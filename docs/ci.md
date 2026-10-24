@@ -15,6 +15,13 @@ Those earlier PR populations and timing estimates are historical; the current
 | `corpus-parity-subset` | Existing advisory subset | Skipped | Existing advisory subset |
 | `corpus-parity` caller | In the post workflow | In the post workflow | Full parity |
 
+**2026-10-24 supersedes the table's no-label-exclusion claim for Debug and
+sanitizers:** `ci-post.yml` passes no explicit `--exclude-label` argument,
+but `debug` and `sanitizers` exclude `slow` by default on push, nightly
+schedule and manual dispatch. Release, kernel and native run every
+registered row. The current remote CTest contract below defines the
+exclusion and shard-union accounting.
+
 The nightly CI schedule is 01:30 UTC. The existing docs-only classification
 still skips proof jobs on a documentation-only PR or main push. Both
 preflight tiers together retain the original full stage inventory; the slow
@@ -148,6 +155,351 @@ they hold the diff's `from` to the release `VERSION` names and rebuild the
 catalog that release published from the checked-in diff and its SHA-256
 instead ([Run-failure codes](pages/run-failure-codes.md)).
 
+## Current remote CTest contract: `ctest-shard-union/v1`
+
+**L6 rule, 2026-10-24 02:12 (supersedes the earlier 01:48 Debug-only ruling):**
+the default `slow` exclusion follows the declared CMake **Debug build type**.
+It covers `debug` and `sanitizers`, with or without `--ctest-shard`, and a
+future Debug profile inherits it whenever it uses the full test registry.
+These builds compile the Debug-only closed-row re-fold, which makes the
+large ledger rows quadratic. `release`, `kernel` and `native` use Release
+builds, retain `excludeLabel: null` by default, and run every registered
+`slow` row at its full size. Release is the gate for these rows.
+There is no flag to run the full Debug or sanitizer registry, including the
+`slow` rows: `ci_verify.py` provides no full-population opt-out for those
+profiles. Push and manual dispatch also use their default `slow` exclusion.
+`live-sanitizers` and `live-tsan` are Debug builds but select CTest only from
+`build/runner` (`scripts/ci_verify.py`, `LIVE_ONLY_PROFILES` and the
+`test_dir /= 'runner'` branch): that registry has no `slow` rows, so both
+retain no label exclusion and still reject `--exclude-label`.
+
+The declared exclusion and summary accounting apply equally to `debug` and
+`sanitizers`: sharded summaries declare
+`excludeLabel: "slow"` and every `ctestExcludedNames` entry; selection is the
+full registry minus those names, and only selection is partitioned.
+The registry hash still covers every registered name. Both profiles retain
+null default execution floors. Their default runs now enter strict exclusion
+accounting: at least 876 registered rows for `debug`, 867 for `sanitizers`,
+a nonempty exclusion that leaves selected rows, and exact accounting of that
+selection. These registration constants have not changed; applying them to
+plain Debug-type runs is part of the default-exclusion change. An explicit
+valid `--exclude-label X` still wins on unsharded and 1/1 paths. For `N > 1`,
+only the profile's declared Debug-build-type `slow` exclusion is accepted;
+Release and kernel exclusions remain refused.
+
+**Skip accounting, corrected 2026-10-24:** default and explicit exclusions
+use the same rule on plain, 1/1 and multi-shard runs. Without the overlay,
+pinned private-fixture rows may skip; with the overlay those rows must run.
+The only additional permitted skip is `test_scratch_arena_jailed_seals` on
+non-Linux hosts, because its C++ non-Linux branch returns 77 when Linux memfd
+seals are unavailable. That platform allowance applies in either fixture
+mode. The same row skipping on Linux, any other unpinned skip, a not-run or
+disabled row, and any selected row missing from results fail accounting.
+Only observed permitted skips count toward `ran + permitted skips = selected`;
+the platform table never supplies a credit for a missing result.
+
+**Explicit floors, corrected 2026-10-24:** `--min-tests N` on `debug` and
+`sanitizers` raises the registration bound and requires at least N actual
+executed rows. Plain and 1/1 runs record that execution proof in `ctest-floor`;
+for multiple shards the union must meet the same undivided execution floor. Permitted
+platform and private-fixture skips do not count as executed rows. No default
+floor or registration constant is changed.
+
+Each sharded summary reports `ctestExcludedNames`, a sorted list discovered
+with `ctest -N -L <label>` (`[]` with no exclusion). Only the registry minus
+those names is partitioned. Without `--ctest-shard`, the summary gains no
+registry-name or exclusion-name fields; the default exclusion still adds
+selected discovery and strict `ctest-exclusion` checks.
+
+**Slow-label bound, 2026-10-24:** `PINNED_SLOW_TEST_ROWS` in
+`scripts/ci_verify.py` pins all 41 source-labelled names: 29 from the
+`PINEFORGE_PR_SLOW_TESTS` loop and 12 direct CMake `LABELS` assignments.
+Every name listed by `ctest -N -L slow` must belong to that set; conditional
+registration may omit names. An unpinned name fails `ctest-exclusion` on
+plain and 1/1 runs, or `ctest-shard-discovery` for multiple shards, with the
+offending names reported. No registration or execution floor is lowered.
+
+For `release`, `debug`, `sanitizers` and `kernel`, `--ctest-shard I/N`
+selects a deterministic slice with integer indices `1 <= I <= N <= 8`.
+Run the same command on N independent VMs/checkouts of the same tree,
+profile and fixture mode, substituting each one-based index for `I`:
+
+```sh
+python3 scripts/ci_verify.py debug --build-dir build-ci-debug --jobs 16 \
+  --ccache --ctest-shard I/4
+```
+
+Every shard performs its own configure and full build before running CTest.
+The caller must collect all N original summaries and logs and accept only
+their complete union. The lab's `shards.mjs` and `recipes.mjs` consume the
+`ctest-shard-union/v1` contract and must agree with these profile label
+declarations, including `sanitizers: slow`. That version identifies the lab's
+union receipt; the engine summary retains `pineforge-ci-verify/v1`.
+
+With `N > 1`, the unsharded selection is the complete `ctest -N` registry
+minus `ctestExcludedNames`. `--exclude-label slow` is accepted for `debug`
+and `sanitizers`, matching their default; other explicit multi-shard label
+exclusions and profiles outside the four listed above are refused.
+The verifier sorts the selected unique names and assigns each name to zero-based
+shard `int.from_bytes(sha256(name.encode('utf-8')).digest(), 'big') % N`.
+The emitted shard index is one-based. The partition needs no duration file
+and uses no host timings, Python hash seed or discovery order. Adding a test
+at fixed N preserves every existing name's owner. Hash assignment does not
+guarantee equal work or nonempty slices; an empty slice fails and requires
+fewer shards. No wall-time or balance improvement is established here.
+
+An anchored, escaped CTest `-R` expression selects each slice. Before
+execution, `ctest -N -R` must reproduce the exact selected names. Actual
+CTest result lines supply the category name lists; missing, extra and
+duplicate results fail even if CTest exits zero. Not-run and disabled rows
+fail the multi-shard accounting. Excluded runs use the strict skip policy
+above, including when `minTests` is null. The unsupported-WebSocket allowance
+remains confined to full runs without the overlay.
+
+Every shard reports the same **undivided** `minTests`: Release 910 with the
+overlay or 603 without it (307 pinned placeholders), kernel 337 with the
+overlay or 306 without it (31 pinned placeholders). Debug and sanitizers
+default to JSON null. An explicit floor can raise these minimums; a
+multi-shard run refuses an explicit floor below the profile's minimum.
+Registry capacity is checked locally against that global floor, subtracting
+registered pinned placeholders in the absent world. The union must contain
+every selected name exactly once and its total executed population must
+meet the same floor. Only `test_native_live_websocket` on a full run can
+count as an executed skip, only without the overlay. A shard never claims
+that its own row count passed the global execution floor.
+
+The unsharded summary shape is preserved; the Debug-type defaults also
+require selected discovery, the registration bound and strict skip accounting.
+`--ctest-shard 1/1` preserves the unsharded CTest execution command, floor
+override/exclusion behaviour and `enforce_test_floor` accounting; it adds
+discovery and name evidence. A floorless 1/1 run also records an explicit
+`ctest-floor` stage explaining that no execution floor is configured.
+
+The required successful stage table for the four multi-shard profiles is:
+
+| Ownership | Stage names and conditions |
+| --- | --- |
+| Every shard | `tool-versions`, `corpus-submodule-init`, `corpus-submodule-status`, `corpus-submodule-pin`, `configure`, `profile-options`, `build`, `stale-binaries`, `native-binary`, `ctest-list-all`, `ctest-list-shard`, `ctest`, `ctest-floor`, `ctest-shard-accounting`. |
+| Every source-layer shard | `abi-base`, `abi-prior`, `abi-v13`, `abi-v14`, `abi-v15-frozen`, `abi-v16-frozen`, `abi-v18-frozen`. Conditional provider fetches also remain local. |
+| Every kernel shard | `abi-providers-skipped`, with status `passed` and exit code 0. |
+| Every Release/kernel shard | `examples-assert-live`. |
+| Every sanitizers shard | `sanitizer-public-flag`. |
+| Shard 1 | `source-guard-c-abi`, `source-guard-native-source`, `source-guard-broker-hash`, `source-guard-pending-mirror`, `source-guard-native-versions`, `source-guard-native-c-surface`, `source-guard-aggregate-versions`, `source-guard-adapter-spec-shadowing`, `source-guard-dangling-comment-names`, `source-guard-run-failure-codes`, `source-guard-run-failure-diff`, `source-guard-selected-window-ownership`, `install`, `smoke-configure`, `smoke-build`, `smoke-version`, `smoke-version-check`. |
+| Shard 1, Release | `source-guard-twin-parity`. |
+| Shard 1, Release/kernel | `native-include-independence`. |
+| Shard 1, kernel | `kernel-residuals`, `native-help`. |
+
+Stages owned by shard 1 appear on every other shard as
+`{"status": "deferred", "ownerShard": 1, "exitCode": null}` under their
+original name. The owner must have actually passed each shared stage.
+Only the exact 12 source guards and seven ABI provider stages listed above
+may instead prove an absent-fixture skip: status `skipped`, exit code 77,
+log `ci-logs/<stage>.log`, and an original line
+`SKIP private fixtures not present: <nonempty path>`. With the overlay,
+these skips fail. Other stages cannot skip, and per-shard stages cannot defer.
+Successful summaries have unique stage names.
+
+The sharded JSON evidence is:
+
+| Field | Type and meaning |
+| --- | --- |
+| `profile`, `status`, `exitCode`, `failures` | Requested profile string, `"passed"`, integer 0, and empty array on success. |
+| `ctestShard` | Object with integer `index: I` and `count: N`. |
+| `ctestRegisteredNames`, `ctestRegistered` | Full sorted unique name array and its integer length. |
+| `ctestRegistrySha256` | Lowercase SHA-256 hex over sorted UTF-8 names, each followed by LF, including the final name. |
+| `ctestUnshardedSelectedNames`, `ctestUnshardedSelected` | Sorted registry minus `ctestExcludedNames`, and its length before partitioning. |
+| `excludeLabel` | `"slow"` for `debug` and `sanitizers`; JSON null for `release` and `kernel`. Every shard must agree. |
+| `ctestExcludedNames` | Sorted unique names discovered by `ctest -N -L <label>`; a subset of the full registry, identical on every shard; `[]` without an exclusion. |
+| `minTests` | The unchanged global execution floor, integer or JSON null. |
+| `ctestPrivateFixturesOverlay` | Boolean fixture mode; every shard must agree with the job. |
+| `ctestRan`, `ctestSkipped`, `ctestNotRun`, `ctestDisabled` | Complete actual name arrays, disjoint within and across shards; the last two are empty on a successful multi-shard run. |
+| `ctestSelected`, `ctestRows`, `ctestTotal` | Integer local result count, ran-list length, and non-disabled result count. |
+| `stages` | Actual per-stage proofs, including `name`, `status`, `exitCode`, `log`, and `ownerShard: 1` for deferrals. |
+
+`ci-logs/ctest.log` keeps CTest's original closing
+`100% tests passed ... out of M` key line; M must equal that shard's
+`ctestTotal`. `ci-summary.json` supplies the original `ci-summary` key
+(passed, exit 0, zero failures). The lab computes the `ctest-floor` key from
+the union rather than applying the unsharded floor-log extractor to each
+leaf. Local `ci-logs/ctest-floor.log` explains registry capacity and local
+accounting. The `kernel-residuals` key comes from shard 1's original stage
+log; `runtime-budget` comes from the original `Testing/Temporary/LastTest.log`
+of the shard owning that CTest row, including its authorized pinned skip.
+
+`validate_ctest_shard_union` checks the engine summary, name union, floors
+and stage ownership. Callers must provide `read_stage_log(summary, stage)`
+with original logs to prove authorized absent-fixture stage skips; without
+a reader, skipped stages fail closed. The lab additionally checks original
+CTest/summary keys, each VM's outer private-fixtures SHA/file-count line,
+the shipped engine/submodule/companion identities, task receipts and clocks.
+The engine does not manufacture these lab receipts.
+
+<details>
+<summary>Historical port design, superseded by the current contract above</summary>
+
+The following earlier design and timing discussion is retained as project
+history. Its duration weighting, label-filtered multi-shard mode, broader
+profile scope and reference-check description do not describe the current
+implementation. The current contract above governs execution.
+
+## Sharding remote CTest verification
+
+`--ctest-shard I/N` selects one CTest slice with integer, one-based indices
+`1 <= I <= N <= 8`. Each VM must use the same engine tree, profile, options,
+private-fixture overlay mode and committed duration table, in its own checkout
+and build directory. For example, a four-VM Release verification runs the
+following command once on each VM, replacing `I` with its index:
+
+```sh
+python3 scripts/ci_verify.py release --build-dir build-ci-release --jobs 4 \
+  --ccache --ctest-shard I/4
+```
+
+The caller must collect all four results and judge their union before claiming
+the profile passed. A successful individual shard proves its local work only.
+Without the option the verifier keeps the existing commands, stage accounting
+and summary fields. `--ctest-shard 1/1` uses the existing CTest execution
+command and `enforce_test_floor` accounting, with additional discovery and
+name evidence.
+
+Every shard reads the complete `ctest -N` registry, including private-fixture
+placeholders. With `--exclude-label`, it also reads the same `ctest -N -LE`
+selection that an unsharded run uses. Duplicate names, duplicate discovery
+numbers, missing names, unreadable counts and empty selections fail. The
+label-selected names are assigned in decreasing scheduling weight, with
+lexical name order breaking equal weights. Each name goes to the shard with
+the smallest accumulated weight, with the lowest shard index breaking ties.
+The historical proposal named `scripts/ci_ctest_durations.tsv` as its timing input. <!-- verified HEAD -->
+It would supply integer hundredths of a second from
+the maximum observed duration per name in the supplied CI-SLIM pull-request
+and push timing TSVs, retaining names measured at least ten seconds. A name
+absent from the table receives a one-second scheduling weight; that is an
+estimate, not a timing measurement. An assignment leaving any shard empty
+fails and requires fewer shards.
+
+Each shard passes its exact escaped name set to CTest with an anchored `-R`
+expression, retaining `-LE` when requested. A separate `ctest -N` with those
+filters must reproduce the intended slice before execution. The verifier
+then reads actual result names from CTest output and cross-checks the closing
+counts and skipped/not-run/disabled lists. It refuses a missing, extra or
+duplicated result name even when CTest exits zero. The result set is never
+inferred by subtracting skipped names from discovery.
+
+For `N > 1`, global floors and local accounting are separate obligations:
+
+* The complete registry on every shard is held to the unchanged PR
+  `max(EXCLUDED_REGISTERED_MIN[profile], minTests)` bound on an excluded run.
+  The unsharded label selection must remove some registered names and leave
+  some, independently of the slice size.
+* On a full run, the unchanged overlay-aware run floor is checked against the
+  registry's runnable capacity. Without the overlay, capacity is the full
+  registered count minus the registered pinned private-fixture names;
+  with the overlay it is the full registered count. The
+  floor itself remains fixed at 603/306 absent or 910/337 present for
+  Release/kernel, or the explicit `--min-tests` value. It is never divided by
+  the shard count or lowered by an observed skip.
+* Each shard requires `ran + permitted skips = its own selected count`, with
+  no not-run or disabled row. In a full Release/kernel run without fixtures,
+  every selected pinned row must skip and public rows must run. The existing
+  unsupported-WebSocket allowance remains confined to full runs without the
+  overlay. An excluded run accepts only pinned private-fixture skips without
+  the overlay; the overlay-present checks still reject private-fixture
+  skips. Floorless full profiles keep their existing skip policy while
+  proving every selected name.
+* The union judge also checks the unchanged run floor against the sum of
+  actual ran counts, including only the existing full-run WebSocket
+  allowance. A row counted in the registry cannot conceal a missing local
+  result, and a pinned placeholder cannot conceal a missing public row.
+
+The following stage ownership table is exhaustive for the verifier's
+successful path; profile conditions still apply. A failure stage such as
+`configure-cache`, `ctest-discovery` or `require-websocket-skip` belongs to the
+same shard as the operation it diagnoses and always fails that shard.
+
+| Stages | Shards | Reason and profile conditions |
+| --- | --- | --- |
+| `tool-versions` | Every shard | Record each VM's tools. |
+| `corpus-submodule-init`, `corpus-submodule-status`, `corpus-submodule-pin` | Every shard | Materialize and authenticate that checkout's corpus input. |
+| `configure`, `profile-options` | Every shard | Build configuration is local to the VM. |
+| `sanitizer-public-flag`, `live-sanitizer-coverage`, `runner-thread-sanitizer-coverage` | Every shard | Audit that VM's compile commands when its profile enables the corresponding instrumentation. |
+| `examples-assert-live` | Every shard | Audit local example/module compiles in Release, kernel and live-runner profiles. |
+| `build`, `stale-binaries`, `native-binary` | Every shard | Rebuild all targets and authenticate the binaries that this shard will execute. |
+| `abi-base`, `abi-prior`, `abi-v13`, `abi-v14`, `abi-v15-frozen`, `abi-v16-frozen`, `abi-v18-frozen`, and their `*-fetch` stages (`abi-fetch` for `abi-base`) | Every shard | Prepare or reuse local receipt-backed providers for source-layer profiles; a CTest slice can contain any ABI row. Fetch stages remain conditional on a missing pinned object. |
+| `abi-providers-skipped` | Every shard | Existing explicit explanation for kernel and runner-only profiles, which register no receipt-backed ABI rows. |
+| `live-test-inventory`, `live-test-inventory-required` | Every shard | Check the complete runner inventory before selecting a live-only slice. |
+| `ctest-list-all`, `ctest-list-selected`, `ctest-list-shard`, `ctest`, `ctest-floor`, `ctest-exclusion`, `ctest-private-fixtures`, `live-test-skips`, `ctest-shard-accounting` | Every shard | Discovery and all applicable row/fixture accounting bind the registry and this shard's actual result names. The selected listing is conditional on `--exclude-label`; `ctest-list-shard` and `ctest-shard-accounting` are sharded-only stages. |
+| `source-guard-c-abi`, `source-guard-native-source`, `source-guard-broker-hash`, `source-guard-pending-mirror`, `source-guard-native-versions`, `source-guard-native-c-surface`, `source-guard-aggregate-versions`, `source-guard-adapter-spec-shadowing`, `source-guard-dangling-comment-names`, `source-guard-run-failure-codes`, `source-guard-run-failure-diff`, `source-guard-selected-window-ownership` | Shard 1 | Source-only checks read the common tree. Their existing pinned private-fixture skip contract still applies. |
+| `source-guard-twin-parity` | Shard 1 | Release and native source parity proof. |
+| `native-include-independence` | Shard 1 | Release, native and kernel installed-header/archive proof. |
+| `kernel-residuals` | Shard 1 | Kernel archive vocabulary proof. |
+| `install`, `smoke-configure`, `smoke-build`, `smoke-version`, `smoke-version-check` | Shard 1 | Build-dependent package/version proof runs once for the profile. |
+| `native-help` | Shard 1 | Installed help proof in profiles that build the live runner. |
+| `require-websocket` | Shard 1 | Direct no-skip transport proof when required by the profile or option; the registered CTest row still belongs to exactly one slice. |
+
+On shards 2 through N, a shared stage has `status: "deferred"`,
+`exitCode: null`, and `ownerShard: 1`; it is never marked passed. The union
+judge requires the corresponding successful shard 1 proof for every shared
+stage applicable to the profile. Only the existing source-guard exit-77
+contract can supply a skipped owner proof, and only without the overlay.
+ABI preparation, build validation and fixture accounting cannot be deferred.
+Preflight, documentation recipe steps, subset checks and corpus/parity steps
+outside this verifier retain their caller's scheduling. The CTest documentation
+guard rows remain in the selected inventory and are assigned like other rows.
+
+For sharded runs only, `ci-summary.json` adds the following evidence to its
+existing schema; consumers must reject missing or null evidence in a
+successful shard:
+
+| Field | Meaning |
+| --- | --- |
+| `ctestShard` | `{ "index": I, "count": N }`. |
+| `ctestRegistered`, `ctestRegisteredNames` | Full registry count and lexically sorted complete name list, identical on every shard. |
+| `ctestRegistrySha256` | Lowercase SHA-256 hex of the UTF-8 sorted registered names, with one LF after every name including the last. |
+| `ctestUnshardedSelected`, `ctestUnshardedSelectedNames` | Count and sorted names after the original label selection, before sharding. |
+| `ctestSelected` | This shard's selected count. |
+| `ctestRan` | Complete actual ran name list; `ctestRows` remains its count, including failed tests that actually ran. |
+| `ctestSkipped`, `ctestNotRun`, `ctestDisabled` | Complete actual name lists for those categories; the existing `ctestTotal` counts all non-disabled results. |
+| `ctestPrivateFixturesOverlay` | Boolean overlay mode used by the row checks. |
+
+The judge requires exactly N successful summaries with each index present
+once, the same profile/options/overlay mode, and matching registry names,
+count and recomputed hash. Category lists must be disjoint within and across
+shards and agree with their counts. The union of ran, skipped and not-run
+names must equal `ctestUnshardedSelectedNames` exactly; a disabled row fails
+the multi-shard accounting and is never credited as ran. Without a label
+exclusion that union must also equal the full registry and reproduce
+`ctestRegistrySha256`. With an exclusion it equals the common selected list,
+while the full registry independently supplies the registration floor and
+hash. Every shared stage must have one successful owner proof and only
+documented deferrals on the other shards. The engine's
+`validate_ctest_shard_union` supplies the reference name/hash/floor/ownership
+check; the remote judge must additionally bind all artifacts to the requested
+engine tree.
+
+The historical timing comparison used a name-sorted four-way stride as the
+simple baseline, since the timing TSVs do not carry CTest discovery indices.
+For each job and name, the comparison averages its observed seconds across
+both TSVs; ideal is the sum of those per-name averages divided by four.
+The weighted assignment uses the committed cross-job maxima as its weights.
+These are serial row-second balance estimates, not measurements of parallel
+CTest or VM wall time:
+
+| Job | Ideal seconds | Name-stride maximum / ideal | Weighted maximum / ideal |
+| --- | ---: | ---: | ---: |
+| Release | 864.953 | 3.3077 | 2.8701 |
+| Debug | 995.399 | 2.4750 | 1.9927 |
+| sanitizers | 1735.558 | 1.9381 | 1.1052 |
+| kernel-only | 874.555 | 3.1237 | 2.9683 |
+
+The old timing data includes the unsplittable `test_ci_verify` row, whose
+cross-job maximum is 4130.04 seconds. The D1 verifier-class work changes that
+row's scheduling, so these historical ratios do not establish the new
+critical path. The real sharded lab run must report per-shard wall times,
+validate the union and receive the required review before any speedup is
+claimed.
+
+</details>
+
 ## Profiles
 
 | Profile | Build | Additional coverage |
@@ -159,6 +511,11 @@ instead ([Run-failure codes](pages/run-failure-codes.md)).
 | `live-sanitizers` | Debug, live runner enabled, ASan and UBSan | Every runner target instrumented and audited from compile commands; all runner CTest rows, Python E2Es and installed runner help; WebSocket-enabled curl mandatory while `runner/transport.cpp` exists, no skips accepted |
 | `live-tsan` | Debug, live runner enabled, ThreadSanitizer | Separate build instruments every runner target, audits compile commands and runs all runner rows and Python E2Es; WebSocket-enabled curl is mandatory and skips are refused |
 | `kernel` | Release, live runner enabled, Pine source layer OFF | The source-free CTest set behind a row floor (`PRIVATE_FIXTURE_PROFILE_FLOORS`; `--min-tests N` overrides it), installed package, and the `nm` half of the include-independence proof over `libpineforge_kernel.a` |
+
+**2026-10-24 clarification of the Debug row above:** no default row floor
+means no default execution floor; `debug` and `sanitizers` now enforce their
+registration minima and strict selection accounting through the default
+`slow` exclusion, and an explicit `--min-tests N` also gates executed rows.
 
 By default each profile uses `build-ci-<profile>`. Keep separate build directories
 for different profiles and toolchains. The verifier never deletes a build tree
@@ -235,6 +592,14 @@ have no row floor of their own. Raise the table's `full` number when a row
 lands, and pass `--min-tests N` to override it for one run (the flag gates any
 profile; `kernel` and `release` have a default).
 
+**2026-10-24 superseding detail:** `debug` and `sanitizers` have no default
+execution floor, but their default exclusion enforces the registration
+bound. An explicit `--min-tests N` on either profile also requires N rows to
+execute on plain and 1/1 runs, or across the multi-shard union. Other
+profiles with an explicit label exclusion use N only in the registration
+bound on plain and 1/1 runs; full Release/kernel runs retain their execution
+floors.
+
 The two run floors are overlay-aware, keyed on `PINEFORGE_PRIVATE_FIXTURES`.
 Both numbers are constants of the profile, measured on the campaign's
 two-world runs; they never move with the run's own `ctest -N` count or its
@@ -269,6 +634,15 @@ and records
 that left the selection or could not start, a lost
 registration below the PR registration floor, unreadable enumeration, or
 missing label fails; with the overlay present every skip fails, as before.
+
+**2026-10-24 supersedes the skip restriction in the preceding sentences:**
+every excluded run also permits the single named
+`test_scratch_arena_jailed_seals` skip on non-Linux hosts, with or without the
+overlay; Linux skips of that row and all other unpinned skips still fail.
+Ran rows plus observed permitted skips must equal selection, and missing,
+not-run and disabled rows still fail. Plain and 1/1 use `ctest-exclusion`;
+multi-shard runs enforce the same rule in `ctest-floor`.
+
 The PR registration floors are the keys of `EXCLUDED_REGISTERED_MIN` in
 `scripts/ci_verify.py`, one for each profile whose pull-request leg excludes
 the label; their values are in
@@ -844,6 +1218,13 @@ A push to `main` that changes more than documentation and a manual dispatch of
 has no verifier deadline: main's full set ran out of the old 30-minute
 default twice, and the owner rule of 2026-10-12 removes stage and row
 deadlines rather than raising them again. Standalone manual dispatch of `native-live.yml` is also full.
+
+**2026-10-24 supersedes the no-exclusion claim above:** push and dispatch
+`debug` and `sanitizers` exclude `slow` by default; Release, kernel and
+native retain their full registries on those events. Release is the gate for
+the `slow` rows, and `ci_verify.py` has no flag for a full-registry Debug or
+sanitizer run.
+
 The maintainers run the full `ci_verify.py` profiles on their x86-64 build
 hosts before the PR merge gate and post `pineforge/verify` to the PR head.
 Their parity verdict posts `pineforge/parity`, reporting no regression or that
@@ -894,6 +1275,11 @@ it on push to `main`. Only the `pull_request` event changes. Push,
 and every verifier class, so coverage is unchanged and only the time at which a
 regression is first seen moves. `release.yml` is unchanged.
 
+**2026-10-24 supersedes D1's every-row claim for Debug and sanitizers:**
+those profiles exclude `slow` on every event, including push and
+`workflow_dispatch`; Release, kernel and native keep every row on non-PR
+events. Preflight still runs every verifier class on push and dispatch.
+
 Decision D3 keeps Ubuntu Release/Debug and macOS Release on pull requests and
 defers macOS Debug to non-PR events. The PR's own
 `build (macos-26, Release)` must be green and still enforces the Release
@@ -910,6 +1296,12 @@ on every other event; the routing `include` entries and leg names stay the same.
 | push to `main`, `workflow_dispatch` | Ubuntu and macOS Release/Debug (four legs) | every row | every row | every row | every class |
 | other non-PR contexts (`schedule`, `release` if triggered) | Ubuntu and macOS Release/Debug (four legs) | every row | every row | every row | every class |
 
+**2026-10-24 supersedes the push/dispatch row's Debug/sanitizer cell:**
+both Debug legs and `sanitizers` exclude `slow`; native runs every row.
+
+**2026-10-24 supersedes the other non-PR row's Debug/sanitizer cell:**
+both Debug legs and `sanitizers` exclude `slow`; native runs every row.
+
 The label `slow` is `PINEFORGE_PR_SLOW_TESTS` in `tests/CMakeLists.txt`: 29
 rows, among them `test_ci_verify`, the serial run of
 `scripts/test_ci_verify.py`, which dominates a full Release or kernel job.
@@ -918,6 +1310,13 @@ a pull request; D1 adds both Release jobs and `kernel-only`. A row a profile
 does not register carries no label there, and the kernel profile registers
 fewer of the 29 than Release does. `live-sanitizers`, `live-tsan` and the
 parity subset are unchanged.
+
+**2026-10-24 supersedes the 29-row label inventory above:** 29 is the
+timing-list population only. Twelve additional names receive `slow` through
+direct `LABELS` assignments in `tests/CMakeLists.txt` and
+`tests/cr150.d/*.cmake`, making 41 distinct source-labelled names.
+`PINNED_SLOW_TEST_ROWS` bounds the discovered exclusion by those names,
+independent of the registered count; each profile may register a subset.
 
 The verifier's own self-test is split by TestCase class. A class is FAST only
 when its measured total in the serial run log is under 5 s and its passing
@@ -932,6 +1331,11 @@ workflows and the CI scripts among them); an unknown or unreadable diff
 runs the SLOW classes. Push to `main` and `workflow_dispatch` run every class.
 The CTest row `test_ci_verify` stays in the `slow` population: the pull-request
 legs exclude it by label and every full run executes it.
+
+**2026-10-24 supersedes the Debug/sanitizer implication above:**
+`test_ci_verify` stays excluded from their push and dispatch CTest runs too.
+Full Release, kernel and native CTest runs execute it; preflight's all-class
+push/dispatch policy remains in force independently.
 
 A pull-request leg that excludes the label is held to a registration floor in
 place of the run floor: the registered rows must be at least the larger of
@@ -953,6 +1357,13 @@ run floors in the table above (910 and 337 with the overlay present, 603 and
 306 absent) are not read on an excluded run; push, dispatch and every other
 full run still enforce them.
 
+**2026-10-24 supersedes the exclusion skip wording above:** the sole named
+non-Linux seals skip is also permitted in either fixture mode, using the
+same strict rule for plain, 1/1 and multi-shard execution. Debug and
+sanitizers use exclusion accounting on push and dispatch as well; an explicit
+`--min-tests` also gates their actual executed population, with permitted
+skips left out of that execution count.
+
 A regression in an excluded row, or in a SLOW class that a pull request did not
 trigger, is first seen by the push-to-main run for the merge commit, and by the
 maintainers' full verification where it runs the row; the pull request does not
@@ -963,6 +1374,12 @@ s, `sanitizers` 2707 s and the native cell 3132 s; the older
 and 1838 s, and a push run on the current pool has not been measured. The
 pull-request wall time under D1 is to be measured on real PR runs, typical and
 tail; it is not claimed as met against the owner's 15-minute target.
+
+**2026-10-24 supersedes the first-seen timing claim above for Debug and
+sanitizers:** no event and no flag runs their `slow` rows. A regression
+visible only in those profiles, such as an ASan-only defect in a `slow` row,
+is not seen by any run under this policy. Release is the only gate for those
+rows and cannot detect a defect that occurs only with sanitizer instrumentation.
 
 **Rule for the deferred rows (L6 condition, 10-20).** Every row and class this
 section excludes from a pull request still runs on the merge commit. A red
@@ -1164,6 +1581,12 @@ before anything else. The PR aggregate retains its independent API diff
 reader, so a preceding job cannot authorize a GitHub-only skip. Full CI keeps
 every proof dependency and both preflight tiers. Docs deployment and parity's
 HTTPS submodule clone retain their existing credential handling behind authz.
+
+**2026-10-24 clarification:** the full-profile commands in `ci-post.yml`
+carry no explicit `--exclude-label` arguments. The verifier's Debug-type
+default excludes `slow` from Debug and sanitizer runs on every event,
+including non-PR events; Release, kernel and native retain every row.
+PR CI keeps CR-233's Release smoke selected by CTest label `fast`.
 
 Baseline promotion uses `["self-hosted","pf-gcp-main"]` for its GitHub App
 secrets and inherited `id-token: write` permission. The release class admits

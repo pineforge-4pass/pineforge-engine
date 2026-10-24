@@ -5,6 +5,7 @@ Same harness style as run_json_syminfo_test.py: docker/ is on sys.path, the stra
 library is a fake whose exports record their calls. Every code and argument the
 tests see is also checked against the catalog, docker/run_failure_codes.json.
 """
+import ast
 import contextlib
 import ctypes
 import io
@@ -238,10 +239,19 @@ def line_of(out):
 def harness(tmp_path, monkeypatch):
     tape = tmp_path / "tape.csv"
     tape.write_text(TAPE)
+    native_cdll = ctypes.CDLL
 
     def run(lib, *extra, ohlcv=None, cdll=None):
         argv = ["run_json.py", "--so", "fake.so", "--ohlcv", str(ohlcv or tape), *extra]
-        monkeypatch.setattr(ctypes, "CDLL", cdll or (lambda path: lib))
+        strategy_cdll = cdll or (lambda path: lib)
+
+        def load(path, *args, **kwargs):
+            # Report artifacts use the process libc with use_errno=True.
+            # Only the strategy library is a fixture.
+            return (native_cdll(path, *args, **kwargs) if path is None
+                    else strategy_cdll(path, *args, **kwargs))
+
+        monkeypatch.setattr(ctypes, "CDLL", load)
         monkeypatch.setattr(sys, "argv", argv)
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
@@ -516,7 +526,9 @@ def test_a_report_write_error_adds_no_failure_line(tmp_path, monkeypatch, error)
     tape = tmp_path / "tape.csv"
     tape.write_text(TAPE)
     lib = fake_lib()
-    monkeypatch.setattr(ctypes, "CDLL", lambda path: lib)
+    native_cdll = ctypes.CDLL
+    monkeypatch.setattr(ctypes, "CDLL", lambda path, *args, **kwargs: (
+        native_cdll(path, *args, **kwargs) if path is None else lib))
     out, err = FailingStdout(error), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         status = run_json.main(["--so", "fake.so", "--ohlcv", str(tape)])
@@ -530,7 +542,9 @@ def test_a_report_write_error_adds_no_failure_line(tmp_path, monkeypatch, error)
 def test_a_closed_pipe_leaves_nothing_for_the_flush_at_exit(tmp_path, monkeypatch):
     tape = tmp_path / "tape.csv"
     tape.write_text(TAPE)
-    monkeypatch.setattr(ctypes, "CDLL", lambda path: fake_lib())
+    native_cdll = ctypes.CDLL
+    monkeypatch.setattr(ctypes, "CDLL", lambda path, *args, **kwargs: (
+        native_cdll(path, *args, **kwargs) if path is None else fake_lib()))
     read_end, write_end = os.pipe()
     os.close(read_end)  # the reader is gone: every write is EPIPE
     stdout, err = open(write_end, "w", encoding="ascii"), io.StringIO()
@@ -1254,14 +1268,51 @@ def settings_args(**kw):
     return [a for k, v in kw.items() for a in (f"--{k}", json.dumps(v))]
 
 
-def test_valid_settings_go_through_the_checked_api(harness):
-    _, legacy = harness(fake_lib(), *settings_args(inputs={"Length": "5"},
-                                                   overrides={"initial_capital": "20000"}))
-    lib = checked_lib()
-    status, out = harness(lib, *settings_args(inputs={"Length": "5"},
-                                              overrides={"initial_capital": "20000"}))
+def test_valid_settings_go_through_the_checked_api(harness, tmp_path):
+    source = tmp_path / "settings.cpp"
+    source.write_text('''class GeneratedStrategy {
+    GeneratedStrategy() {
+        pineforge::source::PineStrategyConfig cfg{};
+        cfg.initial_capital = 10000.0;
+        configure_pine_strategy(cfg);
+    }
+    void init() { get_input_int("Length", 10); }
+};''', encoding="utf-8")
+    # Both routes describe the same strategy and effective values. Release
+    # provenance needs the full typed receipt, including every override;
+    # the name-only admission fixture cannot certify a fingerprint.
+    receipt = legacy_receipt(receipt_row("Length", "int", "10", "5"))
+    receipt["overrides"] = [
+        receipt_row("initial_capital", "float", "10000", "20000"),
+        receipt_row("commission_value", "float", "0"),
+        receipt_row("default_qty_value", "float", "1"),
+        receipt_row("pyramiding", "int", "1"),
+        receipt_row("slippage", "int", "0"),
+        receipt_row("process_orders_on_close", "bool", "false"),
+        receipt_row("calc_on_order_fills", "bool", "false"),
+        receipt_row("close_entries_rule", "string", "FIFO"),
+        receipt_row("default_qty_type", "string", "fixed"),
+        receipt_row("commission_type", "string", "percent"),
+    ]
+    for row in receipt["inputs"] + receipt["overrides"]:
+        row.update(options=[], option_values=[], min=None, max=None, step=None)
+    args = ["--generated-cpp", str(source),
+            *settings_args(inputs={"Length": "5"},
+                           overrides={"initial_capital": "20000"})]
+    legacy_lib = checked_lib(receipt=receipt, drop=CHECKED_EXPORTS)
+    legacy_status, legacy = harness(legacy_lib, *args)
+    assert legacy_status == 0
+    assert ("strategy_set_input", ST, b"Length", b"5") in legacy_lib.calls
+    assert ("strategy_set_override", ST, b"initial_capital", b"20000") in legacy_lib.calls
+    lib = checked_lib(receipt=receipt)
+    status, out = harness(lib, *args)
     assert status == 0
     assert report_of(out) == report_of(legacy)
+    fingerprint = report_of(out)["fingerprint"]
+    assert fingerprint is not None
+    assert fingerprint["provenance"]["inputs"]["Length"] == {
+        "type": "int", "default": 10, "value": 5}
+    assert fingerprint["provenance"]["applied"]["overrides"] == {"initial_capital": 20000.0}
     names = lib.names()
     assert "strategy_create" not in names and "strategy_set_input" not in names
     assert [c[:4] for c in lib.calls if c[0] in ("strategy_set_input_checked",
@@ -1446,7 +1497,279 @@ def test_a_failed_checked_create_is_strategy_create_failed(harness, create, text
     assert create_call[1] is None  # params_json is reserved: NULL
 
 
+# Each nonliteral call is pinned by enclosing scope AND complete AST, with an
+# exact occurrence count. Moving/adding/changing one requires a reviewed entry.
+# Native tuples may carry None for an old library's deliberately untyped line;
+# engine code strings are ABI data, not harness-defined vocabulary.
+_CODE_PASSTHROUGHS = [
+    ("write_failure", "failure_line(text, code, code_args)", 1,
+     "serializer forwards the already classified failure unchanged"),
+    ("_typed_failure",
+     "RunFailure(text, code, dict(code_args) if isinstance(code_args, dict) else {})", 1,
+     "selected-window helper producers are scanned below"),
+    ("_selected_run", "RunFailure(error.message, error.code, error.detail)", 1,
+     "InventoryAdmissionError.code is request_feed_inventory.CODE, scanned below"),
+    ("_selected_run", "RunFailure(*_post_boundary_engine_failure(failure, phases))", 1,
+     "run_failure native tuple, with a literal post-execution remapping"),
+    ("_selected_run", "write_failure(*_post_boundary_engine_failure(failure, phases))", 1,
+     "same native tuple on the path/array route"),
+    ("_csv2bin_main", "failure_line(str(failure), failure.code, failure.code_args)", 1,
+     "RunFailure or pf_bars.BarsError; BarsError code choices are scanned below"),
+    ("main", "write_failure(str(failure), failure.code, failure.code_args)", 2,
+     "caught RunFailure or _SigtermAbort.failure (literal run_aborted)"),
+    ("main", "write_failure(str(typed), typed.code, typed.code_args)", 1,
+     "_typed_failure forwards only the helper classes whose producers are scanned"),
+    ("_main", "RunFailure(*_post_boundary_engine_failure(failure, phases))", 1,
+     "ordinary run_failure native tuple, with the same literal remapping"),
+    ("_main", "write_failure(*_post_boundary_engine_failure(failure, phases))", 1,
+     "same ordinary native tuple on the path/array route"),
+    ("_require_jailed_arena", "RunFailure(*failure)", 1,
+     "run_failure native arena admission tuple"),
+    ("_FdReportSink.__init__", "RunFailure(*failure)", 1,
+     "run_failure native fd-sink admission tuple"),
+    ("_check_bench_run", "RunFailure(text, code, args)", 1,
+     "tuple destructured directly from run_failure for the just-completed trial"),
+    ("enable_outputs",
+     'OutputsError("--outputs: " + (text or "the library refused to record"), code, args)', 1,
+     "engine_failure_code ABI tuple or the literal outputs_rejected fallback"),
+]
+
+_HELPER_CODE_SOURCES = {
+    "request_feed_inventory": "InventoryAdmissionError",
+    "selected_window_report": "SelectedWindowError",
+    "selected_window_plan": "PlanBridgeError",
+    "run_execution_observer": "ObserverBindingError",
+    "run_phase_transport": "PhaseTransportError",
+    "pf_bars": "BarsError",
+}
+
+
+def _run_failure_classes(tree):
+    """Discover the complete local inheritance closure, independent of AST order."""
+    classes = [node for node in ast.walk(tree) if isinstance(node, ast.ClassDef)]
+    names = {"RunFailure"}
+    while True:
+        derived = names | {
+            node.name for node in classes
+            if any(isinstance(base, ast.Name) and base.id in names for base in node.bases)
+        }
+        if derived == names:
+            return names
+        names = derived
+
+
+def _scoped_nodes(node, scope=(), subclass=False, failure_classes=None):
+    if failure_classes is None:
+        failure_classes = _run_failure_classes(node)
+    if isinstance(node, ast.ClassDef):
+        scope += (node.name,)
+        subclass = node.name in failure_classes and node.name != "RunFailure"
+    elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        scope += (node.name,)
+    yield scope, subclass, node
+    for child in ast.iter_child_nodes(node):
+        yield from _scoped_nodes(child, scope, subclass, failure_classes)
+
+
+def _super_init(call):
+    return (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+            and call.func.attr == "__init__" and isinstance(call.func.value, ast.Call)
+            and isinstance(call.func.value.func, ast.Name)
+            and call.func.value.func.id == "super")
+
+
+def _failure_code_argument(call):
+    code = call.args[1] if len(call.args) > 1 else None
+    code = next((item.value for item in call.keywords if item.arg == "code"), code)
+    return None if any(isinstance(arg, ast.Starred) for arg in call.args) else code
+
+
+def _fixed_failure_codes(tree, failure_classes):
+    """Only a one-statement, literal-coded parent initializer fixes a caller's code."""
+    fixed, inherited = {}, {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef) or node.name not in failure_classes:
+            continue
+        initializer = next((item for item in node.body
+                            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+                            and item.name == "__init__"), None)
+        if initializer is None:
+            inherited[node.name] = [base.id for base in node.bases
+                                    if isinstance(base, ast.Name) and base.id in failure_classes]
+            continue
+        # These wrappers take reason/code_args rather than a code. Their entire
+        # initializer must delegate a literal; its super call is also scanned.
+        if len(initializer.body) != 1 or not isinstance(initializer.body[0], ast.Expr):
+            continue
+        call = initializer.body[0].value
+        code = _failure_code_argument(call) if _super_init(call) else None
+        if isinstance(code, ast.Constant) and isinstance(code.value, str):
+            fixed[node.name] = code
+    while True:
+        derived = {name: fixed[bases[0]] for name, bases in inherited.items()
+                   if len(bases) == 1 and bases[0] in fixed and name not in fixed}
+        if not derived:
+            return fixed
+        fixed.update(derived)
+
+
+def _call_key(scope, call):
+    return ".".join(scope), ast.dump(call, include_attributes=False)
+
+
+def _failure_code_source(path):
+    """Only the listed repository sources; refuse protected paths before opening."""
+    for candidate in (path.absolute(), path.resolve()):
+        spelling = candidate.as_posix() + "/"
+        forbidden = ("/.config/zsh/keys/", "/.ssh/", "/.aws/", "/.codex/",
+                     "/.config/pineforge/")
+        assert not any(name in spelling for name in forbidden), (
+            f"refused protected source path: {candidate}")
+        assert not any(part.endswith(".env") for part in candidate.parts), (
+            f"refused *.env source path: {candidate}")
+    assert path.resolve().parent == Path(__file__).resolve().parent, (
+        f"refused source outside the listed docker directory: {path}")
+    return path.read_text(encoding="utf-8")
+
+
+def _literal_code(code, where):
+    assert isinstance(code, ast.Constant) and isinstance(code.value, str), (
+        f"non-literal failure code at {where}")
+    assert code.value in CATALOG["codes"], f"uncatalogued code {code.value!r} at {where}"
+    return code.value
+
+
+def _helper_code_choices(expression, scope, bindings, seen=frozenset()):
+    """Resolve only literal/conditional code choices and simple local constants."""
+    if isinstance(expression, ast.Constant) and isinstance(expression.value, str):
+        return {expression.value}
+    if isinstance(expression, ast.IfExp):
+        return (_helper_code_choices(expression.body, scope, bindings, seen)
+                | _helper_code_choices(expression.orelse, scope, bindings, seen))
+    if isinstance(expression, ast.Name):
+        for end in range(len(scope), -1, -1):
+            key = (scope[:end], expression.id)
+            if key in bindings and key not in seen:
+                values = bindings[key]
+                assert len(values) == 1, f"non-literal reassigned helper code: {key}"
+                return _helper_code_choices(values[0], key[0], bindings, seen | {key})
+    raise AssertionError(f"non-literal imported failure code: {ast.dump(expression)}")
+
+
+def _check_helper_code_sources(directory):
+    expected = set(_HELPER_CODE_SOURCES.values()) - {"BarsError"}
+    assert run_json._TYPED_ERROR_NAMES == expected, "typed helper source list needs review"
+    for module, error_class in _HELPER_CODE_SOURCES.items():
+        path = directory / (module + ".py")
+        nodes = list(_scoped_nodes(ast.parse(_failure_code_source(path))))
+        bindings = {}
+        assignments = []
+        for scope, _, node in nodes:
+            if isinstance(node, ast.Assign):
+                targets = node.targets
+            elif isinstance(node, ast.AnnAssign) and node.value is not None:
+                targets = [node.target]
+            else:
+                continue
+            for target in targets:
+                assignments.append((scope, target, node.value))
+                if isinstance(target, ast.Name):
+                    key = (scope, target.id)
+                    bindings.setdefault(key, []).append(node.value)
+
+        emitted = set()
+        for scope, target, value in assignments:
+            constant = isinstance(target, ast.Name) and (
+                target.id == "CODE" or target.id.startswith("CODE_"))
+            class_code = (isinstance(target, ast.Name) and target.id == "code"
+                          and scope == (error_class,))
+            field_code = isinstance(target, ast.Attribute) and target.attr == "code"
+            if field_code and isinstance(value, ast.Name) and value.id == "code":
+                # These constructors retain their caller's code verbatim.
+                # Their call arguments, including forwarding wrappers, are checked below.
+                assert scope == (error_class, "__init__"), (path, scope)
+                continue
+            if constant or class_code or field_code:
+                emitted.update(_helper_code_choices(value, scope, bindings))
+            if isinstance(target, ast.Name) and target.id == "_FIXED_TEXT":
+                assert isinstance(value, ast.Dict), f"non-literal code table in {path}"
+                emitted.update(_literal_code(key, path) for key in value.keys)
+
+        forwarded = 0
+        for scope, _, call in nodes:
+            if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Name)):
+                continue
+            names = {error_class}
+            if module == "selected_window_report":
+                names.add("_error")
+            if call.func.id not in names:
+                continue
+            # These three classes have a fixed code field and no code parameter.
+            if module in {"request_feed_inventory", "run_phase_transport", "pf_bars"}:
+                continue
+            if (module == "selected_window_report"
+                    and _call_key(scope, call) == _call_key(
+                        ("_error",), ast.parse(
+                            "SelectedWindowError(code, _FIXED_TEXT[code], code_args)",
+                            mode="eval").body)):
+                # Safe pass-through: every _error caller is scanned for its code;
+                # _FIXED_TEXT's closed key set is independently catalog checked.
+                forwarded += 1
+                continue
+            code = call.args[0] if call.args else None
+            code = next((item.value for item in call.keywords if item.arg == "code"), code)
+            assert code is not None, f"missing helper failure code at {path}:{call.lineno}"
+            emitted.update(_helper_code_choices(code, scope, bindings))
+        if module == "selected_window_report":
+            assert forwarded == 1, "selected-window forwarding wrapper needs review"
+        assert emitted, f"helper code scan reached no codes in {path}"
+        assert not emitted - CATALOG["codes"].keys(), (
+            f"uncatalogued imported codes in {path}: {sorted(emitted - CATALOG['codes'].keys())}")
+
+
+def assert_run_json_codes_catalogued():
+    """Shared guard for both harness test modules; every emitter is accounted for."""
+    source = Path(__file__).resolve().parent / "run_json.py"
+    paths = [source, *(source.parent / (name + ".py") for name in _HELPER_CODE_SOURCES)]
+    print("Failure-code guard reads: " + ", ".join(str(path) for path in paths))
+    tree = ast.parse(_failure_code_source(source))
+    failure_classes = _run_failure_classes(tree)
+    fixed_codes = _fixed_failure_codes(tree, failure_classes)
+    allowed = {
+        _call_key(tuple(scope.split(".")), ast.parse(call, mode="eval").body): (count, reason)
+        for scope, call, count, reason in _CODE_PASSTHROUGHS
+    }
+    seen = {key: 0 for key in allowed}
+    emitted = set()
+    for scope, subclass, call in _scoped_nodes(tree, failure_classes=failure_classes):
+        if not isinstance(call, ast.Call):
+            continue
+        direct = (isinstance(call.func, ast.Name)
+                  and call.func.id in failure_classes | {"write_failure", "failure_line"})
+        parent_init = subclass and _super_init(call)
+        if not (direct or parent_init):
+            continue
+        code = (fixed_codes[call.func.id] if direct and call.func.id in fixed_codes
+                else _failure_code_argument(call))
+        if isinstance(code, ast.Constant) and isinstance(code.value, str):
+            emitted.add(_literal_code(code, f"{source}:{call.lineno}"))
+            continue
+        key = _call_key(scope, call)
+        assert key in allowed, (
+            f"non-literal failure code at {source}:{call.lineno} in {'.'.join(scope)}: "
+            f"{ast.unparse(call)}; needs an explicit reviewed pass-through")
+        seen[key] += 1
+    assert emitted, "the source scan must reach the failure emitters"
+    for key, (count, reason) in allowed.items():
+        assert seen[key] == count, f"pass-through changed: {key[0]} ({reason})"
+    _check_helper_code_sources(source.parent)
+
+
 def test_every_own_code_is_catalogued():
+    assert_run_json_codes_catalogued()
+
+    # Retain the original typed-argument controls. Coverage of the emitted
+    # vocabulary comes from the source above, independently of these fixtures.
     for code, args in [
             ("setting_rejected", {"entrypoint": e, "reason": r})
             for e in ("strategy_set_input", "strategy_set_override")

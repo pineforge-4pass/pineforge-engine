@@ -75,7 +75,7 @@ public:
         if (bar_index_ == 4) after_action_view = signed_position_size();
         if (bar_index_ == 6) strategy_close_all();
     }
-    const std::vector<Trade>& rows() const { return trades_; }
+    const TradeLedger& rows() const { return trades_; }
 };
 
 void test_margin_is_visible_before_script_actions() {
@@ -164,7 +164,7 @@ public:
         strategy_exit("SX", "S", qnan, qnan, qnan, 1.0, 60000.0);
         if (bar_index_ == 2) strategy_close_all();
     }
-    const std::vector<Trade>& rows() const { return trades_; }
+    const TradeLedger& rows() const { return trades_; }
 };
 
 void test_margin_excursion_samples_only_the_traversed_prefix() {

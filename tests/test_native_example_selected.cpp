@@ -1,4 +1,5 @@
-#include <pineforge/native_host.hpp>
+// This dlopen driver uses only the C ABI; C++ checks live in the example module.
+#include <pineforge/pineforge.h>
 
 #include <dlfcn.h>
 
@@ -9,13 +10,6 @@
 #include <string>
 
 namespace {
-
-static_assert(PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V19 == 1,
-              "selected example requires the v15 native host");
-static_assert(sizeof(pf_bar_t) == sizeof(pineforge::Bar),
-              "C bar mirror must match the native host bar");
-static_assert(sizeof(pf_report_t) == sizeof(pineforge::ReportC),
-              "C report mirror must match the native host report");
 
 int checks = 0;
 int failures = 0;
@@ -319,12 +313,12 @@ int main(int argc, char** argv) {
     full_bars(full);
     const Snapshot batch = run_batch(abi, "native-selected-batch", 1, full, 5);
     integration_row("batch -> Completed",
-                    batch.lifecycle == static_cast<int>(pineforge::NativeLifecycleKind::Completed),
+                    batch.lifecycle == PF_NATIVE_LIFECYCLE_COMPLETED,
                     batch);
 
     const Snapshot stream = run_stream(abi, "native-selected-stream", 1, full, 5);
     integration_row("forward -> Completed",
-                    stream.lifecycle == static_cast<int>(pineforge::NativeLifecycleKind::Completed),
+                    stream.lifecycle == PF_NATIVE_LIFECYCLE_COMPLETED,
                     stream);
 
     pf_bar_t reversal_only[5]{};

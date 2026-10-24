@@ -1,0 +1,17 @@
+//@version=6
+strategy("CR-150 unique entry ids", initial_capital=1000000, pyramiding=1, process_orders_on_close=true)
+// Q9: keep bars, trade count and id byte length equal in both populations.
+// No strategy.closedtrades.* or strategy.opentrades.* read is used.
+uniqueIds = input.bool(true, "unique_ids")
+longIds = input.bool(false, "long_ids")
+every = input.int(4, "every", minval=2)
+limit = input.int(10000, "trades", minval=1)
+var int opened = 0
+var string active = ""
+if bar_index % every == 0 and opened < limit
+    ordinal = uniqueIds ? opened : 0
+    active := (longIds ? "census-entry-" : "E") + str.tostring(ordinal, "00000000000000")
+    strategy.entry(active, strategy.long, qty=1)
+    opened += 1
+if bar_index % every == 1
+    strategy.close(active)

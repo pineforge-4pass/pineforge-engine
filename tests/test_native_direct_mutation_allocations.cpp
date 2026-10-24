@@ -18,8 +18,9 @@
 //     extending its session-day spans, a few times a day, whether the book
 //     fills or not (at most one per 40 bars here); before the lane the fills
 //     added about five allocations each;
-//   * a Full read of the whole record (native_events(0)) allocates its one
-//     result vector (no event of these books holds a vector of its own).
+//   * a Full read of the whole record (native_events(0)) budgets one result
+//     vector plus the decoded definitions in spilled journal pages; the
+//     bracket fixture has no nonempty nested vectors or long strings.
 //
 // Each book is a bare host (no Pine); the windows start after a warm-up and
 // end at the last bar's callback, so a run's setup and its end are outside
@@ -263,8 +264,60 @@ void witness(Mode mode) {
     if (mode != Mode::Reissue) CHECK(book.fills > 100);
 }
 
-// The whole record of a Full run, read once: one result vector, and what the
-// read costs in time (printed; the lane measures it against 10f20197 on spark).
+// Mirror the private src/native_order.cpp JournalStore constants: there is no
+// public header for them. test_journal_resident_cap pins the same kCap/kChunk
+// and fails if kMaxResident rises (its bound is kCap + kChunk, upper only).
+// If kMaxResident falls, real pages exceed this mirror's count, the cache no
+// longer holds them, and this test fails at `allocations <= budget` while the
+// printed budget still shows the mirrored page count: re-pin here.
+constexpr std::size_t kCap = 2048;
+constexpr std::size_t kChunk = 32;
+constexpr std::size_t kFullReadCacheSlots = 4;
+static_assert(kCap % kChunk == 0 && kCap > kFullReadCacheSlots * kChunk,
+              "the resident cap contains whole chunks and exceeds the read cache");
+
+constexpr std::size_t full_read_spilled_pages(std::size_t events) {
+    // Full retention never retires. These small bracket events fill a page
+    // per chunk: spill just enough whole chunks to leave <= kCap events,
+    // not everything above JournalStore's kKeepResident floor.
+    const std::size_t excess = events > kCap ? events - kCap : 0;
+    return excess / kChunk + (excess % kChunk != 0 ? 1u : 0u);
+}
+
+// prepare_spill reserves SpillStorage and all four cache event vectors before
+// the read; load reuses them. archive_definition, however, calls make_shared
+// once per decoded DefinitionRef: one per event in this bracket fixture,
+// hence kChunk allocations per full spilled page, not one page-buffer allocation.
+// No other read allocation needs slack: short strings stay inline, nested
+// vectors are empty, and the account rows select std::sort, not inplace_merge.
+constexpr std::size_t kFullReadSlack = 0;
+
+constexpr std::size_t full_read_allocation_budget(std::size_t events) {
+    // One reserved result vector + decoded page payloads + named zero slack.
+    // full_read checks that every spilled page fits the cache, so its cursor
+    // search cannot evict a page and force the subsequent scan to decode it again.
+    return 1 + full_read_spilled_pages(events) * kChunk + kFullReadSlack;
+}
+
+void full_read_budget_control() {
+    for (std::size_t events = 0; events <= kCap; ++events)
+        CHECK(full_read_allocation_budget(events) == 1 + 0 + kFullReadSlack);
+    CHECK(full_read_spilled_pages(kCap + 1) == 1);
+    CHECK(full_read_spilled_pages(kCap + kChunk) == 1);
+    CHECK(full_read_spilled_pages(kCap + kChunk + 1) == 2);
+    CHECK(full_read_allocation_budget(kCap + kChunk + 1)
+          == 1 + 2 * kChunk + kFullReadSlack);
+    // Exercise spilled prefixes through the cache's full capacity, with total
+    // journal lengths well beyond one chunk, independently of this run's size.
+    for (std::size_t extra = 1; extra <= kFullReadCacheSlots * kChunk; ++extra) {
+        const std::size_t events = kCap + extra;
+        CHECK(full_read_allocation_budget(events) < events / 2
+              && "one allocation per journal event must exceed the Full-read budget");
+    }
+}
+
+// The whole record of a Full run, read once: a result vector plus the decoded
+// definitions in spilled pages; the read time is printed for comparison.
 void full_read() {
     const int bars = 4000;
     const std::vector<Bar> tape = make_bars(bars);
@@ -284,7 +337,16 @@ void full_read() {
     std::printf("Full read: %zu rows (%zu commands) in %.0f us, %zu allocations\n",
                 events.size(), commands, micros, allocations);
     CHECK(commands > 1000);
-    CHECK(allocations == 1);
+    // Only command rows belong to JournalStore; driver/account rows do not spill.
+    const std::size_t pages = full_read_spilled_pages(commands);
+    const std::size_t budget = full_read_allocation_budget(commands);
+    std::printf("Full read budget: 1 result vector + %zu pages * %zu definitions + "
+                "%zu slack = %zu allocations\n", pages, kChunk, kFullReadSlack, budget);
+    CHECK(pages <= kFullReadCacheSlots
+          && "spilled pages must fit the cache to avoid cursor-search redecodes");
+    CHECK(budget < commands / 8
+          && "Full-read budget must stay far below per-command or per-row allocation");
+    CHECK(allocations <= budget);
 }
 
 }  // namespace
@@ -293,6 +355,7 @@ int main() {
     witness(Mode::Bracket);
     witness(Mode::Market);
     witness(Mode::Reissue);
+    full_read_budget_control();
     full_read();
     std::printf("%d checks\n", checks);
     if (failures == 0) {

@@ -9,6 +9,7 @@ import unittest
 
 import check_aggregate_cpp_versions as checker
 from cpp_abi_pairing import run_synthetic_pair
+import source_clone
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,12 +20,9 @@ class AggregateVersions(unittest.TestCase):
         directory = tempfile.TemporaryDirectory(prefix="pf-aggregate-versions-")
         self.addCleanup(directory.cleanup)
         root = Path(directory.name) / "repo"
-        # __pycache__ / *.pyc: a Python guard CTest runs in parallel writes its
-        # bytecode through a temporary file that can vanish between copytree's
-        # listing and its copy; bytecode is never source input to the clone.
-        shutil.copytree(ROOT, root, ignore=shutil.ignore_patterns(
-            "build*", ".git", "corpus", "*.so", "*.a", ".native-fx-introduced-*",
-            "__pycache__", "*.pyc"))
+        # source_clone.py excludes volatile bytecode and pytest cache names.
+        source_clone.clone_source_tree(ROOT, root, extra_ignore=(
+            "build*", ".git", "corpus", "*.so", "*.a", ".native-fx-introduced-*"))
         return root
 
     def test_current_tree(self) -> None:
@@ -35,6 +33,18 @@ class AggregateVersions(unittest.TestCase):
         path = root / "include/pineforge/engine.hpp"
         path.write_text(path.read_text().replace("engine_script_run_v19", "engine_script_run_v0", 1))
         with self.assertRaises(ValueError):
+            checker.check(root)
+
+    def test_reopened_epoch_mutation_rejects(self) -> None:
+        root = self.copied_root()
+        path = root / "include/pineforge/engine.hpp"
+        before = ("inline namespace engine_script_run_v19 {\n"
+                  "// The fold broker_state_hash() is built on:")
+        text = path.read_text()
+        self.assertIn(before, text)
+        path.write_text(text.replace(
+            before, before.replace("engine_script_run_v19", "engine_script_run_v0"), 1))
+        with self.assertRaisesRegex(ValueError, "BacktestEngine requires engine_script_run_v19"):
             checker.check(root)
 
     def test_stream_fold_mutation_rejects(self) -> None:

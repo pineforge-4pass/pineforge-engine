@@ -365,12 +365,15 @@ typedef struct pf_trace_entry_s {
 
 typedef struct pf_report_s {
     /* Trades */
-    int             total_trades;       /**< Closed-trade count (== trades_len), including
+    int             total_trades;       /**< Logical closed-trade count, including
                                          *   the range-end close of a position still open
-                                         *   after the final bar (pf_trade_t::open_at_end). */
+                                         *   after the final bar. Equals trades_len on the
+                                         *   owning-array route; with a sink trades_len is 0.
+                                         *   The opt-in report envelope declares capture
+                                         *   separately in <pineforge/report_mode.h>. */
     pf_trade_t*     trades;             /**< Heap array of closed trades; script-driven exits
                                          *   first, then the range-end rows (open_at_end=1). */
-    int             trades_len;         /**< Length of #trades. */
+    int             trades_len;         /**< Resident length of #trades, not the logical total. */
     double          net_profit;         /**< Sum of all closed-trade PnL. */
 
     /* Bar processing counts */
@@ -414,7 +417,9 @@ typedef struct pf_report_s {
      * On a completed KernelRecorded run len == script_bars_processed; a
      * Failed or Aborted run can expose a shorter prefix (check
      * strategy_get_last_error), and metrics describe that prefix. NOTE int64_t
-     * length (ctypes: c_int64). */
+     * length (ctypes: c_int64). With a report sink: NULL / 0 length.
+     * The opt-in <pineforge/report_mode.h> envelope exposes logical point
+     * count and capture flags separately; this field is resident length. */
     pf_equity_point_t*  equity_curve;
     int64_t             equity_curve_len;
     /* Per-script-bar broker-state hash when recording is on and report
@@ -425,7 +430,7 @@ typedef struct pf_report_s {
      * native hosts alike: each point latches the continuation, and the
      * scalar folds the last latch. A Failed or Aborted run can have a
      * shorter recorded prefix; its last row need not equal the scalar.
-     * ABI v4. */
+     * ABI v4. With a report sink: NULL / 0 length. */
     uint64_t*           broker_state_hash;
     int64_t             broker_state_hash_len;
 } pf_report_t;
@@ -694,6 +699,64 @@ PF_API void strategy_set_trade_start_time(pf_strategy_t s, int64_t timestamp_ms)
  *  @{
  */
 
+/** Read process-wide scratch-arena diagnostics, outside canonical report bytes.
+ *  Writes the peak bytes of simultaneously claimed chunks since attachment
+ *  and the exact supplied backing size (including any unallocatable tail).
+ *  Returns 0; with no arena attached both values are 0. Returns -1 with both
+ *  outputs unchanged if either pointer is NULL, the pointers alias, or the
+ *  snapshot cannot be read. Never throws or changes a strategy's last error.
+ *  Query after report finalization and before arena detach. The counters
+ *  belong to the attachment, not a strategy or repeat; detach resets them.
+ *  No pf_report_t, sink receipt, trailer or broker-state hash layout changes. */
+PF_API int pf_report_scratch_arena_stats(uint64_t* high_water_bytes,
+                                       uint64_t* arena_bytes);
+
+/** Admit a jailed handle only with an attached scratch arena.
+ *  Attach the inherited environment arena, if configured (fixed fd 5:
+ *  PF_SCRATCH_ARENA_FD=5, positive PF_SCRATCH_ARENA_BYTES);
+ *  validate its backing and mapping configuration before execution.
+ *  On Linux, require a sealed memfd whose seal mask contains
+ *  F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL. F_SEAL_EXEC and other non-write
+ *  seals may be added (e.g. MFD_NOEXEC_SEAL). F_SEAL_WRITE or
+ *  F_SEAL_FUTURE_WRITE is refused at attachment with
+ *  report_sink_failed/arena_backing. These requirements hold regardless of
+ *  PF_SCRATCH_ARENA_JAILED; off Linux, admit any attached arena.
+ *  Returns 0 accepted; -1 for a NULL handle or an unavailable/invalid arena.
+ *  Arena failures set the handle's typed report_sink_failed/arena_backing
+ *  failure. Never creates a backing file or falls back to TMPDIR.
+ *  Existing unjailed callers do not need to call this opt-in admission.
+ *  The first successful attach sets SIGXFSZ to SIG_IGN process-wide; the prior disposition is not restored.
+ *  Same fd/size reattaches are no-ops. Hosts relying on their SIGXFSZ handler
+ *  or default termination must account for this before attaching an arena. */
+PF_API int strategy_require_report_scratch_arena_v1(pf_strategy_t s);
+
+struct pf_report_sink_diagnostics_v1;
+/** Read bounded sink provenance without reading the sink or replaying rows.
+ *  Include report_sink.h for the descriptor; initialize struct_size and
+ *  version=1. Returns 0 filled; -1 with *out unchanged for a bad handle,
+ *  size, version or NULL output. Completion follows the sink trailer.
+ *  Queries never execute callbacks, advance a cursor or change last_error. */
+PF_API int strategy_report_sink_diagnostics_v1(
+    pf_strategy_t s, struct pf_report_sink_diagnostics_v1* out);
+
+/** Install the invocation's cooperative SIGTERM handler. The handler only
+ *  stores a volatile sig_atomic_t flag; batch runs observe it at completed
+ *  input-bar boundaries, independently of #strategy_request_abort.
+ *  Opt-in, process-wide, for one serialized child invocation. Call on the
+ *  invoking thread with SIGTERM blocked, then unblock it; pending SIGTERM is
+ *  preserved. Returns 0, or -1 on signal-setup failure. Repeated installation
+ *  preserves an already requested stop. This opt-in installs only the abort
+ *  handler for SIGTERM; it does not change any ABI layout. */
+PF_API int pf_run_abort_install_sigterm_v1(void);
+
+/** Read the invocation stop flag: 0 or 1. No allocation or state mutation. */
+PF_API int pf_run_abort_requested_v1(void);
+
+/** Restore the disposition saved by #pf_run_abort_install_sigterm_v1.
+ *  Call with SIGTERM blocked, after native cleanup and failure publication.
+ *  Returns 0 (also when uninstalled), or -1 on signal-setup failure. */
+PF_API int pf_run_abort_restore_sigterm_v1(void);
+
 /** Return the physical entry incarnation for one closed-trade row.
  *
  *  Partial-close/FIFO fragments emitted from the same physical entry share
@@ -829,6 +892,61 @@ PF_API int strategy_stream_fill_report(pf_strategy_t s, pf_report_t* out);
 /** @defgroup pf_live Live-runtime surface (ABI v4)
  *  Default-off flags and read-only accessors used by pineforge-live. None of
  *  them changes a historical run unless enabled. @{ */
+
+#define PINEFORGE_HAS_SCRATCH_TABLES_V1 1
+
+/** Storage policy for the nine historical scratch-table regions. */
+typedef enum pf_scratch_table_backend_e {
+    PF_SCRATCH_TABLE_DISK_SCRATCH = 0,
+    PF_SCRATCH_TABLE_BOUNDED_MEMORY = 1
+} pf_scratch_table_backend_t;
+
+/** Version 1 scratch-table admission maxima, in keys/rows and key bytes.
+ *  Set struct_size = sizeof(pf_scratch_tables_v1), version = 1, reserved = 0.
+ *  K_q/B_q are reserved zero; q's two region descriptors remain empty.
+ *  Each other K/B pair includes all distinct ever-stored keys, including erased
+ *  keys. U/B_U cover all cohort IDs, V/B_V all exit-rank IDs (V <= 27), and R
+ *  all rooted successors, including internally generated replacements.
+ *  Counts and UTF-8/binary key-byte totals are admitted maxima supplied by
+ *  the host, not estimates inferred from the number of bars.
+ *  Bounded mode reserves one fixed slab before run preparation; exceeding
+ *  the manifest fails the run with scratch_capacity_exceeded. The layout
+ *  and every offset must fit uint64_t, size_t and off_t. Allocation failure
+ *  remains out_of_memory. This policy is independent of the report sink.
+ *  In bounded mode, all eleven maxima zero select the P0 policy at each
+ *  begin: finite batches use that run's input-bar count, and streams without
+ *  a declared lifetime use the fixed stream tier (warmup is not lifetime).
+ *  Any nonzero maximum makes the entire manifest explicit, zeros included.
+ *  The default is an admission policy, not a measured workload bound. */
+typedef struct pf_scratch_tables_v1 {
+    uint32_t struct_size;
+    uint32_t version;
+    uint32_t backend;
+    uint32_t reserved;
+    uint64_t K_q;
+    uint64_t B_q;
+    uint64_t K_e;
+    uint64_t B_e;
+    uint64_t K_c;
+    uint64_t B_c;
+    uint64_t U;
+    uint64_t B_U;
+    uint64_t V;
+    uint64_t B_V;
+    uint64_t R;
+} pf_scratch_tables_v1;
+
+/** Copy scratch-table configuration while idle; NULL restores disk defaults.
+ *  Never retains a pointer into the caller's descriptor. Returns 0 on
+ *  success, -1 for a null handle or invalid size/version/backend/reserved/V,
+ *  -2 during a stream, and -3 during a batch run (including begin callbacks).
+ *  A refusal preserves the installed configuration and active run ownership.
+ *  Finite streams must supply maxima for their complete admitted lifetime.
+ *  The embedding host sets RLIMIT_FSIZE and owns disk-scratch SIGXFSZ policy.
+ *  This setter does not attach an arena; see #strategy_require_report_scratch_arena_v1 for the SIGXFSZ side effect of arena attachment. */
+PF_API int strategy_set_scratch_tables_v1(pf_strategy_t s,
+                                         const pf_scratch_tables_v1* config);
+
 /** Request cooperative abort of the run in progress (see c_abi.cpp). */
 PF_API void strategy_request_abort(pf_strategy_t s);
 /** 0 = completed, 1 = NOT_COMPLETED (aborted), -1 = @p s is NULL. */
@@ -1223,7 +1341,8 @@ PF_API int64_t strategy_position_cycle_seq(pf_strategy_t s);
  *  (`trades_` then the range-end rows, `open_at_end`). The returned pointer
  *  is valid until the next run() (or stream call) on this handle, like
  *  #strategy_get_last_error. NULL on a NULL @p s or an out-of-range
- *  @p trade_index. */
+ *  @p trade_index. This legacy borrowed-pointer API materializes each
+ *  requested row until the next run; full-history requests use growing RAM. */
 PF_API const char* strategy_closed_trade_entry_id(pf_strategy_t s, int trade_index);
 /** See #strategy_closed_trade_entry_id for the row-space/lifetime/NULL
  *  contract. The returned string is the engine's own INTERNAL exit id, not
@@ -1861,6 +1980,16 @@ PF_API int strategy_signal_safety_receipt(pf_strategy_t s, char* json, size_t ca
 
 /** @} */ /* end of pf_outputs */
 
+/** Feature probe for the borrowed symbol-feed setter. */
+#define PINEFORGE_HAS_SYMBOL_FEED_BORROWED_V1 1
+/** Install another symbol's bars without copying them. The caller keeps both
+ *  arrays alive until the feed is replaced or cleared, or #strategy_free.
+ *  Validation and return values match #strategy_set_symbol_feed. Historical
+ *  runs only: stream_begin() fails closed while a symbol feed is installed. */
+PF_API int strategy_set_symbol_feed_borrowed_v1(
+    pf_strategy_t s, const char* key, const char* timeframe,
+    const pf_bar_t* bars, const int64_t* close_ms, int n);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif
@@ -1872,5 +2001,8 @@ PF_API int strategy_signal_safety_receipt(pf_strategy_t s, char* json, size_t ca
  * pinned separately by scripts/check_c_abi_runtime.py, which is why they do
  * not move this header's own declaration count. */
 #include <pineforge/native_c_api.h>
+
+/** Feature probe: include <pineforge/report_sink.h> for the additive sink ABI. */
+#define PINEFORGE_HAS_REPORT_SINK_V1 1
 
 #endif /* PINEFORGE_H */

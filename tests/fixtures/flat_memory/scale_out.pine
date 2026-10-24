@@ -1,0 +1,11 @@
+//@version=6
+strategy("CR150 position-tail scale-out", overlay=true, initial_capital=1000000,
+         default_qty_type=strategy.fixed, default_qty_value=4, pyramiding=2,
+         margin_long=0, margin_short=0, commission_type=strategy.commission.percent,
+         commission_value=0.00125, close_entries_rule="FIFO")
+// One position stays open while FIFO lots receive additions and 50% exits.
+// Use the same synthetic price envelope as test_position_tail_scale_out.cpp.
+if bar_index % 4 == 0
+    strategy.entry("scale-out", strategy.long, qty=bar_index == 0 ? 8 : 4)
+if bar_index % 4 == 2 and strategy.position_size > 0
+    strategy.exit("half", "scale-out", limit=close + 0.25, qty_percent=50)

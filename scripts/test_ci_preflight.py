@@ -1760,6 +1760,50 @@ exit "$lookup_exit"
                 self.assertIn('PR fast rows must keep one pinned CMake label list and executable build target',
                               findings)
 
+    def test_fast_rows_refuse_property_writes_after_the_registration_block(self):
+        sources = self.ci_sources()
+        cmake = sources[3]
+        finding = 'PR fast rows must keep one pinned CMake label list and executable build target'
+        self.assertIn('test_ta', ci_preflight.fast_rows(cmake))
+        self.assertNotIn(finding, ci_workflow_findings(*sources, others=self.other_sources()))
+        self.assertNotIn(
+            finding, self.mutated_file_findings(
+                3, None, cmake, cmake + '\n# A comment after registration is harmless.\n'))
+        for statement in (
+                'set_tests_properties(test_ta PROPERTIES LABELS "cr999")',
+                'set_tests_properties(test_ta PROPERTIES SKIP_RETURN_CODE 77)',
+                'set_property(TEST test_ta APPEND PROPERTY LABELS "cr999")',
+                'add_test(NAME test_ta_x COMMAND true)'):
+            with self.subTest(statement=statement):
+                findings = self.mutated_file_findings(
+                    3, None, cmake, cmake + '\n' + statement + '\n')
+                self.assertIn(finding, findings)
+
+    def test_fast_rows_cannot_be_rewritten_after_validation(self):
+        sources = self.ci_sources()
+        block = ci_preflight.FAST_TEST_REGISTRATION
+        finding = 'PR fast rows must keep one pinned CMake label list and executable build target'
+        self.assertEqual(sources[3].count(block), 1)
+        # A terminal block is the positive control even on the BASE tree,
+        # whose real block precedes the lane includes.
+        sources[3] = sources[3].replace(block, '', 1).rstrip() + '\n' + block
+        self.assertNotIn(finding, ci_workflow_findings(*sources))
+        for properties in ('SKIP_RETURN_CODE 1', 'LABELS "slow"'):
+            with self.subTest(properties=properties):
+                changed = list(sources)
+                changed[3] += f'set_tests_properties(test_ta PROPERTIES {properties})\n'
+                self.assertIn(finding, ci_workflow_findings(*changed))
+
+    def test_fast_validation_cannot_precede_a_lane_include(self):
+        sources = self.ci_sources()
+        block = ci_preflight.FAST_TEST_REGISTRATION
+        finding = 'PR fast rows must keep one pinned CMake label list and executable build target'
+        self.assertEqual(sources[3].count(block), 1)
+        sources[3] = sources[3].replace(block, '', 1).rstrip() + '\n' + block
+        self.assertNotIn(finding, ci_workflow_findings(*sources))
+        sources[3] += 'include("${CMAKE_CURRENT_SOURCE_DIR}/cr150.d/late-properties.cmake")\n'
+        self.assertIn(finding, ci_workflow_findings(*sources))
+
     def test_reusable_heavy_profiles_keep_full_populations_and_dispatch(self):
         for before, after in (
                 ('  workflow_dispatch:\n', ''),
@@ -1916,7 +1960,7 @@ exit "$lookup_exit"
                 self.assertIn(f'{job} must keep its full population', findings)
                 self.assertEqual(sum('--exclude-label' in body for body in _jobs(changed[0]).values()), 1)
 
-    def assert_full_event_populations(self, ci, release):
+    def assert_release_kernel_native_full_debug_sanitizers_exclude_slow(self, ci, release):
         jobs = _jobs(ci)
         # Full verification no longer carries a label exclusion on any event.
         self.assertEqual({job for job, body in jobs.items() if '--exclude-label' in body},
@@ -1936,9 +1980,13 @@ exit "$lookup_exit"
         for profile in ('release', 'debug', 'kernel', 'sanitizers', 'native',
                         'live-sanitizers', 'live-tsan'):
             cfg = ci_verify.build_config([profile])
+            # L6 rule 2026-10-24 02:12: the Debug builds of the full registry
+            # (debug, sanitizers) exclude label slow by default; every other
+            # profile, including the runner-only Debug ones, runs every row.
+            default_exclusion = ['-LE', 'slow'] if profile in ('debug', 'sanitizers') else []
             self.assertEqual(ci_verify.ctest_command(cfg, cfg.build_dir, jobs=1, junit=False), [
                 'ctest', '--test-dir', str(cfg.build_dir), '--output-on-failure',
-                '--no-tests=error', '--parallel', '1', '--timeout', '0'])
+                '--no-tests=error', '--parallel', '1', '--timeout', '0'] + default_exclusion)
         discovered = set(discover_test_ids(ROOT / 'scripts/test_ci_verify.py'))
         self.assertTrue(discovered)
         for event in ('push', 'workflow_dispatch', 'schedule', 'release', ''):
@@ -1954,10 +2002,11 @@ exit "$lookup_exit"
                         str(ROOT / 'scripts/test_ci_verify.py'), '--log-dir',
                         str(ROOT / 'build-ci-preflight/verifier-tests-shards')])
 
-    def test_main_and_release_keep_every_row_and_verifier_class(self):
+    def test_release_kernel_native_keep_rows_debug_sanitizers_exclude_slow_all_classes(self):
+        # CR-233 keeps the full-event profiles in ci-post.yml (CI_SOURCES[6]).
         ci = self.ci_sources()[6]
         release = (ROOT / '.github/workflows/release.yml').read_text()
-        self.assert_full_event_populations(ci, release)
+        self.assert_release_kernel_native_full_debug_sanitizers_exclude_slow(ci, release)
         # A push path carrying an exclusion must break this coverage control.
         for job in ('build', 'kernel-only', 'sanitizers'):
             for flag in ("${{ github.event_name == 'push' && '--exclude-label slow' || '' }}",
@@ -1966,12 +2015,13 @@ exit "$lookup_exit"
                     changed = in_job(ci, job, ' --ccache', ' --ccache ' + flag)
                     self.assertNotEqual(changed, ci)
                     with self.assertRaises(AssertionError):
-                        self.assert_full_event_populations(changed, release)
+                        self.assert_release_kernel_native_full_debug_sanitizers_exclude_slow(
+                            changed, release)
                     sources = self.ci_sources()
                     sources[6] = changed
                     self.assertNotEqual(ci_workflow_findings(*sources), [])
         with self.assertRaises(AssertionError):
-            self.assert_full_event_populations(
+            self.assert_release_kernel_native_full_debug_sanitizers_exclude_slow(
                 ci, in_job(release, 'release', '    steps:\n',
                            '    steps:\n      - run: python3 scripts/ci_verify.py release --exclude-label slow\n'))
 

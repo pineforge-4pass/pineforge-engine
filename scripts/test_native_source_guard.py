@@ -142,7 +142,8 @@ def _mask_cpp(text: str) -> str:
 
 
 def _class_extent(masked: str) -> tuple[int, int] | None:
-    match = re.search(r"\bclass\s+BacktestEngine\b[^\{]*\{", masked)
+    # A forward declaration must not borrow the next class's opening brace.
+    match = re.search(r"\bclass\s+BacktestEngine\b\s*(?::[^{;]*)?\{", masked)
     if not match:
         return None
     opening = masked.find("{", match.start(), match.end())
@@ -337,6 +338,23 @@ def self_test() -> int:
         missing = _declared_but_undefined(root)
         if missing != [(3, "missing_member")]:
             print("native source guard: member-declaration self-test failed: "
+                  + repr(missing), file=sys.stderr)
+            return 1
+        # The unrelated row-source members have no BacktestEngine definitions.
+        # A forward declaration before them must still lead to the actual
+        # engine definition, including its genuinely missing member.
+        header.write_text(
+            "class BacktestEngine;\n"
+            "class OpenReportRowSource {\n"
+            "public:\n"
+            "  void clear();\n"
+            "  void begin();\n"
+            "  int row() const;\n"
+            "  void materialize();\n"
+            "};\n" + header.read_text(encoding="utf-8"), encoding="utf-8")
+        missing = _declared_but_undefined(root)
+        if missing != [(11, "missing_member")]:
+            print("native source guard: forward-declaration self-test failed: "
                   + repr(missing), file=sys.stderr)
             return 1
     return 0

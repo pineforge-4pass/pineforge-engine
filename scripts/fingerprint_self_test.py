@@ -892,13 +892,15 @@ def main() -> int:
               duplicate_rejected)
 
     source_tree = ast.parse(RUN_STRATEGY.read_text(encoding="utf-8"))
-    main_fn = next((node for node in source_tree.body
-                    if isinstance(node, ast.FunctionDef) and node.name == "main"), None)
-    main_uses_helper = main_fn is not None and any(
+    # L9c split main() into main() (argparse + sink ExitStack) and _main_run().
+    main_fns = [node for node in source_tree.body
+                if isinstance(node, ast.FunctionDef) and node.name in ("main", "_main_run")]
+    main_uses_helper = bool(main_fns) and any(
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Name)
         and node.func.id == "build_runtime_provenance"
-        for node in ast.walk(main_fn)
+        for fn in main_fns
+        for node in ast.walk(fn)
     )
     check("run_strategy: main fingerprint path uses runtime helper",
           main_uses_helper)
