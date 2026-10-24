@@ -8,9 +8,12 @@ void row() {
     using namespace s4e_tmp;
     PlainEnvironment environment;
     require_filesystems();
-    // An anonymous disk file avoids leaving a failed sink artifact behind.
-    Fd sink(::open("/var/tmp", O_TMPFILE | O_RDWR | O_CLOEXEC, 0600));
-    require(sink.value >= 0, "lab /var/tmp must support an anonymous disk sink");
+    // An unlinked disk file avoids leaving a failed sink artifact behind. The
+    // lab host's /var/tmp (overlayfs) has no O_TMPFILE, so create and unlink.
+    char sink_name[] = "/var/tmp/s4e-explicit-refused-XXXXXX";
+    Fd sink(::mkstemp(sink_name));
+    require(sink.value >= 0, "lab /var/tmp must support an unlinked disk sink");
+    ::unlink(sink_name);
     const auto path = std::string("/proc/self/fd/") + std::to_string(sink.value);
     std::printf("S4E explicit sink follows only its owned descriptor: %s\n", path.c_str());
     CreationWatch watch;
