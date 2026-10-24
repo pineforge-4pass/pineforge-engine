@@ -89,7 +89,9 @@ jobs:
       # Org GitHub App token (no PAT — never expires). Authorizes the version
       # bump commit/tag push to protected main (the App is a bypass actor on the
       # org ruleset) AND the downstream hub dispatch. Scoped to this repo + the
-      # hub. Minted first so checkout can push with it.
+      # hub. Minted first so checkout can push with it. GitHub records this
+      # authenticated pusher as pineforge-app[bot] on exact-main push runs;
+      # ci_release_gate.py pins that login for the one-bump phase-1 exemption.
       - name: Mint org App token
         id: app
         uses: actions/create-github-app-token@v1
@@ -111,6 +113,14 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+      # Phase 1 also accepts an App-pushed two-file bump on a gated PR merge.
+      # No matching post-merge push run yet: refuse; retry after it exists.
+      # The gate requires one active main pull_request ruleset whose own
+      # bypass_actors is exactly Integration 4105147 with bypass_mode always.
+      # Other rulesets' bypass lists do not supply or invalidate that barrier.
+      # The gate needs bypass_actors visible on every branch ruleset in the inventory.
+      # If the release App token cannot see them, the bump is refused.
+      # release-ruleset-probe.yml reports whether it can. contents: write scopes GITHUB_TOKEN.
       - name: Refuse unless pineforge/verify and pineforge/parity are green
         id: gate
         env:
@@ -194,7 +204,8 @@ jobs:
       # from now on (--check: the diff starts at the newest tag HEAD reaches)
       # must pass on the tagged commit before anything is pushed. The commit
       # and the tag go up in one atomic push: both land or neither does, so
-      # main never holds a diff reset to a tag the remote lacks.
+      # main never holds a diff reset to a tag the remote lacks. Keep these
+      # exact two modified regular files: the release gate exempts no others.
       #
       # When a step fails after this push (gh release create, say), the tag
       # exists and re-running this run stops at "Compute next version" (tag

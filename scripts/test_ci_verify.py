@@ -1770,7 +1770,7 @@ class DriverOrderingAndAggregation(unittest.TestCase):
             self.assertEqual(Path(ctest_argv[ctest_argv.index('--output-junit') + 1]).resolve(),
                              (build_dir / 'ctest-junit.xml').resolve())
 
-    def test_ctest_label_exclusion_is_forwarded(self):
+    def test_ctest_label_exclusion_is_forwarded_to_ctest_argv(self):
         code, summary, scripted, _ = self.run_profile(
             extra=['--exclude-label', 'l4-pending'])
         self.assertEqual(code, 0, summary['failures'])
@@ -1836,7 +1836,7 @@ class DriverOrderingAndAggregation(unittest.TestCase):
         ctest_argv = next(argv for argv in scripted.calls if argv[0] == 'ctest' and '--test-dir' in argv)
         self.assertNotIn('--output-junit', ctest_argv)
 
-    def test_ctest_label_exclusion_is_forwarded(self):
+    def test_ctest_label_exclusion_is_forwarded_to_ctest_execution_run(self):
         code, summary, scripted, _ = self.run_profile(extra=['--exclude-label', 'l4-pending'])
         self.assertEqual(code, 0, summary['failures'])
         ctest_argv = next(

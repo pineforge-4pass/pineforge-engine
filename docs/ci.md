@@ -60,13 +60,16 @@ or `slow` rows. The target rebuilds those executables with their library.
 PRs restore the newest compatible default-branch compiler cache, and only
 successful runs on `main` save that cache namespace.
 
-FLEET-POST=A splits routing at the file boundary: PR jobs use
-`["self-hosted","pf-gcp-pr"]`, and push/schedule/manual jobs use
-`["self-hosted","pf-gcp-post"]`. No job chooses its label by event.
+FLEET-POST=A splits verification and documentation routing at the file boundary:
+PR jobs use `["self-hosted","pf-gcp-pr"]`, and post-merge push/schedule/manual
+jobs use `["self-hosted","pf-gcp-post"]`. No job chooses its label by event.
 `corpus-parity-subset.yml` is reusable only from the PR pipeline;
 `corpus-parity.yml` keeps full parity and the full-event subset on the post
 fleet. The checker follows local reusable calls, so a PR caller cannot borrow
 a post workflow even behind a job condition.
+
+The manual `release-ruleset-probe.yml` workflow runs `authz` on
+`["self-hosted","pf-gcp-pr"]` and `probe` on `["self-hosted","pf-gcp-post"]`.
 
 `docs.yml` retains the PR build name and `.github/**` exclusion.
 `docs-post.yml` builds and deploys on main pushes and manual dispatch.
@@ -1147,8 +1150,11 @@ pins that one job name and image, and the exception never applies to a
 workflow reachable from `pull_request`. The PR build remains
 `build (ubuntu-24.04, Release)` and its aggregate remains `build`.
 
-Release and promotion use the isolated release fleet: `release`, `notify-hub`, Linux x64
-`prebuilt` and baseline `promote` use `["self-hosted","pf-gcp-main"]`.
+Release and promotion use the isolated release fleet:
+`release`, `notify-hub`, Linux x64 `prebuilt` and baseline `promote` use
+`["self-hosted","pf-gcp-main"]`.
+The release ruleset probe runs `authz` on `["self-hosted","pf-gcp-pr"]` and
+`probe` on `["self-hosted","pf-gcp-post"]`.
 Release's ARM/macOS artifact cells keep their existing hosted pins, and
 promotion runs on a push to `main` plus manual dispatch from `main`.
 
@@ -1199,7 +1205,9 @@ responses are selected by username. Mutation tests replace a script with
 `exit 0`, remove repository/fork/identity checks or permission lookups, disable
 `fail`, bypass failed lookups, add guard credentials or a checkout, or
 disconnect the credential job. Missing, skipped or unsuccessful authorization
-cannot admit promotion.
+cannot admit promotion. The stage also rejects workflow-level `defaults` and
+`env`, and guard-level `defaults`, so an inherited shell or environment
+variable cannot bypass the guard pin.
 
 The release pool is restricted to the existing pinned release and promotion
 jobs; reusable call edges cannot admit PR events to them.
@@ -1286,8 +1294,109 @@ exactly one associated merged PR targeting `main`, with `merge_commit_sha`
 equal to the release sha and a head tree matching the released tree, then
 reads that head's full contexts through the statuses API. PRs targeting other
 bases or naming a different merge commit are ignored; malformed fields refuse.
-Zero matches refuse; multiple matches refuse and name every matching PR, with
-no preference for the newest.
+When qualifying merged PRs exist, zero tree matches refuse; multiple matches
+refuse and name every matching PR, with no preference for the newest. A failed
+tree or status check never falls back to a release bump.
+
+When there is no qualifying merged PR for the current main sha, phase 1 permits
+one release bump only when all three conditions hold:
+
+1. GitHub's `repos/{repo}/actions/runs?head_sha=<sha>&per_page=100` returns at
+   least one run with `event == "push"`, `head_branch == "main"` and
+   `head_sha == <sha>`. Every such run must have both `actor.login` and
+   `triggering_actor.login` equal to the gate's fixed `RELEASE_PUSH_ACTOR`,
+   `pineforge-app[bot]`, the release App installation token used by
+   `release.yml`. All pages are read; missing HTTP headers, malformed pages,
+   an advertised unread Link next page, changing `total_count` or a row count
+   different from that total refuse. A matching count never overrides an
+   unread next page. Reaching the filtered API's 1000-run limit also refuses,
+   because completeness at that boundary cannot be inferred. Zero matching
+   runs refuse. A bump pushed seconds
+   ago may not have a post-merge run yet; retry the release once that push run exists.
+   At gate time, the guard also reads `repos/{repo}` to confirm main is still
+   the default branch, lists `repos/{repo}/rulesets?includes_parents=true&per_page=100`
+   with every page, and reads each branch ruleset by id for its conditions,
+   rules and `bypass_actors`. It selects branch rulesets whose `ref_name`
+   includes main (`~DEFAULT_BRANCH`, `refs/heads/main`, `~ALL`, or a matching
+   pathname pattern) without excluding main. Simple `*` and `?` patterns do
+   not cross `/`; advanced or unknown pattern syntax refuses.
+   There must be **one active applicable branch ruleset** carrying a
+   `pull_request` rule whose **own** `bypass_actors` list is exactly
+   `[{"actor_type": "Integration", "actor_id": 4105147, "bypass_mode": "always"}]`,
+   the release App token used by `release.yml`. That ruleset's PR rule blocks
+   every direct push by an actor that cannot bypass that same ruleset.
+   A status-check-only rule permits writers to push when its checks pass
+   and supplies no barrier. A disabled, evaluating or main-excluded App-only
+   PR ruleset supplies no barrier either. A second bypass actor, a different
+   App/type or a PR-only bypass mode on the candidate disqualifies it.
+   Other rulesets' bypass lists and enforcement do not supply or invalidate
+   a valid App-only PR barrier. Lists are never intersected: a person may hold
+   a repository role and belong to a team represented by different descriptors.
+   Ruleset names and ids are not pinned; tag-creation rulesets provide no
+   evidence about pushes to main. Every branch detail is still validated,
+   including details after a valid barrier, so unreadable or malformed
+   evidence refuses.
+   Both Actions and ruleset list reads retain HTTP Link headers and check
+   every advertised next page, consecutive page numbers and a terminal page;
+   missing headers, incomplete pagination, API errors, inconsistent
+   list/detail fields and malformed payloads refuse.
+   Every HTTP response body read as JSON, including paginated PR and status
+   lists, must contain exactly one JSON document before pagination is checked.
+   Extra documents (including a later page without its HTTP headers) or
+   trailing garbage refuse with an endpoint-specific diagnostic:
+   `returned an HTTP response body with trailing data; expected exactly one JSON document`.
+   Empty bodies refuse with `returned an empty payload`; a valid empty JSON
+   array is still a complete document.
+2. The bump has exactly one parent, and that parent passes the ordinary
+   phase-1 merged-PR/tree/full-status checks above, including the allowed
+   status creator. This depth is exactly one: a bump on another bump refuses
+   even when its grandparent was gated. A merge commit also refuses.
+3. The complete parent-to-bump file diff is exactly `VERSION` and
+   `docker/run_failure_codes_diff.json`, both status `M`, both regular blobs
+   with mode `100644` before and after. The gate compares complete recursive
+   Git trees, derives `M` from an existing path with a changed blob, and
+   refuses truncated trees. Added, deleted or renamed files, mode changes,
+   any extra file (including README or CHANGELOG), either missing
+   modification, and an empty diff refuse.
+
+Condition 1 proves who pushed this sha to main. It does not prove that the
+pushed content is what a particular release run built, or exclusive use of
+the App credential by this workflow. Commit author, committer and verification
+metadata provide no push-identity evidence. Condition 3 bounds the content
+changes to the two files whose values the release workflow computes: the next
+version and the reset catalog diff. Preflight pins the exact writer, staging,
+commit and atomic-push step and the App-token checkout wiring.
+
+The gate needs `bypass_actors` visible on every branch ruleset in the inventory.
+If the release App token cannot see them, the bump is refused.
+`release-ruleset-probe.yml` reports whether that token can see them.
+Visibility with the installation token, including inherited organization
+rulesets, is unverified until the probe runs. A missing field refuses;
+the guard never assumes an unreadable list is empty or App-only.
+The workflow-level `contents: write` setting scopes GITHUB_TOKEN.
+Preflight pins the unconditional gate invocation and its App token, and its
+binding release-gate tests pin this visibility requirement in code and docs.
+
+Dispatch **Release ruleset probe** (`release-ruleset-probe.yml`) once from
+`main` to check actual ruleset visibility with the same App token mint as
+`release.yml`. The workflow file must be on the default branch, and the run
+must use `main`'s copy.
+The probe job runs on `["self-hosted","pf-gcp-post"]`, with `authz` on
+`["self-hosted","pf-gcp-pr"]`.
+`pf-gcp-main` admits only allowlisted workflows (an org runner-group restriction),
+so the one-time probe uses `pf-gcp-post`.
+The dispatch must run from `main`; the workflow itself refuses any other ref
+before minting the App token or checking out repository code.
+It runs `python3 scripts/ci_release_gate.py rulesets-probe --repo OWNER/REPO`,
+reading only repository metadata, the parent-inclusive ruleset inventory and
+branch details. Success prints the barrier id/name and one compact inventory
+line with enforcement, source and bypass visibility. Refusal exits 1 with empty
+stdout and the reader's `::error::` diagnostic; API/response failures name the endpoint.
+Two hidden rulesets need two dispatches: the first refusal names only the
+first hidden ruleset; make its `bypass_actors` visible before dispatching again
+to identify the second.
+The probe changes no release evidence or gate verdicts. A release `dry_run`
+on a merged PR does not exercise the bump-only ruleset reader.
 
 Phase 2 is **not live yet**: `MAIN_PROOF_WATCHER_FIRST_SHA` in
 `scripts/ci_release_gate.py` is `None`. When C2 main-watch (#176) supplies the
@@ -1296,7 +1405,7 @@ fixed in that constant by a reviewed PR. The release job cannot configure it
 through an environment variable or workflow input. At that sha and every
 descendant, the guard requires a main-proof receipt for the **exact main
 sha** with both full contexts green and does not consult PR heads. Missing,
-unreadable or non-green receipts refuse, with no transitional fallback.
+unreadable or non-green receipts refuse, with no PR or release-bump fallback.
 Commits preceding the cut-over retain phase 1; unknown ancestry refuses.
 The reader seam defines normalized context states, not a receipt storage format.
 
