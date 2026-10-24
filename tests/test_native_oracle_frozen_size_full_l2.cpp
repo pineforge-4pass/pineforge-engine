@@ -8,7 +8,9 @@
 #define signed_position_size oracle_script_position_size
 #define id_unclosed_qty_ source_id_ledger_view()
 #include "oracle_fixture_config_shim.hpp"
+#define trades_ oracle_trade_rows()
 #include "oracle/test_oracle_frozen_size.cpp"
+#undef trades_
 #undef id_unclosed_qty_
 #undef signed_position_size
 #undef PineStrategyHost

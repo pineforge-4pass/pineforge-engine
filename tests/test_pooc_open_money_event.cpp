@@ -81,7 +81,7 @@ public:
             strategy_close("", "SURVIVOR");
         }
     }
-    const std::vector<Trade>& rows() const { return trades_; }
+    const TradeLedger& rows() const { return trades_; }
     double remaining() const { return position_qty_; }
     void literal_shortfall_at_entry() {
         // Deliberately seed a post-admission book with a real cash deficit.
@@ -137,7 +137,7 @@ void covered_control(bool coof, bool funded, int slip = 2, int pyramid_limit = 0
     CHECK(script.recalc == (coof && fire));
     CHECK(script.at_open == (coof && fire));
     if (fire) {
-        const auto& call = p.rows().front();
+        const auto& call = *p.rows().begin();
         CHECK(call.exit_comment == "Margin call");
         CHECK(call.exit_id == "__margin_call__");
         CHECK(call.qty == 1.0);

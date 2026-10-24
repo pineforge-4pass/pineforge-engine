@@ -161,31 +161,49 @@
 //   rebuilt/1: hash=15614000236465510904 -> hash=11624460762363654931
 //   rebuilt/2: hash=14113207875665531755 -> hash=12629210294549389608
 //   rebuilt/3: hash=15614000236465510904 -> hash=11624460762363654931
+// Join head (6cac82ce51, s1c line), harvest job rj-20261022t152941-1a6cf3 (NTU2, engine 3dc24bad43 = the join head
+// with the PF_HOST_VIEW_MEMO_DUMP dump forced on): 13 of 13 runs moved in the hash= field only; trades, fnv and net
+// (and error) are identical on every run. Cause: the exit and trade scratch folds of 3c6f46d159 and the provider's
+// context.versions of 4b5ef3dd28; design, not a bug. The dump owns these values, never edit one by hand.
+// expectation corrected (LAB-QUIETFIX, kPinned hash= fields, 13 of 13 runs), because the removal of the scope-allocation counter fold from the broker-state hash (1b89731330, LAB-QUIETFIX; measured: green on its parent b4a3f76738, red on it) moves the hash; trades, counts and every non-hash value did not move; harvested from this test's own mismatch output on 2cf32840b8, private mode, job rj-20261023t203718-907c79, source .lane-out/harvest-test_adapter_host_view_memo.txt:
+//   batch/A: hash=10711477516890444176 -> hash=2519106336441837047
+//   batch/B: hash=4162910698961082552 -> hash=9959768908743741568
+//   stream/A: hash=10119151085004608240 -> hash=11739218832916586075
+//   stream/B: hash=5559672457081137574 -> hash=8115458682293477793
+//   interleaved/A: hash=10119151085004608240 -> hash=11739218832916586075
+//   interleaved/B: hash=5559672457081137574 -> hash=8115458682293477793
+//   round_robin/A1: hash=10119151085004608240 -> hash=11739218832916586075
+//   round_robin/B: hash=5559672457081137574 -> hash=8115458682293477793
+//   round_robin/A2: hash=10119151085004608240 -> hash=11739218832916586075
+//   rebuilt/0: hash=10711477516890444176 -> hash=2519106336441837047
+//   rebuilt/1: hash=4162910698961082552 -> hash=9959768908743741568
+//   rebuilt/2: hash=10711477516890444176 -> hash=2519106336441837047
+//   rebuilt/3: hash=4162910698961082552 -> hash=9959768908743741568
 constexpr Pinned kPinned[] = {
     {"batch/A",
-     "trades=23 fnv=e337022ac3d8b681 net=71.786509342348978 hash=12629210294549389608 error=''"},
+     "trades=23 fnv=e337022ac3d8b681 net=71.786509342348978 hash=2519106336441837047 error=''"},
     {"batch/B",
-     "trades=35 fnv=9fbd9e232cb9843a net=-268.32270548365625 hash=11624460762363654931 error=''"},
+     "trades=35 fnv=9fbd9e232cb9843a net=-268.32270548365625 hash=9959768908743741568 error=''"},
     {"stream/A",
-     "trades=23 fnv=a0e7b82126f9e8de net=17.321792890020646 hash=16383339362501048882 error=''"},
+     "trades=23 fnv=a0e7b82126f9e8de net=17.321792890020646 hash=11739218832916586075 error=''"},
     {"stream/B",
-     "trades=35 fnv=3eaaaacd90998d64 net=-306.89379320283734 hash=12101474821779718764 error=''"},
+     "trades=35 fnv=3eaaaacd90998d64 net=-306.89379320283734 hash=8115458682293477793 error=''"},
     {"interleaved/A",
-     "trades=23 fnv=a0e7b82126f9e8de net=17.321792890020646 hash=16383339362501048882 error=''"},
+     "trades=23 fnv=a0e7b82126f9e8de net=17.321792890020646 hash=11739218832916586075 error=''"},
     {"interleaved/B",
-     "trades=35 fnv=3eaaaacd90998d64 net=-306.89379320283734 hash=12101474821779718764 error=''"},
+     "trades=35 fnv=3eaaaacd90998d64 net=-306.89379320283734 hash=8115458682293477793 error=''"},
     {"round_robin/A1",
-     "trades=23 fnv=a0e7b82126f9e8de net=17.321792890020646 hash=16383339362501048882 error=''"},
+     "trades=23 fnv=a0e7b82126f9e8de net=17.321792890020646 hash=11739218832916586075 error=''"},
     {"round_robin/B",
-     "trades=35 fnv=3eaaaacd90998d64 net=-306.89379320283734 hash=12101474821779718764 error=''"},
+     "trades=35 fnv=3eaaaacd90998d64 net=-306.89379320283734 hash=8115458682293477793 error=''"},
     {"round_robin/A2",
-     "trades=23 fnv=a0e7b82126f9e8de net=17.321792890020646 hash=16383339362501048882 error=''"},
+     "trades=23 fnv=a0e7b82126f9e8de net=17.321792890020646 hash=11739218832916586075 error=''"},
     {"rebuilt/0",
-     "trades=23 fnv=e337022ac3d8b681 net=71.786509342348978 hash=12629210294549389608 error=''"},
+     "trades=23 fnv=e337022ac3d8b681 net=71.786509342348978 hash=2519106336441837047 error=''"},
     {"rebuilt/1",
-     "trades=35 fnv=9fbd9e232cb9843a net=-268.32270548365625 hash=11624460762363654931 error=''"},
+     "trades=35 fnv=9fbd9e232cb9843a net=-268.32270548365625 hash=9959768908743741568 error=''"},
     {"rebuilt/2",
-     "trades=23 fnv=e337022ac3d8b681 net=71.786509342348978 hash=12629210294549389608 error=''"},
+     "trades=23 fnv=e337022ac3d8b681 net=71.786509342348978 hash=2519106336441837047 error=''"},
     {"rebuilt/3",
-     "trades=35 fnv=9fbd9e232cb9843a net=-268.32270548365625 hash=11624460762363654931 error=''"},
+     "trades=35 fnv=9fbd9e232cb9843a net=-268.32270548365625 hash=9959768908743741568 error=''"},
 };

@@ -1,0 +1,8 @@
+list(APPEND TEST_SOURCES test_disk_id_table)
+pineforge_add_unit_test(test_disk_id_table)
+list(APPEND TEST_SOURCES test_id_cohort_storage)
+pineforge_add_unit_test(test_id_cohort_storage)
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    list(APPEND TEST_SOURCES test_id_adapter_storage)
+    pineforge_add_unit_test(test_id_adapter_storage)
+endif()

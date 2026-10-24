@@ -1572,7 +1572,7 @@ struct SessionDayMemo::State {
     // session_day_from_open by the open date's day number, direct-mapped: the
     // days one lookup reads -- a date and its neighbours, a month of trading
     // dates -- never share a slot.
-    static constexpr std::size_t kDaySlots = 64;
+    static constexpr std::size_t kDaySlots = SessionDayMemo::kDayCapacity;
     // The local civil day of the last few whole seconds a zoned calendar was
     // asked about.
     static constexpr std::size_t kLocalSlots = 8;
@@ -1583,8 +1583,14 @@ struct SessionDayMemo::State {
 
     struct DaySlot {
         bool used = false;
+        // Whether session_day_from_open answered with a day for `open_day`:
+        // `day` reads only then. An answer of none is kept like any other.
+        bool present = false;
         int64_t open_day = 0;
-        std::optional<SessionDay> day;
+        // Its spans' buffer is reserved when the memo binds its calendar and
+        // only assigned into after, so the slot owns the same heap whichever
+        // day it holds.
+        SessionDay day;
     };
     struct LocalSlot {
         bool used = false;
@@ -1615,6 +1621,8 @@ struct SessionDayMemo::State {
     std::uint64_t interval_resolutions = 0;
     // Times libc's local time was read for this calendar.
     std::uint64_t libc_local_reads = 0;
+    // Session days resolved rather than answered from `days`.
+    std::uint64_t day_resolutions = 0;
 
     // The zone's own transitions, for cycle_certificate: a constant offset
     // (UTC, a fixed offset), or the transition instants of the TZif file libc
@@ -1701,13 +1709,24 @@ const SessionDay* memo_session_day_from_open(const SessionCalendar& cal,
     MemoState::DaySlot& slot =
         m.days[static_cast<std::uint64_t>(open_day) % MemoState::kDaySlots];
     if (!slot.used || slot.open_day != open_day) {
-        // Resolved before the slot is touched, so a throw leaves it intact.
-        auto day = session_day_from_open(cal, civil_from_days(open_day));
-        slot.day = std::move(day);
+        // Resolved before the slot is touched, and the slot is a miss while it
+        // is rewritten, so a throw leaves no half-written day behind.
+        const auto day = session_day_from_open(cal, civil_from_days(open_day));
+        ++m.day_resolutions;
+        slot.used = false;
+        slot.present = day.has_value();
+        if (day) {
+            // Copy-assigned, so its spans keep the buffer bind reserved, which
+            // holds any day of this calendar (session_day_span_bound): no
+            // reallocation.
+            slot.day = *day;
+        } else {
+            slot.day.spans.clear();
+        }
         slot.open_day = open_day;
         slot.used = true;
     }
-    return slot.day ? &*slot.day : nullptr;
+    return slot.present ? &slot.day : nullptr;
 }
 
 const SessionDay* memo_session_day_with_trading(const SessionCalendar& cal,
@@ -2210,10 +2229,45 @@ std::uint64_t SessionDayMemo::libc_local_reads() const noexcept {
     return state_ ? state_->libc_local_reads : 0;
 }
 
+std::uint64_t SessionDayMemo::day_resolutions() const noexcept {
+    return state_ ? state_->day_resolutions : 0;
+}
+
+std::size_t SessionDayMemo::retained_days() const noexcept {
+    std::size_t held = 0;
+    if (state_) {
+        for (const auto& slot : state_->days) {
+            if (slot.used) ++held;
+        }
+    }
+    return held;
+}
+
+std::size_t SessionDayMemo::retained_span_capacity() const noexcept {
+    std::size_t capacity = 0;
+    if (state_) {
+        for (const auto& slot : state_->days) capacity += slot.day.spans.capacity();
+    }
+    return capacity;
+}
+
+// The loop in session_day_from_open pushes at most one span per declared
+// window for each civil date n in {-1, 0, 1} from the open date, or the one
+// span of an all-day calendar; merge_spans and the resolution that follows it
+// keep or drop spans and never add one.
+std::size_t session_day_span_bound(const SessionCalendar& calendar) noexcept {
+    if (!calendar.valid()) return 0;
+    return calendar.all_day() ? std::size_t{1} : 3 * calendar.windows().size();
+}
+
 SessionDayMemo::State& SessionDayMemo::bind(const SessionCalendar& calendar) {
     auto fresh = std::make_unique<State>();
     fresh->valid = calendar.valid();
     fresh->utc = is_utc_zone(calendar.timezone());
+    // Every day slot's span buffer, now and for good (State::DaySlot): what
+    // the memo owns is the same after its first lookup as after its millionth.
+    const std::size_t spans = session_day_span_bound(calendar);
+    for (auto& slot : fresh->days) slot.day.spans.reserve(spans);
     state_ = std::move(fresh);
     calendar_ = &calendar;
     return *state_;

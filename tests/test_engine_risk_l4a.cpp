@@ -41,7 +41,7 @@ Bar bar(std::int64_t timestamp, double open, double high, double low, double clo
 
 class RiskHost : public source::PineStrategyHost {
 public:
-    const Trade& row(int index) const { return get_trade(index); }
+    Trade row(int index) const { return get_trade(index); }
     double position() const { return physical_position().signed_units; }
     double average() const { return physical_position().average_price; }
     std::size_t lots() const { return physical_position().lot_count; }

@@ -1,0 +1,2 @@
+list(APPEND TEST_SOURCES test_journal_resident_cap)
+pineforge_add_unit_test(test_journal_resident_cap)

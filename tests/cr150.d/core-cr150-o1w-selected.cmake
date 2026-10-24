@@ -1,0 +1,2 @@
+list(APPEND TEST_SOURCES test_selected_capture_latches)
+pineforge_add_unit_test(test_selected_capture_latches)

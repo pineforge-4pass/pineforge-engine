@@ -239,7 +239,7 @@ void a_f3_fee_and_a_f4_batch_rate_facts() {
     REQUIRE(rates.size() >= 2);
     CHECK(rates[0] == 2.0 && rates[1] == 2.0);
     CHECK(host.rows().size() == 1);
-    CHECK(host.rows().front().commission > 0.0);
+    CHECK(host.rows()[host.rows().base()].commission > 0.0);
 
     struct PercentRow {
         double at_entry = 0.0;
@@ -278,7 +278,7 @@ void a_f3_fee_and_a_f4_batch_rate_facts() {
         percent.run(&bar, 1);
         completed(percent);
         REQUIRE(percent.rows().size() == 1);
-        out.commission = percent.rows().front().commission;
+        out.commission = percent.rows()[percent.rows().base()].commission;
         return out;
     };
 

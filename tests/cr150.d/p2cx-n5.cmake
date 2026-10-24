@@ -1,0 +1,2 @@
+list(APPEND TEST_SOURCES test_n5_summary_only_envelope_after_pending_capture)
+pineforge_add_unit_test(test_n5_summary_only_envelope_after_pending_capture)

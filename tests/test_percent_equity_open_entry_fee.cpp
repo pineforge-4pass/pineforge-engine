@@ -98,10 +98,10 @@ public:
     int closed_count() const { return static_cast<int>(trades_.size()); }
     double first_closed_qty() const {
         return trades_.empty() ? std::numeric_limits<double>::quiet_NaN()
-                               : trades_.front().qty;
+                               : trades_[trades_.base()].qty;
     }
     std::string first_exit_comment() const {
-        return trades_.empty() ? std::string() : trades_.front().exit_comment;
+        return trades_.empty() ? std::string() : trades_[trades_.base()].exit_comment;
     }
 
 private:
@@ -236,11 +236,11 @@ public:
 
     int closed_count() const { return static_cast<int>(trades_.size()); }
     double first_closed_qty() const {
-        return trades_.empty() ? kNaN : trades_.front().qty;
+        return trades_.empty() ? kNaN : trades_[trades_.base()].qty;
     }
     double remaining_qty() const { return position_qty_; }
     std::string first_exit_comment() const {
-        return trades_.empty() ? std::string() : trades_.front().exit_comment;
+        return trades_.empty() ? std::string() : trades_[trades_.base()].exit_comment;
     }
 
 private:

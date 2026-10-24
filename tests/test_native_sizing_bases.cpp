@@ -674,6 +674,93 @@ bool names_identifier(const std::string& text, const std::string& name) {
     return false;
 }
 
+// H2-11: exempt only the body of the kernel archive field dispatcher, never
+// the surrounding source translation unit. Comments/literals cannot extend
+// the exemption past the dispatcher's actual closing brace.
+std::optional<std::string> without_payload_dispatcher(const std::string& text) {
+    const std::string signature = "void payload_fields(Archive& a, T& v)";
+    const auto function = text.find(signature);
+    if (function == std::string::npos
+            || text.find(signature, function + signature.size()) != std::string::npos) {
+        return std::nullopt;
+    }
+    const auto open = text.find_first_not_of(" \t\r\n", function + signature.size());
+    if (open == std::string::npos || text[open] != '{') return std::nullopt;
+    std::size_t depth = 0;
+    for (std::size_t at = open; at < text.size(); ++at) {
+        if (text.compare(at, 2, "//") == 0) {
+            at = text.find('\n', at + 2);
+            if (at == std::string::npos) return std::nullopt;
+            continue;
+        }
+        if (text.compare(at, 2, "/*") == 0) {
+            at = text.find("*/", at + 2);
+            if (at == std::string::npos) return std::nullopt;
+            ++at;
+            continue;
+        }
+        if (text.compare(at, 2, "R\"") == 0) {
+            const auto delimiter_end = text.find('(', at + 2);
+            if (delimiter_end == std::string::npos || delimiter_end - (at + 2) > 16) {
+                return std::nullopt;
+            }
+            const auto ending = ")" + text.substr(at + 2, delimiter_end - (at + 2)) + "\"";
+            const auto close = text.find(ending, delimiter_end + 1);
+            if (close == std::string::npos) return std::nullopt;
+            at = close + ending.size() - 1;
+            continue;
+        }
+        if (text[at] == '"' || text[at] == '\'') {
+            const char quote = text[at];
+            bool closed = false;
+            while (++at < text.size()) {
+                if (text[at] == '\\') {
+                    ++at;
+                } else if (text[at] == quote) {
+                    closed = true;
+                    break;
+                }
+            }
+            if (!closed) return std::nullopt;
+            continue;
+        }
+        if (text[at] == '{') ++depth;
+        if (text[at] == '}' && --depth == 0) {
+            return text.substr(0, open) + "{}\n" + text.substr(at + 1);
+        }
+    }
+    return std::nullopt;
+}
+
+void the_codec_exception_stops_at_the_dispatcher_body() {
+    const std::string codec = R"fixture(template<class Archive, class T>
+void payload_fields(Archive& a, T& v) {
+    // A comment brace } cannot end the body.
+    /* Nor can { or } inside a block comment. */
+    const char* quoted = "}";
+    const char* raw = R"tag({)tag";
+    if (true) { a(ScopeFraction{}, ScopeClaim{}, ScopeBasis{}, ReductionSize{}); }
+}
+)fixture";
+    const char* names[] = {"ScopeFraction", "ScopeClaim", "ScopeBasis", "ReductionSize"};
+    const auto outside = without_payload_dispatcher(codec);
+    REQUIRE(outside.has_value());
+    for (const char* name : names) {
+        CHECK(!names_identifier(*outside, name));
+        const auto before = without_payload_dispatcher(
+            std::string("using leaked = ") + name + ";\n" + codec);
+        const auto after = without_payload_dispatcher(
+            codec + "void lower() { " + name + " leaked; }\n");
+        REQUIRE(before.has_value());
+        REQUIRE(after.has_value());
+        CHECK(names_identifier(*before, name));
+        CHECK(names_identifier(*after, name));
+    }
+    CHECK(!without_payload_dispatcher("void payload_fields(Archive& a, T& v);").has_value());
+    CHECK(!without_payload_dispatcher(codec + codec).has_value());
+    CHECK(!without_payload_dispatcher(codec.substr(0, codec.size() - 2)).has_value());
+}
+
 // R5 R2 retired the first half of this witness: the Pine adapter now emits
 // native_order::Sized for its declaration-level default quantity, so the
 // source layer does name the SIZING basis (Sized, CashValue, EquityFraction,
@@ -780,19 +867,32 @@ void the_source_layer_never_names_the_scope_reduction_bases() {
     REQUIRE(paths.size() >= 4);
     const char* names[] = {"ScopeFraction", "ScopeClaim", "ScopeBasis",
                            "ReductionSize"};
+    const std::string codec_suffix = "/src/source/exit_scratch_versions_production.cpp";
+    std::size_t codec_files = 0;
     for (const auto& path : paths) {
+        const bool codec = path.size() >= codec_suffix.size()
+            && path.compare(path.size() - codec_suffix.size(),
+                            codec_suffix.size(), codec_suffix) == 0;
         std::ifstream input(path);
         REQUIRE(input.good());
         std::ostringstream buffer;
         buffer << input.rdbuf();
         const std::string text = buffer.str();
         CHECK(!text.empty());
+        std::string inspected = text;
+        if (codec) {
+            ++codec_files;
+            const auto outside = without_payload_dispatcher(text);
+            REQUIRE(outside.has_value());
+            inspected = *outside;
+        }
         for (const char* name : names) {
-            const bool found = names_identifier(text, name);
+            const bool found = names_identifier(inspected, name);
             if (found) std::printf("  adapter names %s in %s\n", name, path.c_str());
             CHECK(!found);
         }
     }
+    CHECK(codec_files == 1);
 #else
     std::printf("  PINEFORGE_SOURCE_LAYER_FILES is undefined\n");
     CHECK(false);
@@ -818,6 +918,8 @@ int main() {
     test("pending bracket parent", a_pending_parent_defers_the_fraction_until_the_parent_fills);
     test("sizing preview is the acceptance arithmetic",
          the_sizing_preview_is_the_acceptance_arithmetic);
+    test("codec exception is confined to payload_fields",
+         the_codec_exception_stops_at_the_dispatcher_body);
     test("adapter reduction neutrality",
          the_source_layer_never_names_the_scope_reduction_bases);
     std::printf("R5 L3 sizing bases: %d checks, %d failures\n", checks, failures);

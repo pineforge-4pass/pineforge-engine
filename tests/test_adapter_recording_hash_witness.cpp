@@ -286,6 +286,7 @@ void emit(Scenario scenario, const Observed& got) {
 #else
 // ── Pinned data (see the provenance note at the top of this file) ───────
 // F9_PINNED_DATA_BEGIN
+// Phase B (2e976fb11f), proof rj-20261022t033804-5368ab, box i-09ed19f2aa5a5fc42, harvest harvest-evidence-20261022T053127Z/out/fix-test_adapter_recording_hash_witness.txt: 30 lines moved; the harvest owns these values, never edit one by hand.
 // expectation corrected (kSubmit_rows, 32 of 32 values), because v19 folds the continuation over live state word-wise (native-consumer/v9) and the broker-state hash folds a running closed-row digest (pineforge-broker-state/v19); the trades did not move:
 //   16709085573648202138ull -> 16509221787135873163ull
 //   2367456619966436912ull -> 1111427372116971977ull
@@ -455,39 +456,76 @@ void emit(Scenario scenario, const Observed& got) {
 //   8521102792149394239ull -> 9469106967430871440ull
 //   15674750399051881772ull -> 16570938101897609843ull
 //   7695240294002266835ull -> 4504916531370139992ull
+// Join head (7ca2baba67, s1c line), harvest job rj-20261022t111407-69377e (NTU2, engine 8825bf1cd2 = the join head with
+// PINEFORGE_F9_HARVEST on): 267 of 267 hash values moved (rows 192, reads 69, final 6); every _trades array moved 0 of 12.
+// Cause: the exit and trade scratch folds of 3c6f46d159 and the provider's context.versions of 4b5ef3dd28; design, not a
+// bug. The harvest owns these values, never edit one by hand.
+// expectation corrected (LAB-QUIETFIX, kSubmit_rows, 32 of 32 values), because the removal of the scope-allocation counter fold from the broker-state hash (1b89731330, LAB-QUIETFIX; measured: green on its parent b4a3f76738, red on it) moves the hash; trades, counts and every non-hash value did not move; harvested in this test's own PINEFORGE_F9_HARVEST mode on 2cf32840b8, private mode, job rj-20261023t203718-907c79, source .lane-out/harvest-test_adapter_recording_hash_witness.txt:
+//   13518365217186218231ull -> 10197135956408038487ull
+//   7001598324843115961ull -> 2347367595827648505ull
+//   15503248986690441944ull -> 16190311593001647870ull
+//   17161755021706039619ull -> 13104388309477345381ull
+//   10168601832056376669ull -> 13586721507719025031ull
+//   14394097681722657233ull -> 13048238141310168135ull
+//   1384421532493051116ull -> 7957948294020348034ull
+//   6568386080265069502ull -> 17190559703672034600ull
+//   17241467720457847413ull -> 102143740044985817ull
+//   6623733486018368947ull -> 16772411130708193207ull
+//   17439295361495649124ull -> 14608893439086961998ull
+//   4273436974001331510ull -> 2189915794062062150ull
+//   14194456243762903216ull -> 134763093487870496ull
+//   16870414438675121551ull -> 17797702512523615583ull
+//   13951931773747471598ull -> 11904103470267488062ull
+//   6027791917174859477ull -> 14981856061232305861ull
+//   1629508681748740995ull -> 378258471389411379ull
+//   7748143871656700331ull -> 13435154251886458872ull
+//   539485259105599095ull -> 11262210905277990210ull
+//   18059237371217387244ull -> 8974668152935344533ull
+//   15872888988860193146ull -> 6233404574791142927ull
+//   15966879094240465217ull -> 18327250566914815250ull
+//   16846136316819826333ull -> 9336803150702990374ull
+//   16092682274083719182ull -> 15705488612933775201ull
+//   18142637398515549773ull -> 12339140857599365778ull
+//   145911495517759122ull -> 11657853949440486793ull
+//   14317093133029032011ull -> 2308997855751638988ull
+//   14859822880763191957ull -> 6758957975047576211ull
+//   16394426640796964393ull -> 8214783004704095647ull
+//   13306090203188302550ull -> 1472296705634128456ull
+//   10386510810633958497ull -> 11167827865552641939ull
+//   8560726163125632530ull -> 15518171819697274632ull
 constexpr std::uint64_t kSubmit_rows[] = {
-    8019365971493599225ull,
-    12084928604454138979ull,
-    7685642069387429171ull,
-    3048458165749351592ull,
-    1016691552216785494ull,
-    13664491885780078814ull,
-    9587023827432894395ull,
-    14524900109868328621ull,
-    9449029978748182379ull,
-    9296236845939991861ull,
-    6847490445118097064ull,
-    14897753485894546380ull,
-    7669322480769918742ull,
-    18113034908832324457ull,
-    11682376339945760628ull,
-    2819337982306099843ull,
-    12538423773171751757ull,
-    9997308340912374195ull,
-    132882202901269803ull,
-    4324917842328411012ull,
-    1959066109394889214ull,
-    14408797952054993661ull,
-    7452559163448719125ull,
-    1130695807598369650ull,
-    14753042997347871525ull,
-    16364773345230049122ull,
-    2501705297798598401ull,
-    3039640816570362339ull,
-    16993856174708044159ull,
-    9469106967430871440ull,
-    16570938101897609843ull,
-    4504916531370139992ull,
+    10197135956408038487ull,
+    2347367595827648505ull,
+    16190311593001647870ull,
+    13104388309477345381ull,
+    13586721507719025031ull,
+    13048238141310168135ull,
+    7957948294020348034ull,
+    17190559703672034600ull,
+    102143740044985817ull,
+    16772411130708193207ull,
+    14608893439086961998ull,
+    2189915794062062150ull,
+    134763093487870496ull,
+    17797702512523615583ull,
+    11904103470267488062ull,
+    14981856061232305861ull,
+    378258471389411379ull,
+    13435154251886458872ull,
+    11262210905277990210ull,
+    8974668152935344533ull,
+    6233404574791142927ull,
+    18327250566914815250ull,
+    9336803150702990374ull,
+    15705488612933775201ull,
+    12339140857599365778ull,
+    11657853949440486793ull,
+    2308997855751638988ull,
+    6758957975047576211ull,
+    8214783004704095647ull,
+    1472296705634128456ull,
+    11167827865552641939ull,
+    15518171819697274632ull,
 };
 // expectation corrected (kSubmit_reads, 6 of 6 values), because v19 folds the continuation over live state word-wise (native-consumer/v9) and the broker-state hash folds a running closed-row digest (pineforge-broker-state/v19); the trades did not move:
 //   10242542257977841923ull -> 17535387619041092918ull
@@ -526,20 +564,28 @@ constexpr std::uint64_t kSubmit_rows[] = {
 //   908288806773219080ull -> 2034408309116732524ull
 //   10022661800093696072ull -> 5425212598938859462ull
 //   17712540386472434171ull -> 5372180744734514209ull
+// expectation corrected (LAB-QUIETFIX, kSubmit_reads, 6 of 6 values), because the removal of the scope-allocation counter fold from the broker-state hash (1b89731330, LAB-QUIETFIX; measured: green on its parent b4a3f76738, red on it) moves the hash; trades, counts and every non-hash value did not move; harvested in this test's own PINEFORGE_F9_HARVEST mode on 2cf32840b8, private mode, job rj-20261023t203718-907c79, source .lane-out/harvest-test_adapter_recording_hash_witness.txt:
+//   1797421374622823828ull -> 7810019071557380820ull
+//   17253941748289981700ull -> 15641273772674005426ull
+//   6674692598901180672ull -> 17280486844855217366ull
+//   16628431212486004240ull -> 2931469579617218112ull
+//   7742860835419350296ull -> 10738250855037303213ull
+//   15270833955243874791ull -> 13004705235079603212ull
 constexpr std::uint64_t kSubmit_reads[] = {
-    18234150623076098218ull,
-    7528636846310271579ull,
-    2034408309116732524ull,
-    5425212598938859462ull,
-    14054540774545879068ull,
-    5372180744734514209ull,
+    7810019071557380820ull,
+    15641273772674005426ull,
+    17280486844855217366ull,
+    2931469579617218112ull,
+    10738250855037303213ull,
+    13004705235079603212ull,
 };
 // expectation corrected: kSubmit_final 4550614867809308423ull -> 6186330499779649827ull, because v19 folds the continuation over live state word-wise (native-consumer/v9) and the broker-state hash folds a running closed-row digest (pineforge-broker-state/v19); the trades did not move.
 // expectation corrected (v19-E): kSubmit_final 6186330499779649827ull -> 8426887344131973464ull, because v19-E folds live adapter state (pineforge-source-adapter/v4: retired placement rows are erased, the append-only logs fold as running digests; pineforge-pine-scheduler/v3); the trades did not move; harvested with its switch against main 10f20197 (every old pin reproduced), this tree and V19-E's tip 6e97f272 (identical rows).
 // expectation corrected (V19-FIX): kSubmit_final 8426887344131973464ull -> 13033963886965614456ull, because R5 lane V19-FIX moves the Pine hash values once, inside v19: the dead PineExecutionAdapter::path_order_ no longer folds into pineforge-source-adapter/v4, a script cancel retires every leg of each exit it names and K1 lets a withdrawn leg go, and an origin that can no longer be bound leaves its kernel cohort roster; the trades did not move; harvested with this TU's harvest switch against main 91d65ad6 (every old pin reproduced) and the lane's tree.
 // expectation corrected (INT26 v19 hash re-pin): kSubmit_final 13033963886965614456ull -> 7695240294002266835ull [H-THIN], because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane H-THIN's hash step (the Pine host's excursion model leaves the source-layer fold, E19; a FIFO exit reserves its own entry's quantity, P10), R5 lane PAR-ORDERS-2's new transient coof_fill_forced_ fold and R5 lane PAR-MARGIN-2's post-fill margin waypoint and R5 lane PAR-CASHFEE's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since PAR-ORDERS' re-pin (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary; the trades did not move.
 // expectation corrected (global exit children): kSubmit_final 7695240294002266835ull -> 4504916531370139992ull, because the source adapter's state now folds TradingView's entry-id table once it holds two entry ids or its peak passes 13 keys (TradingView's global exit children, pineforge-source-adapter/v4); the trades did not move; harvested with PINEFORGE_F9_HARVEST against main 700c5d24 (every old pin reproduced) and this tree
-constexpr std::uint64_t kSubmit_final = 4504916531370139992ull;
+// expectation corrected (LAB-QUIETFIX, kSubmit_final, 1 of 1 values): 8560726163125632530ull -> 15518171819697274632ull, because the removal of the scope-allocation counter fold from the broker-state hash (1b89731330, LAB-QUIETFIX; measured: green on its parent b4a3f76738, red on it) moves the hash; trades, counts and every non-hash value did not move; harvested in this test's own PINEFORGE_F9_HARVEST mode on 2cf32840b8, private mode, job rj-20261023t203718-907c79, source .lane-out/harvest-test_adapter_recording_hash_witness.txt.
+constexpr std::uint64_t kSubmit_final = 15518171819697274632ull;
 constexpr Trade kSubmit_trades[] = {
     {1736121720000LL, 1736122260000LL, 101.5, 102, 2, 0},
     {1736122080000LL, 1736122620000LL, 100, 101, 2, 0},
@@ -678,39 +724,72 @@ constexpr Trade kSubmit_trades[] = {
 //   4090055281926467129ull -> 2965585984607700150ull [H-THIN]
 //   10973342611545588080ull -> 14433906025888897687ull [H-THIN]
 //   17124982032285163865ull -> 8339014417427264918ull [H-THIN]
+// expectation corrected (LAB-QUIETFIX, kReplace_rows, 32 of 32 values), because the removal of the scope-allocation counter fold from the broker-state hash (1b89731330, LAB-QUIETFIX; measured: green on its parent b4a3f76738, red on it) moves the hash; trades, counts and every non-hash value did not move; harvested in this test's own PINEFORGE_F9_HARVEST mode on 2cf32840b8, private mode, job rj-20261023t203718-907c79, source .lane-out/harvest-test_adapter_recording_hash_witness.txt:
+//   13518365217186218231ull -> 10197135956408038487ull
+//   9455201166032034522ull -> 6040926151156413082ull
+//   9046310406730611074ull -> 13460283165365344546ull
+//   7148350057040406303ull -> 6704283693258194335ull
+//   6266814665880799636ull -> 2451646539320159092ull
+//   17210758101113186815ull -> 10321008380160288831ull
+//   18049488967163253734ull -> 10447523099755260518ull
+//   1525562630754509185ull -> 12411069931718689569ull
+//   5688808243429260662ull -> 1190291437169580076ull
+//   17470959993376857392ull -> 17191245730897351026ull
+//   2885359563005397500ull -> 14329900786969777486ull
+//   11715028902967158489ull -> 5552612666770267491ull
+//   14728176790459613784ull -> 11972358475977548298ull
+//   1602954229797464674ull -> 7885797171824748428ull
+//   7380139034764978166ull -> 1944373519882571536ull
+//   5576675742542030964ull -> 12549827863231602186ull
+//   16344980309610261903ull -> 14552434281270317601ull
+//   12232051085070164582ull -> 10932375344477227970ull
+//   6652848943751104585ull -> 5439558770920067477ull
+//   16983665351441458294ull -> 4146320613545395882ull
+//   18025989860997852730ull -> 10401546282919788214ull
+//   6015153318646294392ull -> 18232558531225272108ull
+//   4392019058948261956ull -> 16971713301625169056ull
+//   2438524330251896176ull -> 4955087825605400012ull
+//   16988999962249043816ull -> 3100369574809869124ull
+//   2606608670850684187ull -> 11749052983766196799ull
+//   10837139623563318127ull -> 11121984477950609931ull
+//   5146026467856274548ull -> 37431191708779832ull
+//   10846057819950707443ull -> 9500817305813455839ull
+//   3393290406838556758ull -> 10426584238810163098ull
+//   15782196115065419653ull -> 13727912957868959521ull
+//   15989758082508457868ull -> 4606558571081972872ull
 constexpr std::uint64_t kReplace_rows[] = {
-    8019365971493599225ull,
-    10913970432357026228ull,
-    16718022224308212524ull,
-    11959962526167016269ull,
-    13682103540524835918ull,
-    14243367393985337845ull,
-    8014600618664019672ull,
-    12889133748772252011ull,
-    360570764097142565ull,
-    11876071708761659347ull,
-    3851347914344196379ull,
-    269582453071901974ull,
-    7374511927462938135ull,
-    14141590806976750289ull,
-    10009811972588039873ull,
-    6680845581363570511ull,
-    14019640910801526228ull,
-    8435723009555847478ull,
-    11806787700855741945ull,
-    4186867479979939080ull,
-    4211449273197151184ull,
-    2665513011878476638ull,
-    6197194006704225848ull,
-    9112509013863788708ull,
-    8040469185102305882ull,
-    2771278037748002351ull,
-    11922167282207411627ull,
-    11390247996551829374ull,
-    5206095883568772047ull,
-    2965585984607700150ull,
-    14433906025888897687ull,
-    8339014417427264918ull,
+    10197135956408038487ull,
+    6040926151156413082ull,
+    13460283165365344546ull,
+    6704283693258194335ull,
+    2451646539320159092ull,
+    10321008380160288831ull,
+    10447523099755260518ull,
+    12411069931718689569ull,
+    1190291437169580076ull,
+    17191245730897351026ull,
+    14329900786969777486ull,
+    5552612666770267491ull,
+    11972358475977548298ull,
+    7885797171824748428ull,
+    1944373519882571536ull,
+    12549827863231602186ull,
+    14552434281270317601ull,
+    10932375344477227970ull,
+    5439558770920067477ull,
+    4146320613545395882ull,
+    10401546282919788214ull,
+    18232558531225272108ull,
+    16971713301625169056ull,
+    4955087825605400012ull,
+    3100369574809869124ull,
+    11749052983766196799ull,
+    11121984477950609931ull,
+    37431191708779832ull,
+    9500817305813455839ull,
+    10426584238810163098ull,
+    13727912957868959521ull,
+    4606558571081972872ull,
 };
 // expectation corrected (kReplace_reads, 8 of 8 values), because v19 folds the continuation over live state word-wise (native-consumer/v9) and the broker-state hash folds a running closed-row digest (pineforge-broker-state/v19); the trades did not move:
 //   8242046592519750921ull -> 5144918420709740188ull
@@ -748,21 +827,31 @@ constexpr std::uint64_t kReplace_rows[] = {
 //   4857350833193818325ull -> 17144192060924016500ull [H-THIN]
 //   4317633836685601759ull -> 15841551483731080184ull [H-THIN]
 //   1066029825997878730ull -> 3093248295129869043ull [H-THIN]
+// expectation corrected (LAB-QUIETFIX, kReplace_reads, 8 of 8 values), because the removal of the scope-allocation counter fold from the broker-state hash (1b89731330, LAB-QUIETFIX; measured: green on its parent b4a3f76738, red on it) moves the hash; trades, counts and every non-hash value did not move; harvested in this test's own PINEFORGE_F9_HARVEST mode on 2cf32840b8, private mode, job rj-20261023t203718-907c79, source .lane-out/harvest-test_adapter_recording_hash_witness.txt:
+//   16080774742405748475ull -> 10034526376765482683ull
+//   4149978315516581550ull -> 2021665469159482190ull
+//   4269683584049999352ull -> 8320778768528137592ull
+//   15542263951999075365ull -> 6880156935206624069ull
+//   455456718410046783ull -> 4975296495115681919ull
+//   1914489353081185178ull -> 8824570663227306106ull
+//   11410689567843817455ull -> 14899389989665179445ull
+//   6311894436942387808ull -> 1800858312589370966ull
 constexpr std::uint64_t kReplace_reads[] = {
-    18240752413274260441ull,
-    2691016625363928396ull,
-    6810061420294520706ull,
-    9524522377897439163ull,
-    7296154269922229361ull,
-    17144192060924016500ull,
-    15841551483731080184ull,
-    3093248295129869043ull,
+    10034526376765482683ull,
+    2021665469159482190ull,
+    8320778768528137592ull,
+    6880156935206624069ull,
+    4975296495115681919ull,
+    8824570663227306106ull,
+    14899389989665179445ull,
+    1800858312589370966ull,
 };
 // expectation corrected: kReplace_final 17912935963855979970ull -> 2578691877718696634ull, because v19 folds the continuation over live state word-wise (native-consumer/v9) and the broker-state hash folds a running closed-row digest (pineforge-broker-state/v19); the trades did not move.
 // expectation corrected (v19-E): kReplace_final 2578691877718696634ull -> 836327192465797433ull, because v19-E folds live adapter state (pineforge-source-adapter/v4: retired placement rows are erased, the append-only logs fold as running digests; pineforge-pine-scheduler/v3); the trades did not move; harvested with its switch against main 10f20197 (every old pin reproduced), this tree and V19-E's tip 6e97f272 (identical rows).
 // expectation corrected (V19-FIX): kReplace_final 836327192465797433ull -> 17124982032285163865ull, because R5 lane V19-FIX moves the Pine hash values once, inside v19: the dead PineExecutionAdapter::path_order_ no longer folds into pineforge-source-adapter/v4, a script cancel retires every leg of each exit it names and K1 lets a withdrawn leg go, and an origin that can no longer be bound leaves its kernel cohort roster; the trades did not move; harvested with this TU's harvest switch against main 91d65ad6 (every old pin reproduced) and the lane's tree.
 // expectation corrected (INT26 v19 hash re-pin): kReplace_final 17124982032285163865ull -> 8339014417427264918ull [H-THIN], because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane H-THIN's hash step (the Pine host's excursion model leaves the source-layer fold, E19; a FIFO exit reserves its own entry's quantity, P10), R5 lane PAR-ORDERS-2's new transient coof_fill_forced_ fold and R5 lane PAR-MARGIN-2's post-fill margin waypoint and R5 lane PAR-CASHFEE's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since PAR-ORDERS' re-pin (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary; the trades did not move.
-constexpr std::uint64_t kReplace_final = 8339014417427264918ull;
+// expectation corrected (LAB-QUIETFIX, kReplace_final, 1 of 1 values): 15989758082508457868ull -> 4606558571081972872ull, because the removal of the scope-allocation counter fold from the broker-state hash (1b89731330, LAB-QUIETFIX; measured: green on its parent b4a3f76738, red on it) moves the hash; trades, counts and every non-hash value did not move; harvested in this test's own PINEFORGE_F9_HARVEST mode on 2cf32840b8, private mode, job rj-20261023t203718-907c79, source .lane-out/harvest-test_adapter_recording_hash_witness.txt.
+constexpr std::uint64_t kReplace_final = 4606558571081972872ull;
 constexpr Trade kReplace_trades[] = {
     {1736122080000LL, 1736122620000LL, 100.25, 101.25, 2, 0},
 };
@@ -899,39 +988,72 @@ constexpr Trade kReplace_trades[] = {
 //   16001552197493914473ull -> 6180321870109069012ull [H-THIN]
 //   12375923388653592921ull -> 13623488446145227464ull [H-THIN]
 //   17283281126178883990ull -> 7433824449803764975ull [H-THIN]
+// expectation corrected (LAB-QUIETFIX, kCancel_rows, 32 of 32 values), because the removal of the scope-allocation counter fold from the broker-state hash (1b89731330, LAB-QUIETFIX; measured: green on its parent b4a3f76738, red on it) moves the hash; trades, counts and every non-hash value did not move; harvested in this test's own PINEFORGE_F9_HARVEST mode on 2cf32840b8, private mode, job rj-20261023t203718-907c79, source .lane-out/harvest-test_adapter_recording_hash_witness.txt:
+//   13518365217186218231ull -> 10197135956408038487ull
+//   18361598466684796790ull -> 7070557441239384630ull
+//   17953593404635368900ull -> 15540401082014365636ull
+//   11987103026486519898ull -> 16648291771752370714ull
+//   8821599467241906686ull -> 16149388560418145278ull
+//   3334678103465005012ull -> 5766074531811125716ull
+//   12444285756145365465ull -> 8950009877320613017ull
+//   11464073945349854107ull -> 11082350326666107163ull
+//   7109713614991591875ull -> 12315217869589519747ull
+//   2430222657493046184ull -> 7126031563126762920ull
+//   6100210675594542989ull -> 6023032640258036333ull
+//   9656274378342510657ull -> 13595332169564208001ull
+//   18020565617797055355ull -> 8777333832182038491ull
+//   14151029147651075160ull -> 11623170206824066520ull
+//   10168717789470386424ull -> 14678450028098792792ull
+//   10209199326017337814ull -> 6925314386668447766ull
+//   15706069365870453559ull -> 4089392068649870231ull
+//   1386475089630836726ull -> 6481802705250889462ull
+//   2930368554295325281ull -> 3530710693924115137ull
+//   15670503046022038036ull -> 14390680941136055764ull
+//   4654974964623817312ull -> 1706944649353465792ull
+//   8726055546522047775ull -> 940064806390936063ull
+//   15065748616539168900ull -> 8019894872012511428ull
+//   6535872900383366929ull -> 16100002792642752963ull
+//   15736047898651495925ull -> 17057102108290800391ull
+//   6778341007477143879ull -> 5681639802463776357ull
+//   15375501366126767963ull -> 11184971314814519865ull
+//   18039955934040661772ull -> 3853723004190683502ull
+//   4670199224493625394ull -> 8345947001822004986ull
+//   16714287853145448597ull -> 14032017373094359482ull
+//   12500550703155878543ull -> 14466863787392284398ull
+//   16848897997451921612ull -> 143860904537651269ull
 constexpr std::uint64_t kCancel_rows[] = {
-    8019365971493599225ull,
-    9755581588236959176ull,
-    8371403224338711542ull,
-    16042211801967482956ull,
-    16802932054993035276ull,
-    13204266665875046502ull,
-    16358615663034135167ull,
-    6541217908632789433ull,
-    16241388624320518101ull,
-    3812797098998110562ull,
-    18060365737908723675ull,
-    1812188758081721615ull,
-    5200369397060719481ull,
-    14528435239011413150ull,
-    16366047349482157266ull,
-    14462275783608418760ull,
-    15465277701067203145ull,
-    10822246540794760664ull,
-    5153708099721087119ull,
-    10351223234449594086ull,
-    17418701808057553558ull,
-    8964634856941185769ull,
-    8066351423005290858ull,
-    17339397096778631582ull,
-    10167217103912949158ull,
-    7835551358700961936ull,
-    3057432646794745428ull,
-    3633706464540692363ull,
-    17115428998086447629ull,
-    6180321870109069012ull,
-    13623488446145227464ull,
-    7433824449803764975ull,
+    10197135956408038487ull,
+    7070557441239384630ull,
+    15540401082014365636ull,
+    16648291771752370714ull,
+    16149388560418145278ull,
+    5766074531811125716ull,
+    8950009877320613017ull,
+    11082350326666107163ull,
+    12315217869589519747ull,
+    7126031563126762920ull,
+    6023032640258036333ull,
+    13595332169564208001ull,
+    8777333832182038491ull,
+    11623170206824066520ull,
+    14678450028098792792ull,
+    6925314386668447766ull,
+    4089392068649870231ull,
+    6481802705250889462ull,
+    3530710693924115137ull,
+    14390680941136055764ull,
+    1706944649353465792ull,
+    940064806390936063ull,
+    8019894872012511428ull,
+    16100002792642752963ull,
+    17057102108290800391ull,
+    5681639802463776357ull,
+    11184971314814519865ull,
+    3853723004190683502ull,
+    8345947001822004986ull,
+    14032017373094359482ull,
+    14466863787392284398ull,
+    143860904537651269ull,
 };
 // expectation corrected (kCancel_reads, 19 of 19 values), because v19 folds the continuation over live state word-wise (native-consumer/v9) and the broker-state hash folds a running closed-row digest (pineforge-broker-state/v19); the trades did not move:
 //   11036775732707302117ull -> 4251966616960422708ull
@@ -1015,32 +1137,53 @@ constexpr std::uint64_t kCancel_rows[] = {
 //   7135414897549443327ull -> 12371316346718768834ull [H-THIN]
 // expectation corrected (admission and book rules fold, kCancel_reads, 1 of 19 values), because the source layer's fold (pineforge-source-adapter/v4) now folds the admission and book rules' new state -- the close-first fact, a refused reversal's mark, the pyramiding records and the exit tombstones, each only while set; every closed trade is unchanged in every Trade field against the engine before this change (the per-trade %.17g dump of every run-pass and the no-hash digests), as are the counts; harvested with this TU's own switch:
 //   12371316346718768834ull -> 9742762082741642158ull
+// expectation corrected (LAB-QUIETFIX, kCancel_reads, 19 of 19 values), because the removal of the scope-allocation counter fold from the broker-state hash (1b89731330, LAB-QUIETFIX; measured: green on its parent b4a3f76738, red on it) moves the hash; trades, counts and every non-hash value did not move; harvested in this test's own PINEFORGE_F9_HARVEST mode on 2cf32840b8, private mode, job rj-20261023t203718-907c79, source .lane-out/harvest-test_adapter_recording_hash_witness.txt:
+//   11863367851402374719ull -> 2045796013588297983ull
+//   13165777514584985355ull -> 2046822534051672331ull
+//   17843364032298737092ull -> 15836877054322499364ull
+//   10882592472082434332ull -> 13313988900428555036ull
+//   9231149389049553010ull -> 11689797563737502770ull
+//   96323492932098979ull -> 2954026871499388739ull
+//   13247194404898464784ull -> 11083436263823256528ull
+//   14629197591060667848ull -> 7847427855387161320ull
+//   10815651902513516884ull -> 9602898511390596308ull
+//   536188393206130206ull -> 13342998301314456958ull
+//   16901371859384597910ull -> 4666174020920609494ull
+//   5837100521385464702ull -> 12578185275875794718ull
+//   9966080209493244730ull -> 15061407825113297466ull
+//   11300093097442538538ull -> 5552783507771357002ull
+//   6480555927327246362ull -> 2688634276372991578ull
+//   9831848336184917010ull -> 15556883674421101874ull
+//   13689890532660162063ull -> 898791876073047759ull
+//   6330493456879663336ull -> 7584991567850831374ull
+//   8950731875713864897ull -> 2719858024370158089ull
 constexpr std::uint64_t kCancel_reads[] = {
-    16017138806894645973ull,
-    14395189169447138845ull,
-    15433550368465758174ull,
-    15319181961208510706ull,
-    7116101502612005176ull,
-    5624598517067648741ull,
-    15626337877376063418ull,
-    12303175751506120794ull,
-    16768996190976851778ull,
-    9166644978234881348ull,
-    18107466278445992216ull,
-    512994913100055200ull,
-    9443988914314833904ull,
-    15301609864008799700ull,
-    18376839094291697164ull,
-    3352239734550209384ull,
-    9556582455608271345ull,
-    4597279093679219283ull,
-    9742762082741642158ull,
+    2045796013588297983ull,
+    2046822534051672331ull,
+    15836877054322499364ull,
+    13313988900428555036ull,
+    11689797563737502770ull,
+    2954026871499388739ull,
+    11083436263823256528ull,
+    7847427855387161320ull,
+    9602898511390596308ull,
+    13342998301314456958ull,
+    4666174020920609494ull,
+    12578185275875794718ull,
+    15061407825113297466ull,
+    5552783507771357002ull,
+    2688634276372991578ull,
+    15556883674421101874ull,
+    898791876073047759ull,
+    7584991567850831374ull,
+    2719858024370158089ull,
 };
 // expectation corrected: kCancel_final 547718020446064204ull -> 12693965216151243664ull, because v19 folds the continuation over live state word-wise (native-consumer/v9) and the broker-state hash folds a running closed-row digest (pineforge-broker-state/v19); the trades did not move.
 // expectation corrected (v19-E): kCancel_final 12693965216151243664ull -> 12078141763174815190ull, because v19-E folds live adapter state (pineforge-source-adapter/v4: retired placement rows are erased, the append-only logs fold as running digests; pineforge-pine-scheduler/v3); the trades did not move; harvested with its switch against main 10f20197 (every old pin reproduced), this tree and V19-E's tip 6e97f272 (identical rows).
 // expectation corrected (V19-FIX): kCancel_final 12078141763174815190ull -> 17283281126178883990ull, because R5 lane V19-FIX moves the Pine hash values once, inside v19: the dead PineExecutionAdapter::path_order_ no longer folds into pineforge-source-adapter/v4, a script cancel retires every leg of each exit it names and K1 lets a withdrawn leg go, and an origin that can no longer be bound leaves its kernel cohort roster; the trades did not move; harvested with this TU's harvest switch against main 91d65ad6 (every old pin reproduced) and the lane's tree.
 // expectation corrected (INT26 v19 hash re-pin): kCancel_final 17283281126178883990ull -> 7433824449803764975ull [H-THIN], because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane H-THIN's hash step (the Pine host's excursion model leaves the source-layer fold, E19; a FIFO exit reserves its own entry's quantity, P10), R5 lane PAR-ORDERS-2's new transient coof_fill_forced_ fold and R5 lane PAR-MARGIN-2's post-fill margin waypoint and R5 lane PAR-CASHFEE's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since PAR-ORDERS' re-pin (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary; the trades did not move.
-constexpr std::uint64_t kCancel_final = 7433824449803764975ull;
+// expectation corrected (LAB-QUIETFIX, kCancel_final, 1 of 1 values): 16848897997451921612ull -> 143860904537651269ull, because the removal of the scope-allocation counter fold from the broker-state hash (1b89731330, LAB-QUIETFIX; measured: green on its parent b4a3f76738, red on it) moves the hash; trades, counts and every non-hash value did not move; harvested in this test's own PINEFORGE_F9_HARVEST mode on 2cf32840b8, private mode, job rj-20261023t203718-907c79, source .lane-out/harvest-test_adapter_recording_hash_witness.txt.
+constexpr std::uint64_t kCancel_final = 143860904537651269ull;
 constexpr Trade kCancel_trades[] = {
     {1736122980000LL, 1736123340000LL, 101, 102, 2, 0},
 };
@@ -1177,39 +1320,72 @@ constexpr Trade kCancel_trades[] = {
 //   12667708910662510744ull -> 9104659107751229673ull [H-THIN]
 //   17116188563837257134ull -> 12444616329691358185ull [H-THIN]
 //   18394579596403092954ull -> 14761567357674824267ull [H-THIN]
+// expectation corrected (LAB-QUIETFIX, kOca_rows, 32 of 32 values), because the removal of the scope-allocation counter fold from the broker-state hash (1b89731330, LAB-QUIETFIX; measured: green on its parent b4a3f76738, red on it) moves the hash; trades, counts and every non-hash value did not move; harvested in this test's own PINEFORGE_F9_HARVEST mode on 2cf32840b8, private mode, job rj-20261023t203718-907c79, source .lane-out/harvest-test_adapter_recording_hash_witness.txt:
+//   13518365217186218231ull -> 10197135956408038487ull
+//   11511698201257638672ull -> 2661371859372280432ull
+//   11657733070640950209ull -> 11262186513100952033ull
+//   4912287146587197325ull -> 2585286156515770029ull
+//   5254213556242544875ull -> 16653506846534320907ull
+//   2200886605890608753ull -> 1641396583382158289ull
+//   14424049191222579961ull -> 14229555019339268680ull
+//   15556212243190912693ull -> 14618370291003183609ull
+//   11920542733112046372ull -> 16749840054127897264ull
+//   909060483684854792ull -> 14680110142746380740ull
+//   3167655972183090273ull -> 8639520712105478749ull
+//   9033381987949311161ull -> 4126475015937659709ull
+//   15149179827632879224ull -> 16160926914215128396ull
+//   7781055332525237567ull -> 8133762677687679459ull
+//   4486320066598957562ull -> 8927325861565035614ull
+//   13831738596995600117ull -> 7735236725149071866ull
+//   4533719101093036103ull -> 6003584960174539256ull
+//   14095335009551958495ull -> 3638044318859254344ull
+//   16923696359514265873ull -> 18386833817138819827ull
+//   13526785621772085966ull -> 5042403951589988512ull
+//   11160970723929104736ull -> 555480192683147318ull
+//   1317507638131345984ull -> 14738457101507218838ull
+//   16568660076129692458ull -> 7234084221712054884ull
+//   16442676926463971791ull -> 3811387350265102618ull
+//   2502711424404222304ull -> 8847731632070110603ull
+//   18388344323882996103ull -> 12932776819365661036ull
+//   9343365775875981615ull -> 9218304420545640724ull
+//   10250970505505697980ull -> 17215396573474559823ull
+//   10912087355067734751ull -> 4665364659109518856ull
+//   5451421131197696656ull -> 1610429272082122343ull
+//   4587423173871901746ull -> 7930415832641328160ull
+//   17895001074723403050ull -> 9838335192766373595ull
 constexpr std::uint64_t kOca_rows[] = {
-    8019365971493599225ull,
-    3232936220238691146ull,
-    8093402965097552867ull,
-    16342776694917511399ull,
-    1176409931075103109ull,
-    14796994139400300899ull,
-    4041329064345231230ull,
-    18203940660042607242ull,
-    11789920335390250025ull,
-    12162719525992402073ull,
-    10376658214325705912ull,
-    985387310022141304ull,
-    11563487340980545165ull,
-    17750573796976151050ull,
-    8782861391928203675ull,
-    148042859240194154ull,
-    2639689295090791304ull,
-    3292338544680283540ull,
-    14365721109494484841ull,
-    16315745438525882490ull,
-    10211812198887998072ull,
-    3453235346472806652ull,
-    3881756084375528314ull,
-    11254139579967538522ull,
-    15982954994366452515ull,
-    5877991312918986556ull,
-    18327879919054319324ull,
-    14523893722425410095ull,
-    5768357588422531024ull,
-    1269641092263952791ull,
-    15172589745188766474ull,
-    13866561949272281349ull,
+    10197135956408038487ull,
+    2661371859372280432ull,
+    11262186513100952033ull,
+    2585286156515770029ull,
+    16653506846534320907ull,
+    1641396583382158289ull,
+    14229555019339268680ull,
+    14618370291003183609ull,
+    16749840054127897264ull,
+    14680110142746380740ull,
+    8639520712105478749ull,
+    4126475015937659709ull,
+    16160926914215128396ull,
+    8133762677687679459ull,
+    8927325861565035614ull,
+    7735236725149071866ull,
+    6003584960174539256ull,
+    3638044318859254344ull,
+    18386833817138819827ull,
+    5042403951589988512ull,
+    555480192683147318ull,
+    14738457101507218838ull,
+    7234084221712054884ull,
+    3811387350265102618ull,
+    8847731632070110603ull,
+    12932776819365661036ull,
+    9218304420545640724ull,
+    17215396573474559823ull,
+    4665364659109518856ull,
+    1610429272082122343ull,
+    7930415832641328160ull,
+    9838335192766373595ull,
 };
 // expectation corrected (kOca_reads, 12 of 12 values), because v19 folds the continuation over live state word-wise (native-consumer/v9) and the broker-state hash folds a running closed-row digest (pineforge-broker-state/v19); the trades did not move:
 //   14283998503469032055ull -> 10089579219758468484ull
@@ -1267,25 +1443,39 @@ constexpr std::uint64_t kOca_rows[] = {
 //   16889317257125145965ull -> 9873415387786869126ull
 //   10082918155625450592ull -> 16537836510935200438ull
 //   5595798093249349329ull -> 5301913186335997812ull
+// expectation corrected (LAB-QUIETFIX, kOca_reads, 12 of 12 values), because the removal of the scope-allocation counter fold from the broker-state hash (1b89731330, LAB-QUIETFIX; measured: green on its parent b4a3f76738, red on it) moves the hash; trades, counts and every non-hash value did not move; harvested in this test's own PINEFORGE_F9_HARVEST mode on 2cf32840b8, private mode, job rj-20261023t203718-907c79, source .lane-out/harvest-test_adapter_recording_hash_witness.txt:
+//   13149181495996266868ull -> 7490472481549847092ull
+//   18402732270650530157ull -> 12783879139837033101ull
+//   12100442474324556885ull -> 10328666249363193348ull
+//   1386290532784424732ull -> 12539078020984346384ull
+//   9661064293986569191ull -> 13433048141845755515ull
+//   12055022228962085620ull -> 13774018276946743440ull
+//   7653757144705663676ull -> 9933496658210842351ull
+//   5990590965425446879ull -> 52870264046465988ull
+//   5360727002429021838ull -> 4413451952257900984ull
+//   2849119381153889088ull -> 13183016222037369235ull
+//   2081742237759209521ull -> 16541361494202878466ull
+//   10942380771584110508ull -> 4768332567704023918ull
 constexpr std::uint64_t kOca_reads[] = {
-    15189525287878030606ull,
-    12039483643790541963ull,
-    9873415387786869126ull,
-    14061180146549677313ull,
-    3457726981161275090ull,
-    15838028967223682041ull,
-    11019583341156392335ull,
-    8561321185756650792ull,
-    16537836510935200438ull,
-    13731153404690471591ull,
-    12194364484894581010ull,
-    5301913186335997812ull,
+    7490472481549847092ull,
+    12783879139837033101ull,
+    10328666249363193348ull,
+    12539078020984346384ull,
+    13433048141845755515ull,
+    13774018276946743440ull,
+    9933496658210842351ull,
+    52870264046465988ull,
+    4413451952257900984ull,
+    13183016222037369235ull,
+    16541361494202878466ull,
+    4768332567704023918ull,
 };
 // expectation corrected: kOca_final 13344165461917220241ull -> 14677771083385306600ull, because v19 folds the continuation over live state word-wise (native-consumer/v9) and the broker-state hash folds a running closed-row digest (pineforge-broker-state/v19); the trades did not move.
 // expectation corrected (v19-E): kOca_final 14677771083385306600ull -> 15465526605242472570ull, because v19-E folds live adapter state (pineforge-source-adapter/v4: retired placement rows are erased, the append-only logs fold as running digests; pineforge-pine-scheduler/v3); the trades did not move; harvested with its switch against main 10f20197 (every old pin reproduced), this tree and V19-E's tip 6e97f272 (identical rows).
 // expectation corrected (V19-FIX): kOca_final 15465526605242472570ull -> 18394579596403092954ull, because R5 lane V19-FIX moves the Pine hash values once, inside v19: the dead PineExecutionAdapter::path_order_ no longer folds into pineforge-source-adapter/v4, a script cancel retires every leg of each exit it names and K1 lets a withdrawn leg go, and an origin that can no longer be bound leaves its kernel cohort roster; the trades did not move; harvested with this TU's harvest switch against main 91d65ad6 (every old pin reproduced) and the lane's tree.
 // expectation corrected (INT26 v19 hash re-pin): kOca_final 18394579596403092954ull -> 14761567357674824267ull [H-THIN], because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane H-THIN's hash step (the Pine host's excursion model leaves the source-layer fold, E19; a FIFO exit reserves its own entry's quantity, P10), R5 lane PAR-ORDERS-2's new transient coof_fill_forced_ fold and R5 lane PAR-MARGIN-2's post-fill margin waypoint and R5 lane PAR-CASHFEE's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since PAR-ORDERS' re-pin (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary; the trades did not move.
-constexpr std::uint64_t kOca_final = 13866561949272281349ull;
+// expectation corrected (LAB-QUIETFIX, kOca_final, 1 of 1 values): 17895001074723403050ull -> 9838335192766373595ull, because the removal of the scope-allocation counter fold from the broker-state hash (1b89731330, LAB-QUIETFIX; measured: green on its parent b4a3f76738, red on it) moves the hash; trades, counts and every non-hash value did not move; harvested in this test's own PINEFORGE_F9_HARVEST mode on 2cf32840b8, private mode, job rj-20261023t203718-907c79, source .lane-out/harvest-test_adapter_recording_hash_witness.txt.
+constexpr std::uint64_t kOca_final = 9838335192766373595ull;
 constexpr Trade kOca_trades[] = {
     {1736121960000LL, 1736122020000LL, 100.75, 100.75, 2, 0},
     {1736122500000LL, 1736122980000LL, 100.5, 101, 2, 0},
@@ -1433,39 +1623,72 @@ constexpr Trade kOca_trades[] = {
 //   11067585398331222410ull -> 10609254493048907095ull
 //   358041756474409844ull -> 2927934665370179713ull
 //   8735900797794446825ull -> 5336484828345527040ull
+// expectation corrected (LAB-QUIETFIX, kReissue_rows, 32 of 32 values), because the removal of the scope-allocation counter fold from the broker-state hash (1b89731330, LAB-QUIETFIX; measured: green on its parent b4a3f76738, red on it) moves the hash; trades, counts and every non-hash value did not move; harvested in this test's own PINEFORGE_F9_HARVEST mode on 2cf32840b8, private mode, job rj-20261023t203718-907c79, source .lane-out/harvest-test_adapter_recording_hash_witness.txt:
+//   9766734968777647655ull -> 6897554802115491879ull
+//   15138994004846732732ull -> 489174378742504610ull
+//   521752120079514877ull -> 2104985345644114043ull
+//   8956696981258525871ull -> 15842032525300769985ull
+//   13702225646149652758ull -> 12383013596259507052ull
+//   2888788131353671829ull -> 10280747373039962163ull
+//   6665054858574518353ull -> 629781810215320591ull
+//   16116347040845972141ull -> 16451156209167924859ull
+//   11570084145670353978ull -> 14840076768737588332ull
+//   18067289190989822574ull -> 6240428360704176688ull
+//   1108783368226194089ull -> 9886925916618359583ull
+//   10358726701952669540ull -> 1781397145149751374ull
+//   6013998963489362794ull -> 11574867677518321140ull
+//   6729848350722039406ull -> 9384664844886855596ull
+//   7517542535904346167ull -> 12286944460592511489ull
+//   12034244248177749809ull -> 17615520450554171603ull
+//   4634915827289518272ull -> 5823554763343633278ull
+//   9380555558979931248ull -> 6705343396867625586ull
+//   9306411452937213453ull -> 3576315948956378711ull
+//   11319331952756786953ull -> 7128815719509147903ull
+//   2327702311874550850ull -> 10327982472872360680ull
+//   18074321964140357476ull -> 17584059752508983330ull
+//   9686708347451244609ull -> 13535698795857851035ull
+//   16035779328423917875ull -> 14347210800975827961ull
+//   2049990217218893756ull -> 10919676939976884528ull
+//   3503034218051774134ull -> 10326692202696232308ull
+//   15833899293079309971ull -> 14248001792633263669ull
+//   1835862364136459028ull -> 10595198556623105962ull
+//   17536169199288006798ull -> 16470375824637511864ull
+//   14885185951672719923ull -> 16849563238210669853ull
+//   4801409876430016397ull -> 14096059488295655627ull
+//   16802613398038112080ull -> 11569799257540442198ull
 constexpr std::uint64_t kReissue_rows[] = {
-    5794085833535179433ull,
-    10206102349587901947ull,
-    16740711338258568218ull,
-    157145938453825824ull,
-    11549520461694658189ull,
-    375980444520009614ull,
-    1364356711154384662ull,
-    9267951354912006062ull,
-    18013247113906258621ull,
-    15135278226663906553ull,
-    6395419845332150882ull,
-    2608642583221907887ull,
-    1439014296977039245ull,
-    4897379921696966153ull,
-    13502194017489163244ull,
-    8254807225619272358ull,
-    4041173354564745731ull,
-    5823046275575919511ull,
-    11150667084723241358ull,
-    7066649565605271382ull,
-    9147117666804548605ull,
-    2943969262508479583ull,
-    2242050686395926078ull,
-    18297932585058907168ull,
-    7328278135585233712ull,
-    9013102684393431912ull,
-    10171046521422328961ull,
-    15321967377461392532ull,
-    17617684058802300546ull,
-    10609254493048907095ull,
-    2927934665370179713ull,
-    5336484828345527040ull,
+    6897554802115491879ull,
+    489174378742504610ull,
+    2104985345644114043ull,
+    15842032525300769985ull,
+    12383013596259507052ull,
+    10280747373039962163ull,
+    629781810215320591ull,
+    16451156209167924859ull,
+    14840076768737588332ull,
+    6240428360704176688ull,
+    9886925916618359583ull,
+    1781397145149751374ull,
+    11574867677518321140ull,
+    9384664844886855596ull,
+    12286944460592511489ull,
+    17615520450554171603ull,
+    5823554763343633278ull,
+    6705343396867625586ull,
+    3576315948956378711ull,
+    7128815719509147903ull,
+    10327982472872360680ull,
+    17584059752508983330ull,
+    13535698795857851035ull,
+    14347210800975827961ull,
+    10919676939976884528ull,
+    10326692202696232308ull,
+    14248001792633263669ull,
+    10595198556623105962ull,
+    16470375824637511864ull,
+    16849563238210669853ull,
+    14096059488295655627ull,
+    11569799257540442198ull,
 };
 // expectation corrected (kReissue_reads, 22 of 22 values), because v19 folds the continuation over live state word-wise (native-consumer/v9) and the broker-state hash folds a running closed-row digest (pineforge-broker-state/v19); the trades did not move:
 //   3939475029491512578ull -> 12411711249896042591ull
@@ -1567,36 +1790,60 @@ constexpr std::uint64_t kReissue_rows[] = {
 //   13855326176576914141ull -> 4234010692993274504ull
 //   10342641769074306343ull -> 10311284043845160462ull
 //   11480238464600989237ull -> 1712190764782642700ull
+// expectation corrected (LAB-QUIETFIX, kReissue_reads, 22 of 22 values), because the removal of the scope-allocation counter fold from the broker-state hash (1b89731330, LAB-QUIETFIX; measured: green on its parent b4a3f76738, red on it) moves the hash; trades, counts and every non-hash value did not move; harvested in this test's own PINEFORGE_F9_HARVEST mode on 2cf32840b8, private mode, job rj-20261023t203718-907c79, source .lane-out/harvest-test_adapter_recording_hash_witness.txt:
+//   10848009743024432264ull -> 7978829576362276488ull
+//   17069376941660297163ull -> 4647077312803126457ull
+//   16188482164935333761ull -> 12126169314207095559ull
+//   7665244487737665138ull -> 13124262119164604612ull
+//   6698056401798211624ull -> 7316541252404869878ull
+//   12941908072879310293ull -> 7295094938226092979ull
+//   748038178602482210ull -> 2915079679959106608ull
+//   15505123055733844453ull -> 15087123583116047939ull
+//   91965419876159129ull -> 8165545185758951067ull
+//   9060481909678609290ull -> 2034703176974988460ull
+//   946815149531444180ull -> 7872428134109126234ull
+//   6568117267930089838ull -> 13223807412594400276ull
+//   7584211953777084175ull -> 10594898550915473709ull
+//   1498694658233107910ull -> 6593216314744463600ull
+//   8996320485778621531ull -> 7103640325920421503ull
+//   911233581839929506ull -> 14921130557853831080ull
+//   6960890076239808922ull -> 17151743605747870816ull
+//   16314173368677411762ull -> 12078056032139795116ull
+//   7264592635713523288ull -> 12106549741434512606ull
+//   8551523249409132452ull -> 3087937926769549434ull
+//   17569568028449544186ull -> 6483129368795654812ull
+//   16457777945844021128ull -> 11789687657699200402ull
 constexpr std::uint64_t kReissue_reads[] = {
-    15035498073180564574ull,
-    6351174026430191720ull,
-    17029808830897663162ull,
-    1960056261526077029ull,
-    9359327854260104443ull,
-    9193727488393939674ull,
-    2562235961360585845ull,
-    15091373470769183170ull,
-    9066532592892510086ull,
-    15993610558080257077ull,
-    14590383768983463647ull,
-    14847391113272722757ull,
-    9991682699480081944ull,
-    7606589495236393781ull,
-    16170401377191376471ull,
-    17881500630125149780ull,
-    17208157448648654596ull,
-    15884399018721245490ull,
-    13014737480809736044ull,
-    4234010692993274504ull,
-    10311284043845160462ull,
-    1712190764782642700ull,
+    7978829576362276488ull,
+    4647077312803126457ull,
+    12126169314207095559ull,
+    13124262119164604612ull,
+    7316541252404869878ull,
+    7295094938226092979ull,
+    2915079679959106608ull,
+    15087123583116047939ull,
+    8165545185758951067ull,
+    2034703176974988460ull,
+    7872428134109126234ull,
+    13223807412594400276ull,
+    10594898550915473709ull,
+    6593216314744463600ull,
+    7103640325920421503ull,
+    14921130557853831080ull,
+    17151743605747870816ull,
+    12078056032139795116ull,
+    12106549741434512606ull,
+    3087937926769549434ull,
+    6483129368795654812ull,
+    11789687657699200402ull,
 };
 // expectation corrected: kReissue_final 10597617675334596827ull -> 5214787630894246342ull, because v19 folds the continuation over live state word-wise (native-consumer/v9) and the broker-state hash folds a running closed-row digest (pineforge-broker-state/v19); the trades did not move.
 // expectation corrected (v19-E): kReissue_final 5214787630894246342ull -> 14699793179829041832ull, because v19-E folds live adapter state (pineforge-source-adapter/v4: retired placement rows are erased, the append-only logs fold as running digests; pineforge-pine-scheduler/v3); the trades did not move; harvested with its switch against main 10f20197 (every old pin reproduced), this tree and V19-E's tip 6e97f272 (identical rows).
 // expectation corrected (V19-FIX): kReissue_final 14699793179829041832ull -> 11660101618206053704ull, because R5 lane V19-FIX moves the Pine hash values once, inside v19: the dead PineExecutionAdapter::path_order_ no longer folds into pineforge-source-adapter/v4, a script cancel retires every leg of each exit it names and K1 lets a withdrawn leg go, and an origin that can no longer be bound leaves its kernel cohort roster; the trades did not move; harvested with this TU's harvest switch against main 91d65ad6 (every old pin reproduced) and the lane's tree.
 // expectation corrected (INT26 v19 hash re-pin): kReissue_final 11660101618206053704ull -> 8735900797794446825ull [H-THIN], because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane H-THIN's hash step (the Pine host's excursion model leaves the source-layer fold, E19; a FIFO exit reserves its own entry's quantity, P10), R5 lane PAR-ORDERS-2's new transient coof_fill_forced_ fold and R5 lane PAR-MARGIN-2's post-fill margin waypoint and R5 lane PAR-CASHFEE's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since PAR-ORDERS' re-pin (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary; the trades did not move.
 // expectation corrected (global exit children): kReissue_final 8735900797794446825ull -> 5336484828345527040ull, because the source adapter's state now folds TradingView's entry-id table once it holds two entry ids or its peak passes 13 keys (TradingView's global exit children, pineforge-source-adapter/v4); the trades did not move; harvested with PINEFORGE_F9_HARVEST against main 700c5d24 (every old pin reproduced) and this tree
-constexpr std::uint64_t kReissue_final = 5336484828345527040ull;
+// expectation corrected (LAB-QUIETFIX, kReissue_final, 1 of 1 values): 16802613398038112080ull -> 11569799257540442198ull, because the removal of the scope-allocation counter fold from the broker-state hash (1b89731330, LAB-QUIETFIX; measured: green on its parent b4a3f76738, red on it) moves the hash; trades, counts and every non-hash value did not move; harvested in this test's own PINEFORGE_F9_HARVEST mode on 2cf32840b8, private mode, job rj-20261023t203718-907c79, source .lane-out/harvest-test_adapter_recording_hash_witness.txt.
+constexpr std::uint64_t kReissue_final = 11569799257540442198ull;
 constexpr Trade kReissue_trades[] = {
     {1736121660000LL, 1736123040000LL, 100.75, 99.75, 2, 0},
     {1736123100000LL, 1736123460000LL, 100.75, 101, 2, 1},
@@ -1734,39 +1981,72 @@ constexpr Trade kReissue_trades[] = {
 //   17629340520421506187ull -> 10031744998823385352ull [H-THIN]
 //   12781001967037913295ull -> 2405952843925529234ull [H-THIN]
 //   4953750954703410960ull -> 15933138127006431029ull [H-THIN]
+// expectation corrected (LAB-QUIETFIX, kTrail_rows, 32 of 32 values), because the removal of the scope-allocation counter fold from the broker-state hash (1b89731330, LAB-QUIETFIX; measured: green on its parent b4a3f76738, red on it) moves the hash; trades, counts and every non-hash value did not move; harvested in this test's own PINEFORGE_F9_HARVEST mode on 2cf32840b8, private mode, job rj-20261023t203718-907c79, source .lane-out/harvest-test_adapter_recording_hash_witness.txt:
+//   9766734968777647655ull -> 6897554802115491879ull
+//   16982206528944347200ull -> 733175986835718786ull
+//   1459045851598552414ull -> 12669116875728978576ull
+//   13215070657398491829ull -> 6354125282659526383ull
+//   11109909036593266407ull -> 11539049830626658355ull
+//   4718715011838301722ull -> 7630754106475426990ull
+//   9772961631160968232ull -> 1704380185595945108ull
+//   8522832717807392054ull -> 3438515963285411994ull
+//   2306858756351454791ull -> 12717461299510697579ull
+//   2828128274067886890ull -> 16075627284904745638ull
+//   9318917383459181793ull -> 1392721392299325205ull
+//   16493055998766631755ull -> 14665494637789956479ull
+//   1421729380096722257ull -> 9491281921250487845ull
+//   2110399100148633312ull -> 12359531812991643972ull
+//   8735807056545606116ull -> 3586697277866756184ull
+//   8412529309072145246ull -> 5146212522977286562ull
+//   16349980591354419925ull -> 14800831758773190273ull
+//   11154030314116670406ull -> 1865520450450238210ull
+//   10094867848029735194ull -> 14822039902495869750ull
+//   8450999133821827949ull -> 16245392867348208617ull
+//   9017580198272942427ull -> 9420251603817997087ull
+//   5696564548246255167ull -> 7966826943488019195ull
+//   1960575925988957357ull -> 16913517872518648065ull
+//   7306234966896363525ull -> 5852972132169365481ull
+//   10397486542183205653ull -> 285051919162782881ull
+//   11017511178565148503ull -> 2527488678449426443ull
+//   11734606431220498382ull -> 9548853529911201778ull
+//   5257428350674914567ull -> 6173274927777467571ull
+//   333185028275649774ull -> 16456578914621790090ull
+//   2397494843947066959ull -> 15672754184277549379ull
+//   17677869189642723145ull -> 1853716024690050413ull
+//   14117220305832934166ull -> 9422568079770911042ull
 constexpr std::uint64_t kTrail_rows[] = {
-    5794085833535179433ull,
-    2370845579388248975ull,
-    14433248242147310045ull,
-    6746208057179709300ull,
-    5141474228715449514ull,
-    11607255782218151389ull,
-    15859825369433213587ull,
-    14000636333325119541ull,
-    8235513201704559620ull,
-    896476467432039189ull,
-    8318862700865263670ull,
-    7174198796690634212ull,
-    14047279371931353558ull,
-    10303898847732478779ull,
-    10919087129373839423ull,
-    2392471918185386717ull,
-    13975657224456405630ull,
-    5371073164686480833ull,
-    5788193476615953481ull,
-    742735857153964210ull,
-    9511387276849347064ull,
-    8387023980895655564ull,
-    12129447825700318114ull,
-    6819473365388645714ull,
-    177891932096105070ull,
-    12347931419050467504ull,
-    11096564370558447981ull,
-    5083341745670325276ull,
-    15979402051208842361ull,
-    10031744998823385352ull,
-    2405952843925529234ull,
-    15933138127006431029ull,
+    6897554802115491879ull,
+    733175986835718786ull,
+    12669116875728978576ull,
+    6354125282659526383ull,
+    11539049830626658355ull,
+    7630754106475426990ull,
+    1704380185595945108ull,
+    3438515963285411994ull,
+    12717461299510697579ull,
+    16075627284904745638ull,
+    1392721392299325205ull,
+    14665494637789956479ull,
+    9491281921250487845ull,
+    12359531812991643972ull,
+    3586697277866756184ull,
+    5146212522977286562ull,
+    14800831758773190273ull,
+    1865520450450238210ull,
+    14822039902495869750ull,
+    16245392867348208617ull,
+    9420251603817997087ull,
+    7966826943488019195ull,
+    16913517872518648065ull,
+    5852972132169365481ull,
+    285051919162782881ull,
+    2527488678449426443ull,
+    9548853529911201778ull,
+    6173274927777467571ull,
+    16456578914621790090ull,
+    15672754184277549379ull,
+    1853716024690050413ull,
+    9422568079770911042ull,
 };
 // expectation corrected (kTrail_reads, 2 of 2 values), because v19 folds the continuation over live state word-wise (native-consumer/v9) and the broker-state hash folds a running closed-row digest (pineforge-broker-state/v19); the trades did not move:
 //   3939475029491512578ull -> 12411711249896042591ull
@@ -1780,15 +2060,19 @@ constexpr std::uint64_t kTrail_rows[] = {
 // expectation corrected (INT26 v19 hash re-pin, kTrail_reads, 2 of 2 values), because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane H-THIN's hash step (the Pine host's excursion model leaves the source-layer fold, E19; a FIFO exit reserves its own entry's quantity, P10), R5 lane PAR-ORDERS-2's new transient coof_fill_forced_ fold and R5 lane PAR-MARGIN-2's post-fill margin waypoint and R5 lane PAR-CASHFEE's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since PAR-ORDERS' re-pin (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary; the trades did not move:
 //   9397758857253294369ull -> 15035498073180564574ull [H-THIN]
 //   8570208265068282686ull -> 2064235671204825645ull [H-THIN]
+// expectation corrected (LAB-QUIETFIX, kTrail_reads, 2 of 2 values), because the removal of the scope-allocation counter fold from the broker-state hash (1b89731330, LAB-QUIETFIX; measured: green on its parent b4a3f76738, red on it) moves the hash; trades, counts and every non-hash value did not move; harvested in this test's own PINEFORGE_F9_HARVEST mode on 2cf32840b8, private mode, job rj-20261023t203718-907c79, source .lane-out/harvest-test_adapter_recording_hash_witness.txt:
+//   10848009743024432264ull -> 7978829576362276488ull
+//   14483415267821185374ull -> 1016771268649580704ull
 constexpr std::uint64_t kTrail_reads[] = {
-    15035498073180564574ull,
-    2064235671204825645ull,
+    7978829576362276488ull,
+    1016771268649580704ull,
 };
 // expectation corrected: kTrail_final 2322910976412840875ull -> 11930736200467274982ull, because v19 folds the continuation over live state word-wise (native-consumer/v9) and the broker-state hash folds a running closed-row digest (pineforge-broker-state/v19); the trades did not move.
 // expectation corrected (v19-E): kTrail_final 11930736200467274982ull -> 11018457759974752048ull, because v19-E folds live adapter state (pineforge-source-adapter/v4: retired placement rows are erased, the append-only logs fold as running digests; pineforge-pine-scheduler/v3); the trades did not move; harvested with its switch against main 10f20197 (every old pin reproduced), this tree and V19-E's tip 6e97f272 (identical rows).
 // expectation corrected (V19-FIX): kTrail_final 11018457759974752048ull -> 4953750954703410960ull, because R5 lane V19-FIX moves the Pine hash values once, inside v19: the dead PineExecutionAdapter::path_order_ no longer folds into pineforge-source-adapter/v4, a script cancel retires every leg of each exit it names and K1 lets a withdrawn leg go, and an origin that can no longer be bound leaves its kernel cohort roster; the trades did not move; harvested with this TU's harvest switch against main 91d65ad6 (every old pin reproduced) and the lane's tree.
 // expectation corrected (INT26 v19 hash re-pin): kTrail_final 4953750954703410960ull -> 15933138127006431029ull [H-THIN], because the integrated tree's picks move v19 hash values inside the unreleased epoch: R5 lane H-THIN's hash step (the Pine host's excursion model leaves the source-layer fold, E19; a FIFO exit reserves its own entry's quantity, P10), R5 lane PAR-ORDERS-2's new transient coof_fill_forced_ fold and R5 lane PAR-MARGIN-2's post-fill margin waypoint and R5 lane PAR-CASHFEE's hash step (the fold folds the sizing snapshot's strategy.equity where a percent-of-equity quantity under a cash fee is recorded); old values are the pins every pick since PAR-ORDERS' re-pin (1518fa8f) kept, harvested with this TU's own switch on the integrated tree and at every pick boundary; the trades did not move.
-constexpr std::uint64_t kTrail_final = 15933138127006431029ull;
+// expectation corrected (LAB-QUIETFIX, kTrail_final, 1 of 1 values): 14117220305832934166ull -> 9422568079770911042ull, because the removal of the scope-allocation counter fold from the broker-state hash (1b89731330, LAB-QUIETFIX; measured: green on its parent b4a3f76738, red on it) moves the hash; trades, counts and every non-hash value did not move; harvested in this test's own PINEFORGE_F9_HARVEST mode on 2cf32840b8, private mode, job rj-20261023t203718-907c79, source .lane-out/harvest-test_adapter_recording_hash_witness.txt.
+constexpr std::uint64_t kTrail_final = 9422568079770911042ull;
 constexpr Trade kTrail_trades[] = {
     {1736121660000LL, 1736121840000LL, 100.25, 100.75, 2, 0},
 };

@@ -91,10 +91,10 @@ struct OpeningHost final : Host {
     }
 };
 
-std::vector<const Trade*> liquidation_rows(const Host& host, const std::string& id) {
-    std::vector<const Trade*> out;
+std::vector<Trade> liquidation_rows(const Host& host, const std::string& id) {
+    std::vector<Trade> out;
     for (const auto& row : host.rows()) {
-        if (row.exit_id == id) out.push_back(&row);
+        if (row.exit_id == id) out.push_back(row);
     }
     return out;
 }
@@ -109,7 +109,7 @@ void default_ticket_is_the_kernels() {
     CHECK(host.last_error().empty());
     const auto rows = liquidation_rows(host, "__kernel_liquidation__");
     REQUIRE(rows.size() == 1);
-    CHECK(rows[0]->exit_comment == "Margin liquidation");
+    CHECK(rows[0].exit_comment == "Margin liquidation");
 }
 
 // 2. A broker that names its ticket gets that ticket, verbatim, on the closed
@@ -137,11 +137,11 @@ void named_ticket_is_used_verbatim() {
     const auto broker = liquidation_rows(named, "__margin_call__");
     REQUIRE(plain.size() == 1);
     REQUIRE(broker.size() == 1);
-    CHECK(broker[0]->exit_comment == "Margin call");
+    CHECK(broker[0].exit_comment == "Margin call");
     // The ticket is a name, not a rule: the same units at the same price.
-    CHECK(broker[0]->qty == plain[0]->qty);
-    CHECK(broker[0]->exit_price == plain[0]->exit_price);
-    CHECK(broker[0]->exit_time == plain[0]->exit_time);
+    CHECK(broker[0].qty == plain[0].qty);
+    CHECK(broker[0].exit_price == plain[0].exit_price);
+    CHECK(broker[0].exit_time == plain[0].exit_time);
     CHECK(named.physical_position().signed_units
           == baseline.physical_position().signed_units);
     // The kernel's own name is gone from the run that renamed it.
@@ -159,7 +159,7 @@ void one_name_leaves_the_other_alone() {
     CHECK(host.last_error().empty());
     const auto rows = liquidation_rows(host, "MC");
     REQUIRE(rows.size() == 1);
-    CHECK(rows[0]->exit_comment == "Margin liquidation");
+    CHECK(rows[0].exit_comment == "Margin liquidation");
 }
 
 // 4. Hash neutrality. A model that leaves the ticket unnamed digests to the
