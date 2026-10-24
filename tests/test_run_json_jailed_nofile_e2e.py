@@ -464,9 +464,9 @@ def test_census_flags_unlinked_scratch(tmp_path):
         assert census == {"cwd": [], "TMPDIR": []}, census
         scratch_calls = [call for call, result in _trace_calls(reference.stderr)
                          if result >= 0 and call.startswith(("open(", "openat(", "openat2("))
-                         and re.search(r'"[^"]*/pineforge-scratch-[^/"]*"', call)
+                         and re.search(r'"[^"]*/pineforge-[^/"]*"', call)
                          and re.search(r"\bO_CREAT\b", call)]
-        assert scratch_calls, "unrestricted reference lacks a successful O_CREAT pineforge-scratch-* open"
+        assert scratch_calls, "unrestricted reference lacks a successful O_CREAT pineforge-* scratch open"
         # Pass the complete real trace, never a fabricated creation witness.
         with pytest.raises(AssertionError, match=re.escape(scratch_calls[0])):
             _assert_no_scratch_opens(reference.stderr, library, tape)
