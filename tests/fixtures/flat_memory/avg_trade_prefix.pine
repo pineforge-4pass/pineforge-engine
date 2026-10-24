@@ -1,0 +1,36 @@
+//@version=6
+//
+// CR-150 lane L0 fixture F13 (1), acceptance (d): a script that reads the three
+// avg_*_percent members and strategy.max_drawdown mid-run, so the prefix-sum
+// path of DESIGN.md 3.4 is exercised by a script and not only by a unit test.
+//
+// The reads happen on every bar, before this bar's orders, so a wrong prefix
+// sum changes what the script decides, not only the report.
+//
+strategy("Flat memory: avg trade percent mid-run",
+     overlay            = false,
+     initial_capital    = 100000,
+     currency           = currency.USD,
+     process_orders_on_close = false,
+     pyramiding         = 1,
+     commission_type    = strategy.commission.percent,
+     commission_value   = 0.1,
+     slippage           = 0,
+     default_qty_type   = strategy.fixed,
+     default_qty_value  = 1)
+
+avgPct     = strategy.avg_trade_percent
+avgWinPct  = strategy.avg_winning_trade_percent
+avgLossPct = strategy.avg_losing_trade_percent
+maxDd      = strategy.max_drawdown
+
+enterLong = avgPct >= 0 and avgWinPct >= avgLossPct and maxDd <= 0
+enterShort = avgPct < 0 and avgWinPct < avgLossPct
+
+if enterLong
+    strategy.entry("Long", strategy.long)
+if enterShort
+    strategy.entry("Short", strategy.short)
+
+if bar_index % 10 == 9
+    strategy.close_all()
