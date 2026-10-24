@@ -464,7 +464,7 @@ void child(Operation operation) {
 void file_limit() {
     struct sigaction action{};
     action.sa_handler = SIG_DFL;
-    ::sigemptyset(&action.sa_mask);
+    sigemptyset(&action.sa_mask);
     require(::sigaction(SIGXFSZ, &action, nullptr) == 0, "start with default SIGXFSZ");
     const struct rlimit limit{0, 0};
     require(::setrlimit(RLIMIT_FSIZE, &limit) == 0, "apply real RLIMIT_FSIZE=0");

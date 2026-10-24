@@ -1153,7 +1153,7 @@ void finalizer_epipe(ScratchArenaBackend backend) {
         IgnoreSigpipe() {
             struct sigaction ignored{};
             ignored.sa_handler = SIG_IGN;
-            ::sigemptyset(&ignored.sa_mask);
+            sigemptyset(&ignored.sa_mask);
             require(::sigaction(SIGPIPE, &ignored, &previous) == 0, "ignore SIGPIPE for EPIPE witness");
         }
         ~IgnoreSigpipe() { ::sigaction(SIGPIPE, &previous, nullptr); }
@@ -1180,7 +1180,7 @@ void finalizer_epipe(ScratchArenaBackend backend) {
 void jail_limits(std::uint64_t arena_bytes) {
     struct sigaction disposition{};
     disposition.sa_handler = SIG_DFL;
-    ::sigemptyset(&disposition.sa_mask);
+    sigemptyset(&disposition.sa_mask);
     require(::sigaction(SIGXFSZ, &disposition, nullptr) == 0,
             "child starts with default SIGXFSZ so attach must ignore it");
     struct rlimit file_limit{0, 0};

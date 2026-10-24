@@ -111,7 +111,7 @@ struct DefaultSigxfsz {
     DefaultSigxfsz() {
         struct sigaction disposition{};
         disposition.sa_handler = SIG_DFL;
-        CHECK(::sigemptyset(&disposition.sa_mask) == 0);
+        CHECK(sigemptyset(&disposition.sa_mask) == 0);
         CHECK(::sigaction(SIGXFSZ, &disposition, &previous) == 0);
     }
     ~DefaultSigxfsz() { ::sigaction(SIGXFSZ, &previous, nullptr); }

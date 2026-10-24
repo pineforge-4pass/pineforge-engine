@@ -20,8 +20,8 @@ namespace {
 class SignalScope {
 public:
     SignalScope() {
-        assert(::sigemptyset(&term_) == 0);
-        assert(::sigaddset(&term_, SIGTERM) == 0);
+        assert(sigemptyset(&term_) == 0);
+        assert(sigaddset(&term_, SIGTERM) == 0);
         assert(::pthread_sigmask(SIG_BLOCK, &term_, &previous_) == 0);
         assert(pf_run_abort_install_sigterm_v1() == 0);
         assert(pf_run_abort_requested_v1() == 0);

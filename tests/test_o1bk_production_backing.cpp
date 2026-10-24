@@ -713,7 +713,7 @@ void backing_errno_mapping() {
 void write_past_file_size_limit(std::size_t page) {
     struct sigaction disposition{};
     disposition.sa_handler = SIG_IGN;
-    require(::sigemptyset(&disposition.sa_mask) == 0
+    require(sigemptyset(&disposition.sa_mask) == 0
             && ::sigaction(SIGXFSZ, &disposition, nullptr) == 0,
             "child ignores SIGXFSZ so the real syscall can report EFBIG");
     struct rlimit limit{};

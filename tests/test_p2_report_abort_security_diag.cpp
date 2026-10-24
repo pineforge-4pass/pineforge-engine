@@ -13,7 +13,7 @@ namespace {
 struct Sigterm {
     sigset_t term{}, previous{};
     Sigterm() {
-        require(::sigemptyset(&term) == 0 && ::sigaddset(&term, SIGTERM) == 0,
+        require(sigemptyset(&term) == 0 && sigaddset(&term, SIGTERM) == 0,
                 "cannot prepare SIGTERM mask");
         require(::sigprocmask(SIG_BLOCK, &term, &previous) == 0,
                 "cannot block SIGTERM for installation");

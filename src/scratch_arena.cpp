@@ -366,7 +366,7 @@ void ScratchArena::attach(int fd, std::uint64_t bytes) {
         auto candidate = std::unique_ptr<ScratchArena>(new ScratchArena(fd, bytes));
         struct sigaction disposition{};
         disposition.sa_handler = SIG_IGN;
-        ::sigemptyset(&disposition.sa_mask);
+        sigemptyset(&disposition.sa_mask);
         if (::sigaction(SIGXFSZ, &disposition, nullptr) != 0)
             arena_error(errno, "scratch arena ignore SIGXFSZ");
         singleton_ = std::move(candidate);

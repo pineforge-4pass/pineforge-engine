@@ -75,7 +75,7 @@ struct FileSizeLimit {
                 "fixture file-size limit fits the hard limit");
         struct sigaction ignored{};
         ignored.sa_handler = SIG_IGN;
-        ::sigemptyset(&ignored.sa_mask);
+        sigemptyset(&ignored.sa_mask);
         require(::sigaction(SIGXFSZ, &ignored, &previous_signal) == 0, "ignore fixture SIGXFSZ");
         auto next = previous;
         next.rlim_cur = bytes;
