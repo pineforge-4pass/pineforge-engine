@@ -776,11 +776,19 @@ int main() {
         select_window(host);
         const auto bars = tape();
         host.run(bars.data(), static_cast<int>(bars.size()));
-        require(std::strcmp(run_failure_code_of(host), "engine_invariant") == 0
-                    && std::strcmp(run_failure_args_of(host), "{}") == 0
-                    && host.last_error()
-                        == "summary trade metrics differ from the logical trade count",
-                "B3: capture did not fail at the exact trade metrics backstop: status="
+        // Without the X1(2) begin check the capture fails at the trade metrics
+        // backstop; with it the run is refused at begin before any callback.
+        // Either is the fail-closed shape; each is pinned exactly.
+        const bool backstop = std::strcmp(run_failure_code_of(host), "engine_invariant") == 0
+            && std::strcmp(run_failure_args_of(host), "{}") == 0
+            && host.last_error() == "summary trade metrics differ from the logical trade count";
+        const bool begin_refusal =
+            std::strcmp(run_failure_code_of(host), "report_mode_unsupported") == 0
+            && std::strcmp(run_failure_args_of(host),
+                           "{\"contract\":\"pineforge-report/v1\",\"mode\":\"SUMMARY_ONLY\"}") == 0
+            && host.begins == 0 && host.calculations == 0;
+        require(backstop || begin_refusal,
+                "B3: capture failed neither at the exact trade metrics backstop nor at the begin refusal: status="
                     + std::to_string(host.last_run_status())
                     + " code=" + run_failure_code_of(host)
                     + " args=" + run_failure_args_of(host) + " error=" + host.last_error());
