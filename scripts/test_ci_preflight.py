@@ -1048,6 +1048,45 @@ class PreflightFailures(unittest.TestCase):
                 self.assertIn("baseline promotion must run main's copy and require the latest two head statuses",
                               ci_workflow_findings(*changed))
 
+    def test_promotion_guard_rejects_workflow_defaults_and_env(self):
+        original = self.ci_sources()
+        self.assertEqual(ci_workflow_findings(*original), [])
+        self.assertEqual(original[2].count('\njobs:\n'), 1)
+        settings = (
+            ('defaults', 'defaults:\n  run:\n    shell: bash -c "exit 0" -- {0}\n'),
+            ('env', 'env:\n  KEY: ${{ secrets.PINEFORGE_APP_PRIVATE_KEY }}\n'),
+            ('defaults', 'defaults: {}\n'),
+            ('env', 'env: {}\n'),
+            ('defaults', "'defaults': {run: {shell: bash}}\n"),
+            ('env', '"env": {PUBLIC_VALUE: harmless}\n'),
+        )
+        for key, setting in settings:
+            with self.subTest(setting=setting):
+                changed = original.copy()
+                changed[2] = changed[2].replace('\njobs:\n', '\n' + setting + 'jobs:\n', 1)
+                self.assertNotEqual(changed[2], original[2])
+                self.assertEqual(_jobs(changed[2]), _jobs(original[2]))
+                self.assertEqual(ci_workflow_findings(*changed), [
+                    f'baseline promotion must not define workflow-level {key}',
+                ])
+
+    def test_promotion_guard_rejects_job_defaults(self):
+        original = self.ci_sources()
+        self.assertEqual(ci_workflow_findings(*original), [])
+        for setting in (
+                '    defaults:\n      run:\n        shell: bash -c "exit 0" -- {0}\n',
+                '    defaults: {}\n',
+                '    "defaults": {run: {shell: bash}}\n'):
+            with self.subTest(setting=setting):
+                changed = original.copy()
+                changed[2] = in_job(changed[2], 'promote-guard', '    steps:\n',
+                                    setting + '    steps:\n')
+                self.assertNotEqual(changed[2], original[2])
+                self.assertEqual(ci_workflow_findings(*changed), [
+                    'baseline promotion promote-guard must not define job-level defaults',
+                    'baseline promotion must start with the pinned read-only promote-guard',
+                ])
+
     def promotion_guard_result(self, *, workflow=None, **overrides):
         """Run the real workflow shell; only the external gh CLI is stubbed."""
         bash = shutil.which('bash')
