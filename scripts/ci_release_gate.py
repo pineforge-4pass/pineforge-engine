@@ -5,7 +5,8 @@ Usage: ci_release_gate.py gate --repo OWNER/REPO --sha SHA --ref refs/heads/main
        ci_release_gate.py rulesets-probe --repo OWNER/REPO
 
 Every GitHub API call is a read (GET), using the release job's own GH_TOKEN.
-Each endpoint/page is read at most once; failures refuse without retry or sleep.
+Each gate endpoint/page is read at most once; failures refuse without retry or sleep.
+The probe measures the inventory before an independent verdict read.
 Phase 1 checks a unique tree-matching merged PR head or one authenticated,
 two-file release bump on that gated parent. Phase 2 requires the exact main
 sha's proof receipt after the fixed watcher cut-over, with no PR/bump fallback.
@@ -410,8 +411,78 @@ def _require_release_rulesets(api: API, repo: str) -> tuple[dict, list[dict]]:
     return barrier, branches
 
 
+def _ruleset_inventory_report(api: API, repo: str) -> str:
+    """Measure every branch ruleset without deciding the release verdict."""
+    lines = [
+        "branch ruleset inventory (includes_parents=true; branch targets only; tag/push omitted):"]
+    try:
+        endpoint = f"repos/{repo}"
+        project = _read_json(api, endpoint)
+        if not isinstance(project, dict) or project.get("default_branch") != "main":
+            raise ReleaseGateError(f"API {endpoint} must identify main as the default branch")
+
+        endpoint = f"repos/{repo}/rulesets?includes_parents=true&per_page=100"
+        listed = _read_json(api, endpoint, complete_rulesets=True, paginate=True)
+        identities, entries = set(), []
+        # Match the verdict reader's complete inventory and summary validation.
+        for item in listed:
+            if (not isinstance(item, dict) or type(item.get("id")) is not int or item["id"] <= 0
+                    or not isinstance(item.get("target"), str)
+                    or item["target"] not in ("branch", "tag", "push")
+                    or not isinstance(item.get("enforcement"), str)
+                    or item["enforcement"] not in ("active", "disabled", "evaluate")):
+                raise ReleaseGateError(
+                    f"API {endpoint} returned invalid ruleset summary: {item!r}")
+            if item["id"] in identities:
+                raise ReleaseGateError(
+                    f"API {endpoint} returned duplicate ruleset id {item['id']}")
+            identities.add(item["id"])
+            entries.append(item)
+    except ReleaseGateError as exc:
+        lines.append(f"inventory=ERROR {str(exc)[:240]!r}")
+        return "\n".join(lines)
+
+    for item in entries:
+        if item["target"] != "branch":
+            continue
+        endpoint = f"repos/{repo}/rulesets/{item['id']}"
+        display = item
+        try:
+            entry = _read_json(api, endpoint)
+            if (not isinstance(entry, dict) or type(entry.get("id")) is not int
+                    or any(entry.get(key) != item[key]
+                           for key in ("id", "target", "enforcement"))):
+                raise ReleaseGateError(f"API {endpoint} returned inconsistent ruleset detail")
+            display = {**item, **entry}
+            bypass_list = entry.get("bypass_actors")
+            visibility = (f"visible actors={len(bypass_list)}"
+                          if isinstance(bypass_list, list) else "hidden")
+            try:
+                applies = "yes" if _ruleset_applies_to_main(entry, endpoint) else "no"
+            except ReleaseGateError:
+                applies = "unreadable"
+            rule_rows = entry.get("rules")
+            pull_request = "unreadable"
+            if isinstance(rule_rows, list):
+                pull_request = "yes" if any(
+                    isinstance(rule, dict) and rule.get("type") == "pull_request"
+                    for rule in rule_rows) else "no"
+            evidence = (f"bypass_actors={visibility} applies={applies} "
+                        f"pull_request={pull_request}")
+        except ReleaseGateError as exc:
+            evidence = f"detail=ERROR {str(exc)[:240]!r}"
+        lines.append(
+            f"ruleset id={item['id']} name={display.get('name', '<unknown>')!r} "
+            f"source_type={display.get('source_type', '<unknown>')!r} "
+            f"source={display.get('source', '<unknown>')!r} "
+            f"enforcement={display['enforcement']!r} "
+            f"updated_at={display.get('updated_at', '<unknown>')!r} {evidence}")
+    return "\n".join(lines)
+
+
 def rulesets_probe(repo: str, *, api: API) -> str:
-    """Read exactly the bump's ruleset evidence, with the same refusal policy."""
+    """Print the complete measurement, then use the bump's unchanged verdict."""
+    print(_ruleset_inventory_report(api, repo), flush=True)
     barrier, branches = _require_release_rulesets(api, repo)
     inventory = "; ".join(
         f"{row['id']} {row.get('name', '<unknown>')!r} {row['enforcement']} "
