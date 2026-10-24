@@ -23,6 +23,15 @@
 //   lookup-different-id          GUARD for the lookup (a different id must not
 //                                be replaced): green on all three trees, red
 //                                only if the lookup matches beyond the id.
+// Additional incarnation rows (lab verification pending):
+//   incarnation-superseded-definition  INCARNATION WITNESS: the queued old X
+//                                must never consume a request number.
+//   incarnation-different-id     INCARNATION CONTROL: both queued ids survive;
+//                                the counting rule also holds without the fix.
+// Both read the sequence origin from the earlier L control request, count
+// accepted submit/replace events, and check absolute open-lot incarnations,
+// including a later Z. Comments distinguish definitions in public events;
+// an unexpected old X cannot increase its own expected incarnation.
 // The older site rows (probe-*, control-*, site-*) keep their roles.
 // The two-close_all sequence (close_all; entry X; close_all; entry X qty 2) is
 // NOT asserted here: the engine's outcome differs from the Pine statement
@@ -337,7 +346,10 @@ void check_row(const Row& row) {
     CHECK(strategy_pending_orders_len(&host) == 0);
 }
 
-enum class ScopeCase { DifferentId, QueuedReplacement, ReversalCloseAllCapture };
+enum class ScopeCase {
+    DifferentId, QueuedReplacement, ReversalCloseAllCapture,
+    IncarnationSupersededDefinition, IncarnationDifferentId
+};
 
 struct ScopeRow {
     const char* name;
@@ -348,7 +360,32 @@ constexpr ScopeRow scope_rows[] = {
     {"lookup-different-id", ScopeCase::DifferentId},
     {"lookup-queued-replacement", ScopeCase::QueuedReplacement},
     {"reversal-close-all-capture", ScopeCase::ReversalCloseAllCapture},
+    {"incarnation-superseded-definition", ScopeCase::IncarnationSupersededDefinition},
+    {"incarnation-different-id", ScopeCase::IncarnationDifferentId},
 };
+
+constexpr char queued_definition_comment[] = "queued definition";
+constexpr char reissued_definition_comment[] = "reissued definition";
+
+bool incarnation_case(ScopeCase scenario) {
+    return scenario == ScopeCase::IncarnationSupersededDefinition
+        || scenario == ScopeCase::IncarnationDifferentId;
+}
+
+std::vector<native_order::DefinitionRef> accepted_definitions(
+        const source::PineStrategyHost& host, std::uint64_t after_ordinal = 0) {
+    std::vector<native_order::DefinitionRef> result;
+    for (const auto& event : host.native_events(after_ordinal)) {
+        if (!event.command) continue;
+        if (const auto* accepted = std::get_if<native_order::AcceptedEvent>(&*event.command))
+            result.push_back(accepted->definition);
+        if (const auto* replaced = std::get_if<native_order::ReplacedEvent>(&*event.command))
+            result.push_back(replaced->successor_definition);
+    }
+    // Every successful replace consumes a sequence number, including a
+    // keep_handle re-price. Cancels, executions and rejected commands do not.
+    return result;
+}
 
 std::vector<pf_pending_order_v1_t> pending_rows(source::PineStrategyHost& host) {
     std::vector<pf_pending_order_v1_t> result;
@@ -416,9 +453,18 @@ public:
 
     int capture_sequence_calls = 0;
     int capture_release_checks = 0;
+    int incarnation_sequence_calls = 0;
+    int incarnation_reissue_calls = 0;
+    int incarnation_next_calls = 0;
+    std::uint64_t incarnation_origin = 0;
+    std::uint64_t incarnation_release_boundary = 0;
+    std::uint64_t incarnation_next_boundary = 0;
+    native_order::RequestHandle incarnation_parent_close{};
+    std::vector<native_order::DefinitionRef> incarnation_prefix;
 
     void stage_reversal_close_all_capture();
     void check_reversal_close_all_release();
+    void stage_incarnation_sequence();
 
     void on_source_bar(const Bar&) override {
         if (pine_bar_index() == 0) {
@@ -440,11 +486,21 @@ public:
             case ScopeCase::ReversalCloseAllCapture:
                 stage_reversal_close_all_capture();
                 break;
+            case ScopeCase::IncarnationSupersededDefinition:
+            case ScopeCase::IncarnationDifferentId:
+                stage_incarnation_sequence();
+                break;
             }
             return;
         }
         if (pine_bar_index() == 2 && scenario_ == ScopeCase::ReversalCloseAllCapture)
             check_reversal_close_all_release();
+        if (pine_bar_index() == 2 && incarnation_case(scenario_)) {
+            ++incarnation_next_calls;
+            for (const auto& event : native_events(0))
+                incarnation_next_boundary = event.ordinal;
+            strategy_entry("Z", false, missing, missing, seed_units);
+        }
     }
 
 private:
@@ -476,6 +532,64 @@ int fill_id_count(const ScopeProbeHost& host, const char* id) {
         if (fill && fill->request().label == id) ++count;
     }
     return count;
+}
+
+void ScopeProbeHost::stage_incarnation_sequence() {
+    ++incarnation_sequence_calls;
+    const auto control = accepted_definitions(*this);
+    CHECK(control.size() == 1);
+    if (!control.empty()) {
+        CHECK(control.front()->request.label == "L");
+        incarnation_origin = control.front()->handle.incarnation;
+        CHECK(incarnation_origin != 0);
+    }
+    const auto seed = native_open_lots(missing);
+    CHECK(seed.size() == 1);
+    if (seed.size() == 1) {
+        CHECK(seed[0].entry_label == "L");
+        CHECK(seed[0].signed_units == seed_units);
+        CHECK(seed[0].entry_incarnation == incarnation_origin);
+    }
+
+    // The lookup-queued-replacement sequence, with comments identifying the
+    // old and new definitions without supplying any incarnation oracle.
+    strategy_close_all();
+    incarnation_prefix = accepted_definitions(*this);
+    for (const auto& definition : incarnation_prefix) {
+        if (definition->request.label != "__close__") continue;
+        incarnation_parent_close = definition->handle;
+        CHECK(std::holds_alternative<native_order::Flatten>(definition->request.intent));
+    }
+    CHECK(incarnation_parent_close.incarnation != 0);
+    for (const auto& event : native_events(0))
+        incarnation_release_boundary = event.ordinal;
+    strategy_entry("X", false, missing, missing, missing, queued_definition_comment);
+
+    // Prove the second call really sees an unaccepted definition behind a
+    // still-live full close. These preconditions hold on both adapter trees.
+    const auto queued = pending_rows(*this);
+    CHECK(pending_id_count(queued, "__close__") == 1);
+    const auto* parent = pending_id(queued, "__close__");
+    CHECK(parent != nullptr);
+    if (parent) CHECK(parent->incarnation == incarnation_parent_close.incarnation);
+    CHECK(pending_id_count(queued, "X") == 1);
+    const auto* x = pending_id(queued, "X");
+    CHECK(x != nullptr);
+    if (x) {
+        CHECK(x->incarnation == 0);
+        CHECK(std::isnan(x->qty));
+        CHECK(std::isnan(x->limit_price));
+        CHECK(std::isnan(x->stop_price));
+        CHECK(x->is_long == 0);
+    }
+    CHECK(accepted_definitions(*this).size() == incarnation_prefix.size());
+    CHECK(fill_id_count(*this, "__close__") == 0);
+    CHECK(fill_id_count(*this, "X") == 0);
+    CHECK(physical_position().signed_units == seed_units);
+
+    const char* reissued_id = scenario_ == ScopeCase::IncarnationSupersededDefinition ? "X" : "Y";
+    strategy_entry(reissued_id, false, missing, missing, reissue_units, reissued_definition_comment);
+    ++incarnation_reissue_calls;
 }
 
 void ScopeProbeHost::stage_reversal_close_all_capture() {
@@ -585,6 +699,133 @@ void ScopeProbeHost::check_reversal_close_all_release() {
     CHECK(strategy_pending_orders_len(this) == 0);
 }
 
+void check_incarnation_row(ScopeProbeHost& host, bool same_id) {
+    const char* reissued_id = same_id ? "X" : "Y";
+    CHECK(host.incarnation_sequence_calls == 1);
+    CHECK(host.incarnation_reissue_calls == 1);
+    CHECK(host.incarnation_next_calls == 0);
+    CHECK(!host.incarnation_prefix.empty());
+    const auto staged = pending_rows(host);
+    CHECK(pending_id_count(staged, "__close__") == 1);
+    CHECK(pending_id_count(staged, "X") == 1);
+    CHECK(pending_id_count(staged, "Y") == (same_id ? 0 : 1));
+    const auto* reissued = pending_id(staged, reissued_id);
+    CHECK(reissued != nullptr);
+    if (reissued) {
+        CHECK(reissued->incarnation == 0);
+        CHECK(reissued->qty == reissue_units);
+    }
+    CHECK(accepted_definitions(host).size() == host.incarnation_prefix.size());
+
+    CHECK(host.stream_push_tick(TradeTick{start + 120'000, 1, 100.0, 1.0}));
+    CHECK(host.last_error().empty());
+    const auto released = accepted_definitions(host, host.incarnation_release_boundary);
+    std::vector<native_order::DefinitionRef> survivors;
+    int x_acceptances = 0;
+    int surviving_x_acceptances = 0;
+    int reissued_acceptances = 0;
+    for (const auto& definition : released) {
+        const auto& request = definition->request;
+        if (request.label == "X") ++x_acceptances;
+        const bool reissued_definition = request.label == reissued_id
+            && request.comment == reissued_definition_comment;
+        const bool different_id_original = !same_id && request.label == "X"
+            && request.comment == queued_definition_comment;
+        if (!reissued_definition && !different_id_original) continue;
+        survivors.push_back(definition);
+        if (request.label == "X") ++surviving_x_acceptances;
+        if (reissued_definition) ++reissued_acceptances;
+    }
+    CHECK(reissued_acceptances == 1);
+    CHECK(surviving_x_acceptances == 1);
+    CHECK(x_acceptances == surviving_x_acceptances);
+    CHECK(released.size() == survivors.size());
+    std::fprintf(stderr, "[%s] origin=%llu, accepted before release=%zu, released=%zu, surviving=%zu, X accepted=%d, surviving X=%d\n",
+                 row_name, static_cast<unsigned long long>(host.incarnation_origin),
+                 host.incarnation_prefix.size(), released.size(), survivors.size(),
+                 x_acceptances, surviving_x_acceptances);
+
+    std::uint64_t parent_fill_ordinal = 0;
+    for (const auto& event : host.native_events(host.incarnation_release_boundary)) {
+        if (!event.command) continue;
+        const auto* fill = std::get_if<native_order::ExecutionAppliedEvent>(&*event.command);
+        if (fill && fill->handle() == host.incarnation_parent_close) {
+            parent_fill_ordinal = event.ordinal;
+            CHECK(fill->closed_units == seed_units);
+            CHECK(fill->opened_units == 0.0);
+        }
+    }
+    CHECK(parent_fill_ordinal != 0);
+    CHECK(fill_id_count(host, "__close__") == 1);
+    const auto opened = host.native_open_lots(missing);
+    CHECK(opened.size() == survivors.size());
+    CHECK(host.physical_position().signed_units == -reissue_units - (same_id ? 0.0 : seed_units));
+    // Start at L's observed incarnation, not a literal. The prefix counts
+    // every accepted command before release. Only definitions permitted to
+    // survive contribute below; counting an unwanted old X here would let
+    // its extra sequence number normalize the bug's own expected values.
+    std::uint64_t accepted_before = static_cast<std::uint64_t>(host.incarnation_prefix.size());
+    for (const auto& definition : survivors) {
+        const std::uint64_t expected = host.incarnation_origin + accepted_before;
+        CHECK(definition->birth.acceptance_ordinal > parent_fill_ordinal);
+        CHECK(definition->handle.incarnation == expected);
+        int matching_lots = 0;
+        for (const auto& lot : opened) {
+            if (lot.entry_label != definition->request.label
+                || lot.entry_comment != definition->request.comment) continue;
+            ++matching_lots;
+            CHECK(lot.entry_incarnation == definition->handle.incarnation);
+            CHECK(lot.entry_incarnation == expected);
+            const double units = lot.entry_comment == reissued_definition_comment
+                ? reissue_units : seed_units;
+            CHECK(lot.signed_units == -units);
+            std::fprintf(stderr, "[%s] %s lot incarnation=%llu, expected=%llu, accepted before=%llu\n",
+                         row_name, lot.entry_label.c_str(),
+                         static_cast<unsigned long long>(lot.entry_incarnation),
+                         static_cast<unsigned long long>(expected),
+                         static_cast<unsigned long long>(accepted_before));
+        }
+        CHECK(matching_lots == 1);
+        ++accepted_before;
+    }
+    CHECK(strategy_pending_orders_len(&host) == 0);
+
+    // Close bar 2 to issue Z, then read its accepted handle and pending row
+    // before its next-open fill. Its absolute expectation uses L and counted
+    // accepted definitions, never the observed X incarnation plus one.
+    const std::uint64_t expected_next = host.incarnation_origin + accepted_before;
+    CHECK(host.stream_advance_time(start + 180'000));
+    CHECK(host.last_error().empty());
+    CHECK(host.incarnation_next_calls == 1);
+    const auto next = accepted_definitions(host, host.incarnation_next_boundary);
+    CHECK(next.size() == 1);
+    if (next.size() == 1) {
+        CHECK(next[0]->request.label == "Z");
+        CHECK(next[0]->handle.incarnation == expected_next);
+    }
+    const auto pending_next = pending_rows(host);
+    CHECK(pending_id_count(pending_next, "Z") == 1);
+    const auto* z = pending_id(pending_next, "Z");
+    CHECK(z != nullptr);
+    if (z) CHECK(z->incarnation == expected_next);
+    CHECK(host.stream_push_tick(TradeTick{start + 180'000, 2, 100.0, 1.0}));
+    CHECK(host.last_error().empty());
+    CHECK(fill_id_count(host, "Z") == 1);
+    int next_lots = 0;
+    for (const auto& lot : host.native_open_lots(missing)) {
+        if (lot.entry_label != "Z") continue;
+        ++next_lots;
+        CHECK(lot.entry_incarnation == expected_next);
+        CHECK(lot.signed_units == -seed_units);
+        std::fprintf(stderr, "[%s] Z lot incarnation=%llu, expected=%llu, accepted before=%llu\n",
+                     row_name, static_cast<unsigned long long>(lot.entry_incarnation),
+                     static_cast<unsigned long long>(expected_next),
+                     static_cast<unsigned long long>(accepted_before));
+    }
+    CHECK(next_lots == 1);
+    CHECK(strategy_pending_orders_len(&host) == 0);
+}
+
 void check_scope_row(const ScopeRow& row) {
     row_name = row.name;
     ScopeProbeHost host(row.scenario);
@@ -612,6 +853,10 @@ void check_scope_row(const ScopeRow& row) {
     CHECK(host.last_error().empty());
     if (!began) return;
 
+    if (incarnation_case(row.scenario)) {
+        check_incarnation_row(host, row.scenario == ScopeCase::IncarnationSupersededDefinition);
+        return;
+    }
     const auto staged = pending_rows(host);
     if (row.scenario == ScopeCase::DifferentId) {
         // X and Y are both default-sized one-unit entries. The different-id
