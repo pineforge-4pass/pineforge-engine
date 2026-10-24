@@ -148,12 +148,18 @@ Each of `trades`, `equity_curve`, `broker_state_hash`, `trace`, `trace_names`,
 | `captured` (`uint32_t`) | Explicit 0/1 flag: the sequence was captured as requested output. A successfully captured empty sequence has 1; a deliberately omitted sequence has 0. |
 | `external` (`uint32_t`) | Explicit 0/1 flag: captured output belongs to the external sink. Implies `captured == 1`. It does not transfer sink ownership to the report. |
 
-FULL has `captured=1, external=0` for enabled sequences, even when empty.
+FULL has `captured=1, external=0` for enabled sequences it retains, even when
+empty. A sequence omitted by
+`set_equity_report_mode(ReportMode::SUMMARY_ONLY)` or
+`set_optional_report_mode(report_sequence::ReportMode::SummaryOnly)` instead
+has `captured=0, external=0` in FULL; its logical count is unchanged.
 SUMMARY_ONLY has `captured=0, external=0` for every sequence, even when its
 logical count is nonzero. STREAMED has `captured=1, external=1` for enabled
-sequences. Disabled optional sequences have both flags zero. Trades are always
-enabled. Equity is enabled when a report-point provider exists; a completed
-bare HostRecorded run can still have no kernel points. SUMMARY_ONLY requires
+sequences, including those whose resident history is omitted, because the
+sink still emits their records. Disabled optional sequences have both flags
+zero. Trades are always enabled. Equity is enabled when a report-point
+provider exists; a completed bare HostRecorded run can still have no kernel
+points. SUMMARY_ONLY requires
 an exact point/presentation provider for the metrics FULL would compute.
 Flags describe capture policy on an incomplete report too; only `complete`
 certifies that the entire sequence or summary is valid.
@@ -179,6 +185,11 @@ and terminal rows. Public and internal spellings differ for the security
 evaluation totals; both are listed. On failure the existing partial-report
 rules apply, with `complete=0`; no complete summary is inferred from a prefix.
 
+The FULL column describes retained sequences. The equity and optional-sequence
+controls above can omit their respective resident histories in FULL: the
+affected pointers/lengths are NULL/0 and `captured=0, external=0`, with logical
+counts unchanged.
+
 | Payload field(s) | FULL | SUMMARY_ONLY | STREAMED |
 | --- | --- | --- | --- |
 | `total_trades` | Logical T, equals resident row length | Same logical T | Same logical T |
@@ -195,11 +206,12 @@ rules apply, with `complete=0`; no complete summary is inferred from a prefix.
 | `trace`, `trace_len` | Owning enabled trace entries | NULL, 0 | NULL, 0; enabled entries external |
 | `trace_names`, `trace_names_len` | Owning pointer array; borrowed strategy-owned strings | NULL, 0 | NULL, 0; enabled name association external |
 | `metrics.all`, `metrics.longs`, `metrics.shorts`, `metrics.equity` | Existing complete 768-byte `pf_metrics_t` | Bit-identical complete block | Bit-identical complete block |
-| `equity_curve`, `equity_curve_len` | Owning presented points, resident length | NULL, 0; logical count in metadata, capture flag 0 | NULL, 0; logical count in metadata, capture/external flags 1 |
+| `equity_curve`, `equity_curve_len` | Owning presented points, resident length; NULL, 0 under the equity-summary control, with logical count unchanged and capture/external flags 0 | NULL, 0; logical count in metadata, capture flag 0 | NULL, 0; logical count in metadata, capture/external flags 1 |
 | `broker_state_hash`, `broker_state_hash_len` | Owning enabled hash sequence | NULL, 0 | NULL, 0; enabled hashes external |
 
 Outputs remain outside ReportC. In FULL the existing output accessors retain
-their behavior. SUMMARY_ONLY retains bounded manifest/constants/hlines and
+their behavior unless the optional-sequence control omits those histories.
+SUMMARY_ONLY retains bounded manifest/constants/hlines and
 summary values but no series, row times, alert messages or events as report
 output; logical output counts remain in metadata. STREAMED sends those
 enabled sequences through O/V/K records without rebuilding columns in RAM.
@@ -535,8 +547,9 @@ See the [JSON field types and presence table](../pages/report-schema.md#report_s
 
 ## Integration and ABI inventory
 
-This slice adds data types and C++ method declarations only: **zero** new
-`PF_API` declarations/definitions and no runtime storage/behavior.
+Native C++ mode selection and envelope reads implement the runtime admission,
+capture metadata and completion checks described above. The envelope adds
+**zero** new `PF_API` declarations/definitions.
 `include/pineforge/pineforge.h` has 102 public declarations.
 `scripts/check_c_abi_runtime.py` pins 113 declarations across its four
 `RUNTIME_HEADERS` and 93 runtime implementations; `scripts/test_ci_verify.py`
