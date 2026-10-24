@@ -751,7 +751,7 @@ protected:
     double summary_broker_equity_prefix_[4]{};
 
 public:
-    // Equity component of the versioned mode setter. The envelope owner must
+    // Separate equity-mode helper; set_report_mode_v1 does not call it. The envelope owner must
     // first establish replay/presentation eligibility and all OTHER sequence
     // policies. This helper alone does not advertise a complete mode provider.
     // Status values follow the versioned contract: accepted=0, invalid=-1,
@@ -2116,7 +2116,7 @@ public:
     // at a time from the closed ledger and the terminal lot mark.
     int set_report_mode_v1(ReportMode mode);
     // Initialize metadata.struct_size/version before reading. A successful
-    // read copies a frozen report without replay or outward side effects.
+    // read assembles through fill_report; without an execution observer or selected generation, FULL and STREAMED present on every read; the first STREAMED read after a completed run writes the sink.
     // Release the owned payload with free_report(&out->report).
     int fill_report_envelope_v1(ReportEnvelopeV1* out) const;
 

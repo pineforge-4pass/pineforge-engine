@@ -160,11 +160,11 @@ refused by the backing publishes nothing.
 
 `ScratchStatus` has no capacity member and the API has no `RunFailureCode`
 conversion. A `put` never refuses because a resident slot is full: it spills to
-the backing. A `put` that cannot be served at all, whether the cause is an
-exhausted backing, a backing I/O failure, a failing comparator or source, a call
-outside a transaction or an exhausted handle domain, returns `programming_error`
-and leaves its output untouched. That is a defect in the caller or in the
-provisioning, not a run failure and not a retry. The host provisions the
+the backing. Backing I/O failure (including medium exhaustion) makes `put` and
+`erase` return `io_error`; other mutation failures return `programming_error`.
+These include input/comparison failure, a call outside a transaction or handle
+domain exhaustion. A failed `put` leaves its output untouched. These statuses
+prescribe no run failure or retry. The host provisions the
 backing: a production backing extends or spills, and a fixed test backing is
 sized by its test for the whole workload. The guard test fails if the closed
 status vocabulary gains a member or if a contract header gains an exception,
@@ -278,9 +278,9 @@ Its limits, which a replacement need not share: a page size of at most 1 MiB, a
 page count of at most 16 Mi, records below 2^61 bytes and handle numbers below
 2^62; index nodes are not merged after erasures; cell pages never return to the
 page pool; the journal pool keeps as many pages as the largest transaction so
-far touched; and the interior nodes of the handle table are not reclaimed, so
-the backing grows by well under one byte per handle ever issued even when the
-live set is bounded.
+far touched. Empty non-root handle-table leaves and any ancestors thereby left
+childless are reclaimed up to, but excluding, the root; backing growth stays
+well under one byte per handle ever issued even when the live set is bounded.
 
 ## Statuses
 
@@ -294,10 +294,10 @@ live set is bounded.
 | `io_error` | The medium failed. |
 | `corrupt` | Stored bytes failed validation. |
 
-`put` and `erase` report every failure as `programming_error`; an `erase` of an
-absent handle is `not_found` and is not a failure. `commit` reports the failing
-backing call's own status. Reads return a backing `io_error` or `corrupt`
-unchanged, and a comparator's failure unchanged.
+`put` and `erase` return `io_error` for backing I/O failure; other failures return
+`programming_error`. Erasing an absent handle returns `not_found` in an active
+transaction that is not rollback-only. `commit` reports the failing backing call's
+own status. Reads preserve backing `io_error`/`corrupt` and comparator failures.
 
 ## What a consumer lane must do
 

@@ -108,8 +108,8 @@ through an explicitly negotiated provider bridge.
 | Mode | Metrics and summary scalars | Resident sequences | External sequences |
 | --- | --- | --- | --- |
 | FULL (`0`) | Existing values/bits | Existing owning arrays unless a recording control omits that sequence | None through the explicit FULL envelope |
-| SUMMARY_ONLY (`1`) | Exact metrics require an eligible presentation/replay provider | No arrays in the returned report; execution retention uses the controls below | None |
-| STREAMED (`2`) | Same values/bits | None | Complete enabled sequences, in existing report order, through a bounded sink |
+| SUMMARY_ONLY (`1`) | Exact metrics require an eligible presentation/replay provider. The resident-curve fold matches all four FULL metric blocks on hosts without presentation overrides and without an execution observer, configured or admitted selection window, or observed phase | No arrays in the returned report; execution retention uses the controls below | None |
+| STREAMED (`2`) | Same values/bits subject to the presentation gap below | None in envelope | Complete enabled sequences, in existing report order, through a bounded sink |
 
 The existing sink-v1 route remains supported. Explicit FULL conflicts with an
 installed sink; STREAMED requires one; SUMMARY_ONLY conflicts with sequence-sink
@@ -225,18 +225,18 @@ array. The latter is zero in SUMMARY_ONLY and STREAMED. Ordinary completed
 KernelRecorded reports have one logical point per script bar; selected
 reports have M+1, including the anchor.
 
-With equity-summary recording, report assembly freezes a presented first-pass
-snapshot. When the return-count guards require a second pass, Sharpe/Sortino
-remain NaN and the envelope's `complete` stays zero until a matching
-`EquityRatioResult` is installed through `install_equity_ratio_result`.
-The engine does not start a replay from either setter or from an envelope
-read. Installation checks the frozen equity snapshot, including its ordered
-point witness; it does not establish the O1 contract's separate trade and
-continuation witnesses for a provider. An exact replay provider must satisfy
-all those requirements and suppress outward observer, alert and sink side
-effects during replay. Repeated report reads do not rerun execution callbacks.
-Nonreplayable hosts/presenters require an exact adapter or an explicit refusal;
-no metric may be silently omitted.
+With equity-summary recording, report assembly freezes a presented first-pass snapshot.
+When the return-count guards require a second pass, Sharpe/Sortino remain NaN and the envelope's `complete` stays zero until a matching `EquityRatioResult` is installed through `install_equity_ratio_result`.
+The engine does not start a replay from either setter or from an envelope read.
+Installation checks the frozen equity snapshot, including its ordered point witness; it does not establish the O1 contract's separate trade and continuation witnesses for a provider.
+An exact replay provider must satisfy all those requirements and suppress outward observer, alert and sink side effects during replay.
+Repeated report reads do not rerun execution callbacks.
+Nonreplayable hosts/presenters require an exact adapter or an explicit refusal; no metric may be silently omitted.
+With ordinary equity recording, `set_report_mode_v1(SUMMARY_ONLY)` folds the curve in place; the curve stays resident in the engine.
+On hosts without presentation overrides and without an execution observer, configured or admitted selection window, or observed phase, all four metric blocks are bit-identical to FULL, including Sharpe/Sortino.
+SUMMARY_ONLY's resident-curve fold skips `present_report`; FULL presents, while STREAMED's scratch-curve route presents the held tail with zero trade rows.
+With an eligible Pine terminal quote, this gap resets `net_profit` to the closed-row sum and the last equity point to initial capital plus that sum, so Pine results may differ.
+This is the gap behind the `PineStrategyHost` refusals above; capture refusals are described in the admission, legacy-control and begin paragraphs.
 
 Transport selection is `--report-mode FULL|SUMMARY_ONLY|STREAMED`. A missing
 provider must refuse before execution with `report_mode_unsupported`, args
@@ -554,10 +554,10 @@ buffer, no formatting.
 `pf_report_t::metrics` is a `pf_metrics_t` — four embedded blocks.
 Ordinary reports assemble metrics on read; selected/observer reports reuse
 their captured metric block. Equity-summary recording uses execution folds
-and any installed matching second-pass ratios, with completion gated as
-described above. All 768 bytes, including the equity-derived ratios, must
-match FULL. The complete per-metric
-reference (definitions, units, NaN rules, validation status) lives on @ref metrics.
+and any installed matching second-pass ratios, with completion gated as described above.
+All 768 bytes, including the equity-derived ratios, must match FULL. The resident-curve fold of `set_report_mode_v1(SUMMARY_ONLY)` returns no output curve/trade array;
+all four blocks match FULL bit for bit on hosts without presentation overrides and without an execution observer, configured or admitted selection window, or observed phase.
+The complete per-metric reference (definitions, units, NaN rules, validation status) lives on @ref metrics.
 
 | Block | Type | Scope |
 | --- | --- | --- |

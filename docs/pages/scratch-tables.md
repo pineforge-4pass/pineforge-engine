@@ -3,9 +3,9 @@
 Scratch-table storage is selected independently of the report sink. The
 versioned descriptor and fixed-slab foundation are present; the host wiring
 and default header described here are authored, with remote verification
-pending. Joined backend enforcement, engine expansion of an all-zero
-manifest, disk/RAM identity and the complete jailed zero-file-operation proof
-are **planned** until those changes and their proof land. Host tests using a
+pending. Bounded-memory enforcement and all-zero manifest expansion are
+implemented in the native begin path. Disk/RAM identity and the complete jailed
+zero-file-operation proof remain **planned**. Host tests using a
 fake library establish orchestration only.
 
 ## Backends and descriptor
@@ -13,7 +13,7 @@ fake library establish orchestration only.
 | Backend | Value | Contract |
 | --- | ---: | --- |
 | `disk_scratch` / `PF_SCRATCH_TABLE_DISK_SCRATCH` | 0 | Existing temporary-file tables. This remains the unjailed default. |
-| `bounded_memory` / `PF_SCRATCH_TABLE_BOUNDED_MEMORY` | 1 | Planned fixed slab for historical table bytes, prepared before the run, with count/byte admission and no growth or disk fallback on exhaustion. |
+| `bounded_memory` / `PF_SCRATCH_TABLE_BOUNDED_MEMORY` | 1 | Fixed slab for historical table bytes, prepared before the run, with count/byte admission and no growth or disk fallback on exhaustion. |
 
 Call #strategy_set_scratch_tables_v1 on an idle handle before running it.
 The `pf_scratch_tables_v1` descriptor in `include/pineforge/pineforge.h`
@@ -38,8 +38,8 @@ size/version/backend/reserved/V, -2 during a stream, or -3 during a batch
 (including begin callbacks). Refusal preserves the installed configuration.
 An idle NULL descriptor restores disk defaults.
 
-The planned engine rule is: **bounded_memory plus an all-zero manifest uses
-the default tier for that run's bar count**. Resolve it once in common
+The native engine expands an **all-zero bounded_memory manifest using
+the default batch or stream tier**. It resolves this once in common
 prepare, before allocation/provider mutation, without replacing the stored
 all-zero configuration. Any nonzero maximum makes the whole manifest
 explicit: zero fields in that manifest stay zero. Disk mode never activates
@@ -52,7 +52,7 @@ before allocation; actual allocation failure remains `out_of_memory`.
 `include/pineforge/detail/scratch_defaults.hpp`. These are **policy limits,
 not measured bounds**, and do not prove that an arbitrary strategy fits.
 The Python host mirrors this tier explicitly, so its fresh-handle wiring does
-not depend on the planned all-zero expansion.
+not depend on the engine's all-zero expansion.
 
 | Maximum | P0 value |
 | --- | ---: |
@@ -67,7 +67,7 @@ not depend on the planned all-zero expansion.
 The no-argument C++ overload selects the stream tier; Python uses
 `default_scratch_manifest(None)`. A zero-bar finite batch has `R=0`.
 The current stream-begin API supplies a warmup length, not a declared total
-lifetime bar count: even with warmup bars, the planned all-zero stream
+lifetime bar count: even with warmup bars, the all-zero stream
 default is 65,536. A caller with a finite stream envelope supplies an explicit
 manifest for the whole admitted lifetime.
 
@@ -218,7 +218,7 @@ and HPO drivers are in other repositories; their integration is **planned**.
 Capacity resources are `layout`, `sequence_data`, `sequence_index`,
 `erased_data`, `erased_index`, `consumed_data`, `consumed_index`, `cohort`,
 `exit_rank`, and `successor_roots`. q names remain in the wire vocabulary.
-The planned backend checks cover the entire failing operation's count and
+The implemented bounded-memory checks cover the entire operation's count and
 byte workset before its first semantic mutation, with no grow/rehash/fallback.
 Physical allocator failure stays `out_of_memory`; it is not relabeled as a
 logical capacity breach. Report-sink failures retain their separate code.
@@ -263,6 +263,6 @@ This work covers historical scratch tables with the sink OFF. The sink-ON
 report chain, position-tail spill (L18), and the durable runner are outside
 this coverage; it does not certify their jailed execution or storage bounds.
 
-Planned release wording, pending joined implementation and remote proof:
+Release wording for implemented bounded-memory tables; remote disk/RAM identity and jailed proof remain pending:
 
 > Scratch tables use a single allocation before the run, with enforced count and byte capacities and typed failure on exhaustion. Historical distinct IDs, ID pairs, consumed-exit combinations and replacement successors consume that budget; the default replacement reserve depends on input-bar count. This is not a guarantee that only OHLCV memory scales.

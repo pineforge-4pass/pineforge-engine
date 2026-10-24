@@ -25,7 +25,7 @@ extern "C" {
 typedef uint32_t pf_report_mode_v1_t;
 enum {
     PF_REPORT_MODE_FULL = 0,         /**< Legacy owning report sequences. */
-    PF_REPORT_MODE_SUMMARY_ONLY = 1, /**< Exact metrics; no captured sequences. */
+    PF_REPORT_MODE_SUMMARY_ONLY = 1, /**< FULL metric bits without presentation overrides; no captured sequences; refused with an observer, selection window or observed phase and no sink. */
     PF_REPORT_MODE_STREAMED = 2      /**< Complete sequences in an external sink. */
 };
 

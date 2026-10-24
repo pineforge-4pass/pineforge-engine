@@ -33,8 +33,8 @@ Native clients select a mode before execution, check that the setter returns
 `metadata.struct_size = sizeof(pf_report_metadata_v1)` and `metadata.version = 1`
 before the read. A bad descriptor leaves the destination unchanged. A valid
 read returns an independently owned report payload, freed exactly once with
-`BacktestEngine::free_report(&envelope.report)`. It never re-executes a script,
-invokes presentation/observer callbacks again or emits another sink record.
+`BacktestEngine::free_report(&envelope.report)`. Native reads assemble through `fill_report` without rerunning scripts or observer callbacks.
+On ordinary (unobserved, unselected) paths, every FULL read presents and every STREAMED read presents the held tail; the first STREAMED read after a completed run writes remaining E/T/O/K/H records and the trailer.
 An envelope must not already own an unfreed payload when filled.
 
 The C-compatible structs do not themselves add a C export. The initial native
@@ -400,7 +400,7 @@ Each `EquityPointSourceV1` value is the exact final presented
 forward visits preserve point order and the selected anchor; point count
 and observation count remain distinct. `<pineforge/metrics_stream.hpp>`
 declares the ordinary and explicit-observation-count `compute_equity_stats`
-overloads for this source. Their implementation walks captured FULL/STREAMED
+overloads for this source. Their planned implementation must walk captured FULL/STREAMED
 points in the existing five ordered folds through fixed buffers. It must
 neither build an array adapter nor change arithmetic, calendar behavior or
 terminal presentation.
