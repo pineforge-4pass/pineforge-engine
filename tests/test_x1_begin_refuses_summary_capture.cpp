@@ -212,17 +212,6 @@ void compare_totals(const ReportC& actual, const ReportC& oracle) {
             "FULL capture P&L differs from the independent FULL oracle");
 }
 
-void legacy_summary_report(Host& host, const ReportC& oracle) {
-    Report report;
-    host.fill_report(&report.value);
-    completed(host);
-    require(host.equity_report_mode() == ReportMode::SUMMARY_ONLY,
-            "legacy pending equity mode was not adopted");
-    require(!host.equity_summary_ratios_ready(),
-            "legacy SUMMARY_ONLY equity ratios must remain pending");
-    compare_totals(report.value, oracle);
-}
-
 // The legacy equity-mode path is not the v1 envelope mode: a selected window under it
 // keeps its released outcome. The window's equity stream is not fed in SUMMARY_ONLY, so
 // the run fails closed in the selected-report view with engine_invariant. The control is
@@ -332,19 +321,10 @@ int main() {
         run(host);
         completed(host);
     })) return 1;
-    if (!row("legacy SUMMARY_ONLY observer-first control", [&] {
-        Observer observer;
-        Host host;
-        configure(host);
-        // Register while FULL so the observer guard cannot mask the begin check.
-        attach_observer(host, observer);
-        require(host.set_equity_report_mode(ReportMode::SUMMARY_ONLY) == PF_REPORT_MODE_ACCEPTED,
-                "legacy SUMMARY_ONLY setter refused after observer registration");
-        run(host);
-        completed(host);
-        legacy_summary_report(host, oracle.value.report);
-        require(observer.calls == 1, "legacy capture did not dispatch the observer once");
-    })) return 1;
+    // An observer together with the legacy SUMMARY_ONLY mode is refused by the two
+    // setters (p2-x1, L6 12:54), so that combination never reaches begin and has no
+    // control here; the legacy selected-window controls below cover the begin check's
+    // reach (it must not touch the legacy path).
 
     bool good = row("SUMMARY_ONLY selected-window begin refusal", [] {
         Host host;
@@ -360,18 +340,6 @@ int main() {
         configure(host);
         require(host.set_equity_report_mode(ReportMode::SUMMARY_ONLY) == PF_REPORT_MODE_ACCEPTED,
                 "pending SUMMARY_ONLY setter refused");
-        select_window(host);
-        legacy_window_fails_closed(host);
-    })) return 1;
-    if (!row("legacy SUMMARY_ONLY observer and selected-window control", [&] {
-        Observer observer;
-        Host host;
-        configure(host);
-        // Install while FULL, then use the equity mode adopted at begin.
-        // This reaches begin even when SUMMARY_ONLY observer registration is refused.
-        attach_observer(host, observer);
-        require(host.set_equity_report_mode(ReportMode::SUMMARY_ONLY) == PF_REPORT_MODE_ACCEPTED,
-                "pending SUMMARY_ONLY setter refused after observer registration");
         select_window(host);
         legacy_window_fails_closed(host);
     })) return 1;
