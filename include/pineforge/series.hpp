@@ -1,5 +1,4 @@
 #pragma once
-#include <deque>
 #include <vector>
 #include <algorithm>
 #include "na.hpp"
@@ -15,14 +14,10 @@ class DynamicRingBuffer {
 
 public:
     explicit DynamicRingBuffer(std::size_t capacity)
-        : capacity_(capacity) {}
+        : buffer_(capacity, na<T>()), capacity_(capacity) {}
 
     void push_front(T val) {
         if (capacity_ == 0) return;
-        // Lazy alloc: many Series are declared but never pushed; defer the
-        // allocation to first use. Invariant: buffer_.empty() implies
-        // size_ == 0, so no other member can read an unmaterialized buffer.
-        if (buffer_.empty()) buffer_.resize(capacity_, na<T>());
         if (size_ == 0) {
             buffer_[0] = val;
             size_ = 1;
@@ -83,7 +78,7 @@ public:
  * PineScript history indexing for transpiled series (close, open, user vars, etc.)
  *
  * Pine uses expr[k] with k = 0 on the current bar, k >= 1 meaning k bars into the past
- * (close[1] = previous bar). Newest values live at the front of the deque; operator[](k)
+ * (close[1] = previous bar). Newest values live at the front of the ring; operator[](k)
  * reads k steps into the past. Codegen emits the same k for _s_close[k] and Series vars.
  *
  * push() — new bar; update() — same bar (magnifier intrabar). Negative or out-of-range

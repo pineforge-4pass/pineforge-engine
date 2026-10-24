@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <functional>
 #include <numeric>
 #include <string>
 #include <unordered_map>
@@ -262,7 +263,8 @@ double Lowest::recompute(double src) {
 // --- PivotHigh ---
 
 PivotHigh::PivotHigh(int left_bars, int right_bars)
-    : left_bars_(left_bars), right_bars_(right_bars) {}
+    : left_bars_(left_bars), right_bars_(right_bars),
+      buffer_(window_capacity(left_bars) + window_capacity(right_bars)) {}
 
 double PivotHigh::compute(double src) {
     buffer_.push_back(src);
@@ -313,7 +315,8 @@ double PivotHigh::compute(double src) {
 // --- PivotLow ---
 
 PivotLow::PivotLow(int left_bars, int right_bars)
-    : left_bars_(left_bars), right_bars_(right_bars) {}
+    : left_bars_(left_bars), right_bars_(right_bars),
+      buffer_(window_capacity(left_bars) + window_capacity(right_bars)) {}
 
 double PivotLow::compute(double src) {
     buffer_.push_back(src);
@@ -412,7 +415,8 @@ double AllTimeMin::compute(double src) {
 
 // --- Median ---
 
-Median::Median(int length) : length_(length) {}
+Median::Median(int length) : length_(length), buffer_(window_capacity(length)),
+    sorted_(length > 0 ? length : 0) {}
 
 double Median::compute(double src) {
     if (is_na(src)) {
@@ -429,7 +433,8 @@ double Median::compute(double src) {
     }
 
     // Copy and sort
-    std::vector<double> sorted(buffer_.begin(), buffer_.end());
+    auto& sorted = sorted_;
+    std::copy(buffer_.begin(), buffer_.end(), sorted.begin());
     std::sort(sorted.begin(), sorted.end());
 
     int n = (int)sorted.size();
@@ -742,11 +747,25 @@ double Mode::compute(double src) {
     buffer_.push_back(src);
     if ((int)buffer_.size() > length_) buffer_.pop_front();
     if ((int)buffer_.size() < length_) return na<double>();
-    std::unordered_map<double, int> counts;
-    for (auto v : buffer_) counts[v]++;
+    return mode();
+}
+
+double Mode::mode() {
+    std::fill(counts_.begin(), counts_.end(), 0);
+    for (const double v : buffer_) {
+        std::size_t slot = std::hash<double>{}(v) % keys_.size();
+        while (counts_[slot] && !(keys_[slot] == v)) {
+            if (++slot == keys_.size()) slot = 0;
+        }
+        if (!counts_[slot]) keys_[slot] = v;
+        ++counts_[slot];
+    }
     int max_count = 0;
     double mode_val = na<double>();
-    for (auto& [val, cnt] : counts) {
+    for (std::size_t i = 0; i < keys_.size(); ++i) {
+        const int cnt = counts_[i];
+        if (!cnt) continue;
+        const double val = keys_[i];
         if (cnt > max_count || (cnt == max_count && (is_na(mode_val) || val < mode_val))) {
             max_count = cnt;
             mode_val = val;
@@ -836,7 +855,8 @@ double Median::recompute(double src) {
     if (is_na(src)) return na<double>();
     if ((int)buffer_.size() < length_) return na<double>();
 
-    std::vector<double> sorted(buffer_.begin(), buffer_.end());
+    auto& sorted = sorted_;
+    std::copy(buffer_.begin(), buffer_.end(), sorted.begin());
     std::sort(sorted.begin(), sorted.end());
 
     int n = (int)sorted.size();
@@ -961,17 +981,7 @@ double Mode::recompute(double src) {
     if (is_na(src)) return na<double>();
     if ((int)buffer_.size() < length_) return na<double>();
 
-    std::unordered_map<double, int> counts;
-    for (auto v : buffer_) counts[v]++;
-    int max_count = 0;
-    double mode_val = na<double>();
-    for (auto& [val, cnt] : counts) {
-        if (cnt > max_count || (cnt == max_count && (is_na(mode_val) || val < mode_val))) {
-            max_count = cnt;
-            mode_val = val;
-        }
-    }
-    return mode_val;
+    return mode();
 }
 
 // --- Range ---

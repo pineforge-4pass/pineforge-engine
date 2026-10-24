@@ -99,24 +99,13 @@ int simple_ta_length(std::int64_t value, const char* function, const char* argum
 // --- HeldHistory ---
 
 void HeldHistory::push(double value) {
-    if (tail_.size() == kChunk) {
-        frozen_.push_back(std::make_shared<const std::vector<double>>(std::move(tail_)));
-        tail_ = std::vector<double>();
+    if (values_.size() == kCapacity) {
+        values_.pop_front();
+        ++first_bar_;
+        --count_;
     }
-    if (tail_.capacity() == 0) tail_.reserve(kChunk);
-    tail_.push_back(value);
+    values_.push_back(value);
     ++count_;
-}
-
-void HeldHistory::drop_front_chunks(std::size_t keep) {
-    std::size_t drop = 0;
-    while (drop < frozen_.size() &&
-           count_ - static_cast<long long>(kChunk) >= static_cast<long long>(keep)) {
-        count_ -= static_cast<long long>(kChunk);
-        first_bar_ += static_cast<long long>(kChunk);
-        ++drop;
-    }
-    if (drop) frozen_.erase(frozen_.begin(), frozen_.begin() + static_cast<long>(drop));
 }
 
 void HeldHistory::write(long long bar, double value, std::size_t keep) {
@@ -128,31 +117,25 @@ void HeldHistory::write(long long bar, double value, std::size_t keep) {
     const long long last = last_bar();
     if (bar < last) return;           // an earlier bar is never rewritten
     if (bar == last) {
-        tail_.back() = value;
+        values_.back() = value;
         return;
     }
     // Skipped bars hold the last value. Only the `keep` newest bars can ever
     // be read, so a longer gap restarts the history at its readable part.
-    const double held = tail_.back();
+    const double held = values_.back();
     long long gap = bar - last - 1;
     if (gap >= static_cast<long long>(keep)) {
-        frozen_.clear();
-        tail_ = std::vector<double>();
+        values_.clear();
         count_ = 0;
         first_bar_ = bar - static_cast<long long>(keep);
         gap = static_cast<long long>(keep);
     }
     for (long long i = 0; i < gap; ++i) push(held);
     push(value);
-    drop_front_chunks(keep);
 }
 
 double HeldHistory::at(long long bar) const {
-    const long long i = bar - first_bar_;
-    const std::size_t chunk = static_cast<std::size_t>(i) / kChunk;
-    const std::size_t offset = static_cast<std::size_t>(i) % kChunk;
-    if (chunk < frozen_.size()) return (*frozen_[chunk])[offset];
-    return tail_[offset];
+    return values_[static_cast<std::size_t>(bar - first_bar_)];
 }
 
 // --- SeriesWindowExtreme ---

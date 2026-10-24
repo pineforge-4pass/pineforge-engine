@@ -166,6 +166,21 @@ struct Rng {
 // ---- exact comparison ------------------------------------------------------
 bool same_double(double a, double b) { return std::memcmp(&a, &b, sizeof a) == 0; }
 
+// The generic record template still uses heap COW. Preserve its original
+// >=34 allocation-unwind assertion without padding the external label path.
+struct HeapTextRec {
+    int64_t x;
+    double y;
+    XLoc xloc;
+    YLoc yloc;
+    std::string text;
+    bool alive;
+};
+bool same_rec(const HeapTextRec& a, const HeapTextRec& b) {
+    return a.x == b.x && same_double(a.y, b.y) && a.xloc == b.xloc && a.yloc == b.yloc
+        && a.text == b.text && a.alive == b.alive;
+}
+
 bool same_rec(const LineRec& a, const LineRec& b) {
     return a.x1 == b.x1 && a.x2 == b.x2 && same_double(a.y1, b.y1) && same_double(a.y2, b.y2)
         && a.xloc == b.xloc && a.ext_l == b.ext_l && a.ext_r == b.ext_r && a.alive == b.alive;
@@ -1032,16 +1047,67 @@ void refuse_when_spent(std::size_t) {
     if (g_allowed > 0 && --g_allowed == 0) global_allocation::refusing = true;
 }
 
-void test_refused_block_copy_unwinds() {
-    std::printf("test_refused_block_copy_unwinds\n");
+void test_generic_refused_block_copy_unwinds() {
+    std::printf("test_generic_refused_block_copy_unwinds\n");
     const std::string text(64, 'q');
     int attempts = 0, refusals = 0, failures = 0;
     for (std::size_t allowed = 0; allowed <= 40; ++allowed) {
+        DrawingArena<HeapTextRec> built(100);
+        RefArena<HeapTextRec> ref(100);
+        for (int i = 0; i < 70; ++i) {   // blocks 0 and 1 in the tree, 6 in the tail
+            HeapTextRec record{i, 1.0 * i, XLoc::bar_index, YLoc::price,
+                               text + std::to_string(i), true};
+            ref.alloc(record);
+            built.alloc(std::move(record));
+        }
+        DrawingArena<HeapTextRec> a = built;
+        const DrawingArena<HeapTextRec> checkpoint = a;
+        std::string edit = text + "edited";
+        bool threw = false;
+        g_allowed = allowed;
+        global_allocation::on_recorded = refuse_when_spent;
+        global_allocation::recording = true;
+        global_allocation::refusing = allowed == 0;
+        try {
+            a.at(5).text = std::move(edit);   // a record of block 0
+        } catch (const std::bad_alloc&) {
+            threw = true;
+        }
+        global_allocation::refusing = false;
+        global_allocation::recording = false;
+        global_allocation::on_recorded = nullptr;
+        ++attempts;
+        refusals += threw ? 1 : 0;
+        if (!same_arena(checkpoint, ref)) ++failures;
+        RefArena<HeapTextRec> want = ref;
+        if (!threw) want.at(5).text = text + "edited";
+        if (!same_arena(a, want)) ++failures;
+        a.at(6).text = "after";
+        want.at(6).text = "after";
+        if (!same_arena(a, want) || !same_arena(checkpoint, ref)) ++failures;
+    }
+    std::printf("  %d writes into a shared block of 32 long labels, %d refused at each allocation "
+                "in turn, %d left an arena or its checkpoint changed\n", attempts, refusals, failures);
+    CHECK(failures == 0);
+    CHECK(refusals >= 34);   // the node, the block and each of its 32 records
+    CHECK(refusals < attempts);
+}
+
+// Label cache decode is a different allocation boundary from heap COW.
+// Fault every possible allocation in a 32-record decode, plus the following
+// operation, and require a complete old or new value, never a partial load.
+void test_refused_label_cache_load_unwinds() {
+    std::printf("test_refused_label_cache_load_unwinds\n");
+    constexpr std::size_t width = 32;
+    const std::string text(64, 'q');
+    int attempts = 0, refusals = 0, failures = 0;
+    for (std::size_t allowed = 0; allowed <= width + 8; ++allowed) {
         DrawingArena<LabelRec> built(100);
         RefArena<LabelRec> ref(100);
-        for (int i = 0; i < 70; ++i) {   // blocks 0 and 1 in the tree, 6 in the tail
+        for (int i = 0; i < 70; ++i) {
             pf_label_new(built, i, i, text + std::to_string(i));
-            ref.alloc(LabelRec{i, 1.0 * i, XLoc::bar_index, YLoc::price, text + std::to_string(i), true});
+            ref.alloc(LabelRec{i, 1.0 * i, XLoc::bar_index, YLoc::price,
+                               text + std::to_string(i), true});
         }
         DrawingArena<LabelRec> a = built;
         const DrawingArena<LabelRec> checkpoint = a;
@@ -1052,7 +1118,7 @@ void test_refused_block_copy_unwinds() {
         global_allocation::recording = true;
         global_allocation::refusing = allowed == 0;
         try {
-            pf_label_set_text(a, Label{5}, std::move(edit));   // a record of block 0
+            pf_label_set_text(a, Label{5}, std::move(edit));
         } catch (const std::bad_alloc&) {
             threw = true;
         }
@@ -1061,18 +1127,17 @@ void test_refused_block_copy_unwinds() {
         global_allocation::on_recorded = nullptr;
         ++attempts;
         refusals += threw ? 1 : 0;
-        if (!same_arena(checkpoint, ref)) ++failures;
         RefArena<LabelRec> want = ref;
         if (!threw) want.at(5).text = text + "edited";
-        if (!same_arena(a, want)) ++failures;
+        if (!same_arena(a, want) || !same_arena(checkpoint, ref)) ++failures;
         pf_label_set_text(a, Label{6}, "after");
         want.at(6).text = "after";
         if (!same_arena(a, want) || !same_arena(checkpoint, ref)) ++failures;
     }
-    std::printf("  %d writes into a shared block of 32 long labels, %d refused at each allocation "
-                "in turn, %d left an arena or its checkpoint changed\n", attempts, refusals, failures);
+    std::printf("  label cache: %d attempts, %d refusals, %d inconsistencies\n",
+                attempts, refusals, failures);
     CHECK(failures == 0);
-    CHECK(refusals >= 34);   // the node, the block and each of its 32 records
+    CHECK(refusals > 0);
     CHECK(refusals < attempts);
 }
 
@@ -1162,7 +1227,8 @@ int main() {
     test_unchanged_checkpoint_copies_nothing();
     test_checkpoint_cost_is_linear();
     test_refused_allocation_keeps_arena_consistent();
-    test_refused_block_copy_unwinds();
+    test_generic_refused_block_copy_unwinds();
+    test_refused_label_cache_load_unwinds();
     std::printf("\ndrawing checkpoint tests: %d passed, %d failed\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;
 }

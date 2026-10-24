@@ -72,6 +72,12 @@ class FirstCallBound {
     std::optional<T> object_;
 
 public:
+    // Setup hook for a caller that can evaluate the simple arguments before
+    // bar zero. Construct storage without advancing numeric/rewind state.
+    template <class Make>
+    T& prepare(Make&& make) {
+        return bind(std::forward<Make>(make));
+    }
     template <class Make>
     T& bind(Make&& make) {
         if (!object_) object_.emplace(std::forward<Make>(make)());
@@ -92,12 +98,14 @@ public:
 // The history a series-length window reads: one value per bar of the
 // evaluation context, from the call site's first execution on. A bar the site
 // executes holds its source; a bar it skips holds the value of the last
-// execution before it. The last kMaxBarsBack + 1 bars are kept. Full chunks
-// are immutable and shared between copies, so copying the object (the
-// script-state checkpoint does it every bar) costs one chunk at most.
+// execution before it. The last kMaxBarsBack + 1 bars are kept in prepared
+// storage. Checkpoint assignment copies into a second prepared ring without
+// allocating chunks. The bound is the existing Pine series-window limit.
+inline constexpr long long kSeriesWindowMaxBarsBack = 15000;
 class HeldHistory {
 public:
-    static constexpr std::size_t kChunk = 1024;
+    static constexpr std::size_t kCapacity = kSeriesWindowMaxBarsBack + 1;
+    HeldHistory() : values_(kCapacity) {}
 
     bool empty() const { return count_ == 0; }
     long long first_bar() const { return first_bar_; }
@@ -111,11 +119,9 @@ public:
 
 private:
     void push(double value);
-    void drop_front_chunks(std::size_t keep);
 
-    std::vector<std::shared_ptr<const std::vector<double>>> frozen_;
-    std::vector<double> tail_;
-    long long first_bar_ = 0;   // the bar of frozen_[0][0] (or tail_[0])
+    WindowRing<double> values_;
+    long long first_bar_ = 0;
     long long count_ = 0;       // bars held
 };
 
@@ -150,7 +156,7 @@ private:
 //   (tv/edge), and 4990, 5001 and 9000-bar windows answered in full.
 class SeriesWindowExtreme {
 public:
-    static constexpr long long kMaxBarsBack = 15000;
+    static constexpr long long kMaxBarsBack = kSeriesWindowMaxBarsBack;
 
     struct Result {
         double value;     // na: warm-up, or no member

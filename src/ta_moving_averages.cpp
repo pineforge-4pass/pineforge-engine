@@ -86,7 +86,8 @@ namespace pineforge {
 //   sma = S / n
 
 KahanWindowSum::KahanWindowSum(int length)
-    : length_(length), count_(0), sum_(0.0), comp_(0.0),
+    : values_(window_capacity(length)), addends_(window_capacity(length)),
+      length_(length), count_(0), sum_(0.0), comp_(0.0),
       saved_sum_(0.0), saved_comp_(0.0), saved_count_(0),
       saved_evicted_value_(na<double>()), saved_evicted_addend_(na<double>()),
       saved_pushed_(false) {}
@@ -413,7 +414,9 @@ double HMA::compute(double src) {
 
 // --- VWMA (Volume-Weighted Moving Average) ---
 
-VWMA::VWMA(int length) : length_(length), sv_sum_(0.0), v_sum_(0.0) {}
+VWMA::VWMA(int length) : length_(length),
+    sv_buffer_(window_capacity(length)), v_buffer_(window_capacity(length)),
+    sv_sum_(0.0), v_sum_(0.0) {}
 
 double VWMA::compute(double src, double vol) {
     if (is_na(src) || is_na(vol)) {
@@ -449,7 +452,8 @@ double VWMA::compute(double src, double vol) {
 // ============================================================================
 
 ALMA::ALMA(int length, double offset, double sigma, bool floor)
-    : length_(length), offset_(offset), sigma_(sigma), floor_(floor) {}
+    : length_(length), offset_(offset), sigma_(sigma), floor_(floor),
+      buffer_(window_capacity(length)) {}
 
 double ALMA::compute(double src) {
     buffer_.push_back(src);
@@ -472,7 +476,7 @@ double ALMA::compute(double src) {
 // SWMA (Symmetrically Weighted Moving Average, fixed period 4)
 // ============================================================================
 
-SWMA::SWMA() {}
+SWMA::SWMA() : buffer_(5) {}
 
 double SWMA::compute(double src) {
     buffer_.push_back(src);

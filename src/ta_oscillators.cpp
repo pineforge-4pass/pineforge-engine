@@ -174,16 +174,28 @@ double Stoch::compute(double src, double high, double low) {
 
 // --- Change ---
 
-Change::Change(int max_length) : max_length_(max_length) {}
+Change::Change(int max_length) : history(window_capacity(max_length)),
+    max_length_(max_length) {}
+
+double Change::from_history(double src, double previous) {
+    if (is_na(src) || is_na(previous)) return na<double>();
+    return src - previous;
+}
 
 double Change::compute(double src, int length) {
-    history.push_back(src);
-
-    // Keep only enough history: we need at most max_length_ + 1 entries
-    int keep = std::max(max_length_, length) + 1;
-    while ((int)history.size() > keep) {
-        history.pop_front();
+    if (!extended_ && length > max_length_) {
+        extended_history_.assign(history.begin(), history.end());
+        extended_ = true;
     }
+    if (extended_) {
+        extended_history_.push_back(src);
+        const auto keep = static_cast<std::size_t>(std::max(max_length_, length)) + 1;
+        while (extended_history_.size() > keep) extended_history_.pop_front();
+        if (extended_history_.size() <= static_cast<std::size_t>(length)) return na<double>();
+        return from_history(src, extended_history_[extended_history_.size() - 1 - length]);
+    }
+    if (history.size() == window_capacity(max_length_)) history.pop_front();
+    history.push_back(src);
 
     if ((int)history.size() <= length) {
         return na<double>();
@@ -249,17 +261,15 @@ bool Cross::compute(double a, double b) {
 
 // --- Mom (Momentum) ---
 
-Mom::Mom(int length) : length_(length) {}
+Mom::Mom(int length) : length_(length), buffer_(window_capacity(length)) {}
 
 double Mom::compute(double src) {
     if (is_na(src)) {
         return na<double>();
     }
 
+    if (buffer_.size() == window_capacity(length_)) buffer_.pop_front();
     buffer_.push_back(src);
-    while ((int)buffer_.size() > length_ + 1) {
-        buffer_.pop_front();
-    }
 
     if ((int)buffer_.size() < length_ + 1) {
         return na<double>();
@@ -270,17 +280,15 @@ double Mom::compute(double src) {
 
 // --- ROC (Rate of Change) ---
 
-ROC::ROC(int length) : length_(length) {}
+ROC::ROC(int length) : length_(length), buffer_(window_capacity(length)) {}
 
 double ROC::compute(double src) {
     if (is_na(src)) {
         return na<double>();
     }
 
+    if (buffer_.size() == window_capacity(length_)) buffer_.pop_front();
     buffer_.push_back(src);
-    while ((int)buffer_.size() > length_ + 1) {
-        buffer_.pop_front();
-    }
 
     if ((int)buffer_.size() < length_ + 1) {
         return na<double>();
@@ -296,17 +304,15 @@ double ROC::compute(double src) {
 
 // --- Rising ---
 
-Rising::Rising(int length) : length_(length) {}
+Rising::Rising(int length) : length_(length), buffer_(window_capacity(length)) {}
 
 double Rising::compute(double src) {
     if (is_na(src)) {
         return 0.0;
     }
 
+    if (buffer_.size() == window_capacity(length_)) buffer_.pop_front();
     buffer_.push_back(src);
-    while ((int)buffer_.size() > length_ + 1) {
-        buffer_.pop_front();
-    }
 
     if ((int)buffer_.size() < length_ + 1) {
         return 0.0;
@@ -323,17 +329,15 @@ double Rising::compute(double src) {
 
 // --- Falling ---
 
-Falling::Falling(int length) : length_(length) {}
+Falling::Falling(int length) : length_(length), buffer_(window_capacity(length)) {}
 
 double Falling::compute(double src) {
     if (is_na(src)) {
         return 0.0;
     }
 
+    if (buffer_.size() == window_capacity(length_)) buffer_.pop_front();
     buffer_.push_back(src);
-    while ((int)buffer_.size() > length_ + 1) {
-        buffer_.pop_front();
-    }
 
     if ((int)buffer_.size() < length_ + 1) {
         return 0.0;
@@ -350,7 +354,7 @@ double Falling::compute(double src) {
 
 // --- CCI (Commodity Channel Index) ---
 
-CCI::CCI(int length) : length_(length) {}
+CCI::CCI(int length) : length_(length), buffer_(window_capacity(length)) {}
 
 double CCI::compute(double src) {
     if (is_na(src)) {
@@ -389,7 +393,9 @@ double CCI::compute(double src) {
 
 // --- RCI: Spearman rank correlation (time order vs price ranks) × 100 ---
 
-RCI::RCI(int length) : length_(length) {}
+RCI::RCI(int length) : length_(length), buffer_(window_capacity(length)),
+    prices_(length > 0 ? length : 0), price_rank_(length > 0 ? length : 0),
+    order_(length > 0 ? length : 0) {}
 
 double RCI::compute(double src) {
     if (is_na(src)) {
@@ -404,8 +410,9 @@ double RCI::compute(double src) {
         return na<double>();
     }
 
-    std::vector<double> prices(buffer_.begin(), buffer_.end());
-    std::vector<int> order(n);
+    auto& prices = prices_;
+    auto& order = order_;
+    std::copy(buffer_.begin(), buffer_.end(), prices.begin());
     for (int i = 0; i < n; i++) {
         order[i] = i;
     }
@@ -413,7 +420,7 @@ double RCI::compute(double src) {
         return prices[a] < prices[b];
     });
 
-    std::vector<double> price_rank(n);
+    auto& price_rank = price_rank_;
     int i = 0;
     while (i < n) {
         int j = i;
@@ -441,12 +448,14 @@ double RCI::compute(double src) {
 // ============================================================================
 
 MFI::MFI(int length)
-    : length_(length), prev_src_(na<double>()), bar_count_(0),
+    : length_(length), pos_buffer_(window_capacity(length)),
+      neg_buffer_(window_capacity(length)), prev_src_(na<double>()), bar_count_(0),
       // Mirror the initial committed state (see RMA::RMA) so a recompute()
       // before the first compute() restores a well-defined pristine state.
-      // The saved_*_buffer_ deques default-construct empty, matching the
-      // live pos_/neg_buffer_ initial empty state.
-      saved_prev_src_(na<double>()), saved_bar_count_(0) {}
+      // Both checkpoint windows are materialized before the first save.
+      saved_prev_src_(na<double>()), saved_bar_count_(0),
+      saved_pos_buffer_(window_capacity(length)),
+      saved_neg_buffer_(window_capacity(length)) {}
 
 double MFI::compute(double src, double vol) {
     saved_prev_src_ = prev_src_;
@@ -479,12 +488,14 @@ double MFI::compute(double src, double vol) {
 // ============================================================================
 
 CMO::CMO(int length)
-    : length_(length), prev_src_(na<double>()), bar_count_(0),
+    : length_(length), up_buffer_(window_capacity(length)),
+      down_buffer_(window_capacity(length)), prev_src_(na<double>()), bar_count_(0),
       // Mirror the initial committed state (see RMA::RMA) so a recompute()
       // before the first compute() restores a well-defined pristine state.
-      // The saved_*_buffer_ deques default-construct empty, matching the
-      // live up_/down_buffer_ initial empty state.
-      saved_prev_src_(na<double>()), saved_bar_count_(0) {}
+      // Both checkpoint windows are materialized before the first save.
+      saved_prev_src_(na<double>()), saved_bar_count_(0),
+      saved_up_buffer_(window_capacity(length)),
+      saved_down_buffer_(window_capacity(length)) {}
 
 double CMO::compute(double src) {
     saved_prev_src_ = prev_src_;
@@ -575,7 +586,7 @@ double WPR::compute(double close, double high, double low) {
 // COG (Center of Gravity)
 // ============================================================================
 
-COG::COG(int length) : length_(length) {}
+COG::COG(int length) : length_(length), buffer_(window_capacity(length)) {}
 
 double COG::compute(double src) {
     buffer_.push_back(src);
@@ -656,6 +667,12 @@ double Stoch::recompute(double src, double high, double low) {
 
 // --- Change ---
 double Change::recompute(double src, int length) {
+    if (extended_) {
+        if (extended_history_.empty()) return compute(src, length);
+        extended_history_.back() = src;
+        if (extended_history_.size() <= static_cast<std::size_t>(length)) return na<double>();
+        return from_history(src, extended_history_[extended_history_.size() - 1 - length]);
+    }
     if (history.empty()) return compute(src, length);
     history.back() = src;
 
@@ -752,14 +769,15 @@ double RCI::recompute(double src) {
     const int n = (int)buffer_.size();
     if (n < length_ || n < 2) return na<double>();
 
-    std::vector<double> prices(buffer_.begin(), buffer_.end());
-    std::vector<int> order(n);
+    auto& prices = prices_;
+    auto& order = order_;
+    std::copy(buffer_.begin(), buffer_.end(), prices.begin());
     for (int i = 0; i < n; i++) order[i] = i;
     std::sort(order.begin(), order.end(), [&](int a, int b) {
         return prices[a] < prices[b];
     });
 
-    std::vector<double> price_rank(n);
+    auto& price_rank = price_rank_;
     int i = 0;
     while (i < n) {
         int j = i;
