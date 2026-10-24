@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Mutation controls for the admission reflection guard."""
 from pathlib import Path
-import shutil
 import tempfile
 import unittest
 
 import check_market_admission_schema as checker
+import source_clone
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -14,12 +14,10 @@ class AdmissionSchema(unittest.TestCase):
     def clone(self):
         directory = tempfile.TemporaryDirectory()
         root = Path(directory.name) / "repo"
-        # __pycache__ / *.pyc: a Python guard CTest runs in parallel writes its
-        # bytecode through a temporary file that can vanish between copytree's
-        # listing and its copy; bytecode is never source input to the clone.
-        shutil.copytree(ROOT, root, ignore=shutil.ignore_patterns(
+        # source_clone.py excludes volatile bytecode and pytest cache names.
+        source_clone.clone_source_tree(ROOT, root, extra_ignore=(
             "build*", ".git", "corpus", "*.so", "*.a",
-            ".native-fx-introduced-*", "__pycache__", "*.pyc"))
+            ".native-fx-introduced-*"))
         return directory, root
 
     def test_current(self):

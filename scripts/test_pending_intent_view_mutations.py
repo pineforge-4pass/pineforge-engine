@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from pathlib import Path
-import shutil
 import tempfile
 import unittest
 
+import source_clone
 import test_pending_intent_view as checker
 
 
@@ -18,12 +18,9 @@ class ProjectionCoverage(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(prefix="pf-intent-view-")
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name) / "repo"
-        # __pycache__ / *.pyc: a Python guard CTest runs in parallel writes its
-        # bytecode through a temporary file that can vanish between copytree's
-        # listing and its copy; bytecode is never source input to the clone.
-        shutil.copytree(ROOT, root, ignore=shutil.ignore_patterns(
-            ".git", "build*", "corpus", "benchmarks", "*.a", "*.so", ".native-fx-introduced-*", ".ccache",
-            "__pycache__", "*.pyc"))
+        # source_clone.py excludes volatile bytecode and pytest cache names.
+        source_clone.clone_source_tree(ROOT, root, extra_ignore=(
+            ".git", "build*", "corpus", "benchmarks", "*.a", "*.so", ".native-fx-introduced-*", ".ccache"))
         for relative, before, after in mutations:
             path = root / relative
             text = path.read_text()
