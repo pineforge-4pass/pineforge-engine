@@ -58,6 +58,7 @@
 #include <pineforge/run_failure.hpp>
 
 #include "../src/command_scratch_cache.hpp"
+#include "../src/command_scratch_production.hpp"
 #include "../src/report_scratch.hpp"
 #include "scratch_descriptor_fixture.hpp"
 
@@ -75,6 +76,7 @@
 #include <limits>
 #include <memory>
 #include <new>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <sys/stat.h>
@@ -784,6 +786,23 @@ struct RemovalPeaks {
 RemovalPeaks measure_removal(const TestRoot& root, const std::string& name,
                              std::int64_t bars, bool observer) {
     scenario = "(e) " + name;
+    namespace pd = pineforge::detail;
+    using CommandCache = pd::CachedScratchBacking;
+    constexpr std::size_t command_page_bytes = 512;
+    // Keep the combined cache array within the original 64 KiB allowance.
+    // A 128-page payload plus slot metadata would still exceed the short curve.
+    constexpr std::size_t command_cache_pages =
+        (64 * 1024) / (command_page_bytes + CommandCache::slot_metadata_bytes());
+    struct DependencyCacheBudget {
+        std::optional<std::size_t> previous;
+        explicit DependencyCacheBudget(std::size_t pages)
+            : previous(pd::set_command_scratch_resident_entries(
+                pd::CommandScratchResidentKind::journal_pages, pages)) {}
+        ~DependencyCacheBudget() {
+            pd::set_command_scratch_resident_entries(
+                pd::CommandScratchResidentKind::journal_pages, previous);
+        }
+    } dependency_cache_budget(command_cache_pages);
     report_arrays::Counts off_arrays;
     std::unique_ptr<Oracle> oracle;
     {
@@ -821,9 +840,8 @@ RemovalPeaks measure_removal(const TestRoot& root, const std::string& name,
     // Mutation: in native_execution_consumer.cpp capture_presentation, change
     // new pf_equity_point_t[1]{*held} to new pf_equity_point_t[2]{*held};
     // observer run peak becomes C + 2H and must fail this equality.
-    using CommandCache = pineforge::detail::CachedScratchBacking;
     constexpr std::size_t command_cache_bytes =
-        CommandCache::resident_bytes(CommandCache::default_entries(512), 512) - sizeof(CommandCache);
+        CommandCache::resident_bytes(command_cache_pages, command_page_bytes) - sizeof(CommandCache);
     const std::size_t capture_arrays = observer ? 1 : 0;
     require(run_arrays.peak_bytes == command_cache_bytes + capture_arrays * held_bytes
                 && run_arrays.capacity_bytes == command_cache_bytes
