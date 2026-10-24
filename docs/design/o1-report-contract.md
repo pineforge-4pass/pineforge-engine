@@ -125,8 +125,9 @@ but no implementation must not be reported as supporting any new mode.
   Completion requires a validated complete sink receipt.
 
 File-backed scratch for ordinary runs requires disk backing even when no sink
-or scratch directory was configured. The default selector checks the filesystem
-type with `statfs`: use nonempty `TMPDIR` if disk-backed; when `TMPDIR` is unset
+or scratch directory was configured. The default selector first checks that the
+candidate is a searchable directory, then checks the filesystem type with `statfs`:
+use nonempty `TMPDIR` if disk-backed; when `TMPDIR` is unset
 or empty, retain disk-backed `/tmp` as the legacy first candidate. If that
 candidate is proven tmpfs/ramfs, try `/var/tmp`, also only if disk-backed. A failed
 filesystem query stops default resolution with its syscall errno and names the

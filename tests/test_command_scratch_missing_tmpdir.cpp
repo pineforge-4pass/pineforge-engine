@@ -1,4 +1,4 @@
-// PART B: prepared decision pin; native command scratch is created at begin.
+// Native command scratch is created at begin; both refusals retain its prefix.
 #include "default_scratch_tmpfs_fixture.hpp"
 #include <system_error>
 
@@ -24,6 +24,8 @@ void expect_command_failure(const std::string& candidate, int number) {
         (void)pineforge::detail::make_command_scratch_backing(4096);
     } catch (const std::system_error& error) {
         const auto failure = pineforge::classify_run_failure(error);
+        require(std::string(error.what()).find("command scratch create") == 0,
+                "both command refusals must start with the established create prefix");
         require(error.code() == std::error_code(number, std::generic_category())
                     && failure.code == pineforge::RunFailureCode::scratch_io_failed
                     && !failure.args
@@ -38,6 +40,7 @@ void expect_command_failure(const std::string& candidate, int number) {
                 && host.native_state().kind != pineforge::NativeLifecycleKind::Completed
                 && std::string(pineforge::run_failure_code_of(host)) == "scratch_io_failed"
                 && std::string(pineforge::run_failure_args_of(host)) == "{}"
+                && host.last_error().find("command scratch create") != std::string::npos
                 && host.last_error().find(candidate) != std::string::npos
                 && host.last_error().find(
                     std::error_code(number, std::generic_category()).message()) != std::string::npos,

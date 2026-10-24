@@ -1,6 +1,6 @@
 #pragma once
 
-#include "default_scratch_tmpfs_fixture.hpp"
+#include "scratch_process_fixture.hpp"
 #include <pineforge/detail/scratch_file.hpp>
 
 namespace s4e_tmp {
@@ -9,43 +9,75 @@ namespace s4e_tmp {
 struct InvalidDirectories {
     std::string disk, memory;
 
+private:
+    struct Entries {
+        std::string regular, mode0000;
+        bool regular_created = false, mode_created = false;
+    };
+    std::array<Entries, 2> entries_{};
+
+    static void cleanup(const char* root, bool root_created, const Entries& entries) noexcept {
+        if (entries.mode_created) {
+            ::chmod(entries.mode0000.c_str(), 0700);
+            ::rmdir(entries.mode0000.c_str());
+        }
+        if (entries.regular_created) ::unlink(entries.regular.c_str());
+        if (root_created) ::rmdir(root);
+    }
+
+public:
     InvalidDirectories() {
         require_filesystems();
         char disk_name[] = "/var/tmp/s4e-invalid-directory-XXXXXX";
         char memory_name[] = "/dev/shm/s4e-invalid-directory-XXXXXX";
-        const char* created = ::mkdtemp(disk_name);
-        require(created != nullptr, "cannot create disk-backed directory fixture");
-        disk = created;
-        created = ::mkdtemp(memory_name);
-        require(created != nullptr, "cannot create tmpfs directory fixture");
-        memory = created;
-        std::printf("S4E owned inspection paths: /dev/null, %s, %s\n",
-                    disk.c_str(), memory.c_str());
-        for (const auto& root : {disk, memory}) {
-            Fd regular(::open((root + "/regular").c_str(), O_CREAT | O_EXCL | O_RDWR, 0600));
-            require(regular.value >= 0, "cannot create regular-file candidate");
-            require(::mkdir((root + "/mode0000").c_str(), 0) == 0,
-                    "cannot create non-searchable candidate");
+        bool disk_created = false, memory_created = false;
+        try {
+            disk_created = ::mkdtemp(disk_name) != nullptr;
+            require(disk_created, "cannot create disk-backed directory fixture");
+            disk = disk_name;
+            memory_created = ::mkdtemp(memory_name) != nullptr;
+            require(memory_created, "cannot create tmpfs directory fixture");
+            memory = memory_name;
+            std::printf("S4E owned inspection paths: /dev/null, %s, %s\n",
+                        disk.c_str(), memory.c_str());
+            const std::array<const std::string*, 2> roots{{&disk, &memory}};
+            for (std::size_t i = 0; i < roots.size(); ++i) {
+                const auto& root = *roots[i];
+                auto& entries = entries_[i];
+                entries.regular = root + "/regular";
+                entries.mode0000 = root + "/mode0000";
+                Fd regular(::open(entries.regular.c_str(), O_CREAT | O_EXCL | O_RDWR, 0600));
+                entries.regular_created = regular.value >= 0;
+                require(entries.regular_created, "cannot create regular-file candidate");
+                entries.mode_created = ::mkdir(entries.mode0000.c_str(), 0) == 0;
+                require(entries.mode_created, "cannot create non-searchable candidate");
+                // A dropped child must reach the target: only mode0000,
+                // rather than its mkdtemp parent, should deny search.
+                if (::geteuid() == 0)
+                    require(::chmod(root.c_str(), 0711) == 0,
+                            "cannot make owned fixture parent searchable by the dropped child");
+            }
+        } catch (...) {
+            // The destructor is not called if construction fails. The raw
+            // mkdtemp names also cover a failed std::string assignment.
+            cleanup(disk_name, disk_created, entries_[0]);
+            cleanup(memory_name, memory_created, entries_[1]);
+            throw;
         }
     }
     ~InvalidDirectories() {
-        for (const auto& root : {disk, memory}) {
-            if (root.empty()) continue;
-            ::chmod((root + "/mode0000").c_str(), 0700);
-            ::rmdir((root + "/mode0000").c_str());
-            ::unlink((root + "/regular").c_str());
-            ::rmdir(root.c_str());
-        }
+        cleanup(disk.c_str(), true, entries_[0]);
+        cleanup(memory.c_str(), true, entries_[1]);
     }
     template<class Check>
     void each(Check check) const {
         check("/dev/null", ENOTDIR);
         for (const auto& root : {disk, memory}) check(root + "/regular", ENOTDIR);
-        if (::geteuid() == 0) {
-            std::puts("SKIP EACCES mode-0000 cases only: running as root");
-        } else {
+        scratch_unprivileged("mode-0000 scratch cells", [&] {
+            std::printf("S4E mode-0000 cells: effective uid %lu\n",
+                        static_cast<unsigned long>(::geteuid()));
             for (const auto& root : {disk, memory}) check(root + "/mode0000", EACCES);
-        }
+        });
     }
 };
 

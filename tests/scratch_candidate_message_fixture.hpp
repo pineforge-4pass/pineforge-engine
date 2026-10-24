@@ -38,7 +38,8 @@ void expect_candidate_failure(Operation operation, const char* prefix,
                 "create translator must preserve its established failure arguments");
         const std::string text = error.what();
         require(text.find(prefix) == 0
-                    && text.find("TMPDIR '" + candidate + "': statfs failed") != std::string::npos
+                    && text.find("TMPDIR '" + candidate + "': directory check failed")
+                        != std::string::npos
                     && text.find("set TMPDIR") == std::string::npos,
                 "create translator must retain its prefix and the failed query candidate");
         return;
