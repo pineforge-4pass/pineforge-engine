@@ -1,0 +1,3 @@
+list(APPEND TEST_SOURCES test_p2cx_cpu_ledger_loop)
+pineforge_add_unit_test(test_p2cx_cpu_ledger_loop)
+set_tests_properties(test_p2cx_cpu_ledger_loop PROPERTIES RUN_SERIAL TRUE)

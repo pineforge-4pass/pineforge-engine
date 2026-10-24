@@ -108,7 +108,7 @@ public:
     size_type cache_size() const;
     void clear();
     void reserve(size_type);
-    size_type size() const;
+    size_type size() const { return end_; }
     size_type base() const;
     // Cached fixed descriptors plus explicitly materialized legacy values.
     // No retained string payload belongs to the normal descriptor window.
@@ -186,6 +186,11 @@ public:
 private:
     struct State;
     std::unique_ptr<State> state_;
+    // A copy of State::end so size() inlines into every closedtrades loop
+    // bound. Never counted on its own: each operation that changes the end or
+    // swaps state_ (push_back, resize, clear, copy/move construction and
+    // assignment) re-reads it from state_->end before returning.
+    size_type end_ = 0;
 };
 
 } // inline namespace engine_script_run_v19

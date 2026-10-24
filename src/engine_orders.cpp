@@ -391,6 +391,15 @@ struct TradeLedger::State {
     mutable std::unique_ptr<CacheEntry[]> cache;
     mutable size_type cache_count = 0, cache_capacity = 0;
     mutable size_type cache_generation = 2;
+    // The entry the last checked field read (field_entry) used. A field read of
+    // the same row right after it -- id, then profit, in a Pine closedtrades
+    // loop -- skips the row check and the slot arithmetic. It is never trusted:
+    // a hit needs the entry's own global AND the live generation, so
+    // replace()'s invalidate() and every invalidate_cache() end it. The pointer
+    // itself is dropped wherever the cache array is freed (ensure_cache,
+    // set_cache_rows) and when the published boundary moves (seal(), the only
+    // writer of `first`), because a hit does not run check().
+    mutable const CacheEntry* hot = nullptr;
 
     State() {
         index.bound_cache();
@@ -444,6 +453,7 @@ struct TradeLedger::State {
         invalidate_cache();
         // Discard the old allocation first: even transient storage stays
         // within the configured row budget during growth.
+        hot = nullptr;
         cache.reset();
         cache_capacity = 0;
         cache = std::make_unique<CacheEntry[]>(capacity);
@@ -478,19 +488,35 @@ struct TradeLedger::State {
         ++cache_count;
         return entry;
     }
+    // The miss path, out of line: the 168-byte Record temporary and the scratch
+    // reads stay out of every accessor's frame.
+    [[gnu::noinline]] const CacheEntry& load_miss(size_type global) const {
+        return remember(global, descriptor(global));
+    }
     const CacheEntry& load(size_type global) const {
         if (const auto* entry = cached(global)) return *entry;
-        return remember(global, descriptor(global));
+        return load_miss(global);
+    }
+    // The entry a checked field read works from. A hit returns the entry
+    // cached(global) would: `hot` always points into the live cache array, an
+    // entry is written only at cache_slot(its global), and the entry must still
+    // hold `global` under the live generation. check(global, true) held when
+    // `hot` was set, and nothing that could break it leaves `hot` usable: seal
+    // drops it, and a shrinking resize bumps the generation first.
+    const CacheEntry& field_entry(size_type global) const {
+        if (hot && hot->global == global && current(*hot)) return *hot;
+        check(global, true);
+        const auto& entry = load(global);
+        hot = &entry;
+        return entry;
     }
     template<auto Member>
     auto numeric_field(size_type global) const {
-        check(global, true);
-        return load(global).record.*Member;
+        return field_entry(global).record.*Member;
     }
     template<StringExtent Record::*Member>
     std::string string_field(size_type global) const {
-        check(global, true);
-        const auto& entry = load(global);
+        const auto& entry = field_entry(global);
         const auto text = entry.record.*Member;
         if (!entry.strings_valid()) return get_string(text);
         size_type offset = 0;
@@ -507,10 +533,13 @@ struct TradeLedger::State {
             throw detail::ScratchIoError(EFBIG, "trade ledger offset");
         return static_cast<std::uint64_t>(global) * sizeof(Record);
     }
+    // Out of line and cold, so the checked accessors stay as small as they were.
+    [[noreturn, gnu::noinline, gnu::cold]] static void row_outside_window() {
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                       "trade ledger: row outside resident window");
+    }
     void check(size_type global, bool mutable_row = false) const {
-        if (global >= end || (mutable_row && global < first))
-            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
-                                           "trade ledger: row outside resident window");
+        if (global >= end || (mutable_row && global < first)) row_outside_window();
     }
     size_type slot(size_type global) const {
         return (head + global - resident_first) % kResidentRows;
@@ -558,7 +587,7 @@ struct TradeLedger::State {
             }
         }
     }
-    std::string get_string(StringExtent text) const {
+    [[gnu::noinline]] std::string get_string(StringExtent text) const {
         validate_string(text);
         std::string result(static_cast<size_type>(text.length), '\0');
         read_string(text, result.data());
@@ -665,6 +694,7 @@ TradeLedger& TradeLedger::operator=(const TradeLedger& other) {
     if (this != &other) {
         TradeLedger next(other);
         state_.swap(next.state_);
+        end_ = state_->end;
     }
     return *this;
 }
@@ -672,12 +702,15 @@ TradeLedger& TradeLedger::operator=(const TradeLedger& other) {
 TradeLedger::TradeLedger(TradeLedger&& other) : TradeLedger() {
     state_.swap(other.state_);
     state_->invalidate_cache();
+    end_ = state_->end;
+    other.end_ = other.state_->end;
 }
 
 TradeLedger& TradeLedger::operator=(TradeLedger&& other) {
     if (this != &other) {
         TradeLedger next(std::move(other));
         state_.swap(next.state_);
+        end_ = state_->end;
     }
     return *this;
 }
@@ -689,6 +722,7 @@ void TradeLedger::clear() {
     next->index.set_directory(next->directory);
     next->payload.set_directory(next->directory);
     state_.swap(next);
+    end_ = state_->end;
 }
 
 void TradeLedger::set_scratch_directory(const std::string& directory) {
@@ -704,6 +738,7 @@ void TradeLedger::set_cache_rows(size_type rows) {
         throw coded<std::invalid_argument>(RunFailureCode::setting_rejected,
                                            {{"input", "resident.ledger_rows"}, {"reason", "frozen"}},
                                            "trade ledger: cache rows changed after spill");
+    state_->hot = nullptr;
     state_->cache.reset();
     state_->cache_count = 0;
     state_->cache_capacity = 0;
@@ -722,7 +757,6 @@ TradeLedger::size_type TradeLedger::cache_size() const { return state_->cache_co
 
 void TradeLedger::reserve(size_type) {}
 
-TradeLedger::size_type TradeLedger::size() const { return state_->end; }
 TradeLedger::size_type TradeLedger::base() const { return state_->first; }
 TradeLedger::size_type TradeLedger::resident_size() const {
     return state_->count + state_->materialized.size();
@@ -836,6 +870,7 @@ void TradeLedger::push_back(const Trade& trade) {
     state_->rows[(state_->head + state_->count) % kResidentRows] = record;
     ++state_->count;
     ++state_->end;
+    end_ = state_->end;
 }
 
 void TradeLedger::push_back(Trade&& trade) { push_back(static_cast<const Trade&>(trade)); }
@@ -850,6 +885,7 @@ void TradeLedger::resize(size_type global_end) {
         // are already external; discard the bounded descriptor cache.
         while (state_->count != 0) state_->evict();
         state_->end = state_->resident_first = global_end;
+        end_ = state_->end;
         state_->materialized.erase(state_->materialized.lower_bound(global_end),
                                     state_->materialized.end());
     } else {
@@ -895,6 +931,8 @@ void TradeLedger::seal(size_type global_end) {
     // sealed rows before they reach the cache: cached entries stay valid, so a
     // closedtrades loop is not made cold again by every published trade.
     while (state_->count != 0 && state_->resident_first < global_end) state_->evict();
+    // A hot-entry hit skips check(), so it must not outlive the boundary move.
+    state_->hot = nullptr;
     state_->first = global_end;
 }
 
