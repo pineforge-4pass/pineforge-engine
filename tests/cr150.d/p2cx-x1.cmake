@@ -1,4 +1,4 @@
 if(UNIX)
-    list(APPEND TEST_SOURCES test_x1_observer_summary_only_counts)
-    pineforge_add_unit_test(test_x1_observer_summary_only_counts)
+    list(APPEND TEST_SOURCES test_report_mode_v1_summary_with_observer)
+    pineforge_add_unit_test(test_report_mode_v1_summary_with_observer)
 endif()

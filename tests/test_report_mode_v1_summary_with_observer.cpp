@@ -1,10 +1,11 @@
-// X1: observer admission order must not turn omitted trades into empty metrics.
+// X1: refuse unsupported SUMMARY_ONLY capture before registration or begin.
 // Public APIs only; the independent FULL run supplies every parity expectation.
 #include <pineforge/execution_observer.h>
 #include <pineforge/native_host.hpp>
 #include <pineforge/report_mode.h>
 #include <pineforge/report_sink.h>
 #include <pineforge/run_failure.hpp>
+#include <pineforge/selected_window.h>
 
 #include <array>
 #include <cmath>
@@ -56,10 +57,14 @@ struct Envelope {
     Envelope& operator=(const Envelope&) = delete;
 };
 
-class Host final : public NativeStrategyHost {
+class Host : public NativeStrategyHost {
 public:
+    int begins = 0;
     int calculations = 0;
-    void on_native_run_begin() override { calculations = 0; }
+    void on_native_run_begin() override {
+        ++begins;
+        calculations = 0;
+    }
     void on_native_bar(const Bar&, const NativeDecisionContext&) override {
         const int index = calculations++;
         const int cycle = index / 4;
@@ -75,6 +80,21 @@ private:
         const auto result = submit(request);
         require(result.status == no::SubmitStatus::Accepted && result.handle.has_value(),
                 "fixture order refused");
+    }
+};
+
+class CountMismatchHost final : public Host {
+public:
+    mutable int presentations = 0;
+    mutable int logical_trades_before = 0;
+protected:
+    bool report_presenter_supports_non_full() const noexcept override { return true; }
+    void present_report(ReportC* report) const override {
+        ++presentations;
+        logical_trades_before = report->total_trades;
+        // A deliberately inconsistent bounded presenter: no array, ledger,
+        // order, hash or private field is changed by this negative fixture.
+        ++report->total_trades;
     }
 };
 
@@ -129,11 +149,31 @@ int before_results(void* context, const pf_execution_boundary_v1* boundary,
     return 0;
 }
 
-void attach(Host& host, Observer& observer) {
+int set_observer(Host& host, Observer& observer) {
     const pf_execution_observer_v1 descriptor{
         sizeof descriptor, 1, &observer, before_results};
-    const int status = strategy_set_execution_observer_v1(handle(host), &descriptor);
+    return strategy_set_execution_observer_v1(handle(host), &descriptor);
+}
+
+void attach(Host& host, Observer& observer) {
+    const int status = set_observer(host, observer);
     require(status == 0, "observer registration status=" + std::to_string(status));
+}
+
+void refuse_observer(const char* row, Host& host, Observer& observer) {
+    const int status = set_observer(host, observer);
+    std::printf("%s: observer registration status=%d expected=-2\n", row, status);
+    require(status == -2, std::string(row) + ": SUMMARY_ONLY registration must return -2");
+    require(host.native_state().kind == NativeLifecycleKind::Ready
+                && host.last_run_status() == 0 && host.last_error().empty(),
+            std::string(row) + ": registration refusal changed the run outcome");
+}
+
+void select_window(Host& host) {
+    const pf_selected_window_config_v1 window{
+        sizeof window, 1, start_ms, start_ms + bar_count * minute_ms};
+    const int status = strategy_set_selected_window_v1(handle(host), &window);
+    require(status == 0, "window registration status=" + std::to_string(status));
 }
 
 void run(Host& host, const Observer* observer = nullptr) {
@@ -144,6 +184,7 @@ void run(Host& host, const Observer* observer = nullptr) {
                 + " code=" + run_failure_code_of(host) + " error=" + host.last_error());
     require(host.native_state().kind == NativeLifecycleKind::Completed,
             "fixture did not complete");
+    require(host.begins == 1, "begin callback count=" + std::to_string(host.begins));
     require(host.calculations == bar_count,
             "calculation count=" + std::to_string(host.calculations)
                 + " expected=" + std::to_string(bar_count));
@@ -243,20 +284,6 @@ void compare(Checks& checks, const ReportC& actual, const ReportC& oracle) {
                  "equity pointer and resident length disagree");
 }
 
-bool typed(RunFailureCode code) {
-    return code != RunFailureCode::none && code != RunFailureCode::engine_unclassified_error;
-}
-
-bool typed_exception(const char* row, const std::exception& error) {
-    // Require a carried code; the classifier's fallback for std::logic_error
-    // must not turn an ordinary fixture/assertion error into an accepted refusal.
-    const auto* info = dynamic_cast<const RunFailureInfo*>(&error);
-    if (!info || !typed(info->run_failure_code())) return false;
-    std::printf("%s: typed fill refusal=%s error=%s\n",
-                row, run_failure_code_name(info->run_failure_code()), error.what());
-    return true;
-}
-
 bool withheld(const ReportC& report) {
     return report.total_trades == 0 && report.net_profit == 0.0
         && report.metrics.all.num_trades == 0 && report.metrics.longs.num_trades == 0
@@ -269,21 +296,61 @@ bool withheld(const ReportC& report) {
         && !report.broker_state_hash && report.broker_state_hash_len == 0;
 }
 
-bool plain(const char* row, Host& host, const ReportC& oracle, bool allow_refusal) {
+bool begin_refused(const char* row, Host& host, const Observer* observer = nullptr) {
+    const auto bars = tape();
+    host.run(bars.data(), static_cast<int>(bars.size()));
+    const auto state = host.native_state();
+    pf_execution_observation_v1 observation{};
+    observation.struct_size = sizeof observation;
+    observation.version = 1;
+    const int query = strategy_execution_observation_v1(handle(host), &observation);
+    Report report;
+    host.fill_report(&report.value);
+    const char* code = run_failure_code_of(host);
+    const char* args = run_failure_args_of(host);
+    std::fprintf(stderr,
+        "%s: run_status=%d code=%s args=%s error=%s lifecycle=%u operation=%u "
+        "begins=%d calculations=%d observer_calls=%d query=%d "
+        "generation=%llu attempt_generation=%llu boundary=%u\n",
+        row, host.last_run_status(), code, args, host.last_error().c_str(),
+        static_cast<unsigned>(state.kind), static_cast<unsigned>(state.failure.operation),
+        host.begins, host.calculations, observer ? observer->calls : 0, query,
+        static_cast<unsigned long long>(observation.run_generation),
+        static_cast<unsigned long long>(observation.attempt_generation),
+        observation.boundary_delivered);
+    Checks checks{row};
+    checks.check(host.last_run_status() == 1 && !host.last_error().empty(),
+                 "begin did not fail closed");
+    checks.check(std::strcmp(code, "report_mode_unsupported") == 0,
+                 "begin refusal must carry exactly report_mode_unsupported");
+    checks.check(std::strcmp(args,
+                     "{\"contract\":\"pineforge-report/v1\",\"mode\":\"SUMMARY_ONLY\"}") == 0,
+                 "begin refusal arguments differ from the report contract");
+    checks.check(state.kind == NativeLifecycleKind::Failed
+                     && state.failure.operation == NativeFailureOperation::Begin,
+                 "refusal was not a begin failure");
+    checks.check(host.begins == 0 && host.calculations == 0,
+                 "unsupported capture ran a host callback");
+    checks.check(!observer || observer->calls == 0,
+                 "unsupported capture dispatched the observer");
+    checks.check(query == 0 && observation.run_generation == 0
+                     && observation.attempt_generation == 0
+                     && observation.boundary_delivered == 0,
+                 "refused begin admitted a generation or delivered a boundary");
+    checks.check(withheld(report.value), "refused begin published a report");
+    if (!checks.good) print_report(row, report.value);
+    return checks.good;
+}
+
+bool plain(const char* row, Host& host, const ReportC& oracle) {
     Report result;
     try {
         host.fill_report(&result.value);
     } catch (const std::exception& error) {
-        if (allow_refusal && typed_exception(row, error)) return true;
+        std::fprintf(stderr, "%s: unexpected fill refusal: %s\n", row, error.what());
         print_report(row, result.value);
         print_report("FULL oracle", oracle);
         throw;
-    }
-    if (allow_refusal && host.last_run_status() != 0
-        && typed(run_failure_value_of(host).code) && withheld(result.value)) {
-        std::printf("%s: typed failed-closed fill status=%d code=%s\n",
-                    row, host.last_run_status(), run_failure_code_of(host));
-        return true;
     }
     Checks checks{row};
     checks.check(host.last_run_status() == 0 && host.last_error().empty(),
@@ -293,15 +360,13 @@ bool plain(const char* row, Host& host, const ReportC& oracle, bool allow_refusa
 }
 
 bool envelope(const char* row, Host& host, const ReportC& oracle,
-              ReportMode expected_mode, bool allow_refusal) {
+              ReportMode expected_mode) {
     Envelope result;
     int status = PF_REPORT_MODE_INVALID;
     try {
         status = host.fill_report_envelope_v1(&result.value);
     } catch (const std::exception& error) {
-        if (allow_refusal && result.value.metadata.complete == 0
-            && withheld(result.value.report) && typed_exception(row, error))
-            return true;
+        std::fprintf(stderr, "%s: unexpected envelope refusal: %s\n", row, error.what());
         print_report(row, result.value.report);
         print_report("FULL oracle", oracle);
         throw;
@@ -309,11 +374,6 @@ bool envelope(const char* row, Host& host, const ReportC& oracle,
     std::printf("%s: envelope status=%d mode=%u expected_mode=%u complete=%u\n",
                 row, status, result.value.metadata.mode,
                 static_cast<pf_report_mode_v1_t>(expected_mode), result.value.metadata.complete);
-    const bool refusal = status == PF_REPORT_MODE_REPLAY_UNAVAILABLE
-        || status == PF_REPORT_MODE_UNSUPPORTED || status == PF_REPORT_MODE_CONFLICT;
-    if (allow_refusal && refusal && result.value.metadata.complete == 0
-        && withheld(result.value.report))
-        return true;
     Checks checks{row};
     checks.check(status == PF_REPORT_MODE_ACCEPTED, "envelope was not accepted");
     checks.check(host.last_run_status() == 0 && host.last_error().empty(),
@@ -394,6 +454,39 @@ std::string sink_directory() {
     // Preserve the sink evidence; never use the system temp directory or delete it.
     return directory;
 }
+
+bool sink_control(const char* row, ReportMode mode, const ReportC& oracle) {
+    Observer observer;
+    Host host;
+    configure(host);
+    // FULL must be selected before the sink; STREAMED requires it first.
+    if (mode == ReportMode::FULL)
+        require(host.set_report_mode_v1(mode) == PF_REPORT_MODE_ACCEPTED,
+                std::string(row) + ": FULL setter refused");
+    const auto directory = sink_directory();
+    const auto path = directory + "/observed.ndjson";
+    const pf_report_sink_v1 sink{
+        sizeof sink, 1, path.c_str(), "p2cx-x1", directory.c_str()};
+    const int status = host.set_report_sink_v1(&sink);
+    require(status == 0, std::string(row) + ": path sink status=" + std::to_string(status));
+    if (mode == ReportMode::STREAMED)
+        require(host.set_report_mode_v1(mode) == PF_REPORT_MODE_ACCEPTED,
+                std::string(row) + ": STREAMED setter refused");
+    attach(host, observer);
+    run(host, &observer);
+    const bool parity = plain(row, host, oracle);
+    pf_report_sink_receipt_v1 receipt{};
+    receipt.struct_size = sizeof receipt;
+    receipt.version = 1;
+    const int receipt_status = host.report_sink_receipt_v1(&receipt);
+    std::printf("%s: receipt status=%d complete=%u count_t=%lld expected=%d sink=%s\n",
+                row, receipt_status, receipt.complete, static_cast<long long>(receipt.count_t),
+                oracle.total_trades, path.c_str());
+    require(receipt_status == 0 && receipt.complete == 1
+                && receipt.count_t == oracle.total_trades,
+            std::string(row) + ": sink must publish exactly the oracle's closed trades");
+    return parity;
+}
 } // namespace
 
 int main() {
@@ -402,7 +495,7 @@ int main() {
     // An invalid FULL oracle is a failed control, not evidence about X1.
     if (!suite.row("FULL oracle control", [&] { return oracle_run(oracle); })) return 1;
 
-    suite.row("A", [&] {
+    if (!suite.row("A", [&] {
         Observer observer;
         Host host;
         configure(host);
@@ -411,82 +504,168 @@ int main() {
         std::printf("A: setter status=%d expected=%d\n",
                     status, PF_REPORT_MODE_REPLAY_UNAVAILABLE);
         run(host, &observer);
-        const bool full = envelope("A", host, oracle.value, ReportMode::FULL, false);
+        const bool full = envelope("A", host, oracle.value, ReportMode::FULL);
         if (status != PF_REPORT_MODE_REPLAY_UNAVAILABLE)
             std::fprintf(stderr, "A: observer-first setter must refuse with REPLAY_UNAVAILABLE\n");
         return status == PF_REPORT_MODE_REPLAY_UNAVAILABLE && full;
-    });
+    })) return 1;
 
-    // B1 and B2 read the SAME completed generation, even when B1 is inconsistent.
-    {
-        Observer observer;
-        Host host;
-        bool ready = false;
-        try {
-            configure(host);
-            const int status = host.set_report_mode_v1(ReportMode::SUMMARY_ONLY);
-            require(status == PF_REPORT_MODE_ACCEPTED,
-                    "B: observer-free SUMMARY_ONLY setter status=" + std::to_string(status));
-            attach(host, observer);
-            run(host, &observer);
-            ready = true;
-        } catch (const std::exception& error) {
-            std::fprintf(stderr, "B setup: %s\n", error.what());
-        } catch (...) {
-            std::fprintf(stderr, "B setup: unknown exception\n");
-        }
-        suite.row("B1", [&] { return ready && plain("B1", host, oracle.value, true); });
-        suite.row("B2", [&] {
-            return ready && envelope("B2", host, oracle.value, ReportMode::SUMMARY_ONLY, true);
-        });
+    for (const auto mode : std::array<ReportMode, 2>{{ReportMode::FULL, ReportMode::STREAMED}}) {
+        const char* row = mode == ReportMode::FULL ? "D" : "D/STREAMED";
+        if (!suite.row(row, [&] { return sink_control(row, mode, oracle.value); })) return 1;
     }
 
-    for (const bool observer_first : std::array<bool, 2>{{true, false}}) {
-        const char* row = observer_first ? "C/observer-first" : "C/observer-last";
-        suite.row(row, [&] {
-            Observer observer;
-            Host host;
-            configure(host);
-            if (observer_first) attach(host, observer);
-            const int status = host.set_equity_report_mode(ReportMode::SUMMARY_ONLY);
-            require(status == 0, std::string(row) + ": legacy setter status=" + std::to_string(status));
-            if (!observer_first) attach(host, observer);
-            run(host, &observer);
-            const auto active = host.equity_report_mode();
-            require(active == ReportMode::SUMMARY_ONLY,
-                    "legacy equity mode=" + std::to_string(static_cast<unsigned>(active))
-                        + " expected=" + std::to_string(PF_REPORT_MODE_SUMMARY_ONLY));
-            return plain(row, host, oracle.value, true);
-        });
-    }
-
-    suite.row("D", [&] {
+    suite.row("B1", [&] {
         Observer observer;
         Host host;
         configure(host);
+        require(host.set_report_mode_v1(ReportMode::SUMMARY_ONLY) == PF_REPORT_MODE_ACCEPTED,
+                "B1: observer-free SUMMARY_ONLY setter refused");
+        refuse_observer("B1", host, observer);
+        // Prove the refused registration stayed absent before clearing it:
+        // a subsequent FULL run must complete without calling that descriptor.
         require(host.set_report_mode_v1(ReportMode::FULL) == PF_REPORT_MODE_ACCEPTED,
-                "D: FULL setter refused");
-        const auto directory = sink_directory();
-        const auto path = directory + "/full-observed.ndjson";
-        const pf_report_sink_v1 sink{sizeof sink, 1, path.c_str(), "p2cx-x1", directory.c_str()};
-        const int status = host.set_report_sink_v1(&sink);
-        require(status == 0, "D: path sink setter status=" + std::to_string(status));
-        attach(host, observer);
-        run(host, &observer);
-        const bool parity = plain("D", host, oracle.value, false);
-        pf_report_sink_receipt_v1 receipt{};
-        receipt.struct_size = sizeof receipt;
-        receipt.version = 1;
-        const int receipt_status = host.report_sink_receipt_v1(&receipt);
-        std::printf("D: receipt status=%d complete=%u count_t=%lld expected=%d sink=%s\n",
-                    receipt_status, receipt.complete, static_cast<long long>(receipt.count_t),
-                    oracle.value.total_trades, path.c_str());
-        require(receipt_status == 0 && receipt.complete == 1
-                    && receipt.count_t == oracle.value.total_trades,
-                "D: sink control did not publish exactly the oracle's closed trades");
-        return parity;
+                "B1: restoring FULL refused");
+        run(host);
+        require(observer.calls == 0, "B1: refused observer was stored");
+        const bool parity = plain("B1", host, oracle.value);
+        const bool full = envelope("B1", host, oracle.value, ReportMode::FULL);
+        require(host.set_report_mode_v1(ReportMode::SUMMARY_ONLY) == PF_REPORT_MODE_ACCEPTED,
+                "B1: refused registration left capture configuration behind");
+        require(strategy_set_execution_observer_v1(handle(host), nullptr) == 0,
+                "B1: clearing in SUMMARY_ONLY must be accepted");
+        return parity && full;
     });
 
-    std::printf("test_x1_observer_summary_only_counts: %d failed rows\n", suite.failures);
+    suite.row("B1/replacement", [&] {
+        Observer installed;
+        Observer replacement;
+        Host host;
+        configure(host);
+        attach(host, installed);
+        require(host.set_equity_report_mode(ReportMode::SUMMARY_ONLY) == 0,
+                "B1/replacement: pending SUMMARY_ONLY setter refused");
+        refuse_observer("B1/replacement", host, replacement);
+        // The pending mode can be restored without clearing/reinstalling the
+        // original observer. Its callback proves the failed replacement atomic.
+        require(host.set_equity_report_mode(ReportMode::FULL) == 0,
+                "B1/replacement: restoring pending FULL refused");
+        run(host, &installed);
+        require(replacement.calls == 0, "B1/replacement: refused descriptor replaced the original");
+        return plain("B1/replacement", host, oracle.value);
+    });
+
+    // The public window setter bypasses observer-registration admission.
+    // B2 keeps the existing envelope gate as a control; B3 independently
+    // requires begin to refuse this mode before callbacks or generation admission.
+    if (!suite.row("B2", [&] {
+        Host host;
+        configure(host);
+        require(host.set_report_mode_v1(ReportMode::SUMMARY_ONLY) == PF_REPORT_MODE_ACCEPTED,
+                "B2: SUMMARY_ONLY setter refused");
+        select_window(host);
+        Envelope result;
+        const int status = host.fill_report_envelope_v1(&result.value);
+        std::printf("B2: envelope status=%d expected=%d complete=%u\n",
+                    status, PF_REPORT_MODE_REPLAY_UNAVAILABLE, result.value.metadata.complete);
+        require(status == PF_REPORT_MODE_REPLAY_UNAVAILABLE
+                    && result.value.metadata.complete == 0 && withheld(result.value.report),
+                "B2: envelope must refuse capture exactly with REPLAY_UNAVAILABLE");
+        require(host.begins == 0 && host.calculations == 0
+                    && host.last_run_status() == 0 && host.last_error().empty(),
+                "B2: envelope refusal executed or failed the run");
+        return true;
+    })) return 1;
+
+    suite.row("B3", [&] {
+        Host host;
+        configure(host);
+        require(host.set_report_mode_v1(ReportMode::SUMMARY_ONLY) == PF_REPORT_MODE_ACCEPTED,
+                "B3: SUMMARY_ONLY setter refused");
+        select_window(host);
+        return begin_refused("B3", host);
+    });
+
+    suite.row("E", [&] {
+        Observer observer;
+        CountMismatchHost host;
+        configure(host);
+        const auto directory = sink_directory();
+        const auto path = directory + "/inconsistent-presenter.ndjson";
+        const pf_report_sink_v1 sink{
+            sizeof sink, 1, path.c_str(), "p2cx-x1", directory.c_str()};
+        require(host.set_report_sink_v1(&sink) == 0, "E: path sink setter refused");
+        require(host.set_report_mode_v1(ReportMode::STREAMED) == PF_REPORT_MODE_ACCEPTED,
+                "E: STREAMED setter refused");
+        attach(host, observer);
+        const auto bars = tape();
+        host.run(bars.data(), static_cast<int>(bars.size()));
+        const char* code = run_failure_code_of(host);
+        const char* args = run_failure_args_of(host);
+        std::fprintf(stderr,
+            "E: status=%d code=%s args=%s error=%s begins=%d calculations=%d "
+            "presentations=%d original_total=%d oracle_total=%d observer_calls=%d\n",
+            host.last_run_status(), code, args, host.last_error().c_str(), host.begins,
+            host.calculations, host.presentations, host.logical_trades_before,
+            oracle.value.total_trades, observer.calls);
+        Checks checks{"E"};
+        checks.check(host.begins == 1 && host.calculations == bar_count
+                         && host.presentations == 1
+                         && host.logical_trades_before == oracle.value.total_trades,
+                     "fixture did not reach capture after the oracle's closed trips");
+        // Judge run(), before fill_report can detect a later sink count error.
+        checks.check(host.last_run_status() == 1
+                         && host.native_state().kind == NativeLifecycleKind::Failed,
+                     "inconsistent capture succeeded");
+        checks.check(std::strcmp(code, "engine_invariant") == 0
+                         && std::strcmp(args, "{}") == 0,
+                     "capture did not carry the exact invariant code and empty arguments");
+        checks.check(host.last_error() == "summary trade metrics differ from the logical trade count",
+                     "capture failed outside the metrics backstop");
+        checks.check(observer.calls == 0, "inconsistent capture reached the observer boundary");
+        return checks.good;
+    });
+
+    if (!suite.row("C/observer-first", [&] {
+        Observer observer;
+        Host host;
+        configure(host);
+        attach(host, observer);
+        require(host.set_equity_report_mode(ReportMode::SUMMARY_ONLY) == 0,
+                "C/observer-first: legacy SUMMARY_ONLY setter refused");
+        return begin_refused("C/observer-first", host, &observer);
+    })) return 1;
+
+    if (!suite.row("C/observer-last", [&] {
+        Observer observer;
+        Host host;
+        configure(host);
+        require(host.set_equity_report_mode(ReportMode::SUMMARY_ONLY) == 0,
+                "C/observer-last: legacy SUMMARY_ONLY setter refused");
+        refuse_observer("C/observer-last", host, observer);
+        run(host);
+        require(observer.calls == 0, "C/observer-last: refused descriptor was stored");
+        require(host.equity_report_mode() == ReportMode::SUMMARY_ONLY,
+                "C/observer-last: pending equity mode was not adopted");
+        return plain("C/observer-last", host, oracle.value);
+    })) return 1;
+
+    if (!suite.row("C/clear", [&] {
+        Observer observer;
+        Host host;
+        configure(host);
+        attach(host, observer);
+        require(host.set_equity_report_mode(ReportMode::SUMMARY_ONLY) == 0,
+                "C/clear: legacy SUMMARY_ONLY setter refused");
+        const int status = strategy_set_execution_observer_v1(handle(host), nullptr);
+        require(status == 0, "C/clear: SUMMARY_ONLY observer clear status=" + std::to_string(status));
+        run(host);
+        require(observer.calls == 0, "C/clear: removed observer was called");
+        require(host.equity_report_mode() == ReportMode::SUMMARY_ONLY,
+                "C/clear: observer removal changed the pending equity mode");
+        return plain("C/clear", host, oracle.value);
+    })) return 1;
+
+    std::printf("test_report_mode_v1_summary_with_observer: %d failed rows\n", suite.failures);
     return suite.failures == 0 ? 0 : 1;
 }
