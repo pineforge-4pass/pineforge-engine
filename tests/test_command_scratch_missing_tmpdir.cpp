@@ -26,7 +26,7 @@ void expect_command_failure(const std::string& candidate, int number) {
         const auto failure = pineforge::classify_run_failure(error);
         require(error.code() == std::error_code(number, std::generic_category())
                     && failure.code == pineforge::RunFailureCode::scratch_io_failed
-                    && failure.args && *failure.args == "{}"
+                    && !failure.args
                     && std::string(error.what()).find(candidate) != std::string::npos,
                 "command backing must preserve its errno, candidate and resource failure code");
         caught = true;
