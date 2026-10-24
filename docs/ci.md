@@ -593,10 +593,16 @@ lands, and pass `--min-tests N` to override it for one run (the flag gates any
 profile; `kernel` and `release` have a default).
 
 On Linux profiles with the source layer enabled, `ctest-scratch-guard` requires
-`test_scratch_guard_ledger_read`, `test_scratch_guard_reissue`, and
-`test_scratch_guard_equal_string` in the full CTest registry and refuses selected
-guard rows that skip, are disabled, or do not run; unreadable discovery or result
-lists fail closed. Each shard checks execution only for its own selected names.
+`test_scratch_guard_ledger_read`, `test_scratch_guard_reissue`,
+`test_scratch_guard_equal_string`, and `test_scratch_guard_hl2_01` in the full
+CTest registry and refuses selected guard rows that skip, are disabled, or do
+not run; unreadable discovery or result lists fail closed. Every selected guard
+must have its own Passed/Failed result
+line before CTest's closing summary; a passing total alone proves no named
+execution. Runner-only profiles discover the build-root registry on both plain
+and 1/1 runs, requiring exactly one `Total Tests: N` line matching the number
+of listed rows, with no duplicate names or test numbers. Each shard checks
+execution only for its own selected names.
 These exact row names are the contract the scratch-syscall counter tests must carry;
 kernel-only and non-Linux runs do not run this stage.
 

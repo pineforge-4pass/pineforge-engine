@@ -104,7 +104,7 @@ class UnittestShardsTests(unittest.TestCase):
         ids = shards_runner.discover_test_ids(ROOT / 'scripts/test_ci_verify.py')
         discovered = {test_id.rsplit('.', 2)[-2] for test_id in ids}
         self.assertEqual(discovered, {
-            'ConfigValidation', 'RowFloorConfig', 'ProfileOptions',
+            'ConfigValidation', 'ScratchGuardRows', 'RowFloorConfig', 'ProfileOptions',
             'RunnerSanitizerCoverage', 'RuntimeBudgetLanes', 'CopyCacheIdentity',
             'HistoricalProviderPinTable', 'HistoricalProviderPins',
             'CAbiRuntimeInventory', 'ReceiptReuse', 'GitObjectDiscovery',
@@ -127,6 +127,10 @@ class UnittestShardsTests(unittest.TestCase):
         with mock.patch.object(verifier_classes, 'FAST_CLASSES',
                                verifier_classes.FAST_CLASSES - {'ConfigValidation'}):
             with self.assertRaisesRegex(ValueError, 'unclassified=.*ConfigValidation'):
+                verifier_classes.validate_class_partition(discovered)
+        with mock.patch.object(verifier_classes, 'FAST_CLASSES',
+                               verifier_classes.FAST_CLASSES - {'ScratchGuardRows'}):
+            with self.assertRaisesRegex(ValueError, 'unclassified=.*ScratchGuardRows'):
                 verifier_classes.validate_class_partition(discovered)
         with mock.patch.object(verifier_classes, 'FAST_CLASSES',
                                verifier_classes.FAST_CLASSES | {'ReceiptReuse'}):

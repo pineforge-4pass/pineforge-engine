@@ -814,6 +814,7 @@ SCRATCH_GUARD_ROWS = frozenset((
     'test_scratch_guard_ledger_read',
     'test_scratch_guard_reissue',
     'test_scratch_guard_equal_string',
+    'test_scratch_guard_hl2_01',
 ))
 
 
@@ -1451,7 +1452,7 @@ def ctest_list_names(output: bytes) -> 'frozenset[str] | None':
 
 @dataclass(frozen=True)
 class CTestRows:
-    """The rows of one CTest run: its own count, and those that did not run."""
+    """One CTest run's count, non-running rows and named execution evidence."""
     total: int
     # SKIP_RETURN_CODE / SKIP_REGULAR_EXPRESSION rows; inside total, as passed.
     skipped: tuple[str, ...] = ()
@@ -1459,6 +1460,9 @@ class CTestRows:
     not_run: tuple[str, ...] = ()
     # DISABLED rows; CTest leaves them out of total.
     disabled: tuple[str, ...] = ()
+    # Only real Passed/Failed result lines before the closing summary prove
+    # named execution; a summary count or absence from negative lists cannot.
+    executed: tuple[str, ...] = ()
 
     @property
     def ran(self) -> int:
@@ -1481,6 +1485,8 @@ def ctest_rows(output: bytes) -> CTestRows | None:
     when those lists disagree with the output -- a FAILED list whose length is
     not the summary's failed count, or skipped result lines the did-not-run
     list does not match -- so a floor fails closed on output it cannot read.
+    Named execution evidence comes only from Passed/Failed result lines before
+    that summary; the numerical floor continues to use the summary's count.
     """
     text = output.decode('utf-8', 'replace')
     summary = ctest_summary(text)
@@ -1502,7 +1508,10 @@ def ctest_rows(output: bytes) -> CTestRows | None:
                          f'names {len(skipped)} skipped rows')
     if len(skipped) + len(not_run) > total:
         raise ValueError(f'{len(skipped) + len(not_run)} rows did not run out of {total}')
-    return CTestRows(total, skipped, not_run, disabled)
+    executed = tuple(match.group('name')
+                     for match in CTEST_NAMED_RESULT.finditer(text[:summary.start()])
+                     if match.group('result') in ('Passed', 'Failed', '***Failed'))
+    return CTestRows(total, skipped, not_run, disabled, executed)
 
 
 def ctest_supports_junit(runner: Runner) -> bool:
@@ -2071,6 +2080,25 @@ class Driver:
         self.write_summary()
         return False
 
+    def scratch_guard_registry(self, test_dir: Path,
+                               registered_names: 'frozenset[str] | None') -> 'frozenset[str] | None':
+        """Runner-only selections prove guard registration at the build root."""
+        if (not self.cfg.profile.source_layer or not sys.platform.startswith('linux')
+                or test_dir == self.cfg.build_dir):
+            return registered_names
+        full_rows = self.invoke(
+            'ctest-list-scratch-guard',
+            ['ctest', '--test-dir', str(self.cfg.build_dir), '-N'],
+            stream_output=False)
+        if full_rows.returncode:
+            return None
+        try:
+            # Unlike a name-only listing, this also requires one matching
+            # total and rejects duplicate names/numbers and invalid UTF-8.
+            return frozenset(ctest_registry(full_rows.stdout + full_rows.stderr))
+        except ValueError:
+            return None
+
     def run_sharded_ctest(self, test_dir: Path, jobs: int, all_rows: Completed,
                           selected_rows: Completed) -> Completed | None:
         try:
@@ -2139,7 +2167,8 @@ class Driver:
         self.summary['ctestRan'] = evidence['ran']
         if shard.count == 1:
             self.enforce_test_floor(ran, registered=len(registry), selected=len(selection),
-                                    registered_names=frozenset(registry),
+                                    registered_names=self.scratch_guard_registry(
+                                        test_dir, frozenset(registry)),
                                     selected_names=frozenset(selected),
                                     excluded_names=frozenset(excluded))
             if self.cfg.min_tests is None:
@@ -2792,16 +2821,7 @@ class Driver:
                                 if all_rows.returncode == 0 else None)
             selected_names = (ctest_list_names(selected_rows.stdout + selected_rows.stderr)
                               if selected_rows.returncode == 0 else None)
-            if (self.cfg.profile.source_layer and sys.platform.startswith('linux')
-                    and test_dir != self.cfg.build_dir):
-                # Runner-only selection is not the full build registry. Keep
-                # its existing counts, but prove guard presence over the root.
-                full_rows = self.invoke(
-                    'ctest-list-scratch-guard',
-                    ['ctest', '--test-dir', str(self.cfg.build_dir), '-N'],
-                    stream_output=False)
-                registered_names = (ctest_list_names(full_rows.stdout + full_rows.stderr)
-                                    if full_rows.returncode == 0 else None)
+            registered_names = self.scratch_guard_registry(test_dir, registered_names)
             self.enforce_test_floor(ran, registered=registered, selected=selected,
                                     registered_names=registered_names,
                                     selected_names=selected_names, excluded_names=excluded_names)
@@ -3169,6 +3189,9 @@ class Driver:
                                   ('not run', rows.not_run))
             if guards & set(names)
         ]
+        unreported = sorted(guards - set(rows.executed))
+        if unreported:
+            offenders.append('no Passed/Failed result line: ' + ', '.join(unreported))
         if offenders:
             self.fail_stage(stage, f'{stage}: selected guard rows did not run; '
                             + '; '.join(offenders))

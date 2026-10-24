@@ -136,6 +136,7 @@ SCRATCH_GUARD_FIXTURE_NAMES = (
     'test_scratch_guard_ledger_read',
     'test_scratch_guard_reissue',
     'test_scratch_guard_equal_string',
+    'test_scratch_guard_hl2_01',
 )
 
 
@@ -252,6 +253,21 @@ def named_ctest_output(names, *, skipped=(), not_run=(), disabled=()) -> bytes:
     text = summary.decode()
     closing = re.search(r'\n\d+% tests passed', text)
     return (''.join(lines) + text[closing.start():]).encode()
+
+
+def populated_ctest_output(total: int, *, required=(), skipped=(), not_run=(), disabled=()) -> bytes:
+    """Keep the requested count while giving registered witnesses real result lines."""
+    names = list(dict.fromkeys((*required, *skipped, *not_run, *disabled)))
+    population = total + len(disabled)
+    if len(names) > population:
+        raise AssertionError('fixture count cannot contain all required and non-running rows')
+    index = 0
+    while len(names) < population:
+        name = f'test_result_{index}'
+        if name not in names:
+            names.append(name)
+        index += 1
+    return named_ctest_output(names, skipped=skipped, not_run=not_run, disabled=disabled)
 
 
 class Scripted:
@@ -378,6 +394,10 @@ class Scripted:
         if argv[0] == 'cmake' and '--install' in argv:
             return self._install()
         if argv[0] == 'ctest':
+            if ('-N' in argv and '--test-dir' in argv
+                    and argv[argv.index('--test-dir') + 1] == str(self.build_dir)
+                    and 'ctest_root_listing' in self.exits):
+                return Completed(0, self.exits['ctest_root_listing'])
             if 'ctest_shard_inventory' in self.exits:
                 registry = self.exits['ctest_shard_inventory']
                 names = list(registry)
@@ -472,9 +492,13 @@ class Scripted:
             rows = self.exits.get('ctest_rows', default_rows)
             if rows == 'absent':
                 return Completed(int(self.exits.get('ctest', 0)), b'tests\n', b'')
-            summary = ctest_output(rows, self.exits.get('ctest_skipped', ()),
-                                   self.exits.get('ctest_not_run', ()),
-                                   self.exits.get('ctest_disabled', ()))
+            guards = (SCRATCH_GUARD_FIXTURE_NAMES
+                      if ci_verify.PROFILE[self.profile].source_layer
+                      and self.profile not in ci_verify.LIVE_ONLY_PROFILES else ())
+            summary = populated_ctest_output(
+                rows, required=guards, skipped=self.exits.get('ctest_skipped', ()),
+                not_run=self.exits.get('ctest_not_run', ()),
+                disabled=self.exits.get('ctest_disabled', ()))
             return Completed(int(self.exits.get('ctest', 0)), summary, b'')
         if argv[0].endswith('smoke_version') or Path(argv[0]).name == 'smoke_version':
             stdout = str(self.exits.get('smoke-stdout', expected_version(self.source))).encode() + b'\n'
@@ -897,7 +921,7 @@ class ScratchGuardRows(unittest.TestCase):
         return ci_verify.Driver(cfg)
 
     def floor(self, *, registry=SCRATCH_GUARD_FIXTURE_NAMES, skipped=(), disabled=(),
-              not_run=(), raw=None, profile='release', host='linux'):
+              not_run=(), raw=None, profile='release', host='linux', returncode=0):
         with mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES': ''}), \
                 mock.patch.object(ci_verify.sys, 'platform', host):
             driver = self.driver(profile)
@@ -905,7 +929,7 @@ class ScratchGuardRows(unittest.TestCase):
             output = (named_ctest_output(names, skipped=skipped, disabled=disabled,
                                          not_run=not_run) if raw is None else raw)
             driver.enforce_test_floor(
-                Completed(0, output), registered=len(names), selected=len(names),
+                Completed(returncode, output), registered=len(names), selected=len(names),
                 registered_names=frozenset(registry) if registry is not None else None)
         return driver
 
@@ -955,6 +979,84 @@ class ScratchGuardRows(unittest.TestCase):
                 self.assert_guard_failure(driver, row, 'not run')
                 self.assertEqual(failure_stages(driver.summary), ['ctest-scratch-guard'])
 
+    def test_selected_guards_need_named_execution_even_when_release_floor_passes(self):
+        public = tuple(f'public_guard_{index}' for index in range(603))
+        registry = (*public, *SCRATCH_GUARD_FIXTURE_NAMES)
+        for keep_total in (False, True):
+            with self.subTest(keep_total=keep_total), \
+                    mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES': ''}), \
+                    mock.patch.object(ci_verify.sys, 'platform', 'linux'):
+                # The first shape is the reported 603-public-row run; the
+                # second retains the complete selection's closing total.
+                output = named_ctest_output(public)
+                if keep_total:
+                    output = output.replace(b'out of 603', b'out of 607')
+                driver = self.driver()
+                driver.cfg.min_tests = 603
+                driver.enforce_test_floor(
+                    Completed(0, output), registered=len(registry), selected=len(registry),
+                    registered_names=frozenset(registry), selected_names=frozenset(registry))
+                for row in SCRATCH_GUARD_FIXTURE_NAMES:
+                    self.assert_guard_failure(driver, row, 'no Passed/Failed result line')
+                self.assertEqual(driver.summary['ctestRows'], 607 if keep_total else 603)
+                self.assertEqual(failure_stages(driver.summary), ['ctest-scratch-guard'])
+                floor = next(stage for stage in driver.stages if stage['name'] == 'ctest-floor')
+                self.assertEqual(floor['status'], 'passed', floor)
+
+    def test_each_selected_guard_requires_its_own_passed_or_failed_line(self):
+        names = (*SCRATCH_GUARD_FIXTURE_NAMES, 'public')
+        for row in SCRATCH_GUARD_FIXTURE_NAMES:
+            complete = named_ctest_output(names)
+            line = next(line for line in complete.splitlines(keepends=True)
+                        if f': {row} '.encode() in line)
+            for replacement, after_summary in (
+                    (b'', False),
+                    (line.replace(f': {row} '.encode(), f': {row}_extra '.encode()), False),
+                    (f'Start 1: {row}\n'.encode(), False),
+                    (line.replace(b'Passed', b'Unknown'), False),
+                    (b'', True)):
+                with self.subTest(row=row, replacement=replacement, after_summary=after_summary):
+                    output = complete.replace(line, replacement)
+                    if after_summary:
+                        output += line
+                    driver = self.floor(registry=names, raw=output)
+                    self.assert_guard_failure(driver, row, 'no Passed/Failed result line')
+                    self.assertEqual(failure_stages(driver.summary), ['ctest-scratch-guard'])
+                    error = driver.failures[0]['error']
+                    for other in set(SCRATCH_GUARD_FIXTURE_NAMES) - {row}:
+                        self.assertNotIn(other, error)
+
+    def test_failed_guard_is_execution_evidence_but_unreported_guard_is_not(self):
+        failed, missing = SCRATCH_GUARD_FIXTURE_NAMES[:2]
+        output = named_ctest_output(SCRATCH_GUARD_FIXTURE_NAMES)
+        failed_line = next(line for line in output.splitlines(keepends=True)
+                           if f': {failed} '.encode() in line)
+        output = output.replace(failed_line, failed_line.replace(b'Passed', b'***Failed'))
+        output = output.replace(b'100% tests passed out of 4',
+                                b'75% tests passed, 1 tests failed out of 4')
+        output += f'\nThe following tests FAILED:\n\t1 - {failed} (Failed)\n'.encode()
+        self.assertEqual(self.floor(raw=output, returncode=8).failures, [])
+        missing_line = next(line for line in output.splitlines(keepends=True)
+                            if f': {missing} '.encode() in line)
+        driver = self.floor(raw=output.replace(missing_line, b''), returncode=8)
+        self.assert_guard_failure(driver, missing, 'no Passed/Failed result line')
+        self.assertEqual(failure_stages(driver.summary), ['ctest-scratch-guard'])
+        self.assertNotIn(failed, driver.failures[0]['error'])
+
+    def test_floorless_source_profile_requires_named_guard_execution(self):
+        with mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES': ''}), \
+                mock.patch.object(ci_verify.sys, 'platform', 'linux'):
+            driver = self.driver('native')
+            driver.cfg.min_tests = None
+            registry = (*SCRATCH_GUARD_FIXTURE_NAMES,
+                        *(f'public_floorless_{index}' for index in range(599)))
+            driver.enforce_test_floor(
+                Completed(0, ctest_output(603)), registered=603, selected=603,
+                registered_names=frozenset(registry))
+        for row in SCRATCH_GUARD_FIXTURE_NAMES:
+            self.assert_guard_failure(driver, row, 'no Passed/Failed result line')
+        self.assertEqual(failure_stages(driver.summary), ['ctest-scratch-guard'])
+
     def test_unreadable_registry_fails_closed(self):
         driver = self.floor(registry=None)
         for row in SCRATCH_GUARD_FIXTURE_NAMES:
@@ -976,7 +1078,7 @@ class ScratchGuardRows(unittest.TestCase):
             driver = self.driver('native')
             driver.cfg.min_tests = None
             driver.enforce_test_floor(
-                Completed(0, b'No tests were found!!!\n'), registered=3, selected=3,
+                Completed(0, b'No tests were found!!!\n'), registered=4, selected=4,
                 registered_names=frozenset(SCRATCH_GUARD_FIXTURE_NAMES))
         for row in SCRATCH_GUARD_FIXTURE_NAMES:
             self.assert_guard_failure(driver, row, 'no readable row lists')
@@ -987,13 +1089,18 @@ class ScratchGuardRows(unittest.TestCase):
                 mock.patch.object(ci_verify.sys, 'platform', 'linux'):
             driver = self.driver('native')
             driver.cfg.exclude_label = 'custom-label'
+            selection = (*SCRATCH_GUARD_FIXTURE_NAMES,
+                         *(f'public_selection_{index}' for index in range(959)))
+            registry = (*selection, 'excluded')
             driver.enforce_test_floor(
-                Completed(0, named_ctest_output(SCRATCH_GUARD_FIXTURE_NAMES)),
-                registered=4, selected=3,
-                registered_names=frozenset((*SCRATCH_GUARD_FIXTURE_NAMES, 'excluded')))
+                Completed(0, named_ctest_output(selection)),
+                registered=len(registry), selected=len(selection),
+                registered_names=frozenset(registry))
         for row in SCRATCH_GUARD_FIXTURE_NAMES:
             self.assert_guard_failure(driver, row, 'selection names were unreadable')
         self.assertEqual(failure_stages(driver.summary), ['ctest-scratch-guard'])
+        exclusion = next(stage for stage in driver.stages if stage['name'] == 'ctest-exclusion')
+        self.assertEqual(exclusion['status'], 'passed', exclusion)
 
     def test_exact_guard_name_cannot_be_satisfied_by_a_suffix(self):
         missing = 'test_scratch_guard_ledger_read'
@@ -1006,7 +1113,7 @@ class ScratchGuardRows(unittest.TestCase):
     def test_all_guard_rows_present_and_run_pass(self):
         driver = self.floor()
         self.assertEqual(driver.failures, [])
-        self.assert_guard_pass(driver, 3)
+        self.assert_guard_pass(driver, 4)
         self.assertEqual(ci_verify.SCRATCH_GUARD_ROWS, frozenset(SCRATCH_GUARD_FIXTURE_NAMES))
 
     def test_unrelated_suffix_skip_does_not_match_a_guard(self):
@@ -1014,7 +1121,7 @@ class ScratchGuardRows(unittest.TestCase):
         driver = self.floor(registry=(*SCRATCH_GUARD_FIXTURE_NAMES, unrelated),
                             skipped=(unrelated,), host='linux2')
         self.assertEqual(driver.failures, [])
-        self.assert_guard_pass(driver, 3)
+        self.assert_guard_pass(driver, 4)
 
     def test_kernel_and_non_linux_source_profiles_do_not_run_the_stage(self):
         for profile, host in (('kernel', 'linux'), ('release', 'darwin'),
@@ -1032,7 +1139,7 @@ class ScratchGuardRows(unittest.TestCase):
                     mock.patch.object(ci_verify.sys, 'platform', 'linux'):
                 driver = self.driver(profile)
                 selection = (*(name for name in SCRATCH_GUARD_FIXTURE_NAMES if name != missing),
-                             *(f'public_guard_{index}' for index in range(1024)))
+                             *(f'public_guard_{index}' for index in range(1023)))
                 excluded = frozenset(SHARD_SLOW_FIXTURE_NAMES)
                 registry = frozenset(selection) | excluded
                 driver.enforce_test_floor(
@@ -1044,10 +1151,34 @@ class ScratchGuardRows(unittest.TestCase):
                 self.assertEqual(exclusion['status'], 'passed', exclusion)
                 self.assertEqual(failure_stages(driver.summary), ['ctest-scratch-guard'])
 
+    def test_debug_and_sanitizers_require_named_guard_execution_before_return(self):
+        for profile in ('debug', 'sanitizers'):
+            for missing in SCRATCH_GUARD_FIXTURE_NAMES:
+                with self.subTest(profile=profile, missing=missing), \
+                        mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES': ''}), \
+                        mock.patch.object(ci_verify.sys, 'platform', 'linux'):
+                    selection = (*SCRATCH_GUARD_FIXTURE_NAMES,
+                                 *(f'public_evidence_{index}' for index in range(1020)))
+                    excluded = frozenset(SHARD_SLOW_FIXTURE_NAMES)
+                    registry = frozenset(selection) | excluded
+                    output = named_ctest_output(selection)
+                    line = next(line for line in output.splitlines(keepends=True)
+                                if f': {missing} '.encode() in line)
+                    driver = self.driver(profile)
+                    driver.enforce_test_floor(
+                        Completed(0, output.replace(line, b'')), registered=len(registry),
+                        selected=len(selection), registered_names=registry,
+                        selected_names=frozenset(selection), excluded_names=excluded)
+                    self.assert_guard_failure(driver, missing, 'no Passed/Failed result line')
+                    self.assertEqual(failure_stages(driver.summary), ['ctest-scratch-guard'])
+                    exclusion = next(stage for stage in driver.stages
+                                     if stage['name'] == 'ctest-exclusion')
+                    self.assertEqual(exclusion['status'], 'passed', exclusion)
+
     def shard_floor(self, *, skipped=(), missing=()):
         # Pin the partition boundary, not a hash coincidence: this test checks
         # the consumer of selection names, not the separately-tested partitioner.
-        public = tuple(f'public_guard_{index}' for index in range(1024))
+        public = tuple(f'public_guard_{index}' for index in range(1023))
         registry = (*(name for name in SCRATCH_GUARD_FIXTURE_NAMES if name not in missing), *public)
         selected = (SCRATCH_GUARD_FIXTURE_NAMES[0], *public[:512])
         other = (*(name for name in SCRATCH_GUARD_FIXTURE_NAMES[1:] if name not in missing),
@@ -1237,7 +1368,7 @@ class RowFloorConfig(unittest.TestCase):
 
     def test_sharded_accounting_refuses_not_run_disabled_and_unpermitted_skips(self):
         selection = ('a', 'b', *SCRATCH_GUARD_FIXTURE_NAMES,
-                     *(f'public_{row}' for row in range(1021)))
+                     *(f'public_{row}' for row in range(1020)))
         registry = (*selection, *SHARD_SLOW_FIXTURE_NAMES)
         for category in ('not_run', 'disabled', 'skipped'):
             with self.subTest(category=category):
@@ -1274,7 +1405,7 @@ class RowFloorConfig(unittest.TestCase):
         # never from the production allow-list or its predicate.
         selection = ('test_scratch_arena_jailed_seals', 'test_unlisted_platform_skip',
                      *SCRATCH_GUARD_FIXTURE_NAMES,
-                     *(f'public_platform_{index}' for index in range(1021)))
+                     *(f'public_platform_{index}' for index in range(1020)))
         excluded = SHARD_SLOW_FIXTURE_NAMES
         registry = (*selection, *excluded)
 
@@ -1439,24 +1570,24 @@ class RowFloorConfig(unittest.TestCase):
 
     def test_shard_one_of_one_delegates_to_identical_unsharded_accounting(self):
         cases = (
-            ('native', (), (), False),
-            ('native', ('--min-tests', '3'), (), False),
-            ('native', ('--min-tests', '1'), ('private',), False),
-            ('release', ('--min-tests', '1'), ('private',), False),
-            ('release', ('--min-tests', '1'), (), False),
-            ('native', (), ('private',), True),
-            ('debug', ('--exclude-label', 'slow'), (), False),
-            ('sanitizers', (), (), False),
+            ('native', (), (), False, []),
+            ('native', ('--min-tests', '7'), (), False, ['ctest-floor']),
+            ('native', ('--min-tests', '5'), ('private',), False, []),
+            ('release', ('--min-tests', '5'), ('private',), False, []),
+            ('release', ('--min-tests', '5'), (), False, ['ctest-floor']),
+            ('native', (), ('private',), True, ['ctest-private-fixtures']),
+            ('debug', ('--exclude-label', 'slow'), (), False, []),
+            ('sanitizers', (), (), False, []),
         )
         names = ('public', 'private', *SCRATCH_GUARD_FIXTURE_NAMES)
-        for profile, extra, skipped, overlay in cases:
+        for profile, extra, skipped, overlay, expected_failures in cases:
             with self.subTest(profile=profile, extra=extra, skipped=skipped, overlay=overlay):
                 excluded = (SHARD_SLOW_FIXTURE_NAMES
                             if profile in ('debug', 'sanitizers') else ())
                 selected_names = names
                 if excluded:
                     selected_names = (*names, *(f'public_fixture_{index}'
-                                               for index in range(1024)))
+                                               for index in range(1020)))
                 discovery = self.discovery((*selected_names, *excluded))
                 selection = self.discovery(selected_names)
                 output = named_ctest_output(selected_names, skipped=skipped)
@@ -1486,6 +1617,15 @@ class RowFloorConfig(unittest.TestCase):
                             'ctestNotRun', 'ctestDisabled'):
                     self.assertEqual(sharded.summary[key], plain.summary[key], key)
                 self.assertEqual(failure_stages(sharded.summary), failure_stages(plain.summary))
+                self.assertEqual(failure_stages(plain.summary), expected_failures)
+                self.assertEqual(failure_stages(sharded.summary), expected_failures)
+                if extra == ('--min-tests', '7'):
+                    self.assertEqual(sharded.summary['ctestRows'], 6)
+                    self.assertIn('ran 6 rows, below the floor of 7',
+                                  sharded.failures[0]['error'])
+                if skipped and extra == ('--min-tests', '5'):
+                    self.assertEqual(plain.summary['ctestRows'], 5)
+                    self.assertEqual(sharded.summary['ctestRows'], sharded.summary['minTests'])
                 self.assertIn('ctest-shard-accounting', stage_names(sharded.summary))
                 command = next(stage['argv'] for stage in sharded.stages if stage['name'] == 'ctest')
                 self.assertNotIn('-R', command)
@@ -1793,7 +1933,7 @@ class RowFloorConfig(unittest.TestCase):
                                  (SHARD_SLOW_FIXTURE_NAMES[0], outsider)):
                     with self.subTest(profile=profile, shard=shard, labelled=labelled):
                         inventory = (*SCRATCH_GUARD_FIXTURE_NAMES,
-                                     *(f'public_slow_bound_{row}' for row in range(1021)),
+                                     *(f'public_slow_bound_{row}' for row in range(1020)),
                                      *SHARD_SLOW_FIXTURE_NAMES, outsider)
                         code, summary, _, _ = DriverOrderingAndAggregation.run_profile(
                             self, profile,
@@ -1812,7 +1952,7 @@ class RowFloorConfig(unittest.TestCase):
         # policy set would refuse this valid conditional registry.
         commands = {name: 0 for name in LAB_SHARD_GUARDS}
         inventory = (*SCRATCH_GUARD_FIXTURE_NAMES,
-                     *(f'public_slow_bound_{row}' for row in range(1021)),
+                     *(f'public_slow_bound_{row}' for row in range(1020)),
                      *SHARD_SLOW_FIXTURE_NAMES)
         for profile in ('debug', 'sanitizers'):
             for shard in (None, '1/1', '1/4'):
@@ -1834,7 +1974,7 @@ class RowFloorConfig(unittest.TestCase):
         self.assertTrue(pinned)
         outsider = 'public_unpinned_skip'
         inventory = (*pinned, outsider, *SCRATCH_GUARD_FIXTURE_NAMES,
-                     *(f'public_skip_{row}' for row in range(1021)),
+                     *(f'public_skip_{row}' for row in range(1020)),
                      *SHARD_SLOW_FIXTURE_NAMES)
         commands = {name: 0 for name in LAB_SHARD_GUARDS}
         for profile in ('debug', 'sanitizers'):
@@ -1907,7 +2047,7 @@ class RowFloorConfig(unittest.TestCase):
 
     def test_native_runs_the_labelled_rows_by_default(self):
         inventory = (*SCRATCH_GUARD_FIXTURE_NAMES,
-                     *(f'public_{row}' for row in range(1021)), *SHARD_SLOW_FIXTURE_NAMES)
+                     *(f'public_{row}' for row in range(1020)), *SHARD_SLOW_FIXTURE_NAMES)
         commands = {name: 0 for name in LAB_SHARD_GUARDS}
         code, summary, _, _ = DriverOrderingAndAggregation.run_profile(
             self, 'native', ctest_shard_inventory=inventory,
@@ -1927,7 +2067,7 @@ class RowFloorConfig(unittest.TestCase):
     def test_explicit_release_exclusion_still_uses_unsharded_accounting(self):
         labelled = SHARD_SLOW_FIXTURE_NAMES
         inventory = (*SCRATCH_GUARD_FIXTURE_NAMES,
-                     *(f'public_{row}' for row in range(1021)), *labelled)
+                     *(f'public_{row}' for row in range(1020)), *labelled)
         commands = {name: 0 for name in LAB_SHARD_GUARDS | {'source-guard-twin-parity'}}
         code, summary, _, _ = DriverOrderingAndAggregation.run_profile(
             self, 'release', extra=['--exclude-label', 'custom-label'],
@@ -3653,6 +3793,110 @@ class DriverOrderingAndAggregation(unittest.TestCase):
         self.assertEqual(ctest['extraEnvKeys'], ['ASAN_OPTIONS', 'UBSAN_OPTIONS'])
         self.assertNotIn('ctest', failure_stages(summary))
 
+    @staticmethod
+    def scratch_runner_names():
+        names = {'native_live_help', 'test_live_json', 'test_native_live_startup',
+                 'test_native_live_store', 'test_native_live_routing',
+                 'test_native_example_batch', 'test_native_example_selected'}
+        names.update(path.stem for path in (ROOT / 'tests').glob('native_live*_e2e.py')
+                     if path.stem != 'native_live_equivalence_e2e')
+        if (ROOT / 'runner' / 'transport.cpp').is_file():
+            names.add('test_native_live_websocket')
+        return tuple(sorted(names))
+
+    def test_runner_only_guard_registry_rejects_invalid_discovery(self):
+        runner_names = self.scratch_runner_names()
+        root = RowFloorConfig.discovery((*runner_names, *SCRATCH_GUARD_FIXTURE_NAMES)).stdout
+        total = len(runner_names) + 4
+        total_line = f'Total Tests: {total}\n'.encode()
+        first = next(line for line in root.splitlines(keepends=True)
+                     if line.startswith(b'Test #1:'))
+        invalid = (
+            root.replace(total_line, b'Total Tests: 0\n'),
+            root.replace(total_line, b''),
+            root + total_line,
+            root.replace(total_line, f'Total Tests: {total + 1}\n'.encode()),
+            root.replace(first, first + first).replace(
+                total_line, f'Total Tests: {total + 1}\n'.encode()),
+            root.replace(b'Test #2:', b'Test #1:'),
+        )
+        commands = {name: 0 for name in LAB_SHARD_GUARDS}
+        for profile in ('live-sanitizers', 'live-tsan'):
+            for shard in (None, '1/1'):
+                for listing in invalid:
+                    with self.subTest(profile=profile, shard=shard, listing=listing), \
+                            mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES': ''}), \
+                            mock.patch.object(ci_verify.sys, 'platform', 'linux'):
+                        code, summary, _, _ = self.run_profile(
+                            profile, extra=[] if shard is None else ['--ctest-shard', shard],
+                            ctest_shard_inventory=runner_names, ctest_root_listing=listing,
+                            junit_help='absent', **commands)
+                        self.assertEqual(code, 1)
+                        self.assertEqual(failure_stages(summary), ['ctest-scratch-guard'])
+                        error = summary['failures'][0]['error']
+                        self.assertIn('full CTest registry names were unreadable', error)
+                        for row in SCRATCH_GUARD_FIXTURE_NAMES:
+                            self.assertIn(row, error)
+                        self.assertEqual(stage_names(summary).count('ctest-list-scratch-guard'), 1)
+
+    def test_runner_only_one_of_one_checks_root_registry_and_keeps_runner_selection(self):
+        runner_names = self.scratch_runner_names()
+        root = RowFloorConfig.discovery((*runner_names, *SCRATCH_GUARD_FIXTURE_NAMES)).stdout
+        commands = {name: 0 for name in LAB_SHARD_GUARDS}
+        for profile in ('live-sanitizers', 'live-tsan'):
+            for shard in (None, '1/1'):
+                with self.subTest(profile=profile, shard=shard), \
+                        mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES': ''}), \
+                        mock.patch.object(ci_verify.sys, 'platform', 'linux'):
+                    code, summary, _, build_dir = self.run_profile(
+                        profile, extra=[] if shard is None else ['--ctest-shard', shard],
+                        ctest_shard_inventory=runner_names, ctest_root_listing=root,
+                        junit_help='absent', **commands)
+                    self.assertEqual(code, 0, summary['failures'])
+                    self.assertEqual(summary['failures'], [])
+                    for key in ('ctestRegistered', 'ctestSelected', 'ctestRows'):
+                        self.assertEqual(summary[key], len(runner_names), key)
+                    roots = [stage for stage in summary['stages']
+                             if stage['name'] == 'ctest-list-scratch-guard']
+                    self.assertEqual(len(roots), 1)
+                    self.assertEqual(roots[0]['argv'],
+                                     ['ctest', '--test-dir', str(build_dir), '-N'])
+                    guard = next(stage for stage in summary['stages']
+                                 if stage['name'] == 'ctest-scratch-guard')
+                    self.assertEqual(guard['status'], 'passed', guard)
+                    log = (build_dir / guard['log']).read_text()
+                    self.assertIn('all 4 guard rows registered', log)
+                    self.assertIn('checked 0 selected guard rows', log)
+                    ctest = next(stage for stage in summary['stages'] if stage['name'] == 'ctest')
+                    self.assertIn(str(build_dir / 'runner'), ctest['argv'])
+                    self.assertNotIn('-R', ctest['argv'])
+                    if shard is not None:
+                        self.assertEqual(summary['ctestRegisteredNames'], list(runner_names))
+                        self.assertEqual(summary['ctestRan'], list(runner_names))
+
+    def test_runner_only_one_of_one_refuses_a_missing_root_guard(self):
+        runner_names = self.scratch_runner_names()
+        missing = 'test_scratch_guard_hl2_01'
+        root_names = (*runner_names, *(name if name != missing else name + '_extra'
+                                      for name in SCRATCH_GUARD_FIXTURE_NAMES))
+        root = RowFloorConfig.discovery(root_names).stdout
+        commands = {name: 0 for name in LAB_SHARD_GUARDS}
+        for profile in ('live-sanitizers', 'live-tsan'):
+            with self.subTest(profile=profile), \
+                    mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES': ''}), \
+                    mock.patch.object(ci_verify.sys, 'platform', 'linux'):
+                code, summary, _, _ = self.run_profile(
+                    profile, extra=['--ctest-shard', '1/1'],
+                    ctest_shard_inventory=runner_names, ctest_root_listing=root,
+                    junit_help='absent', **commands)
+                self.assertEqual(code, 1)
+                self.assertEqual(failure_stages(summary), ['ctest-scratch-guard'])
+                error = summary['failures'][0]['error']
+                self.assertIn(missing, error)
+                self.assertIn('missing from the full CTest registry', error)
+                for other in set(SCRATCH_GUARD_FIXTURE_NAMES) - {missing}:
+                    self.assertNotIn(other, error)
+
     def test_live_sanitizers_follow_transport_presence_and_run_e2es_under_strict_env(self):
         original_is_file = Path.is_file
         for present in (True, False):
@@ -3793,7 +4037,7 @@ class RowFloorDriver(unittest.TestCase):
     def test_real_ctest_shards_escape_names_and_keep_failed_rows_as_run(self):
         # a/b/c/d have distinct SHA-256 remainders modulo four.
         padding = (*SCRATCH_GUARD_FIXTURE_NAMES,
-                   *(f'public_padding_{row}' for row in range(1021)))
+                   *(f'public_padding_{row}' for row in range(1020)))
         names = ('a', 'b', 'c', 'd', 'row.a', 'row[0]', 'row+plus', 'row(one)',
                  'row$money', 'row^start', 'row|pipe', 'row_plain', *padding)
         # Real label discovery must satisfy the unchanged registration floor
@@ -4019,13 +4263,13 @@ class RowFloorDriver(unittest.TestCase):
 
     def test_min_tests_override_gates_the_rows_that_ran(self):
         # --min-tests stays the override (fail-closed below 1, see
-        # RowFloorConfig) and gates the same count: 4 rows, 1 skipped.
+        # RowFloorConfig): all four guards run beside one skipped public row.
         code, summary, _, _ = self.run_profile(
-            'native', extra=['--min-tests', '3'], ctest_rows=4, ctest_skipped=['test_skip'])
+            'native', extra=['--min-tests', '4'], ctest_rows=5, ctest_skipped=['test_skip'])
         self.assertEqual(code, 0, summary['failures'])
-        self.assertEqual(summary['ctestRows'], 3)
+        self.assertEqual(summary['ctestRows'], 4)
         code, summary, _, _ = self.run_profile(
-            'native', extra=['--min-tests', '4'], ctest_rows=4, ctest_skipped=['test_skip'])
+            'native', extra=['--min-tests', '5'], ctest_rows=5, ctest_skipped=['test_skip'])
         self.assertEqual(code, 1)
         self.assertIn('ctest-floor', failure_stages(summary))
 
@@ -4037,26 +4281,26 @@ class RowFloorDriver(unittest.TestCase):
         # their scripted runs must account for the selected population.
         for profile in ('native',):
             with self.subTest(profile=profile):
-                code, summary, _, _ = self.run_profile(profile, ctest_rows=3)
+                code, summary, _, _ = self.run_profile(profile, ctest_rows=4)
                 self.assertEqual(code, 0, summary['failures'])
                 self.assertNotIn('ctest-floor', stage_names(summary))
                 self.assertIsNone(summary['minTests'])
-                self.assertEqual(summary['ctestRows'], 3)
+                self.assertEqual(summary['ctestRows'], 4)
 
     def test_min_tests_gates_any_profile_and_overrides_the_kernel_default(self):
         for profile in ('release', 'native'):
             with self.subTest(profile=profile):
                 code, summary, _, _ = self.run_profile(
-                    profile, extra=['--min-tests', '4'], ctest_rows=3)
+                    profile, extra=['--min-tests', '5'], ctest_rows=4)
                 self.assertEqual(code, 1)
                 self.assertIn('ctest-floor', failure_stages(summary))
-                self.assertEqual(summary['minTests'], 4)
-        for profile in ('kernel', 'release'):
+                self.assertEqual(summary['minTests'], 5)
+        for profile, floor, rows in (('kernel', 2, 3), ('release', 3, 4)):
             with self.subTest(profile=profile):
                 code, summary, _, _ = self.run_profile(
-                    profile, extra=['--min-tests', '2'], ctest_rows=3)
+                    profile, extra=['--min-tests', str(floor)], ctest_rows=rows)
                 self.assertEqual(code, 0, summary['failures'])
-                self.assertEqual(summary['minTests'], 2)
+                self.assertEqual(summary['minTests'], floor)
                 self.assertIn('ctest-floor', stage_names(summary))
 
 
@@ -4887,8 +5131,11 @@ class PrExclusionWithFixturesAbsent(unittest.TestCase):
                         [profile, '--exclude-label', 'slow', '--build-dir', temporary],
                         stream_output=False)
                     driver = ci_verify.Driver(cfg)
+                    output = (populated_ctest_output(
+                        total, required=SCRATCH_GUARD_FIXTURE_NAMES, skipped=skipped)
+                        if total else ctest_output(0))
                     driver.enforce_test_floor(
-                        Completed(0, ctest_output(total, skipped)),
+                        Completed(0, output),
                         registered=registered, selected=selected,
                         registered_names=frozenset(SCRATCH_GUARD_FIXTURE_NAMES),
                         excluded_names=frozenset(SCRIPTED_SLOW_FIXTURE_NAMES))
@@ -4985,7 +5232,9 @@ class PrExclusionWithFixturesAbsent(unittest.TestCase):
                 source=source, runner=default_runner, stream_output=False)
             driver = ci_verify.Driver(cfg)
             driver.enforce_test_floor(
-                Completed(0, ctest_output(877, tuple(self.pinned_probe(2))), b''),
+                Completed(0, populated_ctest_output(
+                    877, required=SCRATCH_GUARD_FIXTURE_NAMES,
+                    skipped=tuple(self.pinned_probe(2))), b''),
                 registered=882, selected=877,
                 registered_names=frozenset(SCRATCH_GUARD_FIXTURE_NAMES),
                 excluded_names=frozenset(SCRIPTED_SLOW_FIXTURE_NAMES))

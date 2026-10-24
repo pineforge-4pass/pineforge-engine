@@ -11,6 +11,7 @@ from typing import Mapping, Sequence
 
 FAST_CLASSES = frozenset({
     'ConfigValidation',
+    'ScratchGuardRows',
     'RowFloorConfig',
     'ProfileOptions',
     'RunnerSanitizerCoverage',
