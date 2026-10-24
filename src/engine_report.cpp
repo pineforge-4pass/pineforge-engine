@@ -1282,25 +1282,25 @@ void BacktestEngine::finish_report_sink(ReportC* out) const {
             // The last input bar is already complete. A SIGTERM received
             // during report assembly still abandons a whole-record prefix,
             // before any success trailer or complete receipt is published.
-            if (NativeExecutionConsumer::abort_before_sink_trailer(
+            // Keep security diagnostics and scalars on abort; the common
+            // cleanup below releases only the sink's sequence arrays.
+            if (!NativeExecutionConsumer::abort_before_sink_trailer(
                     const_cast<BacktestEngine&>(*this))) {
-                free_report(out);
-                return;
+                const auto trailer = sink.writer->write_trailer();
+                sink.receipt.count_e = trailer.count_e;
+                sink.receipt.count_t = trailer.count_t;
+                sink.receipt.count_o = trailer.count_o;
+                sink.receipt.count_v = trailer.count_v;
+                sink.receipt.count_k = trailer.count_k;
+                sink.receipt.count_x = trailer.count_x;
+                sink.receipt.count_h = trailer.count_h;
+                std::memcpy(sink.receipt.sha256_hex, trailer.sha256_hex, sizeof trailer.sha256_hex);
+                summary.struct_size = sizeof summary;
+                summary.version = 1;
+                summary.complete = 1;
+                sink.summary = summary;
+                sink.receipt.complete = 1;
             }
-            const auto trailer = sink.writer->write_trailer();
-            sink.receipt.count_e = trailer.count_e;
-            sink.receipt.count_t = trailer.count_t;
-            sink.receipt.count_o = trailer.count_o;
-            sink.receipt.count_v = trailer.count_v;
-            sink.receipt.count_k = trailer.count_k;
-            sink.receipt.count_x = trailer.count_x;
-            sink.receipt.count_h = trailer.count_h;
-            std::memcpy(sink.receipt.sha256_hex, trailer.sha256_hex, sizeof trailer.sha256_hex);
-            summary.struct_size = sizeof summary;
-            summary.version = 1;
-            summary.complete = 1;
-            sink.summary = summary;
-            sink.receipt.complete = 1;
         }
     } catch (const report_sink::WriterError& error) {
         sink.writer.reset();
