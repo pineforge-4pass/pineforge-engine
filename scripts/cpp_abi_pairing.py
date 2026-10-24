@@ -78,7 +78,9 @@ def epoch_from_headers(include: Path) -> str:
         raise PairingError("engine header is missing from " + str(include))
     epochs = re.findall(r"\binline\s+namespace\s+(engine_script_run_v\d+)\s*\{",
                         engine.read_text())
-    if len(epochs) != 1:
+    # A header may REOPEN its one epoch (the row source is declared in the epoch
+    # that holds BacktestEngine); two different epochs, or none, are still refused.
+    if len(set(epochs)) != 1:
         raise PairingError("engine header must declare exactly one epoch")
     return epochs[0]
 

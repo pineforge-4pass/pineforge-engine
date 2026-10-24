@@ -1,3 +1,18 @@
+// Publication witness modes (selected only by external compile definitions):
+// Default: check the pinned digests and counts, then the trade invariants;
+// return zero on success, one on failure.
+// PINEFORGE_D2D_PUBLICATION_HARVEST: print the pinned-table harvest, return zero.
+// Build with -DPINEFORGE_D2D_PUBLICATION_DUMP for the measurement mode;
+// it takes precedence over harvest and returns one so ctest prints its output.
+// Dump keeps the harvest prologue, pinned rows and closing line, adding
+// WINDUMP-RUN (name, digest, wo, counts), then each pass's PASS (error length),
+// EXTFOLD (host-extension fold), TRADE (closed row, doubles as %.17g),
+// HROW (recorded broker-state hash row), FINALHASH (final broker-state hash),
+// and WINDUMP-END (name). Formats match the WIN-CX measurement patch.
+// In the provenance notes, "the digest without the three hash inputs" means
+// the printed wo: omit EXTFOLD, HROW and FINALHASH inputs, keeping other bytes.
+// The full digest's input order is unchanged; dump state exists only in dump mode.
+//
 // R5 lane D2-D: the host's per-bar source publication moves no value.
 //
 // PineStrategyHost::scheduler_publish_source_bar now asks two questions
@@ -118,6 +133,9 @@
 #include <algorithm>
 #include <cinttypes>
 #include <cmath>
+#if defined(PINEFORGE_D2D_PUBLICATION_DUMP)
+#include <cstdarg>
+#endif
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -722,6 +740,10 @@ std::vector<Scenario> battery() {
 // ── One run: its digest ──────────────────────────────────────────────────
 struct Digest {
     std::uint64_t value = 1469598103934665603ull;
+#if defined(PINEFORGE_D2D_PUBLICATION_DUMP)
+    std::uint64_t wo = 1469598103934665603ull;
+    std::string dump;
+#endif
     std::size_t folds = 0;
     std::size_t trades = 0;
     std::size_t rows = 0;
@@ -730,9 +752,32 @@ struct Digest {
         for (std::size_t i = 0; i < n; ++i) {
             value ^= c[i];
             value *= 1099511628211ull;
+#if defined(PINEFORGE_D2D_PUBLICATION_DUMP)
+            wo ^= c[i];
+            wo *= 1099511628211ull;
+#endif
         }
     }
     template <class V> void v(V x) { bytes(&x, sizeof x); }
+#if defined(PINEFORGE_D2D_PUBLICATION_DUMP)
+    void bytes_hash_only(const void* p, std::size_t n) {
+        const auto* c = static_cast<const unsigned char*>(p);
+        for (std::size_t i = 0; i < n; ++i) {
+            value ^= c[i];
+            value *= 1099511628211ull;
+        }
+    }
+    template <class V> void vh(V x) { bytes_hash_only(&x, sizeof x); }
+    void line(const char* fmt, ...) __attribute__((format(printf, 2, 3))) {
+        char buf[1024];
+        va_list ap;
+        va_start(ap, fmt);
+        std::vsnprintf(buf, sizeof buf, fmt, ap);
+        va_end(ap);
+        dump += buf;
+        dump += '\n';
+    }
+#endif
     void s(const std::string& text) {
         v(text.size());
         bytes(text.data(), text.size());
@@ -749,7 +794,15 @@ void fold_run(Digest& d, PubHost& h, const Scenario& s) {
         h.run(s.bars.data(), static_cast<int>(s.bars.size()));
     }
     d.s(h.last_error());
+#if defined(PINEFORGE_D2D_PUBLICATION_DUMP)
+    d.line("PASS err=%zu", h.last_error().size());
+    for (std::uint64_t f : h.folds) {
+        d.vh(f);
+        d.line("EXTFOLD %016llx", static_cast<unsigned long long>(f));
+    }
+#else
     for (std::uint64_t f : h.folds) d.v(f);
+#endif
     d.folds += h.folds.size();
     const int trades = h.trade_count();
     for (int i = 0; i < trades; ++i) {
@@ -758,16 +811,39 @@ void fold_run(Digest& d, PubHost& h, const Scenario& s) {
         d.v(t.qty); d.v(t.pnl); d.v(t.commission); d.v(t.is_long);
         d.v(t.entry_bar_index); d.v(t.exit_bar_index); d.v(t.exit_from_bracket);
         d.s(t.entry_id); d.s(t.exit_id); d.s(t.exit_comment); d.s(t.entry_comment);
+#if defined(PINEFORGE_D2D_PUBLICATION_DUMP)
+        d.line("TRADE %d et=%lld xt=%lld ep=%.17g xp=%.17g q=%.17g pnl=%.17g com=%.17g long=%d ebi=%d xbi=%d br=%d eid=%s xid=%s xc=%s ec=%s"
+               " pp=%.17g ru=%.17g dd=%.17g inc=%llu oae=%d cc=%d",
+               i, static_cast<long long>(t.entry_time), static_cast<long long>(t.exit_time), t.entry_price, t.exit_price,
+               t.qty, t.pnl, t.commission, static_cast<int>(t.is_long), static_cast<int>(t.entry_bar_index),
+               static_cast<int>(t.exit_bar_index), static_cast<int>(t.exit_from_bracket), t.entry_id.c_str(),
+               t.exit_id.c_str(), t.exit_comment.c_str(), t.entry_comment.c_str(),
+               t.pnl_pct, t.max_runup, t.max_drawdown, static_cast<unsigned long long>(t.entry_incarnation),
+               static_cast<int>(t.open_at_end), static_cast<int>(t.close_cause));
+#endif
     }
     d.trades += static_cast<std::size_t>(trades);
     // The kernel's own reads between publications: the broker-state hash row
     // it records at every script bar.
     ReportC report{};
     h.fill_report(&report);
+#if defined(PINEFORGE_D2D_PUBLICATION_DUMP)
+    for (std::int64_t i = 0; i < report.broker_state_hash_len; ++i) {
+        d.vh(report.broker_state_hash[i]);
+        d.line("HROW %lld %016llx", static_cast<long long>(i),
+               static_cast<unsigned long long>(report.broker_state_hash[i]));
+    }
+#else
     for (std::int64_t i = 0; i < report.broker_state_hash_len; ++i) d.v(report.broker_state_hash[i]);
+#endif
     d.rows += static_cast<std::size_t>(report.broker_state_hash_len);
     BacktestEngine::free_report(&report);
+#if defined(PINEFORGE_D2D_PUBLICATION_DUMP)
+    d.vh(h.broker_state_hash());
+    d.line("FINALHASH %016llx", static_cast<unsigned long long>(h.broker_state_hash()));
+#else
     d.v(h.broker_state_hash());
+#endif
 }
 
 Digest observe(const Scenario& s) {
@@ -801,7 +877,7 @@ struct Pinned {
     std::size_t rows;
 };
 
-#if defined(PINEFORGE_D2D_PUBLICATION_HARVEST)
+#if defined(PINEFORGE_D2D_PUBLICATION_HARVEST) || defined(PINEFORGE_D2D_PUBLICATION_DUMP)
 void harvest() {
     std::printf("// R5 lane D2-D: the values tests/test_publication_witness.cpp pins, one\n"
                 "// row per run of its battery (name, digest, source folds, closed trades,\n"
@@ -816,6 +892,12 @@ void harvest() {
         const Digest d = observe(s);
         std::printf("    {\"%s\", 0x%016" PRIx64 "ull, %zu, %zu, %zu},\n", s.name.c_str(),
                     d.value, d.folds, d.trades, d.rows);
+#if defined(PINEFORGE_D2D_PUBLICATION_DUMP)
+        std::printf("WINDUMP-RUN %s digest=%016" PRIx64 " wo=%016" PRIx64 " folds=%zu trades=%zu rows=%zu\n",
+                    s.name.c_str(), d.value, d.wo, d.folds, d.trades, d.rows);
+        std::printf("%s", d.dump.c_str());
+        std::printf("WINDUMP-END %s\n", s.name.c_str());
+#endif
     }
     std::printf("};\n");
 }
@@ -1007,7 +1089,10 @@ void no_quantity_leaves_the_lot_grid() {
 }  // namespace
 
 int main() {
-#if defined(PINEFORGE_D2D_PUBLICATION_HARVEST)
+#if defined(PINEFORGE_D2D_PUBLICATION_DUMP)
+    harvest();
+    return 1;  // A failing test makes ctest print the dump.
+#elif defined(PINEFORGE_D2D_PUBLICATION_HARVEST)
     harvest();
     return 0;
 #else

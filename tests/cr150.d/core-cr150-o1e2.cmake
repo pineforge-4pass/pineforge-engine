@@ -1,0 +1,6 @@
+list(APPEND TEST_SOURCES test_native_o1_request_journal)
+pineforge_add_unit_test(test_native_o1_request_journal)
+list(APPEND TEST_SOURCES test_native_o1_live_book)
+pineforge_add_unit_test(test_native_o1_live_book)
+list(APPEND TEST_SOURCES test_native_o1_chain_pages)
+pineforge_add_unit_test(test_native_o1_chain_pages)

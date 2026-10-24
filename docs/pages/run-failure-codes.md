@@ -40,7 +40,8 @@ if (code != NULL && code[0] != '\0') {
   `engine_unclassified_error`, never `""`.
 - #strategy_get_last_error_args answers the arguments as one canonical JSON
   object: UTF-8, keys sorted, no whitespace; an `integer` argument is a JSON
-  integer, a `number` the shortest round-trip double, a `nullable_string` a
+  integer, a `number` the shortest round-trip double, a `boolean` a JSON
+  `true` or `false`, a `nullable_string` a
   JSON string or `null`, a `scalar` a JSON string, integer, finite number,
   `true`, `false` or `null` (a boolean or a null is never written as a
   string), every other kind a JSON string. It is `"{}"` for a code without
@@ -78,6 +79,9 @@ codes it tested the text alone, so a script stopped by an empty
   symbol or timeframe, the bar a failure happened on and any text a script
   built are not arguments, so a failing run cannot carry results out through
   them.
+- **Cancellation progress is engine-owned.** Q7's `run_aborted` witnesses
+  are the count of fully completed input bars and a boolean start witness.
+  They are produced by the run boundary, never read from script output.
 - **Validation is central.** An undeclared argument, a wrong kind, a value
   outside an argument's closed list or a missing required argument turns the
   failure into `engine_invariant`, its English kept: a wrong call cannot mint
@@ -93,7 +97,28 @@ codes it tested the text alone, so a script stopped by an empty
 
 The tables below list the catalog at this tree.
 
-The `outputs_limit` and `outputs_rejected` rows below are released in 1.5.0, and not part of 1.4.0; so are the 24 selected-window and report-contract rows described [after the tables](#run_failure_codes_selected_window). The other 38 codes retain their released 1.4.0 status. The `strategy_library_incompatible` row counts the two released 1.5.0 outputs reasons, `outputs_api_mismatch` and `outputs_manifest_invalid`, in addition to its six released 1.4.0 reasons.
+The catalog contains 69 named failure codes: 38 first released in 1.4.0,
+26 first released in 1.5.0, and 5 added in 1.7.0. The C++ registry also
+contains one unnamed `none` sentinel, giving 70 registry entries.
+
+The 1.7.0 additions are `report_mode_unsupported`, `report_sink_failed`,
+`scratch_capacity_exceeded`, `scratch_configuration_invalid`, and
+`scratch_io_failed`. Their classes, retryability and typed arguments are
+listed below.
+
+`report_mode_unsupported` (code 65) also covers a native begin when
+`SUMMARY_ONLY` (the v1 mode or the pending legacy equity mode) is combined with
+an execution observer or a selected window and no report sink is enabled:
+that capture cannot be exact in this mode. Begin refuses before callbacks or
+bars. Drop the window or the observer, or select `FULL`; bounded capture uses
+`STREAMED` with a sink.
+
+The 26 codes first released in 1.5.0 comprise `outputs_limit`,
+`outputs_rejected`, and the 24 selected-window and report-contract rows
+described [after the tables](#run_failure_codes_selected_window).
+The `strategy_library_incompatible` row also includes the two released
+1.5.0 outputs reasons, `outputs_api_mismatch` and `outputs_manifest_invalid`,
+in addition to its six released 1.4.0 reasons.
 
 <!-- BEGIN generated from docker/run_failure_codes.json: python3 scripts/test_gen_run_failure_catalog_diff.py --write-docs-tables -->
 
@@ -104,7 +129,7 @@ The `outputs_limit` and `outputs_rejected` rows below are released in 1.5.0, and
 | `engine_fault` | A PineForge bug; terminal. |
 | `input` | The run request's own data or options; terminal. |
 | `no_data` | PineForge lacks data the script reads; terminal. |
-| `resource` | Machine memory; retryable, capped. |
+| `resource` | Machine memory or scratch storage; retryability is specified per code. |
 | `strategy` | The script or its own declaration; terminal. |
 | `strategy_limit` | A TradingView or PineForge resource cap the script reached; terminal. |
 | `symbol_feeds` | Other symbols' bars installed through the symbol-feed setters; terminal. |
@@ -116,7 +141,7 @@ The `outputs_limit` and `outputs_rejected` rows below are released in 1.5.0, and
 | Code | Class | Retryable | Arguments | What it means |
 | --- | --- | --- | --- | --- |
 | `chart_bars_rejected` | `input` | no | `field` (vocab, 6 values, optional), `index` (integer, optional), `reason` (vocab, 12 values) | The run's chart bars (the request's OHLCV) were refused. |
-| `chart_bars_unreadable` | `input` | no | `reason` (vocab, 4 values) | The harness could not read the run's OHLCV file. |
+| `chart_bars_unreadable` | `input` | no | `reason` (vocab, 9 values) | The harness could not read the run's OHLCV file. |
 | `engine_command_value_invalid` | `engine_fault` | no | `field` (string), `reason` (vocab, 3 values), `stage` (vocab, 7 values) | The engine derived an invalid command value (non-finite, invalid text or an overflowing finite value) from its own book, equity, margin, sizing, fee, slippage or settlement state: an engine fault, never a strategy failure. stage names where it was derived. |
 | `engine_invariant` | `engine_fault` | no | none | An engine invariant failed: a PineForge bug. |
 | `engine_unclassified_error` | `engine_fault` | no | none | An error no coded site reported: a PineForge bug. |
@@ -137,20 +162,25 @@ The `outputs_limit` and `outputs_rejected` rows below are released in 1.5.0, and
 | `recalc_cap` | `strategy_limit` | no | none | The script's calc_on_order_fills recalculation loop reached its cap. |
 | `recorded_request_missing` | `no_data` | no | none | No recorded series is installed for a request the script reads. |
 | `recorded_request_refused` | `input` | no | `reason` (vocab, 5 values) | A recorded request series was refused. |
+| `report_mode_unsupported` | `unsupported` | no | `contract` (string), `mode` (string) | The requested report mode cannot be provided for this run. Two causes: the host has no provider bridge for the mode and contract (run_json), or the native kernel refuses a SUMMARY_ONLY run that configures a selected window or an execution observer without a report sink at begin, because that capture has no exact trade rows. Remedy for the second cause: drop the window or the observer, or select FULL; bounded capture uses STREAMED with a sink. |
 | `report_platform_unavailable` | `engine_fault` | no | `field` (vocab, 6 values) | The runner cannot establish an execution-platform fact its report contract requires. A pre-load backstop for an image that claimed results-digest support, raised before any strategy code loads. |
 | `report_post_execution_failed` | `engine_fault` | no | `phase` (vocab, 3 values), `reason` (vocab, 4 values) | The engine could not finish producing the result after strategy execution completed: a deadline or an otherwise unclassified failure in result assembly, the results digest or serialization. An engine fault, never a strategy failure; a specific typed engine fault keeps its own code. |
 | `report_result_invalid` | `engine_fault` | no | `field` (string), `reason` (vocab, 4 values) | The report producer generated an invalid canonical result: an engine or harness fault, never a strategy failure. |
 | `report_shape_request_invalid` | `input` | no | `option` (vocab, 2 values), `value` (scalar) | The report-shape request is invalid: the report shape or the curve point budget carries a value the runner refuses. |
 | `report_shape_unsupported` | `unsupported` | no | `shape` (string) | The runner does not support the requested report shape. The first selected-window build supports the full shape only. |
+| `report_sink_failed` | `engine_fault` | no | `arena_bytes` (integer, optional), `cap_bytes` (integer, optional), `claimed_bytes` (integer, optional), `high_water_bytes` (integer, optional), `needed_bytes_lower_bound` (integer, optional), `reason` (vocab, 7 values, optional), `sink_bytes` (integer, optional), `store` (vocab, 13 values, optional) | The engine could not complete the report sink, scratch storage or spill arena. Every reason, including exhaustion of the engine-certified arena bound or planned sink cap and a closed sink peer during finalization, is an engine fault. reason distinguishes arena exhaustion (arena_exhausted), arena I/O (arena_io), invalid arena backing (arena_backing), file-mode scratch I/O (scratch_io), sink open/write I/O (sink_io), a closed sink peer (sink_peer_closed) and a finalizer stream exceeding its planned cap (sink_exhausted). With arena_exhausted, high_water_bytes and arena_bytes are byte counts, claimed_bytes counts chunk bytes claimed when the failing claim was attempted, and store identifies the requesting scratch user. needed_bytes_lower_bound is the requesting report region's additional whole-chunk demand. For store command it is the arena size needed for the required store extent rounded up to chunks, divided by kCommandScratchArenaShare and rounded up to bytes (saturated at INT64_MAX). Crossing a command store's share is arena_exhausted and the hosting layer re-places the run. With sink_exhausted, the finalizer exits 8; sink_bytes is the bytes read (cap_bytes + 1) and cap_bytes is the planned cap U. APP maps that receipt to this failure and refunds the run; COMPUTE re-places it with 2x U. Other reasons carry no sizes or store identity. All arguments are optional for existing raisers; the run has no completed sink or valid trailer. |
 | `request_symbol_invalid` | `strategy` | no | none | A request.security symbol is not a valid symbol. |
 | `request_timeframe_invalid` | `strategy` | no | `api` (vocab, 2 values) | A request timeframe literal does not parse. |
 | `request_timeframe_unsupported` | `unsupported` | no | `input_tf` (timeframe, optional), `reason` (vocab, 7 values), `script_tf` (timeframe, optional) | A request timeframe cannot be served for this run's chart timeframe. |
 | `request_unsupported` | `unsupported` | no | `line` (integer, optional), `reason` (vocab, 2 values) | A request shape PineForge does not support. |
 | `results_digest_unsupported` | `unsupported` | no | `requested` (string) | The runner does not support the requested results digest. The first selected-window build declares no digest. |
-| `run_aborted` | `engine_fault` | yes | none | The run was aborted on request. |
-| `run_mode_unsupported` | `unsupported` | no | `feature` (vocab, 10 values) | A feature the requested run mode does not support. |
+| `run_aborted` | `engine_fault` | yes | `bars_count` (integer, optional), `strategy_started` (boolean, optional) | The run was aborted on request. Cooperative SIGTERM stops after the in-flight input bar completes, leaves no sink trailer, and exits 1. bars_count is the nonnegative number of fully completed input bars, mirrored as top-level bars.count, matching the runner's bars_processed population; strategy_started is a boolean mirrored at the top level. Both are optional for legacy abort raisers. There is no cancelled class: the abort path has exactly two internal callers, the orchestrator's hand-off at the service limit (the run is restarted with the same run id) and an operator stop. The abort line itself carries no retry semantics: it has no retryable field, and a retry is APP's decision from which caller stopped the run. On the abort path bars_count is diagnostic only and is never billed. No live-counter descriptor is used (fd 6 is not used). |
+| `run_mode_unsupported` | `unsupported` | no | `feature` (vocab, 11 values) | A feature the requested run mode does not support. |
 | `run_options_rejected` | `input` | no | `input_tf` (timeframe, optional), `option` (vocab, 11 values), `script_tf` (timeframe, optional) | The run's own options (timeframes, intrabar path, magnifier, path order) were refused. |
-| `run_request_invalid` | `input` | no | `option` (vocab, 20 values) | The harness command line or one of its JSON options is invalid. |
+| `run_request_invalid` | `input` | no | `option` (vocab, 25 values) | The harness command line or one of its JSON options is invalid. |
+| `scratch_capacity_exceeded` | `resource` | no | `resource` (vocab, 10 values) | The admitted scratch-table layout or a fixed region's capacity was exceeded. The run must be admitted with sufficient finite maxima before retrying. |
+| `scratch_configuration_invalid` | `input` | no | `reason` (vocab, 3 values), `stage` (vocab, 1 values) | The command-scratch byte cap from the environment or the caller is malformed: not a positive decimal, out of uint64_t range, or zero. |
+| `scratch_io_failed` | `resource` | no | none | The engine could not create, resize, read or write command scratch or the storage of one of its auxiliary tables (the disk id table, the id-pair store or the placement table). Command scratch also raises this code when the default-directory policy fails a directory query or refuses memory-backed default candidates, or when an explicit memory-backed command directory is refused. Native runs create command scratch at begin, so these failures are resource failures before any strategy callback. The run has no successful completion. Report-sink scratch files, the curve writer and the position-tail facade do not raise this code: they raise report_sink_failed with reason scratch_io. |
 | `security_feed_refused` | `input` | no | `reason` (vocab, 11 values) | An auxiliary or native request.security feed was refused. |
 | `setting_rejected` | `input` | no | `entrypoint` (vocab, 4 values, optional), `input` (pine_source, optional), `reason` (vocab, 21 values, optional) | A run setting (an input or a strategy() override) was refused. |
 | `setting_unsupported` | `unsupported` | no | none | A setting this compiled strategy cannot honour. |
@@ -160,7 +190,7 @@ The `outputs_limit` and `outputs_rejected` rows below are released in 1.5.0, and
 | `strategy_settings_rejected` | `strategy` | no | `field` (vocab, 30 values) | A strategy() declaration setting (or its override) is not a value the engine accepts. |
 | `strategy_value_invalid` | `strategy` | no | `field` (string), `reason` (vocab, 3 values) | The strategy supplied an invalid actionable value (a non-finite number, invalid text or an overflowing finite value) to a declaration, setting or command that needs a valid one. |
 | `stream_input_rejected` | `input` | no | none | A streaming input (bar, tick or auxiliary bar) was refused. |
-| `symbol_feeds_refused` | `symbol_feeds` | no | `field` (vocab, 6 values, optional), `input_tf` (timeframe, optional), `reason` (vocab, 41 values), `script_tf` (timeframe, optional) | Other symbols' bars installed for request.security were refused. |
+| `symbol_feeds_refused` | `symbol_feeds` | no | `field` (vocab, 6 values, optional), `input_tf` (timeframe, optional), `reason` (vocab, 47 values), `script_tf` (timeframe, optional) | Other symbols' bars installed for request.security were refused. |
 | `symbol_metadata_rejected` | `symbol_metadata` | yes | `field` (vocab, 14 values) | The symbol's catalog metadata (syminfo) is not a value the engine accepts. |
 | `syminfo_unreadable` | `symbol_metadata` | yes | `reason` (vocab, 4 values) | The harness could not read the run's syminfo file. |
 | `window_boundary_unaligned` | `input` | no | `bound` (vocab, 3 values), `next_boundary_ms` (integer), `previous_boundary_ms` (integer), `value_ms` (integer) | A selected-window boundary (start, end or fed start) is not aligned to the script calendar; the adjacent boundaries are carried. |
@@ -184,6 +214,7 @@ The `outputs_limit` and `outputs_rejected` rows below are released in 1.5.0, and
 
 | Kind | Its value |
 | --- | --- |
+| `boolean` | A JSON boolean. |
 | `identifier` | A name the compiled strategy spells as a literal (a built-in, an argument). |
 | `integer` | A JSON integer. |
 | `keyword` | A fixed keyword. |
@@ -203,6 +234,36 @@ A code's closed value lists and its English templates are the catalog's own
 values. `retryable` says whether the same request can succeed when it is run
 again: after memory frees up, once the caller refreshes the symbol's
 metadata, or after an aborted run.
+
+`report_sink_failed.store` also includes `command` for an attached arena's
+command/exit scratch region. Its `arena_exhausted` exception keeps the original
+allocator counters when a command-store owner rethrows it. Crossing the
+per-store arena share carries this same typed verdict, with needed bytes
+computed as the arena size satisfying that store's required extent. A separate
+command byte-budget refusal retains its status-only I/O behavior.
+
+File-backed scratch must have disk backing. With no scratch directory configured, the engine checks filesystem type with `statfs`,
+using nonempty `TMPDIR` if disk-backed, or the legacy `/tmp` candidate when `TMPDIR` is unset or empty. Only a successful query proving
+that first candidate is tmpfs/ramfs permits trying `/var/tmp`, also checked by filesystem type. A failed query stops resolution with its
+syscall errno and names the failed candidate, except as described below. Directory names are not a medium test; tmpfs/ramfs is never silently chosen.
+If both default candidates are proven tmpfs/ramfs, the engine retains `ENODEV` / `scratch requires disk backing`, names every candidate tried and its rejection reason in the failure detail, and adds `set TMPDIR to a disk-backed directory`.
+
+An ENOTSUP probe gives no filesystem evidence: use the default candidate as in 1.6.3 (error 0, no tmpfs claim, no refusal note).
+This covers hosts with no probe (neither Linux nor macOS) and real ENOTSUP from stat/faccessat/statfs; the test is by errno value,
+so on Linux ENOTSUP and EOPNOTSUPP are both 95. A FUSE/9p/network mount answering 95 keeps its candidate; a later create failure
+keeps the plain 1.6.3 text. If the first candidate is proven tmpfs/ramfs and /var/tmp answers ENOTSUP, select /var/tmp without the rejected-candidate note.
+
+An explicit scratch/spill directory is kept as supplied and never falls back;
+explicit tmpfs/ramfs directories are now refused, including command scratch.
+The explicit sink-path refusal
+`requires disk backing, not tmpfs or ramfs` is unchanged. The jailed profile
+still requires a sealed arena and never creates a backing file or falls back to
+`TMPDIR`, `/tmp` or `/var/tmp`. File-backed command scratch uses
+`scratch_io_failed` (class `resource`), including default-directory query
+failures other than ENOTSUP and all-memory refusals. Native runs create command scratch at begin,
+before strategy callbacks. Report scratch uses `report_sink_failed` with
+`reason: scratch_io`; auxiliary tables use `scratch_io_failed`; sink-path I/O
+uses `report_sink_failed` with `reason: sink_io`.
 
 The English templates describe the texts a code is raised with; they are not
 a grammar. A `{name}` marks a part that varies and need not be an argument of

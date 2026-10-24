@@ -1,0 +1,7 @@
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
+    list(APPEND TEST_SOURCES test_position_tail_summary)
+    pineforge_add_unit_test(test_position_tail_summary)
+    list(APPEND TEST_SOURCES test_position_tail_summary_scale)
+    pineforge_add_unit_test(test_position_tail_summary_scale)
+    set_tests_properties(test_position_tail_summary_scale PROPERTIES LABELS "slow;mem")
+endif()

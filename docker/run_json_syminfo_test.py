@@ -146,12 +146,14 @@ def harness(tmp_path, monkeypatch):
     tape = tmp_path / "tape.csv"
     tape.write_text("open,high,low,close,volume,timestamp\n"
                     "1,2,0.5,1.5,10,1000\n1.5,3,1,2.5,20,2000\n")
+    native_cdll = ctypes.CDLL
 
     def run(lib, *extra, syminfo=None):
         argv = ["run_json.py", "--so", "fake.so", "--ohlcv", str(tape), *extra]
         if syminfo is not None:
             argv += ["--syminfo", str(write(tmp_path, syminfo, "s.json"))]
-        monkeypatch.setattr(ctypes, "CDLL", lambda path: lib)
+        monkeypatch.setattr(ctypes, "CDLL", lambda path, *args, **kwargs: (
+            native_cdll(path, *args, **kwargs) if path is None else lib))
         monkeypatch.setattr(sys, "argv", argv)
         out = io.StringIO()
         with contextlib.redirect_stdout(out):

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <pineforge/detail/scratch_store.hpp>
 #include <pineforge/native_host.hpp>
 #include <pineforge/session_time.hpp>
 #include <pineforge/source/pine_adapter.hpp>
@@ -20,6 +21,7 @@
 // The run-time symbol key overload of register_security_eval (lane XSYM-D):
 // a request site of another symbol reads the feed installed for that symbol.
 #define PINEFORGE_HAS_SYMBOL_SECURITY_EVAL_V1 1
+#define PINEFORGE_HAS_TRADE_SCRATCH_V1 1
 
 namespace pineforge::source {
 
@@ -336,6 +338,10 @@ public:
 
     virtual void on_source_bar(const Bar&) = 0;
     void configure_pine_strategy(const PineStrategyConfig&);
+    // Run-owner provisioned, exclusive scratch; use trade_scratch_order().
+    // Borrowed through the run, empty outside a recut or same-bar sort.
+    void set_trade_scratch(detail::CommandScratchStore&);
+    static detail::ScratchKeyOrder trade_scratch_order() noexcept;
     void set_strategy_override(const StrategyOverrides&);
     // A stream's historical warmup remains a configuration window until the
     // first realtime input.  The legacy stream path permits the feed to
@@ -444,7 +450,7 @@ public:
     // The request-data doors (pineforge.h strategy_set_symbol_feed and its
     // siblings); see BacktestEngine for the contract (lane XSYM-D).
     bool set_symbol_feed(const std::string& key, const std::string& timeframe,
-                         const Bar* bars, const int64_t* close_ms, int n) override;
+                         const Bar* bars, const int64_t* close_ms, int n) override; bool set_symbol_feed_borrowed(const std::string& key, const std::string& timeframe, const Bar* bars, const int64_t* close_ms, int n) override;
     bool set_symbol_feed_column(const std::string& key, const std::string& timeframe,
                                 const std::string& name, const double* values,
                                 int n) override;
@@ -571,6 +577,15 @@ public:
     void fixture_retain_all_events();
 
 protected:
+    // CR-150 observer seam: on_native_applied is final, so a host that has to
+    // observe an applied event after the host itself has settled its rows
+    // overrides THIS instead. Called exactly once per applied event, at the
+    // end of on_native_applied and after finish_applied_admission -- never
+    // per bar. Empty by default, so a host that does not override it behaves
+    // byte for byte as before and folds the same hash. It observes; it does
+    // not admit, price or seal anything.
+    virtual void on_native_applied_event(const native_order::ExecutionAppliedEvent&,
+                                         const NativeDecisionContext&) {}
     // Narrow test-facade configuration slots keep the frozen L0 oracle bodies
     // unchanged while routing their setup through the source configuration
     // projected at the native begin boundary.
@@ -855,7 +870,7 @@ protected:
 private:
     friend class PineScheduler;
     friend class PineExecutionAdapter;
-
+    friend struct ReportSinkEquityTestAccess;
     // One request.security site of ANOTHER symbol (register_security_eval with a
     // symbol key). Its payload runs in the requested context: on every bar of the
     // symbol's feed, in order, as the kernel hands the bars over through the
@@ -901,12 +916,12 @@ private:
     std::uint64_t adapter_broker_fill_event_sequence() const noexcept {
         return broker_fill_event_seq_;
     }
-    void scheduler_prepare_script_run(const std::vector<Bar>&,
+    void scheduler_prepare_script_run(PineScheduler::InputView,
                                       bool static_eligible, int expected_script_bars,
                                       bool script_bar_geometry);
     void scheduler_configure_security_evaluators();
     bool scheduler_uses_aux_security_feed() const noexcept;
-    void scheduler_prepare_security_sequence(const std::vector<Bar>&);
+    void scheduler_prepare_security_sequence(PineScheduler::InputView);
     // R5 lane R3b: the plain request.security sites of a batch run whose
     // input and script timeframes coincide are declared to the kernel as
     // NativeTimeframeSubscription series instances at the L6c begin-time hook
@@ -947,7 +962,7 @@ private:
     // this host's store, or the kernel's run spec while they are lent to it.
     const NativeInstrumentFeed& installed_symbol_feed(std::size_t i) const;
     // Copies lent bytes back from the kernel's spec, which keeps its own.
-    void restore_symbol_feeds();
+    void restore_symbol_feeds(); void stage_symbol_feed_views();
     // The same for a request-data door: the reason it failed, or empty.
     std::string restore_symbol_feeds_reason();
     // True while the running spec names this host's sites: the kernel steps
@@ -1007,6 +1022,9 @@ private:
     void publish_security_eval_state_at_calling_boundary(SecurityEvalState& state);
     void scheduler_record_range_end(const Bar&);
     void present_report(ReportC*) const override;
+    // Pine presentation re-marks owning trade/equity arrays, including an
+    // unbound host's future terminal quote. No bounded-state adapter exists.
+    bool report_presenter_supports_non_full() const noexcept override { return false; }
     bool report_terminal_quote_eligible() const;
     std::int64_t report_quote_time_ms_ = -1;
     double report_quote_close_ = std::numeric_limits<double>::quiet_NaN();
@@ -1053,6 +1071,10 @@ private:
     void finish_adapter_evaluation();
     void project_short_seed_report_rows(const native_order::ExecutionAppliedEvent&);
     void order_global_exit_children(const native_order::ExecutionAppliedEvent&);
+    detail::CommandScratchStore* trade_scratch_ = nullptr;
+    detail::CommandScratchStore& trade_scratch();
+    std::optional<std::size_t> sort_same_bar_exit_trades(
+        TradeLedger&, PineExecutionAdapter&);
     bool scheduler_coof_enabled() const noexcept { return config_.calc_on_order_fills; }
     // The range-end row an applied execution may complete. It stays ordered
     // after the fill's calc_on_order_fills recalculation, which can advance
@@ -1152,7 +1174,7 @@ protected:
     // The foreign site whose payload is being evaluated: its requested
     // context answers pine_bar_index(), time_close() and syminfo_ for the
     // length of the dispatch, and nothing outside one. Never durable.
-    const ForeignSecuritySite* foreign_context_ = nullptr;
+    struct BorrowedFeedSlot { const Bar* bars = nullptr; const std::int64_t* close_ms = nullptr; std::size_t size = 0; bool present = false; }; std::vector<BorrowedFeedSlot> symbol_feed_views_; const ForeignSecuritySite* foreign_context_ = nullptr;
 
     // Provider configuration, not book state: it is staged before a run and
     // projected into the adapter at begin, so it is waived from the durable
@@ -1298,6 +1320,8 @@ protected:
     // hold_script_average_price() wrote position_entry_price_ on the flat
     // book this pass; release_script_average_price() clears it.
     bool script_average_held_ = false;
+    void finish_applied_admission(const native_order::ExecutionAppliedEvent&,
+                                  const NativeDecisionContext&);
 };
 
 using PineNativeHost = PineStrategyHost;

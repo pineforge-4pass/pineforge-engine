@@ -22,6 +22,8 @@
 //    spelling, its line, a literal symbol, an input title), a closed engine
 //    vocabulary, or a value the run request supplied (a row of its OHLCV, its
 //    timeframes) -- never from a value the script computes while it runs;
+//    Q7's run_aborted additionally carries only engine-owned completion count
+//    and started witnesses, never a script-computed index or value;
 //  * a vocabulary argument outside its closed list, an undeclared argument, a
 //    wrong kind or a missing required argument turns the failure into
 //    engine_invariant (the English is kept): a wrong call cannot mint a code
@@ -166,6 +168,8 @@ enum class RunFailureArgKind : std::uint8_t {
     string,
     nullable_string,
     scalar,
+    // Q7: exactly a JSON true/false, with all earlier kind values preserved.
+    boolean,
 };
 
 /// One typed argument as a raise site spells it. `name` is a literal; a text
@@ -259,6 +263,10 @@ public:
         : Base(what), RunFailureInfo(code, args) {}
     coded(RunFailureCode code, const RunFailureArgs& args, const char* what)
         : Base(what), RunFailureInfo(code, args) {}
+    // Keep structured exception context (for example system_error::code())
+    // when the base cannot be reconstructed from its English text alone.
+    coded(RunFailureCode code, const RunFailureArgs& args, const Base& error)
+        : Base(error), RunFailureInfo(code, args) {}
     coded(RunFailureValue value, const std::string& what)
         : Base(what), RunFailureInfo(std::move(value)) {}
     coded(RunFailureValue value, const char* what)

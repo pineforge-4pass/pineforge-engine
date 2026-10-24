@@ -1,0 +1,2 @@
+list(APPEND TEST_SOURCES test_book_read_definition_reuse)
+pineforge_add_unit_test(test_book_read_definition_reuse)

@@ -25,13 +25,23 @@ def check(root: Path = ROOT) -> int:
     for name in required:
         if not re.search(r"\b(?:class|struct)\s+" + re.escape(name) + r"\s*\{", header):
             raise ValueError(name + " storage is missing")
-    # R5 lane V19-E: the v4 source extension folds the journal's events one at
-    # a time, each once, through the canonical per-event reflection.
+    # Scratch-store stage 2.3 (ecbc4d175e), Readback: an owning event sequence
+    # is diagnostic only. The v4 fold now streams canonical reflected fields
+    # in the journal, and the adapter publishes its continuation.
     for token in (
         "void reflect(const Draft& value", "void reflect(const Event& value",
-        "void Journal::reflect", "admission::reflect(events[admission_events_folded_]",
+        "void Journal::reflect", "Journal::Prefix Journal::folded_window() const",
+        "fold_journal_record(source,page,result.digest)",
     ):
-        if token not in (source + "\n" + adapter_hash):
+        if token not in source:
+            raise ValueError("admission reflection/hash fold is missing: " + token)
+    for token in (
+        "const auto folded = admission_journal.folded_window();",
+        "admission_events_folded_ = folded.count;",
+        "admission_events_digest_ = folded.digest;",
+        "admission_events_last_ = folded.last_sequence;",
+    ):
+        if token not in adapter_hash:
             raise ValueError("admission reflection/hash fold is missing: " + token)
     waivers = (root / "scripts/broker_state_hash_waivers.txt").read_text()
     if "market_admission" in waivers:

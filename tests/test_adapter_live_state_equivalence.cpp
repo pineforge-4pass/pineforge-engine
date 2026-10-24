@@ -354,6 +354,9 @@ struct Fold {
 class ScriptHost final : public source::PineStrategyHost {
 public:
     explicit ScriptHost(const Config& config) : config_(config), rng_(config.seed) {
+        // This placement-retirement witness compares every historical admission
+        // reflection leaf to its original literals, so opt into that projection.
+        market_admission_journal().retain_full_observation_history();
         set_syminfo_timezone("UTC");
         set_syminfo_session("24x7");
         if (config.family == Family::Revival) {

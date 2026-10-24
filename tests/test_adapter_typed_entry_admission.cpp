@@ -144,7 +144,7 @@ public:
         }
         if (bar_index_ == 4) strategy_close_all();
     }
-    const std::vector<Trade>& rows() const { return trades_; }
+    const TradeLedger& rows() const { return trades_; }
 private:
     Case case_;
     bool per_call_;

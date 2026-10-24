@@ -88,7 +88,7 @@ public:
     double pos_size() const { return signed_position_size(); }
     int n_trades() const { return (int)trades_.size(); }
     // Last emitted trade (the add scratch in a scratch cell).
-    const Trade& last_trade() const { return trades_.back(); }
+    Trade last_trade() const { return trades_.back(); }
     bool last_is_dur0() const {
         const Trade& t = trades_.back();
         return t.entry_bar_index == t.exit_bar_index;
