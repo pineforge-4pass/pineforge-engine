@@ -396,6 +396,8 @@ Id StoreImpl::create(std::uint64_t bytes, std::uint64_t align) {
   ImplicitTx transaction(this);
   put_chunk(id, 0, chunk_buffer_.get(),
             static_cast<std::size_t>(kHeaderBytes + chunk_length(0, bytes)));
+  // Data chunks start zeroed: the buffer head held the header bytes above.
+  std::memset(chunk_buffer_.get(), 0, chunk_buffer_bytes_);
   for (std::uint64_t chunk = 1; chunk < chunks; ++chunk) {
     put_chunk(id, chunk, chunk_buffer_.get(),
               static_cast<std::size_t>(chunk_length(chunk, bytes)));
