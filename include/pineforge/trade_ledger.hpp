@@ -18,8 +18,9 @@ inline namespace engine_script_run_v19 {
 // A kResidentRows descriptor window and an equally sized fixed byte tail of
 // the string payload stay in memory. All four string payloads and all older
 // mutable/sealed descriptors use the existing run-owned positional scratch
-// files. Owning Trade values belong to readers, so no arbitrary-width string
-// is hidden in the resident window.
+// files. A separate, budgeted read cache retains numeric records and up to
+// kCacheStringBytes of decoded string bytes per row. Wider rows use scratch.
+// Owning Trade values still belong to readers.
 //
 // Reads own their values. No reference or contiguous pointer into an
 // evictable page escapes. Iteration visits [base(),size()) as before, now
@@ -33,6 +34,15 @@ public:
     // storage type is complete.
     static constexpr size_type kRecordBytes = 168;
     static constexpr size_type kResidentRows = 64;
+    // One knob for this cache kind: ledger_rows. Each entry contains a
+    // 168-byte numeric/extent record, a global key and validity generation,
+    // and exactly 1,024 inline string bytes (all four strings combined).
+    // No per-entry heap allocation or growing offset/string directory.
+    static constexpr size_type kCacheStringBytes = 1024;
+    static constexpr size_type kLedgerEntryBytes =
+        kRecordBytes + 2 * sizeof(size_type) + kCacheStringBytes;
+    static constexpr size_type kDefaultCacheRows = 4096;
+    static constexpr size_type kMaxCacheRows = 65536;
     using Visitor = std::function<bool(size_type, const Trade&)>;
 
     class const_iterator {
@@ -69,6 +79,22 @@ public:
     // Bind before the first spill. No mapping or in-memory offset directory.
     void set_scratch_directory(const std::string&);
     const std::string& scratch_directory() const;
+    // Configure before the first append/spill; clear() preserves the budget.
+    // Valid rows: [1,65536]; invalid/late settings throw a coded
+    // std::invalid_argument (setting_rejected, reason value_below_minimum,
+    // value_above_maximum or frozen). Default: 4,096 rows, 4,947,968 entry
+    // bytes on 64-bit targets; maximum: 65,536 rows, 79,167,488 entry bytes.
+    void set_cache_rows(size_type rows);
+    size_type cache_rows() const;
+    // Accounted ledger/cache storage: rows*kLedgerEntryBytes + a fixed base
+    // (sizeof ledger + State). Excludes allocator overhead, scratch/OS pages,
+    // configured directory strings, returned owning Trades and the explicit
+    // legacy materialize() map. Validates the same row range as the setter.
+    static size_type resident_cache_bytes(size_type rows);
+    size_type cache_resident_bytes() const;
+    // Occupied decoded entries only; separate from resident_size()'s legacy
+    // descriptor/materialization accounting.
+    size_type cache_size() const;
     void clear();
     void reserve(size_type);
     size_type size() const;
@@ -81,6 +107,9 @@ public:
 
     // read() spans the whole exact source; at()/[] retain the checked
     // unsealed-window contract for existing settlement callers.
+    // Hits allocate only the owning strings already required by read().
+    // Direct-mapped eviction above cache_rows(), or an oversized string set,
+    // retains the existing scratch path; a history loop can still cost O(T).
     Trade read(size_type global) const;
     Trade operator[](size_type global) const;
     Trade at(size_type global) const;
