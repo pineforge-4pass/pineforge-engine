@@ -145,8 +145,11 @@ previous report mode; the legacy FULL sink route remains supported.
 Without a sink, pending selected-window or observer capture makes
 `set_report_mode_v1(SUMMARY_ONLY)` return `-5`. If SUMMARY_ONLY is already
 selected, a non-null observer registration returns `-2`. A selected window
-configured afterward is accepted, but a run with trades fails closed with
-`engine_invariant`: `summary trade metrics differ from the logical trade count`.
+configured afterward is accepted by the setter, but the run fails closed and
+publishes no report: with the begin refusal (see the begin paragraph below) at
+begin with `report_mode_unsupported`, before any callback or bar; without it, a
+run with trades fails with `engine_invariant`: `summary trade metrics differ
+from the logical trade count`.
 An envelope read refuses with `-5` only for an admitted capture; a pending
 window configures the next run. With no run, that read returns
 `PF_REPORT_MODE_ACCEPTED`, `metadata.complete == 0`, and no report payload.
