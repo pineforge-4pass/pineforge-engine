@@ -54,8 +54,9 @@
 //    -- none when a rebuild of the spilled table (BookSpill::compact) has made
 //    the matcher rescan the book first. When a rebuild falls depends on how
 //    much garbage the book's rewrites leave, so on N: the two books' totals
-//    are NOT equal (argon traced 5 against 3 up to the first fill, 54 against
-//    52 over bar 2), and this row no longer asserts that they are.
+//    are NOT equal (argon traced 5 against 3 up to the first fill; over bar 2
+//    the box reads 20,879 against 20,877, not argon's 54 against 52: see
+//    round 6), and this row no longer asserts that they are.
 //  * O(log N) per spilled Evaluate winner per point, not counted here: the
 //    refresh the matcher then asks of the core (refresh_allowance: classify,
 //    promote_book_row finds the row in the spilled table, make_book_room
@@ -66,12 +67,50 @@
 // live_back), and a step per spilled row a rank walk passes (live_at,
 // live_back) -- nothing else. A keyed search's own O(log N) DiskIdTable steps
 // are not steps here, and the refresh path (promote_book_row, make_book_room)
-// adds nothing to either.
+// adds nothing to either. A walk of the book in queue order (live(),
+// visit_book) reads its spilled rows without counting them.
+//
+// Round 6 (the box on da5271886: steps 0 and 0; refresh-reuse window 5 and 3
+// rows; bar 2 20,879 and 20,877 rows). Bar 2's rows are not walks of the
+// book: each is a keyed search by handle (hold_live -> spilled_held), and four
+// readers make one here (src/native_execution_consumer.cpp):
+//  * the provenance re-check at the head of every whole scan
+//    (provenance_still_matches): one search per provenance row of a request
+//    standing outside the heap. A whole scan adds a row for each Fill
+//    candidate it finds and keeps the old ones; the list is cleared at the
+//    next point. After fill m of K, each of the K - m requests still to fill
+//    has m rows, so the K - 1 scans after the fills search
+//    sum m(K - m) = K(K*K - 1)/6 = 20,825 rows;
+//  * each fill's own read of its request (consume_matched_request): K = 50;
+//  * the first Fill winner, kept from its winner-only rescan (book_at 0) and
+//    spilled since by the next refresh (scanned_request): 1;
+//  * the heap's back row at a point's first scan, spilled by the refresh
+//    chain before its own reuse (scanned_request): at most one per point,
+//    none where a table rebuild rescanned the book first -- 3 in the small
+//    book (points 1-3), 1 in the large one (rebuilds at points 2 and 3).
+// So bar 2 reads 20,876 rows in K alone plus the back rows (20,879 and
+// 20,877), and the refresh-reuse window the back rows plus 2 (5 and 3). The
+// count depends on K, not on N. Each is still a keyed search of O(log N)
+// table steps the counter does not see, and the re-checks grow as K^3: a
+// large constant for a point with K fills, not O(1).
+// The real bound, then: O(1) lookup steps per winner (0 table steps in both
+// books); bar 2's row reads are the fill point's keyed searches, a count in
+// K, plus the back rows, and do not depend on N; the refresh path is O(log N)
+// per spilled Evaluate winner per point and uncounted (round 4).
 // What is asserted: no rank walk in either book (the table steps, equal: both
-// none), and in each window fewer keyed lookups than the spilled rows a single
-// point reuses (book - kResidentRows), which a lookup per reused spilled
-// winner cannot give. The totals are printed. No equality of the totals, and
-// nothing about the refresh path's cost, is asserted (round 5).
+// none); in the refresh-reuse window, fewer keyed lookups than the spilled
+// rows a single point reuses (book - kResidentRows), which a lookup per
+// reused spilled winner cannot give; and over bar 2, totals within
+// kBarPoints of each other both ways. Only the back rows depend on the book,
+// at most one per matched point of bar 2 (its open and its three path
+// segments). That needs no table rebuild among the K reachable rows'
+// refreshes at the fill point: a rebuild's whole rescan there would add a
+// provenance row for every reachable row refreshed so far, searched at every
+// later head. Rebuilds fall about alive + 2 MiB / row bytes promotions apart
+// (BookSpill::worth_compacting), more than one point's chain: here the large
+// book rebuilds at promotions 15,070 of point 2 and 26,530 of point 3, the
+// small one at none of points 1-3 (argon's trace). No equality of the
+// totals, and nothing about the refresh path's cost, is asserted.
 #include "../src/native_execution_consumer.hpp"
 
 #include <pineforge/native_host.hpp>
@@ -102,6 +141,9 @@ int checks = 0;
 constexpr std::size_t kResidentRows = 4096;   // kBookMax, src/native_order.cpp
 constexpr std::size_t kWinners = 50;          // fills at one point
 constexpr double kReach = 99.75;              // bar 2's low is below it
+// Bar 2's matched points: its open and its three path segments
+// (deliver_confirmed_script; close_execution is NextEligiblePoint).
+constexpr std::uint64_t kBarPoints = 4;
 
 no::Request limit_buy(double price, const char* label) {
     no::Request request{no::Transact{1.0}, label, ""};
@@ -274,11 +316,11 @@ int main() {
             CHECK(small.steps % kWinners == large.steps % kWinners);
             // The reused spilled winners are not looked up: in the
             // refresh-reuse window (every spilled resting row a winner reused
-            // after its refresh, up to the first fill) and over the whole of
-            // bar 2, each book's keyed lookups stay below the spilled rows one
-            // point reuses. Not equal between the books: the row a refresh
-            // chain spills off the heap's back is looked up once per point
-            // unless a table rebuild rescanned first, and rebuilds fall by N.
+            // after its refresh, up to the first fill) each book's keyed
+            // lookups stay below the spilled rows one point reuses. Not equal
+            // between the books: the row a refresh chain spills off the heap's
+            // back is looked up once per point unless a table rebuild
+            // rescanned first, and rebuilds fall by N.
             print_window("refresh-reuse window", small, large, small.first_fill, large.first_fill);
             print_window("bar 2", small, large, small.end, large.end);
             const std::uint64_t small_spilled = small.book - kResidentRows;
@@ -287,10 +329,23 @@ int main() {
             const std::uint64_t large_reuse = total_between(large.placed, large.first_fill);
             CHECK(small_reuse < small_spilled);
             CHECK(large_reuse < large_spilled);
+            // Over the whole of bar 2 the reads are the fill point's keyed
+            // searches -- K(K*K - 1)/6 provenance re-checks, the K fills' own
+            // reads and the first Fill winner's, a count in K alone -- plus
+            // the back rows (header, round 6). That is not below the small
+            // book's spilled rows (K^3/6 is not), but it does not grow with
+            // the book: only the back rows differ, at most one per matched
+            // point, so a book four times the size reads at most kBarPoints
+            // rows more, or fewer.
             const std::uint64_t small_bar = total_between(small.placed, small.end);
             const std::uint64_t large_bar = total_between(large.placed, large.end);
-            CHECK(small_bar < small_spilled);
-            CHECK(large_bar < large_spilled);
+            const std::uint64_t bar_in_k = kWinners * (kWinners * kWinners - 1) / 6 + kWinners + 1;
+            std::printf("bar 2 in K alone: %llu rows; back rows %lld -> %lld\n",
+                        static_cast<unsigned long long>(bar_in_k),
+                        static_cast<long long>(small_bar) - static_cast<long long>(bar_in_k),
+                        static_cast<long long>(large_bar) - static_cast<long long>(bar_in_k));
+            CHECK(large_bar <= small_bar + kBarPoints);
+            CHECK(small_bar <= large_bar + kBarPoints);
         }
     } catch (const std::exception& error) {
         ++failures;
