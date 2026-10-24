@@ -926,9 +926,19 @@ def test_native_jailed_fd_without_arena_refuses_before_scratch_or_sink(tmp_path)
 
 def test_native_jailed_fd_with_arena_and_zero_fsize_creates_no_files(tmp_path):
     source = bars.csv_file(tmp_path, count=17)
-    # The jailed admission requires a sealed memfd arena (CR-267); an ordinary
-    # file is refused with report_sink_failed/arena_backing (the test above).
-    arena = sealed_arena_fd(16 * 1024 * 1024)
+    # On Linux the jailed admission requires a sealed memfd arena (CR-267); an
+    # ordinary file is refused with report_sink_failed/arena_backing (the test
+    # above). Off Linux there are no sealed memfds and the admission accepts
+    # any attached arena, so the ordinary-file arena of the original row stays.
+    if sys.platform.startswith("linux"):
+        arena = sealed_arena_fd(16 * 1024 * 1024)
+        arena_args = {"arena_fd": arena}
+    else:
+        arena = None
+        arena_file = tmp_path / "inherited-arena"
+        with arena_file.open("wb") as prepared:
+            prepared.truncate(16 * 1024 * 1024)
+        arena_args = {"arena_path": arena_file}
     work, temporary = tmp_path / "work", tmp_path / "tmp"
     work.mkdir(mode=0o555)
     temporary.mkdir(mode=0o555)
@@ -937,7 +947,7 @@ def test_native_jailed_fd_with_arena_and_zero_fsize_creates_no_files(tmp_path):
         actual = child_run(
             source, ["--so", native_module(False), "--profile", "jailed",
                      "--input-tf", "1", "--script-tf", "1"],
-            stub=False, jail=True, work=work, temporary=temporary, arena_fd=arena)
+            stub=False, jail=True, work=work, temporary=temporary, **arena_args)
         assert actual[0] == 0 and actual[2] == "", actual
         document = json.loads(actual[1])
         assert "trades" not in document and "equity_curve" not in document
@@ -948,7 +958,8 @@ def test_native_jailed_fd_with_arena_and_zero_fsize_creates_no_files(tmp_path):
             assert sum(row.tag == "T" for row in records) == document["summary"]["total_trades"]
         assert snapshot(work, temporary) == before
     finally:
-        os.close(arena)
+        if arena is not None:
+            os.close(arena)
         work.chmod(0o755)
         temporary.chmod(0o755)
 
