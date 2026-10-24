@@ -227,7 +227,7 @@ references; L15a must maintain these anchors and mechanically pin every current
 | Host feed lookup/delivery and column reads | `installed_symbol_feed` `src/source/pine_security_eval.cpp:1059-1068`; `installed_symbol_feed` `src/source/pine_security_eval.cpp:1291-1301`; `installed_symbol_feed` `src/source/pine_security_eval.cpp:1320-1328` | 359-360 |
 | Feed validation: bar values/order, close length/bounds, column length; configure and consumer entry points | `feed.bars` `src/native_run_spec.cpp:259-290`; `instrument_feed_shapes` `src/native_run_spec.cpp:743`; `validate_native_instrument_feeds` `src/native_run_spec.cpp:1019-1022`; `validate_native_timeframe_subscriptions` `src/native_execution_consumer.cpp:9829`; `validate_native_timeframe_subscriptions` `src/native_execution_consumer.cpp:9854` | 361-363 |
 | Adapter projection validation: use the context normalizer; host stages after lending and before projection, using a context built from its store | `normalize_projected_spec` `src/source/pine_adapter.cpp:3166` | 361-363; V1/V2 change 5 |
-| Instrument-feed digest and cached/uncached continuation folds | `digest_instrument_feed_views` `src/native_run_spec.cpp:1162-1205`; `native_instrument_feeds_digest` `src/native_execution_consumer.cpp:328`; `native_instrument_feeds_digest` `src/native_execution_consumer.cpp:2889`; `native_run_spec_digest` `src/native_execution_consumer.cpp:13979` | 364-365 |
+| Instrument-feed digest and cached/uncached continuation folds | `digest_instrument_feed_views` `src/native_run_spec.cpp:1162-1205`; `native_instrument_feeds_digest` `src/native_execution_consumer.cpp:328`; `native_instrument_feeds_digest` `src/native_execution_consumer.cpp:2889`; `native_run_spec_digest` `src/native_execution_consumer.cpp:13989` | 364-365 |
 | Staged feed counts in host state and its hash | `installed_symbol_feed` `src/source/pine_strategy_host.cpp:535-545`; `staged_.instrument_feeds` `src/source/pine_state_hash.cpp:339-346` | 366-367 |
 | Refresh of symbol-data digest and host hash fold | `refresh_symbol_data_digest` `src/source/pine_security_eval.cpp:1553-1566`; `symbol_data_digest_` `src/source/pine_state_hash.cpp:1239-1245` | 367-368 |
 | Restore/store upkeep and column-setter length check | `held.bars` `src/source/pine_security_eval.cpp:1091-1101`; `data.bars` `src/source/pine_security_eval.cpp:1433-1439` | 369-370 |
@@ -318,7 +318,7 @@ L17c/d and L8c use one report path. `fill_trades_section`
 open rows for a sink. `report_closed_net_profit`
 (`src/engine_report.cpp:258`) starts at `ClosedTradePrefix::pnl` and adds the
 resident suffix in order. `finish_streamed_trade_metrics`
-(`src/native_execution_consumer.cpp:13810`) finishes copies of the sealed
+(`src/native_execution_consumer.cpp:13820`) finishes copies of the sealed
 accumulators over resident closed rows, then the presented open rows. The
 source host's terminal-quote presentation continues that same closed-row PnL
 fold before adding its edited open rows (`net_profit`
