@@ -47,6 +47,14 @@ POST_RUNNER = '["self-hosted","pf-gcp-post"]'
 RELEASE_RUNNER = '["self-hosted","pf-gcp-main"]'
 CI_EVENTS = '''on:
   pull_request:
+    # LB-387: suite jobs skip on a draft PR (the required aggregate then fails, never passes);
+    # ready_for_review starts the full run when the PR is marked ready.
+    # converted_to_draft re-runs the workflow so its failing aggregate supersedes the earlier ready run.
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+'''
+CI_CONCURRENCY = '''concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}-${{ github.event.pull_request.draft && 'draft' || 'ready' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 '''
 POST_CI_EVENTS = '''on:
   push:
@@ -170,14 +178,16 @@ PR_PROOF_JOBS = {'build': 'BUILD_RESULT', 'corpus-parity-subset': 'PARITY_RESULT
 HEAVY_JOBS = frozenset(('sanitizers', 'kernel-only', 'native-live', 'corpus-parity'))
 AUTHZ_SUCCESS = "${{ needs.authz.result == 'success' }}"
 AUTHZ_ALWAYS = "${{ always() && needs.authz.result == 'success' }}"
+PREFLIGHT_IF = "${{ !github.event.pull_request.draft && (always() && needs.authz.result == 'success') }}"
 AUTHZ_FULL_SUCCESS = "${{ needs.authz.result == 'success' && github.event_name != 'pull_request' }}"
 DOCS_ONLY_SKIP = ("${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || "
                   "needs.changes.outputs.docs_only != 'true') }}")
 # Only the scheduling hint comes from changes. The aggregate recomputes this
 # class from the event-bound API diff inside its own job.
-GITHUB_ONLY_SKIP = ("${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || "
+GITHUB_ONLY_SKIP = ("${{ !github.event.pull_request.draft && (always() && needs.authz.result == 'success' && "
+                    "(needs.changes.result != 'success' || "
                     "(needs.changes.outputs.docs_only != 'true' && (github.event_name != 'pull_request' || "
-                    "needs.changes.outputs.github_only != 'true'))) }}")
+                    "needs.changes.outputs.github_only != 'true')))) }}")
 HEAVY_SKIP = DOCS_ONLY_SKIP
 SLOW_PREFLIGHT_IF = AUTHZ_ALWAYS
 BUILD_VERIFY_RUN = ' '.join(r'''|
@@ -1158,7 +1168,12 @@ def authz_workflow_findings(workflow: str, name: str, aggregate: str) -> list[st
     if events is None or 'pull_request_target' in events:
         findings.append(f'{name} must use readable events without pull_request_target')
     pr = re.search(r'(?m)^  pull_request:[^\n]*(?:\n(?:    [^\n]*|[ \t]*))*', workflow)
-    if name == 'ci.yml' and (not pr or pr[0].strip() != 'pull_request:'):
+    if name == 'ci.yml' and (not pr or pr[0].strip() != (
+            'pull_request:\n'
+            '    # LB-387: suite jobs skip on a draft PR (the required aggregate then fails, never passes);\n'
+            '    # ready_for_review starts the full run when the PR is marked ready.\n'
+            '    # converted_to_draft re-runs the workflow so its failing aggregate supersedes the earlier ready run.\n'
+            '    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]')):
         findings.append('ci.yml must run on every pull_request without event filters')
     if _job_values(workflow, 'permissions') != ['contents: read']:
         findings.append(f'{name} must retain contents: read workflow permissions')
@@ -1379,6 +1394,8 @@ def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[st
     events = CI_EVENTS if pr else POST_CI_EVENTS
     if _job_block(workflow, 'on') != _code(events):
         findings.append(f'{name} must keep its exact {"unfiltered PR" if pr else "main push, nightly and manual"} triggers')
+    if pr and _job_block(workflow, 'concurrency') != _code(CI_CONCURRENCY):
+        findings.append('ci.yml must keep its exact draft and ready concurrency groups')
     jobs = _jobs(workflow)
     proofs = PR_PROOF_JOBS if pr else PROOF_JOBS
     expected_jobs = {'authz', 'changes', 'preflight', *proofs, 'build-gate'}
@@ -1404,7 +1421,7 @@ def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[st
         findings.append("changes must publish the base's scripts/ci_verifier_paths.py answer, exactly")
     preflight = jobs.get('preflight', '')
     if (sorted(_needs(preflight)) != ['authz', 'changes']
-            or _job_values(preflight, 'if') != [AUTHZ_ALWAYS]):
+            or _job_values(preflight, 'if') != [PREFLIGHT_IF if pr else AUTHZ_ALWAYS]):
         findings.append('preflight must follow authz and changes and run even if classification fails')
     if (f'      PINEFORGE_VERIFIER_SLOW: {PREFLIGHT_VERIFIER_SLOW}\n' not in preflight
             or preflight.count('PINEFORGE_VERIFIER_SLOW:') != 1):
