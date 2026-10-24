@@ -42,6 +42,13 @@ version number follows semantic versioning over the surfaces the
   same id behind a full close: the superseded definition is no longer
   submitted, so it no longer takes an incarnation number. Numbers stay
   non-zero, unique and monotonic; `entry_id` is unchanged.
+- **Streamed trade history: T records are interleaved with E records in the sink
+  file (CR-271).** Regenerated scripts that opt into streamed trade history
+  (`set_trade_history_streamable`) write T records interleaved with E records in
+  the sink file as trades close; the record set and every report value are
+  unchanged; consumers must not rely on E-before-T order. The byte order of the
+  sink file changes with it, so the file's trailer `sha256` differs from a run of
+  the same strategy that does not opt in, although counts and values are equal.
 
 ### State hashes
 
