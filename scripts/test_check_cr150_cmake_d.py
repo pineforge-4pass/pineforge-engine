@@ -249,6 +249,28 @@ class ModuleProfileControls(CMakeControls):
                 self.assert_module_refused(
                     f'if({guard})\n{self.ROW}endif()\n', self.MODULE)
 
+    def test_mixed_and_or_is_left_to_right(self) -> None:
+        # NOT binds before logical operators; parentheses keep their grouping.
+        for guard in (
+                f'{self.GUARD} AND APPLE',
+                'NOT (PINEFORGE_ENABLE_SANITIZERS OR PINEFORGE_ENABLE_COVERAGE)'):
+            for row, module in (
+                    (f'if({guard})\n{self.ROW}endif()\n', self.MODULE),
+                    (self.ROW, f'if({guard})\n{self.MODULE}endif()\n')):
+                with self.subTest(guard=guard, row=row, module=module):
+                    result = self.check_inputs(row, module)
+                    self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+        mixed = ('PINEFORGE_ENABLE_SANITIZERS OR PINEFORGE_ENABLE_COVERAGE '
+                 'OR APPLE AND PINEFORGE_FORCE_PY')
+        for row, module in (
+                (self.ROW, f'if({mixed})\nelse()\n{self.MODULE}endif()\n'),
+                (f'if(NOT ({mixed}))\n{self.ROW}endif()\n', self.MODULE)):
+            with self.subTest(row=row, module=module):
+                # CMake folds ((S OR C) OR APPLE) AND FORCE_PY: when FORCE_PY
+                # is false, both paths can load the module with sanitizers on.
+                self.assert_module_refused(row, module)
+
     def test_else_and_elseif_do_not_inherit_the_previous_guard(self) -> None:
         for branch in ('else()', 'elseif(UNIX)'):
             with self.subTest(branch=branch):
@@ -266,6 +288,93 @@ class ModuleProfileControls(CMakeControls):
                 '"MODULE=$<TARGET_FILE:fixture_module>")\n'):
             with self.subTest(extra=extra):
                 self.assert_module_refused(row, self.MODULE, extra)
+
+    def test_target_file_dir_read_is_joined(self) -> None:
+        row = ('add_test(NAME test_module_python COMMAND ${CMAKE_COMMAND} -E env '
+               '"M=$<TARGET_FILE_DIR:fixture_module>/x.so" '
+               '${Python3_EXECUTABLE} -B -m pytest fixture.py)\n')
+        result = self.check_inputs(
+            row, f'if({self.GUARD})\n{self.MODULE}endif()\n')
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assert_module_refused(row, self.MODULE)
+
+    def test_other_target_file_and_property_reads_are_joined(self) -> None:
+        for expression in (
+                '$<TARGET_FILE_NAME:fixture_module>',
+                '$<TARGET_LINKER_FILE:fixture_module>',
+                '$<TARGET_SONAME_FILE:fixture_module>',
+                '$<TARGET_PROPERTY:fixture_module,OUTPUT_NAME>'):
+            with self.subTest(expression=expression):
+                row = self.ROW.replace('$<TARGET_FILE:fixture_module>', expression)
+                result = self.check_inputs(
+                    f'if({self.GUARD})\n{row}endif()\n', self.MODULE)
+                self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+                self.assert_module_refused(row, self.MODULE)
+
+    def test_exclude_from_all_before_module_is_a_module(self) -> None:
+        for options in ('MODULE EXCLUDE_FROM_ALL', 'EXCLUDE_FROM_ALL MODULE'):
+            with self.subTest(options=options):
+                module = f'add_library(fixture_module {options} fixture.cpp)\n'
+                result = self.check_inputs(
+                    self.ROW, f'if({self.GUARD})\n{module}endif()\n')
+                self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+                self.assert_module_refused(self.ROW, module)
+
+    def test_module_source_name_does_not_change_a_static_library_type(self) -> None:
+        for options in ('STATIC', 'EXCLUDE_FROM_ALL STATIC'):
+            with self.subTest(options=options):
+                result = self.check_inputs(
+                    self.ROW, f'add_library(fixture_module {options} fixture.cpp MODULE)\n')
+                self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+    def test_bare_command_variable_in_lane_is_refused(self) -> None:
+        result = self.check_inputs(
+            self.ROW, f'if({self.GUARD})\n{self.MODULE}endif()\n')
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        # Satisfy the old checker's source-presence lookup, so the negative
+        # reaches the invisible command rather than failing fixture setup.
+        source = self.cmake.parent / 'test_module_python.cpp'
+        declared_inputs([source])
+        source.write_text('// Source-presence fixture for the CMake checker.\n')
+        prefix = (self.MODULE
+                  + 'list(APPEND cmd ${Python3_EXECUTABLE} -B fixture.py '
+                  '--module $<TARGET_FILE:fixture_module>)\n')
+        for command in ('${cmd}', '"${cmd}"'):
+            with self.subTest(command=command):
+                self.lane.write_text(
+                    f'add_test(NAME test_module_python COMMAND {command})\n')
+                self.cmake.write_text(prefix + INCLUDE_LOOP)
+                result = self.run_checker()
+                output = result.stdout + result.stderr
+                self.assertEqual(1, result.returncode, output)
+                self.assertIn(f'{self.lane}:1:', output)
+                self.assertIn('bare COMMAND variable', output)
+
+    def test_bare_command_variable_in_fence_is_refused(self) -> None:
+        result = self.check_inputs(
+            self.ROW, f'if({self.GUARD})\n{self.MODULE}endif()\n')
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        row = ('add_test(NAME test_module_python COMMAND ${Python3_EXECUTABLE} '
+               '-B fixture.py)\n')
+        prefix = (self.MODULE
+                  + 'list(APPEND cmd ${Python3_EXECUTABLE} -B fixture.py '
+                  '--module $<TARGET_FILE:fixture_module>)\n')
+        for statement in (
+                'add_test(NAME test_module_python COMMAND ${cmd})\n',
+                'add_test(NAME test_module_python COMMAND "${cmd}")\n',
+                row + 'set_tests_properties(test_module_python PROPERTIES COMMAND "${cmd}")\n',
+                row + 'set_property(TEST test_module_python PROPERTY COMMAND "${cmd}")\n'):
+            with self.subTest(statement=statement):
+                self.lane.write_text(REGISTRATION)
+                self.cmake.write_text(
+                    prefix + INCLUDE_LOOP
+                    + '# --- CR-150 property-control begin ---\n'
+                    + statement + '# --- CR-150 property-control end ---\n')
+                result = self.run_checker()
+                output = result.stdout + result.stderr
+                self.assertEqual(1, result.returncode, output)
+                self.assertIn(f'{self.cmake}:', output)
+                self.assertIn('bare COMMAND variable', output)
 
     def test_main_file_module_guard_is_also_seen(self) -> None:
         self.lane.write_text(self.ROW)
