@@ -7611,6 +7611,23 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND EXISTS "${PROJECT_SOURCE_DIR}/corpus/validat
     set_target_properties(cr224_nofile_strategy PROPERTIES PREFIX "" SUFFIX ".so" LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/cr224_nofile")
 endif()
 # --- CR-150 core-cr150-cr224 end ---
+
+# --- CR-150 ci-cx-scratchguard begin ---
+# Link the committed generated TU into the executable: --wrap must see the
+# engine's unresolved syscall references, including those in its static lib.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_library(scratch_guard_hl2_01_fixture OBJECT fixtures/scratch_guard_hl2_01/generated.cpp)
+    target_link_libraries(scratch_guard_hl2_01_fixture PRIVATE pineforge)
+    target_compile_options(scratch_guard_hl2_01_fixture PRIVATE -ffp-contract=off)
+    target_sources(test_scratch_guard_hl2_01 PRIVATE
+        $<TARGET_OBJECTS:scratch_guard_hl2_01_fixture>)
+    target_link_options(test_scratch_guard_hl2_01 PRIVATE
+        "-Wl,--wrap=pread" "-Wl,--wrap=pwrite"
+        "-Wl,--wrap=read" "-Wl,--wrap=readv"
+        "-Wl,--wrap=preadv" "-Wl,--wrap=preadv2" "-Wl,--wrap=mmap"
+        "-Wl,--wrap=posix_fadvise" "-Wl,--wrap=fdatasync")
+endif()
+# --- CR-150 ci-cx-scratchguard end ---
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
         message(FATAL_ERROR "PR fast row or executable is missing: ${_pf_fast_test}")
