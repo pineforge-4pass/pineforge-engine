@@ -378,8 +378,9 @@ using namespace pineforge;
 namespace pd = pineforge::detail;
 namespace sd = pineforge::source::detail;
 
-// Typed, read-only access, as in the adapter and payload-codec fixtures.
-// No layout cast, production hook, extra I/O, or mutation of the measured store.
+// Typed access, as in the adapter and payload-codec fixtures. The scoped
+// comparator observer forwards unchanged operations without adding I/O or
+// editing records; it needs no layout cast or new production API.
 template<class Tag, auto Member> struct MemberAccess {
     friend auto member(Tag) { return Member; }
 };
@@ -397,13 +398,101 @@ pd::scratch_impl::Core& core(pd::CommandScratchStore& store) {
     return *state;
 }
 
+struct ScopeEraseAccounting {
+    Count cleared_scopes = 0, commit_allowance = 0;
+    Count scope = 0, rows = 0;
+
+    void inserted() noexcept { scope = 0; rows = 0; }
+    void erased(Count erased_scope, Count removed) noexcept {
+        // A helper's batches are contiguous; an intervening insertion starts
+        // another clear, including when the caller refills the same scope.
+        if (scope != erased_scope) {
+            scope = erased_scope;
+            rows = 0;
+            ++cleared_scopes;
+        }
+        constexpr Count batch = sd::kExitScopeEraseBatch;
+        const Count before = rows / batch + (rows % batch != 0);
+        rows += removed;
+        commit_allowance += rows / batch + (rows % batch != 0) - before;
+    }
+};
+
+void check_scope_erase_accounting() {
+    constexpr Count batch = sd::kExitScopeEraseBatch;
+    ScopeEraseAccounting batched, per_row, separate;
+    batched.erased(1, batch);
+    batched.erased(1, 1);
+    for (Count row = 0; row < batch + 1; ++row) per_row.erased(1, 1);
+    require(batched.cleared_scopes == 1 && batched.commit_allowance == 2
+            && per_row.cleared_scopes == 1 && per_row.commit_allowance == 2
+            && per_row.commit_allowance < batch + 1,
+            "CR-257 per-row teardown must not inflate the 65-row scope allowance");
+    separate.erased(1, 1);
+    separate.erased(2, 1);
+    require(separate.cleared_scopes == 2 && separate.commit_allowance == 2,
+            "CR-257 distinct partial scopes must each receive one commit");
+    per_row.inserted();
+    per_row.erased(1, 1);
+    require(per_row.cleared_scopes == 2 && per_row.commit_allowance == 3,
+            "CR-257 refilled scope must be counted as a separate clear");
+}
+
 struct CommandObserver {
     pd::scratch_impl::Core* store = nullptr;
     Count reads = 0, writes = 0, syncs = 0, extent_pages = 0;
     Count commits = 0, inserts = 0, created = 0, erased = 0;
     Count writes_at_commit = 0, maximum_commit_writes = 0;
+    ScopeEraseAccounting scopes;
+    Count transaction_scope = 0;
+    bool mixed_scopes = false;
     bool invalid = false;
     pd::ScratchIoObserver previous;
+
+    // compare_with passes its probe as the left source. Forward the original
+    // comparator's reads exactly once and copy only the words it already read:
+    // no extra backing/cache reads, retained sources or replacement comparator.
+    struct ScopeProbe final : pd::ScratchByteSource {
+        CommandObserver& observer;
+        const pd::ScratchByteSource& source;
+        ScopeProbe(CommandObserver& measured, const pd::ScratchByteSource& input)
+            : observer(measured), source(input) {}
+        std::uint64_t size() const noexcept override { return source.size(); }
+        const pd::ReportScratchIoError* carried_failure() const noexcept override {
+            return source.carried_failure();
+        }
+        pd::ScratchStatus read(std::uint64_t offset, pd::ScratchBuffer destination) const noexcept override {
+            const auto status = source.read(offset, destination);
+            if (status == pd::ScratchStatus::ok && measuring && observer.store->active_
+                && offset == 0 && destination.size >= sizeof(sd::ExitScratchKeyWords)) {
+                sd::ExitScratchKeyWords words{};
+                std::memcpy(words.data(), destination.data, sizeof(words));
+                if (observer.transaction_scope == 0) observer.transaction_scope = words[0];
+                else observer.mixed_scopes |= observer.transaction_scope != words[0];
+            }
+            return status;
+        }
+    };
+    struct ScopeOrder {
+        CommandObserver& observer;
+        pd::ScratchKeyOrder previous;
+        explicit ScopeOrder(CommandObserver& measured) : observer(measured) {
+            require(observer.store != nullptr, "CR-257 scope observation needs a live store");
+            previous = observer.store->order_;
+            require(previous.id == sd::exit_scratch_key_order().id && previous.compare,
+                    "CR-257 scope observation needs the exit-scratch key order");
+            observer.store->order_ = {previous.id, this, &compare};
+        }
+        ~ScopeOrder() { observer.store->order_ = previous; }
+        ScopeOrder(const ScopeOrder&) = delete;
+        ScopeOrder& operator=(const ScopeOrder&) = delete;
+        static pd::ScratchStatus compare(void* opaque, const pd::ScratchByteSource& left,
+                                        const pd::ScratchByteSource& right, int& order) noexcept {
+            auto& self = *static_cast<ScopeOrder*>(opaque);
+            const ScopeProbe probe(self.observer, left);
+            return self.previous.compare(self.previous.context, probe, right, order);
+        }
+    };
 
     // Backings snapshot this registration. Construct BEFORE the host and all
     // its stores, and keep the context alive until AFTER host destruction.
@@ -458,7 +547,7 @@ struct CommandObserver {
             return;
         }
         const Count removed = before.record_count + made - now.record_count;
-        // The planned change batches pure scope erasures. Mixed insert/erase
+        // Scope teardown batches pure erasures. Mixed insert/erase
         // transactions would require a separately stated accounting contract.
         self.invalid |= made != 0 && removed != 0;
         // An empty commit cannot inflate the insertion allowance. A genuine
@@ -468,6 +557,13 @@ struct CommandObserver {
         self.created += made;
         self.erased += removed;
         self.inserts += removed == 0; // Includes a genuine upsert transaction.
+        if (removed != 0) {
+            self.invalid |= self.transaction_scope == 0 || self.mixed_scopes;
+            if (self.transaction_scope != 0 && !self.mixed_scopes)
+                self.scopes.erased(self.transaction_scope, removed);
+        } else self.scopes.inserted();
+        self.transaction_scope = 0;
+        self.mixed_scopes = false;
         ++self.commits;
         self.maximum_commit_writes = std::max(self.maximum_commit_writes,
                                               self.writes - self.writes_at_commit);
@@ -758,6 +854,7 @@ void validate_trading(const TradingHost& host, const Driver& driver) {
 } // namespace
 
 SourceRun source_run(Count n) {
+    check_scope_erase_accounting();
     Driver driver(n);
     SourceRun result;
     result.context.n = n;
@@ -769,6 +866,7 @@ SourceRun source_run(Count n) {
                 "CR-257 trading warmup failed");
         auto& context = sd::exit_scratch(adapter(host));
         observer.store = &core(context.store);
+        CommandObserver::ScopeOrder scope_order(observer); // Restored before host destruction.
         const auto before = context.store.stats();
         const auto sequence_before = observer.store->cur_.seq;
         const auto handles_before = observer.store->cur_.next_handle;
@@ -788,6 +886,8 @@ SourceRun source_run(Count n) {
         result.commits = observer.commits;
         result.insert_commits = observer.inserts;
         result.records_created = observer.created;
+        result.cleared_scopes = observer.scopes.cleared_scopes;
+        result.erase_commit_allowance = observer.scopes.commit_allowance;
         result.context.extent_pages = observer.extent_pages;
         result.context.records_changed = observer.erased;
         validate(result.io);
@@ -807,6 +907,8 @@ SourceRun source_run(Count n) {
                 "CR-257 observer/wrappers/actual source store disagree or missed RUN I/O");
         require(observer.commits > 0 && observer.created > 0 && observer.erased == observer.created
                 && observer.inserts > 0 && context.store.record_count() == 0
+                && result.cleared_scopes > 0 && result.cleared_scopes <= observer.erased
+                && result.erase_commit_allowance >= result.cleared_scopes
                 && !context.store.transaction_active() && host.closed_trade_count() > closes_before
                 && observer.extent_pages <= after.backing_pages,
                 "CR-257 temporary records/commits or measured trades are vacuous");
@@ -837,6 +939,7 @@ SourceRun source_run(Count n) {
 }
 
 SourceRun scope_erase_run(Count records) {
+    check_scope_erase_accounting();
     require(records > sd::kExitScopeEraseBatch,
             "CR-257 erase fixture must exercise a full batch and a partial batch");
     CommandObserver observer; // Register before creating the actual backing.
@@ -853,6 +956,7 @@ SourceRun scope_erase_run(Count records) {
         require(rows[static_cast<std::size_t>(i)] == i * 17 + 3,
                 "CR-257 erase fixture ignored its stored payloads");
     observer.store = &core(store);
+    CommandObserver::ScopeOrder scope_order(observer); // Restored while store is still alive.
     const auto before = store.stats();
     const auto sequence_before = observer.store->cur_.seq;
     SourceRun result;
@@ -864,6 +968,8 @@ SourceRun scope_erase_run(Count records) {
     validate(result.io);
     require(!observer.invalid && observer.erased == records && observer.created == 0
             && observer.inserts == 0 && observer.commits > 0
+            && observer.scopes.cleared_scopes == 1
+            && observer.scopes.commit_allowance == ceil_div(records, sd::kExitScopeEraseBatch)
             && observer.extent_pages > 0 && observer.writes > 0
             && observer.writes == result.io.pages.pwrite.calls
             && result.io.pages.pread.calls <= observer.reads
@@ -879,6 +985,8 @@ SourceRun scope_erase_run(Count records) {
     result.page_writes = observer.writes;
     result.sync_charges = observer.syncs;
     result.commits = observer.commits;
+    result.cleared_scopes = observer.scopes.cleared_scopes;
+    result.erase_commit_allowance = observer.scopes.commit_allowance;
     // Clear must leave the store reusable, including its free lists. These
     // writes/readbacks are outside RUN and use different values and a new scope.
     sd::ExitScratchRows<Count> reused(context);
@@ -926,11 +1034,11 @@ void source_bounds(const SourceRun& run) {
     // so no nonresident-row allowance or per-bar literal belongs here.
     class_bound(FileClass::trade_payload, "pread_calls", payload.pread.calls, 0, context);
     class_bound(FileClass::trade_payload, "pread_bytes", payload.pread.bytes, 0, context);
-    // CR-265 design allowance: one commit per 64 erased rows (round up),
-    // plus the separately charged insertion commits. Each commit has the
-    // fixed command-store page budget; no measured write count sets a limit.
-    const Count erase_commits = ceil_div(context.records_changed, sd::kExitScopeEraseBatch);
-    const Count allowed_commits = erase_commits + run.insert_commits;
+    // CR-265 allows insert_commits + sum over non-empty scope clears of
+    // ceil(rows_in_scope / kExitScopeEraseBatch), rounding each scope separately.
+    require(run.erase_commit_allowance < context.records_changed,
+            "CR-257 source fixture must reject one teardown commit per erased row");
+    const Count allowed_commits = run.insert_commits + run.erase_commit_allowance;
     const Count write_calls = allowed_commits * pd::kPagesPerCommit;
     bound("command.commits", run.commits, allowed_commits, context);
     bound("command.page_pwrite_calls", pages.pwrite.calls, write_calls, context);
@@ -950,13 +1058,16 @@ void source_bounds(const SourceRun& run) {
     bound("command.fdatasync_calls", io.fdatasync.calls,
           ceil_div(scratch_write_bytes, kCacheBytes) + 1, context);
     std::printf("X257 command.charges read=%llu write=%llu sync=%llu commits=%llu"
-                " insert_commits=%llu records_created=%llu N=%llu\n",
+                " insert_commits=%llu records_created=%llu cleared_scopes=%llu"
+                " erase_commit_allowance=%llu N=%llu\n",
         static_cast<unsigned long long>(run.page_reads),
         static_cast<unsigned long long>(run.page_writes),
         static_cast<unsigned long long>(run.sync_charges),
         static_cast<unsigned long long>(run.commits),
         static_cast<unsigned long long>(run.insert_commits),
         static_cast<unsigned long long>(run.records_created),
+        static_cast<unsigned long long>(run.cleared_scopes),
+        static_cast<unsigned long long>(run.erase_commit_allowance),
         static_cast<unsigned long long>(context.n));
 }
 } // namespace cr257
