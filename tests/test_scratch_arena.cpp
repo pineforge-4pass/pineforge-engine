@@ -219,7 +219,13 @@ struct Backing {
     Backing(int descriptor, std::uint64_t size,
             ScratchArenaBackend kind = ScratchArenaBackend::regular_file)
         : fd(descriptor), bytes(size), backend(kind) {
-        require(fd >= 0, "create backing descriptor");
+        if (fd < 0) {
+            // errno is still the failing creation call's: say which one in the message.
+            const int failed = errno;
+            const std::string why = "create backing descriptor: errno " + std::to_string(failed)
+                                    + " (" + std::strerror(failed) + ")";
+            throw std::runtime_error(why);
+        }
     }
     Backing(const Backing&) = delete;
     Backing& operator=(const Backing&) = delete;
@@ -1107,12 +1113,27 @@ void tmpfs_regular_backing() {
 
 void anonymous_regular_backing() {
     TemporaryDirectory directory(".");
-    Backing backing(::open(directory.path.c_str(), O_TMPFILE | O_RDWR | O_CLOEXEC, 0600),
-                    4 * kChunk);
+    int descriptor = ::open(directory.path.c_str(), O_TMPFILE | O_RDWR | O_CLOEXEC, 0600);
+    if (descriptor < 0 && errno == EOPNOTSUPP) {
+        // The filesystem (overlayfs on the CLOUD VM's kernel answers errno 95 here, measured) has no
+        // O_TMPFILE. The shape under test is an anonymous regular file, so build the same shape the
+        // other way: mkstemp, then unlink the name. Only EOPNOTSUPP takes this path; any other errno
+        // fails in Backing's constructor with that errno in the message. This is not a skip.
+        std::fprintf(stderr, "NOTE: O_TMPFILE is not supported here (errno %d: %s); the anonymous "
+                     "regular-file arena shape is built with mkstemp+unlink\n",
+                     errno, std::strerror(errno));
+        std::string name = directory.path + "/anonymous-XXXXXX";
+        descriptor = ::mkstemp(name.data());
+        if (descriptor >= 0) require(::unlink(name.c_str()) == 0, "unlink the mkstemp fallback backing");
+    }
+    Backing backing(descriptor, 4 * kChunk);
     int allocation;
     do { allocation = ::posix_fallocate(backing.fd, 0, static_cast<off_t>(backing.bytes)); }
     while (allocation == EINTR);
-    require(allocation == 0, "preallocate the O_TMPFILE disk-arena shape");
+    if (allocation != 0) {
+        throw std::runtime_error("preallocate the anonymous regular-file disk-arena shape: errno "
+                                 + std::to_string(allocation) + " (" + std::strerror(allocation) + ")");
+    }
     Attachment attachment(backing);
     ScratchFile file;
     file.open("accepted-anonymous-file");
