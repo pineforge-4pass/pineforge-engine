@@ -78,7 +78,7 @@ jobs:
   authz:
     name: authz
     # Preflight pins executable workflow lines after removing comment-only lines.
-    # authz uses pf-gcp-pr; the App-token probe uses pf-gcp-main.
+    # authz uses pf-gcp-pr; the App-token probe uses pf-gcp-post.
     runs-on: ["self-hosted", "pf-gcp-pr"]
     permissions: {}
     # No timeout-minutes: the owner's no-time-limits rule (check-no-time-limits refuses new ones).
@@ -140,7 +140,7 @@ jobs:
 
   probe:
     needs: [authz]
-    runs-on: ["self-hosted","pf-gcp-main"]
+    runs-on: ["self-hosted","pf-gcp-post"]
     steps:
       - name: Mint org App token
         id: app
@@ -507,16 +507,16 @@ class PreflightFailures(unittest.TestCase):
                 if (name, job) in (('ci-post.yml', 'build-macos'),
                                    ('promote-baseline.yml', 'promote-guard')):
                     continue  # Both hosted exceptions have their own negative controls.
-                # Release workflows retain a non-release canon authz runner.
-                fleet = ('pr' if ci_preflight.RELEASE_JOB_RUNNERS.get(name, {}).get(job) == PR_RUNNER
-                         else workflow_fleet)
+                # Per-job pins retain the canon PR fleet or the dispatch post fleet.
+                fixed_runner = ci_preflight.RELEASE_JOB_RUNNERS.get(name, {}).get(job)
+                fleet = {PR_RUNNER: 'pr', POST_RUNNER: 'post'}.get(fixed_runner, workflow_fleet)
                 runner = {'pr': PR_RUNNER, 'post': POST_RUNNER, 'main': RELEASE_RUNNER}[fleet]
                 if (name, job) == ('release.yml', 'prebuilt'):
                     yield name, job, fleet, f'            runner: {RELEASE_RUNNER}\n', RELEASE_MATRIX_FINDING
                     continue
                 value, = ci_preflight._job_values(body, 'runs-on', unquote=False)
                 finding = f'{name} job {job} must run on {runner}'
-                if fleet == 'main':
+                if fixed_runner is not None and fixed_runner != PR_RUNNER:
                     finding += ' (isolated release)'
                 yield name, job, fleet, f'    runs-on: {value}\n', finding
 
@@ -2025,7 +2025,7 @@ exit "$lookup_exit"
                 'notify-hub': '["self-hosted","pf-gcp-main"]'},
             'release-ruleset-probe.yml': {
                 'authz': '["self-hosted","pf-gcp-pr"]',
-                'probe': '["self-hosted","pf-gcp-main"]'},
+                'probe': '["self-hosted","pf-gcp-post"]'},
             'promote-baseline.yml': {
                 'promote': '["self-hosted","pf-gcp-main"]'},
         })
@@ -2243,6 +2243,14 @@ exit "$lookup_exit"
                 with self.subTest(workflow=name, job=job, wrong_fleet=runner):
                     findings = self.routed_file_findings(name, job, before, routed_line(before, runner))
                     self.assertIn(finding, findings)
+
+    def test_gcp_sites_pin_probe_to_the_dispatch_fleet(self):
+        sites = [site for site in self.gcp_sites() if site[0] == 'release-ruleset-probe.yml']
+        self.assertEqual([(job, fleet) for _, job, fleet, *_ in sites],
+                         [('authz', 'pr'), ('probe', 'post')])
+        self.assertEqual(sites[1][-1],
+                         f'release-ruleset-probe.yml job probe must run on {POST_RUNNER} '
+                         '(isolated release)')
 
     def test_gcp_sites_reject_retired_and_void_labels(self):
         for name, job, fleet, before, finding in self.gcp_sites():
@@ -3638,7 +3646,7 @@ finally:
         self.assertEqual(ci_preflight._code(path.read_text()),
                          ci_preflight._code(RULESETS_PROBE_WORKFLOW))
         self.assertEqual(ci_preflight.RELEASE_JOB_RUNNERS.get(path.name),
-                         {'authz': PR_RUNNER, 'probe': RELEASE_RUNNER})
+                         {'authz': PR_RUNNER, 'probe': POST_RUNNER})
         probe_app = ci_preflight._step_named(ci_preflight._steps(_jobs(path.read_text())['probe']),
                                              '      - name: Mint org App token')
         release_app = ci_preflight._step_named(
@@ -3647,12 +3655,36 @@ finally:
         self.assertEqual(probe_app, release_app, 'the mint steps must stay byte-identical')
         self.assertEqual(ci_workflow_findings(*self.ci_sources(), others=self.other_sources()), [])
 
+    def test_release_ruleset_probe_post_fleet_is_accepted(self):
+        workflows = {'release-ruleset-probe.yml': RULESETS_PROBE_WORKFLOW}
+        self.assertEqual(ci_preflight.runner_findings(workflows), [])
+        self.assertEqual(ci_preflight.release_rulesets_probe_workflow_findings(
+            RULESETS_PROBE_WORKFLOW, self.other_sources()['release.yml']), [])
+
+    def test_release_ruleset_probe_refuses_release_and_pr_fleets(self):
+        original, others = self.ci_sources(), self.other_sources()
+        finding = (f'release-ruleset-probe.yml job probe must run on {POST_RUNNER} '
+                   '(isolated release)')
+        for runner in (RELEASE_RUNNER, PR_RUNNER):
+            with self.subTest(runner=runner):
+                changed = in_job(RULESETS_PROBE_WORKFLOW, 'probe',
+                                 f'    runs-on: {POST_RUNNER}\n',
+                                 f'    runs-on: {runner}\n')
+                self.assertNotEqual(changed, RULESETS_PROBE_WORKFLOW)
+                self.assertIn(finding, ci_preflight.runner_findings(
+                    {'release-ruleset-probe.yml': changed}))
+                self.assertIn(finding, ci_workflow_findings(
+                    *original, others={**others, 'release-ruleset-probe.yml': changed}))
+                self.assertIn(RULESETS_PROBE_FINDING,
+                              ci_preflight.release_rulesets_probe_workflow_findings(
+                                  changed, others['release.yml']))
+
     def test_release_ruleset_probe_comments_describe_the_actual_pin_scope(self):
         source = (ROOT / 'scripts/ci_preflight.py').read_text()
         workflow = (ROOT / '.github/workflows/release-ruleset-probe.yml').read_text()
         header = (
             '    # Preflight pins executable workflow lines after removing comment-only lines.\n'
-            '    # authz uses pf-gcp-pr; the App-token probe uses pf-gcp-main.\n')
+            '    # authz uses pf-gcp-pr; the App-token probe uses pf-gcp-post.\n')
         requirements = (
             (source,
              '# Scoped CI workflows bind this canon header byte for byte, including its\n'
@@ -3724,7 +3756,8 @@ finally:
                 ('permissions', '  contents: read', '  contents: write'),
                 ('extra scope', '  contents: read', '  contents: read\n  actions: read'),
                 ('job permissions', '  probe:\n', '  probe:\n    permissions:\n      contents: write\n'),
-                ('runner', RELEASE_RUNNER, POST_RUNNER),
+                ('runner', POST_RUNNER, RELEASE_RUNNER),
+                ('PR runner', POST_RUNNER, PR_RUNNER),
                 ('app action', 'actions/create-github-app-token@v1',
                  'actions/create-github-app-token@v2'),
                 ('app output', '        id: app', '        id: other'),
