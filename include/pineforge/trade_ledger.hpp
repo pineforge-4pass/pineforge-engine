@@ -47,6 +47,9 @@ public:
         kRecordBytes + 2 * sizeof(size_type) + kCacheStringBytes;
     static constexpr size_type kDefaultCacheRows = 65536;
     static constexpr size_type kMaxCacheRows = 1048576;
+    // A run with a report sink installed keeps the cache inside the sink's
+    // fixed heap window: 128 x 312 = 39,936 B, under one 64 KiB scratch window.
+    static constexpr size_type kSinkCacheRows = 128;
     using Visitor = std::function<bool(size_type, const Trade&)>;
 
     class const_iterator {
