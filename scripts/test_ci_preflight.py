@@ -233,7 +233,10 @@ class WorkflowActionPins(unittest.TestCase):
                        if path.suffix in ('.yml', '.yaml'))
         for name in ('action.yml', 'action.yaml'):
             paths.extend(sorted((ROOT / '.github/actions').rglob(name)))
-        return {str(path.relative_to(ROOT)): path.read_text() for path in paths}
+        # The bytes as stored, decoded as preflight decodes them: read_text()
+        # would turn a bare CR into LF before the lint ever saw it.
+        return {str(path.relative_to(ROOT)): path.read_bytes().decode('utf-8')
+                for path in paths}
 
     def third_party_uses(self, sources=None):
         if sources is None:
@@ -1249,6 +1252,205 @@ class ActionPins(unittest.TestCase):
                 [sys.executable, str(ROOT / 'scripts/ci_preflight.py'), '--check-ci-workflow']))
         code, output = self.run_contract(ROOT)
         self.assertEqual(code, 0, output)
+
+
+class CiFileLoading(unittest.TestCase):
+    """The stages read tracked CI files as stored: bytes, strict UTF-8, no newline translation.
+
+    Every test writes real files into a temporary tree laid out like the
+    repository and runs main(), the entry point CI runs, over it. A checker
+    handed a string never passes through the loaders, and the loaders are where
+    a bare CR used to vanish: Path.read_text() decodes in universal-newline mode.
+    """
+    DOCS = '.github/workflows/docs.yml'
+    DOCS_POST = '.github/workflows/docs-post.yml'
+    CONFIG = '.github/actionlint.yaml'
+    CMAKE = 'tests/CMakeLists.txt'
+
+    @staticmethod
+    def action_sources():
+        """Every file the action-pin lint reads, relative to the repository root."""
+        paths = sorted(path for path in (ROOT / '.github/workflows').iterdir()
+                       if path.suffix in ('.yml', '.yaml'))
+        for name in ('action.yml', 'action.yaml'):
+            paths.extend(sorted((ROOT / '.github/actions').rglob(name)))
+        return [path.relative_to(ROOT).as_posix() for path in paths]
+
+    def workflow_sources(self):
+        return [name for name in self.action_sources() if name.startswith('.github/workflows/')]
+
+    def make_tree(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        tree = Path(directory.name)
+        shutil.copytree(ROOT / '.github/workflows', tree / '.github/workflows')
+        shutil.copytree(ROOT / '.github/actions', tree / '.github/actions')
+        shutil.copyfile(ROOT / self.CONFIG, tree / self.CONFIG)
+        (tree / 'tests').mkdir()
+        shutil.copyfile(ROOT / self.CMAKE, tree / self.CMAKE)
+        return tree
+
+    def crlf_tree(self, names):
+        tree = self.make_tree()
+        for name in names:
+            original = (ROOT / name).read_bytes()
+            self.assertNotIn(b'\r', original, name)
+            (tree / name).write_bytes(original.replace(b'\n', b'\r\n'))
+        return tree
+
+    @staticmethod
+    def run_stage(tree, flag):
+        output = io.StringIO()
+        with mock.patch.object(ci_preflight, 'ROOT', tree), \
+                mock.patch.object(sys, 'argv', ['ci_preflight.py', flag]), \
+                contextlib.redirect_stdout(output):
+            code = ci_preflight.main()
+        return code, output.getvalue()
+
+    @staticmethod
+    def about(output, name):
+        """The stage's lines about one file."""
+        return [line for line in output.splitlines() if line.startswith(name + ':')]
+
+    @staticmethod
+    def not_utf8(name, line, offset):
+        return (f'{name}:{line}: not valid UTF-8 (invalid start byte at byte offset {offset}): '
+                'save the file as UTF-8')
+
+    @staticmethod
+    def bare_cr_finding(name, changed):
+        """The finding for the first bare CR of `changed`: its LF-delimited line and text."""
+        index = changed.index(b'\r')
+        number = changed.count(b'\n', 0, index) + 1
+        source = changed.decode('utf-8').split('\n')[number - 1].strip(' \t')
+        return ActionPins.unsupported_finding(
+            name, number, source, 'unsupported line break U+000D')
+
+    def assert_bare_cr_refused(self, name, changed):
+        """main() over a tree holding `changed` as `name` must name its first bare CR."""
+        tree = self.make_tree()
+        (tree / name).write_bytes(changed)
+        code, output = self.run_stage(tree, '--check-ci-workflow')
+        self.assertEqual(self.about(output, name), [self.bare_cr_finding(name, changed)], output)
+        self.assertEqual(code, 1, output)
+
+    def assert_undecodable_is_a_finding(self, name, flag):
+        """An invalid byte appended to a real file is a finding that names it, never a crash."""
+        original = (ROOT / name).read_bytes()
+        self.assertTrue(original.endswith(b'\n'), name)
+        tree = self.make_tree()
+        (tree / name).write_bytes(original + b'# \xff\n')
+        try:
+            code, output = self.run_stage(tree, flag)
+        except UnicodeError as error:
+            self.fail(f'{flag} crashed on an undecodable {name}: {error}')
+        self.assertEqual(self.about(output, name), [
+            self.not_utf8(name, original.count(b'\n') + 1, len(original) + 2)], output)
+        self.assertEqual(code, 1, output)
+
+    def test_a_bare_cr_in_place_of_the_final_lf_of_any_real_source_is_refused(self):
+        sources = self.action_sources()
+        self.assertTrue(any(name.startswith('.github/workflows/') for name in sources))
+        self.assertTrue(any(name.startswith('.github/actions/') for name in sources))
+        for name in sources:
+            with self.subTest(name=name):
+                original = (ROOT / name).read_bytes()
+                self.assertTrue(original.endswith(b'\n') and b'\r' not in original)
+                self.assert_bare_cr_refused(name, original[:-1] + b'\r')
+
+    def test_a_bare_cr_between_two_lines_of_a_real_workflow_is_refused(self):
+        original = (ROOT / self.DOCS).read_bytes()
+        self.assertEqual(original.count(b'\non:\n'), 1)
+        self.assert_bare_cr_refused(self.DOCS, original.replace(b'\non:\n', b'\non:\r', 1))
+
+    def test_the_stage_argv_ci_runs_refuses_the_reported_input(self):
+        # No mock at all: the stage's own argv in a child process, over a copy
+        # of the tree whose docs.yml has its final LF replaced by a CR.
+        changed = (ROOT / self.DOCS).read_bytes()[:-1] + b'\r'
+        tree = self.make_tree()
+        shutil.copytree(ROOT / 'scripts', tree / 'scripts',
+                        ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+        (tree / self.DOCS).write_bytes(changed)
+        argv = {entry[0]: entry[1] for entry in check_commands(tree)}['ci-workflow-contract']
+        result = subprocess.run(argv, cwd=tree, capture_output=True, text=True)
+        output = result.stdout + result.stderr
+        self.assertEqual(self.about(output, self.DOCS), [self.bare_cr_finding(self.DOCS, changed)],
+                         output)
+        self.assertEqual(result.returncode, 1, output)
+
+    def test_crlf_copies_of_every_stage_input_are_accepted_and_still_scanned(self):
+        tree = self.crlf_tree([*self.action_sources(), self.CMAKE])
+        code, output = self.run_stage(tree, '--check-ci-workflow')
+        self.assertEqual(code, 0, output)
+        self.assertIn('runners and time limits OK', output)
+        # Zero findings must mean the grammar was checked: a mutable action
+        # after the last block scalar of a CRLF file is found on its own line.
+        original = (ROOT / self.DOCS).read_bytes()
+        (tree / self.DOCS).write_bytes(original.replace(b'\n', b'\r\n')
+                                       + b'      - uses: actions/checkout@main\r\n')
+        code, output = self.run_stage(tree, '--check-ci-workflow')
+        self.assertEqual(self.about(output, self.DOCS), [ActionPins.finding(
+            self.DOCS, original.count(b'\n') + 1, 'actions/checkout@main')], output)
+        self.assertEqual(code, 1, output)
+
+    def test_the_combined_checker_takes_the_file_texts_as_stored(self):
+        sources = [(ROOT / path).read_bytes().decode('utf-8') for path in CI_SOURCES]
+        self.assertEqual(ci_workflow_findings(*sources), [])
+        # The loaders now hand it CRLF files unchanged: every check but the
+        # action-pin lint still has to read them as the LF text they always did.
+        self.assertEqual(ci_workflow_findings(*(text.replace('\n', '\r\n') for text in sources)), [])
+
+    def test_a_file_that_is_not_utf8_is_a_finding_not_a_crash(self):
+        for name in (self.DOCS, '.github/workflows/release.yml',
+                     '.github/actions/setup-live-curl/action.yml', self.CMAKE):
+            with self.subTest(name=name):
+                self.assert_undecodable_is_a_finding(name, '--check-ci-workflow')
+
+    def test_the_docs_stages_read_the_same_way(self):
+        for flag in ('--check-docs-workflow', '--self-test-docs-workflow'):
+            with self.subTest(flag=flag, kind='crlf'):
+                code, output = self.run_stage(self.crlf_tree((self.DOCS, self.DOCS_POST)), flag)
+                self.assertEqual(code, 0, output)
+            for name in (self.DOCS, self.DOCS_POST):
+                with self.subTest(flag=flag, name=name):
+                    self.assert_undecodable_is_a_finding(name, flag)
+
+    def test_the_runner_label_stage_reads_the_same_way(self):
+        flag = '--check-actionlint-runner-labels'
+        tree = self.crlf_tree([self.CONFIG, *self.workflow_sources()])
+        code, output = self.run_stage(tree, flag)
+        self.assertEqual(code, 0, output)
+        self.assertIn('all literal self-hosted labels declared', output)
+        for name in ('.github/workflows/ci.yml', self.CONFIG):
+            with self.subTest(name=name):
+                self.assert_undecodable_is_a_finding(name, flag)
+
+    def test_reverting_the_loader_to_read_text_is_detected(self):
+        changed = (ROOT / self.DOCS).read_bytes()[:-1] + b'\r'
+        self.assert_bare_cr_refused(self.DOCS, changed)
+        source = inspect.getsource(ci_preflight.read_ci_text)
+        guard = 'data = path.read_bytes()\n'
+        self.assertEqual(source.count(guard), 1)
+        mutant = source.replace(
+            guard, "data = path.read_text(encoding='utf-8').encode('utf-8')\n", 1)
+        namespace = {}
+        exec(compile(mutant, '<loader-reverted-to-read-text>', 'exec'),
+             vars(ci_preflight), namespace)
+        with mock.patch.object(ci_preflight, 'read_ci_text', namespace['read_ci_text']):
+            with self.assertRaises(AssertionError):
+                self.assert_bare_cr_refused(self.DOCS, changed)
+
+    def test_dropping_the_lf_view_of_the_other_checks_is_detected(self):
+        for flag, names in (('--check-ci-workflow', (self.CMAKE,)),
+                            ('--check-docs-workflow', (self.DOCS, self.DOCS_POST)),
+                            ('--check-actionlint-runner-labels',
+                             (self.CONFIG, *self.workflow_sources()))):
+            with self.subTest(flag=flag):
+                code, output = self.run_stage(self.crlf_tree(names), flag)
+                self.assertEqual(code, 0, output)
+                with mock.patch.object(ci_preflight, '_universal_newlines', lambda text: text):
+                    code, output = self.run_stage(self.crlf_tree(names), flag)
+                self.assertEqual(code, 1, output)
 
 
 class PreflightFailures(unittest.TestCase):

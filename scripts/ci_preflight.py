@@ -2041,21 +2041,59 @@ def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[st
     return findings
 
 
+def read_ci_text(path: Path, findings: list[str], root: Path | None = None) -> str:
+    """A tracked CI file's text, every line break byte exactly as stored.
+
+    Path.read_text() decodes in universal-newline mode: a bare CR reached every
+    checker as LF, so the action-pin lint's refusal of it could never fire on a
+    real file. This reads the bytes and decodes them as strict UTF-8, never the
+    locale's codec. A file that is not UTF-8 is a finding (never a crash) and its
+    text, bad bytes replaced, still goes on so the other findings print too. The
+    finding names the file relative to root (the repository when None).
+    """
+    data = path.read_bytes()
+    try:
+        return data.decode('utf-8')
+    except UnicodeDecodeError as error:
+        name = path.relative_to(ROOT if root is None else root).as_posix()
+        line = data.count(b'\n', 0, error.start) + 1
+        findings.append(f'{name}:{line}: not valid UTF-8 ({error.reason} at byte offset '
+                        f'{error.start}): save the file as UTF-8')
+        return data.decode('utf-8', 'replace')
+
+
+def _universal_newlines(text: str) -> str:
+    """The text as Path.read_text() always gave it: CRLF and a bare CR are LF.
+
+    Every check except the action-pin lint reads this view, so a CRLF file is
+    judged exactly as it was before the loaders kept the bytes.
+    """
+    return text.replace('\r\n', '\n').replace('\r', '\n')
+
+
 def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
                          parity: str, docs: str, post: str, subset: str, docs_post: str,
                          others: dict[str, str] | None = None,
                          *, curl_action: str | None = None,
                          actions: dict[str, str] | None = None) -> list[str]:
-    """Check actual PR/post files together, including every reusable call edge."""
+    """Check actual PR/post files together, including every reusable call edge.
+
+    The texts are the files as stored (read_ci_text): the action-pin lint judges
+    them so, and every other check gets the universal-newline view it always had.
+    """
     workflows = {'ci.yml': ci, 'ci-post.yml': post, 'native-live.yml': native,
                  'corpus-parity.yml': parity, 'corpus-parity-subset.yml': subset,
                  'docs.yml': docs, 'docs-post.yml': docs_post,
                  'promote-baseline.yml': promote, **(others or {})}
-    findings = runner_findings(workflows)
     action_sources = {f'.github/workflows/{name}': text for name, text in workflows.items()}
     action_sources.update(actions or {})
     if curl_action is not None:
         action_sources.setdefault('.github/actions/setup-live-curl/action.yml', curl_action)
+    workflows = {name: _universal_newlines(text) for name, text in workflows.items()}
+    ci, native, promote, cmake, parity, docs, post, subset, docs_post = map(
+        _universal_newlines, (ci, native, promote, cmake, parity, docs, post, subset, docs_post))
+    curl_action = None if curl_action is None else _universal_newlines(curl_action)
+    findings = runner_findings(workflows)
     findings += action_pin_findings(action_sources)
     findings += pipeline_workflow_findings(ci, 'ci.yml', pr=True)
     findings += pipeline_workflow_findings(post, 'ci-post.yml', pr=False)
@@ -2296,23 +2334,24 @@ def actionlint_runner_label_findings(source: Path) -> list[str]:
     parses this same required file with its full YAML/schema parser.
     """
     config_name = '.github/actionlint.yaml'
+    findings = []
     try:
-        config = (source / config_name).read_text()
-    except (OSError, UnicodeError) as error:
+        config = _universal_newlines(read_ci_text(source / config_name, findings, source))
+    except OSError as error:
         return [f'{config_name}: cannot read config: {error}']
     lines = [re.sub(r'\s+#.*$', '', line).rstrip() for line in _code(config)]
     entries = [re.fullmatch(r'    - (' + _LITERAL_RUNNER_LABEL + r')', line)
                for line in lines[2:]]
     if (lines[:2] != ['self-hosted-runner:', '  labels:']
             or not entries or not all(entries)):
-        return [f'{config_name}: cannot parse config: expected self-hosted-runner.labels '
+        return [*findings,
+                f'{config_name}: cannot parse config: expected self-hosted-runner.labels '
                 'as a block list of literal labels']
     declared = {entry.group(1).strip('\'"') for entry in entries}
-    findings = []
     for path in sorted((source / '.github/workflows').glob('*')):
         if path.suffix not in ('.yml', '.yaml'):
             continue
-        workflow = path.read_text()
+        workflow = _universal_newlines(read_ci_text(path, findings, source))
         if _unparsed(workflow):
             findings.append(f'{path.name}: cannot parse jobs for literal runner labels')
             continue
@@ -2584,23 +2623,28 @@ def main() -> int:
         workflows = ROOT / '.github/workflows'
         named = ('ci.yml', 'native-live.yml', 'promote-baseline.yml', 'corpus-parity.yml',
                  'docs.yml', 'ci-post.yml', 'corpus-parity-subset.yml', 'docs-post.yml')
-        actions = {path.relative_to(ROOT).as_posix(): path.read_text()
+        # Every file is read as stored: the lint must see a bare CR on disk.
+        # A file that is not UTF-8 is a finding here, and the curl action is
+        # read twice (as an action and as the native job's input): list it once.
+        findings = []
+        actions = {path.relative_to(ROOT).as_posix(): read_ci_text(path, findings)
                    for path in sorted((ROOT / '.github/actions').rglob('*'))
                    if path.name in ('action.yml', 'action.yaml') and path.is_file()}
-        findings = ci_workflow_findings(
-            (workflows / 'ci.yml').read_text(),
-            (workflows / 'native-live.yml').read_text(),
-            (workflows / 'promote-baseline.yml').read_text(),
-            (ROOT / 'tests/CMakeLists.txt').read_text(),
-            (workflows / 'corpus-parity.yml').read_text(),
-            (workflows / 'docs.yml').read_text(),
-            (workflows / 'ci-post.yml').read_text(),
-            (workflows / 'corpus-parity-subset.yml').read_text(),
-            (workflows / 'docs-post.yml').read_text(),
-            {path.name: path.read_text() for path in sorted(workflows.iterdir())
+        checked = ci_workflow_findings(
+            read_ci_text(workflows / 'ci.yml', findings),
+            read_ci_text(workflows / 'native-live.yml', findings),
+            read_ci_text(workflows / 'promote-baseline.yml', findings),
+            read_ci_text(ROOT / 'tests/CMakeLists.txt', findings),
+            read_ci_text(workflows / 'corpus-parity.yml', findings),
+            read_ci_text(workflows / 'docs.yml', findings),
+            read_ci_text(workflows / 'ci-post.yml', findings),
+            read_ci_text(workflows / 'corpus-parity-subset.yml', findings),
+            read_ci_text(workflows / 'docs-post.yml', findings),
+            {path.name: read_ci_text(path, findings) for path in sorted(workflows.iterdir())
              if path.suffix in ('.yml', '.yaml') and path.name not in named},
-            curl_action=(ROOT / '.github/actions/setup-live-curl/action.yml').read_text(),
+            curl_action=read_ci_text(ROOT / '.github/actions/setup-live-curl/action.yml', findings),
             actions=actions)
+        findings = list(dict.fromkeys(findings + checked))
         for finding in findings:
             print(finding)
         if not findings:
@@ -2608,11 +2652,15 @@ def main() -> int:
                   'fast/slow rows, runners and time limits OK')
         return 1 if findings else 0
     if args.check_docs_workflow or args.self_test_docs_workflow:
-        workflow = (ROOT / '.github/workflows/docs.yml').read_text()
-        post = (ROOT / '.github/workflows/docs-post.yml').read_text()
+        findings = []
+        workflow = _universal_newlines(read_ci_text(ROOT / '.github/workflows/docs.yml', findings))
+        post = _universal_newlines(read_ci_text(ROOT / '.github/workflows/docs-post.yml', findings))
         if args.self_test_docs_workflow:
-            return docs_workflow_self_test(workflow, post)
-        findings = docs_workflow_findings(workflow, post)
+            code = docs_workflow_self_test(workflow, post)
+            for finding in findings:
+                print(finding)
+            return 1 if findings else code
+        findings += docs_workflow_findings(workflow, post)
         for finding in findings:
             print(finding)
         if not findings:
