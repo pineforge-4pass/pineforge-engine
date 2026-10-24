@@ -3430,7 +3430,8 @@ finally:
                 changed = in_step(release, 'release', gate_name, before, after)
                 self.assertNotEqual(changed, release)
                 self.assertIn('release.yml must keep the unconditional release gate '
-                              'with its administration-readable App token',
+                              'with its administration-readable App token '
+                              'for the App-only main pull_request barrier',
                               ci_workflow_findings(
                                   *original, others={**others, 'release.yml': changed}))
 
