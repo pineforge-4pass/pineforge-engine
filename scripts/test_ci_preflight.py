@@ -868,6 +868,27 @@ class PreflightFailures(unittest.TestCase):
                 self.assertNotEqual(changed[index], original[index])
                 self.assertNotEqual(ci_workflow_findings(*changed), [])
 
+    def test_baseline_promotion_accepts_qualified_base_ref(self):
+        sources = self.ci_sources()
+        short = 'git merge-base --is-ancestor "$MERGE_SHA" "origin/$BASE_REF"'
+        qualified = ('git merge-base --is-ancestor "$MERGE_SHA" '
+                     '"refs/remotes/origin/$BASE_REF"')
+        # Supply the same qualified input before and after the workflow fix.
+        sources[2] = sources[2].replace(short, qualified)
+        self.assertEqual(sources[2].count(qualified), 1)
+        self.assertEqual(ci_workflow_findings(*sources, others=self.other_sources()), [])
+
+    def test_baseline_promotion_rejects_short_base_ref(self):
+        sources = self.ci_sources()
+        short = 'git merge-base --is-ancestor "$MERGE_SHA" "origin/$BASE_REF"'
+        qualified = ('git merge-base --is-ancestor "$MERGE_SHA" '
+                     '"refs/remotes/origin/$BASE_REF"')
+        # Supply the old command even when the workflow already uses the fix.
+        sources[2] = sources[2].replace(qualified, short)
+        self.assertEqual(sources[2].count(short), 1)
+        self.assertIn('baseline promotion must admit a squash merge by tree equality only',
+                      ci_workflow_findings(*sources, others=self.other_sources()))
+
     def test_baseline_promotion_rejects_later_pr_head_checkout(self):
         finding = ("baseline promotion must run main's copy and require "
                    "the latest two head statuses")
