@@ -1,5 +1,6 @@
 #pragma once
 #include <Eigen/Dense>
+#include <pineforge/detail/matrix_store.hpp>
 #include <memory>
 #include <vector>
 #include <stdexcept>
@@ -10,6 +11,7 @@ namespace pineforge {
 class NumericMatrix {
     struct Storage {
         Eigen::MatrixXd data;
+        std::shared_ptr<detail::matrix_store::TileMatrix> tiles;
 
         Storage() = default;
         explicit Storage(Eigen::MatrixXd value)
@@ -23,8 +25,10 @@ class NumericMatrix {
 
     std::shared_ptr<Storage> storage_;
 
-    explicit NumericMatrix(Eigen::MatrixXd data)
-        : storage_(std::make_shared<Storage>(std::move(data))) {}
+    explicit NumericMatrix(Eigen::MatrixXd data);
+    static NumericMatrix external(detail::matrix_store::Runtime&, int rows, int cols);
+    Eigen::MatrixXd dense() const;
+    Eigen::MatrixXd& native_escape() const;
 
     [[nodiscard]] Storage& require_storage();
     [[nodiscard]] const Storage& require_storage() const;
@@ -52,10 +56,14 @@ public:
     class Snapshot {
         std::shared_ptr<Storage> identity_;
         Eigen::MatrixXd state_;
+        std::shared_ptr<detail::matrix_store::TileMatrix> tiles_;
 
         Snapshot(std::shared_ptr<Storage> identity,
                  const Eigen::MatrixXd& state)
             : identity_(std::move(identity)), state_(state) {}
+        Snapshot(std::shared_ptr<Storage> identity,
+                 std::shared_ptr<detail::matrix_store::TileMatrix> tiles)
+            : identity_(std::move(identity)), tiles_(std::move(tiles)) {}
 
         friend class NumericMatrix;
 
@@ -75,6 +83,12 @@ public:
     void fill(double val);
     std::vector<double> row(int idx) const;
     std::vector<double> col(int idx) const;
+    template<class Visitor> void for_each_row(int idx, Visitor&& visit) const {
+        for (int col = 0, end = columns(); col < end; ++col) visit(get(idx, col));
+    }
+    template<class Visitor> void for_each_col(int idx, Visitor&& visit) const {
+        for (int row = 0, end = rows(); row < end; ++row) visit(get(row, idx));
+    }
 
     // Row/Col ops
     int rows() const;
@@ -127,6 +141,12 @@ public:
     // Handle state. A default-constructed value represents ``na``; new_()
     // returns a valid handle even when its dimensions are 0x0.
     [[nodiscard]] bool is_na() const noexcept { return !storage_; }
+    [[nodiscard]] bool is_external_storage() const { return require_storage().tiles != nullptr; }
+    [[nodiscard]] detail::matrix_store::Id external_identity() const {
+        const auto& tiles = require_storage().tiles;
+        if (!tiles) detail::matrix_store::invariant("native matrix has no external identity");
+        return tiles->identity();
+    }
 
     [[nodiscard]] Snapshot snapshot() const;
     void restore(const Snapshot& snapshot);
@@ -144,8 +164,10 @@ public:
     bool is_zero() const;
 
     // Access to internal data for friend operations
-    const Eigen::MatrixXd& data() const { return require_storage().data; }
-    Eigen::MatrixXd& data() { return require_storage().data; }
+    // Persistent native-address compatibility escape. Generated bounded code
+    // uses scalar/streaming access. This escape is explicitly not O(1) in cells.
+    const Eigen::MatrixXd& data() const { return native_escape(); }
+    Eigen::MatrixXd& data() { return native_escape(); }
 };
 
 inline bool is_na(const NumericMatrix& matrix) noexcept {

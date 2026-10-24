@@ -1,5 +1,6 @@
 #pragma once
 #include <pineforge/run_failure.hpp>
+#include <pineforge/detail/matrix_store.hpp>
 #include <vector>
 #include <string>
 #include <type_traits>
@@ -8,11 +9,14 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <utility>
 
 namespace pineforge {
 
 namespace detail {
+
+struct MatrixNativeTag {};
 
 // A matrix call the script got wrong: the exception type and English it always
 // had, coded pine_matrix_error with the Pine function and the reason. Out of
@@ -160,7 +164,7 @@ inline void sort_impl(std::vector<Row>& data, int column, bool ascending) {
 
 } // namespace detail
 
-template <typename T>
+template <typename T, typename StoragePolicy = void>
 class GenericMatrix {
     using Data = std::vector<std::vector<T>>;
 
@@ -230,6 +234,10 @@ public:
     };
 
     ~GenericMatrix() = default;
+    [[nodiscard]] bool is_external_storage() const {
+        (void)require_storage();
+        return false;
+    }
 
     [[nodiscard]] static GenericMatrix new_(int rows, int cols, T init) {
         if (rows < 0 || cols < 0)
@@ -498,7 +506,7 @@ public:
 // char<->bool conversion; every storage-agnostic structural method delegates
 // to the same detail:: helpers used by the primary template.
 template <>
-class GenericMatrix<bool> {
+class GenericMatrix<bool, detail::MatrixNativeTag> {
     using Data = std::vector<std::vector<char>>;
 
     struct Storage {
@@ -803,6 +811,344 @@ public:
         }
         Data replacement(snapshot.state_);
         snapshot.identity_->data.swap(replacement);
+        storage_ = snapshot.identity_;
+    }
+};
+
+// Mapped elements use external tiles when the run owner installs a Runtime.
+// The native implementation above remains the compatibility path, including
+// throwing-copy UDTs without a generated ownership codec.
+template<class T>
+class GenericMatrix<T, std::enable_if_t<detail::matrix_store::codec<T>::mapped>> {
+    using Native = GenericMatrix<T, detail::MatrixNativeTag>;
+    using Tiles = detail::matrix_store::TileMatrix;
+    using Codec = detail::matrix_store::codec<T>;
+    struct Storage {
+        Native native;
+        std::shared_ptr<Tiles> tiles;
+    };
+    std::shared_ptr<Storage> storage_;
+    explicit GenericMatrix(std::shared_ptr<Storage> storage) : storage_(std::move(storage)) {}
+    Storage& state() const {
+        if (!storage_) detail::matrix_na_error("matrix operation on na ID");
+        return *storage_;
+    }
+    static GenericMatrix external(detail::matrix_store::Runtime& runtime,
+                                  std::uint64_t rows, std::uint64_t columns) {
+        auto storage = std::make_shared<Storage>();
+        storage->tiles = std::make_shared<Tiles>(runtime, rows, columns,
+                                                Codec::record_bytes, Codec::owned_slots);
+        return GenericMatrix(std::move(storage));
+    }
+    std::uint64_t index(int row, int column) const {
+        return static_cast<std::uint64_t>(row) * state().tiles->columns()
+            + static_cast<std::uint64_t>(column);
+    }
+    // row_ref exposes persistent native addresses. Preserve that C++ contract
+    // by making the escape explicit and observable via is_external_storage().
+    // Generated bounded code must use get/for_each_row/for_each_col instead.
+    Native& native_escape() const {
+        Storage& s = state();
+        if (s.tiles) {
+            Native result = Native::new_(rows(), columns());
+            for (int r = 0, end = rows(); r < end; ++r)
+                for (int c = 0, width = columns(); c < width; ++c)
+                    result.set(r, c, get(r, c));
+            s.native = result;
+            s.tiles.reset();
+        }
+        return s.native;
+    }
+    static void row_check(int row, int limit, const char* function, const char* what) {
+        if (row < 0 || row >= limit)
+            detail::matrix_call_error<std::out_of_range>(function, "row_index_out_of_range", what);
+    }
+    static void col_check(int col, int limit, const char* function, const char* what) {
+        if (col < 0 || col >= limit)
+            detail::matrix_call_error<std::out_of_range>(function, "column_index_out_of_range", what);
+    }
+
+public:
+    GenericMatrix() noexcept = default;
+    GenericMatrix(const GenericMatrix&) noexcept = default;
+    GenericMatrix& operator=(const GenericMatrix&) noexcept = default;
+    GenericMatrix(GenericMatrix&& other) noexcept : storage_(other.storage_) {}
+    GenericMatrix& operator=(GenericMatrix&& other) noexcept {
+        if (this != &other) storage_ = other.storage_;
+        return *this;
+    }
+    class Snapshot {
+        std::shared_ptr<Storage> identity_;
+        std::shared_ptr<Tiles> tiles_;
+        std::optional<typename Native::Snapshot> native_;
+        explicit Snapshot(std::shared_ptr<Storage> identity) : identity_(std::move(identity)) {
+            if (identity_->tiles) tiles_ = identity_->tiles->clone();
+            else native_.emplace(identity_->native.snapshot());
+        }
+        friend class GenericMatrix;
+    public:
+        Snapshot(const Snapshot&) = default;
+        Snapshot& operator=(const Snapshot&) = default;
+        Snapshot(Snapshot&&) = default;
+        Snapshot& operator=(Snapshot&&) = default;
+    };
+    static GenericMatrix new_(int rows, int cols, T init) {
+        if (rows < 0 || cols < 0)
+            detail::matrix_call_error<std::invalid_argument>(
+                "matrix.new", "negative_dimensions", "matrix.new: negative dimensions");
+        if (auto* runtime = detail::matrix_store::current_runtime()) {
+            auto result = external(*runtime, rows, cols);
+            result.fill(init);
+            return result;
+        }
+        auto storage = std::make_shared<Storage>();
+        storage->native = Native::new_(rows, cols, init);
+        return GenericMatrix(std::move(storage));
+    }
+    static GenericMatrix new_(int rows, int cols) {
+        static_assert(std::is_default_constructible_v<T>,
+                      "matrix.new: no-init overload requires default-constructible T");
+        return new_(rows, cols, T{});
+    }
+    T get(int row, int col) const {
+        Storage& s = state();
+        if (!s.tiles) return s.native.get(row, col);
+        row_check(row, rows(), "matrix.get", "matrix.get: row index out of range");
+        col_check(col, columns(), "matrix.get", "matrix.get: column index out of range");
+        return detail::matrix_store::read_value<T>(*s.tiles, index(row, col));
+    }
+    void set(int row, int col, T value) {
+        Storage& s = state();
+        if (!s.tiles) { s.native.set(row, col, value); return; }
+        row_check(row, rows(), "matrix.set", "matrix.set: row index out of range");
+        col_check(col, columns(), "matrix.set", "matrix.set: column index out of range");
+        detail::matrix_store::write_value(*s.tiles, index(row, col), value);
+    }
+    void fill(T value) {
+        Storage& s = state();
+        if (!s.tiles) { s.native.fill(value); return; }
+        // Encode a value once, then preserve its immutable leaves/identity.
+        if (!s.tiles->count()) return;
+        detail::matrix_store::write_value(*s.tiles, 0, value);
+        for (std::uint64_t cell = 1, end = s.tiles->count(); cell < end; ++cell)
+            s.tiles->copy_cell(cell, *s.tiles, 0);
+    }
+    int rows() const {
+        const Storage& s = state();
+        return s.tiles ? static_cast<int>(s.tiles->rows()) : s.native.rows();
+    }
+    int columns() const {
+        const Storage& s = state();
+        return s.tiles ? (s.tiles->rows() ? static_cast<int>(s.tiles->columns()) : 0)
+                       : s.native.columns();
+    }
+    template<class Visitor> void for_each_row(int row, Visitor&& visit) const {
+        row_check(row, rows(), "matrix.row", "matrix.row: row index out of range");
+        for (int col = 0, end = columns(); col < end; ++col) visit(get(row, col));
+    }
+    template<class Visitor> void for_each_col(int col, Visitor&& visit) const {
+        col_check(col, columns(), "matrix.col", "matrix.col: column index out of range");
+        for (int row = 0, end = rows(); row < end; ++row) visit(get(row, col));
+    }
+    std::vector<T> row(int row) const {
+        std::vector<T> result;
+        for_each_row(row, [&](const T& value) { result.push_back(value); });
+        return result;
+    }
+    std::vector<T> col(int col) const {
+        std::vector<T> result;
+        for_each_col(col, [&](const T& value) { result.push_back(value); });
+        return result;
+    }
+    template<class U = T, class = std::enable_if_t<!std::is_same_v<U, bool>>>
+    const std::vector<T>& row_ref(int row) const { return native_escape().row_ref(row); }
+
+    void add_row(int at, const std::vector<T>& values) {
+        Storage& s = state();
+        if (!s.tiles) { s.native.add_row(at, values); return; }
+        const int r = rows(), c = r ? columns() : static_cast<int>(values.size());
+        row_check(at, r + 1, "matrix.add_row", "matrix.add_row: row index out of range");
+        if (r && values.size() != static_cast<std::size_t>(c))
+            detail::matrix_call_error<std::runtime_error>(
+                "matrix.add_row", "values_size_mismatch", "matrix.add_row: values size must equal columns()");
+        s.tiles->resize(static_cast<std::uint64_t>(r) + 1, c);
+        for (std::uint64_t cell = static_cast<std::uint64_t>(r) * c;
+             cell > static_cast<std::uint64_t>(at) * c; --cell)
+            s.tiles->copy_cell(cell - 1 + c, *s.tiles, cell - 1);
+        for (int col = 0; col < c; ++col) set(at, col, static_cast<T>(values[static_cast<std::size_t>(col)]));
+    }
+    void add_col(int at, const std::vector<T>& values) {
+        Storage& s = state();
+        if (!s.tiles) { s.native.add_col(at, values); return; }
+        const int r = rows(), c = columns();
+        if (!r) detail::matrix_call_error<std::logic_error>(
+            "matrix.add_col", "empty_matrix", "matrix.add_col on empty matrix: use add_row first");
+        col_check(at, c + 1, "matrix.add_col", "matrix.add_col: column index out of range");
+        if (values.size() != static_cast<std::size_t>(r))
+            detail::matrix_call_error<std::runtime_error>(
+                "matrix.add_col", "values_size_mismatch", "matrix.add_col: values size must equal rows()");
+        s.tiles->resize(r, static_cast<std::uint64_t>(c) + 1);
+        for (int row = r; row-- > 0;)
+            for (int col = c; col-- > 0;)
+                s.tiles->copy_cell(static_cast<std::uint64_t>(row) * (c + 1) + col + (col >= at),
+                                  *s.tiles, static_cast<std::uint64_t>(row) * c + col);
+        for (int row = 0; row < r; ++row) set(row, at, static_cast<T>(values[static_cast<std::size_t>(row)]));
+    }
+    void remove_row(int at) {
+        Storage& s = state();
+        if (!s.tiles) { s.native.remove_row(at); return; }
+        const int r = rows(), c = columns();
+        row_check(at, r, "matrix.remove_row", "matrix.remove_row: row index out of range");
+        for (auto cell = static_cast<std::uint64_t>(at) * c,
+                  end = static_cast<std::uint64_t>(r - 1) * c; cell < end; ++cell)
+            s.tiles->copy_cell(cell, *s.tiles, cell + c);
+        s.tiles->resize(r - 1, c);
+    }
+    void remove_col(int at) {
+        Storage& s = state();
+        if (!s.tiles) { s.native.remove_col(at); return; }
+        const int r = rows(), c = columns();
+        col_check(at, c, "matrix.remove_col", "matrix.remove_col: column index out of range");
+        for (int row = 0; row < r; ++row)
+            for (int col = 0; col < c - 1; ++col)
+                s.tiles->copy_cell(static_cast<std::uint64_t>(row) * (c - 1) + col,
+                                  *s.tiles, static_cast<std::uint64_t>(row) * c + col + (col >= at));
+        s.tiles->resize(r, c - 1);
+    }
+    void swap_rows(int first, int second) {
+        Storage& s = state();
+        if (!s.tiles) { s.native.swap_rows(first, second); return; }
+        row_check(first, rows(), "matrix.swap_rows", "matrix.swap_rows: row index out of range");
+        row_check(second, rows(), "matrix.swap_rows", "matrix.swap_rows: row index out of range");
+        for (int col = 0, end = columns(); col < end; ++col)
+            s.tiles->swap_cells(index(first, col), index(second, col));
+    }
+    void swap_columns(int first, int second) {
+        Storage& s = state();
+        if (!s.tiles) { s.native.swap_columns(first, second); return; }
+        col_check(first, columns(), "matrix.swap_columns", "matrix.swap_columns: column index out of range");
+        col_check(second, columns(), "matrix.swap_columns", "matrix.swap_columns: column index out of range");
+        for (int row = 0, end = rows(); row < end; ++row)
+            s.tiles->swap_cells(index(row, first), index(row, second));
+    }
+    GenericMatrix copy() const {
+        const Storage& s = state();
+        auto storage = std::make_shared<Storage>();
+        if (s.tiles) storage->tiles = s.tiles->clone();
+        else storage->native = s.native.copy();
+        return GenericMatrix(std::move(storage));
+    }
+    GenericMatrix submatrix(int from_row, int to_row, int from_col, int to_col) const {
+        const Storage& s = state();
+        if (!s.tiles) {
+            auto storage = std::make_shared<Storage>();
+            storage->native = s.native.submatrix(from_row, to_row, from_col, to_col);
+            return GenericMatrix(std::move(storage));
+        }
+        if (from_row < 0 || to_row > rows())
+            detail::matrix_call_error<std::out_of_range>("matrix.submatrix", "row_index_out_of_range",
+                                                       "matrix.submatrix: row index out of range");
+        if (from_col < 0 || to_col > columns())
+            detail::matrix_call_error<std::out_of_range>("matrix.submatrix", "column_index_out_of_range",
+                                                       "matrix.submatrix: column index out of range");
+        if (from_row > to_row) detail::matrix_call_error<std::invalid_argument>(
+            "matrix.submatrix", "from_row_after_to_row", "matrix.submatrix: from_row must be <= to_row");
+        if (from_col > to_col) detail::matrix_call_error<std::invalid_argument>(
+            "matrix.submatrix", "from_col_after_to_col", "matrix.submatrix: from_col must be <= to_col");
+        auto result = external(s.tiles->runtime(), to_row - from_row, to_col - from_col);
+        for (int row = from_row; row < to_row; ++row)
+            for (int col = from_col; col < to_col; ++col)
+                result.state().tiles->copy_cell(
+                    static_cast<std::uint64_t>(row - from_row) * (to_col - from_col) + col - from_col,
+                    *s.tiles, index(row, col));
+        return result;
+    }
+    GenericMatrix transpose() const {
+        static_assert(std::is_default_constructible_v<T>, "matrix.transpose: requires default-constructible element type");
+        const Storage& s = state();
+        if (!s.tiles) {
+            auto storage = std::make_shared<Storage>();
+            storage->native = s.native.transpose();
+            return GenericMatrix(std::move(storage));
+        }
+        auto result = external(s.tiles->runtime(), columns(), rows());
+        for (int r = 0, end = rows(); r < end; ++r)
+            for (int c = 0, width = columns(); c < width; ++c)
+                result.state().tiles->copy_cell(static_cast<std::uint64_t>(c) * end + r, *s.tiles, index(r, c));
+        return result;
+    }
+    GenericMatrix concat(const GenericMatrix& other, bool horizontal) const {
+        (void)state(); (void)other.state();
+        if (horizontal && rows() != other.rows()) detail::matrix_call_error<std::invalid_argument>(
+            "matrix.concat", "row_count_mismatch", "matrix.concat: row count mismatch");
+        if (!horizontal && columns() != other.columns()) detail::matrix_call_error<std::invalid_argument>(
+            "matrix.concat", "column_count_mismatch", "matrix.concat: column count mismatch");
+        if (!state().tiles || !other.state().tiles) {
+            auto storage = std::make_shared<Storage>();
+            storage->native = native_escape().concat(other.native_escape(), horizontal);
+            return GenericMatrix(std::move(storage));
+        }
+        const int r = rows(), c = columns(), nr = horizontal ? r : r + other.rows(),
+                  nc = horizontal ? c + other.columns() : c;
+        auto result = external(state().tiles->runtime(), nr, nc);
+        for (int row = 0; row < nr; ++row)
+            for (int col = 0; col < nc; ++col) {
+                const bool left = horizontal ? col < c : row < r;
+                const auto& source = left ? *this : other;
+                const int sr = horizontal || left ? row : row - r;
+                const int sc = !horizontal || left ? col : col - c;
+                result.state().tiles->copy_cell(static_cast<std::uint64_t>(row) * nc + col,
+                                                *source.state().tiles, source.index(sr, sc));
+            }
+        return result;
+    }
+    void reshape(int r, int c) {
+        static_assert(std::is_default_constructible_v<T>, "matrix.reshape: requires default-constructible element type");
+        if (!state().tiles) { state().native.reshape(r, c); return; }
+        if (r < 0 || c < 0) detail::matrix_call_error<std::runtime_error>(
+            "matrix.reshape", "negative_dimensions", "GenericMatrix::reshape: negative dimension");
+        const auto total = static_cast<std::uint64_t>(r) * static_cast<std::uint64_t>(c);
+        if (total > static_cast<std::uint64_t>(std::numeric_limits<int>::max()))
+            detail::matrix_limit_error<std::runtime_error>("matrix.reshape: dimension overflow");
+        const auto old = state().tiles->count();
+        state().tiles->resize(r, c);
+        for (auto cell = old; cell < total; ++cell)
+            detail::matrix_store::write_value(*state().tiles, cell, T{});
+    }
+    void reverse() {
+        if (!state().tiles) { state().native.reverse(); return; }
+        for (int first = 0, last = rows() - 1; first < last; ++first, --last) swap_rows(first, last);
+    }
+    void sort(int column, bool ascending = true) {
+        static_assert(!std::is_same_v<T, bool>, "matrix.sort: not supported on bool element type");
+        native_escape().sort(column, ascending);
+    }
+    int elements_count() const {
+        if (!state().tiles) return state().native.elements_count();
+        const auto count = state().tiles->count();
+        if (count > static_cast<std::uint64_t>(std::numeric_limits<int>::max()))
+            detail::matrix_limit_error<std::overflow_error>("matrix.elements_count: total exceeds int range");
+        return static_cast<int>(count);
+    }
+    bool is_na() const noexcept { return !storage_; }
+    bool is_external_storage() const { return state().tiles != nullptr; }
+    detail::matrix_store::Id external_identity() const {
+        const auto& tiles = state().tiles;
+        if (!tiles) detail::matrix_store::invariant("native matrix has no external identity");
+        return tiles->identity();
+    }
+    Snapshot snapshot() const { (void)state(); return Snapshot(storage_); }
+    void restore(const Snapshot& snapshot) {
+        if (!snapshot.identity_) detail::matrix_snapshot_error("matrix restore from invalid snapshot");
+        Storage& s = *snapshot.identity_;
+        if (snapshot.tiles_) {
+            if (s.tiles) s.tiles->restore(*snapshot.tiles_);
+            else s.tiles = snapshot.tiles_->clone();
+            s.native = Native{};
+        } else {
+            s.tiles.reset();
+            s.native.restore(*snapshot.native_);
+        }
         storage_ = snapshot.identity_;
     }
 };
