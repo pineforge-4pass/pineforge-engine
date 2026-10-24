@@ -1916,13 +1916,13 @@ namespace {
 // One sequence's logical count and capture policy. Disabled optional sources
 // carry zero in all three fields; a captured empty sequence keeps captured=1.
 pf_report_sequence_v1 report_sequence_v1(std::int64_t logical_count,
-                                         bool enabled, bool sum_only, bool streamed) {
+                                         bool enabled, bool omitted, bool streamed) {
     pf_report_sequence_v1 sequence{};
     if (!enabled) return sequence;
     sequence.logical_count = logical_count;
-    // FULL captures in place, STREAMED captures externally, SUMMARY_ONLY
-    // captures nothing (an empty captured sequence still reports captured=1).
-    sequence.captured = sum_only ? 0u : 1u;
+    // Omitted resident history is uncaptured unless the sink still emits it.
+    // A captured empty sequence still reports captured=1.
+    sequence.captured = omitted && !streamed ? 0u : 1u;
     sequence.external = streamed ? 1u : 0u;
     return sequence;
 }
@@ -1972,8 +1972,9 @@ int BacktestEngine::fill_report_envelope_v1(ReportEnvelopeV1* out) const {
     const bool streamed = report_mode_ == ReportMode::STREAMED;
     const bool summary = report_mode_ == ReportMode::SUMMARY_ONLY;
     const bool current = NativeExecutionConsumer::rows_are_current(*this);
-    const auto sequence = [current, summary, streamed](std::int64_t count, bool enabled) {
-        return report_sequence_v1(current ? count : 0, enabled, summary, streamed);
+    const auto sequence = [current, summary, streamed](std::int64_t count, bool enabled,
+                                                      bool omitted = false) {
+        return report_sequence_v1(current ? count : 0, enabled, summary || omitted, streamed);
     };
     const auto& sink = report_sink_state_;
     // Before completion a retired row is counted at the cursor and a pending
@@ -2009,13 +2010,15 @@ int BacktestEngine::fill_report_envelope_v1(ReportEnvelopeV1* out) const {
 
     local.metadata.trades = sequence(local.report.total_trades, true);
     local.metadata.equity_curve = sequence(
-        equity_count, equity_count > 0 || sink.equity_scratch != nullptr);
-    local.metadata.broker_state_hash = sequence(hash_count, broker_state_hash_recording_);
-    local.metadata.trace = sequence(trace_count, trace_enabled_);
+        equity_count, equity_count > 0 || sink.equity_scratch != nullptr,
+        active_equity_report_mode_ == ReportMode::SUMMARY_ONLY);
+    local.metadata.broker_state_hash = sequence(
+        hash_count, broker_state_hash_recording_, optional_summary);
+    local.metadata.trace = sequence(trace_count, trace_enabled_, optional_summary);
     local.metadata.trace_names = sequence(
-        static_cast<std::int64_t>(trace_names_.size()), trace_enabled_);
-    local.metadata.output_rows = sequence(output_rows, outputs_enabled_);
-    local.metadata.output_events = sequence(output_events, outputs_enabled_);
+        static_cast<std::int64_t>(trace_names_.size()), trace_enabled_, optional_summary);
+    local.metadata.output_rows = sequence(output_rows, outputs_enabled_, optional_summary);
+    local.metadata.output_events = sequence(output_events, outputs_enabled_, optional_summary);
 
     const auto* consumer = execution_consumer_slot_.ptr && execution_consumer_slot_.native
         ? static_cast<const NativeExecutionConsumer*>(execution_consumer_slot_.ptr.get())
