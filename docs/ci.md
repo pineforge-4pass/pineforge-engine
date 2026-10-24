@@ -1199,7 +1199,9 @@ responses are selected by username. Mutation tests replace a script with
 `exit 0`, remove repository/fork/identity checks or permission lookups, disable
 `fail`, bypass failed lookups, add guard credentials or a checkout, or
 disconnect the credential job. Missing, skipped or unsuccessful authorization
-cannot admit promotion.
+cannot admit promotion. The stage also rejects workflow-level `defaults` and
+`env`, and guard-level `defaults`, so an inherited shell or environment
+variable cannot bypass the guard pin.
 
 The release pool is restricted to the existing pinned release and promotion
 jobs; reusable call edges cannot admit PR events to them.
