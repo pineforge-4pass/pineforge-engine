@@ -27,3 +27,7 @@ scripts/
 tutorial/
 .playwright-mcp/
 node_modules/
+
+# Frozen Python report producer used only by the L9A comparison tests.
+tests/fixtures/run_json_frozen_pre_l9a.py
+tests/fixtures/run_json_frozen_pre_l9a.sha256

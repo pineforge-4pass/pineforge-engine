@@ -39,7 +39,7 @@ void BacktestEngine::stream_observe_exit(size_t trade_index) {
     if (stream_action_sequence_ == std::numeric_limits<uint64_t>::max()) {
         throw std::runtime_error("stream action sequence overflow");
     }
-    const Trade& trade = trades_.at(trade_index);
+    const Trade trade = trades_.at(trade_index);
     StreamOrderAction action;
     action.sequence = ++stream_action_sequence_;
     action.timestamp_ms = trade.exit_time;
@@ -61,7 +61,7 @@ void BacktestEngine::stream_refresh_action_metadata(size_t first_action, size_t 
     for (size_t i = first_action; i < stream_order_actions_.size(); ++i) {
         auto& action = stream_order_actions_[i];
         if (!action.is_entry) {
-            const auto& trade = trades_.at(action.closed_trade_index);
+            const Trade trade = trades_.at(action.closed_trade_index);
             action.order_id = trade.exit_id;
             action.comment = trade.exit_comment;
             continue;
@@ -76,7 +76,7 @@ void BacktestEngine::stream_refresh_action_metadata(size_t first_action, size_t 
         }
         if (!found) {
             for (size_t j = first_trade; j < trades_.size(); ++j) {
-                const auto& trade = trades_[j];
+                const Trade trade = trades_[j];
                 if (trade.entry_incarnation == action.entry_incarnation && trade.entry_id == action.order_id) {
                     action.comment = trade.entry_comment;
                     break;

@@ -1,0 +1,6 @@
+list(APPEND TEST_SOURCES test_metrics_fold)
+pineforge_add_unit_test(test_metrics_fold)
+if(UNIX)
+    list(APPEND TEST_SOURCES test_summary_metrics_allocations)
+    pineforge_add_unit_test(test_summary_metrics_allocations)
+endif()

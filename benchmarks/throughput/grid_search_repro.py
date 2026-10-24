@@ -2,7 +2,13 @@
 import ctypes
 import csv
 import itertools
+import sys
 from pathlib import Path
+
+# Share the host's descriptor and policy arithmetic, including typed refusals.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "docker"))
+from run_json import (RunFailure, _bind_scratch_tables, _check_bench_run,
+                      apply_scratch_tables, default_scratch_manifest, failure_line)
 
 class pf_bar_t(ctypes.Structure):
     _fields_ = [
@@ -192,6 +198,16 @@ def main():
     lib.report_free.argtypes = [ctypes.POINTER(pf_report_t)]
     lib.report_free.restype = None
 
+    _bind_scratch_tables(lib)
+    for name in ("strategy_get_last_error", "strategy_get_last_error_code",
+                 "strategy_get_last_error_args"):
+        if hasattr(lib, name):
+            getattr(lib, name).argtypes = [ctypes.c_void_p]
+            getattr(lib, name).restype = ctypes.c_char_p
+    if hasattr(lib, "strategy_last_run_status"):
+        lib.strategy_last_run_status.argtypes = [ctypes.c_void_p]
+        lib.strategy_last_run_status.restype = ctypes.c_int
+
     # Load CSV
     bars_list = []
     print(f"Loading CSV data from {csv_path.name}...")
@@ -230,29 +246,40 @@ def main():
             print("Failed to create strategy instance!")
             continue
 
-        # Set inputs
-        lib.strategy_set_input(s, b"Fast EMA", str(fast).encode())
-        lib.strategy_set_input(s, b"Slow EMA", str(slow).encode())
-        lib.strategy_set_input(s, b"Take profit (ticks)", str(tp).encode())
-
         report = pf_report_t()
-        lib.run_backtest(s, bars_array, n, ctypes.byref(report))
+        try:
+            lib.strategy_set_input(s, b"Fast EMA", str(fast).encode())
+            lib.strategy_set_input(s, b"Slow EMA", str(slow).encode())
+            lib.strategy_set_input(s, b"Take profit (ticks)", str(tp).encode())
 
-        profit = report.net_profit
-        trades = report.total_trades
+            # P0 policy for THIS trial, after its overrides/feed selection.
+            # A fresh handle/run receives fresh occupancy, never its predecessor's.
+            manifest = default_scratch_manifest(n)
+            apply_scratch_tables(lib, s, manifest)
+            lib.run_backtest(s, bars_array, n, ctypes.byref(report))
+            _check_bench_run(lib, s)  # a failed trial cannot enter the ranking
 
-        print(f"Params: Fast_EMA={fast}, Slow_EMA={slow}, TP_ticks={tp} | Net Profit = {profit:.2f} | Trades = {trades}")
+            profit = report.net_profit
+            trades = report.total_trades
 
-        if profit > best_profit:
-            best_profit = profit
-            best_params = (fast, slow, tp)
+            print(f"Params: Fast_EMA={fast}, Slow_EMA={slow}, TP_ticks={tp} | Net Profit = {profit:.2f} | Trades = {trades}")
 
-        lib.report_free(ctypes.byref(report))
-        lib.strategy_free(s)
+            if profit > best_profit:
+                best_profit = profit
+                best_params = (fast, slow, tp)
+        finally:
+            try:
+                lib.report_free(ctypes.byref(report))
+            finally:
+                lib.strategy_free(s)
 
     print("\n=== OPTIMIZATION COMPLETE ===")
     print(f"Best Profit: {best_profit:.2f}")
     print(f"Best Parameters: Fast EMA = {best_params[0]}, Slow EMA = {best_params[1]}, Take profit (ticks) = {best_params[2]}")
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except RunFailure as failure:
+        sys.stderr.write(failure_line(str(failure), failure.code, failure.code_args))
+        sys.exit(failure.exit_status)

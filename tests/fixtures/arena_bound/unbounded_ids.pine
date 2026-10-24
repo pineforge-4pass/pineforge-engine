@@ -1,0 +1,6 @@
+//@version=6
+strategy("arena unbounded ids")
+var string id = ""
+while true
+    id := id + "x"
+    strategy.order(id, strategy.long, qty=1)

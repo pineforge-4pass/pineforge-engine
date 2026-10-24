@@ -1,0 +1,3 @@
+list(APPEND TEST_SOURCES test_scratch_arena_jailed_seals)
+pineforge_add_unit_test(test_scratch_arena_jailed_seals)
+set_tests_properties(test_scratch_arena_jailed_seals PROPERTIES SKIP_RETURN_CODE 77 LABELS "cr267")

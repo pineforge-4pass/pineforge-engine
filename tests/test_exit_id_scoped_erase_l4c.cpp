@@ -115,7 +115,7 @@ public:
     }
     // trades_ is protected on the engine; expose it for main()'s asserts.
     size_t trade_count() const { return trades_.size(); }
-    const Trade& trade_at(size_t i) const { return trades_[i]; }
+    Trade trade_at(size_t i) const { return trades_[i]; }
 };
 
 }  // namespace

@@ -2,10 +2,10 @@
 #include <string>
 #include <cstdint>
 #include <vector>
+#include <memory>
 #include "bar.hpp"
 
 namespace pineforge {
-
 // ─── Day-length constants ──────────────────────────────────────────────────────
 
 inline constexpr int64_t kSecPerDay = 86400;
@@ -453,6 +453,39 @@ public:
                             std::vector<int64_t> trade_instants,
                             CalendarPeriod feed_period);
 
+    /// A period partition generated on demand rather than stored: what
+    /// set_native_period_source installs where set_native_periods installs
+    /// stamps, for a partition whose stamps would grow with the feed (one per
+    /// N trading dates of an N-day request). The aggregator asks it exactly
+    /// what it asks of stored stamps -- the latest period opening at or before
+    /// an instant -- and keeps nothing of the answers. The source owns its
+    /// memory bound, and its answers do not depend on the order of the
+    /// questions.
+    class PeriodSource {
+    public:
+        virtual ~PeriodSource() = default;
+        /// The open of the latest period at or before `ms`; false before the
+        /// first period. `last` says that period is the final one.
+        virtual bool stamp_at(int64_t ms, int64_t& stamp, bool& last) = 0;
+        /// The final period's open.
+        virtual int64_t last_stamp() const = 0;
+        /// How many period opens the source holds in memory right now.
+        virtual std::size_t stamps_held() const = 0;
+    };
+
+    /// Install a DAY partition from `source`: each period's group open is its
+    /// stamp, as set_native_periods leaves a DAY partition's, and the last
+    /// period reaches at least its nominal close. It replaces a stored
+    /// partition, as a later set_native_periods replaces the source. Returns
+    /// false -- and leaves no native partition -- for a null source or an
+    /// aggregator that is not CALENDAR on DAY. The source must stay valid for
+    /// every question the run asks of this aggregator.
+    bool set_native_period_source(std::shared_ptr<PeriodSource> source);
+
+    /// Period opens this aggregator holds in memory: the stamps and group
+    /// opens of a stored partition, what the source holds for a generated one.
+    std::size_t native_period_stamps_held() const;
+
     /// A RATIO aggregator's late day opens, from the installed native daily
     /// feed (native_late_day_opens over the evaluator's input): each opens a
     /// session-day that traded later than its day stamp, and the intraday
@@ -468,10 +501,12 @@ public:
     void set_native_day_opens(std::vector<int64_t> late_opens);
 
     /// Whether an installed native daily feed keys this aggregator's
-    /// buckets: its period partition (CALENDAR, set_native_periods) or late
-    /// day opens (RATIO, set_native_day_opens).
+    /// buckets: its period partition (CALENDAR, set_native_periods or
+    /// set_native_period_source) or late day opens (RATIO,
+    /// set_native_day_opens).
     bool has_native_periods() const {
-        return !native_stamps_.empty() || !native_late_opens_.empty();
+        return !native_stamps_.empty() || native_source_ != nullptr
+            || !native_late_opens_.empty();
     }
 
     /// Whether a session ending BEFORE its nominal close completes the
@@ -555,6 +590,9 @@ private:
     std::vector<int64_t> native_stamps_;
     std::vector<int64_t> native_group_open_;
     int64_t native_last_bound_ = 0;   // nominal close of the last stamp's period
+    // The same partition generated rather than stored (set_native_period_source);
+    // native_stamps_ is empty while a source is installed.
+    std::shared_ptr<PeriodSource> native_source_;
     // RATIO: the late day opens the grid starts from (set_native_day_opens).
     std::vector<int64_t> native_late_opens_;
     // set_early_close_completes: the next-input-bar completion applies.
@@ -570,6 +608,9 @@ private:
     void merge_into_current(const Bar& bar);
     // Index of the native period holding `ms` (-1 before the first stamp).
     int native_index(int64_t ms) const;
+    // Open of the generated partition's period holding `ms`; false where
+    // native_index would answer -1.
+    bool native_source_period(int64_t ms, int64_t& stamp) const;
 };
 
 } // namespace pineforge
