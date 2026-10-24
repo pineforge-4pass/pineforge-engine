@@ -8,6 +8,7 @@ from collections import Counter
 import io
 import json
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 import unittest
@@ -1975,10 +1976,28 @@ class WorkflowPinTests(unittest.TestCase):
         self.assert_gate_pin(self.workflow())
 
     def assert_ruleset_visibility_documentation(self, source, docs, workflow):
-        for text in (source, docs, workflow):
-            self.assertNotRegex(text.replace("`", "").casefold(),
-                                r"\badministration\s*:\s*read\b|\bapp\s+requires\b",
-                                "unverified App permission claim must stay absent")
+        def constant_string(node):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                return node.value
+            if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+                left = constant_string(node.left)
+                right = constant_string(node.right)
+                if left is not None and right is not None:
+                    return left + right
+            return None
+
+        texts = [source, docs, workflow]
+        # ast joins adjacent literals; walking also visits f-string literal parts.
+        for node in ast.walk(ast.parse(source)):
+            value = constant_string(node)
+            if value is not None:
+                texts.append(value)
+        for text in texts:
+            for view in (text.replace("`", "").casefold(),
+                         re.sub(r"""(?:#|//|['"`]|\s)+""", " ", text).casefold()):
+                self.assertNotRegex(view,
+                                    r"\badministration\s*:\s*read\b|\bapp\s+requires\b",
+                                    "unverified App permission claim must stay absent")
         self.assertIn(
             "# The gate needs bypass_actors visible on every branch ruleset in the inventory.\n"
             "# If the release App token cannot see them, the bump is refused;\n"
@@ -2046,6 +2065,43 @@ class WorkflowPinTests(unittest.TestCase):
                 with self.assertRaisesRegex(
                         AssertionError, "unverified App permission claim must stay absent"):
                     self.assert_ruleset_visibility_documentation(*changed)
+
+    def test_ruleset_visibility_guard_rejects_concatenated_and_fstring_claims(self):
+        original = [Path(ci_release_gate.__file__).read_text(),
+                    (ROOT / "docs/ci.md").read_text(), self.workflow()]
+        self.assert_ruleset_visibility_documentation(*original)
+        for expression in (
+                '("App " "requires administration:" " read")',
+                '"App " + ("requires administr" + "ation:") + " read"',
+                '("administr" + ("ation:" + " re")) + "ad"',
+                'f"App requi\\x72es administration: re\\x61d {RELEASE_APP_ID}"',
+                '"administr\\x61tion: re\\x61d"'):
+            with self.subTest(expression=expression):
+                changed = original.copy()
+                changed[0] += f"\nPERMISSION_CLAIM = {expression}\n"
+                self.assertNotEqual(changed[0], original[0])
+                ast.parse(changed[0])
+                with self.assertRaisesRegex(
+                        AssertionError, "unverified App permission claim must stay absent"):
+                    self.assert_ruleset_visibility_documentation(*changed)
+
+    def test_ruleset_visibility_guard_rejects_wrapped_and_quoted_claims(self):
+        original = [Path(ci_release_gate.__file__).read_text(),
+                    (ROOT / "docs/ci.md").read_text(), self.workflow()]
+        self.assert_ruleset_visibility_documentation(*original)
+        for index in range(len(original)):
+            for claim in (
+                    "\n# Needs administration:\n# read\n",
+                    "\n# App\n# requires\n",
+                    '\n# Needs "administration":"read".\n',
+                    "\n# // 'App'\n# // 'requires'\n"):
+                with self.subTest(place=index, claim=claim):
+                    changed = original.copy()
+                    changed[index] += claim
+                    self.assertNotEqual(changed[index], original[index])
+                    with self.assertRaisesRegex(
+                            AssertionError, "unverified App permission claim must stay absent"):
+                        self.assert_ruleset_visibility_documentation(*changed)
 
     def test_prebuilt_builds_the_emitted_sha_and_asserts_tag_identity(self):
         jobs = _jobs(self.workflow())
