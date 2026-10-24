@@ -755,7 +755,9 @@ public:
     // first establish replay/presentation eligibility and all OTHER sequence
     // policies. This helper alone does not advertise a complete mode provider.
     // Status values follow the versioned contract: accepted=0, invalid=-1,
-    // busy=-3, conflict=-4. Configuration takes effect at the next run begin.
+    // busy=-3, conflict=-4, replay unavailable=-5 (SUMMARY_ONLY with a
+    // registered execution observer). A refusal preserves the pending mode.
+    // Configuration takes effect at the next run begin.
     int set_equity_report_mode(ReportMode mode);
     ReportMode equity_report_mode() const { return active_equity_report_mode_; }
     std::int64_t equity_logical_point_count() const {

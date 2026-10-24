@@ -38,6 +38,29 @@ std::uint64_t bits(double value) {
     return result;
 }
 
+struct EquityField {
+    const char* name;
+    double pf_equity_stats_t::*member;
+};
+
+constexpr std::array<EquityField, 15> equity_fields{{
+    {"equity.max_equity_drawdown", &pf_equity_stats_t::max_equity_drawdown},
+    {"equity.max_equity_drawdown_pct", &pf_equity_stats_t::max_equity_drawdown_pct},
+    {"equity.max_equity_runup", &pf_equity_stats_t::max_equity_runup},
+    {"equity.max_equity_runup_pct", &pf_equity_stats_t::max_equity_runup_pct},
+    {"equity.buy_hold_return", &pf_equity_stats_t::buy_hold_return},
+    {"equity.buy_hold_return_pct", &pf_equity_stats_t::buy_hold_return_pct},
+    {"equity.sharpe_monthly", &pf_equity_stats_t::sharpe_monthly},
+    {"equity.sortino_monthly", &pf_equity_stats_t::sortino_monthly},
+    {"equity.sharpe_bar", &pf_equity_stats_t::sharpe_bar},
+    {"equity.sortino_bar", &pf_equity_stats_t::sortino_bar},
+    {"equity.cagr", &pf_equity_stats_t::cagr},
+    {"equity.calmar", &pf_equity_stats_t::calmar},
+    {"equity.recovery_factor", &pf_equity_stats_t::recovery_factor},
+    {"equity.time_in_market_pct", &pf_equity_stats_t::time_in_market_pct},
+    {"equity.open_pl", &pf_equity_stats_t::open_pl},
+}};
+
 struct Report {
     ReportC value{};
     ~Report() { BacktestEngine::free_report(&value); }
@@ -233,6 +256,11 @@ void print_report(const char* label, const ReportC& report) {
         std::fprintf(stderr, "%s: %s=%.17g bits=0x%016llx\n",
             label, names[index], values[index],
             static_cast<unsigned long long>(bits(values[index])));
+    for (const auto& field : equity_fields) {
+        const double value = report.metrics.equity.*field.member;
+        std::fprintf(stderr, "%s: %s=%.17g bits=0x%016llx\n",
+            label, field.name, value, static_cast<unsigned long long>(bits(value)));
+    }
 }
 
 struct Checks {
@@ -244,10 +272,11 @@ struct Checks {
         std::fprintf(stderr, "%s: %s\n", row, message);
     }
     bool finish(const ReportC& actual, const ReportC& oracle,
-                const pf_report_metadata_v1* metadata = nullptr) const {
+                const pf_report_metadata_v1* metadata = nullptr,
+                const char* oracle_label = "FULL oracle") const {
         if (!good) {
             print_report(row, actual);
-            print_report("FULL oracle", oracle);
+            print_report(oracle_label, oracle);
             if (metadata)
                 std::fprintf(stderr,
                     "%s: mode=%u complete=%u equity.logical_count=%lld "
@@ -263,29 +292,38 @@ struct Checks {
 
 void compare(Checks& checks, const ReportC& actual, const ReportC& oracle) {
     checks.check(actual.total_trades == round_trips, "total_trades != N");
-    checks.check(actual.total_trades == oracle.total_trades, "total differs from FULL");
+    checks.check(actual.total_trades == oracle.total_trades, "total differs from control");
     checks.check(actual.metrics.all.num_trades == actual.total_trades,
                  "metrics.all.num_trades != total_trades");
     checks.check(actual.metrics.all.num_trades == oracle.metrics.all.num_trades,
-                 "all-trade count differs from FULL");
+                 "all-trade count differs from control");
     checks.check(actual.metrics.longs.num_trades == oracle.metrics.longs.num_trades,
-                 "long-trade count differs from FULL");
+                 "long-trade count differs from control");
     checks.check(actual.metrics.shorts.num_trades == oracle.metrics.shorts.num_trades,
-                 "short-trade count differs from FULL");
+                 "short-trade count differs from control");
     checks.check(static_cast<std::int64_t>(actual.metrics.longs.num_trades)
                      + actual.metrics.shorts.num_trades == actual.metrics.all.num_trades,
                  "long + short count differs from all");
     checks.check(bits(actual.net_profit) == bits(oracle.net_profit),
-                 "net_profit bits differ from FULL");
+                 "net_profit bits differ from control");
     checks.check(bits(actual.metrics.all.net_profit) == bits(oracle.metrics.all.net_profit),
-                 "all.net_profit bits differ from FULL");
+                 "all.net_profit bits differ from control");
     checks.check(bits(actual.metrics.longs.net_profit) == bits(oracle.metrics.longs.net_profit),
-                 "longs.net_profit bits differ from FULL");
+                 "longs.net_profit bits differ from control");
     checks.check(bits(actual.metrics.shorts.net_profit) == bits(oracle.metrics.shorts.net_profit),
-                 "shorts.net_profit bits differ from FULL");
+                 "shorts.net_profit bits differ from control");
     checks.check(actual.equity_curve_len >= 0
                      && (actual.equity_curve != nullptr) == (actual.equity_curve_len != 0),
                  "equity pointer and resident length disagree");
+}
+
+void compare_equity(Checks& checks, const ReportC& actual, const ReportC& oracle) {
+    for (const auto& field : equity_fields)
+        checks.check(bits(actual.metrics.equity.*field.member)
+                         == bits(oracle.metrics.equity.*field.member),
+                     field.name);
+    checks.check(actual.equity_curve_len == oracle.equity_curve_len,
+                 "equity_curve_len differs from the independent control");
 }
 
 bool withheld(const ReportC& report) {
@@ -343,21 +381,23 @@ bool failed_closed(const char* row, Host& host, const Observer* observer = nullp
     return checks.good;
 }
 
-bool plain(const char* row, Host& host, const ReportC& oracle) {
+bool plain(const char* row, Host& host, const ReportC& oracle,
+           bool whole_equity = false, const char* oracle_label = "FULL oracle") {
     Report result;
     try {
         host.fill_report(&result.value);
     } catch (const std::exception& error) {
         std::fprintf(stderr, "%s: unexpected fill refusal: %s\n", row, error.what());
         print_report(row, result.value);
-        print_report("FULL oracle", oracle);
+        print_report(oracle_label, oracle);
         throw;
     }
     Checks checks{row};
     checks.check(host.last_run_status() == 0 && host.last_error().empty(),
                  "plain fill did not preserve successful run status");
     compare(checks, result.value, oracle);
-    return checks.finish(result.value, oracle);
+    if (whole_equity) compare_equity(checks, result.value, oracle);
+    return checks.finish(result.value, oracle, nullptr, oracle_label);
 }
 
 bool envelope(const char* row, Host& host, const ReportC& oracle,
@@ -444,6 +484,38 @@ bool oracle_run(Report& report) {
     return true;
 }
 
+bool legacy_summary_run(Report& report, const ReportC& oracle) {
+    Host host;
+    configure(host);
+    require(host.set_equity_report_mode(ReportMode::SUMMARY_ONLY) == 0,
+            "legacy control: SUMMARY_ONLY setter refused");
+    run(host);
+    host.fill_report(&report.value);
+    Checks checks{"unobserved legacy SUMMARY_ONLY control"};
+    checks.check(host.last_run_status() == 0 && host.last_error().empty(),
+                 "legacy control fill failed");
+    checks.check(host.equity_report_mode() == ReportMode::SUMMARY_ONLY,
+                 "legacy control did not adopt SUMMARY_ONLY");
+    checks.check(host.equity_logical_point_count() == oracle.equity_curve_len,
+                 "legacy control logical equity count differs from FULL");
+    checks.check(!report.value.equity_curve && report.value.equity_curve_len == 0,
+                 "legacy control retained a resident equity curve");
+    compare(checks, report.value, oracle);
+    // These first-pass statistics require no ratio replay. The independent
+    // FULL host also validates the legacy control before it judges the defect.
+    for (const auto member : std::array<double pf_equity_stats_t::*, 6>{{
+             &pf_equity_stats_t::max_equity_drawdown,
+             &pf_equity_stats_t::max_equity_runup,
+             &pf_equity_stats_t::time_in_market_pct,
+             &pf_equity_stats_t::cagr,
+             &pf_equity_stats_t::calmar,
+             &pf_equity_stats_t::recovery_factor}})
+        checks.check(bits(report.value.metrics.equity.*member)
+                         == bits(oracle.metrics.equity.*member),
+                     "legacy control first-pass equity metric differs from FULL");
+    return checks.finish(report.value, oracle);
+}
+
 std::string sink_directory() {
     const std::filesystem::path source(__FILE__);
     require(source.is_absolute() && source.parent_path().filename() == "tests",
@@ -495,6 +567,10 @@ int main() {
     Report oracle;
     // An invalid FULL oracle is a failed control, not evidence about X1.
     if (!suite.row("FULL oracle control", [&] { return oracle_run(oracle); })) return 1;
+    Report legacy_control;
+    if (!suite.row("legacy SUMMARY_ONLY control", [&] {
+        return legacy_summary_run(legacy_control, oracle.value);
+    })) return 1;
 
     if (!suite.row("A", [&] {
         Observer observer;
@@ -538,34 +614,141 @@ int main() {
         return parity && full;
     });
 
-    // Released legacy behaviour (L6 11:18): the LEGACY equity-mode path never
-    // refuses an observer. Replacing an installed observer while the legacy
-    // SUMMARY_ONLY control is pending is accepted, the replacement is the one
-    // delivered, and the result equals the FULL oracle (ratios pending).
-    suite.row("C/legacy-replacement-pinned", [&] {
+    suite.row("C/legacy-then-observer", [&] {
+        const char* row = "C/legacy-then-observer";
+        Observer observer;
+        Host host;
+        configure(host);
+        require(host.set_equity_report_mode(ReportMode::SUMMARY_ONLY) == 0,
+                std::string(row) + ": legacy SUMMARY_ONLY setter refused");
+        refuse_observer(row, host, observer);
+        run(host);
+        require(observer.calls == 0, std::string(row) + ": refused observer was stored");
+        return plain(row, host, legacy_control.value, true,
+                     "unobserved legacy SUMMARY_ONLY control");
+    });
+
+    suite.row("C/observer-then-legacy", [&] {
+        const char* row = "C/observer-then-legacy";
+        Observer observer;
+        Host host;
+        configure(host);
+        attach(host, observer);
+        const int status = host.set_equity_report_mode(ReportMode::SUMMARY_ONLY);
+        std::printf("%s: legacy setter status=%d expected=%d\n",
+                    row, status, PF_REPORT_MODE_REPLAY_UNAVAILABLE);
+        require(status == PF_REPORT_MODE_REPLAY_UNAVAILABLE,
+                std::string(row) + ": legacy SUMMARY_ONLY must return exactly -5");
+        run(host, &observer);
+        require(host.equity_report_mode() == ReportMode::FULL,
+                std::string(row) + ": refusal changed the pending equity mode");
+        return plain(row, host, oracle.value, true);
+    });
+
+    suite.row("C/replacement-after-refusal", [&] {
+        const char* row = "C/replacement-after-refusal";
         Observer installed;
         Observer replacement;
         Host host;
         configure(host);
         attach(host, installed);
-        require(host.set_equity_report_mode(ReportMode::SUMMARY_ONLY) == 0,
-                "C/legacy-replacement-pinned: legacy SUMMARY_ONLY setter refused");
+        require(host.set_equity_report_mode(ReportMode::SUMMARY_ONLY)
+                    == PF_REPORT_MODE_REPLAY_UNAVAILABLE,
+                std::string(row) + ": legacy SUMMARY_ONLY must return exactly -5");
         attach(host, replacement);
         run(host, &replacement);
-        require(installed.calls == 0, "C/legacy-replacement-pinned: replaced observer was called");
+        require(installed.calls == 0, std::string(row) + ": replaced observer was called");
         require(replacement.calls == 1,
-                "C/legacy-replacement-pinned: replacement observer was not called once");
-        return plain("C/legacy-replacement-pinned", host, oracle.value);
+                std::string(row) + ": replacement observer was not called once");
+        require(host.equity_report_mode() == ReportMode::FULL,
+                std::string(row) + ": refusal changed the pending equity mode");
+        return plain(row, host, oracle.value, true);
+    });
+
+    suite.row("C/legacy-after-clear", [&] {
+        const char* row = "C/legacy-after-clear";
+        Observer observer;
+        Host host;
+        configure(host);
+        require(host.set_equity_report_mode(ReportMode::SUMMARY_ONLY) == 0,
+                std::string(row) + ": unobserved legacy setter refused");
+        require(strategy_set_execution_observer_v1(handle(host), nullptr) == 0,
+                std::string(row) + ": clearing with pending legacy SUMMARY_ONLY refused");
+        require(host.set_equity_report_mode(ReportMode::FULL) == 0,
+                std::string(row) + ": restoring pending FULL refused");
+        attach(host, observer);
+        require(strategy_set_execution_observer_v1(handle(host), nullptr) == 0,
+                std::string(row) + ": installed observer clear refused");
+        require(host.set_equity_report_mode(ReportMode::SUMMARY_ONLY) == 0,
+                std::string(row) + ": legacy setter refused after observer clear");
+        require(strategy_set_execution_observer_v1(handle(host), nullptr) == 0,
+                std::string(row) + ": repeated clear with pending legacy SUMMARY_ONLY refused");
+        run(host);
+        require(observer.calls == 0, std::string(row) + ": cleared observer was called");
+        return plain(row, host, legacy_control.value, true,
+                     "unobserved legacy SUMMARY_ONLY control");
+    });
+
+    suite.row("C/legacy-pending-fullswitch", [&] {
+        const char* row = "C/legacy-pending-fullswitch";
+        Observer observer;
+        Host host;
+        configure(host);
+        require(host.set_equity_report_mode(ReportMode::SUMMARY_ONLY) == 0,
+                std::string(row) + ": legacy SUMMARY_ONLY setter refused");
+        run(host);
+        require(host.equity_report_mode() == ReportMode::SUMMARY_ONLY,
+                std::string(row) + ": fixture did not leave active SUMMARY_ONLY");
+        // Pending SUMMARY_ONLY still refuses after completion. Switching the
+        // pending mode to FULL must accept despite that leftover active mode.
+        const int refused = set_observer(host, observer);
+        std::printf("%s: pending SUMMARY_ONLY observer status=%d expected=-2\n", row, refused);
+        require(refused == -2, std::string(row) + ": pending legacy mode must return -2");
+        require(host.set_equity_report_mode(ReportMode::FULL) == 0,
+                std::string(row) + ": pending FULL setter refused");
+        attach(host, observer);
+        require(host.equity_report_mode() == ReportMode::SUMMARY_ONLY
+                    && host.begins == 1 && observer.calls == 0,
+                std::string(row) + ": registration changed the completed run");
+        return true;
+    });
+
+    suite.row("C/legacy-observer-equity-block", [&] {
+        const char* row = "C/legacy-observer-equity-block";
+        Observer observer;
+        Host host;
+        configure(host);
+        attach(host, observer);
+        const int status = host.set_equity_report_mode(ReportMode::SUMMARY_ONLY);
+        std::printf("%s: legacy setter status=%d expected=%d\n",
+                    row, status, PF_REPORT_MODE_REPLAY_UNAVAILABLE);
+        if (status != 0) {
+            require(status == PF_REPORT_MODE_REPLAY_UNAVAILABLE,
+                    std::string(row) + ": refusal must be exactly -5");
+            require(host.begins == 0 && host.calculations == 0 && observer.calls == 0
+                        && host.last_run_status() == 0 && host.last_error().empty(),
+                    std::string(row) + ": refusal executed or failed the run");
+            return true;
+        }
+        // Old behaviour (or m2): reach the defective plain report and compare
+        // every equity field to a separate unobserved legacy-summary host.
+        // finish prints every value and its bits, including all NaN ratios.
+        run(host, &observer);
+        Report report;
+        host.fill_report(&report.value);
+        Checks checks{row};
+        checks.check(host.last_run_status() == 0 && host.last_error().empty(),
+                     "legacy observed plain fill failed");
+        compare(checks, report.value, legacy_control.value);
+        compare_equity(checks, report.value, legacy_control.value);
+        return checks.finish(report.value, legacy_control.value, nullptr,
+                             "unobserved legacy SUMMARY_ONLY control");
     });
 
     // The public window setter bypasses observer-registration admission.
-    // B2 is the no-run control: a window configured for a run that never
-    // happens must not publish a report. The envelope read answers either
-    // REPLAY_UNAVAILABLE (a pending window judged like an admitted one) or
-    // ACCEPTED with complete == 0 (N5: a pending window configures the NEXT
-    // run and only an admitted capture judges the read); both are fail-closed
-    // here, so the row holds with or without N5 picked. B3 independently
-    // requires either the begin guard or the capture backstop to fail closed.
+    // B2 is N5's no-run control: a pending window configures the NEXT run,
+    // so the envelope read is ACCEPTED, incomplete, and publishes nothing.
+    // B3 independently requires the capture backstop after execution.
     if (!suite.row("B2", [&] {
         Host host;
         configure(host);
@@ -576,13 +759,12 @@ int main() {
         const int status = host.fill_report_envelope_v1(&result.value);
         std::printf("B2: envelope status=%d complete=%u\n",
                     status, result.value.metadata.complete);
-        require((status == PF_REPORT_MODE_REPLAY_UNAVAILABLE || status == PF_REPORT_MODE_ACCEPTED)
+        require(status == PF_REPORT_MODE_ACCEPTED
                     && result.value.metadata.complete == 0 && withheld(result.value.report),
-                "B2: a never-run window must publish nothing: REPLAY_UNAVAILABLE or "
-                "ACCEPTED, complete == 0, report withheld");
+                "B2: a never-run window must be ACCEPTED, complete == 0, report withheld");
         require(host.begins == 0 && host.calculations == 0
                     && host.last_run_status() == 0 && host.last_error().empty(),
-                "B2: envelope refusal executed or failed the run");
+                "B2: envelope read executed or failed the run");
         return true;
     })) return 1;
 
@@ -594,6 +776,14 @@ int main() {
         select_window(host);
         const auto bars = tape();
         host.run(bars.data(), static_cast<int>(bars.size()));
+        require(std::strcmp(run_failure_code_of(host), "engine_invariant") == 0
+                    && std::strcmp(run_failure_args_of(host), "{}") == 0
+                    && host.last_error()
+                        == "summary trade metrics differ from the logical trade count",
+                "B3: capture did not fail at the exact trade metrics backstop: status="
+                    + std::to_string(host.last_run_status())
+                    + " code=" + run_failure_code_of(host)
+                    + " args=" + run_failure_args_of(host) + " error=" + host.last_error());
         return failed_closed("B3", host);
     });
 
@@ -642,90 +832,52 @@ int main() {
         Host host;
         configure(host);
         attach(host, observer);
-        require(host.set_equity_report_mode(ReportMode::SUMMARY_ONLY) == 0,
-                "C/observer-first: legacy SUMMARY_ONLY setter refused");
-        const auto bars = tape();
-        host.run(bars.data(), static_cast<int>(bars.size()));
-        if (host.last_run_status() != 0)
-            return failed_closed("C/observer-first", host, &observer);
-        check_completed(host, &observer);
+        require(host.set_equity_report_mode(ReportMode::SUMMARY_ONLY)
+                    == PF_REPORT_MODE_REPLAY_UNAVAILABLE,
+                "C/observer-first: legacy SUMMARY_ONLY must return exactly -5");
+        run(host, &observer);
         Report report;
         host.fill_report(&report.value);
-        const bool plain_ratios_ready = host.equity_summary_ratios_ready();
         Envelope result;
         const int status = host.fill_report_envelope_v1(&result.value);
-        const bool envelope_ratios_ready = host.equity_summary_ratios_ready();
         std::fprintf(stderr,
             "C/observer-first: run_status=%d code=%s args=%s error=%s observer_calls=%d "
-            "equity_mode=%u plain_ratios_ready=%u envelope_ratios_ready=%u "
+            "equity_mode=%u "
             "envelope_status=%d mode=%u complete=%u logical_trades=%lld oracle_total=%d\n",
             host.last_run_status(), run_failure_code_of(host), run_failure_args_of(host),
             host.last_error().c_str(), observer.calls,
             static_cast<unsigned>(host.equity_report_mode()),
-            plain_ratios_ready ? 1u : 0u, envelope_ratios_ready ? 1u : 0u,
             status, result.value.metadata.mode, result.value.metadata.complete,
             static_cast<long long>(result.value.metadata.trades.logical_count),
             oracle.value.total_trades);
         Checks checks{"C/observer-first"};
         checks.check(host.last_run_status() == 0 && host.last_error().empty(),
-                     "legacy report reads did not preserve successful run status");
-        checks.check(host.equity_report_mode() == ReportMode::SUMMARY_ONLY,
-                     "pending legacy equity mode was not adopted");
-        checks.check(!plain_ratios_ready && !envelope_ratios_ready,
-                     "legacy summary ratios must remain pending on both reads");
+                     "report reads did not preserve successful run status");
+        checks.check(host.equity_report_mode() == ReportMode::FULL,
+                     "refused legacy setter changed the pending equity mode");
         checks.check(status == PF_REPORT_MODE_ACCEPTED,
-                     "legacy envelope was not accepted");
+                     "FULL envelope was not accepted");
         checks.check(result.value.metadata.mode == PF_REPORT_MODE_FULL,
                      "legacy equity setter changed the versioned report mode");
-        checks.check(result.value.metadata.complete == 0,
-                     "pending legacy ratios certified a complete envelope");
+        checks.check(result.value.metadata.complete == 1,
+                     "completed FULL run has an incomplete envelope");
         checks.check(result.value.metadata.trades.logical_count == oracle.value.total_trades,
                      "envelope logical trade count differs from FULL");
-        // Each read must independently match the FULL trade oracle. The
-        // legacy held equity tail may differ from FULL, but both reads agree.
+        // Each read independently matches the entire FULL equity block.
         compare(checks, report.value, oracle.value);
+        compare_equity(checks, report.value, oracle.value);
         compare(checks, result.value.report, oracle.value);
+        compare_equity(checks, result.value.report, oracle.value);
         checks.check(report.value.trades_len == result.value.report.trades_len
                          && report.value.equity_curve_len == result.value.report.equity_curve_len,
                      "plain and envelope resident lengths disagree");
         checks.check(result.value.metadata.equity_curve.captured
                          == (result.value.report.equity_curve_len != 0 ? 1u : 0u),
-                     "legacy envelope equity capture flag disagrees with resident curve");
+                     "FULL envelope equity capture flag disagrees with resident curve");
         const bool plain_good = checks.finish(report.value, oracle.value);
         const bool envelope_good = checks.finish(
             result.value.report, oracle.value, &result.value.metadata);
         return plain_good && envelope_good;
-    })) return 1;
-
-    if (!suite.row("C/legacy-observer-pinned", [&] {
-        const char* row = "C/legacy-observer-pinned";
-        Observer observer;
-        Host host;
-        configure(host);
-        require(host.set_equity_report_mode(ReportMode::SUMMARY_ONLY) == 0,
-                std::string(row) + ": legacy SUMMARY_ONLY setter refused");
-        const int status = set_observer(host, observer);
-        std::printf("%s: observer registration status=%d expected=0\n", row, status);
-        require(status == 0, std::string(row) + ": legacy observer registration refused");
-        run(host, &observer);
-        Report report;
-        host.fill_report(&report.value);
-        const bool ratios_ready = host.equity_summary_ratios_ready();
-        std::fprintf(stderr,
-            "%s: run_status=%d code=%s args=%s error=%s observer_calls=%d "
-            "equity_mode=%u ratios_ready=%u oracle_total=%d\n",
-            row, host.last_run_status(), run_failure_code_of(host), run_failure_args_of(host),
-            host.last_error().c_str(), observer.calls,
-            static_cast<unsigned>(host.equity_report_mode()), ratios_ready ? 1u : 0u,
-            oracle.value.total_trades);
-        Checks checks{row};
-        checks.check(host.last_run_status() == 0 && host.last_error().empty(),
-                     "legacy plain read did not preserve successful run status");
-        checks.check(host.equity_report_mode() == ReportMode::SUMMARY_ONLY,
-                     "pending legacy equity mode was not adopted");
-        checks.check(!ratios_ready, "legacy summary ratios must remain pending");
-        compare(checks, report.value, oracle.value);
-        return checks.finish(report.value, oracle.value);
     })) return 1;
 
     if (!suite.row("C/clear", [&] {
@@ -733,15 +885,19 @@ int main() {
         Host host;
         configure(host);
         attach(host, observer);
-        require(host.set_equity_report_mode(ReportMode::SUMMARY_ONLY) == 0,
-                "C/clear: legacy SUMMARY_ONLY setter refused");
+        require(host.set_equity_report_mode(ReportMode::SUMMARY_ONLY)
+                    == PF_REPORT_MODE_REPLAY_UNAVAILABLE,
+                "C/clear: legacy SUMMARY_ONLY must return exactly -5");
         const int status = strategy_set_execution_observer_v1(handle(host), nullptr);
         require(status == 0, "C/clear: SUMMARY_ONLY observer clear status=" + std::to_string(status));
+        require(host.set_equity_report_mode(ReportMode::SUMMARY_ONLY) == 0,
+                "C/clear: legacy SUMMARY_ONLY setter refused after clear");
         run(host);
         require(observer.calls == 0, "C/clear: removed observer was called");
         require(host.equity_report_mode() == ReportMode::SUMMARY_ONLY,
                 "C/clear: observer removal changed the pending equity mode");
-        return plain("C/clear", host, oracle.value);
+        return plain("C/clear", host, legacy_control.value, true,
+                     "unobserved legacy SUMMARY_ONLY control");
     })) return 1;
 
     std::printf("test_report_mode_v1_summary_with_observer: %d failed rows\n", suite.failures);

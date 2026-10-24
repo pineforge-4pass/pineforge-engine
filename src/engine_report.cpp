@@ -358,11 +358,20 @@ void compute_report_metrics(pf_metrics_t& result,
 }  // namespace internal
 
 
+bool NativeExecutionConsumer::observer_registered(const BacktestEngine& engine) noexcept {
+    const auto* consumer = static_cast<const NativeExecutionConsumer*>(
+        engine.execution_consumer_slot_.ptr.get());
+    return consumer && consumer->selected_epoch_.observer_registered;
+}
+
 int BacktestEngine::set_equity_report_mode(ReportMode mode) {
     if (mode != ReportMode::FULL && mode != ReportMode::SUMMARY_ONLY
         && mode != ReportMode::STREAMED) return -1;
     if (report_sink_setter_status() != 0) return -3;
     if (mode == ReportMode::SUMMARY_ONLY && report_sink_state_.enabled) return -4;
+    if (mode == ReportMode::SUMMARY_ONLY
+        && NativeExecutionConsumer::observer_registered(*this))
+        return PF_REPORT_MODE_REPLAY_UNAVAILABLE;
     pending_equity_report_mode_ = mode;
     return 0;
 }

@@ -111,9 +111,9 @@ through an explicitly negotiated provider bridge.
 | SUMMARY_ONLY (`1`) | Exact metrics require an eligible presentation/replay provider | No arrays in the returned report; execution retention uses the controls below | None |
 | STREAMED (`2`) | Same values/bits | None | Complete enabled sequences, in existing report order, through a bounded sink |
 
-Legacy calls, including the existing sink-v1 route, keep their current
-behavior. Explicit FULL conflicts with an installed sink; STREAMED requires
-one; SUMMARY_ONLY conflicts with sequence-sink capture. FULL is an owning-array
+The existing sink-v1 route remains supported. Explicit FULL conflicts with an
+installed sink; STREAMED requires one; SUMMARY_ONLY conflicts with sequence-sink
+capture. FULL is an owning-array
 compatibility action and makes no fixed-memory claim. SUMMARY_ONLY must not
 allocate full arrays and delete them after reporting.
 
@@ -125,6 +125,8 @@ the next run:
 
 - `set_equity_report_mode(ReportMode::SUMMARY_ONLY)` keeps the held equity
   point and fixed metric folds instead of the curve or a private curve tape.
+  It cannot be combined with an execution observer; the setter refusals are
+  described below.
 - `set_optional_report_mode(report_sequence::ReportMode::SummaryOnly)`
   omits the resident trace/name, broker-hash and output row/event histories.
 
@@ -140,9 +142,26 @@ explicit STREAMED with `PF_REPORT_MODE_CONFLICT` (`-4`): its whole-array
 presenter has no exact non-FULL adapter. The general sink conflicts still
 apply, so SUMMARY_ONLY with a sink also returns `-4`. Rejection preserves the
 previous report mode; the legacy FULL sink route remains supported.
-Selected-window or observer capture without a sink also refuses SUMMARY_ONLY
-with `-5`, at mode selection or at envelope read if capture was configured
-later. STREAMED without a sink returns `-4`.
+Without a sink, pending selected-window or observer capture makes
+`set_report_mode_v1(SUMMARY_ONLY)` return `-5`. If SUMMARY_ONLY is already
+selected, a non-null observer registration returns `-2`. A selected window
+configured afterward is accepted, but a run with trades fails closed with
+`engine_invariant`: `summary trade metrics differ from the logical trade count`.
+An envelope read refuses with `-5` only for an admitted capture; a pending
+window configures the next run. With no run, that read returns
+`PF_REPORT_MODE_ACCEPTED`, `metadata.complete == 0`, and no report payload.
+STREAMED without a sink returns `-4`.
+
+The legacy equity control also refuses observer + SUMMARY_ONLY in both call
+orders: registering an observer while legacy SUMMARY_ONLY is pending returns
+`-2`; selecting legacy SUMMARY_ONLY while an observer is registered returns
+`PF_REPORT_MODE_REPLAY_UNAVAILABLE` (`-5`) without changing the pending mode.
+Clearing the observer remains allowed when quiescent. Switching the pending
+legacy mode to FULL allows registration even if a past run's active mode was
+SUMMARY_ONLY. Selected-window capture with legacy SUMMARY_ONLY fails closed
+with a typed run failure and publishes no report (`engine_invariant` when its
+report view is unavailable; `report_mode_unsupported` at begin once the begin
+refusal is present).
 
 The new data layout wraps the ABI-4 payload rather than growing it:
 

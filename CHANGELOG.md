@@ -7,6 +7,11 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
+- **FIX (1.7.0):** In 1.6.x an observed legacy-summary run (execution
+  observer + `set_equity_report_mode(SUMMARY_ONLY)`) returned wrong equity metrics
+  through plain `fill_report` (drawdown 0, `time_in_market >= 300 %`, NaN
+  ratios); 1.7.0 refuses the combination in both call orders (`-2` at the
+  observer setter, `-5` at the legacy setter).
 - **A latched `report_sink_failed` now yields an empty report.** After a run
   whose failure is `report_sink_failed` (including a sink failure at finish time
   after an otherwise successful run), every later report read returns the empty
