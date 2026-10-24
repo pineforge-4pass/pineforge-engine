@@ -8300,7 +8300,7 @@ struct WorkingRequestCore::SuccessorRootIndex {
             file.open("pineforge-roots");
         } catch (const detail::AuxiliaryScratchIoError& error) {
             // Preserve the roots diagnostic without catching arena resource failures.
-            throw detail::AuxiliaryScratchIoError(error.code().value(), "native successor roots create");
+            throw detail::AuxiliaryScratchIoError(error.code().value(), (std::string("native successor roots create; ") + error.what()).c_str());
         }
     }
 

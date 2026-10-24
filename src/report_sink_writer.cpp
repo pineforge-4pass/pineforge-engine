@@ -3,7 +3,6 @@
 #include "sha256.hpp"
 
 #include <pineforge/version.h>
-
 #include <algorithm>
 #include <array>
 #include <cerrno>
@@ -16,6 +15,7 @@
 #include <sys/stat.h>
 #include <system_error>
 #if defined(__linux__)
+#include <pineforge/detail/scratch_directory.hpp>
 #include <sys/vfs.h>
 #endif
 #include <unistd.h>
@@ -393,7 +393,7 @@ struct LineWriter::State {
 #if defined(__linux__)
         struct statfs filesystem{};
         if (::fstatfs(descriptor, &filesystem) != 0) io_error("filesystem query failed", errno);
-        if (filesystem.f_type == 0x01021994L || filesystem.f_type == 0x858458f6L)
+        if (detail::scratch_filesystem_is_memory(filesystem.f_type))
             io_error("requires disk backing, not tmpfs or ramfs", EINVAL);
         const int flags = ::fcntl(descriptor, F_GETFL);
         if (flags < 0 || ::fcntl(descriptor, F_SETFL, flags | O_DIRECT) < 0)
