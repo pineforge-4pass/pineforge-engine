@@ -9,6 +9,8 @@
 #include <stdexcept>
 #include <iomanip>
 #include <algorithm>
+#include <array>
+#include <cstring>
 #include <system_error>
 
 namespace pineforge {
@@ -169,15 +171,204 @@ std::string number_style_text(double value, const std::string& style) {
     return pattern_text(value, fmt);
 }
 
-} // namespace
+ScriptString trim_blanks(const ScriptString& value) {
+    auto first = ScriptString::size_type{0}, last = value.size();
+    while (first < last && (value[first] == ' ' || value[first] == '\t')) ++first;
+    while (last > first && (value[last - 1] == ' ' || value[last - 1] == '\t')) --last;
+    return value.substr(first, last - first);
+}
 
-// ---------- str.format ----------
+// Binary64 has at most max_exponent10+1 integer digits. The only positive
+// decimal scale below is percent (+2); reserve one more digit for rounding,
+// fifteen fraction digits, grouping separators, sign, point and two affixes.
+// This is a bound on a NUMBER's spelling, never on script string length.
+struct NumberText {
+    static constexpr std::size_t integer_digits =
+        static_cast<std::size_t>(std::numeric_limits<double>::max_exponent10) + 4;
+    static constexpr std::size_t fraction_digits = 15;
+    static constexpr std::size_t capacity =
+        integer_digits + integer_digits / 3 + fraction_digits + 4;
+    std::array<char, capacity> data{};
+    std::size_t size = 0;
+    std::string_view view() const noexcept { return {data.data(), size}; }
+    void append(char ch) { data[size++] = ch; }
+    void append(std::string_view text) {
+        std::memcpy(data.data() + size, text.data(), text.size());
+        size += text.size();
+    }
+};
 
-std::string str_format_values(const std::string& fmt,
-                              const std::vector<StrFormatValue>& args) {
-    std::string result;
+NumberText script_decimal_text(double value, int min_fraction, int max_fraction,
+                               bool grouping, int decimal_shift = 0) {
+    NumberText result;
+    if (std::isnan(value)) { result.append("NaN"); return result; }
+    if (std::isinf(value)) {
+        result.append(value < 0 ? "-Infinity" : "Infinity");
+        return result;
+    }
+    max_fraction = std::max(0, std::min(max_fraction, 15));
+    min_fraction = std::max(0, std::min(min_fraction, max_fraction));
+    std::array<char, std::numeric_limits<double>::max_digits10 + 8> spelling{};
+    const auto converted = std::to_chars(spelling.data(), spelling.data() + spelling.size(), value);
+    if (converted.ec != std::errc{})
+        throw coded<std::runtime_error>(RunFailureCode::engine_invariant, {},
+                                        "shortest-decimal conversion failed");
+    const auto spelling_size = static_cast<std::size_t>(converted.ptr - spelling.data());
+    const bool negative = spelling[0] == '-';
+    std::size_t exponent_at = negative ? 1 : 0;
+    while (exponent_at < spelling_size && spelling[exponent_at] != 'e' &&
+           spelling[exponent_at] != 'E') ++exponent_at;
+    int exponent = 0;
+    if (exponent_at != spelling_size) {
+        auto at = exponent_at + 1;
+        const bool minus = at < spelling_size && spelling[at] == '-';
+        if (at < spelling_size && (spelling[at] == '-' || spelling[at] == '+')) ++at;
+        for (; at < spelling_size; ++at) exponent = exponent * 10 + spelling[at] - '0';
+        if (minus) exponent = -exponent;
+    }
+    // A shortest FIXED spelling can contain more digits than max_digits10
+    // (e.g. an exactly representable 18-digit integer). It is still no longer
+    // than the scientific alternative bounded by the spelling buffer.
+    std::array<char, std::numeric_limits<double>::max_digits10 + 8> digits{};
+    std::size_t digit_count = 0;
+    int decimal_point = 0;
+    bool after_point = false;
+    for (std::size_t at = negative ? 1 : 0; at < exponent_at; ++at) {
+        const auto ch = spelling[at];
+        if (ch == '.') after_point = true;
+        else {
+            digits[digit_count++] = ch;
+            if (!after_point) ++decimal_point;
+        }
+    }
+    decimal_point += exponent + decimal_shift;
+    std::size_t leading = 0;
+    while (leading < digit_count && digits[leading] == '0') ++leading;
+    if (leading == digit_count) {
+        digits[0] = '0'; digit_count = 1; decimal_point = 1;
+    } else {
+        std::memmove(digits.data(), digits.data() + leading, digit_count - leading);
+        digit_count -= leading;
+        decimal_point -= static_cast<int>(leading);
+    }
+    std::array<char, NumberText::integer_digits + NumberText::fraction_digits> units{};
+    std::size_t unit_count = 0;
+    const int keep = decimal_point + max_fraction;
+    if ((digit_count == 1 && digits[0] == '0') || keep < 0) {
+        units[unit_count++] = '0';
+    } else if (keep == 0) {
+        units[unit_count++] = digits[0] >= '5' ? '1' : '0';
+    } else {
+        const auto kept = static_cast<std::size_t>(keep);
+        const auto copied = std::min(kept, digit_count);
+        std::memcpy(units.data(), digits.data(), copied);
+        unit_count = kept;
+        std::fill(units.begin() + static_cast<std::ptrdiff_t>(copied),
+                  units.begin() + static_cast<std::ptrdiff_t>(unit_count), '0');
+        if (kept < digit_count && digits[kept] >= '5') {
+            std::size_t at = unit_count;
+            while (at != 0 && units[at - 1] == '9') units[--at] = '0';
+            if (at != 0) ++units[at - 1];
+            else {
+                std::memmove(units.data() + 1, units.data(), unit_count);
+                units[0] = '1'; ++unit_count;
+            }
+        }
+    }
+    bool nonzero = false;
+    for (std::size_t at = 0; at < unit_count; ++at) nonzero = nonzero || units[at] != '0';
+    if (!nonzero) { units[0] = '0'; unit_count = 1; }
+    const auto max_digits = static_cast<std::size_t>(max_fraction);
+    if (unit_count <= max_digits) {
+        const auto padding = max_digits + 1 - unit_count;
+        std::memmove(units.data() + padding, units.data(), unit_count);
+        std::fill_n(units.data(), padding, '0');
+        unit_count += padding;
+    }
+    const auto integer_size = unit_count - max_digits;
+    auto fraction_size = max_digits;
+    while (fraction_size > static_cast<std::size_t>(min_fraction) &&
+           units[integer_size + fraction_size - 1] == '0') --fraction_size;
+    if (negative && nonzero) result.append('-');
+    for (std::size_t at = 0; at < integer_size; ++at) {
+        if (grouping && at != 0 && (integer_size - at) % 3 == 0) result.append(',');
+        result.append(units[at]);
+    }
+    if (fraction_size != 0) {
+        result.append('.');
+        result.append(std::string_view(units.data() + integer_size, fraction_size));
+    }
+    return result;
+}
+
+NumberText script_pattern_text(double value, const ScriptString& pattern) {
+    if (!std::isfinite(value)) return script_decimal_text(value, 0, 0, false);
+    const auto fmt = trim_blanks(pattern);
+    std::uint64_t required = 0, optional = 0;
+    bool fraction = false, grouping = false, percent = false;
+    std::array<char, ScriptString::chunk_bytes> buffer{};
+    for (ScriptString::size_type offset = 0; offset < fmt.size();) {
+        const auto n = fmt.read(offset, buffer.data(), buffer.size());
+        for (std::size_t i = 0; i < n; ++i) {
+            const char ch = buffer[i];
+            if (ch == '.' && !fraction) { fraction = true; continue; }
+            grouping = grouping || (!fraction && ch == ',');
+            percent = percent || ch == '%';
+            if (fraction && ch == '0') ++required;
+            if (fraction && ch == '#') ++optional;
+        }
+        offset += n;
+    }
+    auto result = script_decimal_text(value, static_cast<int>(required),
+                                      static_cast<int>(required + optional), grouping, percent ? 2 : 0);
+    if (percent) result.append('%');
+    return result;
+}
+
+NumberText number_style_text(double value, const ScriptString& style) {
+    if (!std::isfinite(value)) return script_decimal_text(value, 0, 0, false);
+    const auto fmt = trim_blanks(style);
+    if (fmt.empty()) return script_decimal_text(value, 0, 3, true);
+    if (fmt == "integer") return script_decimal_text(value, 0, 0, true);
+    if (fmt == "percent") {
+        auto result = script_decimal_text(value, 0, 0, true, 2);
+        result.append('%');
+        return result;
+    }
+    if (fmt == "currency") {
+        auto result = script_decimal_text(value, 2, 2, true);
+        const auto at = result.data[0] == '-' ? std::size_t{1} : std::size_t{0};
+        std::memmove(result.data.data() + at + 1, result.data.data() + at, result.size - at);
+        result.data[at] = '$'; ++result.size;
+        return result;
+    }
+    return script_pattern_text(value, fmt);
+}
+
+template <class TextType> struct TextOnlyArg {
+    enum class Kind { Text };
+    Kind kind = Kind::Text;
+    double number = 0;
+    const TextType& text;
+};
+template <class Text> struct TextArgs {
+    const std::vector<Text>& values;
+    std::size_t size() const { return values.size(); }
+    TextOnlyArg<Text> operator[](std::size_t i) const { return {TextOnlyArg<Text>::Kind::Text, 0, values[i]}; }
+};
+
+// One grammar for legacy and external strings. TextArgs borrows arguments;
+// formatting an accumulated text no longer constructs owning argument copies.
+template <class Text, class Args>
+Text format_values(const Text& fmt, const Args& args) {
+    Text result;
+    if constexpr (std::is_same_v<Text, ScriptString>) {
+        result = fmt;
+        result.clear(); // Keep a compatibility Store owner with the result.
+    }
     bool quoted = false;
-    for (size_t i = 0; i < fmt.size();) {
+    using Index = typename Text::size_type;
+    for (Index i = 0; i < fmt.size();) {
         const char c = fmt[i];
         if (c == '\'') {
             if (i + 1 < fmt.size() && fmt[i + 1] == '\'') {
@@ -194,41 +385,51 @@ std::string str_format_values(const std::string& fmt,
             ++i;
             continue;
         }
-        const size_t end = fmt.find('}', i + 1);
-        if (end == std::string::npos) {
+        const Index end = fmt.find('}', i + 1);
+        if (end == Text::npos) {
             result += fmt.substr(i);
             break;
         }
-        const std::string inside = fmt.substr(i + 1, end - i - 1);
-        const size_t first_comma = inside.find(',');
-        const std::string index_text = trim_blanks(inside.substr(0, first_comma));
-        if (index_text.empty() || !std::all_of(index_text.begin(), index_text.end(),
-                                               [](char ch) { return ch >= '0' && ch <= '9'; })) {
+        const Text inside = fmt.substr(i + 1, end - i - 1);
+        const Index first_comma = inside.find(',');
+        const Text index_text = trim_blanks(inside.substr(0, first_comma));
+        bool digits = !index_text.empty();
+        for (Index j = 0; digits && j < index_text.size(); ++j)
+            digits = index_text[j] >= '0' && index_text[j] <= '9';
+        if (!digits) {
             result += fmt.substr(i, end - i + 1);
             i = end + 1;
             continue;
         }
         // An index too long for size_t names no argument either.
-        const size_t index = index_text.size() > 9 ? args.size()
-            : static_cast<size_t>(std::stoul(index_text));
+        size_t index = 0;
+        if (index_text.size() > 9) index = args.size();
+        else for (Index j = 0; j < index_text.size(); ++j)
+            index = index * 10 + static_cast<unsigned>(index_text[j] - '0');
         if (index >= args.size()) {
             result += fmt.substr(i, end - i + 1);
             i = end + 1;
             continue;
         }
         const auto& arg = args[index];
-        if (arg.kind == StrFormatValue::Kind::Text) {
+        if (arg.kind == std::decay_t<decltype(arg)>::Kind::Text) {
             result += arg.text;
-        } else if (first_comma == std::string::npos) {
-            result += number_style_text(arg.number, "");
+        } else if (first_comma == Text::npos) {
+            if constexpr (std::is_same_v<Text, ScriptString>) {
+                const auto rendered = script_decimal_text(arg.number, 0, 3, true);
+                result.append(rendered.view());
+            } else result += number_style_text(arg.number, std::string(""));
         } else {
-            const size_t second_comma = inside.find(',', first_comma + 1);
-            const std::string type = trim_blanks(inside.substr(
+            const Index second_comma = inside.find(',', first_comma + 1);
+            const Text type = trim_blanks(inside.substr(
                 first_comma + 1, second_comma - first_comma - 1));
             if (type == "number") {
-                const std::string style = second_comma == std::string::npos
-                    ? "" : inside.substr(second_comma + 1);
-                result += number_style_text(arg.number, style);
+                const Text style = second_comma == Text::npos
+                    ? Text{} : inside.substr(second_comma + 1);
+                if constexpr (std::is_same_v<Text, ScriptString>) {
+                    const auto rendered = number_style_text(arg.number, style);
+                    result.append(rendered.view());
+                } else result += number_style_text(arg.number, style);
             } else {
                 result += fmt.substr(i, end - i + 1);
             }
@@ -238,9 +439,57 @@ std::string str_format_values(const std::string& fmt,
     return result;
 }
 
+} // namespace
+
+std::string str_format_values(const std::string& fmt,
+                              const std::vector<StrFormatValue>& args) {
+    return format_values(fmt, args);
+}
 std::string str_format(const std::string& fmt,
                             const std::vector<std::string>& args) {
-    return str_format_values(fmt, std::vector<StrFormatValue>(args.begin(), args.end()));
+    return format_values(fmt, TextArgs<std::string>{args});
+}
+ScriptString script_str_format_values(const ScriptString& fmt,
+                                      const std::vector<ScriptStrFormatValue>& args) {
+    return format_values(fmt, args);
+}
+ScriptString script_str_format(const ScriptString& fmt, const std::vector<ScriptString>& args) {
+    return format_values(fmt, TextArgs<ScriptString>{args});
+}
+ScriptString str_tostring(detail::o1::Store& store, double value,
+                          const ScriptString& mode, double mintick) {
+    if (!std::isfinite(value) || mode.empty()) {
+        const auto rendered = script_decimal_text(value, 0, 10, false);
+        return ScriptString(store, rendered.view());
+    }
+    if (mode == "mintick" && mintick > 0) {
+        // Keep the legacy stream's locale and binary tick-rounding behavior
+        // at this explicit bounded numeric boundary.
+        return ScriptString(store, str_tostring(value, "mintick", mintick));
+    }
+    if (mode == "mintick") {
+        const auto rendered = script_decimal_text(value, 0, 10, false);
+        return ScriptString(store, rendered.view());
+    }
+    if (mode == "percent") {
+        auto rendered = script_decimal_text(value, 0, 2, false);
+        rendered.append('%');
+        return ScriptString(store, rendered.view());
+    }
+    if (mode == "volume") {
+        const double magnitude = std::fabs(value);
+        int shift = 0;
+        char unit = '\0';
+        if (magnitude >= 1e12) { shift = -12; unit = 'T'; }
+        else if (magnitude >= 1e9) { shift = -9; unit = 'B'; }
+        else if (magnitude >= 1e6) { shift = -6; unit = 'M'; }
+        else if (magnitude >= 1e3) { shift = -3; unit = 'K'; }
+        auto rendered = script_decimal_text(value, 0, shift ? 2 : 0, false, shift);
+        if (unit) rendered.append(unit);
+        return ScriptString(store, rendered.view());
+    }
+    const auto rendered = script_pattern_text(value, mode);
+    return ScriptString(store, rendered.view());
 }
 
 // ---------- str.format_time ----------

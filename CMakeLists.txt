@@ -146,6 +146,9 @@ set(PINEFORGE_KERNEL_SOURCES
     src/matrix.cpp
     src/session_time.cpp
     src/str_utils.cpp
+    src/script_string.cpp
+    src/script_store.cpp
+    src/detail/o1_store.cpp
     src/ta_extremes_volume.cpp
     src/ta_misc.cpp
     src/ta_moving_averages.cpp
