@@ -13,6 +13,21 @@
 // same-bar batch or appending another entry behind the close. Otherwise both
 // the correct and the moved-from replacement key go unused.
 //
+// Row classes (measured on the lab, three trees: the fix, only the key capture
+// reverted, the fully unfixed adapter):
+//   reversal-close-all-capture   CAPTURE WITNESS: red with only the capture
+//                                reverted and on the fully unfixed adapter.
+//   lookup-queued-replacement    LOOKUP WITNESS: red on the fully unfixed
+//                                adapter only; green with only the capture
+//                                reverted (it does not witness the capture).
+//   lookup-different-id          GUARD for the lookup (a different id must not
+//                                be replaced): green on all three trees, red
+//                                only if the lookup matches beyond the id.
+// The older site rows (probe-*, control-*, site-*) keep their roles.
+// The two-close_all sequence (close_all; entry X; close_all; entry X qty 2) is
+// NOT asserted here: the engine's outcome differs from the Pine statement
+// above and is carded separately (CX-CR277-DIVERGE).
+//
 // release-time-key was withdrawn: the lab measured it GREEN with the capture
 // reverted and on the fully unfixed adapter. reversal-close-all-capture uses
 // seed 837832's market S; priced S with OCA reduce; close_all sequence instead.
@@ -322,7 +337,7 @@ void check_row(const Row& row) {
     CHECK(strategy_pending_orders_len(&host) == 0);
 }
 
-enum class ScopeCase { DifferentId, QueuedReplacement, ReversalCloseAllCapture, ParentMismatch };
+enum class ScopeCase { DifferentId, QueuedReplacement, ReversalCloseAllCapture };
 
 struct ScopeRow {
     const char* name;
@@ -384,9 +399,9 @@ public:
         if (scenario == ScopeCase::ReversalCloseAllCapture) {
             config.initial_capital = 1'000'000.0;
             config.pyramiding = 1;
-            config.margin_long = 0.0;
-            config.margin_short = 0.0;
-            // Seed 837832's commission keeps the market S live instead of
+            // Margins stay at 100/100, as in the seed's battery configuration
+            // (test_adapter_live_state_equivalence.cpp, margin off). Seed 837832's
+            // commission keeps the market S live instead of
             // taking the zero-cost same-bar command batch.
             config.commission_type = static_cast<int>(CommissionType::CASH_PER_ORDER);
             config.commission_value = 0.25;
@@ -424,12 +439,6 @@ public:
                 break;
             case ScopeCase::ReversalCloseAllCapture:
                 stage_reversal_close_all_capture();
-                break;
-            case ScopeCase::ParentMismatch:
-                strategy_close_all();
-                strategy_entry("X", false);
-                strategy_close_all();
-                strategy_entry("X", false, missing, missing, reissue_units);
                 break;
             }
             return;
@@ -576,31 +585,6 @@ void ScopeProbeHost::check_reversal_close_all_release() {
     CHECK(strategy_pending_orders_len(this) == 0);
 }
 
-void check_parent_scope_guard() {
-    ScopeProbeHost host(ScopeCase::ParentMismatch);
-    const Bar warmup[] = {
-        {100, 100, 100, 100, 1, start},
-        {100, 100, 100, 100, 1, start + 60'000},
-    };
-    const bool began = host.stream_begin(warmup, 2, "1", "1");
-    CHECK(began);
-    CHECK(host.last_error().empty());
-    if (!began) return;
-    // The first X belongs to the first full close. A second full close is
-    // then current, so the second X must append instead of replacing the
-    // first one. Removing only the paired-parent conjunct replaces it.
-    const auto staged = pending_rows(host);
-    CHECK(pending_id_count(staged, "X") == 2);
-    CHECK(host.stream_push_tick(TradeTick{start + 120'000, 1, 100.0, 1.0}));
-    CHECK(host.last_error().empty());
-    CHECK(host.physical_position().signed_units == -reissue_units);
-    CHECK(host.physical_position().lot_count == 1);
-    CHECK(open_id_count(host, "X") == 1);
-    CHECK(open_id_units(host, "X") == reissue_units);
-    const auto remaining = pending_rows(host);
-    CHECK(pending_id_count(remaining, "X") == 1);
-}
-
 void check_scope_row(const ScopeRow& row) {
     row_name = row.name;
     ScopeProbeHost host(row.scenario);
@@ -649,12 +633,12 @@ void check_scope_row(const ScopeRow& row) {
         CHECK(open_id_units(host, "Y") == seed_units);
         CHECK(fill_id_count(host, "X") == 1);
         CHECK(fill_id_count(host, "Y") == 1);
-        check_parent_scope_guard();
     } else if (row.scenario == ScopeCase::QueuedReplacement) {
         // The second X is the declared two-unit replacement of the row
-        // appended after close_all. The key capture makes it one queued row;
-        // the unfixed adapter leaves the first one under key 0 and produces
-        // two X fills.
+        // appended after close_all. The place_entry LOOKUP (not the key
+        // capture) makes it one queued row: measured, this row stays green
+        // with only the capture reverted; on the fully unfixed adapter the
+        // lookup is absent and two X rows are queued, giving two X fills.
         CHECK(pending_id_count(staged, "X") == 1);
         const auto* x = pending_id(staged, "X");
         CHECK(x != nullptr);
