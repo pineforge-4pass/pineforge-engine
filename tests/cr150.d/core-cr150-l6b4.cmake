@@ -7,4 +7,6 @@ endif()
 if(UNIX)
     list(APPEND TEST_SOURCES test_report_sink_scratch_curve)
     pineforge_add_unit_test(test_report_sink_scratch_curve)
+    # Measures the scratch curve on a disk-backed file; fails on the CLOUD overlayfs container.
+    set_tests_properties(test_report_sink_scratch_curve PROPERTIES LABELS "LAB-DISKSCRATCH")
 endif()

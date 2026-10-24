@@ -1,6 +1,8 @@
 if(UNIX)
     list(APPEND TEST_SOURCES test_report_sink_failure_reasons)
     pineforge_add_unit_test(test_report_sink_failure_reasons)
+    # "report sink requires a disk-backed regular file": fails on the CLOUD overlayfs container.
+    set_tests_properties(test_report_sink_failure_reasons PROPERTIES LABELS "LAB-DISKSCRATCH")
     if(PINEFORGE_BUILD_SOURCE_LAYER)
         list(APPEND TEST_SOURCES test_report_sink_failure_source)
         pineforge_add_unit_test(test_report_sink_failure_source)
