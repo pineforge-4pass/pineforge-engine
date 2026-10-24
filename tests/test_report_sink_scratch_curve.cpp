@@ -812,7 +812,8 @@ RemovalPeaks measure_removal(const TestRoot& root, const std::string& name,
     // cr150-contracts.md, Report-sink presentation: one copied ordinary tail,
     // and the observer keeps its presented value inline, with no owning array.
     // This bare host opens only the Dependency command store (512-byte pages).
-    // Its CachedScratchBacking owns C = kCacheBytes; capture temporarily adds
+    // Its CachedScratchBacking owns one fixed array C = pages * (page bytes
+    // + slot metadata, including dirty flags); capture temporarily adds
     // H = sizeof(one point) before the run exit guard releases the cache.
     // Thus run peak = C + (observer ? H : 0), largest array = C, allocations =
     // one cache + (observer ? one tail : none), and live bytes at return = 0.
@@ -820,7 +821,9 @@ RemovalPeaks measure_removal(const TestRoot& root, const std::string& name,
     // Mutation: in native_execution_consumer.cpp capture_presentation, change
     // new pf_equity_point_t[1]{*held} to new pf_equity_point_t[2]{*held};
     // observer run peak becomes C + 2H and must fail this equality.
-    constexpr std::size_t command_cache_bytes = pineforge::detail::CachedScratchBacking::kCacheBytes;
+    using CommandCache = pineforge::detail::CachedScratchBacking;
+    constexpr std::size_t command_cache_bytes =
+        CommandCache::resident_bytes(CommandCache::default_entries(512), 512) - sizeof(CommandCache);
     const std::size_t capture_arrays = observer ? 1 : 0;
     require(run_arrays.peak_bytes == command_cache_bytes + capture_arrays * held_bytes
                 && run_arrays.capacity_bytes == command_cache_bytes

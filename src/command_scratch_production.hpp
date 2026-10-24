@@ -6,9 +6,30 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <ratio>
 
+#define PINEFORGE_COMMAND_SCRATCH_WRITE_BEHIND_V1 1
+
 namespace pineforge::detail {
+
+// One fixed integer budget per kind, snapshotted at backing construction.
+// Source exit stores use placement_snapshots (including their undo pages);
+// all other command-store caches use journal_pages. No env/run-spec parsing
+// here: the shared run-option owner calls this setter before creating stores.
+enum class CommandScratchResidentKind { placement_snapshots, journal_pages };
+// nullopt restores the geometry-dependent default: min(1024, maximum fitting
+// <=8 MiB including cache object + per-slot metadata/dirty flags + page bytes).
+// Explicit counts must be 1..16384 and also fit that 8 MiB bound for the
+// backing geometry. Zero/too large throws coded invalid_argument with
+// scratch_capacity_exceeded, resource=layout. No live cache is resized.
+std::optional<std::size_t> set_command_scratch_resident_entries(
+    CommandScratchResidentKind kind, std::optional<std::size_t> pages);
+std::size_t command_scratch_default_resident_entries(std::size_t page_bytes) noexcept;
+// Explicit physical-I/O oracle/debug policy. Same record/transaction path,
+// immediate writes, still read-cached. Returns previous thread registration;
+// existing backings retain their policy, just as for observer registrations.
+bool set_command_scratch_write_through(bool enabled) noexcept;
 
 // Provisional 1/16 share from M1; never a fixed byte allowance.
 inline constexpr std::int64_t kCommandScratchArenaShareNumerator = 1;
@@ -65,8 +86,10 @@ ScratchStatus command_scratch_io_status(int error) noexcept;
 // three stores are reserved exactly in the host's bound (arena-bound.md):
 // A = (b + 3q) C, b = ceil(B / C) + 14, q = max(1, (b - 3) / 13) with integer division. Reserve the entire K/chunk directory
 // once at construction. No private file or sizing syscall is used; the
-// attachment must outlive the backing. Buffered sync is
-// supported; data/full return programming_error. Arena faults return io_error
+// attachment must outlive the backing. Extent admission remains immediate;
+// page contents may stay dirty/resident within the selected integer budget.
+// Conflict eviction, explicit buffered sync and destruction write them back.
+// Buffered sync is supported; data/full return programming_error. Arena faults return io_error
 // and carry the original ReportScratchIoError for the owner to rethrow.
 // Crossing K is typed report_sink_failed, reason arena_exhausted;
 // the hosting layer re-places the run on a larger arena. Its needed byte
@@ -85,8 +108,14 @@ ScratchStatus command_scratch_io_status(int error) noexcept;
 // Extents consume the run budget until destruction; over-cap extensions return
 // ScratchStatus::io_error before extending the backing in either mode.
 // Zero page size and sizes beyond off_t throw std::invalid_argument.
-// OS setup failures throw std::system_error.
+// OS setup failures throw std::system_error. The exclusive cache must be
+// drained with CommandScratchStore::drain() (physical only) or explicit
+// sync(buffered) before any direct-file reader bypasses it.
+// Write faults can be deferred to eviction/sync; inspect carried_failure
+// before cleanup. The destructor attempts write-back but cannot report errors;
+// callers requiring a checked close must drain and inspect its status first.
 std::unique_ptr<pineforge::detail::ScratchBacking> make_command_scratch_backing(
-    std::size_t page_size);
+    std::size_t page_size,
+    CommandScratchResidentKind kind = CommandScratchResidentKind::journal_pages);
 
 } // namespace pineforge::detail

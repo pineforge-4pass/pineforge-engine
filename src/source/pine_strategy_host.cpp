@@ -66,7 +66,8 @@ struct SourceExitScratchRun {
     // Geometry is fixed independently of the bar and order populations.
     const std::size_t page_size = command_scratch_page_size();
     std::unique_ptr<::pineforge::detail::ScratchBacking> exit_backing =
-        source::detail::make_command_scratch_backing(page_size);
+        source::detail::make_command_scratch_backing(page_size,
+            ::pineforge::detail::CommandScratchResidentKind::placement_snapshots);
     ::pineforge::detail::CommandScratchStore exit{
         command_scratch_config(page_size, source::detail::exit_scratch_key_order()),
         exit_backing.get()};

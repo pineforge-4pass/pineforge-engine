@@ -153,6 +153,21 @@ private:
     const ScratchIoObserver observer_;
 };
 
+// Optional physical close/read-bypass boundary for a deferred decorator.
+// A separate interface preserves ScratchBacking's existing layout/vtable.
+// Immediate backings need no implementation. Draining does not add a logical
+// read/write/sync charge: accepted logical operations have already been charged.
+// It never commits a store transaction or adds a durability guarantee.
+class ScratchBackingDrain {
+public:
+    virtual ~ScratchBackingDrain() noexcept = default;
+    virtual ScratchStatus drain() noexcept = 0;
+};
+inline ScratchStatus drain_scratch_backing(ScratchBacking& backing) noexcept {
+    if (auto* deferred = dynamic_cast<ScratchBackingDrain*>(&backing)) return deferred->drain();
+    return ScratchStatus::ok;
+}
+
 // Test fixture only: fixed caller-owned bytes, no allocator, file, mapping or
 // capacity growth. A test must provision enough BACKING pages for its entire
 // workload, separately from the store's tiny resident cache. Exhausting this

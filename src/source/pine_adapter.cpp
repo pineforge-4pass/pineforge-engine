@@ -1117,7 +1117,8 @@ struct CommandScratchRun {
     // Fixed geometry, independent of bars, handles and text widths.
     static constexpr std::size_t page_size = 512;
     std::unique_ptr<pineforge::detail::ScratchBacking> backing =
-        make_command_scratch_backing(page_size);
+        make_command_scratch_backing(page_size,
+            pineforge::detail::CommandScratchResidentKind::placement_snapshots);
     CommandScratchStore store;
 
     explicit CommandScratchRun(ScratchKeyOrder order)

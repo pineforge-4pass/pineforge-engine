@@ -160,6 +160,14 @@ public:
     // where it stopped and completes once the backing answers.
     ScratchStatus rollback() noexcept;
 
+    // Checked physical close/read-bypass boundary, outside a transaction and
+    // any read callback. Drains an optional deferred backing, retaining its
+    // typed I/O failure before cleanup; immediate backings need no work.
+    // Does not commit, change logical state/digests or increment logical I/O
+    // counters/observer charges. A failed drain is retriable with the same
+    // live backing. Call before owner destruction when close errors matter.
+    ScratchStatus drain() noexcept;
+
     // While the active transaction is rollback-only, every read, walk and
     // digest below returns programming_error (its pending state may be partial).
     ScratchStatus point(ScratchHandle, ScratchRecordInfo&) const noexcept override;

@@ -1,0 +1,8 @@
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    list(APPEND TEST_SOURCES test_p2_perffix_scratch_write_behind)
+    pineforge_add_unit_test(test_p2_perffix_scratch_write_behind)
+endif()
+if(PINEFORGE_BUILD_SOURCE_LAYER AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    list(APPEND TEST_SOURCES test_p2_perffix_pooc_write_behind)
+    pineforge_add_unit_test(test_p2_perffix_pooc_write_behind)
+endif()

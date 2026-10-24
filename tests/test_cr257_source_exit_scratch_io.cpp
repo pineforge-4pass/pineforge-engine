@@ -1082,6 +1082,22 @@ int main(int argc, char** argv) {
         cr257::require(cr257::kCacheBytes % cr257::platform_page == 0
                        && cr257::kCacheBytes / cr257::platform_page >= 2,
                        "CR-257 lab geometry needs at least two pages per read window");
+        // Keep this historical one-charge/one-pwrite witness on its original
+        // physical policy and 64 KiB read geometry. The separate POOC unit
+        // exercises default write-behind against this write-through oracle.
+        namespace pd = pineforge::detail;
+        struct WriteThroughWitness {
+            bool policy = pd::set_command_scratch_write_through(true);
+            std::optional<std::size_t> journal = pd::set_command_scratch_resident_entries(
+                pd::CommandScratchResidentKind::journal_pages, cr257::kCacheBytes / cr257::platform_page);
+            std::optional<std::size_t> placements = pd::set_command_scratch_resident_entries(
+                pd::CommandScratchResidentKind::placement_snapshots, cr257::kCacheBytes / cr257::platform_page);
+            ~WriteThroughWitness() {
+                pd::set_command_scratch_resident_entries(pd::CommandScratchResidentKind::placement_snapshots, placements);
+                pd::set_command_scratch_resident_entries(pd::CommandScratchResidentKind::journal_pages, journal);
+                pd::set_command_scratch_write_through(policy);
+            }
+        } write_through_witness;
         const std::string mode = argc == 1 ? "source" : argv[1];
         cr257::require(argc <= 2, "CR-257 unexpected command-line arguments");
         if (mode == "source") cr257::source_bounds(cr257::source_run(cr257::kSmallN));

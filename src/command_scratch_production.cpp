@@ -80,6 +80,18 @@ std::uint64_t scale_bytes(std::uint64_t value, std::uint64_t multiplier,
 thread_local ScratchIoObserver command_scratch_observer{};
 thread_local CommandScratchByteCap command_scratch_byte_cap;
 thread_local std::weak_ptr<CommandScratchByteBudget> command_scratch_environment_budget;
+thread_local std::optional<std::size_t> placement_snapshot_entries;
+thread_local std::optional<std::size_t> journal_page_entries;
+thread_local bool command_scratch_write_through = false;
+
+std::optional<std::size_t>& resident_registration(CommandScratchResidentKind kind) {
+    switch (kind) {
+    case CommandScratchResidentKind::placement_snapshots: return placement_snapshot_entries;
+    case CommandScratchResidentKind::journal_pages: return journal_page_entries;
+    }
+    throw coded<std::invalid_argument>(RunFailureCode::engine_invariant, {},
+                                      "unknown command scratch resident kind");
+}
 
 std::uint64_t environment_byte_cap() {
     const char* selected = std::getenv("PINEFORGE_COMMAND_SCRATCH_MAX_BYTES");
@@ -152,15 +164,9 @@ public:
         return failure_ ? &*failure_ : nullptr;
     }
 
-protected:
-    ScratchStatus do_read_page(ScratchPageId id, ScratchBuffer destination) const noexcept override {
-        failure_.reset();
-        if (id >= extent_) return ScratchStatus::not_found;
-        return perform([&] {
-            file_.read(id * page_size(), destination.data, destination.size);
-        });
-    }
-    ScratchStatus do_write_page(ScratchPageId id, ScratchBytes source) noexcept override {
+    // The decorator calls this before accepting dirty resident bytes. Keep
+    // the exact original byte-cap/arena checks and real extent publication.
+    ScratchStatus admit_page(ScratchPageId id) noexcept {
         failure_.reset();
         const auto size = static_cast<std::uint64_t>(page_size());
         const auto limit = static_cast<std::uint64_t>(std::numeric_limits<off_t>::max());
@@ -185,7 +191,21 @@ protected:
             // A following mapping/copy failure may still leave real extent.
             extent_ = id + 1;
         }
-        return perform([&] { file_.write(id * size, source.data, source.size); });
+        return ScratchStatus::ok;
+    }
+
+protected:
+    ScratchStatus do_read_page(ScratchPageId id, ScratchBuffer destination) const noexcept override {
+        failure_.reset();
+        if (id >= extent_) return ScratchStatus::not_found;
+        return perform([&] {
+            file_.read(id * page_size(), destination.data, destination.size);
+        });
+    }
+    ScratchStatus do_write_page(ScratchPageId id, ScratchBytes source) noexcept override {
+        const auto status = admit_page(id);
+        if (status != ScratchStatus::ok) return status;
+        return perform([&] { file_.write(id * page_size(), source.data, source.size); });
     }
     ScratchStatus do_sync(ScratchDurability durability) noexcept override {
         failure_.reset();
@@ -268,6 +288,29 @@ public:
 
     std::uint64_t page_count() const noexcept override { return extent_; }
 
+    ScratchStatus admit_page(ScratchPageId id) noexcept {
+        off_t offset, end;
+        if (!page_offsets(id, offset, end)) return ScratchStatus::programming_error;
+        if (id >= extent_) {
+            const auto growth = static_cast<std::uint64_t>(end)
+                - extent_ * static_cast<std::uint64_t>(page_size());
+            if (budget_ && !budget_->reserve(growth)) return ScratchStatus::io_error;
+            int result;
+            do {
+                result = ::ftruncate(fd_, end);
+            } while (result < 0 && errno == EINTR);
+            if (result < 0) {
+                const int error = errno;
+                if (budget_) budget_->release(growth);
+                return command_scratch_io_status(error);
+            }
+            // ftruncate exposes zero-filled holes. Keep the real new extent
+            // even if the following positional write fails or is short.
+            extent_ = id + 1;
+        }
+        return ScratchStatus::ok;
+    }
+
 protected:
     ScratchStatus do_read_page(ScratchPageId id, ScratchBuffer destination) const noexcept override {
         if (id >= extent_) return ScratchStatus::not_found;
@@ -290,25 +333,10 @@ protected:
     }
 
     ScratchStatus do_write_page(ScratchPageId id, ScratchBytes source) noexcept override {
+        const auto status = admit_page(id);
+        if (status != ScratchStatus::ok) return status;
         off_t offset, end;
         if (!page_offsets(id, offset, end)) return ScratchStatus::programming_error;
-        if (id >= extent_) {
-            const auto growth = static_cast<std::uint64_t>(end)
-                - extent_ * static_cast<std::uint64_t>(page_size());
-            if (budget_ && !budget_->reserve(growth)) return ScratchStatus::io_error;
-            int result;
-            do {
-                result = ::ftruncate(fd_, end);
-            } while (result < 0 && errno == EINTR);
-            if (result < 0) {
-                const int error = errno;
-                if (budget_) budget_->release(growth);
-                return command_scratch_io_status(error);
-            }
-            // ftruncate exposes zero-filled holes. Keep the real new extent
-            // even if the following positional write fails or is short.
-            extent_ = id + 1;
-        }
         std::size_t transferred = 0;
         while (transferred < source.size) {
             const auto chunk = std::min(source.size - transferred,
@@ -351,6 +379,26 @@ private:
 
 } // namespace
 
+std::optional<std::size_t> set_command_scratch_resident_entries(
+        CommandScratchResidentKind kind, std::optional<std::size_t> pages) {
+    if (pages && (*pages == 0 || *pages > CachedScratchBacking::kMaxEntries))
+        throw coded<std::invalid_argument>(RunFailureCode::scratch_capacity_exceeded,
+            {{"resource", "layout"}}, "command scratch resident page budget is out of range");
+    auto& registration = resident_registration(kind);
+    registration.swap(pages);
+    return pages;
+}
+
+std::size_t command_scratch_default_resident_entries(std::size_t page_bytes) noexcept {
+    return CachedScratchBacking::default_entries(page_bytes);
+}
+
+bool set_command_scratch_write_through(bool enabled) noexcept {
+    const bool previous = command_scratch_write_through;
+    command_scratch_write_through = enabled;
+    return previous;
+}
+
 pineforge::detail::ScratchIoObserver set_command_scratch_io_observer(
     pineforge::detail::ScratchIoObserver observer) noexcept {
     const auto previous = command_scratch_observer;
@@ -368,7 +416,7 @@ CommandScratchByteCap set_command_scratch_byte_cap(CommandScratchByteCap registr
 }
 
 std::unique_ptr<pineforge::detail::ScratchBacking> make_command_scratch_backing(
-    std::size_t page_size) {
+    std::size_t page_size, CommandScratchResidentKind kind) {
     if (page_size == 0)
         throw coded<std::invalid_argument>(RunFailureCode::engine_invariant, {},
                                            "command scratch page size is zero");
@@ -376,6 +424,11 @@ std::unique_ptr<pineforge::detail::ScratchBacking> make_command_scratch_backing(
             > static_cast<std::uintmax_t>(std::numeric_limits<off_t>::max()))
         throw coded<std::invalid_argument>(RunFailureCode::scratch_capacity_exceeded,
             {{"resource", "layout"}}, "command scratch page size is not representable in off_t");
+    const auto pages = resident_registration(kind).value_or(
+        command_scratch_default_resident_entries(page_size));
+    if (pages == 0 || pages > CachedScratchBacking::max_entries(page_size))
+        throw coded<std::invalid_argument>(RunFailureCode::scratch_capacity_exceeded,
+            {{"resource", "layout"}}, "command scratch resident page budget is out of range");
     const auto default_cap = environment_byte_cap();
     auto budget = command_scratch_byte_cap;
     if (!budget && default_cap != 0) {
@@ -391,10 +444,16 @@ std::unique_ptr<pineforge::detail::ScratchBacking> make_command_scratch_backing(
         return std::make_unique<CachedScratchBacking>(
             std::make_unique<CommandScratchArena>(
                 page_size, ScratchIoObserver{}, std::move(budget), arena->stats()),
-            command_scratch_observer);
+            pages, command_scratch_observer,
+            +[](ScratchBacking& inner, ScratchPageId id) noexcept {
+                return static_cast<CommandScratchArena&>(inner).admit_page(id);
+            }, command_scratch_write_through);
     return std::make_unique<CachedScratchBacking>(
         std::make_unique<CommandScratchFile>(page_size, ScratchIoObserver{}, std::move(budget)),
-        command_scratch_observer);
+        pages, command_scratch_observer,
+        +[](ScratchBacking& inner, ScratchPageId id) noexcept {
+            return static_cast<CommandScratchFile&>(inner).admit_page(id);
+        }, command_scratch_write_through);
 }
 
 } // namespace pineforge::detail

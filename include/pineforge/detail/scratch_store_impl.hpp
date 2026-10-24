@@ -1294,6 +1294,13 @@ public:
         return st;
     }
 
+    Status drain() noexcept {
+        if (open_status_ != Status::ok || active_ || busy_ != 0) return Status::programming_error;
+        const Status st = drain_scratch_backing(*backing_);
+        note_backing_failure(st);
+        return st;
+    }
+
     // ---- mutations ----------------------------------------------------------------
 
     Status put_impl(const ScratchByteSource& key, const ScratchByteSource& value, std::uint64_t& result) noexcept {
@@ -1792,6 +1799,9 @@ inline ScratchStatus CommandScratchStore::commit(ScratchDurability durability) n
 }
 inline ScratchStatus CommandScratchStore::rollback() noexcept {
     return state_ == nullptr ? ScratchStatus::programming_error : state_->rollback();
+}
+inline ScratchStatus CommandScratchStore::drain() noexcept {
+    return state_ == nullptr ? ScratchStatus::programming_error : state_->drain();
 }
 inline ScratchStatus CommandScratchStore::point(ScratchHandle handle, ScratchRecordInfo& info) const noexcept {
     return state_ == nullptr ? ScratchStatus::programming_error : state_->point(handle, info);

@@ -825,9 +825,9 @@ void short_reads_and_syscall_errors(std::size_t page) {
     const int fd = created_descriptor(before);
     const auto image = pattern(page, 8);
     const auto conflicting_image = pattern(page, 18);
-    require(page >= 512 && page <= CachedScratchBacking::kCacheBytes,
+    const ScratchPageId conflicting_page = CachedScratchBacking::default_entries(page);
+    require(page >= 512 && conflicting_page > 0,
             "fault fixture must exercise a cached page geometry");
-    const ScratchPageId conflicting_page = CachedScratchBacking::kCacheBytes / page;
     std::vector<std::byte> out(page);
     require_status(backing->write_page(0, bytes(image)), ScratchStatus::ok, "seed fault test");
     require_charge(charges, 0, ScratchIoOperation::write_page, 0, page, ScratchStatus::ok);
@@ -884,6 +884,15 @@ void short_reads_and_syscall_errors(std::size_t page) {
 
 int main() {
     try {
+        // These direct-descriptor corruption/short-write assertions require
+        // immediate physical writes. Retain their write-through oracle;
+        // the new cache/POOC units test deferred eviction and sync failures.
+        struct WriteThroughWitness {
+            bool previous = pineforge::detail::set_command_scratch_write_through(true);
+            ~WriteThroughWitness() {
+                pineforge::detail::set_command_scratch_write_through(previous);
+            }
+        } write_through_witness;
         const long platform_page = ::sysconf(_SC_PAGESIZE);
         require(platform_page > 1, "query platform page size");
         TemporaryDirectory directory;
