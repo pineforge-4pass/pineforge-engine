@@ -103,6 +103,28 @@ but no implementation must not be reported as supporting any new mode.
   pages, formatting scratch, indexes and charged I/O windows may not.
   Completion requires a validated complete sink receipt.
 
+File-backed scratch for ordinary runs requires disk backing even when no sink
+or scratch directory was configured. The default selector checks the filesystem
+type with `statfs`: use nonempty `TMPDIR` if disk-backed; when `TMPDIR` is unset
+or empty, retain disk-backed `/tmp` as the legacy first candidate. If that
+candidate is proven tmpfs/ramfs, try `/var/tmp`, also only if disk-backed. A failed
+filesystem query stops resolution with its syscall errno and names the failed
+candidate; it never permits fallback. Directory names never determine the
+medium, and tmpfs/ramfs is never silently selected. Once a disk-backed candidate
+is selected, ordinary creation/write failures keep their existing failure behavior.
+
+If both default candidates are proven tmpfs/ramfs, refuse with `ENODEV` and
+`scratch requires disk backing`. The failure detail names every candidate tried
+and its rejection reason, followed by `set TMPDIR to a disk-backed directory`.
+An explicitly configured directory is kept as supplied, never redirected to a
+default; explicit tmpfs/ramfs scratch is still refused. An explicit sink path
+keeps its existing `requires disk backing, not tmpfs or ramfs` refusal.
+
+The jailed profile is unchanged: it requires a sealed arena and never creates
+a backing file or falls back to `TMPDIR`, `/tmp` or `/var/tmp`. Default directory
+selection does not permit report capture in SUMMARY_ONLY; its no-curve-file
+rule above still applies.
+
 Each sequence retains its existing report order: closed trades followed by
 report-only range-end rows, presented equity points including a selected
 anchor, broker hashes at their original cadence, trace/name association, and

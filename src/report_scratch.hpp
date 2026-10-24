@@ -21,7 +21,8 @@ inline constexpr std::size_t kScratchWindowPoints =
 
 // One positional store through the detail::ScratchFile facade. Startup
 // explicitly attaches an arena; otherwise the facade uses a private, unlinked,
-// close-on-exec file in the supplied directory (empty selects TMPDIR).
+// close-on-exec file (empty: disk-backed TMPDIR or /tmp, with /var/tmp tried
+// only after proven tmpfs/ramfs). Query errors retain their errno.
 // A nonempty directory is used as supplied, with no fallback.
 // L18 owns a separate position_tail store for variable-length records.
 //

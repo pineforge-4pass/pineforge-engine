@@ -73,8 +73,10 @@ ScratchStatus command_scratch_io_status(int error) noexcept;
 // argument is ceil(chunkCeil(required store extent) / f), not a shortfall.
 // The same policy applies at every arena size, including the default.
 // Without an attachment, the disk-file directory comes from
-// PINEFORGE_COMMAND_SCRATCH_DIR, defaulting to /tmp when unset or empty. There
-// is no fallback when the selected directory fails. The unique file is unlinked
+// PINEFORGE_COMMAND_SCRATCH_DIR; unset/empty uses the common disk-backed
+// TMPDIR-or-/tmp policy, trying /var/tmp only after proven tmpfs/ramfs.
+// Query errors retain their errno. An explicit directory never falls back.
+// Tmpfs/ramfs is refused by filesystem type. The unique file is unlinked
 // before returning and its close-on-exec descriptor is closed on destruction.
 // With no registration, PINEFORGE_COMMAND_SCRATCH_MAX_BYTES supplies a default
 // shared across live backings created on this thread with that default. When

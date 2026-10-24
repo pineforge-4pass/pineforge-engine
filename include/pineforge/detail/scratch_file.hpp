@@ -2,6 +2,7 @@
 
 #include <pineforge/detail/scratch_slab.hpp>
 #include <pineforge/detail/scratch_arena.hpp>
+#include <pineforge/detail/scratch_directory.hpp>
 
 #include <algorithm>
 #include <cerrno>
@@ -131,9 +132,19 @@ public:
             arena_ = arena;
             return;
         }
-        const char* temporary = std::getenv("TMPDIR");
-        std::string name = directory_.empty()
-            ? (temporary && *temporary ? temporary : "/tmp") : directory_;
+        std::string refusal;
+        int directory_error = 0;
+        std::string name = resolve_scratch_directory(directory_, refusal, directory_error);
+        if (name.empty()) {
+            if (directory_error != ENODEV || bounded_cache_ || io_raiser_ == IoRaiser::auxiliary)
+                io_error(directory_error, refusal.c_str());
+            // Selection fails before any backing I/O. Carry the same errno,
+            // code and reason directly so the report facade's legacy create
+            // translator cannot erase the candidate/rejection diagnostics.
+            throw coded<std::system_error>(RunFailureCode::report_sink_failed,
+                {{"reason", "scratch_io"}},
+                std::system_error(directory_error, std::generic_category(), refusal));
+        }
         if (name.back() != '/') name += '/';
         name += prefix;
         name += "-XXXXXX";
