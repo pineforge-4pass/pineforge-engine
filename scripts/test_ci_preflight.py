@@ -228,29 +228,73 @@ def routed_line(before, value):
 class WorkflowActionPins(unittest.TestCase):
     """Check the actual workflow and composite-action references."""
 
-    def third_party_uses(self):
-        paths = sorted(path for path in (ROOT / '.github/workflows').iterdir()
-                       if path.suffix in ('.yml', '.yaml'))
-        for name in ('action.yml', 'action.yaml'):
-            paths.extend(sorted((ROOT / '.github/actions').rglob(name)))
-        references = []
-        for path in paths:
-            for number, line in enumerate(path.read_text().splitlines(), 1):
-                match = re.fullmatch(r'[ \t]*(?:-[ \t]+)?uses:[ \t]+(\S+)(.*)', line)
-                if match and not match[1].startswith('./'):
-                    references.append((path.relative_to(ROOT), number, match[1], match[2]))
+    def third_party_uses(self, sources=None):
+        if sources is None:
+            paths = sorted(path for path in (ROOT / '.github/workflows').iterdir()
+                           if path.suffix in ('.yml', '.yaml'))
+            for name in ('action.yml', 'action.yaml'):
+                paths.extend(sorted((ROOT / '.github/actions').rglob(name)))
+            sources = {str(path.relative_to(ROOT)): path.read_text() for path in paths}
+        findings = []
+        references = [(Path(name), number, reference, comment)
+                      for name, number, reference, comment in
+                      ci_preflight.action_uses(sources, findings=findings)
+                      if not reference.startswith(ci_preflight.ACTION_PIN_EXEMPT_PREFIXES)]
+        self.assertEqual(findings, [], '\n'.join(findings))
         self.assertTrue(references, 'no third-party action references were checked')
         return references
+
+    def assert_full_commit_sha(self, reference):
+        self.assertRegex(reference, ci_preflight.ACTION_PIN_SHA)
+
+    def assert_version_comment(self, comment):
+        self.assertRegex(comment, ci_preflight.ACTION_PIN_COMMENT)
 
     def test_third_party_actions_use_full_commit_shas(self):
         for path, number, reference, _ in self.third_party_uses():
             with self.subTest(path=str(path), line=number):
-                self.assertRegex(reference, r'^.+@[0-9a-f]{40}$')
+                self.assert_full_commit_sha(reference)
 
     def test_third_party_actions_have_version_comments(self):
         for path, number, _, comment in self.third_party_uses():
             with self.subTest(path=str(path), line=number):
-                self.assertRegex(comment, r'^[ \t]+# v[0-9]+\.[0-9]+\.[0-9]+$')
+                self.assert_version_comment(comment)
+
+    def test_real_tree_helper_accepts_lint_scalar_grammar(self):
+        reference = 'actions/checkout@11d5960a326750d5838078e36cf38b85af677262'
+        for value in (f'"{reference}" # v4.4.0', f"'{reference}' # v4.4.0",
+                      'docker://alpine:3.20', f'{reference} # v4.4.0-rc.1'):
+            with self.subTest(value=value):
+                # Retain a third-party row when the second row is exempt.
+                sources = {'.github/workflows/grammar.yml':
+                           f'- uses: {reference} # v4.4.0\n- uses: {value}\n'}
+                self.assertEqual(ci_preflight.action_pin_findings(sources), [])
+                rows = self.third_party_uses(sources)
+                expected = [reference] if value.startswith('docker://') else [reference, reference]
+                self.assertEqual([row[2] for row in rows], expected)
+                for _, _, parsed, comment in rows:
+                    self.assert_full_commit_sha(parsed)
+                    self.assert_version_comment(comment)
+        # The shared real-tree assertions must still reject these mutations.
+        path = '.github/workflows/grammar.yml'
+        for _, _, reference, _ in self.third_party_uses(
+                {path: '- uses: actions/checkout@main # v4.4.0\n'}):
+            with self.assertRaises(AssertionError):
+                self.assert_full_commit_sha(reference)
+        for _, _, _, comment in self.third_party_uses(
+                {path: '- uses: actions/checkout@0123456789abcdef0123456789abcdef01234567\n'}):
+            with self.assertRaises(AssertionError):
+                self.assert_version_comment(comment)
+
+    def test_real_tree_helper_refuses_unsupported_uses_shapes(self):
+        path = '.github/workflows/grammar.yml'
+        text = ('- uses: actions/checkout@0123456789abcdef0123456789abcdef01234567 # v4.4.0\n'
+                '- {uses: actions/checkout@main}\n')
+        expected = (f"{path}:2: unsupported uses shape '- {{uses: actions/checkout@main}}'; "
+                    'use a block-style uses: scalar')
+        with self.assertRaises(AssertionError) as failure:
+            self.third_party_uses({path: text})
+        self.assertIn(expected, str(failure.exception))
 
 
 class WorkflowEventFleets(unittest.TestCase):
@@ -605,6 +649,118 @@ class ActionPins(unittest.TestCase):
                 f'    - uses: {reference} # v4.2.2\n')
         self.assertEqual(self.pin_findings(text, composite=True),
                          [self.finding(self.ACTION, 5, reference)])
+
+    @staticmethod
+    def unsupported_finding(path, line, text):
+        return (f'{path}:{line}: unsupported uses shape {text!r}; '
+                'use a block-style uses: scalar')
+
+    def assert_unsupported_step(self, step, *, composite=False, checker=None):
+        if composite:
+            original = (ROOT / self.ACTION).read_text()
+            self.assertTrue(original.endswith('\n'))
+            number = len(original.splitlines()) + 1
+            text = original + '    ' + step + '\n'
+            path = self.ACTION
+        else:
+            original = self.workflow('actions/checkout@main')
+            text = original.replace('- uses: actions/checkout@main', step, 1)
+            self.assertNotEqual(text, original)
+            number, path = 6, self.WORKFLOW
+        self.assertEqual(self.pin_findings(text, composite=composite, checker=checker),
+                         [self.unsupported_finding(path, number, step)])
+
+    def test_flow_mapping_mutable_steps_are_refused(self):
+        steps = (
+            '- {uses: actions/checkout@main}',
+            '- { uses : actions/checkout@main }',
+            '- {"uses": "actions/checkout@main"}',
+            "- { 'uses' : 'actions/checkout@main' }",
+            '- {"uses":"actions/checkout@main"}',
+            '- {name: External action, uses: actions/checkout@main}',
+            '- {name: External action, "uses" : actions/checkout@main, with: {fetch-depth: 0}}',
+            "- {with: {fetch-depth: 0}, 'uses': actions/checkout@main}",
+            '- name: External action, uses: actions/checkout@main',
+            "- name: External action, 'uses' : actions/checkout@main",
+            '- uses: ./.github/actions/local, uses: actions/checkout@main',
+            '- uses: docker://alpine:3.20, "uses": actions/checkout@main',
+            '- {&key "uses": actions/checkout@main}',
+            '- {!!str uses: actions/checkout@main}',
+        )
+        for composite in (False, True):
+            for step in steps:
+                with self.subTest(composite=composite, step=step):
+                    self.assert_unsupported_step(step, composite=composite)
+
+    def test_pinned_flow_mapping_is_refused_as_unsupported(self):
+        step = f'- {{uses: actions/checkout@{self.SHA}}} # v4.4.0'
+        for composite in (False, True):
+            with self.subTest(composite=composite):
+                self.assert_unsupported_step(step, composite=composite)
+
+    def test_multiline_flow_mapping_is_refused_as_unsupported(self):
+        line = f'uses: actions/checkout@{self.SHA} # v4.4.0'
+        original = self.workflow('actions/checkout@main')
+        text = original.replace('- uses: actions/checkout@main',
+                                '- {\n          ' + line + '\n        }', 1)
+        self.assertNotEqual(text, original)
+        self.assertEqual(self.pin_findings(text),
+                         [self.unsupported_finding(self.WORKFLOW, 7, line)])
+
+    def test_flow_mapping_reusable_workflow_is_refused(self):
+        line = 'call: {uses: example/shared/.github/workflows/build.yml@main}'
+        text = 'on: workflow_dispatch\njobs:\n  ' + line + '\n'
+        self.assertEqual(self.pin_findings(text),
+                         [self.unsupported_finding(self.WORKFLOW, 3, line)])
+
+    def test_run_script_uses_text_is_not_a_yaml_key(self):
+        for indicator in ('|', '|-', '|+', '|2', '>', '>-', '>+', '>2-'):
+            with self.subTest(indicator=indicator):
+                script = (f'      - run: {indicator}\n'
+                          "          printf '%s\\n' '\n"
+                          '          uses: actions/checkout@main\n'
+                          "          '\n"
+                          '          # {uses: actions/checkout@main}\n'
+                          '          echo "uses: actions/checkout@main"\n')
+                text = self.workflow('actions/checkout@main').replace(
+                    '      - uses: actions/checkout@main\n', script, 1)
+                self.assertEqual(self.pin_findings(text), [])
+                number = len(text.splitlines()) + 1
+                text += '      - uses: actions/upload-artifact@main\n'
+                self.assertEqual(self.pin_findings(text), [
+                    self.finding(self.WORKFLOW, number, 'actions/upload-artifact@main')])
+        # Quoted YAML values and comments must not expose apparent flow keys.
+        text = ('on: workflow_dispatch\njobs:\n  inspect:\n'
+                '    runs-on: ["self-hosted","pf-gcp-post"]\n    steps:\n'
+                '      - name: "Example, uses: actions/checkout@main"\n'
+                '        run: \'echo "{uses: actions/checkout@main}"\'\n'
+                '      - name: A plain scalar mentioning uses:literal\n'
+                '        run: "true"\n'
+                '      # - {"uses": actions/checkout@main}\n')
+        self.assertEqual(self.pin_findings(text), [])
+
+    def test_removing_unsupported_shape_branch_is_detected(self):
+        step = '- {uses: actions/checkout@main}'
+        sources = {self.WORKFLOW: self.workflow('actions/checkout@main').replace(
+            '- uses: actions/checkout@main', step, 1)}
+        expected = [self.unsupported_finding(self.WORKFLOW, 6, step)]
+        self.assertEqual(ci_preflight.action_pin_findings(sources), expected)
+        source = inspect.getsource(ci_preflight.action_uses)
+        guard = (
+            '            if uses_keys and (value is None or in_flow or len(uses_keys) != 1):\n'
+            '                findings.append(\n'
+            "                    f'{name}:{number}: unsupported uses shape {line.strip()!r}; '\n"
+            "                    'use a block-style uses: scalar')\n"
+            '                continue\n')
+        self.assertEqual(source.count(guard), 1)
+        mutant = source.replace(guard, '', 1)
+        namespace = dict(ci_preflight.action_pin_findings.__globals__)
+        exec(compile(mutant, '<unsupported-action-shape-check-removed>', 'exec'), namespace)
+        exec(compile(inspect.getsource(ci_preflight.action_pin_findings),
+                     '<action-pin-check-with-mutant-extractor>', 'exec'), namespace)
+        # Exercise real extraction and validation with the refusal branch removed.
+        with self.assertRaises(AssertionError):
+            self.assertEqual(namespace['action_pin_findings'](sources), expected)
 
     def test_every_offending_line_is_reported(self):
         text = self.workflow('actions/checkout@main # v4.2.2')

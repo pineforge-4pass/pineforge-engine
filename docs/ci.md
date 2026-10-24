@@ -107,6 +107,7 @@ third-party `uses:` in `.github/workflows/*.yml` (also `.yaml`) and nested
 `uses: owner/action@<40 lowercase hex commit SHA> # v4.2.2`, with the version
 comment on the same line; prerelease and build suffixes are allowed. Local
 `./` actions and reusable workflows, and `docker://` images, are exempt.
+Unsupported `uses` key shapes, including flow mappings, are refused.
 To bump an action, resolve the desired upstream version to its full commit
 SHA and update both the SHA and version comment together.
 
