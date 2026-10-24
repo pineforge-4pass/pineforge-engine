@@ -88,9 +88,19 @@ int main() {
             configure(late);
             require(late.set_report_mode_v1(ReportMode::SUMMARY_ONLY) == PF_REPORT_MODE_ACCEPTED,
                     "ordinary native SUMMARY_ONLY refused");
-            install_control(late, selected, calls);
+            int observer_status = 0;
+            if (selected) {
+                install_control(late, selected, calls);
+            } else {
+                const pf_execution_observer_v1 observer{
+                    sizeof observer, 1, &calls, before_results};
+                observer_status = native_set_execution_observer_v1(&late, &observer);
+                require(observer_status == 0 || observer_status == -2,
+                        "late execution observer returned unexpected registration status: "
+                            + std::to_string(observer_status));
+            }
             late.run(bars.data(), static_cast<int>(bars.size()));
-            if (late.last_run_status() != 0) {
+            if (selected && late.last_run_status() != 0) {
                 // The X1 series fails this order closed at the earliest point
                 // (begin refuses report_mode_unsupported, or the capture-path
                 // backstop raises engine_invariant): the run fails with a
@@ -109,10 +119,33 @@ int main() {
                 clear_control(late, selected);
                 continue;
             }
-            // Without the X1 begin refusal the run completes and the envelope
-            // read refuses (below): either way no inexact summary is published.
             require_completed_run(late, bars);
             require(late.open_lots() == 3, "late capture lacks its three in-window lots");
+            if (!selected && observer_status == -2) {
+                // X1 refuses registration without binding an observer or
+                // changing the ordinary native SUMMARY_ONLY configuration.
+                require(calls == 0, "refused late observer was called");
+                for (int read = 0; read < 2; ++read) {
+                    Envelope result;
+                    require(late.fill_report_envelope_v1(&result.value) == PF_REPORT_MODE_ACCEPTED,
+                            "refused late observer prevented ordinary summary publication");
+                    require(result.value.metadata.complete == 1
+                                && result.value.metadata.mode == PF_REPORT_MODE_SUMMARY_ONLY,
+                            "refused late observer changed summary completion or mode");
+                    require(result.value.report.total_trades == 3
+                                && result.value.report.total_trades
+                                    == result.value.report.metrics.all.num_trades,
+                            "refused late observer summary lost exact trades");
+                    require(result.value.report.trades == nullptr
+                                && result.value.report.trades_len == 0
+                                && result.value.report.equity_curve == nullptr
+                                && result.value.report.equity_curve_len == 0,
+                            "refused late observer summary published report arrays");
+                    clear_control(late, selected);
+                }
+                continue;
+            }
+            // A successfully installed control still makes the read refuse.
             // Removing pending configuration cannot erase the admitted capture.
             for (int read = 0; read < 2; ++read) {
                 Envelope result;
