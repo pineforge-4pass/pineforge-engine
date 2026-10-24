@@ -13090,11 +13090,13 @@ bool NativeExecutionConsumer::fill_selected_report(const BacktestEngine& engine,
     // present_report is never called at read.
     const ReportC& captured = consumer->presentation_;
     const bool scratch_equity = consumer->presentation_sink_equity_written_;
-    const bool sink_equity = scratch_equity && engine.report_sink_state_.enabled;
+    const bool sink_equity = scratch_equity
+        && (engine.report_sink_state_.enabled || engine.report_sink_state_.receipt.complete);
     const bool ordinary_sink = !consumer->selected_epoch_.admitted_selected
         && engine.report_sink_state_.equity_scratch != nullptr;
     const bool captured_sink_trades = consumer->presentation_sink_trades_;
-    const bool sink_trades = captured_sink_trades && engine.report_sink_state_.enabled;
+    const bool sink_trades = captured_sink_trades
+        && (engine.report_sink_state_.enabled || engine.report_sink_state_.receipt.complete);
     const bool borrow_captured_trades = !captured_sink_trades && engine.report_sink_state_.enabled;
     // The presentation may publish a different length than metrics use.
     // Sink-off storage covers their maximum; a sink reads the presented

@@ -1946,7 +1946,7 @@ int BacktestEngine::fill_report_envelope_v1(ReportEnvelopeV1* out) const {
     if (report_sink_setter_status() != 0) return PF_REPORT_MODE_BUSY;
     // The capture policy and the configured sink must still agree; a sink
     // removed or installed after the setter makes the shape ambiguous.
-    const bool sink_enabled = report_sink_state_.enabled;
+    const bool sink_enabled = report_sink_state_.enabled || report_sink_state_.receipt.complete;
     if ((report_mode_ == ReportMode::FULL && sink_enabled)
         || (report_mode_ == ReportMode::SUMMARY_ONLY && sink_enabled)
         || (report_mode_ == ReportMode::STREAMED && !sink_enabled))
