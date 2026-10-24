@@ -4239,6 +4239,28 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
     PINEFORGE_RETIREMENT_OBSERVE(placement_, cycle, askable_origins, roots,
                                 candidates, first_reissues);
 
+    // A released K3 witness needs its own witness until the closure stops growing.
+    // visit_rows walks incarnations in order, so the first match is the earliest.
+    std::size_t witness_count;
+    do {
+        witness_count = first_reissues.size();
+        for (const auto incarnation : released) {
+            if (!contains(first_reissues, incarnation)) continue;
+            const auto& leg = placement_.at(incarnation);
+            placement_.visit_rows([&](std::uint64_t newer, const PlacementSnapshot& peer) {
+                PINEFORGE_TAIL_WORK("k3_pairs", 1);
+                if (newer <= incarnation || peer.placement_cycle != cycle || peer.family != leg.family
+                    || peer.placement_script_open_ms <= leg.placement_script_open_ms
+                    || same_double_bits(peer.exit_levels.stop, leg.exit_levels.stop)
+                    || peer.source_id != leg.source_id || peer.from_entry != leg.from_entry) return false;
+                if (!contains(first_reissues, newer))
+                    first_reissues.insert(std::lower_bound(first_reissues.begin(),
+                                                          first_reissues.end(), newer), newer);
+                return true;
+            });
+        }
+    } while (first_reissues.size() != witness_count);
+
     auto& doomed = sweep.doomed;
     auto root_cursor = roots.begin();
     placement_.visit_rows([&](std::uint64_t incarnation, const PlacementSnapshot& value) {
