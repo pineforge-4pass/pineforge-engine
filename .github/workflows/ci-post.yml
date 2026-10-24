@@ -121,7 +121,7 @@ jobs:
     steps:
       # The tested commit and its parents: a pull request's merge and the base
       # it merged into, a push's commit and its parent.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 2
           persist-credentials: false
@@ -171,7 +171,7 @@ jobs:
         run: |
           echo "::error::authz did not pass; nothing of this run's code is checked out or run"
           exit 1
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         if: ${{ needs.authz.result == 'success' }}
         with:
           persist-credentials: false
@@ -203,7 +203,7 @@ jobs:
 
       - name: Retain preflight diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ci-preflight
           path: build-ci-preflight/
@@ -220,13 +220,13 @@ jobs:
         run: |
           echo "::error::authz did not pass; nothing of this run's code is checked out or run"
           exit 1
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         if: ${{ needs.authz.result == 'success' }}
         with:
           persist-credentials: false
           fetch-depth: 0
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.12'
       - name: Install the harness test runner
@@ -239,7 +239,7 @@ jobs:
         run: python3 scripts/ci_preflight.py --output-dir build-ci-preflight-slow --tier slow
       - name: Retain preflight diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ci-preflight-slow
           path: build-ci-preflight-slow/
@@ -286,14 +286,14 @@ jobs:
             ubuntu-24.04:Linux|macos-26:macOS) ;;
             *) echo "::error::post fleet runner OS $ACTUAL_OS cannot verify $REQUESTED_PLATFORM"; exit 1 ;;
           esac
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         if: ${{ needs.authz.result == 'success' }}
         with:
           persist-credentials: false
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.12'
 
@@ -317,7 +317,7 @@ jobs:
       # fallback. Only main writes this namespace, never a PR merge ref.
       - name: Restore ccache
         id: ccache-restore
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-main-${{ runner.os }}-${{ runner.arch }}-${{ matrix.build_type }}-${{ github.sha }}
@@ -346,7 +346,7 @@ jobs:
 
       - name: Retain CI diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ci-diagnostics-${{ matrix.platform.os }}-${{ matrix.build_type }}
           path: ci-diagnostics/
@@ -354,7 +354,7 @@ jobs:
 
       - name: Save main ccache
         if: ${{ success() && github.ref == 'refs/heads/main' && steps.ccache-restore.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ${{ steps.ccache-restore.outputs.cache-primary-key }}
@@ -388,14 +388,14 @@ jobs:
             ubuntu-24.04:Linux|macos-26:macOS) ;;
             *) echo "::error::post fleet runner OS $ACTUAL_OS cannot verify $REQUESTED_PLATFORM"; exit 1 ;;
           esac
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         if: ${{ needs.authz.result == 'success' }}
         with:
           persist-credentials: false
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.12'
 
@@ -416,7 +416,7 @@ jobs:
       # Keep the main cache namespace shared with PR restores. Only main saves.
       - name: Restore ccache
         id: ccache-restore
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-main-${{ runner.os }}-${{ runner.arch }}-${{ matrix.build_type }}-${{ github.sha }}
@@ -440,7 +440,7 @@ jobs:
 
       - name: Retain CI diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ci-diagnostics-${{ matrix.os }}-${{ matrix.build_type }}
           path: ci-diagnostics/
@@ -448,7 +448,7 @@ jobs:
 
       - name: Save main ccache
         if: ${{ success() && github.ref == 'refs/heads/main' && steps.ccache-restore.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ${{ steps.ccache-restore.outputs.cache-primary-key }}
@@ -477,14 +477,14 @@ jobs:
         run: |
           echo "::error::authz did not pass; nothing of this run's code is checked out or run"
           exit 1
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         if: ${{ needs.authz.result == 'success' }}
         with:
           persist-credentials: false
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.12'
 
@@ -504,7 +504,7 @@ jobs:
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libeigen3-dev tzdata-legacy ccache
 
       - name: Restore ccache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-${{ runner.os }}-${{ runner.arch }}-sanitizers-${{ github.sha }}
@@ -521,7 +521,7 @@ jobs:
 
       - name: Retain CI diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ci-diagnostics-sanitizers
           path: ci-diagnostics/
@@ -547,14 +547,14 @@ jobs:
         run: |
           echo "::error::authz did not pass; nothing of this run's code is checked out or run"
           exit 1
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         if: ${{ needs.authz.result == 'success' }}
         with:
           persist-credentials: false
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.12'
 
@@ -574,7 +574,7 @@ jobs:
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y cmake ninja-build libeigen3-dev tzdata-legacy libsqlite3-dev libssl-dev zlib1g-dev ccache
 
       - name: Restore ccache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-${{ runner.os }}-${{ runner.arch }}-kernel-${{ github.sha }}
@@ -596,7 +596,7 @@ jobs:
 
       - name: Retain CI diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ci-diagnostics-kernel
           path: ci-diagnostics/

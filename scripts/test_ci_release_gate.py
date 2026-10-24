@@ -2122,7 +2122,7 @@ class WorkflowPinTests(unittest.TestCase):
                       '          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"', push)
 
         steps = _steps(jobs["prebuilt"])
-        checkout = next(step for step in steps if "uses: actions/checkout@v4" in step)
+        checkout = next(step for step in steps if "uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0" in step)
         self.assertIn("          ref: ${{ inputs.dry_run && github.sha || needs.release.outputs.sha }}\n",
                       checkout)
         self.assertIn("          fetch-depth: 0", checkout)
