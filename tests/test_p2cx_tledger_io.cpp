@@ -138,6 +138,9 @@ Counts bars_with_open_lot(int population, int bars_count, bool spilled) {
             first_runup = base.lots()[0].max_runup;
             first_drawdown = base.lots()[0].max_drawdown;
             reader.ledger().set_scratch_directory(".");
+            // Run begin sets the ledger budget from the run mode: no report
+            // sink is installed here, so it is the default, not the sink cap.
+            CHECK(reader.ledger().cache_rows() == TradeLedger::kDefaultCacheRows);
             for (const auto& value : expected) reader.ledger().push_back(value);
             if (spilled) pressure(reader.ledger(), expected);
             const auto cold = closed_loop(reader, expected);
@@ -179,7 +182,11 @@ void per_bar_reads() {
     // The four-tiny-row case is already green on frozen2 and is labelled so.
     const auto control = bars_with_open_lot(4, 1000, false);
     CHECK(control.reads == 0 && control.writes == 0);
-    for (const int population : {4, 32}) {
+    // 300 > kSinkCacheRows (128): a sink-off run must keep the DEFAULT budget
+    // set at run begin, so 300 immutable rows still fit and the loop does no I/O.
+    static_assert(300 > TradeLedger::kSinkCacheRows && 300 < TradeLedger::kDefaultCacheRows,
+                  "population must separate the sink budget from the default budget");
+    for (const int population : {4, 32, 300}) {
         const auto small = bars_with_open_lot(population, 1000, true);
         const auto large = bars_with_open_lot(population, 10000, true);
         CHECK(small.reads == 0 && small.writes == 0);
