@@ -364,18 +364,22 @@ private:
                 at == owner->resident_.rend() ? nullptr : at->second};
     }
     template<bool Const>
-    void recycle_sorted(Offset at, std::shared_ptr<Row>& row,
+    void recycle_sorted(Offset offset, std::shared_ptr<Row>& row,
                         typename Residents::node_type& spare) const {
         // D-05: do not sweep unrelated residents or write an unchanged row.
         // A copied iterator/Range pin prevents both eviction and buffer reuse.
-        if (row.use_count() == 2 && row->second.spillable()) {
-            const auto value = row->second.retired_record();
-            const auto stored = index_.get(at);
-            const bool unchanged = std::memcmp(&value, &stored, sizeof value) == 0;
-            if (unchanged || !Const) {
-                if (!unchanged) index_.set(at, value);
-                unindex_resident(row.get());
-                spare = resident_.extract(row->resident_at_);
+        if (row.use_count() == 2) {
+            // Storage predicate hooks use the resident iterator named at.
+            const auto at = row->resident_at_;
+            if (at->second->second.spillable()) {
+                const auto value = at->second->second.retired_record();
+                const auto stored = index_.get(offset);
+                const bool unchanged = std::memcmp(&value, &stored, sizeof value) == 0;
+                if (unchanged || !Const) {
+                    if (!unchanged) index_.set(offset, value);
+                    unindex_resident(at->second.get());
+                    spare = resident_.extract(at);
+                }
             }
         }
         row.reset();
