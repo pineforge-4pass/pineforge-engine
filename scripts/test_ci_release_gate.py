@@ -1699,6 +1699,8 @@ class RulesetsProbeTests(unittest.TestCase):
             '`["self-hosted","pf-gcp-pr"]`.',
             "`pf-gcp-main` admits only allowlisted workflows (an org runner-group restriction),\n"
             "so the one-time probe uses `pf-gcp-post`.",
+            "The dispatch must run from `main`; the workflow itself refuses any other ref\n"
+            "before minting the App token or checking out repository code.",
         )
         message = "docs must state the probe's main dispatch and actual fleet routes"
         for required in requirements:

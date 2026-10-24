@@ -1385,6 +1385,8 @@ The probe job runs on `["self-hosted","pf-gcp-post"]`, with `authz` on
 `["self-hosted","pf-gcp-pr"]`.
 `pf-gcp-main` admits only allowlisted workflows (an org runner-group restriction),
 so the one-time probe uses `pf-gcp-post`.
+The dispatch must run from `main`; the workflow itself refuses any other ref
+before minting the App token or checking out repository code.
 It runs `python3 scripts/ci_release_gate.py rulesets-probe --repo OWNER/REPO`,
 reading only repository metadata, the parent-inclusive ruleset inventory and
 branch details. Success prints the barrier id/name and one compact inventory

@@ -66,6 +66,9 @@ PROMOTION_AUTHORIZATION_STEP = 'Only our own merged pull requests and dispatches
 RULESETS_PROBE_FINDING = (
     'release-ruleset-probe.yml must keep the dispatch-only read-only probe '
     'with the same release App token')
+RULESETS_PROBE_REF_FINDING = (
+    'release-ruleset-probe.yml probe must refuse a dispatch ref other than '
+    'refs/heads/main as its first step before minting the App token or checkout')
 RULESETS_PROBE_WORKFLOW = '''name: Release ruleset probe
 
 on:
@@ -142,6 +145,14 @@ jobs:
     needs: [authz]
     runs-on: ["self-hosted","pf-gcp-post"]
     steps:
+      - name: Refuse a dispatch ref other than main
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error title=rulesets-probe::$1"; echo "rulesets-probe: REFUSED: $1" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
+          [ "$REF" = refs/heads/main ] || fail "release ruleset probe requires refs/heads/main"
+
       - name: Mint org App token
         id: app
         uses: actions/create-github-app-token@v1
@@ -516,7 +527,9 @@ class PreflightFailures(unittest.TestCase):
                     continue
                 value, = ci_preflight._job_values(body, 'runs-on', unquote=False)
                 finding = f'{name} job {job} must run on {runner}'
-                if fixed_runner is not None and fixed_runner != PR_RUNNER:
+                if fixed_runner == POST_RUNNER:
+                    finding += ' (post fleet)'
+                elif fixed_runner is not None and fixed_runner != PR_RUNNER:
                     finding += ' (isolated release)'
                 yield name, job, fleet, f'    runs-on: {value}\n', finding
 
@@ -2250,7 +2263,7 @@ exit "$lookup_exit"
                          [('authz', 'pr'), ('probe', 'post')])
         self.assertEqual(sites[1][-1],
                          f'release-ruleset-probe.yml job probe must run on {POST_RUNNER} '
-                         '(isolated release)')
+                         '(post fleet)')
 
     def test_gcp_sites_reject_retired_and_void_labels(self):
         for name, job, fleet, before, finding in self.gcp_sites():
@@ -3664,7 +3677,7 @@ finally:
     def test_release_ruleset_probe_refuses_release_and_pr_fleets(self):
         original, others = self.ci_sources(), self.other_sources()
         finding = (f'release-ruleset-probe.yml job probe must run on {POST_RUNNER} '
-                   '(isolated release)')
+                   '(post fleet)')
         for runner in (RELEASE_RUNNER, PR_RUNNER):
             with self.subTest(runner=runner):
                 changed = in_job(RULESETS_PROBE_WORKFLOW, 'probe',
@@ -3678,6 +3691,104 @@ finally:
                 self.assertIn(RULESETS_PROBE_FINDING,
                               ci_preflight.release_rulesets_probe_workflow_findings(
                                   changed, others['release.yml']))
+
+    def test_release_ruleset_probe_main_ref_guard_precedes_credentials(self):
+        marker = '      - name: Refuse a dispatch ref other than main'
+        for workflow in (
+                (ROOT / '.github/workflows/release-ruleset-probe.yml').read_text(),
+                ci_preflight.RELEASE_RULESETS_PROBE_WORKFLOW,
+                RULESETS_PROBE_WORKFLOW):
+            with self.subTest(workflow=workflow):
+                steps = ci_preflight._steps(_jobs(workflow)['probe'])
+                self.assertEqual(steps[0].splitlines()[0], marker)
+                self.assertEqual(ci_preflight._step_values(steps[0], 'if'), [])
+                self.assertEqual(ci_preflight._step_values(steps[0], 'continue-on-error'), [])
+                self.assertEqual(ci_preflight._step_values(steps[0], 'env'),
+                                 ['REF: ${{ github.ref }}'])
+                self.assertNotIn('secrets.', steps[0])
+                self.assertNotIn('token', steps[0])
+                self.assertEqual(steps[1].splitlines()[0], '      - name: Mint org App token')
+                self.assertEqual(steps[2].splitlines()[0], '      - name: Checkout')
+
+    def test_release_ruleset_probe_topic_dispatch_stops_before_mint(self):
+        workflow = (ROOT / '.github/workflows/release-ruleset-probe.yml').read_text()
+        steps = ci_preflight._steps(_jobs(workflow)['probe'])
+        mint = next(index for index, step in enumerate(steps)
+                    if step.splitlines()[0] == '      - name: Mint org App token')
+        prefix = []
+        for step in steps[:mint]:
+            self.assertEqual(ci_preflight._step_values(step, 'uses'), [])
+            self.assertEqual(ci_preflight._step_values(step, 'if'), [])
+            self.assertEqual(ci_preflight._step_values(step, 'continue-on-error'), [])
+            self.assertEqual(ci_preflight._step_values(step, 'env'),
+                             ['REF: ${{ github.ref }}'])
+            name, = ci_preflight._step_values(step, 'name')
+            prefix.append(job_script(workflow, 'probe', name))
+        # Execute the real pre-mint shell; the echo marks reaching the action boundary.
+        script = ''.join(prefix) + 'echo "mint step reached"\n'
+        for ref, expected in (
+                ('refs/heads/topic', 1), ('refs/tags/main', 1),
+                ('refs/heads/main/topic', 1), ('refs/heads/Main', 1),
+                ('', 1), ('refs/heads/main', 0)):
+            with self.subTest(ref=ref), tempfile.TemporaryDirectory() as directory:
+                summary = Path(directory) / 'summary'
+                result = subprocess.run(
+                    ['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', script],
+                    env={'PATH': os.environ.get('PATH', '/usr/bin:/bin'),
+                         'REF': ref, 'GITHUB_STEP_SUMMARY': str(summary)},
+                    capture_output=True, text=True)
+                self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
+                self.assertEqual(result.stderr, '')
+                if expected:
+                    self.assertEqual(result.stdout, '::error title=rulesets-probe::'
+                                     'release ruleset probe requires refs/heads/main\n')
+                    self.assertEqual(summary.read_text(), 'rulesets-probe: REFUSED: '
+                                     'release ruleset probe requires refs/heads/main\n')
+                    self.assertNotIn('mint step reached', result.stdout)
+                else:
+                    self.assertEqual(result.stdout, 'mint step reached\n')
+                    self.assertFalse(summary.exists())
+
+    def test_release_ruleset_probe_main_ref_guard_mutations_refuse(self):
+        original, others = self.ci_sources(), self.other_sources()
+        steps = ci_preflight._steps(_jobs(RULESETS_PROBE_WORKFLOW)['probe'])
+        guard, mint, checkout = (step + '\n' for step in steps[:3])
+        no_guard = RULESETS_PROBE_WORKFLOW.replace(guard, '', 1)
+        comparison = ('          [ "$REF" = refs/heads/main ] || fail '
+                      '"release ruleset probe requires refs/heads/main"')
+        guard_name = '      - name: Refuse a dispatch ref other than main\n'
+        for name, before, after in (
+                ('missing main ref guard', guard, ''),
+                ('main ref guard after mint', guard + mint, mint + guard),
+                ('main ref guard after checkout', guard + mint + checkout, mint + checkout + guard),
+                ('dispatch input ref', '          REF: ${{ github.ref }}',
+                 '          REF: ${{ github.event.inputs.ref }}'),
+                ('head ref', '          REF: ${{ github.ref }}',
+                 '          REF: ${{ github.head_ref }}'),
+                ('different ref comparison', comparison,
+                 comparison.replace('[ "$REF" = refs/heads/main ]', '[ "$REF" = refs/heads/topic ]')),
+                ('prefix ref comparison', comparison,
+                 comparison.replace('[ "$REF" = refs/heads/main ]', '[[ "$REF" == refs/heads/main* ]]')),
+                ('masked main ref refusal', comparison,
+                 '          [ "$REF" = refs/heads/main ] || true'),
+                ('neutralized main ref exit', guard, guard.replace('exit 1; }', 'return 0; }')),
+                ('main ref continue-on-error', guard_name,
+                 guard_name + '        continue-on-error: true\n'),
+                ('main ref if false', guard_name, guard_name + '        if: false\n'),
+                ('main ref if always', guard_name, guard_name + '        if: ${{ always() }}\n'),
+                ('main ref guard only in authz', RULESETS_PROBE_WORKFLOW,
+                 in_job(no_guard, 'authz', '    steps:\n', '    steps:\n' + guard))):
+            with self.subTest(invariant=name):
+                self.assertEqual(RULESETS_PROBE_WORKFLOW.count(before), 1, name)
+                changed = RULESETS_PROBE_WORKFLOW.replace(before, after, 1)
+                self.assertNotEqual(changed, RULESETS_PROBE_WORKFLOW)
+                direct = ci_preflight.release_rulesets_probe_workflow_findings(
+                    changed, others['release.yml'])
+                combined = ci_workflow_findings(
+                    *original, others={**others, 'release-ruleset-probe.yml': changed})
+                for findings in (direct, combined):
+                    self.assertIn(RULESETS_PROBE_REF_FINDING, findings)
+                    self.assertIn(RULESETS_PROBE_FINDING, findings)
 
     def test_release_ruleset_probe_comments_describe_the_actual_pin_scope(self):
         source = (ROOT / 'scripts/ci_preflight.py').read_text()
@@ -3740,7 +3851,9 @@ finally:
                 ('missing authz', authz, ''),
                 ('missing needs', '    needs: [authz]\n', ''),
                 ('disabled authz', '    name: authz\n', '    name: authz\n    if: false\n'),
-                ('authz refusal', 'exit 1; }', ':; }'),
+                ('authz refusal',
+                 'fail() { echo "::error title=authz::$1"; echo "authz: REFUSED: $1" >> "$GITHUB_STEP_SUMMARY"; exit 1; }',
+                 'fail() { echo "::error title=authz::$1"; echo "authz: REFUSED: $1" >> "$GITHUB_STEP_SUMMARY"; :; }'),
                 ('authz permissions', '    permissions: {}', '    permissions: {contents: read}'),
                 ('authz runner', '    runs-on: ["self-hosted", "pf-gcp-pr"]',
                  '    runs-on: ["self-hosted", "pf-gcp-post"]'),

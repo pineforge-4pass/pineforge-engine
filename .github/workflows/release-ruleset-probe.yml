@@ -76,6 +76,14 @@ jobs:
     needs: [authz]
     runs-on: ["self-hosted","pf-gcp-post"]
     steps:
+      - name: Refuse a dispatch ref other than main
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error title=rulesets-probe::$1"; echo "rulesets-probe: REFUSED: $1" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
+          [ "$REF" = refs/heads/main ] || fail "release ruleset probe requires refs/heads/main"
+
       - name: Mint org App token
         id: app
         uses: actions/create-github-app-token@v1

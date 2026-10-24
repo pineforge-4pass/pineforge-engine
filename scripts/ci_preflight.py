@@ -1008,7 +1008,8 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                     actual = [_runner_value(value) for value in actual]
                     expected = [_runner_value(value) for value in expected]
                 if actual != expected:
-                    suffix = '' if fixed_release[job] == PR_RUNNER else ' (isolated release)'
+                    suffix = {PR_RUNNER: '', POST_RUNNER: ' (post fleet)'}.get(
+                        fixed_release[job], ' (isolated release)')
                     findings.append(f'{name} job {job} must run on {fixed_release[job]}{suffix}')
                 environments = _job_values(workflow, 'env') + _job_values(body, 'env')
                 if any(re.search(r'\bPF_CI_LABELS["\']?\s*:', value) for value in environments):
@@ -1250,6 +1251,14 @@ jobs:
     needs: [authz]
     runs-on: ["self-hosted","pf-gcp-post"]
     steps:
+      - name: Refuse a dispatch ref other than main
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error title=rulesets-probe::$1"; echo "rulesets-probe: REFUSED: $1" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
+          [ "$REF" = refs/heads/main ] || fail "release ruleset probe requires refs/heads/main"
+
       - name: Mint org App token
         id: app
         uses: actions/create-github-app-token@v1
@@ -1274,15 +1283,20 @@ jobs:
 
 
 def release_rulesets_probe_workflow_findings(workflow: str, release: str) -> list[str]:
-    probe_app = _step_named(_steps(_jobs(workflow).get('probe', '')),
-                           '      - name: Mint org App token')
+    steps = _steps(_jobs(workflow).get('probe', ''))
+    expected = _steps(_jobs(RELEASE_RULESETS_PROBE_WORKFLOW)['probe'])
+    findings = []
+    if not steps or _code(steps[0]) != _code(expected[0]):
+        findings.append('release-ruleset-probe.yml probe must refuse a dispatch ref other than '
+                        'refs/heads/main as its first step before minting the App token or checkout')
+    probe_app = _step_named(steps, '      - name: Mint org App token')
     release_app = _step_named(_steps(_jobs(release).get('release', '')),
                              '      - name: Mint org App token')
     if (_code(workflow) != _code(RELEASE_RULESETS_PROBE_WORKFLOW)
             or _code(probe_app) != _code(release_app)):
-        return ['release-ruleset-probe.yml must keep the dispatch-only read-only probe '
-                'with the same release App token']
-    return []
+        findings.append('release-ruleset-probe.yml must keep the dispatch-only read-only probe '
+                        'with the same release App token')
+    return findings
 
 
 def release_bump_workflow_findings(workflow: str) -> list[str]:
