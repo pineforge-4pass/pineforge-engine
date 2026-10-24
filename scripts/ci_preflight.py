@@ -20,6 +20,7 @@ so neither had drift to report or anything to wait for.
 from __future__ import annotations
 
 import argparse
+from collections.abc import Iterator
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -736,12 +737,62 @@ def _key_value(line: str, key: str) -> str | None:
     return '' if value.startswith('#') else value
 
 
-def action_pin_findings(sources: dict[str, str]) -> list[str]:
-    """Check uses scalars and their same-line comments without a YAML dependency."""
-    findings = []
+ACTION_PIN_SHA = re.compile(r'\A[^@\s]+@[0-9a-f]{40}\Z')
+ACTION_PIN_COMMENT = re.compile(
+    r'\A#[ \t]+v[0-9]+(?:\.[0-9]+)*'
+    r'(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?'
+    r'(?:\+[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?[ \t]*\Z')
+ACTION_PIN_EXEMPT_PREFIXES = ('./', 'docker://')
+# Consume quoted text and comments before looking for another mapping key.
+# The lookbehind leaves flow delimiters available for depth accounting.
+_ACTION_YAML_TOKENS = re.compile(
+    r"""(?P<uses>(?:^|(?<=[ \t,{\[?]))(?:(?:"uses"|'uses')[ \t]*:"""
+    r'|uses[ \t]*:(?=[ \t{}\[\],]|$)))'
+    r"""|"(?:\\.|[^"\\])*"|'(?:''|[^'])*'"""
+    r'|(?P<comment>(?<!\S)#[^\r\n]*)|(?P<flow>[{}\[\]])')
+
+
+def action_uses(sources: dict[str, str], *,
+                findings: list[str]) -> Iterator[tuple[str, int, str, str]]:
+    """Yield (file, line, reference, comment); append unsupported-key findings."""
     for name, text in sources.items():
+        scalar_depth = None
+        flow_depth = 0
         for number, line in enumerate(text.splitlines(), 1):
-            value = _key_value(re.sub(r'^\s*-[ \t]+', '', line), 'uses')
+            if scalar_depth is not None:
+                if not line.strip() or _indent(line) > scalar_depth:
+                    continue
+                scalar_depth = None
+            if not line.strip() or line.lstrip().startswith('#'):
+                continue
+            stripped = line.strip()
+            step = re.match(r'-[ \t]+', stripped)
+            key_line = stripped[step.end():] if step else stripped
+            key = re.match(r"""(?:"([^"]+)"|'([^']+)'|([^\s:'"]+))[ \t]*:""", key_line)
+            key_name = next(group for group in key.groups() if group is not None) if key else ''
+            first = _key_value(key_line, key_name) if key else None
+            if first is not None and re.fullmatch(
+                    r'[|>](?:[+-][1-9]?|[1-9][+-]?)?(?:[ \t]+#[^\r\n]*)?[ \t]*', first):
+                # A compact "- run:" key is two columns deeper than the dash.
+                # As with _job_values, a scalar's indented text is not YAML keys.
+                scalar_depth = _indent(line) + (step.end() if step else 0)
+            collection = (flow_depth > 0 or key_line.startswith(('{', '['))
+                          or (first is not None and first.startswith(('{', '['))))
+            uses_keys = []
+            in_flow = flow_depth > 0
+            for token in _ACTION_YAML_TOKENS.finditer(key_line):
+                if token.lastgroup == 'uses':
+                    uses_keys.append(token.start())
+                    in_flow = in_flow or flow_depth > 0
+                elif token.lastgroup == 'flow' and collection:
+                    flow_depth = (flow_depth + 1 if token.group() in '{['
+                                  else max(0, flow_depth - 1))
+            value = _key_value(key_line, 'uses')
+            if uses_keys and (value is None or in_flow or len(uses_keys) != 1):
+                findings.append(
+                    f'{name}:{number}: unsupported uses shape {line.strip()!r}; '
+                    'use a block-style uses: scalar')
+                continue
             if value is None:
                 continue
             # Keep quotes separate from the trailing comment: a # inside a
@@ -752,17 +803,20 @@ def action_pin_findings(sources: dict[str, str]) -> list[str]:
             reference = (next(group for group in scalar.groups()[:3] if group is not None)
                          if scalar else value)
             comment = (scalar.group(4) or '') if scalar else ''
-            if reference.startswith(('./', 'docker://')):
-                continue
-            if (re.fullmatch(r'[^@\s]+@[0-9a-f]{40}', reference)
-                    and re.fullmatch(
-                        r'#[ \t]+v[0-9]+(?:\.[0-9]+)*'
-                        r'(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?'
-                        r'(?:\+[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?[ \t]*', comment)):
-                continue
-            findings.append(
-                f'{name}:{number}: third-party uses {reference!r} must be pinned to a '
-                '40-character lowercase hex SHA with a trailing # v<version> comment')
+            yield name, number, reference, comment
+
+
+def action_pin_findings(sources: dict[str, str]) -> list[str]:
+    """Check uses scalars and refuse unsupported keys without a YAML dependency."""
+    findings = []
+    for name, number, reference, comment in action_uses(sources, findings=findings):
+        if reference.startswith(ACTION_PIN_EXEMPT_PREFIXES):
+            continue
+        if ACTION_PIN_SHA.fullmatch(reference) and ACTION_PIN_COMMENT.fullmatch(comment):
+            continue
+        findings.append(
+            f'{name}:{number}: third-party uses {reference!r} must be pinned to a '
+            '40-character lowercase hex SHA with a trailing # v<version> comment')
     return findings
 
 
