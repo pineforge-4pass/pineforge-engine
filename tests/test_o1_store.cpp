@@ -1007,8 +1007,8 @@ void check_no_heap_after_open() {
   held = true;
   global_allocation::refusing = true;
   try {
-    held = held && store->write(discarded, 0, buffer.data(), buffer.size()) ==
-                       buffer.size();
+    // The object is 48 bytes: a write of 64 is clipped to the object size.
+    held = held && store->write(discarded, 0, buffer.data(), buffer.size()) == 48;
     discarded_tx->rollback();
     held = held && !store->alive(discarded);
     held = held && store->stats().bytes_resident == resident_before;
