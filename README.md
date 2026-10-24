@@ -38,14 +38,13 @@ The separate PineForge compiler, [`pineforge-codegen`](https://github.com/pinefo
 Recorded outputs and their additional API declarations described here are
 part of **1.5.0**.
 
-**[1.6.1](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.6.1)
-was released on 2026-10-18**, paired with
-[pineforge-codegen 1.6.1](https://github.com/pineforge-4pass/pineforge-codegen-oss/releases/tag/v1.6.1).
-The [release notes](CHANGELOG.md#161--2026-10-18) cover selected-window
-contract revision `1.3-parity` rather than `1.3` until a completeness proof
-exists, preflight stage timings, the API documentation updates since 1.6.0,
-and the CI and test updates since the release candidate.
-For the 1.6.1 pair, regenerate strategy C++ and relink against that pair's
+**[1.6.2](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.6.2)
+was released on 2026-10-21**, paired with
+[pineforge-codegen 1.6.2](https://github.com/pineforge-4pass/pineforge-codegen-oss/releases/tag/v1.6.2).
+The [release notes](CHANGELOG.md#162--2026-10-21) cover the EN-115
+selected-window completeness proof, selected-window contract revision `1.3`,
+and ownership manifest controls running in four CTest shards (CR-196).
+For the 1.6.2 pair, regenerate strategy C++ and relink against that pair's
 headers and archive. Published 1.3.0 download and installation examples below
 remain pinned to that earlier pair.
 
@@ -58,7 +57,7 @@ cases, and no completeness claim (the published 1.6.0 image declares `1.3`).
 `capabilities.selected_window_contract_revisions` is `["1.3-parity"]` when the
 runtime supports selected windows and `[]` otherwise.
 
-From 1.6.2 (unreleased), the engine/codegen image advertises selected-window
+From 1.6.2, the engine/codegen image advertises selected-window
 contract revision `1.3` through `docker/run_json.py --capabilities-json`:
 with the section-4 producers and manifest present and value ownership
 `complete` (EN-115), it emits the four typed codes (`strategy_value_invalid`,
@@ -706,6 +705,7 @@ Documentation: [C ABI reference](https://cdocs.pineforge.dev) · [Getting starte
 
 ## Releases
 
+- **[v1.6.2](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.6.2)** (2026-10-21) — EN-115 selected-window completeness proof completed, with selected-window contract revision `1.3` and `value_ownership` `complete`; ownership manifest controls run in four CTest shards (CR-196). No wire or ABI change: the selected-window wire version stays 1, the phase version 1 and the fingerprint/schema version 2. Pair with codegen 1.6.2, regenerate and relink. See [CHANGELOG.md](CHANGELOG.md#162--2026-10-21).
 - **[v1.6.1](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.6.1)** (2026-10-18) — selected-window contract revision `1.3-parity` (`capabilities.selected_window_contract_revisions: ["1.3-parity"]` on a supported runtime and `[]` otherwise) rather than `1.3` until a completeness proof exists (EN-115), with the four typed value-ownership codes (`strategy_value_invalid`, `engine_command_value_invalid`, `report_result_invalid` and `report_post_execution_failed`) emitted and value parity with the 1.4.0 reference on the tested cases; per-stage `startedAt` and `seconds` in `preflight-summary.json`; `noindex` on raw Doxygen source listings and their omission from `sitemap.xml`; verifier-tests sharded across parallel `unittest` subprocesses; the lower-feed timing ratio skipped only under AddressSanitizer. The C layouts stay at ABI 4, `PF_ABI_VERSION` stays 4, the selected-window wire version stays 1, the phase version 1 and the fingerprint/schema version 2. Pair with codegen 1.6.1, regenerate and relink. See [CHANGELOG.md](CHANGELOG.md#161--2026-10-18).
 - **[v1.6.0](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.6.0)** (2026-10-17) — selected-window contract revision `1.3` (`capabilities.selected_window_contract_revisions: ["1.3"]` on a supported runtime and `[]` otherwise; 1.6.0 declared contract revision `1.3`; corrected to `1.3-parity` in 1.6.1); typed failures across source value admission (`strategy_value_invalid`), derived execution and settlement arithmetic (`engine_command_value_invalid`), non-finite canonical trade or summary doubles (`report_result_invalid`) and post-boundary serialization faults (`report_post_execution_failed`), with every report writer enforcing JSON so no bare `NaN` or `Infinity` token is emitted; Doxygen favicon, 404 page, `robots.txt`, `sitemap.xml`, canonical URLs and tag-or-`unreleased` version label; CI deadline and timeout-flag removals, private-fixture test moves and benchmark comparison/quiet-gate updates. The C layouts stay at ABI 4, `PF_ABI_VERSION` stays 4, the selected-window wire version stays 1, the phase version 1 and the fingerprint/schema version 2. Pair with codegen 1.6.0, regenerate and relink. See [CHANGELOG.md](CHANGELOG.md#160--2026-10-17).
 - **[v1.5.0](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.5.0)** (2026-10-12) — recorded outputs: a module can record per-bar doubles in named slots, run-level doubles and events, read through the nine `pf_outputs` runtime exports with coded refusals, off until a caller turns them on and byte-identical when unused; a run's report belongs to the call that began it; the engine's test inputs and strategy scripts moved to a private repository, with tests that need them skipping by name, a LEGAL.md *Data not distributed* note and a maintainers' private-fixture overlay. The C layouts stay at ABI 4, `PF_ABI_VERSION` stays 4 and the new members enter `engine_script_run_v19` without an epoch. Pair with codegen 1.5.0, regenerate and relink. See [CHANGELOG.md](CHANGELOG.md#150--2026-10-12).
