@@ -1808,6 +1808,61 @@ class RulesetsProbeTests(unittest.TestCase):
                     reads.append((RULESETS_API, True, None))
                 self.assertEqual(api.calls, reads * 2)
 
+    def test_long_inventory_errors_are_escaped_shortened_and_keep_the_refusal(self):
+        detail = "gh: Forbidden (HTTP 403)\n" + "x" * 300
+        long_repo = "example/" + "r" * 300
+        long_repo_api = f"repos/{long_repo}"
+        invalid = {"id": 707, "target": "branch", "enforcement": "unknown" + "x" * 300}
+        cases = (
+            ("inventory transport", REPO, RULESETS_API, subprocess.CalledProcessError(
+                1, ["gh", "api", RULESETS_API], stderr=detail),
+             f"API {RULESETS_API} failed with HTTP 403: {detail}"),
+            ("repository transport", REPO, REPO_API, subprocess.CalledProcessError(
+                1, ["gh", "api", REPO_API], stderr=detail),
+             f"API {REPO_API} failed with HTTP 403: {detail}"),
+            ("default branch", long_repo, long_repo_api,
+             json.dumps({"default_branch": "release"}),
+             f"API {long_repo_api} must identify main as the default branch"),
+            ("summary validation", REPO, RULESETS_API,
+             http_response(200, json.dumps([invalid])),
+             f"API {RULESETS_API} returned invalid ruleset summary: {invalid!r}"),
+        )
+        for scenario, repo, endpoint, payload, diagnostic in cases:
+            with self.subTest(scenario=scenario):
+                self.assertGreater(len(diagnostic), 240)
+                api = self.api_for()
+                api.responses[endpoint] = payload
+                expected = (
+                    1, RULESET_INVENTORY_HEADER + f"inventory=ERROR {diagnostic[:240]!r}\n",
+                    f"::error::{diagnostic}\n")
+                # RED on 5a866543573c: every row prints the entire diagnostic.
+                self.assertEqual(self.run_probe(api, repo=repo), expected)
+                reads = [(f"repos/{repo}", False, None)]
+                if endpoint == RULESETS_API:
+                    reads.append((RULESETS_API, True, None))
+                self.assertEqual(api.calls, reads * 2)
+
+                # Revert only the bound in the full module and require this
+                # same exact-output assertion to catch every input row.
+                source = Path(ci_release_gate.__file__).read_text()
+                before = '        lines.append(f"inventory=ERROR {str(exc)[:240]!r}")\n'
+                after = '        lines.append(f"inventory=ERROR {str(exc)!r}")\n'
+                self.assertEqual(source.count(before), 1,
+                                 "mutation must have one source target")
+                mutated = source.replace(before, after, 1)
+                self.assertNotEqual(mutated, source)
+                namespace = {"__name__": "ci_release_inventory_error_bound_mutant"}
+                exec(compile(mutated, ci_release_gate.__file__, "exec"), namespace)
+                mutant_api = self.api_for()
+                mutant_api.responses[endpoint] = payload
+                result = self.run_probe(mutant_api, repo=repo, main=namespace["main"])
+                self.assertEqual(result, (
+                    1, RULESET_INVENTORY_HEADER + f"inventory=ERROR {diagnostic!r}\n",
+                    f"::error::{diagnostic}\n"))
+                with self.assertRaises(AssertionError):
+                    self.assertEqual(result, expected)
+                self.assertEqual(mutant_api.calls, reads * 2)
+
     def test_detail_transport_error_is_escaped_shortened_and_does_not_hide_next_row(self):
         rows = self.measurement_rows()
         api = self.api_for(rows)

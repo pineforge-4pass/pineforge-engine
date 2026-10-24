@@ -439,7 +439,7 @@ def _ruleset_inventory_report(api: API, repo: str) -> str:
             identities.add(item["id"])
             entries.append(item)
     except ReleaseGateError as exc:
-        lines.append(f"inventory=ERROR {str(exc)!r}")
+        lines.append(f"inventory=ERROR {str(exc)[:240]!r}")
         return "\n".join(lines)
 
     for item in entries:
