@@ -30,6 +30,13 @@ version number follows semantic versioning over the surfaces the
   (released, no hub image) declares `1.3-parity`; it remains the parity
   build's literal, and a tuple holding both is invalid. No wire or ABI change: the selected-window wire version
   stays 1, the phase version 1 and the fingerprint/schema version 2.
+- **Entry incarnation numbers can differ from 1.6.3 after a same-id re-entry
+  behind a full close (CR-277).** The public C ABI value
+  `strategy_closed_trade_entry_incarnation` (and `pf_trade_t`'s entry
+  incarnation) can differ from 1.6.3 in scripts that reissue an entry with the
+  same id behind a full close: the superseded definition is no longer
+  submitted, so it no longer takes an incarnation number. Numbers stay
+  non-zero, unique and monotonic; `entry_id` is unchanged.
 
 ### State hashes
 
