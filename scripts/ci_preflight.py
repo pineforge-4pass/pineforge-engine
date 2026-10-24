@@ -1291,7 +1291,7 @@ jobs:
 
       - name: Mint org App token
         id: app
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1.12.0
         with:
           app-id: ${{ secrets.PINEFORGE_APP_ID }}
           private-key: ${{ secrets.PINEFORGE_APP_PRIVATE_KEY }}
@@ -1300,7 +1300,7 @@ jobs:
 
       - name: Checkout
         if: ${{ needs.authz.result == 'success' }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
 
@@ -1344,14 +1344,14 @@ def release_bump_workflow_findings(workflow: str) -> list[str]:
     app = _step_named(steps, '      - name: Mint org App token')
     checkout = _step_named(steps, '      - name: Checkout (full history)')
     if (_step_values(app, 'id') != ['app']
-            or _step_values(app, 'uses') != ['actions/create-github-app-token@v1']
+            or _step_values(app, 'uses') != ['actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547']
             or _step_block(app, 'with') != [
                 '        with:',
                 '          app-id: ${{ secrets.PINEFORGE_APP_ID }}',
                 '          private-key: ${{ secrets.PINEFORGE_APP_PRIVATE_KEY }}',
                 '          owner: ${{ github.repository_owner }}',
                 '          repositories: pineforge-engine']
-            or _step_values(checkout, 'uses') != ['actions/checkout@v4']
+            or _step_values(checkout, 'uses') != ['actions/checkout@11d5960a326750d5838078e36cf38b85af677262']
             or _step_block(checkout, 'with') != [
                 '        with:', '          fetch-depth: 0',
                 '          token: ${{ steps.app.outputs.token }}']):
@@ -1562,7 +1562,7 @@ def native_workflow_findings(native: str, curl_action: str | None = None) -> lis
     upload = _step_named(steps, '      - name: Retain CI diagnostics')
     cache_key = 'ccache-${{ runner.os }}-${{ runner.arch }}-live-v2-${{ matrix.profile }}-'
     if (_step_values(restore, 'if') != ['${{ !inputs.cold_cache }}']
-            or _step_values(restore, 'uses') != ['actions/cache/restore@v4']
+            or _step_values(restore, 'uses') != ['actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830']
             or f'          key: {cache_key}${{{{ github.sha }}}}' not in _code(restore)
             or f'            {cache_key}' not in _code(restore)
             or '      CCACHE_DIR: ${{ github.workspace }}/.ccache/${{ matrix.profile }}' not in _code(job)
@@ -1585,7 +1585,7 @@ def native_workflow_findings(native: str, curl_action: str | None = None) -> lis
         findings.append('native-live must verify each full profile with no step deadline or timeout flag and '
                         'native-only PR exclusion')
     if (_step_values(save, 'if') != [NATIVE_CACHE_SAVE]
-            or _step_values(save, 'uses') != ['actions/cache/save@v4']
+            or _step_values(save, 'uses') != ['actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830']
             or '          key: ${{ steps.ccache-restore.outputs.cache-primary-key }}' not in _code(save)
             or '          path: ${{ env.CCACHE_DIR }}' not in _code(save)
             or (save and upload and job.index(save) < job.index(upload))):
@@ -1604,7 +1604,7 @@ def native_workflow_findings(native: str, curl_action: str | None = None) -> lis
         built = _step_named(action_steps, '      id: curl-build')
         saved = _step_named(action_steps, '    - name: Save pinned WebSocket-enabled libcurl')
         if (_step_values(restored, 'if') != ["${{ inputs.cold-cache != 'true' }}"]
-                or _step_values(restored, 'uses') != ['actions/cache/restore@v4']
+                or _step_values(restored, 'uses') != ['actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830']
                 or 'key: curl-${{ inputs.cache-namespace }}-' not in restored
                 or 'restore-keys:' in restored
                 or any(token not in restored for token in (
@@ -1613,11 +1613,11 @@ def native_workflow_findings(native: str, curl_action: str | None = None) -> lis
                 or '  cold-cache:\n' not in curl_action or "    default: 'false'" not in curl_action):
             findings.append('pinned curl restore must include dependency identity and bypass every cold-cache restore')
         if (_step_values(saved, 'if') != [CURL_CACHE_SAVE]
-                or _step_values(saved, 'uses') != ['actions/cache/save@v4']
+                or _step_values(saved, 'uses') != ['actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830']
                 or _step_values(built, 'run') != ['bash scripts/build_live_curl.sh build-native-deps 4']
                 or '        key: ${{ steps.curl-cache.outputs.cache-primary-key }}' not in _code(saved)
                 or not built or not saved or curl_action.index(saved) < curl_action.index(built)
-                or 'uses: actions/cache@v4' in curl_action):
+                or 'uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830' in curl_action):
             findings.append('pinned curl must save immediately after its successful build, independently of later tests')
     return findings
 
@@ -1669,7 +1669,7 @@ def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[st
         findings.append('preflight must invoke only its fast stage plan')
     linters = _step_named(steps, '      - name: Install workflow linters')
     if (len(steps) != 5 or [_step_values(step, 'uses') for step in steps] != [
-            [], ['actions/checkout@v4'], [], [], ['actions/upload-artifact@v4']]
+            [], ['actions/checkout@11d5960a326750d5838078e36cf38b85af677262'], [], [], ['actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02']]
             or _step_values(linters, 'run') != [PREFLIGHT_LINTER_RUN]
             or any(_step_values(step, 'run') for step in steps if _step_values(step, 'uses'))):
         findings.append('preflight must keep only checkout, linters, fast checks and diagnostics')
@@ -1724,13 +1724,13 @@ def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[st
             findings.append(f'{job} must run the fast Release smoke only on PRs and full profiles otherwise')
         cache = _step_named(_steps(build), '      - name: Restore ccache')
         save = _step_named(_steps(build), '      - name: Save main ccache')
-        if (_step_values(cache, 'uses') != ['actions/cache/restore@v4']
+        if (_step_values(cache, 'uses') != ['actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830']
                 or _step_values(cache, 'id') != ['ccache-restore']
                 or _step_block(cache, 'with') != [
                     '        with:', '          path: ${{ env.CCACHE_DIR }}',
                     f'          key: {BUILD_CACHE_KEY}${{{{ github.sha }}}}',
                     '          restore-keys: |', f'            {BUILD_CACHE_KEY}']
-                or _step_values(save, 'uses') != ['actions/cache/save@v4']
+                or _step_values(save, 'uses') != ['actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830']
                 or _step_values(save, 'if') != [BUILD_CACHE_SAVE]
                 or _step_block(save, 'with') != [
                     '        with:', '          path: ${{ env.CCACHE_DIR }}',
@@ -1981,7 +1981,7 @@ def docs_workflow_findings(workflow: str, post: str | None = None) -> list[str]:
             findings.append('docs-post.yml must retain only main pushes and manual dispatch')
         deploy = _step_named(_steps(_jobs(post).get('build', '')),
                              '      - name: Deploy to Cloudflare Pages')
-        if (_step_values(deploy, 'uses') != ['cloudflare/wrangler-action@v3']
+        if (_step_values(deploy, 'uses') != ['cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd']
                 or _step_values(deploy, 'if')
                 or 'apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}' not in deploy
                 or 'accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}' not in deploy
@@ -1996,8 +1996,8 @@ def docs_workflow_self_test(workflow: str, post: str) -> int:
         return 1
     no_pr = workflow.replace(DOCS_PR_TRIGGER, '', 1)
     deploy_on_pr = workflow.replace('      - name: Upload artifact\n',
-        '      - uses: cloudflare/wrangler-action@v3\n      - name: Upload artifact\n', 1)
-    no_deploy = post.replace('uses: cloudflare/wrangler-action@v3', 'run: "true"', 1)
+        '      - uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3.15.0\n      - name: Upload artifact\n', 1)
+    no_deploy = post.replace('uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3.15.0', 'run: "true"', 1)
     if no_pr == workflow or deploy_on_pr == workflow or no_deploy == post:
         print('docs workflow contract: could not form all three mutations')
         return 1

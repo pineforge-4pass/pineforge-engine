@@ -156,7 +156,7 @@ jobs:
 
       - name: Mint org App token
         id: app
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1.12.0
         with:
           app-id: ${{ secrets.PINEFORGE_APP_ID }}
           private-key: ${{ secrets.PINEFORGE_APP_PRIVATE_KEY }}
@@ -165,7 +165,7 @@ jobs:
 
       - name: Checkout
         if: ${{ needs.authz.result == 'success' }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
 
@@ -223,6 +223,34 @@ def routed_line(before, value):
     if before.startswith("            runner: '") and value.startswith('['):
         value = "'" + value + "'"
     return before.split(': ', 1)[0] + ': ' + value + '\n'
+
+
+class WorkflowActionPins(unittest.TestCase):
+    """Check the actual workflow and composite-action references."""
+
+    def third_party_uses(self):
+        paths = sorted(path for path in (ROOT / '.github/workflows').iterdir()
+                       if path.suffix in ('.yml', '.yaml'))
+        for name in ('action.yml', 'action.yaml'):
+            paths.extend(sorted((ROOT / '.github/actions').rglob(name)))
+        references = []
+        for path in paths:
+            for number, line in enumerate(path.read_text().splitlines(), 1):
+                match = re.fullmatch(r'[ \t]*(?:-[ \t]+)?uses:[ \t]+(\S+)(.*)', line)
+                if match and not match[1].startswith('./'):
+                    references.append((path.relative_to(ROOT), number, match[1], match[2]))
+        self.assertTrue(references, 'no third-party action references were checked')
+        return references
+
+    def test_third_party_actions_use_full_commit_shas(self):
+        for path, number, reference, _ in self.third_party_uses():
+            with self.subTest(path=str(path), line=number):
+                self.assertRegex(reference, r'^.+@[0-9a-f]{40}$')
+
+    def test_third_party_actions_have_version_comments(self):
+        for path, number, _, comment in self.third_party_uses():
+            with self.subTest(path=str(path), line=number):
+                self.assertRegex(comment, r'^[ \t]+# v[0-9]+\.[0-9]+\.[0-9]+$')
 
 
 class WorkflowEventFleets(unittest.TestCase):
@@ -892,13 +920,13 @@ class PreflightFailures(unittest.TestCase):
             name = Path(CI_SOURCES[index]).name
             for after in ('', AUTHZ_REFUSE_STEP.replace('exit 1', 'true'),
                           AUTHZ_REFUSE_STEP.replace("!= 'success'", "== 'failure'"),
-                          AUTHZ_REFUSE_STEP + '      - uses: actions/checkout@v4\n'):
+                          AUTHZ_REFUSE_STEP + '      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0\n'):
                 with self.subTest(workflow=name, mutation=after):
                     findings = self.mutated_file_findings(index, job, AUTHZ_REFUSE_STEP, after)
                     self.assertIn(f'{name} {job} must always run and refuse authz first', findings)
             # Keeping the refusal after checkout cannot satisfy refuse-first.
             findings = self.mutated_file_findings(index, job, AUTHZ_REFUSE_STEP,
-                                                  '      - uses: actions/checkout@v4\n' + AUTHZ_REFUSE_STEP)
+                                                  '      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0\n' + AUTHZ_REFUSE_STEP)
             self.assertIn(f'{name} {job} must always run and refuse authz first', findings)
             for condition in ('${{ !cancelled() }}', '${{ success() }}'):
                 findings = self.mutated_file_findings(index, job, '    if: always()\n',
@@ -910,7 +938,7 @@ class PreflightFailures(unittest.TestCase):
         for index, job in ((0, 'preflight'), (0, 'build'), (6, 'build'), (6, 'build-macos'),
                            (6, 'sanitizers'), (6, 'kernel-only')):
             for after in ('', AUTHZ_REFUSE_STEP.replace('exit 1', 'true'),
-                          '      - uses: actions/checkout@v4\n' + AUTHZ_REFUSE_STEP):
+                          '      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0\n' + AUTHZ_REFUSE_STEP):
                 with self.subTest(job=job, mutation=after):
                     findings = self.mutated_file_findings(index, job, AUTHZ_REFUSE_STEP, after)
                     self.assertIn(f'{Path(CI_SOURCES[index]).name} job {job} with a status function must refuse authz first',
@@ -921,7 +949,7 @@ class PreflightFailures(unittest.TestCase):
         self.assertEqual(ci_workflow_findings(*original, others=self.other_sources()), [])
         body = _jobs(original[0])['preflight']
         steps = ci_preflight._steps(body)
-        checkout = ci_preflight._step_named(steps, '      - uses: actions/checkout@v4')
+        checkout = ci_preflight._step_named(steps, '      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0')
         verify = ci_preflight._step_named(steps, '      - name: Verify workflow wiring and source guards')
         guard = f'        if: {ci_preflight.AUTHZ_SUCCESS}\n'
         unnamed_run = '      - run: python3 scripts/ci_preflight.py --output-dir build-ci-preflight\n'
@@ -1131,7 +1159,7 @@ class PreflightFailures(unittest.TestCase):
              '    env:\n      KEY: ${{ secrets.PINEFORGE_APP_PRIVATE_KEY }}\n'
              '    steps:\n', guard_finding),
             ('promote-guard', '    steps:\n',
-             '    steps:\n      - uses: actions/checkout@v4\n', guard_finding),
+             '    steps:\n      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0\n', guard_finding),
             ('promote-guard', '    steps:\n',
              '    if: false\n    steps:\n', guard_finding),
             ('promote-guard', '    steps:\n',
@@ -1830,7 +1858,7 @@ exit "$lookup_exit"
             self.assertIn('preflight must keep only checkout, linters, fast checks and diagnostics', findings)
         for step in (
                 '      - run: cmake --build build\n',
-                '      - uses: actions/setup-python@v5\n',
+                '      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0\n',
                 '      - run: python3 scripts/ci_verify.py release\n'):
             findings = self.mutated_file_findings(0, 'preflight', '    steps:\n',
                                                   '    steps:\n' + step)
@@ -1883,12 +1911,12 @@ exit "$lookup_exit"
 
     def test_ci_smoke_cache_refuses_losing_main_fallback_or_pr_writes(self):
         mutations = [
-            ('uses: actions/cache/restore@v4', 'uses: actions/cache@v4'),
+            ('uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830', 'uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830'),
             ('key: ccache-main-', 'key: ccache-pr-'),
             ('            ccache-main-', '            ccache-'),
             ('          restore-keys: |\n', '          restore-keys: |\n            ccache-pr-\n'),
             (ci_preflight.BUILD_CACHE_SAVE, '${{ success() }}'),
-            ('uses: actions/cache/save@v4', 'uses: actions/cache/restore@v4'),
+            ('uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830', 'uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830'),
             ('key: ${{ steps.ccache-restore.outputs.cache-primary-key }}', 'key: ccache-pr'),
         ]
         for index, job in ((0, 'build'), (6, 'build'), (6, 'build-macos')):
@@ -2551,8 +2579,8 @@ exit "$lookup_exit"
         # A step-level declaration also cannot stand in for the actual runner.
         before = f'    runs-on: {PR_RUNNER}\n'
         changed = in_job(workflows['ci.yml'], 'preflight', before, routed_line(before, RELEASE_RUNNER))
-        changed = in_job(changed, 'preflight', '      - uses: actions/checkout@v4\n',
-                         '      - uses: actions/checkout@v4\n        env:\n'
+        changed = in_job(changed, 'preflight', '      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0\n',
+                         '      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0\n        env:\n'
                          f"          PF_CI_LABELS: '{PR_RUNNER}'\n")
         findings = ci_preflight.runner_findings(dict(workflows, **{'ci.yml': changed}))
         self.assertIn(f'ci.yml job preflight must run on {PR_RUNNER}', findings)
@@ -4042,7 +4070,7 @@ finally:
                 ('job permissions', '  probe:\n', '  probe:\n    permissions:\n      contents: write\n'),
                 ('runner', POST_RUNNER, RELEASE_RUNNER),
                 ('PR runner', POST_RUNNER, PR_RUNNER),
-                ('app action', 'actions/create-github-app-token@v1',
+                ('app action', 'actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547',
                  'actions/create-github-app-token@v2'),
                 ('app output', '        id: app', '        id: other'),
                 ('app id', 'secrets.PINEFORGE_APP_ID', 'secrets.OTHER_APP_ID'),
@@ -4087,7 +4115,7 @@ finally:
                    if name != 'release-ruleset-probe.yml'}
         self.assertIn(RULESETS_PROBE_FINDING, ci_workflow_findings(*original, others=missing))
         for before, after in (
-                ('actions/create-github-app-token@v1', 'actions/create-github-app-token@v2'),
+                ('actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547', 'actions/create-github-app-token@v2'),
                 ('secrets.PINEFORGE_APP_ID', 'secrets.OTHER_APP_ID'),
                 ('secrets.PINEFORGE_APP_PRIVATE_KEY', 'secrets.OTHER_PRIVATE_KEY'),
                 ('          repositories: pineforge-engine',
@@ -4914,8 +4942,8 @@ class PinnedLiveCurl(unittest.TestCase):
                     self.assertIn('--curl-dir "${{ steps.curl-deps.outputs.curl-dir }}"', line)
         action = (ROOT / '.github/actions/setup-live-curl/action.yml').read_text()
         self.assertIn('bash scripts/build_live_curl.sh --metadata', action)
-        self.assertIn('uses: actions/cache/restore@v4', action)
-        self.assertIn('uses: actions/cache/save@v4', action)
+        self.assertIn('uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830', action)
+        self.assertIn('uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830', action)
         self.assertIn('bash scripts/build_live_curl.sh build-native-deps 4', action)
 
     def test_shared_curl_pin_and_websocket_build_flags(self):
@@ -4953,7 +4981,7 @@ class IndependentNativeProfiles(unittest.TestCase):
             ('live-v2-${{ matrix.profile }}-', 'live-v2-shared-'),
             ('ccache --zero-stats', 'ccache --show-stats'),
             (NATIVE_CACHE_SAVE, "${{ success() }}"),
-            ('uses: actions/cache/save@v4', 'uses: actions/cache@v4'),
+            ('uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830', 'uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830'),
             ('name: ci-diagnostics-native-live-${{ matrix.profile }}',
              'name: ci-diagnostics-native-live'),
             ('--ccache ', '--ccache --test-timeout 900 '),
@@ -4997,8 +5025,8 @@ class IndependentNativeProfiles(unittest.TestCase):
         for before, after in (
                 ("if: ${{ inputs.cold-cache != 'true' }}", 'if: always()'),
                 (CURL_CACHE_SAVE, '${{ success() }}'),
-                ('uses: actions/cache/restore@v4', 'uses: actions/cache@v4'),
-                ('uses: actions/cache/save@v4', 'uses: actions/cache@v4'),
+                ('uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830', 'uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830'),
+                ('uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830', 'uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830'),
                 ('curl-${{ inputs.cache-namespace }}-', 'curl-shared-'),
                 ('${{ steps.dependencies.outputs.sha256 }}', 'unpinned'),
                 ('${{ steps.dependencies.outputs.identity }}', 'shared-toolchain'),
@@ -5044,9 +5072,9 @@ class IndependentNativeProfiles(unittest.TestCase):
         self.assertIn('if: ${{ !inputs.cold_cache }}', native)
         self.assertIn('cold-cache: ${{ inputs.cold_cache }}', native)
         self.assertIn("if: ${{ inputs.cold-cache != 'true' }}", action)
-        self.assertIn('uses: actions/cache/restore@v4', action)
-        self.assertIn('uses: actions/cache/save@v4', action)
-        self.assertNotIn('uses: actions/cache@v4', action)
+        self.assertIn('uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830', action)
+        self.assertIn('uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830', action)
+        self.assertNotIn('uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830', action)
 
 
 if __name__ == '__main__':
