@@ -1,0 +1,6 @@
+list(APPEND TEST_SOURCES test_disk_id_table_ram)
+pineforge_add_unit_test(test_disk_id_table_ram)
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    list(APPEND TEST_SOURCES test_adapter_tree_ram)
+    pineforge_add_unit_test(test_adapter_tree_ram)
+endif()

@@ -131,7 +131,9 @@
     "next_sequence_": "uint64_t",
     "active_allocations_": "uint64_t",
     "outstanding_sequences_": "std::vector<uint64_t>",
-    "events_": "std::vector<Event>"
+    "events_": "std::vector<Event>",
+    "retired_prefix_": "Prefix",
+    "retain_full_observation_history_": "bool"
   },
   "CurrentPrices": {
     "limit": "double",

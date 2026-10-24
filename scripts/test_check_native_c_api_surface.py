@@ -149,6 +149,28 @@ class SurfaceGuardTests(unittest.TestCase):
             "callback_contexts", "    uint8_t  closes_session_day; /**< It closes its session day. */",
             "\n    int64_t input_interval_open_ms;")
 
+    def test_closed_rows_pin_requires_a_by_value_accessor(self) -> None:
+        by_value = "Trade closed_trade(std::size_t i) const"
+        by_reference = "const Trade& closed_trade(std::size_t i) const"
+        self.assertEqual(guard.C_V1_EXCLUSIONS["closed_rows_in_place"][1], by_value)
+        saved = guard.INCLUDE
+        self.addCleanup(setattr, guard, "INCLUDE", saved)
+        copy = Path(self.c_api.parent, "include")
+        shutil.copytree(saved, copy)
+        engine = copy / "engine.hpp"
+        text = engine.read_text(encoding="utf-8")
+        self.assertEqual(text.count(by_value), 1)
+        guard.INCLUDE = copy
+        code, err = self.run_guard()
+        self.assertEqual(code, 0, err)
+
+        engine.write_text(text.replace(by_value, by_reference, 1), encoding="utf-8")
+        code, err = self.run_guard()
+        self.assertEqual(code, 1, err)
+        self.assertIn(
+            f'C_V1_EXCLUSIONS["closed_rows_in_place"]: the C++ declaration `{by_value}` '
+            "is gone from engine.hpp: retire the row, or re-pin it", err)
+
     def test_a_cpp_capability_that_goes_retires_its_row(self) -> None:
         saved = guard.INCLUDE
         self.addCleanup(setattr, guard, "INCLUDE", saved)

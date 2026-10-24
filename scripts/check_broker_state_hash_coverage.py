@@ -54,6 +54,12 @@ SCHEDULER_CACHE_WAIVERS: dict[str, str] = {
         "(pine_scheduler.hpp:72-95), so it is never next-decision state "
         "(L10c)."
     ),
+    "input_script_cursor": (
+        "Derived completion lookup over retained_.bars and the run's timeframe "
+        "configuration; input() answers a repeated index from the last flags "
+        "or rebuilds by reset-and-rescan. The independent consumed-prefix "
+        "cursor is folded in hash_state and is not waived (CR-150 L4)."
+    ),
 }
 
 GENERIC_HEADERS = ("include/pineforge/engine.hpp",)
@@ -63,6 +69,32 @@ SOURCE_HEADERS = (
     "include/pineforge/source/pine_strategy_host.hpp",
     "include/pineforge/source/pine_language_state.hpp",
 )
+
+# The run owner is storage/lifetime, not another broker-state leaf. Its exit
+# context is folded through the adapter's existing borrowed binding. Pin every
+# decision-relevant context field, including callback *presence*, never an
+# address or a shared_ptr reference count.
+EXIT_SCRATCH_CONTEXT_FOLDS = {
+    "store": "hash_scratch_store(f, &scratch->store);",
+    "run": "hash_source_run_identity(f, scratch->run);",
+    "versions": "f.b(scratch->versions != nullptr);",
+    "lots": "f.b(scratch->lots != nullptr);",
+    "working": "f.b(scratch->working != nullptr);",
+}
+EXIT_SCRATCH_OBSERVATION_WAIVERS = {
+    "next_scope": (
+        "scope-allocation counter, not state; retained records, "
+        "store digest and run identity are folded"
+    ),
+    "observation": "Borrowed instrumentation context; no trading decision reads it.",
+    "observe_rows": "Reports temporary scope row counts; does not supply trading state.",
+    "observe_lookup": "Reports lookup work; does not supply trading state.",
+    "teardown_failure": (
+        "Run-local failure memory of a failed scope teardown, rethrown at the next "
+        "entry point; the run then ends in a typed failure, no trading decision "
+        "reads it and no durable state carries it."
+    ),
+}
 
 
 def clean(text: str) -> str:
@@ -213,6 +245,114 @@ def require_once(text: str, value: str, label: str) -> None:
         raise ValueError(label + " must appear exactly once")
 
 
+def scratch_store_state_digest_leaf(root: Path) -> str:
+    """Cover the logical 24-byte prefix, independently of physical storage."""
+    # X25-X27 select order id 0x5832355832370002. The generic implementation
+    # must fold the selected runtime id, not a constant substituted for it.
+    label = ("CommandScratchStore.state_digest prefix "
+             "(24 bytes: order.id [X25-X27=0x5832355832370002], next_handle, record_count)")
+    implementation = executable_hash_text(
+        (root / "include/pineforge/detail/scratch_store_impl.hpp").read_text())
+    digest = _function_body(
+        implementation, r"\bStatus\s+digest\s*\(\s*bool\s+with_state\b", label)
+    # The count is shared with ordered_digest; only the state digest prefixes
+    # it with the ordering schema and allocator state. Check the live sequence,
+    # not mere mentions of these fields elsewhere in the implementation.
+    prefix = re.sub(r"\s+", "", digest.split("std::uint64_t leaf", 1)[0])
+    expected = (
+        "Fold fold;"
+        "if (with_state) {"
+        "fold.le64(order_.id);"
+        "fold.le64(cur_.next_handle);"
+        "}"
+        "fold.le64(cur_.record_count);"
+    )
+    require_once(prefix, re.sub(r"\s+", "", expected), label)
+    wrapper = _function_body(
+        implementation, r"\bScratchStatus\s+CommandScratchStore::state_digest\s*\(",
+        "CommandScratchStore.state_digest entry point")
+    require_once(wrapper, "state_->digest(true, page, result)",
+                 "CommandScratchStore.state_digest state-prefix dispatch")
+    encoder = _function_body(
+        implementation, r"\bvoid\s+le64\s*\(\s*std::uint64_t\s+v\s*\)",
+        "CommandScratchStore LE64 encoder")
+    if re.sub(r"\s+", "", encoder) != "Byteraw[8];st64(raw,v);bytes(raw,8);":
+        raise ValueError(label + " must use an eight-byte LE64 encoder")
+    little_endian = _function_body(
+        implementation, r"\bvoid\s+st64\s*\(", "CommandScratchStore LE64 byte order")
+    if re.sub(r"\s+", "", little_endian) != (
+        "for(inti=0;i<8;++i)p[i]=static_cast<Byte>((value>>(8*i))&0xFF);"
+    ):
+        raise ValueError(label + " must use little-endian byte order")
+    return label
+
+
+def exit_scratch_context_fields(root: Path, source_hash: str) -> int:
+    label = "ExitScratchContext"
+    header = clean((root / "include/pineforge/source/exit_scratch.hpp").read_text())
+    context = _named_body(header, "struct", label)
+    fields = _data_fields(context, trailing_underscore=False)
+    # Function-pointer members are deliberately excluded by the general
+    # declaration parser. Here their presence changes the available service,
+    # so classify them too, including any newly added reader.
+    fields.update(re.findall(r"\(\s*\*\s*([A-Za-z_]\w*)\s*\)", context))
+    classified = set(EXIT_SCRATCH_CONTEXT_FOLDS) | set(EXIT_SCRATCH_OBSERVATION_WAIVERS)
+    if fields != classified:
+        raise ValueError(label + " fields: unclassified="
+                         + repr(sorted(fields - classified)) + ", stale="
+                         + repr(sorted(classified - fields)))
+    fold = _function_body(source_hash, r"\bvoid\s+hash_exit_scratch\s*\(", label + " fold")
+    require_once(fold, "f.b(scratch != nullptr);", label + " binding presence")
+    require_once(fold, "if (!scratch) return;", label + " unbound guard")
+    for field, statement in EXIT_SCRATCH_CONTEXT_FOLDS.items():
+        require_once(fold, statement, label + "." + field + " fold")
+    for field, reason in EXIT_SCRATCH_OBSERVATION_WAIVERS.items():
+        if re.search(r"\bscratch\s*->\s*" + re.escape(field) + r"\b", fold):
+            raise ValueError(label + "." + field + " is waived, not folded: " + reason)
+    identity = _function_body(
+        source_hash, r"\bvoid\s+hash_source_run_identity\s*\(", label + " run identity")
+    require_once(identity, "f.s(identity.session_key);", label + " run identity session key")
+    adapter = _function_body(
+        source_hash, r"\bvoid\s+source::PineExecutionAdapter::hash_state\s*\(",
+        "source adapter hash")
+    require_once(adapter, "hash_exit_scratch(f, exit_scratch_.get());",
+                 label + " adapter exit_scratch_ binding fold")
+    return len(EXIT_SCRATCH_CONTEXT_FOLDS)
+
+
+def trade_scratch_folds(source_hash: str) -> None:
+    # A mention in the branch condition is not coverage. Pin both alternative
+    # folds and their shared digest path without changing the emitted bytes.
+    host = _function_body(
+        source_hash, r"\bvoid\s+source::PineStrategyHost::hash_host_extension\s*\(",
+        "trade_scratch_ host extension")
+    expected = (
+        "const auto released = NativeExecutionConsumer::bound(*this).released_command_scratch("
+        "NativeExecutionConsumer::CommandScratchBinding::Trade);"
+        "if (!trade_scratch_ && released) {"
+        "f.b(true);"
+        "hash_scratch_digest(f, released->status, released->digest);"
+        "} else {"
+        "hash_scratch_store(f, trade_scratch_);"
+        "}"
+    )
+    require_once(re.sub(r"\s+", "", host), re.sub(r"\s+", "", expected),
+                 "trade_scratch_ live/released folds")
+    for name, statements in (
+        ("hash_scratch_store", (
+            "f.b(store != nullptr);",
+            "if (!store) return;",
+            "const auto status = store->state_digest({page.data(), page.size()}, digest);",
+            "hash_scratch_digest(f, status, digest);",
+        )),
+        ("hash_scratch_digest", ("f.u(digest);",)),
+    ):
+        fold = _function_body(source_hash, r"\bvoid\s+" + re.escape(name) + r"\s*\(",
+                              "trade_scratch_ " + name)
+        for statement in statements:
+            require_once(fold, statement, "trade_scratch_ " + name + " fold `" + statement + "`")
+
+
 def main(root: Path = ROOT) -> int:
     try:
         engine_hash = executable_hash_text((root / "src/engine_state_hash.cpp").read_text())
@@ -289,6 +429,10 @@ def main(root: Path = ROOT) -> int:
             "f.u(static_cast<uint64_t>(value.scope));",
         ):
             require_once(consumer_hash, fold, "native request-state fold `" + fold + "`")
+
+        scratch_leaf = scratch_store_state_digest_leaf(root)
+        exit_context_fields = exit_scratch_context_fields(root, source_hash)
+        trade_scratch_folds(source_hash)
 
         # R5 N5 (RP9): a KernelRecorded run records the per-bar broker-state
         # hash row itself, in exactly one place — the per-calculation
@@ -371,7 +515,9 @@ def main(root: Path = ROOT) -> int:
               f"{len(generic)} generic members, {len(source)} source-adapter members, "
               f"{len(nested)} nested fields, {len(waivers)} waivers, "
               f"{len(SCHEDULER_CACHE_WAIVERS)} scheduler cache waivers, "
-              f"{len(PINNED_HASH_DEBT)} pinned sibling-lane debts, OK")
+              f"{len(PINNED_HASH_DEBT)} pinned sibling-lane debts, "
+              f"{exit_context_fields} exit-context fields, "
+              f"leaf={scratch_leaf}, OK")
         return 0
     except (OSError, ValueError) as error:
         print("check_broker_state_hash_coverage: " + str(error), file=sys.stderr)

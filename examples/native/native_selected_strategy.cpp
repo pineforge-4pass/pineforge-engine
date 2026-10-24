@@ -24,6 +24,17 @@
 
 namespace {
 
+// Keep C++ capability/layout checks with the module that links the runtime.
+static_assert(PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V19 == 1,
+              "selected example requires the v19 native host");
+static_assert(sizeof(pf_bar_t) == sizeof(pineforge::Bar),
+              "C bar mirror must match the native host bar");
+static_assert(sizeof(pf_report_t) == sizeof(pineforge::ReportC),
+              "C report mirror must match the native host report");
+static_assert(static_cast<int>(pineforge::NativeLifecycleKind::Completed)
+                  == PF_NATIVE_LIFECYCLE_COMPLETED,
+              "C lifecycle mirror must match the native host lifecycle");
+
 namespace no = pineforge::native_order;
 
 // Not `final`: PINEFORGE_EXPORT_NATIVE_STRATEGY derives the module class from

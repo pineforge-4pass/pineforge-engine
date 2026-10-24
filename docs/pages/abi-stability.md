@@ -67,11 +67,11 @@ Three layers:
 
 ## Symbol inventory
 
-The counts below include recorded outputs and describe the released 1.5.0 API; recorded outputs are not part of 1.4.0.
+The counts below describe the current API, including recorded outputs and the report sink; recorded outputs are not part of 1.4.0.
 
-A built strategy `.so` exposes 96 compiled-strategy `PF_API` declarations
-(80 runtime implementations plus sixteen generated exports) plus 43 native-host
-declarations: 139 `PF_API` exports in total; a script that declares
+A built strategy `.so` exposes 109 compiled-strategy `PF_API` declarations
+(93 runtime implementations plus sixteen generated exports) plus 43 native-host
+declarations: 152 `PF_API` exports in total; a script that declares
 `use_bar_magnifier = true` also exports `strategy_declares_bar_magnifier`, and a
 module that records outputs its three outputs exports. `nm -gU` also reports libc++'s
 `std::piecewise_construct`; no project-internal C++ symbol is exported. The grouped table below is a guide,
@@ -122,9 +122,14 @@ not the complete inventory:
 | `strategy_outputs_api_version` | @ref pf_outputs (a recording module's own) |
 | `strategy_outputs_manifest` | @ref pf_outputs (a recording module's own) |
 | `strategy_signal_safety_receipt` | @ref pf_outputs (a recording module's own) |
+| `pf_report_sink_version` | Report sink version |
+| `strategy_set_report_sink_v1` | Report sink path configuration |
+| `strategy_set_report_sink_fd_v1` | Report sink borrowed stream configuration |
+| `strategy_report_sink_receipt_v1` | Report sink counts, digest and completion |
+| `strategy_report_sink_summary_v1` | Report-only T-row folds and nonfinite validation |
 
 Sixteen per-strategy exports include the five create/run/free lifecycle
-functions. The remaining 80 runtime implementations, including the
+functions. The remaining 93 runtime implementations, including the
 closed-trade incarnation accessor, are force-linked into each strategy library,
 so consumers resolve the same complete ABI from the strategy `.so`. All
 additions remain covered by the minor-version append-only guarantee.
@@ -134,6 +139,125 @@ You can verify this against any strategy `.so`:
 ```bash
 nm -D --defined-only my_strategy.so | awk '$2=="T"{print $3}' | sort
 ```
+
+## Sequential fd report sink
+
+Include `<pineforge/report_sink.h>` for the additive
+`pf_report_sink_fd_v1` descriptor and `strategy_set_report_sink_fd_v1`.
+`pf_report_sink_version()` remains 1, the wire format remains version 1,
+and `PF_ABI_VERSION` remains 4. The existing path descriptor and all existing
+report, trade and receipt layouts stay unchanged.
+
+| Field | Type | Offset |
+| --- | --- | --- |
+| `struct_size` | `uint32_t` | 0 |
+| `version` | `uint32_t` | 4 |
+| `fd` | `int` (32 bits) | 8 |
+| `run_id` | `const char*` | 16 on LP64; 12 on ILP32 |
+
+The descriptor is 24 bytes on LP64 and 16 bytes on ILP32. Set `struct_size`
+to `sizeof(pf_report_sink_fd_v1)` and `version` to 1. `run_id` is copied;
+NULL means the empty string. Pass the actual inherited fd number: the library
+has no default number. The jailed wrapper's convention is fd 4 for the sink;
+fd 3 remains the selected phase-receipt channel and fd 5 belongs to the
+separate scratch arena.
+
+The fd must be a FIFO's write end or an AF_UNIX `SOCK_STREAM` socket. Either
+sink setter replaces the one installed sink, and NULL through either setter
+removes it. Both return 0 on acceptance, -1 for a bad handle or descriptor
+prefix (or a negative fd), -2 during a stream and -3 during a batch run or
+report capture. Run-begin validation and write errors use the existing typed
+`report_sink_failed` path. The caller keeps the fd open through execution and
+report capture, then closes it to signal EOF. The engine never duplicates or
+closes a borrowed fd, including on failure, replacement or handle destruction.
+
+The fd route uses the same canonical line builder, hash, LF framing, 1 MiB
+line rule, fixed 64 KiB buffer and receipt as the path route. It performs only
+sequential writes, retries partial writes and EINTR, and waits in `poll()` on
+EAGAIN. It opens no file, seeks nowhere and derives no scratch directory.
+Only successful capture writes the trailer, as the final line; an aborted
+or failed run has no valid trailer. A trusted finalizer consumes the stream.
+
+Sockets use `send(..., MSG_NOSIGNAL)`. A FIFO host must ignore SIGPIPE
+(Python does by default; a C host calls `signal(SIGPIPE, SIG_IGN)`) so a
+closed reader becomes `report_sink_failed`. The library does not change
+process-wide SIGPIPE handling. A successful new inherited-arena attach sets SIGXFSZ to `SIG_IGN` process-wide; detach does not restore it. Hosts relying on their SIGXFSZ handler or default termination must account for this before attaching an arena.
+
+## Report sink summary receipt
+
+The additive `strategy_report_sink_diagnostics_v1` query supplies annualization
+provenance without reading the sink back. Its descriptor in `report_sink.h`
+is 72 bytes: `struct_size`/`version` at 0/4, `count_e` at 8, first and last
+`pf_equity_point_t` at 16/40, `trade_at_start` at 64 and `complete` at 68.
+The points are the emitted E endpoints; `trade_at_start` folds whether any
+emitted T has `entry_bar_index <= 0`. It publishes only after the trailer.
+Missing, failed, aborted or unstarted generations return zeros/incomplete.
+Initialize size/version=1; a bad handle, pointer, size or version returns -1
+without changing the output. This separate query preserves both existing
+receipt layouts, wire bytes and broker hashes.
+
+Jailed hosts additionally call `strategy_require_report_scratch_arena_v1`
+before execution. The engine validates/attaches the inherited fixed-fd-5
+arena. On Linux, admission requires a sealed memfd whose seal mask contains
+`F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL`; `F_SEAL_EXEC` and other
+non-write seals may be added, for example by `MFD_NOEXEC_SEAL`. A mask
+containing `F_SEAL_WRITE` or `F_SEAL_FUTURE_WRITE` is refused at attachment.
+The sealed-memfd admission requirement and write-seal refusal hold regardless
+of `PF_SCRATCH_ARENA_JAILED`. Off Linux, admission accepts any attached arena.
+An invalid or missing arena returns the handle's typed
+`report_sink_failed`/`arena_backing` before execution: the run never started.
+The Python host emits exit status 1, `code` `report_sink_failed`, `args`
+`{"reason":"arena_backing"}` and top-level `reason` `arena_backing`, with no
+strategy report or trades. The engine never creates backing. `run_json.py`
+refuses sink fd 5 and jailed spill directories, and takes sink-fd ownership
+only after the fd API is admitted.
+
+`strategy_report_sink_summary_v1` is an additive query in
+`<pineforge/report_sink.h>` for both sink transports. It avoids a record
+read-back when a jailed child publishes its summary. The existing
+`pf_report_sink_receipt_v1` remains exactly 144 bytes, the wire and report
+sink ABI version remain 1, and `PF_ABI_VERSION` remains 4.
+
+`pf_report_sink_summary_v1` is 64 bytes, aligned to 8 bytes, with these
+offsets on both LP64 and ILP32:
+
+| Field | Type | Offset |
+| --- | --- | --- |
+| `struct_size` | `uint32_t` | 0 |
+| `version` | `uint32_t` | 4 |
+| `count_t` | `int64_t` | 8 |
+| `wins` | `int64_t` | 16 |
+| `losses` | `int64_t` | 24 |
+| `best_trade` | `double` | 32 |
+| `worst_trade` | `double` | 40 |
+| `max_drawdown` | `double` | 48 |
+| `nonfinite_t_field` | `int32_t` | 56 |
+| `complete` | `uint32_t` | 60 |
+
+Initialize `struct_size = sizeof(pf_report_sink_summary_v1)` and
+`version = 1`. The query returns 0 filled, or -1 with the caller's output
+unchanged for a NULL output, bad handle, size or version. With no sink or
+before successful report capture, values are zero and `complete` is 0.
+New runs and sink replacement/removal reset the summary. Queries do no
+I/O, never capture a report and never advance state.
+
+After capture, require `complete == 1` in both receipts and require
+`count_t` to equal the trailer's T count and the report's `total_trades`.
+The summary folds the original T P&Ls in report order. Wins and losses
+use strict positive/negative comparisons. Best and worst start at the first
+P&L and keep the earlier value on ties, preserving the first zero's sign.
+Empty best/worst are +0.0. Cumulative P&L, its running peak and drawdown
+start at +0.0; each row adds its P&L, updates the peak, then takes the
+minimum of prior drawdown and cumulative minus peak. This nonpositive
+trade-sequence drawdown is independent of the equity metrics.
+
+`nonfinite_t_field` is 0 for finite canonical trade fields. Otherwise it
+records the first field of the first offending T row, using wire indices
+5 entry_price, 6 exit_price, 7 qty, 8 pnl, 9 pnl_pct, 10 max_runup,
+11 max_drawdown, 12 commission. Consumers must raise
+`report_result_invalid` with `field: "trades.<name>"`, `reason: "nonfinite"`
+before publishing the summary. Trailer completion attests stream
+completion; this field separately preserves report-result validation.
 
 ## What's *not* guaranteed
 

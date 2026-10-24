@@ -9,7 +9,7 @@
 namespace pineforge {
 
 // The closed run-failure vocabulary (run_failure_codes.json),
-// in catalog order. `none` is no failure. The numbers are not on any
+// in stable numeric order. `none` is no failure. The numbers are not on any
 // wire: the C getters answer with the names.
 enum class RunFailureCode : std::uint16_t {
     none = 0,
@@ -77,8 +77,13 @@ enum class RunFailureCode : std::uint16_t {
     window_range_invalid = 62,
     window_report_mismatch = 63,
     window_request_invalid = 64,
+    report_mode_unsupported = 65,
+    report_sink_failed = 66,
+    scratch_capacity_exceeded = 67,
+    scratch_configuration_invalid = 68,
+    scratch_io_failed = 69,
 };
 
-inline constexpr std::uint16_t kRunFailureCodeCount = 65;
+inline constexpr std::uint16_t kRunFailureCodeCount = 70;
 
 }  // namespace pineforge
