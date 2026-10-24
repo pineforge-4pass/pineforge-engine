@@ -1955,6 +1955,11 @@ def check_commands(source: Path, output: Path | None = None,
          [sys.executable, str(source / 'scripts/check_pine_to_native_coverage.py')]),
         ('doc-pine-coverage-tests',
          [sys.executable, str(source / 'scripts/test_check_pine_to_native_coverage.py')]),
+        ('duplicate-test-names-tests',
+         [sys.executable, str(source / 'scripts/test_check_duplicate_test_names.py')]),
+        ('duplicate-test-names',
+         [sys.executable, str(source / 'scripts/check_duplicate_test_names.py'),
+          '--root', str(source)]),
     ]
     if tier == 'github-only':
         return [entry for entry in commands if entry[0] in GITHUB_ONLY_PREFLIGHT_STAGES]
