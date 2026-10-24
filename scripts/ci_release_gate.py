@@ -328,7 +328,7 @@ def _ruleset_bypasses(payload: dict, endpoint: str) -> set[tuple[str, int | None
     actors = payload.get("bypass_actors")
     if not isinstance(actors, list):
         raise ReleaseGateError(f"API {endpoint} returned missing or invalid bypass_actors "
-                               "(App requires administration: read)")
+                               "(token cannot see this ruleset's bypass_actors)")
     bypasses = set()
     for actor in actors:
         if not isinstance(actor, dict):

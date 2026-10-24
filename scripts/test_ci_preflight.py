@@ -77,7 +77,8 @@ permissions:
 jobs:
   authz:
     name: authz
-    # GCP fleet (owner #1050): non-release jobs on pf-gcp-pr; release-class jobs only on pf-gcp-main.
+    # Preflight pins executable workflow lines after removing comment-only lines.
+    # authz uses pf-gcp-pr; the App-token probe uses pf-gcp-main.
     runs-on: ["self-hosted", "pf-gcp-pr"]
     permissions: {}
     # No timeout-minutes: the owner's no-time-limits rule (check-no-time-limits refuses new ones).
@@ -3606,6 +3607,37 @@ finally:
             '      - name: Mint org App token')
         self.assertEqual(probe_app, release_app, 'the mint steps must stay byte-identical')
         self.assertEqual(ci_workflow_findings(*self.ci_sources(), others=self.other_sources()), [])
+
+    def test_release_ruleset_probe_comments_describe_the_actual_pin_scope(self):
+        source = (ROOT / 'scripts/ci_preflight.py').read_text()
+        workflow = (ROOT / '.github/workflows/release-ruleset-probe.yml').read_text()
+        header = (
+            '    # Preflight pins executable workflow lines after removing comment-only lines.\n'
+            '    # authz uses pf-gcp-pr; the App-token probe uses pf-gcp-main.\n')
+        requirements = (
+            (source,
+             '# Scoped CI workflows bind this canon header byte for byte, including its\n'
+             '# fleet comment and comma spacing. The release probe pins executable lines.\n'),
+            (source,
+             '                    # Normalize the runner array here; the probe workflow pin below\n'
+             '                    # compares nonblank lines after removing comment-only lines.\n'),
+            (source, header),
+            (RULESETS_PROBE_WORKFLOW, header),
+            (workflow, header),
+        )
+        message = 'comments must describe the probe pin without claiming its header is bound'
+        for text, required in requirements:
+            self.assertIn(required, text, message)
+            changed = text.replace(required, '', 1)
+            self.assertNotEqual(changed, text)
+            with self.assertRaisesRegex(AssertionError, message):
+                self.assertIn(required, changed, message)
+
+        changed = workflow.replace(header, '    # A different header comment.\n', 1)
+        self.assertNotEqual(changed, workflow)
+        self.assertEqual(ci_workflow_findings(
+            *self.ci_sources(), others={**self.other_sources(),
+                                       'release-ruleset-probe.yml': changed}), [])
 
     def test_release_ruleset_probe_refuses_the_original_unauthorized_workflow(self):
         # The concrete main input has neither authz nor needs/step guards.

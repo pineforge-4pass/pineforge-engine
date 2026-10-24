@@ -271,8 +271,8 @@ endif()
 # PR-only ALLOWED_BOTS is dependabot[bot] and pineforge-app[bot]. No local canon
 # file is needed on CI runners. Changing the script requires a new canon pin.
 AUTHZ_STEP_SHA256 = '94bf3afefe4588bc33dad5fd4d8fa3d2a104cc45743ad59286c756fa3a17baa6'
-# The canon header is text, not a decoded array: the fleet comment and the
-# space after the comma bind every authz job byte for byte.
+# Scoped CI workflows bind this canon header byte for byte, including its
+# fleet comment and comma spacing. The release probe pins executable lines.
 AUTHZ_JOB_HEADER = '''    name: authz
     # Fleet routing is fixed for this workflow; releases use pf-gcp-main.
     runs-on: ["self-hosted", "pf-gcp-pr"]
@@ -1003,8 +1003,8 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                 actual = _job_values(body, 'runs-on', unquote=False)
                 expected = [fixed_release[job]]
                 if fixed_release[job] == PR_RUNNER:
-                    # Canon authz keeps its space after the comma; the complete
-                    # probe workflow pin below binds that exact header.
+                    # Normalize the runner array here; the probe workflow pin below
+                    # compares nonblank lines after removing comment-only lines.
                     actual = [_runner_value(value) for value in actual]
                     expected = [_runner_value(value) for value in expected]
                 if actual != expected:
@@ -1185,7 +1185,8 @@ permissions:
 jobs:
   authz:
     name: authz
-    # GCP fleet (owner #1050): non-release jobs on pf-gcp-pr; release-class jobs only on pf-gcp-main.
+    # Preflight pins executable workflow lines after removing comment-only lines.
+    # authz uses pf-gcp-pr; the App-token probe uses pf-gcp-main.
     runs-on: ["self-hosted", "pf-gcp-pr"]
     permissions: {}
     # No timeout-minutes: the owner's no-time-limits rule (check-no-time-limits refuses new ones).

@@ -1635,10 +1635,72 @@ class RulesetsProbeTests(unittest.TestCase):
         api = self.api_for(rows)
         self.assertEqual(self.run_probe(api), (
             1, "", f"::error::API repos/{REPO}/rulesets/13094758 returned missing or invalid "
-            "bypass_actors (App requires administration: read)\n"))
+            "bypass_actors (token cannot see this ruleset's bypass_actors)\n"))
         self.assertEqual(api.calls, [
             (REPO_API, False, None), (RULESETS_API, True, None),
             (f"repos/{REPO}/rulesets/13094758", False, None)])
+
+    def test_two_hidden_rulesets_require_two_dispatches_as_documented(self):
+        docs = (ROOT / "docs/ci.md").read_text()
+        limit = (
+            "Two hidden rulesets need two dispatches: the first refusal names only the\n"
+            "first hidden ruleset; make its `bypass_actors` visible before dispatching again\n"
+            "to identify the second.")
+        message = "docs must explain the first-hidden-ruleset refusal limit"
+        self.assertIn(limit, docs, message)
+        changed = docs.replace(limit, "", 1)
+        self.assertNotEqual(changed, docs)
+        with self.assertRaisesRegex(AssertionError, message):
+            self.assertIn(limit, changed, message)
+
+        rows = release_rulesets()
+        rows[0].update(id=13094758, name="default", source_type="Organization",
+                       source="example")
+        rows[1].update(source_type="Repository", source=REPO)
+        visible_actors = rows[0].pop("bypass_actors")
+        del rows[1]["bypass_actors"]
+        first = self.api_for(rows)
+        self.assertEqual(self.run_probe(first), (
+            1, "", f"::error::API repos/{REPO}/rulesets/13094758 returned missing or invalid "
+            "bypass_actors (token cannot see this ruleset's bypass_actors)\n"))
+        self.assertEqual(first.calls, [
+            (REPO_API, False, None), (RULESETS_API, True, None),
+            (f"repos/{REPO}/rulesets/13094758", False, None)])
+
+        rows[0]["bypass_actors"] = visible_actors
+        second = self.api_for(rows)
+        self.assertEqual(self.run_probe(second), (
+            1, "", f"::error::API {STRICT_RULESET_API} returned missing or invalid "
+            "bypass_actors (token cannot see this ruleset's bypass_actors)\n"))
+        self.assertEqual(second.calls, [
+            (REPO_API, False, None), (RULESETS_API, True, None),
+            (f"repos/{REPO}/rulesets/13094758", False, None),
+            (STRICT_RULESET_API, False, None)])
+
+    def test_probe_dispatch_branch_and_fleets_are_documented(self):
+        docs = (ROOT / "docs/ci.md").read_text()
+        requirements = (
+            "FLEET-POST=A splits verification and documentation routing at the file boundary:\n"
+            'PR jobs use `["self-hosted","pf-gcp-pr"]`, and post-merge push/schedule/manual\n'
+            'jobs use `["self-hosted","pf-gcp-post"]`.',
+            "The manual `release-ruleset-probe.yml` workflow runs `authz` on\n"
+            '`["self-hosted","pf-gcp-pr"]` and `probe` on `["self-hosted","pf-gcp-main"]`.',
+            "Release, promotion and the release ruleset probe use the isolated release fleet:\n"
+            "`release`, `notify-hub`, Linux x64 `prebuilt`, baseline `promote` and\n"
+            '`release-ruleset-probe.yml`\'s `probe` job use `["self-hosted","pf-gcp-main"]`.',
+            "Dispatch **Release ruleset probe** (`release-ruleset-probe.yml`) once from\n"
+            "`main` to check actual ruleset visibility with the same App token mint as\n"
+            "`release.yml`. The workflow file must be on the default branch, and the run\n"
+            "must use `main`'s copy.",
+        )
+        message = "docs must state the probe's main dispatch and actual fleet routes"
+        for required in requirements:
+            with self.subTest(required=required):
+                self.assertIn(required, docs, message)
+                changed = docs.replace(required, "", 1)
+                self.assertNotEqual(changed, docs)
+                with self.assertRaisesRegex(AssertionError, message):
+                    self.assertIn(required, changed, message)
 
     def test_empty_inventory_refusal_and_documented_endpoint_scope(self):
         # The reader report's complete [] inventory fails on main without an
@@ -1757,7 +1819,7 @@ class RulesetsProbeTests(unittest.TestCase):
                        source="example")
         del rows[0]["bypass_actors"]
         refusal = (1, "", f"::error::API repos/{REPO}/rulesets/13094758 returned missing or "
-                   "invalid bypass_actors (App requires administration: read)\n")
+                   "invalid bypass_actors (token cannot see this ruleset's bypass_actors)\n")
         self.assertEqual(self.run_probe(self.api_for(rows)), refusal)
         source = Path(ci_release_gate.__file__).read_text()
         before = "    barrier, branches = _require_release_rulesets(api, repo)\n"
@@ -1913,11 +1975,10 @@ class WorkflowPinTests(unittest.TestCase):
         self.assert_gate_pin(self.workflow())
 
     def assert_ruleset_visibility_documentation(self, source, docs, workflow):
-        source_comments = "\n".join(line for line in source.splitlines()
-                                    if line.lstrip().startswith("#"))
-        for text in (source_comments, docs, workflow):
-            self.assertNotIn("administration: read", text,
-                             "unverified App permission claim must stay absent")
+        for text in (source, docs, workflow):
+            self.assertNotRegex(text.replace("`", "").casefold(),
+                                r"\badministration\s*:\s*read\b|\bapp\s+requires\b",
+                                "unverified App permission claim must stay absent")
         self.assertIn(
             "# The gate needs bypass_actors visible on every branch ruleset in the inventory.\n"
             "# If the release App token cannot see them, the bump is refused;\n"
@@ -1965,6 +2026,25 @@ class WorkflowPinTests(unittest.TestCase):
                 changed[index] += claim
                 self.assertNotEqual(changed[index], original[index])
                 with self.assertRaisesRegex(AssertionError, message):
+                    self.assert_ruleset_visibility_documentation(*changed)
+
+    def test_ruleset_visibility_guard_rejects_restored_refusal_and_spelling_variants(self):
+        original = [Path(ci_release_gate.__file__).read_text(),
+                    (ROOT / "docs/ci.md").read_text(), self.workflow()]
+        self.assert_ruleset_visibility_documentation(*original)
+        neutral = "(token cannot see this ruleset's bypass_actors)"
+        self.assertEqual(original[0].count(neutral), 1,
+                         "restoration must target the runtime refusal string")
+        for claim in ("App requires administration: read", "administration: read",
+                      "`administration: read`", "administration:read",
+                      "`administration:read`", "`administration`: `read`",
+                      "ADMINISTRATION : READ", "App requires"):
+            with self.subTest(claim=claim):
+                changed = original.copy()
+                changed[0] = changed[0].replace(neutral, f"({claim})", 1)
+                self.assertNotEqual(changed[0], original[0])
+                with self.assertRaisesRegex(
+                        AssertionError, "unverified App permission claim must stay absent"):
                     self.assert_ruleset_visibility_documentation(*changed)
 
     def test_prebuilt_builds_the_emitted_sha_and_asserts_tag_identity(self):
