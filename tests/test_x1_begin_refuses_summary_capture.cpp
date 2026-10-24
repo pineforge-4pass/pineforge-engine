@@ -1,6 +1,6 @@
-// X1(2): v1 SUMMARY_ONLY capture without a sink must fail at begin, before bars.
-// The selected-window setter reaches begin even with the observer setter guard.
-// The legacy equity-only setter preserves FULL trade metrics and pending ratios.
+// X1(2): SUMMARY_ONLY capture without a sink must fail at begin, before bars.
+// Both v1 and pending legacy equity modes are covered, including handle reuse.
+// Observer setter guards may refuse earlier; a selected window still reaches begin.
 #include <pineforge/execution_observer.h>
 #include <pineforge/native_host.hpp>
 #include <pineforge/report_mode.h>
@@ -79,9 +79,9 @@ private:
     }
 };
 
-void configure(Host& host) {
+void configure(Host& host, std::uint64_t run_number = 1) {
     NativeRunSpec spec;
-    spec.identity = {"x1-begin-summary-capture", 1};
+    spec.identity = {"x1-begin-summary-capture", run_number};
     spec.input_tf = spec.script_tf = "1";
     spec.tickerid = "TEST:X1";
     spec.timezone = "UTC";
@@ -117,6 +117,8 @@ void completed(const Host& host) {
     require(host.last_run_status() == 0 && host.last_error().empty(),
             "run status=" + std::to_string(host.last_run_status())
                 + " code=" + run_failure_code_of(host) + " error=" + host.last_error());
+    require(std::strcmp(run_failure_code_of(host), "") == 0,
+            std::string("completed run kept a failure code: ") + run_failure_code_of(host));
     require(host.native_state().kind == NativeLifecycleKind::Completed,
             "fixture did not complete");
     require(host.begins == 1 && host.calculations == bar_count,
@@ -153,11 +155,10 @@ int before_results(void* context, const pf_execution_boundary_v1* boundary,
     return 0;
 }
 
-void attach_observer(Host& host, Observer& observer) {
+int attach_observer(Host& host, Observer& observer) {
     const pf_execution_observer_v1 descriptor{
         sizeof descriptor, 1, &observer, before_results};
-    const int status = strategy_set_execution_observer_v1(handle(host), &descriptor);
-    require(status == 0, "observer registration status=" + std::to_string(status));
+    return strategy_set_execution_observer_v1(handle(host), &descriptor);
 }
 
 // A captured FULL run (selected window or observer) is not "complete" in the
@@ -212,21 +213,23 @@ void compare_totals(const ReportC& actual, const ReportC& oracle) {
             "FULL capture P&L differs from the independent FULL oracle");
 }
 
-// The legacy equity-mode path is not the v1 envelope mode: a selected window under it
-// keeps its released outcome. The window's equity stream is not fed in SUMMARY_ONLY, so
-// the run fails closed in the selected-report view with engine_invariant. The control is
-// that the begin check of the v1 mode does NOT touch this path (no report_mode_unsupported).
-void legacy_window_fails_closed(Host& host) {
-    run(host);
-    require(host.last_run_status() == 1 && !host.last_error().empty(),
-            "legacy SUMMARY_ONLY selected window did not fail the run");
-    require(std::strcmp(run_failure_code_of(host), "engine_invariant") == 0,
-            std::string("legacy SUMMARY_ONLY selected window must keep engine_invariant, got code=")
-                + run_failure_code_of(host) + " error=" + host.last_error());
-}
+enum class BeginRoute { Batch, Stream };
 
-void refused_at_begin(Host& host) {
-    run(host);
+void refused_at_begin(Host& host, BeginRoute route = BeginRoute::Batch) {
+    if (route == BeginRoute::Stream) {
+        const auto bars = tape();
+        std::array<pf_bar_t, bar_count> warmup{};
+        for (std::size_t index = 0; index < bars.size(); ++index) {
+            const auto& bar = bars[index];
+            warmup[index] = {bar.open, bar.high, bar.low, bar.close,
+                             bar.volume, bar.timestamp};
+        }
+        require(strategy_stream_begin(handle(host), warmup.data(),
+                                      static_cast<int>(warmup.size()), "1", "1") == -1,
+                "SUMMARY_ONLY capture stream_begin was accepted");
+    } else {
+        run(host);
+    }
     const auto state = host.native_state();
     const auto failure = run_failure_value_of(host);
     std::fprintf(stderr,
@@ -236,6 +239,9 @@ void refused_at_begin(Host& host) {
         host.begins, host.calculations);
     require(host.last_run_status() == 1 && !host.last_error().empty(),
             "SUMMARY_ONLY capture did not fail the run");
+    require(host.last_error() == "unsupported report mode: SUMMARY_ONLY "
+                                 "(no pineforge-report/v1 provider bridge for this host)",
+            "begin refusal diagnostic differs from the catalog template: " + host.last_error());
     require(state.kind == NativeLifecycleKind::Failed
                 && state.failure.operation == NativeFailureOperation::Begin,
             "SUMMARY_ONLY capture failed after begin");
@@ -297,7 +303,7 @@ int main() {
         configure(host);
         require(host.set_report_mode_v1(ReportMode::FULL) == PF_REPORT_MODE_ACCEPTED,
                 "FULL setter refused");
-        attach_observer(host, observer);
+        require(attach_observer(host, observer) == 0, "FULL observer setter refused");
         run(host);
         completed(host);
         require(observer.calls == 1, "FULL capture did not dispatch the observer once");
@@ -313,7 +319,7 @@ int main() {
         run(host);
         completed(host);
     })) return 1;
-    if (!row("pending SUMMARY_ONLY no-capture control", [] {
+    if (!row("legacy SUMMARY_ONLY no-capture control", [] {
         Host host;
         configure(host);
         require(host.set_equity_report_mode(ReportMode::SUMMARY_ONLY) == PF_REPORT_MODE_ACCEPTED,
@@ -321,12 +327,38 @@ int main() {
         run(host);
         completed(host);
     })) return 1;
-    // An observer together with the legacy SUMMARY_ONLY mode is refused by the two
-    // setters (p2-x1, L6 12:54), so that combination never reaches begin and has no
-    // control here; the legacy selected-window controls below cover the begin check's
-    // reach (it must not touch the legacy path).
-
-    bool good = row("SUMMARY_ONLY selected-window begin refusal", [] {
+    if (!row("reused handle: uncaptured SUMMARY_ONLY after a windowed run completes", [] {
+        Host host;
+        configure(host);
+        require(host.set_report_mode_v1(ReportMode::FULL) == PF_REPORT_MODE_ACCEPTED,
+                "reused handle FULL setter refused");
+        select_window(host);
+        run(host);
+        completed(host);
+        require(strategy_set_selected_window_v1(handle(host), nullptr) == 0,
+                "reused handle window clear refused");
+        const int status = host.set_report_mode_v1(ReportMode::SUMMARY_ONLY);
+        if (status == PF_REPORT_MODE_REPLAY_UNAVAILABLE) {
+            // fix-rep/N5 refuses a mode switch after a captured generation.
+            completed(host);
+            Envelope result;
+            full_report(host, result);
+            require(result.value.metadata.mode == PF_REPORT_MODE_FULL,
+                    "refused mode switch changed the report mode");
+            std::printf("reused handle: SUMMARY_ONLY setter refused (-5); "
+                        "handle still Completed in FULL; no second run attempted\n");
+            return;
+        }
+        require(status == PF_REPORT_MODE_ACCEPTED,
+                "reused handle SUMMARY_ONLY setter status=" + std::to_string(status));
+        // Same session key and a higher run number, as in selected-window off_behavior.
+        configure(host, 2);
+        host.begins = 0;
+        host.calculations = 0;
+        run(host);
+        completed(host);
+    })) return 1;
+    if (!row("SUMMARY_ONLY selected-window begin refusal", [] {
         Host host;
         configure(host);
         require(host.set_report_mode_v1(ReportMode::SUMMARY_ONLY) == PF_REPORT_MODE_ACCEPTED,
@@ -334,14 +366,86 @@ int main() {
         // This setter has no report-mode guard, including after p2-x1 is picked.
         select_window(host);
         refused_at_begin(host);
-    });
-    if (!row("legacy SUMMARY_ONLY selected-window control", [&] {
+    })) return 1;
+    if (!row("SUMMARY_ONLY observer begin refusal", [] {
+        Observer observer;
+        Host host;
+        configure(host);
+        require(host.set_report_mode_v1(ReportMode::SUMMARY_ONLY) == PF_REPORT_MODE_ACCEPTED,
+                "observer row SUMMARY_ONLY setter refused before registration");
+        const int status = attach_observer(host, observer);
+        if (status == -2) {
+            require(host.native_state().kind == NativeLifecycleKind::Ready
+                        && host.last_run_status() == 0 && host.last_error().empty()
+                        && host.begins == 0 && host.calculations == 0 && observer.calls == 0,
+                    "observer setter refusal changed the staged run");
+            std::printf("SUMMARY_ONLY observer begin refusal: observer setter refused (-2); "
+                        "begin assertion skipped (p2-x1 guard); no run attempted\n");
+            return;
+        }
+        require(status == 0, "SUMMARY_ONLY observer setter status=" + std::to_string(status));
+        refused_at_begin(host);
+        require(observer.calls == 0, "refused begin dispatched the observer");
+    })) return 1;
+    if (!row("SUMMARY_ONLY observer-first begin refusal", [] {
+        Observer observer;
+        Host host;
+        configure(host);
+        require(host.set_report_mode_v1(ReportMode::FULL) == PF_REPORT_MODE_ACCEPTED,
+                "observer-first FULL setter refused");
+        require(attach_observer(host, observer) == 0, "observer-first setter refused in FULL");
+        const int status = host.set_report_mode_v1(ReportMode::SUMMARY_ONLY);
+        if (status == PF_REPORT_MODE_REPLAY_UNAVAILABLE) {
+            require(host.native_state().kind == NativeLifecycleKind::Ready
+                        && host.last_run_status() == 0 && host.last_error().empty()
+                        && host.begins == 0 && host.calculations == 0 && observer.calls == 0,
+                    "mode setter refusal changed the staged run");
+            std::printf("SUMMARY_ONLY observer-first begin refusal: mode setter refused (-5); "
+                        "begin assertion skipped (p2-x1 guard); no run attempted\n");
+            return;
+        }
+        require(status == PF_REPORT_MODE_ACCEPTED,
+                "observer-first SUMMARY_ONLY setter status=" + std::to_string(status));
+        refused_at_begin(host);
+        require(observer.calls == 0, "refused observer-first begin dispatched the observer");
+    })) return 1;
+    if (!row("SUMMARY_ONLY selected-window stream_begin refusal", [] {
+        Host host;
+        configure(host);
+        require(host.set_report_mode_v1(ReportMode::SUMMARY_ONLY) == PF_REPORT_MODE_ACCEPTED,
+                "stream SUMMARY_ONLY setter refused before capture was configured");
+        select_window(host);
+        refused_at_begin(host, BeginRoute::Stream);
+    })) return 1;
+    if (!row("legacy SUMMARY_ONLY selected-window refusal", [] {
         Host host;
         configure(host);
         require(host.set_equity_report_mode(ReportMode::SUMMARY_ONLY) == PF_REPORT_MODE_ACCEPTED,
                 "pending SUMMARY_ONLY setter refused");
         select_window(host);
-        legacy_window_fails_closed(host);
+        refused_at_begin(host);
     })) return 1;
-    return good ? 0 : 1;
+    if (!row("legacy SUMMARY_ONLY observer begin refusal", [] {
+        Observer observer;
+        Host host;
+        configure(host);
+        require(host.set_report_mode_v1(ReportMode::FULL) == PF_REPORT_MODE_ACCEPTED,
+                "legacy observer FULL setter refused");
+        require(attach_observer(host, observer) == 0, "legacy observer setter refused in FULL");
+        const int status = host.set_equity_report_mode(ReportMode::SUMMARY_ONLY);
+        if (status == PF_REPORT_MODE_REPLAY_UNAVAILABLE) {
+            require(host.native_state().kind == NativeLifecycleKind::Ready
+                        && host.last_run_status() == 0 && host.last_error().empty()
+                        && host.begins == 0 && host.calculations == 0 && observer.calls == 0,
+                    "legacy setter refusal changed the staged run");
+            std::printf("legacy SUMMARY_ONLY observer begin refusal: legacy setter refused (-5); "
+                        "begin assertion skipped (p2-x1 guard); no run attempted\n");
+            return;
+        }
+        require(status == PF_REPORT_MODE_ACCEPTED,
+                "legacy observer SUMMARY_ONLY setter status=" + std::to_string(status));
+        refused_at_begin(host);
+        require(observer.calls == 0, "refused legacy begin dispatched the observer");
+    })) return 1;
+    return 0;
 }
