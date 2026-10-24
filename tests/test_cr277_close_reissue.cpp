@@ -12,6 +12,13 @@
 // A same-id reissue must replace X in pending_entries_ BEFORE choosing a
 // same-bar batch or appending another entry behind the close. Otherwise both
 // the correct and the moved-from replacement key go unused.
+//
+// release-time-key was withdrawn: the lab measured it GREEN with the capture
+// reverted and on the fully unfixed adapter. reversal-close-all-capture uses
+// seed 837832's market S; priced S with OCA reduce; close_all sequence instead.
+// Pine's last same-id unfilled command modifies one order; pyramiding=1 gives
+// no second same-direction entry slot. Thus the release must open one S lot
+// of the declared default quantity, independently of the seed's trade counts.
 #include <pineforge/pineforge.h>
 #include <pineforge/source/pine_strategy_host.hpp>
 
@@ -315,7 +322,7 @@ void check_row(const Row& row) {
     CHECK(strategy_pending_orders_len(&host) == 0);
 }
 
-enum class ScopeCase { DifferentId, QueuedReplacement, ReleaseTime, ParentMismatch };
+enum class ScopeCase { DifferentId, QueuedReplacement, ReversalCloseAllCapture, ParentMismatch };
 
 struct ScopeRow {
     const char* name;
@@ -325,7 +332,7 @@ struct ScopeRow {
 constexpr ScopeRow scope_rows[] = {
     {"lookup-different-id", ScopeCase::DifferentId},
     {"lookup-queued-replacement", ScopeCase::QueuedReplacement},
-    {"release-time-key", ScopeCase::ReleaseTime},
+    {"reversal-close-all-capture", ScopeCase::ReversalCloseAllCapture},
 };
 
 std::vector<pf_pending_order_v1_t> pending_rows(source::PineStrategyHost& host) {
@@ -374,12 +381,29 @@ public:
         config.slippage = 0;
         config.process_orders_on_close = false;
         config.calc_on_order_fills = false;
+        if (scenario == ScopeCase::ReversalCloseAllCapture) {
+            config.initial_capital = 1'000'000.0;
+            config.pyramiding = 1;
+            config.margin_long = 0.0;
+            config.margin_short = 0.0;
+            // Seed 837832's commission keeps the market S live instead of
+            // taking the zero-cost same-bar command batch.
+            config.commission_type = static_cast<int>(CommissionType::CASH_PER_ORDER);
+            config.commission_value = 0.25;
+        }
         configure_pine_strategy(config);
         set_syminfo_timezone("UTC");
         set_syminfo_session("24x7");
         set_syminfo_mintick(1.0);
+        if (scenario == ScopeCase::ReversalCloseAllCapture) set_syminfo_mintick(0.25);
         fixture_retain_all_events();
     }
+
+    int capture_sequence_calls = 0;
+    int capture_release_checks = 0;
+
+    void stage_reversal_close_all_capture();
+    void check_reversal_close_all_release();
 
     void on_source_bar(const Bar&) override {
         if (pine_bar_index() == 0) {
@@ -398,11 +422,8 @@ public:
                 strategy_entry("X", false);
                 strategy_entry("X", false, missing, missing, reissue_units);
                 break;
-            case ScopeCase::ReleaseTime:
-                // This is the transferred live NaN-quantity entry. There is
-                // deliberately no same-callback reissue in this row.
-                strategy_entry("X", true);
-                strategy_close_all();
+            case ScopeCase::ReversalCloseAllCapture:
+                stage_reversal_close_all_capture();
                 break;
             case ScopeCase::ParentMismatch:
                 strategy_close_all();
@@ -413,12 +434,8 @@ public:
             }
             return;
         }
-        if (pine_bar_index() == 2 && scenario_ == ScopeCase::ReleaseTime) {
-            // The stream invokes this next-bar callback before matching the
-            // deferred close. The fixed key lets the release replace this
-            // same-id request; an empty key leaves both X requests live.
-            strategy_entry("X", true, missing, missing, reissue_units);
-        }
+        if (pine_bar_index() == 2 && scenario_ == ScopeCase::ReversalCloseAllCapture)
+            check_reversal_close_all_release();
     }
 
 private:
@@ -452,6 +469,113 @@ int fill_id_count(const ScopeProbeHost& host, const char* id) {
     return count;
 }
 
+void ScopeProbeHost::stage_reversal_close_all_capture() {
+    ++capture_sequence_calls;
+    CHECK(physical_position().signed_units == seed_units);
+    CHECK(physical_position().lot_count == 1);
+    CHECK(open_id_count(*this, "L") == 1);
+    CHECK(open_id_units(*this, "L") == seed_units);
+    CHECK(fill_id_count(*this, "S") == 0);
+
+    // Exactly the three order commands of script bar 190. Observations
+    // between them prove the live transfer and its already-staged priced peer.
+    strategy_entry("S", false);
+    const auto market = pending_rows(*this);
+    CHECK(pending_id_count(market, "S") == 1);
+    const auto* live_s = pending_id(market, "S");
+    CHECK(live_s != nullptr);
+    std::uint64_t market_incarnation = 0;
+    if (live_s) {
+        market_incarnation = live_s->incarnation;
+        CHECK(market_incarnation != 0); // A live request, not a batch sibling.
+        CHECK(std::isnan(live_s->qty));
+        CHECK(std::isnan(live_s->limit_price));
+        CHECK(std::isnan(live_s->stop_price));
+        CHECK(live_s->is_long == 0);
+    }
+
+    strategy_entry("S", false, 101.75, missing, missing, {}, "g1", 2);
+    const auto before_close = pending_rows(*this);
+    CHECK(pending_id_count(before_close, "S") == 2);
+    int priced_pending_s = 0;
+    int live_market_s = 0;
+    for (const auto& order : before_close) {
+        if (std::strcmp(order.id, "S") != 0) continue;
+        if (order.limit_price == 101.75) {
+            ++priced_pending_s;
+            CHECK(order.incarnation == 0); // The priced-reversal staging route.
+            CHECK(std::isnan(order.qty));
+            CHECK(std::isnan(order.stop_price));
+            CHECK(order.is_long == 0);
+            CHECK(std::strcmp(order.oca_name, "g1") == 0);
+            CHECK(order.oca_type == 2);
+        } else if (order.incarnation == market_incarnation) {
+            ++live_market_s;
+        }
+    }
+    CHECK(priced_pending_s == 1);
+    CHECK(live_market_s == 1);
+
+    strategy_close_all();
+    const auto staged = pending_rows(*this);
+    CHECK(pending_id_count(staged, "__close__") == 1);
+    CHECK(pending_id_count(staged, "S") == 2);
+    int transferred_s = 0;
+    priced_pending_s = 0;
+    for (const auto& order : staged) {
+        if (std::strcmp(order.id, "S") != 0) continue;
+        CHECK(order.incarnation == 0);
+        CHECK(std::isnan(order.qty));
+        CHECK(std::isnan(order.stop_price));
+        CHECK(order.is_long == 0);
+        if (std::isnan(order.limit_price)) ++transferred_s;
+        if (order.limit_price == 101.75) ++priced_pending_s;
+    }
+    // Two internal definitions are staged, but exactly one is the transferred
+    // market S in pending_entries_. They are not two permitted Pine orders.
+    CHECK(transferred_s == 1);
+    CHECK(priced_pending_s == 1);
+    int market_cancellations = 0;
+    for (const auto& event : native_events(0)) {
+        if (!event.command) continue;
+        const auto* cancelled = std::get_if<native_order::CancelledEvent>(&*event.command);
+        if (cancelled && cancelled->handle().incarnation == market_incarnation)
+            ++market_cancellations;
+    }
+    CHECK(market_cancellations == 1);
+    CHECK(fill_id_count(*this, "__close__") == 0);
+    CHECK(fill_id_count(*this, "S") == 0);
+    CHECK(physical_position().signed_units == seed_units);
+}
+
+void ScopeProbeHost::check_reversal_close_all_release() {
+    ++capture_release_checks;
+    // Historical matching has already processed this bar's open. Observe
+    // here, before range-end finalization; issue no next-bar replacement.
+    const int s_fills = fill_id_count(*this, "S");
+    const int s_lots = open_id_count(*this, "S");
+    std::fprintf(stderr, "[%s] released S fills=%d, open S=%d, position=%.17g, lots=%zu\n",
+                 row_name, s_fills, s_lots, physical_position().signed_units,
+                 physical_position().lot_count);
+    // The same-id modification rule leaves one one-unit short order; the
+    // full close consumes L first. Pyramiding=1 cannot grant another S lot.
+    CHECK(s_fills == 1);
+    CHECK(s_lots == 1);
+    CHECK(physical_position().lot_count == 1);
+    CHECK(physical_position().signed_units == -seed_units);
+    CHECK(open_id_units(*this, "S") == seed_units);
+    CHECK(open_id_count(*this, "L") == 0);
+    CHECK(fill_id_count(*this, "__close__") == 1);
+    CHECK(trade_count() == 1);
+    if (trade_count() == 1) {
+        CHECK(get_trade(0).entry_id == "L");
+        CHECK(get_trade(0).exit_id == "__close__");
+        CHECK(get_trade(0).qty == seed_units);
+    }
+    CHECK(pending_id_count(pending_rows(*this), "S") == 0);
+    CHECK(strategy_pending_orders_len(this) == 0);
+}
+
 void check_parent_scope_guard() {
     ScopeProbeHost host(ScopeCase::ParentMismatch);
     const Bar warmup[] = {
@@ -480,6 +604,21 @@ void check_parent_scope_guard() {
 void check_scope_row(const ScopeRow& row) {
     row_name = row.name;
     ScopeProbeHost host(row.scenario);
+    if (row.scenario == ScopeCase::ReversalCloseAllCapture) {
+        // The host's historical run supports the seed's magnifier mode.
+        // These inputs make the sell limit executable at the next open;
+        // no observed trade price, handle or trade count is an oracle.
+        const Bar tape[] = {
+            {100.25, 100.25, 100.25, 100.25, 1, start},
+            {101.5, 103.0, 101.5, 102.25, 1, start + 60'000},
+            {102.25, 102.25, 102.0, 102.0, 1, start + 120'000},
+        };
+        host.run(tape, 3, "", "", true, 4, MagnifierDistribution::ENDPOINTS);
+        CHECK(host.last_error().empty());
+        CHECK(host.capture_sequence_calls == 1);
+        CHECK(host.capture_release_checks == 1);
+        return;
+    }
     const Bar warmup[] = {
         {100, 100, 100, 100, 1, start},
         {100, 100, 100, 100, 1, start + 60'000},
@@ -526,21 +665,6 @@ void check_scope_row(const ScopeRow& row) {
         CHECK(host.physical_position().lot_count == 1);
         CHECK(open_id_count(host, "X") == 1);
         CHECK(open_id_units(host, "X") == reissue_units);
-        CHECK(fill_id_count(host, "X") == 1);
-    } else {
-        // The first X is a same-side default-sized live entry, so close_all
-        // transfers it as a NaN-quantity row. The next-bar X is an explicit
-        // two-unit command. A same-id release replaces that command and
-        // releases exactly the transferred one-unit X.
-        CHECK(pending_id_count(staged, "X") == 1);
-        const auto* x = pending_id(staged, "X");
-        CHECK(x != nullptr && std::isnan(x->qty));
-        CHECK(host.stream_push_tick(TradeTick{start + 120'000, 1, 100.0, 1.0}));
-        CHECK(host.last_error().empty());
-        CHECK(host.physical_position().signed_units == seed_units);
-        CHECK(host.physical_position().lot_count == 1);
-        CHECK(open_id_count(host, "X") == 1);
-        CHECK(open_id_units(host, "X") == seed_units);
         CHECK(fill_id_count(host, "X") == 1);
     }
     CHECK(strategy_pending_orders_len(&host) == 0);
