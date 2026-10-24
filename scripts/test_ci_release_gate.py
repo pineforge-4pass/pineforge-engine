@@ -28,7 +28,23 @@ WATCHER_FIRST_SHA = "f" * 40
 MAIN_API = f"repos/{REPO}/branches/main"
 PULLS_API = f"repos/{REPO}/commits/{SHA}/pulls"
 STATUSES_API = f"repos/{REPO}/commits/{HEAD}/statuses?per_page=100"
+BUMP_PARENT = OTHER_HEAD
+BUMP_API = f"repos/{REPO}/commits/{SHA}"
+PARENT_PULLS_API = f"repos/{REPO}/commits/{BUMP_PARENT}/pulls"
+RUNS_API = f"repos/{REPO}/actions/runs?head_sha={SHA}&per_page=100"
+REPO_API = f"repos/{REPO}"
+RULESETS_API = f"repos/{REPO}/rulesets?includes_parents=true&per_page=100"
+DEFAULT_RULESET_API = f"repos/{REPO}/rulesets/101"
+STRICT_RULESET_API = f"repos/{REPO}/rulesets/202"
+BEFORE_TREE_API = f"repos/{REPO}/git/trees/{TREE}?recursive=1"
+AFTER_TREE_API = f"repos/{REPO}/git/trees/{OTHER_TREE}?recursive=1"
 GATE_NAME = "Refuse unless pineforge/verify and pineforge/parity are green"
+RULESET_BARRIER_REFUSAL = (
+    "main requires an active applicable pull_request ruleset with bypass_actors "
+    "exactly Integration 4105147 with bypass_mode always")
+SINGLE_DOCUMENT_REFUSAL = (
+    "returned an HTTP response body with trailing data; "
+    "expected exactly one JSON document")
 
 
 def _without_comments(text):
@@ -69,6 +85,77 @@ def http_response(code, body, headers=None):
             + "\r\n" + body)
 
 
+def push_run(*, actor="pineforge-app[bot]", triggering_actor="pineforge-app[bot]",
+             event="push", branch="main", sha=SHA):
+    return {"event": event, "head_branch": branch, "head_sha": sha,
+            "actor": {"login": actor}, "triggering_actor": {"login": triggering_actor}}
+
+
+def runs_page(rows, *, total=None, headers=None):
+    return http_response(200, json.dumps({
+        "total_count": len(rows) if total is None else total,
+        "workflow_runs": rows}), headers)
+
+
+def bypass(actor_id=4105147, actor_type="Integration", mode="always"):
+    return {"actor_id": actor_id, "actor_type": actor_type, "bypass_mode": mode}
+
+
+def ruleset(number=202, *, target="branch", enforcement="active", include=None,
+            exclude=None, rules=("pull_request", "required_status_checks"), actors=None):
+    rule_rows = [{"type": rule} for rule in rules]
+    for row in rule_rows:
+        if row["type"] == "required_status_checks":
+            row["parameters"] = {
+                "required_status_checks": [{"context": "lint"}],
+                "strict_required_status_checks_policy": True,
+            }
+    return {
+        "id": number, "name": f"fixture ruleset {number}", "target": target,
+        "enforcement": enforcement,
+        "conditions": {"ref_name": {
+            "include": ["~DEFAULT_BRANCH"] if include is None else include,
+            "exclude": [] if exclude is None else exclude}},
+        "rules": rule_rows,
+        "bypass_actors": [bypass()] if actors is None else actors,
+    }
+
+
+def release_rulesets():
+    return [
+        ruleset(101, rules=("deletion", "required_linear_history", "pull_request"),
+                actors=[bypass(), bypass(None, "OrganizationAdmin"),
+                        bypass(None, "DeployKey"), bypass(5, "RepositoryRole"),
+                        bypass(5219872)]),
+        ruleset(),
+        # A tag-creation ruleset is never evidence about main pushes.
+        ruleset(303, target="tag", include=["refs/tags/v*"], rules=("creation",)),
+    ]
+
+
+def ruleset_summaries(rows):
+    return [{key: row[key] for key in ("id", "name", "target", "enforcement")}
+            for row in rows]
+
+
+def tree_entry(path, sha, *, mode="100644", kind="blob"):
+    return {"path": path, "sha": sha, "mode": mode, "type": kind}
+
+
+def bump_files(*, after=False):
+    return [
+        tree_entry("VERSION", ("4" if after else "1") * 40),
+        tree_entry("docker", ("6" if after else "7") * 40, mode="040000", kind="tree"),
+        tree_entry("docker/run_failure_codes_diff.json", ("5" if after else "2") * 40),
+        tree_entry("src", "8" * 40, mode="040000", kind="tree"),
+        tree_entry("src/unchanged.cpp", "3" * 40),
+    ]
+
+
+def git_tree(sha, entries, *, truncated=False):
+    return json.dumps({"sha": sha, "truncated": truncated, "tree": entries})
+
+
 class FakeAPI:
     """Raw gh responses keyed by exact endpoint, including jq/pagination flags."""
 
@@ -79,6 +166,7 @@ class FakeAPI:
             PULLS_API: json.dumps([pull()]),
             f"repos/{REPO}/commits/{HEAD}": json.dumps(commit(HEAD, TREE)),
             STATUSES_API: json.dumps(successes()),
+            RUNS_API: runs_page([]),
         }
         self.calls = []
 
@@ -93,6 +181,27 @@ class FakeAPI:
 
     def statuses(self, rows):
         self.responses[STATUSES_API] = json.dumps(rows)
+
+    def rulesets(self, rows):
+        self.responses[RULESETS_API] = http_response(200, json.dumps(ruleset_summaries(rows)))
+        self.responses.update({f"repos/{REPO}/rulesets/{row['id']}": json.dumps(row)
+                               for row in rows})
+
+    def release_bump(self):
+        candidate = commit(SHA, OTHER_TREE)
+        candidate["parents"] = [{"sha": BUMP_PARENT}]
+        candidate["commit"]["verification"] = {"verified": False}
+        self.responses.update({
+            REPO_API: json.dumps({"default_branch": "main"}),
+            PULLS_API: "[]",
+            BUMP_API: json.dumps(candidate),
+            RUNS_API: runs_page([push_run()]),
+            PARENT_PULLS_API: json.dumps([pull(merge_sha=BUMP_PARENT)]),
+            f"repos/{REPO}/commits/{BUMP_PARENT}": json.dumps(commit(BUMP_PARENT, TREE)),
+            BEFORE_TREE_API: git_tree(TREE, bump_files()),
+            AFTER_TREE_API: git_tree(OTHER_TREE, bump_files(after=True)),
+        })
+        self.rulesets(release_rulesets())
 
 
 class GateTests(unittest.TestCase):
@@ -414,6 +523,17 @@ class GateTests(unittest.TestCase):
         code, stdout, stderr = self.run_gate()
         self.assertEqual(code, 0, (stdout, stderr))
 
+    def test_paginated_pr_and_status_bodies_require_one_json_document(self):
+        # RED on 72133e77e3: the headerless [] becomes another decoded page
+        # without changing the merged PR or its successful statuses.
+        for endpoint in (PULLS_API, STATUSES_API):
+            with self.subTest(endpoint=endpoint):
+                self.api = FakeAPI()
+                self.api.responses[endpoint] = (
+                    http_response(200, self.api.responses[endpoint]) + "[]")
+                self.assert_refused(f"API {endpoint} {SINGLE_DOCUMENT_REFUSAL}")
+                self.assertEqual(self.api.calls[-1], (endpoint, True, None))
+
     def test_http_headers_cannot_hide_an_empty_page(self):
         for pages in (("", json.dumps(successes())), (json.dumps(successes()), "")):
             with self.subTest(pages=pages):
@@ -677,6 +797,812 @@ class GateTests(unittest.TestCase):
         self.assertIn(f"tree {other_tree}", stdout)
 
 
+class ReleaseBumpTests(unittest.TestCase):
+    # Reuse the real CLI harness without inheriting/rerunning GateTests' cases.
+    run_gate = GateTests.run_gate
+    assert_refused = GateTests.assert_refused
+    enable_watcher = GateTests.enable_watcher
+
+    def setUp(self):
+        GateTests.setUp(self)
+        self.api.release_bump()
+
+    def reset_bump(self):
+        self.api = FakeAPI()
+        self.api.release_bump()
+
+    def assert_bump_green(self):
+        code, stdout, stderr = self.run_gate()
+        self.assertEqual(code, 0, (stdout, stderr))
+        self.assertEqual(stderr, "")
+        self.assertEqual(stdout, (
+            f"release gate green: release bump {SHA}; parent {BUMP_PARENT}; "
+            f"PR #17 head {HEAD}; pineforge/verify=success; "
+            f"pineforge/parity=success; tree {TREE}\n"))
+
+    def test_bump_on_a_gated_parent_passes(self):
+        # RED on main: the exact empty associated-pulls input refuses there.
+        self.assert_bump_green()
+        self.assertIn((RUNS_API, True, None), self.api.calls)
+        self.assertIn((PARENT_PULLS_API, True, None), self.api.calls)
+        self.assertIn((STATUSES_API, True, None), self.api.calls)
+        self.assertIn((BEFORE_TREE_API, False, None), self.api.calls)
+        self.assertIn((AFTER_TREE_API, False, None), self.api.calls)
+        self.assertTrue(all(count == 1 for count in
+                            Counter(endpoint for endpoint, _, _ in self.api.calls).values()))
+        self.git.assert_not_called()
+        self.proof.assert_not_called()
+
+    def test_bump_plus_one_code_file_refuses(self):
+        # Condition (c) mutation control: all identity/parent evidence is green.
+        entries = bump_files(after=True) + [tree_entry("src/extra.cpp", "9" * 40)]
+        self.api.responses[AFTER_TREE_API] = git_tree(OTHER_TREE, entries)
+        self.assert_refused("release bump must modify exactly VERSION and "
+                            "docker/run_failure_codes_diff.json")
+
+    def test_human_push_or_rerun_refuses_even_with_forged_commit_identity(self):
+        candidate = json.loads(self.api.responses[BUMP_API])
+        candidate.update(author={"login": "github-actions[bot]"},
+                         committer={"login": "github-actions[bot]"})
+        candidate["commit"].update(
+            author={"name": "github-actions[bot]"},
+            committer={"name": "github-actions[bot]"},
+            verification={"verified": True})
+        for actor, trigger in (("luisleo526", "luisleo526"),
+                               ("luisleo526", "pineforge-app[bot]"),
+                               ("pineforge-app[bot]", "luisleo526")):
+            with self.subTest(actor=actor, triggering_actor=trigger):
+                self.reset_bump()
+                self.api.responses[BUMP_API] = json.dumps(candidate)
+                self.api.responses[RUNS_API] = runs_page([
+                    push_run(actor=actor, triggering_actor=trigger)])
+                self.assert_refused("release bump push actor must be pineforge-app[bot] "
+                                    "for both actor and triggering_actor")
+
+    def test_zero_runs_refuses(self):
+        self.api.responses[RUNS_API] = runs_page([])
+        self.assert_refused(f"no exact-main push workflow run for release bump {SHA}")
+
+    def test_unrelated_runs_cannot_supply_push_identity(self):
+        for row in (push_run(event="workflow_dispatch"), push_run(branch="release"),
+                    push_run(sha=BUMP_PARENT)):
+            with self.subTest(row=row):
+                self.reset_bump()
+                self.api.responses[RUNS_API] = runs_page([row])
+                self.assert_refused(f"no exact-main push workflow run for release bump {SHA}")
+
+    def test_every_matching_push_run_must_have_both_app_actors(self):
+        for rows in ([push_run(), push_run(actor="luisleo526")],
+                     [push_run(triggering_actor="luisleo526"), push_run()]):
+            with self.subTest(rows=rows):
+                self.reset_bump()
+                self.api.responses[RUNS_API] = runs_page(rows)
+                self.assert_refused("release bump push actor must be pineforge-app[bot]")
+
+    def test_runs_on_later_pages_are_all_read_with_adjacent_object_headers(self):
+        for separator in ("", "\n"):
+            with self.subTest(separator=separator):
+                self.reset_bump()
+                pages = [runs_page([push_run(event="workflow_dispatch") for _ in range(100)],
+                                   total=101, headers={
+                                       "Link": f'<https://api.github.com/{RUNS_API}&page=2>; '
+                                       'rel="next"'}),
+                         runs_page([push_run()], total=101, headers={
+                             "Link": f'<https://api.github.com/{RUNS_API}&page=1>; rel="prev"'})]
+                self.api.responses[RUNS_API] = separator.join(pages)
+                self.assert_bump_green()
+                self.assertIn((RUNS_API, True, None), self.api.calls)
+
+    def test_human_push_on_a_later_page_refuses(self):
+        self.api.responses[RUNS_API] = (
+            runs_page([push_run() for _ in range(100)], total=101, headers={
+                "Link": f'<https://api.github.com/{RUNS_API}&page=2>; rel="next"'})
+            + runs_page([push_run(actor="luisleo526")], total=101))
+        self.assert_refused("release bump push actor must be pineforge-app[bot]")
+
+    def test_later_runs_page_errors_cannot_hide_behind_a_good_page(self):
+        for trailing, fragment in (
+                (http_response(503, "unavailable"), "upstream error 503"),
+                (http_response(200, ""), "returned an empty payload"),
+                (http_response(200, "not JSON"), "returned invalid JSON")):
+            with self.subTest(fragment=fragment):
+                self.reset_bump()
+                self.api.responses[RUNS_API] = (
+                    runs_page([push_run()], total=2, headers={
+                        "Link": f'<https://api.github.com/{RUNS_API}&page=2>; rel="next"'})
+                    + trailing)
+                self.assert_refused(f"API {RUNS_API} {fragment}")
+                self.assertEqual(self.api.calls[-1], (RUNS_API, True, None))
+
+    def test_truncated_run_list_or_inconsistent_totals_refuse(self):
+        for payload in (runs_page([push_run()], total=1001),
+                        "".join(runs_page([push_run()] * 100, total=1000, headers={
+                            "Link": f'<https://api.github.com/{RUNS_API}&page={index + 2}>; '
+                            'rel="next"'} if index < 9 else None) for index in range(10)),
+                        runs_page([push_run()], total=2, headers={
+                            "Link": f'<https://api.github.com/{RUNS_API}&page=2>; rel="next"'})
+                        + runs_page([push_run()], total=3)):
+            with self.subTest(payload=payload):
+                self.reset_bump()
+                self.api.responses[RUNS_API] = payload
+                self.assert_refused(f"API {RUNS_API} returned incomplete workflow_runs pagination")
+
+    def test_advertised_unread_runs_page_refuses_even_when_total_count_matches(self):
+        # RED on a8b12768f1: one valid run equals total_count, so main ignores
+        # the advertised second page and prints the exact green bump verdict.
+        self.api.responses[RUNS_API] = runs_page([push_run()], headers={
+            "Link": f'<https://api.github.com/{RUNS_API}&page=2>; rel="next"'})
+        self.assert_refused(
+            f"API {RUNS_API} returned incomplete workflow_runs pagination: "
+            "unread or unlinked next page")
+        self.assertEqual(self.api.calls[-1], (RUNS_API, True, None))
+
+    def test_missing_or_inconsistent_runs_page_links_refuse(self):
+        body = json.dumps({"total_count": 1, "workflow_runs": [push_run()]})
+        for raw in (body,
+                    runs_page([push_run()], headers={
+                        "Link": f'<https://api.github.com/{RUNS_API}&page=3>; rel="next"'})
+                    + runs_page([], total=1),
+                    runs_page([push_run()], total=2) + runs_page([push_run()], total=2),
+                    runs_page([push_run()], headers={"Link": "unreadable"}),
+                    runs_page([push_run()], headers={
+                        "Link": f'<https://api.github.com/{RUNS_API}&page=2>; rel="last"'})):
+            with self.subTest(raw=raw):
+                self.reset_bump()
+                self.api.responses[RUNS_API] = raw
+                self.assert_refused(
+                    f"API {RUNS_API} returned incomplete workflow_runs pagination")
+                self.assertEqual(self.api.calls[-1], (RUNS_API, True, None))
+
+    def test_runs_body_cannot_hide_an_extra_json_document_without_headers(self):
+        # Exact sol report input: one HTTP page, two JSON documents, one run.
+        # RED on 72133e77e3: both totals are 1, so the bump prints green.
+        self.api.responses[RUNS_API] = (
+            runs_page([push_run()]) + '{"total_count":1,"workflow_runs":[]}')
+        self.assert_refused(f"API {RUNS_API} {SINGLE_DOCUMENT_REFUSAL}")
+        self.assertEqual(self.api.calls[-1], (RUNS_API, True, None))
+
+    def test_ruleset_body_cannot_hide_an_extra_json_document_without_headers(self):
+        # RED on 72133e77e3: the second document adds no inventory rows,
+        # leaving the valid App-only barrier and exact green bump verdict.
+        self.api.responses[RULESETS_API] += "[]"
+        self.assert_refused(f"API {RULESETS_API} {SINGLE_DOCUMENT_REFUSAL}")
+        self.assertEqual(self.api.calls[-1], (RULESETS_API, True, None))
+
+    def test_second_http_page_cannot_contain_an_extra_json_document(self):
+        summaries = json.dumps(ruleset_summaries(release_rulesets()))
+        for endpoint, first, second, extra in (
+                (RUNS_API,
+                 json.dumps({"total_count": 2, "workflow_runs": [push_run()]}),
+                 json.dumps({"total_count": 2, "workflow_runs": [push_run()]}),
+                 '{"total_count":2,"workflow_runs":[]}'),
+                (RULESETS_API, summaries, "[]", "[]")):
+            for separator in ("", "\n"):
+                with self.subTest(endpoint=endpoint, separator=separator):
+                    self.reset_bump()
+                    self.api.responses[endpoint] = (
+                        http_response(200, first, {
+                            "Link": f'<https://api.github.com/{endpoint}&page=2>; rel="next"'})
+                        + separator + http_response(200, second, {
+                            "Link": f'<https://api.github.com/{endpoint}&page=1>; rel="prev"'})
+                        + extra)
+                    # RED on 72133e77e3: two linked HTTP responses pass,
+                    # then three documents decode with unchanged row counts.
+                    self.assert_refused(f"API {endpoint} {SINGLE_DOCUMENT_REFUSAL}")
+                    self.assertEqual(self.api.calls[-1], (endpoint, True, None))
+
+    def test_trailing_garbage_is_named_as_an_invalid_http_body(self):
+        for endpoint in (RUNS_API, RULESETS_API):
+            with self.subTest(endpoint=endpoint):
+                self.reset_bump()
+                self.api.responses[endpoint] += "\ntrailing garbage"
+                # RED on 72133e77e3: it instead reports a generic parse
+                # error while decoding a nonexistent additional page.
+                self.assert_refused(f"API {endpoint} {SINGLE_DOCUMENT_REFUSAL}")
+                self.assertEqual(self.api.calls[-1], (endpoint, True, None))
+
+    def test_partially_headerless_pages_refuse_before_link_validation(self):
+        summaries = json.dumps(ruleset_summaries(release_rulesets()))
+        for endpoint, first, second in (
+                (RUNS_API,
+                 json.dumps({"total_count": 1, "workflow_runs": [push_run()]}),
+                 '{"total_count":1,"workflow_runs":[]}'),
+                (RULESETS_API, summaries, "[]")):
+            with self.subTest(endpoint=endpoint):
+                self.reset_bump()
+                self.api.responses[endpoint] = (
+                    http_response(200, first, {
+                        "Link": f'<https://api.github.com/{endpoint}&page=2>; rel="next"'})
+                    + "\n" + second)
+                # The second response alone lacks headers. RED on
+                # 72133e77e3: Link validation reports an unread next page
+                # before noticing that the first body has two documents.
+                self.assert_refused(f"API {endpoint} {SINGLE_DOCUMENT_REFUSAL}")
+                self.assertEqual(self.api.calls[-1], (endpoint, True, None))
+
+    def test_empty_http_body_refuses_before_link_validation(self):
+        for endpoint in (RUNS_API, RULESETS_API):
+            with self.subTest(endpoint=endpoint):
+                self.reset_bump()
+                self.api.responses[endpoint] = http_response(200, " \r\n ", {
+                    "Link": f'<https://api.github.com/{endpoint}&page=2>; rel="next"'})
+                # RED on 72133e77e3: the unread Link diagnostic masks the
+                # empty body; the body check must run before pagination.
+                self.assert_refused(f"API {endpoint} returned an empty payload")
+                self.assertEqual(self.api.calls[-1], (endpoint, True, None))
+
+    def test_complete_runs_pages_may_end_with_an_empty_page(self):
+        self.api.responses[RUNS_API] = (
+            runs_page([push_run()], headers={
+                "Link": f'<https://api.github.com/{RUNS_API}&page=2>; rel="next"'})
+            + runs_page([], total=1))
+        self.assert_bump_green()
+
+    def test_malformed_runs_or_actors_refuse(self):
+        for payload, fragment in (
+                (http_response(200, "[]"), "invalid workflow_runs page"),
+                (http_response(200, '{"total_count":true,"workflow_runs":[]}'),
+                 "invalid workflow_runs page"),
+                (http_response(200, '{"total_count":1,"workflow_runs":{}}'),
+                 "invalid workflow_runs page"),
+                (runs_page([None]), "invalid workflow run"),
+                (runs_page([{"event": "push"}]), "invalid workflow run"),
+                (runs_page([{**push_run(), "actor": None}]), "push actor must be"),
+                (runs_page([{**push_run(), "triggering_actor": {}}]), "push actor must be")):
+            with self.subTest(payload=payload):
+                self.reset_bump()
+                self.api.responses[RUNS_API] = payload
+                self.assert_refused(fragment)
+
+    def test_bump_on_an_ungated_parent_refuses(self):
+        # Condition (b) mutation control: identity and the two-file diff are green.
+        for context in ("pineforge/verify", "pineforge/parity"):
+            with self.subTest(context=context):
+                self.reset_bump()
+                self.api.statuses([row for row in successes() if row["context"] != context])
+                self.assert_refused(f"PR #17 head {HEAD}: missing {context}")
+
+    def test_parent_still_requires_trusted_newest_success_and_matching_tree(self):
+        for variant, fragment in (
+                ("red", "pineforge/verify=failure (expected success)"),
+                ("creator", "refused status creator"),
+                ("tree", f"no merged pull request head matches release tree {TREE}"),
+                ("ambiguous", "multiple merged PR heads match (#17, #18)")):
+            with self.subTest(variant=variant):
+                self.reset_bump()
+                if variant == "red":
+                    self.api.statuses([status("pineforge/verify", "failure"), *successes()])
+                elif variant == "creator":
+                    rows = successes()
+                    rows[0]["creator"] = {"login": "outsider", "type": "User"}
+                    self.api.statuses(rows)
+                elif variant == "tree":
+                    self.api.responses[f"repos/{REPO}/commits/{HEAD}"] = json.dumps(
+                        commit(HEAD, OTHER_TREE))
+                else:
+                    self.api.responses[PARENT_PULLS_API] = json.dumps([
+                        pull(merge_sha=BUMP_PARENT), pull(number=18, merge_sha=BUMP_PARENT)])
+                self.assert_refused(fragment)
+
+    def test_bump_on_bump_refuses_despite_a_gated_grandparent(self):
+        grandparent, grandtree = "9" * 40, "0" * 40
+        parent = commit(BUMP_PARENT, TREE)
+        parent["parents"] = [{"sha": grandparent}]
+        self.api.responses.update({
+            PARENT_PULLS_API: "[]",
+            f"repos/{REPO}/commits/{BUMP_PARENT}": json.dumps(parent),
+            f"repos/{REPO}/actions/runs?head_sha={BUMP_PARENT}&per_page=100":
+                runs_page([push_run(sha=BUMP_PARENT)]),
+            f"repos/{REPO}/commits/{grandparent}/pulls":
+                json.dumps([pull(merge_sha=grandparent)]),
+            f"repos/{REPO}/commits/{grandparent}": json.dumps(commit(grandparent, grandtree)),
+            f"repos/{REPO}/commits/{HEAD}": json.dumps(commit(HEAD, grandtree)),
+            f"repos/{REPO}/git/trees/{grandtree}?recursive=1":
+                git_tree(grandtree, [
+                    {**row, "sha": "a" * 40}
+                    if row["path"] in ("VERSION", "docker/run_failure_codes_diff.json") else row
+                    for row in bump_files()]),
+        })
+        self.assert_refused(f"no merged pull request associated with {BUMP_PARENT}")
+        self.assertFalse(any(grandparent in endpoint for endpoint, _, _ in self.api.calls))
+
+    def test_merge_root_and_malformed_parent_lists_refuse(self):
+        for parents in ([], [{"sha": BUMP_PARENT}, {"sha": HEAD}],
+                        None, [{"sha": "bad"}], [{}]):
+            with self.subTest(parents=parents):
+                self.reset_bump()
+                candidate = commit(SHA, OTHER_TREE)
+                candidate["parents"] = parents
+                self.api.responses[BUMP_API] = json.dumps(candidate)
+                self.assert_refused("release bump requires exactly one valid parent")
+
+    def test_deleted_renamed_added_or_missing_allowlisted_file_refuses(self):
+        for path in ("VERSION", "docker/run_failure_codes_diff.json"):
+            for change in ("deleted", "renamed", "added", "unchanged"):
+                with self.subTest(path=path, change=change):
+                    self.reset_bump()
+                    before, after = bump_files(), bump_files(after=True)
+                    if change == "deleted":
+                        after = [row for row in after if row["path"] != path]
+                    elif change == "renamed":
+                        after = [{**row, "path": path + ".renamed"}
+                                 if row["path"] == path else row for row in after]
+                    elif change == "added":
+                        before = [row for row in before if row["path"] != path]
+                    else:
+                        original = next(row for row in before if row["path"] == path)
+                        after = [original if row["path"] == path else row for row in after]
+                    self.api.responses[BEFORE_TREE_API] = git_tree(TREE, before)
+                    self.api.responses[AFTER_TREE_API] = git_tree(OTHER_TREE, after)
+                    self.assert_refused("release bump must modify exactly VERSION and "
+                                        "docker/run_failure_codes_diff.json")
+
+    def test_mode_change_or_nonregular_file_on_either_side_refuses(self):
+        for path in ("VERSION", "docker/run_failure_codes_diff.json"):
+            for sides in (("before",), ("after",), ("before", "after")):
+                for mode, kind in (("100755", "blob"), ("120000", "blob"),
+                                   ("160000", "commit")):
+                    with self.subTest(path=path, sides=sides, mode=mode):
+                        self.reset_bump()
+                        for side in sides:
+                            entries = [{**row, "mode": mode, "type": kind}
+                                       if row["path"] == path else row
+                                       for row in bump_files(after=side == "after")]
+                            endpoint, tree = ((BEFORE_TREE_API, TREE) if side == "before"
+                                              else (AFTER_TREE_API, OTHER_TREE))
+                            self.api.responses[endpoint] = git_tree(tree, entries)
+                        self.assert_refused(f"release bump path {path} must stay mode 100644")
+
+    def test_zero_changed_files_refuses(self):
+        for same_tree in (False, True):
+            with self.subTest(same_tree=same_tree):
+                self.reset_bump()
+                self.api.responses[AFTER_TREE_API] = git_tree(OTHER_TREE, bump_files())
+                if same_tree:
+                    candidate = json.loads(self.api.responses[BUMP_API])
+                    candidate["commit"]["tree"]["sha"] = TREE
+                    self.api.responses[BUMP_API] = json.dumps(candidate)
+                self.assert_refused("release bump must modify exactly VERSION and "
+                                    "docker/run_failure_codes_diff.json")
+                self.assertEqual(Counter(endpoint for endpoint, _, _ in self.api.calls)[
+                    BEFORE_TREE_API], 1)
+                if same_tree:
+                    self.assertNotIn((AFTER_TREE_API, False, None), self.api.calls)
+
+    def test_truncated_or_malformed_git_trees_refuse(self):
+        for endpoint, tree, after in ((BEFORE_TREE_API, TREE, False),
+                                      (AFTER_TREE_API, OTHER_TREE, True)):
+            for payload, fragment in (
+                    (git_tree(tree, bump_files(after=after), truncated=True),
+                     "invalid or truncated git tree"),
+                    (git_tree("9" * 40, bump_files(after=after)), "invalid or truncated git tree"),
+                    (json.dumps({"sha": tree, "tree": []}), "invalid or truncated git tree"),
+                    (git_tree(tree, [None]), "invalid git tree entry"),
+                    (git_tree(tree, [tree_entry("VERSION", "bad")]), "invalid git tree entry"),
+                    (git_tree(tree, [*bump_files(after=after), bump_files(after=after)[0]]),
+                     "duplicate git tree path")):
+                with self.subTest(endpoint=endpoint, payload=payload):
+                    self.reset_bump()
+                    self.api.responses[endpoint] = payload
+                    self.assert_refused(f"API {endpoint} returned {fragment}")
+
+    def test_bump_evidence_read_errors_stop_without_retry_or_later_reads(self):
+        for endpoint in (RUNS_API, BUMP_API, PARENT_PULLS_API,
+                         f"repos/{REPO}/commits/{BUMP_PARENT}", STATUSES_API,
+                         BEFORE_TREE_API, AFTER_TREE_API):
+            for payload, fragment in ((http_response(503, "unavailable"), "upstream error 503"),
+                                      ("", "returned an empty payload"),
+                                      ("not JSON", "returned invalid JSON")):
+                with self.subTest(endpoint=endpoint, payload=payload):
+                    self.reset_bump()
+                    self.api.responses[endpoint] = (
+                        http_response(200, payload) if endpoint == RUNS_API
+                        and not payload.startswith("HTTP/") else payload)
+                    self.assert_refused(f"API {endpoint} {fragment}")
+                    self.assertEqual(self.api.calls[-1][0], endpoint)
+                    self.assertTrue(all(count == 1 for count in Counter(
+                        called for called, _, _ in self.api.calls).values()))
+
+    def test_phase_two_missing_receipt_cannot_use_a_valid_bump(self):
+        self.enable_watcher()
+        self.assert_refused(f"main-proof receipt is missing for {SHA}")
+        self.assertEqual(self.api.calls, [(MAIN_API, False, ".commit.sha")])
+        self.proof.assert_called_once_with(REPO, SHA)
+
+    def test_failed_candidate_pr_check_cannot_use_an_otherwise_valid_bump(self):
+        self.api.responses[PULLS_API] = json.dumps([pull()])
+        self.assert_refused(f"no merged pull request head matches release tree {OTHER_TREE}")
+        self.assertNotIn((RUNS_API, True, None), self.api.calls)
+
+
+class ReleaseRulesetTests(unittest.TestCase):
+    # Only transport is fake: every row goes through main() and the real gate().
+    run_gate = GateTests.run_gate
+    assert_refused = GateTests.assert_refused
+    setUp = ReleaseBumpTests.setUp
+    reset_bump = ReleaseBumpTests.reset_bump
+    assert_bump_green = ReleaseBumpTests.assert_bump_green
+
+    def test_overlapping_role_and_team_bypasses_are_not_an_app_only_barrier(self):
+        # RED on a8b12768f1: descriptor intersection is App-only even though
+        # a role-5 member of team 123 can bypass both pull-request rulesets.
+        self.api.rulesets([
+            ruleset(101, rules=("pull_request",),
+                    actors=[bypass(), bypass(5, "RepositoryRole")]),
+            ruleset(rules=("pull_request",), actors=[bypass(), bypass(123, "Team")]),
+        ])
+        self.assert_refused(RULESET_BARRIER_REFUSAL)
+
+    def test_status_checks_cannot_complete_a_broader_pull_request_ruleset(self):
+        # RED on a8b12768f1: a person can bypass the PR ruleset and satisfy
+        # the status check normally, without bypassing the second ruleset.
+        self.api.rulesets([
+            ruleset(101, rules=("pull_request",),
+                    actors=[bypass(), bypass(5, "RepositoryRole")]),
+            ruleset(rules=("required_status_checks",)),
+        ])
+        self.assert_refused(RULESET_BARRIER_REFUSAL)
+
+    def test_second_bypass_actor_cannot_loosen_the_app_only_barrier(self):
+        # The Team row is RED on a8b12768f1: it is absent from the broad
+        # ruleset, so the descriptor intersection still contains only the App.
+        for actor in (bypass(5, "RepositoryRole"), bypass(5219872),
+                      bypass(None, "OrganizationAdmin"), bypass(None, "DeployKey"),
+                      bypass(123, "Team")):
+            with self.subTest(actor=actor):
+                self.reset_bump()
+                rows = release_rulesets()
+                rows[1]["bypass_actors"].append(actor)
+                self.api.rulesets(rows)
+                self.assert_refused(RULESET_BARRIER_REFUSAL)
+
+    def test_disabled_or_evaluating_main_restriction_refuses(self):
+        for enforcement in ("disabled", "evaluate"):
+            with self.subTest(enforcement=enforcement):
+                self.reset_bump()
+                rows = release_rulesets()
+                rows[1]["enforcement"] = enforcement
+                self.api.rulesets(rows)
+                self.assert_refused(RULESET_BARRIER_REFUSAL)
+
+    def test_removed_strict_restriction_cannot_be_replaced_by_tag_protection(self):
+        self.api.rulesets([release_rulesets()[0], release_rulesets()[2]])
+        self.assert_refused(RULESET_BARRIER_REFUSAL)
+
+    def test_at_least_one_applicable_pull_request_barrier_is_required(self):
+        for rows in ([], [release_rulesets()[2]],
+                     [ruleset(rules=("deletion", "required_linear_history"))],
+                     [ruleset(include=["refs/heads/release"])],
+                     [ruleset(exclude=["refs/heads/main"])]):
+            with self.subTest(rows=rows):
+                self.reset_bump()
+                self.api.rulesets(rows)
+                self.assert_refused(RULESET_BARRIER_REFUSAL)
+
+    def test_barrier_bypasses_must_be_exactly_the_always_release_app(self):
+        for actors in ([], [bypass(mode="pull_request")], [bypass(5219872)],
+                       [bypass(4105147, "Team")]):
+            with self.subTest(actors=actors):
+                self.reset_bump()
+                rows = release_rulesets()
+                rows[1]["bypass_actors"] = actors
+                self.api.rulesets(rows)
+                self.assert_refused(RULESET_BARRIER_REFUSAL)
+
+    def test_each_ruleset_api_error_stops_without_retry_or_later_reads(self):
+        for endpoint in (REPO_API, RULESETS_API, DEFAULT_RULESET_API, STRICT_RULESET_API):
+            for payload, fragment in (
+                    (OSError("connection refused"), "failed: connection refused"),
+                    (subprocess.CalledProcessError(
+                        1, ["gh", "api", endpoint], stderr="gh: Forbidden (HTTP 403)"),
+                     "failed with HTTP 403"),
+                    (http_response(503, "unavailable"), "upstream error 503"),
+                    ("", "returned an empty payload"),
+                    ("not JSON",
+                     "returned incomplete ruleset pagination: missing HTTP page headers"
+                     if endpoint == RULESETS_API else "returned invalid JSON")):
+                with self.subTest(endpoint=endpoint, fragment=fragment):
+                    self.reset_bump()
+                    # Keep the existing empty-body diagnostic reachable: the
+                    # inventory already requires HTTP page headers on main.
+                    self.api.responses[endpoint] = (
+                        http_response(200, "") if endpoint == RULESETS_API and payload == ""
+                        else payload)
+                    self.assert_refused(f"API {endpoint} {fragment}")
+                    self.assertEqual(self.api.calls[-1][0], endpoint)
+                    self.assertTrue(all(count == 1 for count in Counter(
+                        called for called, _, _ in self.api.calls).values()))
+
+    def test_missing_bypass_actors_refuses_instead_of_assuming_token_visibility(self):
+        for index in (0, 1):
+            with self.subTest(index=index):
+                self.reset_bump()
+                rows = release_rulesets()
+                del rows[index]["bypass_actors"]
+                self.api.rulesets(rows)
+                endpoint = DEFAULT_RULESET_API if index == 0 else STRICT_RULESET_API
+                self.assert_refused(f"API {endpoint} returned missing or invalid bypass_actors")
+
+    def test_malformed_ruleset_inventory_or_details_refuse(self):
+        strict = ruleset()
+        for endpoint, payload, fragment in (
+                (RULESETS_API, http_response(200, "{}"), "an empty payload"),
+                (RULESETS_API, http_response(200, "[null]"), "invalid ruleset summary"),
+                (RULESETS_API, http_response(200, json.dumps([{"id": True}])),
+                 "invalid ruleset summary"),
+                (RULESETS_API, http_response(200, json.dumps(
+                    ruleset_summaries([strict, strict]))), "duplicate ruleset id 202"),
+                (STRICT_RULESET_API, json.dumps({**strict, "id": 999}),
+                 "inconsistent ruleset detail"),
+                (STRICT_RULESET_API, json.dumps({**strict, "enforcement": "disabled"}),
+                 "inconsistent ruleset detail"),
+                (STRICT_RULESET_API, json.dumps({**strict, "conditions": {}}),
+                 "invalid ref_name conditions"),
+                (STRICT_RULESET_API, json.dumps({**strict, "conditions": {
+                    "ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": None}}}),
+                 "invalid ref_name conditions"),
+                (STRICT_RULESET_API, json.dumps({**strict, "rules": [None]}),
+                 "invalid rules"),
+                (STRICT_RULESET_API, json.dumps({**strict, "bypass_actors": None}),
+                 "missing or invalid bypass_actors"),
+                (STRICT_RULESET_API, json.dumps({**strict, "bypass_actors": [{}]}),
+                 "invalid bypass actor"),
+                (STRICT_RULESET_API, json.dumps({**strict, "bypass_actors": [
+                    bypass(True), bypass()]}), "invalid bypass actor"),
+                (STRICT_RULESET_API, json.dumps({**strict, "bypass_actors": [
+                    bypass(mode="unknown")]}), "invalid bypass actor")):
+            with self.subTest(endpoint=endpoint, fragment=fragment):
+                self.reset_bump()
+                self.api.responses[endpoint] = payload
+                self.assert_refused(f"API {endpoint} returned {fragment}")
+
+    def test_main_must_still_be_the_default_branch_for_default_branch_conditions(self):
+        self.api.responses[REPO_API] = json.dumps({"default_branch": "release"})
+        self.assert_refused(f"API {REPO_API} must identify main as the default branch")
+
+    def test_app_only_ruleset_on_another_or_excluded_branch_cannot_hide_shared_human(self):
+        for changes in ({"target": "tag"},
+                        {"conditions": {"ref_name": {
+                            "include": ["refs/heads/release"], "exclude": []}}},
+                        {"conditions": {"ref_name": {
+                            "include": ["~DEFAULT_BRANCH"], "exclude": ["refs/heads/m*"]}}}):
+            with self.subTest(changes=changes):
+                self.reset_bump()
+                rows = release_rulesets()
+                rows[1].update(changes)
+                self.api.rulesets(rows)
+                self.assert_refused(RULESET_BARRIER_REFUSAL)
+
+    def test_other_bypass_lists_do_not_invalidate_an_existing_app_only_barrier(self):
+        # The other-App and disabled/evaluate rows are RED on a8b12768f1:
+        # it intersects unrelated bypasses or requires every blocker active.
+        for other in (release_rulesets()[0], ruleset(404, actors=[bypass(5219872)]),
+                      ruleset(404, enforcement="disabled"),
+                      ruleset(404, enforcement="evaluate")):
+            for barrier_first in (False, True):
+                with self.subTest(other=other, barrier_first=barrier_first):
+                    self.reset_bump()
+                    rows = [ruleset(), other] if barrier_first else [other, ruleset()]
+                    self.api.rulesets(rows)
+                    self.assert_bump_green()
+                    for row in rows:
+                        self.assertIn((f"repos/{REPO}/rulesets/{row['id']}", False, None),
+                                      self.api.calls)
+
+    def test_incomplete_ruleset_pagination_refuses_even_with_an_app_only_first_page(self):
+        summaries = json.dumps(ruleset_summaries(release_rulesets()))
+        next_link = {"Link": f'<https://api.github.com/{RULESETS_API}&page=2>; rel="next"'}
+        for raw in (summaries, http_response(200, summaries, next_link),
+                    http_response(200, summaries, {
+                        "Link": f'<https://api.github.com/{RULESETS_API}&page=3>; rel="next"'})
+                    + http_response(200, "[]"),
+                    http_response(200, summaries) + http_response(200, "[]"),
+                    http_response(200, summaries, {"Link": "unreadable"}),
+                    http_response(200, summaries, {
+                        "Link": f'<https://api.github.com/{RULESETS_API}&page=2>; rel="last"'})):
+            with self.subTest(raw=raw):
+                self.reset_bump()
+                self.api.responses[RULESETS_API] = raw
+                self.assert_refused(f"API {RULESETS_API} returned incomplete ruleset pagination")
+
+    def test_later_ruleset_pages_are_read_before_deciding(self):
+        rows = [ruleset(), ruleset(404, actors=[bypass(5219872)])]
+        del rows[1]["bypass_actors"]
+        self.api.rulesets(rows)
+        self.api.responses[RULESETS_API] = (
+            http_response(200, json.dumps(ruleset_summaries(rows[:1])), {
+                "Link": f'<https://api.github.com/{RULESETS_API}&page=2>; rel="next"'})
+            + http_response(200, json.dumps(ruleset_summaries(rows[1:]))))
+        self.assert_refused(f"API repos/{REPO}/rulesets/404 returned "
+                            "missing or invalid bypass_actors")
+        self.assertIn((f"repos/{REPO}/rulesets/404", False, None), self.api.calls)
+
+    def test_app_only_barrier_may_arrive_on_a_later_ruleset_page(self):
+        rows = [release_rulesets()[0], ruleset()]
+        self.api.rulesets(rows)
+        self.api.responses[RULESETS_API] = (
+            http_response(200, json.dumps(ruleset_summaries(rows[:1])), {
+                "Link": f'<https://api.github.com/{RULESETS_API}&page=2>; rel="next"'})
+            + http_response(200, json.dumps(ruleset_summaries(rows[1:]))))
+        self.assert_bump_green()
+        self.assertIn((STRICT_RULESET_API, False, None), self.api.calls)
+
+    def test_green_finds_the_barrier_without_pinning_ruleset_ids_or_names(self):
+        rows = release_rulesets()
+        for row in rows:
+            row["id"] += 700
+            row["name"] = "renamed protection"
+        rows[1]["conditions"]["ref_name"]["include"] = ["refs/heads/main"]
+        self.api.rulesets(rows)
+        self.api.responses[RUNS_API] = runs_page([push_run(), push_run()])
+        self.assert_bump_green()
+        self.assertIn((RULESETS_API, True, None), self.api.calls)
+        self.assertIn((f"repos/{REPO}/rulesets/902", False, None), self.api.calls)
+
+    def test_green_complete_ruleset_pages_may_end_with_an_empty_page(self):
+        summaries = json.dumps(ruleset_summaries(release_rulesets()))
+        self.api.responses[RULESETS_API] = (
+            http_response(200, summaries, {
+                "Link": f'<https://api.github.com/{RULESETS_API}&page=2>; rel="next"'})
+            + http_response(200, "[]"))
+        self.assert_bump_green()
+
+    def test_pull_request_and_supported_main_conditions_can_supply_the_barrier(self):
+        for include in ("~DEFAULT_BRANCH", "refs/heads/main", "~ALL", "refs/heads/m?in"):
+            with self.subTest(include=include):
+                self.reset_bump()
+                self.api.rulesets([ruleset(rules=("pull_request",), include=[include])])
+                self.assert_bump_green()
+
+    def test_status_checks_alone_cannot_supply_the_barrier(self):
+        # RED on a8b12768f1: required_status_checks is treated as a push
+        # blocker and its App-only bypass intersection permits this bump.
+        for include in ("~DEFAULT_BRANCH", "refs/heads/main", "~ALL", "refs/heads/m?in"):
+            with self.subTest(include=include):
+                self.reset_bump()
+                self.api.rulesets([
+                    ruleset(rules=("required_status_checks",), include=[include])])
+                self.assert_refused(RULESET_BARRIER_REFUSAL)
+
+    def test_unsupported_ref_patterns_refuse_instead_of_guessing_applicability(self):
+        for pattern in ("~UNKNOWN", "refs/**/main", "refs/heads/[m]ain",
+                        "refs/heads/ma\\in"):
+            with self.subTest(pattern=pattern):
+                self.reset_bump()
+                self.api.rulesets([ruleset(include=[pattern])])
+                self.assert_refused(f"API {STRICT_RULESET_API} returned invalid "
+                                    "ref_name conditions: unsupported pattern")
+
+    def test_failed_later_ruleset_page_cannot_hide_behind_a_green_first_page(self):
+        summaries = json.dumps(ruleset_summaries(release_rulesets()))
+        for body, code, fragment in (("unavailable", 503, "upstream error 503"),
+                                     ("", 200, "returned an empty payload"),
+                                     ("not JSON", 200, "returned invalid JSON")):
+            with self.subTest(fragment=fragment):
+                self.reset_bump()
+                self.api.responses[RULESETS_API] = (
+                    http_response(200, summaries, {
+                        "Link": f'<https://api.github.com/{RULESETS_API}&page=2>; rel="next"'})
+                    + http_response(code, body))
+                self.assert_refused(f"API {RULESETS_API} {fragment}")
+                self.assertEqual(self.api.calls[-1], (RULESETS_API, True, None))
+
+    def test_removing_each_new_condition_admits_its_unsafe_input(self):
+        # Execute complete source mutants, never a stubbed gate/helper. The
+        # ordinary gate must refuse each input before the mutant admits it.
+        source = Path(ci_release_gate.__file__).read_text()
+        strict = ruleset()
+        missing = {key: value for key, value in strict.items() if key != "bypass_actors"}
+        loose = {**strict, "bypass_actors": [bypass(), bypass(5, "RepositoryRole")]}
+
+        def responses_for(rows):
+            return {
+                RULESETS_API: http_response(200, json.dumps(ruleset_summaries(rows))),
+                **{f"repos/{REPO}/rulesets/{row['id']}": json.dumps(row) for row in rows},
+            }
+
+        applicability = 'if not applies or not blocking or payload["enforcement"] != "active":'
+        exact_bypasses = 'if bypasses == {("Integration", RELEASE_APP_ID, "always")}:'
+        pr_rule = 'blocking = any(rule["type"] == "pull_request" for rule in rules)'
+        status_too = (
+            'blocking = any(rule["type"] in ("pull_request", "required_status_checks") '
+            'for rule in rules)')
+        single_document = "if body[document_end:].strip():"
+        cases = [
+            ("reader call", "    _require_release_rulesets(api, repo)\n", "",
+             responses_for([missing]), "missing or invalid bypass_actors"),
+            ("nonempty barrier population", "if not barrier_found:", "if False:",
+             responses_for([]), RULESET_BARRIER_REFUSAL),
+            ("disabled enforcement", ' or payload["enforcement"] != "active"', "",
+             responses_for([ruleset(enforcement="disabled")]), RULESET_BARRIER_REFUSAL),
+            ("evaluate enforcement", ' or payload["enforcement"] != "active"', "",
+             responses_for([ruleset(enforcement="evaluate")]), RULESET_BARRIER_REFUSAL),
+            ("exact own bypass list", exact_bypasses, "if bypasses:",
+             responses_for([loose]), RULESET_BARRIER_REFUSAL),
+            ("overlapping role and team principals", exact_bypasses,
+             'if ("Integration", RELEASE_APP_ID, "always") in bypasses:',
+             responses_for([
+                 ruleset(101, rules=("pull_request",),
+                         actors=[bypass(), bypass(5, "RepositoryRole")]),
+                 ruleset(rules=("pull_request",), actors=[bypass(), bypass(123, "Team")]),
+             ]), RULESET_BARRIER_REFUSAL),
+            ("all branch details read after finding a barrier",
+             "            barrier_found = True", "            return",
+             responses_for([ruleset(101), missing]), "missing or invalid bypass_actors"),
+            ("actor type", "        identity = (kind, number, mode)",
+             '        identity = ("Integration", number, mode)',
+             responses_for([ruleset(actors=[bypass(4105147, "Team")])]),
+             RULESET_BARRIER_REFUSAL),
+            ("always mode", "        identity = (kind, number, mode)",
+             '        identity = (kind, number, "always")',
+             responses_for([ruleset(actors=[bypass(mode="pull_request")])]),
+             RULESET_BARRIER_REFUSAL),
+            ("App id", "RELEASE_APP_ID = 4105147", "RELEASE_APP_ID = 5219872",
+             responses_for([ruleset(actors=[bypass(5219872)])]), RULESET_BARRIER_REFUSAL),
+            ("visible bypass lists", 'actors = payload.get("bypass_actors")',
+             'actors = payload.get("bypass_actors", [{"actor_type": "Integration", '
+             '"actor_id": RELEASE_APP_ID, "bypass_mode": "always"}])',
+             responses_for([missing]), "missing or invalid bypass_actors"),
+            ("complete ruleset pagination", "paginate=True, complete_rulesets=True", "paginate=True",
+             {RULESETS_API: http_response(
+                 200, json.dumps(ruleset_summaries(release_rulesets())), {
+                     "Link": f'<https://api.github.com/{RULESETS_API}&page=2>; rel="next"'})},
+             "incomplete ruleset pagination"),
+            ("complete Actions pagination",
+             'complete_pages="ruleset" if complete_rulesets else items_key',
+             'complete_pages="ruleset" if complete_rulesets else None',
+             {RUNS_API: runs_page([push_run()], headers={
+                 "Link": f'<https://api.github.com/{RUNS_API}&page=2>; rel="next"'})},
+             "incomplete workflow_runs pagination: unread or unlinked next page"),
+            ("single Actions document per HTTP body", single_document, "if False:",
+             {RUNS_API: runs_page([push_run()]) + '{"total_count":1,"workflow_runs":[]}'},
+             f"API {RUNS_API} {SINGLE_DOCUMENT_REFUSAL}"),
+            ("single ruleset document per HTTP body", single_document, "if False:",
+             {RULESETS_API: http_response(
+                 200, json.dumps(ruleset_summaries(release_rulesets()))) + "[]"},
+             f"API {RULESETS_API} {SINGLE_DOCUMENT_REFUSAL}"),
+            ("branch target", 'if summary["target"] != "branch":', "if False:",
+             responses_for([ruleset(target="tag", include=["~ALL"])]), RULESET_BARRIER_REFUSAL),
+            ("main inclusion", applicability,
+             'if not blocking or payload["enforcement"] != "active":',
+             responses_for([ruleset(include=["refs/heads/release"])]), RULESET_BARRIER_REFUSAL),
+            ("main exclusion", applicability,
+             'if not blocking or payload["enforcement"] != "active":',
+             responses_for([ruleset(exclude=["refs/heads/main"])]), RULESET_BARRIER_REFUSAL),
+            ("pull-request rule", applicability,
+             'if not applies or payload["enforcement"] != "active":',
+             responses_for([ruleset(rules=("deletion",))]), RULESET_BARRIER_REFUSAL),
+            ("status-only ruleset is not a barrier", pr_rule, status_too,
+             responses_for([ruleset(rules=("required_status_checks",))]), RULESET_BARRIER_REFUSAL),
+            ("status checks cannot complete a broader PR ruleset", pr_rule, status_too,
+             responses_for([
+                 ruleset(101, rules=("pull_request",),
+                         actors=[bypass(), bypass(5, "RepositoryRole")]),
+                 ruleset(rules=("required_status_checks",)),
+             ]), RULESET_BARRIER_REFUSAL),
+            ("default branch", 'repository.get("default_branch") != "main"', "False",
+             {REPO_API: json.dumps({"default_branch": "release"})},
+             "must identify main as the default branch"),
+        ]
+        for name, before, after, responses, diagnostic in cases:
+            with self.subTest(condition=name):
+                self.reset_bump()
+                self.api.responses.update(responses)
+                self.assert_refused(diagnostic)
+                self.assertEqual(source.count(before), 1, "mutation must have one source target")
+                mutated = source.replace(before, after, 1)
+                self.assertNotEqual(mutated, source)
+                namespace = {"__name__": "ci_release_gate_condition_mutant"}
+                exec(compile(mutated, ci_release_gate.__file__, "exec"), namespace)
+                self.api.calls.clear()
+                green = namespace["gate"](REPO, SHA, "refs/heads/main",
+                                          api=self.api, git=self.git)
+                self.assertEqual(green, (
+                    f"release gate green: release bump {SHA}; parent {BUMP_PARENT}; "
+                    f"PR #17 head {HEAD}; pineforge/verify=success; "
+                    f"pineforge/parity=success; tree {TREE}"))
+
+
 class APICommandTests(unittest.TestCase):
     def test_json_reader_accepts_an_empty_array_with_or_without_pagination(self):
         for paginate in (False, True):
@@ -809,6 +1735,18 @@ class WorkflowPinTests(unittest.TestCase):
 
     def test_ci_release_gate_is_unconditional_and_precedes_every_release_write(self):
         self.assert_gate_pin(self.workflow())
+
+    def test_ruleset_reader_permission_dependency_is_documented_and_fixed_in_code(self):
+        source = Path(ci_release_gate.__file__).read_text()
+        docs = (ROOT / "docs/ci.md").read_text()
+        self.assertRegex(source, r"(?m)^RELEASE_APP_ID = 4105147$")
+        for text in (source, docs, self.workflow()):
+            self.assertIn("administration: read", text)
+            self.assertIn("bypass_actors", text)
+        self.assertIn("# The gate relies on App permission administration: read to see bypass_actors;",
+                      source)
+        self.assertIn("Removing this App permission makes every release-bump exemption refuse.",
+                      docs)
 
     def test_prebuilt_builds_the_emitted_sha_and_asserts_tag_identity(self):
         jobs = _jobs(self.workflow())

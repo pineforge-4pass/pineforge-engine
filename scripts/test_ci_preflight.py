@@ -3417,6 +3417,71 @@ finally:
                     'run-json-harness-tests']
         self.assertEqual(argv[9:], ['/nonexistent-pineforge-src/docker/run_json_*_test.py'])
 
+    def test_release_bump_contract_and_gate_tests_remain_binding(self):
+        self.assertEqual(ci_workflow_findings(*self.ci_sources(), others=self.other_sources()), [])
+        for tier in ('all', 'fast'):
+            plan = {entry[0]: entry for entry in check_commands(ROOT, tier=tier)}
+            self.assertEqual(plan['release-gate-tests'], (
+                'release-gate-tests', [sys.executable, str(ROOT / 'scripts/test_ci_release_gate.py')]))
+
+    def test_release_bump_publication_mutations_refuse(self):
+        original, others = self.ci_sources(), self.other_sources()
+        release = others['release.yml']
+        finding = ('release.yml must keep the exact two-file release bump writer, '
+                   'commit and atomic push')
+        for before, after in (
+                ('git add VERSION docker/run_failure_codes_diff.json',
+                 'git add VERSION docker/run_failure_codes_diff.json README.md'),
+                ('git add VERSION docker/run_failure_codes_diff.json', 'git add -A'),
+                ('cp "${RESET}" docker/run_failure_codes_diff.json',
+                 'cp "${RESET}" docker/run_failure_codes.json'),
+                ("printf '%s\\n' \"${NEXT}\" > VERSION",
+                 "printf '%s\\n' \"${NEXT}\" > VERSION\n          chmod +x VERSION"),
+                ('git commit -m "chore(release): ${TAG}"',
+                 'git commit --amend -m "chore(release): ${TAG}"'),
+                ('git push --atomic origin HEAD "${TAG}"', 'git push origin HEAD "${TAG}"')):
+            with self.subTest(after=after):
+                changed = in_step(release, 'release', 'Write bumped VERSION, commit, tag, push',
+                                  before, after)
+                self.assertNotEqual(changed, release)
+                self.assertIn(finding, ci_workflow_findings(
+                    *original, others={**others, 'release.yml': changed}))
+
+    def test_release_bump_app_token_mutations_refuse(self):
+        original, others = self.ci_sources(), self.other_sources()
+        release = others['release.yml']
+        for name, before, after in (
+                ('Checkout (full history)', 'token: ${{ steps.app.outputs.token }}',
+                 'token: ${{ github.token }}'),
+                ('Mint org App token', '        id: app', '        id: another-app'),
+                ('Mint org App token', 'app-id: ${{ secrets.PINEFORGE_APP_ID }}',
+                 'app-id: ${{ secrets.OTHER_APP_ID }}')):
+            with self.subTest(name=name, after=after):
+                changed = in_step(release, 'release', name, before, after)
+                self.assertNotEqual(changed, release)
+                self.assertIn('release.yml bump push must use the release App installation token',
+                              ci_workflow_findings(
+                                  *original, others={**others, 'release.yml': changed}))
+
+    def test_release_ruleset_reader_token_and_invocation_mutations_refuse(self):
+        original, others = self.ci_sources(), self.other_sources()
+        release = others['release.yml']
+        gate_name = 'Refuse unless pineforge/verify and pineforge/parity are green'
+        for before, after in (
+                ('GH_TOKEN: ${{ steps.app.outputs.token }}', 'GH_TOKEN: ${{ github.token }}'),
+                ('        id: gate', '        id: gate\n        if: inputs.dry_run'),
+                ('python3 scripts/ci_release_gate.py gate', 'echo release gate green'),
+                ('--ref "${GITHUB_REF}"', '--ref "${GITHUB_REF}" || true'),
+                ('        run: |', '        continue-on-error: true\n        run: |')):
+            with self.subTest(after=after):
+                changed = in_step(release, 'release', gate_name, before, after)
+                self.assertNotEqual(changed, release)
+                self.assertIn('release.yml must keep the unconditional release gate '
+                              'with its administration-readable App token '
+                              'for the App-only main pull_request barrier',
+                              ci_workflow_findings(
+                                  *original, others={**others, 'release.yml': changed}))
+
     def test_duplicate_test_name_stages_are_binding_and_pin_the_source_root(self):
         source = Path('/src')
         commands = check_commands(source)
