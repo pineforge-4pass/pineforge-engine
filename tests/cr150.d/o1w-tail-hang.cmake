@@ -1,0 +1,6 @@
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
+    list(APPEND TEST_SOURCES test_position_tail_retirement)
+    pineforge_add_unit_test(test_position_tail_retirement)
+    list(APPEND TEST_SOURCES test_position_tail_retirement_work)
+    pineforge_add_unit_test(test_position_tail_retirement_work)
+endif()

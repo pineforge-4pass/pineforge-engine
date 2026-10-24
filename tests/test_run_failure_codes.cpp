@@ -1180,6 +1180,10 @@ struct ArgSpec {
 
 // A value the arg's kind accepts, and the JSON it canonicalizes to.
 RunFailureArg sample_arg(const ArgSpec& spec, std::string& json_value) {
+    if (spec.kind == "boolean") {
+        json_value = "true";
+        return RunFailureArg(spec.name.c_str(), true);
+    }
     if (spec.kind == "integer") {
         json_value = "7";
         return RunFailureArg(spec.name.c_str(), std::int64_t{7});
@@ -1283,6 +1287,13 @@ void check_code_args(RunFailureCode code, const std::string& name, const Json* a
             expect(spec.name + " as an integer", with({arg, std::int64_t{1}}), invariant, "{}");
             expect(spec.name + " as a boolean", with({arg, true}), invariant, "{}");
             expect(spec.name + " as a null", with({arg, nullptr}), invariant, "{}");
+        } else if (spec.kind == "boolean") {
+            expect(spec.name + " as text", with({arg, "true"}), invariant, "{}");
+            expect(spec.name + " as an integer", with({arg, 1}), invariant, "{}");
+            expect(spec.name + " as a number", with({arg, 1.0}), invariant, "{}");
+            expect(spec.name + " as a null", with({arg, nullptr}), invariant, "{}");
+            const auto got = pineforge::make_run_failure(code, with({arg, false}));
+            CHECK_EQ(at + spec.name + " false accepted", code_name(got.code), name);
         } else if (spec.kind == "integer") {
             expect(spec.name + " as text", with({arg, "7"}), invariant, "{}");
             expect(spec.name + " as a number", with({arg, 7.5}), invariant, "{}");
@@ -1363,6 +1374,7 @@ void window_vocabulary_rows() {
     CHECK_EQ("kind string", number_of(Kind::string), "8");
     CHECK_EQ("kind nullable_string", number_of(Kind::nullable_string), "9");
     CHECK_EQ("kind scalar", number_of(Kind::scalar), "10");
+    CHECK_EQ("kind boolean", number_of(Kind::boolean), "11");
     CHECK_EQ("type text", number_of(Type::text), "0");
     CHECK_EQ("type integer", number_of(Type::integer), "1");
     CHECK_EQ("type number", number_of(Type::number), "2");
@@ -1838,8 +1850,8 @@ void registry_rows() {
     CHECK(codes != nullptr && codes->kind == Json::Kind::object);
     if (codes == nullptr) return;
 
-    // The enum is the catalog in order: code i is the catalog's i-th name, and
-    // every name round-trips through exactly one code.
+    // The catalog is alphabetical; enum values preserve the released numeric
+    // ABI. Every catalog name must round-trip through exactly one stable code.
     CHECK_EQ("code count", std::to_string(pineforge::kRunFailureCodeCount),
              std::to_string(codes->object.size() + 1));
     CHECK_EQ("none has no name", code_name(RunFailureCode::none), "");
@@ -1852,13 +1864,12 @@ void registry_rows() {
         CHECK_EQ("code name unique: " + code_name(code), unique ? "unique" : "repeated",
                  "unique");
     }
-    std::size_t index = 1;
     for (const auto& [name, entry] : codes->object) {
-        const auto code = static_cast<RunFailureCode>(index++);
-        CHECK_EQ("catalog order", code_name(code), name);
         const auto found = by_name.find(name);
         CHECK_EQ("name round trip: " + name,
                  found == by_name.end() ? "" : code_name(found->second), name);
+        const auto code = found == by_name.end() ? RunFailureCode::none : found->second;
+        CHECK_EQ("catalog name", code_name(code), name);
         const Json* cls = entry.find("class");
         const Json* retryable = entry.find("retryable");
         CHECK_EQ("class of " + name, class_name(pineforge::run_failure_code_class(code)),

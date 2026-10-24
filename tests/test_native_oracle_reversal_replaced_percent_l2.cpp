@@ -6,6 +6,8 @@
 #define PineStrategyHost OraclePineNativeHost
 #define signed_position_size oracle_script_position_size
 #include "oracle_fixture_config_shim.hpp"
+#define trades_ oracle_trade_rows()
 #include "oracle/test_oracle_reversal_replaced_percent.cpp"
+#undef trades_
 #undef signed_position_size
 #undef PineStrategyHost

@@ -1,0 +1,2 @@
+list(APPEND TEST_SOURCES test_summary_only_ratios_not_silently_pending)
+pineforge_add_unit_test(test_summary_only_ratios_not_silently_pending)

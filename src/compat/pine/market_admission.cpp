@@ -139,16 +139,7 @@ static History fold_admission_history(const Range& events, bool apply_reviews = 
     return h;
 }
 int last_rejected_command_bar(const admission::Journal& journal) {
-    for(auto it=journal.events().rbegin();it!=journal.events().rend();++it)
-        if(const auto* e=std::get_if<admission::CommandEvent>(&*it)) {
-            switch(e->outcome) {
-            case admission::Outcome::RejectedIntradayCap:case admission::Outcome::RejectedFrozenMarketCap:
-            case admission::Outcome::RejectedAffordability:case admission::Outcome::RejectedPricedCap:
-            case admission::Outcome::OpeningRejectedReductionAdmitted:return e->observation->bar;
-            default:break;
-            }
-        }
-    return -1;
+    return journal.last_rejected_command_bar();
 }
 History admission_history(const admission::Journal& journal){return fold_admission_history(journal.events());}
 } // namespace pineforge::compat::pine

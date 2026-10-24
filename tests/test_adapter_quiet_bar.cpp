@@ -233,7 +233,7 @@ public:
         return execution_consumer().continuation_hash();
     }
 
-    const std::vector<Trade>& rows() const { return trades_; }
+    const TradeLedger& rows() const { return trades_; }
 #ifndef PINEFORGE_QUIET_BAR_HARVEST
     pf_equity_stats_t reference_equity(const ReportC& report) const {
         auto reference = equity_stats_reference::compute_equity_stats(
@@ -842,7 +842,7 @@ Observed observe(const Scenario& s, bool magnifier, bool recording, bool portabl
     BacktestEngine::free_report(&report);
     out.final_hash = host.broker_state_hash();
     if (!portable) out.continuation = host.continuation();
-    out.trades = host.rows();
+    out.trades.assign(host.rows().begin(), host.rows().end());
     return out;
 }
 

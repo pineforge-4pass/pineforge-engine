@@ -16,6 +16,7 @@ import argparse
 import ast
 import copy
 import ctypes
+import importlib.util
 import json
 import math
 import re
@@ -30,19 +31,25 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 CHECKER = ROOT / "scripts/check_selected_window_ownership.py"
 MANIFEST = ROOT / "tests/ownership/manifest.v1.json"
+SPEC = importlib.util.spec_from_file_location("selected_window_ownership", CHECKER)
+ownership = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = ownership
+SPEC.loader.exec_module(ownership)
 
 
 def emitted_schema(root: Path) -> dict:
     """D4 route two: evaluate the actual Python builders, not checker helpers.
 
-    Only ctypes classes and pure report functions are compiled from the AST.
-    No imports, CLI, CDLL, native library or main block is executed. One trade
-    and one mark make both array element schemas observable even on an empty
-    normal report. A second evaluation with defined absences derives nullable
-    columns from _num / _stats_dict instead of borrowing the manifest's flags.
+    Only ctypes classes, the record iterable and pure report functions are
+    compiled from the AST. No imports, CLI, CDLL, native library or main block
+    is executed. One trade and one mark make both array element schemas
+    observable even on an empty normal report. A second evaluation with
+    defined absences derives nullable columns from _num / _stats_dict instead
+    of borrowing the manifest's flags.
     """
     tree = ast.parse((root / "docker/run_json.py").read_text(encoding="utf-8"))
-    classes = {"TradeC", "TradeStatsC", "EquityStatsC", "MetricsC", "EquityPointC"}
+    classes = {"TradeC", "TradeStatsC", "EquityStatsC", "MetricsC", "EquityPointC",
+               "_JSONRecordArray"}
     functions = {"_num", "_stats_dict", "fmt_utc", "build_report_dict",
                  "_annualization_diagnostics", "_annualization_block"}
     assigned = {"EQUITY_REPORT_KEYS", "MIN_ANNUALIZATION_SPAN_MS"}
@@ -107,6 +114,14 @@ def emitted_schema(root: Path) -> dict:
     def build():
         out = namespace["build_report_dict"](
             report, Path("feed.csv"), 1, 1, 1, 0.0, {}, {}, {}, [1])
+        # Snapshot the bounded iterables before changing the PODs for the
+        # opposite-side and nullable evaluations. Retaining their factories
+        # would make all three observations read the last mutated report.
+        for key in ("trades", "equity_curve"):
+            if isinstance(out[key], namespace["_JSONRecordArray"]):
+                if len(out[key]) != 1:
+                    raise AssertionError(f"independent D4 needs one observable element at {key}")
+                out[key] = list(out[key])
         # D4's version leaf comes from the real selected-window wire version;
         # this is a reconstruction, not a claim that a digest is implemented.
         window = ast.parse((root / "docker/selected_window_report.py").read_text(encoding="utf-8"))
@@ -135,7 +150,7 @@ def emitted_schema(root: Path) -> dict:
             containers[path] = "object"
             for key, item in value.items():
                 walk(item, undefined[key], key if path == "$" else f"{path}.{key}")
-        elif isinstance(value, list):
+        elif isinstance(value, (list, namespace["_JSONRecordArray"])):
             containers[path] = "array"
             if len(value) != 1:
                 raise AssertionError(f"independent D4 needs one observable element at {path}")
@@ -200,6 +215,76 @@ class ManifestCheckerTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(result.stdout, "")
         self.assertEqual(result.stderr, "")
+
+    def test_typed_failure_sink_requires_manifest_row(self):
+        # Mutation: remove _Failure keyword discovery in python_producers.
+        # The real raise then goes unreported when this row is absent.
+        self.copy_tree()
+        identifier = "report.docker/pineforge_sink_finalize.py._check_equity"
+        source = (self.root / "docker/pineforge_sink_finalize.py").read_text(encoding="utf-8")
+        self.assertIn('failure_code="report_result_invalid"', source)
+        self.doc["sinks"] = [row for row in self.doc["sinks"] if row["id"] != identifier]
+        self.reject("sink-set", "missing " + identifier, copied_tree=True)
+        self.doc["sinks"].append({
+            "id": identifier, "file": "docker/pineforge_sink_finalize.py",
+            "anchor": "_check_equity", "producer": "report_result_invalid", "stage": None,
+            "fields": [
+                {"field": "equity_curve.equity", "reasons": ["nonfinite"]},
+                {"field": "equity_curve.open_profit", "reasons": ["nonfinite"]},
+            ],
+        })
+        result = self.run_checker(copied_tree=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, "")
+
+    def test_typed_failure_field_and_reason_drift_are_rejected(self):
+        self.copy_tree()
+        path = self.root / "docker/pineforge_sink_finalize.py"
+        text = path.read_text(encoding="utf-8")
+        for before, after, detail in (
+                ('"equity_curve." + name', '"unowned_curve." + name',
+                 "report_result_invalid: unknown field unowned_curve.equity"),
+                ('"reason": "nonfinite"', '"reason": "unowned_reason"',
+                 "report_result_invalid: unknown reason unowned_reason")):
+            with self.subTest(after=after):
+                self.assertEqual(text.count(before), 1)
+                path.write_text(text.replace(before, after, 1), encoding="utf-8")
+                self.reject("vocabulary", detail, copied_tree=True)
+
+    def test_typed_failure_fields_follow_reader_descriptor(self):
+        self.copy_tree()
+        path = self.root / "docker/pf_sink.py"
+        text = path.read_text(encoding="utf-8")
+        column = '("equity", "f64?", "account_ccy")'
+        self.assertEqual(text.count(column), 1)
+        path.write_text(text.replace(column, '("unowned_equity", "f64?", "account_ccy")', 1),
+                        encoding="utf-8")
+        self.reject("vocabulary", "report_result_invalid: unknown field equity_curve.unowned_equity",
+                    copied_tree=True)
+
+    def test_typed_failure_unknown_syntax_fails_closed(self):
+        self.copy_tree()
+        path = self.root / "docker/pineforge_sink_finalize.py"
+        text = path.read_text(encoding="utf-8")
+        for before, after, detail in (
+                ('failure_code="report_result_invalid"', 'failure_code=choose_code()',
+                 "unresolved _Failure producer code"),
+                ('failure_args={"field": field, "reason": "nonfinite"}',
+                 'failure_args=choose_payload()', "unrecognized Python object producer"),
+                ('failure_args={"field": field, "reason": "nonfinite"}',
+                 'failure_args={"field": choose_field(), "reason": "nonfinite"}',
+                 "unresolved Python producer argument"),
+                ('zip(record.fields[1:], record.values[1:])',
+                 'zip(record.fields[2:], record.values[2:])',
+                 "unrecognized sink equity guard; update the independent reconstruction")):
+            with self.subTest(after=after):
+                self.assertEqual(text.count(before), 1)
+                path.write_text(text.replace(before, after, 1), encoding="utf-8")
+                result = self.run_checker(copied_tree=True)
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertEqual(result.stdout, f"ownership[input]: {detail}\n")
+                self.assertEqual(result.stderr, "")
 
     def test_report_probe_pin_removed_is_rejected(self):
         self.doc["probes"] = []
@@ -358,18 +443,23 @@ class ManifestCheckerTests(unittest.TestCase):
         self.reject("sink-mapping", "source.admit_strategy_entry: fields/reasons differ from code")
 
     def test_catalog_code_missing_from_manifest_is_rejected(self):
-        self.doc["catalog"]["codes"] = [row for row in self.doc["catalog"]["codes"]
-                                         if row["code"] != "outputs_limit"]
-        self.reject("catalog-set", "missing outputs_limit")
+        rows = self.doc["catalog"]["codes"]
+        for code in ("outputs_limit", "scratch_capacity_exceeded", "scratch_io_failed"):
+            with self.subTest(code=code):
+                self.doc["catalog"]["codes"] = [row for row in rows if row["code"] != code]
+                self.reject("catalog-set", f"missing {code}")
 
     def test_catalog_registry_missing_code_is_rejected(self):
         self.copy_tree()
         path = self.root / "src/run_failure_registry.inc"
         text = path.read_text(encoding="utf-8")
-        text, changed = re.subn(r'^\s*\{"outputs_limit",[^\n]*\n', "", text, flags=re.M)
-        self.assertEqual(changed, 1)
-        path.write_text(text, encoding="utf-8")
-        self.reject("registry-set", "stale outputs_limit", copied_tree=True)
+        for code in ("outputs_limit", "scratch_capacity_exceeded", "scratch_io_failed"):
+            with self.subTest(code=code):
+                changed_text, changed = re.subn(
+                    r'^\s*\{"' + re.escape(code) + r'",[^\n]*\n', "", text, flags=re.M)
+                self.assertEqual(changed, 1)
+                path.write_text(changed_text, encoding="utf-8")
+                self.reject("registry-set", f"stale {code}", copied_tree=True)
 
     def test_unknown_producer_field_is_rejected_by_vocabulary(self):
         # Killer for vocabulary-check-disabled, even if another check also fails.
@@ -454,6 +544,92 @@ class ManifestCheckerTests(unittest.TestCase):
 
     def test_d4_independent_reconstruction_matches_manifest(self):
         self.assertEqual(manifest_schema(self.doc), emitted_schema(ROOT))
+
+    def test_d4_record_array_factories_are_accepted(self):
+        # The real builder contains both factories, alongside the separate
+        # sink builder. Discover the schema from its actual source and PODs.
+        findings = ownership.Findings()
+        actual = ownership.reconstruct_schema(ROOT, findings)
+        self.assertEqual(findings.lines, set())
+        self.assertEqual(actual, manifest_schema(self.doc))
+        self.assertEqual(actual, emitted_schema(ROOT))
+
+    def test_d4_second_record_array_assignment_is_rejected(self):
+        self.copy_tree()
+        path = self.root / "docker/run_json.py"
+        text = path.read_text(encoding="utf-8")
+        assignments = (
+            ("trades", "    trades = _JSONRecordArray(lambda: (trade_at(i) for i in range(n)), n, trade_at)\n"),
+            ("equity_curve", "    equity_curve = _JSONRecordArray(\n"
+                             "        lambda: (point_at(i) for i in range(points)), points, point_at)\n"),
+        )
+        for block, assignment in assignments:
+            with self.subTest(block=block):
+                self.assertEqual(text.count(assignment), 1)
+                path.write_text(text.replace(assignment, assignment + assignment, 1), encoding="utf-8")
+                result = self.run_checker(copied_tree=True)
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertEqual(result.stdout, f"ownership[input]: ambiguous array element producer {block}\n")
+                self.assertEqual(result.stderr, "")
+
+    def test_d4_record_array_callable_with_unknown_source_is_rejected(self):
+        self.copy_tree()
+        path = self.root / "docker/run_json.py"
+        text = path.read_text(encoding="utf-8")
+        # Summary scalar reconstruction resolves p before the array proof;
+        # the unknown point source therefore fails there first. The trade
+        # row t reaches the factory's exact POD-binding check.
+        for block, row, diagnostic in (
+                ("trades", "t", "unrecognized array POD binding trades"),
+                ("equity_curve", "p",
+                 "unrecognized scalar producer expression: report.unknown[i]")):
+            binding = f"        {row} = report.{block}[i]\n"
+            with self.subTest(block=block):
+                self.assertEqual(text.count(binding), 1)
+                path.write_text(text.replace(binding, f"        {row} = report.unknown[i]\n", 1),
+                                encoding="utf-8")
+                result = self.run_checker(copied_tree=True)
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertEqual(result.stdout, f"ownership[input]: {diagnostic}\n")
+                self.assertEqual(result.stderr, "")
+
+    def scalar_fixture(self, source):
+        assignment, = ast.parse(source).body
+        self.assertIsInstance(assignment, ast.Assign)
+        target, = assignment.targets
+        self.assertIsInstance(target, ast.Name)
+        self.assertEqual(target.id, "p")
+        return ownership.scalar_type(ast.Name(id="p", ctx=ast.Load()), {"p": assignment.value})
+
+    def test_d4_report_array_scalar_index_is_accepted(self):
+        for source in ("p = report.equity_curve[i]", "p = report.equity_curve[0]",
+                       "p = report.trades[i]", "p = report.trades[0]"):
+            with self.subTest(source=source):
+                self.assertEqual(self.scalar_fixture(source), {"kind": "number", "null_allowed": False})
+
+    def test_d4_unrecognized_report_array_index_is_rejected(self):
+        self.assertEqual(self.scalar_fixture("p = report.equity_curve[i]"),
+                         {"kind": "number", "null_allowed": False})
+        for expression in ("report.unknown[i]", "other.equity_curve[i]",
+                           "report.other.equity_curve[i]", "report.equity_curve.values[i]"):
+            with self.subTest(expression=expression):
+                with self.assertRaises(ownership.InputError) as raised:
+                    self.scalar_fixture("p = " + expression)
+                self.assertEqual(str(raised.exception),
+                                 "unrecognized scalar producer expression: " + expression)
+
+    def test_d4_report_array_slice_is_rejected(self):
+        self.assertEqual(self.scalar_fixture("p = report.equity_curve[i]"),
+                         {"kind": "number", "null_allowed": False})
+        for expression in ("report.equity_curve[i:j]", "report.equity_curve[:]",
+                           "report.equity_curve[True]", "report.equity_curve[1.0]",
+                           "report.equity_curve[i + 1]", "report.equity_curve[index()]",
+                           "report.equity_curve[i, j]"):
+            with self.subTest(expression=expression):
+                with self.assertRaises(ownership.InputError) as raised:
+                    self.scalar_fixture("p = " + expression)
+                self.assertEqual(str(raised.exception),
+                                 "unrecognized scalar producer expression: " + expression)
 
     def test_d4_manifest_leaf_removed_is_rejected(self):
         # Killer for D4-comparison-disabled; checks this specific diagnostic.

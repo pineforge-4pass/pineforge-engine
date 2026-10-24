@@ -439,6 +439,34 @@ def metric_result_fields(tree, validator):
     return paths
 
 
+def sink_equity_fields(root, validator):
+    # _check_equity labels the parsed E descriptor, not a manifest field list.
+    # Recognize its exact traversal and label expression; unfamiliar syntax
+    # must not silently erase this shared finalizer/converter producer.
+    loops = [node for node in validator.body if isinstance(node, ast.For)]
+    labels = [node for node in ast.walk(validator) if isinstance(node, ast.Assign)
+              and any(isinstance(target, ast.Name) and target.id == "field"
+                      for target in node.targets)]
+    if (len(loops) != 1 or ast.unparse(loops[0].target) != "(name, value)"
+            or ast.unparse(loops[0].iter) != "zip(record.fields[1:], record.values[1:])"
+            or len(labels) != 1 or not isinstance(labels[0].value, ast.BinOp)
+            or not isinstance(labels[0].value.op, ast.Add)
+            or not isinstance(labels[0].value.left, ast.Constant)
+            or not isinstance(labels[0].value.left.value, str)
+            or not isinstance(labels[0].value.right, ast.Name)
+            or labels[0].value.right.id != "name"):
+        raise InputError("unrecognized sink equity guard; update the independent reconstruction")
+    reader = ast.parse(read(root / "docker/pf_sink.py"))
+    columns = ast.literal_eval(py_assignments(reader)["_E"])
+    if (not isinstance(columns, tuple) or len(columns) < 2
+            or any(not isinstance(column, tuple) or len(column) != 3
+                   or not all(isinstance(value, str) for value in column)
+                   for column in columns)
+            or len({column[0] for column in columns}) != len(columns)):
+        raise InputError("unrecognized sink E descriptor")
+    return {labels[0].value.left.value + column[0] for column in columns[1:]}
+
+
 def python_producers(root, findings):
     rows = []
     for path in sorted((root / "docker").glob("*.py")):
@@ -452,12 +480,26 @@ def python_producers(root, findings):
             domains = py_domains(function)
             if path.name == "run_json.py" and function.name == "_validate_report_result":
                 domains["metric_field"] = metric_result_fields(tree, function)
+            if path.name == "pineforge_sink_finalize.py" and function.name == "_check_equity":
+                domains["field"] = sink_equity_fields(root, function)
             domains["phase"].update(phases)
             grouped, post_reasons, post_phases = defaultdict(list), set(), set()
             for node in ast.walk(function):
                 args = None
                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "RunFailure":
                     args = node.args
+                elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_Failure":
+                    names = [keyword.arg for keyword in node.keywords]
+                    if not names:
+                        continue  # untyped transport/grammar refusal
+                    if (set(names) != {"failure_code", "failure_args"}
+                            or len(names) != 2):
+                        raise InputError("unrecognized _Failure producer keywords")
+                    keywords = {keyword.arg: keyword.value for keyword in node.keywords}
+                    code = keywords["failure_code"]
+                    if not isinstance(code, ast.Constant) or code.value not in PRODUCERS:
+                        raise InputError("unresolved _Failure producer code")
+                    args = (None, code, keywords["failure_args"])
                 elif isinstance(node, ast.Return) and isinstance(node.value, ast.Tuple):
                     args = node.value.elts
                 if args is None or len(args) < 3 or not isinstance(args[1], ast.Constant) or args[1].value not in PRODUCERS:
@@ -866,6 +908,13 @@ def scalar_type(node, environment, resolving=frozenset()):
             return result
     if isinstance(node, ast.Name) and node.id in environment and node.id not in resolving:
         return scalar_type(environment[node.id], environment, resolving | {node.id})
+    # One indexed read from the report arrays reconstructed below, never a slice.
+    if (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Attribute)
+            and isinstance(node.value.value, ast.Name) and node.value.value.id == "report"
+            and node.value.attr in {"trades", "equity_curve"}
+            and (isinstance(node.slice, ast.Name)
+                 or (isinstance(node.slice, ast.Constant) and type(node.slice.value) is int))):
+        return {"kind": "number", "null_allowed": False}
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
         name = node.func.id
         if name in {"int", "len", "sum"}:
@@ -890,6 +939,93 @@ def scalar_type(node, environment, resolving=frozenset()):
             return {"kind": "number" if isinstance(node.op, ast.Div) or "number" in {left["kind"], right["kind"]} else "integer",
                     "null_allowed": False}
     raise InputError(f"unrecognized scalar producer expression: {ast.unparse(node)}")
+
+
+def record_array_element(builder, block, value):
+    """Ruling B: only the two POD-backed factories in build_report_dict."""
+    shapes = {"trades": ("trade_at", "n", "t", "int(report.trades_len)"),
+              "equity_curve": ("point_at", "points", "p",
+                               "int(report.equity_curve_len) if report.equity_curve else 0")}
+    if builder.name != "build_report_dict" or block not in shapes or value.id != block:
+        raise InputError(f"ambiguous array element producer {block}")
+    producer, length, row, count = shapes[block]
+    template = ast.parse(
+        f"def {producer}(i):\n"
+        f"    {row} = report.{block}[i]\n"
+        "    return {}\n"
+        f"{length} = {count}\n"
+        f"{block} = _JSONRecordArray("
+        f"lambda: ({producer}(i) for i in range({length})), {length}, {producer})\n")
+    expected_producer, expected_count, expected_array = template.body
+
+    # Count bindings before resolving any value; a dict of last assignments
+    # would silently discard a competing producer. Walk this builder only,
+    # never another top-level function such as _build_sink_report.
+    bindings = defaultdict(list)
+    for node in ast.walk(builder):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            bindings[node.id].append(node)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            bindings[node.name].append(node)
+        elif isinstance(node, ast.arg):
+            bindings[node.arg].append(node)
+        elif isinstance(node, ast.alias):
+            bindings[node.asname or node.name.split(".")[0]].append(node)
+        elif isinstance(node, (ast.ExceptHandler, ast.MatchAs, ast.MatchStar)) and node.name:
+            bindings[node.name].append(node)
+        elif isinstance(node, ast.MatchMapping) and node.rest:
+            bindings[node.rest].append(node)
+        elif isinstance(node, (ast.Global, ast.Nonlocal)):
+            for name in node.names:
+                bindings[name].append(node)
+
+    def assignment(name, expected):
+        matches = [node for node in builder.body if isinstance(node, ast.Assign)
+                   and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
+                   and node.targets[0].id == name]
+        if (len(matches) != 1 or bindings[name] != [matches[0].targets[0]]
+                or ast.dump(matches[0]) != ast.dump(expected)):
+            raise InputError(f"ambiguous array element producer {block}")
+        return matches[0]
+
+    array = assignment(block, expected_array)
+    bound = assignment(length, expected_count)
+    producers = [node for node in builder.body
+                 if isinstance(node, ast.FunctionDef) and node.name == producer]
+    if (len(producers) != 1 or bindings[producer] != producers
+            or not builder.args.args or builder.args.args[0].arg != "report"
+            or bindings["report"] != [builder.args.args[0]]
+            or any(bindings[name] for name in
+                   ("_JSONRecordArray", "range", "int", "float", "bool", "callable", "len"))):
+        raise InputError(f"ambiguous array element producer {block}")
+    nested = producers[0]
+    if not (builder.body.index(nested) < builder.body.index(bound) < builder.body.index(array)):
+        raise InputError(f"ambiguous array element producer {block}")
+    if (nested.decorator_list or nested.returns is not None
+            or ast.dump(nested.args) != ast.dump(expected_producer.args)
+            or len(nested.body) != 2 or not isinstance(nested.body[1], ast.Return)
+            or not isinstance(nested.body[1].value, ast.Dict)
+            or ast.dump(nested.body[0]) != ast.dump(expected_producer.body[0])):
+        raise InputError(f"unrecognized array POD binding {block}")
+
+    element = nested.body[1].value
+    # Conversions may read the proven row and its index. The trade producer
+    # also has the existing optional incarnation argument; no other source
+    # or attribute receiver is admitted, even inside a conversion call.
+    names = {row, "i", "int", "float", "bool"}
+    if block == "trades":
+        names.update({"trade_entry_incarnations", "callable", "len"})
+        arguments = [node for node in builder.args.args if node.arg == "trade_entry_incarnations"]
+        if len(arguments) != 1 or bindings["trade_entry_incarnations"] != arguments:
+            raise InputError(f"unrecognized array POD binding {block}")
+    for node in ast.walk(element):
+        if (isinstance(node, ast.Lambda)
+                or (isinstance(node, ast.Name)
+                    and (not isinstance(node.ctx, ast.Load) or node.id not in names))
+                or (isinstance(node, ast.Attribute)
+                    and (not isinstance(node.value, ast.Name) or node.value.id != row))):
+            raise InputError(f"unrecognized array POD binding {block}")
+    return element
 
 
 def reconstruct_schema(root, findings):
@@ -964,11 +1100,19 @@ def reconstruct_schema(root, findings):
                    and isinstance(node.func, ast.Attribute) and node.func.attr == "append"
                    and isinstance(node.func.value, ast.Name) and node.func.value.id == value.id
                    and len(node.args) == 1]
-        if len(appends) != 1:
+        factory = any(isinstance(node, ast.Assign) and isinstance(node.value, ast.Call)
+                      and isinstance(node.value.func, ast.Name) and node.value.func.id == "_JSONRecordArray"
+                      and any(isinstance(target, ast.Name) and target.id == value.id for target in node.targets)
+                      for node in ast.walk(builder))
+        if factory and not appends:
+            element = record_array_element(builder, block, value)
+        elif factory or len(appends) != 1:
             raise InputError(f"ambiguous array element producer {block}")
+        else:
+            element = appends[0]
         containers[block] = "array"
         containers[block + "[*]"] = "object"
-        for key, expression in py_dict(appends[0]).items():
+        for key, expression in py_dict(element).items():
             # Every native attribute read must belong to the checked POD.
             for attribute in ast.walk(expression):
                 if (isinstance(attribute, ast.Attribute) and isinstance(attribute.value, ast.Name)

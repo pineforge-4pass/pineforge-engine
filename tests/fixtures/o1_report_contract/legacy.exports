@@ -1,0 +1,21 @@
+{
+  global:
+    strategy_create;
+    strategy_free;
+    strategy_set_input;
+    strategy_set_override;
+    run_backtest;
+    run_backtest_full;
+    report_free;
+    pf_abi_version;
+    pf_version_string;
+    pf_version_get;
+    strategy_execution_contract;
+    strategy_get_last_error;
+    strategy_get_last_error_code;
+    strategy_get_last_error_args;
+    strategy_last_run_status;
+    strategy_closed_trade_entry_incarnation;
+  local:
+    *;
+};

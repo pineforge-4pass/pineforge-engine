@@ -1,0 +1,2 @@
+list(APPEND TEST_SOURCES test_x1_begin_refuses_summary_capture)
+pineforge_add_unit_test(test_x1_begin_refuses_summary_capture)

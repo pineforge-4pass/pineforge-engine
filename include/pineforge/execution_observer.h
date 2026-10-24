@@ -120,6 +120,9 @@ PF_API uint32_t pf_execution_observer_version(void);
  *  contract (not a purity assertion or an unknown-override detector); -3 for a
  *  nonquiescent or reentrant call; -4 when the private consumer storage cannot
  *  be allocated. No exception crosses C.
+ *  For a non-NULL descriptor, -2 also covers v1 report mode SUMMARY_ONLY or
+ *  pending legacy equity mode SUMMARY_ONLY. This mode check precedes the -3
+ *  busy check and leaves the registration unchanged; NULL removal is exempt.
  *
  *  Registration copies the descriptor's values. context and before_results
  *  stay borrowed until a successful replacement or removal, or until the

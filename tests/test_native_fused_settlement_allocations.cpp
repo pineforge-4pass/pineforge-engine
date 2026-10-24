@@ -11,8 +11,8 @@
 // per closing fill across inspect, preview and settle, and 3 per opening.
 //
 // This row counts every allocation (global_allocation_replacement.hpp) around
-// each call on a warm engine -- its row, lot and stream vectors already hold
-// room, the identifiers fit the string's inline buffer, and the precommit
+// each call on a warm engine -- its ledger backing is open, lot and stream
+// vectors hold room, the identifiers fit the string's inline buffer, and the precommit
 // preview writes into a vector with room -- and requires zero for every call,
 // fill shape, fee form and scope. It then reports, without a bound, the
 // allocations per fill of two whole runs through the matcher (a market book
@@ -52,7 +52,7 @@ class Warm final : public NativeStrategyHost {
 public:
     void on_native_bar(const Bar&, const NativeDecisionContext&) override {}
 
-    // A warm engine: room in every vector a settlement appends to.
+    // Lot/action capacity; direct_calls also warms the paged trade backing.
     Warm(CommissionType fee, double value, bool stream) {
         commission_type_ = fee;
         commission_value_ = value;
@@ -163,6 +163,13 @@ void direct_calls() {
     for (const auto fee : fees) {
         for (const bool stream : {false, true}) {
             Warm engine(fee, fee == CommissionType::PERCENT ? 0.1 : 1.5, stream);
+            // reserve() does not open the paged ledger's index/payload files.
+            // Complete a real close before the census of warmed calls.
+            engine.hold(true, 2.0);
+            const auto warm = engine.fill(ex::Action{ex::Flatten{}}, 0.0,
+                                          ex::CloseScope{ex::Book{}});
+            CHECK(warm.status == ex::Status::Applied);
+            CHECK(engine.trade_count() == 1);
             for (const auto& shape : shapes) {
                 if (shape.held) engine.hold(shape.is_long, 2.0);
                 else engine.flat();

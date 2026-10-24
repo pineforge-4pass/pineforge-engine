@@ -13,7 +13,7 @@
 
 ## 1. TradingView's ten-significant-digit money rule
 
-Was `include/pineforge/engine.hpp:918-952`, deleted by R5 lane E6 (the `:73-180` span earlier
+Was `include/pineforge/engine.hpp`, historical lines 918-952 recorded by `06d4107c0`, deleted by R5 lane E6 (the span at lines 73-180 earlier
 drafts named is and was live code: `ClosedLotExcursionFacts`, `PyramidEntry`, `Trade`). The
 arithmetic lives in the adapter
 (`tv_money_round` / `tv_money_floor_lot` in
@@ -714,7 +714,7 @@ runs on fractional grids only (§1.8).
 
 ## 2. `strategy.close`: the per-entry-id ledger and same-bar batching
 
-Was `include/pineforge/engine.hpp:503-565`, next to storage that is the
+Was `include/pineforge/engine.hpp`, historical lines 503-565 recorded by `44b17c185`, next to storage that is the
 adapter's since the `engine_script_run_v18` relocation <!-- verified HEAD -->
 (`PineStrategyHost::id_unclosed_qty_`, which R4 slice C, #254, replaced with
 `PineExecutionAdapter::close_logical_units_`, and the same-bar close batches, see
@@ -798,8 +798,8 @@ id-only maps above without any behavior change.
 
 ## 3. KI-62: same-bar pyramid-add scratch after a priced bracket exit
 
-Was `src/engine_orders.cpp:198-208` (comment-only — the helper it documented
-is gone) and, in short form, `include/pineforge/engine.hpp:2659-2663`. The
+Was `src/engine_orders.cpp`, historical lines 198-208 recorded by `44b17c185` (comment-only — the helper it documented
+is gone) and, in short form, `include/pineforge/engine.hpp`, historical lines 2659-2663. The
 scratch is produced by the adapter today.
 
 ```text
@@ -818,7 +818,7 @@ this exit's fill price), matching TV's per-pyramid scratch reporting.
 
 ## 4. Other orphaned fill / bracket / margin notes
 
-Was the contiguous comment-only block `include/pineforge/engine.hpp:2646-2845`,
+Was the contiguous comment-only block `include/pineforge/engine.hpp`, historical lines 2646-2845 recorded by `44b17c185`,
 in source order. Each paragraph documented a private member that no longer
 exists; that block's KI-62 paragraph is section 3 above.
 
