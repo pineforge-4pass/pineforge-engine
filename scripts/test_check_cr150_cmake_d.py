@@ -280,6 +280,62 @@ class ModuleProfileControls(CMakeControls):
                 if not guarded:
                     self.assertIn('MODULE fixture_module reaches Python row', result.stderr)
 
+    def test_exists_wrapped_main_module_requires_profile_guard(self) -> None:
+        """H2-3: preserve the same-calc private-fixture and SKIP branches."""
+        self.lane.write_text(REGISTRATION)
+        fixture = (
+            'if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixture.cpp")\n'
+            + self.MODULE + self.ROW
+            + 'else()\n'
+            'add_test(NAME test_module_python COMMAND ${CMAKE_COMMAND} -E echo '
+            '"SKIP private fixtures not present: fixture.cpp")\n'
+            'set_tests_properties(test_module_python PROPERTIES '
+            'SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " '
+            'LABELS private_fixtures)\n'
+            'endif()\n')
+        for guarded in (True, False):
+            with self.subTest(guarded=guarded):
+                guard = 'PINEFORGE_BUILD_SOURCE_LAYER AND PINEFORGE_BUILD_LIVE_RUNNER'
+                if guarded:
+                    guard += f' AND {self.GUARD}'
+                self.cmake.write_text(f'if({guard})\n{fixture}endif()\n' + INCLUDE_LOOP)
+                result = self.run_checker()
+                output = result.stdout + result.stderr
+                self.assertEqual(0 if guarded else 1, result.returncode, output)
+                if not guarded:
+                    self.assertIn(
+                        'MODULE fixture_module reaches Python row test_module_python', output)
+                    self.assertIn(self.GUARD, output)
+
+    def test_existing_shared_asan_preload_registration_is_accepted(self) -> None:
+        """The live stop-equivalence preload uses SHARED and a command list."""
+        self.lane.write_text(REGISTRATION)
+        self.cmake.write_text(
+            'if(PINEFORGE_BUILD_SOURCE_LAYER AND PINEFORGE_BUILD_LIVE_RUNNER)\n'
+            'if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixture.cpp")\n'
+            'add_library(fixture_module SHARED fixture.cpp)\n'
+            'set(_pf_d8_equivalence_command)\n'
+            'if(PINEFORGE_ENABLE_SANITIZERS)\n'
+            'if(APPLE)\n'
+            'set(_pf_d8_runtime_environment '
+            '"DYLD_INSERT_LIBRARIES=${_pf_d8_sanitizer_runtime}")\n'
+            'else()\n'
+            'set(_pf_d8_runtime_environment "LD_PRELOAD=${_pf_d8_sanitizer_runtime}")\n'
+            'endif()\n'
+            'list(APPEND _pf_d8_equivalence_command ${CMAKE_COMMAND} -E env '
+            '"${_pf_d8_runtime_environment}" '
+            '"ASAN_OPTIONS=detect_leaks=0:halt_on_error=1:abort_on_error=1" '
+            '"UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1")\n'
+            'endif()\n'
+            'list(APPEND _pf_d8_equivalence_command ${Python3_EXECUTABLE} -B '
+            'fixture.py --library $<TARGET_FILE:fixture_module> '
+            '--runner $<TARGET_FILE:pineforge-live> --require-terminal-receipts)\n'
+            'add_test(NAME test_module_python COMMAND ${_pf_d8_equivalence_command})\n'
+            'endif()\n'
+            'endif()\n' + INCLUDE_LOOP)
+        result = self.run_checker()
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
 
 class TimeoutControls(CMakeControls):
     """H2-8: newly registered rows cannot declare a deadline, even zero."""
