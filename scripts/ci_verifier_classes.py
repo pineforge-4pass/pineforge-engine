@@ -34,6 +34,7 @@ SLOW_CLASSES = frozenset({
     'ExamplesAssertLive',
     'StaleBinaries',
     'ReceiptRecipe',
+    'NativeLiveEquivalenceCTest',
 })
 
 

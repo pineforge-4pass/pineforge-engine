@@ -232,6 +232,8 @@ class Scripted:
             if 'status' in argv:
                 prefix = str(self.exits.get('corpus-submodule-prefix', ' '))
                 return Completed(0, (prefix + 'b46cd80c247a53b19e23cb0c12c4451d624ce9a6 corpus\n').encode(), b'')
+        if argv[0] == 'git' and 'lfs' in argv:
+            return Completed(int(self.exits.get('corpus-live-feed', 0)), b'corpus LFS feed\n', b'')
         if argv[0] == 'git' and 'cat-file' in argv:
             if V18_FROZEN_COMMIT + '^{commit}' in argv:
                 key = 'v18-frozen-cat-file'
@@ -892,7 +894,9 @@ class ProfileOptions(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, 'must run every runner row'):
             self.definitions('live-tsan', ['--exclude-label', 'slow'])
         self.assertIn('native_live_routing_e2e', ci_verify.runner_e2e_test_names(ROOT))
-        self.assertNotIn('native_live_equivalence_e2e', ci_verify.runner_e2e_test_names(ROOT))
+        # Every driver, including corpus equivalence, must be a required row.
+        self.assertEqual(ci_verify.runner_e2e_test_names(ROOT),
+                         {path.stem for path in (ROOT / 'tests').glob('native_live*_e2e.py')})
 
     def test_kernel_drops_the_source_layer_and_keeps_the_live_runner(self):
         values, argv = self.definitions('kernel')
@@ -1490,6 +1494,14 @@ class DriverOrderingAndAggregation(unittest.TestCase):
         self.assertIn('corpus-submodule-pin', failure_stages(summary))
         self.assertFalse(any(argv[0] == 'cmake' and '-S' in argv for argv in scripted.calls))
 
+    def test_live_corpus_lfs_failure_stops_before_guards_and_configure(self):
+        code, summary, scripted, _ = self.run_profile(
+            'live-sanitizers', **{'corpus-live-feed': 1})
+        self.assertEqual(code, 1)
+        self.assertIn('corpus-live-feed', failure_stages(summary))
+        self.assertNotIn('configure', scripted.names())
+        self.assertNotIn('source-guard-c-abi', stage_names(summary))
+
     def test_build_failure_skips_ctest_and_install(self):
         code, summary, scripted, _ = self.run_profile(build=1)
         self.assertEqual(code, 1)
@@ -1781,7 +1793,7 @@ class DriverOrderingAndAggregation(unittest.TestCase):
 
     def test_pr_exclusion_proves_registered_minus_labelled_equals_ran(self):
         self.assertEqual(ci_verify.EXCLUDED_REGISTERED_MIN,
-                         {'debug': 876, 'sanitizers': 867, 'native': 963,
+                         {'debug': 876, 'sanitizers': 867, 'native': 964,
                           'release': 895, 'kernel': 337})
         for profile, registered in ci_verify.EXCLUDED_REGISTERED_MIN.items():
             with self.subTest(profile=profile):
@@ -2816,7 +2828,7 @@ class PrivateFixtureFloors(unittest.TestCase):
             self.assertEqual(validate_config(parse_args(['kernel'])).min_tests,
                              FULL_FLOOR['kernel'])
         self.assertEqual(ci_verify.EXCLUDED_REGISTERED_MIN,
-                         {'debug': 876, 'sanitizers': 867, 'native': 963,
+                         {'debug': 876, 'sanitizers': 867, 'native': 964,
                           'release': 895, 'kernel': 337})
 
     def test_overlay_flag_moves_the_floor_and_is_the_only_input(self):
@@ -3365,10 +3377,10 @@ class LiveProfilesWithFixturesAbsent(unittest.TestCase):
     skip; without the overlay runner/ registers its pinned private-fixture
     placeholders and they SKIP, so the old rule failed the required
     native-live job of every public PR (.github/workflows/ci.yml's build
-    gate). The branch now accepts exactly the pinned skips -- every skipped
-    row must be a pinned private-fixture row -- while an unpinned skip, a
-    not-run row and a disabled row still fail, and with the overlay present
-    the old rule stands: nothing may skip.
+    gate). The branch accepts pinned skips outside the required e2e inventory;
+    every skipped row must be a pinned private-fixture row. A required e2e
+    skip, an unpinned skip, a not-run row and a disabled row still fail. With
+    the overlay present the old rule stands: nothing may skip.
     """
 
     def run_profile(self, profile='live-sanitizers', extra=None, **exits):
@@ -3383,18 +3395,21 @@ class LiveProfilesWithFixturesAbsent(unittest.TestCase):
             self, profile, extra=extra, **exits)
 
     def pinned_probe(self, count: int) -> list:
-        pinned = sorted(ci_verify.private_fixture_rows(ROOT))
+        # Required e2e rows must execute even when other pinned rows skip.
+        pinned = sorted(ci_verify.private_fixture_rows(ROOT)
+                        - ci_verify.runner_e2e_test_names(ROOT))
         self.assertGreaterEqual(len(pinned), count)
         return pinned[:count]
 
     def test_green_the_absent_runner_placeholders_skip_and_the_profile_passes(self):
         # Control (a): the public native-live shape. The runner/ tree
-        # registers its 65 pinned placeholders beside the 12 rows it runs;
+        # registers its 65 old pinned placeholders beside the required rows;
         # they skip, ran stays at the floor, and the profile passes with the
         # acceptance printed.
         pinned = self.pinned_probe(65)
         code, summary, _, build_dir = self.run_profile(
-            'live-sanitizers', ctest_registered=77, ctest_rows=77,
+            'live-sanitizers', ctest_registered=65 + LIVE_SANITIZERS_MIN_TESTS,
+            ctest_rows=65 + LIVE_SANITIZERS_MIN_TESTS,
             ctest_skipped=pinned)
         self.assertEqual(code, 0, summary['failures'])
         self.assertEqual(summary['ctestRows'], LIVE_SANITIZERS_MIN_TESTS)
@@ -3408,7 +3423,8 @@ class LiveProfilesWithFixturesAbsent(unittest.TestCase):
         # though the arithmetic alone would tolerate it.
         pinned = self.pinned_probe(65)
         code, summary, _, _ = self.run_profile(
-            'live-sanitizers', ctest_registered=78, ctest_rows=78,
+            'live-sanitizers', ctest_registered=66 + LIVE_SANITIZERS_MIN_TESTS,
+            ctest_rows=66 + LIVE_SANITIZERS_MIN_TESTS,
             ctest_skipped=pinned + ['test_unpinned_runner_row'])
         self.assertEqual(code, 1)
         self.assertIn('live-test-skips', failure_stages(summary))
@@ -3422,7 +3438,8 @@ class LiveProfilesWithFixturesAbsent(unittest.TestCase):
         # pinned skips -- the acceptance covers skips, nothing else.
         pinned = self.pinned_probe(65)
         code, summary, _, _ = self.run_profile(
-            'live-sanitizers', ctest_registered=78, ctest_rows=78,
+            'live-sanitizers', ctest_registered=66 + LIVE_SANITIZERS_MIN_TESTS,
+            ctest_rows=66 + LIVE_SANITIZERS_MIN_TESTS,
             ctest_skipped=pinned, ctest_not_run=['test_live_not_run_row'])
         self.assertEqual(code, 1)
         self.assertIn('live-test-skips', failure_stages(summary))
@@ -3435,7 +3452,8 @@ class LiveProfilesWithFixturesAbsent(unittest.TestCase):
         # own count, so only this rule can refuse it.
         pinned = self.pinned_probe(65)
         code, summary, _, _ = self.run_profile(
-            'live-sanitizers', ctest_registered=77, ctest_rows=77,
+            'live-sanitizers', ctest_registered=65 + LIVE_SANITIZERS_MIN_TESTS,
+            ctest_rows=65 + LIVE_SANITIZERS_MIN_TESTS,
             ctest_skipped=pinned, ctest_disabled=['test_live_disabled_row'])
         self.assertEqual(code, 1)
         self.assertIn('live-test-skips', failure_stages(summary))
@@ -3446,7 +3464,8 @@ class LiveProfilesWithFixturesAbsent(unittest.TestCase):
         # private-fixtures rule and on this one.
         with mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES': '1'}):
             code, summary, _, _ = self.run_profile(
-                'live-sanitizers', ctest_registered=13, ctest_rows=13,
+                'live-sanitizers', ctest_registered=LIVE_SANITIZERS_MIN_TESTS + 1,
+                ctest_rows=LIVE_SANITIZERS_MIN_TESTS + 1,
                 ctest_skipped=self.pinned_probe(1))
         self.assertEqual(code, 1)
         self.assertIn('live-test-skips', failure_stages(summary))
@@ -3460,10 +3479,28 @@ class LiveProfilesWithFixturesAbsent(unittest.TestCase):
         # placeholders the same way.
         pinned = self.pinned_probe(65)
         code, summary, _, _ = self.run_profile(
-            'live-tsan', ctest_registered=77, ctest_rows=77,
+            'live-tsan', ctest_registered=65 + LIVE_SANITIZERS_MIN_TESTS,
+            ctest_rows=65 + LIVE_SANITIZERS_MIN_TESTS,
             ctest_skipped=pinned)
         self.assertEqual(code, 0, summary['failures'])
         self.assertIn('live-test-skips', stage_names(summary))
+
+    def test_required_equivalence_skip_fails_even_when_other_rows_cover_the_floor(self):
+        # Inventory membership and a healthy total cannot substitute for this
+        # required driver's execution, even though its skip is a pinned one.
+        for profile in ci_verify.LIVE_ONLY_PROFILES:
+            with self.subTest(profile=profile):
+                code, summary, _, _ = self.run_profile(
+                    profile, ctest_registered=LIVE_SANITIZERS_MIN_TESTS + 1,
+                    ctest_rows=LIVE_SANITIZERS_MIN_TESTS + 1,
+                    ctest_skipped=['native_live_equivalence_e2e'])
+                self.assertEqual(code, 1)
+                self.assertEqual(summary['ctestRows'], LIVE_SANITIZERS_MIN_TESTS)
+                self.assertIn('live-test-skips', failure_stages(summary))
+                error = next(item['error'] for item in summary['failures']
+                             if item['stage'] == 'live-test-skips')
+                self.assertIn('required runner e2e rows skipped', error)
+                self.assertIn('native_live_equivalence_e2e', error)
 
     def test_the_native_profile_is_not_under_this_rule(self):
         # Control (e): the native profile runs runner rows too but is not a
@@ -4118,6 +4155,179 @@ class CTestDeadlines(unittest.TestCase):
         self.assertEqual((rows.total, rows.ran), (4, 2), output)
         self.assertEqual(rows.skipped, ('labelled_skip',), output)
         self.assertEqual(rows.not_run, ('labelled_not_run',), output)
+
+
+class NativeLiveEquivalenceCTest(unittest.TestCase):
+    """CR-223-ROW: source wiring and compiler-free adapter controls.
+
+    The tiny driver below is a fixture, never the corpus e2e or a compiler.
+    The supervisor separately proves the registered row with the real driver.
+    """
+
+    def test_registered_row_has_build_tree_outputs_and_status_only_skip(self):
+        cmake = (ROOT / 'runner' / 'CMakeLists.txt').read_text()
+        row = re.search(r'add_test\(NAME native_live_equivalence_e2e\s+(.*?)\)',
+                        cmake, re.S)
+        self.assertIsNotNone(row, 'the equivalence driver needs a permanent runner CTest row')
+        command = row.group(1)
+        self.assertIn('${Python3_EXECUTABLE} -B', command)
+        self.assertIn('${PROJECT_SOURCE_DIR}/tests/native_live_equivalence_ctest.py', command)
+        self.assertIn('--script ${PROJECT_SOURCE_DIR}/tests/native_live_equivalence_e2e.py', command)
+        self.assertIn('--build-dir ${PROJECT_BINARY_DIR}', command)
+        for option in ('--libraries-dir', '--out'):
+            self.assertRegex(command, re.escape(option) + r'\s+\$\{CMAKE_CURRENT_BINARY_DIR\}/')
+        properties = re.search(
+            r'set_tests_properties\(native_live_equivalence_e2e\s+PROPERTIES\s+(.*?)\)',
+            cmake, re.S)
+        self.assertIsNotNone(properties)
+        self.assertRegex(properties.group(1), r'\bSKIP_RETURN_CODE\s+77\b')
+        self.assertRegex(properties.group(1), r'\bLABELS\s+private_fixtures\b')
+        self.assertNotRegex(properties.group(1),
+                            r'\b(SKIP_REGULAR_EXPRESSION|PASS_REGULAR_EXPRESSION|WILL_FAIL|DISABLED)\b')
+        self.assertIn('native_live_equivalence_e2e', ci_verify.private_fixture_rows(ROOT))
+        # The same runtime preload/finalization contract must reach both
+        # ctypes witnesses in ASan and TSan builds.
+        self.assertRegex(cmake, r'set_tests_properties\(native_live_genuine_retry_e2e\s+'
+                         r'native_live_equivalence_e2e\s+PROPERTIES ENVIRONMENT')
+
+    def test_inventory_decision_and_prerequisites_are_documented(self):
+        source = (ROOT / 'scripts' / 'ci_verify.py').read_text()
+        function = source.split('def runner_e2e_test_names(', 1)[1].split('\n\n', 1)[0]
+        self.assertIn('native-live.yml', function)
+        self.assertIn('corpus', function)
+        self.assertIn('docs/ci.md', function)
+        docs = (ROOT / 'docs' / 'ci.md').read_text()
+        self.assertIn('`native_live_equivalence_e2e`', docs)
+        self.assertIn('runner_e2e_test_names()', docs)
+        self.assertNotIn('corpus equivalence driver is not a runner CTest row', docs)
+
+    def test_mandatory_row_raises_live_run_floor_in_both_fixture_worlds(self):
+        # All twelve existing public rows and the equivalence row must RUN.
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            for transport_present in (False, True):
+                if transport_present:
+                    (source / 'runner').mkdir()
+                    (source / 'runner' / 'transport.cpp').write_text('// fixture\n')
+                for overlay in ('', '1'):
+                    with self.subTest(transport=transport_present, overlay=overlay), \
+                            mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES': overlay}):
+                        for profile in ci_verify.LIVE_ONLY_PROFILES:
+                            self.assertEqual(ci_verify.profile_min_tests(ci_verify.PROFILE[profile], source),
+                                             13 if transport_present else 12)
+
+    def test_live_feed_materialization_follows_profile_and_is_lfs_explicit(self):
+        # Exercise the prerequisite method alone: no guards, configure or
+        # compiler is invoked by this control.
+        for profile in ci_verify.PROFILES:
+            with self.subTest(profile=profile), tempfile.TemporaryDirectory() as temporary:
+                config = validate_config(parse_args(
+                    [profile, '--build-dir', temporary], source=ROOT), source=ROOT)
+                driver = ci_verify.Driver(config)
+                calls = []
+
+                def invoke(stage, argv):
+                    calls.append((stage, argv))
+                    return Completed(0, b' 0123456789abcdef corpus\n', b'')
+
+                with mock.patch.object(driver, 'invoke', side_effect=invoke):
+                    self.assertTrue(driver.ensure_corpus_submodule())
+                lfs = [argv for stage, argv in calls if stage == 'corpus-live-feed']
+                expected = config.profile.live_runner and config.profile.source_layer
+                self.assertEqual(bool(lfs), expected)
+                if expected:
+                    self.assertEqual(lfs, [[
+                        'git', '-C', str(ROOT / 'corpus'), 'lfs', 'pull',
+                        '--include=data/ohlcv_ETH-USDT-USDT_1m.csv', '--exclude=']])
+        workflow = (ROOT / '.github' / 'workflows' / 'native-live.yml').read_text()
+        install = next(line for line in workflow.splitlines() if 'apt-get install' in line)
+        self.assertIn('git-lfs', install.split())
+
+    def fixture(self, temporary, *, missing=None, exit_code=0, exception=False):
+        root = Path(temporary) / 'source'
+        build = Path(temporary) / 'build'
+        script = root / 'tests' / 'native_live_equivalence_e2e.py'
+        script.parent.mkdir(parents=True)
+        script.write_text(
+            "PROBES = {'probe-alpha': {'market'}, 'probe-beta': {'limit'}}\n"
+            "import argparse, json\nfrom pathlib import Path\n"
+            "parser = argparse.ArgumentParser()\n"
+            "for option in ('--root', '--build-dir', '--libraries-dir', '--out'):\n"
+            "    parser.add_argument(option, required=True)\n"
+            "args = parser.parse_args()\n"
+            "Path(args.out).mkdir(parents=True, exist_ok=False)\n"
+            "Path(args.libraries_dir).mkdir(parents=True, exist_ok=False)\n"
+            "print('DRIVER_EXECUTED ' + json.dumps(vars(args)), flush=True)\n"
+            + ("raise RuntimeError('driver fixture failure')\n" if exception
+               else f"raise SystemExit({exit_code})\n"))
+        paths = [
+            build / 'bin' / 'pineforge-live', build / 'compile_commands.json',
+            build / 'lib' / 'libpineforge.a',
+            root / 'corpus' / 'data' / 'ohlcv_ETH-USDT-USDT_1m.csv',
+            root / 'tests' / 'native_live_receipts.py',
+            *(root / 'corpus' / 'validation' / probe / 'generated.cpp'
+              for probe in ('probe-alpha', 'probe-beta')),
+        ]
+        for path in paths:
+            if missing is None or not path.as_posix().endswith(missing):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('// prerequisite fixture only\n')
+        command = [sys.executable, '-B', str(ROOT / 'tests' / 'native_live_equivalence_ctest.py'),
+                   '--script', str(script), '--root', str(root), '--build-dir', str(build),
+                   '--libraries-dir', str(build / 'libraries'), '--out', str(build / 'results')]
+        return command
+
+    def invoke_fixture(self, command):
+        return subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              env={key: value for key, value in os.environ.items()
+                                   if key not in ('LD_PRELOAD', 'DYLD_INSERT_LIBRARIES')})
+
+    def test_each_missing_prerequisite_skips_once_without_executing_driver(self):
+        for missing in ('bin/pineforge-live', 'compile_commands.json', 'lib/libpineforge.a',
+                        'corpus/data/ohlcv_ETH-USDT-USDT_1m.csv', 'tests/native_live_receipts.py',
+                        'corpus/validation/probe-alpha/generated.cpp',
+                        'corpus/validation/probe-beta/generated.cpp'):
+            with self.subTest(missing=missing), tempfile.TemporaryDirectory() as temporary:
+                result = self.invoke_fixture(self.fixture(temporary, missing=missing))
+                self.assertEqual(result.returncode, 77, result.stdout + result.stderr)
+                self.assertEqual(len(result.stdout.splitlines()), 1)
+                self.assertTrue(result.stdout.startswith(
+                    'SKIP native_live_equivalence_e2e prerequisites absent: '), result.stdout)
+                self.assertIn(missing, result.stdout)
+                self.assertNotIn('DRIVER_EXECUTED', result.stdout)
+
+    def test_ready_driver_executes_and_runtime_failures_never_become_skips(self):
+        for exit_code in (0, 1, 2, 77, 256, -256):
+            with self.subTest(exit_code=exit_code), tempfile.TemporaryDirectory() as temporary:
+                result = self.invoke_fixture(self.fixture(temporary, exit_code=exit_code))
+                self.assertIn('DRIVER_EXECUTED ', result.stdout, result.stdout + result.stderr)
+                self.assertEqual(result.returncode, 0 if exit_code == 0 else 1,
+                                 result.stdout + result.stderr)
+                self.assertNotIn('SKIP ', result.stdout)
+        with tempfile.TemporaryDirectory() as temporary:
+            result = self.invoke_fixture(self.fixture(temporary, exception=True))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotEqual(result.returncode, 77)
+            self.assertIn('driver fixture failure', result.stderr)
+
+    def test_reruns_retain_distinct_outputs_and_libraries_under_build_tree(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            command = self.fixture(temporary)
+            receipts = []
+            for _ in range(2):
+                result = self.invoke_fixture(command)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                receipt = json.loads(next(line.removeprefix('DRIVER_EXECUTED ')
+                                         for line in result.stdout.splitlines()
+                                         if line.startswith('DRIVER_EXECUTED ')))
+                for option in ('out', 'libraries_dir'):
+                    self.assertTrue(Path(receipt[option]).is_relative_to(
+                        (Path(temporary) / 'build').resolve()))
+                    self.assertTrue(Path(receipt[option]).is_dir())
+                receipts.append(receipt)
+            for option in ('out', 'libraries_dir'):
+                self.assertNotEqual(receipts[0][option], receipts[1][option])
+                self.assertTrue(Path(receipts[0][option]).is_dir())
 
 
 if __name__ == '__main__':
