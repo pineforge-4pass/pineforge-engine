@@ -86,11 +86,11 @@ ScratchFile::ScratchFile(const std::string& directory, detail::ScratchStore stor
     try {
         file_.open("pineforge-scratch");
     } catch (const detail::ReportScratchIoError& error) {
-        // Keep the report facade's create English and errno. Arena reasons
+        // Keep the create prefix, candidate detail and errno. Arena reasons
         // and their per-raiser arguments propagate unchanged.
         const auto& failure = error.run_failure();
         if (failure.args && *failure.args == "{\"reason\":\"scratch_io\"}")
-            fail_io(error.code().value(), "report scratch create");
+            fail_io(error.code().value(), (std::string("report scratch create; ") + error.what()).c_str());
         throw;
     }
 }

@@ -223,16 +223,20 @@ public:
         const char* selected = std::getenv("PINEFORGE_COMMAND_SCRATCH_DIR");
         std::string refusal;
         int directory_error = 0;
-        std::string path = resolve_scratch_directory(selected ? selected : "", refusal, directory_error);
+        bool proven_memory = false;
+        std::string path = resolve_scratch_directory(selected ? selected : "", refusal,
+                                                     directory_error, proven_memory);
         if (path.empty())
             throw coded<std::system_error>(RunFailureCode::scratch_io_failed, {},
-                std::system_error(directory_error, std::generic_category(), refusal));
+                std::system_error(proven_memory ? ENODEV : directory_error,
+                                  std::generic_category(), refusal));
+        const auto create_message = scratch_create_message("command scratch create", path, refusal);
         if (path.back() != '/') path += '/';
         path += "pineforge-command-XXXXXX";
         const int opened = ::mkstemp(path.data());
         if (opened < 0)
             throw coded<std::system_error>(RunFailureCode::scratch_io_failed, {},
-                std::system_error(errno, std::generic_category(), "command scratch create"));
+                std::system_error(errno, std::generic_category(), create_message));
 
         int result;
         do {

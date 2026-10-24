@@ -129,17 +129,22 @@ or scratch directory was configured. The default selector checks the filesystem
 type with `statfs`: use nonempty `TMPDIR` if disk-backed; when `TMPDIR` is unset
 or empty, retain disk-backed `/tmp` as the legacy first candidate. If that
 candidate is proven tmpfs/ramfs, try `/var/tmp`, also only if disk-backed. A failed
-filesystem query stops resolution with its syscall errno and names the failed
-candidate; it never permits fallback. Directory names never determine the
-medium, and tmpfs/ramfs is never silently selected. Once a disk-backed candidate
-is selected, ordinary creation/write failures keep their existing failure behavior.
+filesystem query stops default resolution with its syscall errno and names the
+failed candidate at every create wrapper; it never permits fallback. Directory
+names never determine the medium, and tmpfs/ramfs is never silently selected.
+Once a disk-backed candidate is selected, ordinary creation/write failures keep
+their existing failure kinds and errno. Every create wrapper retains its established message prefix and
+appends the directory-selection detail. If creation in the selected `/var/tmp`
+fails, the detail names that directory, the rejected first candidate and
+`set TMPDIR to a disk-backed directory`.
 
 If both default candidates are proven tmpfs/ramfs, refuse with `ENODEV` and
 `scratch requires disk backing`. The failure detail names every candidate tried
 and its rejection reason, followed by `set TMPDIR to a disk-backed directory`.
 An explicitly configured directory is kept as supplied, never redirected to a
-default; explicit tmpfs/ramfs scratch is still refused. An explicit sink path
-keeps its existing `requires disk backing, not tmpfs or ramfs` refusal.
+default; explicit tmpfs/ramfs scratch is now refused, including command scratch.
+An explicit sink path keeps its existing
+`requires disk backing, not tmpfs or ramfs` refusal.
 
 The jailed profile is unchanged: it requires a sealed arena and never creates
 a backing file or falls back to `TMPDIR`, `/tmp` or `/var/tmp`. Default directory

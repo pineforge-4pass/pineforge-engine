@@ -180,7 +180,7 @@ in addition to its six released 1.4.0 reasons.
 | `run_request_invalid` | `input` | no | `option` (vocab, 25 values) | The harness command line or one of its JSON options is invalid. |
 | `scratch_capacity_exceeded` | `resource` | no | `resource` (vocab, 10 values) | The admitted scratch-table layout or a fixed region's capacity was exceeded. The run must be admitted with sufficient finite maxima before retrying. |
 | `scratch_configuration_invalid` | `input` | no | `reason` (vocab, 3 values), `stage` (vocab, 1 values) | The command-scratch byte cap from the environment or the caller is malformed: not a positive decimal, out of uint64_t range, or zero. |
-| `scratch_io_failed` | `resource` | no | none | The engine could not create, resize, read or write the storage of one of its auxiliary tables (the disk id table, the id-pair store or the placement table). The run has no successful completion. Report-sink scratch files, the curve writer and the position-tail facade do not raise this code: they raise report_sink_failed with reason scratch_io. |
+| `scratch_io_failed` | `resource` | no | none | The engine could not create, resize, read or write command scratch or the storage of one of its auxiliary tables (the disk id table, the id-pair store or the placement table). Command scratch also raises this code when the default-directory policy fails a directory query or refuses memory-backed default candidates, or when an explicit memory-backed command directory is refused. Native runs create command scratch at begin, so these failures are resource failures before any strategy callback. The run has no successful completion. Report-sink scratch files, the curve writer and the position-tail facade do not raise this code: they raise report_sink_failed with reason scratch_io. |
 | `security_feed_refused` | `input` | no | `reason` (vocab, 11 values) | An auxiliary or native request.security feed was refused. |
 | `setting_rejected` | `input` | no | `entrypoint` (vocab, 4 values, optional), `input` (pine_source, optional), `reason` (vocab, 21 values, optional) | A run setting (an input or a strategy() override) was refused. |
 | `setting_unsupported` | `unsupported` | no | none | A setting this compiled strategy cannot honour. |
@@ -254,13 +254,16 @@ candidates are proven tmpfs/ramfs, the engine retains `ENODEV` /
 reason in the failure detail, and adds `set TMPDIR to a disk-backed directory`.
 
 An explicit scratch/spill directory is kept as supplied and never falls back;
-explicit tmpfs/ramfs directories remain refused. The explicit sink-path refusal
+explicit tmpfs/ramfs directories are now refused, including command scratch.
+The explicit sink-path refusal
 `requires disk backing, not tmpfs or ramfs` is unchanged. The jailed profile
 still requires a sealed arena and never creates a backing file or falls back to
-`TMPDIR`, `/tmp` or `/var/tmp`. These policies keep the existing failure codes:
-report scratch uses `report_sink_failed` with `reason: scratch_io`; auxiliary
-tables use `scratch_io_failed`; sink-path I/O uses `report_sink_failed` with
-`reason: sink_io`.
+`TMPDIR`, `/tmp` or `/var/tmp`. File-backed command scratch uses
+`scratch_io_failed` (class `resource`), including default-directory query
+failures and all-memory refusals. Native runs create command scratch at begin,
+before strategy callbacks. Report scratch uses `report_sink_failed` with
+`reason: scratch_io`; auxiliary tables use `scratch_io_failed`; sink-path I/O
+uses `report_sink_failed` with `reason: sink_io`.
 
 The English templates describe the texts a code is raised with; they are not
 a grammar. A `{name}` marks a part that varies and need not be an argument of
