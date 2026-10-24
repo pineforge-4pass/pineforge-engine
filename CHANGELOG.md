@@ -709,26 +709,35 @@ deployments using Docker `--tmpfs /tmp` or Kubernetes `emptyDir` with
   cache of closed rows in process memory in front of them. A Pine run
   allocates that cache at its first closed trade, whether or not the
   script reads trade history, because the Pine host reads each booked row.
-  The cache holds at most `TradeLedger::kDefaultCacheRows` = 65,536 rows
-  of `TradeLedger::kLedgerEntryBytes` = 312 bytes, 20,447,232 bytes, and is
+  Without a report sink the cache holds at most
+  `TradeLedger::kDefaultCacheRows` = 65,536 rows of
+  `TradeLedger::kLedgerEntryBytes` = 312 bytes, 20,447,232 bytes, and is
   allocated at the smaller of that budget and the next power of two at or
   above the number of closed rows (at least 64): 19,968 bytes up to 64
   closed trades, 10,223,616 bytes at 24,238, 20,447,232 bytes above
-  32,768. It stays until the next run begins or the engine is destroyed,
-  and each engine holds its own, so K engines alive together hold K times
-  that. A cached row serves `BacktestEngine::avg_trade_percent`,
-  `avg_winning_trade_percent`, `avg_losing_trade_percent`, the
-  `closed_trade_*` accessors and `get_trade` with no scratch read. Above
-  65,536 closed trades the cache is direct-mapped, so rows that share a slot
-  evict each other and a loop over the whole history reads them from
-  scratch files again on every pass: 2 x (N - 65,536) rows per pass for N
-  closed trades below 131,072, and every row from 131,072 closed trades on.
-  Rows whose four strings together exceed 128 bytes keep their numbers
-  cached but read their text from scratch files. A script that calls the
-  accessors each bar then pays one scratch read per such row per call.
-  The budget has no user control in this release: `TradeLedger::set_cache_rows`
-  is a C++ call that nothing in the engine, the C API or the environment
-  makes. When closed rows are streamed (a
+  32,768. With a report sink installed the budget is
+  `TradeLedger::kSinkCacheRows` = 128 rows, 39,936 bytes, a fixed bound
+  that does not depend on the number of closed trades (19,968 bytes up to
+  64 closed trades, 39,936 bytes above), so that the sink run's working
+  memory stays flat. The cache stays until the next run begins or the
+  engine is destroyed, and each engine holds its own, so K engines alive
+  together hold K times that. A cached row serves
+  `BacktestEngine::avg_trade_percent`, `avg_winning_trade_percent`,
+  `avg_losing_trade_percent`, the `closed_trade_*` accessors and
+  `get_trade` with no scratch read. Above the budget the cache is
+  direct-mapped, so rows that share a slot evict each other and a loop
+  over the whole history reads them from scratch files again on every
+  pass: 2 x (N - 65,536) rows per pass for N closed trades below 131,072,
+  and every row from 131,072 closed trades on; with a report sink,
+  2 x (N - 128) rows per pass below 256 closed trades, and every row from
+  256 on. Rows whose four strings together exceed 128 bytes keep their
+  numbers cached but read their text from scratch files. A script that
+  calls the accessors each bar then pays one scratch read per such row per
+  call. The budget has no user control in this release:
+  `NativeExecutionConsumer::begin_ready` sets it at every run begin, to 128
+  rows with a report sink and to 65,536 rows without, and nothing in the
+  C API or the environment changes either figure. When closed rows are
+  streamed (a
   report sink whose trade history is streamable), once per script bar
   `NativeExecutionConsumer::closed_rows_sealable` decodes again every row of
   the trailing block of closed rows that share the last exit time. Cohort
