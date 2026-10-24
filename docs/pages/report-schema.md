@@ -107,7 +107,7 @@ through an explicitly negotiated provider bridge.
 
 | Mode | Metrics and summary scalars | Resident sequences | External sequences |
 | --- | --- | --- | --- |
-| FULL (`0`) | Existing values/bits | Existing owning arrays | None through the explicit FULL envelope |
+| FULL (`0`) | Existing values/bits | Existing owning arrays unless a recording control omits that sequence | None through the explicit FULL envelope |
 | SUMMARY_ONLY (`1`) | Exact metrics require an eligible presentation/replay provider | No arrays in the returned report; execution retention uses the controls below | None |
 | STREAMED (`2`) | Same values/bits | None | Complete enabled sequences, in existing report order, through a bounded sink |
 
@@ -181,10 +181,16 @@ remain in the payload in all modes.
 
 Each `logical_count` counts final records from the authoritative pass once,
 regardless of capture. In SUMMARY_ONLY every sequence has `captured=0` and
-`external=0`. In FULL an enabled sequence has `captured=1, external=0`; in
-STREAMED it has `captured=1, external=1`. Disabled optional sources have
-count/flags zero. Thus omitted equity and a successfully captured empty curve
-are distinguishable. `complete=1` additionally requires successful execution
+`external=0`. In FULL an enabled, retained sequence has
+`captured=1, external=0`, even when empty. A sequence omitted by
+`set_equity_report_mode(ReportMode::SUMMARY_ONLY)` or
+`set_optional_report_mode(report_sequence::ReportMode::SummaryOnly)` instead
+has `captured=0, external=0` in FULL, with its logical count unchanged.
+STREAMED keeps `captured=1, external=1` for enabled sequences even when their
+resident history is omitted, because the sink still emits their records.
+Disabled optional sources have count/flags zero. Thus omitted equity and a
+successfully captured empty curve are distinguishable. `complete=1`
+additionally requires successful execution
 and report validation, matched replay witnesses where needed, and a complete
 STREAMED sink receipt. Lengths and counts never prove completion.
 
@@ -489,8 +495,10 @@ Populated only when:
 1. The source script contains `// @pf-trace name=expr` pragmas, **and**
 2. #strategy_set_trace_enabled was called with `1` before the run.
 
-In the explicit envelope, FULL returns the resident records, SUMMARY_ONLY
-omits them, and STREAMED publishes them externally. The trace/name logical
+In the explicit envelope, FULL returns the resident records unless the
+optional-sequence control omits them with `captured=0, external=0` and unchanged
+logical counts. SUMMARY_ONLY omits them, and STREAMED publishes them externally
+with `captured=1, external=1`. The trace/name logical
 counts and capture flags remain explicit in metadata.
 
 | Field | Meaning |
