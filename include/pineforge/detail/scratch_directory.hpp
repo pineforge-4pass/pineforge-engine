@@ -3,6 +3,7 @@
 #include <cerrno>
 #include <cstdint>
 #include <cstdlib>
+#include <fcntl.h>
 #include <string>
 #include <system_error>
 #include <sys/stat.h>
@@ -16,20 +17,48 @@
 
 namespace pineforge::detail {
 
-inline bool scratch_filesystem_is_memory(std::uint64_t type) noexcept {
+inline const char* scratch_memory_filesystem_name(std::uint64_t type) noexcept {
     // Normalize f_type on platforms where the filesystem word is signed.
     const auto magic = static_cast<std::uint32_t>(type);
-    return magic == UINT32_C(0x01021994) || magic == UINT32_C(0x858458f6);
+    if (magic == UINT32_C(0x01021994)) return "tmpfs";
+    if (magic == UINT32_C(0x858458f6)) return "ramfs";
+    return nullptr;
 }
 
-// Preserve the operation prefix while naming the selected directory and any
-// rejected default candidate. Shared by both file-create implementations.
+inline bool scratch_filesystem_is_memory(std::uint64_t type) noexcept {
+    return scratch_memory_filesystem_name(type) != nullptr;
+}
+
+// Keep the historical operation alone unless a selection note needs the
+// selected directory too. Shared by both file-create implementations.
 inline std::string scratch_create_message(const char* operation,
                                           const std::string& directory,
                                           const std::string& selection_note) {
-    std::string message = std::string(operation) + "; directory '" + directory + "'";
-    if (!selection_note.empty()) message += "; " + selection_note;
-    return message;
+    if (selection_note.empty()) return operation;
+    return std::string(operation) + "; directory '" + directory + "'; " + selection_note;
+}
+
+// Translate only create selection/refusal notes, never an inner operation or
+// its system_error suffix. The outer typed error supplies its own suffix.
+inline std::string scratch_failure_detail(const char* what, int errno_value) {
+    std::string message(what);
+    const auto suffix = ": " + std::error_code(errno_value, std::generic_category()).message();
+    if (message.size() >= suffix.size()
+        && message.compare(message.size() - suffix.size(), suffix.size(), suffix) == 0)
+        message.resize(message.size() - suffix.size());
+    constexpr char create_prefix[] = "scratch create; ";
+    constexpr char refusal_prefix[] = "scratch requires disk backing; ";
+    if (message.compare(0, sizeof(create_prefix) - 1, create_prefix) == 0)
+        return message.substr(sizeof(create_prefix) - 1);
+    // The refusal itself is part of the note; retain its established wording.
+    if (message.compare(0, sizeof(refusal_prefix) - 1, refusal_prefix) == 0)
+        return message;
+    return {};
+}
+
+inline std::string scratch_with_detail(const char* prefix, const char* what, int errno_value) {
+    const auto detail = scratch_failure_detail(what, errno_value);
+    return detail.empty() ? std::string(prefix) : std::string(prefix) + "; " + detail;
 }
 
 // Return an errno, not a boolean: a failed query is not proof of disk backing.
@@ -43,7 +72,14 @@ inline int scratch_directory_filesystem_type(const char* path, std::uint64_t& ty
     do { status = ::stat(path, &directory); } while (status != 0 && errno == EINTR);
     if (status != 0) return errno;
     if (!S_ISDIR(directory.st_mode)) return ENOTDIR;
+#if defined(AT_EACCESS)
+    // Match the effective credentials used by mkstemp.
+    do { status = ::faccessat(AT_FDCWD, path, X_OK, AT_EACCESS); }
+    while (status != 0 && errno == EINTR);
+#else
+    // Without AT_EACCESS, retain the available real-id search-permission check.
     do { status = ::access(path, X_OK); } while (status != 0 && errno == EINTR);
+#endif
     if (status != 0) return errno;
     struct statfs filesystem{};
     do { status = ::statfs(path, &filesystem); } while (status != 0 && errno == EINTR);
@@ -95,8 +131,7 @@ inline std::string resolve_scratch_directory(const std::string& configured,
             refusal += ')';
         } else {
             error = ENODEV;
-            refusal += static_cast<std::uint32_t>(type) == UINT32_C(0x01021994)
-                ? "tmpfs" : "ramfs";
+            refusal += scratch_memory_filesystem_name(type);
             refusal += " requires disk backing, not tmpfs or ramfs";
         }
         return true;

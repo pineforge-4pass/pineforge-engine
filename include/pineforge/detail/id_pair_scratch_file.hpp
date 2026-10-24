@@ -115,7 +115,7 @@ private:
     static auto auxiliary(const char* operation, Operation transfer) -> decltype(transfer()) {
         try { return transfer(); }
         catch (const AuxiliaryScratchIoError& error) {
-            throw IdPairStoreError(error.code().value(), (std::string(operation) + "; " + error.what()).c_str());
+            throw IdPairStoreError(error.code().value(), scratch_with_detail(operation, error.what(), error.code().value()).c_str());
         }
         // Arena backing/capacity failures retain their report-scratch type
         // and payload. Only auxiliary I/O becomes the historical ID error.
