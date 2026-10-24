@@ -17,6 +17,7 @@
 #include <filesystem>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace {
 using namespace pineforge;
@@ -516,16 +517,27 @@ bool legacy_summary_run(Report& report, const ReportC& oracle) {
     return checks.finish(report.value, oracle);
 }
 
+// Every sink directory is a mkdtemp directory under TMPDIR (else /tmp), outside the
+// source checkout. A fully green run removes exactly the directories it created;
+// a failed run keeps them as evidence.
+std::vector<std::string>& created_sink_directories() {
+    static std::vector<std::string> directories;
+    return directories;
+}
+
 std::string sink_directory() {
-    const std::filesystem::path source(__FILE__);
-    require(source.is_absolute() && source.parent_path().filename() == "tests",
-            "test requires the CMake source path to locate worktree scratch");
-    const auto scratch = source.parent_path().parent_path() / "scratch-s4e";
-    std::filesystem::create_directories(scratch);
-    std::string directory = (scratch / "x1-observer-XXXXXX").string();
+    const auto* configured = std::getenv("TMPDIR");
+    const std::filesystem::path parent = configured && *configured ? configured : "/tmp";
+    std::string directory = (parent / "pineforge-x1-observer-XXXXXX").string();
     require(::mkdtemp(directory.data()) != nullptr, "cannot create X1 scratch directory");
-    // Preserve the sink evidence; never use the system temp directory or delete it.
+    created_sink_directories().push_back(directory);
     return directory;
+}
+
+void remove_created_sink_directories() {
+    for (const auto& directory : created_sink_directories())
+        std::filesystem::remove_all(directory);
+    created_sink_directories().clear();
 }
 
 bool sink_control(const char* row, ReportMode mode, const ReportC& oracle) {
@@ -909,5 +921,6 @@ int main() {
     })) return 1;
 
     std::printf("test_report_mode_v1_summary_with_observer: %d failed rows\n", suite.failures);
+    if (suite.failures == 0) remove_created_sink_directories();
     return suite.failures == 0 ? 0 : 1;
 }
