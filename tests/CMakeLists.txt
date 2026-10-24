@@ -7597,10 +7597,14 @@ endif()
 # --- CR-150 core-cr150-cr289 end ---
 
 # --- CR-150 core-cr150-cr224 begin ---
-# CR-281 ports CR-224 to Linux's sealed-memfd jailed arena. A dedicated ALL
-# module is mandatory even when ci_verify disables corpus strategy targets.
-# Missing generated.cpp is a configure/build failure, never a skipped test.
-if(PINEFORGE_BUILD_SOURCE_LAYER AND CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
+# CR-281 ports CR-224 to Linux's sealed-memfd jailed arena. The module's only
+# source is a file of the corpus submodule, so the module and its row exist
+# exactly where that file does: the lab profiles check the submodule out
+# (ci_verify ensure_corpus_submodule) although they turn corpus strategy
+# targets OFF, so the option cannot be the guard; the pull-request build has no
+# submodule and configures without it. The same guard is in
+# cr150.d/core-cr150-cr224.cmake.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND EXISTS "${PROJECT_SOURCE_DIR}/corpus/validation/bracket-same-id-exit-replace-01/generated.cpp" AND CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
     add_library(cr224_nofile_strategy MODULE ../corpus/validation/bracket-same-id-exit-replace-01/generated.cpp)
     target_link_libraries(cr224_nofile_strategy PRIVATE pineforge)
     target_link_options(cr224_nofile_strategy PRIVATE "-Wl,--whole-archive" "$<TARGET_FILE:pineforge>" "-Wl,--no-whole-archive")

@@ -92,6 +92,7 @@ which needs SQLite3, libcurl ≥ 7.86 and OpenSSL. On Debian/Ubuntu also
 install `tzdata-legacy` (`sudo apt-get install -y tzdata-legacy`): noble split
 the backward zone links out of `tzdata`, and `test_native_calendar` resolves
 `US/Eastern`, `Japan` and `GB`.
+Linux hosts running `test_run_json_jailed_nofile_e2e` require `strace` with permission to trace child processes (ptrace).
 
 > **The stale-test-binary trap.** `cmake --build build --target pineforge`
 > rebuilds only the static library. Test executables are separate targets that

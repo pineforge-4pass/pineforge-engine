@@ -43,7 +43,11 @@ WINDOW_BYTES = 32 * CHUNK_BYTES  # ScratchArena::kDefaultWindowBytes.
 CONSTRAINTS_OK = "CR281 constraints: RLIMIT_FSIZE=0/0 SIGXFSZ=SIG_IGN write=EFBIG pwrite=EFBIG"
 ARENA_OK = f"CR281 arena: fd=5 bytes={ARENA_BYTES} seals=GROW|SHRINK|SEAL pwrite=EFBIG"
 NO_ARENA_OK = "CR281 arena: fd=5 absent"
-TRACE_CALL = re.compile(r"^(openat|open|creat|memfd_create)\(")
+TRACE_FILTER = "trace=%file,memfd_create"
+TRACE_NAMES = (
+    r"openat2|openat|open|creat|memfd_create|mknodat|mknod|"
+    r"linkat|link|symlinkat|symlink|renameat2|renameat|rename|mkdirat|mkdir")
+TRACE_CALL = re.compile(r"^(" + TRACE_NAMES + r")\(")
 TRACE_PREFIX = re.compile(r"^(?:(?:\[pid\s+(\d+)\]|(\d+))\s+)?(.*)$")
 
 
@@ -233,7 +237,7 @@ def _run_child(tmp_path, name, library, tape, *, profile, restricted, arena=Fals
             cwd.chmod(0o555)
             temporary.chmod(0o555)
             # Root can create in 0555 directories. The zero file-size limit,
-            # canary, directory census and optional strace still apply.
+            # canary, directory census and mandatory strace still apply.
             canary = directory / "preopened-write-canary"
             canary_fd = _keep_above_arena_slot(os.open(
                 canary, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600))
@@ -249,7 +253,7 @@ def _run_child(tmp_path, name, library, tape, *, profile, restricted, arena=Fals
             # Trace the entire child, including imports and the fd-5 remap.
             # stderr is a PIPE: a strace -o file could not grow at FSIZE=0.
             command = [tracer, "-f", "-qq", "-s", "65535", "-e",
-                       "trace=openat,open,creat,memfd_create", "--", *command]
+                       TRACE_FILTER, "--", *command]
         result = subprocess.run(
             command, cwd=cwd,
             env=_child_environment(cwd, temporary, profile=profile, arena=arena),
@@ -286,10 +290,20 @@ def _run_child(tmp_path, name, library, tape, *, profile, restricted, arena=Fals
 
 def _tracer():
     tracer = shutil.which("strace")
-    if tracer is None:
-        print("CR281 strace: absent from PATH; syscall census unavailable; "
-              "native execution, arena admission, EFBIG and directory checks remain mandatory",
-              flush=True)
+    assert tracer is not None, (
+        "CR281 requires strace in PATH: the syscall census must detect even "
+        "created-but-unwritten or immediately unlinked scratch files")
+    try:
+        probe = subprocess.run(
+            [tracer, "-f", "-qq", "-s", "65535", "-e", TRACE_FILTER, "--",
+             sys.executable, "-B", "-c", "pass"],
+            capture_output=True, text=True, check=False)
+    except OSError as error:
+        raise AssertionError("CR281 requires working strace to trace a child") from error
+    assert probe.returncode == 0, (
+        "CR281 requires working strace with child ptrace permitted:\n" + probe.stderr)
+    assert any(result >= 0 for _, result in _trace_calls(probe.stderr)), (
+        "CR281 strace did not trace a successful file syscall in a trivial child")
     return tracer
 
 
@@ -300,7 +314,7 @@ def _trace_calls(stderr):
         prefix = TRACE_PREFIX.fullmatch(line)
         assert prefix is not None, line
         pid, body = prefix.group(1) or prefix.group(2) or "main", prefix.group(3)
-        resumed = re.match(r"^<\.\.\. (openat|open|creat|memfd_create) resumed>(.*)$", body)
+        resumed = re.match(r"^<\.\.\. (" + TRACE_NAMES + r") resumed>(.*)$", body)
         if resumed:
             assert pid in pending, f"unmatched resumed syscall: {line}"
             beginning = pending.pop(pid)
@@ -317,24 +331,28 @@ def _trace_calls(stderr):
         assert returned is not None, f"unparsed syscall result: {line}"
         calls.append((body, int(returned.group(1))))
     assert not pending, f"incomplete syscall census: {pending}"
-    assert calls, "strace was present but returned no open/creat/memfd census"
+    assert calls, "strace was present but returned no file-creation/writable-open census"
     return calls
 
 
 def _assert_no_scratch_opens(stderr, library, tape):
     calls = _trace_calls(stderr)
     successful = [call for call, descriptor in calls if descriptor >= 0]
+    opened = [call for call in successful
+              if call.startswith(("open(", "openat(", "openat2("))]
     for required_input in (library, tape):
         quoted_path = json.dumps(str(required_input), ensure_ascii=False)
-        assert any(quoted_path in call for call in successful), (
+        assert any(quoted_path in call for call in opened), (
             f"strace did not observe the real input being opened: {required_input}")
     forbidden = [call for call in successful
-                 if call.startswith(("creat(", "memfd_create("))
+                 if call.startswith(("creat(", "memfd_create(", "mknod(", "mknodat(",
+                                     "link(", "linkat(", "symlink(", "symlinkat(",
+                                     "rename(", "renameat(", "renameat2(", "mkdir(", "mkdirat("))
                  or re.search(r"\bO_(?:CREAT|TMPFILE|WRONLY|RDWR)\b",
                               re.sub(r'"(?:\\.|[^"\\])*"', '""', call))]
     # No successful creation or writable open ANYWHERE, including transient/
-    # unlinked files, O_TMPFILE and child-created memfds. Read-only imports,
-    # the real module and the real feed remain legitimate inputs.
+    # unlinked files, O_TMPFILE, child-created memfds and paths made by
+    # mknod/link/rename/mkdir. Read-only imports, the module and feed are inputs.
     assert not forbidden, "jailed child created/opened scratch files:\n" + "\n".join(forbidden)
     print(f"CR281 strace: {len(calls)} syscalls; real module/feed opened; "
           "creations=0 writable-opens=0", flush=True)
@@ -396,6 +414,66 @@ def _inputs(tmp_path):
         inputs.chmod(0o755)
 
 
+def test_a_requires_syscall_census():
+    _tracer()  # Fails on absent strace, ptrace denial or an empty census.
+
+
+def test_census_flags_synthetic_file_calls():
+    import pytest
+
+    library, tape = Path("/inputs/probe.so"), Path("/inputs/chart.csv")
+    inputs = (
+        f'openat(AT_FDCWD, "{library}", O_RDONLY|O_CLOEXEC) = 3\n'
+        f'openat(AT_FDCWD, "{tape}", O_RDONLY|O_CLOEXEC) = 4\n')
+    forbidden = (
+        'openat(AT_FDCWD, "/tmp/unwritten", O_RDONLY|O_CREAT, 0600) = 5',
+        'openat(AT_FDCWD, "/tmp", O_RDWR|O_TMPFILE, 0600) = 5',
+        'memfd_create("scratch", MFD_CLOEXEC) = 5',
+        'openat(AT_FDCWD, "/tmp/existing-unwritten", O_WRONLY) = 5',
+        'mknodat(AT_FDCWD, "/tmp/x", S_IFREG|0600, 0) = 0',
+        'openat2(AT_FDCWD, "/tmp/x", {flags=O_WRONLY|O_CREAT, mode=0600, resolve=0}, 24) = 3',
+        'mknod("/tmp/x", S_IFREG|0600, 0) = 0',
+        'link("/inputs/old", "/tmp/x") = 0',
+        'linkat(AT_FDCWD, "/inputs/old", AT_FDCWD, "/tmp/x", 0) = 0',
+        'rename("/inputs/old", "/tmp/x") = 0',
+        'renameat(AT_FDCWD, "/inputs/old", AT_FDCWD, "/tmp/x") = 0',
+        'renameat2(AT_FDCWD, "/inputs/old", AT_FDCWD, "/tmp/x", RENAME_NOREPLACE) = 0',
+        'symlink("/inputs/old", "/tmp/x") = 0',
+        'symlinkat("/inputs/old", AT_FDCWD, "/tmp/x") = 0',
+        'mkdir("/tmp/x", 0700) = 0',
+        'mkdirat(AT_FDCWD, "/tmp/x", 0700) = 0',
+    )
+    for call in forbidden:
+        with pytest.raises(AssertionError, match=re.escape(call)):
+            _assert_no_scratch_opens(inputs + call, library, tape)
+    # Neither a failed creation nor the read-only module/tape opens is scratch.
+    _assert_no_scratch_opens(
+        inputs + 'openat(AT_FDCWD, "/tmp/denied", O_WRONLY|O_CREAT, 0600) = -1 EACCES (Permission denied)',
+        library, tape)
+
+
+def test_census_flags_unlinked_scratch(tmp_path):
+    import pytest
+
+    tracer = _tracer()
+    with _inputs(tmp_path) as (library, tape):
+        reference, census = _run_child(tmp_path, "census-reference", library, tape,
+                                      profile="unjailed", restricted=False, tracer=tracer)
+        document = _report(reference)
+        assert document["diagnostics"]["scratch_arena_bytes"] == 0
+        assert census == {"cwd": [], "TMPDIR": []}, census
+        scratch_calls = [call for call, result in _trace_calls(reference.stderr)
+                         if result >= 0 and call.startswith(("open(", "openat(", "openat2("))
+                         and re.search(r'"[^"]*/pineforge-scratch-[^/"]*"', call)
+                         and re.search(r"\bO_CREAT\b", call)]
+        assert scratch_calls, "unrestricted reference lacks a successful O_CREAT pineforge-scratch-* open"
+        # Pass the complete real trace, never a fabricated creation witness.
+        with pytest.raises(AssertionError, match=re.escape(scratch_calls[0])):
+            _assert_no_scratch_opens(reference.stderr, library, tape)
+        print("CR281 census control: detected successful, unlinked scratch:\n"
+              + "\n".join(scratch_calls), flush=True)
+
+
 def test_a_real_jailed_sink_off_with_admitted_arena_creates_no_scratch_file(tmp_path):
     tracer = _tracer()
     with _inputs(tmp_path) as (library, tape):
@@ -410,8 +488,7 @@ def test_a_real_jailed_sink_off_with_admitted_arena_creates_no_scratch_file(tmp_
                                     profile="jailed", restricted=True, arena=True,
                                     tracer=tracer)
         assert census == {"cwd": [], "TMPDIR": []}, census
-        if tracer:
-            _assert_no_scratch_opens(jailed.stderr, library, tape)
+        _assert_no_scratch_opens(jailed.stderr, library, tape)
         document = _report(jailed)
         diagnostics = document["diagnostics"]
         # An environment variable or exit 0 alone is not arena admission.
@@ -426,9 +503,16 @@ def test_a_real_jailed_sink_off_with_admitted_arena_creates_no_scratch_file(tmp_
                 # every field comes from the live unjailed reference run.
                 assert json.dumps(got[field], allow_nan=False) == json.dumps(
                     want[field], allow_nan=False), (index, field, got[field], want[field])
+        excluded = {"elapsed_seconds", "diagnostics"}
+        actual_report = {key: value for key, value in document.items() if key not in excluded}
+        expected_report = {key: value for key, value in reference_report.items() if key not in excluded}
+        assert json.dumps(actual_report, sort_keys=True, allow_nan=False) == json.dumps(
+            expected_report, sort_keys=True, allow_nan=False), (
+                "jailed/reference reports differ beyond elapsed_seconds and diagnostics")
         print(f"CR281 CHECK (a) PASS: arena_bytes={ARENA_BYTES} "
               f"high_water={diagnostics['scratch_arena_high_water_bytes']}; "
-              f"trades identical field by field ({len(actual)}); cwd=empty TMPDIR=empty",
+              f"trades identical field by field ({len(actual)}); full report identical "
+              "except elapsed_seconds/diagnostics; cwd=empty TMPDIR=empty",
               flush=True)
 
 
@@ -439,8 +523,7 @@ def test_b_real_jailed_without_arena_refuses_before_execution(tmp_path):
                                      profile="jailed", restricted=True, tracer=tracer)
         failure = _failure(refused, "report_sink_failed", {"reason": "arena_backing"})
         assert census == {"cwd": [], "TMPDIR": []}, census
-        if tracer:
-            _assert_no_scratch_opens(refused.stderr, library, tape)
+        _assert_no_scratch_opens(refused.stderr, library, tape)
         print(f"CR281 CHECK (b) PASS: fd 5 absent; exit=1 code={failure['code']} "
               f"args={failure['args']} reason={failure['reason']}; no report body/trades",
               flush=True)
@@ -458,12 +541,11 @@ def test_c_real_unjailed_disk_scratch_negative_control_fails_under_same_limits(t
         # Reject unrelated failures, including a Python spool error or SIGXFSZ.
         failure = _failure(control, "scratch_io_failed", {})
         assert census == {"cwd": [], "TMPDIR": []}, census
-        if tracer:
-            scratch_calls = [call for call, _ in _trace_calls(control.stderr)
-                             if re.search(r'"[^"]*/pineforge-[^/"]*"', call)]
-            assert scratch_calls, "the native scratch failure lacks a traced scratch open"
-            print("CR281 negative-control scratch syscalls:\n" + "\n".join(scratch_calls),
-                  flush=True)
+        scratch_calls = [call for call, _ in _trace_calls(control.stderr)
+                         if re.search(r'"[^"]*/pineforge-[^/"]*"', call)]
+        assert scratch_calls, "the native scratch failure lacks a traced scratch open"
+        print("CR281 negative-control scratch syscalls:\n" + "\n".join(scratch_calls),
+              flush=True)
         print(f"CR281 CHECK (c) PASS: exit=1 native {failure['code']} "
               f"args={failure['args']}; no report body/trades", flush=True)
 
