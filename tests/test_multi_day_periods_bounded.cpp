@@ -55,6 +55,10 @@
 
 #include "../src/source/multi_day_periods.hpp"
 
+// Reuse the byte/peak probe of test_magnifier_path_source_l16.cpp.
+#define PINEFORGE_TEST_ALLOCATION_BYTES
+#include "global_allocation_replacement.hpp"
+
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
@@ -729,6 +733,331 @@ void test_f16_f17_monotone_control() {
     run_date_order_case(date_order_fixture("f16-f17-UTC-monotone-control", false, false), false);
 }
 
+// ─── F16/F17 repair: late/repeated decreases and a bounded unordered walk ────
+
+// Mirrors the production rescan window; re-read against the production value
+// when integrating. Keep this local so the red rows compile before the fix.
+constexpr int kWindowDays = 366;
+
+Scenario extended_date_order_fixture(const char* name, std::int64_t from, std::int64_t to,
+                                     const std::vector<std::int64_t>& fall_backs) {
+    Scenario sc;
+    sc.name = name;
+    sc.tz = "America/New_York";
+    sc.session = "1930-1945";
+    sc.input_tf = "1";
+    // Weekday session opens leave the Saturday gap pair outside the previous
+    // resolved cycle. A preceding Saturday session-open bar would hide it
+    // behind the intraday shortcut. These are intraday, not own-open D bars.
+    for (std::int64_t d = from; d < to; ++d) {
+        if (weekday_of(d) >= 1 && weekday_of(d) <= 5)
+            sc.chart.push_back(bar_at(at_local(sc.tz, d, 19, 30), 0));
+    }
+    for (const std::int64_t d : fall_backs) {
+        sc.chart.push_back(bar_at(d * kDay - kMinute, 0));
+        sc.chart.push_back(bar_at(d * kDay, 0));
+    }
+    std::sort(sc.chart.begin(), sc.chart.end(), [](const Bar& a, const Bar& b) {
+        return a.timestamp < b.timestamp;
+    });
+    for (std::size_t i = 0; i < sc.chart.size(); ++i)
+        sc.chart[i] = bar_at(sc.chart[i].timestamp, i);
+    return sc;
+}
+
+Scenario date_order_control(const Scenario& unordered) {
+    Scenario sc = unordered;
+    sc.name += "-UTC-control";
+    sc.tz = "UTC";
+    sc.session = "24x7";
+    return sc;
+}
+
+bool check_date_order_references(const Scenario& sc) {
+    bool valid = true;
+    for (const bool exchange : {false, true}) {
+        const auto stamps = reference_of(sc, 2, exchange);
+        CHECK_CTX(!stamps.empty(), sc.name + (exchange ? " exchange" : " weekday")
+                  + " old reference must be non-empty FIRST");
+        valid = valid && !stamps.empty();
+    }
+    return valid;
+}
+
+// Reachability only, not an alternative stamp oracle: replay the reference's
+// intraday shortcut and pin every decreasing resolution to the hand-derived
+// pair. In particular, a long prefix must not skip either witness bar.
+std::size_t check_date_order_walk(const Scenario& sc,
+                                 const std::vector<std::int64_t>& fall_backs) {
+    const auto calendar = native_calendar::parse_session(sc.session, sc.tz);
+    CHECK_CTX(calendar.has_value(), sc.name + " supported calendar");
+    if (!calendar) return 0;
+    std::optional<native_calendar::NativeSessionDay> cycle;
+    std::optional<std::int64_t> previous;
+    std::int64_t previous_ms = 0;
+    std::int64_t previous_covered = 0;
+    std::size_t decreases = 0;
+    std::size_t distinct_after = 0;
+    for (std::size_t i = 0; i < sc.chart.size(); ++i) {
+        const std::int64_t ms = sc.chart[i].timestamp;
+        if (i > 0) CHECK_CTX(sc.chart[i - 1].timestamp < ms, sc.name + " strict UTC order");
+        if (cycle && cycle->holds(ms)) continue;
+        const std::int64_t covered = session_covered_instant_ms(ms, sc.tz, sc.session);
+        cycle = native_calendar::session_day_at(*calendar, covered);
+        CHECK_CTX(cycle.has_value(), sc.name + " covered instant resolves");
+        if (!cycle) continue;
+        if (previous && cycle->ordinal < *previous) {
+            CHECK_CTX(decreases < fall_backs.size(), sc.name + " no extra decrease");
+            if (decreases < fall_backs.size()) {
+                const std::int64_t d = fall_backs[decreases];
+                CHECK_CTX(previous_ms == d * kDay - kMinute && ms == d * kDay,
+                          sc.name + " both consecutive gap stamps were resolved");
+                CHECK_CTX(*previous == d && cycle->ordinal == d - 1,
+                          sc.name + " covered trading dates decrease by one");
+                CHECK_CTX(previous_covered == (d + 1) * kDay + 30 * kMinute,
+                          sc.name + " first covers fall-back date 19:30 EST");
+                CHECK_CTX(covered == (d - 1) * kDay + 23 * kHour + 30 * kMinute,
+                          sc.name + " second covers previous date 19:30 EDT");
+            }
+            ++decreases;
+        }
+        if (!fall_backs.empty() && ms > fall_backs.back() * kDay
+            && cycle->ordinal > fall_backs.back()
+            && (!previous || cycle->ordinal != *previous)) {
+            ++distinct_after;
+        }
+        previous = cycle->ordinal;
+        previous_ms = ms;
+        previous_covered = covered;
+    }
+    CHECK_CTX(decreases == fall_backs.size(), sc.name + " exact number of resolved decreases");
+    return distinct_after;
+}
+
+void compare_extended_date_order(const Scenario& sc) {
+    constexpr int days = 2;
+    for (const bool exchange : {false, true}) {
+        const std::string ctx = sc.name + (exchange ? " exchange" : " weekday");
+        const auto stamps = reference_of(sc, days, exchange);
+        CHECK_CTX(!stamps.empty(), ctx + " old reference must be non-empty FIRST");
+        if (stamps.empty()) continue;
+        const Partition partition = make_partition(sc, days, exchange);
+        CHECK_CTX(partition != nullptr, ctx + " unordered feed must plan a partition");
+        if (partition) {
+            CHECK_CTX(partition->last_stamp() == stamps.back(), ctx + " final reference stamp");
+            // Every reference stamp, including all periods before and after
+            // each decrease, must actually be emitted by the source.
+            for (std::size_t i = 0; i < stamps.size(); ++i) {
+                std::int64_t actual = 0;
+                bool last = false;
+                CHECK_CTX(partition->stamp_at(stamps[i], actual, last), ctx + " stamp exists");
+                CHECK_CTX(actual == stamps[i], ctx + " exact reference stamp " + std::to_string(i));
+                CHECK_CTX(last == (i + 1 == stamps.size()), ctx + " final-stamp flag");
+            }
+        }
+        const TimeframeAggregator ref = stored_partition(sc, days, stamps);
+        const TimeframeAggregator made = generated_partition(sc, days, partition);
+        CHECK_CTX(made.has_native_periods(), ctx + " host-style source install");
+        const std::int64_t bound = session_period_close_ms(
+            stamps.back(), sc.tz, sc.session, CalendarPeriod::DAY);
+        auto points = probe_points(sc, stamps, bound);
+        // Unlike the general battery's intraday sampling, visit EVERY bar.
+        for (const Bar& bar : sc.chart) {
+            points.push_back(bar.timestamp - 1);
+            points.push_back(bar.timestamp);
+            points.push_back(bar.timestamp + 1);
+        }
+        std::sort(points.begin(), points.end());
+        points.erase(std::unique(points.begin(), points.end()), points.end());
+        compare_in_order(ref, made, points, ctx + " every bar/stamp ascending");
+        auto some = every_nth(points, 12);
+        std::reverse(some.begin(), some.end());
+        compare_in_order(ref, made, some, ctx + " descending");
+        std::uint64_t state = 0x2545F4914F6CDD1DULL;
+        for (std::size_t i = some.size(); i > 1; --i) {
+            state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+            std::swap(some[i - 1], some[(state >> 33) % i]);
+        }
+        compare_in_order(ref, made, some, ctx + " shuffled");
+        // Do not return on null: compare the host's nominal fallback too.
+        const auto most = compare_feed(sc, days, stamps, partition, ctx);
+        CHECK_CTX(most > 0, ctx + " source actually retained opens");
+        CHECK_CTX(most <= source::kMultiDayWindow, ctx + " bounded stamp window");
+    }
+}
+
+void run_extended_date_order(const Scenario& sc, const std::vector<std::int64_t>& fall_backs) {
+    NativeDayPartitionScope nominal(nullptr);
+    const Scenario control = date_order_control(sc);
+    if (!check_date_order_references(sc) || !check_date_order_references(control)) return;
+    check_date_order_walk(control, {});
+    compare_extended_date_order(control);  // Same timestamps, same N, ordered dates.
+    check_date_order_walk(sc, fall_backs);
+    compare_extended_date_order(sc);
+}
+
+void test_f16_f17_regression_far_from_start() {
+    std::printf("test_f16_f17_regression_far_from_start\n");
+    NativeDayPartitionScope nominal(nullptr);
+    const auto fall_back = civil(2025, 11, 2);
+    const Scenario sc = extended_date_order_fixture("f16-f17-late-regression",
+        civil(2025, 1, 1), civil(2026, 2, 1), {fall_back});
+    if (!check_date_order_references(sc)) return;
+    const auto pair = std::lower_bound(sc.chart.begin(), sc.chart.end(), fall_back * kDay - kMinute,
+        [](const Bar& bar, std::int64_t ms) { return bar.timestamp < ms; });
+    CHECK_CTX(pair - sc.chart.begin() > 200, sc.name + " months before the regression");
+    CHECK_CTX(sc.chart.end() - pair > 50, sc.name + " bars after the regression");
+    run_extended_date_order(sc, {fall_back});
+}
+
+void test_f16_f17_two_regressions() {
+    std::printf("test_f16_f17_two_regressions\n");
+    // March 2026's noon-sampled offset changes +5h -> +4h, moving the
+    // coverage clock forward. Use two fall-backs: November 2, 2025 and
+    // November 1, 2026 each change +4h -> +5h at UTC midnight. For the latter
+    // pair, covered opens are November 2 00:30Z then October 31 23:30Z:
+    // ordinals civil(2026,11,1) -> civil(2026,10,31), again a 25h reversal.
+    const auto first = civil(2025, 11, 2);
+    const auto second = civil(2026, 11, 1);
+    const Scenario sc = extended_date_order_fixture("f16-f17-two-fall-backs",
+        civil(2025, 1, 1), civil(2027, 2, 1), {first, second});
+    run_extended_date_order(sc, {first, second});
+}
+
+std::size_t unordered_peak_bytes = 0;
+void unordered_allocation_peak(std::size_t) {
+    unordered_peak_bytes = std::max(unordered_peak_bytes, global_allocation::live_bytes);
+}
+
+struct UnorderedHeap {
+    bool planned = false;
+    bool installed = false;
+    bool equal = true;
+    std::size_t peak = 0;
+    std::size_t retained = 0;
+    std::size_t after_release = 0;
+    std::size_t most_stamps = 0;
+};
+
+UnorderedHeap date_order_heap(const Scenario& sc, bool exchange,
+                              const std::vector<std::int64_t>& stamps) {
+    // Same recording idiom as test_magnifier_path_source_l16.cpp:path_heap:
+    // borrowed input and oracle/output allocations are outside the window.
+    struct Expected {
+        AggregatedBar fed;
+        Bar current;
+        Bar completed;
+        std::int64_t open;
+        std::int64_t label;
+    };
+    std::vector<Expected> expected;
+    TimeframeAggregator ref = stored_partition(sc, 2, stamps);
+    for (std::size_t i = 0; i < sc.chart.size(); ++i) {
+        const auto ms = sc.chart[i].timestamp;
+        const auto next = i + 1 < sc.chart.size() ? sc.chart[i + 1].timestamp : 0;
+        const auto fed = ref.feed(sc.chart[i], next, 0);
+        expected.push_back({fed, ref.current(), ref.last_completed(),
+                            ref.bucket_open_ms(ms), ref.bar_label_ms(ms)});
+    }
+    const auto feeds = feeds_of(sc, 2, exchange);
+    CHECK(!global_allocation::recording);
+    CHECK(global_allocation::live_bytes == 0);
+    unordered_peak_bytes = 0;
+    global_allocation::on_recorded = unordered_allocation_peak;
+    global_allocation::recording = true;
+    UnorderedHeap out;
+    {
+        const Partition partition = source::make_multi_day_period_source(feeds);
+        out.planned = partition != nullptr;
+        TimeframeAggregator made = make_aggregator(sc, 2);
+        out.installed = made.set_native_period_source(partition);
+        for (std::size_t i = 0; i < sc.chart.size(); ++i) {
+            const auto ms = sc.chart[i].timestamp;
+            const auto next = i + 1 < sc.chart.size() ? sc.chart[i + 1].timestamp : 0;
+            const auto fed = made.feed(sc.chart[i], next, 0);
+            const Expected& a = expected[i];
+            const bool equal = same_bar(fed.bar, a.fed.bar)
+                && fed.is_complete == a.fed.is_complete && fed.sub_bar_count == a.fed.sub_bar_count
+                && same_bar(made.current(), a.current) && same_bar(made.last_completed(), a.completed)
+                && made.bucket_open_ms(ms) == a.open && made.bar_label_ms(ms) == a.label;
+            out.equal = equal && out.equal;
+            out.most_stamps = std::max(out.most_stamps, made.native_period_stamps_held());
+        }
+        out.retained = global_allocation::live_bytes;
+    }  // Destroy measured owners while recording still accounts for frees.
+    out.after_release = global_allocation::live_bytes;
+    global_allocation::recording = false;
+    global_allocation::on_recorded = nullptr;
+    out.peak = unordered_peak_bytes;
+    return out;
+}
+
+void test_f16_f17_long_unordered_feed_memory() {
+    std::printf("test_f16_f17_long_unordered_feed_memory\n");
+    NativeDayPartitionScope nominal(nullptr);
+    const auto fall_back = civil(2025, 11, 2);
+    const Scenario shorter = extended_date_order_fixture("f16-f17-unordered-short",
+        fall_back - 1, fall_back + 2 * kWindowDays, {fall_back});
+    const Scenario longer = extended_date_order_fixture("f16-f17-unordered-long",
+        fall_back - 1, fall_back + 10 * kWindowDays, {fall_back});
+    // Count actual held weekday dates after the pair, independently of a
+    // source's reported size. Both tapes exceed the entire 366-day window.
+    const auto held_after = [&](const Scenario& sc) {
+        std::size_t count = 0;
+        for (const Bar& bar : sc.chart)
+            if (bar.timestamp > fall_back * kDay) ++count;
+        return count;  // One session-open bar per distinct weekday date.
+    };
+    for (const bool ordered : {true, false}) {
+        const Scenario small = ordered ? date_order_control(shorter) : shorter;
+        const Scenario large = ordered ? date_order_control(longer) : longer;
+        if (!check_date_order_references(small) || !check_date_order_references(large)) continue;
+        const auto small_dates = check_date_order_walk(small, ordered ? std::vector<std::int64_t>{}
+            : std::vector<std::int64_t>{fall_back});
+        const auto large_dates = check_date_order_walk(large, ordered ? std::vector<std::int64_t>{}
+            : std::vector<std::int64_t>{fall_back});
+        CHECK(held_after(small) > static_cast<std::size_t>(kWindowDays));
+        CHECK(held_after(large) > 4 * held_after(small));
+        if (!ordered) {
+            CHECK(small_dates == held_after(small));
+            CHECK(large_dates == held_after(large));
+            CHECK(small_dates > static_cast<std::size_t>(kWindowDays));
+            CHECK(large_dates > 4 * small_dates);
+        }
+        for (const bool exchange : {false, true}) {
+            const std::string ctx = std::string(ordered ? "ordered" : "unordered")
+                + (exchange ? " exchange" : " weekday");
+            const auto small_stamps = reference_of(small, 2, exchange);
+            const auto large_stamps = reference_of(large, 2, exchange);
+            CHECK_CTX(!small_stamps.empty() && !large_stamps.empty(), ctx + " non-empty references");
+            if (small_stamps.empty() || large_stamps.empty()) continue;
+            const auto a = date_order_heap(small, exchange, small_stamps);
+            const auto b = date_order_heap(large, exchange, large_stamps);
+            // A fixed allowance for owners/calendar scratch plus four
+            // windows of (ordinal, value, occupancy). Never a tape-size term.
+            constexpr std::size_t budget = 16 * 1024
+                + 4 * kWindowDays * (2 * sizeof(std::int64_t) + sizeof(bool));
+            std::printf("  %s: dates=%zu/%zu peak=%zu/%zu retained=%zu/%zu bound=%zu\n",
+                        ctx.c_str(), held_after(small), held_after(large), a.peak, b.peak,
+                        a.retained, b.retained, budget);
+            CHECK_CTX(a.planned && b.planned && a.installed && b.installed,
+                      ctx + " actually exercises installed sources");
+            CHECK_CTX(a.equal && b.equal, ctx + " every bar equals the old reference");
+            CHECK_CTX(a.peak > 0 && b.peak > 0, ctx + " allocation probe observed the source");
+            CHECK_CTX(a.peak <= budget && b.peak <= budget, ctx + " O(window) peak bytes");
+            CHECK_CTX(b.peak <= a.peak, ctx + " flat peak, no population allowance");
+            CHECK_CTX(b.retained <= a.retained, ctx + " flat retained bytes");
+            CHECK_CTX(a.after_release == 0 && b.after_release == 0, ctx + " owners released");
+            CHECK_CTX(a.most_stamps > 0 && b.most_stamps > 0, ctx + " stamps were generated");
+            CHECK_CTX(a.most_stamps <= source::kMultiDayWindow
+                      && b.most_stamps <= source::kMultiDayWindow, ctx + " bounded stamp window");
+            // Positive control: the old retained table really grows with
+            // these tapes; excluding it from the recording window matters.
+            CHECK_CTX(large_stamps.size() > 3 * small_stamps.size(), ctx + " stored table grows");
+        }
+    }
+}
+
 void test_equals_the_stored_table() {
     std::printf("test_equals_the_stored_table\n");
     std::vector<Scenario> scenarios;
@@ -1017,6 +1346,107 @@ void test_host_installs_the_generated_partition() {
     }
 }
 
+// A real host install, not a second direct factory call. Lookahead off keeps
+// each state's current_bar/sub-bar count equal to the aggregator's feed result
+// (no historical lookahead projection or boundary-peek count adjustment).
+class DateOrderHostProbe final : public source::PineStrategyHost {
+public:
+    struct Row {
+        std::int64_t time;
+        Bar fed;
+        int sub_bars;
+        std::int64_t feeds;
+        std::int64_t completions;
+        Bar current;
+        Bar completed;
+        std::int64_t open;
+        std::int64_t label;
+        bool installed;
+        std::size_t held;
+    };
+    std::vector<Row> rows;
+
+    DateOrderHostProbe() { attach_pine_execution_adapter(); }
+
+    void configure_security_evaluators() override {
+        security_eval_states_.clear();
+        register_security_eval(0, "2D", input_tf_, false, false);
+    }
+
+    void evaluate_security(int, const Bar&, bool) override {}
+
+    void on_source_bar(const Bar& bar) override {
+        CHECK(security_eval_states_.size() == 1);
+        if (security_eval_states_.size() != 1) return;
+        const auto& state = security_eval_states_.front();
+        const auto& agg = state.aggregator;
+        rows.push_back({bar.timestamp, state.current_bar, state.current_sub_bar_count,
+                        state.feed_count, state.eval_complete_count, agg.current(),
+                        agg.last_completed(), agg.bucket_open_ms(bar.timestamp),
+                        agg.bar_label_ms(bar.timestamp), agg.has_native_periods(),
+                        agg.native_period_stamps_held()});
+    }
+};
+
+void compare_date_order_host(const Scenario& sc) {
+    NativeDayPartitionScope nominal(nullptr);
+    for (const bool exchange : {false, true}) {
+        const std::string ctx = sc.name + (exchange ? " stock host" : " crypto host");
+        const auto stamps = reference_of(sc, 2, exchange);
+        CHECK_CTX(!stamps.empty(), ctx + " old reference must be non-empty FIRST");
+        if (stamps.empty()) continue;
+        TimeframeAggregator ref = stored_partition(sc, 2, stamps);
+        ref.set_early_close_completes(exchange);  // Same host symbol-class rule.
+        DateOrderHostProbe probe;
+        const auto handle = static_cast<pf_strategy_t>(&probe);
+        strategy_set_syminfo_timezone(handle, sc.tz.c_str());
+        strategy_set_syminfo_session(handle, sc.session.c_str());
+        strategy_set_syminfo_type(handle, exchange ? "stock" : "crypto");
+        probe.run(sc.chart.data(), static_cast<int>(sc.chart.size()), sc.input_tf, sc.input_tf,
+                  false, 4, MagnifierDistribution::ENDPOINTS);
+        CHECK_CTX(probe.last_error().empty(), ctx + " host run succeeds");
+        CHECK_CTX(probe.rows.size() == sc.chart.size(), ctx + " one result per input bar");
+        if (probe.rows.size() != sc.chart.size()) continue;
+        std::int64_t completions = 0;
+        for (std::size_t i = 0; i < sc.chart.size(); ++i) {
+            const auto ms = sc.chart[i].timestamp;
+            const auto next = i + 1 < sc.chart.size() ? sc.chart[i + 1].timestamp : 0;
+            const AggregatedBar expected = ref.feed(sc.chart[i], next, 0);
+            if (expected.is_complete) ++completions;
+            const auto& row = probe.rows[i];
+            const std::string at = ctx + " bar " + std::to_string(i);
+            CHECK_CTX(row.installed, at + " host must install the repaired source");
+            CHECK_CTX(row.time == ms, at + " input time");
+            CHECK_CTX(row.feeds == static_cast<std::int64_t>(i + 1), at + " fed exactly once");
+            CHECK_CTX(same_bar(row.fed, expected.bar), at + " feed timestamp and OHLCV");
+            CHECK_CTX(row.sub_bars == expected.sub_bar_count, at + " exact sub-bar count");
+            CHECK_CTX(row.completions == completions, at + " exact completion count");
+            CHECK_CTX(same_bar(row.current, ref.current()), at + " current timestamp and OHLCV");
+            CHECK_CTX(same_bar(row.completed, ref.last_completed()),
+                      at + " completed timestamp and OHLCV");
+            CHECK_CTX(row.open == ref.bucket_open_ms(ms), at + " reference bucket open");
+            CHECK_CTX(row.label == ref.bar_label_ms(ms), at + " reference bar label");
+            CHECK_CTX(row.held > 0 && row.held <= source::kMultiDayWindow, at + " bounded source");
+        }
+    }
+}
+
+void test_f16_f17_host_path() {
+    std::printf("test_f16_f17_host_path\n");
+    const auto fall_back = civil(2025, 11, 2);
+    // Identical unordered feed to regression_far_from_start, now through
+    // scheduler_prepare_security_sequence's factory and conditional install.
+    const Scenario sc = extended_date_order_fixture("f16-f17-host-late-regression",
+        civil(2025, 1, 1), civil(2026, 2, 1), {fall_back});
+    const Scenario control = date_order_control(sc);
+    NativeDayPartitionScope nominal(nullptr);
+    if (!check_date_order_references(sc) || !check_date_order_references(control)) return;
+    check_date_order_walk(control, {});
+    compare_date_order_host(control);
+    check_date_order_walk(sc, {fall_back});
+    compare_date_order_host(sc);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -1031,13 +1461,23 @@ int main(int argc, char** argv) {
         test_f16_f17_monotone_control();
         test_f16_f17_chart_decreasing_dates();
         test_f16_f17_aux_decreasing_dates();
+        test_f16_f17_regression_far_from_start();
+        test_f16_f17_two_regressions();
+        test_f16_f17_long_unordered_feed_memory();
+        test_f16_f17_host_path();
     } else if (argc == 2) {
         // The supervisor can run each witness/control as a separate lab job.
         const std::string name = argv[1];
         if (name == "f16_f17_chart_decreasing_dates") test_f16_f17_chart_decreasing_dates();
         else if (name == "f16_f17_aux_decreasing_dates") test_f16_f17_aux_decreasing_dates();
         else if (name == "f16_f17_monotone_control") test_f16_f17_monotone_control();
-        else die("unknown case; use f16_f17_{chart_decreasing_dates,aux_decreasing_dates,monotone_control}");
+        else if (name == "f16_f17_regression_far_from_start") test_f16_f17_regression_far_from_start();
+        else if (name == "f16_f17_two_regressions") test_f16_f17_two_regressions();
+        else if (name == "f16_f17_long_unordered_feed_memory") test_f16_f17_long_unordered_feed_memory();
+        else if (name == "f16_f17_host_path") test_f16_f17_host_path();
+        else die("unknown case; use f16_f17_{chart_decreasing_dates,aux_decreasing_dates,"
+                 "monotone_control,regression_far_from_start,two_regressions,"
+                 "long_unordered_feed_memory,host_path}");
     } else {
         die("expected zero arguments or one F16/F17 case name");
     }
