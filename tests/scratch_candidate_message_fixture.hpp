@@ -30,9 +30,11 @@ void expect_candidate_failure(Operation operation, const char* prefix,
         require(error.code() == std::error_code(ENOENT, std::generic_category())
                     && failure.code == code,
                 "create translator must preserve errno and typed failure code");
-        require(failure.args && *failure.args ==
-                    (code == pineforge::RunFailureCode::report_sink_failed
-                        ? "{\"reason\":\"scratch_io\"}" : "{}"),
+        // A code that declares no arguments classifies with a null args pointer
+        // (the run getter renders it as "{}"); report_sink_failed carries a reason.
+        require(code == pineforge::RunFailureCode::report_sink_failed
+                    ? (failure.args && *failure.args == "{\"reason\":\"scratch_io\"}")
+                    : !failure.args,
                 "create translator must preserve its established failure arguments");
         const std::string text = error.what();
         require(text.find(prefix) == 0
