@@ -102,7 +102,7 @@ WARN_LOGFILE           = site/doxygen-warnings.log
 # EXCLUDE below keeps the generated and vendored trees out.
 #
 # pineforge.h is named FIRST, before the directory that also contains it, because
-# engine.hpp defines `PINEFORGE_NO_STRATEGY_DECLS` at engine.hpp:44, and Doxygen's
+# engine.hpp defines `PINEFORGE_NO_STRATEGY_DECLS` at engine.hpp:47, and Doxygen's
 # preprocessor carries that define across the whole run. Parsed after engine.hpp,
 # pineforge.h loses
 # strategy_create / strategy_free / run_backtest / run_backtest_full /

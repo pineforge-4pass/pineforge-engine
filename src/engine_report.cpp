@@ -999,6 +999,8 @@ int BacktestEngine::set_report_sink_fd_v1(const pf_report_sink_fd_v1* descriptor
     if (!descriptor && report_sink_state_.fd >= 0 && report_sink_state_.receipt.complete
         && last_run_status_ == 0 && last_error_.empty())
         return set_report_sink_v1(nullptr);
+    // NULL has the same generation-preserving guard through either setter.
+    if (!descriptor && (report_sink_state_.equity_scratch || trades_.base() > 0)) return -3;
     ReportSinkState next;
     next.trade_history_streamable = report_sink_state_.trade_history_streamable;
     if (descriptor) {
@@ -1022,7 +1024,10 @@ int BacktestEngine::set_report_sink_fd_v1(const pf_report_sink_fd_v1* descriptor
 int BacktestEngine::report_sink_receipt_v1(pf_report_sink_receipt_v1* out) const noexcept {
     if (!out || out->struct_size != sizeof(*out) || out->version != 1) return -1;
     pf_report_sink_receipt_v1 local{};
-    if (report_sink_state_.enabled || report_sink_state_.receipt.complete)
+    // Share fill_report's attempt gate: a refusal before begin leaves the
+    // preceding generation's storage intact, but cannot publish its receipt.
+    if (NativeExecutionConsumer::rows_are_current(*this)
+        && (report_sink_state_.enabled || report_sink_state_.receipt.complete))
         local = report_sink_state_.receipt;
     local.struct_size = sizeof local;
     local.version = 1;
@@ -1033,7 +1038,8 @@ int BacktestEngine::report_sink_receipt_v1(pf_report_sink_receipt_v1* out) const
 int BacktestEngine::report_sink_summary_v1(pf_report_sink_summary_v1* out) const noexcept {
     if (!out || out->struct_size != sizeof(*out) || out->version != 1) return -1;
     pf_report_sink_summary_v1 local{};
-    if (report_sink_state_.enabled || report_sink_state_.receipt.complete) {
+    if (NativeExecutionConsumer::rows_are_current(*this)
+        && (report_sink_state_.enabled || report_sink_state_.receipt.complete)) {
         local = report_sink_state_.summary;
         local.complete = report_sink_state_.receipt.complete;
     }
@@ -1047,7 +1053,8 @@ int BacktestEngine::report_sink_diagnostics_v1(
         pf_report_sink_diagnostics_v1* out) const noexcept {
     if (!out || out->struct_size != sizeof(*out) || out->version != 1) return -1;
     pf_report_sink_diagnostics_v1 local{};
-    if (report_sink_state_.receipt.complete && report_sink_state_.writer)
+    if (NativeExecutionConsumer::rows_are_current(*this)
+        && report_sink_state_.receipt.complete && report_sink_state_.writer)
         local = report_sink_state_.writer->diagnostics();
     local.struct_size = sizeof local;
     local.version = 1;
@@ -1151,6 +1158,24 @@ void BacktestEngine::begin_report_sink() {
     }
 }
 
+pf_report_sink_summary_v1 NativeExecutionConsumer::finish_report_sink_summary(
+        const BacktestEngine& engine) const {
+    if (engine.trades_.base() != closed_trade_prefix_.base
+        || (engine.trades_.base() != 0 && !closed_trade_report_))
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+            "report summary has no matching sealed prefix");
+    // Resume a copy of the original left fold: sealed closed rows, resident
+    // closed rows, then one rebuilt terminal row per lot. Never retain rows
+    // or change the sealed prefix when a report is read again.
+    auto summary = closed_trade_report_ ? closed_trade_report_->summary : ReportTradeSummary{};
+    if (summary.value.count_t != static_cast<std::int64_t>(engine.trades_.base()))
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+            "report summary count differs from the sealed trade base");
+    for (const auto& row : engine.trades_) summary.fold(report_trade_row(row));
+    for (const auto& row : engine.range_end_trades_) summary.fold(report_trade_row(row));
+    return summary.value;
+}
+
 void BacktestEngine::finish_report_sink(ReportC* out) const {
     auto& sink = report_sink_state_;
     if (!sink.enabled && !sink.receipt.complete) return;
@@ -1182,7 +1207,9 @@ void BacktestEngine::finish_report_sink(ReportC* out) const {
             const TradeC* open_rows = out->trades;
             int open_count = out->trades_len;
             NativeExecutionConsumer::report_sink_open_trades(*this, open_rows, open_count);
-            auto summary = consumer->finish_report_sink_summary(*this, open_rows, open_count);
+            auto summary = report_mode_ != ReportMode::FULL && open_rows == nullptr && open_count == 0
+                ? consumer->finish_report_sink_summary(*this)
+                : consumer->finish_report_sink_summary(*this, open_rows, open_count);
             if (summary.count_t != out->total_trades)
                 throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                     "report summary count differs from the report trade count");
@@ -1847,6 +1874,15 @@ const Trade& OpenReportRowSource::materialize(std::size_t index) const {
     return materialized_[index];
 }
 
+bool NativeExecutionConsumer::report_capture_needs_sink(const BacktestEngine& engine) noexcept {
+    const auto* consumer = static_cast<const NativeExecutionConsumer*>(
+        engine.execution_consumer_slot_.ptr.get());
+    if (!consumer) return false;
+    const auto& epoch = consumer->selected_epoch_;
+    return epoch.window_configured || epoch.observer_registered
+        || epoch.admitted_selected || epoch.phase_observed;
+}
+
 int BacktestEngine::set_report_mode_v1(ReportMode mode) {
     switch (mode) {
         case ReportMode::FULL:
@@ -1863,6 +1899,14 @@ int BacktestEngine::set_report_mode_v1(ReportMode mode) {
     if (mode == ReportMode::FULL && sink) return PF_REPORT_MODE_CONFLICT;
     if (mode == ReportMode::SUMMARY_ONLY && sink) return PF_REPORT_MODE_CONFLICT;
     if (mode == ReportMode::STREAMED && !sink) return PF_REPORT_MODE_CONFLICT;
+    if (mode == ReportMode::SUMMARY_ONLY
+        && NativeExecutionConsumer::report_capture_needs_sink(*this))
+        return PF_REPORT_MODE_REPLAY_UNAVAILABLE;
+    // A whole-array presenter cannot certify omitted or external rows without
+    // an exact bounded-state adapter. Refuse before changing configuration.
+    if (mode != ReportMode::FULL && !report_presenter_supports_non_full())
+        return mode == ReportMode::SUMMARY_ONLY
+            ? PF_REPORT_MODE_REPLAY_UNAVAILABLE : PF_REPORT_MODE_CONFLICT;
     report_mode_ = mode;
     return PF_REPORT_MODE_ACCEPTED;
 }
@@ -1872,13 +1916,13 @@ namespace {
 // One sequence's logical count and capture policy. Disabled optional sources
 // carry zero in all three fields; a captured empty sequence keeps captured=1.
 pf_report_sequence_v1 report_sequence_v1(std::int64_t logical_count,
-                                         bool enabled, bool sum_only, bool streamed) {
+                                         bool enabled, bool omitted, bool streamed) {
     pf_report_sequence_v1 sequence{};
     if (!enabled) return sequence;
     sequence.logical_count = logical_count;
-    // FULL captures in place, STREAMED captures externally, SUMMARY_ONLY
-    // captures nothing (an empty captured sequence still reports captured=1).
-    sequence.captured = sum_only ? 0u : 1u;
+    // Omitted resident history is uncaptured unless the sink still emits it.
+    // A captured empty sequence still reports captured=1.
+    sequence.captured = omitted && !streamed ? 0u : 1u;
     sequence.external = streamed ? 1u : 0u;
     return sequence;
 }
@@ -1907,6 +1951,11 @@ int BacktestEngine::fill_report_envelope_v1(ReportEnvelopeV1* out) const {
         || (report_mode_ == ReportMode::SUMMARY_ONLY && sink_enabled)
         || (report_mode_ == ReportMode::STREAMED && !sink_enabled))
         return PF_REPORT_MODE_CONFLICT;
+    // Selection/observation can be installed after mode selection. Refuse
+    // before capture can publish omitted trade metrics or owning arrays.
+    if (report_mode_ == ReportMode::SUMMARY_ONLY
+        && NativeExecutionConsumer::report_capture_needs_sink(*this))
+        return PF_REPORT_MODE_REPLAY_UNAVAILABLE;
 
     ReportEnvelopeV1 local{};
     local.metadata.struct_size = sizeof(pf_report_metadata_v1);
@@ -1922,44 +1971,63 @@ int BacktestEngine::fill_report_envelope_v1(ReportEnvelopeV1* out) const {
 
     const bool streamed = report_mode_ == ReportMode::STREAMED;
     const bool summary = report_mode_ == ReportMode::SUMMARY_ONLY;
+    const bool current = NativeExecutionConsumer::rows_are_current(*this);
+    const auto sequence = [current, summary, streamed](std::int64_t count, bool enabled,
+                                                      bool omitted = false) {
+        return report_sequence_v1(current ? count : 0, enabled, summary || omitted, streamed);
+    };
     const auto& sink = report_sink_state_;
-    // Logical counts are independent of resident array lengths; a retired
-    // sink row is counted at the cursor, a resident one where it lives.
-    std::int64_t equity_count = sink.equity_scratch
-        ? sink.equity_scratch->size() : static_cast<std::int64_t>(equity_curve_.size());
+    // Before completion a retired row is counted at the cursor and a pending
+    // one where it lives. The trailer includes the held row/event/hash too;
+    // their still-resident buffers must not be counted again after finish.
+    // Selected capture transfers scratch ownership before this read. A
+    // completed receipt remains authoritative; without a sink the equity
+    // recorder exposes its logical count even when only its tail is resident.
+    std::int64_t equity_count = sink.receipt.complete ? sink.receipt.count_e
+        : sink.equity_scratch ? sink.equity_scratch->size() : equity_logical_point_count();
     if (local.report.equity_curve_len > equity_count)
         equity_count = local.report.equity_curve_len;
-    const std::int64_t trace_count =
-        sink.receipt.count_x + static_cast<std::int64_t>(trace_buffer_.size());
-    const std::int64_t output_rows =
-        sink.receipt.count_o + static_cast<std::int64_t>(output_open_ms_.size());
-    const std::int64_t output_events =
-        sink.receipt.count_v + static_cast<std::int64_t>(output_events_.size());
+    const bool optional_summary =
+        optional_report_mode_ == report_sequence::ReportMode::SummaryOnly;
+    const auto witness = current && optional_summary ? optional_sequence_summary()
+        : report_sequence::OptionalSequenceSummary{};
+    const std::int64_t trace_count = optional_summary
+        ? static_cast<std::int64_t>(witness.traces.count)
+        : sink.receipt.count_x + static_cast<std::int64_t>(trace_buffer_.size());
+    const std::int64_t output_rows = optional_summary
+        ? static_cast<std::int64_t>(witness.rows.count)
+        : sink.receipt.count_o + (sink.receipt.complete ? 0
+            : static_cast<std::int64_t>(output_open_ms_.size()));
+    const std::int64_t output_events = optional_summary
+        ? static_cast<std::int64_t>(witness.events.count)
+        : sink.receipt.count_v + (sink.receipt.complete ? 0
+            : static_cast<std::int64_t>(output_events_.size()));
     const std::int64_t hash_count = broker_state_hash_recording_
-        ? sink.receipt.count_h + static_cast<std::int64_t>(broker_state_hashes_.size())
+        ? (optional_summary ? static_cast<std::int64_t>(witness.hashes.count)
+            : sink.receipt.count_h + (sink.receipt.complete ? 0
+                : static_cast<std::int64_t>(broker_state_hashes_.size())))
         : 0;
 
-    local.metadata.trades = report_sequence_v1(
-        local.report.total_trades, true, summary, streamed);
-    local.metadata.equity_curve = report_sequence_v1(
-        equity_count, equity_count > 0 || sink.equity_scratch != nullptr, summary, streamed);
-    local.metadata.broker_state_hash = report_sequence_v1(
-        hash_count, broker_state_hash_recording_, summary, streamed);
-    local.metadata.trace = report_sequence_v1(
-        trace_count, trace_enabled_, summary, streamed);
-    local.metadata.trace_names = report_sequence_v1(
-        static_cast<std::int64_t>(trace_names_.size()), trace_enabled_, summary, streamed);
-    local.metadata.output_rows = report_sequence_v1(
-        output_rows, outputs_enabled_, summary, streamed);
-    local.metadata.output_events = report_sequence_v1(
-        output_events, outputs_enabled_, summary, streamed);
+    local.metadata.trades = sequence(local.report.total_trades, true);
+    local.metadata.equity_curve = sequence(
+        equity_count, equity_count > 0 || sink.equity_scratch != nullptr,
+        active_equity_report_mode_ == ReportMode::SUMMARY_ONLY);
+    local.metadata.broker_state_hash = sequence(
+        hash_count, broker_state_hash_recording_, optional_summary);
+    local.metadata.trace = sequence(trace_count, trace_enabled_, optional_summary);
+    local.metadata.trace_names = sequence(
+        static_cast<std::int64_t>(trace_names_.size()), trace_enabled_, optional_summary);
+    local.metadata.output_rows = sequence(output_rows, outputs_enabled_, optional_summary);
+    local.metadata.output_events = sequence(output_events, outputs_enabled_, optional_summary);
 
     const auto* consumer = execution_consumer_slot_.ptr && execution_consumer_slot_.native
         ? static_cast<const NativeExecutionConsumer*>(execution_consumer_slot_.ptr.get())
         : nullptr;
-    const bool completed = last_run_status_ == 0 && last_error_.empty() && consumer
-        && consumer->state_kind() == NativeLifecycleKind::Completed;
-    local.metadata.complete = completed ? 1u : 0u;
+    const bool completed = current && last_run_status_ == 0 && last_error_.empty() && consumer
+        && consumer->state_kind() == NativeLifecycleKind::Completed
+        && (active_equity_report_mode_ != ReportMode::SUMMARY_ONLY
+            || equity_summary_ratios_ready());
+    local.metadata.complete = completed && (!streamed || sink.receipt.complete) ? 1u : 0u;
     *out = local;
     return PF_REPORT_MODE_ACCEPTED;
 }

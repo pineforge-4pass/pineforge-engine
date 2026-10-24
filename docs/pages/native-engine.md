@@ -468,7 +468,7 @@ byte-identical** to the spec. Conflicting values are a preflight refusal:
 spec fields.
 
 The rich `run(bars, n, input_tf, script_tf, inputs, syminfo, overrides, …)`
-overload (`engine.hpp:2020`) is **not** refused as a source mutation: it
+overload (`engine.hpp:2027`) is **not** refused as a source mutation: it
 reaches `NativeExecutionConsumer::run_rich`
 (`src/native_execution_consumer.hpp:148`), which admits the begin, checks the
 timeframe arguments against the spec, preflights and pumps the batch exactly
@@ -2083,7 +2083,7 @@ host that marks its own equity keeps this default and owns the whole series.
 `max_runup_` and `max_contracts_held_all_` / `_long_` / `_short_` — read back
 through `max_drawdown_percent()` (`engine.hpp:1720`), `max_runup_percent()`
 (`engine.hpp:1160`) and `max_contracts_held_all/long/short()`
-(`max_contracts_held_all` `engine.hpp:2090-2092`) — are a property of the RUN: what it drew down, what
+(`max_contracts_held_all` `engine.hpp:2097-2099`) — are a property of the RUN: what it drew down, what
 it ran up, the most it ever held. The kernel folds them (`update_equity_extremes`, `engine.hpp:1550`) at every script
 calculation under `HostRecorded` and `KernelRecorded`. Under
 `KernelRecordedAtHostMarks`, it folds them at the host-mark callbacks instead, so
@@ -2106,7 +2106,7 @@ drawdown/run-up walk, and metrics computed over a real series.
 The per-bar **broker-state hash** is a row of that same report, so
 `KernelRecorded` records it too. It stays behind the recording switch it
 always had — `set_broker_state_hash_recording(true)`
-(`engine.hpp:2395`; C: `strategy_set_broker_state_hash_recording`), off by
+(`engine.hpp:2402`; C: `strategy_set_broker_state_hash_recording`), off by
 default, set while no run is active — because each row is a full
 `broker_state_hash()` over the lots and the closed rows (since v19 a row costs
 the live state, not the run's length: the closed rows enter through a running
@@ -2238,7 +2238,7 @@ bare host's own rows get theirs: the margin model's liquidation books
 under the ticket the model or the run named. A host running its own forced
 close states the cause on the row it produced.
 
-`closed_trade_close_cause(i)` (`engine.hpp:2087`) is the C++ read and
+`closed_trade_close_cause(i)` (`engine.hpp:2094`) is the C++ read and
 `strategy_closed_trade_close_cause` (`pineforge.h:1418`) the C one, with the
 same numbering: `-1` for a bad index or a NULL handle, `0` UNKNOWN, `1`
 SCRIPT, `2` BRACKET, `3` MARGIN_CALL, `4` INTRADAY_LOSS_CAP, `5`
@@ -3093,7 +3093,7 @@ declared subscription does: an `authoritative_bars` feed, the `gaps` and
 series' place in the run's continuous identity. Prefer `subscriptions` unless
 you want none of those.
 
-`set_native_security_feed` (`engine.hpp:1951`) is the host ingress for
+`set_native_security_feed` (`engine.hpp:1958`) is the host ingress for
 `authoritative_bars` installed before a run — see *Authoritative bars* above —
 and not a way to register a series: registration is
 `NativeRunSpec::subscriptions` or `declare_timeframe_subscriptions`. In-run the

@@ -1,9 +1,10 @@
-# O1 report contract, revision 1 (round-2 reader declarations)
+# O1 report contract, revision 1
 
-Status: declarations and consumer contract for the 1.7.0 A1 lanes. This
-document does not advertise implemented SUMMARY_ONLY support. The base is
-`583c2217d2`; runtime implementation, transport negotiation and remote
-verification are separate acceptance gates.
+Status: native C++ runtime and consumer contract for 1.7.0. Mode selection
+and envelope reads are implemented in `src/engine_report.cpp`. Exact bounded
+SUMMARY_ONLY still requires an eligible host and a provider for any required
+second pass; the engine does not schedule that replay. Transport negotiation
+and remote verification remain separate acceptance gates.
 
 ## Versions and entry points
 
@@ -11,14 +12,15 @@ The versioned report envelope is `pineforge-report/v1`. Its C data declarations
 live in `<pineforge/report_mode.h>`; the native C++ declarations are
 `ReportMode`, `ReportEnvelopeV1`, `BacktestEngine::set_report_mode_v1` and
 `BacktestEngine::fill_report_envelope_v1` in `<pineforge/engine.hpp>`.
-These methods have declarations only in this slice.
+The native methods implement mode admission and report assembly, subject to
+the eligibility and completion requirements below.
 
 The single C++ reader/visitor family lives in `<pineforge/report_pages.hpp>`,
 which includes `report_mode.h`; `engine.hpp` includes both. Its namespace is
 `pineforge::report`. It adds no mode enum, envelope version, feature probe or
-C export. The completed-row provider belongs to o1w-ledger; the presented-point
-provider, held point and metric overloads belong to o1w-metrics. No backing
-store or runtime method body is supplied here.
+C export. The completed-row and presented-point provider contracts share the
+ledger and equity-metric boundaries. Reader declarations alone do not
+establish provider availability.
 
 The envelope contains `metadata` followed by `report`, the unchanged ABI-4
 `ReportC` / `pf_report_t` payload. Do not append fields to either legacy struct:
@@ -86,15 +88,25 @@ but no implementation must not be reported as supporting any new mode.
   an installed external sink is a conflict. This compatibility mode has
   O(B + T + E + D) result storage and makes no fixed-memory claim.
 * **SUMMARY_ONLY (1):** the HPO trial. Return every metric block and summary
-  scalar with the same bits as FULL on the same completed execution. Capture
-  no trade rows, equity curve, broker-hash history, trace/name history or
-  recorded output series/events as report output, in RAM or a private tape.
-  Fold finalized rows/points in their existing order and discard them as
-  output. No curve file, tmpfs, memfd or allocate-then-free array is permitted.
+  scalar with the same bits as FULL on the same completed execution, once
+  exact presentation/replay eligibility is established. The current
+  `set_report_mode_v1` selects the returned shape: it omits owning report
+  arrays, but does not change execution-time equity or optional-sequence
+  retention. That setter alone does not establish fixed-memory recording.
+  A bounded summary provider must also select
+  `set_equity_report_mode(ReportMode::SUMMARY_ONLY)` and
+  `set_optional_report_mode(report_sequence::ReportMode::SummaryOnly)`
+  before begin, and supply the exact replay described below. The equity
+  control keeps a held point and fixed folds; the optional-sequence control
+  omits trace/name, hash and output row/event histories. The fixed-memory
+  target folds finalized rows/points in order without retaining report
+  sequences in RAM or a private curve tape; no curve file, tmpfs, memfd or
+  allocate-then-free array qualifies.
   Exact internal historical trade reads required by a script remain the
   ledger lane's responsibility; they are not report capture. A configured
-  sequence sink conflicts with this mode. Recording/trace switches may
-  enable logical counting, but cannot override this mode's capture policy.
+  sequence sink conflicts with this mode. Recording/trace switches remain
+  independent of the returned report shape; configure their retention
+  explicitly rather than inferring it from an empty returned array.
 * **STREAMED (2):** return the same metrics/scalars while emitting complete
   requested sequences to an external, bounded-buffer sink. Require an
   installed `pf_report_sink_v1`; do not silently fall back to owning arrays.
@@ -132,16 +144,22 @@ Each of `trades`, `equity_curve`, `broker_state_hash`, `trace`, `trace_names`,
 
 | Field | Meaning |
 | --- | --- |
-| `logical_count` (`int64_t`) | Number of final logical records produced by the authoritative pass, independent of capture and resident length. Disabled optional sources produce zero. |
+| `logical_count` (`int64_t`) | Number of final logical records produced by the authoritative pass, independent of capture and resident length. Disabled optional sources produce zero. The one exception is `trace_names`: its `logical_count` is the number of names RETAINED in the name table (a name dictionary would grow with distinct dynamic names, against the bounded-memory rule), so it is 0 when the sequence is not captured (the optional summary control and STREAMED) and N in FULL. |
 | `captured` (`uint32_t`) | Explicit 0/1 flag: the sequence was captured as requested output. A successfully captured empty sequence has 1; a deliberately omitted sequence has 0. |
 | `external` (`uint32_t`) | Explicit 0/1 flag: captured output belongs to the external sink. Implies `captured == 1`. It does not transfer sink ownership to the report. |
 
-FULL has `captured=1, external=0` for enabled sequences, even when empty.
+FULL has `captured=1, external=0` for enabled sequences it retains, even when
+empty. A sequence omitted by
+`set_equity_report_mode(ReportMode::SUMMARY_ONLY)` or
+`set_optional_report_mode(report_sequence::ReportMode::SummaryOnly)` instead
+has `captured=0, external=0` in FULL; its logical count is unchanged.
 SUMMARY_ONLY has `captured=0, external=0` for every sequence, even when its
 logical count is nonzero. STREAMED has `captured=1, external=1` for enabled
-sequences. Disabled optional sequences have both flags zero. Trades are always
-enabled. Equity is enabled when a report-point provider exists; a completed
-bare HostRecorded run can still have no kernel points. SUMMARY_ONLY requires
+sequences, including those whose resident history is omitted, because the
+sink still emits their records. Disabled optional sequences have both flags
+zero. Trades are always enabled. Equity is enabled when a report-point
+provider exists; a completed bare HostRecorded run can still have no kernel
+points. SUMMARY_ONLY requires
 an exact point/presentation provider for the metrics FULL would compute.
 Flags describe capture policy on an incomplete report too; only `complete`
 certifies that the entire sequence or summary is valid.
@@ -167,6 +185,11 @@ and terminal rows. Public and internal spellings differ for the security
 evaluation totals; both are listed. On failure the existing partial-report
 rules apply, with `complete=0`; no complete summary is inferred from a prefix.
 
+The FULL column describes retained sequences. The equity and optional-sequence
+controls above can omit their respective resident histories in FULL: the
+affected pointers/lengths are NULL/0 and `captured=0, external=0`, with logical
+counts unchanged.
+
 | Payload field(s) | FULL | SUMMARY_ONLY | STREAMED |
 | --- | --- | --- | --- |
 | `total_trades` | Logical T, equals resident row length | Same logical T | Same logical T |
@@ -183,11 +206,12 @@ rules apply, with `complete=0`; no complete summary is inferred from a prefix.
 | `trace`, `trace_len` | Owning enabled trace entries | NULL, 0 | NULL, 0; enabled entries external |
 | `trace_names`, `trace_names_len` | Owning pointer array; borrowed strategy-owned strings | NULL, 0 | NULL, 0; enabled name association external |
 | `metrics.all`, `metrics.longs`, `metrics.shorts`, `metrics.equity` | Existing complete 768-byte `pf_metrics_t` | Bit-identical complete block | Bit-identical complete block |
-| `equity_curve`, `equity_curve_len` | Owning presented points, resident length | NULL, 0; logical count in metadata, capture flag 0 | NULL, 0; logical count in metadata, capture/external flags 1 |
+| `equity_curve`, `equity_curve_len` | Owning presented points, resident length; NULL, 0 under the equity-summary control, with logical count unchanged and capture/external flags 0 | NULL, 0; logical count in metadata, capture flag 0 | NULL, 0; logical count in metadata, capture/external flags 1 |
 | `broker_state_hash`, `broker_state_hash_len` | Owning enabled hash sequence | NULL, 0 | NULL, 0; enabled hashes external |
 
 Outputs remain outside ReportC. In FULL the existing output accessors retain
-their behavior. SUMMARY_ONLY retains bounded manifest/constants/hlines and
+their behavior unless the optional-sequence control omits those histories.
+SUMMARY_ONLY retains bounded manifest/constants/hlines and
 summary values but no series, row times, alert messages or events as report
 output; logical output counts remain in metadata. STREAMED sends those
 enabled sequences through O/V/K records without rebuilding columns in RAM.
@@ -523,8 +547,9 @@ See the [JSON field types and presence table](../pages/report-schema.md#report_s
 
 ## Integration and ABI inventory
 
-This slice adds data types and C++ method declarations only: **zero** new
-`PF_API` declarations/definitions and no runtime storage/behavior.
+Native C++ mode selection and envelope reads implement the runtime admission,
+capture metadata and completion checks described above. The envelope adds
+**zero** new `PF_API` declarations/definitions.
 `include/pineforge/pineforge.h` has 102 public declarations.
 `scripts/check_c_abi_runtime.py` pins 113 declarations across its four
 `RUNTIME_HEADERS` and 93 runtime implementations; `scripts/test_ci_verify.py`

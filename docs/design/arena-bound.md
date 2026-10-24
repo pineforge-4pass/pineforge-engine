@@ -554,7 +554,7 @@ non-command certificates exactly.
 
 These formulas apply to the EngineRecorded streamed invocation. The
 selected recorder appends its anchor and selected observations in one
-writer (`src/engine_report.cpp:833`), and capture transfers that writer as `metric_curve`
+writer (`equity_scratch` append at `src/engine_report.cpp:1152`), and capture transfers that writer as `metric_curve`
 instead of copying its prefix (`src/native_execution_consumer.cpp:12915`).
 HostRecorded array presentation and a second full curve are outside this
 profile. Adding another persistent scratch user requires another term and
