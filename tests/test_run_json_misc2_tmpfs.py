@@ -111,8 +111,11 @@ def test_default_run_with_tmpfs_tmpdir(
     if status == 0:
         assert backing not in {"none", "probe-error"}, stdout
         assert artifacts and library.installed
-        selected = (spill if backing == "spill" and _kind(spill) not in MEMORY_FILESYSTEMS
-                    and os.access(spill, os.W_OK | os.X_OK) else Path("/var/tmp"))
+        if backing == "spill":
+            # F-3: an explicit directory WINS; a run only succeeds when it is usable.
+            assert _kind(spill) not in MEMORY_FILESYSTEMS and os.access(
+                spill, os.W_OK | os.X_OK), stdout
+        selected = spill if backing == "spill" else Path("/var/tmp")
         assert all(path == selected for path in artifacts), artifacts
         assert all(path != memory and memory not in path.parents for path in artifacts)
         assert _kind(selected) not in MEMORY_FILESYSTEMS
@@ -127,7 +130,8 @@ def test_default_run_with_tmpfs_tmpdir(
                 or "probe" in failure["error"])
         assert artifacts == [] and library.installed == []
         if backing in {"available", "spill"}:
-            candidates = [spill, Path("/var/tmp")] if backing == "spill" else [Path("/var/tmp")]
+            # F-3: with an explicit directory only that directory is a candidate.
+            candidates = [spill] if backing == "spill" else [Path("/var/tmp")]
             for selected in candidates:
                 if selected.is_dir():
                     assert _kind(selected) in MEMORY_FILESYSTEMS or not os.access(

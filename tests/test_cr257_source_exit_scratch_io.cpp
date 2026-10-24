@@ -411,6 +411,8 @@ struct ScopeEraseAccounting {
             rows = 0;
             ++cleared_scopes;
         }
+        static_assert(sd::kExitScopeEraseBatch == 64,
+                      "CR-265: scope erase commits are bounded by ceil(records/64)");
         constexpr Count batch = sd::kExitScopeEraseBatch;
         const Count before = rows / batch + (rows % batch != 0);
         rows += removed;
