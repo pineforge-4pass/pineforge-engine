@@ -8,7 +8,9 @@
 // copied at the ledger end (index 1), one TradeC past that block.
 // Fail-before: AddressSanitizer heap-buffer-overflow in the second fill_report;
 // without a sanitizer, the direct selected read at the end still returns that
-// array.
+// array. The selected read likewise rebuilt its whole metric equity curve
+// after the detach (sink_equity on enabled alone), so both rereads pin all
+// four sink-shaped arrays.
 #include <pineforge/execution_observer.h>
 #include <pineforge/native_host.hpp>
 #include <pineforge/pineforge.h>
@@ -43,6 +45,19 @@ void require(bool condition, const std::string& message) {
 
 bool same(double left, double right) {
     return std::memcmp(&left, &right, sizeof left) == 0;
+}
+
+// report_sink.h: with a sink, trades, equity_curve, broker_state_hash and trace
+// are NULL with length 0. One check per array, so a failure names the array.
+void require_sink_shape(const ReportC& report, const std::string& read) {
+    require(report.trades == nullptr && report.trades_len == 0,
+            read + " returned a trade array");
+    require(report.equity_curve == nullptr && report.equity_curve_len == 0,
+            read + " returned an equity curve");
+    require(report.broker_state_hash == nullptr && report.broker_state_hash_len == 0,
+            read + " returned a broker state hash array");
+    require(report.trace == nullptr && report.trace_len == 0,
+            read + " returned a trace array");
 }
 
 struct Report {
@@ -218,6 +233,7 @@ void reread(bool selected) {
     host.fill_report(&second.value);
     require(second.value.trades == nullptr && second.value.trades_len == 0,
             "detached reread lost the sink report shape");
+    require_sink_shape(second.value, "detached reread");
     require(second.value.total_trades == first.value.total_trades
             && same(second.value.net_profit, first.value.net_profit)
             && std::memcmp(&second.value.metrics, &first.value.metrics,
@@ -230,9 +246,10 @@ void reread(bool selected) {
             "detached reread changed the completed receipt or summary");
     require(pipe.drain().empty(), "detached reread wrote sink bytes");
 
-    // fill_report's finish_report_sink frees whatever trade array the selected
-    // read returns, so ask the selected read directly as well: a completed sink
-    // generation keeps the frozen scalars and builds no trade array.
+    // fill_report's finish_report_sink frees whatever array the selected read
+    // returns, so ask the selected read directly as well: a completed sink
+    // generation keeps the frozen scalars and builds no trade array and no
+    // equity curve.
     Report direct;
     require(pineforge::NativeExecutionConsumer::fill_selected_report(host, &direct.value),
             "selected read did not serve the capture");
@@ -240,6 +257,7 @@ void reread(bool selected) {
             && direct.value.total_trades == first.value.total_trades
             && same(direct.value.net_profit, first.value.net_profit),
             "detached selected read rebuilt a trade array");
+    require_sink_shape(direct.value, "detached selected read");
 }
 } // namespace
 
