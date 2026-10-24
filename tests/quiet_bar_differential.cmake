@@ -43,8 +43,17 @@ if(_differ)
         math(EXPR _line "${_line} + 1")
     endforeach()
     math(EXPR _shown "${_line} + 1")
+    set(_gated_token "<EOF>")
+    set(_ungated_token "<EOF>")
+    if(_line LESS _gated_count)
+        list(GET _gated_lines ${_line} _gated_token)
+    endif()
+    if(_line LESS _ungated_count)
+        list(GET _ungated_lines ${_line} _ungated_token)
+    endif()
     message(FATAL_ERROR "quiet_bar_differential: the transcripts differ at line ${_shown} "
                         "(gated ${_gated_count} lines, ungated ${_ungated_count}); "
+                        "gated token: [${_gated_token}]; ungated token: [${_ungated_token}]; "
                         "see ${_gated} and ${_ungated}")
 endif()
 list(FILTER _gated_lines INCLUDE REGEX "^run ")

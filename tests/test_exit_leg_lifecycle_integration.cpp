@@ -29,7 +29,7 @@ public:
     void suspend(const char* id){lifecycle_fixture::suspend(get(id));}
     void margin(double p){++bar_index_;current_bar_={p,p,p,p,1,bar_index_*60000LL};process_margin_call(current_bar_);}
     double qty()const{return position_qty_;}
-    const std::vector<Trade>& rows()const{return trades_;}
+    const TradeLedger& rows()const{return trades_;}
 private:bool buy_;
 };
 void old_stop(bool buy,bool marketable,bool remove_current){

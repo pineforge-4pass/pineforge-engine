@@ -93,7 +93,15 @@ public:
         t.is_long = value.is_long != 0;
         t.max_runup = value.max_runup; t.max_drawdown = value.max_drawdown;
         t.entry_bar_index = value.entry_bar_index; t.exit_bar_index = value.exit_bar_index;
-        (range_end ? range_end_trades_ : trades_).push_back(t);
+        // The two report rows live in differently typed stores since the O(1)
+        // contract: closed rows in TradeLedger, the range-end section in the
+        // constant-memory OpenReportRowSource (R12). Seeding the latter is its
+        // documented reference-oracle path.
+        if (range_end) {
+            range_end_trades_.push_back(t);
+        } else {
+            trades_.push_back(t);
+        }
     }
     void read(ReportC& out) const { fill_trades_section(&out); }
 };
@@ -353,16 +361,20 @@ void annualization_span_rule() {
     };
     // The frozen walk supplies all thirteen unchanged fields. The two
     // proportional expectations come from the input curve independently.
-    auto want = equity_stats_reference::compute_equity_stats(
+    const auto want = equity_stats_reference::compute_equity_stats(
         curve, 3, 10000, "UTC", 100, 108, 1, 800);
-    CHECK(std::isinf(want.cagr) && std::isinf(want.calmar));
     CHECK(std::isfinite(want.sharpe_bar) && std::isfinite(want.sortino_bar));
     const double span_years = static_cast<double>(curve[2].time_ms - curve[0].time_ms)
                            / (365.25 * 86400.0 * 1000.0);
     const double ratio = curve[2].equity / 10000.0;
-    want.cagr = (ratio - 1.0) * (1.0 / span_years) * 100.0;
-    want.calmar = want.cagr / want.max_equity_drawdown_pct;
+    const double compounded = (std::pow(ratio, 1.0 / span_years) - 1.0) * 100.0;
+    CHECK(!std::isfinite(compounded));
+    const double simple = (ratio - 1.0) * (1.0 / span_years) * 100.0;
+    const double drawdown_pct =
+        (curve[0].equity - curve[1].equity) / curve[0].equity * 100.0;
     CHECK(std::isfinite(want.cagr) && std::isfinite(want.calmar));
+    CHECK(same_bits(want.cagr, simple));
+    CHECK(same_bits(want.calmar, simple / drawdown_pct));
     try {
         const auto got = metrics::compute_equity_stats(
             curve, 3, 10000, "UTC", 100, 108, 1, 800);
@@ -440,15 +452,17 @@ void compounded_overflow_fallback() {
         const pf_equity_point_t curve[] = {
             {kTime, 1, 0}, {kTime + test.span, test.final_equity, 0},
         };
-        auto want = equity_stats_reference::compute_equity_stats(
+        const auto want = equity_stats_reference::compute_equity_stats(
             curve, 2, 1, "UTC", 1, 1, 0, 0);
         const double years = static_cast<double>(test.span) / (365.25 * 86400.0 * 1000.0);
         const double ratio = test.final_equity / 1.0;
         const double power = std::pow(ratio, 1.0 / years);
         CHECK(std::isfinite(power) == test.finite_power);
-        CHECK(!std::isfinite(want.cagr));
-        want.cagr = (ratio - 1.0) * (1.0 / years) * 100.0;
+        const double compounded = (power - 1.0) * 100.0;
+        CHECK(!std::isfinite(compounded));
+        const double simple = (ratio - 1.0) * (1.0 / years) * 100.0;
         CHECK(std::isfinite(want.cagr));
+        CHECK(same_bits(want.cagr, simple));
         try {
             const auto got = metrics::compute_equity_stats(
                 curve, 2, 1, "UTC", 1, 1, 0, 0);
@@ -464,15 +478,20 @@ void compounded_overflow_fallback() {
     const pf_equity_point_t drawdown[] = {
         {kTime, 1, 0}, {kTime + kDay / 2, 0.99, 0}, {kTime + kDay, 10, 0},
     };
-    auto want = equity_stats_reference::compute_equity_stats(
+    const auto want = equity_stats_reference::compute_equity_stats(
         drawdown, 3, 1, "UTC", 1, 1, 0, 9);
-    CHECK(std::isinf(want.cagr) && std::isinf(want.calmar));
     CHECK(want.max_equity_drawdown_pct > 0.0);
     CHECK(std::isfinite(want.sharpe_bar) && std::isfinite(want.sortino_bar));
     const double years = static_cast<double>(kDay) / (365.25 * 86400.0 * 1000.0);
     const double ratio = drawdown[2].equity / 1.0;
-    want.cagr = (ratio - 1.0) * (1.0 / years) * 100.0;
-    want.calmar = want.cagr / want.max_equity_drawdown_pct;
+    const double compounded = (std::pow(ratio, 1.0 / years) - 1.0) * 100.0;
+    CHECK(!std::isfinite(compounded));
+    const double simple = (ratio - 1.0) * (1.0 / years) * 100.0;
+    const double drawdown_pct =
+        (drawdown[0].equity - drawdown[1].equity) / drawdown[0].equity * 100.0;
+    CHECK(std::isfinite(want.cagr) && std::isfinite(want.calmar));
+    CHECK(same_bits(want.cagr, simple));
+    CHECK(same_bits(want.calmar, simple / drawdown_pct));
     try {
         const auto got = metrics::compute_equity_stats(
             drawdown, 3, 1, "UTC", 1, 1, 0, 9);
@@ -494,17 +513,23 @@ void bar_ratio_span_boundary() {
             {kTime, 10000, 0}, {kTime + span / 2, 9900, 0},
             {kTime + span, 10020, 0},
         };
-        auto want = equity_stats_reference::compute_equity_stats(
+        const auto want = equity_stats_reference::compute_equity_stats(
             curve, 3, 10000, "UTC", 1, 1, 0, 20);
         CHECK(std::isfinite(want.cagr) && std::isfinite(want.calmar));
         CHECK(std::isfinite(want.sharpe_bar) && std::isfinite(want.sortino_bar));
         const double years = static_cast<double>(span) / (365.25 * 86400.0 * 1000.0);
         const double ratio = curve[2].equity / 10000.0;
         const double simple = (ratio - 1.0) * (1.0 / years) * 100.0;
-        CHECK(!same_bits(want.cagr, simple));
+        const double compounded = (std::pow(ratio, 1.0 / years) - 1.0) * 100.0;
+        CHECK(!same_bits(compounded, simple));
+        const double drawdown_pct =
+            (curve[0].equity - curve[1].equity) / curve[0].equity * 100.0;
         if (span < kDay) {
-            want.cagr = simple;
-            want.calmar = simple / want.max_equity_drawdown_pct;
+            CHECK(same_bits(want.cagr, simple));
+            CHECK(same_bits(want.calmar, simple / drawdown_pct));
+        } else {
+            CHECK(same_bits(want.cagr, compounded));
+            CHECK(same_bits(want.calmar, compounded / drawdown_pct));
         }
         try {
             const auto got = metrics::compute_equity_stats(

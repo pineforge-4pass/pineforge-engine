@@ -325,7 +325,7 @@ public:
             }},
             {"trades_[].pnl", [](Probe& s) {
                 if (s.trades_.empty()) s.trades_.push_back(Trade{});
-                s.trades_[0].pnl += 1.0;
+                s.trades_.modify(0, [](Trade& row) { row.pnl += 1.0; });
             }},
 
             // pending_orders_: several distinct fields, incl. fix-round-1

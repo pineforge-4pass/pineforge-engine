@@ -7,22 +7,746 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
+This release adds report-sink transport, scratch-backed history and bounded
+storage admission, with new C++ views and command-line report routes.
+Regenerate strategy C++ with the matching codegen, rebuild every C++ object
+that includes an engine header, and relink against the matching engine
+headers and archive. Replacing the archive alone does not update a statically
+linked strategy library. `get_trade()` and `closed_trade()` now return
+`Trade` by value; working-book, journal and cohort accessors return views,
+and some reads can now throw on scratch I/O. The C++ epoch namespace is still
+`engine_script_run_v19` although the layout of `BacktestEngine` changed (its
+trade list is now a `TradeLedger`), so an object compiled against 1.6.x headers
+is not reliably rejected at link time: rebuild every object.
+
+### Breaking for hosts
+
+- **Disk-backed scratch and default directory selection (CR-150).**
+  Closing a trade writes `TradeLedger` scratch even without a report sink.
+  An attached scratch arena takes precedence over files. Otherwise, report
+  and ledger scratch use the configured scratch directory; a path sink
+  defaults that directory to its parent. With no explicit directory,
+  `resolve_scratch_directory` uses nonempty `TMPDIR`, or `/tmp` if it is
+  unset or empty. Only a successful probe proving that candidate is tmpfs
+  or ramfs permits trying `/var/tmp`. If that fallback is also memory-backed,
+  selection is refused. A failed default-directory query stops with its
+  errno; it does not trigger fallback. An explicit directory proven to be
+  tmpfs/ramfs is now refused (`ENODEV`), without redirecting it elsewhere. Path
+  sinks also refuse non-regular files and, on Linux, tmpfs/ramfs backing, with
+  `EINVAL`. The `jailed` profile is unchanged: it requires a sealed arena and
+  never creates a backing file or falls back to `TMPDIR`, `/tmp` or `/var/tmp`.
+
+- **Command scratch can refuse a run at begin.**
+  `PINEFORGE_COMMAND_SCRATCH_DIR` selects an explicit command-store directory;
+  unset or empty uses the default policy above. Default-directory query
+  failures and memory-backed directory refusals raise
+  `scratch_io_failed` (69), a non-retryable `resource` failure. The host gets
+  a failed run status and an error naming the failed candidate and errno;
+  the run stops before strategy callbacks and has no successful completion.
+  Command creation errors retain the `command scratch create` prefix;
+  selection/refusal notes add the candidate details. Report/ledger file
+  I/O errors instead use `report_sink_failed`, reason `scratch_io`.
+
+A default `/tmp` or `TMPDIR` on tmpfs/ramfs is not used. Every run without an
+attached scratch arena creates its command scratch at begin, so with a
+memory-backed `TMPDIR` and no usable `/var/tmp` even a run with no trades is
+refused with `scratch_io_failed`. The command scratch needs a disk-backed
+directory: `TMPDIR`, or `PINEFORGE_COMMAND_SCRATCH_DIR` for the command stores
+only. That variable is not read for the trade ledger or the report files: a
+run that closes a trade, spills or writes a report sink without an explicit
+scratch directory also needs a disk-backed `TMPDIR`, or its first closed
+trade fails with `report_sink_failed`, reason `scratch_io`. This includes
+deployments using Docker `--tmpfs /tmp` or Kubernetes `emptyDir` with
+`medium: Memory`.
+
+### Report sink and scratch spill
+
+- **Version-1 report sinks (CR-150).** The additive `report_sink.h` API,
+  announced by `PINEFORGE_HAS_REPORT_SINK_V1` and queried through
+  `pf_report_sink_version()`, writes `pf-report-sink/v1` to a path or a
+  caller-selected FIFO or Unix stream socket. The stream carries equity,
+  trades, output rows, events, constants, trace and broker hashes, with
+  canonical binary64 spelling, UTF-8 JSON, LF framing, a 1 MiB line limit
+  and a final SHA-256 receipt (the seven-count C struct
+  `pf_report_sink_receipt_v1`; the trailer counts only the enabled record
+  types, always `E` and `T`). `pf_report_t` remains ABI 4.
+  With a sink, `trades`, `equity_curve`, `broker_state_hash`, `trace` and
+  `trace_names` are NULL with zero lengths; `security_diag` is still
+  populated. `total_trades` is the logical total, independent of
+  `trades_len`. The library borrows the fd and never closes it; a FIFO
+  host must ignore SIGPIPE to receive a typed closed-peer failure.
+
+- **Sink summaries and lifecycle (CR-150).** Receipt, T-row summary and
+  `strategy_report_sink_diagnostics_v1` annualization queries publish
+  completion only with the trailer. They do not replay a report. A failed
+  or aborted sink has no valid trailer. Setters refuse changes during
+  execution or a stream. NULL through either setter refuses removal with
+  live equity scratch or sealed trade rows, except that a completed,
+  successful fd generation can detach while preserving its receipt,
+  summary, scratch and borrowed descriptor. Later reads keep that
+  generation's sink shape, including selected reports and envelopes.
+  A refused begin does not expose the preceding generation's receipt or
+  summary. Each begin checks the borrowed fd's device/inode identity;
+  replacing it requires installing the descriptor again, or begin fails
+  with `report_sink_failed`, reason `sink_io`.
+  A stream-begin request with a sink is refused as
+  `run_mode_unsupported`, feature `stream_report_sink`.
+
+- **Native report modes and reader declarations (CR-150).** C++ clients
+  gain `set_report_mode_v1`, `fill_report_envelope_v1` and the separate
+  version-1 envelope. Logical counts, capture and external storage are
+  distinct. FULL and SUMMARY_ONLY conflict with an installed sink;
+  STREAMED requires one. Omitted sequences have `captured=0` unless the
+  sink supplies them; completed counts do not count retained tails twice.
+  `complete=1` requires the current run to have completed successfully,
+  any required equity ratios to be ready and, for STREAMED, a complete
+  sink receipt. A host overriding `present_report` must also declare its
+  eligibility through `report_presenter_supports_non_full`; without an
+  exact adapter it must refuse non-FULL capture.
+  `PineStrategyHost` refuses SUMMARY_ONLY (`-5` without a sink, `-4` with one)
+  and explicit STREAMED (`-4`); its legacy FULL sink route remains supported.
+  `report_pages.hpp` declares value, page, forward/backward visitor and
+  separate-text reader contracts. The trade-reader providers and engine
+  accessors for those contracts are not implemented.
+  These methods do not supply a C/ctypes envelope provider or a complete
+  fixed-memory SUMMARY_ONLY host. The separate equity-summary helper
+  requires a host-run `EquityMetricsSecondPass` and matching
+  `install_equity_ratio_result()` when a second pass is needed; until then
+  its four Sharpe/Sortino fields are NaN and the envelope is incomplete.
+
+- **Scratch-backed trade history and report metrics (CR-150).**
+  `TradeLedger` replaces the vector of closed trades. C++ closed-row access
+  returns a value; `TradeLedger::read()`, `visit()` and `previous()` reach
+  retired history. Rows and text use scratch storage; sink sealing,
+  trade-stat accumulators and the three average-percent prefix sums avoid
+  rebuilding retired rows for reports. Numeric report folds use
+  `numeric_at()` without decoding trade text. Equity metrics can read arrays
+  or scratch through a 64 KiB window and generate returns in ordered passes
+  without retaining return vectors. Terminal open-position rows are
+  reconstructed from retained marks and excursion facts; host excursion
+  answers are retained in scratch and reused during reconstruction.
+  Source trade sorting and global-exit recuts use `exit_phase_value()` and
+  `set_exit_phase()` to translate global indices relative to the sealed
+  trade base, preserving exit phases after older rows are sealed.
+
+- **Selected-window sink reports (CR-150).** Selected runs can write a named
+  sink, keep bounded equity tails and trade captures, and derive their
+  metrics from scratch instead of copying the selected curve and all trade
+  rows. Sealed rows are counted and emitted once in global trade order.
+  A live `fill_report` during an open selected sink run is refused with
+  `report_shape_unsupported`, shape `live_selected_sink`.
+
+- **Streamed trade history: T records can be interleaved with E records in the
+  sink file (CR-271).** Regenerated scripts that opt into streamed trade history
+  (`set_trade_history_streamable`) write T records interleaved with E records in
+  the sink file as trades close; the record set and every report value are
+  unchanged; consumers must not rely on E-before-T order. When rows are sealed
+  and published before the run ends, the byte order of the sink file can differ
+  from a run of the same strategy that does not opt in, and so can the file's
+  trailer `sha256`, although counts and values are equal; the last exit-time
+  rows stay resident until the end, so a run with few trades can be byte-identical.
+  The validation corpus C++ is regenerated with the 1.7.0 codegen
+  (`89b48cb6e2fe`); its gitlink is `8425ca820c4b`, and the committed
+  per-probe trade digests are unchanged.
+
+- **Optional sequences and borrowed native reads (CR-150).** Native optional
+  sequence policies can retain arrays, stream records or fold summary
+  witnesses while releasing rows. Summary output-event row indices advance
+  by discarded rows, including across repeated calculations. A rewritten
+  pending broker-hash row replaces its old summary leaf instead of leaving
+  a stale witness. Native working requests, open lots and
+  request/placement/pending payloads gain callback and chunk readers.
+  `WorkingRequestCore::live()` and `history()` return `LiveView` and
+  `JournalView`; spilled references can expire on cache refill or the next
+  command, and old-event reads can throw on I/O. `cohorts()` returns a
+  logical `CohortView`, synthesizing empty allocated rosters.
+  `refresh_point_allowances` and `has_waiting_children` lose their
+  `noexcept` guarantee. Opening readback/cursors and `external_openings`
+  let enrollment freeze membership without retaining a caller's cursor.
+  Borrowed values require the source generation to remain alive and forbid
+  host mutation inside visitors.
+
+- **Spilled native working books (CR-150).** The matcher holds spilled
+  rows across sibling sizing, trail observation and other book reads;
+  `WorkingRequestCore::hold_live()` gives native hosts the same lifetime
+  control. A spilled row stays alive with its returned shared pointer;
+  a resident row is still borrowed until the next command. Reused winners
+  can use their scanned table location while its generation matches,
+  avoiding another book search for that lookup. Group-recipient visitors
+  can read paged journal events without invalidating the walk's source
+  event. Accepted definitions preserve external opening membership through
+  spill; refused requests snapshot and reload their original opening lists.
+  A spilled-book read failure is carried through noexcept folds and
+  rethrown by continuation and broker-hash readers, rather than publishing
+  a truncated hash or terminating in the fold. Journal retirement stages
+  fallible reads before changing its retained window.
+
+- **Admitted scratch-table storage (CR-150).**
+  `PINEFORGE_HAS_SCRATCH_TABLES_V1` announces
+  `strategy_set_scratch_tables_v1`, which selects disk scratch or a fixed
+  memory slab before execution, independently of report capture. Explicit
+  maxima include distinct historical keys, erased keys and generated
+  successors; `K_q/B_q` are reserved zero and `V` cannot exceed 27.
+  All-zero bounded maxima select the default admission policy: finite
+  batches reserve `R=2*bars`, and streams without a declared lifetime
+  reserve 65,536 roots. The other defaults are 8,192 erased-minima keys,
+  4,096 partial-cycle keys, 4,096 cohort IDs and 27 exit-rank IDs, with
+  fixed key-byte allowances of 3,145,728, 2,101,248, 1,048,576 and 6,912
+  bytes respectively. Exceeding a region fails; it never grows the slab
+  or falls back to disk.
+
+- **Inherited scratch arenas and opt-in admission (CR-150, CR-260,
+  CR-267).** The arena can serve report scratch, command stores, ID-pair
+  tables, ordered folds, successor roots and openings.
+  `PF_SCRATCH_ARENA_FD=5` and `PF_SCRATCH_ARENA_BYTES` select its backing.
+  A host requiring an arena calls
+  `strategy_require_report_scratch_arena_v1` on each handle before execution;
+  `run_json.py --profile jailed` does this on every fresh handle.
+  Missing or inadmissible backing fails with `report_sink_failed`,
+  reason `arena_backing`. On Linux this admission requires a memfd with
+  `F_SEAL_GROW|F_SEAL_SHRINK|F_SEAL_SEAL` and neither `F_SEAL_WRITE` nor
+  `F_SEAL_FUTURE_WRITE`, independently of `PF_SCRATCH_ARENA_JAILED`;
+  an ordinary file is refused. Other platforms use an attached regular-file
+  arena. Unjailed hosts need not opt in. Environment attachment occurs
+  through this call or installation of a report sink. Without
+  `PF_SCRATCH_ARENA_FD`, the attachment helper is a no-op and
+  `PF_SCRATCH_ARENA_JAILED` is not consulted; the explicit admission call
+  still requires an arena. With the fd configured,
+  `PF_SCRATCH_ARENA_JAILED=1` also requires sealed-memfd backing.
+  `PF_SCRATCH_WINDOW_BYTES` sets the total mapping cap, default 32 MiB,
+  rounded down to platform pages; invalid/sub-page values are refused.
+  Each command store has a one-chunk minimum and capacity equal to the
+  arena's provisional 1/16 share rounded down to 1 MiB chunks.
+  Crossing that share carries `arena_exhausted`, including the
+  needed-arena lower bound. `pf_report_scratch_arena_stats` exposes
+  attachment-wide high-water and supplied bytes outside report/hash bytes.
+  **A successful new arena attachment sets process-wide SIGXFSZ to
+  `SIG_IGN`; detach does not restore it.**
+
+- **Command scratch backing and byte budgets (CR-150, CR-221).** Source and
+  native run setup provision the command, trade and dependency stores
+  through the production backing. The store supplies transactional
+  put/erase, rollback, stable handles, ordered readers and content/state
+  digests. The reference definition refuses page sizes above 1 MiB or page
+  counts above 16 Mi, key or value lengths at least 2^61 bytes and handle
+  exhaustion at 2^62. Invalid transaction/durability requests are programming
+  errors; a backing failure leaves a rollback-only transaction.
+  `PINEFORGE_COMMAND_SCRATCH_MAX_BYTES` admits a positive decimal uint64
+  budget shared by the environment-backed command stores created on the
+  same thread; malformed values fail with `scratch_configuration_invalid`.
+  Backing faults and budget exhaustion return store-level `io_error`;
+  exit/trade command-scratch consumers surface these as `scratch_io_failed`.
+  Carried arena failures retain their typed reason through rollback and
+  state-hash reads.
+
+- **Scratch I/O buffering and exit-scope cleanup (CR-257, CR-265).**
+  Command backings use up to 64 KiB of read-cache page bytes per store,
+  at most 192 KiB for three stores, plus metadata. Pages outside the
+  supported cache geometry bypass it. Trade payloads gain a buffered tail.
+  Scratch-file page-cache advice is charged by bytes rather than every
+  chunk. Logical I/O observations still count cache hits.
+  `kExitScopeEraseBatch=64` batches scope cleanup into transactions of at
+  most 64 erases. `ExitScratchScope` retains teardown faults during
+  unwinding and raises them at a throwing boundary; a cleanup failure
+  cannot silently become a successful run. Its `teardown_failure` is
+  run-local diagnostic state, excluded from the broker-state hash.
+  These changes do not establish a bound on total writes or cleanup time.
+
+- **Bounded resident command journals (CR-150).** The working book and older
+  journal, chain and receipt populations spill to scratch. The journal's
+  non-codec resident limit is 2,048 events; spill pages hold at most
+  32 events and 32,768 bytes; spilling keeps at least 128 newest events
+  resident. A page closes before the next event that will not fit.
+  When paging is required, a single event above 32,768 serialized bytes
+  fails with `report_sink_failed`, reason `scratch_io` (EFBIG), even
+  without a report sink. External opening lists count toward this limit.
+  Spilled-book reads reuse a resident journal definition when available.
+  Admission records share one codec; the non-owning birth scan rejects
+  unknown causes as `corrupt`, and filtering a retired prefix refolds
+  the retained tail. Cohort and group receipts have absolute retained
+  bases and lifetime counts; consumers fold receipts before retiring
+  them. Group receipts below the retained base assert in Debug and throw
+  `out_of_range` otherwise. Adjustment chains longer than 256 links
+  keep their IDs externally; use `prior_adjustment_count` and
+  `visit_prior_adjustments` to read the complete chain instead of only
+  the event's inline IDs.
+
+### run_json and CLI
+
+- **Binary bar inputs and conversion (CR-150).** `run_json.py csv2bin
+  --chart|--feed --symbol SYMBOL --tf TF IN.csv OUT.bin` writes headerless
+  48-byte little-endian `pf_bar_t/v1` rows, a JSON sidecar and, for feeds,
+  `.close.bin` close times. The sidecar is published last after durable
+  replacement; a refusal exits 2 without publishing it. `--ohlcv-bin` and
+  binary symbol feeds use mapped input and the borrowed-feed setter.
+  A symbol-feed index may select the binary chart; exactly one chart source
+  is required, and an index chart and explicit binary must name the same
+  file. `--verify-bin full` is the default; `sidecar` skips digest comparison,
+  while both modes check sizes, metadata and timestamp order.
+  Selected-window charts still require CSV; binary symbol feeds are
+  supported. The capability probe advertises `bars_bin_version=1` only
+  with the required borrowed-feed support and
+  `selected_window_bars_bin_version=0`.
+
+- **Streaming JSON report assembly and named-sink stdout (CR-150).** With
+  a complete sink-v1 API, unjailed `run_json.py` uses a temporary path sink
+  by default and streams report arrays back from the strict reader instead
+  of building an owning result document. `--report-sink PATH` retains the
+  stream: stdout becomes the summary projection, replacing `trades` in
+  place with `report_sink: {path, schema, version, run_id, counts, sha256}`
+  and omitting `equity_curve`. The trade and equity arrays remain in the
+  sink file. `--run-id` selects the run ID and `--spill-dir` selects the
+  scratch location. The default sink directory is checked for disk backing,
+  with `/var/tmp` as fallback; failure raises `run_request_invalid`,
+  option `arguments`, naming `TMPDIR` and the rejected candidates.
+  An explicit `--spill-dir` is passed to the engine without fallback.
+  Ordinary and selected runs with a library exporting
+  `pf_report_scratch_arena_stats` add
+  `diagnostics.scratch_arena_high_water_bytes` and
+  `diagnostics.scratch_arena_bytes`, including zeros without an attachment.
+  Unless the profile is jailed or the run uses the fd route, the report JSON on
+  stdout is now assembled through an unlinked temporary file in the default
+  temporary directory or `--spill-dir`, also for a module without a sink API
+  (1.6.3 assembled it in memory), so such a run needs writable temporary storage
+  the size of the report.
+  A module without any sink API keeps the legacy route unless a sink was
+  explicitly requested; a partial or incompatible sink API is refused.
+
+- **Jailed and fd CLI routes (CR-150, CR-267).** `--profile jailed`, also
+  selected by `PINEFORGE_RUN_JSON_PROFILE=jailed`, installs bounded scratch
+  tables and requires the inherited arena on every fresh handle.
+  The default is `unjailed`. Jailed runs refuse path sinks and `--spill-dir`
+  and leave the sink off unless `--report-sink-fd N` selects a stream.
+  Jailed and fd stdout assembly creates no report artifact file; the
+  sink-off jailed array report still occupies memory.
+  The fd route emits summary/provenance JSON without reading its own sink.
+  It requires `3 <= N <= INT_MAX`, reserves fd 5 for the arena, and refuses
+  path/fd combinations, `--bench`, validation-only runs and a shared phase
+  fd. `--report-sink-format` defaults to 1; format 2 is refused in favor
+  of the external transcoder. Explicit `--report-mode FULL` keeps the legacy
+  report route; SUMMARY_ONLY and STREAMED fail before input or library
+  loading with catalog code `report_mode_unsupported` (65), arguments
+  `mode` and `contract=pineforge-report/v1`, because this ctypes host has
+  no envelope provider bridge.
+
+- **Sink finalization and JSON conversion (CR-150, CR-289).**
+  `pineforge-sink-finalize` verifies an inherited stream, counts, SHA, run ID
+  and ordering before publishing a retained file, or forwards provisional
+  verified lines with `--out -`. Its options include `--in-fd`, `--out`,
+  `--run-id`, `--spool-dir`, `--max-bytes` and `--receipt-fd`; stdout mode
+  requires a positive byte cap and a separate receipt fd.
+  `pineforge-sink-to-json` reads a retained regular file with `--in` or
+  `--in-fd`, presentation from `--stdout-json` or `--stdout-json-fd`, and
+  requires `--out - --max-bytes B`. It verifies before emission, replays
+  arrays, drops invalid presentation metadata with diagnostics and bounds
+  metadata capture to 2 MiB. Valid metadata includes
+  `diagnostics.annualization`, `diagnostics.phase_timing` and a null
+  `calendar.session`. Finalizer version `1.1.0` writes typed-refusal fields
+  to the receipt when `--receipt-fd 2` reserves stderr; with a different
+  receipt fd, those fields appear in a separate stderr JSON diagnostic.
+  Both tools use exit 2 for usage, 3 for malformed input or line/order
+  errors, 4 for receipt verification, 5 for I/O, 6 for an incomplete sink,
+  7 for an internal error and 8 for exceeding the byte cap.
+  An overlong LF-terminated line is 3. Consumers must discard stdout on
+  any nonzero exit and require successful completion.
+
+- **Strategy-runner sink opt-in (CR-150).** `PINEFORGE_REPORT_SINK=1`
+  requires sink-v1 and reads reports through it. Each probe prints a
+  `sink_canary:` line including bytes, records, trades and equity count
+  checked against the engine receipt. `PINEFORGE_KEEP_REPORT_SINK=all` or
+  a probe list keeps named mode-0600 temporary sinks and prints
+  `sink_kept:` paths. `PINEFORGE_CANARY_LOG` retains the sweep's canary
+  lines; the corpus subset command adds a second, sink-on pass.
+  `PINEFORGE_SUBSET_SINK=0` skips that second pass for a developer loop.
+
+- **Bounded scratch in the HPO example (CR-150).** The throughput
+  `grid_search_repro.py` example installs the default bounded scratch
+  manifest on each fresh trial handle and checks run status before ranking
+  its results. A failed trial cannot enter the ranking.
+
+### Run-failure codes and refusals
+
+- **Append-only run-failure numbers.** The 64 codes in v1.6.3 keep their
+  numbers 1 through 64; `none` stays 0. New codes are
+  `report_mode_unsupported=65`, `report_sink_failed=66`,
+  `scratch_capacity_exceeded=67`, `scratch_configuration_invalid=68`
+  and `scratch_io_failed=69`; `kRunFailureCodeCount` is 70.
+  The C failure getters return names.
+
+- **Typed storage failure details (CR-150, CR-267).** `report_sink_failed`
+  is a non-retryable `engine_fault` and distinguishes `arena_exhausted`,
+  `arena_io`, `arena_backing`, `scratch_io`, `sink_io`,
+  `sink_peer_closed` and `sink_exhausted`. Exhaustion diagnostics can
+  carry arena, claimed, high-water and needed bytes, store identity, or
+  sink bytes and cap. File I/O failures of the native journal, chain and
+  opening spill storage also raise
+  `report_sink_failed`/`scratch_io`, with or without a sink; arena
+  backing failures retain their arena reasons. Auxiliary ID-table,
+  ID-pair and placement-file I/O use `scratch_io_failed`, and so do the
+  spilled book's row and link tables and the successor-root index, which
+  carry their I/O errors as auxiliary scratch errors.
+  A `run_json.py` `report_sink_failed` line mirrors `reason`,
+  `high_water_bytes` and `arena_bytes` from its arguments at the top
+  level when present. Binary inputs extend `chart_bars_unreadable` and
+  `symbol_feeds_refused` reason vocabularies.
+
+- **SUMMARY_ONLY capture refusals (X1, N5).** Without a sink, an execution
+  observer and SUMMARY_ONLY are refused together in either call order. A non-null
+  observer setter returns `-2` while the v1 mode or pending legacy
+  equity mode is SUMMARY_ONLY; clearing it remains allowed while quiescent.
+  With an observer registered, `set_equity_report_mode(SUMMARY_ONLY)`
+  returns `PF_REPORT_MODE_REPLAY_UNAVAILABLE` (`-5`) without changing
+  the pending mode; `set_report_mode_v1(SUMMARY_ONLY)` also returns `-5`.
+  Begin refuses a selected window or observer with either SUMMARY_ONLY
+  setting and no sink, before run callbacks or bars, with
+  `report_mode_unsupported` (65), arguments `mode=SUMMARY_ONLY` and
+  `contract=pineforge-report/v1`. Drop the window or observer, or select
+  FULL; bounded capture uses STREAMED with a sink.
+  The envelope read's `-5` capture check judges only an admitted capture.
+  Configuring a window for the next run does not invalidate the envelope
+  of an already completed SUMMARY_ONLY generation.
+
+- **Codec-bound execution preparation (CR-150).** Native hosts that call
+  `bind_journal_codec` now get `PreparationError` with
+  `CoreFailure::UnsupportedTransition` from plan-form
+  `WorkingRequestCore::prepare_execution`, before state changes.
+  The plan's noexcept installation cannot report codec I/O failures;
+  refusing preparation avoids a later `std::terminate`.
+
+- **Nonfinite sink equity is refused (CR-289).** The path and fd writers
+  reject nonfinite E-row `equity` or `open_profit` before writing the row,
+  using `report_result_invalid`, `reason=nonfinite` and
+  `field=equity_curve.equity` or `equity_curve.open_profit`.
+  The converter and finalizer refuse a null in either E field with the
+  same code/arguments and exit 3, even with a valid receipt.
+  The v1 schema keeps `f64?` for compatibility; the writer does not emit
+  null E values. For multiple defects, streaming checks the earliest
+  released point, equity first; completed array/metric routes check
+  final `open_profit` first, so the reported field can differ.
+
+- **Resource retries and boolean arguments (CR-150).** The `resource`
+  class no longer implies retryability. Read each code's `retryable`:
+  `scratch_capacity_exceeded` and `scratch_io_failed` are not retryable;
+  `out_of_memory` still is. The catalog adds the argument kind `boolean`,
+  used by `run_aborted.strategy_started`; `strategy_get_last_error_args`
+  emits it as JSON `true` or `false`.
+
+- **A latched `report_sink_failed` yields an empty report (CR-150).**
+  Every later report read returns NULL arrays and zero counts instead of
+  retrying failed storage, including native spill failures with no sink
+  and a sink failure at finish time after execution succeeded. The typed
+  status, code, arguments and message stay latched. Other failure codes
+  retain their partial-report behavior.
+
+- **Cooperative SIGTERM abort (CR-150).** The opt-in process-wide
+  `pf_run_abort_install_sigterm_v1`, `pf_run_abort_requested_v1` and
+  `pf_run_abort_restore_sigterm_v1` API lets a batch stop after its
+  in-flight input bar. `run_json.py` blocks SIGTERM from startup on
+  platforms with `pthread_sigmask`, until the native flag-only handler
+  can take ownership; an earlier pending signal is reported before start.
+  It publishes `run_aborted`, exits 1 and leaves no sink trailer.
+  Arguments `bars_count` and `strategy_started` are mirrored as
+  `bars.count` and `strategy_started`; the abort document carries no
+  retryable field. An abort during report assembly also clears sink-owned
+  sequence arrays while preserving security diagnostics and scalar fields.
+
+### State hashes
+
+- **Broker-state hash values of Pine source-layer runs on 1.7.0 differ from
+  1.6.3; the domain tags are unchanged.** The tags stay
+  `pineforge-broker-state/v19` and `pineforge-source-adapter/v4`: the recipe
+  gains folded state and changes what some folds contain (the causes are
+  listed below), and the placement retirement rules deliberately change
+  values inside the retirement epoch. A host that stored hashes from 1.6.3 or earlier
+  will see different values on 1.7.0 for every run of a Pine source-layer host
+  (`PineStrategyHost`): `strategy_broker_state_hash`, the per-bar
+  `pf_report_t::broker_state_hash` rows, and `strategy_stream_state_hash`,
+  which folds the broker-state hash. A stored hash will not match a recomputed
+  one; compare these hashes only between runs of one release. A bare native
+  host folds only the constant `source:none` for the source layer, so none of
+  the causes below applies to it. Apart from the last cause, the changes
+  alter hash values only (the re-pin commits report unchanged trades, counts
+  and curves); the last cause, CR-277, also alters trades in one measured
+  configuration. Causes:
+  - the trade command store: the host extension folds a presence flag and, when
+    the store exists, its state digest (order id, next handle, record count and
+    every live row's handle, key and value, independent of backing and cache
+    placement); after a run releases the store the same presence and digest
+    bytes are folded (CR-150);
+  - the exit command store: the adapter folds, right after its domain, a
+    presence flag and, when an exit scratch exists, the run identity, presence
+    flags for its version provider, its lots callback and its working callback,
+    and the exit store's presence flag and state digest (same contents as
+    above) (CR-150); the exit context's temporary scope-allocation counter is
+    not folded (LAB-QUIETFIX), which is not a difference from 1.6.3, which
+    never folded it;
+  - retired limit-only placements (O1W): a terminally filled, non-revivable
+    limit is erased from the hashed placement sequence and survives only in the
+    placement table's high-water, erased-row count and erased-identity digest,
+    and a filled-exit placement folds an extra marker; hash values change
+    wherever such a limit retires;
+  - placement retirement rules (CR-150): entry and order placements retire by
+    their script-bar open time instead of an input-bar index (on a chart that
+    aggregates input bars, 1.6.3 kept every entry row of the run), and for the
+    dormant exit legs of one origin, exit id, family and entry only the oldest
+    is kept as the representative, with superseded dormant legs released (except a dormant leg that
+    was not withdrawn while its origin is still open: it is kept until its position cycle ends, see
+    Costs that remain); the retired rows leave the hashed
+    placement sequence, so hash values change wherever such a placement
+    retires;
+  - settled bracket families (O1W): wholly settled families are archived out of
+    the working families; when any is archived the adapter folds a versioned
+    part (`pineforge-settled-bracket-families/v1`, the family count and a keyed
+    digest) after the working families, and it is absent when none is
+    archived;
+  - `strategy.close("")` and `strategy.close_all()` keep a pending entry's real
+    id as its replacement key (CR-277; it was an empty string), and the hash
+    folds every pending entry's key, so a hash taken while such an entry is
+    pending differs. A same-id `strategy.entry` re-issued behind such a close
+    now replaces the pending entry instead of opening a second one, as
+    TradingView's order-id rule requires; one measured random reversal
+    configuration (seed 837832, magnifier 1, margin 0, pyramiding 1) therefore
+    closes 89 trades instead of 90 (the lost trade was an exact duplicate
+    short opened beside the first). Reverting only the key capture restores the
+    90. TradingView equality of the exact close-then-reissue sequence is not
+    proven.
+  The cohort table, the consumed partial-exit cycles, the admission-event
+  journal, the exit phases, the source-money fold and the scheduler's consumed
+  digests were rewritten to bound memory; the source comments state that their
+  bytes are unchanged. See the public contract's rule on state-hash recipes
+  ([public contract](docs/pages/public-contract.md)).
+
+### Adapter behavior
+
+- **Adapter history retirement (CR-150).** Origin/cohort receipts, bracket
+  rosters, historical IDs, successor roots and position tails use retirement,
+  bounded resident windows or scratch instead of retaining all history in
+  RAM, except that rows pinned for the current position cycle and one record
+  per settled bracket family stay in process memory (see Costs that remain).
+  Named-exit retention preserves closed-origin exit evidence while its
+  position cycle still holds the side. Placement aging uses script-bar time.
+  The reissue scan memoizes its first witness and scans new candidates
+  incrementally; eligible terminally filled named limits retire, while
+  global filled limits remain revival evidence. Settled bracket families
+  are archived and restored before append or a consumed-leg probe.
+  The partial-exit-cycle sorted hash fold is maintained on mutation rather
+  than rebuilt at each hash read; its mutations are not constant-time.
+
+- **Bracket cancels of members no longer working (CR-150).** When an exit
+  bracket family is cancelled, members the kernel no longer works,
+  including settled members, record a `NotWorking` outcome against one
+  never-issued incarnation (`UINT64_MAX`) of the same run, in roster order.
+  Working members keep their own handles. Recorded cancel targets therefore
+  do not depend on whether non-working rows have already been retired.
+
+- **Entry incarnation numbers can differ from 1.6.3 after a same-id re-entry
+  behind a full close (CR-277).** The public C ABI value
+  `strategy_closed_trade_entry_incarnation`, the C++ `Trade::entry_incarnation`
+  and the `entry_incarnation` of the sink T records and the `run_json` trade
+  rows can differ from 1.6.3 in scripts that reissue an entry with the
+  same id behind a full close: the superseded definition is no longer
+  submitted, so it no longer takes an incarnation number. Numbers stay
+  non-zero, unique and monotonic; `entry_id` is unchanged. `pf_trade_t` has no
+  such member and is unchanged.
+
+- **Store-once bars and bounded calendar views (CR-150).** Native bar views,
+  the chart scheduler and the magnifier share borrowed input or generate
+  bounded path segments instead of copying whole feeds and completion
+  arrays. `PINEFORGE_HAS_SYMBOL_FEED_BORROWED_V1` announces
+  `strategy_set_symbol_feed_borrowed_v1`, which requires bars and close
+  times to outlive their installation and refuses stream-begin while
+  installed. N-day `request.security` partitions are generated on demand
+  with a window of 16 period opens. Calendar memo and certified-cycle span
+  buffers are reserved once.
+
+- **Fixed N-day request bars across a DST change (F16/F17).** On the 1.7.0
+  development line, `2D` and longer `request.security` bars could use the
+  wrong trading dates when increasing feed timestamps resolved to session
+  dates that went backward across a clock change. This is fixed in 1.7.0;
+  v1.6.3's stored-table builder handled these dates correctly.
+  `make_multi_day_period_source` now selects a calendar-year rescan for
+  that case, keeping the first stamp per date, chart before auxiliary
+  feed, in `kUnorderedRescanDays=366` date slots. The usual ordered path
+  and its 16-open window are unchanged.
+
+### CI and docs
+
+- **Scratch sizing and ABI inventories (CR-150, CR-249, CR-260).** The public
+  scratch-table and arena documentation distinguishes policy admission from
+  a certified bound. The arena estimator accounts for the ordered fold,
+  excludes openings for its stock-source profile and reserves the three
+  command-store shares in its closed form.
+  `scripts/emit_abi_export_list.py` emits checked runtime and independent
+  native C inventories as TSV, to stdout or atomically through `--output`;
+  overwriting requires `--force`.
+
+- **CTest sharding and Debug defaults.** `scripts/ci_verify.py
+  --ctest-shard I/N` accepts `1 <= I <= N <= 8`. Multi-shard runs support
+  release, debug, sanitizers and kernel, with deterministic SHA-256
+  name assignment and registry, selection and execution evidence for
+  `ctest-shard-union/v1`; the full union is required for a verification
+  verdict. Debug and sanitizers exclude the pinned `slow` rows by default.
+  Release, kernel, native and runner-only live profiles have no default
+  exclusion. Release is the gate for the slow rows; Debug's default is
+  not full-population verification. PR CI selects only `fast` rows;
+  post-merge Release, kernel and native run every registered row, while
+  Debug and sanitizers retain their default `slow` exclusion.
+
 - **Ownership manifest controls run in four CTest shards (CR-196).** The same
   loader-discovered cases keep every assertion and the 180-second timeout per
   row; a cheap guard checks complete, disjoint assignment for shard counts
-  1 through 8. Preflight continues to run the complete unsharded suite.
-- **EN-115 selected-window completeness proof completed.** From 1.6.2 the image
-  declares selected-window contract revision `1.3` again: the section-4
-  producers and manifest are present, `value_ownership` is `complete`, and a
-  revision `1.3` pairs only with a `complete` receipt. The `docker/run_json.py
-  --capabilities-json` probe reports
+  1 through 8. Preflight continues to run the complete unsharded suite. This
+  was already in the v1.6.2 and v1.6.3 sources; it is first documented here.
+
+- **Selected-window completeness (EN-115).** (Already declared by the v1.6.2 and
+  v1.6.3 sources; first documented here.) The image declares selected-window
+  contract revision `1.3`: the section-4 producers and manifest are present,
+  `value_ownership` is `complete`, and revision `1.3` pairs only with a
+  `complete` receipt. `docker/run_json.py --capabilities-json` reports
   `capabilities.selected_window_contract_revisions` as `["1.3"]` on a
-  supported runtime and `[]` otherwise. The published 1.5.0 image declared
-  `1.3-parity` (earlier images carried no revision member), the published
-  1.6.0 image declared `1.3` without a completeness proof, and engine 1.6.1
-  (released, no hub image) declares `1.3-parity`; it remains the parity
-  build's literal, and a tuple holding both is invalid. No wire or ABI change: the selected-window wire version
-  stays 1, the phase version 1 and the fingerprint/schema version 2.
+  supported runtime and `[]` otherwise. A parity build declares
+  `1.3-parity`; a tuple holding both is invalid. The selected-window wire
+  version stays 1, the phase version 1 and the fingerprint/schema version 2.
+
+- **Corpus regeneration tooling (CR-271).**
+  `scripts/regen_corpus_cpp.sh` makes its fetched codegen checkout readable
+  by the runtime image's non-root user and prints the last three stderr
+  lines when transpilation fails.
+
+### Costs that remain
+
+- **1.7.0 is slower than 1.6.3 on some scripts.** The cause is scratch-file
+  reads and writes per bar that 1.6.3 did not make. Measured on one Linux host
+  (16 vCPU, GCC 13.4, mean of four repetitions) over six benchmark scripts, the
+  two median scripts of the parity sweep take 1.1 and 1.6 times as long as on
+  1.6.3 for compile plus run (1.1 and 3.3 times for the run phase alone), and
+  the worst of the six takes 5.7 times as long (16.2 times for the run phase
+  alone). The six are not a sample of all scripts, and the results are
+  identical in every measured case. The fix is planned for 1.7.1, with a
+  target of at most 1.1 times the 1.6.3 run time on every script in the
+  measured set.
+
+- **Script state keeps its resident layout.** No paged or external store for
+  Pine script state (arrays, strings, maps, matrices, user-defined type
+  instances, Series and indicator history, drawing objects) is part of this
+  release. The engine's own containers for it (`series.hpp`, `matrix.hpp`,
+  `generic_matrix.hpp`, `drawing.hpp` and the `ta_*` sources) are unchanged
+  from v1.6.3 and stay in process memory, so a script that grows one of them
+  grows resident memory with it. The paths whose resident memory is bounded
+  are the trade-ledger rows, the sink writer and the command journals
+  described above; the files they spill to grow with the run, and the trade
+  rows are O(T) on disk in a writable scratch directory even with no sink.
+  Without a report sink the equity curve stays in process memory (one point
+  per script bar) and FULL reports build owning arrays. With a report sink
+  installed the engine keeps only the editable tail of the curve in memory
+  and writes the rest to scratch, on the Pine host's legacy FULL sink route
+  as on the native route. `PineStrategyHost` cannot select `STREAMED` or
+  `SUMMARY_ONLY`.
+
+- **Pending-book reads still depend on the candidate population.** Let R be
+  live handles plus staged same-bar commands, pending entries, bracket legs,
+  fill-recalculation requests and shadow requests, before duplicate exit
+  legs are collapsed; journal history is excluded. `projected_pending_size()`
+  and `copy_v1()` now skip predecessor and sibling comparisons for non-exit
+  rows. Exit rows still scan predecessors and siblings. The worst case,
+  already present in v1.6.3, remains O(R²) candidate operations for size or
+  a late indexed copy, and O(P R²) for a full indexed walk of P projected
+  rows, reaching O(R³) when P=R. String comparison, payload reconstruction
+  and backing I/O add costs.
+
+- **Pyramiding and cohort exposure keep population-dependent work.** In the
+  configured pyramiding-above-one close-ledger path, booking scans retained
+  opening records for the armed incarnation, named ID and remaining
+  quantity, then removes depleted rows; the held-record check sums them
+  again. `cohort_exposure_for` repeatedly searches `live_units_by_origin`
+  and origin positions to fold units in roster order. Its rosters and
+  live-unit/origin indices depend on the position population. These paths
+  do not establish a whole-run time or memory bound.
+
+- **Full arrays and borrowed-string compatibility still cost memory.**
+  FULL owning reports grow with captured sequences. Legacy C closed-trade
+  string pointers materialize requested rows until the next run, and
+  terminal-row pointer compatibility retains the prefix through the
+  requested row. C consumers needing bounded transfer buffers use the
+  report sink; C++ hosts can use `TradeLedger::read/visit/previous`.
+  Their `Trade` values own text; they do not implement the declared
+  separate-text or paged trade-reader contracts.
+
+- **Spill storage and repeated passes still cost time and backing space.**
+  Scratch digests walk live records and their bytes. Settled bracket
+  families retain one fixed record per archived family in a resident map.
+  Cold journal/book reads can reconstruct owning definitions and reload
+  pages. Partially occupied ordered-index nodes are not rebalanced on erase,
+  and committed journal pages stay in a reuse pool. Sink metrics and JSON
+  output replay ordered records; output-column conversion performs a replay
+  per column plus emission preflight. Exit-scope cleanup still seeks and
+  erases each record, although commits now batch up to 64 erases.
+
+- **A failed read of spilled storage can end the process.** Some reads that
+  now come from scratch files reach callers declared `noexcept`, so an I/O
+  error or an allocation failure there calls `std::terminate` where the run
+  should fail with a typed code such as `scratch_io_failed`. Two paths can
+  terminate; the C accessors fail silently. `NativeExecutionConsumer::first_command_after` is `noexcept` and
+  bisects `WorkingRequestCore::history()`, a `JournalView` whose events past
+  the 2,048-event resident limit are read back from spill pages; it is
+  reached from the Pine adapter's `visit_commands_after`, from `native_events`
+  and from `strategy_native_events_v1`. `WorkingRequestCore::commit(MutationPlan&)`
+  is `noexcept` and writes through the journal codec that `bind_journal_codec`
+  attaches, so a failed write terminates; no production code binds that codec
+  on a `WorkingRequestCore` in this release, so only a host or test that does
+  reaches it. The C accessors `strategy_closed_trade_entry_id`,
+  `strategy_closed_trade_exit_id`, `strategy_closed_trade_exit_comment`,
+  `strategy_closed_trade_close_cause` and
+  `strategy_closed_trade_entry_incarnation` swallow a failed ledger read
+  and answer as for an out-of-range index (NULL, -1 or 0) without setting
+  `strategy_get_last_error`. Tracked as card ORG-171-IO, a
+  1.7.1 priority.
+
+- **Reads of closed trades and cohorts now cost I/O.** The prefix sums
+  described above apply to sealed rows only. Unless history is streamed,
+  the trade ledger keeps 64 rows resident and reads older closed rows,
+  text included, back from scratch files on every call, where the previous
+  release walked an in-memory vector (`std::vector<Trade>`).
+  `BacktestEngine::avg_trade_percent`, `avg_winning_trade_percent`,
+  `avg_losing_trade_percent` and the `closed_trade_*` accessors therefore
+  read every older row per call, so a script that calls them each bar pays
+  one scratch read per row per call. When closed rows are streamed (a
+  report sink whose trade history is streamable), once per script bar
+  `NativeExecutionConsumer::closed_rows_sealable` decodes again every row of
+  the trailing block of closed rows that share the last exit time. Cohort
+  lookups through `DiskResidentIdTable::find` now spill resident rows and walk
+  an on-disk ordered tree, inside loops such as `cohort_exposure_for`, where
+  the previous release used an `std::unordered_map`. The complexity in the
+  number of rows is unchanged for closed-trade reads. A cohort lookup was
+  O(1) and is now O(resident rows + log of the id population x key length)
+  per call. None of the three is
+  measured: this release pins no throughput bound for them. Tracked as card
+  ORG-171-COSTS.
+
+- **A refused begin can empty the report sink file.** A path report sink is
+  opened with `O_TRUNC` when a run begins (`BacktestEngine::begin_report_sink`,
+  reached from the consumer's begin before the dependency command scratch is
+  provisioned). A begin that is refused after that point, for example because
+  `PINEFORGE_COMMAND_SCRATCH_DIR` names a tmpfs, leaves the file at that path
+  created and truncated to zero bytes, so a file from an earlier run at the
+  same path is lost even though the new run was refused. Use a sink path
+  whose old contents you can lose, or check the scratch directory before
+  `begin`. Tracked as card ORG-171-SINK, a 1.7.1 priority.
+
+- **A touched dormant leg that is re-issued keeps one placement row per
+  re-issue.** A script that re-issues `strategy.exit` on a leg held dormant (a
+  declined-reversal pair or pair hold) of a still open origin, after the
+  leg's previous stop was touched so that the re-issue arrives as a new
+  instance, keeps one `PlacementSnapshot` row per such re-issue in the
+  heap-resident `PlacementTable` until the position cycle ends or the origin
+  closes. This is the retention rule v1.6.3 applied to unwithdrawn dormant
+  legs; the growth on this pattern is not measured. An untouched re-issue
+  with the same exit id replaces its row in place and does not grow. A
+  strategy that never goes flat and keeps re-issuing a touched dormant leg
+  therefore grows resident memory with the number of such re-issues, and it
+  is tracked as card ORG-171-DORMANT, a bounded retirement for this pattern
+  with a RETAIN-ladder bound test that exercises an unwithdrawn dormant
+  re-issue.
 
 ## 1.6.1 — 2026-10-18
 

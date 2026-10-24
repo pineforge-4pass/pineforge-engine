@@ -1,0 +1,6 @@
+if(UNIX)
+add_test(NAME test_run_json_sink_failure_details_w2 COMMAND ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider ${PROJECT_SOURCE_DIR}/tests/test_run_json_sink_failure_details.py -k "not native")
+if(PINEFORGE_BUILD_SOURCE_LAYER AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
+add_test(NAME test_run_json_sink_failure_details_native_w2 COMMAND ${CMAKE_COMMAND} -E env "PINEFORGE_L22V_STRATEGY_SO=$<TARGET_FILE:report_sink_l6b1_strategy>" ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider ${PROJECT_SOURCE_DIR}/tests/test_run_json_sink_failure_details.py -k native)
+endif()
+endif()

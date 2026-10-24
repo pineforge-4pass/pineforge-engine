@@ -2,13 +2,23 @@
 #include <pineforge/source/pine_native_host.hpp>
 
 #include "../broker_state_hash_internal.hpp"
+#include "../native_execution_consumer.hpp"
 #include "pine_intent_state.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <stdexcept>
 #include <type_traits>
 #include <variant>
+#include <vector>
+
+#ifndef PINEFORGE_TAIL_WORK
+#define PINEFORGE_TAIL_WORK(site, count) ((void)0)
+#endif
+#ifndef PINEFORGE_BROKER_HASH_OBSERVE
+#define PINEFORGE_BROKER_HASH_OBSERVE(rows, families, archived, digest) ((void)0)
+#endif
 
 namespace pineforge {
 namespace {
@@ -43,6 +53,38 @@ void hash_source_run_identity(BrokerStateHashSink& f,
     // it does not change the source-visible state of a fresh run.
     f.u(0);
 }
+void hash_scratch_digest(BrokerStateHashSink& f,
+                         ::pineforge::detail::ScratchStatus status, std::uint64_t digest) {
+    if (status != ::pineforge::detail::ScratchStatus::ok)
+        throw coded<std::logic_error>(
+            status == ::pineforge::detail::ScratchStatus::io_error
+                ? RunFailureCode::scratch_io_failed : RunFailureCode::engine_invariant,
+            {}, "scratch state digest failed");
+    f.u(digest);
+}
+void hash_scratch_store(BrokerStateHashSink& f,
+                        const ::pineforge::detail::CommandScratchStore* store) {
+    f.b(store != nullptr);
+    if (!store) return;
+    // One page of workspace, independent of the record population. The state
+    // digest includes order.id, next_handle, record_count and every live row's
+    // handle/key/value, without depending on backing or cache placement.
+    std::vector<std::byte> page(store->page_size());
+    std::uint64_t digest = 0;
+    const auto status = store->state_digest({page.data(), page.size()}, digest);
+    if (status == ::pineforge::detail::ScratchStatus::io_error)
+        ::pineforge::detail::rethrow_carried_scratch_failure(store->carried_failure());
+    hash_scratch_digest(f, status, digest);
+}
+void hash_exit_scratch(BrokerStateHashSink& f,
+                       const source::detail::ExitScratchContext* scratch) {
+    f.b(scratch != nullptr);
+    if (!scratch) return;
+    hash_source_run_identity(f, scratch->run);
+    f.b(scratch->versions != nullptr);
+    f.b(scratch->lots != nullptr); f.b(scratch->working != nullptr);
+    hash_scratch_store(f, &scratch->store);
+}
 void hash_native_handle(BrokerStateHashSink& f, const native_order::RequestHandle& handle) {
     hash_source_run_identity(f, handle.run); f.u(handle.incarnation);
 }
@@ -57,6 +99,9 @@ void hash_placement(BrokerStateHashSink& f, const source::PlacementSnapshot& val
     f.d(value.requested_qty); f.d(value.projection_remaining_qty);
     f.d(value.qty_percent); f.b(value.is_long); f.b(value.immediately);
     f.b(value.opening); f.b(value.deferred_cohort);
+    // Conditional v19/v4 retirement fact: an untouched placement retains
+    // its byte spelling. This receipt decides the filled-limit K1 exception.
+    if (value.filled_exit) f.u(0x66696c6c6564ULL);
     f.b(value.reservation_deferred_to_pending_entry);
     // Folded only when set, so a run that never issues a void exit keeps
     // its digest (lane W3B-ENG-GRID).
@@ -269,6 +314,7 @@ void hash_native_request(BrokerStateHashSink& f, const native_order::Request& re
 
 void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     f.s(kSourceAdapterDomain);
+    hash_exit_scratch(f, exit_scratch_.get());
     f.u(source_sequence_); f.u(command_ordinal_); f.u(broker_open_epoch_);
     f.i(last_broker_open_ms_); f.u(source_command_sequence_); f.b(host_ != nullptr);
     f.b(config_.process_orders_on_close); f.b(config_.calc_on_order_fills);
@@ -302,11 +348,11 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     for (const auto& pair : staged_.inputs) input_keys.push_back(pair.first);
     std::sort(input_keys.begin(), input_keys.end()); f.u(input_keys.size());
     for (const auto& key : input_keys) { f.s(key); f.s(staged_.inputs.at(key)); }
-    std::vector<std::string> cohort_keys;
-    for (const auto& pair : cohorts_by_id_) cohort_keys.push_back(pair.first);
-    std::sort(cohort_keys.begin(), cohort_keys.end()); f.u(cohort_keys.size());
-    for (const auto& key : cohort_keys) {
-        const auto& cohort = cohorts_by_id_.at(key);
+    // Replay every logical cohort in the same lexicographic order as before,
+    // including retired summaries, without materializing an id-sized vector.
+    f.u(cohorts_by_id_.size());
+    for (const auto& row : cohorts_by_id_.all_sorted()) {
+        const auto& key = row.first; const auto& cohort = row.second;
         f.s(key); f.u(cohort.handle.value); f.i(cohort.cycle);
         // v4: the origin roster is append-only; its members fold once each,
         // when appended (OriginRoster::digest).
@@ -322,14 +368,22 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
             f.u(incarnation); f.d(cohort.live_units_by_origin.at(incarnation));
         }
     }
-    f.u(cohort_order_.size());
-    for (const auto& key : cohort_order_) f.s(key);
+    f.u(cohorts_by_id_.size());
+    cohorts_by_id_.for_each_id([&](const auto& key) { f.s(key); });
     // v4: the rows the table still holds, in incarnation order, and what the
     // erased ones left: the high water, how many, and a running digest of
     // their identities (PlacementTable::erased_digest).
+    // O1W's terminally filled, non-revivable limits use the same erase/fold
+    // path. This deliberately changes values inside the retirement epoch;
+    // no hash of a mutable placement is cached.
+    PINEFORGE_BROKER_HASH_OBSERVE(placement_, bracket_families_,
+                                settled_bracket_families_, settled_bracket_digest_);
     f.u(placement_.high_water()); f.u(placement_.erased_rows()); f.u(placement_.erased_digest());
     f.u(placement_.size());
-    for (const auto& row : placement_) { f.u(row.first); hash_placement(f, row.second); }
+    for (const auto& row : placement_) {
+        PINEFORGE_TAIL_WORK("hash_placements", 1);
+        f.u(row.first); hash_placement(f, row.second);
+    }
     std::vector<std::uint64_t> live_keys;
     for (const auto& pair : live_by_source_key_) live_keys.push_back(pair.first);
     std::sort(live_keys.begin(), live_keys.end()); f.u(live_keys.size());
@@ -341,10 +395,20 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
         // v4: the settled prefix as its count and running digest, the
         // working tail in full, and the consumed legs of erased members.
         const auto& family = bracket_families_.at(key);
+        PINEFORGE_TAIL_WORK("hash_families", 1);
         f.u(key); f.u(family.settled_count()); f.u(family.settled_digest());
         hash_native_handle_vector(f, family.working_tail());
         f.u(family.consumed_facts().size());
         for (const auto& fact : family.consumed_facts()) { f.u(fact.first); f.u(fact.second); }
+    }
+    // Immutable wholly settled families are still addressable for a later
+    // bracket cancel/re-issue. Their keyed digest changes on archive, restore
+    // and erase, so reads cost only active families. This versioned extension
+    // is absent when no family is archived; the v4 working-tail fold above
+    // keeps its spelling. Run identity is normalized as for native handles.
+    if (!settled_bracket_families_.empty()) {
+        f.s("pineforge-settled-bracket-families/v1");
+        f.u(settled_bracket_families_.size()); f.u(settled_bracket_digest_);
     }
     f.u(pending_bracket_legs_.size());
     for (const auto& leg : pending_bracket_legs_) {
@@ -463,9 +527,27 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
         f.d(fee.nonpercent_fee);
     }
     // v4: the final prefix folded once, the current bar's tail in full.
-    f.u(trade_exit_phase_.size()); f.u(exit_phase_final_); f.u(exit_phase_digest_);
-    for (std::size_t index = exit_phase_final_; index < trade_exit_phase_.size(); ++index)
-        f.u(trade_exit_phase_[index]);
+    const auto trade_prefix = host_
+        ? NativeExecutionConsumer::bound(*host_).closed_trade_prefix()
+        : NativeExecutionConsumer::ClosedTradePrefix{};
+    const std::size_t phase_end = trade_prefix.base + trade_exit_phase_.size();
+    const auto* phase_consumer = host_ ? &NativeExecutionConsumer::bound(*host_) : nullptr;
+    f.u(phase_end);
+    if (phase_consumer && phase_consumer->exit_phases_restarted()) {
+        // Preserve the sink-off hash's raw reset marker AND its phase bytes.
+        // The bounded transform applies the sealed bytes to this incoming
+        // hash, rather than substituting a different digest representation.
+        f.u(0); f.u(BrokerStateHashSink{}.h);
+        f.h = phase_consumer->replay_sealed_exit_phases(f.h);
+        for (const auto phase : trade_exit_phase_) f.u(phase);
+    } else {
+        if (exit_phase_final_ < trade_prefix.base)
+            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                           "hashed exit-phase fold precedes the sealed prefix");
+        f.u(exit_phase_final_); f.u(exit_phase_digest_);
+        for (std::size_t index = exit_phase_final_; index < phase_end; ++index)
+            f.u(trade_exit_phase_.at(index - trade_prefix.base));
+    }
     // The entry-id table orders children once it holds two ids, and its size
     // matters once its peak passes 13 keys; below both it decides nothing.
     if (exit_rank_keys_.size() >= 2 || exit_rank_peak_ > 13 || exit_rank_alt_peak_ > 13) {
@@ -485,14 +567,7 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     std::sort(intraday_relabel_ordinals.begin(), intraday_relabel_ordinals.end());
     f.u(intraday_relabel_ordinals.size());
     for (const auto ordinal : intraday_relabel_ordinals) f.u(ordinal);
-    std::vector<std::string> consumed_partial_keys;
-    consumed_partial_keys.reserve(consumed_partial_exit_cycles_.size());
-    for (const auto& row : consumed_partial_exit_cycles_) consumed_partial_keys.push_back(row.first);
-    std::sort(consumed_partial_keys.begin(), consumed_partial_keys.end());
-    f.u(consumed_partial_keys.size());
-    for (const auto& key : consumed_partial_keys) {
-        f.s(key); f.i(consumed_partial_exit_cycles_.at(key));
-    }
+    consumed_partial_exit_cycles_.fold_sorted(f);
     std::vector<std::uint64_t> shadowed_openings(
         bracket_shadowed_openings_.begin(), bracket_shadowed_openings_.end());
     std::sort(shadowed_openings.begin(), shadowed_openings.end());
@@ -660,9 +735,12 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
             // as fold_source_money does.
             const std::uint64_t count = pine->closed_trade_count();
             const bool restart = count < source_money_folded_;
-            double gains = restart ? 0.0 : source_gains_;
-            double losses = restart ? 0.0 : source_losses_;
-            for (std::uint64_t index = restart ? 0 : source_money_folded_;
+            if (count < trade_prefix.base)
+                throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                               "hashed source-money rewind precedes the sealed prefix");
+            double gains = restart ? trade_prefix.source_gains : source_gains_;
+            double losses = restart ? trade_prefix.source_losses : source_losses_;
+            for (std::uint64_t index = restart ? trade_prefix.base : source_money_folded_;
                  index < count; ++index) {
                 const double profit = pine->closed_trade(index).pnl;
                 if (profit > 0.0) gains += profit;
@@ -753,27 +831,18 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     }
     f.u(cap.next_action()); f.b(priority.attached());
     f.b(priority.retained_parent_first());
-    // v4: the journal's events as a running digest, each folded once, and its
-    // next sequence. Its outstanding allocations and active captures live
-    // inside one command and are empty at every hash point.
-    const auto& events = admission_journal.events();
-    if (admission_events_folded_ > events.size()
-        || (admission_events_folded_ != 0
-            && admission::sequence(events[admission_events_folded_ - 1])
-                != admission_events_last_)) {
-        admission_events_folded_ = 0;
-        admission_events_digest_ = 1469598103934665603ULL;
-    }
-    for (; admission_events_folded_ < events.size(); ++admission_events_folded_) {
-        BrokerStateHashSink event_fold;
-        event_fold.h = admission_events_digest_;
-        admission::reflect(events[admission_events_folded_], "event",
-            [&](const auto& field) { hash_admission_field(event_fold, field); });
-        admission_events_digest_ = event_fold.h;
-        admission_events_last_ = admission::sequence(events[admission_events_folded_]);
-    }
+    // The eager boundary fold and this query share the original v4 byte loop.
+    // A retired prefix substitutes for its events, without adding hash bytes.
+    fold_admission_events();
     f.u(admission_journal.sequence_frontier());
     f.u(admission_events_folded_); f.u(admission_events_digest_);
+}
+
+void source::PineExecutionAdapter::fold_admission_events() const {
+    const auto folded = admission_journal.folded_window();
+    admission_events_folded_ = folded.count;
+    admission_events_digest_ = folded.digest;
+    admission_events_last_ = folded.last_sequence;
 }
 
 std::uint64_t source::PineExecutionAdapter::fold_dropped_close(
@@ -794,7 +863,7 @@ std::uint64_t source::PineExecutionAdapter::fold_exit_phase(std::uint64_t digest
     return f.h;
 }
 
-void source::PineScheduler::hash_state(BrokerStateHashSink& f) const {
+void source::PineScheduler::fold_consumed_digests() const noexcept {
     // ab9714be test_live_state_hash_recording: a shorter run is a hash prefix
     // of the same longer feed.  Retained future input is provider transport,
     // not broker continuation state, so fold only the consumed source prefix.
@@ -802,8 +871,7 @@ void source::PineScheduler::hash_state(BrokerStateHashSink& f) const {
     // folded once, the first time a read passes it; a prefix run still reads
     // like the full run up to its last bar.
     const std::size_t consumed = std::min(
-        retained_.bars.size(), static_cast<std::size_t>(std::max(source_bar_count_, 0)));
-    f.s("pineforge-pine-scheduler/v3");
+        retained_n_, static_cast<std::size_t>(std::max(source_bar_count_, 0)));
     const auto extend = [](std::size_t& folded, std::uint64_t& digest, std::size_t upto,
                            const auto& element) {
         if (folded > upto) {
@@ -819,10 +887,44 @@ void source::PineScheduler::hash_state(BrokerStateHashSink& f) const {
     };
     extend(consumed_bars_folded_, consumed_bars_digest_, consumed,
         [&](BrokerStateHashSink& g, std::size_t index) {
-            const auto& bar = retained_.bars[index];
+            // owned is just the stream's backing for bars, not an additional
+            // broker fact: either storage folds the same bar bytes once.
+            const auto& bar = retained_.is_stream ? retained_.owned[index] : retained_.bars[index];
             g.d(bar.open); g.d(bar.high); g.d(bar.low); g.d(bar.close); g.d(bar.volume);
             g.i(bar.timestamp);
         });
+    const std::size_t completion_prefix = std::min(input_script_size_, consumed);
+    // Fold both flags here, before release_batch_input clears the caller span.
+    // The independent cursor restarts with both digests for a shorter prefix.
+    if (consumed_completes_folded_ > completion_prefix
+        || consumed_boundaries_folded_ > completion_prefix) {
+        consumed_completes_folded_ = 0;
+        consumed_completes_digest_ = 1469598103934665603ULL;
+        consumed_boundaries_folded_ = 0;
+        consumed_boundaries_digest_ = 1469598103934665603ULL;
+        if (consumed_script_cursor_) consumed_script_cursor_->reset();
+    }
+    extend(consumed_completes_folded_, consumed_completes_digest_, completion_prefix,
+        [&](BrokerStateHashSink& g, std::size_t index) {
+            const auto flags = consumed_script_cursor_
+                ? consumed_script_cursor_->next(retained_.bars[index])
+                : ScriptBucketCursor::Flags{};
+            g.u(flags.complete);
+            BrokerStateHashSink boundary;
+            boundary.h = consumed_boundaries_digest_;
+            boundary.u(flags.boundary);
+            consumed_boundaries_digest_ = boundary.h;
+            consumed_boundaries_folded_ = index + 1;
+        });
+}
+
+void source::PineScheduler::hash_state(BrokerStateHashSink& f) const {
+    fold_consumed_digests();
+    // retained_n_ survives detachment. Using the now-empty span's size here
+    // would rewind all three digests and change every post-run hash (F8).
+    const std::size_t consumed = std::min(
+        retained_n_, static_cast<std::size_t>(std::max(source_bar_count_, 0)));
+    f.s("pineforge-pine-scheduler/v3");
     f.u(consumed); f.u(consumed_bars_digest_);
     f.s(retained_.input_tf); f.s(retained_.script_tf); f.b(retained_.bar_magnifier);
     f.i(retained_.magnifier_samples); f.i(static_cast<std::int64_t>(retained_.distribution));
@@ -859,15 +961,9 @@ void source::PineScheduler::hash_state(BrokerStateHashSink& f) const {
     f.i(prior_input_script_open_ms_);
     f.i(awaiting_legacy_script_open_ms_);
     f.i(last_stream_input_open_ms_);
-    const std::size_t completion_prefix = std::min(input_script_completes_.size(), consumed);
-    extend(consumed_completes_folded_, consumed_completes_digest_, completion_prefix,
-        [&](BrokerStateHashSink& g, std::size_t index) { g.u(input_script_completes_[index]); });
+    const std::size_t completion_prefix = std::min(input_script_size_, consumed);
     f.u(completion_prefix); f.u(consumed_completes_digest_);
-    const std::size_t boundary_prefix = std::min(input_script_boundary_completes_.size(), consumed);
-    extend(consumed_boundaries_folded_, consumed_boundaries_digest_, boundary_prefix,
-        [&](BrokerStateHashSink& g, std::size_t index) {
-            g.u(input_script_boundary_completes_[index]);
-        });
+    const std::size_t boundary_prefix = std::min(input_script_size_, consumed);
     f.u(boundary_prefix); f.u(consumed_boundaries_digest_);
     f.b(uses_aux_security_feed_);
     if (retained_.is_stream) f.b(input_is_observed_ticks_);
@@ -1033,6 +1129,19 @@ void hash_selected_intents(BrokerStateHashSink& f, const source::detail::PineInt
 
 void source::PineStrategyHost::hash_host_extension(BrokerStateHashSink& f) const {
     f.s(kSourceAdapterDomain);
+    if (!trade_scratch_)
+        NativeExecutionConsumer::bound(*this).rethrow_released_command_scratch_failure(
+            NativeExecutionConsumer::CommandScratchBinding::Trade);
+    const auto released = NativeExecutionConsumer::bound(*this).released_command_scratch(
+        NativeExecutionConsumer::CommandScratchBinding::Trade);
+    if (!trade_scratch_ && released) {
+        // Preserve the live store's exact presence/digest bytes after its
+        // run-owned backing is released. This is no additional hash field.
+        f.b(true);
+        hash_scratch_digest(f, released->status, released->digest);
+    } else {
+        hash_scratch_store(f, trade_scratch_);
+    }
     f.b(config_.process_orders_on_close); f.b(config_.calc_on_order_fills);
     f.d(config_.initial_capital); f.i(config_.default_qty_type); f.d(config_.default_qty_value);
     f.i(config_.pyramiding); f.d(config_.commission_value); f.i(config_.commission_type);
