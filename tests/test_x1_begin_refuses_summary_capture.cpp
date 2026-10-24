@@ -329,6 +329,29 @@ int main() {
         run(host);
         completed(host);
     })) return 1;
+    // The v1 setter above stops at -5 after a captured generation (design), so it never
+    // reaches the begin check with a stale admitted flag. The legacy setter checks only the
+    // observer, so this row does: pending legacy SUMMARY_ONLY, no window, no observer, the
+    // previous generation's admitted flag still set. Begin must NOT refuse and run 2 completes.
+    if (!row("reused handle: legacy SUMMARY_ONLY after a windowed run completes", [] {
+        Host host;
+        configure(host);
+        select_window(host);
+        run(host);
+        completed(host);
+        require(strategy_set_selected_window_v1(handle(host), nullptr) == 0,
+                "reused handle (legacy) window clear refused");
+        require(host.set_equity_report_mode(ReportMode::SUMMARY_ONLY) == PF_REPORT_MODE_ACCEPTED,
+                "reused handle (legacy) SUMMARY_ONLY setter refused");
+        configure(host, 2);
+        host.begins = 0;
+        host.calculations = 0;
+        run(host);
+        completed(host);
+        require(std::strcmp(run_failure_code_of(host), "") == 0,
+                std::string("reused handle (legacy) run 2 carries a failure code: ")
+                    + run_failure_code_of(host));
+    })) return 1;
     if (!row("reused handle: uncaptured SUMMARY_ONLY after a windowed run completes", [] {
         Host host;
         configure(host);
