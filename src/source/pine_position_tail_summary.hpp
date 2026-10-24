@@ -8,11 +8,15 @@
 #include <pineforge/source/pine_adapter.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <limits>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -157,6 +161,18 @@ class PositionTailSummary {
         PositionTailExact side[2];
     };
     static_assert(sizeof(Margins) == 32, "unchanged disk summary width");
+    // Per-position derived summaries. Small identity sets never enter the
+    // scratch tree; resetting the proof drops their unreachable dirty values.
+    // Excess/oversized ids keep the existing exact disk representation.
+    static constexpr std::size_t kMarginRows = 32;
+    static constexpr std::size_t kMarginKeyBytes = 128;
+    struct MarginRow {
+        std::array<char, kMarginKeyBytes> key{};
+        Margins value{};
+        std::size_t key_size = 0;
+        std::uint64_t offset = 0; // Zero until this row actually spills.
+        bool valid = false, dirty = false;
+    };
 
 public:
     PineExecutionAdapter::PositionTailWork work{};
@@ -175,7 +191,7 @@ public:
             unsafe_reason_ = PositionTailGuard::None;
         }
         forget_origins();
-        margins_.clear();
+        clear_margins();
         all_margins_ = {};
         high_closed_origin_ = 0;
         barrier_ = barrier;
@@ -303,7 +319,7 @@ public:
         }
         safe_ = false;
         forget_origins();
-        margins_.clear();
+        clear_margins();
         all_margins_ = {};
     }
 
@@ -356,18 +372,68 @@ public:
             const bool certified = all_margins_.side[side].read(result, rejection);
             return finish(certified, rejection.value(), diagnostics);
         }
-        const auto offset = margins_.find(*named_entry);
-        if (!offset) {
+        const auto value = find_margin(*named_entry);
+        if (!value) {
             result = 0.0;
             return finish(true, PositionTailGuard::None, diagnostics);
         }
-        const auto value = margins_.get(*offset);
-        if constexpr (Diagnostics::enabled) rejection.reject(value.side[side].reason);
-        const bool certified = value.side[side].read(result, rejection);
+        if constexpr (Diagnostics::enabled) rejection.reject(value->side[side].reason);
+        const bool certified = value->side[side].read(result, rejection);
         return finish(certified, rejection.value(), diagnostics);
     }
 
 private:
+    void clear_margins() noexcept {
+        // No write-back: the old position's entire derived table is dead.
+        for (auto& row : resident_margins_) row.valid = row.dirty = false;
+        next_margin_ = 0;
+        margins_.clear();
+    }
+    MarginRow* resident_margin(const std::string& key) noexcept {
+        if (key.size() > kMarginKeyBytes) return nullptr;
+        for (auto& row : resident_margins_)
+            if (row.valid && row.key_size == key.size()
+                && std::string_view(row.key.data(), row.key_size) == key) return &row;
+        return nullptr;
+    }
+    MarginRow& retain_margin(const std::string& key, const Margins& value,
+                             std::uint64_t offset, bool dirty) {
+        auto& row = resident_margins_[next_margin_];
+        if (row.valid && row.dirty) {
+            // Persist the CURRENT subtotal before changing the key or value.
+            // A failed insertion/write keeps the owned dirty victim intact.
+            if (row.offset == 0) {
+                const auto inserted = margins_.insert(
+                    std::string(row.key.data(), row.key_size), row.value);
+                if (!inserted.second) margins_.set(inserted.first, row.value);
+            } else margins_.set(row.offset, row.value);
+        }
+        if (!key.empty()) std::memcpy(row.key.data(), key.data(), key.size());
+        row.key_size = key.size();
+        row.value = value;
+        row.offset = offset;
+        row.valid = true;
+        row.dirty = dirty;
+        next_margin_ = (next_margin_ + 1) % kMarginRows;
+        return row;
+    }
+    std::optional<Margins> find_margin(const std::string& key) {
+        if (auto* row = resident_margin(key)) return row->value;
+        // With no spill every possible live value is in the fixed array.
+        if (margins_.size() == 0) return std::nullopt;
+        const auto offset = margins_.find(key);
+        if (!offset) return std::nullopt;
+        const auto value = margins_.get(*offset);
+        if (key.size() <= kMarginKeyBytes) retain_margin(key, value, *offset, false);
+        return value;
+    }
+    MarginRow& writable_margin(const std::string& key) {
+        if (auto* row = resident_margin(key)) return *row;
+        const auto offset = margins_.size() == 0 ? std::optional<std::uint64_t>{}
+                                                : margins_.find(key);
+        const auto value = offset ? margins_.get(*offset) : Margins{};
+        return retain_margin(key, value, offset.value_or(0), false);
+    }
     template<class Diagnostics>
     bool finish(bool certified, PositionTailGuard reason, Diagnostics) noexcept {
         if (certified) ++work.certified_queries;
@@ -402,20 +468,26 @@ private:
         all_margins_.side[side].add(trade.qty, all_rejection);
         if constexpr (Diagnostics::enabled)
             all_margins_.side[side].reason = all_rejection.reason;
-        const auto inserted = margins_.insert(trade.entry_id, Margins{});
-        auto value = margins_.get(inserted.first);
+        auto* resident = trade.entry_id.size() <= kMarginKeyBytes
+            ? &writable_margin(trade.entry_id) : nullptr;
+        const auto offset = resident ? 0 : margins_.insert(trade.entry_id, Margins{}).first;
+        auto value = resident ? resident->value : margins_.get(offset);
         if constexpr (Diagnostics::enabled) named_rejection.reason = value.side[side].reason;
         value.side[side].add(trade.qty, named_rejection);
         if constexpr (Diagnostics::enabled) value.side[side].reason = named_rejection.reason;
-        margins_.set(inserted.first, value);
+        if (resident) {
+            resident->value = value;
+            resident->dirty = true;
+        } else margins_.set(offset, value);
     }
 
     Origins origins_;
     std::unordered_set<const void*> live_cohorts_;
-    // Historical margin ids must stay queryable even after their last live
-    // origin drains. Only fixed tree metadata lives in RAM; values/ids are
-    // in the existing external table, without a resident directory/cache.
+    // Historical margin ids remain queryable after their last live origin
+    // drains. Only eviction/oversized keys reach the external tree.
     ::pineforge::detail::DiskIdTable<Margins> margins_;
+    std::array<MarginRow, kMarginRows> resident_margins_{};
+    std::size_t next_margin_ = 0;
     Margins all_margins_{};
     std::uint64_t high_closed_origin_ = 0;
     std::size_t observed_end_ = 0;

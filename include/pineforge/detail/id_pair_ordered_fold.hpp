@@ -62,31 +62,51 @@ class IdPairFoldFile {
     static_assert(kRowsPerSegment != 0, "a fold record fits in an off_t file");
     static constexpr std::size_t kSegments = static_cast<std::size_t>(
         (kMaximumRows + kRowsPerSegment - 1) / kRowsPerSegment);
-    std::array<IdPairScratchFile, kSegments> files_;
+    // Cache only the first segment. Later segments are genuine spill; adding
+    // a cache/policy pointer to EVERY fixed descriptor would inflate the
+    // existing 32 KiB fold workspace even when no segment is opened.
+    ResidentIdPairScratchFile first_;
+    std::array<IdPairScratchFile, kSegments - 1> files_;
 public:
     IdPairFoldFile() {
         // These regions are the consumed-cycle auxiliary index, including
         // its undo path and every lazy segment. Reuse the closed identity
         // vocabulary; a file prefix is never a diagnostic store identity.
+        first_.set_store(ScratchStore::partial_cycles_idx);
         for (auto& file : files_) file.set_store(ScratchStore::partial_cycles_idx);
     }
     bool opened() const noexcept {
+        if (first_.opened()) return true;
         for (const auto& file : files_) if (file.opened()) return true;
         return false;
     }
-    void clear() noexcept { for (auto& file : files_) file.reset(); }
+    void enable_resident_io() { first_.enable_resident_io(); }
+    void clear() noexcept {
+        first_.reset();
+        for (auto& file : files_) file.reset();
+    }
     void fixture_count_io(IdPairScratchFile::FixtureIO* io) noexcept {
+        first_.fixture_count_io(io);
         for (auto& file : files_) file.fixture_count_io(io);
     }
     void read(std::uint64_t row, void* bytes, std::size_t size = sizeof(Record),
               std::size_t within = 0) const {
-        files_[static_cast<std::size_t>(row / kRowsPerSegment)].read(
-            (row % kRowsPerSegment) * sizeof(Record) + within, bytes, size);
+        const auto segment = static_cast<std::size_t>(row / kRowsPerSegment);
+        const auto offset = (row % kRowsPerSegment) * sizeof(Record) + within;
+        if (segment == 0) first_.read(offset, bytes, size);
+        else files_[segment - 1].read(offset, bytes, size);
     }
     void write(std::uint64_t row, const void* bytes, const std::string& directory) {
-        auto& file = files_[static_cast<std::size_t>(row / kRowsPerSegment)];
-        file.open(directory);
-        file.write((row % kRowsPerSegment) * sizeof(Record), bytes, sizeof(Record));
+        const auto segment = static_cast<std::size_t>(row / kRowsPerSegment);
+        const auto offset = (row % kRowsPerSegment) * sizeof(Record);
+        if (segment == 0) {
+            first_.open(directory);
+            first_.write(offset, bytes, sizeof(Record));
+        } else {
+            auto& file = files_[segment - 1];
+            file.open(directory);
+            file.write(offset, bytes, sizeof(Record));
+        }
     }
     static std::uint64_t disk_bytes(std::uint64_t rows) noexcept {
         constexpr auto maximum = std::numeric_limits<std::uint64_t>::max();
@@ -154,6 +174,11 @@ public:
     std::uint64_t apply(std::uint64_t seed) const noexcept { return root_fold_.apply(seed); }
     void fixture_count_io(IdPairScratchFile::FixtureIO* io) noexcept {
         leaves_.fixture_count_io(io); branches_.fixture_count_io(io); undo_.fixture_count_io(io);
+    }
+    void enable_resident_io() {
+        leaves_.enable_resident_io();
+        branches_.enable_resident_io();
+        undo_.enable_resident_io();
     }
 
 private:

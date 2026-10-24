@@ -1,4 +1,5 @@
 #include <pineforge/source/pine_adapter.hpp>
+#include <pineforge/detail/resident_budget.hpp>
 #include <pineforge/source/pine_input_domain.hpp>
 #include <pineforge/source/magnifier_intrabars.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
@@ -54,6 +55,19 @@
 #endif
 #ifndef PINEFORGE_MARGIN_REVIVAL_OBSERVE
 #define PINEFORGE_MARGIN_REVIVAL_OBSERVE(before, rows, event, context, units, cycle, selected) ((void)0)
+#endif
+// Test-only observation of the reversal's exit selection, excluding the
+// unrelated fill bookkeeping around it. No production counters or state.
+#ifndef PINEFORGE_REVERSAL_EXITS_OBSERVE
+#define PINEFORGE_REVERSAL_EXITS_OBSERVE(before, owner, snapshot, position) ((void)0)
+#endif
+#ifndef PINEFORGE_REVERSAL_EXIT_OWNER
+#define PINEFORGE_REVERSAL_EXIT_OWNER(owner, id) ((void)0)
+#endif
+// The equivalence fixture replays the old full walk at the first observer.
+// Production always takes the traversal below, without a runtime switch.
+#ifndef PINEFORGE_REVERSAL_EXITS_REFERENCE
+#define PINEFORGE_REVERSAL_EXITS_REFERENCE(owner) false
 #endif
 
 #include <algorithm>
@@ -1103,6 +1117,7 @@ PineExecutionAdapter::PineExecutionAdapter(compat::pine::CapAttachment attachmen
     pending_view_.owner_ = this;
     cohorts_by_id_.set_store(::pineforge::detail::ScratchStore::cohort);
     exit_rank_keys_.set_store(::pineforge::detail::ScratchStore::exit_rank);
+    consumed_partial_exit_cycles_.enable_resident_io();
 }
 
 PineExecutionAdapter::PineExecutionAdapter(NativeStrategyHost& host,
@@ -2561,6 +2576,10 @@ void PineExecutionAdapter::revive_brackets_after_margin(
 }
 
 void PineExecutionAdapter::reset_for_run() {
+    // Resolve once per run, before clearing/binding tables or any bar callback.
+    // Directory rebinding and hash/lookup paths must not re-read the environment.
+    const auto cohort_resident_limit = ::pineforge::detail::resident_entries(
+        ::pineforge::detail::ResidentKind::idtable_entries);
     position_tail_spill_.reset();
     position_tail_summary_ = std::make_shared<detail::PositionTailSummary>();
     exit_scratch_ = nullptr;
@@ -2576,6 +2595,7 @@ void PineExecutionAdapter::reset_for_run() {
         index->clear();
     admission_journal.reset();
     cohorts_by_id_.clear();
+    cohorts_by_id_.set_resident_limit(static_cast<std::size_t>(cohort_resident_limit));
     placement_.clear();
     live_by_source_key_.clear();
     clear_bracket_families();
@@ -2605,6 +2625,7 @@ void PineExecutionAdapter::reset_for_run() {
     exit_phase_final_ = 0;
     exit_phase_digest_ = 1469598103934665603ULL;
     exit_rank_keys_.clear();
+    resident_exit_rank_count_ = 0;
     exit_rank_keys_digest_ = 1469598103934665603ULL;
     exit_rank_peak_ = 0;
     exit_rank_alt_peak_ = 0;
@@ -6636,9 +6657,8 @@ void PineExecutionAdapter::retire_in_position_exits_at_flat(
 // ab9714be pine_fills.cpp:664-670: candidate exit fills tie-break by order creation sequence created_seq
 std::uint64_t PineExecutionAdapter::command_sequence_for_exit(
         const SourceId& exit_id, const SourceId& from_entry) const {
-    // The same-bar exit sort asks this on every script bar while its tail
-    // group persists; the table answers from its per-id index instead of a
-    // scan over every placement ever retained (quadratic over a long run).
+    // Retained mutable identities are scanned; erased minima use the bounded
+    // resident store. The same-bar sort memoizes answers within its own call.
     return placement_.command_sequence_for(exit_id, from_entry);
 }
 
@@ -6706,16 +6726,34 @@ void PineExecutionAdapter::permute_exit_phase_rows(
 // and, in a grown table, no two of the ids in one bucket; whether a
 // strategy.order market order is a transient key too it leaves open, so a
 // table the two readings size differently is out of its reach.
+std::optional<std::uint32_t> PineExecutionAdapter::exit_rank_age(const SourceId& id) const {
+    for (std::size_t i = 0; i < resident_exit_rank_count_; ++i) {
+        const auto& row = resident_exit_ranks_[i];
+        if (row.size == id.size() && std::string_view(row.key.data(), row.size) == id)
+            return row.age;
+    }
+    if (resident_exit_rank_count_ == exit_rank_keys_.size()) return std::nullopt;
+    const auto found = exit_rank_keys_.find(id);
+    return found ? std::optional<std::uint32_t>{exit_rank_keys_.get(*found)} : std::nullopt;
+}
+
 void PineExecutionAdapter::note_exit_rank_key(const SourceId& id) {
     // Past 26 keys the table needs 64 buckets, which the pin does not reach;
     // the peak keeps it there, so the ids beyond need no record.
     if (exit_rank_keys_.size() > 26
-        || exit_rank_keys_.find(id).has_value()) {
+        || exit_rank_age(id).has_value()) {
         // The recorded population remains capped at 27 keys, as before.
         return;
     }
     exit_rank_keys_.require_insert(id);
-    exit_rank_keys_.insert(id, static_cast<std::uint32_t>(exit_rank_keys_.size()));
+    const auto age = static_cast<std::uint32_t>(exit_rank_keys_.size());
+    exit_rank_keys_.insert(id, age);
+    if (id.size() <= kExitRankKeyBytes) {
+        auto& row = resident_exit_ranks_[resident_exit_rank_count_++];
+        if (!id.empty()) std::memcpy(row.key.data(), id.data(), id.size());
+        row.size = id.size();
+        row.age = age;
+    }
     const std::uint64_t size = id.size();
     exit_rank_keys_digest_ = fnv_append(exit_rank_keys_digest_, &size, sizeof(size));
     exit_rank_keys_digest_ = fnv_append(exit_rank_keys_digest_, id.data(), id.size());
@@ -6755,7 +6793,7 @@ std::optional<std::vector<std::uint32_t>> PineExecutionAdapter::global_exit_chil
     std::vector<std::uint32_t> bucket(exit_rank_keys_.size());
     std::vector<std::uint32_t> load(capacity, 0);
     bool supported = true;
-    exit_rank_keys_.for_each_inserted([&](const auto& key, auto age) {
+    const auto inspect = [&](std::string_view key, std::uint32_t age) {
         std::uint32_t hash = 0;
         if (!java_string_hash(key, hash)) { supported = false; return; }
         bucket[age] = (hash ^ (hash >> 16)) & (capacity - 1);
@@ -6763,14 +6801,20 @@ std::optional<std::vector<std::uint32_t>> PineExecutionAdapter::global_exit_chil
         // count is of entry ids only: a transient close key landing in a bin
         // of seven would do the same, which no tape reaches.
         if (++load[bucket[age]] >= 8) supported = false;
-    });
+    };
+    if (resident_exit_rank_count_ == exit_rank_keys_.size()) {
+        for (std::size_t i = 0; i < resident_exit_rank_count_; ++i) {
+            const auto& row = resident_exit_ranks_[i];
+            inspect(std::string_view(row.key.data(), row.size), row.age);
+        }
+    } else exit_rank_keys_.for_each_inserted(inspect);
     if (!supported) return std::nullopt;
     std::vector<std::size_t> ages;
     ages.reserve(ids.size());
     for (const auto& id : ids) {
-        const auto found = exit_rank_keys_.find(id);
+        const auto found = exit_rank_age(id);
         if (!found) return std::nullopt;
-        const auto age = static_cast<std::size_t>(exit_rank_keys_.get(*found));
+        const auto age = static_cast<std::size_t>(*found);
         if (capacity > 16) {
             for (const auto other : ages)
                 if (bucket[other] == bucket[age]) return std::nullopt;
@@ -11580,7 +11624,6 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
     // Relative levels resolve against a live source cohort. The original tick
     // facts remain in the snapshot for deferred/observer projections.
     const auto physical = detail::run_position(require_host());
-    const SourceId partial_exit_key = exit_id + "\x1f" + from_entry;
     // ab9714be pine_strategy_commands.cpp:1661-1692: only a re-issue that is
     // itself explicitly partial against the live position (net of a same-bar
     // pending close) is suppressed; an explicit qty covering the whole
@@ -11592,11 +11635,12 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
     if (!std::isnan(qty) && live_exit_units > internal::kQtyEpsilon)
         reissue_percent = std::min(qty, live_exit_units) / live_exit_units * 100.0;
     const bool partial_reissue = reissue_percent < 100.0 - internal::kFullPercentEps;
-    if (const auto consumed = consumed_partial_exit_cycles_.lookup(partial_exit_key);
-        consumed && partial_reissue
-        && live_exit_units > internal::kQtyEpsilon
-        && *consumed == current_position_cycle_) {
-        return;
+    // Reuse P2-CX's parked guard: only a live, explicitly partial reissue
+    // can take this return. Full exits need neither the key nor the lookup.
+    if (partial_reissue && live_exit_units > internal::kQtyEpsilon) {
+        const auto consumed = consumed_partial_exit_cycles_.lookup_joined_single(
+            exit_id, '\x1f', from_entry);
+        if (consumed && *consumed == current_position_cycle_) return;
     }
     if (partial_reissue && exit_tombstoned(exit_id, from_entry)) return;
     // A held global exit with relative legs over two or more entries covers
@@ -25311,32 +25355,69 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         // the new one.  The generic settlement event owns that fact; mirror
         // it into every source cohort so a later reuse of an old entry id
         // cannot reserve against already-closed exposure.
+        PINEFORGE_REVERSAL_EXITS_OBSERVE(true, *this, placement_snapshot, live_position);
         std::vector<SourceId> preserved_cohorts;
+        // Only these resident queues are read by full-close cancellation.
+        // Snapshot their owners before cancellation mutates them. Storage is
+        // bounded by the current live/pending exit population, not cohort
+        // history; an empty selection never creates an ExitScratchScope.
+        std::vector<SourceId> closed_cohorts;
+        const bool keep_pending_bound =
+            detail::exit_binding_rule_switches().pending_bound_exit_survives_flat;
+        const auto cancellable_exit = [&](const PlacementSnapshot& row) {
+            return (row.family == PineOrderFamily::ExitLimit
+                    || row.family == PineOrderFamily::ExitStop
+                    || row.family == PineOrderFamily::ExitTrail)
+                && !(keep_pending_bound && row.pending_bound_exit);
+        };
         if (placement_snapshot) preserved_cohorts.push_back(placement_snapshot->source_id);
         for (const auto& handle : live_handles_) {
             const auto pending = placement_.find(handle.incarnation);
-            if (pending != placement_.end()
-                && pending->second.opening
-                && pending->second.family == PineOrderFamily::Entry
-                && pending->second.is_long == (live_position > 0.0)) {
-                preserved_cohorts.push_back(pending->second.source_id);
+            if (pending == placement_.end()) continue;
+            const auto& row = pending->second;
+            if (row.opening && row.family == PineOrderFamily::Entry
+                && row.is_long == (live_position > 0.0)) {
+                preserved_cohorts.push_back(row.source_id);
             }
+            if (cancellable_exit(row) && !coof_leg_reaches_exit(row))
+                closed_cohorts.push_back(row.from_entry);
         }
         std::sort(preserved_cohorts.begin(), preserved_cohorts.end());
-        // An empty, spilled cohort can still own queued exits. The old map
-        // cancelled those too, in sorted id order. Snapshot only the live
-        // exemptions, then stream every logical id without restoring facts.
-        detail::ExitScratchRows<SourceId> closed_cohorts(*this);
-        cohorts_by_id_.for_each_sorted_id([&](const SourceId& id) {
-            if (!std::binary_search(preserved_cohorts.begin(), preserved_cohorts.end(), id)) {
-                closed_cohorts.push_back(id);
-            }
-        });
-        closed_cohorts.ordered_text(
-            [&](const detail::ExitScratchText& id) {
+        const auto collect_pending = [&](const auto& rows) {
+            for (const auto& row : rows)
+                if (cancellable_exit(row.snapshot))
+                    closed_cohorts.push_back(row.snapshot.from_entry);
+        };
+        collect_pending(pending_bracket_legs_);
+        collect_pending(pending_coof_requests_);
+        collect_pending(source_shadow_pending_);
+        // Relative definitions/armed children have their own ownership, not
+        // the pending_bound_exit/coof exclusions of placement snapshots.
+        for (const auto& row : pending_relative_exits_)
+            closed_cohorts.push_back(row.from_entry);
+        for (const auto& row : anchored_relative_legs_)
+            if (!row.from_entry.empty()) closed_cohorts.push_back(row.from_entry);
+        std::sort(closed_cohorts.begin(), closed_cohorts.end());
+        closed_cohorts.erase(std::unique(closed_cohorts.begin(), closed_cohorts.end()),
+                             closed_cohorts.end());
+        if (!PINEFORGE_REVERSAL_EXITS_REFERENCE(*this)) {
+            for (const auto& id : closed_cohorts) {
+                if (std::binary_search(preserved_cohorts.begin(), preserved_cohorts.end(), id))
+                    continue;
+                // Match the old logical-table domain, including empty, spilled
+                // cohorts. Global/unmaterialized owners absent from that table
+                // were never visited by its sorted-id walk. A complete resident
+                // index also answers misses without probing the disk tree.
+                if (cohorts_by_id_.find_resident(id) == cohorts_by_id_.end()
+                    && (cohorts_by_id_.resident_size() == cohorts_by_id_.size()
+                        || cohorts_by_id_.find(id) == cohorts_by_id_.end())) {
+                    continue;
+                }
+                PINEFORGE_REVERSAL_EXIT_OWNER(*this, id);
                 cancel_exit_orders_for_full_close(id);
-                return true;
-            });
+            }
+        }
+        PINEFORGE_REVERSAL_EXITS_OBSERVE(false, *this, placement_snapshot, live_position);
         if (position_tail_summary_) position_tail_summary_->forget_origins();
         for (auto& cohort : cohorts_by_id_) {
             ::pineforge::detail::clear_exposure_storage(cohort.second.opened);
@@ -28692,7 +28773,7 @@ void OriginRoster::retire_before(std::size_t global) {
 // row reader. Explicit names in live/queued placements also pin an origin
 // whose own row has gone. No persistent release bitmap or lookup is added.
 void PineExecutionAdapter::retire_origin_prefixes() {
-    cohorts_by_id_.spill();
+    cohorts_by_id_.trim_to_budget();
     if (detail::retain_retired_rows()) return;
     // The front row alone can pin each retained window. Check before building
     // named, so a resting bracket/stop pair allocates no retirement scratch.
@@ -28780,7 +28861,7 @@ void PineExecutionAdapter::retire_origin_prefixes() {
                 index->cohort_sides.erase(&facts);
         }
     }
-    cohorts_by_id_.spill();
+    cohorts_by_id_.trim_to_budget();
     if (auto* index = adapter_lookup_index(consumer, this, run_counter_, false)) {
         auto& sides = index->cohort_sides;
         if (sides.bucket_count() / 4 > sides.size()) sides.rehash(sides.size());
@@ -28946,6 +29027,10 @@ void PineExecutionAdapter::require_exit_rank_key(const SourceId& id) const {
     // Preserve the 27/28 cutoff: an ignored 28th key needs no ticket, even
     // when its string would exceed the admitted aggregate byte allowance.
     if (exit_rank_keys_.size() > 26) return;
+    for (std::size_t i = 0; i < resident_exit_rank_count_; ++i) {
+        const auto& row = resident_exit_ranks_[i];
+        if (row.size == id.size() && std::string_view(row.key.data(), row.size) == id) return;
+    }
     exit_rank_keys_.require_insert(id);
 }
 

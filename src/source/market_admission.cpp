@@ -215,13 +215,19 @@ detail::ScratchStatus append_journal_record(Journal& journal,
     }
     status = jc::finish(codec.store,status);
     if (status == Status::ok) {
+        // Commit is the publication boundary, including for the fold cache.
         codec.abandoned = 0;
         codec.failed_sequence = 0;
         ++codec.count;
         --journal.outstanding_count_;
         codec.snapshot_valid = false;
-        std::vector<Event>().swap(journal.events_);
+        if (summary.sequence <= journal.folded_window_.last_sequence)
+            journal.restore_observed_fold();
         if (summary.sequence <= journal.folded_window_.last_sequence) journal.fold_valid_ = false;
+        if (journal.can_fold_publication(summary.sequence))
+            journal.fold_publication(source,codec.buffer(),summary.sequence,
+                                     summary.rejected,summary.rejected_bar);
+        std::vector<Event>().swap(journal.events_);
         if (summary.rejected && journal.rejection_gate_.valid
             && summary.sequence > journal.rejection_gate_.sequence)
             journal.rejection_gate_ = {summary.sequence,summary.rejected_bar,true};
@@ -263,8 +269,10 @@ Journal::Prefix Journal::folded_window() const {
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                       "admission filter cannot rewrite folded lifetime history");
     if (codec_) CodecState::check(codec_->failure, codec_.get());
-    if (fold_valid_ && !filtered_ && folded_window_.count == event_count())
+    if (fold_valid_ && !filtered_ && folded_window_.count == event_count()) {
+        publication_fold_pending_ = false;
         return folded_window_;
+    }
     Prefix result = fold_valid_ && !filtered_ ? folded_window_ : retired_prefix_;
     auto gate = rejection_gate_.valid ? rejection_gate_
         : RejectionGate{retired_prefix_.last_sequence,retired_prefix_.last_rejected_command_bar,true};
@@ -324,10 +332,45 @@ Journal::Prefix Journal::folded_window() const {
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                       "admission filter cannot rewrite the rejection gate");
     folded_window_ = result;
+    publication_fold_pending_ = false;
     fold_valid_ = true;
     filtered_ = false;
     rejection_gate_ = gate;
     return result;
+}
+
+void Journal::restore_observed_fold() noexcept {
+    if (!publication_fold_pending_) return;
+    // Only a valid, unfiltered frontier is ever extended at publication.
+    // Restore it before applying the original invalidation/filter rules.
+    folded_window_ = observed_window_;
+    publication_fold_pending_ = false;
+}
+
+bool Journal::can_fold_publication(uint64_t id) const noexcept {
+    // Called AFTER publication. Exactly one new event must follow a proved,
+    // complete frontier; no invalid/filtered or previously missed tail can
+    // be repaired by folding only this event.
+    return fold_valid_ && !filtered_ && id > folded_window_.last_sequence
+        && folded_window_.count != std::numeric_limits<std::size_t>::max()
+        && folded_window_.count + 1 == event_count();
+}
+
+void Journal::fold_publication(const detail::ScratchByteSource& source,
+    detail::ScratchBuffer page, uint64_t id, bool rejected, int rejected_bar) noexcept {
+    auto folded = folded_window_;
+    // Use the original normalized byte fold on the accepted immutable source.
+    // A source reread failure leaves the old frontier/count intact, so the
+    // next query still recovers through the original scan path.
+    if (fold_journal_record(source,page,folded.digest) != detail::ScratchStatus::ok) return;
+    ++folded.count;
+    folded.last_sequence = id;
+    if (rejected) folded.last_rejected_command_bar = rejected_bar;
+    if (!publication_fold_pending_) {
+        observed_window_ = folded_window_;
+        publication_fold_pending_ = true;
+    }
+    folded_window_ = folded;
 }
 
 int Journal::last_rejected_command_bar() const {
@@ -356,6 +399,8 @@ Journal::Journal(const Journal& other) {
     outstanding_count_ = other.outstanding_count_;
     retired_prefix_ = other.retired_prefix_;
     folded_window_ = other.folded_window_;
+    observed_window_ = other.observed_window_;
+    publication_fold_pending_ = other.publication_fold_pending_;
     fold_valid_ = other.fold_valid_;
     filtered_ = other.filtered_;
     rejection_gate_ = other.rejection_gate_;
@@ -374,6 +419,8 @@ Journal& Journal::operator=(const Journal& other) {
     events_.swap(copy.events_);
     std::swap(retired_prefix_, copy.retired_prefix_);
     std::swap(folded_window_, copy.folded_window_);
+    std::swap(observed_window_, copy.observed_window_);
+    std::swap(publication_fold_pending_, copy.publication_fold_pending_);
     std::swap(fold_valid_, copy.fold_valid_);
     std::swap(filtered_, copy.filtered_);
     std::swap(rejection_gate_, copy.rejection_gate_);
@@ -391,6 +438,8 @@ Journal::Journal(Journal&& other) {
     events_ = std::move(other.events_);
     retired_prefix_ = other.retired_prefix_;
     folded_window_ = other.folded_window_;
+    observed_window_ = other.observed_window_;
+    publication_fold_pending_ = other.publication_fold_pending_;
     fold_valid_ = other.fold_valid_;
     filtered_ = other.filtered_;
     rejection_gate_ = other.rejection_gate_;
@@ -400,6 +449,8 @@ Journal::Journal(Journal&& other) {
     other.next_sequence_ = 1;
     other.retired_prefix_ = {};
     other.folded_window_ = {};
+    other.observed_window_ = {};
+    other.publication_fold_pending_ = false;
     other.fold_valid_ = false;
     other.filtered_ = false;
     other.rejection_gate_ = {};
@@ -418,6 +469,8 @@ Journal& Journal::operator=(Journal&& other) {
     events_.swap(moved.events_);
     std::swap(retired_prefix_, moved.retired_prefix_);
     std::swap(folded_window_, moved.folded_window_);
+    std::swap(observed_window_, moved.observed_window_);
+    std::swap(publication_fold_pending_, moved.publication_fold_pending_);
     std::swap(fold_valid_, moved.fold_valid_);
     std::swap(filtered_, moved.filtered_);
     std::swap(rejection_gate_, moved.rejection_gate_);
@@ -504,12 +557,18 @@ void Journal::append(Event event) {
     const bool rejected = command && rejected_command(command->outcome);
     const int rejected_bar = rejected ? command->observation->bar : -1;
     auto at=std::lower_bound(events_.begin(),events_.end(),id,[](const auto& e,uint64_t n){return sequence(e)<n;});
-    events_.insert(at,std::move(event));
+    at=events_.insert(at,std::move(event));
     // Consume only after insertion succeeds. Allocation failure leaves a caller
     // free to retry this still-outstanding event; retain never restores an ID.
     outstanding_sequences_.erase(pending);
     --outstanding_count_;
+    if (id <= folded_window_.last_sequence) restore_observed_fold();
     if (id <= folded_window_.last_sequence) fold_valid_ = false;
+    if (can_fold_publication(id)) {
+        const auto source = encode_journal_record(*at);
+        std::array<std::byte,512> page{};
+        fold_publication(source,{page.data(),page.size()},id,rejected,rejected_bar);
+    }
     if (rejected && rejection_gate_.valid && id > rejection_gate_.sequence)
         rejection_gate_ = {id,rejected_bar,true};
 }
@@ -551,6 +610,7 @@ void Journal::retain(const std::vector<uint64_t>& retained) {
         if (status == detail::ScratchStatus::end) status = detail::ScratchStatus::ok;
         CodecState::check(detail::journal_codec::finish(store,status), codec_.get());
         if (removed) {
+            restore_observed_fold();
             codec_->count -= removed;
             codec_->snapshot_valid = false;
             std::vector<Event>().swap(events_);
@@ -564,6 +624,7 @@ void Journal::retain(const std::vector<uint64_t>& retained) {
         return std::find(retained.begin(),retained.end(),sequence(e))==retained.end();
     }),events_.end());
     if (events_.size() != before) {
+        restore_observed_fold();
         if (fold_valid_) filtered_ = true;
         rejection_gate_.valid = false;
     }
@@ -581,6 +642,7 @@ void Journal::reset() {
     std::vector<Event>().swap(events_);
     std::vector<uint64_t>().swap(outstanding_sequences_);
     next_sequence_=1;retired_prefix_={};folded_window_={};fold_valid_=false;filtered_=false;
+    observed_window_ = {}; publication_fold_pending_ = false;
     rejection_gate_ = {};
 }
 void Journal::retain_full_observation_history() {

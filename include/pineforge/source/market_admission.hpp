@@ -256,7 +256,8 @@ public:
     // Called only at a completed script-bar boundary, after every retained
     // event has entered the v4 fold and no producer can insert before it.
     void retire_prefix(std::size_t count, uint64_t digest, uint64_t last_sequence);
-    // Current v4 continuation, read fieldwise without an owning event snapshot.
+    // Current v4 continuation, maintained from encoded bytes at valid ordered
+    // publications, without an owning event snapshot.
     // Filtering requires a validated nonzero prefix and an unchanged rejection
     // gate before its surviving tail can be refolded. Only reset starts a new
     // lifetime.
@@ -271,6 +272,10 @@ private:
     struct CodecState;
     std::unique_ptr<CodecState> codec_;
     void release_allocation(uint64_t sequence) noexcept;
+    void restore_observed_fold() noexcept;
+    bool can_fold_publication(uint64_t sequence) const noexcept;
+    void fold_publication(const detail::ScratchByteSource&, detail::ScratchBuffer,
+                          uint64_t sequence, bool rejected, int rejected_bar) noexcept;
     uint64_t next_sequence_ = 1;
     uint64_t active_allocations_ = 0;
     uint64_t outstanding_count_ = 0;
@@ -278,6 +283,11 @@ private:
     mutable std::vector<Event> events_; // explicit diagnostic projection when bound
     Prefix retired_prefix_;
     mutable Prefix folded_window_;
+    // Publication may extend the cache before a query observes it. Preserve
+    // that query frontier for retain()/out-of-order completion: their legacy
+    // filter proof must not depend on whether the writer eagerly folded.
+    Prefix observed_window_;
+    mutable bool publication_fold_pending_ = false;
     mutable bool fold_valid_ = false;
     mutable bool filtered_ = false;
     // Derived on successful append; sequence order, not the greatest bar.

@@ -18,6 +18,7 @@
 #include <pineforge/source/exit_scratch.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -650,7 +651,7 @@ public:
     using iterator = Iterator<false>;
     using const_iterator = Iterator<true>;
 
-    PlacementTable() = default;
+    PlacementTable() { erased_minima_.enable_resident_io(); }
     PlacementTable(const PlacementTable&) = delete;
     PlacementTable& operator=(const PlacementTable&) = delete;
     PlacementTable(PlacementTable&&) noexcept = default;
@@ -1607,6 +1608,9 @@ public:
     void set_auxiliary_tables_directory(const std::string& directory); // Same binding.
     void fixture_use_memory_auxiliary_tables();
     std::uint64_t fixture_auxiliary_disk_bytes() const noexcept;
+    auto fixture_cohort_resident_layout() const noexcept {
+        return cohorts_by_id_.resident_layout();
+    }
     std::uint64_t fixture_erased_digest() const noexcept { return placement_.erased_digest(); }
     std::uint64_t fixture_erased_rows() const noexcept { return placement_.erased_rows(); }
     const ::pineforge::detail::IdPairStore<std::int64_t, true>&
@@ -2907,11 +2911,23 @@ private:
     // strategy.close / close_all order -- and, for the alternative the tapes
     // leave open, per live strategy.order market order too.
     ::pineforge::detail::DiskIdTable<std::uint32_t> exit_rank_keys_;
+    // The rank population already stops at 27. Bound owned key bytes too;
+    // longer ids retain exact disk lookups. This is physical read metadata,
+    // not another age assignment or hash domain.
+    static constexpr std::size_t kExitRankRows = 27, kExitRankKeyBytes = 128;
+    struct ExitRankRow {
+        std::array<char, kExitRankKeyBytes> key{};
+        std::size_t size = 0;
+        std::uint32_t age = 0;
+    };
+    std::array<ExitRankRow, kExitRankRows> resident_exit_ranks_{};
+    std::size_t resident_exit_rank_count_ = 0;
     std::uint64_t exit_rank_keys_digest_ = 1469598103934665603ULL;
     std::uint32_t exit_rank_peak_ = 0;
     std::uint32_t exit_rank_alt_peak_ = 0;
     void require_tree_precommit(const NativePrecommitView&) const;
     void require_exit_rank_key(const SourceId&) const;
+    std::optional<std::uint32_t> exit_rank_age(const SourceId&) const;
     void note_exit_rank_key(const SourceId&);
     void note_exit_rank_transients();
     // R5 lane V19-E: the exit phases of the trades before exit_phase_final_

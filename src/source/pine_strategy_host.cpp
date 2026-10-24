@@ -2561,6 +2561,22 @@ std::optional<std::size_t> source::PineStrategyHost::sort_same_bar_exit_trades(
         --start;
     }
     if (end - start > 1) {
+        // Placement identity is stable throughout this sort, but mutable
+        // snapshots make a persistent query cache unsafe. Keep only this
+        // group's first 64 sequence answers; larger groups use the same
+        // exact query after the fixed window. No keys/history survive here.
+        std::array<std::optional<std::uint64_t>, 64> sequences{};
+        const auto sequence_for = [&](std::size_t index) {
+            const auto read = [&] {
+                const Trade row = trades[index];
+                return adapter.command_sequence_for_exit(row.exit_id, row.entry_id);
+            };
+            const auto offset = index - start;
+            if (offset >= sequences.size()) return read();
+            auto& sequence = sequences[offset];
+            if (!sequence) sequence = read();
+            return *sequence;
+        };
         // ab9714be pine_scheduler.cpp:262-283 and pine_fills.cpp:3710-3730:
         // fills on the bar OPEN precede intrabar fills chronologically. Sibling
         // bracket exits that fill within the same phase tie-break by command
@@ -2569,8 +2585,8 @@ std::optional<std::size_t> source::PineStrategyHost::sort_same_bar_exit_trades(
             const bool open_a = adapter.is_open_phase_exit(ia);
             const bool open_b = adapter.is_open_phase_exit(ib);
             if (open_a != open_b) return open_a;
-            const auto sa = adapter.command_sequence_for_exit(trades[ia].exit_id, trades[ia].entry_id);
-            const auto sb = adapter.command_sequence_for_exit(trades[ib].exit_id, trades[ib].entry_id);
+            const auto sa = sequence_for(ia);
+            const auto sb = sequence_for(ib);
             return sa < sb;
         };
         const auto none = static_cast<std::uint8_t>(NativePathPhase::None);
@@ -2582,8 +2598,7 @@ std::optional<std::size_t> source::PineStrategyHost::sort_same_bar_exit_trades(
         TradeScratchTransaction transaction(scratch);
         for (std::size_t source = start; source < end; ++source) {
             const auto phase = adapter.exit_phase_value(source);
-            const auto sequence = adapter.command_sequence_for_exit(
-                trades[source].exit_id, trades[source].entry_id);
+            const auto sequence = sequence_for(source);
             scratch_put(scratch,
                 {scratch_sort, adapter.is_open_phase_exit(source) ? 0U : 1U, sequence, source},
                 scratch_bytes(&phase, sizeof phase));
