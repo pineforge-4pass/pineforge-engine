@@ -1,6 +1,7 @@
 // Pin the 1.6.3 create diagnostics through real opens, with explicit paths.
 // No TMPDIR changes or injected failures. RED at e36e585064 is predicted,
 // not observed: compile and execute this unit only on the supervisor's box.
+#include "scratch_process_fixture.hpp"
 #include "../src/command_scratch_production.hpp"
 #include "../src/report_scratch.hpp"
 #include <pineforge/detail/id_pair_scratch_file.hpp>
@@ -121,23 +122,33 @@ void missing_creates(const Directory& directory) {
 
 void unwritable_create(const Directory& directory) {
     if (::geteuid() == 0) {
-        std::puts("SKIP mode-0500 EACCES cases only: running as root");
-        return;
+        require(::chmod(directory.path.c_str(), 0711) == 0,
+                "cannot make pinned-text parent searchable by the dropped child");
+        require(::chown(directory.unwritable.c_str(), 65534, 65534) == 0,
+                "cannot give the dropped child ownership of its mode-0500 directory");
     }
-    // Search permission and the filesystem query succeed. The actual mkstemp
-    // in ScratchFile::open must fail because this owned directory is unwritable.
-    std::uint64_t type = 0;
-    require(pd::scratch_directory_filesystem_type(directory.unwritable.c_str(), type) == 0
-                && !pd::scratch_filesystem_is_memory(type),
-            "mode-0500 directory must pass the real filesystem query");
-    for (const bool bounded : {false, true}) {
-        pd::ScratchFile file;
-        if (bounded) file.bound_cache();
-        file.set_directory(directory.unwritable);
-        expect_exact<pd::ReportScratchIoError>(
-            [&] { file.open("pineforge-pinned-permission"); }, EACCES, "scratch create",
-            pineforge::RunFailureCode::report_sink_failed);
-    }
+    s4e_tmp::scratch_unprivileged("mode-0500 pinned create cells", [&] {
+        require(::geteuid() != 0, "mode-0500 create cells must run without root DAC override");
+        struct stat status{};
+        require(::stat(directory.unwritable.c_str(), &status) == 0
+                    && S_ISDIR(status.st_mode) && status.st_uid == ::geteuid()
+                    && (status.st_mode & 0777) == 0500,
+                "mode-0500 create cells must own their searchable, unwritable directory");
+        // Search permission and the filesystem query succeed. The actual mkstemp
+        // in ScratchFile::open must fail because this owned directory is unwritable.
+        std::uint64_t type = 0;
+        require(pd::scratch_directory_filesystem_type(directory.unwritable.c_str(), type) == 0
+                    && !pd::scratch_filesystem_is_memory(type),
+                "mode-0500 directory must pass the real filesystem query");
+        for (const bool bounded : {false, true}) {
+            pd::ScratchFile file;
+            if (bounded) file.bound_cache();
+            file.set_directory(directory.unwritable);
+            expect_exact<pd::ReportScratchIoError>(
+                [&] { file.open("pineforge-pinned-permission"); }, EACCES, "scratch create",
+                pineforge::RunFailureCode::report_sink_failed);
+        }
+    });
 }
 
 no::Request request() {

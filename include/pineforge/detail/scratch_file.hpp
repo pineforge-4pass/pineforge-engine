@@ -134,9 +134,7 @@ public:
         }
         std::string refusal;
         int directory_error = 0;
-        bool proven_memory = false;
-        std::string name = resolve_scratch_directory(directory_, refusal, directory_error,
-                                                     proven_memory);
+        std::string name = resolve_scratch_directory(directory_, refusal, directory_error);
         if (name.empty()) {
             // Keep the resolver's errno and the established typed raiser for
             // bounded and unbounded stores alike.

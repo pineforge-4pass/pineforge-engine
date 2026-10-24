@@ -223,9 +223,8 @@ public:
         const char* selected = std::getenv("PINEFORGE_COMMAND_SCRATCH_DIR");
         std::string refusal;
         int directory_error = 0;
-        bool proven_memory = false;
         std::string path = resolve_scratch_directory(selected ? selected : "", refusal,
-                                                     directory_error, proven_memory);
+                                                     directory_error);
         if (path.empty())
             throw coded<std::system_error>(RunFailureCode::scratch_io_failed, {},
                 std::system_error(directory_error, std::generic_category(),

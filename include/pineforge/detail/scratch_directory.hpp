@@ -95,13 +95,15 @@ inline int scratch_directory_filesystem_type(const char* path, std::uint64_t& ty
 
 // Empty return => refusal/error are populated. proven_memory distinguishes a
 // successful memory-filesystem query from a query that itself returns ENODEV.
-// A successful fallback retains its selection note in refusal for a later
+// A successfully queried fallback retains its selection note for a later
 // create failure; accepted first/explicit candidates have no rejection note.
 // No directory is created here.
 // A nonempty explicit path is never replaced or normalized. With no explicit
 // path, retain the legacy TMPDIR-or-/tmp choice; only proven tmpfs/ramfs permits
-// trying /var/tmp. Default query errors stop with their errno; explicit query
-// errors leave creation to the caller. /tmp is used only if TMPDIR is unset/empty.
+// trying /var/tmp. ENOTSUP supplies no filesystem evidence: keep that candidate
+// with error 0, proven_memory false and no note, including a reached fallback.
+// Other default query errors stop with their errno; explicit query errors leave
+// creation to the caller. /tmp is used only if TMPDIR is unset/empty.
 // Probe has signature int(const char*, uint64_t&) and returns a syscall errno.
 // The injected form lets tests cover a tmpfs /tmp without changing mounts.
 template<class Probe>
@@ -116,6 +118,12 @@ inline std::string resolve_scratch_directory(const std::string& configured,
         std::uint64_t type = 0;
         query_error = probe(path.c_str(), type);
         proven_memory = query_error == 0 && scratch_filesystem_is_memory(type);
+        if (query_error == ENOTSUP) {
+            // Unsupported probing supplies no evidence in either direction.
+            refusal.clear();
+            error = 0;
+            return false;
+        }
         if (query_error == 0 && !proven_memory) return false;
         if (!refusal.empty()) refusal += "; ";
         refusal += source;
@@ -160,7 +168,8 @@ inline std::string resolve_scratch_directory(const std::string& configured,
         return {};
     }
     if (!reject("/var/tmp", "fallback")) {
-        refusal += "; selected fallback '/var/tmp'; set TMPDIR to a disk-backed directory";
+        if (query_error != ENOTSUP)
+            refusal += "; selected fallback '/var/tmp'; set TMPDIR to a disk-backed directory";
         error = 0;
         return "/var/tmp";
     }
@@ -181,6 +190,12 @@ inline std::string resolve_scratch_directory(const std::string& configured,
                                              bool& proven_memory) {
     return resolve_scratch_directory(configured, refusal, error, proven_memory,
                                      scratch_directory_filesystem_type);
+}
+
+inline std::string resolve_scratch_directory(const std::string& configured,
+                                             std::string& refusal, int& error) {
+    bool ignored_memory = false;
+    return resolve_scratch_directory(configured, refusal, error, ignored_memory);
 }
 
 } // namespace pineforge::detail
