@@ -95,8 +95,10 @@ int main() {
                 const pf_execution_observer_v1 observer{
                     sizeof observer, 1, &calls, before_results};
                 observer_status = native_set_execution_observer_v1(&late, &observer);
-                require(observer_status == 0 || observer_status == -2,
-                        "late execution observer returned unexpected registration status: "
+                // X1 is picked: the setter refuses an observer while the v1 mode
+                // is SUMMARY_ONLY. A 0 here means the refusal is absent.
+                require(observer_status == -2,
+                        "late execution observer must be refused with -2 under X1: status "
                             + std::to_string(observer_status));
             }
             late.run(bars.data(), static_cast<int>(bars.size()));
