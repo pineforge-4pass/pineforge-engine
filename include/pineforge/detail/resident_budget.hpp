@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <string_view>
 
 namespace pineforge::detail {
 
@@ -88,6 +89,12 @@ constexpr std::optional<std::uint64_t> resident_bytes(
 // memoization: a later run on the same host must observe its new environment.
 // Only positive decimal uint64_t values <= the descriptor maximum are accepted.
 std::uint64_t resident_entries(ResidentKind kind);
+
+// reason: nondecimal, nonpositive, overflow, above_maximum or frozen.
+// The payload value retains at most 1024 input bytes without splitting UTF-8.
+// max is an integer when it fits int64_t, otherwise its exact decimal text.
+[[noreturn]] void throw_resident_budget_invalid(ResidentKind kind, std::string_view value,
+                                             std::uint64_t max, std::string_view reason);
 
 // Sum at effective (environment-resolved) budgets, checking products and sum.
 // See measured above: zero placeholders are not a complete resident RAM plan.

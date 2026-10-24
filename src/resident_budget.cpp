@@ -8,37 +8,46 @@
 #include <system_error>
 
 namespace pineforge::detail {
-namespace {
 
-[[noreturn]] void budget_error(const ResidentBudgetDescriptor& row, const char* value,
-                              const char* reason, int error) {
+[[noreturn]] void throw_resident_budget_invalid(ResidentKind kind, std::string_view value,
+                                             std::uint64_t max, std::string_view reason) {
+    const auto& row = resident_budget(kind);
     const auto message = std::string("resident budget kind=") + row.name
-        + " value=\"" + value + "\" max=" + std::to_string(row.max_entries);
-    // Code 68's current closed registry requires this legacy stage spelling.
-    // Keep the actual kind/value/max in the message until its owner extends
-    // the vocabulary; empty args or a new stage would become engine_invariant.
+        + " value=\"" + std::string(value) + "\" max=" + std::to_string(max);
+    // Match run_json's 1 KiB string-argument cap, keeping valid UTF-8 whole.
+    std::size_t length = value.size() < 1024 ? value.size() : 1024;
+    if (length < value.size()) {
+        while (length > 0 && (static_cast<unsigned char>(value[length]) & 0xC0) == 0x80)
+            --length;
+    }
+    RunFailureArgs args{{"reason", std::string(reason)}, {"stage", "resident_budget"},
+                        {"kind", row.name}, {"value", std::string(value.substr(0, length))}};
+    if (max <= static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
+        args.emplace_back("max", static_cast<std::int64_t>(max));
+    else
+        args.emplace_back("max", std::to_string(max));
+    const int error = reason == "overflow" || reason == "above_maximum" ? ERANGE : EINVAL;
     throw coded<std::system_error>(RunFailureCode::scratch_configuration_invalid,
-        {{"reason", reason}, {"stage", "command_scratch_byte_cap"}},
-        std::system_error(error, std::generic_category(), message));
+        args, std::system_error(error, std::generic_category(), message));
 }
-
-} // namespace
 
 std::uint64_t resident_entries(ResidentKind kind) {
     const auto& row = resident_budget(kind);
     const char* selected = std::getenv(row.env_name);
     if (!selected) return row.default_entries;
-    if (!*selected) budget_error(row, selected, "nondecimal", EINVAL);
+    if (!*selected) throw_resident_budget_invalid(kind, selected, row.max_entries, "nondecimal");
     std::uint64_t entries = 0;
     for (const char* at = selected; *at; ++at) {
-        if (*at < '0' || *at > '9') budget_error(row, selected, "nondecimal", EINVAL);
+        if (*at < '0' || *at > '9')
+            throw_resident_budget_invalid(kind, selected, row.max_entries, "nondecimal");
         const auto digit = static_cast<std::uint64_t>(*at - '0');
         if (entries > (std::numeric_limits<std::uint64_t>::max() - digit) / 10)
-            budget_error(row, selected, "overflow", ERANGE);
+            throw_resident_budget_invalid(kind, selected, row.max_entries, "overflow");
         entries = entries * 10 + digit;
     }
-    if (entries == 0) budget_error(row, selected, "nonpositive", EINVAL);
-    if (entries > row.max_entries) budget_error(row, selected, "overflow", ERANGE);
+    if (entries == 0) throw_resident_budget_invalid(kind, selected, row.max_entries, "nonpositive");
+    if (entries > row.max_entries)
+        throw_resident_budget_invalid(kind, selected, row.max_entries, "above_maximum");
     return entries;
 }
 
@@ -50,7 +59,7 @@ std::uint64_t planned_resident_bytes() {
         const auto bytes = resident_bytes(kind, entries);
         if (!bytes || *bytes > std::numeric_limits<std::uint64_t>::max() - total) {
             const auto value = std::to_string(entries);
-            budget_error(resident_budget(kind), value.c_str(), "overflow", ERANGE);
+            throw_resident_budget_invalid(kind, value, resident_budget(kind).max_entries, "overflow");
         }
         total += *bytes;
     }

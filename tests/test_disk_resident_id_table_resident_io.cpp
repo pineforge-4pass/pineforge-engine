@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -353,16 +354,48 @@ void resident_budget_contract() {
         require(entries == valid.second, "valid decimal budget parsed incorrectly");
     }
     const auto too_large = std::to_string(row.max_entries + 1);
-    for (const char* invalid : {"", "0", "000", "-1", "+1", " 1", "1 ", "1x", "x1",
-                                "1\n", "18446744073709551616", too_large.c_str()}) {
-        EnvironmentScope selected(row.env_name, invalid);
+    struct InvalidBudget {
+        std::string value;
+        std::string json_value;
+        const char* reason;
+        int error;
+    };
+    const std::vector<InvalidBudget> invalid_values{
+        {"", "", "nondecimal", EINVAL},
+        {"0", "0", "nonpositive", EINVAL},
+        {"000", "000", "nonpositive", EINVAL},
+        {"-1", "-1", "nondecimal", EINVAL},
+        {"+1", "+1", "nondecimal", EINVAL},
+        {" 1", " 1", "nondecimal", EINVAL},
+        {"1 ", "1 ", "nondecimal", EINVAL},
+        {"1x", "1x", "nondecimal", EINVAL},
+        {"x1", "x1", "nondecimal", EINVAL},
+        {"1\n", "1\\u000a", "nondecimal", EINVAL},
+        {"a\"b", "a\\\"b", "nondecimal", EINVAL},
+        {"a\\b", "a\\\\b", "nondecimal", EINVAL},
+        {"18446744073709551616", "18446744073709551616", "overflow", ERANGE},
+        {too_large, too_large, "above_maximum", ERANGE},
+        {std::string(1025, 'x'), std::string(1024, 'x'), "nondecimal", EINVAL},
+        {std::string(1023, 'x') + "\xC3\xA9", std::string(1023, 'x'),
+         "nondecimal", EINVAL},
+        {std::string(1022, 'x') + "\xC3\xA9" + "y", std::string(1022, 'x') + "\xC3\xA9",
+         "nondecimal", EINVAL},
+    };
+    for (const auto& invalid : invalid_values) {
+        EnvironmentScope selected(row.env_name, invalid.value.c_str());
         bool refused = false;
         try { (void)resident_entries(ResidentKind::idtable_entries); }
         catch (const std::system_error& error) {
             const std::string message = error.what();
-            refused = classify_run_failure(error).code == RunFailureCode::scratch_configuration_invalid
+            const auto failure = classify_run_failure(error);
+            const auto args = std::string("{\"kind\":\"idtable_entries\",\"max\":") + maximum
+                + ",\"reason\":\"" + invalid.reason
+                + "\",\"stage\":\"resident_budget\",\"value\":\"" + invalid.json_value + "\"}";
+            refused = failure.code == RunFailureCode::scratch_configuration_invalid
+                && failure.args && *failure.args == args
+                && error.code() == std::error_code(invalid.error, std::generic_category())
                 && message.find(row.name) != std::string::npos
-                && message.find(std::string("value=\"") + invalid + "\"") != std::string::npos
+                && message.find(std::string("value=\"") + invalid.value + "\"") != std::string::npos
                 && message.find("max=" + maximum) != std::string::npos;
         }
         require(refused, "malformed/out-of-range budget lost its typed refusal or context");
@@ -388,7 +421,13 @@ void resident_budget_contract() {
         bool refused = false;
         try { (void)planned_resident_bytes(); }
         catch (const std::system_error& error) {
-            refused = classify_run_failure(error).code == RunFailureCode::scratch_configuration_invalid;
+            const auto failure = classify_run_failure(error);
+            const auto args = std::string("{\"kind\":\"placement_snapshots\",\"max\":")
+                + std::to_string(kResidentBudgets[2].max_entries)
+                + ",\"reason\":\"nondecimal\",\"stage\":\"resident_budget\",\"value\":\"abc\"}";
+            refused = failure.code == RunFailureCode::scratch_configuration_invalid
+                && failure.args && *failure.args == args
+                && error.code() == std::error_code(EINVAL, std::generic_category());
         }
         require(refused, "byte planner ignored an invalid effective budget");
     }

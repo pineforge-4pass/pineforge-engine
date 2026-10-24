@@ -62,6 +62,30 @@ def test_run_failure_code_numbers_stable():
     assert {name: current.get(name) for name in V170_ADDITIONS} == V170_ADDITIONS
 
 
+def test_scratch_configuration_invalid_catalog_arguments():
+    catalogue, _ = registry.load_catalog(ROOT)
+    entry = catalogue["codes"]["scratch_configuration_invalid"]
+    assert entry["class"] == "input"
+    assert entry["retryable"] is False
+    assert entry["since"] == "1.7.0"
+    assert entry["args"] == {
+        "kind": {
+            "kind": "vocab", "optional": True,
+            "values": ["ledger_rows", "idtable_entries", "placement_snapshots", "journal_pages"],
+        },
+        "max": {"kind": "scalar", "optional": True},
+        "reason": {
+            "kind": "vocab",
+            "values": ["above_maximum", "frozen", "nondecimal", "nonpositive", "overflow"],
+        },
+        "stage": {
+            "kind": "vocab",
+            "values": ["command_scratch_byte_cap", "resident_budget"],
+        },
+        "value": {"kind": "string", "optional": True},
+    }
+
+
 def test_run_failure_generator_appends_after_released_numbers():
     released = released_numbers()
     catalogue, _ = registry.load_catalog(ROOT)

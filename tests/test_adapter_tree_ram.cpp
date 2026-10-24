@@ -3,6 +3,8 @@
 // primitive supplied alone the real adapter arm still hits the refusing tree
 // binder. The supervisor records the executed first diagnostic on the lab.
 #include <pineforge/detail/disk_id_table.hpp>
+#include <pineforge/detail/resident_budget.hpp>
+#include <pineforge/run_failure.hpp>
 
 #include <algorithm>
 #include <array>
@@ -686,15 +688,26 @@ public:
     int callbacks = 0;
 };
 
+void require_resident_budget_failure(const RunFailureValue& failure, const char* value,
+                                     const char* reason) {
+    const auto maximum = std::to_string(
+        detail::resident_budget(detail::ResidentKind::idtable_entries).max_entries);
+    const auto args = std::string("{\"kind\":\"idtable_entries\",\"max\":") + maximum
+        + ",\"reason\":\"" + reason + "\",\"stage\":\"resident_budget\",\"value\":\"" + value + "\"}";
+    require(failure.code == RunFailureCode::scratch_configuration_invalid
+            && failure.args && *failure.args == args,
+            "resident budget setup failure lost its exact code, stage, kind, reason, value or max");
+}
+
 void invalid_resident_budget_refuses_before_bars() {
     const auto bars = flat_tape(2);
     for (const char* invalid : {"0", "abc"}) {
         CohortBudgetScope budget(invalid);
         BudgetRefusalHost host;
         host.run(bars.data(), static_cast<int>(bars.size()));
-        require(!host.last_error().empty()
-                && run_failure_value_of(host).code == RunFailureCode::scratch_configuration_invalid,
-                "invalid resident budget must keep its typed setup failure");
+        require(!host.last_error().empty(), "invalid resident budget must fail during setup");
+        require_resident_budget_failure(run_failure_value_of(host), invalid,
+                                        std::strcmp(invalid, "0") == 0 ? "nonpositive" : "nondecimal");
         require(host.callbacks == 0 && host.trade_count() == 0,
                 "invalid resident budget ran a strategy bar or made a trade");
         require(host.last_error().find("idtable_entries") != std::string::npos
@@ -728,9 +741,9 @@ void resident_budget_is_sampled_once_per_run() {
             "changing the environment inside a run changed its resolved budget");
     host.run(bars.data(), static_cast<int>(bars.size()));
     require(!host.last_error().empty()
-            && run_failure_value_of(host).code == RunFailureCode::scratch_configuration_invalid
             && host.callbacks == static_cast<int>(bars.size()),
             "the next run did not refuse the new invalid budget before callbacks");
+    require_resident_budget_failure(run_failure_value_of(host), "abc", "nondecimal");
 }
 
 } // namespace tree_ram_fixture

@@ -8,7 +8,7 @@
   "to": {
     "version": null,
     "unreleased": true,
-    "catalogSha256": "400961b4f134c550841fc7d04d4fe82026de133f33512ff1b41604302d6deddd"
+    "catalogSha256": "63bce396151f4894def5abb3903c26e6a232ba49d1a7adcffa4d588e183fb99f"
   },
   "catalogSchema": {
     "before": "pineforge-run-failure-catalog/v1",
@@ -161,9 +161,25 @@
       "collection": "codes",
       "entry": {
         "args": {
+          "kind": {
+            "kind": "vocab",
+            "optional": true,
+            "values": [
+              "ledger_rows",
+              "idtable_entries",
+              "placement_snapshots",
+              "journal_pages"
+            ]
+          },
+          "max": {
+            "kind": "scalar",
+            "optional": true
+          },
           "reason": {
             "kind": "vocab",
             "values": [
+              "above_maximum",
+              "frozen",
               "nondecimal",
               "nonpositive",
               "overflow"
@@ -172,8 +188,13 @@
           "stage": {
             "kind": "vocab",
             "values": [
-              "command_scratch_byte_cap"
+              "command_scratch_byte_cap",
+              "resident_budget"
             ]
+          },
+          "value": {
+            "kind": "string",
+            "optional": true
           }
         },
         "class": "input",

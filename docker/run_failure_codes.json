@@ -1302,9 +1302,25 @@
   },
   "scratch_configuration_invalid": {
    "args": {
+    "kind": {
+     "kind": "vocab",
+     "optional": true,
+     "values": [
+      "ledger_rows",
+      "idtable_entries",
+      "placement_snapshots",
+      "journal_pages"
+     ]
+    },
+    "max": {
+     "kind": "scalar",
+     "optional": true
+    },
     "reason": {
      "kind": "vocab",
      "values": [
+      "above_maximum",
+      "frozen",
       "nondecimal",
       "nonpositive",
       "overflow"
@@ -1313,8 +1329,13 @@
     "stage": {
      "kind": "vocab",
      "values": [
-      "command_scratch_byte_cap"
+      "command_scratch_byte_cap",
+      "resident_budget"
      ]
+    },
+    "value": {
+     "kind": "string",
+     "optional": true
     }
    },
    "class": "input",
