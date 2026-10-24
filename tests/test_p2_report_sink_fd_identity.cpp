@@ -48,8 +48,17 @@ struct Socket {
     }
 };
 
-void complete(Host& host, std::uint64_t generation) {
-    configure(host, generation);
+void configure_run(Host& host, std::uint64_t generation = 1) {
+    const auto setup = host.configure_native(spec(generation));
+    require(setup.status == NativeSetupStatus::Applied,
+            "native configure refused (run " + std::to_string(generation)
+                + ", error " + std::to_string(static_cast<int>(setup.validation.error))
+                + ", field " + std::to_string(static_cast<int>(setup.validation.field))
+                + "): " + host.last_error());
+}
+
+// The caller stages exactly one Ready spec before installing or running a sink.
+void complete(Host& host) {
     run(host, tape(2));
     Report report;
     host.fill_report(&report.value);
@@ -57,7 +66,7 @@ void complete(Host& host, std::uint64_t generation) {
 }
 
 void require_identity_refusal(Host& host) {
-    configure(host, 2);
+    configure_run(host, 2);
     const auto bars = tape(2);
     host.run(bars.data(), static_cast<int>(bars.size()));
     require(host.last_run_status() != 0
@@ -71,17 +80,19 @@ void copy_move_identity() {
     Socket original;
     Socket unrelated;
     Host source, copied, moved;
-    configure(source);
+    configure_run(source);
     const int borrowed = original.fd[1];
     const pf_report_sink_fd_v1 sink{sizeof sink, 1, borrowed, "p2-fd-identity-assignment"};
     require(source.set_report_sink_fd_v1(&sink) == 0, "assignment source install refused");
 
     // A copy retains configuration without the source's run-local owners.
     sink_state(copied) = sink_state(source);
-    complete(copied, 1);
+    configure_run(copied);
+    complete(copied);
     // Move assignment must carry the identity beside the borrowed fd.
     sink_state(moved) = std::move(sink_state(copied));
-    complete(moved, 1);
+    configure_run(moved);
+    complete(moved);
     sink_state(copied) = sink_state(source);
 
     require(::close(borrowed) == 0, "cannot close assignment source fd");
@@ -99,9 +110,9 @@ void copy_move_identity() {
     Socket next_stream;
     require(::dup2(next_stream.fd[1], borrowed) == borrowed, "cannot reuse fd for independent engine");
     Host independent;
-    configure(independent);
+    configure_run(independent);
     require(independent.set_report_sink_fd_v1(&sink) == 0, "independent sink install refused");
-    complete(independent, 1);
+    complete(independent);
     require(::shutdown(next_stream.fd[1], SHUT_WR) == 0, "cannot finish independent stream");
     require_trailer(next_stream.read_to_eof());
 }
@@ -115,7 +126,7 @@ int main() {
         Socket original;
         Socket unrelated;
         Host host;
-        configure(host);
+        configure_run(host);
         const int borrowed = original.fd[1];
         const pf_report_sink_fd_v1 sink{sizeof sink, 1, borrowed, "p2-fd-identity"};
         require(host.set_report_sink_fd_v1(&sink) == 0, "fd sink install refused");
@@ -127,14 +138,15 @@ int main() {
             host.fill_report(&report.value);
             require(receipt(host).complete == 1, "first generation did not complete");
         }
-        complete(host, 2);
+        configure_run(host, 2);
+        complete(host);
 
         require(::close(borrowed) == 0, "cannot close original borrowed fd");
         original.fd[1] = -1;
         require(!original.read_to_eof().empty(), "original stream received no report");
         require(::dup2(unrelated.fd[1], borrowed) == borrowed, "cannot reuse borrowed fd number");
 
-        configure(host, 3);
+        configure_run(host, 3);
         const auto bars = tape(2);
         host.run(bars.data(), static_cast<int>(bars.size()));
         const bool typed_refusal = host.last_run_status() != 0
