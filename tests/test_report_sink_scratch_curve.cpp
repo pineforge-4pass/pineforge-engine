@@ -728,7 +728,11 @@ RemovalPeaks measure_removal(const TestRoot& root, const std::string& name,
         require(peaks.engine.size == held_size && peaks.engine.capacity == held_capacity,
                 "sink removal or report fill rehydrated equity_curve_");
         require(arrays.peak_bytes <= held_bytes && arrays.capacity_bytes <= held_bytes,
-                "sink removal or report fill allocated more than the counted report tail");
+                "sink removal or report fill allocated more than the counted report tail: peak_bytes="
+                    + std::to_string(arrays.peak_bytes) + ", capacity_bytes=" + std::to_string(arrays.capacity_bytes)
+                    + ", live_bytes=" + std::to_string(arrays.live_bytes) + ", allocations=" + std::to_string(arrays.allocations)
+                    + ", held_bytes=" + std::to_string(held_bytes) + ", held_size=" + std::to_string(held_size)
+                    + ", point_bytes=" + std::to_string(sizeof(pf_equity_point_t)) + ", observer=" + std::to_string(observer));
     };
     const auto refuse_removal = [&] {
         const auto before = receipt(on);
