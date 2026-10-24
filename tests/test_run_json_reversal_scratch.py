@@ -102,8 +102,7 @@ def run_probe(module, artifacts):
             command += ["--syminfo", str(syminfo_path)]
         prefix.with_suffix(".argv.json").write_text(
             json.dumps(command, indent=2) + "\n", encoding="utf-8")
-        result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True,
-                                timeout=1800)
+        result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
         runs.append(result)
         prefix.with_suffix(".stdout.json").write_text(result.stdout, encoding="utf-8")
         prefix.with_suffix(".stderr.txt").write_text(result.stderr, encoding="utf-8")

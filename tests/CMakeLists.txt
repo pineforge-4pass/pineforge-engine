@@ -4142,8 +4142,9 @@ add_test(NAME test_oracle_sha256_pin
 target_compile_definitions(test_native_market_vertical PRIVATE
     PINEFORGE_NATIVE_SYNTHETIC_SOURCE_SHA256="${PINEFORGE_NATIVE_MARKET_VERTICAL_SHA256}")
 
-# R5 L3 adapter-neutrality witness: the sizing-bases test reads the whole
-# source layer and proves no Pine translation unit names the new value kinds.
+# R5 L3 adapter-neutrality witness: test_native_sizing_bases reads the source
+# layer and forbids the scope-reduction value kinds outside the kernel codec's
+# payload_fields body in exit_scratch_versions_production.cpp (H2-11).
 # '|' separates the paths because ';' would split the compile definition.
 file(GLOB_RECURSE PINEFORGE_SOURCE_LAYER_FILES CONFIGURE_DEPENDS
      "${PROJECT_SOURCE_DIR}/src/source/*.cpp"
@@ -4152,12 +4153,8 @@ file(GLOB_RECURSE PINEFORGE_SOURCE_LAYER_FILES CONFIGURE_DEPENDS
      "${PROJECT_SOURCE_DIR}/src/compat/*.hpp"
      "${PROJECT_SOURCE_DIR}/include/pineforge/source/*.hpp"
      "${PROJECT_SOURCE_DIR}/include/pineforge/compat/*.hpp")
-# The neutrality witness below covers the Pine lowering layer. The exit-scratch record
-# codec is excluded: it is the kernel's archive field dispatcher, it must name each
-# native_order alternative to record it, and it constructs or resolves nothing
-# (measured red: test_native_sizing_bases :793 on proof rj-20261022t055326-7da628).
-list(REMOVE_ITEM PINEFORGE_SOURCE_LAYER_FILES
-     "${PROJECT_SOURCE_DIR}/src/source/exit_scratch_versions_production.cpp")
+# Keep the codec translation unit in the witness. Only its payload_fields
+# dispatcher may name those alternatives; all surrounding source is checked.
 list(LENGTH PINEFORGE_SOURCE_LAYER_FILES PINEFORGE_SOURCE_LAYER_COUNT)
 if(PINEFORGE_SOURCE_LAYER_COUNT LESS 4)
     message(FATAL_ERROR "source-layer neutrality glob found no translation units")
@@ -7278,23 +7275,20 @@ endif()
 # --- CR-150 core-cr150-l9a begin ---
 # CR-150 L9A: full JSON through the temporary sink; after every line pin.
 # Preflight also discovers this file through docker/run_json_*_test.py.
+# H2-6: optional native and corpus checks must not skip inside a green row.
+# The native row is in p2cx-cmake.cmake. The corpus byte proof needs a
+# supervisor-supplied PINEFORGE_L9A_CORPUS_CASES manifest, as L9B does, so it
+# stays outside this CI registration.
 add_test(NAME test_run_json_sink_l9a
-    COMMAND ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider
-        ${PROJECT_SOURCE_DIR}/tests/test_run_json_sink.py)
-if(TARGET report_sink_l6b1_strategy AND NOT PINEFORGE_ENABLE_SANITIZERS
-   AND NOT PINEFORGE_ENABLE_COVERAGE)
-    set_property(TEST test_run_json_sink_l9a APPEND PROPERTY ENVIRONMENT
-        "PINEFORGE_L9A_STRATEGY_SO=$<TARGET_FILE:report_sink_l6b1_strategy>")
-endif()
-if(TARGET outputs_fixture_strategy)
-    set_property(TEST test_run_json_sink_l9a APPEND PROPERTY ENVIRONMENT
-        "PINEFORGE_L9A_OUTPUTS_SO=$<TARGET_FILE:outputs_fixture_strategy>")
-endif()
+    COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/scripts/run_pytest_no_skips.py
+        --artifacts ${CMAKE_CURRENT_BINARY_DIR}/pytest-no-skips/test_run_json_sink_l9a
+        -- -q -p no:cacheprovider
+        ${PROJECT_SOURCE_DIR}/tests/test_run_json_sink.py -k "not native and not corpus")
 # --- CR-150 core-cr150-l9a end ---
 
 # --- CR-150 core-cr150-l19b begin ---
 # CR-150 L19B: match the library Debug-mode precedent for
-# test_native_runtime_ambient_lifo at tests/CMakeLists.txt:4129-4130.
+# test_native_runtime_ambient_lifo's PINEFORGE_LIBRARY_DEBUG_CHECKS definition (H2-12).
 target_compile_definitions(test_group_receipt_retirement PRIVATE PINEFORGE_LIBRARY_DEBUG_CHECKS=$<CONFIG:Debug>)
 # --- CR-150 core-cr150-l19b end ---
 
@@ -7534,7 +7528,6 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX AND PINEFORGE_BUILD_CORPUS_STRATEGIES
             ${PROJECT_SOURCE_DIR}/tests/test_run_json_reversal_scratch.py
             --so $<TARGET_FILE:reversal_scratch_strategy>
             --artifacts ${CMAKE_CURRENT_BINARY_DIR}/reversal_scratch)
-    set_tests_properties(test_run_json_reversal_scratch PROPERTIES TIMEOUT 3600)
 endif()
 # --- CR-150 core-cr150-o1-revscratch end ---
 

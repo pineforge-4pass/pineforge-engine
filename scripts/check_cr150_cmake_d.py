@@ -34,6 +34,8 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
 endif()
 '''
 ALLOWED_TEST_PROPERTIES = frozenset({
+    # TIMEOUT is parsed here for ownership diagnostics, then rejected by the
+    # cross-file owner-#827 rule after all lane syntax has been checked.
     "LABELS", "SKIP_RETURN_CODE", "TIMEOUT", "RUN_SERIAL", "DEPENDS",
 })
 REFUSED_TEST_PROPERTIES = frozenset({
@@ -751,6 +753,146 @@ def _without_final_fast_validation(text: str) -> str:
     return text
 
 
+def _profile_truth(words: list[str], profile: tuple[bool, bool]) -> set[bool]:
+    """Possible condition values; unknown CMake predicates can be true or false."""
+    for operator in ("OR", "AND"):
+        depth = 0
+        for index, word in enumerate(words):
+            if word == "(":
+                depth += 1
+            elif word == ")":
+                depth -= 1
+            elif depth == 0 and word.upper() == operator:
+                left = _profile_truth(words[:index], profile)
+                right = _profile_truth(words[index + 1:], profile)
+                return {(a or b) if operator == "OR" else (a and b)
+                        for a in left for b in right}
+    if words and words[0].upper() == "NOT":
+        return {not value for value in _profile_truth(words[1:], profile)}
+    if words and words[0] == "(" and words[-1] == ")":
+        return _profile_truth(words[1:-1], profile)
+    if words == ["PINEFORGE_ENABLE_SANITIZERS"]:
+        return {profile[0]}
+    if words == ["PINEFORGE_ENABLE_COVERAGE"]:
+        return {profile[1]}
+    if len(words) == 1:
+        if words[0].upper() in ("1", "ON", "TRUE", "YES"):
+            return {True}
+        if words[0].upper() in ("0", "OFF", "FALSE", "NO"):
+            return {False}
+    return {False, True}
+
+
+def _profile_statements(path: Path, statements: list[Statement]):
+    """Track feasible sanitizer/coverage settings separately in every branch."""
+    profiles = {(False, False), (False, True), (True, False), (True, True)}
+    branches: list[tuple[set[tuple[bool, bool]], set[tuple[bool, bool]]]] = []
+    for statement in statements:
+        name = statement.name.lower()
+        if name in ("if", "elseif", "else", "endif"):
+            # Preserve quotes: a quoted option name is not a variable under
+            # CMP0054 and cannot prove a profile exclusion.
+            words = re.findall(r'"(?:\\.|[^"\\])*"|[()]|[^\s()]+', statement.body)
+            if name == "if":
+                remaining = {p for p in profiles if False in _profile_truth(words, p)}
+                branches.append((profiles, remaining))
+                profiles = {p for p in profiles if True in _profile_truth(words, p)}
+            elif not branches:
+                raise CheckFailure(f"{path}:{statement.line}: {name}() without if()")
+            elif name == "endif":
+                profiles, _ = branches.pop()
+            else:
+                outer, remaining = branches[-1]
+                profiles = (remaining if name == "else" else
+                            {p for p in remaining if True in _profile_truth(words, p)})
+                branches[-1] = (
+                    outer, set() if name == "else" else
+                    {p for p in remaining if False in _profile_truth(words, p)})
+            continue
+        if name in ("add_library", "add_test", "set_tests_properties", "set_property"):
+            yield statement, _fence_words(statement), profiles
+    if branches:
+        raise CheckFailure(f"{path}: missing endif() in profile guard")
+
+
+def _check_python_modules(prefix: list[Statement], fences: list[Fence]) -> None:
+    """H2-3: join MODULE declarations, Python rows and their TARGET_FILE reads."""
+    inputs = [(CMAKE, prefix)]
+    inputs.extend((CMAKE, fence.statements) for fence in fences)
+    inputs.extend((path, _statements(path, path.read_text()))
+                  for path in sorted(LANE_DIR.glob("*.cmake")))
+    modules: dict[str, set[tuple[bool, bool]]] = {}
+    rows: dict[str, set[tuple[bool, bool]]] = {}
+    reads: list[tuple[Path, Statement, str, str, set[tuple[bool, bool]]]] = []
+    for path, statements in inputs:
+        for statement, words, profiles in _profile_statements(path, statements):
+            name = statement.name.lower()
+            if (name == "add_library" and len(words) >= 2 and
+                    words[1].upper() == "MODULE" and LITERAL_NAME_RE.fullmatch(words[0])):
+                modules.setdefault(words[0], set()).update(profiles)
+            tests: list[str] = []
+            values: list[str] = []
+            if name == "add_test" and len(words) >= 4 and words[0].upper() == "NAME":
+                command = " ".join(words[3:])
+                if ("Python3_EXECUTABLE" in command or
+                        re.search(r"(?:^|[/\s])(?:python[0-9.]*|pytest)(?:\s|$)|\.py(?:\s|$)",
+                                  command)):
+                    rows.setdefault(words[1], set()).update(profiles)
+                tests, values = [words[1]], words[3:]
+            elif name == "set_tests_properties":
+                at = next((i for i, word in enumerate(words)
+                           if word.upper() == "PROPERTIES"), len(words))
+                tests, values = words[:at], words[at + 2::2]
+            elif name == "set_property" and words and words[0].upper() == "TEST":
+                at = next((i for i, word in enumerate(words)
+                           if word.upper() == "PROPERTY"), len(words))
+                tests = [word for word in words[1:at]
+                         if word.upper() not in ("APPEND", "APPEND_STRING")]
+                values = words[at + 2:]
+            for target in re.findall(r"\$<TARGET_FILE:([A-Za-z0-9_.+-]+)>", " ".join(values)):
+                for test in tests:
+                    reads.append((path, statement, test, target, profiles))
+    for path, statement, test, target, profiles in reads:
+        feasible = profiles & rows.get(test, set()) & modules.get(target, set())
+        if feasible - {(False, False)}:
+            raise CheckFailure(
+                f"{path}:{statement.line}: MODULE {target} reaches Python row {test}; "
+                "require NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE "
+                "on the module or row")
+
+
+def _check_registration_timeouts() -> None:
+    """H2-8: no lane/fence or new main-file row may declare TIMEOUT."""
+    # This exact statement predates the CR-150 registrations. Preserve the
+    # inherited ownership rows, without granting a deadline to any new row.
+    inherited_main = [
+        "test_selected_window_ownership_manifest", "${_pf_ownership_control_shards}",
+        "test_selected_window_ownership_d4", "PROPERTIES", "WORKING_DIRECTORY",
+        "${PROJECT_SOURCE_DIR}", "TIMEOUT", "180",
+    ]
+    for path in [CMAKE, *sorted(LANE_DIR.glob("*.cmake"))]:
+        for statement in _statements(path, path.read_text(), mask_quotes=True):
+            name = statement.name.lower()
+            if name not in ("set_tests_properties", "set_property"):
+                continue
+            words = _fence_words(statement)
+            if path == CMAKE and words == inherited_main:
+                continue
+            if name == "set_tests_properties":
+                at = next((i for i, word in enumerate(words)
+                           if word.upper() == "PROPERTIES"), len(words))
+                keys = words[at + 1::2]
+            elif words and words[0].upper() == "TEST":
+                at = next((i for i, word in enumerate(words)
+                           if word.upper() == "PROPERTY"), len(words))
+                keys = words[at + 1:at + 2]
+            else:
+                continue
+            if any(key.upper() == "TIMEOUT" for key in keys):
+                raise CheckFailure(
+                    f"{path}:{statement.line}: TIMEOUT is forbidden (owner #827)")
+
+
 def _check_cmake_tail() -> dict[str, dict[str, set[str]]]:
     try:
         text = CMAKE.read_text()
@@ -764,6 +906,7 @@ def _check_cmake_tail() -> dict[str, dict[str, set[str]]]:
     owners = _ownership(prefix[:-5], fences)
     for fence in fences:
         _check_fence(fence, owners)
+    _check_python_modules(prefix[:-5], fences)
     return owners
 
 
@@ -776,6 +919,7 @@ def main() -> int:
             raise CheckFailure(f"{LANE_DIR}: lane directory is missing")
         for path in sorted(LANE_DIR.glob("*.cmake")):
             _check_lane(path, owners)
+        _check_registration_timeouts()
     except CheckFailure as error:
         print(f"check_cr150_cmake_d: {error}", file=sys.stderr)
         return 1
