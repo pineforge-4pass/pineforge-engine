@@ -33,6 +33,10 @@ foreach(cr150_lane_file IN LISTS CR150_LANE_CMAKE)
     include("${cr150_lane_file}")
 endforeach()
 '''
+SCRATCH_GUARD_FAST_ENROLMENT = '''if(PINEFORGE_BUILD_SOURCE_LAYER AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    list(APPEND PINEFORGE_PR_FAST_TESTS test_scratch_guard_hl2_01)
+endif()
+'''
 
 
 def declared_inputs(paths) -> None:
@@ -760,6 +764,46 @@ class FenceControls(CMakeControls):
     def test_fast_registration_constant_matches_preflight(self) -> None:
         self.assertEqual(ci_preflight.FAST_TEST_REGISTRATION,
                          check_cr150_cmake_d.FAST_TEST_REGISTRATION)
+
+    def test_scratch_guard_fast_registration_is_the_terminal_exception(self) -> None:
+        registration = self.real_tail('fast-scratchguard')
+        self.assert_tail_passes(self.fence('') + registration)
+        self.assertEqual(registration, check_cr150_cmake_d.FAST_TEST_REGISTRATION)
+        self.assertEqual(registration, check_cr150_cmake_d.FINAL_FAST_VALIDATION)
+        self.assertEqual(
+            INCLUDE_LOOP,
+            check_cr150_cmake_d._without_final_fast_validation(INCLUDE_LOOP + registration))
+        # Also exercise the no-fence route through the last-five-statements rule.
+        self.assert_tail_passes(registration)
+
+    def assert_scratch_guard_fast_mutation(self, replacement: str) -> None:
+        registration = self.real_tail('fast-scratchguard')
+        # The proposed legal block must pass before any refusal is evidence.
+        self.assert_tail_passes(self.fence('') + registration)
+        self.assertEqual(1, registration.count(SCRATCH_GUARD_FAST_ENROLMENT))
+        changed = registration.replace(SCRATCH_GUARD_FAST_ENROLMENT, replacement, 1)
+        self.assertNotEqual(registration, changed)
+        self.assert_tail_refused(
+            self.fence('') + changed,
+            'unfenced statement after the CR-150 include block')
+
+    def test_scratch_guard_fast_enrolment_cannot_be_removed(self) -> None:
+        self.assert_scratch_guard_fast_mutation('')
+
+    def test_second_scratch_guard_fast_enrolment_is_refused(self) -> None:
+        self.assert_scratch_guard_fast_mutation(SCRATCH_GUARD_FAST_ENROLMENT * 2)
+
+    def test_different_scratch_guard_fast_name_is_refused(self) -> None:
+        self.assert_scratch_guard_fast_mutation(SCRATCH_GUARD_FAST_ENROLMENT.replace(
+            'test_scratch_guard_hl2_01', 'test_other'))
+
+    def test_unconditional_scratch_guard_fast_enrolment_is_refused(self) -> None:
+        self.assert_scratch_guard_fast_mutation(
+            'list(APPEND PINEFORGE_PR_FAST_TESTS test_scratch_guard_hl2_01)\n')
+
+    def test_scratch_guard_fast_enrolment_missing_endif_is_refused(self) -> None:
+        self.assert_scratch_guard_fast_mutation(
+            SCRATCH_GUARD_FAST_ENROLMENT.replace('endif()\n', '', 1))
 
     def test_variable_and_generator_expression_write_names_are_refused(self) -> None:
         for target in ('${destination}', '"${destination}"', '$<TARGET_FILE:test_other>',

@@ -36,6 +36,11 @@ CI_SOURCES = ('.github/workflows/ci.yml', '.github/workflows/native-live.yml',
               '.github/workflows/corpus-parity.yml', '.github/workflows/docs.yml',
               '.github/workflows/ci-post.yml', '.github/workflows/corpus-parity-subset.yml',
               '.github/workflows/docs-post.yml')
+SCRATCH_GUARD_FAST_ENROLMENT = '''if(PINEFORGE_BUILD_SOURCE_LAYER AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    list(APPEND PINEFORGE_PR_FAST_TESTS test_scratch_guard_hl2_01)
+endif()
+'''
+FAST_ROWS_FINDING = 'PR fast rows must keep one pinned CMake label list and executable build target'
 BUILD_RUNNER_FINDING = 'ci.yml build must select only Ubuntu Release on pull_request'
 POST_BUILD_RUNNER_FINDING = 'ci-post.yml build must select only Ubuntu Release/Debug cells on full events'
 POST_MACOS_BUILD_RUNNER_FINDING = ('ci-post.yml build-macos must select '
@@ -1759,6 +1764,91 @@ exit "$lookup_exit"
                 findings = self.mutated_file_findings(3, None, fast_block, changed_block)
                 self.assertIn('PR fast rows must keep one pinned CMake label list and executable build target',
                               findings)
+
+    def test_scratch_guard_fast_enrolment_and_fixture_reach_pr_smoke(self):
+        cmake = self.ci_sources()[3]
+        loop = 'foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)\n'
+        self.assertIn(SCRATCH_GUARD_FAST_ENROLMENT + loop, cmake)
+        terminal_at = cmake.index(SCRATCH_GUARD_FAST_ENROLMENT + loop)
+        terminal = cmake[terminal_at:]
+        self.assertEqual(ci_preflight._code(ci_preflight.FAST_TEST_REGISTRATION),
+                         ci_preflight._code(terminal))
+        self.assertIn('set_property(TEST ${_pf_fast_test} APPEND PROPERTY LABELS fast)', terminal)
+        self.assertIn(
+            'add_custom_target(pineforge_pr_smoke DEPENDS ${PINEFORGE_PR_FAST_TESTS})',
+            terminal)
+
+        fence_at = cmake.index('# --- CR-150 ci-cx-scratchguard begin ---\n')
+        self.assertLess(fence_at, terminal_at)
+        fence = cmake[fence_at:].split('# --- CR-150 ci-cx-scratchguard end ---', 1)[0]
+        self.assertIn(SCRATCH_GUARD_FAST_ENROLMENT.splitlines()[0], fence)
+        self.assertIn(
+            'add_library(scratch_guard_hl2_01_fixture OBJECT '
+            'fixtures/scratch_guard_hl2_01/generated.cpp)', fence)
+        self.assertRegex(
+            fence, r'target_sources\(test_scratch_guard_hl2_01 PRIVATE\s+'
+            r'\$<TARGET_OBJECTS:scratch_guard_hl2_01_fixture>\)')
+        unit = cmake.split('function(pineforge_add_unit_test test_name)\n', 1)[1]
+        unit = unit.split('endfunction()', 1)[0]
+        self.assertIn('add_executable(${test_name} ${test_name}.cpp)', unit)
+        self.assertIn('add_test(NAME ${test_name} COMMAND ${test_name})', unit)
+
+    def assert_scratch_guard_fast_mutation(self, mutate):
+        sources = self.ci_sources()
+        loop = 'foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)\n'
+        self.assertEqual(1, sources[3].count(loop))
+        # Construct the intended input on both main and the fixed tree.
+        # Main accepts it because its policy pins only the foreach suffix.
+        cmake = sources[3].replace(SCRATCH_GUARD_FAST_ENROLMENT + loop, loop, 1)
+        cmake = cmake.replace(loop, SCRATCH_GUARD_FAST_ENROLMENT + loop, 1)
+        sources[3] = cmake
+        self.assertNotIn(
+            FAST_ROWS_FINDING, ci_workflow_findings(*sources, others=self.other_sources()))
+        changed = mutate(cmake)
+        self.assertNotEqual(cmake, changed, 'the mutation must change the input')
+        sources[3] = changed
+        self.assertIn(
+            FAST_ROWS_FINDING, ci_workflow_findings(*sources, others=self.other_sources()))
+        # Even a mutation already rejected by main (late enrolment) must
+        # prove that reverting the new enrolment pin is refused as well.
+        sources[3] = cmake.replace(SCRATCH_GUARD_FAST_ENROLMENT, '', 1)
+        self.assertIn(
+            FAST_ROWS_FINDING, ci_workflow_findings(*sources, others=self.other_sources()))
+
+    def test_scratch_guard_fast_enrolment_removal_is_refused(self):
+        self.assert_scratch_guard_fast_mutation(
+            lambda cmake: cmake.replace(SCRATCH_GUARD_FAST_ENROLMENT, '', 1))
+
+    def test_scratch_guard_fast_name_change_is_refused(self):
+        self.assert_scratch_guard_fast_mutation(lambda cmake: cmake.replace(
+            SCRATCH_GUARD_FAST_ENROLMENT,
+            SCRATCH_GUARD_FAST_ENROLMENT.replace('test_scratch_guard_hl2_01', 'test_other'), 1))
+
+    def test_scratch_guard_fast_condition_changes_are_refused(self):
+        for replacement in (
+                'if(PINEFORGE_BUILD_SOURCE_LAYER)',
+                'if(CMAKE_SYSTEM_NAME STREQUAL "Linux")',
+                'if(PINEFORGE_BUILD_SOURCE_LAYER OR CMAKE_SYSTEM_NAME STREQUAL "Linux")',
+                'if(TRUE)'):
+            with self.subTest(condition=replacement):
+                changed = SCRATCH_GUARD_FAST_ENROLMENT.replace(
+                    SCRATCH_GUARD_FAST_ENROLMENT.splitlines()[0], replacement, 1)
+                self.assert_scratch_guard_fast_mutation(lambda cmake: cmake.replace(
+                    SCRATCH_GUARD_FAST_ENROLMENT, changed, 1))
+        self.assert_scratch_guard_fast_mutation(lambda cmake: cmake.replace(
+            SCRATCH_GUARD_FAST_ENROLMENT,
+            'list(APPEND PINEFORGE_PR_FAST_TESTS test_scratch_guard_hl2_01)\n', 1))
+
+    def test_scratch_guard_fast_enrolment_after_target_is_refused(self):
+        self.assert_scratch_guard_fast_mutation(
+            lambda cmake: cmake.replace(SCRATCH_GUARD_FAST_ENROLMENT, '', 1)
+            + SCRATCH_GUARD_FAST_ENROLMENT)
+
+    def test_second_scratch_guard_fast_enrolment_is_refused(self):
+        # The canonical suffix still exists; a separate append must not
+        # silently widen or duplicate the population before validation.
+        self.assert_scratch_guard_fast_mutation(lambda cmake: cmake.replace(
+            SCRATCH_GUARD_FAST_ENROLMENT, SCRATCH_GUARD_FAST_ENROLMENT * 2, 1))
 
     def test_fast_rows_refuse_property_writes_after_the_registration_block(self):
         sources = self.ci_sources()

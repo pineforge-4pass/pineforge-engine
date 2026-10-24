@@ -61,8 +61,10 @@ all stages and its existing event-aware verifier-class selection.
 
 The smoke configures Release, builds `pineforge_pr_smoke` and directly runs
 `ctest --test-dir build -L '^fast$' --output-on-failure --no-tests=error`.
-`PINEFORGE_PR_FAST_TESTS` in `tests/CMakeLists.txt` names its eleven real
-executables; configure refuses missing, disabled, skippable, private-fixture
+`PINEFORGE_PR_FAST_TESTS` in `tests/CMakeLists.txt` names eleven real
+executables everywhere, plus `test_scratch_guard_hl2_01` on Linux with the
+source layer (twelve) so PR smoke compiles and runs its scratch I/O guard;
+configure refuses missing, disabled, skippable, private-fixture
 or `slow` rows. The target rebuilds those executables with their library.
 PRs restore the newest compatible default-branch compiler cache, and only
 successful runs on `main` save that cache namespace.

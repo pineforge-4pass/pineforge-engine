@@ -12,7 +12,10 @@ ROOT = Path(__file__).resolve().parent.parent
 CMAKE = ROOT / "tests" / "CMakeLists.txt"
 LANE_DIR = ROOT / "tests" / "cr150.d"
 README = LANE_DIR / "README.md"
-FAST_TEST_REGISTRATION = '''foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
+FAST_TEST_REGISTRATION = '''if(PINEFORGE_BUILD_SOURCE_LAYER AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    list(APPEND PINEFORGE_PR_FAST_TESTS test_scratch_guard_hl2_01)
+endif()
+foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
         message(FATAL_ERROR "PR fast row or executable is missing: ${_pf_fast_test}")
     endif()
@@ -59,7 +62,10 @@ TARGET_COMMANDS = frozenset({
 # This exact terminal validation is the sole unfenced tail exception.
 # Keep standalone checker controls usable without importing the CI driver.
 # test_s4e_ci_guard_gaps compares it with ci_preflight's pinned block.
-FINAL_FAST_VALIDATION = '''foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
+FINAL_FAST_VALIDATION = '''if(PINEFORGE_BUILD_SOURCE_LAYER AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    list(APPEND PINEFORGE_PR_FAST_TESTS test_scratch_guard_hl2_01)
+endif()
+foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
         message(FATAL_ERROR "PR fast row or executable is missing: ${_pf_fast_test}")
     endif()
@@ -742,7 +748,7 @@ def _check_fence(fence: Fence, owners: dict[str, dict[str, set[str]]]) -> None:
 
 
 def _without_final_fast_validation(text: str) -> str:
-    start = text.rfind("foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)")
+    start = text.rfind(FINAL_FAST_VALIDATION.splitlines()[0])
     if start < 0:
         return text
     def code(value: str) -> list[str]:

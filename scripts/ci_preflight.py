@@ -39,6 +39,8 @@ ACTIONLINT_VERSION = '1.7.12'
 # The names live only in tests/CMakeLists.txt. A digest pins that measured
 # population without maintaining a second row list in this Python guard.
 PR_SLOW_ROWS_SHA256 = 'e8bddea797abc46ca0deb671d5d35db3491b67a82e1413d08278530d12f7b67b'
+# The eleven-name literal is unchanged; FAST_TEST_REGISTRATION pins the one
+# Linux/source-layer scratch-guard enrolment separately.
 PR_FAST_ROWS_SHA256 = '0509b2219786efb6878b193639344c299ff8075ba4532dbe09e80e6e97b60a9a'
 # FLEET-POST=A: Linux PR and full-event jobs use separate, literal fleet arrays.
 # Release artifacts and baseline promotion retain their isolated -main policy.
@@ -246,7 +248,10 @@ GITHUB_ONLY_PREFLIGHT_STAGES = frozenset((
     'ci-workflow-contract', 'docs-workflow-contract', 'docs-workflow-contract-tests',
 ))
 DOCS_PR_TRIGGER = "  pull_request:\n    paths-ignore: ['.github/**']\n"
-FAST_TEST_REGISTRATION = '''foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
+FAST_TEST_REGISTRATION = '''if(PINEFORGE_BUILD_SOURCE_LAYER AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    list(APPEND PINEFORGE_PR_FAST_TESTS test_scratch_guard_hl2_01)
+endif()
+foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
         message(FATAL_ERROR "PR fast row or executable is missing: ${_pf_fast_test}")
     endif()
@@ -1330,7 +1335,7 @@ def release_bump_workflow_findings(workflow: str) -> list[str]:
 
 
 def fast_rows(cmake: str) -> list[str]:
-    """Read the single CMake population; no duplicate Python list of rows."""
+    """Read the literal list; the terminal block pins its Linux/source extension."""
     blocks = re.findall(r'^set\(PINEFORGE_PR_FAST_TESTS\n(.*?)^\)', cmake,
                         re.MULTILINE | re.DOTALL)
     if len(blocks) != 1:
@@ -1912,6 +1917,8 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
         rows = []
     if (hashlib.sha256(('\n'.join(rows) + '\n').encode()).hexdigest() != PR_FAST_ROWS_SHA256
             or cmake.count('APPEND PROPERTY LABELS fast') != 1
+            or len(re.findall(r'\blist\s*\(\s*APPEND\s+PINEFORGE_PR_FAST_TESTS\b',
+                              '\n'.join(_code(cmake)), re.IGNORECASE)) != 1
             or '\n'.join(_code(cmake)).count('\n'.join(_code(FAST_TEST_REGISTRATION))) != 1
             or _code(cmake)[-len(_code(FAST_TEST_REGISTRATION)):] != _code(FAST_TEST_REGISTRATION)):
         findings.append('PR fast rows must keep one pinned CMake label list and executable build target')
