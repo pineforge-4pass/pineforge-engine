@@ -120,6 +120,7 @@ void BacktestEngine::reset_run_state() {
     bars_in_market_ = 0;
     first_bar_open_ = std::numeric_limits<double>::quiet_NaN();
     broker_state_hashes_.clear();    // ABI v4 task 6: retain capacity like equity_curve_
+    reset_optional_sequence_witness();  // CR-150 o1w-seq: fixed witnesses reset with their arrays
     last_script_continuation_hash_ = 0;
     last_script_continuation_valid_ = false;
 

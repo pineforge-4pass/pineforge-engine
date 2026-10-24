@@ -304,7 +304,10 @@ class World:
         return candidate.exists()
 
     def read_text(self, path) -> str:
-        return Path(path).read_text(errors='replace')
+        candidate = Path(path)
+        if not candidate.is_absolute():
+            candidate = self.root / candidate
+        return candidate.read_text(errors='replace')
 
 
 class Machine:
@@ -875,6 +878,8 @@ class Machine:
                 target = target.replace('${PROJECT_SOURCE_DIR}', str(self.root))
                 target = target.replace('${CMAKE_CURRENT_SOURCE_DIR}', str(self.path.parent))
                 included = Path(target)
+                if not included.is_absolute():
+                    included = self.root / included
                 if not self.world.exists(included):
                     raise Unreadable(f'{self.path}:{line}: include({target}) missing')
                 # include() runs the file in the including scope: the shared
@@ -1247,11 +1252,19 @@ def absent_and_overlay(root: Path, removed_dirs: set[str], removed_files: set[st
     return absent, overlay
 
 
+def report_rows(rel: Path, profile_name: str, world: str, rows: set[str]) -> None:
+    """Optional names from the computed registry, without changing its verdict."""
+    if os.environ.get('PF_TWO_WORLD_SHOW_ROWS') == '1':
+        for name in sorted(rows):
+            print(f'  {rel} [{profile_name}] {world}-world row: {name}')
+
+
 def report_worlds(root: Path, rel: Path, profile_name: str, absent, overlay) -> None:
     only_absent = sorted(absent.rows - overlay.rows)
     only_overlay = sorted(overlay.rows - absent.rows)
     print(f'  {rel} [{profile_name}] absent {len(absent.rows)} rows, '
           f'overlay {len(overlay.rows)} rows')
+    report_rows(rel, profile_name, 'overlay', overlay.rows)
     TOTALS['absent_only'] += len(only_absent)
     TOTALS['overlay_only'] += len(only_overlay)
     print(f'  {rel} [{profile_name}] absent-only names: {len(only_absent)}')
@@ -1395,6 +1408,7 @@ def absent_half(root: Path, removed_dirs, removed_files, pin_rows, profiles, rel
             world = World(root, removed_dirs, removed_files, virtual=True)
             machine = registered(root / rel, world, PROFILES[profile_name], root)
             print(f'  {rel} [{profile_name}] absent-world rows: {len(machine.rows)}')
+            report_rows(rel, profile_name, 'absent', machine.rows)
     recorded = read_source_bound_recorded(registered(
         root / 'tests' / 'CMakeLists.txt',
         World(root, removed_dirs, removed_files, virtual=True),

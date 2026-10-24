@@ -1,0 +1,8 @@
+list(APPEND TEST_SOURCES test_id_pair_store_ram)
+pineforge_add_unit_test(test_id_pair_store_ram)
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    list(APPEND TEST_SOURCES test_placement_q_removed)
+    list(APPEND TEST_SOURCES test_adapter_idpair_ram)
+    pineforge_add_unit_test(test_placement_q_removed)
+    pineforge_add_unit_test(test_adapter_idpair_ram)
+endif()

@@ -332,10 +332,11 @@ void brackets_on_tapes() {
         }
         pine.run(input.data(), static_cast<int>(input.size()), "1", fx.chart, true);
         CHECK(pine.last_error().empty());
-        std::map<std::int64_t, const Trade*> by_entry;
+        // get_trade() returns an owning row value: keep copies, never addresses.
+        std::map<std::int64_t, Trade> by_entry;
         for (int i = 0; i < pine.trade_count(); ++i) {
-            const Trade& t = pine.get_trade(i);
-            by_entry[chart_of(t.entry_time)] = &t;
+            const Trade t = pine.get_trade(i);
+            by_entry[chart_of(t.entry_time)] = t;
         }
         int replayed = 0;
         int equal = 0;
@@ -346,9 +347,9 @@ void brackets_on_tapes() {
             ++replayed;
             const auto found = by_entry.find(entry.time);
             const bool same = found != by_entry.end()
-                && std::abs(found->second->entry_price - entry.price) <= 1e-9
-                && chart_of(found->second->exit_time) == exit.time
-                && std::abs(found->second->exit_price - exit.price) <= 1e-9;
+                && std::abs(found->second.entry_price - entry.price) <= 1e-9
+                && chart_of(found->second.exit_time) == exit.time
+                && std::abs(found->second.exit_price - exit.price) <= 1e-9;
             if (same) {
                 ++equal;
             } else {
@@ -491,8 +492,12 @@ void declaration_twin_on_tapes() {
     }
     pine.run(chart.data(), static_cast<int>(chart.size()), "15", "15", false);
     CHECK(pine.last_error().empty());
-    std::map<std::int64_t, const Trade*> by_entry;
-    for (int i = 0; i < pine.trade_count(); ++i) by_entry[pine.get_trade(i).entry_time] = &pine.get_trade(i);
+    // get_trade() returns an owning row value: keep copies, never addresses.
+    std::map<std::int64_t, Trade> by_entry;
+    for (int i = 0; i < pine.trade_count(); ++i) {
+        const Trade t = pine.get_trade(i);
+        by_entry[t.entry_time] = t;
+    }
     int replayed = 0;
     int equal = 0;
     for (const auto& [n, entry] : off_entries) {
@@ -501,9 +506,9 @@ void declaration_twin_on_tapes() {
         ++replayed;
         const auto found = by_entry.find(entry.time);
         const bool same = found != by_entry.end()
-            && std::abs(found->second->entry_price - entry.price) <= 1e-9
-            && found->second->exit_time == exit.time
-            && std::abs(found->second->exit_price - exit.price) <= 1e-9;
+            && std::abs(found->second.entry_price - entry.price) <= 1e-9
+            && found->second.exit_time == exit.time
+            && std::abs(found->second.exit_price - exit.price) <= 1e-9;
         if (same) {
             ++equal;
         } else {

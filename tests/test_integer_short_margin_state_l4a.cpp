@@ -81,7 +81,7 @@ public:
         }
         if (index == 5) strategy_close_all();
     }
-    const Trade& row(int index) const { return get_trade(index); }
+    Trade row(int index) const { return get_trade(index); }
 };
 
 const std::vector<Bar> bars = {

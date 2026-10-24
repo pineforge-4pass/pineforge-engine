@@ -10,7 +10,8 @@
  *   - The runtime-library-side `extern "C"` symbols (the closed-trade
  *     incarnation accessor, setters, strategy_get_last_error,
  *     strategy_get_last_error_code, strategy_get_last_error_args, the
- *     security-feed and symbol-data setters, the strategy_stream_*
+ *     security-feed and symbol-data setters (including the borrowed feed
+ *     export), the strategy_stream_*
  *     lifecycle, the strategy_outputs_* readers, native stream bar
  *     input/action polling/fingerprint/API-version exports, the live-runtime
  *     surface (strategy_request_abort, strategy_last_run_status,
@@ -32,10 +33,15 @@
  *     strategy_configure_native_v1, strategy_configure_native_fx_curve_v1,
  *     strategy_configure_native_fx_curve_ext_v1,
  *     pf_execution_observer_version, strategy_set_execution_observer_v1,
- *     strategy_execution_observation_v1, pf_selected_window_version,
- *     strategy_set_selected_window_v1, strategy_selected_window_counts_v1 — the
- *     authoritative list is EXPECTED_RUNTIME in
- *     scripts/check_c_abi_runtime.py, enforced by CI). The other
+ *     strategy_execution_observation_v1, pf_selected_window_version, pf_report_sink_version,
+ *     strategy_set_selected_window_v1, strategy_selected_window_counts_v1,
+ *     strategy_set_report_sink_v1, strategy_set_report_sink_fd_v1, strategy_report_sink_receipt_v1,
+ *     strategy_set_scratch_tables_v1, strategy_report_sink_summary_v1,
+ *     pf_report_scratch_arena_stats, strategy_require_report_scratch_arena_v1,
+ *     strategy_report_sink_diagnostics_v1,
+ *     pf_run_abort_install_sigterm_v1, pf_run_abort_requested_v1,
+ *     pf_run_abort_restore_sigterm_v1 — the
+ *     authoritative list is EXPECTED_RUNTIME in scripts/check_c_abi_runtime.py (CI). Other
  *     `extern "C"` symbols listed in pineforge.h (strategy_create,
  *     run_backtest, etc.) are emitted per-compiled-strategy by the
  *     codegen, not here.
@@ -51,16 +57,20 @@
 #include <pineforge/engine.hpp>
 #include <pineforge/native_host.hpp>
 #include <pineforge/run_failure.hpp>
+#include <pineforge/detail/scratch_arena.hpp>
 #include <pineforge/bar.hpp>
 #include <pineforge/magnifier.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <cerrno>
 #include <limits>
 #include <cstring>
 #include <exception>
 #include <string>
 #include <utility>
 #include <vector>
+#include <signal.h>
+#include "run_abort.hpp"
 namespace pineforge {
 void clear_native_c_host_refusal_error(BacktestEngine* engine) noexcept;
 bool native_c_host_in_postrun_hook_frame(BacktestEngine* engine) noexcept;
@@ -78,6 +88,14 @@ int native_selected_window_counts_v1(const BacktestEngine*, pf_selected_window_c
 }
 
 namespace {
+
+volatile sig_atomic_t run_sigterm_stop = 0;
+struct sigaction previous_sigterm {};
+bool sigterm_installed = false;
+
+void run_sigterm_handler(int) noexcept {
+    run_sigterm_stop = 1;
+}
 
 template <typename Fn>
 void pf_cabi_void(Fn&& fn) noexcept {
@@ -332,12 +350,43 @@ static_assert(static_cast<int>(pineforge::MagnifierDistribution::BACK_LOADED)  =
  * STRATEGY by the codegen (in emit_top.py::_emit_extern_c).
  * ─────────────────────────────────────────────────────────────────── */
 
+namespace pineforge {
+bool run_sigterm_requested() noexcept {
+    return sigterm_installed && run_sigterm_stop != 0;
+}
+} // namespace pineforge
+
 extern "C" {
+
+PF_API int pf_run_abort_install_sigterm_v1(void) {
+    // The caller blocks SIGTERM across installation. Repeated installation
+    // must not clear a cancellation that already arrived.
+    if (sigterm_installed) return 0;
+    struct sigaction action {};
+    action.sa_handler = run_sigterm_handler;
+    action.sa_flags = SA_RESTART;
+    if (::sigemptyset(&action.sa_mask) != 0) return -1;
+    run_sigterm_stop = 0;
+    if (::sigaction(SIGTERM, &action, &previous_sigterm) != 0) return -1;
+    sigterm_installed = true;
+    return 0;
+}
+
+PF_API int pf_run_abort_requested_v1(void) {
+    return pineforge::run_sigterm_requested() ? 1 : 0;
+}
+
+PF_API int pf_run_abort_restore_sigterm_v1(void) {
+    if (!sigterm_installed) return 0;
+    if (::sigaction(SIGTERM, &previous_sigterm, nullptr) != 0) return -1;
+    sigterm_installed = false;
+    return 0;
+}
 
 /* trade_index is a REPORT row index: pf_report_t::trades is trades_ followed
  * by range_end_trades_ (fill_trades_section, engine_report.cpp), so the
- * accessor indexes that same row space (report_trade_count /
- * get_report_trade).
+ * accessor uses closed_trade_close_cause's -1 as the resident-window check;
+ * get_report_trade keeps global indices, including after a sealed prefix.
  *
  * round-4b F3: this bounded the index by trade_count() == trades_.size(),
  * so every range-end row (the position still open after the final bar,
@@ -353,8 +402,12 @@ PF_API uint64_t strategy_closed_trade_entry_incarnation(
         pf_strategy_t s, int trade_index) {
     if (!s) return 0;
     const auto* engine = static_cast<const pineforge::BacktestEngine*>(s);
-    if (trade_index < 0 || trade_index >= engine->report_trade_count()) return 0;
-    return engine->get_report_trade(trade_index).entry_incarnation;
+    try {
+        if (engine->closed_trade_close_cause(trade_index) < 0) return 0;
+        return engine->get_report_trade(trade_index).entry_incarnation;
+    } catch (...) {
+        return 0;
+    }
 }
 
 /* ABI v4 live-runtime surface (task 9): closed-trade id / exit-comment
@@ -368,28 +421,41 @@ PF_API uint64_t strategy_closed_trade_entry_incarnation(
  * report-row overload is not possible.
  *
  * Returned pointers are valid until the next run() (or stream call) on this
- * handle, like strategy_get_last_error -- the runtime's own std::string
- * storage backing them is untouched until then. NULL on a NULL handle or an
- * out-of-range trade_index. */
+ * handle, like strategy_get_last_error. This legacy pointer API explicitly
+ * materializes each requested row; value/page readers use bounded storage.
+ * NULL on a NULL handle or an
+ * out-of-range/streamed row, checked by the close-cause query before indexing. */
 PF_API const char* strategy_closed_trade_entry_id(pf_strategy_t s, int trade_index) {
     if (!s) return nullptr;
     const auto* engine = static_cast<const pineforge::BacktestEngine*>(s);
-    if (trade_index < 0 || trade_index >= engine->report_trade_count()) return nullptr;
-    return engine->get_report_trade(trade_index).entry_id.c_str();
+    try {
+        if (engine->closed_trade_close_cause(trade_index) < 0) return nullptr;
+        return engine->materialize_report_trade(trade_index).entry_id.c_str();
+    } catch (...) {
+        return nullptr;
+    }
 }
 
 PF_API const char* strategy_closed_trade_exit_id(pf_strategy_t s, int trade_index) {
     if (!s) return nullptr;
     const auto* engine = static_cast<const pineforge::BacktestEngine*>(s);
-    if (trade_index < 0 || trade_index >= engine->report_trade_count()) return nullptr;
-    return engine->get_report_trade(trade_index).exit_id.c_str();
+    try {
+        if (engine->closed_trade_close_cause(trade_index) < 0) return nullptr;
+        return engine->materialize_report_trade(trade_index).exit_id.c_str();
+    } catch (...) {
+        return nullptr;
+    }
 }
 
 PF_API const char* strategy_closed_trade_exit_comment(pf_strategy_t s, int trade_index) {
     if (!s) return nullptr;
     const auto* engine = static_cast<const pineforge::BacktestEngine*>(s);
-    if (trade_index < 0 || trade_index >= engine->report_trade_count()) return nullptr;
-    return engine->get_report_trade(trade_index).exit_comment.c_str();
+    try {
+        if (engine->closed_trade_close_cause(trade_index) < 0) return nullptr;
+        return engine->materialize_report_trade(trade_index).exit_comment.c_str();
+    } catch (...) {
+        return nullptr;
+    }
 }
 
 /* ABI v4 live-runtime surface (task 9): why a REPORT-row closed trade
@@ -407,7 +473,11 @@ PF_API const char* strategy_closed_trade_exit_comment(pf_strategy_t s, int trade
  * _effective_levels). */
 PF_API int strategy_closed_trade_close_cause(pf_strategy_t s, int trade_index) {
     if (!s) return -1;
-    return static_cast<const pineforge::BacktestEngine*>(s)->closed_trade_close_cause(trade_index);
+    try {
+        return static_cast<const pineforge::BacktestEngine*>(s)->closed_trade_close_cause(trade_index);
+    } catch (...) {
+        return -1;
+    }
 }
 
 /* ABI v4 live-runtime surface (task 9): the script-facing position size
@@ -589,11 +659,23 @@ PF_API void strategy_set_broker_state_hash_recording(pf_strategy_t s, int on) {
  * selected-window fence refuses (strategy_state_query_status_v1 names it):
  * the C++ path throws that refusal, so it is prechecked here and never
  * unwinds through C. A caller that needs a sealed selected run's terminal
- * witness enables recording before the run and reads the last recorded row. */
+ * witness enables recording before the run and reads the last recorded row.
+ * Any other failure of the read (a spilled book that can no longer be read
+ * back) also answers 0, never a hash it cut short, and is noted beside the
+ * handle for strategy_get_last_error / _code, as the int entry points note a
+ * refusal: nothing unwinds through C. */
 PF_API uint64_t strategy_broker_state_hash(pf_strategy_t s) {
     if (!s) return 0;
     if (strategy_state_query_status_v1(s) != PF_STATE_QUERY_ALLOWED_V1) return 0;
-    return static_cast<const pineforge::BacktestEngine*>(s)->broker_state_hash();
+    try {
+        return static_cast<const pineforge::BacktestEngine*>(s)->broker_state_hash();
+    } catch (const std::exception& error) {
+        note_cabi_refusal(s, &error);
+        return 0;
+    } catch (...) {
+        note_cabi_refusal(s, nullptr);
+        return 0;
+    }
 }
 
 /* The current eligibility of both state queries on @p s (broker-state hash
@@ -710,14 +792,14 @@ PF_API int strategy_stream_begin(pf_strategy_t s,
                 input_tf ? std::string(input_tf) : std::string(),
                 script_tf ? std::string(script_tf) : std::string()) ? 0 : -1;
         }
-        std::vector<pineforge::Bar> bars;
-        bars.reserve(static_cast<std::size_t>(n_warmup));
-        for (int i = 0; i < n_warmup; ++i) {
-            const auto& b = warmup_bars[i];
-            bars.push_back({b.open, b.high, b.low, b.close, b.volume, b.timestamp});
-        }
+        // pf_bar_t and Bar have identical size and field offsets (pinned
+        // above). Pass the warmup straight through: a Pine scheduler makes
+        // the one owning stream copy before returning from its begin hook.
+        // A temporary vector here used to keep two whole warmup arrays live.
+        // The caller's span is needed only for this synchronous begin call;
+        // realtime callbacks read the scheduler's owned warmup afterwards.
         return engine->stream_begin(
-            bars.data(), n_warmup,
+            reinterpret_cast<const pineforge::Bar*>(warmup_bars), n_warmup,
             input_tf ? std::string(input_tf) : std::string(),
             script_tf ? std::string(script_tf) : std::string()) ? 0 : -1;
     });
@@ -758,11 +840,21 @@ PF_API void strategy_stream_order_actions_clear(pf_strategy_t s) {
 /* Returns 0 for NULL and for a read the selected-window fence refuses, the
  * same precheck as strategy_broker_state_hash: the refusal is a C++ exception
  * and never crosses this boundary. A broker-state row is not a stream-token
- * value, so a refused read of this token leaves no recorded witness. */
+ * value, so a refused read of this token leaves no recorded witness. The
+ * token folds broker_state_hash(), so a failed read of the spilled book
+ * answers 0 here too, noted as strategy_broker_state_hash notes it. */
 PF_API uint64_t strategy_stream_state_hash(pf_strategy_t s) {
     if (!s) return 0;
     if (strategy_state_query_status_v1(s) != PF_STATE_QUERY_ALLOWED_V1) return 0;
-    return static_cast<const pineforge::BacktestEngine*>(s)->stream_state_hash();
+    try {
+        return static_cast<const pineforge::BacktestEngine*>(s)->stream_state_hash();
+    } catch (const std::exception& error) {
+        note_cabi_refusal(s, &error);
+        return 0;
+    } catch (...) {
+        note_cabi_refusal(s, nullptr);
+        return 0;
+    }
 }
 
 PF_API int strategy_stream_push_tick(pf_strategy_t s,
@@ -1301,4 +1393,106 @@ PF_API int strategy_selected_window_counts_v1(
         static_cast<const pineforge::BacktestEngine*>(s), out);
 }
 
+PF_API int strategy_set_symbol_feed_borrowed_v1(
+        pf_strategy_t s, const char* key, const char* timeframe,
+        const pf_bar_t* bars, const int64_t* close_ms, int n) {
+    return pf_cabi_int(s, [&] {
+        if (!s || !key || !timeframe || n < 0 || (n > 0 && (!bars || !close_ms))) return -1;
+        const auto* native = reinterpret_cast<const pineforge::Bar*>(bars);
+        return static_cast<pineforge::BacktestEngine*>(s)
+                       ->set_symbol_feed_borrowed(std::string(key), std::string(timeframe),
+                                                   native, close_ms, n)
+            ? 0 : -1;
+    });
+}
+
 } /* extern "C" */
+
+// Additive CR-150 report sink ABI. P00 owns the frozen declarations.
+#include <pineforge/report_sink.h>
+
+extern "C" {
+
+PF_API uint32_t pf_report_sink_version(void) { return 1; }
+
+PF_API int pf_report_scratch_arena_stats(uint64_t* high_water_bytes, uint64_t* arena_bytes) {
+    if (!high_water_bytes || !arena_bytes || high_water_bytes == arena_bytes) return -1;
+    try {
+        const auto* arena = pineforge::detail::ScratchArena::attached();
+        const auto stats = arena ? arena->stats() : pineforge::detail::ScratchArenaStats{};
+        *high_water_bytes = stats.high_water;
+        *arena_bytes = stats.bytes_supplied;
+        return 0;
+    } catch (...) {
+        return -1;
+    }
+}
+
+PF_API int strategy_require_report_scratch_arena_v1(pf_strategy_t s) {
+    return pf_cabi_int(s, [&] {
+        if (!s) return -1;
+        pineforge::detail::ScratchArena::attach_from_environment();
+        const auto* arena = pineforge::detail::ScratchArena::attached();
+        // Admission requires sealed backing independently of the caller's environment.
+        // Use the retained backend even if inherited fd 5 has since been rebound.
+        // Sealed memfds exist on Linux only (tests/test_scratch_arena_jailed_seals.cpp);
+        // elsewhere the jailed arena stays an ordinary file, as test_report_sink_jail_write builds it.
+#if defined(__linux__)
+        const bool sealed = arena
+            && arena->stats().backend == pineforge::detail::ScratchArenaBackend::sealed_memfd;
+#else
+        const bool sealed = arena != nullptr;
+#endif
+        if (!sealed)
+            throw pineforge::detail::ReportScratchIoError(EINVAL, "scratch arena admission",
+                {{"reason", "arena_backing"}});
+        return 0;
+    });
+}
+
+PF_API int strategy_report_sink_diagnostics_v1(
+        pf_strategy_t s, pf_report_sink_diagnostics_v1* out) {
+    if (!s) return -1;
+    return static_cast<const pineforge::BacktestEngine*>(s)->report_sink_diagnostics_v1(out);
+}
+
+PF_API int strategy_set_report_sink_v1(pf_strategy_t s, const pf_report_sink_v1* sink) {
+    return pf_cabi_int(s, [&] {
+        if (!s) return -1;
+        return static_cast<pineforge::BacktestEngine*>(s)->set_report_sink_v1(sink);
+    });
+}
+
+PF_API int strategy_report_sink_receipt_v1(pf_strategy_t s, pf_report_sink_receipt_v1* out) {
+    if (!s) return -1;
+    return static_cast<const pineforge::BacktestEngine*>(s)->report_sink_receipt_v1(out);
+}
+
+PF_API int strategy_report_sink_summary_v1(pf_strategy_t s, pf_report_sink_summary_v1* out) {
+    if (!s) return -1;
+    return static_cast<const pineforge::BacktestEngine*>(s)->report_sink_summary_v1(out);
+}
+
+} // extern "C"
+
+extern "C" {
+
+PF_API int strategy_set_report_sink_fd_v1(pf_strategy_t s, const pf_report_sink_fd_v1* sink) {
+    return pf_cabi_int(s, [&] {
+        if (!s) return -1;
+        return static_cast<pineforge::BacktestEngine*>(s)->set_report_sink_fd_v1(sink);
+    });
+}
+
+} // extern "C"
+
+extern "C" {
+
+PF_API int strategy_set_scratch_tables_v1(pf_strategy_t s, const pf_scratch_tables_v1* config) {
+    return pf_cabi_int(s, [&] {
+        if (!s) return -1;
+        return static_cast<pineforge::BacktestEngine*>(s)->set_scratch_tables_v1(config);
+    });
+}
+
+} // extern "C"

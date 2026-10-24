@@ -90,7 +90,8 @@ public:
     // still open after the final bar at that bar's close (report-only rows,
     // record_range_end_close_trades). Exposed so the report can be footed
     // to the blotter PLUS those rows.
-    const std::vector<Trade>& range_end_rows() const { return range_end_trades_; }
+    // O1 R12: the terminal rows are rebuilt from the pinned mark, not stored.
+    const auto& range_end_rows() const { return range_end_trades_; }
     double last_close() const { return current_bar_.close; }
 };
 

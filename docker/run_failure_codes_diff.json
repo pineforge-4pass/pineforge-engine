@@ -8,15 +8,496 @@
   "to": {
     "version": null,
     "unreleased": true,
-    "catalogSha256": "7d61bad51f1f624a83fe90abb64646758c89f6e23c099e52167f9f1c11994d26"
+    "catalogSha256": "400961b4f134c550841fc7d04d4fe82026de133f33512ff1b41604302d6deddd"
   },
   "catalogSchema": {
     "before": "pineforge-run-failure-catalog/v1",
     "after": "pineforge-run-failure-catalog/v1"
   },
-  "metadataChanges": [],
-  "added": [],
-  "changed": [],
+  "metadataChanges": [
+    {
+      "path": "classes.resource",
+      "beforePresent": true,
+      "afterPresent": true,
+      "before": "Machine memory; retryable, capped.",
+      "after": "Machine memory or scratch storage; retryability is specified per code."
+    },
+    {
+      "path": "kinds.boolean",
+      "beforePresent": false,
+      "afterPresent": true,
+      "before": null,
+      "after": "A JSON boolean."
+    }
+  ],
+  "added": [
+    {
+      "code": "report_mode_unsupported",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "contract": {
+            "kind": "string"
+          },
+          "mode": {
+            "kind": "string"
+          }
+        },
+        "class": "unsupported",
+        "description": "The requested report mode cannot be provided for this run. Two causes: the host has no provider bridge for the mode and contract (run_json), or the native kernel refuses a SUMMARY_ONLY run that configures a selected window or an execution observer without a report sink at begin, because that capture has no exact trade rows. Remedy for the second cause: drop the window or the observer, or select FULL; bounded capture uses STREAMED with a sink.",
+        "english": [
+          "unsupported report mode: {mode} (no {contract} provider bridge for this host)",
+          "unsupported report mode: {mode} (a selected window or execution observer cannot be captured exactly under {contract} in this mode: drop it or select FULL; bounded capture uses STREAMED with a sink)"
+        ],
+        "retryable": false,
+        "since": "1.7.0"
+      }
+    },
+    {
+      "code": "report_sink_failed",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "arena_bytes": {
+            "kind": "integer",
+            "optional": true
+          },
+          "cap_bytes": {
+            "kind": "integer",
+            "optional": true
+          },
+          "claimed_bytes": {
+            "kind": "integer",
+            "optional": true
+          },
+          "high_water_bytes": {
+            "kind": "integer",
+            "optional": true
+          },
+          "needed_bytes_lower_bound": {
+            "kind": "integer",
+            "optional": true
+          },
+          "reason": {
+            "kind": "vocab",
+            "optional": true,
+            "values": [
+              "arena_exhausted",
+              "arena_io",
+              "arena_backing",
+              "scratch_io",
+              "sink_io",
+              "sink_peer_closed",
+              "sink_exhausted"
+            ]
+          },
+          "sink_bytes": {
+            "kind": "integer",
+            "optional": true
+          },
+          "store": {
+            "kind": "vocab",
+            "optional": true,
+            "values": [
+              "curve",
+              "position_tail",
+              "cohort",
+              "exit_rank",
+              "sequence_index",
+              "sequence_index_idx",
+              "erased_minima",
+              "erased_minima_idx",
+              "partial_cycles",
+              "partial_cycles_idx",
+              "successor_roots",
+              "command",
+              "unknown"
+            ]
+          }
+        },
+        "class": "engine_fault",
+        "description": "The engine could not complete the report sink, scratch storage or spill arena. Every reason, including exhaustion of the engine-certified arena bound or planned sink cap and a closed sink peer during finalization, is an engine fault. reason distinguishes arena exhaustion (arena_exhausted), arena I/O (arena_io), invalid arena backing (arena_backing), file-mode scratch I/O (scratch_io), sink open/write I/O (sink_io), a closed sink peer (sink_peer_closed) and a finalizer stream exceeding its planned cap (sink_exhausted). With arena_exhausted, high_water_bytes and arena_bytes are byte counts, claimed_bytes counts chunk bytes claimed when the failing claim was attempted, and store identifies the requesting scratch user. needed_bytes_lower_bound is the requesting report region's additional whole-chunk demand. For store command it is the arena size needed for the required store extent rounded up to chunks, divided by kCommandScratchArenaShare and rounded up to bytes (saturated at INT64_MAX). Crossing a command store's share is arena_exhausted and the hosting layer re-places the run. With sink_exhausted, the finalizer exits 8; sink_bytes is the bytes read (cap_bytes + 1) and cap_bytes is the planned cap U. APP maps that receipt to this failure and refunds the run; COMPUTE re-places it with 2x U. Other reasons carry no sizes or store identity. All arguments are optional for existing raisers; the run has no completed sink or valid trailer.",
+        "english": [
+          "report sink open failed",
+          "report sink write failed",
+          "report sink write made no progress"
+        ],
+        "retryable": false,
+        "since": "1.7.0"
+      }
+    },
+    {
+      "code": "scratch_capacity_exceeded",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "resource": {
+            "kind": "vocab",
+            "values": [
+              "layout",
+              "sequence_data",
+              "sequence_index",
+              "erased_data",
+              "erased_index",
+              "consumed_data",
+              "consumed_index",
+              "cohort",
+              "exit_rank",
+              "successor_roots"
+            ]
+          }
+        },
+        "class": "resource",
+        "description": "The admitted scratch-table layout or a fixed region's capacity was exceeded. The run must be admitted with sufficient finite maxima before retrying.",
+        "english": [
+          "scratch capacity exceeded"
+        ],
+        "retryable": false,
+        "since": "1.7.0"
+      }
+    },
+    {
+      "code": "scratch_configuration_invalid",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "reason": {
+            "kind": "vocab",
+            "values": [
+              "nondecimal",
+              "nonpositive",
+              "overflow"
+            ]
+          },
+          "stage": {
+            "kind": "vocab",
+            "values": [
+              "command_scratch_byte_cap"
+            ]
+          }
+        },
+        "class": "input",
+        "description": "The command-scratch byte cap from the environment or the caller is malformed: not a positive decimal, out of uint64_t range, or zero.",
+        "english": [
+          "command scratch byte cap is not positive decimal uint64_t"
+        ],
+        "retryable": false,
+        "since": "1.7.0"
+      }
+    },
+    {
+      "code": "scratch_io_failed",
+      "collection": "codes",
+      "entry": {
+        "args": {},
+        "class": "resource",
+        "description": "The engine could not create, resize, read or write command scratch or the storage of one of its auxiliary tables (the disk id table, the id-pair store or the placement table). Command scratch also raises this code when the default-directory policy fails a directory query or refuses memory-backed default candidates, or when an explicit memory-backed command directory is refused. Native runs create command scratch at begin, so these failures are resource failures before any strategy callback. The run has no successful completion. Report-sink scratch files, the curve writer and the position-tail facade do not raise this code: they raise report_sink_failed with reason scratch_io.",
+        "english": [
+          "scratch create",
+          "scratch read",
+          "scratch write",
+          "id table create",
+          "id table resize",
+          "id table read",
+          "id table write"
+        ],
+        "retryable": false,
+        "since": "1.7.0"
+      }
+    }
+  ],
+  "changed": [
+    {
+      "code": "chart_bars_unreadable",
+      "collection": "codes",
+      "fields": [
+        {
+          "path": "args.reason.values",
+          "beforePresent": true,
+          "afterPresent": true,
+          "before": [
+            "io",
+            "columns",
+            "value",
+            "empty"
+          ],
+          "after": [
+            "io",
+            "columns",
+            "value",
+            "empty",
+            "size",
+            "count",
+            "sidecar",
+            "order",
+            "timeframe_invalid"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "run_aborted",
+      "collection": "codes",
+      "fields": [
+        {
+          "path": "args.bars_count",
+          "beforePresent": false,
+          "afterPresent": true,
+          "before": null,
+          "after": {
+            "kind": "integer",
+            "optional": true
+          }
+        },
+        {
+          "path": "args.strategy_started",
+          "beforePresent": false,
+          "afterPresent": true,
+          "before": null,
+          "after": {
+            "kind": "boolean",
+            "optional": true
+          }
+        },
+        {
+          "path": "description",
+          "beforePresent": true,
+          "afterPresent": true,
+          "before": "The run was aborted on request.",
+          "after": "The run was aborted on request. Cooperative SIGTERM stops after the in-flight input bar completes, leaves no sink trailer, and exits 1. bars_count is the nonnegative number of fully completed input bars, mirrored as top-level bars.count, matching the runner's bars_processed population; strategy_started is a boolean mirrored at the top level. Both are optional for legacy abort raisers. There is no cancelled class: the abort path has exactly two internal callers, the orchestrator's hand-off at the service limit (the run is restarted with the same run id) and an operator stop. The abort line itself carries no retry semantics: it has no retryable field, and a retry is APP's decision from which caller stopped the run. On the abort path bars_count is diagnostic only and is never billed. No live-counter descriptor is used (fd 6 is not used)."
+        }
+      ]
+    },
+    {
+      "code": "run_mode_unsupported",
+      "collection": "codes",
+      "fields": [
+        {
+          "path": "args.feature.values",
+          "beforePresent": true,
+          "afterPresent": true,
+          "before": [
+            "stream_native_security_feed",
+            "stream_symbol_feeds",
+            "stream_calc_on_order_fills",
+            "stream_probe_overrides",
+            "stream_account_currency_fx",
+            "stream_instrument_feeds",
+            "stream_monthly_input",
+            "stream_fx_curve_input",
+            "fx_series_calc_on_order_fills",
+            "fx_series_bar_magnifier"
+          ],
+          "after": [
+            "stream_native_security_feed",
+            "stream_symbol_feeds",
+            "stream_calc_on_order_fills",
+            "stream_probe_overrides",
+            "stream_account_currency_fx",
+            "stream_instrument_feeds",
+            "stream_monthly_input",
+            "stream_fx_curve_input",
+            "fx_series_calc_on_order_fills",
+            "fx_series_bar_magnifier",
+            "stream_report_sink"
+          ]
+        },
+        {
+          "path": "english",
+          "beforePresent": true,
+          "afterPresent": true,
+          "before": [
+            "a declared native FX curve requires confirmed-bar stream input",
+            "native instrument feeds are not supported by streaming",
+            "native request.security feed supports historical runs only",
+            "native stream cannot use historical probe/tail overrides",
+            "native stream refuses monthly input",
+            "native stream requires close-only calculation; calc_on_order_fills is unsupported",
+            "request.security symbol feeds and recorded request series support historical runs only",
+            "timestamped account-currency FX does not support calc_on_order_fills",
+            "timestamped account-currency FX is not supported by streaming",
+            "timestamped account-currency FX is not supported with bar magnifier"
+          ],
+          "after": [
+            "a declared native FX curve requires confirmed-bar stream input",
+            "native instrument feeds are not supported by streaming",
+            "native request.security feed supports historical runs only",
+            "native stream cannot use historical probe/tail overrides",
+            "native stream refuses monthly input",
+            "native stream requires close-only calculation; calc_on_order_fills is unsupported",
+            "request.security symbol feeds and recorded request series support historical runs only",
+            "timestamped account-currency FX does not support calc_on_order_fills",
+            "timestamped account-currency FX is not supported by streaming",
+            "timestamped account-currency FX is not supported with bar magnifier",
+            "report sink does not support streaming"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "run_request_invalid",
+      "collection": "codes",
+      "fields": [
+        {
+          "path": "args.option.values",
+          "beforePresent": true,
+          "afterPresent": true,
+          "before": [
+            "inputs",
+            "overrides",
+            "magnifier_dist",
+            "magnifier_samples",
+            "so",
+            "ohlcv",
+            "syminfo",
+            "symbol_feeds",
+            "trade_start_ms",
+            "warmup",
+            "repeats",
+            "arguments",
+            "input_tf",
+            "script_tf",
+            "bar_magnifier",
+            "generated_cpp",
+            "transpiled",
+            "chart_tz",
+            "magnifier_volume_weighted",
+            "bench"
+          ],
+          "after": [
+            "inputs",
+            "overrides",
+            "magnifier_dist",
+            "magnifier_samples",
+            "so",
+            "ohlcv",
+            "syminfo",
+            "symbol_feeds",
+            "trade_start_ms",
+            "warmup",
+            "repeats",
+            "arguments",
+            "input_tf",
+            "script_tf",
+            "bar_magnifier",
+            "generated_cpp",
+            "transpiled",
+            "chart_tz",
+            "magnifier_volume_weighted",
+            "bench",
+            "ohlcv_bin",
+            "verify_bin",
+            "report_sink",
+            "run_id",
+            "spill_dir"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "symbol_feeds_refused",
+      "collection": "codes",
+      "fields": [
+        {
+          "path": "args.reason.values",
+          "beforePresent": true,
+          "afterPresent": true,
+          "before": [
+            "symbol_text_invalid",
+            "timeframe_invalid",
+            "feed_columns_missing",
+            "feed_value_not_number",
+            "feed_value_invalid",
+            "feed_time_out_of_range",
+            "feed_unreadable",
+            "feed_not_utf8_csv",
+            "feed_not_increasing",
+            "feed_close_time_invalid",
+            "syminfo_not_object",
+            "syminfo_mintick_invalid",
+            "index_duplicate_key",
+            "index_unreadable",
+            "index_not_json",
+            "index_shape",
+            "too_many_symbols",
+            "entry_shape",
+            "feeds_not_object",
+            "too_many_feeds",
+            "duplicate_timeframe",
+            "feed_path_invalid",
+            "library_without_symbol_feeds",
+            "engine_refused",
+            "chart_input_aggregated",
+            "kernel_refused_series",
+            "run_in_progress",
+            "empty_key",
+            "timeframe_unparsable",
+            "invalid_bars",
+            "kernel_refused",
+            "no_feed",
+            "empty_column",
+            "column_length",
+            "column_refused",
+            "valid_not_boolean",
+            "mintick_invalid",
+            "unknown_field",
+            "invalid_arrays",
+            "times_not_increasing",
+            "restore_failed"
+          ],
+          "after": [
+            "symbol_text_invalid",
+            "timeframe_invalid",
+            "feed_columns_missing",
+            "feed_value_not_number",
+            "feed_value_invalid",
+            "feed_time_out_of_range",
+            "feed_unreadable",
+            "feed_not_utf8_csv",
+            "feed_not_increasing",
+            "feed_close_time_invalid",
+            "syminfo_not_object",
+            "syminfo_mintick_invalid",
+            "index_duplicate_key",
+            "index_unreadable",
+            "index_not_json",
+            "index_shape",
+            "too_many_symbols",
+            "entry_shape",
+            "feeds_not_object",
+            "too_many_feeds",
+            "duplicate_timeframe",
+            "feed_path_invalid",
+            "library_without_symbol_feeds",
+            "engine_refused",
+            "chart_input_aggregated",
+            "kernel_refused_series",
+            "run_in_progress",
+            "empty_key",
+            "timeframe_unparsable",
+            "invalid_bars",
+            "kernel_refused",
+            "no_feed",
+            "empty_column",
+            "column_length",
+            "column_refused",
+            "valid_not_boolean",
+            "mintick_invalid",
+            "unknown_field",
+            "invalid_arrays",
+            "times_not_increasing",
+            "restore_failed",
+            "size",
+            "count",
+            "sidecar",
+            "close_file",
+            "empty",
+            "io"
+          ]
+        }
+      ]
+    }
+  ],
   "removed": [],
   "deprecated": []
 }

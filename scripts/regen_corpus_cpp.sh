@@ -35,7 +35,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 IMAGE="${IMAGE:-ghcr.io/pineforge-4pass/pineforge-release@sha256:a69c3700e44868d9657697f43e3f3954a7ed8bde039b55b52ec901538720ac05}"
-CODEGEN_COMMIT="52101f9b7b540fece4493ddc7495451b6d85fc07"
+CODEGEN_COMMIT="89b48cb6e2fed0c0f824f24658fdb5ad96caef59"
 CODEGEN_REPO="${CODEGEN_REPO:-https://github.com/pineforge-4pass/pineforge-codegen-oss.git}"
 VERIFY="${VERIFY:-0}"
 
@@ -58,6 +58,10 @@ if [[ -n "${CODEGEN_DIR:-}" ]]; then
 else
     codegen_checkout="$(mktemp -d)"
     owned_codegen=1
+    # mktemp -d makes a 0700 directory. The pinned runtime image runs as a non-root
+    # uid that does not own it, so on Linux the read-only mount below would be
+    # unreadable and every transpile would fail. The checkout is public source.
+    chmod 755 "$codegen_checkout"
     git -C "$codegen_checkout" init --quiet
     git -C "$codegen_checkout" remote add origin "$CODEGEN_REPO"
     git -C "$codegen_checkout" fetch --quiet --depth=1 origin "$CODEGEN_COMMIT"
@@ -73,8 +77,9 @@ actual_codegen="$(git -C "$codegen_checkout" rev-parse HEAD)"
     fail "codegen checkout lacks pineforge_codegen package: $codegen_checkout"
 
 tmp_cpp="$(mktemp)"
+tmp_err="$(mktemp)"
 cleanup() {
-    rm -f "$tmp_cpp"
+    rm -f "$tmp_cpp" "$tmp_err"
     if [[ "$owned_codegen" == "1" ]]; then rm -rf "$codegen_checkout"; fi
 }
 trap cleanup EXIT
@@ -96,8 +101,9 @@ for pine in corpus/*/*/strategy.pine; do
             -v "$codegen_checkout:/codegen:ro" \
             -v "$ROOT_DIR/$pine:/in/strategy.pine:ro" \
             "$IMAGE" -c 'from pathlib import Path; import sys; from pineforge_codegen import transpile; sys.stdout.write(transpile(Path(sys.argv[1]).read_text(), filename="strategy.pine"))' \
-            /in/strategy.pine > "$tmp_cpp" 2>/dev/null; then
+            /in/strategy.pine > "$tmp_cpp" 2>"$tmp_err"; then
         warn "transpile failed: $strat_dir"
+        tail -n 3 "$tmp_err" | while IFS= read -r err_line; do warn "  $err_line"; done
         failed+=("$strat_dir")
         continue
     fi

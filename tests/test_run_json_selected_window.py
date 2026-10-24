@@ -1807,7 +1807,9 @@ class OrdinaryAndCapabilityTests(unittest.TestCase):
         with mock.patch.object(run_json, "load_strategy", lambda p: lib), \
                 mock.patch.object(swp, "SelectedPrimaryPlanner", FakePlanner):
             status, out, _ = run_main(["--so", "x.so", "--capabilities-json"])
-        self.assertEqual((status, json.loads(out)), (0, swr.capabilities_record(True)))
+        expected = swr.capabilities_record(True)
+        expected["capabilities"]["selected_window_bars_bin_version"] = 0
+        self.assertEqual((status, json.loads(out)), (0, expected))
         self.assertEqual(lib.calls, [])  # nothing was constructed or run
         # The probe's real stdout carries the full contract revision alone, not the parity revision.
         printed = json.loads(out)["capabilities"]
@@ -1822,7 +1824,9 @@ class OrdinaryAndCapabilityTests(unittest.TestCase):
             with mock.patch.object(run_json, "load_strategy", lambda p, _l=lib: _l), \
                     mock.patch.object(swp, "SelectedPrimaryPlanner", FakePlanner):
                 status, out, _ = run_main(["--so", "x.so", "--capabilities-json"])
-            self.assertEqual((status, json.loads(out)), (0, swr.capabilities_record(False)))
+            expected = swr.capabilities_record(False)
+            expected["capabilities"]["selected_window_bars_bin_version"] = 0
+            self.assertEqual((status, json.loads(out)), (0, expected))
             # An unsupported runtime lists no contract revision.
             self.assertEqual(
                 json.loads(out)["capabilities"]["selected_window_contract_revisions"], [])
