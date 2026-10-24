@@ -736,6 +736,36 @@ def _key_value(line: str, key: str) -> str | None:
     return '' if value.startswith('#') else value
 
 
+def action_pin_findings(sources: dict[str, str]) -> list[str]:
+    """Check uses scalars and their same-line comments without a YAML dependency."""
+    findings = []
+    for name, text in sources.items():
+        for number, line in enumerate(text.splitlines(), 1):
+            value = _key_value(re.sub(r'^\s*-[ \t]+', '', line), 'uses')
+            if value is None:
+                continue
+            # Keep quotes separate from the trailing comment: a # inside a
+            # quoted scalar is part of the reference, not a version comment.
+            scalar = re.fullmatch(
+                r"""(?:"([^"]*)"|'([^']*)'|([^\s'"#]+))(?:[ \t]+(#[^\r\n]*))?[ \t]*""",
+                value)
+            reference = (next(group for group in scalar.groups()[:3] if group is not None)
+                         if scalar else value)
+            comment = (scalar.group(4) or '') if scalar else ''
+            if reference.startswith(('./', 'docker://')):
+                continue
+            if (re.fullmatch(r'[^@\s]+@[0-9a-f]{40}', reference)
+                    and re.fullmatch(
+                        r'#[ \t]+v[0-9]+(?:\.[0-9]+)*'
+                        r'(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?'
+                        r'(?:\+[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?[ \t]*', comment)):
+                continue
+            findings.append(
+                f'{name}:{number}: third-party uses {reference!r} must be pinned to a '
+                '40-character lowercase hex SHA with a trailing # v<version> comment')
+    return findings
+
+
 def _job_values(body: str, key: str, *, unquote: bool = True) -> list[str]:
     """Every value of a job-level key, a block value's lines folded onto one."""
     lines = body.split('\n')
@@ -1739,13 +1769,19 @@ def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[st
 def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
                          parity: str, docs: str, post: str, subset: str, docs_post: str,
                          others: dict[str, str] | None = None,
-                         *, curl_action: str | None = None) -> list[str]:
+                         *, curl_action: str | None = None,
+                         actions: dict[str, str] | None = None) -> list[str]:
     """Check actual PR/post files together, including every reusable call edge."""
     workflows = {'ci.yml': ci, 'ci-post.yml': post, 'native-live.yml': native,
                  'corpus-parity.yml': parity, 'corpus-parity-subset.yml': subset,
                  'docs.yml': docs, 'docs-post.yml': docs_post,
                  'promote-baseline.yml': promote, **(others or {})}
     findings = runner_findings(workflows)
+    action_sources = {f'.github/workflows/{name}': text for name, text in workflows.items()}
+    action_sources.update(actions or {})
+    if curl_action is not None:
+        action_sources.setdefault('.github/actions/setup-live-curl/action.yml', curl_action)
+    findings += action_pin_findings(action_sources)
     findings += pipeline_workflow_findings(ci, 'ci.yml', pr=True)
     findings += pipeline_workflow_findings(post, 'ci-post.yml', pr=False)
     findings += native_workflow_findings(native, curl_action)
@@ -2273,6 +2309,9 @@ def main() -> int:
         workflows = ROOT / '.github/workflows'
         named = ('ci.yml', 'native-live.yml', 'promote-baseline.yml', 'corpus-parity.yml',
                  'docs.yml', 'ci-post.yml', 'corpus-parity-subset.yml', 'docs-post.yml')
+        actions = {path.relative_to(ROOT).as_posix(): path.read_text()
+                   for path in sorted((ROOT / '.github/actions').rglob('*'))
+                   if path.name in ('action.yml', 'action.yaml') and path.is_file()}
         findings = ci_workflow_findings(
             (workflows / 'ci.yml').read_text(),
             (workflows / 'native-live.yml').read_text(),
@@ -2285,7 +2324,8 @@ def main() -> int:
             (workflows / 'docs-post.yml').read_text(),
             {path.name: path.read_text() for path in sorted(workflows.iterdir())
              if path.suffix in ('.yml', '.yaml') and path.name not in named},
-            curl_action=(ROOT / '.github/actions/setup-live-curl/action.yml').read_text())
+            curl_action=(ROOT / '.github/actions/setup-live-curl/action.yml').read_text(),
+            actions=actions)
         for finding in findings:
             print(finding)
         if not findings:

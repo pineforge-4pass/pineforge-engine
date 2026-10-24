@@ -2,6 +2,7 @@
 """Exercise preflight failure propagation with real child processes."""
 import contextlib
 import io
+import inspect
 import json
 import os
 from pathlib import Path
@@ -516,6 +517,176 @@ class WorkflowEventFleets(unittest.TestCase):
         self.assertNotEqual(callee, changed)
         self.assertIn(finding, ci_preflight.runner_findings(
             {'pr.yml': caller, 'ci-post.yml': callee}))
+
+
+class ActionPins(unittest.TestCase):
+    SHA = '0123456789abcdef0123456789abcdef01234567'
+    WORKFLOW = '.github/workflows/pinlint.yml'
+    ACTION = '.github/actions/setup-live-curl/action.yml'
+
+    @staticmethod
+    def workflow(value, *, named=False):
+        steps = ('      - name: External action\n'
+                 f'        uses: {value}\n' if named else f'      - uses: {value}\n')
+        return ('on: workflow_dispatch\njobs:\n  inspect:\n'
+                '    runs-on: ["self-hosted","pf-gcp-post"]\n'
+                '    steps:\n' + steps)
+
+    @staticmethod
+    def finding(path, line, reference):
+        return (f'{path}:{line}: third-party uses {reference!r} must be pinned to a '
+                '40-character lowercase hex SHA with a trailing # v<version> comment')
+
+    def pin_findings(self, text, *, composite=False, checker=None):
+        # Use the existing contract entrypoint, so main fails for a missing
+        # finding, not an import error for a newly introduced helper.
+        sources = [(ROOT / path).read_text() for path in CI_SOURCES]
+        checker = ci_workflow_findings if checker is None else checker
+        if composite:
+            findings = checker(*sources, curl_action=text)
+            path = self.ACTION
+        else:
+            findings = checker(*sources, others={Path(self.WORKFLOW).name: text})
+            path = self.WORKFLOW
+        return [finding for finding in findings if finding.startswith(path + ':')]
+
+    def assert_refused(self, value, reference, *, named=False, checker=None):
+        self.assertEqual(
+            self.pin_findings(self.workflow(value, named=named), checker=checker),
+            [self.finding(self.WORKFLOW, 7 if named else 6, reference)])
+
+    def test_mutable_tag_is_refused(self):
+        self.assert_refused('actions/checkout@v4 # v4.2.2', 'actions/checkout@v4')
+
+    def test_branch_ref_is_refused(self):
+        self.assert_refused('actions/checkout@main # v4.2.2', 'actions/checkout@main',
+                            named=True)
+
+    def test_short_sha_is_refused(self):
+        self.assert_refused('actions/checkout@0123456 # v4.2.2', 'actions/checkout@0123456')
+
+    def test_sha_without_same_line_version_is_refused(self):
+        reference = 'actions/checkout@' + self.SHA
+        for value in (reference, reference + '\n        # v4.2.2'):
+            with self.subTest(value=value):
+                self.assert_refused(value, reference)
+
+    def test_malformed_version_comments_are_refused(self):
+        reference = 'actions/checkout@' + self.SHA
+        for comment in ('# 4.2.2', '# vfour', '# v4..2', '# v4.2.',
+                        '# v4.2.2 extra', '# v4.2.2-', '# v4.2.2+'):
+            with self.subTest(comment=comment):
+                self.assert_refused(reference + ' ' + comment, reference)
+
+    def test_uppercase_sha_is_refused(self):
+        reference = 'actions/checkout@' + self.SHA.upper()
+        self.assert_refused(reference + ' # v4.2.2', reference)
+
+    def test_quoted_mutable_values_are_refused(self):
+        for quote in ('"', "'"):
+            for named in (False, True):
+                with self.subTest(quote=quote, named=named):
+                    self.assert_refused(f'{quote}actions/checkout@v4{quote} # v4.2.2',
+                                        'actions/checkout@v4', named=named)
+
+    def test_reference_without_ref_is_refused(self):
+        self.assert_refused('actions/checkout # v4.2.2', 'actions/checkout')
+
+    def test_remote_reusable_workflow_is_refused(self):
+        reference = 'example/shared/.github/workflows/build.yml@main'
+        text = ('on: workflow_dispatch\njobs:\n  call:\n'
+                f'    uses: {reference} # v1.2.3\n')
+        self.assertEqual(self.pin_findings(text),
+                         [self.finding(self.WORKFLOW, 4, reference)])
+
+    def test_composite_step_is_refused(self):
+        reference = 'actions/cache/restore@v4'
+        text = ('name: Example\nruns:\n  using: composite\n  steps:\n'
+                f'    - uses: {reference} # v4.2.2\n')
+        self.assertEqual(self.pin_findings(text, composite=True),
+                         [self.finding(self.ACTION, 5, reference)])
+
+    def test_every_offending_line_is_reported(self):
+        text = self.workflow('actions/checkout@main # v4.2.2')
+        text += '      - uses: actions/upload-artifact@v4 # v4.6.2\n'
+        self.assertEqual(self.pin_findings(text), [
+            self.finding(self.WORKFLOW, 6, 'actions/checkout@main'),
+            self.finding(self.WORKFLOW, 7, 'actions/upload-artifact@v4'),
+        ])
+
+    def test_pinned_quoted_and_local_shapes_are_accepted(self):
+        for named in (False, True):
+            for quote in ('', '"', "'"):
+                for version in ('v4', 'v4.2.2', 'v1.12.0', 'v4.2.2-rc.1',
+                                'v4.2.2+build.7', 'v4.2.2-rc.1+build.7'):
+                    value = f'{quote}actions/checkout@{self.SHA}{quote} # {version}'
+                    with self.subTest(value=value, named=named):
+                        self.assertEqual(self.pin_findings(self.workflow(value, named=named)), [])
+                for reference in ('./.github/actions/x', './.github/workflows/y.yml',
+                                  'docker://alpine:3.20'):
+                    with self.subTest(reference=reference, quote=quote, named=named):
+                        value = quote + reference + quote
+                        text = self.workflow(value, named=named)
+                        text += '      # - uses: actions/checkout@main\n'
+                        self.assertEqual(self.pin_findings(text), [])
+
+    @staticmethod
+    def run_contract(tree):
+        output = io.StringIO()
+        with mock.patch.object(ci_preflight, 'ROOT', tree), \
+                mock.patch.object(sys, 'argv', ['ci_preflight.py', '--check-ci-workflow']), \
+                contextlib.redirect_stdout(output):
+            code = ci_preflight.main()
+        return code, output.getvalue()
+
+    def test_nested_action_yml_and_yaml_are_discovered(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tree = Path(directory)
+            # Copy data inputs only; the real, already imported checker runs.
+            shutil.copytree(ROOT / '.github/workflows', tree / '.github/workflows')
+            shutil.copytree(ROOT / '.github/actions', tree / '.github/actions')
+            (tree / 'tests').mkdir()
+            shutil.copyfile(ROOT / 'tests/CMakeLists.txt', tree / 'tests/CMakeLists.txt')
+            paths = ('.github/actions/nested/alpha/action.yml',
+                     '.github/actions/nested/beta/action.yaml')
+            reference = 'actions/cache/save@main'
+            for name in paths:
+                path = tree / name
+                path.parent.mkdir(parents=True)
+                path.write_text('name: Example\nruns:\n  using: composite\n  steps:\n'
+                                f'    - uses: {reference} # v4.2.2\n')
+            code, output = self.run_contract(tree)
+            self.assertEqual(
+                [line for line in output.splitlines()
+                 if any(line.startswith(name + ':') for name in paths)],
+                [self.finding(name, 5, reference) for name in paths])
+            self.assertEqual(code, 1, output)
+
+    def test_removing_pin_check_is_detected(self):
+        value, reference = 'actions/checkout@main # v4.2.2', 'actions/checkout@main'
+        self.assert_refused(value, reference)
+        source = inspect.getsource(ci_workflow_findings)
+        guard = '    findings += action_pin_findings(action_sources)\n'
+        self.assertEqual(source.count(guard), 1)
+        mutant = source.replace(guard, '', 1)
+        namespace = dict(ci_workflow_findings.__globals__)
+        exec(compile(mutant, '<action-pin-check-removed>', 'exec'), namespace)
+        # Delete the actual integration call, then apply the same regression
+        # assertion to that function. No checker result is stubbed.
+        with self.assertRaises(AssertionError):
+            self.assert_refused(value, reference, checker=namespace['ci_workflow_findings'])
+
+    # Expected to fail with the new check on base c82fd00e until the separate
+    # action-pins lane lands. Keep this a normal test, never an xfail or skip.
+    def test_real_tree_has_only_versioned_action_pins(self):
+        self.assert_refused('actions/checkout@main # v4.2.2', 'actions/checkout@main')
+        for tier in ('all', 'fast', 'github-only'):
+            plan = {entry[0]: entry for entry in check_commands(ROOT, tier=tier)}
+            self.assertEqual(plan['ci-workflow-contract'], (
+                'ci-workflow-contract',
+                [sys.executable, str(ROOT / 'scripts/ci_preflight.py'), '--check-ci-workflow']))
+        code, output = self.run_contract(ROOT)
+        self.assertEqual(code, 0, output)
 
 
 class PreflightFailures(unittest.TestCase):
