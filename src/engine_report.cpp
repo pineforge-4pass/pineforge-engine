@@ -1961,13 +1961,14 @@ const Trade& OpenReportRowSource::materialize(std::size_t index) const {
     return materialized_[index];
 }
 
-bool NativeExecutionConsumer::report_capture_needs_sink(const BacktestEngine& engine) noexcept {
+bool NativeExecutionConsumer::report_capture_needs_sink(
+        const BacktestEngine& engine, bool include_pending) noexcept {
     const auto* consumer = static_cast<const NativeExecutionConsumer*>(
         engine.execution_consumer_slot_.ptr.get());
     if (!consumer) return false;
     const auto& epoch = consumer->selected_epoch_;
-    return epoch.window_configured || epoch.observer_registered
-        || epoch.admitted_selected || epoch.phase_observed;
+    return epoch.admitted_selected || epoch.phase_observed
+        || (include_pending && (epoch.window_configured || epoch.observer_registered));
 }
 
 int BacktestEngine::set_report_mode_v1(ReportMode mode) {
@@ -2038,10 +2039,10 @@ int BacktestEngine::fill_report_envelope_v1(ReportEnvelopeV1* out) const {
         || (report_mode_ == ReportMode::SUMMARY_ONLY && sink_enabled)
         || (report_mode_ == ReportMode::STREAMED && !sink_enabled))
         return PF_REPORT_MODE_CONFLICT;
-    // Selection/observation can be installed after mode selection. Refuse
-    // before capture can publish omitted trade metrics or owning arrays.
+    // Pending windows/observers configure the next run; this read judges
+    // only the admitted capture of the generation whose report it returns.
     if (report_mode_ == ReportMode::SUMMARY_ONLY
-        && NativeExecutionConsumer::report_capture_needs_sink(*this))
+        && NativeExecutionConsumer::report_capture_needs_sink(*this, false))
         return PF_REPORT_MODE_REPLAY_UNAVAILABLE;
 
     ReportEnvelopeV1 local{};

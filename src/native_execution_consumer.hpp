@@ -2326,7 +2326,8 @@ public:
 
     // Pending or admitted selected/observer capture needs a sink for non-FULL
     // reports until an exact omitted-sequence adapter exists. Reads only.
-    static bool report_capture_needs_sink(const BacktestEngine& engine) noexcept;
+    static bool report_capture_needs_sink(const BacktestEngine& engine,
+                                          bool include_pending = true) noexcept;
 
     // Frees the presentation capture (drop_presentation).
     ~NativeExecutionConsumer() override;
