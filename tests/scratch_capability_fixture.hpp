@@ -36,6 +36,30 @@ inline ScratchEffectiveCapabilities parse_scratch_effective_capabilities(std::st
             (mask & (UINT64_C(1) << 2)) != 0}; // CAP_DAC_READ_SEARCH
 }
 
+inline std::string describe_cells(const ScratchEffectiveCapabilities& capabilities) {
+    std::string names;
+    if (!capabilities.known) {
+        names = "unknown (/proc/self/status CapEff missing, unreadable or malformed; "
+                "capabilities may be present)";
+    } else {
+        if (capabilities.setuid) names += "CAP_SETUID(7) ";
+        if (capabilities.dac_override) names += "CAP_DAC_OVERRIDE(1) ";
+        if (capabilities.dac_read_search) names += "CAP_DAC_READ_SEARCH(2) ";
+        if (names.empty()) names = "none relevant";
+        else names.pop_back();
+    }
+    std::string description = "effective capabilities: " + names + "; cells: ";
+    description += capabilities.may_setuid()
+        ? "setreuid EPERM omitted (CAP_SETUID may be present), "
+          "child setreuid outcome and matching-credentials control"
+        : "setreuid EPERM";
+    description += ", owned-0700 TMPDIR positive control, ";
+    description += capabilities.may_bypass_dac()
+        ? "mode-0000 EACCES omitted (DAC capabilities may be present)"
+        : "mode-0000 EACCES";
+    return description;
+}
+
 inline ScratchEffectiveCapabilities read_scratch_effective_capabilities() {
     // No caller-supplied paths: only this fixed procfs file can be opened.
     std::puts("S4E capability inspection path: /proc/self/status (fixed path only)");

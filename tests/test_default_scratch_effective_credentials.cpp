@@ -10,24 +10,7 @@ void nonroot_row() {
     require(::geteuid() != 0 && ::getuid() == ::geteuid(),
             "non-root controls require matching real and effective uids");
     const auto capabilities = read_scratch_effective_capabilities();
-    std::string capability_names;
-    if (!capabilities.known) {
-        capability_names = "unknown (/proc/self/status CapEff unreadable or malformed; "
-                           "capabilities may be present)";
-    } else {
-        if (capabilities.setuid) capability_names += "CAP_SETUID(7) ";
-        if (capabilities.dac_override) capability_names += "CAP_DAC_OVERRIDE(1) ";
-        if (capabilities.dac_read_search) capability_names += "CAP_DAC_READ_SEARCH(2) ";
-        if (capability_names.empty()) capability_names = "none relevant";
-        else capability_names.pop_back();
-    }
-    std::printf("effective capabilities: %s; cells: %s, owned-0700 TMPDIR positive control, %s\n",
-                capability_names.c_str(),
-                capabilities.may_setuid() ? "child setreuid outcome and matching-credentials control"
-                                         : "setreuid EPERM",
-                capabilities.may_bypass_dac()
-                    ? "mode-0000 EACCES cell omitted (DAC capabilities may be present)"
-                    : "mode-0000 EACCES");
+    std::puts(describe_cells(capabilities).c_str());
     if (!capabilities.may_setuid()) {
         scratch_child("non-root effective-credentials refusal", [] {
             errno = 0;
@@ -74,15 +57,19 @@ void nonroot_row() {
             errno = 0;
             const int result = ::setreuid(65534, 0);
             const int observed_error = errno;
-            require(result == 0 || (result == -1 && observed_error != 0),
-                    "capability-aware setreuid must succeed or report a real errno");
+            // EPERM: seccomp, LSM or no_new_privs; EINVAL: an unmapped namespace uid.
+            require(result == 0 || observed_error == EPERM || observed_error == EINVAL,
+                    "capability-aware setreuid must succeed or report EPERM or EINVAL");
             if (result == 0) {
-                require(::getuid() == 65534 && ::geteuid() == 0,
+                require(::getuid() == 65534 && ::geteuid() == 0
+                            && (::getuid() != original_real || ::geteuid() != original_effective),
                         "successful setreuid must install the requested credentials");
                 require(::setreuid(original_real, original_effective) == 0,
                         "cannot restore child credentials after successful setreuid");
                 std::puts("non-root setreuid(65534, 0): returned 0; child credentials restored");
             } else {
+                require(::getuid() == original_real && ::geteuid() == original_effective,
+                        "failed setreuid must leave child real and effective uids unchanged");
                 std::printf("non-root setreuid(65534, 0): returned -1 (errno %d)\n",
                             observed_error);
             }
