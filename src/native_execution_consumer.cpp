@@ -3026,6 +3026,20 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
                RunFailureCode::symbol_metadata_rejected, {{"field", "timezone"}});
         return false;
     }
+    // Capture without trade rows cannot supply a complete v1 report. Check
+    // both report modes before reset/admission and the first host callback.
+    if ((engine.report_mode_ == ReportMode::SUMMARY_ONLY
+         || engine.pending_equity_report_mode_ == ReportMode::SUMMARY_ONLY)
+        && !engine.report_sink_state_.enabled
+        && (selected_epoch_.observer_registered || selected_epoch_.window_configured
+            || selected_epoch_.admitted_selected)) {
+        fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Begin});
+        render(engine, "unsupported report mode: SUMMARY_ONLY "
+                       "(no pineforge-report/v1 provider bridge for this host)",
+               RunFailureCode::report_mode_unsupported,
+               {{"mode", "SUMMARY_ONLY"}, {"contract", "pineforge-report/v1"}});
+        return false;
+    }
     // The selected epoch's last refusal, before anything is reset: a tracked
     // handle whose generation counter is spent admits no run, so the counter
     // never wraps and the previous closure stays as it was.
