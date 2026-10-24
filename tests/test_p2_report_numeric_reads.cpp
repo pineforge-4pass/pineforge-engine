@@ -11,6 +11,7 @@
 #include <cstring>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -67,16 +68,68 @@ public:
         }
     }
 
+    const TradeLedger& ledger() const { return trades_; }
+
 private:
     std::string text_;
 };
 
-std::size_t fill_count(NumericHost& host, ReportC& report) {
+template<class Action>
+std::size_t allocation_count(Action action) {
     const auto before = global_allocation::allocations;
     global_allocation::recording = true;
-    host.fill_report(&report);
+    action();
     global_allocation::recording = false;
     return global_allocation::allocations - before;
+}
+
+template<class Left, class Right>
+void equal_field(const Left& left, const Right& right, int index,
+                 const char* field, const char* context) {
+    bool equal;
+    if constexpr (std::is_same_v<Left, double> && std::is_same_v<Right, double>)
+        equal = std::memcmp(&left, &right, sizeof(double)) == 0;
+    else
+        equal = left == right;
+    if (!equal)
+        throw std::runtime_error(std::string(context) + ": row " + std::to_string(index)
+                                 + " field " + field + " differs");
+}
+
+// TradeC has all fourteen report numbers and no strings. Compare every field,
+// preserving double bits, without comparing its unspecified padding bytes.
+// The same list checks a report row against the independent full ledger read.
+template<class Left, class Right>
+void equal_report_numbers(const Left& left, const Right& right, int index,
+                          const char* context) {
+    equal_field(left.entry_time, right.entry_time, index, "entry_time", context);
+    equal_field(left.exit_time, right.exit_time, index, "exit_time", context);
+    equal_field(left.entry_price, right.entry_price, index, "entry_price", context);
+    equal_field(left.exit_price, right.exit_price, index, "exit_price", context);
+    equal_field(left.pnl, right.pnl, index, "pnl", context);
+    equal_field(left.pnl_pct, right.pnl_pct, index, "pnl_pct", context);
+    equal_field(left.is_long, right.is_long, index, "is_long", context);
+    equal_field(left.max_runup, right.max_runup, index, "max_runup", context);
+    equal_field(left.max_drawdown, right.max_drawdown, index, "max_drawdown", context);
+    equal_field(left.qty, right.qty, index, "qty", context);
+    equal_field(left.commission, right.commission, index, "commission", context);
+    equal_field(left.entry_bar_index, right.entry_bar_index, index, "entry_bar_index", context);
+    equal_field(left.exit_bar_index, right.exit_bar_index, index, "exit_bar_index", context);
+    equal_field(left.open_at_end, right.open_at_end, index, "open_at_end", context);
+}
+
+void equal_ledger_numbers(const Trade& full, const Trade& numeric, int index) {
+    const char* context = "full/numeric ledger read";
+    equal_report_numbers(full, numeric, index, context);
+    // These three numeric/flag fields belong to Trade but not TradeC.
+    equal_field(full.exit_from_bracket, numeric.exit_from_bracket, index,
+                "exit_from_bracket", context);
+    equal_field(full.entry_incarnation, numeric.entry_incarnation, index,
+                "entry_incarnation", context);
+    equal_field(full.close_cause, numeric.close_cause, index, "close_cause", context);
+    require(numeric.entry_id.empty() && numeric.entry_comment.empty()
+                && numeric.exit_comment.empty() && numeric.exit_id.empty(),
+            "numeric ledger read materialized a string");
 }
 
 void equal_reports(const ReportC& left, const ReportC& right) {
@@ -88,9 +141,8 @@ void equal_reports(const ReportC& left, const ReportC& right) {
     require(left.equity_curve_len == right.equity_curve_len,
             "numeric-only report changed equity length");
     for (int index = 0; index < left.trades_len; ++index)
-        require(std::memcmp(&left.trades[index], &right.trades[index],
-                            sizeof(TradeC)) == 0,
-                "numeric-only report changed a trade row");
+        equal_report_numbers(left.trades[index], right.trades[index], index,
+                             "short/long-string report");
     for (std::int64_t index = 0; index < left.equity_curve_len; ++index)
         require(std::memcmp(&left.equity_curve[index], &right.equity_curve[index],
                             sizeof(pf_equity_point_t)) == 0,
@@ -101,7 +153,8 @@ void equal_reports(const ReportC& left, const ReportC& right) {
 
 int main() {
     try {
-        NumericHost empty(1, ""), long_strings(2, std::string(512, 'x'));
+        const std::string long_text(512, 'x');
+        NumericHost empty(1, ""), long_strings(2, long_text);
         const auto bars = tape();
         empty.run(bars.data(), static_cast<int>(bars.size()));
         long_strings.run(bars.data(), static_cast<int>(bars.size()));
@@ -109,18 +162,52 @@ int main() {
                 "numeric read fixture run failed");
 
         ReportC empty_report{}, long_report{};
-        const auto empty_allocations = fill_count(empty, empty_report);
-        const auto long_allocations = fill_count(long_strings, long_report);
+        const auto empty_allocations = allocation_count([&] { empty.fill_report(&empty_report); });
+        const auto long_allocations = allocation_count([&] { long_strings.fill_report(&long_report); });
         require(empty_report.total_trades == 1 && empty_report.trades_len == 1
                     && long_report.total_trades == 1 && long_report.trades_len == 1,
                 "numeric read fixture produced no real trade row");
         equal_reports(empty_report, long_report);
-        require(long_allocations >= empty_allocations + 4,
-                "full report did not expose the four string decodes");
+        for (int index = 0; index < empty_report.trades_len; ++index) {
+            Trade short_full{}, long_full{}, short_numeric{}, long_numeric{};
+            const auto short_full_allocations = allocation_count([&] {
+                short_full = empty.ledger()[static_cast<std::size_t>(index)];
+            });
+            const auto long_full_allocations = allocation_count([&] {
+                long_full = long_strings.ledger()[static_cast<std::size_t>(index)];
+            });
+            require(long_full.entry_id == long_text + "-entry"
+                        && long_full.entry_comment == long_text + "-entry-comment"
+                        && long_full.exit_id == long_text + "-exit"
+                        && long_full.exit_comment == long_text + "-exit-comment",
+                    "full-read control did not retain the four input strings");
+            require(long_full_allocations >= short_full_allocations + 4,
+                    "full ledger read did not expose the four string decodes");
+            const auto short_numeric_allocations = allocation_count([&] {
+                short_numeric = empty.ledger().numeric_at(static_cast<std::size_t>(index));
+            });
+            const auto long_numeric_allocations = allocation_count([&] {
+                long_numeric = long_strings.ledger().numeric_at(static_cast<std::size_t>(index));
+            });
+            equal_ledger_numbers(short_full, short_numeric, index);
+            equal_ledger_numbers(long_full, long_numeric, index);
+            equal_report_numbers(empty_report.trades[index], short_full, index,
+                                 "short-string report/full ledger read");
+            equal_report_numbers(long_report.trades[index], long_full, index,
+                                 "long-string report/full ledger read");
+            require(long_numeric_allocations == short_numeric_allocations,
+                    "numeric ledger read allocated for strings");
+        }
+        // The real full-read control above must expose at least four decodes;
+        // the numeric-only fill_report pass must expose zero extra allocations.
+        if (long_allocations != empty_allocations)
+            throw std::runtime_error("fill_report string decode counter is nonzero (short="
+                + std::to_string(empty_allocations) + ", long="
+                + std::to_string(long_allocations) + " allocations)");
 
         BacktestEngine::free_report(&empty_report);
         BacktestEngine::free_report(&long_report);
-        std::puts("B2-15 numeric report pass: equal values and four-string decode counter");
+        std::puts("B2-15 numeric report pass: equal fields; string decode allocation delta 0");
         return 0;
     } catch (const std::exception& error) {
         global_allocation::recording = false;
