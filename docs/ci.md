@@ -597,19 +597,27 @@ On Linux profiles with the source layer enabled, `ctest-scratch-guard` requires
 `test_scratch_guard_equal_string`, and `test_scratch_guard_hl2_01` in the full
 CTest registry and refuses selected guard rows that skip, are disabled, or do
 not run; unreadable discovery or result lists fail closed. Named execution
-evidence comes only from CTest's `--output-junit` report
-(`ctest-junit.xml` in the build directory), on plain, 1/1, and multi-shard runs.
+evidence comes only from CTest's `--output-junit` report, on plain, 1/1, and
+multi-shard runs; **JUnit evidence channel** below says where it is written and
+what is checked before it is read.
 Every selected guard must have its own testcase with `status="run"`, finite
 nonnegative `time`, and no `<skipped/>` child. A `<failure/>` still proves
 execution; the CTest command's nonzero exit separately fails verification.
 Result-shaped stdout and captured JUnit `system-out` cannot prove execution.
-The number of JUnit testcases with verdicts must equal the closing summary's
-`total - skipped - not_run`; disabled rows are already outside that total.
+The report is reconciled with CTest's selection exactly, by name and with
+multiplicity, never by count alone: its testcases must be exactly the selected
+rows (a selected row the report omits and a testcase nobody selected both fail,
+even when the counts agree), and the testcases holding a verdict must be
+exactly the selected rows minus the skipped, disabled and not-run rows the
+closing summary lists. A testcase name that occurs twice makes the whole report
+unusable. The number of verdicts must also equal the closing summary's
+`total - skipped - not_run`; disabled rows are already outside that total. The
+failure message carries both difference lists (`missing from JUnit` and
+`not selected`; `no verdict` and `unexpected verdict`), cut at twenty names each
+with the rest counted.
 Missing, malformed, or unrequested JUnit fails with
 `no machine-readable execution evidence`, including when CTest lacks JUnit
-support; there is no stdout fallback. Before CTest runs, an existing report is
-preserved under `ci-logs/ctest-junit-previous-*/`, so stale output cannot clear
-the gate.
+support; there is no stdout fallback.
 
 All discovery used by this guard, including ordinary plain runs, requires
 exactly one `Total Tests: N` matching both the number of listed rows and the
@@ -620,6 +628,46 @@ runner selection's counts. Each shard checks execution only for its own
 selected guard names, after requiring all four global registrations.
 These exact row names are the contract the scratch-syscall counter tests must carry;
 kernel-only and non-Linux runs do not run this stage.
+
+**JUnit evidence channel.** The driver gives each CTest run a private slot: a
+fresh directory from `mkdtemp` (mode 0700, a random `pineforge-ctest-junit-*`
+name) under its own temporary directory (`TMPDIR`, else the system one), never
+inside the build tree; a temporary directory that resolves into the build tree
+is refused. CTest is told the report path through its argv only (no environment
+variable carries it into the tests). The driver records that the path was empty
+before the run and the directory's modification time as the run's start, and it
+reads the report only if the path was empty before the run and the file is a
+regular file (opened without following a symlink or waiting on a FIFO), owned by
+the driver's user, and last written since the run started. A report that fails
+any of these is `no machine-readable execution evidence`. The old
+`<build>/ctest-junit.xml` is no longer read: a report an earlier run left there
+is moved to `ci-logs/ctest-junit-previous-*/` so diagnostics do not mistake it
+for the current one. At the end of the run the driver removes the slot and, if
+the report passes the same checks, keeps a copy of it at
+`ci-logs/ctest-junit.xml` for diagnostics collection; nothing reads that copy
+back as evidence.
+
+*What this does and does not stop.* It stops accidental loss, rows that vanish,
+skip, are disabled or never start, result-shaped text a test prints to stdout or
+into its captured output, an earlier run's report standing in for this one's, and
+a planted or stale file at a well-known path. It does not stop a deliberately
+malicious test. Such a test runs as the same user as the driver: the CTest command
+line is visible to every process of that user (for example
+`/proc/<pid>/cmdline`), the temporary directory can be listed, and the file CTest
+writes can be replaced, and no check available to a process in the driver's
+position can tell that writer from CTest. That case is out of scope for the
+driver: forging the evidence takes code written to find and overwrite the
+driver's report, and review of the test's source is what catches it. Hostile XML
+(entity expansion) is out of scope on the same terms; the report is parsed with
+the standard library, which does not fetch external entities.
+
+*CTest version.* `--output-junit` arrived in CTest 3.21 (`ctest --test-dir`, which
+every run uses, in 3.20; the build itself needs CMake 3.16). On a Linux
+source-layer run the driver reads `ctest --version`; below 3.21, or when the
+version cannot be read, it does not ask CTest for the report (an older CTest
+rejects the option), still runs the tests, and fails `ctest-scratch-guard` closed
+with a message naming `CTest >= 3.21`. Runs that do not execute the stage (other
+platforms, the kernel profile) are not held to the floor.
 
 **2026-10-24 superseding detail:** `debug` and `sanitizers` have no default
 execution floor, but their default exclusion enforces the registration

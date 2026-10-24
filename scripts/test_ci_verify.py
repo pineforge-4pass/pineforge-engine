@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -79,6 +80,9 @@ from prepare_settlement_cpp_abi_base import (
 
 _SENTINEL = object()
 _PRIOR_OVERLAY_FLAG: object = _SENTINEL
+# Private JUnit directories the standalone enforcement helpers made; the module
+# removes them at the end. Full Driver runs remove their own in finish().
+_JUNIT_SLOTS: list[Path] = []
 
 # The campaign's per-profile floors, read from the one table in ci_verify so a
 # test never restates a number the table owns. `FULL` is the overlay-present
@@ -188,6 +192,9 @@ def setUpModule():
 
 def tearDownModule():
     global _PRIOR_OVERLAY_FLAG
+    for directory in _JUNIT_SLOTS:
+        shutil.rmtree(directory, ignore_errors=True)
+    _JUNIT_SLOTS.clear()
     if _PRIOR_OVERLAY_FLAG is not _SENTINEL:
         os.environ['PINEFORGE_PRIVATE_FIXTURES'] = str(_PRIOR_OVERLAY_FLAG)
 
@@ -292,12 +299,22 @@ def ctest_junit_output(names, *, skipped=(), not_run=(), disabled=(), failed=())
     return ET.tostring(suite, encoding='utf-8', xml_declaration=True)
 
 
+def write_ctest_junit_bytes(driver, data: bytes) -> None:
+    """Supply a requested CTest report to standalone enforcement tests.
+
+    Inside a driver's own ctest run the private slot already exists (made by
+    prepare_ctest_junit) and is written; a standalone enforcement test has no
+    slot yet, so one is made the way the driver makes it.
+    """
+    if driver.ctest_junit is None:
+        driver.begin_ctest_junit()
+        _JUNIT_SLOTS.append(driver.ctest_junit.directory)
+    driver.ctest_junit.report.write_bytes(data)
+
+
 def write_ctest_junit(driver, names, **categories):
-    """Supply a requested CTest report to standalone enforcement tests."""
-    report = driver.cfg.build_dir / 'ctest-junit.xml'
-    report.parent.mkdir(parents=True, exist_ok=True)
-    report.write_bytes(ctest_junit_output(names, **categories))
-    driver.ctest_junit_requested = True
+    """Supply a requested CTest report with these testcases."""
+    write_ctest_junit_bytes(driver, ctest_junit_output(names, **categories))
 
 
 class Scripted:
@@ -314,6 +331,14 @@ class Scripted:
         self.invocations: list[list[str]] = []
         self.cxx = shutil.which('c++') or '/usr/bin/c++'
         self.secret_seen_in_argv = False
+        # The driver's own extra argv, set by run_driver: whether a label
+        # exclusion is requested decides how many rows the registry lists.
+        self.cli_extra: list[str] = []
+        # One record per ctest run told where to write its JUnit report: what
+        # its private slot held before the report was written, and the
+        # environment the run inherited.
+        self.junit_runs: list[dict] = []
+        self._env: dict = {}
 
     def __call__(self, argv, *, extra_env=None, combine_stderr=True,
                  stream_output=False) -> Completed:
@@ -328,6 +353,7 @@ class Scripted:
         if argv[0] != 'ctest' or ('-N' not in argv and '--show-only=json-v1' not in argv):
             self.calls.append(argv)
         extra_env = extra_env or {}
+        self._env = dict(extra_env)
         joined = ' '.join(argv)
         secret = os.environ.get('CI_VERIFY_TEST_SECRET')
         if secret and secret in joined:
@@ -339,6 +365,10 @@ class Scripted:
                 return Completed(0, b'CTest help --output-junit\n', b'')
             return default_runner(argv, extra_env=None,
                                   combine_stderr=True, stream_output=False)
+        if argv[0] == 'ctest' and '--version' in argv and 'ctest_version' in self.exits:
+            # Scripts the number CTest reports; 'garbage' is a banner that
+            # carries no version.
+            return Completed(0, f'ctest version {self.exits["ctest_version"]}\n'.encode(), b'')
         if argv[0] in {'cmake', 'ctest', 'git'} and '--version' in argv:
             return default_runner(argv, extra_env=None,
                                   combine_stderr=True, stream_output=False)
@@ -465,11 +495,7 @@ class Scripted:
             if self.exits.get('actual_empty_ctest'):
                 return default_runner(argv, extra_env=extra_env,
                                       combine_stderr=combine_stderr, stream_output=False)
-            registered = self.exits.get(
-                'ctest_registered',
-                ci_verify.EXCLUDED_REGISTERED_MIN.get(
-                    self.profile, ci_verify.profile_min_tests(
-                        ci_verify.PROFILE[self.profile], self.source) or KERNEL_MIN_TESTS))
+            registered = self._registered()
             labelled = self.exits.get('ctest_labelled', 5)
             if '-N' in argv:
                 stage = ('ctest-list-excluded' if '-L' in argv else
@@ -482,28 +508,7 @@ class Scripted:
                     # A listing whose count parses but carries no row names:
                     # the registry the pinned-rows-that-ran rule reads.
                     return Completed(0, f'Total Tests: {count}\n'.encode(), b'')
-                # Every row a run scripts as skipped/not-run/disabled is
-                # registered by its own row, exactly as a real `ctest -N`
-                # lists it; the rest of the registry is filler names.
-                names = list(self.exits.get('ctest_registered_names', ()))
-                full_build = argv[argv.index('--test-dir') + 1] == str(self.build_dir)
-                if (ci_verify.PROFILE[self.profile].source_layer
-                        and sys.platform.startswith('linux')
-                        and (self.profile not in ci_verify.LIVE_ONLY_PROFILES or full_build)):
-                    names += [name for name in SCRATCH_GUARD_FIXTURE_NAMES if name not in names]
-                for implied in (self.exits.get('ctest_skipped', ()),
-                                self.exits.get('ctest_not_run', ()),
-                                self.exits.get('ctest_disabled', ())):
-                    names += [name for name in implied if name not in names]
-                if '-L' in argv:
-                    names = list(SCRIPTED_SLOW_FIXTURE_NAMES[:labelled])
-                else:
-                    while len(names) < registered - labelled:
-                        names.append(f'test_row_{len(names) + 1}')
-                    if '-LE' not in argv:
-                        names += list(SCRIPTED_SLOW_FIXTURE_NAMES[:labelled])
-                while len(names) < count:
-                    names.append(f'test_row_{len(names) + 1}')
+                names = self._listing_names(argv, registered, labelled, count)
                 listing = ''.join(f'Test #{number}: {name}\n'
                                   for number, name in enumerate(names[:count], 1))
                 return Completed(int(self.exits.get(stage, 0)),
@@ -521,26 +526,19 @@ class Scripted:
             if 'ctest_raw' in self.exits:
                 self._junit(argv, self.exits.get('ctest_junit_names', ()))
                 return Completed(int(self.exits.get('ctest', 0)), self.exits['ctest_raw'], b'')
-            default_rows = (registered - labelled if '-LE' in argv else
-                            ci_verify.profile_min_tests(
-                                ci_verify.PROFILE[self.profile], self.source) or KERNEL_MIN_TESTS)
-            rows = self.exits.get('ctest_rows', default_rows)
+            rows = self.exits.get('ctest_rows', self._default_rows(argv, registered, labelled))
             if rows == 'absent':
                 return Completed(int(self.exits.get('ctest', 0)), b'tests\n', b'')
-            guards = (SCRATCH_GUARD_FIXTURE_NAMES
-                      if ci_verify.PROFILE[self.profile].source_layer
-                      and self.profile not in ci_verify.LIVE_ONLY_PROFILES else ())
-            summary = populated_ctest_output(
-                rows, required=guards, skipped=self.exits.get('ctest_skipped', ()),
-                not_run=self.exits.get('ctest_not_run', ()),
-                disabled=self.exits.get('ctest_disabled', ()))
-            names = populated_ctest_names(
-                rows, required=guards, skipped=self.exits.get('ctest_skipped', ()),
-                not_run=self.exits.get('ctest_not_run', ()),
-                disabled=self.exits.get('ctest_disabled', ()))
-            self._junit(argv, names, skipped=self.exits.get('ctest_skipped', ()),
-                        not_run=self.exits.get('ctest_not_run', ()),
-                        disabled=self.exits.get('ctest_disabled', ()))
+            skipped = tuple(self.exits.get('ctest_skipped', ()))
+            not_run = tuple(self.exits.get('ctest_not_run', ()))
+            disabled = tuple(self.exits.get('ctest_disabled', ()))
+            # The run reports the rows its own registry lists, under the same
+            # names: a report that disagrees with discovery is a finding of the
+            # driver, never an artefact of the fixture.
+            names = self._run_names(argv, registered, labelled, rows + len(disabled))
+            summary = named_ctest_output(names, skipped=skipped, not_run=not_run,
+                                         disabled=disabled)
+            self._junit(argv, names, skipped=skipped, not_run=not_run, disabled=disabled)
             return Completed(int(self.exits.get('ctest', 0)), summary, b'')
         if argv[0].endswith('smoke_version') or Path(argv[0]).name == 'smoke_version':
             stdout = str(self.exits.get('smoke-stdout', expected_version(self.source))).encode() + b'\n'
@@ -555,17 +553,101 @@ class Scripted:
         return Completed(1, b'', f'unhandled command: {argv}\n'.encode())
 
     def _junit(self, argv, names, **categories):
+        if 'ctest_planted_junit' in self.exits:
+            # What a test running inside the ctest run can do: write a report
+            # where an earlier driver looked for its own.
+            (self.build_dir / 'ctest-junit.xml').write_bytes(self.exits['ctest_planted_junit'])
         if '--output-junit' not in argv:
             if 'ctest_unrequested_junit' in self.exits:
                 (self.build_dir / 'ctest-junit.xml').write_bytes(
                     self.exits['ctest_unrequested_junit'])
             return
+        report = Path(argv[argv.index('--output-junit') + 1])
+        self.junit_runs.append({
+            'report': report,
+            'listing': sorted(os.listdir(report.parent)),
+            'mode': stat.S_IMODE(os.stat(report.parent).st_mode),
+            'env': dict(self._env),
+        })
         data = self.exits.get('ctest_junit', _SENTINEL)
         if data is None:
             return
         if data is _SENTINEL:
             data = ctest_junit_output(names, **categories)
-        Path(argv[argv.index('--output-junit') + 1]).write_bytes(data)
+        report.write_bytes(data)
+
+    def _label_excluded(self) -> bool:
+        """Whether this run excludes a label: --exclude-label, or the profile's default."""
+        return ('--exclude-label' in self.cli_extra
+                or ci_verify.PROFILE[self.profile].exclude_label is not None)
+
+    def _floor_rows(self) -> int:
+        return (ci_verify.profile_min_tests(ci_verify.PROFILE[self.profile], self.source)
+                or KERNEL_MIN_TESTS)
+
+    def _registered(self) -> int:
+        """How many rows the scripted registry holds, unless the test sets it.
+
+        A label-excluding run keeps the registration minimum its profile pins.
+        Without an exclusion every registered row is selected and a scripted
+        run reports exactly that many, so the registry of a source-layer
+        profile is as large as the rows the run is told to report (the rows
+        knob), or else as the profile's floor and registration minimum need.
+        """
+        if 'ctest_registered' in self.exits:
+            return self.exits['ctest_registered']
+        floor_rows = self._floor_rows()
+        registered = ci_verify.EXCLUDED_REGISTERED_MIN.get(self.profile, floor_rows)
+        if ci_verify.PROFILE[self.profile].source_layer and not self._label_excluded():
+            rows = self.exits.get('ctest_rows')
+            if isinstance(rows, int):
+                return rows + len(self.exits.get('ctest_disabled', ()))
+            return max(registered, floor_rows)
+        return registered
+
+    def _default_rows(self, argv, registered, labelled) -> int:
+        """The rows a scripted run reports when the test does not say."""
+        if '-LE' in argv:
+            return registered - labelled
+        if (ci_verify.PROFILE[self.profile].source_layer and not self._label_excluded()
+                and 'ctest_registered' not in self.exits):
+            return registered - len(self.exits.get('ctest_disabled', ()))
+        return self._floor_rows()
+
+    def _listing_names(self, argv, registered, labelled, count) -> list:
+        """The row names a scripted `ctest -N` lists for these label flags.
+
+        Every row a run scripts as skipped/not-run/disabled is registered by
+        its own row, exactly as a real `ctest -N` lists it; the rest of the
+        registry is filler names. The caller cuts the list to its count.
+        """
+        names = list(self.exits.get('ctest_registered_names', ()))
+        full_build = argv[argv.index('--test-dir') + 1] == str(self.build_dir)
+        if (ci_verify.PROFILE[self.profile].source_layer
+                and sys.platform.startswith('linux')
+                and (self.profile not in ci_verify.LIVE_ONLY_PROFILES or full_build)):
+            names += [name for name in SCRATCH_GUARD_FIXTURE_NAMES if name not in names]
+        for implied in (self.exits.get('ctest_skipped', ()),
+                        self.exits.get('ctest_not_run', ()),
+                        self.exits.get('ctest_disabled', ())):
+            names += [name for name in implied if name not in names]
+        if '-L' in argv:
+            names = list(SCRIPTED_SLOW_FIXTURE_NAMES[:labelled])
+        else:
+            while len(names) < registered - labelled:
+                names.append(f'test_row_{len(names) + 1}')
+            if '-LE' not in argv:
+                names += list(SCRIPTED_SLOW_FIXTURE_NAMES[:labelled])
+        while len(names) < count:
+            names.append(f'test_row_{len(names) + 1}')
+        return names
+
+    def _run_names(self, argv, registered, labelled, total) -> list:
+        """The `total` rows a scripted run reports: its registry's names, cut or padded."""
+        if total < len(self._listing_names(argv, 0, 0, 0)):
+            raise AssertionError('fixture count cannot contain all required and '
+                                 'non-running rows')
+        return self._listing_names(argv, registered, labelled, total)[:total]
 
     def _cache_values(self) -> dict[str, str]:
         profile = ci_verify.PROFILE[self.profile]
@@ -813,6 +895,7 @@ class Scripted:
 def run_driver(profile: str, build_dir: Path, scripted: Scripted, extra: list[str] | None = None,
                which=shutil.which) -> int:
     argv = [profile, '--build-dir', str(build_dir), '--jobs', '2', *(extra or [])]
+    scripted.cli_extra = list(extra or [])
     return main(argv, runner=scripted, stream_output=False, which=which)
 
 
@@ -976,7 +1059,11 @@ class ScratchGuardRows(unittest.TestCase):
         cfg = ci_verify.build_config(argv, which=lambda name: '/fixture/bin/' + name,
                                      stream_output=False)
         # Debug/sanitizers' real label-exclusion branches are covered separately.
-        return ci_verify.Driver(cfg)
+        driver = ci_verify.Driver(cfg)
+        # Runs before the build directory goes: removes the driver's private
+        # JUnit directory, keeping the diagnostic copy where finish() would.
+        self.addCleanup(driver.retain_ctest_junit)
+        return driver
 
     def floor(self, *, registry=SCRATCH_GUARD_FIXTURE_NAMES, skipped=(), disabled=(),
               not_run=(), raw=None, profile='release', host='linux', returncode=0,
@@ -991,8 +1078,7 @@ class ScratchGuardRows(unittest.TestCase):
                 write_ctest_junit(driver, names, skipped=skipped,
                                   disabled=disabled, not_run=not_run)
             elif junit is not None:
-                (driver.cfg.build_dir / 'ctest-junit.xml').write_bytes(junit)
-                driver.ctest_junit_requested = True
+                write_ctest_junit_bytes(driver, junit)
             driver.enforce_test_floor(
                 Completed(returncode, output), registered=len(names), selected=len(names),
                 registered_names=frozenset(registry) if registry is not None else None)
@@ -1373,9 +1459,11 @@ class ScratchGuardRows(unittest.TestCase):
                                      if stage['name'] == 'ctest-exclusion')
                     self.assertEqual(exclusion['status'], 'passed', exclusion)
 
-    def shard_floor(self, *, skipped=(), missing=()):
+    def shard_floor(self, *, skipped=(), missing=(), unselected_in_report=()):
         # Pin the partition boundary, not a hash coincidence: this test checks
         # the consumer of selection names, not the separately-tested partitioner.
+        # `unselected_in_report` are skipped testcases the report holds that
+        # the shard never selected: they leave every verdict count unchanged.
         public = tuple(f'public_guard_{index}' for index in range(1023))
         registry = (*(name for name in SCRATCH_GUARD_FIXTURE_NAMES if name not in missing), *public)
         selected = (SCRATCH_GUARD_FIXTURE_NAMES[0], *public[:512])
@@ -1390,13 +1478,15 @@ class ScratchGuardRows(unittest.TestCase):
         def runner(argv, **kwargs):
             if '--help' in argv:
                 return Completed(0, b'CTest help --output-junit\n')
+            if '--version' in argv:
+                return Completed(0, b'ctest version 3.28.3\n')
             if '-N' in argv:
                 return discovery(selected)
             self.assertIn('--output-junit', argv)
-            write_ctest_junit(driver, selected,
-                              skipped=tuple(name for name in skipped if name in selected))
-            return Completed(0, named_ctest_output(
-                selected, skipped=tuple(name for name in skipped if name in selected)))
+            local_skips = tuple(name for name in skipped if name in selected)
+            write_ctest_junit(driver, (*selected, *unselected_in_report),
+                              skipped=(*local_skips, *unselected_in_report))
+            return Completed(0, named_ctest_output(selected, skipped=local_skips))
 
         with mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES': ''}), \
                 mock.patch.object(ci_verify.sys, 'platform', 'linux'), \
@@ -1467,6 +1557,422 @@ class ScratchGuardRows(unittest.TestCase):
         with self.assertRaises(AssertionError):
             self.assert_guard_failure(mutant, missing, 'missing from the full CTest registry')
 
+    def test_a_testcase_repeated_in_the_report_is_not_counted_as_two_rows(self):
+        # Multiplicity: the report is keyed by testcase name and refuses a
+        # repeat outright, so a repeated `public` can neither stand in for a
+        # missing row nor hide behind a set comparison.
+        selection = (*SCRATCH_GUARD_FIXTURE_NAMES, 'public')
+        driver = self.floor(registry=selection,
+                            junit=ctest_junit_output((*selection, 'public')))
+        self.assert_guard_failure(driver, SCRATCH_GUARD_FIXTURE_NAMES[0],
+                                  'no machine-readable execution evidence')
+        self.assertEqual(failure_stages(driver.summary), ['ctest-scratch-guard'])
+
+    def test_reconciliation_function_reports_both_lists_and_counts_the_rest(self):
+        selected = frozenset(f'row_{index:02}' for index in range(25))
+        results = {'row_22': 'passed', 'row_23': 'passed', 'row_24': 'passed',
+                   'extra_a': 'passed', 'extra_b': 'skipped'}
+        offenders = ci_verify.ctest_junit_reconciliation(results, selected, ci_verify.CTestRows(3))
+        self.assertEqual(len(offenders), 2, offenders)
+        first, second = offenders
+        self.assertIn('missing from JUnit: ' + ', '.join(f'row_{index:02}' for index in range(20))
+                      + ' (and 2 more); not selected: extra_a, extra_b', first)
+        self.assertIn('unexpected verdict: extra_a)', second)
+        self.assertEqual(ci_verify.ctest_junit_reconciliation(
+            {name: 'passed' for name in selected}, selected, ci_verify.CTestRows(25)), [])
+        # Skipped, disabled and not-run rows are subtracted from the verdicts
+        # but stay in the population.
+        self.assertEqual(ci_verify.ctest_junit_reconciliation(
+            {'a': 'passed', 'b': 'skipped', 'c': 'not run', 'd': 'skipped'},
+            frozenset('abcd'), ci_verify.CTestRows(3, ('b',), ('c',), ('d',))), [])
+
+    def test_a_shard_reconciles_the_report_with_its_own_selection(self):
+        # The multi-shard path takes the same exact reconciliation: a skipped
+        # testcase the shard never selected leaves every count unchanged.
+        driver, _ = self.shard_floor(unselected_in_report=('outside',))
+        self.assertEqual(failure_stages(driver.summary), ['ctest-scratch-guard'])
+        error = driver.failures[0]['error']
+        self.assertIn('missing from JUnit: none; not selected: outside', error)
+        self.assertNotIn('unexpected verdict', error)
+
+
+class CTestJunitChannel(unittest.TestCase):
+    """The scratch-guard stage reads its evidence from a private per-run JUnit slot.
+
+    The slot is a directory made by mkdtemp outside the build tree, named
+    unpredictably, handed to CTest through argv alone and empty before the run.
+    Its report counts only as a regular file the driver owns, written since the
+    run started, and only from a CTest new enough to write one (3.21). The
+    report is reconciled with CTest's selection by name, never by count alone.
+
+    None of this is tamper-proof and no control here claims it is: a test that
+    runs as the driver's own user can still write whatever file CTest was told
+    to write. These controls pin that accidental loss, a stale or planted file
+    at a well-known path and forged stdout cannot pass, and that forging the
+    evidence takes code written to find and overwrite the driver's report,
+    which review sees (docs/ci.md, "JUnit evidence channel").
+
+    Most controls drive the whole Driver through the scripted runner, naming
+    only what CTest selected, printed and wrote, so they hold for any driver
+    that takes its evidence from CTest's report.
+    """
+
+    # The complete, valid report of a run in which the four guards ran: the
+    # evidence a forger would try to supply.
+    PLANTED = ctest_junit_output(SCRATCH_GUARD_FIXTURE_NAMES)
+
+    def run_native(self, extra_rows=(), **exits):
+        """A Linux native run in which CTest selects and runs the four guards and `extra_rows`."""
+        commands = {name: 0 for name in LAB_SHARD_GUARDS}
+        total = len(SCRATCH_GUARD_FIXTURE_NAMES) + len(extra_rows)
+        exits.setdefault('ctest_registered', total)
+        exits.setdefault('ctest_rows', total)
+        with mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES': ''}), \
+                mock.patch.object(ci_verify.sys, 'platform', 'linux'):
+            return DriverOrderingAndAggregation.run_profile(
+                self, 'native', extra=['--min-tests', '1'],
+                ctest_registered_names=tuple(extra_rows), junit_help='present',
+                **commands, **exits)
+
+    def seeded_mkdtemp(self):
+        """A mkdtemp that leaves a complete report in every private slot it makes."""
+        real = tempfile.mkdtemp
+
+        def seeded(*args, **kwargs):
+            directory = real(*args, **kwargs)
+            if Path(directory).name.startswith('pineforge-ctest-junit-'):
+                Path(directory, 'ctest-junit.xml').write_bytes(self.PLANTED)
+            return directory
+        return seeded
+
+    def slot(self):
+        """A real driver's real slot, and the driver."""
+        driver = ScratchGuardRows.driver(self)
+        slot = driver.begin_ctest_junit()
+        self.addCleanup(shutil.rmtree, slot.directory, True)
+        return driver, slot
+
+    def test_report_goes_to_a_private_empty_directory_outside_the_build_tree(self):
+        code, summary, scripted, build_dir = self.run_native()
+        self.assertEqual(code, 0, summary['failures'])
+        self.assertEqual(len(scripted.junit_runs), 1)
+        run = scripted.junit_runs[0]
+        report = run['report']
+        self.assertEqual(report.name, 'ctest-junit.xml')
+        self.assertTrue(report.parent.name.startswith('pineforge-ctest-junit-'), report)
+        self.assertNotIn(build_dir.resolve(), report.resolve().parents)
+        self.assertNotEqual(report.resolve(), (build_dir / 'ctest-junit.xml').resolve())
+        # Private (0700) and empty when CTest was started: no file to overwrite,
+        # no stale or planted report for the evidence to hide behind.
+        self.assertEqual(run['mode'], 0o700)
+        self.assertEqual(run['listing'], [])
+        # The path travels in argv alone: no variable of CTest's environment,
+        # nor of the driver's, carries it.
+        for value in (*run['env'].values(), *os.environ.values()):
+            self.assertNotIn(str(report.parent), value)
+        guard = next(stage for stage in summary['stages'] if stage['name'] == 'ctest-scratch-guard')
+        self.assertEqual(guard['status'], 'passed', guard)
+
+    def test_every_run_gets_a_directory_of_its_own(self):
+        directories = [self.run_native()[2].junit_runs[0]['report'].parent for _ in range(2)]
+        self.assertNotEqual(directories[0], directories[1])
+        for directory in directories:
+            # mkdtemp's random suffix: nothing derived from the build tree,
+            # the profile or the time.
+            self.assertRegex(directory.name, r'^pineforge-ctest-junit-[a-z0-9_]{8}$')
+
+    def test_the_report_is_kept_for_diagnostics_and_the_private_directory_is_removed(self):
+        code, summary, scripted, build_dir = self.run_native()
+        self.assertEqual(code, 0, summary['failures'])
+        self.assertFalse(scripted.junit_runs[0]['report'].parent.exists())
+        self.assertEqual((build_dir / 'ci-logs' / 'ctest-junit.xml').read_bytes(), self.PLANTED)
+        code, summary, scripted, build_dir = self.run_native(ctest_junit=None)
+        self.assertEqual(code, 1)
+        self.assertFalse(scripted.junit_runs[0]['report'].parent.exists())
+        self.assertFalse((build_dir / 'ci-logs' / 'ctest-junit.xml').exists())
+
+    def test_a_report_planted_where_the_old_driver_looked_cannot_clear_the_gate(self):
+        code, summary, scripted, build_dir = self.run_native(
+            ctest_junit=None, ctest_planted_junit=self.PLANTED)
+        # The plant happened, inside the run, at the old well-known path ...
+        self.assertEqual((build_dir / 'ctest-junit.xml').read_bytes(), self.PLANTED)
+        # ... and a complete, valid report there is not evidence.
+        self.assertEqual(code, 1)
+        self.assertEqual(failure_stages(summary), ['ctest-scratch-guard'])
+        self.assertIn('no machine-readable execution evidence', summary['failures'][0]['error'])
+
+    def test_a_report_present_before_the_run_is_never_read(self):
+        for ctest_writes in (True, False):
+            with self.subTest(ctest_writes=ctest_writes):
+                with mock.patch.object(ci_verify.tempfile, 'mkdtemp',
+                                       side_effect=self.seeded_mkdtemp()):
+                    code, summary, scripted, _ = self.run_native(
+                        **({} if ctest_writes else {'ctest_junit': None}))
+                self.assertEqual(code, 1)
+                self.assertEqual(failure_stages(summary), ['ctest-scratch-guard'])
+                error = summary['failures'][0]['error']
+                self.assertIn('no machine-readable execution evidence', error)
+                self.assertIn('not empty before the run', error)
+                # CTest was handed the path all the same: the refusal is the
+                # driver's own, not a missing file.
+                self.assertEqual(scripted.junit_runs[0]['listing'], ['ctest-junit.xml'])
+
+    def test_a_missing_selected_row_and_an_extra_unselected_row_cannot_cancel_by_count(self):
+        # The reader's example: CTest selects the four guards plus `public`; the
+        # report holds the four guards plus `outside`. Every guard ran, both
+        # sides hold five verdicts and the closing summary accounts for five,
+        # so only the names tell the report from the selection.
+        code, summary, _, _ = self.run_native(
+            ('public',), ctest_junit=ctest_junit_output((*SCRATCH_GUARD_FIXTURE_NAMES, 'outside')))
+        self.assertEqual(code, 1)
+        self.assertEqual(failure_stages(summary), ['ctest-scratch-guard'])
+        self.assertEqual(summary['ctestRows'], 5)
+        error = summary['failures'][0]['error']
+        for text in ('missing from JUnit: public', 'not selected: outside',
+                     'no verdict: public', 'unexpected verdict: outside'):
+            self.assertIn(text, error)
+
+    def test_the_whole_report_is_reconciled_not_only_its_verdicts(self):
+        guards = SCRATCH_GUARD_FIXTURE_NAMES
+        # (rows CTest selects beside the guards, rows its output calls skipped,
+        # the report, the lists the message must carry). The first report adds a
+        # skipped testcase nobody selected: the verdict count stays five. The
+        # second omits a selected row that the output calls skipped: it stays four.
+        cases = (
+            (('public',), (), ctest_junit_output((*guards, 'public', 'outside'),
+                                                 skipped=('outside',)),
+             ('missing from JUnit: none', 'not selected: outside')),
+            (('public',), ('public',), ctest_junit_output(guards),
+             ('missing from JUnit: public', 'not selected: none')),
+        )
+        for rows, skipped, junit, lists in cases:
+            with self.subTest(skipped=skipped, lists=lists):
+                code, summary, _, _ = self.run_native(
+                    rows, ctest_junit=junit, **({'ctest_skipped': skipped} if skipped else {}))
+                self.assertEqual(code, 1)
+                self.assertEqual(failure_stages(summary), ['ctest-scratch-guard'])
+                error = summary['failures'][0]['error']
+                self.assertIn('JUnit testcases differ from the CTest selection', error)
+                for text in lists:
+                    self.assertIn(text, error)
+
+    def test_a_category_disagreement_on_a_non_guard_row_is_refused(self):
+        # The report says public_a skipped, the output says public_b skipped:
+        # five verdicts either way, every guard ran, the same names in both.
+        rows = ('public_a', 'public_b')
+        code, summary, _, _ = self.run_native(
+            rows, ctest_skipped=('public_b',),
+            ctest_junit=ctest_junit_output((*rows, *SCRATCH_GUARD_FIXTURE_NAMES),
+                                           skipped=('public_a',)))
+        self.assertEqual(code, 1)
+        self.assertEqual(failure_stages(summary), ['ctest-scratch-guard'])
+        error = summary['failures'][0]['error']
+        self.assertIn('no verdict: public_a', error)
+        self.assertIn('unexpected verdict: public_b', error)
+        self.assertNotIn('JUnit testcases differ', error)
+
+    def test_a_consistent_report_with_non_running_neighbours_passes(self):
+        # The control for the three above: skipped, not-run and disabled rows
+        # stay in the report's population and out of its verdicts.
+        rows = ('public_skip', 'public_not_run', 'public_disabled')
+        # Seven registered rows; CTest's own total leaves the disabled one out.
+        code, summary, _, _ = self.run_native(
+            rows, ctest_rows=6, ctest_skipped=('public_skip',),
+            ctest_not_run=('public_not_run',), ctest_disabled=('public_disabled',), ctest=8)
+        self.assertEqual(failure_stages(summary), ['ctest'])
+        guard = next(stage for stage in summary['stages'] if stage['name'] == 'ctest-scratch-guard')
+        self.assertEqual(guard['status'], 'passed', guard)
+        self.assertEqual(summary['ctestRows'], 4)
+
+    def test_reconciliation_mutation_is_detected_through_the_whole_driver(self):
+        report = ctest_junit_output((*SCRATCH_GUARD_FIXTURE_NAMES, 'outside'))
+        self.assertEqual(self.run_native(('public',), ctest_junit=report)[0], 1)
+        # A no-op reconciliation has the same effect as removing the call.
+        with mock.patch.object(ci_verify, 'ctest_junit_reconciliation', return_value=[]):
+            code, summary, _, _ = self.run_native(('public',), ctest_junit=report)
+        self.assertEqual(code, 0, summary['failures'])
+
+    def test_slot_mutations_are_detected(self):
+        # Mutation A: the slot at the old well-known path in the build tree. The
+        # planted report that the real slot refuses is then accepted.
+        def legacy_slot(driver):
+            scratch = Path(tempfile.mkdtemp(prefix='legacy-slot-'))
+            self.addCleanup(shutil.rmtree, scratch, True)
+            report = driver.cfg.build_dir / 'ctest-junit.xml'
+            driver.ctest_junit = ci_verify.CTestJunit(scratch, report,
+                                                      not os.path.lexists(report), 0)
+            return driver.ctest_junit
+
+        planted = {'ctest_junit': None, 'ctest_planted_junit': self.PLANTED}
+        self.assertEqual(self.run_native(**planted)[0], 1)
+        with mock.patch.object(ci_verify.Driver, 'begin_ctest_junit', legacy_slot):
+            self.assertEqual(self.run_native(**planted)[0], 0)
+        # Mutation B: the slot forgets to record that its path was not empty.
+        real_begin = ci_verify.Driver.begin_ctest_junit
+
+        def forgetful(driver):
+            driver.ctest_junit = replace(real_begin(driver), empty_before=True)
+            return driver.ctest_junit
+
+        with mock.patch.object(ci_verify.tempfile, 'mkdtemp', side_effect=self.seeded_mkdtemp()):
+            self.assertEqual(self.run_native()[0], 1)
+            with mock.patch.object(ci_verify.Driver, 'begin_ctest_junit', forgetful):
+                code, summary, _, _ = self.run_native()
+        self.assertEqual(code, 0, summary['failures'])
+
+    def test_the_reader_accepts_a_fresh_regular_file_and_refuses_everything_else(self):
+        data = self.PLANTED
+        driver, slot = self.slot()
+        slot.report.write_bytes(data)
+        self.assertEqual(ci_verify.read_ctest_junit(slot), data)
+        # A symlink, even to a perfectly good report.
+        target = slot.directory / 'elsewhere.xml'
+        target.write_bytes(data)
+        slot.report.unlink()
+        slot.report.symlink_to(target)
+        with self.assertRaisesRegex(ValueError, 'symlink'):
+            ci_verify.read_ctest_junit(slot)
+        slot.report.unlink()
+        # A directory; a FIFO is refused the same way, by fstat, and is never waited on.
+        slot.report.mkdir()
+        with self.assertRaisesRegex(ValueError, 'not a regular file'):
+            ci_verify.read_ctest_junit(slot)
+        slot.report.rmdir()
+        # Last written before the run started.
+        slot.report.write_bytes(data)
+        os.utime(slot.report, ns=(slot.started_ns - 10**9, slot.started_ns - 10**9))
+        with self.assertRaisesRegex(ValueError, 'before the run started'):
+            ci_verify.read_ctest_junit(slot)
+        # Written since, but by another user.
+        slot.report.write_bytes(data)
+        with mock.patch.object(ci_verify.os, 'getuid', return_value=os.getuid() + 1):
+            with self.assertRaisesRegex(ValueError, 'owned by uid'):
+                ci_verify.read_ctest_junit(slot)
+        # Its path held something before the run.
+        with self.assertRaisesRegex(ValueError, 'not empty before the run'):
+            ci_verify.read_ctest_junit(replace(slot, empty_before=False))
+        self.assertEqual(ci_verify.read_ctest_junit(slot), data)
+
+    def test_the_slot_records_an_empty_path_and_the_start_on_the_filesystem_clock(self):
+        driver, slot = self.slot()
+        self.assertTrue(slot.empty_before)
+        self.assertEqual(slot.report, slot.directory / 'ctest-junit.xml')
+        self.assertEqual(slot.started_ns, os.stat(slot.directory).st_mtime_ns)
+        self.assertEqual(stat.S_IMODE(os.stat(slot.directory).st_mode), 0o700)
+        self.assertNotIn(driver.cfg.build_dir.resolve(), slot.directory.resolve().parents)
+
+    def test_a_temporary_directory_inside_the_build_tree_is_refused(self):
+        driver = ScratchGuardRows.driver(self)
+        driver.cfg.runner = lambda argv, **kwargs: Completed(
+            0, b'ctest version 3.28.3\n  --output-junit <file>\n')
+        base = driver.cfg.build_dir / 'tmp'
+        base.mkdir()
+        with mock.patch.object(tempfile, 'tempdir', str(base)):
+            with self.assertRaisesRegex(ValueError, 'inside the build tree'):
+                driver.begin_ctest_junit()
+            self.assertEqual(list(base.iterdir()), [])
+            # The stage then fails closed instead of reading a path the tests can name.
+            self.assertIsNone(driver.prepare_ctest_junit())
+        self.assertIn('no private JUnit directory', driver.ctest_junit_problem)
+
+    def test_retaining_the_report_never_copies_a_symlink_or_a_file_that_is_not_the_runs(self):
+        driver, slot = self.slot()
+        secret = driver.cfg.build_dir / 'secret.txt'
+        secret.write_text('not for the artifacts')
+        slot.report.symlink_to(secret)
+        driver.retain_ctest_junit()
+        self.assertFalse((driver.logs / 'ctest-junit.xml').exists())
+        self.assertFalse(slot.directory.exists())
+        driver, slot = self.slot()
+        slot.report.write_bytes(self.PLANTED)
+        driver.retain_ctest_junit()
+        self.assertEqual((driver.logs / 'ctest-junit.xml').read_bytes(), self.PLANTED)
+        self.assertFalse(slot.directory.exists())
+        self.assertIsNone(driver.ctest_junit)
+
+    def test_ctest_command_takes_the_report_path_not_a_flag(self):
+        cfg = ci_verify.build_config(['native'])
+        report = Path('/private/slot/ctest-junit.xml')
+        self.assertEqual(ci_verify.ctest_command(cfg, cfg.build_dir, jobs=2, junit=report)[-2:],
+                         ['--output-junit', str(report)])
+        self.assertNotIn('--output-junit',
+                         ci_verify.ctest_command(cfg, cfg.build_dir, jobs=2, junit=None))
+        with self.assertRaises(TypeError):
+            ci_verify.ctest_command(cfg, cfg.build_dir, jobs=2, junit=True)
+
+    def test_a_ctest_older_than_3_21_fails_closed_naming_the_required_version(self):
+        for version in ('3.20.1', '3.16.3', '2.8.12', 'garbage'):
+            with self.subTest(version=version):
+                code, summary, scripted, _ = self.run_native(ctest_version=version)
+                self.assertEqual(code, 1)
+                self.assertEqual(failure_stages(summary), ['ctest-scratch-guard'])
+                error = summary['failures'][0]['error']
+                self.assertIn('no machine-readable execution evidence', error)
+                self.assertIn('CTest >= 3.21', error)
+                self.assertIn('unreadable' if version == 'garbage' else version, error)
+                # ctest is not given an option it would reject.
+                command = next(stage['argv'] for stage in summary['stages']
+                               if stage['name'] == 'ctest')
+                self.assertNotIn('--output-junit', command)
+                self.assertEqual(scripted.junit_runs, [])
+
+    def test_ctest_3_21_and_newer_write_the_report(self):
+        for version in ('3.21', '3.21.0', '3.28.3', '3.30.0-rc1', '4.4.0'):
+            with self.subTest(version=version):
+                code, summary, scripted, _ = self.run_native(ctest_version=version)
+                self.assertEqual(code, 0, summary['failures'])
+                self.assertEqual(len(scripted.junit_runs), 1)
+
+    def test_runs_without_the_stage_do_not_need_the_floor(self):
+        # The floor belongs to the stage: a platform or a profile that does not
+        # run it keeps requesting the report whenever CTest advertises the flag.
+        commands = {name: 0 for name in LAB_SHARD_GUARDS}
+        for profile, host in (('native', 'darwin'), ('native', 'freebsd14'), ('kernel', 'linux')):
+            with self.subTest(profile=profile, host=host), \
+                    mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES': ''}), \
+                    mock.patch.object(ci_verify.sys, 'platform', host):
+                code, summary, scripted, _ = DriverOrderingAndAggregation.run_profile(
+                    self, profile, ctest_version='3.20.1', junit_help='present', **commands)
+                self.assertEqual(code, 0, summary['failures'])
+                self.assertNotIn('ctest-scratch-guard', stage_names(summary))
+                self.assertEqual(len(scripted.junit_runs), 1)
+
+    def test_version_floor_mutation_is_detected(self):
+        self.assertEqual(self.run_native(ctest_version='3.20.1')[0], 1)
+        with mock.patch.object(ci_verify, 'CTEST_JUNIT_MIN_VERSION', (0, 0)):
+            self.assertEqual(self.run_native(ctest_version='3.20.1')[0], 0)
+
+    def test_ctest_version_reads_the_banner_and_fails_closed(self):
+        def prints(output, code=0):
+            return lambda argv, **kwargs: Completed(code, output)
+
+        for banner, expected in (
+                (b'ctest version 3.28.3\n\nCMake suite maintained and supported by Kitware '
+                 b'(kitware.com/cmake).\n', (3, 28, 3)),
+                (b'ctest version 3.21.0-rc1\n', (3, 21, 0)),
+                (b'ctest version 3.21\n', (3, 21)),
+                (b'ctest version 3.20.6\n', (3, 20, 6)),
+                (b'ctest version 4.4.0\n', (4, 4, 0)),
+                (b'ctest version\n', None), (b'cmake version 3.28.3\n', None),
+                (b'ctest version garbage\n', None), (b'', None), (b'\xff\xfe', None)):
+            with self.subTest(banner=banner):
+                self.assertEqual(ci_verify.ctest_version(prints(banner)), expected)
+        self.assertIsNone(ci_verify.ctest_version(prints(b'ctest version 3.28.3\n', code=1)))
+
+        def missing(argv, **kwargs):
+            raise OSError('no ctest on PATH')
+
+        self.assertIsNone(ci_verify.ctest_version(missing))
+        self.assertLess((3, 20, 9), ci_verify.CTEST_JUNIT_MIN_VERSION)
+        self.assertGreaterEqual((3, 21), ci_verify.CTEST_JUNIT_MIN_VERSION)
+        self.assertGreaterEqual((3, 21, 0), ci_verify.CTEST_JUNIT_MIN_VERSION)
+
+    def test_the_floor_is_where_real_ctest_gained_the_flag(self):
+        version = ci_verify.ctest_version(default_runner)
+        self.assertIsNotNone(version, 'this host cannot read its own ctest --version')
+        self.assertEqual(ctest_supports_junit(default_runner),
+                         version >= ci_verify.CTEST_JUNIT_MIN_VERSION)
+
 
 class RowFloorConfig(unittest.TestCase):
     def shard_driver(self, profile='sanitizers', shard='1/2', extra=()):
@@ -1477,7 +1983,9 @@ class RowFloorConfig(unittest.TestCase):
             argv += ['--ctest-shard', shard]
         cfg = ci_verify.build_config(argv, which=lambda name: '/fixture/bin/' + name,
                                      stream_output=False)
-        return ci_verify.Driver(cfg)
+        driver = ci_verify.Driver(cfg)
+        self.addCleanup(driver.retain_ctest_junit)
+        return driver
 
     @staticmethod
     def discovery(names):
@@ -1622,6 +2130,8 @@ class RowFloorConfig(unittest.TestCase):
         def runner(argv, **kwargs):
             if '--help' in argv:
                 return Completed(0, b'CTest help --output-junit\n')
+            if '--version' in argv:
+                return Completed(0, b'ctest version 3.28.3\n')
             names = registry
             if '-L' in argv:
                 names = tuple(name for name in names if name in excluded)
@@ -1810,6 +2320,8 @@ class RowFloorConfig(unittest.TestCase):
                     def runner(argv, **kwargs):
                         if '--help' in argv:
                             return Completed(0, b'CTest help --output-junit\n')
+                        if '--version' in argv:
+                            return Completed(0, b'ctest version 3.28.3\n')
                         if '-L' in argv:
                             return self.discovery(excluded)
                         if '-N' in argv:
@@ -2324,6 +2836,11 @@ class RowFloorConfig(unittest.TestCase):
                                  for arg in plain_command]
                 shard_command = [arg.replace(sharded['buildDir'], '<build>')
                                  for arg in shard_command]
+                # Each run reports into a private directory of its own, so the
+                # two commands differ in that one path and in nothing else.
+                for command in (plain_command, shard_command):
+                    if '--output-junit' in command:
+                        command[command.index('--output-junit') + 1] = '<private-report>'
                 self.assertEqual(plain_command, shard_command)
                 self.assertNotIn('-R', shard_command)
 
@@ -3650,8 +4167,12 @@ class DriverOrderingAndAggregation(unittest.TestCase):
         ctest_argv = next(argv for argv in scripted.calls if argv[0] == 'ctest' and '--test-dir' in argv)
         if ctest_supports_junit(scripted):
             self.assertIn('--output-junit', ctest_argv)
-            self.assertEqual(Path(ctest_argv[ctest_argv.index('--output-junit') + 1]).resolve(),
-                             (build_dir / 'ctest-junit.xml').resolve())
+            # The report is the one file of a private directory outside the
+            # build tree: no path of the tree names it.
+            report = Path(ctest_argv[ctest_argv.index('--output-junit') + 1]).resolve()
+            self.assertEqual(report.name, 'ctest-junit.xml')
+            self.assertNotEqual(report, (build_dir / 'ctest-junit.xml').resolve())
+            self.assertNotIn(build_dir.resolve(), report.parents)
 
     def test_ctest_label_exclusion_is_forwarded_to_ctest_argv(self):
         code, summary, scripted, _ = self.run_profile(
@@ -4069,8 +4590,9 @@ class DriverOrderingAndAggregation(unittest.TestCase):
                     command = next(stage['argv'] for stage in summary['stages']
                                    if stage['name'] == 'ctest')
                     self.assertIn('--output-junit', command)
-                    self.assertEqual(command[command.index('--output-junit') + 1],
-                                     str(build_dir / 'ctest-junit.xml'))
+                    report = Path(command[command.index('--output-junit') + 1])
+                    self.assertEqual(report.name, 'ctest-junit.xml')
+                    self.assertNotIn(build_dir.resolve(), report.resolve().parents)
                     if evidence is None:
                         self.assertIn('no machine-readable execution evidence',
                                       summary['failures'][0]['error'])
@@ -5559,8 +6081,10 @@ class PrExclusionWithFixturesAbsent(unittest.TestCase):
         # Control (e): the release shape (no --exclude-label) never enters the
         # exclusion stage; the constant floor still governs it.
         pinned = self.pinned_probe(ci_verify.PRIVATE_FIXTURE_PROFILE_FLOORS['release'][1])
+        # Without an exclusion CTest selects, and the scripted run reports,
+        # every registered row, so the registry holds the rows the run reports.
         code, summary, _, _ = DriverOrderingAndAggregation.run_profile(
-            self, 'release', ctest_registered=ABSENT_FLOOR['release'],
+            self, 'release', ctest_registered=FULL_FLOOR['release'],
             ctest_rows=FULL_FLOOR['release'], ctest_skipped=pinned)
         self.assertEqual(code, 0, summary['failures'])
         self.assertIn('ctest-floor', stage_names(summary))
@@ -5581,16 +6105,19 @@ class PrExclusionWithFixturesAbsent(unittest.TestCase):
                 source=source, runner=default_runner, stream_output=False)
             driver = ci_verify.Driver(cfg)
             skipped = tuple(self.pinned_probe(2))
-            write_ctest_junit(driver, populated_ctest_names(
-                877, required=SCRATCH_GUARD_FIXTURE_NAMES, skipped=skipped),
-                skipped=skipped)
+            # The selection the report is reconciled against is the registry
+            # minus the labelled rows: the very rows the scripted run reports.
+            names = populated_ctest_names(
+                877, required=SCRATCH_GUARD_FIXTURE_NAMES, skipped=skipped)
+            excluded = frozenset(SCRIPTED_SLOW_FIXTURE_NAMES)
+            write_ctest_junit(driver, names, skipped=skipped)
             driver.enforce_test_floor(
                 Completed(0, populated_ctest_output(
                     877, required=SCRATCH_GUARD_FIXTURE_NAMES,
                     skipped=skipped), b''),
                 registered=882, selected=877,
-                registered_names=frozenset(SCRATCH_GUARD_FIXTURE_NAMES),
-                excluded_names=frozenset(SCRIPTED_SLOW_FIXTURE_NAMES))
+                registered_names=frozenset(names) | excluded,
+                excluded_names=excluded)
         self.assertEqual(failure_stages(driver.summary), ['ctest-exclusion'])
         stage = next(stage for stage in driver.stages if stage['name'] == 'ctest-exclusion')
         self.assertIn('a truncated pin cannot clear the rows it lost',
@@ -5798,6 +6325,32 @@ class FloorDocsPointAtTheTable(unittest.TestCase):
                 text = (ROOT / rel).read_text()
                 self.assertNotIn('KERNEL_MIN_TESTS', text)
                 self.assertNotIn('RELEASE_MIN_TESTS', text)
+
+
+class JunitEvidenceDocs(unittest.TestCase):
+    """The prose names the evidence channel, what it does not stop, and the CTest it needs."""
+
+    def test_docs_state_the_channel_the_threat_model_and_the_ctest_floor(self):
+        text = ' '.join((ROOT / 'docs' / 'ci.md').read_text(encoding='utf-8').split())
+        for phrase in ('JUnit evidence channel', 'pineforge-ctest-junit-',
+                       'ci-logs/ctest-junit.xml', 'does not stop a deliberately malicious test',
+                       'out of scope', 'arrived in CTest 3.21', 'CTest >= 3.21'):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, text)
+        # The report is no longer a build-directory file the stage reads, and
+        # no sentence claims more than the channel does.
+        self.assertNotIn('`ctest-junit.xml` in the build directory', text)
+        for claim in ('tamper-proof', 'tamper proof', 'cannot be forged', 'unforgeable'):
+            with self.subTest(claim=claim):
+                self.assertNotIn(claim, text.lower())
+
+    def test_readme_states_the_verifiers_ctest_floor_on_the_one_line(self):
+        lines = (ROOT / 'README.md').read_text(encoding='utf-8').splitlines()
+        prerequisites = [line for line in lines if line.startswith('Prerequisites: CMake')]
+        self.assertEqual(len(prerequisites), 1)
+        self.assertIn('CMake ≥ 3.16 to build', prerequisites[0])
+        self.assertIn('`ctest --test-dir` need 3.20', prerequisites[0])
+        self.assertIn('`ctest --output-junit`, which needs CTest 3.21', prerequisites[0])
 
 
 class ExamplesAssertLive(unittest.TestCase):
@@ -6240,7 +6793,9 @@ class CTestDeadlines(unittest.TestCase):
         for profile in ('release', 'debug', 'kernel', 'sanitizers',
                         'native', 'live-sanitizers', 'live-tsan'):
             cfg = ci_verify.build_config([profile])
-            argv = ci_verify.ctest_command(cfg, cfg.build_dir, jobs=16, junit=True)
+            report = Path('/private/ctest-junit-slot/ctest-junit.xml')
+            argv = ci_verify.ctest_command(cfg, cfg.build_dir, jobs=16, junit=report)
+            self.assertEqual(argv[argv.index('--output-junit') + 1], str(report))
             self.assertNotIn('-R', argv)
             self.assertNotIn('-E', argv)
             if profile in ('debug', 'sanitizers'):
@@ -6293,7 +6848,8 @@ class CTestDeadlines(unittest.TestCase):
                                           '--min-tests', '2'])
             driver = ci_verify.Driver(cfg)
             junit = ci_verify.ctest_supports_junit(ci_verify.default_runner)
-            argv = ci_verify.ctest_command(cfg, build, jobs=1, junit=junit)
+            argv = ci_verify.ctest_command(
+                cfg, build, jobs=1, junit=build / 'ctest-junit.xml' if junit else None)
             result = driver.invoke('ctest', argv, stream_output=False)
             driver.enforce_test_floor(result, registered=2, selected=2)
             self.assertEqual(result.returncode, 8, result.stdout)

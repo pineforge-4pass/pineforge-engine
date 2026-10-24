@@ -963,6 +963,12 @@ CTEST_LISTED_ROW = re.compile(r'^\s*\d+ - (.+?) \(([^()\n]+)\)(?:[ \t]+[^\s()][^
 CTEST_SKIPPED_RESULT = re.compile(r'^\s*\d+/\d+ Test\s+#\d+: .*\*\*\*Skipped\b', re.MULTILINE)
 CTEST_LIST_COUNT = re.compile(r'^Total Tests:\s*(\d+)\s*$', re.MULTILINE)
 CTEST_LIST_NAME = re.compile(r'^\s*Test\s+#(?P<number>\d+):\s*(?P<name>.+?)\s*$', re.MULTILINE)
+# `ctest --output-junit` arrived in CTest 3.21; `--test-dir`, which every run uses,
+# in 3.20, and CMake's own build floor stays 3.16. The scratch-guard stage reads the
+# JUnit report, so a Linux source-layer verification needs CTest 3.21. `ctest --version`
+# prints 'ctest version 3.28.3' (a release candidate adds '-rc1').
+CTEST_JUNIT_MIN_VERSION = (3, 21)
+CTEST_VERSION = re.compile(r'^ctest version (\d+)\.(\d+)(?:\.(\d+))?', re.MULTILINE)
 # LeakSanitizer is unavailable in Apple's ASan runtime.  Keep the Linux CI
 # lane strict, while allowing the local macOS ASan/UBSan profile to execute
 # its actual instrumented tests instead of failing during runtime startup.
@@ -1510,17 +1516,88 @@ def ctest_rows(output: bytes) -> CTestRows | None:
     return CTestRows(total, skipped, not_run, disabled)
 
 
-def ctest_junit_results(path: Path) -> dict[str, str]:
+@dataclass(frozen=True)
+class CTestJunit:
+    """The private slot one CTest run is told to write its JUnit report into."""
+    directory: Path
+    report: Path
+    # The report path held nothing when the slot was made. A report at a path
+    # that was not empty before the run is never read, whatever it says.
+    empty_before: bool
+    # The slot directory's mtime when it was made, on the filesystem's own
+    # clock: a report last written earlier cannot belong to this run.
+    started_ns: int
+
+
+def read_ctest_junit(slot: CTestJunit) -> bytes:
+    """The report's bytes, only if the file is this run's report.
+
+    Its path was empty before the run; it is a regular file the driver's own
+    user owns, not a symlink or a FIFO; it was last written since the run
+    started. The open uses O_NOFOLLOW and O_NONBLOCK and every check reads the
+    open descriptor, so the file judged is the file read and a swapped-in
+    symlink or FIFO is neither followed nor waited on.
+
+    Nothing here authenticates the writer: a process running as the same user
+    can still write the file CTest was told to write. The slot keeps accidental
+    loss, a stale file and forged stdout out of the evidence; a deliberately
+    malicious test is out of scope and is a matter for review (docs/ci.md).
+    """
+    import errno
+    import stat
+    if not slot.empty_before:
+        raise ValueError('the JUnit report path was not empty before the run (it existed '
+                         'before CTest wrote anything)')
+    flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0)
+    try:
+        descriptor = os.open(slot.report, flags)
+    except OSError as error:
+        if error.errno == errno.ELOOP:
+            raise ValueError('JUnit report is a symlink') from error
+        raise
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError('JUnit report is not a regular file')
+        if info.st_uid != os.getuid():
+            raise ValueError(f'JUnit report is owned by uid {info.st_uid}, not by the '
+                             f"driver's uid {os.getuid()}")
+        if info.st_mtime_ns < slot.started_ns:
+            raise ValueError('JUnit report was last written before the run started')
+        with open(descriptor, 'rb', closefd=False) as handle:
+            return handle.read()
+    finally:
+        os.close(descriptor)
+
+
+def ctest_version(runner: Runner) -> 'tuple[int, ...] | None':
+    """The number `ctest --version` prints, or None when it cannot be read.
+
+    The scratch-guard stage needs CTest 3.21 and fails closed on a version it
+    cannot read, so every way the probe can fail -- a runner error, a nonzero
+    exit, a banner without a number -- is None.
+    """
+    try:
+        result = call_runner(runner, ['ctest', '--version'], stream_output=False)
+    except OSError:
+        return None
+    match = CTEST_VERSION.search((result.stdout + result.stderr).decode('utf-8', 'replace'))
+    if result.returncode != 0 or match is None:
+        return None
+    return tuple(int(part) for part in match.groups() if part is not None)
+
+
+def ctest_junit_results(report: bytes) -> dict[str, str]:
     """Read only CTest-owned testcase elements, never their captured output.
 
     CTest writes this report after running the tests. A run-status testcase
     with finite nonnegative time and no skipped child proves a verdict;
     failure children still prove execution. Unknown or ambiguous data fails
-    closed instead of downgrading to stdout evidence.
+    closed instead of downgrading to stdout evidence. A testcase name that
+    occurs twice makes the whole report unusable, so the result is keyed by
+    name without ever hiding a duplicate.
     """
-    if path.is_symlink():
-        raise ValueError('JUnit report is a symlink')
-    suite = ET.parse(path).getroot()
+    suite = ET.fromstring(report)
     cases = suite.findall('testcase')
     if suite.tag != 'testsuite' or not cases:
         raise ValueError('JUnit report has no CTest testcase list')
@@ -1538,6 +1615,46 @@ def ctest_junit_results(path: Path) -> dict[str, str]:
                          'not run' if status != 'run' else
                          'failed' if failed else 'passed')
     return results
+
+
+def name_list(names, limit: int = 20) -> str:
+    """Sorted names for a message, the rest counted: a lost shard is thousands of rows."""
+    ordered = sorted(names)
+    shown = ', '.join(ordered[:limit]) or 'none'
+    return shown + (f' (and {len(ordered) - limit} more)' if len(ordered) > limit else '')
+
+
+def ctest_junit_reconciliation(results: dict[str, str], selected: 'frozenset[str]',
+                               rows: CTestRows) -> list[str]:
+    """Where the report's complete testcase population disagrees with CTest's selection.
+
+    Two exact multiset comparisons, so a missing selected name and an extra
+    unselected one cannot cancel by count: every selected row has exactly one
+    testcase and no other testcase exists; and the rows holding a verdict are
+    the selected rows minus the skipped, disabled and not-run rows CTest
+    listed. ``results`` is keyed by testcase name because the reader refuses a
+    report that repeats one, so a duplicate is never miscounted as one row.
+    Each message carries both difference lists.
+    """
+    from collections import Counter
+    population = Counter(results)
+    wanted = Counter(selected)
+    verdicts = Counter(name for name, result in results.items()
+                       if result in ('passed', 'failed'))
+    expected = (wanted - Counter(rows.skipped) - Counter(rows.disabled)
+                - Counter(rows.not_run))
+    offenders = []
+    if population != wanted:
+        offenders.append(
+            'JUnit testcases differ from the CTest selection (missing from JUnit: '
+            f'{name_list((wanted - population).elements())}; not selected: '
+            f'{name_list((population - wanted).elements())})')
+    if verdicts != expected:
+        offenders.append(
+            'JUnit verdicts differ from the selection minus the skipped, disabled and '
+            f'not-run rows CTest listed (no verdict: {name_list((expected - verdicts).elements())}; '
+            f'unexpected verdict: {name_list((verdicts - expected).elements())})')
+    return offenders
 
 
 def ctest_supports_junit(runner: Runner) -> bool:
@@ -1728,7 +1845,8 @@ def validate_config(args: argparse.Namespace, *, source: Path = ROOT,
     )
 
 
-def ctest_command(cfg: VerifyConfig, test_dir: Path, *, jobs: int, junit: bool) -> list[str]:
+def ctest_command(cfg: VerifyConfig, test_dir: Path, *, jobs: int,
+                  junit: 'Path | None') -> list[str]:
     argv = ['ctest', '--test-dir', str(test_dir), '--output-on-failure',
             '--no-tests=error', '--parallel', str(jobs)]
     # Explicit zero requests no default per-test deadline; a row's own
@@ -1737,7 +1855,11 @@ def ctest_command(cfg: VerifyConfig, test_dir: Path, *, jobs: int, junit: bool) 
     if cfg.exclude_label:
         argv += ['-LE', cfg.exclude_label]
     if junit:
-        argv += ['--output-junit', str(cfg.build_dir / 'ctest-junit.xml')]
+        # The report path is the run's private slot, handed to CTest through
+        # argv alone: no environment variable carries it into the tests.
+        if not isinstance(junit, Path):
+            raise TypeError('ctest_command needs the report Path, not a flag')
+        argv += ['--output-junit', str(junit)]
     return argv
 
 
@@ -2036,7 +2158,10 @@ class Driver:
         self.abi_v15_frozen_action = 'not-started'
         self.abi_v16_frozen_action = 'not-started'
         self.abi_v18_frozen_action = 'not-started'
-        self.ctest_junit_requested = False
+        # The private slot this run's CTest was told to write its JUnit report
+        # into, or the reason it was given none.
+        self.ctest_junit: CTestJunit | None = None
+        self.ctest_junit_problem: str | None = None
         self.summary: dict = {
             'schemaVersion': SCHEMA,
             'status': 'incomplete',
@@ -2134,17 +2259,97 @@ class Driver:
                 stream_output=False)
         return self.ctest_discovery(full_rows)[1]
 
-    def prepare_ctest_junit(self) -> bool:
-        """Never let an earlier run's report satisfy this run's guard gate."""
+    def move_aside_legacy_ctest_junit(self) -> None:
+        """Keep an earlier run's <build>/ctest-junit.xml from looking like this run's.
+
+        No stage reads that path any more: the report goes to a private slot.
+        Diagnostics collection still looks there, so a file an earlier run left
+        is preserved under ci-logs instead of passing as current.
+        """
+        report = self.cfg.build_dir / 'ctest-junit.xml'
+        if report.exists() or report.is_symlink():
+            self.logs.mkdir(parents=True, exist_ok=True)
+            previous = Path(tempfile.mkdtemp(prefix='ctest-junit-previous-', dir=self.logs))
+            report.rename(previous / report.name)
+
+    def begin_ctest_junit(self) -> CTestJunit:
+        """Make this run's private report slot: a fresh directory outside the build tree.
+
+        mkdtemp names it unpredictably under the driver's own temporary
+        directory (TMPDIR, else the system one) and creates it 0700. A base
+        inside the build tree is refused: tests and diagnostics already look
+        there. The report path is recorded as empty before the run, and the
+        directory's mtime as the run's start on the filesystem's own clock.
+        """
+        directory = Path(tempfile.mkdtemp(prefix='pineforge-ctest-junit-'))
+        resolved, build = directory.resolve(), self.cfg.build_dir.resolve()
+        if resolved == build or build in resolved.parents:
+            shutil.rmtree(directory, ignore_errors=True)
+            raise ValueError(f'the temporary directory {directory.parent} lies inside the '
+                             f'build tree {build}; point TMPDIR outside it')
+        report = directory / 'ctest-junit.xml'
+        self.ctest_junit = CTestJunit(directory, report, not os.path.lexists(report),
+                                      os.stat(directory).st_mtime_ns)
+        return self.ctest_junit
+
+    def prepare_ctest_junit(self) -> 'Path | None':
+        """Give this run's CTest a private report path, or record why it gets none.
+
+        The Linux source-layer scratch-guard stage reads the report, so there
+        CTest must be new enough to write one (CTEST_JUNIT_MIN_VERSION). A
+        version that is too old or cannot be read requests nothing, instead of
+        a command CTest would reject for an unknown option, and leaves the
+        reason for the stage to report.
+        """
+        self.retain_ctest_junit()
+        self.ctest_junit_problem = None
         supported = ctest_supports_junit(self.cfg.runner)
-        self.ctest_junit_requested = supported
         if self.scratch_guard_required():
-            report = self.cfg.build_dir / 'ctest-junit.xml'
-            if report.exists() or report.is_symlink():
-                self.logs.mkdir(parents=True, exist_ok=True)
-                previous = Path(tempfile.mkdtemp(prefix='ctest-junit-previous-', dir=self.logs))
-                report.rename(previous / report.name)
-        return supported
+            self.move_aside_legacy_ctest_junit()
+            version = ctest_version(self.cfg.runner)
+            if version is None or version < CTEST_JUNIT_MIN_VERSION:
+                needed = '.'.join(map(str, CTEST_JUNIT_MIN_VERSION))
+                self.ctest_junit_problem = (
+                    f'CTest {".".join(map(str, version))} is older than {needed}, the first '
+                    f'release with --output-junit; this stage needs CTest >= {needed}'
+                    if version is not None else
+                    f'`ctest --version` was unreadable, so --output-junit support cannot be '
+                    f'established; this stage needs CTest >= {needed}')
+                return None
+        if not supported:
+            return None
+        try:
+            return self.begin_ctest_junit().report
+        except (OSError, ValueError) as error:
+            self.ctest_junit_problem = f'no private JUnit directory could be made: {error}'
+            return None
+
+    def ctest_junit_evidence(self) -> bytes:
+        """This run's report bytes, or a ValueError saying why the run has none to read."""
+        if self.ctest_junit is None:
+            raise ValueError(self.ctest_junit_problem
+                             or 'CTest did not request --output-junit for this run')
+        return read_ctest_junit(self.ctest_junit)
+
+    def retain_ctest_junit(self) -> None:
+        """Keep a diagnostic copy of the report under ci-logs; remove the private directory.
+
+        The copy only feeds diagnostics collection, which looked for the report
+        in the build directory; nothing reads it back as evidence. It goes
+        through the stage's own gate, so a symlink or a file that is not ours
+        is never copied into the artifacts.
+        """
+        slot, self.ctest_junit = self.ctest_junit, None
+        if slot is None:
+            return
+        try:
+            data = read_ctest_junit(slot)
+            self.logs.mkdir(parents=True, exist_ok=True)
+            (self.logs / 'ctest-junit.xml').write_bytes(data)
+        except (OSError, ValueError):
+            pass  # diagnostics only: the stage has judged the evidence already
+        finally:
+            shutil.rmtree(slot.directory, ignore_errors=True)
 
     def run_sharded_ctest(self, test_dir: Path, jobs: int, all_rows: Completed,
                           selected_rows: Completed) -> Completed | None:
@@ -3226,9 +3431,7 @@ class Driver:
             return
         guards = SCRATCH_GUARD_ROWS & selected_names
         try:
-            if not self.ctest_junit_requested:
-                raise ValueError('CTest did not request --output-junit for this run')
-            results = ctest_junit_results(self.cfg.build_dir / 'ctest-junit.xml')
+            results = ctest_junit_results(self.ctest_junit_evidence())
         except (OSError, ValueError, LookupError, ET.ParseError) as error:
             self.fail_stage(stage, f'{stage}: no machine-readable execution evidence; '
                             f'cannot check required guard rows: {required} ({error})')
@@ -3250,14 +3453,19 @@ class Driver:
             offenders.append(f'JUnit has {len(executed)} verdicts but the closing summary '
                              f'accounts for {rows.ran}; selected guard rows: '
                              + ', '.join(sorted(guards)))
+        offenders += ctest_junit_reconciliation(results, selected_names, rows)
         if offenders:
-            self.fail_stage(stage, f'{stage}: selected guard rows did not run; '
+            self.fail_stage(stage, f'{stage}: selected guard rows did not run, or the JUnit '
+                            'report does not match the CTest selection; '
                             + '; '.join(offenders))
         else:
             self.pass_stage(stage, f'{stage}: all {len(SCRATCH_GUARD_ROWS)} guard rows '
-                            f'registered; checked {len(guards)} selected guard rows')
+                            f'registered; checked {len(guards)} selected guard rows; the '
+                            f'{len(results)} JUnit testcases are exactly the CTest selection '
+                            'and were reported to a private path that was empty before the run')
 
     def finish(self, status: str, code: int) -> int:
+        self.retain_ctest_junit()
         self.summary['status'] = status
         self.summary['exitCode'] = code
         self.write_summary()
