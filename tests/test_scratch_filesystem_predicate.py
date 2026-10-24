@@ -49,13 +49,21 @@ def main() -> int:
     failures = []
     for path in sorted(files):
         refuse_unsafe_path(path)
+        contents = path.read_bytes()
         if path == CANONICAL:
+            literals = [match.lower() for match in MAGIC.findall(contents)]
+            for literal in (b"0x01021994", b"0x858458f6"):
+                count = literals.count(literal)
+                if count != 1:
+                    failures.append(
+                        f"{path.relative_to(ROOT)}: {literal.decode()} occurs {count} times, expected 1"
+                    )
             continue
-        for number, line in enumerate(path.read_bytes().splitlines(), 1):
+        for number, line in enumerate(contents.splitlines(), 1):
             if MAGIC.search(line):
                 failures.append(f"{path.relative_to(ROOT)}:{number}")
     if failures:
-        print("memory-filesystem literals outside scratch_directory.hpp:\n"
+        print("memory-filesystem literals must occur once each in scratch_directory.hpp only:\n"
               + "\n".join(failures), file=sys.stderr)
         return 1
     print("test_scratch_filesystem_predicate: PASS")

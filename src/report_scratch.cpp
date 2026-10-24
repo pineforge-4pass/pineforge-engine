@@ -90,7 +90,7 @@ ScratchFile::ScratchFile(const std::string& directory, detail::ScratchStore stor
         // and their per-raiser arguments propagate unchanged.
         const auto& failure = error.run_failure();
         if (failure.args && *failure.args == "{\"reason\":\"scratch_io\"}")
-            fail_io(error.code().value(), (std::string("report scratch create; ") + error.what()).c_str());
+            fail_io(error.code().value(), detail::scratch_with_detail("report scratch create", error.what(), error.code().value()).c_str());
         throw;
     }
 }
