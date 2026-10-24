@@ -774,6 +774,79 @@ class ActionPins(unittest.TestCase):
             with self.subTest(value=value):
                 self.assert_yaml_refusals(line + '\n', [(1, construct, line)])
 
+    def test_flow_sequence_quotes_cannot_mask_mappings_or_comments(self):
+        for quote in ('"', "'"):
+            line = (f'options: [a{quote}, {{uses: actions/checkout@main}}] '
+                    f'# {quote}]')
+            with self.subTest(quote=quote):
+                self.assert_yaml_refusals(line + '\n', [(1, 'flow mappings', line)])
+                code, visible, _ = ci_preflight._action_yaml_visible(
+                    line.split(': ', 1)[1])
+                self.assertEqual(code, line.split(': ', 1)[1].split(' # ', 1)[0])
+                self.assertIn('{uses: actions/checkout@main}', visible)
+
+    def test_quotes_in_flow_sequences_must_start_an_element(self):
+        for value in ('[a"b"]', "[a'b']", '["a" "b"]', "['a' 'b']",
+                      '[linux, [a"b"]]'):
+            line = 'options: ' + value
+            with self.subTest(value=value):
+                self.assert_yaml_refusals(line + '\n', [(1, 'quoted scalars', line)])
+        for first in ('options: [', 'options: [linux,', 'options: [linux'):
+            line = 'a"b"]'
+            with self.subTest(first=first):
+                self.assert_yaml_refusals(first + '\n  ' + line + '\n',
+                                         [(2, 'quoted scalars', line)])
+
+    def test_flow_quotes_at_element_start_preserve_data_and_scan_resumption(self):
+        text = ('runs-on: ["self-hosted", "pf-gcp-pr"]\n'
+                'branches: [main]\n'
+                'needs: [a, b]\n'
+                'options: ["a # {uses: actions/checkout@main}",\n'
+                "  ['it''s # data', linux]] # actual comment\n")
+        self.assertEqual(ci_preflight.action_pin_findings({self.WORKFLOW: text}), [])
+        text += '- uses: actions/upload-artifact@main\n'
+        self.assertEqual(ci_preflight.action_pin_findings({self.WORKFLOW: text}), [
+            self.finding(self.WORKFLOW, 6, 'actions/upload-artifact@main')])
+
+    def test_unicode_whitespace_at_line_start_is_refused(self):
+        spaces = ('\u0085', '\u00a0', '\u1680', '\u2000', '\u2001', '\u2002',
+                  '\u2003', '\u2004', '\u2005', '\u2006', '\u2007', '\u2008',
+                  '\u2009', '\u200a', '\u2028', '\u2029', '\u202f', '\u205f',
+                  '\u3000', '\ufeff')
+        for space in spaces:
+            line = space + '#hidden: {uses: actions/checkout@main}'
+            for prefix in ('', 'name: Example\n'):
+                with self.subTest(space=repr(space), prefix=prefix):
+                    self.assert_yaml_refusals(
+                        prefix + line + '\n',
+                        [(1 if not prefix else 2, 'unsupported whitespace', line)])
+
+    def test_unicode_whitespace_around_separators_is_refused(self):
+        for space in ('\u0085', '\u00a0', '\u2028', '\u2029', '\ufeff'):
+            for line in (f'name{space}: Example', f'name:{space}Example',
+                         f'name: Example{space}#hidden: {{uses: actions/checkout@main}}',
+                         f'name: Example #{space}hidden: {{uses: actions/checkout@main}}',
+                         f'name: Example{space}: hidden', f'name: Example:{space}hidden'):
+                with self.subTest(space=repr(space), line=line):
+                    self.assert_yaml_refusals(line + '\n',
+                                             [(1, 'unsupported whitespace', line)])
+
+    def test_unterminated_expressions_with_many_quotes_are_refused(self):
+        # Thread-free, with no timing threshold: the large input cannot finish
+        # in normal test flow with the old exponentially backtracking regex.
+        for count in (100, 5000, 200000):
+            line = 'name: ${{' + "'" * count
+            with self.subTest(count=count):
+                self.assert_yaml_refusals(line + '\n', [(1, 'expressions', line)])
+
+    def test_expression_strings_keep_delimiters_and_doubled_quotes_opaque(self):
+        text = ("name: ${{ format('it''s # }} uses: {0}', 'ignored') }}\n"
+                "options: [${{ format('}} # uses: {0}', 'ignored') }}, linux]\n")
+        self.assertEqual(ci_preflight.action_pin_findings({self.WORKFLOW: text}), [])
+        text += '- uses: actions/checkout@main\n'
+        self.assertEqual(ci_preflight.action_pin_findings({self.WORKFLOW: text}), [
+            self.finding(self.WORKFLOW, 3, 'actions/checkout@main')])
+
     def test_backslashes_in_yaml_quoted_values_are_refused(self):
         for line in (r'name: "line\nbreak"', r"name: 'line\nbreak'",
                      r'runs-on: ["self\u002dhosted", linux]'):
@@ -863,6 +936,26 @@ class ActionPins(unittest.TestCase):
                     text += '- uses: actions/upload-artifact@main\n'
                     self.assertEqual(ci_preflight.action_pin_findings({self.WORKFLOW: text}), [
                         self.finding(self.WORKFLOW, 10, 'actions/upload-artifact@main')])
+
+    def test_sequence_item_block_scalar_bodies_are_excluded(self):
+        for indicator in ('|', '>-', '|2+', '|+2', '>2-'):
+            text = (f'args:\n  - {indicator}\n'
+                    '    uses: actions/checkout@main\n')
+            with self.subTest(indicator=indicator):
+                self.assertEqual(ci_preflight.action_pin_findings({self.WORKFLOW: text}), [])
+                text += '  - uses: actions/upload-artifact@main\n'
+                self.assertEqual(ci_preflight.action_pin_findings({self.WORKFLOW: text}), [
+                    self.finding(self.WORKFLOW, 4, 'actions/upload-artifact@main')])
+
+    def test_sequence_mapping_block_scalar_resumes_at_key_indent(self):
+        for key in ('run', 'script'):
+            for indicator in ('|', '>-', '|2+'):
+                text = (f'args:\n  - {key}: {indicator}\n'
+                        '      uses: actions/checkout@main\n'
+                        '    uses: actions/upload-artifact@main\n')
+                with self.subTest(key=key, indicator=indicator):
+                    self.assertEqual(ci_preflight.action_pin_findings({self.WORKFLOW: text}), [
+                        self.finding(self.WORKFLOW, 4, 'actions/upload-artifact@main')])
 
     def test_flow_mapping_mutable_steps_are_refused(self):
         steps = (

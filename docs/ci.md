@@ -110,13 +110,21 @@ comment on the same line; prerelease and build suffixes are allowed. Local
 The lint accepts plain block-style YAML only, with scalar flow sequences
 (for example `runs-on: ["self-hosted", "pf-gcp-pr"]` and `branches: [main]`)
 and empty `{}` / `[]` on one line as a whole plain `key:` value as exceptions
-(whitespace inside an empty collection is allowed).
+(ASCII spaces and tabs inside an empty collection are allowed). In flow
+sequences, quotes may start a quoted scalar only at the start of an element,
+after `[` or `,` and optional ASCII spaces; embedded quotes and mapping
+elements are refused.
 Keys must be unquoted identifiers (`[A-Za-z_][A-Za-z0-9_-]*`); scalar values
 may be plain or single/double quoted on one line, or use `|` / `>` blocks
 with chomping and indentation indicators. GitHub `${{ ... }}` expressions,
 comments and CRLF line endings are supported. Indented block-scalar bodies
 are excluded, including `run:`, github-script's `with: script:`, and
-multiline action inputs.
+multiline action inputs. A sequence item such as `- |`, `- >-` or `- |2+`
+owns its body from the dash column; `- run: |` uses the key's column.
+Whitespace outside block-scalar bodies must be ASCII-only: indentation and
+key separators use ASCII space (U+0020). Non-ASCII whitespace and a BOM
+(including at the start of the file) are refused as `unsupported whitespace`;
+tabs in indentation remain refused.
 Unsupported `uses` key shapes are refused: every `uses:` value must be a
 scalar on the same line. The lint also refuses anchors, aliases, merge
 keys, explicit keys, tags, nonempty flow mappings (including multiline and

@@ -31,6 +31,7 @@ import shlex
 import subprocess
 import sys
 import time
+import unicodedata
 
 from ci_verify import (ROOT, PRIVATE_FIXTURE_SKIP_LITERAL, private_fixtures_overlay,
                        source_guard_commands)
@@ -746,37 +747,88 @@ ACTION_PIN_EXEMPT_PREFIXES = ('./', 'docker://')
 # This is a whitelist for our reviewed workflow files, not a YAML parser.
 # Only plain block keys, scalar values, block scalars and scalar sequences
 # are supported; literal {} / [] are allowed as a whole plain-key value.
-_ACTION_YAML_KEY = re.compile(r'([A-Za-z_][A-Za-z0-9_-]*)[ \t]*:(?:[ \t]+(.*)|$)')
+_ACTION_YAML_KEY = re.compile(r'([A-Za-z_][A-Za-z0-9_-]*) *:(?: +(.*)|$)')
 _ACTION_YAML_QUOTED = re.compile(r'"(?:\\.|[^"\\])*"' r"|'(?:''|[^'])*'")
-_ACTION_YAML_OPAQUE = re.compile(
-    r"(?P<expression>\$\{\{(?:'(?:''|[^'])*'|[^'\r\n])*?\}\})"
-    r'''|(?P<quoted>"(?:\\.|[^"\\])*"|'(?:''|[^'])*')'''
-    r'|(?P<comment>(?<!\S)#[^\r\n]*)')
 _ACTION_BLOCK_SCALAR = re.compile(r'[|>](?:[+-][1-9]?|[1-9][+-]?)?')
 _ACTION_EMPTY_COLLECTION = re.compile(r'\{[ \t]*\}|\[[ \t]*\]')
 _ACTION_YAML_PROPERTIES = {'&': 'anchors', '*': 'aliases', '!': 'tags',
                           '?': 'explicit keys', ':': 'explicit keys'}
 
 
-def _action_yaml_visible(value: str) -> tuple[str, str, list[str]]:
+def _action_yaml_visible(value: str, *,
+                         sequence: list[str] | None = None) -> tuple[str, str, list[str]]:
     """Return code, masked code, quoted tokens; expressions/comments are opaque."""
-    visible, quoted, end = [], [], 0
-    for token in _ACTION_YAML_OPAQUE.finditer(value):
-        visible.append(value[end:token.start()])
-        if token.lastgroup == 'comment':
-            return value[:token.start()].rstrip(), ''.join(visible), quoted
+    visible, quoted, index = [], [], 0
+    depth = len(sequence) if sequence else 0
+    flow = bool(depth) or value.startswith('[')
+    element_start = bool(sequence and sequence[-1] in ('empty', 'comma'))
+    while index < len(value):
+        char = value[index]
+        if char == '#' and (index == 0 or value[index - 1] == ' '):
+            return value[:index].rstrip(' '), ''.join(visible), quoted
+        if value.startswith('${{', index):
+            end, in_string = index + 3, False
+            # Every iteration advances; doubled quotes cannot be repartitioned
+            # into adjacent strings when an expression has no closing }}.
+            while end < len(value):
+                if value[end] == "'":
+                    if in_string and value.startswith("''", end):
+                        end += 2
+                        continue
+                    in_string = not in_string
+                elif not in_string and value.startswith('}}', end):
+                    end += 2
+                    break
+                end += 1
+            else:
+                visible.append(value[index:])
+                break
+            token = value[index:end]
+        elif char in ('"', "'") and (not flow or depth and element_start):
+            end = index + 1
+            while end < len(value):
+                if char == '"' and value[end] == '\\':
+                    end += 2
+                    continue
+                if value[end] == char:
+                    if char == "'" and value.startswith("''", end):
+                        end += 2
+                        continue
+                    end += 1
+                    break
+                end += 1
+            else:
+                # Keep the opening quote visible so the grammar refuses it.
+                visible.append(value[index:])
+                break
+            token = value[index:end]
+            quoted.append(token)
+        else:
+            visible.append(char)
+            if flow:
+                if char == '[':
+                    depth += 1
+                    element_start = True
+                elif char == ']':
+                    depth = max(0, depth - 1)
+                    element_start = False
+                elif char == ',':
+                    element_start = True
+                elif char != ' ':
+                    # An embedded quote remains data, never a masking token.
+                    element_start = False
+            index += 1
+            continue
         # Retain positions and a nonblank scalar placeholder, including for "".
-        visible.append('v' + ' ' * (len(token.group()) - 1))
-        if token.lastgroup == 'quoted':
-            quoted.append(token.group())
-        end = token.end()
-    visible.append(value[end:])
-    return value.rstrip(), ''.join(visible), quoted
+        visible.append('v' + ' ' * (len(token) - 1))
+        element_start = False
+        index = end
+    return value.rstrip(' '), ''.join(visible), quoted
 
 
 def _action_yaml_value(value: str, *, whole_key: bool, sequence: list[str]) -> str | None:
     """Accept a scalar or scalar flow sequence; return a construct to refuse."""
-    code, visible, quoted = _action_yaml_visible(value)
+    code, visible, quoted = _action_yaml_visible(value, sequence=sequence)
     if not code:
         return None
     if not sequence:
@@ -855,12 +907,19 @@ def action_uses(sources: dict[str, str], *,
         sequence = []
         sequence_start = None
         refused_flow_depth = 0
-        for number, line in enumerate(text.splitlines(), 1):
+        # Only LF and CRLF delimit lines; splitlines() would silently consume
+        # Unicode separators before the whitespace refusal can inspect them.
+        for number, line in enumerate(text.replace('\r\n', '\n').split('\n'), 1):
             if scalar_depth is not None:
-                if not line.strip() or _indent(line) > scalar_depth:
+                if not line.strip(' ') or _indent(line) > scalar_depth:
                     continue
                 scalar_depth = None
-            if (not line.strip() and '\t' not in line) or line.lstrip().startswith('#'):
+            unsupported_whitespace = any(
+                char == '\ufeff' or char not in ' \t' and
+                unicodedata.category(char) in {'Zs', 'Zl', 'Zp', 'Cc'}
+                for char in line)
+            if not unsupported_whitespace and (
+                    not line.strip(' ') or line.lstrip(' ').startswith('#')):
                 continue
             if refused_flow_depth:
                 _, visible, _ = _action_yaml_visible(line)
@@ -868,27 +927,31 @@ def action_uses(sources: dict[str, str], *,
                                          + sum(1 if char in '{[' else -1
                                                for char in visible if char in '{}[]'))
                 continue
-            stripped = line.strip()
+            stripped = line.strip(' ')
             step = re.match(r'-[ \t]+', stripped)
             key_line = stripped[step.end():] if step and not sequence else stripped
             key = _ACTION_YAML_KEY.fullmatch(key_line) if not sequence else None
-            first = (key.group(2) or '').strip() if key else None
+            first = (key.group(2) or '').strip(' ') if key else None
             node = first if first is not None else key_line
-            code, visible, _ = _action_yaml_visible(node)
+            code, visible, _ = _action_yaml_visible(node, sequence=sequence)
             sequence_depth = len(sequence)
             # Recover only the extent of a refused property-prefixed block,
             # so an anchored script produces its anchor finding, not script
             # uses findings. This never authorizes the property itself.
             recovery = re.sub(r'^(?:[&*!][^ \t]+[ \t]*)+', '', code)
             if not sequence and _ACTION_BLOCK_SCALAR.fullmatch(recovery):
-                scalar_depth = _indent(line) + (step.end() if step else 0)
+                # A bare "- |" owns its body from the dash column; "- run: |"
+                # owns it from the mapping key's column after the dash.
+                scalar_depth = _indent(line) + (step.end() if step and key else 0)
             quoted_key = _ACTION_YAML_QUOTED.match(key_line)
-            if '\t' in re.match(r'[ \t]*', line).group() or (
+            if unsupported_whitespace:
+                unsupported = 'unsupported whitespace'
+            elif '\t' in re.match(r'[ \t]*', line).group() or (
                     step and '\t' in step.group()):
                 unsupported = 'tab indentation'
             elif re.match(r'(?:---|\.\.\.)(?:[ \t]|$)', stripped):
                 unsupported = 'document markers'
-            elif not sequence and quoted_key and key_line[quoted_key.end():].lstrip().startswith(':'):
+            elif not sequence and quoted_key and key_line[quoted_key.end():].lstrip(' ').startswith(':'):
                 unsupported = 'quoted keys'
             elif not sequence and re.match(r'<<[ \t]*:', key_line):
                 unsupported = 'merge keys'
@@ -912,9 +975,10 @@ def action_uses(sources: dict[str, str], *,
                                              + sum(1 if char in '{[' else -1
                                                    for char in visible if char in '{}[]'))
                 sequence.clear()
+                source_line = line.strip(' \t')
                 findings.append(
                     f'{name}:{number}: unsupported YAML construct in a workflow ({unsupported}): '
-                    f'rewrite it in plain block style; {line.strip()!r}')
+                    f'rewrite it in plain block style; {source_line!r}')
                 continue
             if not key or key.group(1) != 'uses':
                 continue
@@ -929,9 +993,10 @@ def action_uses(sources: dict[str, str], *,
             yield name, number, reference, comment
         if sequence:
             number, line = sequence_start
+            source_line = line.strip(' \t')
             findings.append(
                 f'{name}:{number}: unsupported YAML construct in a workflow (flow sequences): '
-                f'rewrite it in plain block style; {line.strip()!r}')
+                f'rewrite it in plain block style; {source_line!r}')
 
 
 def action_pin_findings(sources: dict[str, str]) -> list[str]:
