@@ -5,11 +5,11 @@ from __future__ import annotations
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
-import shutil
 import tempfile
 import unittest
 
 import check_broker_state_hash_coverage as checker
+import source_clone
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -18,15 +18,13 @@ class Coverage(unittest.TestCase):
     def check(self, mutations=()):
         with tempfile.TemporaryDirectory(prefix="pf-hash-coverage-") as directory:
             root = Path(directory) / "repo"
-            shutil.copytree(ROOT, root, ignore=shutil.ignore_patterns(
+            # source_clone.py excludes volatile bytecode and pytest cache names.
+            source_clone.clone_source_tree(ROOT, root, extra_ignore=(
                 "build*", ".git", "corpus", "*.so", "*.a",
                 # The ABI checker creates this short-lived root sentinel
                 # while CTest runs guards in parallel. It is not source
                 # input to this isolated mutation clone.
-                ".native-fx-introduced-*",
-                # Nor is bytecode, which a parallel Python guard writes
-                # through a temporary file that can vanish mid-copy.
-                "__pycache__", "*.pyc"))
+                ".native-fx-introduced-*"))
             for relative, before, after in mutations:
                 path = root / relative
                 text = path.read_text()

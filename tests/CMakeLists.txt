@@ -2264,16 +2264,16 @@ add_test(NAME test_selected_window_plan_python
 # path, from the repository root. No check that pytest is installed: the test
 # environment must provide it, and a missing pytest fails these rows.
 add_test(NAME test_run_json_selected_window
-    COMMAND ${Python3_EXECUTABLE} -B -m pytest ${PROJECT_SOURCE_DIR}/tests/test_run_json_selected_window.py
+    COMMAND ${Python3_EXECUTABLE} -B -m pytest -p no:cacheprovider ${PROJECT_SOURCE_DIR}/tests/test_run_json_selected_window.py
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
 add_test(NAME test_run_json_nonfinite_report
-    COMMAND ${Python3_EXECUTABLE} -B -m pytest ${PROJECT_SOURCE_DIR}/tests/test_run_json_nonfinite_report.py
+    COMMAND ${Python3_EXECUTABLE} -B -m pytest -p no:cacheprovider ${PROJECT_SOURCE_DIR}/tests/test_run_json_nonfinite_report.py
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
 add_test(NAME test_run_json_post_execution
-    COMMAND ${Python3_EXECUTABLE} -B -m pytest ${PROJECT_SOURCE_DIR}/tests/test_run_json_post_execution.py
+    COMMAND ${Python3_EXECUTABLE} -B -m pytest -p no:cacheprovider ${PROJECT_SOURCE_DIR}/tests/test_run_json_post_execution.py
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
 add_test(NAME test_compile_inventory_pipeline
-    COMMAND ${Python3_EXECUTABLE} -B -m pytest ${PROJECT_SOURCE_DIR}/tests/test_compile_inventory_pipeline.py
+    COMMAND ${Python3_EXECUTABLE} -B -m pytest -p no:cacheprovider ${PROJECT_SOURCE_DIR}/tests/test_compile_inventory_pipeline.py
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
 
 # The seven ABI-provider manifests and the four receipt-gated rows. The
