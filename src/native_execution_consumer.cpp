@@ -3034,8 +3034,9 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
         && (selected_epoch_.observer_registered || selected_epoch_.window_configured)) {
         fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Begin});
         render(engine, "unsupported report mode: SUMMARY_ONLY "
-                       "(a selected window or execution observer needs a pineforge-report/v1 "
-                       "report sink: drop it, attach a sink, or select FULL)",
+                       "(a selected window or execution observer cannot be captured exactly "
+                       "under pineforge-report/v1 in this mode: drop it or select FULL; "
+                       "bounded capture uses STREAMED with a sink)",
                RunFailureCode::report_mode_unsupported,
                {{"mode", "SUMMARY_ONLY"}, {"contract", "pineforge-report/v1"}});
         return false;
