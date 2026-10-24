@@ -972,7 +972,7 @@ class PreflightFailures(unittest.TestCase):
                 self.assertNotEqual(changed[2], original[2])
                 self.assertEqual(ci_workflow_findings(*changed), [
                     'baseline promotion promote-guard must not define job-level defaults',
-                    'baseline promotion must start with the pinned credential-free promote-guard',
+                    'baseline promotion must start with the pinned read-only promote-guard',
                 ])
 
     def promotion_guard_result(self, *, workflow=None, **overrides):
