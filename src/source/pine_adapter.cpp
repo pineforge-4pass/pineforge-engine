@@ -3914,14 +3914,15 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
         return (value.family == PineOrderFamily::Entry || value.family == PineOrderFamily::Order)
             && value.placement_script_open_ms >= last_broker_open_ms_;
     };
-    // Dormant askable-origin legs can be superseded too. A non-dormant
-    // askable-origin leg still answers the consumed-leg question and stays.
+    // An askable-origin leg, dormant or not, stays pinned for its cycle as
+    // v1.6.3's K1 pinned it: releasing a dormant one let the sweep erase its
+    // supersessor while K3 kept the released leg as a witness, and the margin
+    // revival then restored the superseded leg.
     const auto held_by_cycle = [&](const PlacementSnapshot& value) {
         return pinned_by_itself(value) && value.placement_cycle == cycle
             && exit_family(value.family) && !value.from_entry.empty()
             && !withdrawn(value.legs)
-            && (value.legs.dormant()
-                || !contains(askable_origins, value.bracket_origin.incarnation));
+            && !contains(askable_origins, value.bracket_origin.incarnation);
     };
     auto& held = sweep.held;
     bool unpinned = false;
@@ -4150,8 +4151,7 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
                    && *candidate_origin_cursor < incarnation) ++candidate_origin_cursor;
             const bool askable = candidate_origin_cursor != askable_origins.end()
                 && *candidate_origin_cursor == incarnation;
-            if (!askable && (value.legs.dormant()
-                || !contains(askable_origins, value.bracket_origin.incarnation)))
+            if (!askable && !contains(askable_origins, value.bracket_origin.incarnation))
                 held.push_back({incarnation, &value});
         }
         candidates.emplace_back(incarnation, &value);
