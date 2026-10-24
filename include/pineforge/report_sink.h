@@ -42,6 +42,10 @@ typedef struct pf_report_sink_v1 {
  *  failure, abort or handle destruction. The caller closes it to deliver EOF
  *  to the trusted finalizer. A new run on the same fd appends a new stream;
  *  use a fresh stream per run when the reader expects one header/trailer.
+ *  Each begin checks that fd is open and matches its installed device/inode
+ *  identity; a closed or replaced descriptor fails with report_sink_failed.
+ *  A host that dup2s a fresh FIFO onto the same descriptor number for the
+ *  next run must install the sink again.
  *
  *  Bytes, canonical JSON, hashes, LF framing and the 1 MiB line limit are
  *  identical to the path sink. Writes are strictly sequential: no open,
@@ -206,8 +210,10 @@ PF_API int strategy_set_report_sink_v1(pf_strategy_t, const pf_report_sink_v1*);
  *  to detach next-run configuration while preserving its receipt, summary
  *  and borrowed fd. Path generations have no completed-generation detach:
  *  their scratch/base guards still apply. A refusal preserves the generation.
- *  Descriptor I/O/type validation occurs at run begin; a closed fd or a
- *  non-stream descriptor fails the run with report_sink_failed. Summary
+ *  Descriptor I/O/type and installed device/inode identity are checked at
+ *  each run begin; a closed, replaced or non-stream descriptor fails the run
+ *  with report_sink_failed. A host that dup2s a fresh FIFO onto the same
+ *  descriptor number for the next run must install the sink again. Summary
  *  reports and strategy_report_sink_receipt_v1 follow the path sink rules. */
 PF_API int strategy_set_report_sink_fd_v1(pf_strategy_t, const pf_report_sink_fd_v1*);
 
