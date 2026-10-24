@@ -1,16 +1,19 @@
-// This RED workload uses only frozen2's public API. Linux-only registration:
+// Original I/O workloads use frozen2's public API; Round 4 adds field APIs.
+// Linux-only registration:
 // executable-local interposers forward every request to its real syscall.
 // There is no production counter, test-only branch, or linker-option fence.
 #include "p2cx_tledger_fixture.hpp"
 
 #include <pineforge/detail/scratch_file.hpp>
+#include <cstdlib>
 #include <cstdint>
+#include <new>
 #include <sys/syscall.h>
 #include <unistd.h>
 
 namespace ledger_io {
 struct Counts {
-    std::uint64_t reads = 0, writes = 0, written_bytes = 0;
+    std::uint64_t reads = 0, writes = 0, written_bytes = 0, allocations = 0;
 };
 inline bool measuring = false;
 inline Counts counts;
@@ -28,6 +31,21 @@ struct Measure {
     }
 };
 } // namespace ledger_io
+
+// Executable-local allocation counter: real storage still comes from malloc.
+// Numeric-only measurement contains no expected-row copies or string reads.
+// Production has no counter, branch or hook.
+void* operator new(std::size_t bytes) {
+    void* result = std::malloc(bytes ? bytes : 1);
+    if (!result) throw std::bad_alloc();
+    if (ledger_io::measuring) ++ledger_io::counts.allocations;
+    return result;
+}
+void* operator new[](std::size_t bytes) { return ::operator new(bytes); }
+void operator delete(void* pointer) noexcept { std::free(pointer); }
+void operator delete[](void* pointer) noexcept { std::free(pointer); }
+void operator delete(void* pointer, std::size_t) noexcept { std::free(pointer); }
+void operator delete[](void* pointer, std::size_t) noexcept { std::free(pointer); }
 
 extern "C" ssize_t pread(int fd, void* data, std::size_t length, off_t offset) {
     if (ledger_io::measuring) ++ledger_io::counts.reads;
@@ -62,6 +80,11 @@ void forwarding_control() {
     REQUIRE(io.reads == 1);
     REQUIRE(io.writes == 1);
     REQUIRE(io.written_bytes == expected.size());
+    Measure allocation_measure;
+    void* block = ::operator new(257);
+    ::operator delete(block);
+    const auto allocation = allocation_measure.finish();
+    REQUIRE(allocation.allocations == 1);
 }
 
 // Prepare genuine misses without inventing a per-bar OPEN -> replace path.
@@ -205,6 +228,84 @@ void specialized_reads_share_warmed_rows() {
     const auto io = measure.finish();
     CHECK(io.reads == 0 && io.writes == 0);
 }
+
+void hungpixi_population_field_reads() {
+    constexpr std::size_t population = 24238;
+    Reader host;
+    auto& ledger = host.ledger();
+    ledger.set_scratch_directory(".");
+    std::vector<Trade> expected;
+    expected.reserve(population);
+    for (std::size_t i = 0; i < population; ++i) {
+        expected.push_back(row(static_cast<int>(i)));
+        const auto& value = expected.back();
+        // Some comments exceed both common std::string SSO capacities.
+        // Building a Trade for a numeric field therefore allocates, while
+        // all four strings together still fit the 128-byte inline allowance.
+        REQUIRE(value.entry_comment.size() > 23);
+        REQUIRE(value.entry_id.size() + value.entry_comment.size()
+                + value.exit_comment.size() + value.exit_id.size()
+                <= TradeLedger::kCacheStringBytes);
+        ledger.push_back(value);
+    }
+    REQUIRE(ledger.cache_rows() >= population);
+    Measure warmup;
+    for (std::size_t i = 0; i < population; ++i) {
+        same_numeric_fields(ledger, i, expected[i]);
+        same_string_fields(ledger, i, expected[i]);
+        host.compare_fields(static_cast<int>(i), expected[i]);
+    }
+    const auto cold = warmup.finish();
+    REQUIRE(cold.reads > 0); // Old descriptors/strings really leave the tails.
+    CHECK(cold.writes == 0);
+    CHECK(ledger.cache_size() == population);
+    const auto fixed_bytes = TradeLedger::resident_cache_bytes(1)
+        - TradeLedger::kLedgerEntryBytes;
+    // next_power_of_two(24,238) = 32,768, below the 65,536-row default cap.
+    CHECK(ledger.cache_resident_bytes()
+          == fixed_bytes + 32768 * TradeLedger::kLedgerEntryBytes);
+    for (int bar = 0; bar < 8; ++bar) {
+        Measure numeric;
+        for (std::size_t i = 0; i < population; ++i) {
+            same_numeric_fields(ledger, i, expected[i]);
+            host.compare_numeric_fields(static_cast<int>(i), expected[i]);
+        }
+        const auto numbers = numeric.finish();
+        CHECK(numbers.reads == 0 && numbers.writes == 0);
+        CHECK(numbers.allocations == 0);
+        Measure strings;
+        for (std::size_t i = 0; i < population; ++i) {
+            same_string_fields(ledger, i, expected[i]);
+            host.compare_string_fields(static_cast<int>(i), expected[i]);
+        }
+        const auto texts = strings.finish();
+        CHECK(texts.reads == 0 && texts.writes == 0);
+        CHECK(ledger.cache_size() == population);
+    }
+}
+
+void wide_strings_keep_numeric_rows_cached() {
+    TradeLedger ledger;
+    ledger.set_scratch_directory(".");
+    std::vector<Trade> expected{row(0), row(1)};
+    expected[0].exit_comment.assign(TradeLedger::kCacheStringBytes + 1, 'W');
+    for (const auto& value : expected) ledger.push_back(value);
+    pressure(ledger, expected);
+    same_numeric_fields(ledger, 0, expected[0]); // Warm just the numeric record.
+    CHECK(ledger.cache_size() == 1);
+    Measure numeric;
+    for (int pass = 0; pass < 8; ++pass)
+        same_numeric_fields(ledger, 0, expected[0]);
+    const auto numbers = numeric.finish();
+    CHECK(numbers.reads == 0 && numbers.writes == 0);
+    CHECK(numbers.allocations == 0);
+    Measure strings;
+    same_string_fields(ledger, 0, expected[0]);
+    const auto texts = strings.finish();
+    CHECK(texts.reads > 0); // Wide strings deliberately retain scratch fallback.
+    CHECK(texts.writes == 0);
+    same_trade(ledger.read(0), expected[0]);
+}
 } // namespace
 
 int main() {
@@ -212,6 +313,9 @@ int main() {
     test("closedtrades loops with a live OPEN lot", per_bar_reads);
     test("equal strings retain extents, changed strings append", unchanged_strings_only_write_descriptor);
     test("numeric and id accessors share decoded cache", specialized_reads_share_warmed_rows);
+    test("24,238 closed rows: field reads have no warm I/O or numeric allocation",
+         hungpixi_population_field_reads);
+    test("wide strings retain cached numeric fields", wide_strings_keep_numeric_rows_cached);
     std::printf("test_p2cx_tledger_io: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

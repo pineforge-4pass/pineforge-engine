@@ -23,7 +23,8 @@ void matches(const TradeLedger& ledger, const std::vector<Trade>& expected) {
             same_trade(ledger[i], expected[i]);
             same_trade(ledger.at(i), expected[i]);
             same_numeric(ledger.numeric_at(i), expected[i]);
-            CHECK(ledger.entry_id_at(i) == expected[i].entry_id);
+            same_numeric_fields(ledger, i, expected[i]);
+            same_string_fields(ledger, i, expected[i]);
         }
     }
 }
@@ -55,9 +56,12 @@ void sealed_refusal(F action) {
 }
 
 void budgets_and_accounting() {
-    // Fill and exceed each capacity, including the maximum, rather than
-    // inferring occupancy from the memory-accounting formula alone.
-    for (const Size budget : {Size{4}, TradeLedger::kDefaultCacheRows,
+    CHECK(TradeLedger::kLedgerEntryBytes == 312);
+    CHECK(TradeLedger::kDefaultCacheRows == 65536);
+    CHECK(TradeLedger::kMaxCacheRows == 1048576);
+    // Exceed the small/default caps. For the maximum setting, verify real
+    // lazy allocation with 129 rows instead of constructing a million-row run.
+    for (const Size budget : {Size{4}, Size{7}, TradeLedger::kDefaultCacheRows,
                               TradeLedger::kMaxCacheRows}) {
         TradeLedger ledger;
         CHECK(ledger.cache_rows() == TradeLedger::kDefaultCacheRows);
@@ -68,25 +72,28 @@ void budgets_and_accounting() {
         const auto fixed_bytes = ledger.cache_resident_bytes();
         CHECK(TradeLedger::resident_cache_bytes(budget)
               == fixed_bytes + budget * TradeLedger::kLedgerEntryBytes);
+        const Size population = budget == TradeLedger::kMaxCacheRows ? 129 : budget + 3;
+        const Size allocated_rows = budget == TradeLedger::kMaxCacheRows ? 256 : budget;
         std::vector<Trade> expected;
-        for (Size i = 0; i < budget + 3; ++i) {
+        for (Size i = 0; i < population; ++i) {
             expected.push_back(row(static_cast<int>(i)));
             ledger.push_back(expected.back());
             CHECK(ledger.cache_size() == 0); // Appending does not populate it.
             bounded(ledger);
         }
+        CHECK(ledger.cache_resident_bytes() == fixed_bytes);
         for (Size i = 0; i < expected.size(); ++i) {
             same_trade(ledger.read(i), expected[i]);
-            CHECK(ledger.cache_size() == std::min(i + 1, budget));
+            CHECK(ledger.cache_size() == std::min(i + 1, allocated_rows));
             CHECK(ledger.cache_resident_bytes()
-                  == fixed_bytes + budget * TradeLedger::kLedgerEntryBytes);
+                  == fixed_bytes + allocated_rows * TradeLedger::kLedgerEntryBytes);
             bounded(ledger);
         }
         // Reverse traversal reuses/evicts the direct-mapped entries and
         // checks the value of colliding keys against independent rows.
         for (Size i = expected.size(); i != 0; --i) {
             same_trade(ledger.read(i - 1), expected[i - 1]);
-            CHECK(ledger.cache_size() == budget);
+            CHECK(ledger.cache_size() == std::min(population, allocated_rows));
             bounded(ledger);
         }
         CHECK(ledger.resident_size()
@@ -95,6 +102,50 @@ void budgets_and_accounting() {
         CHECK(ledger.cache_rows() == budget);
         CHECK(ledger.cache_size() == 0);
         CHECK(ledger.cache_resident_bytes() == fixed_bytes);
+    }
+}
+
+void lazy_growth_boundaries() {
+    for (const Size budget : {TradeLedger::kDefaultCacheRows, TradeLedger::kMaxCacheRows}) {
+        TradeLedger ledger;
+        ledger.set_scratch_directory(".");
+        ledger.set_cache_rows(budget);
+        const auto fixed_bytes = ledger.cache_resident_bytes();
+        std::vector<Trade> expected;
+        for (int n = 0; n < 64; ++n) {
+            expected.push_back(row(n));
+            ledger.push_back(expected.back());
+        }
+        CHECK(ledger.cache_resident_bytes() == fixed_bytes); // No read yet.
+        matches(ledger, expected);
+        CHECK(ledger.cache_size() == 64);
+        CHECK(ledger.cache_resident_bytes() == fixed_bytes + 64 * TradeLedger::kLedgerEntryBytes);
+        expected[0] = row(700);
+        ledger.replace(0, expected[0]);
+        same_numeric_fields(ledger, 0, expected[0]);
+        same_string_fields(ledger, 0, expected[0]);
+        CHECK(ledger.cache_size() == 64);
+        expected.push_back(row(64));
+        ledger.push_back(expected.back()); // Crossing 64 grows to 128.
+        CHECK(ledger.cache_size() == 0);
+        CHECK(ledger.cache_resident_bytes() == fixed_bytes + 128 * TradeLedger::kLedgerEntryBytes);
+        matches(ledger, expected);
+        for (int n = 65; n < 129; ++n) {
+            expected.push_back(row(n));
+            ledger.push_back(expected.back());
+        }
+        CHECK(ledger.cache_size() == 0); // Crossing 128 invalidates again.
+        CHECK(ledger.cache_resident_bytes() == fixed_bytes + 256 * TradeLedger::kLedgerEntryBytes);
+        matches(ledger, expected);
+        ledger.resize(64);
+        expected.resize(64);
+        expected.push_back(row(900));
+        ledger.push_back(expected.back());
+        // Reused keys after growth/rewind must return the new oracle values.
+        same_numeric_fields(ledger, 64, expected[64]);
+        same_string_fields(ledger, 64, expected[64]);
+        matches(ledger, expected);
+        bounded(ledger);
     }
 }
 
@@ -160,12 +211,34 @@ void replacements_and_rewinds() {
     expected.resize(6);
     CHECK(ledger.cache_size() == 0);
     matches(ledger, expected);
+    const auto cached_before_seal = ledger.cache_size();
+    CHECK(cached_before_seal != 0);
     ledger.seal(2);
-    CHECK(ledger.cache_size() == 0);
+    // Publication changes no row content: the cached entries stay valid.
+    CHECK(ledger.cache_size() == cached_before_seal);
     matches(ledger, expected); // read() still serves the sealed prefix.
     sealed_refusal([&] { (void)ledger.at(0); });
     sealed_refusal([&] { (void)ledger.numeric_at(0); });
     sealed_refusal([&] { (void)ledger.entry_id_at(0); });
+    sealed_refusal([&] { (void)ledger.pnl_at(0); });
+    sealed_refusal([&] { (void)ledger.pnl_pct_at(0); });
+    sealed_refusal([&] { (void)ledger.commission_at(0); });
+    sealed_refusal([&] { (void)ledger.entry_bar_index_at(0); });
+    sealed_refusal([&] { (void)ledger.exit_bar_index_at(0); });
+    sealed_refusal([&] { (void)ledger.entry_incarnation_at(0); });
+    sealed_refusal([&] { (void)ledger.entry_price_at(0); });
+    sealed_refusal([&] { (void)ledger.exit_price_at(0); });
+    sealed_refusal([&] { (void)ledger.entry_time_at(0); });
+    sealed_refusal([&] { (void)ledger.exit_time_at(0); });
+    sealed_refusal([&] { (void)ledger.qty_at(0); });
+    sealed_refusal([&] { (void)ledger.max_runup_at(0); });
+    sealed_refusal([&] { (void)ledger.max_drawdown_at(0); });
+    sealed_refusal([&] { (void)ledger.is_long_at(0); });
+    sealed_refusal([&] { (void)ledger.entry_comment_at(0); });
+    sealed_refusal([&] { (void)ledger.exit_comment_at(0); });
+    sealed_refusal([&] { (void)ledger.exit_id_at(0); });
+    sealed_refusal([&] { (void)ledger.pnl_at(ledger.size()); });
+    sealed_refusal([&] { (void)ledger.exit_id_at(ledger.size()); });
     ledger.clear();
     CHECK(ledger.cache_rows() == 4);
     CHECK(ledger.cache_size() == 0);
@@ -242,24 +315,33 @@ void exact_string_allowance_and_numeric_bits() {
     value.open_at_end = true;
     ledger.push_back(value);
     same_trade(ledger.read(0), value);
-    CHECK(ledger.cache_size() == 1); // Exactly 1,024 bytes is admitted.
+    CHECK(ledger.cache_size() == 1); // Exactly 128 bytes is admitted.
     same_numeric(ledger.numeric_at(0), value);
+    same_numeric_fields(ledger, 0, value);
+    same_string_fields(ledger, 0, value);
     same_trade(ledger.read(0), value); // Hit preserves the NaN payload/signs.
     Trade wider = value;
     wider.exit_comment.push_back('\0');
     ledger.push_back(wider);
     for (int pass = 0; pass < 3; ++pass) {
         same_trade(ledger.read(1), wider);
-        CHECK(ledger.cache_size() == 1); // 1,025 bytes always uses fallback.
+        same_numeric_fields(ledger, 1, wider);
+        same_string_fields(ledger, 1, wider);
+        CHECK(ledger.cache_size() == 2); // 129 bytes: numeric cache, string fallback.
         bounded(ledger);
     }
     ledger.replace(0, wider);
     same_trade(ledger.read(0), wider);
-    CHECK(ledger.cache_size() == 0);
+    CHECK(ledger.cache_size() == 2);
     const Trade empty{};
     ledger.push_back(empty);
     same_trade(ledger.read(2), empty);
-    CHECK(ledger.cache_size() == 1);
+    CHECK(ledger.cache_size() == 3);
+    TradeLedger copied(ledger); // Numeric-only entries cannot decode packed strings.
+    CHECK(copied.cache_size() == 0);
+    same_trade(copied.read(0), wider);
+    same_trade(copied.read(1), wider);
+    same_trade(copied.read(2), empty);
     ledger.seal(ledger.size()); // Force external descriptors for the next miss.
     same_trade(ledger.read(0), wider);
     same_trade(ledger.read(2), empty);
@@ -269,6 +351,7 @@ void exact_string_allowance_and_numeric_bits() {
 
 int main() {
     test("small/default/maximum budgets and exact allocation accounting", budgets_and_accounting);
+    test("lazy 64/128/256 growth and reused-key oracle", lazy_growth_boundaries);
     test("typed invalid and frozen budget refusals", invalid_and_late_budgets);
     test("replace/modify/resize/seal/clear preserve oracle values", replacements_and_rewinds);
     test("copy/move discard cache and preserve independent ledgers", copies_and_moves_start_cold);

@@ -382,12 +382,15 @@ struct TradeLedger::State {
         Record record{};
         size_type global = 0, generation = 0;
         std::array<char, kCacheStringBytes> strings{};
+        // The generation is even; its low bit records whether all four
+        // packed strings fit. This flag adds no padding to the 312-byte entry.
+        bool strings_valid() const { return (generation & size_type{1}) != 0; }
     };
     static_assert(sizeof(CacheEntry) == kLedgerEntryBytes);
     size_type cache_rows = kDefaultCacheRows;
     mutable std::unique_ptr<CacheEntry[]> cache;
-    mutable size_type cache_count = 0;
-    size_type cache_generation = 1;
+    mutable size_type cache_count = 0, cache_capacity = 0;
+    mutable size_type cache_generation = 2;
 
     State() {
         index.bound_cache();
@@ -399,50 +402,105 @@ struct TradeLedger::State {
                                                {{"input", "resident.ledger_rows"},
                                                 {"reason", rows == 0 ? "value_below_minimum"
                                                                      : "value_above_maximum"}},
-                                               "trade ledger: cache rows outside [1,65536]");
+                                               "trade ledger: cache rows outside [1,1048576]");
+    }
+    size_type cache_slot(size_type global) const {
+        // Defaults/growth are powers of two. The public integer knob also
+        // permits other final caps, which need the ordinary modulo fallback.
+        const auto mask = cache_capacity - 1;
+        return (cache_capacity & mask) == 0 ? global & mask : global % cache_capacity;
+    }
+    bool current(const CacheEntry& entry) const {
+        return (entry.generation & ~size_type{1}) == cache_generation;
     }
     const CacheEntry* cached(size_type global) const {
         if (!cache) return nullptr;
-        const auto& entry = cache[global % cache_rows];
-        return entry.generation == cache_generation && entry.global == global ? &entry : nullptr;
+        const auto& entry = cache[cache_slot(global)];
+        return current(entry) && entry.global == global ? &entry : nullptr;
     }
     void invalidate(size_type global) {
         if (cached(global)) {
-            cache[global % cache_rows].generation = 0;
+            cache[cache_slot(global)].generation = 0;
             --cache_count;
         }
     }
-    void invalidate_cache() {
+    void invalidate_cache() const {
         cache_count = 0;
         // Generations make publication/rewind/move invalidation O(1).
         // Even the wraparound fallback touches at most the configured budget.
-        if (cache_generation == std::numeric_limits<size_type>::max()) {
+        if (cache_generation == std::numeric_limits<size_type>::max() - 1) {
             if (cache)
-                for (size_type i = 0; i < cache_rows; ++i) cache[i].generation = 0;
-            cache_generation = 1;
+                for (size_type i = 0; i < cache_capacity; ++i) cache[i].generation = 0;
+            cache_generation = 2;
         } else {
-            ++cache_generation;
+            cache_generation += 2;
         }
     }
-    void remember(size_type global, const Record& record, const Trade& row) const {
-        const std::array<const std::string*, 4> texts{{
-            &row.entry_id, &row.entry_comment, &row.exit_comment, &row.exit_id}};
-        size_type bytes = 0;
-        for (const auto* text : texts) {
-            if (text->size() > kCacheStringBytes - bytes) return;
-            bytes += text->size();
-        }
-        if (!cache) cache = std::make_unique<CacheEntry[]>(cache_rows);
-        auto& entry = cache[global % cache_rows];
-        if (entry.generation != cache_generation) ++cache_count;
+    void ensure_cache(size_type population) const {
+        if (cache && (population <= cache_capacity || cache_capacity == cache_rows)) return;
+        size_type capacity = kResidentRows;
+        while (capacity < population && capacity < cache_rows) capacity *= 2;
+        capacity = std::min(capacity, cache_rows);
+        invalidate_cache();
+        // Discard the old allocation first: even transient storage stays
+        // within the configured row budget during growth.
+        cache.reset();
+        cache_capacity = 0;
+        cache = std::make_unique<CacheEntry[]>(capacity);
+        cache_capacity = capacity;
+    }
+    const CacheEntry& remember(size_type global, const Record& record) const {
+        ensure_cache(end);
+        auto& entry = cache[cache_slot(global)];
+        if (current(entry)) --cache_count;
+        entry.generation = 0;
         entry.record = record;
         entry.global = global;
-        size_type offset = 0;
-        for (const auto* text : texts) {
-            std::copy_n(text->data(), text->size(), entry.strings.data() + offset);
-            offset += text->size();
+        const std::array<StringExtent, 4> texts{{
+            record.entry_id, record.entry_comment, record.exit_comment, record.exit_id}};
+        size_type bytes = 0;
+        bool strings_valid = true;
+        for (const auto text : texts) {
+            if (text.length > kCacheStringBytes - bytes) {
+                strings_valid = false;
+                break;
+            }
+            bytes += static_cast<size_type>(text.length);
         }
-        entry.generation = cache_generation;
+        if (strings_valid) {
+            size_type offset = 0;
+            for (const auto text : texts) {
+                read_string(text, entry.strings.data() + offset);
+                offset += static_cast<size_type>(text.length);
+            }
+        }
+        entry.generation = cache_generation | static_cast<size_type>(strings_valid);
+        ++cache_count;
+        return entry;
+    }
+    const CacheEntry& load(size_type global) const {
+        if (const auto* entry = cached(global)) return *entry;
+        return remember(global, descriptor(global));
+    }
+    template<auto Member>
+    auto numeric_field(size_type global) const {
+        check(global, true);
+        return load(global).record.*Member;
+    }
+    template<StringExtent Record::*Member>
+    std::string string_field(size_type global) const {
+        check(global, true);
+        const auto& entry = load(global);
+        const auto text = entry.record.*Member;
+        if (!entry.strings_valid()) return get_string(text);
+        size_type offset = 0;
+        if constexpr (Member != &Record::entry_id)
+            offset += static_cast<size_type>(entry.record.entry_id.length);
+        if constexpr (Member == &Record::exit_comment || Member == &Record::exit_id)
+            offset += static_cast<size_type>(entry.record.entry_comment.length);
+        if constexpr (Member == &Record::exit_id)
+            offset += static_cast<size_type>(entry.record.exit_comment.length);
+        return std::string(entry.strings.data() + offset, static_cast<size_type>(text.length));
     }
     static std::uint64_t record_offset(size_type global) {
         if (global > std::numeric_limits<std::uint64_t>::max() / sizeof(Record))
@@ -479,24 +537,31 @@ struct TradeLedger::State {
         payload_end += text.size();
         return result;
     }
-    std::string get_string(StringExtent text) const {
+    void validate_string(StringExtent text) const {
         if (text.length > std::numeric_limits<size_type>::max()
             || text.offset > payload_end || text.length > payload_end - text.offset)
             throw detail::ScratchIoError(EIO, "trade ledger string extent");
-        std::string result(static_cast<size_type>(text.length), '\0');
-        if (!result.empty()) {
+    }
+    void read_string(StringExtent text, char* result) const {
+        validate_string(text);
+        const auto length = static_cast<size_type>(text.length);
+        if (length != 0) {
             // Validation above proves the entire extent ends at/before
             // payload_end. Its start must also be in the retained byte tail;
             // in particular, a string wider than the tail always spills.
             if (payload_end - text.offset <= kPayloadTailBytes) {
-                const auto span = tail_span(text.offset, result.size());
-                std::copy_n(payload_tail.data() + span.slot, span.first, result.data());
-                std::copy_n(payload_tail.data(), result.size() - span.first,
-                            result.data() + span.first);
+                const auto span = tail_span(text.offset, length);
+                std::copy_n(payload_tail.data() + span.slot, span.first, result);
+                std::copy_n(payload_tail.data(), length - span.first, result + span.first);
             } else {
-                payload.read(text.offset, result.data(), result.size());
+                payload.read(text.offset, result, length);
             }
         }
+    }
+    std::string get_string(StringExtent text) const {
+        validate_string(text);
+        std::string result(static_cast<size_type>(text.length), '\0');
+        read_string(text, result.data());
         return result;
     }
     StringExtent reuse_string(const std::string& text, StringExtent old) {
@@ -589,8 +654,9 @@ TradeLedger::TradeLedger(const TradeLedger& other)
     // source hits may serve the copy; misses keep the original O(T) I/O path.
     for (size_type i = 0; i < other.size(); ++i) {
         const auto* entry = other.state_->cached(i);
-        push_back(entry ? State::decode_cached(*entry)
-                        : other.state_->decode(other.state_->descriptor(i)));
+        push_back(entry && entry->strings_valid()
+                      ? State::decode_cached(*entry)
+                      : other.state_->decode(other.state_->descriptor(i)));
     }
     seal(other.base());
 }
@@ -640,6 +706,7 @@ void TradeLedger::set_cache_rows(size_type rows) {
                                            "trade ledger: cache rows changed after spill");
     state_->cache.reset();
     state_->cache_count = 0;
+    state_->cache_capacity = 0;
     state_->cache_rows = rows;
 }
 TradeLedger::size_type TradeLedger::cache_rows() const { return state_->cache_rows; }
@@ -649,7 +716,7 @@ TradeLedger::size_type TradeLedger::resident_cache_bytes(size_type rows) {
 }
 TradeLedger::size_type TradeLedger::cache_resident_bytes() const {
     return sizeof(TradeLedger) + sizeof(State)
-        + (state_->cache ? state_->cache_rows * kLedgerEntryBytes : 0);
+        + state_->cache_capacity * kLedgerEntryBytes;
 }
 TradeLedger::size_type TradeLedger::cache_size() const { return state_->cache_count; }
 
@@ -665,11 +732,8 @@ bool TradeLedger::empty() const { return size() == 0; }
 
 Trade TradeLedger::read(size_type global) const {
     state_->check(global);
-    if (const auto* entry = state_->cached(global)) return State::decode_cached(*entry);
-    const auto record = state_->descriptor(global);
-    Trade row = state_->decode(record);
-    state_->remember(global, record, row);
-    return row;
+    const auto& entry = state_->load(global);
+    return entry.strings_valid() ? State::decode_cached(entry) : state_->decode(entry.record);
 }
 
 Trade TradeLedger::operator[](size_type global) const { return at(global); }
@@ -691,11 +755,58 @@ Trade TradeLedger::numeric_at(size_type global) const {
 }
 
 std::string TradeLedger::entry_id_at(size_type global) const {
-    state_->check(global, true);
-    if (const auto* entry = state_->cached(global))
-        return std::string(entry->strings.data(),
-                           static_cast<size_type>(entry->record.entry_id.length));
-    return state_->get_string(state_->descriptor(global).entry_id);
+    return state_->string_field<&State::Record::entry_id>(global);
+}
+std::string TradeLedger::entry_comment_at(size_type global) const {
+    return state_->string_field<&State::Record::entry_comment>(global);
+}
+std::string TradeLedger::exit_comment_at(size_type global) const {
+    return state_->string_field<&State::Record::exit_comment>(global);
+}
+std::string TradeLedger::exit_id_at(size_type global) const {
+    return state_->string_field<&State::Record::exit_id>(global);
+}
+double TradeLedger::pnl_at(size_type global) const {
+    return state_->numeric_field<&State::Record::pnl>(global);
+}
+double TradeLedger::pnl_pct_at(size_type global) const {
+    return state_->numeric_field<&State::Record::pnl_pct>(global);
+}
+double TradeLedger::commission_at(size_type global) const {
+    return state_->numeric_field<&State::Record::commission>(global);
+}
+std::int32_t TradeLedger::entry_bar_index_at(size_type global) const {
+    return state_->numeric_field<&State::Record::entry_bar_index>(global);
+}
+std::int32_t TradeLedger::exit_bar_index_at(size_type global) const {
+    return state_->numeric_field<&State::Record::exit_bar_index>(global);
+}
+std::uint64_t TradeLedger::entry_incarnation_at(size_type global) const {
+    return state_->numeric_field<&State::Record::entry_incarnation>(global);
+}
+double TradeLedger::entry_price_at(size_type global) const {
+    return state_->numeric_field<&State::Record::entry_price>(global);
+}
+double TradeLedger::exit_price_at(size_type global) const {
+    return state_->numeric_field<&State::Record::exit_price>(global);
+}
+std::int64_t TradeLedger::entry_time_at(size_type global) const {
+    return state_->numeric_field<&State::Record::entry_time>(global);
+}
+std::int64_t TradeLedger::exit_time_at(size_type global) const {
+    return state_->numeric_field<&State::Record::exit_time>(global);
+}
+double TradeLedger::qty_at(size_type global) const {
+    return state_->numeric_field<&State::Record::qty>(global);
+}
+double TradeLedger::max_runup_at(size_type global) const {
+    return state_->numeric_field<&State::Record::max_runup>(global);
+}
+double TradeLedger::max_drawdown_at(size_type global) const {
+    return state_->numeric_field<&State::Record::max_drawdown>(global);
+}
+bool TradeLedger::is_long_at(size_type global) const {
+    return state_->numeric_field<&State::Record::is_long>(global);
 }
 
 void TradeLedger::replace(size_type global, const Trade& row) {
@@ -717,6 +828,9 @@ void TradeLedger::modify(size_type global, const std::function<void(Trade&)>& ed
 void TradeLedger::push_back(const Trade& trade) {
     if (size() == std::numeric_limits<size_type>::max())
         throw std::length_error("trade ledger: logical end exhausted");
+    // Copies and write-only runs keep a cold cache unallocated. Once a reader
+    // allocates it, population growth expands it only up to the configured cap.
+    if (state_->cache) state_->ensure_cache(size() + 1);
     const auto record = state_->store(size(), trade);
     if (state_->count == kResidentRows) state_->evict();
     state_->rows[(state_->head + state_->count) % kResidentRows] = record;
@@ -777,7 +891,9 @@ void TradeLedger::seal(size_type global_end) {
     if (global_end < state_->first || global_end > size())
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                        "trade ledger: seal outside resident window");
-    state_->invalidate_cache();
+    // Publication changes no row content, and the checked accessors refuse
+    // sealed rows before they reach the cache: cached entries stay valid, so a
+    // closedtrades loop is not made cold again by every published trade.
     while (state_->count != 0 && state_->resident_first < global_end) state_->evict();
     state_->first = global_end;
 }

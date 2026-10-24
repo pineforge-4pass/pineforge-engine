@@ -1605,68 +1605,68 @@ protected:
     // --- Trade history accessors (for strategy.closedtrades.*) ---
     double closed_trade_profit(int index) const {
         if (index >= 0 && index < (int)trades_.size())
-            return trades_[index].pnl;
+            return trades_.pnl_at(index);
         return 0.0;
     }
     double closed_trade_profit_percent(int idx) const {
         if (idx < 0 || idx >= (int)trades_.size()) return std::numeric_limits<double>::quiet_NaN();
-        return trades_[idx].pnl_pct;
+        return trades_.pnl_pct_at(idx);
     }
     double closed_trade_commission(int idx) const {
         if (idx < 0 || idx >= (int)trades_.size()) return std::numeric_limits<double>::quiet_NaN();
-        return trades_[idx].commission;
+        return trades_.commission_at(idx);
     }
     int closed_trade_entry_bar_index(int idx) const {
         if (idx < 0 || idx >= (int)trades_.size()) return na<int>();
-        return trades_[idx].entry_bar_index;
+        return trades_.entry_bar_index_at(idx);
     }
     int closed_trade_exit_bar_index(int idx) const {
         if (idx < 0 || idx >= (int)trades_.size()) return na<int>();
-        return trades_[idx].exit_bar_index;
+        return trades_.exit_bar_index_at(idx);
     }
     std::string closed_trade_entry_comment(int idx) const {
         if (idx < 0 || idx >= (int)trades_.size()) return std::string();
-        return trades_[idx].entry_comment;
+        return trades_.entry_comment_at(idx);
     }
     std::string closed_trade_exit_comment(int idx) const {
         if (idx < 0 || idx >= (int)trades_.size()) return std::string();
-        return trades_[idx].exit_comment;
+        return trades_.exit_comment_at(idx);
     }
     std::string closed_trade_entry_id(int idx) const {
         if (idx < 0 || idx >= (int)trades_.size()) return std::string();
-        return trades_[idx].entry_id;
+        return trades_.entry_id_at(idx);
     }
     std::string closed_trade_exit_id(int idx) const {
         if (idx < 0 || idx >= (int)trades_.size()) return std::string();
-        return trades_[idx].exit_id;
+        return trades_.exit_id_at(idx);
     }
     uint64_t closed_trade_entry_incarnation(int idx) const {
         if (idx < 0 || idx >= (int)trades_.size()) return 0;
-        return trades_[idx].entry_incarnation;
+        return trades_.entry_incarnation_at(idx);
     }
     double closed_trade_entry_price(int idx) const {
         if (idx < 0 || idx >= (int)trades_.size()) return std::numeric_limits<double>::quiet_NaN();
-        return trades_[idx].entry_price;
+        return trades_.entry_price_at(idx);
     }
     double closed_trade_exit_price(int idx) const {
         if (idx < 0 || idx >= (int)trades_.size()) return std::numeric_limits<double>::quiet_NaN();
-        return trades_[idx].exit_price;
+        return trades_.exit_price_at(idx);
     }
     int64_t closed_trade_entry_time(int idx) const {
         if (idx < 0 || idx >= (int)trades_.size()) return 0;
-        return trades_[idx].entry_time;
+        return trades_.entry_time_at(idx);
     }
     int64_t closed_trade_exit_time(int idx) const {
         if (idx < 0 || idx >= (int)trades_.size()) return 0;
-        return trades_[idx].exit_time;
+        return trades_.exit_time_at(idx);
     }
     double closed_trade_size(int idx) const {
         if (idx < 0 || idx >= (int)trades_.size()) return std::numeric_limits<double>::quiet_NaN();
-        return trades_[idx].qty;
+        return trades_.qty_at(idx);
     }
     double closed_trade_max_runup(int idx) const {
         if (idx < 0 || idx >= (int)trades_.size()) return 0.0;
-        return trades_[idx].max_runup;
+        return trades_.max_runup_at(idx);
     }
     // Percent excursions: trade.max_runup / max_drawdown are stored in
     // account currency (× pointvalue, see build_close_trade_with_costs), so the entry
@@ -1674,25 +1674,23 @@ protected:
     // pointvalue=1 cancels out and matches the legacy ratio bit-for-bit.
     double closed_trade_max_runup_percent(int idx) const {
         if (idx < 0 || idx >= (int)trades_.size()) return 0.0;
-        const Trade& t = trades_[idx];
-        double cost = t.entry_price * t.qty * syminfo_.pointvalue;
-        return (cost > 0.0) ? (t.max_runup / cost) * 100.0 : 0.0;
+        double cost = trades_.entry_price_at(idx) * trades_.qty_at(idx) * syminfo_.pointvalue;
+        return (cost > 0.0) ? (trades_.max_runup_at(idx) / cost) * 100.0 : 0.0;
     }
     double closed_trade_max_drawdown(int idx) const {
         if (idx < 0 || idx >= (int)trades_.size()) return 0.0;
-        return trades_[idx].max_drawdown;
+        return trades_.max_drawdown_at(idx);
     }
     double closed_trade_max_drawdown_percent(int idx) const {
         if (idx < 0 || idx >= (int)trades_.size()) return 0.0;
-        const Trade& t = trades_[idx];
-        double cost = t.entry_price * t.qty * syminfo_.pointvalue;
-        return (cost > 0.0) ? (t.max_drawdown / cost) * 100.0 : 0.0;
+        double cost = trades_.entry_price_at(idx) * trades_.qty_at(idx) * syminfo_.pointvalue;
+        return (cost > 0.0) ? (trades_.max_drawdown_at(idx) / cost) * 100.0 : 0.0;
     }
 
     // --- Direction accessors ---
     std::string closed_trade_direction(int idx) const {
         if (idx < 0 || idx >= (int)trades_.size()) return "";
-        return trades_[idx].is_long ? "long" : "short";
+        return trades_.is_long_at(idx) ? "long" : "short";
     }
     std::string open_trade_direction(int idx) const {
         if (position_side_ == PositionSide::FLAT || idx < 0 || idx >= (int)pyramid_entries_.size()) return "";
