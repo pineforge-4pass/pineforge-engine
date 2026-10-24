@@ -225,7 +225,16 @@ void check_run(const Outcome& outcome, std::size_t resting, const char* name) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    const bool spilled_only = argc > 1 && std::strcmp(argv[1], "--spilled-only") == 0;
+    // The twin row _spilled_only is its own executable, built from this body
+    // with PINEFORGE_B1_TWIN_FLAG (tests/cr150.d/s4e-fix-b1.cmake).
+#ifdef PINEFORGE_B1_TWIN_FLAG
+    const char* const flag = PINEFORGE_B1_TWIN_FLAG;
+    (void) argc;
+    (void) argv;
+#else
+    const char* const flag = argc > 1 ? argv[1] : "";
+#endif
+    const bool spilled_only = std::strcmp(flag, "--spilled-only") == 0;
     try {
         constexpr std::size_t kSpilled = 4200;
         // Self-checks that the run reaches the site: the closes are placed

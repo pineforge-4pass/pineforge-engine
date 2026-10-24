@@ -1,14 +1,17 @@
-// 1.7.0 review B1-05: what the matcher reads to find its winner's row does
-// not grow with the book.
+// 1.7.0 review B1-05: the matcher finds its winners' rows without walking the
+// book. That is the whole claim: the bound the code gives (round 4, below) is
+// O(1) for a winner its scan found outside the heap, one keyed search at most
+// per point, and an uncounted O(log N) refresh path per spilled Evaluate
+// winner per point, which is not O(1).
 //
 // Past its resident bound (kBookMax = 4,096 rows, src/native_order.cpp) the
 // working book keeps its newest rows in an external ordered table, and
 // WorkingRequestCore::live_at(rank) walks `rank` queue steps from the front,
 // one table step for every spilled row it passes. match_path looked every
 // winner up that way (its scanned_request), so a point with K fills paid K
-// walks of the whole spilled part. The lookup a winner needs must be O(1) in
-// the book: the walk of the scan holds the row it picked, and a row kept
-// from an earlier scan is found without a walk from the front.
+// walks of the whole spilled part. The lookup a winner needs must walk no
+// queue: the walk of the scan holds the row it picked, and a row kept from an
+// earlier scan is found without a walk from the front.
 //
 // The run: bar 1 places N resting buy limits the tape never reaches, then
 // K = 50 reachable buy limits (the newest rows, so outside the heap); bar 2
@@ -58,10 +61,17 @@
 //    promote_book_row finds the row in the spilled table, make_book_room
 //    spills the heap's back row into it). B1-05 makes the matcher's lookup
 //    O(1); it does not make the refresh path O(1).
+// What the counter counts (src/native_order.cpp, book_lookup_reads): a row
+// read back per keyed search (spilled_held) or rank read (live_at,
+// live_back), and a step per spilled row a rank walk passes (live_at,
+// live_back) -- nothing else. A keyed search's own O(log N) DiskIdTable steps
+// are not steps here, and the refresh path (promote_book_row, make_book_room)
+// adds nothing to either.
 // What is asserted: no rank walk in either book (the table steps, equal: both
 // none), and in each window fewer keyed lookups than the spilled rows a single
 // point reuses (book - kResidentRows), which a lookup per reused spilled
-// winner cannot give. The totals are printed.
+// winner cannot give. The totals are printed. No equality of the totals, and
+// nothing about the refresh path's cost, is asserted (round 5).
 #include "../src/native_execution_consumer.hpp"
 
 #include <pineforge/native_host.hpp>
