@@ -328,7 +328,9 @@ signed zero; object padding is not a new wire format. The additional
 `pf_close_cause_t` classification, while `exit_from_bracket` separately
 preserves the raw 0/1 source label. Completed rows have `open_at_end=0`;
 the report provider also covers its terminal suffix. Do not synthesize close
-causes from IDs or reinterpret a margin row as a bracket row.
+causes from IDs or reinterpret a margin row as a bracket row. The
+`entry_incarnation` identifies an accepted request record; a definition
+superseded before submission has none.
 
 Both sources return `at(index)` **by value**. For `read_page(from,out,capacity)`,
 the caller supplies the bounded buffer; the method copies ascending logical
