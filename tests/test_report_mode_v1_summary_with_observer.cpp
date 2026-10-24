@@ -559,7 +559,12 @@ int main() {
     });
 
     // The public window setter bypasses observer-registration admission.
-    // B2 keeps the existing envelope gate as a control; B3 independently
+    // B2 is the no-run control: a window configured for a run that never
+    // happens must not publish a report. The envelope read answers either
+    // REPLAY_UNAVAILABLE (a pending window judged like an admitted one) or
+    // ACCEPTED with complete == 0 (N5: a pending window configures the NEXT
+    // run and only an admitted capture judges the read); both are fail-closed
+    // here, so the row holds with or without N5 picked. B3 independently
     // requires either the begin guard or the capture backstop to fail closed.
     if (!suite.row("B2", [&] {
         Host host;
@@ -569,11 +574,12 @@ int main() {
         select_window(host);
         Envelope result;
         const int status = host.fill_report_envelope_v1(&result.value);
-        std::printf("B2: envelope status=%d expected=%d complete=%u\n",
-                    status, PF_REPORT_MODE_REPLAY_UNAVAILABLE, result.value.metadata.complete);
-        require(status == PF_REPORT_MODE_REPLAY_UNAVAILABLE
+        std::printf("B2: envelope status=%d complete=%u\n",
+                    status, result.value.metadata.complete);
+        require((status == PF_REPORT_MODE_REPLAY_UNAVAILABLE || status == PF_REPORT_MODE_ACCEPTED)
                     && result.value.metadata.complete == 0 && withheld(result.value.report),
-                "B2: envelope must refuse capture exactly with REPLAY_UNAVAILABLE");
+                "B2: a never-run window must publish nothing: REPLAY_UNAVAILABLE or "
+                "ACCEPTED, complete == 0, report withheld");
         require(host.begins == 0 && host.calculations == 0
                     && host.last_run_status() == 0 && host.last_error().empty(),
                 "B2: envelope refusal executed or failed the run");
