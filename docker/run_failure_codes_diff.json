@@ -8,7 +8,7 @@
   "to": {
     "version": null,
     "unreleased": true,
-    "catalogSha256": "f913ea6f56e2dffbf37ee00eaf7c848d3199f675d22a725f7061ef56608966e1"
+    "catalogSha256": "65e6fd5be0a3db6440f3787b1c0c86e57a541e28627372f4eb98f4e906a375ec"
   },
   "catalogSchema": {
     "before": "pineforge-run-failure-catalog/v1",
@@ -44,10 +44,10 @@
           }
         },
         "class": "unsupported",
-        "description": "The requested report mode cannot be provided for this run. Two causes: the host has no provider bridge for the mode and contract (run_json), or the native kernel refuses a SUMMARY_ONLY run that configures a selected window or an execution observer without a report sink at begin, because that capture has no exact trade rows. Remedy for the second cause: drop the window or the observer, attach a report sink, or select FULL.",
+        "description": "The requested report mode cannot be provided for this run. Two causes: the host has no provider bridge for the mode and contract (run_json), or the native kernel refuses a SUMMARY_ONLY run that configures a selected window or an execution observer without a report sink at begin, because that capture has no exact trade rows. Remedy for the second cause: drop the window or the observer, or select FULL; bounded capture uses STREAMED with a sink.",
         "english": [
           "unsupported report mode: {mode} (no {contract} provider bridge for this host)",
-          "unsupported report mode: {mode} (a selected window or execution observer needs a {contract} report sink: drop it, attach a sink, or select FULL)"
+          "unsupported report mode: {mode} (a selected window or execution observer cannot be captured exactly under {contract} in this mode: drop it or select FULL; bounded capture uses STREAMED with a sink)"
         ],
         "retryable": false,
         "since": "1.7.0"

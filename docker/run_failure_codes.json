@@ -838,10 +838,10 @@
     }
    },
    "class": "unsupported",
-   "description": "The requested report mode cannot be provided for this run. Two causes: the host has no provider bridge for the mode and contract (run_json), or the native kernel refuses a SUMMARY_ONLY run that configures a selected window or an execution observer without a report sink at begin, because that capture has no exact trade rows. Remedy for the second cause: drop the window or the observer, attach a report sink, or select FULL.",
+   "description": "The requested report mode cannot be provided for this run. Two causes: the host has no provider bridge for the mode and contract (run_json), or the native kernel refuses a SUMMARY_ONLY run that configures a selected window or an execution observer without a report sink at begin, because that capture has no exact trade rows. Remedy for the second cause: drop the window or the observer, or select FULL; bounded capture uses STREAMED with a sink.",
    "english": [
     "unsupported report mode: {mode} (no {contract} provider bridge for this host)",
-    "unsupported report mode: {mode} (a selected window or execution observer needs a {contract} report sink: drop it, attach a sink, or select FULL)"
+    "unsupported report mode: {mode} (a selected window or execution observer cannot be captured exactly under {contract} in this mode: drop it or select FULL; bounded capture uses STREAMED with a sink)"
    ],
    "retryable": false,
    "since": "1.7.0"
