@@ -14,9 +14,20 @@
 namespace ledger_io {
 struct Counts {
     std::uint64_t reads = 0, writes = 0, written_bytes = 0, allocations = 0;
+    std::uint64_t large_array_attempts = 0;
 };
 inline bool measuring = false;
+inline bool fail_large = false;
+inline constexpr std::size_t kLargeArrayBytes = 8 * 1024;
 inline Counts counts;
+
+struct FailLargeArrays {
+    FailLargeArrays() {
+        REQUIRE(!fail_large);
+        fail_large = true;
+    }
+    ~FailLargeArrays() { fail_large = false; }
+};
 
 struct Measure {
     Measure() {
@@ -34,6 +45,8 @@ struct Measure {
 
 // Executable-local allocation counter: real storage still comes from malloc.
 // Numeric-only measurement contains no expected-row copies or string reads.
+// Only this executable can refuse arrays above 8 KiB. This reaches the real
+// cache allocation without refusing the scalar allocations for owning strings.
 // Production has no counter, branch or hook.
 void* operator new(std::size_t bytes) {
     void* result = std::malloc(bytes ? bytes : 1);
@@ -41,7 +54,13 @@ void* operator new(std::size_t bytes) {
     if (ledger_io::measuring) ++ledger_io::counts.allocations;
     return result;
 }
-void* operator new[](std::size_t bytes) { return ::operator new(bytes); }
+void* operator new[](std::size_t bytes) {
+    if (bytes > ledger_io::kLargeArrayBytes) {
+        if (ledger_io::measuring) ++ledger_io::counts.large_array_attempts;
+        if (ledger_io::fail_large) throw std::bad_alloc();
+    }
+    return ::operator new(bytes);
+}
 void operator delete(void* pointer) noexcept { std::free(pointer); }
 void operator delete[](void* pointer) noexcept { std::free(pointer); }
 void operator delete(void* pointer, std::size_t) noexcept { std::free(pointer); }
@@ -98,6 +117,89 @@ void forwarding_control() {
     ::operator delete(block);
     const auto allocation = allocation_measure.finish();
     REQUIRE(allocation.allocations == 1);
+    Measure failed_array_measure;
+    {
+        ledger_io::FailLargeArrays fail_arrays;
+        bool caught = false;
+        try {
+            void* array = ::operator new[](ledger_io::kLargeArrayBytes + 1);
+            ::operator delete[](array);
+        } catch (const std::bad_alloc&) { caught = true; }
+        REQUIRE(caught);
+    }
+    const auto failed_array = failed_array_measure.finish();
+    REQUIRE(failed_array.large_array_attempts == 1);
+    REQUIRE(failed_array.allocations == 0);
+}
+
+void optional_cache_allocation_failure() {
+    // Cold first read and growth of an already allocated 64-row cache both
+    // fail at the 128-row target (128 * 312 = 39,936 bytes, above 8 KiB).
+    for (const bool warmed : {false, true}) {
+        Reader host;
+        auto& ledger = host.ledger();
+        ledger.set_scratch_directory(".");
+        const auto fixed_bytes = ledger.cache_resident_bytes();
+        std::vector<Trade> expected;
+        expected.reserve(129);
+        for (int n = 0; n < 64; ++n) {
+            expected.push_back(row(n));
+            ledger.push_back(expected.back());
+        }
+        if (warmed) {
+            host.compare_fields(0, expected[0]);
+            REQUIRE(ledger.cache_size() == 1);
+            REQUIRE(ledger.cache_resident_bytes()
+                    == fixed_bytes + 64 * TradeLedger::kLedgerEntryBytes);
+        }
+        {
+            ledger_io::FailLargeArrays fail_arrays;
+            Measure failure;
+            for (int n = 64; n < 100; ++n) {
+                expected.push_back(row(n));
+                ledger.push_back(expected.back());
+            }
+            for (int pass = 0; pass < 3; ++pass) {
+                for (std::size_t i = 0; i < expected.size(); ++i) {
+                    same_trade(ledger.read(i), expected[i]);
+                    same_trade(ledger[i], expected[i]);
+                    same_numeric(ledger.numeric_at(i), expected[i]);
+                    same_numeric_fields(ledger, i, expected[i]);
+                    same_string_fields(ledger, i, expected[i]);
+                    host.compare_fields(static_cast<int>(i), expected[i]);
+                }
+                CHECK(ledger.cache_size() == 0);
+                CHECK(ledger.cache_resident_bytes() == fixed_bytes);
+            }
+            const auto failed = failure.finish();
+            CHECK(failed.large_array_attempts == 1); // Never retry per field/bar.
+            CHECK(failed.reads > 0); // Real descriptor fallback, not fake values.
+        }
+        // Even a recovered allocator is not retried at the failed target.
+        Measure same_target;
+        for (std::size_t i = 0; i < expected.size(); ++i)
+            host.compare_fields(static_cast<int>(i), expected[i]);
+        const auto suppressed = same_target.finish();
+        CHECK(suppressed.large_array_attempts == 0);
+        CHECK(suppressed.reads > 0 && suppressed.writes == 0);
+        CHECK(ledger.cache_size() == 0);
+        CHECK(ledger.cache_resident_bytes() == fixed_bytes);
+        for (int n = 100; n < 129; ++n) {
+            expected.push_back(row(n));
+            ledger.push_back(expected.back());
+        }
+        // Population 129 advances the target to 256; one successful retry
+        // restores caching, with exactly the same independent oracle values.
+        Measure recovery;
+        for (std::size_t i = 0; i < expected.size(); ++i)
+            host.compare_fields(static_cast<int>(i), expected[i]);
+        const auto recovered = recovery.finish();
+        CHECK(recovered.large_array_attempts == 1);
+        CHECK(recovered.reads > 0 && recovered.writes == 0);
+        CHECK(ledger.cache_size() == expected.size());
+        CHECK(ledger.cache_resident_bytes()
+              == fixed_bytes + 256 * TradeLedger::kLedgerEntryBytes);
+    }
 }
 
 // Prepare genuine misses without inventing a per-bar OPEN -> replace path.
@@ -319,16 +421,54 @@ void wide_strings_keep_numeric_rows_cached() {
     CHECK(texts.writes == 0);
     same_trade(ledger.read(0), expected[0]);
 }
+
+void exact_string_admission_has_observable_io() {
+    TradeLedger ledger;
+    ledger.set_scratch_directory(".");
+    Trade fits = row(0);
+    const auto other_bytes = fits.entry_id.size() + fits.entry_comment.size()
+        + fits.exit_id.size();
+    REQUIRE(other_bytes < TradeLedger::kCacheStringBytes);
+    fits.exit_comment.assign(TradeLedger::kCacheStringBytes - other_bytes, 'C');
+    fits.exit_comment[10] = '\0';
+    Trade wider = fits;
+    wider.exit_comment.push_back('\0');
+    // pressure() updates the last row: a separate sentinel leaves both
+    // boundary rows' extents outside the payload tail.
+    const std::vector<Trade> expected{fits, wider, row(2)};
+    for (const auto& value : expected) ledger.push_back(value);
+    pressure(ledger, expected); // Displace payloads and old descriptors.
+    same_string_fields(ledger, 0, fits);
+    same_string_fields(ledger, 1, wider);
+    REQUIRE(ledger.cache_size() == 2); // Both numeric records are warm.
+    Measure admitted;
+    for (int pass = 0; pass < 8; ++pass)
+        same_string_fields(ledger, 0, fits);
+    const auto fit_io = admitted.finish();
+    CHECK(fit_io.reads == 0 && fit_io.writes == 0); // Exactly 128 packed bytes.
+    Measure fallback;
+    for (int pass = 0; pass < 8; ++pass)
+        same_string_fields(ledger, 1, wider);
+    const auto wide_io = fallback.finish();
+    // Its descriptor is cached, so these are payload preads for 129 bytes.
+    CHECK(wide_io.reads > 0 && wide_io.writes == 0);
+    same_trade(ledger.read(0), fits);
+    same_trade(ledger.read(1), wider);
+}
 } // namespace
 
 int main() {
     test("real forwarded positional I/O counters", forwarding_control);
+    test("optional cache allocation failure falls back and retries only at growth",
+         optional_cache_allocation_failure);
     test("closedtrades loops with a live OPEN lot", per_bar_reads);
     test("equal strings retain extents, changed strings append", unchanged_strings_only_write_descriptor);
     test("numeric and id accessors share decoded cache", specialized_reads_share_warmed_rows);
     test("24,238 closed rows: field reads have no warm I/O or numeric allocation",
          hungpixi_population_field_reads);
     test("wide strings retain cached numeric fields", wide_strings_keep_numeric_rows_cached);
+    test("128-byte strings cache, 129-byte strings read payload scratch",
+         exact_string_admission_has_observable_io);
     std::printf("test_p2cx_tledger_io: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

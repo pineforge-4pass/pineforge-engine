@@ -107,7 +107,8 @@ void budgets_and_accounting() {
 
 void lazy_growth_boundaries() {
     for (const Size budget : {TradeLedger::kDefaultCacheRows, TradeLedger::kMaxCacheRows}) {
-        TradeLedger ledger;
+        Reader host;
+        auto& ledger = host.ledger();
         ledger.set_scratch_directory(".");
         ledger.set_cache_rows(budget);
         const auto fixed_bytes = ledger.cache_resident_bytes();
@@ -145,6 +146,10 @@ void lazy_growth_boundaries() {
         same_numeric_fields(ledger, 64, expected[64]);
         same_string_fields(ledger, 64, expected[64]);
         matches(ledger, expected);
+        // Shared with the Linux I/O test: exercise every closed_trade_* field
+        // through the engine on all platforms, including after growth/rewind.
+        for (Size i = 0; i < expected.size(); ++i)
+            host.compare_fields(static_cast<int>(i), expected[i]);
         bounded(ledger);
     }
 }
@@ -315,7 +320,7 @@ void exact_string_allowance_and_numeric_bits() {
     value.open_at_end = true;
     ledger.push_back(value);
     same_trade(ledger.read(0), value);
-    CHECK(ledger.cache_size() == 1); // Exactly 128 bytes is admitted.
+    CHECK(ledger.cache_size() == 1); // Numeric row; Linux I/O checks string admission.
     same_numeric(ledger.numeric_at(0), value);
     same_numeric_fields(ledger, 0, value);
     same_string_fields(ledger, 0, value);
@@ -342,7 +347,7 @@ void exact_string_allowance_and_numeric_bits() {
     same_trade(copied.read(0), wider);
     same_trade(copied.read(1), wider);
     same_trade(copied.read(2), empty);
-    ledger.seal(ledger.size()); // Force external descriptors for the next miss.
+    ledger.seal(ledger.size()); // Publication keeps these cached rows; reads below hit.
     same_trade(ledger.read(0), wider);
     same_trade(ledger.read(2), empty);
     bounded(ledger);

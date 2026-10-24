@@ -20,6 +20,7 @@
 #include <cctype>
 #include <cmath>
 #include <map>
+#include <new>
 #include <optional>
 #include <stdexcept>
 #include <type_traits>
@@ -390,6 +391,7 @@ struct TradeLedger::State {
     size_type cache_rows = kDefaultCacheRows;
     mutable std::unique_ptr<CacheEntry[]> cache;
     mutable size_type cache_count = 0, cache_capacity = 0;
+    mutable size_type cache_alloc_failed_at = 0;
     mutable size_type cache_generation = 2;
 
     State() {
@@ -426,7 +428,7 @@ struct TradeLedger::State {
     }
     void invalidate_cache() const {
         cache_count = 0;
-        // Generations make publication/rewind/move invalidation O(1).
+        // Generations make growth/rewind/move invalidation O(1).
         // Even the wraparound fallback touches at most the configured budget.
         if (cache_generation == std::numeric_limits<size_type>::max() - 1) {
             if (cache)
@@ -441,16 +443,24 @@ struct TradeLedger::State {
         size_type capacity = kResidentRows;
         while (capacity < population && capacity < cache_rows) capacity *= 2;
         capacity = std::min(capacity, cache_rows);
+        // An optional cache must not retry a failed allocation per field/bar.
+        // Retry only after population growth advances the capacity target.
+        if (capacity <= cache_alloc_failed_at) return;
         invalidate_cache();
         // Discard the old allocation first: even transient storage stays
         // within the configured row budget during growth.
         cache.reset();
         cache_capacity = 0;
-        cache = std::make_unique<CacheEntry[]>(capacity);
+        try {
+            cache = std::make_unique<CacheEntry[]>(capacity);
+        } catch (const std::bad_alloc&) {
+            cache_alloc_failed_at = capacity;
+            return; // Null cache and zero capacity retain the scratch path.
+        }
         cache_capacity = capacity;
     }
-    const CacheEntry& remember(size_type global, const Record& record) const {
-        ensure_cache(end);
+    const CacheEntry* remember(size_type global, const Record& record) const {
+        if (!cache) return nullptr;
         auto& entry = cache[cache_slot(global)];
         if (current(entry)) --cache_count;
         entry.generation = 0;
@@ -476,31 +486,35 @@ struct TradeLedger::State {
         }
         entry.generation = cache_generation | static_cast<size_type>(strings_valid);
         ++cache_count;
-        return entry;
+        return &entry;
     }
-    const CacheEntry& load(size_type global) const {
-        if (const auto* entry = cached(global)) return *entry;
+    const CacheEntry* load(size_type global) const {
+        if (const auto* entry = cached(global)) return entry;
+        ensure_cache(end);
+        if (!cache) return nullptr;
         return remember(global, descriptor(global));
     }
     template<auto Member>
     auto numeric_field(size_type global) const {
         check(global, true);
-        return load(global).record.*Member;
+        if (const auto* entry = load(global)) return entry->record.*Member;
+        return descriptor(global).*Member;
     }
     template<StringExtent Record::*Member>
     std::string string_field(size_type global) const {
         check(global, true);
-        const auto& entry = load(global);
-        const auto text = entry.record.*Member;
-        if (!entry.strings_valid()) return get_string(text);
+        const auto* entry = load(global);
+        if (!entry) return get_string(descriptor(global).*Member);
+        const auto text = entry->record.*Member;
+        if (!entry->strings_valid()) return get_string(text);
         size_type offset = 0;
         if constexpr (Member != &Record::entry_id)
-            offset += static_cast<size_type>(entry.record.entry_id.length);
+            offset += static_cast<size_type>(entry->record.entry_id.length);
         if constexpr (Member == &Record::exit_comment || Member == &Record::exit_id)
-            offset += static_cast<size_type>(entry.record.entry_comment.length);
+            offset += static_cast<size_type>(entry->record.entry_comment.length);
         if constexpr (Member == &Record::exit_id)
-            offset += static_cast<size_type>(entry.record.exit_comment.length);
-        return std::string(entry.strings.data() + offset, static_cast<size_type>(text.length));
+            offset += static_cast<size_type>(entry->record.exit_comment.length);
+        return std::string(entry->strings.data() + offset, static_cast<size_type>(text.length));
     }
     static std::uint64_t record_offset(size_type global) {
         if (global > std::numeric_limits<std::uint64_t>::max() / sizeof(Record))
@@ -707,6 +721,7 @@ void TradeLedger::set_cache_rows(size_type rows) {
     state_->cache.reset();
     state_->cache_count = 0;
     state_->cache_capacity = 0;
+    state_->cache_alloc_failed_at = 0;
     state_->cache_rows = rows;
 }
 TradeLedger::size_type TradeLedger::cache_rows() const { return state_->cache_rows; }
@@ -732,8 +747,9 @@ bool TradeLedger::empty() const { return size() == 0; }
 
 Trade TradeLedger::read(size_type global) const {
     state_->check(global);
-    const auto& entry = state_->load(global);
-    return entry.strings_valid() ? State::decode_cached(entry) : state_->decode(entry.record);
+    if (const auto* entry = state_->load(global))
+        return entry->strings_valid() ? State::decode_cached(*entry) : state_->decode(entry->record);
+    return state_->decode(state_->descriptor(global));
 }
 
 Trade TradeLedger::operator[](size_type global) const { return at(global); }
