@@ -138,9 +138,9 @@ public:
         std::string name = resolve_scratch_directory(directory_, refusal, directory_error,
                                                      proven_memory);
         if (name.empty()) {
-            // Keep the established typed raiser for bounded and unbounded
-            // stores alike. A query-returned ENODEV is not a memory verdict.
-            io_error(proven_memory ? ENODEV : directory_error, refusal.c_str());
+            // Keep the resolver's errno and the established typed raiser for
+            // bounded and unbounded stores alike.
+            io_error(directory_error, refusal.c_str());
         }
         const auto create_message = scratch_create_message("scratch create", name, refusal);
         if (name.back() != '/') name += '/';

@@ -61,7 +61,7 @@ void row() {
             "default refusal must name every candidate, its rejection and the remedy");
     require(resolve("", {{"/var/tmp", tmpfs}}).empty()
                 && error == ENOENT && visited == std::vector<std::string>{"/tmp"}
-                && refusal.find("statfs") != std::string::npos
+                && refusal.find("directory check failed") != std::string::npos
                 && refusal.find("errno 2") != std::string::npos,
             "failed filesystem probes must remain visible in the refusal");
     require(refusal.find("/var/tmp") == std::string::npos
@@ -82,7 +82,7 @@ void row() {
             require(visited.size() == 1 && visited.front() == "/named-like-disk",
                     "a TMPDIR query error must make exactly one probe and never probe /var/tmp");
             require(refusal.find("TMPDIR '/named-like-disk'") != std::string::npos
-                        && refusal.find("statfs failed (errno " + std::to_string(query_error) + ": "
+                        && refusal.find("directory check failed (errno " + std::to_string(query_error) + ": "
                             + std::error_code(query_error, std::generic_category()).message() + ")")
                             != std::string::npos
                         && refusal.find("/var/tmp") == std::string::npos
@@ -112,7 +112,7 @@ void row() {
                     && error == ENOENT && !proven_memory
                     && visited == std::vector<std::string>{"/named-like-disk", "/var/tmp"}
                     && refusal.find("TMPDIR '/named-like-disk': tmpfs") != std::string::npos
-                    && refusal.find("fallback '/var/tmp': statfs failed (errno 2")
+                    && refusal.find("fallback '/var/tmp': directory check failed (errno 2")
                         != std::string::npos
                     && refusal.find("set TMPDIR") == std::string::npos,
                 "a /var/tmp query error must retain its errno and both candidate diagnostics");
