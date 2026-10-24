@@ -8,7 +8,7 @@
   "to": {
     "version": null,
     "unreleased": true,
-    "catalogSha256": "65e6fd5be0a3db6440f3787b1c0c86e57a541e28627372f4eb98f4e906a375ec"
+    "catalogSha256": "400961b4f134c550841fc7d04d4fe82026de133f33512ff1b41604302d6deddd"
   },
   "catalogSchema": {
     "before": "pineforge-run-failure-catalog/v1",
