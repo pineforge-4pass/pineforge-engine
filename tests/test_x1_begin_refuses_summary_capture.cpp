@@ -240,7 +240,9 @@ void refused_at_begin(Host& host, BeginRoute route = BeginRoute::Batch) {
     require(host.last_run_status() == 1 && !host.last_error().empty(),
             "SUMMARY_ONLY capture did not fail the run");
     require(host.last_error() == "unsupported report mode: SUMMARY_ONLY "
-                                 "(no pineforge-report/v1 provider bridge for this host)",
+                                 "(a selected window or execution observer needs a "
+                                 "pineforge-report/v1 report sink: drop it, attach a sink, "
+                                 "or select FULL)",
             "begin refusal diagnostic differs from the catalog template: " + host.last_error());
     require(state.kind == NativeLifecycleKind::Failed
                 && state.failure.operation == NativeFailureOperation::Begin,
