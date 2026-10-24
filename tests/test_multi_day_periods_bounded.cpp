@@ -44,7 +44,8 @@
  * change resolve to decreasing trading dates through session_covered_instant_ms.
  * The chart and auxiliary witnesses require the same differential even when
  * planning returns null (the host then keeps nominal aggregation). These are
- * expected RED on the line; the UTC monotone control must stay GREEN.
+ * expected RED on 14da9f0d82 (the bounded merge refused the feed) and GREEN
+ * from the rescan fallback; the UTC monotone control is GREEN on both.
  */
 
 #include <pineforge/pineforge.h>
@@ -735,9 +736,11 @@ void test_f16_f17_monotone_control() {
 
 // ─── F16/F17 repair: late/repeated decreases and a bounded unordered walk ────
 
-// Mirrors the production rescan window; re-read against the production value
-// when integrating. Keep this local so the red rows compile before the fix.
+// Mirrors the production rescan window; the static_assert ties the two so the
+// memory row's tape lengths and budget cannot drift from production.
 constexpr int kWindowDays = 366;
+static_assert(kWindowDays == static_cast<int>(source::kUnorderedRescanDays),
+              "the memory row describes the production rescan window");
 
 Scenario extended_date_order_fixture(const char* name, std::int64_t from, std::int64_t to,
                                      const std::vector<std::int64_t>& fall_backs) {
