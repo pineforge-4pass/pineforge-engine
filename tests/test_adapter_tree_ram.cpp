@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <iterator>
 #include <limits>
@@ -62,6 +63,25 @@ bool same_bits(double left, double right) {
 struct ProbeScope {
     explicit ProbeScope(Probe& probe) { active = &probe; }
     ~ProbeScope() { active = nullptr; }
+};
+class CohortBudgetScope {
+public:
+    explicit CohortBudgetScope(const char* value) {
+        if (const char* previous = std::getenv(kName)) previous_ = previous;
+        require((value ? ::setenv(kName, value, 1) : ::unsetenv(kName)) == 0,
+                "select cohort resident budget");
+    }
+    CohortBudgetScope(const CohortBudgetScope&) = delete;
+    CohortBudgetScope& operator=(const CohortBudgetScope&) = delete;
+    ~CohortBudgetScope() {
+        if ((previous_ ? ::setenv(kName, previous_->c_str(), 1) : ::unsetenv(kName)) != 0) {
+            std::fputs("restore cohort resident budget failed\n", stderr);
+            std::abort();
+        }
+    }
+private:
+    static constexpr const char* kName = "PF_RESIDENT_IDTABLE_ENTRIES";
+    std::optional<std::string> previous_;
 };
 std::shared_ptr<ScratchSlab> owner(bool ram, std::uint64_t rows, std::uint64_t bytes,
                                  std::uint64_t ranks, std::uint64_t rank_bytes) {
@@ -568,24 +588,38 @@ void isolated_cohort_leaves_match_with_retired_and_live_facts() {
 
 class CorruptCohortHost final : public TreeHost {
 public:
-    explicit CorruptCohortHost(std::optional<std::uint64_t> reference)
-        : TreeHost(owner(true, 1, 3, 0, 0)), reference_(reference) {}
+    explicit CorruptCohortHost(std::optional<std::uint64_t> reference, bool eviction = true)
+        : TreeHost(owner(true, 2, 6, 0, 0)), reference_(reference), eviction_(eviction) {}
     void on_source_bar(const Bar&) override {
-        if (pine_bar_index() != 0) return;
+        // Run the shape on the final bar: the default-budget observer then
+        // covers the complete run without an unrelated next-bar explicit flush.
+        if (pine_bar_index() != 1) return;
         bind_trees();
         strategy_exit("orphan-x", "old", 200.0, 0.5);
-        // all_sorted's range pins its first row during iterator advancement;
-        // the single empty cohort therefore stays resident after this walk.
         (void)source_hash();
-        const auto spills_before = operations.orphan_spills;
-        // A missing-id close uses openings_for -> find -> spill without
-        // restoring "old" or creating another cohort. It also records a
-        // dropped close, so the clean control supplies the matching hash.
+        // Both cohorts are empty/spillable. With budget 1 the second real
+        // exit's table insertion/lookup evicts the lowest-offset row, "old".
+        // The missing-id lookup also applies any remaining budget pressure,
+        // without restoring "old"; its dropped-close receipt is in the control.
+        strategy_exit("second-x", "new", 200.0, 0.5);
         strategy_close("missing");
-        require(operations.orphan_spills == spills_before + 1,
-                "missing-id close spills the resident empty cohort");
-        require(slab()->region(ScratchResource::cohort).logical_extent == 100,
-                "one old key uses 1+96+3 bytes");
+        // Packed layout: null byte + 2*(56-byte Links + 40-byte Record)
+        // + len("old") + len("new") = 1 + 2*96 + 3 + 3 = 199.
+        require(slab()->region(ScratchResource::cohort).logical_extent == 199,
+                "two cohort keys use 1+2*(56+40)+3+3 bytes");
+        if (!eviction_) {
+            // Default-budget counterpart of the low-budget eviction row:
+            // same two exits, missing-id close and fold, with the env unset.
+            clean_hash = source_hash();
+            require(reference_ && *clean_hash == *reference_,
+                    "default budget preserves the exact low-budget control fold");
+            require(operations.orphan_spills == 0 && operations.spills == 0,
+                    "default-budget shape spilled a resident cohort");
+            checked = true;
+            return;
+        }
+        require(operations.orphan_spills >= 1,
+                "real spillable predicate proves the old cohort was evicted to disk");
         // First packed node is at 1; its 56-byte Links precede the handle.
         std::uint64_t handle = 0;
         slab()->read_at(ScratchResource::cohort, 57, &handle, sizeof handle);
@@ -613,17 +647,90 @@ public:
     std::optional<std::uint64_t> clean_hash;
 private:
     const std::optional<std::uint64_t> reference_;
+    const bool eviction_;
 };
 
 void corrupt_cohort_keeps_the_scratch_io_code() {
     const auto bars = flat_tape(2);
-    CorruptCohortHost control(std::nullopt);
-    { ProbeScope scope(control.operations); control.run(bars.data(), static_cast<int>(bars.size())); }
-    require(control.last_error().empty() && control.checked && control.clean_hash.has_value(),
-            "clean corrupt-record control completed");
-    CorruptCohortHost host(*control.clean_hash);
-    { ProbeScope scope(host.operations); host.run(bars.data(), static_cast<int>(bars.size())); }
-    require(host.last_error().empty() && host.checked, "corrupt-record witness completed");
+    std::uint64_t reference = 0;
+    {
+        CohortBudgetScope budget("1"); // Before construction; restored on every exit.
+        CorruptCohortHost control(std::nullopt);
+        { ProbeScope scope(control.operations); control.run(bars.data(), static_cast<int>(bars.size())); }
+        require(control.last_error().empty() && control.checked && control.clean_hash.has_value(),
+                "clean corrupt-record control completed");
+        reference = *control.clean_hash;
+        CorruptCohortHost host(reference);
+        { ProbeScope scope(host.operations); host.run(bars.data(), static_cast<int>(bars.size())); }
+        require(host.last_error().empty() && host.checked, "corrupt-record witness completed");
+        std::printf("[cohort-budget-low] control_old=%zu control_spills=%zu old=%zu spills=%zu\n",
+                    control.operations.orphan_spills, control.operations.spills,
+                    host.operations.orphan_spills, host.operations.spills);
+    }
+    {
+        CohortBudgetScope budget(nullptr); // Explicit default, also restores caller's env.
+        CorruptCohortHost host(reference, false);
+        { ProbeScope scope(host.operations); host.run(bars.data(), static_cast<int>(bars.size())); }
+        require(host.last_error().empty() && host.checked, "default-budget counterpart completed");
+        require(host.operations.orphan_spills == 0 && host.operations.spills == 0,
+                "default-budget complete run spilled a cohort");
+        std::printf("[cohort-budget-default] old=%zu spills=%zu\n",
+                    host.operations.orphan_spills, host.operations.spills);
+    }
+}
+
+class BudgetRefusalHost final : public TreeHost {
+public:
+    BudgetRefusalHost() : TreeHost(owner(true, 2, 6, 0, 0)) {}
+    void on_source_bar(const Bar&) override { ++callbacks; }
+    int callbacks = 0;
+};
+
+void invalid_resident_budget_refuses_before_bars() {
+    const auto bars = flat_tape(2);
+    for (const char* invalid : {"0", "abc"}) {
+        CohortBudgetScope budget(invalid);
+        BudgetRefusalHost host;
+        host.run(bars.data(), static_cast<int>(bars.size()));
+        require(!host.last_error().empty()
+                && run_failure_value_of(host).code == RunFailureCode::scratch_configuration_invalid,
+                "invalid resident budget must keep its typed setup failure");
+        require(host.callbacks == 0 && host.trade_count() == 0,
+                "invalid resident budget ran a strategy bar or made a trade");
+        require(host.last_error().find("idtable_entries") != std::string::npos
+                && host.last_error().find(invalid) != std::string::npos
+                && host.last_error().find("max=") != std::string::npos,
+                "resident budget refusal must name kind, value and maximum");
+    }
+}
+
+class BudgetSnapshotHost final : public TreeHost {
+public:
+    BudgetSnapshotHost() : TreeHost(owner(true, 2, 6, 0, 0)) {}
+    void on_source_bar(const Bar&) override {
+        ++callbacks;
+        if (pine_bar_index() == 0) {
+            bind_trees();
+            require(::setenv("PF_RESIDENT_IDTABLE_ENTRIES", "abc", 1) == 0,
+                    "change the environment after run setup");
+        }
+        strategy_exit("orphan-x", "old", 200.0, 0.5);
+    }
+    int callbacks = 0;
+};
+
+void resident_budget_is_sampled_once_per_run() {
+    CohortBudgetScope budget("1");
+    BudgetSnapshotHost host;
+    const auto bars = flat_tape(2);
+    host.run(bars.data(), static_cast<int>(bars.size()));
+    require(host.last_error().empty() && host.callbacks == static_cast<int>(bars.size()),
+            "changing the environment inside a run changed its resolved budget");
+    host.run(bars.data(), static_cast<int>(bars.size()));
+    require(!host.last_error().empty()
+            && run_failure_value_of(host).code == RunFailureCode::scratch_configuration_invalid
+            && host.callbacks == static_cast<int>(bars.size()),
+            "the next run did not refuse the new invalid budget before callbacks");
 }
 
 } // namespace tree_ram_fixture
@@ -637,6 +744,8 @@ int main() {
         tree_ram_fixture::twenty_eighth_rank_key_is_ignored();
         tree_ram_fixture::adapter_capacity_before_command_and_financial_commit();
         tree_ram_fixture::corrupt_cohort_keeps_the_scratch_io_code();
+        tree_ram_fixture::invalid_resident_budget_refuses_before_bars();
+        tree_ram_fixture::resident_budget_is_sampled_once_per_run();
         std::puts("test_adapter_tree_ram: disk/RAM trades, cohort folds and rank order");
         return 0;
     } catch (const std::exception& error) {

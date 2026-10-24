@@ -164,6 +164,7 @@ set(PINEFORGE_KERNEL_SOURCES
     src/metrics_spill_curve.cpp
     src/report_scratch.cpp
     src/scratch_arena.cpp
+    src/resident_budget.cpp
 )
 # The kernel-only archive: libpineforge.a's kernel objects and flags, for consumers that never speak Pine.
 add_library(pineforge_kernel STATIC ${PINEFORGE_KERNEL_SOURCES})

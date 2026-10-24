@@ -1,4 +1,5 @@
 #include <pineforge/source/pine_adapter.hpp>
+#include <pineforge/detail/resident_budget.hpp>
 #include <pineforge/source/pine_input_domain.hpp>
 #include <pineforge/source/magnifier_intrabars.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
@@ -2561,6 +2562,10 @@ void PineExecutionAdapter::revive_brackets_after_margin(
 }
 
 void PineExecutionAdapter::reset_for_run() {
+    // Resolve once per run, before clearing/binding tables or any bar callback.
+    // Directory rebinding and hash/lookup paths must not re-read the environment.
+    const auto cohort_resident_limit = ::pineforge::detail::resident_entries(
+        ::pineforge::detail::ResidentKind::idtable_entries);
     position_tail_spill_.reset();
     position_tail_summary_ = std::make_shared<detail::PositionTailSummary>();
     exit_scratch_ = nullptr;
@@ -2576,6 +2581,7 @@ void PineExecutionAdapter::reset_for_run() {
         index->clear();
     admission_journal.reset();
     cohorts_by_id_.clear();
+    cohorts_by_id_.set_resident_limit(static_cast<std::size_t>(cohort_resident_limit));
     placement_.clear();
     live_by_source_key_.clear();
     clear_bracket_families();
@@ -28692,7 +28698,7 @@ void OriginRoster::retire_before(std::size_t global) {
 // row reader. Explicit names in live/queued placements also pin an origin
 // whose own row has gone. No persistent release bitmap or lookup is added.
 void PineExecutionAdapter::retire_origin_prefixes() {
-    cohorts_by_id_.spill();
+    cohorts_by_id_.trim_to_budget();
     if (detail::retain_retired_rows()) return;
     // The front row alone can pin each retained window. Check before building
     // named, so a resting bracket/stop pair allocates no retirement scratch.
@@ -28780,7 +28786,7 @@ void PineExecutionAdapter::retire_origin_prefixes() {
                 index->cohort_sides.erase(&facts);
         }
     }
-    cohorts_by_id_.spill();
+    cohorts_by_id_.trim_to_budget();
     if (auto* index = adapter_lookup_index(consumer, this, run_counter_, false)) {
         auto& sides = index->cohort_sides;
         if (sides.bucket_count() / 4 > sides.size()) sides.rehash(sides.size());

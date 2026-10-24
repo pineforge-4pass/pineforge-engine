@@ -1607,6 +1607,9 @@ public:
     void set_auxiliary_tables_directory(const std::string& directory); // Same binding.
     void fixture_use_memory_auxiliary_tables();
     std::uint64_t fixture_auxiliary_disk_bytes() const noexcept;
+    auto fixture_cohort_resident_layout() const noexcept {
+        return cohorts_by_id_.resident_layout();
+    }
     std::uint64_t fixture_erased_digest() const noexcept { return placement_.erased_digest(); }
     std::uint64_t fixture_erased_rows() const noexcept { return placement_.erased_rows(); }
     const ::pineforge::detail::IdPairStore<std::int64_t, true>&

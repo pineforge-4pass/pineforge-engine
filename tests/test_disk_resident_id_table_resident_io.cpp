@@ -1,7 +1,9 @@
 // CR150-CX: real process I/O counters, not a ScratchFile wrapper or a mock.
-// Keep this unit buildable on c82fd00e8d5de30fd5d959c3e3fbcca0f0c48e9b:
-// the lab must run the SAME source on that base before testing the fix.
+// Round 1's rows have executed base/fix evidence. Round 2 adds the runtime
+// budget API and a separate eager-sorted-flush mutation witness for the lab.
 #include <pineforge/detail/disk_resident_id_table.hpp>
+#include <pineforge/detail/resident_budget.hpp>
+#include <pineforge/run_failure.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
 
 #include <algorithm>
@@ -13,8 +15,10 @@
 #include <cstring>
 #include <fcntl.h>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <unistd.h>
 #include <utility>
 #include <vector>
@@ -23,6 +27,27 @@ namespace {
 void require(bool value, const char* why) {
     if (!value) throw std::runtime_error(why);
 }
+
+class EnvironmentScope {
+public:
+    EnvironmentScope(const char* name, const char* value) : name_(name) {
+        if (const char* previous = std::getenv(name)) previous_ = previous;
+        require((value ? ::setenv(name, value, 1) : ::unsetenv(name)) == 0,
+                "select resident test environment");
+    }
+    EnvironmentScope(const EnvironmentScope&) = delete;
+    EnvironmentScope& operator=(const EnvironmentScope&) = delete;
+    ~EnvironmentScope() {
+        if ((previous_ ? ::setenv(name_.c_str(), previous_->c_str(), 1)
+                       : ::unsetenv(name_.c_str())) != 0) {
+            std::fputs("restore resident test environment failed\n", stderr);
+            std::abort();
+        }
+    }
+private:
+    std::string name_;
+    std::optional<std::string> previous_;
+};
 
 struct Directory {
     std::string path = "/tmp/pineforge-resident-io-XXXXXX";
@@ -47,6 +72,13 @@ public:
         const auto control = difference(before, after);
         require(control.reads == 0 && control.writes == 0,
                 "back-to-back /proc/self/io control is not zero");
+        const auto outer_before = sample();
+        (void)sample();
+        (void)sample();
+        const auto outer_after = sample();
+        const auto nested_control = difference(outer_before, outer_after, 2);
+        require(nested_control.reads == 0 && nested_control.writes == 0,
+                "nested /proc/self/io accounting control is not zero");
 #else
         std::puts("SKIP resident syscall counters: /proc/self/io requires Linux");
 #endif
@@ -84,17 +116,21 @@ public:
         return {};
 #endif
     }
-    static Io difference(Io before, Io after) {
+    static Io difference(Io before, Io after, std::uint64_t inner_samples = 0) {
 #if defined(__linux__)
         require(after.reads > before.reads && after.writes >= before.writes,
                 "process I/O counters moved backwards");
         // Linux accounts the pread after the proc snapshot is generated:
         // after includes the BEFORE snapshot's one read, not its own read.
-        // Subtract exactly that read; no test I/O remains in the delta.
-        return {after.reads - before.reads - 1, after.writes - before.writes};
+        // The whole-bar row also encloses exactly two nested call-window
+        // snapshots. Remove those real counter reads, never any host I/O.
+        require(after.reads - before.reads > inner_samples,
+                "counter window lacks its own snapshot reads");
+        return {after.reads - before.reads - 1 - inner_samples, after.writes - before.writes};
 #else
         (void)before;
         (void)after;
+        (void)inner_samples;
         return {};
 #endif
     }
@@ -121,9 +157,7 @@ struct Facts {
 static_assert(sizeof(Facts::Record) == 40, "the cohort retirement width");
 using Table = pineforge::detail::DiskResidentIdTable<Facts>;
 
-// Deliberately independent of the new member so the base compiles and fails
-// on real syscalls, rather than failing on a missing kResidentRows symbol.
-constexpr std::size_t resident_rows = 512;
+constexpr std::size_t resident_rows = Table::kResidentRows;
 
 Facts facts(std::size_t n, bool live = false) {
     return {{n + 1, static_cast<std::int64_t>(n + 11), n * 3,
@@ -182,6 +216,182 @@ void resident_hits(ProcessIo& counter) {
     }
     const auto after_other = counter.sample();
     no_io("unit-const-resident-emplace", ProcessIo::difference(before_other, after_other), 10'000);
+}
+
+void hash_walk_cycle(ProcessIo& counter) {
+    Directory directory;
+    Table table;
+    table.set_directory(directory.path);
+    const std::array<std::string, 5> ids{{"z", "a", "m", std::string("b\0x", 3), "q"}};
+    for (std::size_t i = 0; i < ids.size(); ++i) {
+        const auto placed = table.emplace(ids[i], facts(i, true));
+        require(placed.second, "hash-cycle insert");
+        placed.first->second.record.cycle += 71;
+        placed.first->second.live = false;
+    }
+    std::vector<std::string> sorted(ids.begin(), ids.end());
+    std::sort(sorted.begin(), sorted.end());
+    require(ids.size() < table.resident_limit(), "hash cycle must fit below the resident limit");
+    const auto before = counter.sample();
+    for (int cycle = 0; cycle < 2'000; ++cycle) {
+        std::size_t visited = 0;
+        for (const auto& row : table.all_sorted()) {
+            require(row.first == sorted.at(visited++), "hash cycle lost lexical order");
+            const auto original = std::find(ids.begin(), ids.end(), row.first);
+            require(original != ids.end(), "hash cycle invented a key");
+            auto expected = facts(static_cast<std::size_t>(original - ids.begin())).record;
+            expected.cycle += 71;
+            require(!row.second.live && same(row.second.record, expected),
+                    "hash cycle lost a dirty resident value");
+        }
+        require(visited == ids.size(), "hash cycle omitted a row");
+        const auto found = table.find(ids[2]);
+        require(found != table.end() && found->second.record.cycle == facts(2).record.cycle + 71,
+                "resident find after a hash walk lost its value");
+    }
+    const auto after = counter.sample();
+    // Protects Iterator<*, Sorted>::operator++'s spill_to(resident_limit_).
+    // Replacing ONLY that call with spill() flushes unpinned non-first rows;
+    // subsequent walk loads/finds do real file I/O and MUST fail this zero.
+    no_io("unit-hash-walk-cycle", ProcessIo::difference(before, after), 2'000);
+}
+
+void sorted_walk_above_limit() {
+    Directory directory;
+    Table table;
+    table.set_directory(directory.path);
+    constexpr std::size_t limit = 2, count = 3 * limit;
+    table.set_resident_limit(limit);
+    std::vector<std::string> ids;
+    std::vector<Facts::Record> records;
+    for (std::size_t i = 0; i < count; ++i) {
+        ids.push_back(key(i));
+        const auto placed = table.emplace(ids.back(), facts(i, true));
+        require(placed.second, "bounded sorted walk insert");
+        placed.first->second.record.cycle += 83;
+        placed.first->second.live = false;
+        records.push_back(placed.first->second.record);
+    }
+    auto sorted = ids;
+    std::sort(sorted.begin(), sorted.end());
+    for (const bool keep_pin : {false, true}) {
+        std::optional<Table::iterator> pin;
+        if (keep_pin) pin = table.find(ids.back());
+        std::size_t visited = 0;
+        for (const auto& row : table.all_sorted()) {
+            require(row.first == sorted.at(visited++), "bounded walk repeats or reorders rows");
+            const auto at = std::find(ids.begin(), ids.end(), row.first);
+            require(at != ids.end() && same(row.second.record, records.at(at - ids.begin())),
+                    "bounded sorted walk lost a dirty value");
+            // The range's first iterator and current iterator each pin one
+            // row, in addition to the optional independent caller pin.
+            require(table.resident_size() <= limit + 2 + (keep_pin ? 1 : 0),
+                    "walk residency exceeds the budget plus possible pins");
+        }
+        require(visited == count && table.size() == count, "bounded walk lost logical rows");
+        require(table.resident_size() <= limit + (keep_pin ? 1 : 0),
+                "completed walk retained more than its limit plus caller pins");
+        if (keep_pin) {
+            const auto resident = table.find_resident(ids.back());
+            require(resident != table.end() && &resident->second == &(*pin)->second,
+                    "sorted walk evicted a caller-pinned row");
+        }
+    }
+    require(table.find("not-an-id") == table.end() && table.resident_size() <= limit,
+            "released walk pins did not trim at the next lookup");
+}
+
+void shrinking_limit_is_deferred(ProcessIo& counter) {
+    Directory directory;
+    Table table;
+    table.set_directory(directory.path);
+    constexpr std::size_t count = 8, limit = 2;
+    table.set_resident_limit(count);
+    std::array<std::string, count> ids;
+    for (std::size_t i = 0; i < count; ++i) {
+        ids[i] = key(i);
+        table.emplace(ids[i], facts(i));
+    }
+    require(table.resident_size() == count, "shrink setup is not fully resident");
+    const auto before = counter.sample();
+    table.set_resident_limit(limit);
+    const auto after = counter.sample();
+    no_io("unit-shrink-setter", ProcessIo::difference(before, after), 1);
+    require(table.resident_size() == count, "resident-limit setter evicted eagerly");
+    {
+        // This key is resident already: the deferred trim cannot rely on a miss.
+        const auto found = table.find(ids.back());
+        require(found != table.end() && same(found->second.record, facts(count - 1).record),
+                "first lookup after shrink lost the resident value");
+    }
+    require(table.resident_size() <= limit && table.size() == count,
+            "first lookup after shrink did not trim to budget");
+    require(table.find_resident(ids.front()) == table.end(), "shrink did not evict oldest first");
+    table.set_resident_limit(1);
+    const Table& constant = table;
+    require(constant.find(ids.back()) != constant.end() && table.resident_size() <= 1,
+            "const lookup did not apply a deferred shrink");
+}
+
+void resident_budget_contract() {
+    using namespace pineforge;
+    using namespace pineforge::detail;
+    const auto& row = resident_budget(ResidentKind::idtable_entries);
+    EnvironmentScope ledger(kResidentBudgets[0].env_name, nullptr);
+    EnvironmentScope idtable(row.env_name, nullptr);
+    EnvironmentScope placement(kResidentBudgets[2].env_name, nullptr);
+    EnvironmentScope journal(kResidentBudgets[3].env_name, nullptr);
+    require(resident_entries(ResidentKind::idtable_entries) == Table::kResidentRows,
+            "unset budget differs from the table's named default");
+    const auto maximum = std::to_string(row.max_entries);
+    const std::array<std::pair<const char*, std::uint64_t>, 3> valid_values{{
+        {"1", 1}, {"0002", 2}, {maximum.c_str(), row.max_entries}
+    }};
+    for (const auto& valid : valid_values) {
+        EnvironmentScope selected(row.env_name, valid.first);
+        const auto entries = resident_entries(ResidentKind::idtable_entries);
+        require(entries == valid.second, "valid decimal budget parsed incorrectly");
+    }
+    const auto too_large = std::to_string(row.max_entries + 1);
+    for (const char* invalid : {"", "0", "000", "-1", "+1", " 1", "1 ", "1x", "x1",
+                                "1\n", "18446744073709551616", too_large.c_str()}) {
+        EnvironmentScope selected(row.env_name, invalid);
+        bool refused = false;
+        try { (void)resident_entries(ResidentKind::idtable_entries); }
+        catch (const std::system_error& error) {
+            const std::string message = error.what();
+            refused = classify_run_failure(error).code == RunFailureCode::scratch_configuration_invalid
+                && message.find(row.name) != std::string::npos
+                && message.find(std::string("value=\"") + invalid + "\"") != std::string::npos
+                && message.find("max=" + maximum) != std::string::npos;
+        }
+        require(refused, "malformed/out-of-range budget lost its typed refusal or context");
+    }
+    // Synthetic widths exercise arithmetic; these are not measured cache sizes.
+    constexpr ResidentBudgetDescriptor arithmetic{"arithmetic", "", 1, 1, 8, 16, true};
+    static_assert(*resident_bytes(arithmetic, 1) == 24, "resident-byte product plus base");
+    constexpr auto last = (std::numeric_limits<std::uint64_t>::max() - 16) / 8;
+    static_assert(resident_bytes(arithmetic, last).has_value(), "last fitting byte product");
+    static_assert(!resident_bytes(arithmetic, last + 1).has_value(), "overflow must be refused");
+    std::uint64_t expected = 0;
+    for (std::size_t i = 0; i < kResidentBudgets.size(); ++i) {
+        const auto kind = static_cast<ResidentKind>(i);
+        require(!kResidentBudgets[i].measured || kResidentBudgets[i].bytes_per_entry != 0,
+                "a measured budget has a zero width");
+        const auto bytes = resident_bytes(kind, resident_entries(kind));
+        require(bytes.has_value(), "default resident-byte plan overflowed");
+        expected += *bytes;
+    }
+    require(planned_resident_bytes() == expected, "resident-byte plan did not sum effective budgets");
+    {
+        EnvironmentScope invalid(kResidentBudgets[2].env_name, "abc");
+        bool refused = false;
+        try { (void)planned_resident_bytes(); }
+        catch (const std::system_error& error) {
+            refused = classify_run_failure(error).code == RunFailureCode::scratch_configuration_invalid;
+        }
+        require(refused, "byte planner ignored an invalid effective budget");
+    }
 }
 
 void bounded_round_trip(ProcessIo& counter) {
@@ -346,6 +556,16 @@ public:
     void on_source_bar(const pineforge::Bar&) override {
         const auto bar = pine_bar_index();
         require(bar >= 0 && bar < host_bars, "unexpected host callback coordinate");
+        const auto start = bar >= warmup_bars ? counter_.sample() : Io{};
+        if (bar > warmup_bars) {
+            // Between successive starts there were exactly two counter-file
+            // reads for the nested strategy-call window below. All output,
+            // counter opens/closes and test fixture I/O stay outside the run.
+            whole_bar_counts[static_cast<std::size_t>(bar - 1)] =
+                ProcessIo::difference(previous_start_, start, 2);
+            ++whole_bars_measured;
+        }
+        if (bar >= warmup_bars) previous_start_ = start;
         ++callbacks;
         if (bar >= warmup_bars) {
             require(physical_position().signed_units == 1.0
@@ -365,16 +585,31 @@ public:
             ++measured;
         }
     }
-    int callbacks = 0, measured = 0;
+    void print_cohort_layout() const {
+        const auto layout = adapter_.fixture_cohort_resident_layout();
+        // Real production CohortFacts, not the small Facts unit carrier.
+        // These are value/container sizes, NOT allocator node-size estimates.
+        std::printf("[idtable-layout] CohortFacts=%zu pair_string_facts=%zu shared_ptr_row=%zu "
+                    "map_value=%zu key_index_value=%zu map=%zu key_index=%zu table=%zu string=%zu "
+                    "bytes_per_entry=not-measured fixed_base_bytes=not-measured\n",
+                    layout.value_bytes, layout.row_bytes, layout.shared_ptr_bytes,
+                    layout.map_value_bytes, layout.key_index_value_bytes,
+                    layout.map_bytes, layout.key_index_bytes, layout.table_bytes, sizeof(std::string));
+    }
+    int callbacks = 0, measured = 0, whole_bars_measured = 0;
     std::array<Io, host_bars> counts{};
+    std::array<Io, host_bars> whole_bar_counts{};
 private:
     ProcessIo& counter_;
+    Io previous_start_{};
     const std::string entry_id_ = "L", exit_id_ = "X";
     const double missing_ = std::numeric_limits<double>::quiet_NaN();
 };
 
 void host_reissues(ProcessIo& counter) {
+    EnvironmentScope default_budget("PF_RESIDENT_IDTABLE_ENTRIES", nullptr);
     ReissueHost host(counter);
+    host.print_cohort_layout(); // Before either host counter window can begin.
     std::array<pineforge::Bar, host_bars> bars{};
     for (int i = 0; i < host_bars; ++i)
         bars[static_cast<std::size_t>(i)] =
@@ -384,6 +619,9 @@ void host_reissues(ProcessIo& counter) {
     require(host.last_error().empty(), host.last_error().c_str());
     require(host.callbacks == host_bars && host.measured == host_bars - warmup_bars,
             "host counter window did not execute every held bar");
+    constexpr int whole_intervals = host_bars - warmup_bars - 1;
+    require(host.whole_bars_measured == whole_intervals,
+            "whole-bar counter window did not span every adjacent callback start");
     bool zero = true;
     if (ProcessIo::enabled()) {
         for (int i = warmup_bars; i < host_bars; ++i) {
@@ -393,7 +631,35 @@ void host_reissues(ProcessIo& counter) {
                         static_cast<unsigned long long>(delta.writes));
             zero = zero && delta.reads == 0 && delta.writes == 0;
         }
-        // No average or N-dependent tolerance can hide per-bar growth.
+        for (int i = warmup_bars; i < host_bars - 1; ++i) {
+            const auto delta = host.whole_bar_counts[static_cast<std::size_t>(i)];
+            std::printf("[host-whole-bar] bar=%d next=%d syscr=%llu syscw=%llu\n", i, i + 1,
+                        static_cast<unsigned long long>(delta.reads),
+                        static_cast<unsigned long long>(delta.writes));
+        }
+        constexpr int quarter = whole_intervals / 4;
+        double first_reads = 0, first_writes = 0, last_reads = 0, last_writes = 0;
+        for (int i = 0; i < quarter; ++i) {
+            const auto first = host.whole_bar_counts[static_cast<std::size_t>(warmup_bars + i)];
+            const auto last = host.whole_bar_counts[static_cast<std::size_t>(host_bars - 1 - quarter + i)];
+            first_reads += static_cast<double>(first.reads);
+            first_writes += static_cast<double>(first.writes);
+            last_reads += static_cast<double>(last.reads);
+            last_writes += static_cast<double>(last.writes);
+        }
+        first_reads /= quarter; first_writes /= quarter;
+        last_reads /= quarter; last_writes /= quarter;
+        // Full bars include genuine ingress/report/journal I/O. Allow four
+        // extra syscalls per kind in the last-quarter mean for bounded page
+        // boundary variation; this is a fixed additive allowance, never a
+        // bar-index multiplier, and the whole-bar counts need not be zero.
+        constexpr double allowance = 4.0;
+        std::printf("[host-whole-bar-quarters] n=%d first_syscr=%.3f first_syscw=%.3f "
+                    "last_syscr=%.3f last_syscw=%.3f allowance=%.0f\n",
+                    quarter, first_reads, first_writes, last_reads, last_writes, allowance);
+        require(last_reads <= first_reads + allowance && last_writes <= first_writes + allowance,
+                "whole-bar I/O grows beyond the fixed quarter-mean allowance");
+        // The nested strategy-call windows still require zero on every bar.
         require(zero, "host strategy reissues issued file I/O after warmup");
     }
 }
@@ -416,6 +682,10 @@ int main() {
         // Keep running after UNIT fails, so the base also executes and prints
         // the independent HOST counter witness.
         run("unit-resident", [&] { resident_hits(counter); });
+        run("unit-hash-walk-cycle", [&] { hash_walk_cycle(counter); });
+        run("unit-sorted-bound", sorted_walk_above_limit);
+        run("unit-shrink", [&] { shrinking_limit_is_deferred(counter); });
+        run("unit-resident-budget", resident_budget_contract);
         run("unit-bound", [&] { bounded_round_trip(counter); });
         run("unit-pins-live", pins_and_live_rows_survive_pressure);
         run("unit-order-hash", resident_order_moves_and_dirty_hash_walk);

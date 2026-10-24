@@ -1,10 +1,12 @@
 #pragma once
 
 #include <pineforge/detail/disk_id_table.hpp>
+#include <pineforge/detail/resident_budget.hpp>
 
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
+#include <limits>
 #include <map>
 #include <memory>
 #include <string>
@@ -14,7 +16,7 @@
 
 namespace pineforge::detail {
 
-// An id index plus live rows and a fixed-budget cache of retired rows. Value
+// An id index plus live rows and a bounded cache of retired rows. Value
 // supplies a fixed Record, retired_record(), restore_record(Record), and
 // spillable(). For a spillable row the record must preserve its logical value.
 // Retired scalar history lives on disk; live rosters stay resident. Iterators
@@ -37,13 +39,28 @@ class DiskResidentIdTable {
 
 public:
     // Budget for lookup caching, independent of the distinct-ever id count.
-    // A retired CohortFacts has a 40-byte record and about 200 bytes of empty
-    // live containers/scalars on 64-bit STLs: 512 rows plus both index nodes
-    // cost roughly 200 KiB, plus two copies of non-SSO key bytes. Live rows
-    // and caller pins may exceed this budget; they must never be evicted.
+    // Byte accounting awaits lab measurement (resident_budget.hpp); live
+    // rows and caller pins may exceed this budget and must never be evicted.
     // Oldest means first logical insertion (ascending disk offset), matching
     // the existing resident iteration order, rather than lookup recency.
-    static constexpr std::size_t kResidentRows = 512;
+    static constexpr std::size_t kResidentRows = static_cast<std::size_t>(
+        resident_budget(ResidentKind::idtable_entries).default_entries);
+    static_assert(resident_budget(ResidentKind::idtable_entries).max_entries
+                  <= std::numeric_limits<std::size_t>::max(), "resident limit fits size_t");
+
+    // Standard type sizes only: allocator-specific node/control-block overhead
+    // and key/container heap allocations are deliberately not guessed here.
+    struct ResidentLayout {
+        std::size_t value_bytes, row_bytes, shared_ptr_bytes;
+        std::size_t map_value_bytes, key_index_value_bytes;
+        std::size_t map_bytes, key_index_bytes, table_bytes;
+    };
+    static constexpr ResidentLayout resident_layout() noexcept {
+        return {sizeof(Value), sizeof(Row), sizeof(std::shared_ptr<Row>),
+                sizeof(typename ResidentRows::value_type),
+                sizeof(typename ResidentKeys::value_type),
+                sizeof(ResidentRows), sizeof(ResidentKeys), sizeof(DiskResidentIdTable)};
+    }
 
     template<bool Const, bool Sorted = false, bool Insertion = false>
     class Iterator {
@@ -66,12 +83,12 @@ public:
         pointer operator->() const noexcept { return row_.get(); }
         Iterator& operator++() {
             if constexpr (Sorted) {
-                const auto next = owner_->index_.next_sorted(at_);
+                const auto next = owner_->next_sorted(at_, row_->first);
                 row_.reset();
                 // Bounded, not eager: the state hash walks every cohort at each
                 // report point; an eager flush there would write back and then
                 // re-read the whole resident cache every bar (CR150-CX edit).
-                owner_->spill_to(kResidentRows);
+                owner_->spill_to(owner_->resident_limit_);
                 at_ = next;
                 if (at_ != 0) row_ = owner_->load(at_);
             } else if constexpr (Insertion) {
@@ -139,6 +156,14 @@ public:
     void bind_scratch(const std::shared_ptr<ScratchSlab>& slab, ScratchResource resource) {
         index_.bind_scratch(slab, resource);
     }
+    // No I/O in the setter. A shrink trims at the next find() (even a
+    // resident hit), emplace(), or ordinary eviction point. find_resident()
+    // remains noexcept and never trims. Live rows/caller pins stay exempt.
+    void set_resident_limit(std::size_t limit) noexcept {
+        resident_limit_ = limit;
+        trim_pending_ = resident_.size() > limit;
+    }
+    std::size_t resident_limit() const noexcept { return resident_limit_; }
     void require_insert(const std::string& key) const {
         if (resident_at(key) == resident_.end()) index_.require_insert(key);
     }
@@ -149,6 +174,7 @@ public:
         ResidentKeys{}.swap(resident_keys_);
         resident_.clear();
         index_.clear();
+        trim_pending_ = false;
     }
     std::uint64_t size() const noexcept { return index_.size(); }
     std::size_t resident_size() const noexcept { return resident_.size(); }
@@ -165,11 +191,11 @@ public:
             KeyIterator<insertion_iterator>(insertion_iterator{this, 0, {}})};
     }
     auto all_sorted() {
-        const auto at = index_.first_sorted();
+        const auto at = first_sorted();
         return Range<sorted_iterator>{{this, at, at ? load(at) : nullptr}, {this, 0, {}}};
     }
     auto all_sorted() const {
-        const auto at = index_.first_sorted();
+        const auto at = first_sorted();
         return Range<const_sorted_iterator>{{this, at, at ? load(at) : nullptr}, {this, 0, {}}};
     }
     // Full insertion-order replay without a growing vector of keys.
@@ -184,16 +210,18 @@ public:
             visit(index_.key(at));
     }
     iterator find(const std::string& key) {
+        trim_pending_limit();
         const auto resident = resident_at(key);
         if (resident != resident_.end()) return {this, resident->first, resident->second};
-        spill_to(kResidentRows);
+        spill_to(resident_limit_);
         const auto at = index_.find(key);
         return at ? iterator{this, *at, load(*at)} : end();
     }
     const_iterator find(const std::string& key) const {
+        trim_pending_limit();
         const auto resident = resident_at(key);
         if (resident != resident_.end()) return {this, resident->first, resident->second};
-        spill_to(kResidentRows);
+        spill_to(resident_limit_);
         const auto at = index_.find(key);
         return at ? const_iterator{this, *at, load(*at)} : end();
     }
@@ -209,21 +237,30 @@ public:
     }
     std::pair<iterator, bool> emplace(const std::string& key, Value value) {
         const auto resident = resident_at(key);
-        if (resident != resident_.end())
-            return {{this, resident->first, resident->second}, false};
+        if (resident != resident_.end()) {
+            const auto at = resident->first;
+            auto row = resident->second; // Pin the duplicate through a deferred shrink.
+            trim_pending_limit();
+            return {{this, at, std::move(row)}, false};
+        }
         // A refused new logical row must not first overwrite/evict an eligible
         // resident row. This search reads index bytes only, without restoring.
         index_.require_insert(key);
-        spill_to(kResidentRows);
+        trim_pending_limit();
+        spill_to(resident_limit_);
         const auto placed = index_.insert(key, value.retired_record());
         if (!placed.second) return {{this, placed.first, load(placed.first)}, false};
         auto row = std::make_shared<Row>(key, std::move(value));
         retain(placed.first, row);
-        spill_to(kResidentRows); // The local shared_ptr pins the returned row.
+        spill_to(resident_limit_); // The local shared_ptr pins the returned row.
         return {{this, placed.first, std::move(row)}, true};
     }
+    // Evict only what exceeds the fixed budget (a no-op within it). The per-bar
+    // retirement sweep calls this instead of spill(): an eager spill() there
+    // flushed the whole cache every bar and defeated the resident index.
+    void trim_to_budget() const { spill_to(resident_limit_); }
     void spill() const {
-        spill_to(0); // Explicit flushes, including sorted walks, remain eager.
+        spill_to(0); // Explicit flushes remain eager; sorted walks are bounded.
         // Do not retain a historical live-population peak in the key buckets.
         if (resident_.empty()) ResidentKeys{}.swap(resident_keys_);
         else if (resident_keys_.bucket_count() / 4 > resident_keys_.size())
@@ -231,6 +268,37 @@ public:
     }
 
 private:
+    bool fully_resident_within_limit() const noexcept {
+        return resident_.size() == index_.size() && resident_.size() <= resident_limit_;
+    }
+    // A complete, budget-sized resident table already has every key. Select
+    // lexical neighbours there without disk AVL reads or another heap index.
+    // This O(R^2) walk is restricted to R <= the resident limit; larger/live
+    // populations and partially spilled tables retain the disk-tree walk.
+    Offset first_sorted() const {
+        if (!fully_resident_within_limit()) return index_.first_sorted();
+        auto first = resident_.end();
+        for (auto at = resident_.begin(); at != resident_.end(); ++at) {
+            if (first == resident_.end() || at->second->first < first->second->first)
+                first = at;
+        }
+        return first == resident_.end() ? 0 : first->first;
+    }
+    Offset next_sorted(Offset current, const std::string& key) const {
+        if (!fully_resident_within_limit()) return index_.next_sorted(current);
+        auto next = resident_.end();
+        for (auto at = resident_.begin(); at != resident_.end(); ++at) {
+            const auto& candidate = at->second->first;
+            if (key < candidate
+                && (next == resident_.end() || candidate < next->second->first)) next = at;
+        }
+        return next == resident_.end() ? 0 : next->first;
+    }
+    void trim_pending_limit() const {
+        if (!trim_pending_) return;
+        spill_to(resident_limit_);
+        trim_pending_ = false;
+    }
     typename ResidentRows::iterator resident_at(const std::string& key) const noexcept {
         const auto found = resident_keys_.find(key);
         return found == resident_keys_.end() ? resident_.end() : found->second;
@@ -279,11 +347,13 @@ private:
         if (found != resident_.end()) return found->second;
         auto row = std::make_shared<Row>(index_.key(at), restore_record(index_.get(at), 0));
         retain(at, row);
-        spill_to(kResidentRows); // Do not let a sequence of disk restores grow the cache.
+        spill_to(resident_limit_); // Do not let a sequence of disk restores grow the cache.
         return row;
     }
     mutable Index index_;
     mutable ResidentRows resident_;
     mutable ResidentKeys resident_keys_;
+    std::size_t resident_limit_ = kResidentRows;
+    mutable bool trim_pending_ = false;
 };
 } // namespace pineforge::detail
