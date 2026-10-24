@@ -1,4 +1,4 @@
-// CR-150 L6b-4, fix rounds 1-2: the engine WRITE side and sink removal.
+// CR-150 L6b-4, fix rounds 1-3: the engine WRITE side and sink removal.
 //
 // The accepted library (src/report_scratch.*) is proved by test_report_scratch;
 // this fixture proves its engine integration. DESIGN 3.2/3.8: with a
@@ -722,7 +722,8 @@ void check_command_cache(const report_arrays::Counts& counts) {
 
 // (e) Count the owned report/capture arrays, not only the public lengths:
 // finish_report_sink frees its temporary array before the caller sees it.
-// Counts outlive their hosts, including the observer's retained capture.
+// The observer retains its presented tail inline, not in a new[] array.
+// Counts outlive their hosts, including any erroneously retained capture array.
 RemovalPeaks measure_removal(const TestRoot& root, const std::string& name,
                              std::int64_t bars, bool observer) {
     scenario = "(e) " + name;
@@ -741,6 +742,9 @@ RemovalPeaks measure_removal(const TestRoot& root, const std::string& name,
     if (observer) observe(on, observer_calls);
     const std::string path = root.out() + "/" + name + ".ndjson";
     install(on, path, root.scratch().c_str());
+    // Both paths must return to their pre-run report-array census. Snapshot
+    // before capture so a leaked observer array cannot become the expectation.
+    const std::size_t steady_report_bytes = arrays.live_bytes;
     {
         const report_arrays::Scope count(arrays);
         run_tape(on, oracle->feed);
@@ -760,6 +764,9 @@ RemovalPeaks measure_removal(const TestRoot& root, const std::string& name,
         peaks.engine.capacity = std::max(peaks.engine.capacity, on.probe_capacity());
         require(peaks.engine.size == held_size && peaks.engine.capacity == held_capacity,
                 "sink removal or report fill rehydrated equity_curve_");
+        pf_equity_point_t held{};
+        require(on.probe_held(&held) && same_point(held, oracle->curve().back()),
+                "sink removal or report fill changed or lost the execution tail");
         require(arrays.peak_bytes <= held_bytes && arrays.capacity_bytes <= held_bytes,
                 "sink removal or report fill allocated more than the counted report tail: peak_bytes="
                     + std::to_string(arrays.peak_bytes) + ", capacity_bytes=" + std::to_string(arrays.capacity_bytes)
@@ -804,7 +811,8 @@ RemovalPeaks measure_removal(const TestRoot& root, const std::string& name,
     };
 
     // Before the first fill too: the ordinary tail is not staged yet, whereas
-    // an observer-only run already owns its captured one-point presentation.
+    // an observer-only run already owns its captured one-point presentation
+    // inline (NativeExecutionConsumer::presentation_equity_tail_).
     refuse_removal();
     {
         const report_arrays::Scope count(arrays);
@@ -838,8 +846,9 @@ RemovalPeaks measure_removal(const TestRoot& root, const std::string& name,
     }
     require(arrays.peak_bytes == held_bytes && arrays.capacity_bytes == held_bytes,
             "report-array peak or capacity changed after refused removal");
-    require(arrays.live_bytes == (observer ? held_bytes : 0),
+    require(arrays.live_bytes == steady_report_bytes,
             "report fill retained an extra curve array: live_bytes=" + std::to_string(arrays.live_bytes)
+            + ", expected_live_bytes=" + std::to_string(steady_report_bytes)
             + ", held_bytes=" + std::to_string(held_bytes)
             + ", held_size=" + std::to_string(held_size)
             + ", observer=" + std::to_string(observer));
