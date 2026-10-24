@@ -106,6 +106,13 @@ The 1.7.0 additions are `report_mode_unsupported`, `report_sink_failed`,
 `scratch_io_failed`. Their classes, retryability and typed arguments are
 listed below.
 
+`report_mode_unsupported` (code 65) also covers a native begin on a host with
+a `pineforge-report/v1` provider bridge when `SUMMARY_ONLY` (the v1 mode or
+the pending legacy equity mode) is combined with an observer or selected
+window and no report sink. Begin refuses before callbacks or bars. Drop the
+window or the observer, or select `FULL`; `SUMMARY_ONLY` with a capture
+needs a sink.
+
 The 26 codes first released in 1.5.0 comprise `outputs_limit`,
 `outputs_rejected`, and the 24 selected-window and report-contract rows
 described [after the tables](#run_failure_codes_selected_window).
