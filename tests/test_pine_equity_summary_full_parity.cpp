@@ -4,7 +4,7 @@
 using namespace report_modes_fix;
 
 namespace {
-void require_same_row(const pf_trade_t& actual, const pf_trade_t& expected) {
+void require_same_row(const TradeC& actual, const TradeC& expected) {
     require(actual.entry_time == expected.entry_time && actual.exit_time == expected.exit_time
                 && actual.is_long == expected.is_long
                 && actual.entry_bar_index == expected.entry_bar_index
