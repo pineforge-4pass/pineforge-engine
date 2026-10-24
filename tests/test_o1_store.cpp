@@ -1000,8 +1000,9 @@ void check_no_heap_after_open() {
   REQUIRE(global_allocation::refused == refused_before);
   REQUIRE(global_allocation::allocations == allocations_before);
 
-  const Id discarded = store->create(48, 8);
+  // Created inside the transaction, so its rollback discards the object.
   auto discarded_tx = store->begin();
+  const Id discarded = store->create(48, 8);
   allocations_before = global_allocation::allocations;
   refused_before = global_allocation::refused;
   held = true;
