@@ -80,7 +80,7 @@ def _http_failure(raw: str, *, exception: bool = False) -> str | None:
     return None
 
 
-def _read_text(api: API, endpoint: str, *, complete_rulesets: bool = False,
+def _read_text(api: API, endpoint: str, *, complete_pages: str | None = None,
                **options) -> str:
     try:
         raw = api(endpoint, **options)
@@ -100,10 +100,34 @@ def _read_text(api: API, endpoint: str, *, complete_rulesets: bool = False,
     # --include emits one header block per page, also when --jq is used.
     # Preserve page boundaries so a good page cannot hide an empty response.
     responses = list(_HTTP_RESPONSE.finditer(raw))
-    if complete_rulesets:
-        # Unlike Actions, the ruleset list has no total_count. Keep gh's HTTP
-        # Link evidence until we prove every advertised next page was read.
-        failure = f"API {endpoint} returned incomplete ruleset pagination"
+    if responses:
+        if raw[:responses[0].start()].strip() or (
+                not options.get("paginate", False) and len(responses) != 1):
+            raise ReleaseGateError(f"API {endpoint} returned unexpected HTTP responses")
+        bodies = []
+        for index, response in enumerate(responses):
+            end = responses[index + 1].start() if index + 1 < len(responses) else len(raw)
+            body = raw[response.end():end].strip()
+            if not body:
+                raise ReleaseGateError(f"API {endpoint} returned an empty payload")
+            if options.get("jq") is None:
+                # One HTTP body must be one JSON page before trusting Links
+                # or joining bodies; a headerless document is not a page.
+                try:
+                    _, document_end = json.JSONDecoder().raw_decode(body)
+                except json.JSONDecodeError as exc:
+                    raise ReleaseGateError(
+                        f"API {endpoint} returned invalid JSON: {exc}") from exc
+                if body[document_end:].strip():
+                    raise ReleaseGateError(
+                        f"API {endpoint} returned an HTTP response body with trailing data; "
+                        "expected exactly one JSON document")
+            bodies.append(body)
+        raw = "\n".join(bodies)
+    if complete_pages is not None:
+        # A matching Actions total_count cannot override an unread Link page.
+        # Keep gh's HTTP evidence for both Actions and ruleset pagination.
+        failure = f"API {endpoint} returned incomplete {complete_pages} pagination"
         if not responses or not options.get("paginate"):
             raise ReleaseGateError(f"{failure}: missing HTTP page headers")
         for index, response in enumerate(responses):
@@ -130,18 +154,6 @@ def _read_text(api: API, endpoint: str, *, complete_rulesets: bool = False,
                         "first": 1, "last": len(responses)}
             if any(page != expected[relation] for relation, page in relations.items()):
                 raise ReleaseGateError(f"{failure}: skipped, repeated or truncated pages")
-    if responses:
-        if raw[:responses[0].start()].strip() or (
-                not options.get("paginate", False) and len(responses) != 1):
-            raise ReleaseGateError(f"API {endpoint} returned unexpected HTTP responses")
-        bodies = []
-        for index, response in enumerate(responses):
-            end = responses[index + 1].start() if index + 1 < len(responses) else len(raw)
-            body = raw[response.end():end].strip()
-            if not body:
-                raise ReleaseGateError(f"API {endpoint} returned an empty payload")
-            bodies.append(body)
-        raw = "\n".join(bodies)
     if not raw.strip():
         raise ReleaseGateError(f"API {endpoint} returned an empty payload")
     return raw.strip()
@@ -149,12 +161,14 @@ def _read_text(api: API, endpoint: str, *, complete_rulesets: bool = False,
 
 def _read_json(api: API, endpoint: str, *, paginate: bool = False,
                items_key: str | None = None, complete_rulesets: bool = False):
-    raw = _read_text(api, endpoint, paginate=paginate, complete_rulesets=complete_rulesets)
+    raw = _read_text(api, endpoint, paginate=paginate,
+                    complete_pages="ruleset" if complete_rulesets else items_key)
     try:
         if not paginate:
             result = json.loads(raw)
         else:
             # gh --paginate prints consecutive JSON documents, one per page.
+            # Framed HTTP bodies were each checked before joining them.
             # Decode every page before deciding, including trailing bad data.
             result = []
             total = None
@@ -355,7 +369,7 @@ def _require_release_rulesets(api: API, repo: str) -> None:
         seen.add(row["id"])
         summaries.append(row)
 
-    intersection = None
+    barrier_found = False
     for summary in summaries:
         if summary["target"] != "branch":
             continue
@@ -372,20 +386,18 @@ def _require_release_rulesets(api: API, repo: str) -> None:
                 or any(not isinstance(rule, dict) or not isinstance(rule.get("type"), str)
                        or not rule["type"] for rule in rules)):
             raise ReleaseGateError(f"API {endpoint} returned invalid rules")
-        blocking = any(rule["type"] in ("pull_request", "required_status_checks")
-                       for rule in rules)
-        if not applies or not blocking:
+        blocking = any(rule["type"] == "pull_request" for rule in rules)
+        if not applies or not blocking or payload["enforcement"] != "active":
             continue
-        if payload["enforcement"] != "active":
-            raise ReleaseGateError(
-                f"main push-blocking ruleset {summary['id']} must be active")
-        # Rulesets are cumulative: an actor must bypass EVERY main push blocker.
-        intersection = bypasses if intersection is None else intersection & bypasses
+        # This one PR rule blocks every direct push except its own bypasses.
+        # Descriptor intersections cannot account for overlapping role/team members.
+        if bypasses == {("Integration", RELEASE_APP_ID, "always")}:
+            barrier_found = True
+        # Finish reading all branch details so later API/visibility errors refuse.
 
-    if intersection is None:
-        raise ReleaseGateError("main has no active applicable push-blocking ruleset")
-    if intersection != {("Integration", RELEASE_APP_ID, "always")}:
-        raise ReleaseGateError("main direct-push bypass intersection must be exactly "
+    if not barrier_found:
+        raise ReleaseGateError("main requires an active applicable pull_request ruleset "
+                               "with bypass_actors exactly "
                                f"Integration {RELEASE_APP_ID} with bypass_mode always")
 
 

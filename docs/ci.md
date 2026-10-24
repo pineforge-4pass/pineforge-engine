@@ -1298,10 +1298,12 @@ one release bump only when all three conditions hold:
    `head_sha == <sha>`. Every such run must have both `actor.login` and
    `triggering_actor.login` equal to the gate's fixed `RELEASE_PUSH_ACTOR`,
    `pineforge-app[bot]`, the release App installation token used by
-   `release.yml`. All pages are read; missing/malformed pages, changing
-   `total_count` or a row count different from that total refuse. Reaching the
-   filtered API's 1000-run limit also refuses, because completeness at that
-   boundary cannot be inferred. Zero matching runs refuse. A bump pushed seconds
+   `release.yml`. All pages are read; missing HTTP headers, malformed pages,
+   an advertised unread Link next page, changing `total_count` or a row count
+   different from that total refuse. A matching count never overrides an
+   unread next page. Reaching the filtered API's 1000-run limit also refuses,
+   because completeness at that boundary cannot be inferred. Zero matching
+   runs refuse. A bump pushed seconds
    ago may not have a post-merge run yet; retry the release once that push run exists.
    At gate time, the guard also reads `repos/{repo}` to confirm main is still
    the default branch, lists `repos/{repo}/rulesets?includes_parents=true&per_page=100`
@@ -1310,20 +1312,33 @@ one release bump only when all three conditions hold:
    includes main (`~DEFAULT_BRANCH`, `refs/heads/main`, `~ALL`, or a matching
    pathname pattern) without excluding main. Simple `*` and `?` patterns do
    not cross `/`; advanced or unknown pattern syntax refuses.
-   There must be at least one applicable `pull_request` or
-   `required_status_checks` rule. Every applicable ruleset carrying either
-   push-blocking rule must be `active`; disabled or evaluate enforcement refuses.
-   Their bypass-list **intersection**, including actor type, id and mode,
-   must be exactly Integration `4105147` with `bypass_mode == "always"`,
-   the release App token used by `release.yml`. Another shared actor, a
-   PR-only App bypass, an empty intersection, or no blocking ruleset refuses.
-   Broader bypass lists on another cumulative ruleset do not grant access
-   through an App-only restriction. Ruleset names and ids are not pinned;
-   tag-creation rulesets provide no evidence about pushes to main.
-   The list read retains HTTP Link headers and checks every advertised next
-   page, consecutive page numbers and a terminal page; missing headers,
-   incomplete pagination, API errors, inconsistent list/detail fields and
-   malformed payloads refuse.
+   There must be **one active applicable branch ruleset** carrying a
+   `pull_request` rule whose **own** `bypass_actors` list is exactly
+   `[{"actor_type": "Integration", "actor_id": 4105147, "bypass_mode": "always"}]`,
+   the release App token used by `release.yml`. That ruleset's PR rule blocks
+   every direct push by an actor that cannot bypass that same ruleset.
+   A status-check-only rule permits writers to push when its checks pass
+   and supplies no barrier. A disabled, evaluating or main-excluded App-only
+   PR ruleset supplies no barrier either. A second bypass actor, a different
+   App/type or a PR-only bypass mode on the candidate disqualifies it.
+   Other rulesets' bypass lists and enforcement do not supply or invalidate
+   a valid App-only PR barrier. Lists are never intersected: a person may hold
+   a repository role and belong to a team represented by different descriptors.
+   Ruleset names and ids are not pinned; tag-creation rulesets provide no
+   evidence about pushes to main. Every branch detail is still validated,
+   including details after a valid barrier, so unreadable or malformed
+   evidence refuses.
+   Both Actions and ruleset list reads retain HTTP Link headers and check
+   every advertised next page, consecutive page numbers and a terminal page;
+   missing headers, incomplete pagination, API errors, inconsistent
+   list/detail fields and malformed payloads refuse.
+   Every HTTP response body read as JSON, including paginated PR and status
+   lists, must contain exactly one JSON document before pagination is checked.
+   Extra documents (including a later page without its HTTP headers) or
+   trailing garbage refuse with an endpoint-specific diagnostic:
+   `returned an HTTP response body with trailing data; expected exactly one JSON document`.
+   Empty bodies refuse with `returned an empty payload`; a valid empty JSON
+   array is still a complete document.
 2. The bump has exactly one parent, and that parent passes the ordinary
    phase-1 merged-PR/tree/full-status checks above, including the allowed
    status creator. This depth is exactly one: a bump on another bump refuses

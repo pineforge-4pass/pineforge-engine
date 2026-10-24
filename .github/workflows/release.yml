@@ -115,7 +115,9 @@ jobs:
 
       # Phase 1 also accepts an App-pushed two-file bump on a gated PR merge.
       # No matching post-merge push run yet: refuse; retry after it exists.
-      # The gate reads main's cumulative branch rulesets with this App token.
+      # The gate requires one active main pull_request ruleset whose own
+      # bypass_actors is exactly Integration 4105147 with bypass_mode always.
+      # Other rulesets' bypass lists do not supply or invalidate that barrier.
       # Its App permission administration: read exposes bypass_actors; removing
       # that permission makes the release-bump exemption refuse every release.
       # The workflow-level contents: write scope belongs to GITHUB_TOKEN.
