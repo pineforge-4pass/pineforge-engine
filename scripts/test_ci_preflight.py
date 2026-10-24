@@ -21,7 +21,7 @@ from ci_preflight import (AUTHZ_ALWAYS, AUTHZ_REFUSE_STEP, CORES,
                           DOCS_ONLY_SKIP, GITHUB_ONLY_SKIP, HEAVY_SKIP, HOSTED_MATRIX_RUNNER, JOB_COMMANDS,
                           PR_RUNNER, POST_RUNNER, MATRIX_LINUX_RUNNER, MATRIX_RUNNER,
                           NATIVE_EXCLUSION, NATIVE_CACHE_SAVE, CURL_CACHE_SAVE,
-                          PROOF_JOBS, PR_PROOF_JOBS, RELEASE_RUNNER, _jobs, check_commands,
+                          PREFLIGHT_IF, PROOF_JOBS, PR_PROOF_JOBS, RELEASE_RUNNER, _jobs, check_commands,
                           ci_workflow_findings, gated_workflow_findings,
                           native_workflow_findings, run_checks)
 
@@ -187,6 +187,13 @@ def in_job(workflow, job, before, after):
         raise AssertionError(f'{before!r} is not in job {job}')
     at = workflow.index(before, start)
     return workflow[:at] + after + workflow[at + len(before):]
+
+
+def ready_pr(condition):
+    """Keep the draft guard when mutating another PR job condition."""
+    if not condition.startswith('${{ ') or not condition.endswith(' }}'):
+        raise AssertionError(f'not a workflow condition: {condition!r}')
+    return '${{ !github.event.pull_request.draft && (' + condition[4:-3] + ') }}'
 
 
 def in_step(workflow, job, name, before, after):
@@ -734,8 +741,9 @@ class PreflightFailures(unittest.TestCase):
         guard = f'        if: {ci_preflight.AUTHZ_SUCCESS}\n'
         unnamed_run = '      - run: python3 scripts/ci_preflight.py --output-dir build-ci-preflight\n'
         for function in ('always()', 'cancelled()', 'failure()', 'success()'):
-            conditioned = in_job(body, None, f'    if: {AUTHZ_ALWAYS}\n',
-                                 '    if: ${{ ' + function + " && needs.authz.result == 'success' }}\n")
+            condition = '${{ ' + function + " && needs.authz.result == 'success' }}"
+            conditioned = in_job(body, None, f'    if: {PREFLIGHT_IF}\n',
+                                 f'    if: {ready_pr(condition)}\n')
             mutations = (
                 (in_job(conditioned, None, AUTHZ_REFUSE_STEP, ''),
                  'ci.yml job preflight with a status function must refuse authz first'),
@@ -1440,6 +1448,41 @@ exit "$lookup_exit"
                 self.assertIn(f'{Path(CI_SOURCES[index]).name} must keep its exact '
                               + ('unfiltered PR' if index == 0 else 'main push, nightly and manual') + ' triggers',
                               findings)
+
+    def test_ci_split_requires_ready_for_review(self):
+        self.assertEqual(ci_workflow_findings(*self.ci_sources(), others=self.other_sources()), [])
+        findings = self.mutated_file_findings(0, None,
+            '    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]\n',
+            '    types: [opened, synchronize, reopened, converted_to_draft]\n')
+        self.assertIn('ci.yml must keep its exact unfiltered PR triggers', findings)
+        self.assertIn('ci.yml must run on every pull_request without event filters', findings)
+
+    def test_ci_split_requires_converted_to_draft(self):
+        self.assertEqual(ci_workflow_findings(*self.ci_sources(), others=self.other_sources()), [])
+        findings = self.mutated_file_findings(0, None,
+            '    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]\n',
+            '    types: [opened, synchronize, reopened, ready_for_review]\n')
+        self.assertIn('ci.yml must keep its exact unfiltered PR triggers', findings)
+        self.assertIn('ci.yml must run on every pull_request without event filters', findings)
+
+    def test_ci_split_requires_separate_draft_and_ready_concurrency_groups(self):
+        self.assertEqual(ci_workflow_findings(*self.ci_sources(), others=self.other_sources()), [])
+        findings = self.mutated_file_findings(0, None,
+            '  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}'
+            "-${{ github.event.pull_request.draft && 'draft' || 'ready' }}\n",
+            '  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}\n')
+        self.assertIn('ci.yml must keep its exact draft and ready concurrency groups', findings)
+
+    def test_ci_split_requires_draft_guards_on_every_pr_suite_job(self):
+        self.assertEqual(ci_workflow_findings(*self.ci_sources(), others=self.other_sources()), [])
+        for job in ('preflight', *PR_PROOF_JOBS):
+            with self.subTest(job=job):
+                findings = self.mutated_file_findings(0, job, '!github.event.pull_request.draft && ', '')
+                finding = ('preflight must follow authz and changes and run even if classification fails'
+                           if job == 'preflight' else
+                           f'{job} must start alongside preflight, after authz and changes, '
+                           'and skip only its classified path policy')
+                self.assertIn(finding, findings)
 
     def test_ci_split_refuses_deleting_or_renaming_every_job(self):
         ci = self.ci_sources()[0]
@@ -2283,13 +2326,19 @@ exit "$lookup_exit"
         self.assertIn(f'ci.yml job preflight must run on {PR_RUNNER}', findings)
 
     def test_ci_contract_pins_the_docs_only_skip(self):
-        """Each proof job waits for authz and changes and skips only its docs-only
-        answer; preflight also waits for the class decision and always runs."""
+        """Keep each pipeline's path policy and dependencies; PR suite jobs
+        also require a ready PR, and post-merge preflight always runs."""
         original, others = self.ci_sources(), self.other_sources()
         self.assertEqual(ci_workflow_findings(*original, others=others), [])
-        docs_skip = f'    if: {DOCS_ONLY_SKIP}\n'
+        docs_skip = f'    if: {ready_pr(DOCS_ONLY_SKIP)}\n'
         mutations = []
         for index, proofs, policy in ((0, PR_PROOF_JOBS, GITHUB_ONLY_SKIP), (6, PROOF_JOBS, DOCS_ONLY_SKIP)):
+            wrong_skips = [f'    if: {ready_pr(condition) if index == 0 else condition}\n'
+                           for condition in (
+                               "${{ needs.changes.outputs.docs_only != 'true' }}",
+                               "${{ !cancelled() && needs.changes.outputs.docs_only == 'false' }}",
+                               "${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}",
+                           )]
             for job in proofs:
                 skip = f'    if: {policy}\n'
                 refused = f'{job} must start alongside preflight, after authz and changes'
@@ -2298,21 +2347,19 @@ exit "$lookup_exit"
                     (index, job, '    needs: [authz, changes]\n', '    needs: [changes, preflight]\n', refused),
                     (index, job, '    needs: [authz, changes]\n', '    needs: preflight\n', refused),
                     (index, job, skip, '', refused),
-                    (index, job, skip, "    if: ${{ needs.changes.outputs.docs_only != 'true' }}\n", refused),
-                    (index, job, skip, "    if: ${{ !cancelled() && needs.changes.outputs.docs_only == 'false' }}\n",
-                     refused),
+                    (index, job, skip, wrong_skips[0], refused),
+                    (index, job, skip, wrong_skips[1], refused),
                     (index, job, skip, skip.replace("!= 'true'", "!= 'true' && github.event_name != 'push'"),
                      refused),
-                    (index, job, skip, "    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}\n",
-                     refused)]
+                    (index, job, skip, wrong_skips[2], refused)]
         mutations += [
             (0, 'preflight', '    needs: [authz, changes]\n', '',
              'preflight must follow authz and changes'),
             (0, 'preflight', '    needs: [authz, changes]\n', '    needs: build\n',
              'preflight must follow authz and changes'),
-            (0, 'preflight', f'    if: {AUTHZ_ALWAYS}\n', docs_skip,
+            (0, 'preflight', f'    if: {PREFLIGHT_IF}\n', docs_skip,
              'preflight must follow authz and changes'),
-            (0, 'preflight', f'    if: {AUTHZ_ALWAYS}\n', '',
+            (0, 'preflight', f'    if: {PREFLIGHT_IF}\n', '',
              'preflight must follow authz and changes'),
             (0, 'changes', '    steps:\n', '    needs: preflight\n    steps:\n',
              'changes must start after authz'),
@@ -2702,8 +2749,8 @@ finally:
                 ('build-gate', 'github_only = False', 'github_only = True'),
                 ('build-gate', 'bool(paths) and all(', 'True or all('),
                 ('build-gate', 'snapshot() != count', 'False'),
-                ('build', GITHUB_ONLY_SKIP, DOCS_ONLY_SKIP),
-                ('corpus-parity-subset', GITHUB_ONLY_SKIP, DOCS_ONLY_SKIP),
+                ('build', GITHUB_ONLY_SKIP, ready_pr(DOCS_ONLY_SKIP)),
+                ('corpus-parity-subset', GITHUB_ONLY_SKIP, ready_pr(DOCS_ONLY_SKIP)),
                 ('preflight', ci_preflight.PREFLIGHT_TIER, "'github-only'"),
                 ('changes', 'pull-requests: read', 'pull-requests: write'),
                 ('build-gate', 'pull-requests: read', 'pull-requests: write')):
@@ -3662,6 +3709,24 @@ finally:
                 self.assertIn(RULESETS_PROBE_FINDING, ci_workflow_findings(
                     *original, others={**others, 'release.yml': changed,
                                       'release-ruleset-probe.yml': RULESETS_PROBE_WORKFLOW}))
+
+    def test_duplicate_test_name_stages_are_binding_and_pin_the_source_root(self):
+        source = Path('/src')
+        commands = check_commands(source)
+        plan = {entry[0]: entry for entry in commands}
+        tests = 'duplicate-test-names-tests'
+        check = 'duplicate-test-names'
+        self.assertEqual(plan[tests], (
+            tests, [sys.executable, str(source / 'scripts/test_check_duplicate_test_names.py')],
+        ))
+        self.assertEqual(plan[check], (
+            check, [sys.executable, str(source / 'scripts/check_duplicate_test_names.py'),
+                    '--root', str(source)],
+        ))
+        names = [entry[0] for entry in commands]
+        self.assertLess(names.index(tests), names.index(check))
+        fast_names = {entry[0] for entry in check_commands(source, tier='fast')}
+        self.assertTrue({tests, check} <= fast_names)
 
     def test_no_stage_is_advisory_today(self):
         for entry in check_commands(Path('/src')):
