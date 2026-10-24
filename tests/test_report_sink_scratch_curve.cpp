@@ -55,6 +55,7 @@
 #include <pineforge/report_sink_writer.hpp>
 #include <pineforge/run_failure.hpp>
 
+#include "../src/command_scratch_cache.hpp"
 #include "../src/report_scratch.hpp"
 #include "scratch_descriptor_fixture.hpp"
 
@@ -88,16 +89,27 @@ int native_set_execution_observer_v1(BacktestEngine*, const pf_execution_observe
 // Count actual new[] storage, including arrays freed before fill_report
 // returns. In the flat memory cases there are no trades, outputs, security
 // diagnostics, trace or hash recording: the report/capture curve is the only
-// array. Scalar new (vectors and the fixed pread window) remains separate.
+// report array. The command scratch's fixed nothrow cache array has its own
+// census and bound. Scalar new (vectors and the fixed pread window) is separate.
 // Every array allocation/deallocation form uses the matched scalar aligned
 // allocator, including sized/nothrow forms, so sanitizers see one allocator.
 namespace report_arrays {
 
-struct Counts {
+// Even a nothrow equity array cannot be mistaken for the byte cache. Throwing
+// array requests always stay in the report census, regardless of their size.
+static_assert(pineforge::detail::CachedScratchBacking::kCacheBytes
+                  % sizeof(pf_equity_point_t) != 0,
+              "command cache bytes must not alias an equity-array allocation");
+
+struct ArrayCounts {
     std::size_t live_bytes = 0;
     std::size_t peak_bytes = 0;
     std::size_t capacity_bytes = 0;
     std::size_t allocations = 0;
+};
+
+struct Counts : ArrayCounts {
+    ArrayCounts command_cache;
 };
 
 Counts* active = nullptr;
@@ -106,22 +118,26 @@ struct Header {
     void* base;
     std::size_t size;
     std::size_t alignment;
-    Counts* owner;
+    ArrayCounts* owner;
 };
 
-void* take(std::size_t size, std::size_t alignment = __STDCPP_DEFAULT_NEW_ALIGNMENT__) {
+void* take(std::size_t size, std::size_t alignment = __STDCPP_DEFAULT_NEW_ALIGNMENT__,
+           bool nothrow = false) {
     alignment = std::max(alignment, std::size_t(__STDCPP_DEFAULT_NEW_ALIGNMENT__));
     const std::size_t prefix = (sizeof(Header) + alignment - 1) / alignment * alignment;
     if (size > std::numeric_limits<std::size_t>::max() - prefix) throw std::bad_alloc();
     void* base = ::operator new(prefix + size, std::align_val_t(alignment));
     auto* block = static_cast<unsigned char*>(base) + prefix;
-    const Header header{base, size, alignment, active};
+    ArrayCounts* owner = active;
+    if (active && nothrow && size == pineforge::detail::CachedScratchBacking::kCacheBytes)
+        owner = &active->command_cache;
+    const Header header{base, size, alignment, owner};
     std::memcpy(block - sizeof(Header), &header, sizeof header);
-    if (active) {
-        active->live_bytes += size;
-        active->peak_bytes = std::max(active->peak_bytes, active->live_bytes);
-        active->capacity_bytes = std::max(active->capacity_bytes, size);
-        ++active->allocations;
+    if (owner) {
+        owner->live_bytes += size;
+        owner->peak_bytes = std::max(owner->peak_bytes, owner->live_bytes);
+        owner->capacity_bytes = std::max(owner->capacity_bytes, size);
+        ++owner->allocations;
     }
     return block;
 }
@@ -137,7 +153,7 @@ void give(void* memory) noexcept {
 void* take_nothrow(std::size_t size,
                    std::size_t alignment = __STDCPP_DEFAULT_NEW_ALIGNMENT__) noexcept {
     try {
-        return take(size, alignment);
+        return take(size, alignment, true);
     } catch (...) {
         return nullptr;
     }
@@ -689,6 +705,21 @@ struct RemovalPeaks {
     std::size_t off_report_capacity = 0;
 };
 
+void check_command_cache(const report_arrays::Counts& counts) {
+    const auto& cache = counts.command_cache;
+    const std::size_t cache_bytes = pineforge::detail::CachedScratchBacking::kCacheBytes;
+    require(cache.allocations <= 1
+                && cache.capacity_bytes == (cache.allocations ? cache_bytes : 0)
+                && cache.peak_bytes == cache.capacity_bytes
+                && (cache.live_bytes == 0 || cache.live_bytes == cache.capacity_bytes),
+            "command scratch cache exceeded its single fixed allocation: peak_bytes="
+                + std::to_string(cache.peak_bytes)
+                + ", capacity_bytes=" + std::to_string(cache.capacity_bytes)
+                + ", live_bytes=" + std::to_string(cache.live_bytes)
+                + ", allocations=" + std::to_string(cache.allocations)
+                + ", cache_bytes=" + std::to_string(cache_bytes));
+}
+
 // (e) Count the owned report/capture arrays, not only the public lengths:
 // finish_report_sink frees its temporary array before the caller sees it.
 // Counts outlive their hosts, including the observer's retained capture.
@@ -723,6 +754,8 @@ RemovalPeaks measure_removal(const TestRoot& root, const std::string& name,
     peaks.engine.size = std::max(on.probe_peak_size, held_size);
     peaks.engine.capacity = std::max(on.probe_peak_capacity, held_capacity);
     const auto sample = [&] {
+        check_command_cache(off_arrays);
+        check_command_cache(arrays);
         peaks.engine.size = std::max(peaks.engine.size, on.probe_size());
         peaks.engine.capacity = std::max(peaks.engine.capacity, on.probe_capacity());
         require(peaks.engine.size == held_size && peaks.engine.capacity == held_capacity,
