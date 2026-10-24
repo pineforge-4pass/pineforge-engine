@@ -592,6 +592,14 @@ have no row floor of their own. Raise the table's `full` number when a row
 lands, and pass `--min-tests N` to override it for one run (the flag gates any
 profile; `kernel` and `release` have a default).
 
+On Linux profiles with the source layer enabled, `ctest-scratch-guard` requires
+`test_scratch_guard_ledger_read`, `test_scratch_guard_reissue`, and
+`test_scratch_guard_equal_string` in the full CTest registry and refuses selected
+guard rows that skip, are disabled, or do not run; unreadable discovery or result
+lists fail closed. Each shard checks execution only for its own selected names.
+These exact row names are the contract the scratch-syscall counter tests must carry;
+kernel-only and non-Linux runs do not run this stage.
+
 **2026-10-24 superseding detail:** `debug` and `sanitizers` have no default
 execution floor, but their default exclusion enforces the registration
 bound. An explicit `--min-tests N` on either profile also requires N rows to

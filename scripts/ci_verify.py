@@ -809,6 +809,13 @@ PRIVATE_FIXTURE_PROFILE_FLOORS = {
 # registration minima remain lower bounds; more rows only raise the count.
 # The receipt/private-fixture populations and runner-only floors are unchanged.
 
+# Contract names shared with the source-layer/Linux scratch-syscall counter tests.
+SCRATCH_GUARD_ROWS = frozenset((
+    'test_scratch_guard_ledger_read',
+    'test_scratch_guard_reissue',
+    'test_scratch_guard_equal_string',
+))
+
 
 def private_fixtures_overlay() -> bool:
     """True when PINEFORGE_PRIVATE_FIXTURES is set and non-empty.
@@ -2133,6 +2140,7 @@ class Driver:
         if shard.count == 1:
             self.enforce_test_floor(ran, registered=len(registry), selected=len(selection),
                                     registered_names=frozenset(registry),
+                                    selected_names=frozenset(selected),
                                     excluded_names=frozenset(excluded))
             if self.cfg.min_tests is None:
                 self.pass_stage('ctest-floor', 'no execution floor configured; '
@@ -2159,6 +2167,7 @@ class Driver:
         overlay = private_fixtures_overlay()
         if overlay:
             self.reject_private_fixture_skips(rows)
+        self.reject_scratch_guard_skips(rows, frozenset(registry), frozenset(selected))
         stage = 'ctest-floor'
         pinned = frozenset()
         absent = self.cfg.profile.name in PRIVATE_FIXTURE_PROFILE_FLOORS and not overlay
@@ -2781,8 +2790,21 @@ class Driver:
             ran = self.invoke('ctest', ctest, extra_env=self.sanitizer_env())
             registered_names = (ctest_list_names(all_rows.stdout + all_rows.stderr)
                                 if all_rows.returncode == 0 else None)
+            selected_names = (ctest_list_names(selected_rows.stdout + selected_rows.stderr)
+                              if selected_rows.returncode == 0 else None)
+            if (self.cfg.profile.source_layer and sys.platform.startswith('linux')
+                    and test_dir != self.cfg.build_dir):
+                # Runner-only selection is not the full build registry. Keep
+                # its existing counts, but prove guard presence over the root.
+                full_rows = self.invoke(
+                    'ctest-list-scratch-guard',
+                    ['ctest', '--test-dir', str(self.cfg.build_dir), '-N'],
+                    stream_output=False)
+                registered_names = (ctest_list_names(full_rows.stdout + full_rows.stderr)
+                                    if full_rows.returncode == 0 else None)
             self.enforce_test_floor(ran, registered=registered, selected=selected,
-                                    registered_names=registered_names, excluded_names=excluded_names)
+                                    registered_names=registered_names,
+                                    selected_names=selected_names, excluded_names=excluded_names)
         if self.cfg.profile.name in LIVE_ONLY_PROFILES:
             try:
                 rows = ctest_rows(ran.stdout + ran.stderr)
@@ -2856,6 +2878,7 @@ class Driver:
     def enforce_test_floor(self, ran: Completed, *, registered: int | None = None,
                            selected: int | None = None,
                            registered_names: 'frozenset[str] | None' = None,
+                           selected_names: 'frozenset[str] | None' = None,
                            excluded_names: 'frozenset[str] | None' = None) -> None:
         """Refuse a CTest run in which fewer rows ran than the profile's floor.
 
@@ -2882,6 +2905,16 @@ class Driver:
         # too) and runs before the exclude-label branch returns.
         if private_fixtures_overlay():
             self.reject_private_fixture_skips(rows)
+        # Direct full-run callers can use the registry itself as selection;
+        # a slow-label listing also determines that selection exactly. The
+        # execution callers pass discovered names explicitly, including 1/1.
+        if selected_names is None and self.cfg.profile.name not in LIVE_ONLY_PROFILES:
+            if not self.cfg.exclude_label:
+                selected_names = registered_names
+            elif (self.cfg.exclude_label == 'slow' and registered_names is not None
+                  and excluded_names is not None):
+                selected_names = registered_names - excluded_names
+        self.reject_scratch_guard_skips(rows, registered_names, selected_names)
         if self.cfg.exclude_label:
             minimum = max(EXCLUDED_REGISTERED_MIN.get(self.cfg.profile.name, 0),
                           self.cfg.min_tests or 0)
@@ -3103,6 +3136,45 @@ class Driver:
                 'ctest-private-fixtures',
                 f'PINEFORGE_PRIVATE_FIXTURES set; none of the {len(pinned)} '
                 f'{PRIVATE_FIXTURE_LABEL} rows skipped')
+
+    def reject_scratch_guard_skips(self, rows: 'CTestRows | None',
+                                   registered_names: 'frozenset[str] | None',
+                                   selected_names: 'frozenset[str] | None') -> None:
+        """Require all Linux/source guard registrations and execution on their shard."""
+        if not self.cfg.profile.source_layer or not sys.platform.startswith('linux'):
+            return
+        stage = 'ctest-scratch-guard'
+        required = ', '.join(sorted(SCRATCH_GUARD_ROWS))
+        if registered_names is None:
+            self.fail_stage(stage, f'{stage}: full CTest registry names were unreadable; '
+                            f'cannot check required guard rows: {required}')
+            return
+        missing = sorted(SCRATCH_GUARD_ROWS - registered_names)
+        if missing:
+            self.fail_stage(stage, f'{stage}: required guard rows missing from the full '
+                            'CTest registry: ' + ', '.join(missing))
+            return
+        if rows is None:
+            self.fail_stage(stage, f'{stage}: CTest printed no readable row lists; '
+                            f'cannot check required guard rows: {required}')
+            return
+        if selected_names is None:
+            self.fail_stage(stage, f'{stage}: CTest selection names were unreadable; '
+                            f'cannot check selected guard rows: {required}')
+            return
+        guards = SCRATCH_GUARD_ROWS & selected_names
+        offenders = [
+            f'{reason}: {", ".join(sorted(guards & set(names)))}'
+            for reason, names in (('skipped', rows.skipped), ('disabled', rows.disabled),
+                                  ('not run', rows.not_run))
+            if guards & set(names)
+        ]
+        if offenders:
+            self.fail_stage(stage, f'{stage}: selected guard rows did not run; '
+                            + '; '.join(offenders))
+        else:
+            self.pass_stage(stage, f'{stage}: all {len(SCRATCH_GUARD_ROWS)} guard rows '
+                            f'registered; checked {len(guards)} selected guard rows')
 
     def finish(self, status: str, code: int) -> int:
         self.summary['status'] = status
