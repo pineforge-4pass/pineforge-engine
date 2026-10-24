@@ -5,7 +5,7 @@ README's *Releases* section and on the GitHub releases page. From 1.0.0 the
 version number follows semantic versioning over the surfaces the
 [public contract](docs/pages/public-contract.md) lists.
 
-## Unreleased
+## 1.7.0 — 2026-10-25
 
 This release adds report-sink transport, scratch-backed history and bounded
 storage admission, with new C++ views and command-line report routes.
@@ -622,9 +622,24 @@ deployments using Docker `--tmpfs /tmp` or Kubernetes `emptyDir` with
   long as on 1.6.3 for compile plus run (1.1 and 3.3 times for the run phase
   alone), and the worst of the six takes 5.7 times as long (16.2 times for the
   run phase alone). The six are not a sample of all scripts, and the results
-  are identical in every measured case. The fix is planned for 1.7.1, with a
+  are identical in every one of those six measured cases. The fix is planned for 1.7.1, with a
   target of at most 1.1 times the 1.6.3 run time on every script in the
-  measured set.
+  measured set. These figures were measured through `scripts/run_strategy.py`,
+  which installs no report sink unless `PINEFORGE_REPORT_SINK=1` is set (it
+  was not), so the 65,536-row closed-trade cache described below was in
+  effect. The release image's `docker/run_json.py` default (unjailed)
+  profile installs a temporary report sink on every handle, so there the
+  cache holds 128 rows and a script that loops over its closed trades reads
+  them from scratch files on every pass: hungpixi (24,238 closed trades),
+  one run each started together on one 16 vCPU machine, took 74.18 s on
+  1.6.3 and did not finish within 1800 s on 1.7.0, where the run was
+  stopped at that limit. The trigger is a report sink installed together
+  with a loop over more than 128 closed trades. Not affected:
+  `scripts/run_strategy.py` without a sink, which the hosted case runner,
+  the verifier and the sweep run (hungpixi takes 107.2 s there, mean of
+  three runs; the corpus-parity canary pass sets
+  `PINEFORGE_REPORT_SINK=1`), and the HPO native adapter, which installs no
+  sink.
 
 - **Script state keeps its resident layout.** No paged or external store for
   Pine script state (arrays, strings, maps, matrices, user-defined type
@@ -709,34 +724,53 @@ deployments using Docker `--tmpfs /tmp` or Kubernetes `emptyDir` with
   cache of closed rows in process memory in front of them. A Pine run
   allocates that cache at its first closed trade, whether or not the
   script reads trade history, because the Pine host reads each booked row.
-  Without a report sink the cache holds at most
-  `TradeLedger::kDefaultCacheRows` = 65,536 rows of
-  `TradeLedger::kLedgerEntryBytes` = 312 bytes, 20,447,232 bytes, and is
-  allocated at the smaller of that budget and the next power of two at or
-  above the number of closed rows (at least 64): 19,968 bytes up to 64
-  closed trades, 10,223,616 bytes at 24,238, 20,447,232 bytes above
-  32,768. With a report sink installed the budget is
+  Which cache a run gets depends on whether a report sink is installed.
+  A run with no report sink holds at most `TradeLedger::kDefaultCacheRows`
+  = 65,536 rows of `TradeLedger::kLedgerEntryBytes` = 312 bytes, 20,447,232
+  bytes, allocated at the smaller of that budget and the next power of two
+  at or above the number of closed rows (at least 64): 19,968 bytes up to 64
+  closed trades, 10,223,616 bytes at 24,238, 20,447,232 bytes above 32,768.
+  A run with a report sink installed holds at most
   `TradeLedger::kSinkCacheRows` = 128 rows, 39,936 bytes, a fixed bound
   that does not depend on the number of closed trades (19,968 bytes up to
   64 closed trades, 39,936 bytes above), so that the sink run's working
-  memory stays flat. The cache stays until the next run begins or the
-  engine is destroyed, and each engine holds its own, so K engines alive
-  together hold K times that. A cached row serves
-  `BacktestEngine::avg_trade_percent`, `avg_winning_trade_percent`,
-  `avg_losing_trade_percent`, the `closed_trade_*` accessors and
-  `get_trade` with no scratch read. Above the budget the cache is
-  direct-mapped, so rows that share a slot evict each other and a loop
-  over the whole history reads them from scratch files again on every
-  pass: 2 x (N - 65,536) rows per pass for N closed trades below 131,072,
-  and every row from 131,072 closed trades on; with a report sink,
-  2 x (N - 128) rows per pass below 256 closed trades, and every row from
-  256 on. Rows whose four strings together exceed 128 bytes keep their
-  numbers cached but read their text from scratch files. A script that
-  calls the accessors each bar then pays one scratch read per such row per
-  call. The budget has no user control in this release:
-  `NativeExecutionConsumer::begin_ready` sets it at every run begin, to 128
-  rows with a report sink and to 65,536 rows without, and nothing in the
-  C API or the environment changes either figure. When closed rows are
+  memory stays flat. `scripts/run_strategy.py` default path (no sink),
+  hl2-01, 100,000 bars, n=3: peak RSS 144.9 MiB on 1.6.3 vs 125.7 MiB on
+  1.7.0. A handle has no sink until its host installs one with
+  `strategy_set_report_sink_v1` or `strategy_set_report_sink_fd_v1`. By
+  entry point, the large cache (no sink) belongs to: the C API used
+  directly, C++ hosts including the Pine host, the `runner/` command line,
+  `scripts/run_strategy.py` unless `PINEFORGE_REPORT_SINK=1` is set, and
+  `docker/run_json.py --profile jailed` without `--report-sink-fd`. The
+  128-row cache (sink installed) belongs to: `docker/run_json.py` in its
+  default, unjailed profile, which installs a temporary sink on every
+  handle even when no `--report-sink` is given and is the release image's
+  JSON entry point; `docker/run_json.py --profile jailed` with
+  `--report-sink-fd`; `scripts/run_strategy.py` with
+  `PINEFORGE_REPORT_SINK=1`; and any host that calls the two functions
+  above. Which of the two the App's jailed host uses is not stated here.
+  The cache stays until the next run begins or the engine is destroyed,
+  and each engine holds its own, so K engines alive together hold K times
+  that. A cached row serves `BacktestEngine::avg_trade_percent`,
+  `avg_winning_trade_percent`, `avg_losing_trade_percent`, the
+  `closed_trade_*` accessors and `get_trade` with no scratch read. Above
+  the budget the cache is direct-mapped, so rows that share a slot evict
+  each other and a loop over the whole history reads them from scratch
+  files again on every pass: with no sink, 2 x (N - 65,536) rows per pass
+  for N closed trades below 131,072, and every row from 131,072 closed
+  trades on; with a sink, 2 x (N - 128) rows per pass below 256 closed
+  trades, and every row from 256 on. A script that loops over its closed
+  trades re-reads rows from scratch files on every pass on every
+  sink-installed entry point above: the colliding rows when there are
+  between 129 and 255 closed trades, and every row from 256 on; from there
+  the slowdown described earlier in this section applies to it. Rows whose
+  four strings together exceed 128 bytes keep their numbers cached but
+  read their text from scratch files. A script that calls the accessors
+  each bar then pays one scratch read per such row per call. The two
+  figures cannot be changed by a user in this release:
+  `NativeExecutionConsumer::begin_ready` sets the budget at every run
+  begin, to 128 rows with a report sink and to 65,536 rows without, and
+  installing a sink or not is the only choice. When closed rows are
   streamed (a
   report sink whose trade history is streamable), once per script bar
   `NativeExecutionConsumer::closed_rows_sealable` decodes again every row of
