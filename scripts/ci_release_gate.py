@@ -30,8 +30,9 @@ ALLOWED_STATUS_CREATORS = (("luisleo526", "User"),)
 # This is GitHub's authenticated push actor, never the commit's author/committer.
 RELEASE_PUSH_ACTOR = "pineforge-app[bot]"
 # Integration for release.yml's PINEFORGE_APP_ID installation token.
-# The gate relies on App permission administration: read to see bypass_actors;
-# removing it makes every release-bump exemption refuse, even with contents: write.
+# The gate needs bypass_actors visible on every branch ruleset in the inventory.
+# If the release App token cannot see them, the bump is refused;
+# release-ruleset-probe.yml reports whether it can.
 RELEASE_APP_ID = 4105147
 RELEASE_BUMP_PATHS = frozenset(("VERSION", "docker/run_failure_codes_diff.json"))
 MAIN_PROOF_WATCHER_FIRST_SHA: str | None = None

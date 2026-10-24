@@ -1359,15 +1359,15 @@ changes to the two files whose values the release workflow computes: the next
 version and the reset catalog diff. Preflight pins the exact writer, staging,
 commit and atomic-push step and the App-token checkout wiring.
 
-The gate relies on the release App permission `administration: read` to read
-`bypass_actors`. The App installation has that permission and `contents: write`;
-the workflow-level `contents: write` setting scopes GITHUB_TOKEN and does not
-grant App permissions. Tokens without administration access may receive a
-ruleset response with `bypass_actors` omitted; a missing field refuses, and
+The gate needs `bypass_actors` visible on every branch ruleset in the inventory.
+If the release App token cannot see them, the bump is refused.
+`release-ruleset-probe.yml` reports whether that token can see them.
+Visibility with the installation token, including inherited organization
+rulesets, is unverified until the probe runs. A missing field refuses;
 the guard never assumes an unreadable list is empty or App-only.
-Removing this App permission makes every release-bump exemption refuse.
+The workflow-level `contents: write` setting scopes GITHUB_TOKEN.
 Preflight pins the unconditional gate invocation and its App token, and its
-binding release-gate tests pin this permission dependency in code and docs.
+binding release-gate tests pin this visibility requirement in code and docs.
 
 Dispatch **Release ruleset probe** (`release-ruleset-probe.yml`) once to check
 actual ruleset visibility with the same App token mint as `release.yml`.
@@ -1375,7 +1375,7 @@ It runs `python3 scripts/ci_release_gate.py rulesets-probe --repo OWNER/REPO`,
 reading only repository metadata, the parent-inclusive ruleset inventory and
 branch details. Success prints the barrier id/name and one compact inventory
 line with enforcement, source and bypass visibility. Refusal exits 1 with empty
-stdout and the reader's `::error::` diagnostic naming the failing endpoint.
+stdout and the reader's `::error::` diagnostic; API/response failures name the endpoint.
 The probe changes no release evidence or gate verdicts. A release `dry_run`
 on a merged PR does not exercise the bump-only ruleset reader.
 

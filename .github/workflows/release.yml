@@ -118,9 +118,9 @@ jobs:
       # The gate requires one active main pull_request ruleset whose own
       # bypass_actors is exactly Integration 4105147 with bypass_mode always.
       # Other rulesets' bypass lists do not supply or invalidate that barrier.
-      # Its App permission administration: read exposes bypass_actors; removing
-      # that permission makes the release-bump exemption refuse every release.
-      # The workflow-level contents: write scope belongs to GITHUB_TOKEN.
+      # The gate needs bypass_actors visible on every branch ruleset in the inventory.
+      # If the release App token cannot see them, the bump is refused.
+      # release-ruleset-probe.yml reports whether it can. contents: write scopes GITHUB_TOKEN.
       - name: Refuse unless pineforge/verify and pineforge/parity are green
         id: gate
         env:

@@ -56,7 +56,7 @@ FLEET_JOB_IDS = {
     'docs.yml': ('authz', 'build'),
     'docs-post.yml': ('authz', 'build'),
     'release.yml': ('release', 'prebuilt', 'notify-hub'),
-    'release-ruleset-probe.yml': ('probe',),
+    'release-ruleset-probe.yml': ('authz', 'probe'),
     'promote-baseline.yml': ('promote',),
 }
 HEAVY_CI_JOBS = ('preflight-slow', 'sanitizers', 'kernel-only', 'native-live', 'corpus-parity')
@@ -75,7 +75,70 @@ permissions:
   contents: read
 
 jobs:
+  authz:
+    name: authz
+    # GCP fleet (owner #1050): non-release jobs on pf-gcp-pr; release-class jobs only on pf-gcp-main.
+    runs-on: ["self-hosted", "pf-gcp-pr"]
+    permissions: {}
+    # No timeout-minutes: the owner's no-time-limits rule (check-no-time-limits refuses new ones).
+    steps:
+      - name: Only our own pull requests and our own events run CI
+        env:
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
+          ASSOCIATION: ${{ github.event.pull_request.author_association }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          WR_HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+          WR_ACTOR: ${{ github.event.workflow_run.triggering_actor.login }}
+          GH_TOKEN: ${{ github.token }}   # read-only use: one permission lookup for workflow_run
+          # Bot logins whose same-repository pull requests count as ours: dependabot[bot] (CI-DEPBOT A)
+          # and the org's own GitHub App bot logins by name (space-separated), nothing else.
+          ALLOWED_BOTS: "dependabot[bot] pineforge-app[bot]"
+        run: |
+          set -eu
+          fail() { echo "::error title=authz::$1"; echo "authz: REFUSED: $1" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
+          case "$EVENT" in
+            push|workflow_dispatch|schedule|merge_group|release|workflow_call|repository_dispatch)
+              # Only someone with write access to this repository (or our App's token) can cause these
+              # events; none of them runs pull-request code.
+              ;;
+            workflow_run)
+              # LB-437: bind identity to the triggering run and its re-runner.
+              # These two App bots are fixed canon policy; ALLOWED_BOTS is PR-only.
+              [ -n "${WR_HEAD_REPO:-}" ] || fail "workflow_run head repository is missing"
+              [ -n "${WR_ACTOR:-}" ] || fail "workflow_run triggering actor is missing"
+              [ "$WR_HEAD_REPO" = "$REPO" ] || fail "workflow_run head repository does not match this repository"
+              case "$WR_ACTOR" in
+                "pineforge-app[bot]"|"pineforge-ci-dispatcher[bot]") ;;
+                *"[bot]") fail "workflow_run bot is not on the canon allowlist" ;;
+                *)
+                  perm=$(gh api "repos/$REPO/collaborators/$WR_ACTOR/permission" --jq .permission 2>/dev/null) || fail "workflow_run permission lookup failed"
+                  case "$perm" in admin|maintain|write) ;; *) fail "workflow_run triggering actor does not have write permission" ;; esac ;;
+              esac ;;
+            pull_request)
+              [ "$HEAD_REPO" = "$REPO" ] || fail "pull request from another repository (${HEAD_REPO:-unknown})"
+              [ "$HEAD_IS_FORK" = "false" ] || fail "pull request from a fork"
+              case "$ASSOCIATION" in
+                OWNER|MEMBER|COLLABORATOR) ;;
+                *)
+                  case " $ALLOWED_BOTS " in
+                    *" $PR_AUTHOR "*) ;;
+                    *)
+                      # A member whose org membership is private shows as CONTRIBUTOR: ask GitHub for the
+                      # author's permission on this repository; anything but admin/maintain/write (or a
+                      # failed call) refuses.
+                      perm=$(gh api "repos/$REPO/collaborators/$PR_AUTHOR/permission" --jq .permission 2>/dev/null || echo none)
+                      case "$perm" in admin|maintain|write) ;; *) fail "author ${PR_AUTHOR:-unknown} (${ASSOCIATION:-NONE}) has permission '$perm', not write, and is not an allowlisted bot" ;; esac ;;
+                  esac ;;
+              esac ;;
+            *) fail "event $EVENT does not run CI (pull_request_target and other events are not allowed)" ;;
+          esac
+          echo "authz: allowed ($EVENT${PR_AUTHOR:+ by $PR_AUTHOR})" >> "$GITHUB_STEP_SUMMARY"
+
   probe:
+    needs: [authz]
     runs-on: ["self-hosted","pf-gcp-main"]
     steps:
       - name: Mint org App token
@@ -88,11 +151,13 @@ jobs:
           repositories: pineforge-engine
 
       - name: Checkout
+        if: ${{ needs.authz.result == 'success' }}
         uses: actions/checkout@v4
         with:
           persist-credentials: false
 
       - name: Probe release ruleset barrier
+        if: ${{ needs.authz.result == 'success' }}
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: python3 scripts/ci_release_gate.py rulesets-probe --repo "${GITHUB_REPOSITORY}"
@@ -426,15 +491,18 @@ class PreflightFailures(unittest.TestCase):
         workflows = self.workflow_sources()
         routes = ci_preflight.workflow_event_routes(workflows)
         for name, workflow in workflows.items():
-            fleet = ('main' if name in ci_preflight.RELEASE_JOB_RUNNERS else
-                     'post' if routes[name] & {'push', 'schedule', 'workflow_dispatch'} else 'pr')
-            runner = {'pr': PR_RUNNER, 'post': POST_RUNNER, 'main': RELEASE_RUNNER}[fleet]
+            workflow_fleet = ('main' if name in ci_preflight.RELEASE_JOB_RUNNERS else
+                              'post' if routes[name] & {'push', 'schedule', 'workflow_dispatch'} else 'pr')
             for job, body in _jobs(workflow).items():
                 if ci_preflight._job_values(body, 'uses'):
                     continue
                 if (name, job) in (('ci-post.yml', 'build-macos'),
                                    ('promote-baseline.yml', 'promote-guard')):
                     continue  # Both hosted exceptions have their own negative controls.
+                # Release workflows retain a non-release canon authz runner.
+                fleet = ('pr' if ci_preflight.RELEASE_JOB_RUNNERS.get(name, {}).get(job) == PR_RUNNER
+                         else workflow_fleet)
+                runner = {'pr': PR_RUNNER, 'post': POST_RUNNER, 'main': RELEASE_RUNNER}[fleet]
                 if (name, job) == ('release.yml', 'prebuilt'):
                     yield name, job, fleet, f'            runner: {RELEASE_RUNNER}\n', RELEASE_MATRIX_FINDING
                     continue
@@ -1873,6 +1941,7 @@ exit "$lookup_exit"
                 'prebuilt': '${{ matrix.runner }}',
                 'notify-hub': '["self-hosted","pf-gcp-main"]'},
             'release-ruleset-probe.yml': {
+                'authz': '["self-hosted","pf-gcp-pr"]',
                 'probe': '["self-hosted","pf-gcp-main"]'},
             'promote-baseline.yml': {
                 'promote': '["self-hosted","pf-gcp-main"]'},
@@ -2080,7 +2149,10 @@ exit "$lookup_exit"
 
     def test_gcp_sites_reject_cross_class_routes(self):
         sites = list(self.gcp_sites())
-        self.assertEqual(len(sites), 29)
+        self.assertEqual(len(sites), 31)
+        self.assertCountEqual([(name, job) for name, job, *_ in sites],
+                              [(name, job) for name, jobs in FLEET_JOB_IDS.items()
+                               for job in jobs])
         self.assertEqual(ci_preflight.runner_findings(self.workflow_sources()), [])
         for name, job, fleet, before, finding in sites:
             correct = {'pr': PR_RUNNER, 'post': POST_RUNNER, 'main': RELEASE_RUNNER}[fleet]
@@ -3468,7 +3540,7 @@ finally:
                 changed = in_step(release, 'release', gate_name, before, after)
                 self.assertNotEqual(changed, release)
                 self.assertIn('release.yml must keep the unconditional release gate '
-                              'with its administration-readable App token '
+                              'with its release App token '
                               'for the App-only main pull_request barrier',
                               ci_workflow_findings(
                                   *original, others={**others, 'release.yml': changed}))
@@ -3479,8 +3551,31 @@ finally:
         self.assertEqual(ci_preflight._code(path.read_text()),
                          ci_preflight._code(RULESETS_PROBE_WORKFLOW))
         self.assertEqual(ci_preflight.RELEASE_JOB_RUNNERS.get(path.name),
-                         {'probe': RELEASE_RUNNER})
+                         {'authz': PR_RUNNER, 'probe': RELEASE_RUNNER})
+        probe_app = ci_preflight._step_named(ci_preflight._steps(_jobs(path.read_text())['probe']),
+                                             '      - name: Mint org App token')
+        release_app = ci_preflight._step_named(
+            ci_preflight._steps(_jobs(self.other_sources()['release.yml'])['release']),
+            '      - name: Mint org App token')
+        self.assertEqual(probe_app, release_app, 'the mint steps must stay byte-identical')
         self.assertEqual(ci_workflow_findings(*self.ci_sources(), others=self.other_sources()), [])
+
+    def test_release_ruleset_probe_refuses_the_original_unauthorized_workflow(self):
+        # The concrete main input has neither authz nor needs/step guards.
+        # Main's whole-workflow pin accepts it, so this is red for that omission.
+        workflow = RULESETS_PROBE_WORKFLOW
+        authz = '  authz:' + _jobs(workflow)['authz']
+        self.assertEqual(workflow.count(authz), 1)
+        unguarded = workflow.replace(authz, '', 1)
+        unguarded = unguarded.replace('    needs: [authz]\n', '', 1)
+        guard = "        if: ${{ needs.authz.result == 'success' }}\n"
+        self.assertEqual(unguarded.count(guard), 2)
+        unguarded = unguarded.replace(guard, '')
+        self.assertEqual(list(_jobs(unguarded)), ['probe'])
+        self.assertEqual(ci_preflight._needs(_jobs(unguarded)['probe']), [])
+        self.assertIn(RULESETS_PROBE_FINDING, ci_workflow_findings(
+            *self.ci_sources(), others={**self.other_sources(),
+                                       'release-ruleset-probe.yml': unguarded}))
 
     def test_release_ruleset_probe_contract_accepts_only_the_requested_workflow(self):
         others = {**self.other_sources(), 'release-ruleset-probe.yml': RULESETS_PROBE_WORKFLOW}
@@ -3488,15 +3583,29 @@ finally:
 
     def test_release_ruleset_probe_workflow_mutations_refuse(self):
         original, others = self.ci_sources(), self.other_sources()
-        # Each row changes an independent invariant of the concrete dispatch
-        # fixture; main has no probe contract and emits none of this finding.
+        # Each row changes an independent invariant of the authorized dispatch
+        # fixture and must reach the real whole-workflow contract.
+        authz = '  authz:' + _jobs(RULESETS_PROBE_WORKFLOW)['authz']
         for name, before, after in (
+                ('missing authz', authz, ''),
+                ('missing needs', '    needs: [authz]\n', ''),
+                ('disabled authz', '    name: authz\n', '    name: authz\n    if: false\n'),
+                ('authz refusal', 'exit 1; }', ':; }'),
+                ('authz permissions', '    permissions: {}', '    permissions: {contents: read}'),
+                ('authz runner', '    runs-on: ["self-hosted", "pf-gcp-pr"]',
+                 '    runs-on: ["self-hosted", "pf-gcp-post"]'),
+                ('checkout guard', '      - name: Checkout\n'
+                 "        if: ${{ needs.authz.result == 'success' }}\n",
+                 '      - name: Checkout\n'),
+                ('probe guard', '      - name: Probe release ruleset barrier\n'
+                 "        if: ${{ needs.authz.result == 'success' }}\n",
+                 '      - name: Probe release ruleset barrier\n'),
                 ('trigger', '  workflow_dispatch:', '  push:'),
                 ('extra trigger', '  workflow_dispatch:', '  workflow_dispatch:\n  pull_request:'),
                 ('inputs', '  workflow_dispatch:', '  workflow_dispatch:\n    inputs:\n      token:\n        type: string'),
                 ('permissions', '  contents: read', '  contents: write'),
                 ('extra scope', '  contents: read', '  contents: read\n  actions: read'),
-                ('job permissions', '    steps:', '    permissions:\n      contents: write\n    steps:'),
+                ('job permissions', '  probe:\n', '  probe:\n    permissions:\n      contents: write\n'),
                 ('runner', RELEASE_RUNNER, POST_RUNNER),
                 ('app action', 'actions/create-github-app-token@v1',
                  'actions/create-github-app-token@v2'),
@@ -3509,8 +3618,8 @@ finally:
                  '          repositories: pineforge-engine\n          permission-administration: read'),
                 ('token consumer', 'GH_TOKEN: ${{ steps.app.outputs.token }}',
                  'GH_TOKEN: ${{ github.token }}'),
-                ('job token', '    steps:',
-                 '    env:\n      GH_TOKEN: ${{ steps.app.outputs.token }}\n    steps:'),
+                ('job token', '  probe:\n',
+                 '  probe:\n    env:\n      GH_TOKEN: ${{ steps.app.outputs.token }}\n'),
                 ('workflow token', 'jobs:', 'env:\n  GH_TOKEN: ${{ steps.app.outputs.token }}\n\njobs:'),
                 ('checkout persistence', 'persist-credentials: false', 'persist-credentials: true'),
                 ('checkout token', '          persist-credentials: false',
@@ -3519,7 +3628,8 @@ finally:
                  '      - run: echo "${GH_TOKEN}"\n'
                  '        env:\n          GH_TOKEN: ${{ steps.app.outputs.token }}\n'
                  '      - name: Checkout'),
-                ('skip', '      - name: Probe release ruleset barrier',
+                ('skip', '      - name: Probe release ruleset barrier\n'
+                 "        if: ${{ needs.authz.result == 'success' }}",
                  '      - name: Probe release ruleset barrier\n        if: false'),
                 ('ignore error', '        run: python3',
                  '        continue-on-error: true\n        run: python3'),
@@ -4168,8 +4278,14 @@ class BaselinePromotionResolution(unittest.TestCase):
 
 class CanonAuthz(unittest.TestCase):
     def test_real_workflow_scripts_admit_our_events_and_refuse_untrusted_identity(self):
-        scripts = [job_script((ROOT / path).read_text(), 'authz') for path in CI_SOURCES[:2]]
-        self.assertEqual(scripts[0], scripts[1])
+        paths = (*CI_SOURCES[:2], '.github/workflows/release-ruleset-probe.yml')
+        scripts = []
+        for path in paths:
+            workflow = (ROOT / path).read_text()
+            self.assertIn('authz', _jobs(workflow), f'{path} must authorize before repository code')
+            scripts.append(job_script(workflow, 'authz'))
+        for script in scripts[1:]:
+            self.assertEqual(scripts[0], script)
         base = {'EVENT': 'pull_request', 'REPO': 'owner/engine', 'HEAD_REPO': 'owner/engine',
                 'HEAD_IS_FORK': 'false', 'ASSOCIATION': 'MEMBER', 'PR_AUTHOR': 'member',
                 'WR_HEAD_REPO': '', 'WR_ACTOR': '', 'PERMISSION': 'none', 'LOOKUP_EXIT': '0',
@@ -4184,6 +4300,7 @@ class CanonAuthz(unittest.TestCase):
             ({'ASSOCIATION': 'NONE', 'PR_AUTHOR': 'other[bot]'}, False, True),
             ({'EVENT': 'pull_request_target'}, False, False),
             ({'EVENT': 'push'}, True, False),
+            ({'EVENT': 'workflow_dispatch'}, True, False),
         ]
         for permission in ('admin', 'maintain', 'write', 'read', 'triage', ''):
             cases.append(({'ASSOCIATION': 'CONTRIBUTOR', 'PERMISSION': permission},
@@ -4219,7 +4336,7 @@ class CanonAuthz(unittest.TestCase):
             gh.chmod(0o755)
             for index, script in enumerate(scripts):
                 for case, (change, allowed, lookup) in enumerate(cases):
-                    with self.subTest(workflow=CI_SOURCES[index], identity=change):
+                    with self.subTest(workflow=paths[index], identity=change):
                         log = root / f'lookup-{index}-{case}'
                         env = {**os.environ, **base, **change, 'LOOKUP_LOG': str(log),
                                'GITHUB_STEP_SUMMARY': str(root / f'summary-{index}-{case}'),

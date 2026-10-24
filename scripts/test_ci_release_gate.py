@@ -1640,6 +1640,32 @@ class RulesetsProbeTests(unittest.TestCase):
             (REPO_API, False, None), (RULESETS_API, True, None),
             (f"repos/{REPO}/rulesets/13094758", False, None)])
 
+    def test_empty_inventory_refusal_and_documented_endpoint_scope(self):
+        # The reader report's complete [] inventory fails on main without an
+        # endpoint. The runtime assertions already hold there; the prose does not.
+        api = self.api_for([])
+        self.assertEqual(self.run_probe(api), (
+            1, "", f"::error::{RULESET_BARRIER_REFUSAL}\n"))
+        self.assertEqual(api.calls, [
+            (REPO_API, False, None), (RULESETS_API, True, None)])
+        docs = (ROOT / "docs/ci.md").read_text()
+        scoped = ("stdout and the reader's `::error::` diagnostic; "
+                  "API/response failures name the endpoint.")
+        unscoped = ("stdout and the reader's `::error::` diagnostic "
+                    "naming the failing endpoint.")
+
+        def assert_scope(text):
+            self.assertIn(scoped, text, "only API/response failures promise an endpoint")
+            self.assertNotIn(unscoped, text, "all-refusals endpoint claim must stay absent")
+
+        assert_scope(docs)
+        self.assertEqual(docs.count(scoped), 1)
+        changed = docs.replace(scoped, unscoped, 1)
+        self.assertNotEqual(changed, docs)
+        with self.assertRaisesRegex(AssertionError,
+                                    "only API/response failures promise an endpoint"):
+            assert_scope(changed)
+
     def test_visible_barrier_prints_exact_evidence_and_only_reads_rulesets(self):
         rows = release_rulesets()
         rows[0].update(source_type="Organization", source="example")
@@ -1886,17 +1912,60 @@ class WorkflowPinTests(unittest.TestCase):
     def test_ci_release_gate_is_unconditional_and_precedes_every_release_write(self):
         self.assert_gate_pin(self.workflow())
 
-    def test_ruleset_reader_permission_dependency_is_documented_and_fixed_in_code(self):
+    def assert_ruleset_visibility_documentation(self, source, docs, workflow):
+        source_comments = "\n".join(line for line in source.splitlines()
+                                    if line.lstrip().startswith("#"))
+        for text in (source_comments, docs, workflow):
+            self.assertNotIn("administration: read", text,
+                             "unverified App permission claim must stay absent")
+        self.assertIn(
+            "# The gate needs bypass_actors visible on every branch ruleset in the inventory.\n"
+            "# If the release App token cannot see them, the bump is refused;\n"
+            "# release-ruleset-probe.yml reports whether it can.", source,
+            "source must document the ruleset visibility requirement")
+        self.assertIn(
+            "The gate needs `bypass_actors` visible on every branch ruleset in the inventory.\n"
+            "If the release App token cannot see them, the bump is refused.\n"
+            "`release-ruleset-probe.yml` reports whether that token can see them.", docs,
+            "docs must document the ruleset visibility requirement")
+        self.assertIn(
+            "      # The gate needs bypass_actors visible on every branch ruleset in the inventory.\n"
+            "      # If the release App token cannot see them, the bump is refused.\n"
+            "      # release-ruleset-probe.yml reports whether it can. "
+            "contents: write scopes GITHUB_TOKEN.", workflow,
+            "workflow must document the ruleset visibility requirement")
+        self.assertNotIn("Removing this App permission makes every release-bump exemption refuse.",
+                         docs, "the unverified permission dependency must stay absent")
+
+    def test_ruleset_reader_visibility_requirement_is_documented_and_fixed_in_code(self):
         source = Path(ci_release_gate.__file__).read_text()
         docs = (ROOT / "docs/ci.md").read_text()
         self.assertRegex(source, r"(?m)^RELEASE_APP_ID = 4105147$")
-        for text in (source, docs, self.workflow()):
-            self.assertIn("administration: read", text)
-            self.assertIn("bypass_actors", text)
-        self.assertIn("# The gate relies on App permission administration: read to see bypass_actors;",
-                      source)
-        self.assertIn("Removing this App permission makes every release-bump exemption refuse.",
-                      docs)
+        self.assert_ruleset_visibility_documentation(source, docs, self.workflow())
+
+    def test_ruleset_visibility_prose_rejects_restored_permission_claims(self):
+        original = [Path(ci_release_gate.__file__).read_text(),
+                    (ROOT / "docs/ci.md").read_text(), self.workflow()]
+        self.assert_ruleset_visibility_documentation(*original)
+        permission_message = "unverified App permission claim must stay absent"
+        for index, claim, message in (
+                (0, "\n# The gate relies on App permission administration: read to see bypass_actors;\n",
+                 permission_message),
+                (1, "\nThe gate relies on the release App permission `administration: read` to read\n"
+                 "`bypass_actors`.\n"
+                 "Removing this App permission makes every release-bump exemption refuse.\n",
+                 permission_message),
+                (2, "\n# Its App permission administration: read exposes bypass_actors; removing\n"
+                 "# that permission makes the release-bump exemption refuse every release.\n",
+                 permission_message),
+                (1, "\nRemoving this App permission makes every release-bump exemption refuse.\n",
+                 "the unverified permission dependency must stay absent")):
+            with self.subTest(place=index, claim=claim):
+                changed = original.copy()
+                changed[index] += claim
+                self.assertNotEqual(changed[index], original[index])
+                with self.assertRaisesRegex(AssertionError, message):
+                    self.assert_ruleset_visibility_documentation(*changed)
 
     def test_prebuilt_builds_the_emitted_sha_and_asserts_tag_identity(self):
         jobs = _jobs(self.workflow())

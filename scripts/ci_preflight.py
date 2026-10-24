@@ -142,10 +142,11 @@ HOSTED_JOB_RUNNERS = {
 }
 # LB-435 plus addendum 2: isolate releases and the named promotion exception.
 # The strategy pin keeps the existing macOS and Linux ARM hosted legs.
+# The probe's credential-free authz retains the canon non-release fleet.
 RELEASE_JOB_RUNNERS = {
     'release.yml': {'release': RELEASE_RUNNER, 'prebuilt': HOSTED_MATRIX_RUNNER,
                     'notify-hub': RELEASE_RUNNER},
-    'release-ruleset-probe.yml': {'probe': RELEASE_RUNNER},
+    'release-ruleset-probe.yml': {'authz': PR_RUNNER, 'probe': RELEASE_RUNNER},
     'promote-baseline.yml': {'promote': RELEASE_RUNNER},
 }
 # Credential-bearing jobs outside the release pins and gated docs build retain
@@ -989,9 +990,16 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                                bool(re.fullmatch(r'ubuntu-(?:\d{2}\.\d{2}|latest)-arm', runs_on[0]))))
             if job in fixed_release:
                 # A quoted JSON scalar does not select a YAML label array.
-                if _job_values(body, 'runs-on', unquote=False) != [fixed_release[job]]:
-                    findings.append(f'{name} job {job} must run on {fixed_release[job]} '
-                                    '(isolated release)')
+                actual = _job_values(body, 'runs-on', unquote=False)
+                expected = [fixed_release[job]]
+                if fixed_release[job] == PR_RUNNER:
+                    # Canon authz keeps its space after the comma; the complete
+                    # probe workflow pin below binds that exact header.
+                    actual = [_runner_value(value) for value in actual]
+                    expected = [_runner_value(value) for value in expected]
+                if actual != expected:
+                    suffix = '' if fixed_release[job] == PR_RUNNER else ' (isolated release)'
+                    findings.append(f'{name} job {job} must run on {fixed_release[job]}{suffix}')
                 environments = _job_values(workflow, 'env') + _job_values(body, 'env')
                 if any(re.search(r'\bPF_CI_LABELS["\']?\s*:', value) for value in environments):
                     findings.append(f'{name} job {job} must not set PF_CI_LABELS '
@@ -1136,7 +1144,8 @@ RELEASE_BUMP_PUBLISH_STEP = r'''      - name: Write bumped VERSION, commit, tag,
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 '''
 
-# This App installation has administration: read, which exposes bypass_actors.
+# The release App token must see bypass_actors on every branch ruleset.
+# release-ruleset-probe.yml reports that visibility with the same token mint.
 # The gate requires one active main pull_request ruleset whose own bypass list
 # is exactly Integration 4105147 with bypass_mode always.
 # The workflow's contents: write GITHUB_TOKEN cannot replace that credential.
@@ -1164,7 +1173,70 @@ permissions:
   contents: read
 
 jobs:
+  authz:
+    name: authz
+    # GCP fleet (owner #1050): non-release jobs on pf-gcp-pr; release-class jobs only on pf-gcp-main.
+    runs-on: ["self-hosted", "pf-gcp-pr"]
+    permissions: {}
+    # No timeout-minutes: the owner's no-time-limits rule (check-no-time-limits refuses new ones).
+    steps:
+      - name: Only our own pull requests and our own events run CI
+        env:
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
+          ASSOCIATION: ${{ github.event.pull_request.author_association }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          WR_HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+          WR_ACTOR: ${{ github.event.workflow_run.triggering_actor.login }}
+          GH_TOKEN: ${{ github.token }}   # read-only use: one permission lookup for workflow_run
+          # Bot logins whose same-repository pull requests count as ours: dependabot[bot] (CI-DEPBOT A)
+          # and the org's own GitHub App bot logins by name (space-separated), nothing else.
+          ALLOWED_BOTS: "dependabot[bot] pineforge-app[bot]"
+        run: |
+          set -eu
+          fail() { echo "::error title=authz::$1"; echo "authz: REFUSED: $1" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
+          case "$EVENT" in
+            push|workflow_dispatch|schedule|merge_group|release|workflow_call|repository_dispatch)
+              # Only someone with write access to this repository (or our App's token) can cause these
+              # events; none of them runs pull-request code.
+              ;;
+            workflow_run)
+              # LB-437: bind identity to the triggering run and its re-runner.
+              # These two App bots are fixed canon policy; ALLOWED_BOTS is PR-only.
+              [ -n "${WR_HEAD_REPO:-}" ] || fail "workflow_run head repository is missing"
+              [ -n "${WR_ACTOR:-}" ] || fail "workflow_run triggering actor is missing"
+              [ "$WR_HEAD_REPO" = "$REPO" ] || fail "workflow_run head repository does not match this repository"
+              case "$WR_ACTOR" in
+                "pineforge-app[bot]"|"pineforge-ci-dispatcher[bot]") ;;
+                *"[bot]") fail "workflow_run bot is not on the canon allowlist" ;;
+                *)
+                  perm=$(gh api "repos/$REPO/collaborators/$WR_ACTOR/permission" --jq .permission 2>/dev/null) || fail "workflow_run permission lookup failed"
+                  case "$perm" in admin|maintain|write) ;; *) fail "workflow_run triggering actor does not have write permission" ;; esac ;;
+              esac ;;
+            pull_request)
+              [ "$HEAD_REPO" = "$REPO" ] || fail "pull request from another repository (${HEAD_REPO:-unknown})"
+              [ "$HEAD_IS_FORK" = "false" ] || fail "pull request from a fork"
+              case "$ASSOCIATION" in
+                OWNER|MEMBER|COLLABORATOR) ;;
+                *)
+                  case " $ALLOWED_BOTS " in
+                    *" $PR_AUTHOR "*) ;;
+                    *)
+                      # A member whose org membership is private shows as CONTRIBUTOR: ask GitHub for the
+                      # author's permission on this repository; anything but admin/maintain/write (or a
+                      # failed call) refuses.
+                      perm=$(gh api "repos/$REPO/collaborators/$PR_AUTHOR/permission" --jq .permission 2>/dev/null || echo none)
+                      case "$perm" in admin|maintain|write) ;; *) fail "author ${PR_AUTHOR:-unknown} (${ASSOCIATION:-NONE}) has permission '$perm', not write, and is not an allowlisted bot" ;; esac ;;
+                  esac ;;
+              esac ;;
+            *) fail "event $EVENT does not run CI (pull_request_target and other events are not allowed)" ;;
+          esac
+          echo "authz: allowed ($EVENT${PR_AUTHOR:+ by $PR_AUTHOR})" >> "$GITHUB_STEP_SUMMARY"
+
   probe:
+    needs: [authz]
     runs-on: ["self-hosted","pf-gcp-main"]
     steps:
       - name: Mint org App token
@@ -1177,11 +1249,13 @@ jobs:
           repositories: pineforge-engine
 
       - name: Checkout
+        if: ${{ needs.authz.result == 'success' }}
         uses: actions/checkout@v4
         with:
           persist-credentials: false
 
       - name: Probe release ruleset barrier
+        if: ${{ needs.authz.result == 'success' }}
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: python3 scripts/ci_release_gate.py rulesets-probe --repo "${GITHUB_REPOSITORY}"
@@ -1210,7 +1284,7 @@ def release_bump_workflow_findings(workflow: str) -> list[str]:
     gate = _step_named(steps, '      - name: Refuse unless pineforge/verify and pineforge/parity are green')
     if _code(gate) != _code(RELEASE_GATE_STEP):
         findings.append('release.yml must keep the unconditional release gate '
-                        'with its administration-readable App token '
+                        'with its release App token '
                         'for the App-only main pull_request barrier')
     app = _step_named(steps, '      - name: Mint org App token')
     checkout = _step_named(steps, '      - name: Checkout (full history)')
