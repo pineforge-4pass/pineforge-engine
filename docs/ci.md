@@ -60,13 +60,16 @@ or `slow` rows. The target rebuilds those executables with their library.
 PRs restore the newest compatible default-branch compiler cache, and only
 successful runs on `main` save that cache namespace.
 
-FLEET-POST=A splits routing at the file boundary: PR jobs use
-`["self-hosted","pf-gcp-pr"]`, and push/schedule/manual jobs use
-`["self-hosted","pf-gcp-post"]`. No job chooses its label by event.
+FLEET-POST=A splits verification and documentation routing at the file boundary:
+PR jobs use `["self-hosted","pf-gcp-pr"]`, and post-merge push/schedule/manual
+jobs use `["self-hosted","pf-gcp-post"]`. No job chooses its label by event.
 `corpus-parity-subset.yml` is reusable only from the PR pipeline;
 `corpus-parity.yml` keeps full parity and the full-event subset on the post
 fleet. The checker follows local reusable calls, so a PR caller cannot borrow
 a post workflow even behind a job condition.
+
+The manual `release-ruleset-probe.yml` workflow runs `authz` on
+`["self-hosted","pf-gcp-pr"]` and `probe` on `["self-hosted","pf-gcp-post"]`.
 
 `docs.yml` retains the PR build name and `.github/**` exclusion.
 `docs-post.yml` builds and deploys on main pushes and manual dispatch.
@@ -1147,8 +1150,11 @@ pins that one job name and image, and the exception never applies to a
 workflow reachable from `pull_request`. The PR build remains
 `build (ubuntu-24.04, Release)` and its aggregate remains `build`.
 
-Release and promotion use the isolated release fleet: `release`, `notify-hub`, Linux x64
-`prebuilt` and baseline `promote` use `["self-hosted","pf-gcp-main"]`.
+Release and promotion use the isolated release fleet:
+`release`, `notify-hub`, Linux x64 `prebuilt` and baseline `promote` use
+`["self-hosted","pf-gcp-main"]`.
+The release ruleset probe runs `authz` on `["self-hosted","pf-gcp-pr"]` and
+`probe` on `["self-hosted","pf-gcp-post"]`.
 Release's ARM/macOS artifact cells keep their existing hosted pins, and
 promotion runs on a push to `main` plus manual dispatch from `main`.
 
@@ -1361,15 +1367,36 @@ changes to the two files whose values the release workflow computes: the next
 version and the reset catalog diff. Preflight pins the exact writer, staging,
 commit and atomic-push step and the App-token checkout wiring.
 
-The gate relies on the release App permission `administration: read` to read
-`bypass_actors`. The App installation has that permission and `contents: write`;
-the workflow-level `contents: write` setting scopes GITHUB_TOKEN and does not
-grant App permissions. Tokens without administration access may receive a
-ruleset response with `bypass_actors` omitted; a missing field refuses, and
+The gate needs `bypass_actors` visible on every branch ruleset in the inventory.
+If the release App token cannot see them, the bump is refused.
+`release-ruleset-probe.yml` reports whether that token can see them.
+Visibility with the installation token, including inherited organization
+rulesets, is unverified until the probe runs. A missing field refuses;
 the guard never assumes an unreadable list is empty or App-only.
-Removing this App permission makes every release-bump exemption refuse.
+The workflow-level `contents: write` setting scopes GITHUB_TOKEN.
 Preflight pins the unconditional gate invocation and its App token, and its
-binding release-gate tests pin this permission dependency in code and docs.
+binding release-gate tests pin this visibility requirement in code and docs.
+
+Dispatch **Release ruleset probe** (`release-ruleset-probe.yml`) once from
+`main` to check actual ruleset visibility with the same App token mint as
+`release.yml`. The workflow file must be on the default branch, and the run
+must use `main`'s copy.
+The probe job runs on `["self-hosted","pf-gcp-post"]`, with `authz` on
+`["self-hosted","pf-gcp-pr"]`.
+`pf-gcp-main` admits only allowlisted workflows (an org runner-group restriction),
+so the one-time probe uses `pf-gcp-post`.
+The dispatch must run from `main`; the workflow itself refuses any other ref
+before minting the App token or checking out repository code.
+It runs `python3 scripts/ci_release_gate.py rulesets-probe --repo OWNER/REPO`,
+reading only repository metadata, the parent-inclusive ruleset inventory and
+branch details. Success prints the barrier id/name and one compact inventory
+line with enforcement, source and bypass visibility. Refusal exits 1 with empty
+stdout and the reader's `::error::` diagnostic; API/response failures name the endpoint.
+Two hidden rulesets need two dispatches: the first refusal names only the
+first hidden ruleset; make its `bypass_actors` visible before dispatching again
+to identify the second.
+The probe changes no release evidence or gate verdicts. A release `dry_run`
+on a merged PR does not exercise the bump-only ruleset reader.
 
 Phase 2 is **not live yet**: `MAIN_PROOF_WATCHER_FIRST_SHA` in
 `scripts/ci_release_gate.py` is `None`. When C2 main-watch (#176) supplies the
