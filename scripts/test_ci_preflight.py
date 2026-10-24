@@ -2,6 +2,7 @@
 """Exercise preflight failure propagation with real child processes."""
 import contextlib
 import io
+import inspect
 import json
 import os
 from pathlib import Path
@@ -227,29 +228,95 @@ def routed_line(before, value):
 class WorkflowActionPins(unittest.TestCase):
     """Check the actual workflow and composite-action references."""
 
-    def third_party_uses(self):
+    def action_sources(self):
         paths = sorted(path for path in (ROOT / '.github/workflows').iterdir()
                        if path.suffix in ('.yml', '.yaml'))
         for name in ('action.yml', 'action.yaml'):
             paths.extend(sorted((ROOT / '.github/actions').rglob(name)))
-        references = []
-        for path in paths:
-            for number, line in enumerate(path.read_text().splitlines(), 1):
-                match = re.fullmatch(r'[ \t]*(?:-[ \t]+)?uses:[ \t]+(\S+)(.*)', line)
-                if match and not match[1].startswith('./'):
-                    references.append((path.relative_to(ROOT), number, match[1], match[2]))
+        # The bytes as stored, decoded as preflight decodes them: read_text()
+        # would turn a bare CR into LF before the lint ever saw it.
+        return {str(path.relative_to(ROOT)): path.read_bytes().decode('utf-8')
+                for path in paths}
+
+    def third_party_uses(self, sources=None):
+        if sources is None:
+            sources = self.action_sources()
+        findings = []
+        references = [(Path(name), number, reference, comment)
+                      for name, number, reference, comment in
+                      ci_preflight.action_uses(sources, findings=findings)
+                      if not reference.startswith(ci_preflight.ACTION_PIN_EXEMPT_PREFIXES)]
+        self.assertEqual(findings, [], '\n'.join(findings))
         self.assertTrue(references, 'no third-party action references were checked')
         return references
+
+    def assert_full_commit_sha(self, reference):
+        self.assertRegex(reference, ci_preflight.ACTION_PIN_SHA)
+
+    def assert_version_comment(self, comment):
+        self.assertRegex(comment, ci_preflight.ACTION_PIN_COMMENT)
 
     def test_third_party_actions_use_full_commit_shas(self):
         for path, number, reference, _ in self.third_party_uses():
             with self.subTest(path=str(path), line=number):
-                self.assertRegex(reference, r'^.+@[0-9a-f]{40}$')
+                self.assert_full_commit_sha(reference)
 
     def test_third_party_actions_have_version_comments(self):
         for path, number, _, comment in self.third_party_uses():
             with self.subTest(path=str(path), line=number):
-                self.assertRegex(comment, r'^[ \t]+# v[0-9]+\.[0-9]+\.[0-9]+$')
+                self.assert_version_comment(comment)
+
+    def test_real_tree_helper_accepts_lint_scalar_grammar(self):
+        reference = 'actions/checkout@11d5960a326750d5838078e36cf38b85af677262'
+        for value in (f'"{reference}" # v4.4.0', f"'{reference}' # v4.4.0",
+                      'docker://alpine:3.20', f'{reference} # v4.4.0-rc.1'):
+            with self.subTest(value=value):
+                # Retain a third-party row when the second row is exempt.
+                sources = {'.github/workflows/grammar.yml':
+                           f'- uses: {reference} # v4.4.0\n- uses: {value}\n'}
+                self.assertEqual(ci_preflight.action_pin_findings(sources), [])
+                rows = self.third_party_uses(sources)
+                expected = [reference] if value.startswith('docker://') else [reference, reference]
+                self.assertEqual([row[2] for row in rows], expected)
+                for _, _, parsed, comment in rows:
+                    self.assert_full_commit_sha(parsed)
+                    self.assert_version_comment(comment)
+        # The shared real-tree assertions must still reject these mutations.
+        path = '.github/workflows/grammar.yml'
+        for _, _, reference, _ in self.third_party_uses(
+                {path: '- uses: actions/checkout@main # v4.4.0\n'}):
+            with self.assertRaises(AssertionError):
+                self.assert_full_commit_sha(reference)
+        for _, _, _, comment in self.third_party_uses(
+                {path: '- uses: actions/checkout@0123456789abcdef0123456789abcdef01234567\n'}):
+            with self.assertRaises(AssertionError):
+                self.assert_version_comment(comment)
+
+    def test_real_tree_helper_refuses_unsupported_uses_shapes(self):
+        path = '.github/workflows/grammar.yml'
+        text = ('- uses: actions/checkout@0123456789abcdef0123456789abcdef01234567 # v4.4.0\n'
+                '- {uses: actions/checkout@main}\n')
+        expected = (f'{path}:2: unsupported YAML construct in a workflow (flow mappings): '
+                    "rewrite it in plain block style; '- {uses: actions/checkout@main}'")
+        with self.assertRaises(AssertionError) as failure:
+            self.third_party_uses({path: text})
+        self.assertIn(expected, str(failure.exception))
+
+    def test_every_real_action_source_has_zero_findings(self):
+        sources = self.action_sources()
+        self.assertTrue(any(name.startswith('.github/workflows/') for name in sources))
+        self.assertTrue(any(name.startswith('.github/actions/') for name in sources))
+        self.assertEqual(ci_preflight.action_pin_findings(sources), [])
+        # Keep the complete population and a valid pin while introducing a
+        # hidden key: zero findings must mean the grammar was checked too.
+        path = '.github/workflows/grammar-control.yml'
+        line = r'- "\u0075ses": actions/checkout@main'
+        changed = {**sources, path: (
+            '- uses: actions/checkout@0123456789abcdef0123456789abcdef01234567 # v4.4.0\n'
+            + line + '\n')}
+        self.assertEqual(ci_preflight.action_pin_findings(changed), [
+            f'{path}:2: unsupported YAML construct in a workflow (quoted keys): '
+            f'rewrite it in plain block style; {line!r}'])
 
 
 class WorkflowEventFleets(unittest.TestCase):
@@ -516,6 +583,874 @@ class WorkflowEventFleets(unittest.TestCase):
         self.assertNotEqual(callee, changed)
         self.assertIn(finding, ci_preflight.runner_findings(
             {'pr.yml': caller, 'ci-post.yml': callee}))
+
+
+class ActionPins(unittest.TestCase):
+    SHA = '0123456789abcdef0123456789abcdef01234567'
+    WORKFLOW = '.github/workflows/pinlint.yml'
+    ACTION = '.github/actions/setup-live-curl/action.yml'
+
+    @staticmethod
+    def workflow(value, *, named=False):
+        steps = ('      - name: External action\n'
+                 f'        uses: {value}\n' if named else f'      - uses: {value}\n')
+        return ('on: workflow_dispatch\njobs:\n  inspect:\n'
+                '    runs-on: ["self-hosted","pf-gcp-post"]\n'
+                '    steps:\n' + steps)
+
+    @staticmethod
+    def finding(path, line, reference):
+        return (f'{path}:{line}: third-party uses {reference!r} must be pinned to a '
+                '40-character lowercase hex SHA with a trailing # v<version> comment')
+
+    def pin_findings(self, text, *, composite=False, checker=None):
+        # Use the existing contract entrypoint, so main fails for a missing
+        # finding, not an import error for a newly introduced helper.
+        sources = [(ROOT / path).read_text() for path in CI_SOURCES]
+        checker = ci_workflow_findings if checker is None else checker
+        if composite:
+            findings = checker(*sources, curl_action=text)
+            path = self.ACTION
+        else:
+            findings = checker(*sources, others={Path(self.WORKFLOW).name: text})
+            path = self.WORKFLOW
+        return [finding for finding in findings if finding.startswith(path + ':')]
+
+    def assert_refused(self, value, reference, *, named=False, checker=None):
+        self.assertEqual(
+            self.pin_findings(self.workflow(value, named=named), checker=checker),
+            [self.finding(self.WORKFLOW, 7 if named else 6, reference)])
+
+    def test_mutable_tag_is_refused(self):
+        self.assert_refused('actions/checkout@v4 # v4.2.2', 'actions/checkout@v4')
+
+    def test_branch_ref_is_refused(self):
+        self.assert_refused('actions/checkout@main # v4.2.2', 'actions/checkout@main',
+                            named=True)
+
+    def test_short_sha_is_refused(self):
+        self.assert_refused('actions/checkout@0123456 # v4.2.2', 'actions/checkout@0123456')
+
+    def test_sha_without_same_line_version_is_refused(self):
+        reference = 'actions/checkout@' + self.SHA
+        for value in (reference, reference + '\n        # v4.2.2'):
+            with self.subTest(value=value):
+                self.assert_refused(value, reference)
+
+    def test_malformed_version_comments_are_refused(self):
+        reference = 'actions/checkout@' + self.SHA
+        for comment in ('# 4.2.2', '# vfour', '# v4..2', '# v4.2.',
+                        '# v4.2.2 extra', '# v4.2.2-', '# v4.2.2+'):
+            with self.subTest(comment=comment):
+                self.assert_refused(reference + ' ' + comment, reference)
+
+    def test_uppercase_sha_is_refused(self):
+        reference = 'actions/checkout@' + self.SHA.upper()
+        self.assert_refused(reference + ' # v4.2.2', reference)
+
+    def test_quoted_mutable_values_are_refused(self):
+        for quote in ('"', "'"):
+            for named in (False, True):
+                with self.subTest(quote=quote, named=named):
+                    self.assert_refused(f'{quote}actions/checkout@v4{quote} # v4.2.2',
+                                        'actions/checkout@v4', named=named)
+
+    def test_reference_without_ref_is_refused(self):
+        self.assert_refused('actions/checkout # v4.2.2', 'actions/checkout')
+
+    def test_remote_reusable_workflow_is_refused(self):
+        reference = 'example/shared/.github/workflows/build.yml@main'
+        text = ('on: workflow_dispatch\njobs:\n  call:\n'
+                f'    uses: {reference} # v1.2.3\n')
+        self.assertEqual(self.pin_findings(text),
+                         [self.finding(self.WORKFLOW, 4, reference)])
+
+    def test_composite_step_is_refused(self):
+        reference = 'actions/cache/restore@v4'
+        text = ('name: Example\nruns:\n  using: composite\n  steps:\n'
+                f'    - uses: {reference} # v4.2.2\n')
+        self.assertEqual(self.pin_findings(text, composite=True),
+                         [self.finding(self.ACTION, 5, reference)])
+
+    @staticmethod
+    def unsupported_finding(path, line, text, construct='flow mappings'):
+        return (f'{path}:{line}: unsupported YAML construct in a workflow ({construct}): '
+                f'rewrite it in plain block style; {text!r}')
+
+    def assert_unsupported_step(self, step, *, composite=False, checker=None,
+                                construct='flow mappings'):
+        if composite:
+            original = (ROOT / self.ACTION).read_text()
+            self.assertTrue(original.endswith('\n'))
+            number = len(original.splitlines()) + 1
+            text = original + '    ' + step + '\n'
+            path = self.ACTION
+        else:
+            original = self.workflow('actions/checkout@main')
+            text = original.replace('- uses: actions/checkout@main', step, 1)
+            self.assertNotEqual(text, original)
+            number, path = 6, self.WORKFLOW
+        self.assertEqual(self.pin_findings(text, composite=composite, checker=checker),
+                         [self.unsupported_finding(path, number, step, construct)])
+
+    def assert_yaml_refusals(self, text, rows):
+        # The public checker already exists on f4a03dd712: a red result
+        # is a behavioral mismatch, never a missing-helper/import failure.
+        for path in (self.WORKFLOW, self.ACTION):
+            with self.subTest(path=path):
+                expected = [self.unsupported_finding(path, number, line, construct)
+                            for number, construct, line in rows]
+                self.assertEqual(ci_preflight.action_pin_findings({path: text}), expected)
+
+    def test_escaped_quoted_keys_are_refused(self):
+        for line in (r'- "\u0075ses": actions/checkout@main',
+                     r'- "\x75ses": actions/checkout@main',
+                     r'- "\U00000075ses": actions/checkout@main'):
+            with self.subTest(line=line):
+                self.assert_yaml_refusals(line + '\n', [(1, 'quoted keys', line)])
+
+    def test_all_quoted_keys_are_refused(self):
+        for key in ('"uses"', "'uses'", '"steps"', "'permissions'"):
+            line = f'- {key}: actions/checkout@{self.SHA} # v4.4.0'
+            with self.subTest(key=key):
+                self.assert_yaml_refusals(line + '\n', [(1, 'quoted keys', line)])
+
+    def test_explicit_keys_are_refused(self):
+        text = '- ? uses\n  : actions/checkout@main\n'
+        self.assert_yaml_refusals(text, [
+            (1, 'explicit keys', '- ? uses'),
+            (2, 'explicit keys', ': actions/checkout@main')])
+
+    def test_anchors_are_refused_without_a_uses_key(self):
+        line = 'steps: &checkout'
+        self.assert_yaml_refusals(line + '\n', [(1, 'anchors', line)])
+
+    def test_aliases_are_refused_without_a_uses_key(self):
+        line = '- *checkout'
+        self.assert_yaml_refusals(line + '\n', [(1, 'aliases', line)])
+
+    def test_merge_keys_are_refused(self):
+        line = '<<: *checkout'
+        self.assert_yaml_refusals(line + '\n', [(1, 'merge keys', line)])
+
+    def test_tags_are_refused(self):
+        for tag in ('!!map', '!custom', '!<tag:yaml.org,2002:map>'):
+            line = 'steps: ' + tag
+            with self.subTest(tag=tag):
+                self.assert_yaml_refusals(line + '\n', [(1, 'tags', line)])
+
+    def test_anchored_multiline_mapping_is_refused(self):
+        text = ('steps:\n'
+                '  - &checkout {\n'
+                f'      uses: actions/checkout@{self.SHA} # v4.4.0\n'
+                '    }\n'
+                '  - *checkout\n')
+        self.assert_yaml_refusals(text, [
+            (2, 'anchors', '- &checkout {'),
+            (5, 'aliases', '- *checkout')])
+
+    def test_anchored_run_scalar_is_refused_without_scanning_its_body(self):
+        text = ("steps:\n  - run: &script |\n"
+                "      printf '%s\\n' '\n"
+                "      uses: actions/checkout@main\n"
+                "      '\n")
+        self.assert_yaml_refusals(text, [(2, 'anchors', '- run: &script |')])
+
+    def test_flow_mappings_without_uses_are_refused(self):
+        for line in ('env: {CHECKOUT: main}', '- {name: Checkout}', '- {}',
+                     'env: {} trailing', '- { }', 'labels: [{}]',
+                     'labels: [name: Checkout]'):
+            with self.subTest(line=line):
+                self.assert_yaml_refusals(line + '\n', [(1, 'flow mappings', line)])
+        self.assert_yaml_refusals('env: {\n  CHECKOUT: main\n}\n',
+                                 [(1, 'flow mappings', 'env: {')])
+
+    def test_reported_flow_continuation_resumes_before_mutable_action(self):
+        path = '.github/workflows/ci.yml'
+        text = ('env: {\n'
+                '  A: b", } # "\n'
+                'steps:\n'
+                '  - uses: actions/checkout@main\n')
+        self.assertEqual(ci_preflight.action_pin_findings({path: text}), [
+            self.unsupported_finding(path, 1, 'env: {'),
+            self.finding(path, 4, 'actions/checkout@main')])
+
+    def test_refused_flow_continuations_count_delimiters_despite_plain_quotes(self):
+        cases = (
+            ('env: {', 'A: b", } # "'),
+            ('env: {', "A: b', } # '"),
+            ('env: {', 'A: [b", linux]} # "'),
+            ('env: {', "A: [b', {B: value}]} # '"),
+            ('options: [{', 'A: b", }] # "'),
+            ('options: [[{', "A: b', }]] # '"),
+        )
+        for opening, continuation in cases:
+            text = ('steps:\n  - ' + opening + '\n'
+                    '      ' + continuation + '\n'
+                    '    uses: actions/checkout@main\n')
+            for path in (self.WORKFLOW, self.ACTION):
+                with self.subTest(opening=opening, continuation=continuation, path=path):
+                    # The uses key is deeper than the opening line: outdent
+                    # recovery alone cannot make this assertion pass.
+                    self.assertEqual(ci_preflight.action_pin_findings({path: text}), [
+                        self.unsupported_finding(path, 2, '- ' + opening),
+                        self.finding(path, 4, 'actions/checkout@main')])
+
+    def test_refused_flow_continuations_end_at_outdent_even_with_unbalanced_depth(self):
+        for prefix, indent in (('', ''), ('options:\n', '  ')):
+            opening = indent + 'env: {'
+            # The quoted { adds depth in the conservative scan; the embedded
+            # quote after b masks the real closer on the old implementation.
+            continuation = indent + '  A: "{", B: b", } # "'
+            for following, uses_line in (
+                    (indent + 'uses: actions/checkout@main\n', 3),
+                    (indent + 'uses: actions/checkout@main # }\n', 3),
+                    ('steps:\n  - uses: actions/checkout@main\n', 4)):
+                text = prefix + opening + '\n' + continuation + '\n' + following
+                offset = 1 if prefix else 0
+                for path in (self.WORKFLOW, self.ACTION):
+                    with self.subTest(prefix=prefix, following=following, path=path):
+                        self.assertEqual(ci_preflight.action_pin_findings({path: text}), [
+                            self.unsupported_finding(path, 1 + offset, opening.strip(' ')),
+                            self.finding(path, uses_line + offset, 'actions/checkout@main')])
+
+    def test_empty_sequences_require_a_whole_plain_key_value(self):
+        for line in ('- []', 'labels: [[]]', 'labels: [] trailing'):
+            with self.subTest(line=line):
+                self.assert_yaml_refusals(line + '\n', [(1, 'empty collections', line)])
+
+    def test_properties_inside_flow_sequences_are_refused(self):
+        for value, construct in (('&runner linux', 'anchors'), ('*runner', 'aliases'),
+                                 ('!!str linux', 'tags'), ('? uses', 'explicit keys')):
+            line = 'runs-on: [' + value + ']'
+            with self.subTest(value=value):
+                self.assert_yaml_refusals(line + '\n', [(1, construct, line)])
+
+    def test_flow_sequence_quotes_cannot_mask_mappings_or_comments(self):
+        for quote in ('"', "'"):
+            line = (f'options: [a{quote}, {{uses: actions/checkout@main}}] '
+                    f'# {quote}]')
+            with self.subTest(quote=quote):
+                self.assert_yaml_refusals(line + '\n', [(1, 'flow mappings', line)])
+                code, visible, _ = ci_preflight._action_yaml_visible(
+                    line.split(': ', 1)[1])
+                self.assertEqual(code, line.split(': ', 1)[1].split(' # ', 1)[0])
+                self.assertIn('{uses: actions/checkout@main}', visible)
+
+    def test_quotes_in_flow_sequences_must_start_an_element(self):
+        for value in ('[a"b"]', "[a'b']", '["a" "b"]', "['a' 'b']",
+                      '[linux, [a"b"]]'):
+            line = 'options: ' + value
+            with self.subTest(value=value):
+                self.assert_yaml_refusals(line + '\n', [(1, 'quoted scalars', line)])
+        for first in ('options: [', 'options: [linux,', 'options: [linux'):
+            line = 'a"b"]'
+            with self.subTest(first=first):
+                self.assert_yaml_refusals(first + '\n  ' + line + '\n',
+                                         [(2, 'quoted scalars', line)])
+
+    def test_flow_quotes_at_element_start_preserve_data_and_scan_resumption(self):
+        text = ('runs-on: ["self-hosted", "pf-gcp-pr"]\n'
+                'branches: [main]\n'
+                'needs: [a, b]\n'
+                'options: ["a # {uses: actions/checkout@main}",\n'
+                "  ['it''s # data', linux]] # actual comment\n")
+        self.assertEqual(ci_preflight.action_pin_findings({self.WORKFLOW: text}), [])
+        text += '- uses: actions/upload-artifact@main\n'
+        self.assertEqual(ci_preflight.action_pin_findings({self.WORKFLOW: text}), [
+            self.finding(self.WORKFLOW, 6, 'actions/upload-artifact@main')])
+
+    def test_unicode_whitespace_at_line_start_is_refused(self):
+        spaces = ('\u0085', '\u00a0', '\u1680', '\u2000', '\u2001', '\u2002',
+                  '\u2003', '\u2004', '\u2005', '\u2006', '\u2007', '\u2008',
+                  '\u2009', '\u200a', '\u2028', '\u2029', '\u202f', '\u205f',
+                  '\u3000', '\ufeff')
+        for space in spaces:
+            line = space + '#hidden: {uses: actions/checkout@main}'
+            construct = (f'unsupported line break U+{ord(space):04X}'
+                         if space in '\u0085\u2028\u2029' else 'unsupported whitespace')
+            for prefix in ('', 'name: Example\n'):
+                with self.subTest(space=repr(space), prefix=prefix):
+                    self.assert_yaml_refusals(
+                        prefix + line + '\n',
+                        [(1 if not prefix else 2, construct, line)])
+
+    def test_unicode_whitespace_around_separators_is_refused(self):
+        for space in ('\u0085', '\u00a0', '\u2028', '\u2029', '\ufeff'):
+            construct = (f'unsupported line break U+{ord(space):04X}'
+                         if space in '\u0085\u2028\u2029' else 'unsupported whitespace')
+            for line in (f'name{space}: Example', f'name:{space}Example',
+                         f'name: Example{space}#hidden: {{uses: actions/checkout@main}}',
+                         f'name: Example #{space}hidden: {{uses: actions/checkout@main}}',
+                         f'name: Example{space}: hidden', f'name: Example:{space}hidden'):
+                with self.subTest(space=repr(space), line=line):
+                    self.assert_yaml_refusals(line + '\n', [(1, construct, line)])
+
+    def test_unsupported_line_breaks_in_block_scalars_refuse_the_whole_file(self):
+        for separator in ('\r', '\u0085', '\u2028', '\u2029', '\v', '\f'):
+            for prefix, body, following, number in (
+                    ('steps:\n  - run: |\n', '      echo ok',
+                     '  - uses: actions/checkout@main', 3),
+                    ('steps:\n  - run: |\n', '     ',
+                     '  - uses: actions/checkout@main', 3),
+                    ('name: Example\nruns:\n  using: composite\n  steps:\n'
+                     '    - shell: bash\n      run: |\n', '        echo ok',
+                     '    - uses: actions/checkout@main', 7)):
+                line = body + separator + following
+                with self.subTest(separator=repr(separator), prefix=prefix, body=body):
+                    self.assert_yaml_refusals(prefix + line + '\n', [
+                        (number, f'unsupported line break U+{ord(separator):04X}',
+                         line.strip(' \t'))])
+
+    def test_unsupported_line_breaks_in_comments_refuse_the_whole_file(self):
+        for separator in ('\r', '\u0085', '\u2028', '\u2029', '\v', '\f'):
+            line = '  # comment' + separator + '  - uses: actions/checkout@main'
+            with self.subTest(separator=repr(separator)):
+                self.assert_yaml_refusals('steps:\n' + line + '\n', [
+                    (2, f'unsupported line break U+{ord(separator):04X}',
+                     line.strip(' \t'))])
+
+    def test_c0_controls_in_block_scalars_and_comments_refuse_the_whole_file(self):
+        for codepoint in range(0x20):
+            if codepoint in (0x09, 0x0a, 0x0b, 0x0c, 0x0d):
+                continue  # TAB/LF/CRLF controls and the six line breaks have separate rows.
+            control = chr(codepoint)
+            for prefix, line, number in (
+                    ('run: |\n', '  echo ' + control + 'ok', 2),
+                    ('name: Example\n', '# comment ' + control + 'text', 2)):
+                with self.subTest(codepoint=codepoint, prefix=prefix):
+                    self.assert_yaml_refusals(prefix + line + '\n', [
+                        (number, f'unsupported control character U+{codepoint:04X}',
+                         line.strip(' \t'))])
+
+    def test_file_character_refusal_reports_only_the_first_offense_before_scanning(self):
+        first = '  echo \x01ok'
+        text = ('uses: actions/checkout@main\r\n'
+                'run: |\r\n' + first + '\r\n'
+                '# later \u2028\n')
+        for path, other in ((self.WORKFLOW, self.ACTION), (self.ACTION, self.WORKFLOW)):
+            with self.subTest(path=path):
+                self.assertEqual(ci_preflight.action_pin_findings({
+                    path: text, other: 'uses: actions/upload-artifact@main\n'}), [
+                        self.unsupported_finding(
+                            path, 3, first.strip(' '), 'unsupported control character U+0001'),
+                        self.finding(other, 1, 'actions/upload-artifact@main')])
+
+    def test_crlf_block_scalar_resumption_and_non_ascii_text_remain_supported(self):
+        text = ('steps:\n'
+                '  - run: |\n'
+                '      echo café — →\tdata\n'
+                '      uses: actions/checkout@main\n'
+                '  # café — →\n'
+                f'  - uses: actions/upload-artifact@{self.SHA} # v4.4.0\n')
+        for newline in ('\n', '\r\n'):
+            for path in (self.WORKFLOW, self.ACTION):
+                with self.subTest(newline=newline, path=path):
+                    sources = {path: text.replace('\n', newline)}
+                    self.assertEqual(ci_preflight.action_pin_findings(sources), [])
+                    changed = sources[path].replace(
+                        f'actions/upload-artifact@{self.SHA}', 'actions/upload-artifact@main', 1)
+                    self.assertNotEqual(changed, sources[path])
+                    self.assertEqual(ci_preflight.action_pin_findings({path: changed}), [
+                        self.finding(path, 6, 'actions/upload-artifact@main')])
+
+    def test_unterminated_expressions_with_many_quotes_are_refused(self):
+        # Thread-free, with no timing threshold: the large input cannot finish
+        # in normal test flow with the old exponentially backtracking regex.
+        for count in (100, 5000, 200000):
+            line = 'name: ${{' + "'" * count
+            with self.subTest(count=count):
+                self.assert_yaml_refusals(line + '\n', [(1, 'expressions', line)])
+
+    def test_expression_strings_keep_delimiters_and_doubled_quotes_opaque(self):
+        text = ("name: ${{ format('it''s # }} uses: {0}', 'ignored') }}\n"
+                "options: [${{ format('}} # uses: {0}', 'ignored') }}, linux]\n")
+        self.assertEqual(ci_preflight.action_pin_findings({self.WORKFLOW: text}), [])
+        text += '- uses: actions/checkout@main\n'
+        self.assertEqual(ci_preflight.action_pin_findings({self.WORKFLOW: text}), [
+            self.finding(self.WORKFLOW, 3, 'actions/checkout@main')])
+
+    def test_backslashes_in_yaml_quoted_values_are_refused(self):
+        for line in (r'name: "line\nbreak"', r"name: 'line\nbreak'",
+                     r'runs-on: ["self\u002dhosted", linux]'):
+            with self.subTest(line=line):
+                self.assert_yaml_refusals(line + '\n', [(1, 'quoted escapes', line)])
+
+    def test_quoted_values_must_end_on_their_line(self):
+        for line in ('name: "unfinished', "name: 'finished' trailing", 'labels: ["unfinished'):
+            with self.subTest(line=line):
+                self.assert_yaml_refusals(line + '\n', [(1, 'quoted scalars', line)])
+
+    def test_flow_sequence_boundaries_are_refused(self):
+        for line in ('labels: [linux][windows]', 'labels: [linux] [windows]',
+                     'labels: [linux] trailing', 'labels: [[linux] windows]',
+                     'labels: [linux,'):
+            with self.subTest(line=line):
+                self.assert_yaml_refusals(line + '\n', [(1, 'flow sequences', line)])
+
+    def test_tab_indentation_is_refused(self):
+        for prefix in ('\t', ' \t', '\t  '):
+            line = prefix + f'- uses: actions/checkout@{self.SHA} # v4.4.0'
+            with self.subTest(prefix=prefix):
+                self.assert_yaml_refusals(line + '\n',
+                                         [(1, 'tab indentation', line.strip())])
+        line = f'-\tuses: actions/checkout@{self.SHA} # v4.4.0'
+        self.assert_yaml_refusals(line + '\n', [(1, 'tab indentation', line)])
+        self.assert_yaml_refusals('\t\n', [(1, 'tab indentation', '')])
+
+    def test_workflow_document_markers_are_refused(self):
+        for marker in ('---', '...', '--- # another document', '... # end'):
+            text = 'name: Example\n' + marker + '\n'
+            with self.subTest(marker=marker):
+                self.assert_yaml_refusals(text, [(2, 'document markers', marker)])
+
+    def test_uses_requires_a_same_line_scalar(self):
+        for value in ('', '|', '>-', '{}', '[]', '[./local]'):
+            line = '- uses:' + (' ' + value if value else '')
+            with self.subTest(value=value):
+                self.assert_yaml_refusals(line + '\n', [(1, 'uses keys', line)])
+
+    def test_unrecognised_block_lines_are_refused(self):
+        line = '%YAML 1.2'
+        self.assert_yaml_refusals(line + '\n', [(1, 'block structure', line)])
+
+    def test_supported_yaml_values_and_collections_remain_accepted(self):
+        for value in ('{}', '{ }', '{ \t}', '[]', '[ ]', '[\t ]',
+                      '[linux, [windows, macos]]'):
+            with self.subTest(value=value):
+                self.assertEqual(ci_preflight.action_pin_findings(
+                    {self.WORKFLOW: 'options: ' + value + ' # supported value\n'}), [])
+        text = ('permissions: {} # no permissions\n'
+                'options: [] # no options\n'
+                'branches: [main]\n'
+                'runs-on: ["self-hosted", "pf-gcp-pr"]\n'
+                "cron: '30 1 * * *'\n"
+                "paths-ignore: ['.github/**']\n"
+                'shell: python3 {0}\n'
+                "run: printf '%s\\n' \"${NEXT}\" > VERSION\n"
+                'group: prefix-${{ github.workflow }}-${{ github.run_id }}\n'
+                "if: ${{ !cancelled() && contains('uses: & ! {', 'x') }}\n"
+                'labels: [linux,\n'
+                '  "self-hosted"]\n'
+                'steps:\n'
+                f'  - uses: "actions/checkout@{self.SHA}" # v4.4.0\n')
+        for newline in ('\n', '\r\n'):
+            with self.subTest(newline=newline):
+                sources = {self.WORKFLOW: text.replace('\n', newline)}
+                self.assertEqual(ci_preflight.action_pin_findings(sources), [])
+                changed = sources[self.WORKFLOW].replace(
+                    f'actions/checkout@{self.SHA}', 'actions/checkout@main', 1)
+                self.assertEqual(ci_preflight.action_pin_findings({self.WORKFLOW: changed}), [
+                    self.finding(self.WORKFLOW, 14, 'actions/checkout@main')])
+
+    def test_script_and_other_block_scalar_bodies_are_excluded(self):
+        for key in ('run', 'script', 'path', 'restore-keys'):
+            for indicator in ('|+', '|-', '>2-', '|2+', '>+2'):
+                with self.subTest(key=key, indicator=indicator):
+                    text = (f'with:\n  {key}: {indicator}\n'
+                            '    - "\\u0075ses": actions/checkout@main\n'
+                            '    ? uses\n'
+                            '    <<: *checkout\n'
+                            '    steps: &checkout {uses: actions/checkout@main}\n'
+                            '    ---\n'
+                            '    \t!!str uses: actions/checkout@main\n'
+                            '  next: value\n')
+                    self.assertEqual(ci_preflight.action_pin_findings({self.WORKFLOW: text}), [])
+                    text += '- uses: actions/upload-artifact@main\n'
+                    self.assertEqual(ci_preflight.action_pin_findings({self.WORKFLOW: text}), [
+                        self.finding(self.WORKFLOW, 10, 'actions/upload-artifact@main')])
+
+    def test_sequence_item_block_scalar_bodies_are_excluded(self):
+        for indicator in ('|', '>-', '|2+', '|+2', '>2-'):
+            text = (f'args:\n  - {indicator}\n'
+                    '    uses: actions/checkout@main\n')
+            with self.subTest(indicator=indicator):
+                self.assertEqual(ci_preflight.action_pin_findings({self.WORKFLOW: text}), [])
+                text += '  - uses: actions/upload-artifact@main\n'
+                self.assertEqual(ci_preflight.action_pin_findings({self.WORKFLOW: text}), [
+                    self.finding(self.WORKFLOW, 4, 'actions/upload-artifact@main')])
+
+    def test_sequence_mapping_block_scalar_resumes_at_key_indent(self):
+        for key in ('run', 'script'):
+            for indicator in ('|', '>-', '|2+'):
+                text = (f'args:\n  - {key}: {indicator}\n'
+                        '      uses: actions/checkout@main\n'
+                        '    uses: actions/upload-artifact@main\n')
+                with self.subTest(key=key, indicator=indicator):
+                    self.assertEqual(ci_preflight.action_pin_findings({self.WORKFLOW: text}), [
+                        self.finding(self.WORKFLOW, 4, 'actions/upload-artifact@main')])
+
+    def test_flow_mapping_mutable_steps_are_refused(self):
+        steps = (
+            '- {uses: actions/checkout@main}',
+            '- { uses : actions/checkout@main }',
+            '- {"uses": "actions/checkout@main"}',
+            "- { 'uses' : 'actions/checkout@main' }",
+            '- {"uses":"actions/checkout@main"}',
+            '- {name: External action, uses: actions/checkout@main}',
+            '- {name: External action, "uses" : actions/checkout@main, with: {fetch-depth: 0}}',
+            "- {with: {fetch-depth: 0}, 'uses': actions/checkout@main}",
+            '- name: External action, uses: actions/checkout@main',
+            "- name: External action, 'uses' : actions/checkout@main",
+            '- uses: ./.github/actions/local, uses: actions/checkout@main',
+            '- uses: docker://alpine:3.20, "uses": actions/checkout@main',
+            '- {&key "uses": actions/checkout@main}',
+            '- {!!str uses: actions/checkout@main}',
+        )
+        for composite in (False, True):
+            for step in steps:
+                with self.subTest(composite=composite, step=step):
+                    construct = ('flow mappings' if step.startswith('- {')
+                                 else 'inline mapping keys')
+                    self.assert_unsupported_step(step, composite=composite, construct=construct)
+
+    def test_pinned_flow_mapping_is_refused_as_unsupported(self):
+        step = f'- {{uses: actions/checkout@{self.SHA}}} # v4.4.0'
+        for composite in (False, True):
+            with self.subTest(composite=composite):
+                self.assert_unsupported_step(step, composite=composite)
+
+    def test_multiline_flow_mapping_is_refused_as_unsupported(self):
+        line = f'uses: actions/checkout@{self.SHA} # v4.4.0'
+        original = self.workflow('actions/checkout@main')
+        text = original.replace('- uses: actions/checkout@main',
+                                '- {\n          ' + line + '\n        }', 1)
+        self.assertNotEqual(text, original)
+        self.assertEqual(self.pin_findings(text),
+                         [self.unsupported_finding(self.WORKFLOW, 6, '- {')])
+
+    def test_flow_mapping_reusable_workflow_is_refused(self):
+        line = 'call: {uses: example/shared/.github/workflows/build.yml@main}'
+        text = 'on: workflow_dispatch\njobs:\n  ' + line + '\n'
+        self.assertEqual(self.pin_findings(text),
+                         [self.unsupported_finding(self.WORKFLOW, 3, line)])
+
+    def test_run_script_uses_text_is_not_a_yaml_key(self):
+        for indicator in ('|', '|-', '|+', '|2', '>', '>-', '>+', '>2-'):
+            with self.subTest(indicator=indicator):
+                script = (f'      - run: {indicator}\n'
+                          "          printf '%s\\n' '\n"
+                          '          uses: actions/checkout@main\n'
+                          "          '\n"
+                          '          # {uses: actions/checkout@main}\n'
+                          '          echo "uses: actions/checkout@main"\n')
+                text = self.workflow('actions/checkout@main').replace(
+                    '      - uses: actions/checkout@main\n', script, 1)
+                self.assertEqual(self.pin_findings(text), [])
+                number = len(text.splitlines()) + 1
+                text += '      - uses: actions/upload-artifact@main\n'
+                self.assertEqual(self.pin_findings(text), [
+                    self.finding(self.WORKFLOW, number, 'actions/upload-artifact@main')])
+        # Quoted YAML values and comments must not expose apparent flow keys.
+        text = ('on: workflow_dispatch\njobs:\n  inspect:\n'
+                '    runs-on: ["self-hosted","pf-gcp-post"]\n    steps:\n'
+                '      - name: "Example, uses: actions/checkout@main"\n'
+                '        run: \'echo "{uses: actions/checkout@main}"\'\n'
+                '      - name: A plain scalar mentioning uses:literal\n'
+                '        run: "true"\n'
+                '      # - {"uses": actions/checkout@main}\n')
+        self.assertEqual(self.pin_findings(text), [])
+
+    def test_removing_unsupported_shape_branch_is_detected(self):
+        step = '- {uses: actions/checkout@main}'
+        sources = {self.WORKFLOW: self.workflow('actions/checkout@main').replace(
+            '- uses: actions/checkout@main', step, 1)}
+        expected = [self.unsupported_finding(self.WORKFLOW, 6, step)]
+        self.assertEqual(ci_preflight.action_pin_findings(sources), expected)
+        source = inspect.getsource(ci_preflight.action_uses)
+        start = source.index('            if unsupported is not None:\n')
+        end = source.index("            if not key or key.group(1) != 'uses':\n", start)
+        guard = source[start:end]
+        self.assertEqual(source.count(guard), 1)
+        mutant = source.replace(guard, '', 1)
+        namespace = dict(ci_preflight.action_pin_findings.__globals__)
+        exec(compile(mutant, '<unsupported-action-shape-check-removed>', 'exec'), namespace)
+        exec(compile(inspect.getsource(ci_preflight.action_pin_findings),
+                     '<action-pin-check-with-mutant-extractor>', 'exec'), namespace)
+        # Exercise real extraction and validation with the refusal branch removed.
+        with self.assertRaises(AssertionError):
+            self.assertEqual(namespace['action_pin_findings'](sources), expected)
+
+    def test_every_offending_line_is_reported(self):
+        text = self.workflow('actions/checkout@main # v4.2.2')
+        text += '      - uses: actions/upload-artifact@v4 # v4.6.2\n'
+        self.assertEqual(self.pin_findings(text), [
+            self.finding(self.WORKFLOW, 6, 'actions/checkout@main'),
+            self.finding(self.WORKFLOW, 7, 'actions/upload-artifact@v4'),
+        ])
+
+    def test_pinned_quoted_and_local_shapes_are_accepted(self):
+        for named in (False, True):
+            for quote in ('', '"', "'"):
+                for version in ('v4', 'v4.2.2', 'v1.12.0', 'v4.2.2-rc.1',
+                                'v4.2.2+build.7', 'v4.2.2-rc.1+build.7'):
+                    value = f'{quote}actions/checkout@{self.SHA}{quote} # {version}'
+                    with self.subTest(value=value, named=named):
+                        self.assertEqual(self.pin_findings(self.workflow(value, named=named)), [])
+                for reference in ('./.github/actions/x', './.github/workflows/y.yml',
+                                  'docker://alpine:3.20'):
+                    with self.subTest(reference=reference, quote=quote, named=named):
+                        value = quote + reference + quote
+                        text = self.workflow(value, named=named)
+                        text += '      # - uses: actions/checkout@main\n'
+                        self.assertEqual(self.pin_findings(text), [])
+
+    @staticmethod
+    def run_contract(tree):
+        output = io.StringIO()
+        with mock.patch.object(ci_preflight, 'ROOT', tree), \
+                mock.patch.object(sys, 'argv', ['ci_preflight.py', '--check-ci-workflow']), \
+                contextlib.redirect_stdout(output):
+            code = ci_preflight.main()
+        return code, output.getvalue()
+
+    def test_nested_action_yml_and_yaml_are_discovered(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tree = Path(directory)
+            # Copy data inputs only; the real, already imported checker runs.
+            shutil.copytree(ROOT / '.github/workflows', tree / '.github/workflows')
+            shutil.copytree(ROOT / '.github/actions', tree / '.github/actions')
+            (tree / 'tests').mkdir()
+            shutil.copyfile(ROOT / 'tests/CMakeLists.txt', tree / 'tests/CMakeLists.txt')
+            paths = ('.github/actions/nested/alpha/action.yml',
+                     '.github/actions/nested/beta/action.yaml')
+            reference = 'actions/cache/save@main'
+            for name in paths:
+                path = tree / name
+                path.parent.mkdir(parents=True)
+                path.write_text('name: Example\nruns:\n  using: composite\n  steps:\n'
+                                f'    - uses: {reference} # v4.2.2\n')
+            code, output = self.run_contract(tree)
+            self.assertEqual(
+                [line for line in output.splitlines()
+                 if any(line.startswith(name + ':') for name in paths)],
+                [self.finding(name, 5, reference) for name in paths])
+            self.assertEqual(code, 1, output)
+
+    def test_removing_pin_check_is_detected(self):
+        value, reference = 'actions/checkout@main # v4.2.2', 'actions/checkout@main'
+        self.assert_refused(value, reference)
+        source = inspect.getsource(ci_workflow_findings)
+        guard = '    findings += action_pin_findings(action_sources)\n'
+        self.assertEqual(source.count(guard), 1)
+        mutant = source.replace(guard, '', 1)
+        namespace = dict(ci_workflow_findings.__globals__)
+        exec(compile(mutant, '<action-pin-check-removed>', 'exec'), namespace)
+        # Delete the actual integration call, then apply the same regression
+        # assertion to that function. No checker result is stubbed.
+        with self.assertRaises(AssertionError):
+            self.assert_refused(value, reference, checker=namespace['ci_workflow_findings'])
+
+    # Expected to fail with the new check on base c82fd00e until the separate
+    # action-pins lane lands. Keep this a normal test, never an xfail or skip.
+    def test_real_tree_has_only_versioned_action_pins(self):
+        self.assert_refused('actions/checkout@main # v4.2.2', 'actions/checkout@main')
+        for tier in ('all', 'fast', 'github-only'):
+            plan = {entry[0]: entry for entry in check_commands(ROOT, tier=tier)}
+            self.assertEqual(plan['ci-workflow-contract'], (
+                'ci-workflow-contract',
+                [sys.executable, str(ROOT / 'scripts/ci_preflight.py'), '--check-ci-workflow']))
+        code, output = self.run_contract(ROOT)
+        self.assertEqual(code, 0, output)
+
+
+class CiFileLoading(unittest.TestCase):
+    """The stages read tracked CI files as stored: bytes, strict UTF-8, no newline translation.
+
+    Every test writes real files into a temporary tree laid out like the
+    repository and runs main(), the entry point CI runs, over it. A checker
+    handed a string never passes through the loaders, and the loaders are where
+    a bare CR used to vanish: Path.read_text() decodes in universal-newline mode.
+    """
+    DOCS = '.github/workflows/docs.yml'
+    DOCS_POST = '.github/workflows/docs-post.yml'
+    CONFIG = '.github/actionlint.yaml'
+    CMAKE = 'tests/CMakeLists.txt'
+
+    @staticmethod
+    def action_sources():
+        """Every file the action-pin lint reads, relative to the repository root."""
+        paths = sorted(path for path in (ROOT / '.github/workflows').iterdir()
+                       if path.suffix in ('.yml', '.yaml'))
+        for name in ('action.yml', 'action.yaml'):
+            paths.extend(sorted((ROOT / '.github/actions').rglob(name)))
+        return [path.relative_to(ROOT).as_posix() for path in paths]
+
+    def workflow_sources(self):
+        return [name for name in self.action_sources() if name.startswith('.github/workflows/')]
+
+    def make_tree(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        tree = Path(directory.name)
+        shutil.copytree(ROOT / '.github/workflows', tree / '.github/workflows')
+        shutil.copytree(ROOT / '.github/actions', tree / '.github/actions')
+        shutil.copyfile(ROOT / self.CONFIG, tree / self.CONFIG)
+        (tree / 'tests').mkdir()
+        shutil.copyfile(ROOT / self.CMAKE, tree / self.CMAKE)
+        return tree
+
+    def crlf_tree(self, names):
+        tree = self.make_tree()
+        for name in names:
+            original = (ROOT / name).read_bytes()
+            self.assertNotIn(b'\r', original, name)
+            (tree / name).write_bytes(original.replace(b'\n', b'\r\n'))
+        return tree
+
+    @staticmethod
+    def run_stage(tree, flag):
+        output = io.StringIO()
+        with mock.patch.object(ci_preflight, 'ROOT', tree), \
+                mock.patch.object(sys, 'argv', ['ci_preflight.py', flag]), \
+                contextlib.redirect_stdout(output):
+            code = ci_preflight.main()
+        return code, output.getvalue()
+
+    @staticmethod
+    def about(output, name):
+        """The stage's lines about one file."""
+        return [line for line in output.splitlines() if line.startswith(name + ':')]
+
+    @staticmethod
+    def not_utf8(name, line, offset):
+        return (f'{name}:{line}: not valid UTF-8 (invalid start byte at byte offset {offset}): '
+                'save the file as UTF-8')
+
+    @staticmethod
+    def bare_cr_finding(name, changed):
+        """The finding for the first bare CR of `changed`: its LF-delimited line and text."""
+        index = changed.index(b'\r')
+        number = changed.count(b'\n', 0, index) + 1
+        source = changed.decode('utf-8').split('\n')[number - 1].strip(' \t')
+        return ActionPins.unsupported_finding(
+            name, number, source, 'unsupported line break U+000D')
+
+    def assert_bare_cr_refused(self, name, changed):
+        """main() over a tree holding `changed` as `name` must name its first bare CR."""
+        tree = self.make_tree()
+        (tree / name).write_bytes(changed)
+        code, output = self.run_stage(tree, '--check-ci-workflow')
+        self.assertEqual(self.about(output, name), [self.bare_cr_finding(name, changed)], output)
+        self.assertEqual(code, 1, output)
+
+    def assert_undecodable_is_a_finding(self, name, flag):
+        """An invalid byte appended to a real file is a finding that names it, never a crash."""
+        original = (ROOT / name).read_bytes()
+        self.assertTrue(original.endswith(b'\n'), name)
+        tree = self.make_tree()
+        (tree / name).write_bytes(original + b'# \xff\n')
+        try:
+            code, output = self.run_stage(tree, flag)
+        except UnicodeError as error:
+            self.fail(f'{flag} crashed on an undecodable {name}: {error}')
+        self.assertEqual(self.about(output, name), [
+            self.not_utf8(name, original.count(b'\n') + 1, len(original) + 2)], output)
+        self.assertEqual(code, 1, output)
+
+    def test_a_bare_cr_in_place_of_the_final_lf_of_any_real_source_is_refused(self):
+        sources = self.action_sources()
+        self.assertTrue(any(name.startswith('.github/workflows/') for name in sources))
+        self.assertTrue(any(name.startswith('.github/actions/') for name in sources))
+        for name in sources:
+            with self.subTest(name=name):
+                original = (ROOT / name).read_bytes()
+                self.assertTrue(original.endswith(b'\n') and b'\r' not in original)
+                self.assert_bare_cr_refused(name, original[:-1] + b'\r')
+
+    def test_a_bare_cr_between_two_lines_of_a_real_workflow_is_refused(self):
+        original = (ROOT / self.DOCS).read_bytes()
+        self.assertEqual(original.count(b'\non:\n'), 1)
+        self.assert_bare_cr_refused(self.DOCS, original.replace(b'\non:\n', b'\non:\r', 1))
+
+    def test_the_stage_argv_ci_runs_refuses_the_reported_input(self):
+        # No mock at all: the stage's own argv in a child process, over a copy
+        # of the tree whose docs.yml has its final LF replaced by a CR.
+        changed = (ROOT / self.DOCS).read_bytes()[:-1] + b'\r'
+        tree = self.make_tree()
+        shutil.copytree(ROOT / 'scripts', tree / 'scripts',
+                        ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+        (tree / self.DOCS).write_bytes(changed)
+        argv = {entry[0]: entry[1] for entry in check_commands(tree)}['ci-workflow-contract']
+        result = subprocess.run(argv, cwd=tree, capture_output=True, text=True)
+        output = result.stdout + result.stderr
+        self.assertEqual(self.about(output, self.DOCS), [self.bare_cr_finding(self.DOCS, changed)],
+                         output)
+        self.assertEqual(result.returncode, 1, output)
+
+    def test_crlf_copies_of_every_stage_input_are_accepted_and_still_scanned(self):
+        tree = self.crlf_tree([*self.action_sources(), self.CMAKE])
+        code, output = self.run_stage(tree, '--check-ci-workflow')
+        self.assertEqual(code, 0, output)
+        self.assertIn('runners and time limits OK', output)
+        # Zero findings must mean the grammar was checked: a mutable action
+        # after the last block scalar of a CRLF file is found on its own line.
+        original = (ROOT / self.DOCS).read_bytes()
+        (tree / self.DOCS).write_bytes(original.replace(b'\n', b'\r\n')
+                                       + b'      - uses: actions/checkout@main\r\n')
+        code, output = self.run_stage(tree, '--check-ci-workflow')
+        self.assertEqual(self.about(output, self.DOCS), [ActionPins.finding(
+            self.DOCS, original.count(b'\n') + 1, 'actions/checkout@main')], output)
+        self.assertEqual(code, 1, output)
+
+    def test_the_combined_checker_takes_the_file_texts_as_stored(self):
+        sources = [(ROOT / path).read_bytes().decode('utf-8') for path in CI_SOURCES]
+        self.assertEqual(ci_workflow_findings(*sources), [])
+        # The loaders now hand it CRLF files unchanged: every check but the
+        # action-pin lint still has to read them as the LF text they always did.
+        self.assertEqual(ci_workflow_findings(*(text.replace('\n', '\r\n') for text in sources)), [])
+
+    def test_a_file_that_is_not_utf8_is_a_finding_not_a_crash(self):
+        for name in (self.DOCS, '.github/workflows/release.yml',
+                     '.github/actions/setup-live-curl/action.yml', self.CMAKE):
+            with self.subTest(name=name):
+                self.assert_undecodable_is_a_finding(name, '--check-ci-workflow')
+
+    def test_the_docs_stages_read_the_same_way(self):
+        for flag in ('--check-docs-workflow', '--self-test-docs-workflow'):
+            with self.subTest(flag=flag, kind='crlf'):
+                code, output = self.run_stage(self.crlf_tree((self.DOCS, self.DOCS_POST)), flag)
+                self.assertEqual(code, 0, output)
+            for name in (self.DOCS, self.DOCS_POST):
+                with self.subTest(flag=flag, name=name):
+                    self.assert_undecodable_is_a_finding(name, flag)
+
+    def test_the_runner_label_stage_reads_the_same_way(self):
+        flag = '--check-actionlint-runner-labels'
+        tree = self.crlf_tree([self.CONFIG, *self.workflow_sources()])
+        code, output = self.run_stage(tree, flag)
+        self.assertEqual(code, 0, output)
+        self.assertIn('all literal self-hosted labels declared', output)
+        for name in ('.github/workflows/ci.yml', self.CONFIG):
+            with self.subTest(name=name):
+                self.assert_undecodable_is_a_finding(name, flag)
+
+    def test_reverting_the_loader_to_read_text_is_detected(self):
+        changed = (ROOT / self.DOCS).read_bytes()[:-1] + b'\r'
+        self.assert_bare_cr_refused(self.DOCS, changed)
+        source = inspect.getsource(ci_preflight.read_ci_text)
+        guard = 'data = path.read_bytes()\n'
+        self.assertEqual(source.count(guard), 1)
+        mutant = source.replace(
+            guard, "data = path.read_text(encoding='utf-8').encode('utf-8')\n", 1)
+        namespace = {}
+        exec(compile(mutant, '<loader-reverted-to-read-text>', 'exec'),
+             vars(ci_preflight), namespace)
+        with mock.patch.object(ci_preflight, 'read_ci_text', namespace['read_ci_text']):
+            with self.assertRaises(AssertionError):
+                self.assert_bare_cr_refused(self.DOCS, changed)
+
+    def test_dropping_the_lf_view_of_the_other_checks_is_detected(self):
+        for flag, names in (('--check-ci-workflow', (self.CMAKE,)),
+                            ('--check-docs-workflow', (self.DOCS, self.DOCS_POST)),
+                            ('--check-actionlint-runner-labels',
+                             (self.CONFIG, *self.workflow_sources()))):
+            with self.subTest(flag=flag):
+                code, output = self.run_stage(self.crlf_tree(names), flag)
+                self.assertEqual(code, 0, output)
+                with mock.patch.object(ci_preflight, '_universal_newlines', lambda text: text):
+                    code, output = self.run_stage(self.crlf_tree(names), flag)
+                self.assertEqual(code, 1, output)
 
 
 class PreflightFailures(unittest.TestCase):
@@ -1089,6 +2024,20 @@ class PreflightFailures(unittest.TestCase):
                 self.assertIn("baseline promotion must run main's copy and require the latest two head statuses",
                               ci_workflow_findings(*changed))
 
+    @staticmethod
+    def quoted_key_lint_findings(workflow, setting):
+        """The action-pin lint's refusal of an injected setting whose key is quoted.
+
+        The promotion guard reads a quoted key like the plain one, so its own
+        findings do not change; the YAML whitelist refuses the quoted key too,
+        first, at the line the setting starts on in the changed workflow.
+        """
+        if not setting.lstrip(' ').startswith(('"', "'")):
+            return []
+        number = workflow.count('\n', 0, workflow.index(setting)) + 1
+        return [ActionPins.unsupported_finding(
+            CI_SOURCES[2], number, setting.strip(), 'quoted keys')]
+
     def test_promotion_guard_rejects_workflow_defaults_and_env(self):
         original = self.ci_sources()
         self.assertEqual(ci_workflow_findings(*original), [])
@@ -1107,9 +2056,10 @@ class PreflightFailures(unittest.TestCase):
                 changed[2] = changed[2].replace('\njobs:\n', '\n' + setting + 'jobs:\n', 1)
                 self.assertNotEqual(changed[2], original[2])
                 self.assertEqual(_jobs(changed[2]), _jobs(original[2]))
-                self.assertEqual(ci_workflow_findings(*changed), [
+                expected = self.quoted_key_lint_findings(changed[2], setting) + [
                     f'baseline promotion must not define workflow-level {key}',
-                ])
+                ]
+                self.assertEqual(ci_workflow_findings(*changed), expected)
 
     def test_promotion_guard_rejects_job_defaults(self):
         original = self.ci_sources()
@@ -1123,10 +2073,11 @@ class PreflightFailures(unittest.TestCase):
                 changed[2] = in_job(changed[2], 'promote-guard', '    steps:\n',
                                     setting + '    steps:\n')
                 self.assertNotEqual(changed[2], original[2])
-                self.assertEqual(ci_workflow_findings(*changed), [
+                expected = self.quoted_key_lint_findings(changed[2], setting) + [
                     'baseline promotion promote-guard must not define job-level defaults',
                     'baseline promotion must start with the pinned read-only promote-guard',
-                ])
+                ]
+                self.assertEqual(ci_workflow_findings(*changed), expected)
 
     def promotion_guard_result(self, *, workflow=None, **overrides):
         """Run the real workflow shell; only the external gh CLI is stubbed."""
@@ -3024,6 +3975,19 @@ finally:
 
     def test_harmless_spellings_are_not_findings(self):
         original, others = self.ci_sources(), self.other_sources()
+
+        def quoted_key_findings(sources):
+            # These two existing spellings remain harmless to the runner and
+            # sizing policies, but the YAML whitelist now explicitly refuses
+            # quoted keys. Keep both inputs and require exactly that refusal.
+            findings = []
+            for index in (0, 5):
+                for number, line in enumerate(sources[index].splitlines(), 1):
+                    if re.match(r' *(?:"PF_CI_LABELS"|"runs-on"):', line):
+                        findings.append(ActionPins.unsupported_finding(
+                            CI_SOURCES[index], number, line.strip(), 'quoted keys'))
+            return findings
+
         verify = KERNEL_VERIFY
         edits = (
                 (6, 'kernel-only', '    steps:\n',
@@ -3055,7 +4019,10 @@ finally:
                 (6, 'kernel-only', '      - name: Verify (kernel)\n',
                  '      - name: Verify (kernel), no longer --jobs 4\n'),
                 (6, 'kernel-only', KERNEL_VERIFY,
-                 'uses: nick-fields/retry@v3\n        with:\n          command: python3 scripts/ci_verify.py '
+                 # A wrapper action spelled the way the ORG-ACTIONPINS lint accepts: a (synthetic) 40-hex sha
+                 # and a version comment, so only the harmless spelling of the command is under test here.
+                 'uses: nick-fields/retry@0123456789abcdef0123456789abcdef01234567 # v3.2.0\n        with:\n'
+                 '          command: python3 scripts/ci_verify.py '
                  f'kernel --build-dir build-kernel --jobs {CORES} --ccache'),
                 (2, 'promote', f'    runs-on: {RELEASE_RUNNER}\n',
                  f'    runs-on: {RELEASE_RUNNER}  # isolated release\n'),
@@ -3066,12 +4033,14 @@ finally:
             with self.subTest(file=CI_SOURCES[index], job=job, after=after):
                 changed = original.copy()
                 changed[index] = in_job(changed[index], job, before, after)
-                self.assertEqual(ci_workflow_findings(*changed, others=others), [])
+                self.assertEqual(ci_workflow_findings(*changed, others=others),
+                                 quoted_key_findings(changed))
         changed = original.copy()
         for index, job, before, after in edits:
             if before in (changed[index] if job is None else _jobs(changed[index]).get(job, '')):
                 changed[index] = in_job(changed[index], job, before, after)
-        self.assertEqual(ci_workflow_findings(*changed, others=others), [])
+        self.assertEqual(ci_workflow_findings(*changed, others=others),
+                         quoted_key_findings(changed))
 
     def test_a_finding_is_reported_once(self):
         changed = self.ci_sources()

@@ -20,6 +20,7 @@ so neither had drift to report or anything to wait for.
 from __future__ import annotations
 
 import argparse
+from collections.abc import Iterator
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -30,6 +31,7 @@ import shlex
 import subprocess
 import sys
 import time
+import unicodedata
 
 from ci_verify import (ROOT, PRIVATE_FIXTURE_SKIP_LITERAL, private_fixtures_overlay,
                        source_guard_commands)
@@ -734,6 +736,309 @@ def _key_value(line: str, key: str) -> str | None:
         return None
     value = match.group(2) or ''
     return '' if value.startswith('#') else value
+
+
+ACTION_PIN_SHA = re.compile(r'\A[^@\s]+@[0-9a-f]{40}\Z')
+ACTION_PIN_COMMENT = re.compile(
+    r'\A#[ \t]+v[0-9]+(?:\.[0-9]+)*'
+    r'(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?'
+    r'(?:\+[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?[ \t]*\Z')
+ACTION_PIN_EXEMPT_PREFIXES = ('./', 'docker://')
+# This is a whitelist for our reviewed workflow files, not a YAML parser.
+# Only plain block keys, scalar values, block scalars and scalar sequences
+# are supported; literal {} / [] are allowed as a whole plain-key value.
+_ACTION_YAML_KEY = re.compile(r'([A-Za-z_][A-Za-z0-9_-]*) *:(?: +(.*)|$)')
+_ACTION_YAML_QUOTED = re.compile(r'"(?:\\.|[^"\\])*"' r"|'(?:''|[^'])*'")
+_ACTION_BLOCK_SCALAR = re.compile(r'[|>](?:[+-][1-9]?|[1-9][+-]?)?')
+_ACTION_EMPTY_COLLECTION = re.compile(r'\{[ \t]*\}|\[[ \t]*\]')
+_ACTION_YAML_FORBIDDEN_CHARACTER = re.compile(
+    r'\r(?!\n)|[\x00-\x08\x0b\x0c\x0e-\x1f\x85\u2028\u2029]')
+_ACTION_YAML_PROPERTIES = {'&': 'anchors', '*': 'aliases', '!': 'tags',
+                          '?': 'explicit keys', ':': 'explicit keys'}
+
+
+def _action_yaml_visible(value: str, *,
+                         sequence: list[str] | None = None) -> tuple[str, str, list[str]]:
+    """Return code, masked code, quoted tokens; expressions/comments are opaque."""
+    visible, quoted, index = [], [], 0
+    depth = len(sequence) if sequence else 0
+    flow = bool(depth) or value.startswith('[')
+    element_start = bool(sequence and sequence[-1] in ('empty', 'comma'))
+    while index < len(value):
+        char = value[index]
+        if char == '#' and (index == 0 or value[index - 1] == ' '):
+            return value[:index].rstrip(' '), ''.join(visible), quoted
+        if value.startswith('${{', index):
+            end, in_string = index + 3, False
+            # Every iteration advances; doubled quotes cannot be repartitioned
+            # into adjacent strings when an expression has no closing }}.
+            while end < len(value):
+                if value[end] == "'":
+                    if in_string and value.startswith("''", end):
+                        end += 2
+                        continue
+                    in_string = not in_string
+                elif not in_string and value.startswith('}}', end):
+                    end += 2
+                    break
+                end += 1
+            else:
+                visible.append(value[index:])
+                break
+            token = value[index:end]
+        elif char in ('"', "'") and (not flow or depth and element_start):
+            end = index + 1
+            while end < len(value):
+                if char == '"' and value[end] == '\\':
+                    end += 2
+                    continue
+                if value[end] == char:
+                    if char == "'" and value.startswith("''", end):
+                        end += 2
+                        continue
+                    end += 1
+                    break
+                end += 1
+            else:
+                # Keep the opening quote visible so the grammar refuses it.
+                visible.append(value[index:])
+                break
+            token = value[index:end]
+            quoted.append(token)
+        else:
+            visible.append(char)
+            if flow:
+                if char == '[':
+                    depth += 1
+                    element_start = True
+                elif char == ']':
+                    depth = max(0, depth - 1)
+                    element_start = False
+                elif char == ',':
+                    element_start = True
+                elif char != ' ':
+                    # An embedded quote remains data, never a masking token.
+                    element_start = False
+            index += 1
+            continue
+        # Retain positions and a nonblank scalar placeholder, including for "".
+        visible.append('v' + ' ' * (len(token) - 1))
+        element_start = False
+        index = end
+    return value.rstrip(' '), ''.join(visible), quoted
+
+
+def _action_yaml_value(value: str, *, whole_key: bool, sequence: list[str]) -> str | None:
+    """Accept a scalar or scalar flow sequence; return a construct to refuse."""
+    code, visible, quoted = _action_yaml_visible(value, sequence=sequence)
+    if not code:
+        return None
+    if not sequence:
+        if code[0] in _ACTION_YAML_PROPERTIES:
+            return _ACTION_YAML_PROPERTIES[code[0]]
+        if whole_key and _ACTION_EMPTY_COLLECTION.fullmatch(code):
+            return None
+        if code.startswith('{'):
+            return 'flow mappings'
+        if code.startswith(('"', "'")):
+            if not _ACTION_YAML_QUOTED.fullmatch(code):
+                return 'quoted scalars'
+            return 'quoted escapes' if '\\' in code else None
+        if _ACTION_BLOCK_SCALAR.fullmatch(code):
+            return None
+        if not code.startswith('['):
+            # Quotes embedded in a plain scalar are data (e.g. shell printf),
+            # while a colon separator would introduce another mapping key.
+            if re.search(r':(?:[ \t]|$)', visible):
+                return 'inline mapping keys'
+            if code[0] in ']}|>%@`,' or re.match(r'-(?:[ \t]|$)', code):
+                return 'block structure'
+            return 'expressions' if '${{' in visible else None
+    # Flow sequences may span lines, but their items must remain scalars or
+    # nonempty sequences: even an implicit mapping without braces is refused.
+    if re.search(r'[{}]|:(?=[ \t,\]}]|$)', visible):
+        return 'flow mappings'
+    property_token = re.search(r'(?:^|[ \t,\[])([&*!?:])', visible)
+    if property_token:
+        return _ACTION_YAML_PROPERTIES[property_token.group(1)]
+    if any('\\' in token for token in quoted):
+        return 'quoted escapes'
+    if re.search(r'''["']''', visible):
+        return 'quoted scalars'
+    if '${{' in visible:
+        return 'expressions'
+    closed = False
+    for char in visible:
+        if char in ' \t':
+            continue
+        if closed:
+            return 'flow sequences'
+        if char == '[':
+            if sequence:
+                if sequence[-1] in ('value', 'closed'):
+                    return 'flow sequences'
+                sequence[-1] = 'value'
+            sequence.append('empty')
+        elif char == ']':
+            if not sequence:
+                return 'flow sequences'
+            if sequence.pop() == 'empty':
+                return 'empty collections'
+            if sequence:
+                sequence[-1] = 'closed'
+            else:
+                closed = True
+        elif char == ',':
+            if not sequence or sequence[-1] not in ('value', 'closed'):
+                return 'flow sequences'
+            sequence[-1] = 'comma'
+        else:
+            if not sequence or sequence[-1] == 'closed':
+                return 'flow sequences'
+            if sequence[-1] != 'value' and char in '|>%@`':
+                return 'flow sequences'
+            sequence[-1] = 'value'
+    return None
+
+
+def action_uses(sources: dict[str, str], *,
+                findings: list[str]) -> Iterator[tuple[str, int, str, str]]:
+    """Whitelist workflow YAML, then yield plain block uses scalars for pinning."""
+    for name, text in sources.items():
+        # Refuse the raw file before any scalar-body, comment or flow skip.
+        # LF and CRLF are the only supported line endings, including in data.
+        offense = _ACTION_YAML_FORBIDDEN_CHARACTER.search(text)
+        if offense is not None:
+            char = offense.group()
+            number = text.count('\n', 0, offense.start()) + 1
+            source_line = text.replace('\r\n', '\n').split('\n')[number - 1].strip(' \t')
+            construct = ('unsupported line break' if char in '\r\x85\u2028\u2029\v\f'
+                         else 'unsupported control character')
+            findings.append(
+                f'{name}:{number}: unsupported YAML construct in a workflow '
+                f'({construct} U+{ord(char):04X}): '
+                f'rewrite it in plain block style; {source_line!r}')
+            continue
+        scalar_depth = None
+        sequence = []
+        sequence_start = None
+        refused_flow_depth = 0
+        refused_flow_indent = 0
+        for number, line in enumerate(text.replace('\r\n', '\n').split('\n'), 1):
+            if scalar_depth is not None:
+                if not line.strip(' ') or _indent(line) > scalar_depth:
+                    continue
+                scalar_depth = None
+            unsupported_whitespace = any(
+                char == '\ufeff' or char not in ' \t' and
+                unicodedata.category(char) in {'Zs', 'Zl', 'Zp', 'Cc'}
+                for char in line)
+            if not unsupported_whitespace and (
+                    not line.strip(' ') or line.lstrip(' ').startswith('#')):
+                continue
+            if refused_flow_depth:
+                if _indent(line) <= refused_flow_indent:
+                    refused_flow_depth = 0
+                    # An aligned closing tail belongs to the refused flow;
+                    # any other outdent is scanned again as a block line.
+                    if line.lstrip(' ').startswith(('}', ']')):
+                        continue
+                else:
+                    # This collection is already refused. Quotes are plain
+                    # text here: they must never mask a closing delimiter.
+                    for char in line:
+                        if char in '{[':
+                            refused_flow_depth += 1
+                        elif char in '}]':
+                            refused_flow_depth -= 1
+                        if not refused_flow_depth:
+                            break
+                    continue
+            stripped = line.strip(' ')
+            step = re.match(r'-[ \t]+', stripped)
+            key_line = stripped[step.end():] if step and not sequence else stripped
+            key = _ACTION_YAML_KEY.fullmatch(key_line) if not sequence else None
+            first = (key.group(2) or '').strip(' ') if key else None
+            node = first if first is not None else key_line
+            code, visible, _ = _action_yaml_visible(node, sequence=sequence)
+            sequence_depth = len(sequence)
+            # Recover only the extent of a refused property-prefixed block,
+            # so an anchored script produces its anchor finding, not script
+            # uses findings. This never authorizes the property itself.
+            recovery = re.sub(r'^(?:[&*!][^ \t]+[ \t]*)+', '', code)
+            if not sequence and _ACTION_BLOCK_SCALAR.fullmatch(recovery):
+                # A bare "- |" owns its body from the dash column; "- run: |"
+                # owns it from the mapping key's column after the dash.
+                scalar_depth = _indent(line) + (step.end() if step and key else 0)
+            quoted_key = _ACTION_YAML_QUOTED.match(key_line)
+            if unsupported_whitespace:
+                unsupported = 'unsupported whitespace'
+            elif '\t' in re.match(r'[ \t]*', line).group() or (
+                    step and '\t' in step.group()):
+                unsupported = 'tab indentation'
+            elif re.match(r'(?:---|\.\.\.)(?:[ \t]|$)', stripped):
+                unsupported = 'document markers'
+            elif not sequence and quoted_key and key_line[quoted_key.end():].lstrip(' ').startswith(':'):
+                unsupported = 'quoted keys'
+            elif not sequence and re.match(r'<<[ \t]*:', key_line):
+                unsupported = 'merge keys'
+            elif not sequence and not key and not step:
+                unsupported = (_ACTION_YAML_PROPERTIES.get(key_line[0])
+                               or 'block structure')
+            else:
+                unsupported = _action_yaml_value(node, whole_key=key is not None,
+                                                 sequence=sequence)
+                if unsupported is None and key and key.group(1) == 'uses' and (
+                        not code or _ACTION_BLOCK_SCALAR.fullmatch(code)
+                        or code.startswith(('{', '['))):
+                    unsupported = 'uses keys'
+            if sequence and not sequence_depth:
+                sequence_start = number, line
+            if unsupported is not None:
+                # The finding refuses the entire unsupported collection;
+                # its inner mapping lines cannot become accepted block keys.
+                if sequence_depth or recovery.startswith(('{', '[')):
+                    refused_flow_depth = max(0, sequence_depth
+                                             + sum(1 if char in '{[' else -1
+                                                   for char in visible if char in '{}[]'))
+                    refused_flow_indent = _indent(sequence_start[1] if sequence_depth else line)
+                sequence.clear()
+                source_line = line.strip(' \t')
+                findings.append(
+                    f'{name}:{number}: unsupported YAML construct in a workflow ({unsupported}): '
+                    f'rewrite it in plain block style; {source_line!r}')
+                continue
+            if not key or key.group(1) != 'uses':
+                continue
+            # Keep quotes separate from the trailing comment: a # inside a
+            # quoted scalar is part of the reference, not a version comment.
+            scalar = re.fullmatch(
+                r"""(?:"([^"]*)"|'([^']*)'|([^\s'"#]+))(?:[ \t]+(#[^\r\n]*))?[ \t]*""",
+                first)
+            reference = (next(group for group in scalar.groups()[:3] if group is not None)
+                         if scalar else first)
+            comment = (scalar.group(4) or '') if scalar else ''
+            yield name, number, reference, comment
+        if sequence:
+            number, line = sequence_start
+            source_line = line.strip(' \t')
+            findings.append(
+                f'{name}:{number}: unsupported YAML construct in a workflow (flow sequences): '
+                f'rewrite it in plain block style; {source_line!r}')
+
+
+def action_pin_findings(sources: dict[str, str]) -> list[str]:
+    """Refuse YAML outside the supported subset and check every uses scalar."""
+    findings = []
+    for name, number, reference, comment in action_uses(sources, findings=findings):
+        if reference.startswith(ACTION_PIN_EXEMPT_PREFIXES):
+            continue
+        if ACTION_PIN_SHA.fullmatch(reference) and ACTION_PIN_COMMENT.fullmatch(comment):
+            continue
+        findings.append(
+            f'{name}:{number}: third-party uses {reference!r} must be pinned to a '
+            '40-character lowercase hex SHA with a trailing # v<version> comment')
+    return findings
 
 
 def _job_values(body: str, key: str, *, unquote: bool = True) -> list[str]:
@@ -1736,16 +2041,60 @@ def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[st
     return findings
 
 
+def read_ci_text(path: Path, findings: list[str], root: Path | None = None) -> str:
+    """A tracked CI file's text, every line break byte exactly as stored.
+
+    Path.read_text() decodes in universal-newline mode: a bare CR reached every
+    checker as LF, so the action-pin lint's refusal of it could never fire on a
+    real file. This reads the bytes and decodes them as strict UTF-8, never the
+    locale's codec. A file that is not UTF-8 is a finding (never a crash) and its
+    text, bad bytes replaced, still goes on so the other findings print too. The
+    finding names the file relative to root (the repository when None).
+    """
+    data = path.read_bytes()
+    try:
+        return data.decode('utf-8')
+    except UnicodeDecodeError as error:
+        name = path.relative_to(ROOT if root is None else root).as_posix()
+        line = data.count(b'\n', 0, error.start) + 1
+        findings.append(f'{name}:{line}: not valid UTF-8 ({error.reason} at byte offset '
+                        f'{error.start}): save the file as UTF-8')
+        return data.decode('utf-8', 'replace')
+
+
+def _universal_newlines(text: str) -> str:
+    """The text as Path.read_text() always gave it: CRLF and a bare CR are LF.
+
+    Every check except the action-pin lint reads this view, so a CRLF file is
+    judged exactly as it was before the loaders kept the bytes.
+    """
+    return text.replace('\r\n', '\n').replace('\r', '\n')
+
+
 def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
                          parity: str, docs: str, post: str, subset: str, docs_post: str,
                          others: dict[str, str] | None = None,
-                         *, curl_action: str | None = None) -> list[str]:
-    """Check actual PR/post files together, including every reusable call edge."""
+                         *, curl_action: str | None = None,
+                         actions: dict[str, str] | None = None) -> list[str]:
+    """Check actual PR/post files together, including every reusable call edge.
+
+    The texts are the files as stored (read_ci_text): the action-pin lint judges
+    them so, and every other check gets the universal-newline view it always had.
+    """
     workflows = {'ci.yml': ci, 'ci-post.yml': post, 'native-live.yml': native,
                  'corpus-parity.yml': parity, 'corpus-parity-subset.yml': subset,
                  'docs.yml': docs, 'docs-post.yml': docs_post,
                  'promote-baseline.yml': promote, **(others or {})}
+    action_sources = {f'.github/workflows/{name}': text for name, text in workflows.items()}
+    action_sources.update(actions or {})
+    if curl_action is not None:
+        action_sources.setdefault('.github/actions/setup-live-curl/action.yml', curl_action)
+    workflows = {name: _universal_newlines(text) for name, text in workflows.items()}
+    ci, native, promote, cmake, parity, docs, post, subset, docs_post = map(
+        _universal_newlines, (ci, native, promote, cmake, parity, docs, post, subset, docs_post))
+    curl_action = None if curl_action is None else _universal_newlines(curl_action)
     findings = runner_findings(workflows)
+    findings += action_pin_findings(action_sources)
     findings += pipeline_workflow_findings(ci, 'ci.yml', pr=True)
     findings += pipeline_workflow_findings(post, 'ci-post.yml', pr=False)
     findings += native_workflow_findings(native, curl_action)
@@ -1985,23 +2334,24 @@ def actionlint_runner_label_findings(source: Path) -> list[str]:
     parses this same required file with its full YAML/schema parser.
     """
     config_name = '.github/actionlint.yaml'
+    findings = []
     try:
-        config = (source / config_name).read_text()
-    except (OSError, UnicodeError) as error:
+        config = _universal_newlines(read_ci_text(source / config_name, findings, source))
+    except OSError as error:
         return [f'{config_name}: cannot read config: {error}']
     lines = [re.sub(r'\s+#.*$', '', line).rstrip() for line in _code(config)]
     entries = [re.fullmatch(r'    - (' + _LITERAL_RUNNER_LABEL + r')', line)
                for line in lines[2:]]
     if (lines[:2] != ['self-hosted-runner:', '  labels:']
             or not entries or not all(entries)):
-        return [f'{config_name}: cannot parse config: expected self-hosted-runner.labels '
+        return [*findings,
+                f'{config_name}: cannot parse config: expected self-hosted-runner.labels '
                 'as a block list of literal labels']
     declared = {entry.group(1).strip('\'"') for entry in entries}
-    findings = []
     for path in sorted((source / '.github/workflows').glob('*')):
         if path.suffix not in ('.yml', '.yaml'):
             continue
-        workflow = path.read_text()
+        workflow = _universal_newlines(read_ci_text(path, findings, source))
         if _unparsed(workflow):
             findings.append(f'{path.name}: cannot parse jobs for literal runner labels')
             continue
@@ -2273,19 +2623,28 @@ def main() -> int:
         workflows = ROOT / '.github/workflows'
         named = ('ci.yml', 'native-live.yml', 'promote-baseline.yml', 'corpus-parity.yml',
                  'docs.yml', 'ci-post.yml', 'corpus-parity-subset.yml', 'docs-post.yml')
-        findings = ci_workflow_findings(
-            (workflows / 'ci.yml').read_text(),
-            (workflows / 'native-live.yml').read_text(),
-            (workflows / 'promote-baseline.yml').read_text(),
-            (ROOT / 'tests/CMakeLists.txt').read_text(),
-            (workflows / 'corpus-parity.yml').read_text(),
-            (workflows / 'docs.yml').read_text(),
-            (workflows / 'ci-post.yml').read_text(),
-            (workflows / 'corpus-parity-subset.yml').read_text(),
-            (workflows / 'docs-post.yml').read_text(),
-            {path.name: path.read_text() for path in sorted(workflows.iterdir())
+        # Every file is read as stored: the lint must see a bare CR on disk.
+        # A file that is not UTF-8 is a finding here, and the curl action is
+        # read twice (as an action and as the native job's input): list it once.
+        findings = []
+        actions = {path.relative_to(ROOT).as_posix(): read_ci_text(path, findings)
+                   for path in sorted((ROOT / '.github/actions').rglob('*'))
+                   if path.name in ('action.yml', 'action.yaml') and path.is_file()}
+        checked = ci_workflow_findings(
+            read_ci_text(workflows / 'ci.yml', findings),
+            read_ci_text(workflows / 'native-live.yml', findings),
+            read_ci_text(workflows / 'promote-baseline.yml', findings),
+            read_ci_text(ROOT / 'tests/CMakeLists.txt', findings),
+            read_ci_text(workflows / 'corpus-parity.yml', findings),
+            read_ci_text(workflows / 'docs.yml', findings),
+            read_ci_text(workflows / 'ci-post.yml', findings),
+            read_ci_text(workflows / 'corpus-parity-subset.yml', findings),
+            read_ci_text(workflows / 'docs-post.yml', findings),
+            {path.name: read_ci_text(path, findings) for path in sorted(workflows.iterdir())
              if path.suffix in ('.yml', '.yaml') and path.name not in named},
-            curl_action=(ROOT / '.github/actions/setup-live-curl/action.yml').read_text())
+            curl_action=read_ci_text(ROOT / '.github/actions/setup-live-curl/action.yml', findings),
+            actions=actions)
+        findings = list(dict.fromkeys(findings + checked))
         for finding in findings:
             print(finding)
         if not findings:
@@ -2293,11 +2652,15 @@ def main() -> int:
                   'fast/slow rows, runners and time limits OK')
         return 1 if findings else 0
     if args.check_docs_workflow or args.self_test_docs_workflow:
-        workflow = (ROOT / '.github/workflows/docs.yml').read_text()
-        post = (ROOT / '.github/workflows/docs-post.yml').read_text()
+        findings = []
+        workflow = _universal_newlines(read_ci_text(ROOT / '.github/workflows/docs.yml', findings))
+        post = _universal_newlines(read_ci_text(ROOT / '.github/workflows/docs-post.yml', findings))
         if args.self_test_docs_workflow:
-            return docs_workflow_self_test(workflow, post)
-        findings = docs_workflow_findings(workflow, post)
+            code = docs_workflow_self_test(workflow, post)
+            for finding in findings:
+                print(finding)
+            return 1 if findings else code
+        findings += docs_workflow_findings(workflow, post)
         for finding in findings:
             print(finding)
         if not findings:
