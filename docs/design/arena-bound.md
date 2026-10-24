@@ -634,7 +634,7 @@ or trace calls made inside an unknown loop.
 
 Safe signed JSON integers use <=17 characters, hash64 is 18 quoted
 characters, and f64 conservatively uses <=64 characters: the formatter
-`f64` at `src/report_sink_writer.cpp:285` builds scientific output with a fixed
+`f64` at `src/report_sink_writer.cpp:285` (its worker `real` at `src/report_sink_writer.cpp:71`) builds scientific output with a fixed
 buffer then performs bounded exponent relayout. Each input string byte
 becomes at most six JSON bytes, plus two quotes; see
 `src/report_sink_writer.cpp:207`. Counting delimiters and the LF gives:
