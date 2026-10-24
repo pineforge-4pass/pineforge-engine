@@ -98,7 +98,16 @@ but no implementation must not be reported as supporting any new mode.
   `set_optional_report_mode(report_sequence::ReportMode::SummaryOnly)`
   before begin, and supply the exact replay described below. The equity
   control keeps a held point and fixed folds; the optional-sequence control
-  omits trace/name, hash and output row/event histories. The fixed-memory
+  omits trace/name, hash and output row/event histories. The legacy equity
+  control refuses SUMMARY_ONLY with `PF_REPORT_MODE_REPLAY_UNAVAILABLE`
+  (`-5`) while an execution observer is registered. Registering an observer
+  while legacy SUMMARY_ONLY is pending returns `-2`; switching the pending
+  mode to FULL permits registration regardless of a past run's active mode.
+  A quiescent null-observer clear remains accepted. Selected-window capture
+  with legacy SUMMARY_ONLY fails closed with a typed run failure (no report
+  is published): `engine_invariant` when its report view is unavailable, or
+  `report_mode_unsupported` at begin where the begin refusal is present.
+  The fixed-memory
   target folds finalized rows/points in order without retaining report
   sequences in RAM or a private curve tape; no curve file, tmpfs, memfd or
   allocate-then-free array qualifies.

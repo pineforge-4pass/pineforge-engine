@@ -2313,6 +2313,7 @@ public:
     // validation or mutation, and a true answer does not make a run admitted.
     static bool selected_window_pending(const BacktestEngine& engine,
                                         pf_selected_window_config_v1* out) noexcept;
+    static bool observer_registered(const BacktestEngine& engine) noexcept;
     static bool selected_window_admitted(const BacktestEngine& engine,
                                          pf_selected_window_config_v1* out) noexcept;
 
