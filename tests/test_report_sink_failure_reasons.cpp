@@ -260,6 +260,10 @@ void arena_backing_admission_translator() {
         require(host.report_sink_receipt_v1(&receipt) == 0 && !receipt.complete
                     && receipt.sha256_hex[0] == '\0',
                 "refused sink admission must not complete a receipt");
+        require(::access(path.c_str(), F_OK) == -1 && errno == ENOENT,
+                "refused admission opened the sink path");
+        require(::fcntl(socket.writer.value, F_GETFD) >= 0,
+                "refused admission closed the borrowed fd");
     }
 }
 
