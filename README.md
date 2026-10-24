@@ -58,7 +58,7 @@ cases, and no completeness claim (the published 1.6.0 image declares `1.3`).
 `capabilities.selected_window_contract_revisions` is `["1.3-parity"]` when the
 runtime supports selected windows and `[]` otherwise.
 
-From 1.6.2 (unreleased), the engine/codegen image advertises selected-window
+From 1.6.2, the engine/codegen image advertises selected-window
 contract revision `1.3` through `docker/run_json.py --capabilities-json`:
 with the section-4 producers and manifest present and value ownership
 `complete` (EN-115), it emits the four typed codes (`strategy_value_invalid`,
