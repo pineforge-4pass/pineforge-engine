@@ -3815,15 +3815,20 @@ bool PineExecutionAdapter::lifecycle_readable(const PlacementSnapshot& row) cons
 // again: the revival never picks an ended cycle, and origin_leg_consumed only
 // asks about opened origins, so its lifecycle is read by nobody.
 //
-// CR-150 L19G: nor does K1 keep a dormant leg bound to an askable origin,
-// or an origin-free current-cycle leg, once the superseded test answers -- some
+// CR-150 L19G: a named origin-free current-cycle leg can lose K1 once some
 // row of the cycle names it (or its target) as its predecessor, or a later-bar
-// exit of the same family and ids has a different stop. K2 and K3 keep one such row for as long
-// as the leg is a candidate, so a leg superseded now stays superseded for the
-// rest of its cycle: the revival never picks it again, and the suspension and
-// the pair hold only rewrite its own lifecycle, which nothing else reads. A
-// cycle that cancels and re-places its exits every bar at a moving level no
-// longer holds a row per bar.
+// exit of the same family and ids has different stop bits. K2/K3 preserve
+// the superseded answer for every remaining revival candidate.
+//
+// ORG-171-DORMANT: a dormant askable-origin leg can also lose its cycle pin
+// when the two-row reissue basis below actually supersedes it. Preserve
+// that basis even for released legs kept by another rule. Otherwise a K3
+// witness could lose its own supersessor and revive (the K1 A/B/A reproduction).
+// An identity witness uses the same family/source/from-entry, a newer
+// incarnation, a strictly later script bar and different stop bits. Origin
+// is deliberately NOT an identity condition in the revival. A projection
+// link alone does not release an askable leg here: it keeps the legacy
+// candidate and its K2 certificate. No new lifecycle or sticky fact is added.
 //
 // R5 lane V19-FIX: nor a leg the script withdrew (every leg retired, by
 // strategy.cancel or strategy.cancel_all whether it was live or dormant:
@@ -3914,15 +3919,14 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
         return (value.family == PineOrderFamily::Entry || value.family == PineOrderFamily::Order)
             && value.placement_script_open_ms >= last_broker_open_ms_;
     };
-    // An askable-origin leg, dormant or not, stays pinned for its cycle as
-    // v1.6.3's K1 pinned it: releasing a dormant one let the sweep erase its
-    // supersessor while K3 kept the released leg as a witness, and the margin
-    // revival then restored the superseded leg.
+    // Non-dormant askable-origin legs still answer the consumed-leg query.
+    // A dormant one can be released only with a retained reissue certificate.
     const auto held_by_cycle = [&](const PlacementSnapshot& value) {
         return pinned_by_itself(value) && value.placement_cycle == cycle
             && exit_family(value.family) && !value.from_entry.empty()
             && !withdrawn(value.legs)
-            && !contains(askable_origins, value.bracket_origin.incarnation);
+            && (value.legs.dormant()
+                || !contains(askable_origins, value.bracket_origin.incarnation));
     };
     auto& held = sweep.held;
     bool unpinned = false;
@@ -3948,12 +3952,50 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
     // or the memo's previously read high water.
     auto& released = sweep.released;
     auto& memo = sweep.unsuperseded;
+    // In incarnation order, retain the newest row and the newest earlier
+    // row whose stop differs from it. With ordered script bars, any older
+    // row superseded by an identity reissue has a witness in this pair:
+    // either its stop differs from newest, or the other member witnesses it.
+    // Check the strict age/identity predicate again before releasing a leg;
+    // delayed adoption or same-bar placement must never manufacture an answer.
+    // The pair is stack scratch, not a per-bar allocation or durable state.
+    const auto reissue_basis = [&](const PlacementSnapshot& own) {
+        std::array<std::pair<std::uint64_t, const PlacementSnapshot*>, 2> basis{};
+        placement_.visit_rows([&](std::uint64_t incarnation, const PlacementSnapshot& peer) {
+            PINEFORGE_TAIL_WORK("k3_pairs", 1);
+            if (peer.placement_cycle != cycle || peer.family != own.family
+                || peer.source_id != own.source_id || peer.from_entry != own.from_entry)
+                return false;
+            if (basis[0].second
+                && !same_double_bits(basis[0].second->exit_levels.stop, peer.exit_levels.stop))
+                basis[1] = basis[0];
+            basis[0] = {incarnation, &peer};
+            return false;
+        });
+        return basis;
+    };
     const auto release_superseded = [&] {
         if (held.empty()) return;
         const std::uint64_t top = placement_.high_water();
         std::uint64_t scan_from = std::numeric_limits<std::uint64_t>::max();
         std::size_t cursor = 0;
         for (auto& leg : held) {
+            const PlacementSnapshot& own = *leg.row;
+            if (own.legs.dormant()
+                && contains(askable_origins, own.bracket_origin.incarnation)) {
+                // K2's named-link test is not interchangeable with this
+                // bounded identity certificate. Without a matching member,
+                // keep the lifecycle and let its ordinary K2/K3 pins stand.
+                for (const auto& witness : reissue_basis(own)) {
+                    if (witness.second && witness.first > leg.incarnation
+                        && witness.second->placement_script_open_ms > own.placement_script_open_ms
+                        && !same_double_bits(witness.second->exit_levels.stop, own.exit_levels.stop))
+                        leg.released = true;
+                }
+                leg.read_through = top;
+                scan_from = std::min(scan_from, leg.read_through);
+                continue;
+            }
             while (cursor < memo.size() && memo[cursor].first < leg.incarnation) ++cursor;
             if (cursor < memo.size() && memo[cursor].first == leg.incarnation) {
                 leg.read_through = memo[cursor].second;
@@ -3963,9 +4005,8 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
             }
             scan_from = std::min(scan_from, leg.read_through);
         }
-        // Every leg was read through the high water, and no row has been
-        // placed since: nothing new to read, and the memo stands.
-        if (scan_from >= top) return;
+        // An already-read suffix makes the following walk empty. Still
+        // publish releases found through the bounded identity certificates.
         const auto stop_bits = [](double value) {
             std::uint64_t out = 0;
             std::memcpy(&out, &value, sizeof(out));
@@ -4151,7 +4192,8 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
                    && *candidate_origin_cursor < incarnation) ++candidate_origin_cursor;
             const bool askable = candidate_origin_cursor != askable_origins.end()
                 && *candidate_origin_cursor == incarnation;
-            if (!askable && !contains(askable_origins, value.bracket_origin.incarnation))
+            if (!askable && (value.legs.dormant()
+                || !contains(askable_origins, value.bracket_origin.incarnation)))
                 held.push_back({incarnation, &value});
         }
         candidates.emplace_back(incarnation, &value);
@@ -4238,6 +4280,26 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
     sweep.reissue_high_water = placement_.high_water();
     PINEFORGE_RETIREMENT_OBSERVE(placement_, cycle, askable_origins, roots,
                                 candidates, first_reissues);
+
+    // The observer above checks the legacy FIRST-witness K3 lookup. These
+    // additional certificates instead cover every released askable leg,
+    // including one retained as an origin representative, root or K3 witness.
+    // Each certificate has at most two rows per identity, independent of
+    // stop changes. It is a closed basis, not a first-witness chain: with
+    // alternating A/B/A stops the older member is superseded by the newer,
+    // and the newest has no later differing-stop row. Recompute it each
+    // sweep and retain the new pair before erasing the previous pair.
+    for (const auto incarnation : released) {
+        const auto& leg = placement_.at(incarnation);
+        if (!leg.legs.dormant()
+            || !contains(askable_origins, leg.bracket_origin.incarnation)) continue;
+        for (const auto& witness : reissue_basis(leg)) {
+            if (witness.second) first_reissues.push_back(witness.first);
+        }
+    }
+    std::sort(first_reissues.begin(), first_reissues.end());
+    first_reissues.erase(std::unique(first_reissues.begin(), first_reissues.end()),
+                         first_reissues.end());
 
     auto& doomed = sweep.doomed;
     auto root_cursor = roots.begin();
