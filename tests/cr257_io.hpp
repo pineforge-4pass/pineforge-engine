@@ -109,6 +109,8 @@ struct SourceRun {
     Count commits = 0;
     Count insert_commits = 0;
     Count records_created = 0;
+    Count cleared_scopes = 0;
+    Count erase_commit_allowance = 0; // Sum of independently rounded scope clears.
 };
 
 SourceRun source_run(Count n);
