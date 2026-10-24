@@ -107,7 +107,25 @@ third-party `uses:` in `.github/workflows/*.yml` (also `.yaml`) and nested
 `uses: owner/action@<40 lowercase hex commit SHA> # v4.2.2`, with the version
 comment on the same line; prerelease and build suffixes are allowed. Local
 `./` actions and reusable workflows, and `docker://` images, are exempt.
-Unsupported `uses` key shapes, including flow mappings, are refused.
+The lint accepts plain block-style YAML only, with scalar flow sequences
+(for example `runs-on: ["self-hosted", "pf-gcp-pr"]` and `branches: [main]`)
+and empty `{}` / `[]` on one line as a whole plain `key:` value as exceptions
+(whitespace inside an empty collection is allowed).
+Keys must be unquoted identifiers (`[A-Za-z_][A-Za-z0-9_-]*`); scalar values
+may be plain or single/double quoted on one line, or use `|` / `>` blocks
+with chomping and indentation indicators. GitHub `${{ ... }}` expressions,
+comments and CRLF line endings are supported. Indented block-scalar bodies
+are excluded, including `run:`, github-script's `with: script:`, and
+multiline action inputs.
+Unsupported `uses` key shapes are refused: every `uses:` value must be a
+scalar on the same line. The lint also refuses anchors, aliases, merge
+keys, explicit keys, tags, nonempty flow mappings (including multiline and
+implicit mappings inside sequences), all quoted keys, backslashes in YAML
+quoted values, tabs in indentation, and `---` / `...` document markers.
+Empty collections outside the whole plain-key value exception, extra
+inline mapping keys, unrecognised block lines and incomplete quoted/flow
+values are refused too. Each refusal names the file, line, construct and
+source text and asks for a rewrite in plain block style.
 To bump an action, resolve the desired upstream version to its full commit
 SHA and update both the SHA and version comment together.
 

@@ -743,71 +743,199 @@ ACTION_PIN_COMMENT = re.compile(
     r'(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?'
     r'(?:\+[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?[ \t]*\Z')
 ACTION_PIN_EXEMPT_PREFIXES = ('./', 'docker://')
-# Consume quoted text and comments before looking for another mapping key.
-# The lookbehind leaves flow delimiters available for depth accounting.
-_ACTION_YAML_TOKENS = re.compile(
-    r"""(?P<uses>(?:^|(?<=[ \t,{\[?]))(?:(?:"uses"|'uses')[ \t]*:"""
-    r'|uses[ \t]*:(?=[ \t{}\[\],]|$)))'
-    r"""|"(?:\\.|[^"\\])*"|'(?:''|[^'])*'"""
-    r'|(?P<comment>(?<!\S)#[^\r\n]*)|(?P<flow>[{}\[\]])')
+# This is a whitelist for our reviewed workflow files, not a YAML parser.
+# Only plain block keys, scalar values, block scalars and scalar sequences
+# are supported; literal {} / [] are allowed as a whole plain-key value.
+_ACTION_YAML_KEY = re.compile(r'([A-Za-z_][A-Za-z0-9_-]*)[ \t]*:(?:[ \t]+(.*)|$)')
+_ACTION_YAML_QUOTED = re.compile(r'"(?:\\.|[^"\\])*"' r"|'(?:''|[^'])*'")
+_ACTION_YAML_OPAQUE = re.compile(
+    r"(?P<expression>\$\{\{(?:'(?:''|[^'])*'|[^'\r\n])*?\}\})"
+    r'''|(?P<quoted>"(?:\\.|[^"\\])*"|'(?:''|[^'])*')'''
+    r'|(?P<comment>(?<!\S)#[^\r\n]*)')
+_ACTION_BLOCK_SCALAR = re.compile(r'[|>](?:[+-][1-9]?|[1-9][+-]?)?')
+_ACTION_EMPTY_COLLECTION = re.compile(r'\{[ \t]*\}|\[[ \t]*\]')
+_ACTION_YAML_PROPERTIES = {'&': 'anchors', '*': 'aliases', '!': 'tags',
+                          '?': 'explicit keys', ':': 'explicit keys'}
+
+
+def _action_yaml_visible(value: str) -> tuple[str, str, list[str]]:
+    """Return code, masked code, quoted tokens; expressions/comments are opaque."""
+    visible, quoted, end = [], [], 0
+    for token in _ACTION_YAML_OPAQUE.finditer(value):
+        visible.append(value[end:token.start()])
+        if token.lastgroup == 'comment':
+            return value[:token.start()].rstrip(), ''.join(visible), quoted
+        # Retain positions and a nonblank scalar placeholder, including for "".
+        visible.append('v' + ' ' * (len(token.group()) - 1))
+        if token.lastgroup == 'quoted':
+            quoted.append(token.group())
+        end = token.end()
+    visible.append(value[end:])
+    return value.rstrip(), ''.join(visible), quoted
+
+
+def _action_yaml_value(value: str, *, whole_key: bool, sequence: list[str]) -> str | None:
+    """Accept a scalar or scalar flow sequence; return a construct to refuse."""
+    code, visible, quoted = _action_yaml_visible(value)
+    if not code:
+        return None
+    if not sequence:
+        if code[0] in _ACTION_YAML_PROPERTIES:
+            return _ACTION_YAML_PROPERTIES[code[0]]
+        if whole_key and _ACTION_EMPTY_COLLECTION.fullmatch(code):
+            return None
+        if code.startswith('{'):
+            return 'flow mappings'
+        if code.startswith(('"', "'")):
+            if not _ACTION_YAML_QUOTED.fullmatch(code):
+                return 'quoted scalars'
+            return 'quoted escapes' if '\\' in code else None
+        if _ACTION_BLOCK_SCALAR.fullmatch(code):
+            return None
+        if not code.startswith('['):
+            # Quotes embedded in a plain scalar are data (e.g. shell printf),
+            # while a colon separator would introduce another mapping key.
+            if re.search(r':(?:[ \t]|$)', visible):
+                return 'inline mapping keys'
+            if code[0] in ']}|>%@`,' or re.match(r'-(?:[ \t]|$)', code):
+                return 'block structure'
+            return 'expressions' if '${{' in visible else None
+    # Flow sequences may span lines, but their items must remain scalars or
+    # nonempty sequences: even an implicit mapping without braces is refused.
+    if re.search(r'[{}]|:(?=[ \t,\]}]|$)', visible):
+        return 'flow mappings'
+    property_token = re.search(r'(?:^|[ \t,\[])([&*!?:])', visible)
+    if property_token:
+        return _ACTION_YAML_PROPERTIES[property_token.group(1)]
+    if any('\\' in token for token in quoted):
+        return 'quoted escapes'
+    if re.search(r'''["']''', visible):
+        return 'quoted scalars'
+    if '${{' in visible:
+        return 'expressions'
+    closed = False
+    for char in visible:
+        if char in ' \t':
+            continue
+        if closed:
+            return 'flow sequences'
+        if char == '[':
+            if sequence:
+                if sequence[-1] in ('value', 'closed'):
+                    return 'flow sequences'
+                sequence[-1] = 'value'
+            sequence.append('empty')
+        elif char == ']':
+            if not sequence:
+                return 'flow sequences'
+            if sequence.pop() == 'empty':
+                return 'empty collections'
+            if sequence:
+                sequence[-1] = 'closed'
+            else:
+                closed = True
+        elif char == ',':
+            if not sequence or sequence[-1] not in ('value', 'closed'):
+                return 'flow sequences'
+            sequence[-1] = 'comma'
+        else:
+            if not sequence or sequence[-1] == 'closed':
+                return 'flow sequences'
+            if sequence[-1] != 'value' and char in '|>%@`':
+                return 'flow sequences'
+            sequence[-1] = 'value'
+    return None
 
 
 def action_uses(sources: dict[str, str], *,
                 findings: list[str]) -> Iterator[tuple[str, int, str, str]]:
-    """Yield (file, line, reference, comment); append unsupported-key findings."""
+    """Whitelist workflow YAML, then yield plain block uses scalars for pinning."""
     for name, text in sources.items():
         scalar_depth = None
-        flow_depth = 0
+        sequence = []
+        sequence_start = None
+        refused_flow_depth = 0
         for number, line in enumerate(text.splitlines(), 1):
             if scalar_depth is not None:
                 if not line.strip() or _indent(line) > scalar_depth:
                     continue
                 scalar_depth = None
-            if not line.strip() or line.lstrip().startswith('#'):
+            if (not line.strip() and '\t' not in line) or line.lstrip().startswith('#'):
+                continue
+            if refused_flow_depth:
+                _, visible, _ = _action_yaml_visible(line)
+                refused_flow_depth = max(0, refused_flow_depth
+                                         + sum(1 if char in '{[' else -1
+                                               for char in visible if char in '{}[]'))
                 continue
             stripped = line.strip()
             step = re.match(r'-[ \t]+', stripped)
-            key_line = stripped[step.end():] if step else stripped
-            key = re.match(r"""(?:"([^"]+)"|'([^']+)'|([^\s:'"]+))[ \t]*:""", key_line)
-            key_name = next(group for group in key.groups() if group is not None) if key else ''
-            first = _key_value(key_line, key_name) if key else None
-            if first is not None and re.fullmatch(
-                    r'[|>](?:[+-][1-9]?|[1-9][+-]?)?(?:[ \t]+#[^\r\n]*)?[ \t]*', first):
-                # A compact "- run:" key is two columns deeper than the dash.
-                # As with _job_values, a scalar's indented text is not YAML keys.
+            key_line = stripped[step.end():] if step and not sequence else stripped
+            key = _ACTION_YAML_KEY.fullmatch(key_line) if not sequence else None
+            first = (key.group(2) or '').strip() if key else None
+            node = first if first is not None else key_line
+            code, visible, _ = _action_yaml_visible(node)
+            sequence_depth = len(sequence)
+            # Recover only the extent of a refused property-prefixed block,
+            # so an anchored script produces its anchor finding, not script
+            # uses findings. This never authorizes the property itself.
+            recovery = re.sub(r'^(?:[&*!][^ \t]+[ \t]*)+', '', code)
+            if not sequence and _ACTION_BLOCK_SCALAR.fullmatch(recovery):
                 scalar_depth = _indent(line) + (step.end() if step else 0)
-            collection = (flow_depth > 0 or key_line.startswith(('{', '['))
-                          or (first is not None and first.startswith(('{', '['))))
-            uses_keys = []
-            in_flow = flow_depth > 0
-            for token in _ACTION_YAML_TOKENS.finditer(key_line):
-                if token.lastgroup == 'uses':
-                    uses_keys.append(token.start())
-                    in_flow = in_flow or flow_depth > 0
-                elif token.lastgroup == 'flow' and collection:
-                    flow_depth = (flow_depth + 1 if token.group() in '{['
-                                  else max(0, flow_depth - 1))
-            value = _key_value(key_line, 'uses')
-            if uses_keys and (value is None or in_flow or len(uses_keys) != 1):
+            quoted_key = _ACTION_YAML_QUOTED.match(key_line)
+            if '\t' in re.match(r'[ \t]*', line).group() or (
+                    step and '\t' in step.group()):
+                unsupported = 'tab indentation'
+            elif re.match(r'(?:---|\.\.\.)(?:[ \t]|$)', stripped):
+                unsupported = 'document markers'
+            elif not sequence and quoted_key and key_line[quoted_key.end():].lstrip().startswith(':'):
+                unsupported = 'quoted keys'
+            elif not sequence and re.match(r'<<[ \t]*:', key_line):
+                unsupported = 'merge keys'
+            elif not sequence and not key and not step:
+                unsupported = (_ACTION_YAML_PROPERTIES.get(key_line[0])
+                               or 'block structure')
+            else:
+                unsupported = _action_yaml_value(node, whole_key=key is not None,
+                                                 sequence=sequence)
+                if unsupported is None and key and key.group(1) == 'uses' and (
+                        not code or _ACTION_BLOCK_SCALAR.fullmatch(code)
+                        or code.startswith(('{', '['))):
+                    unsupported = 'uses keys'
+            if sequence and not sequence_depth:
+                sequence_start = number, line
+            if unsupported is not None:
+                # The finding refuses the entire unsupported collection;
+                # its inner mapping lines cannot become accepted block keys.
+                if sequence_depth or recovery.startswith(('{', '[')):
+                    refused_flow_depth = max(0, sequence_depth
+                                             + sum(1 if char in '{[' else -1
+                                                   for char in visible if char in '{}[]'))
+                sequence.clear()
                 findings.append(
-                    f'{name}:{number}: unsupported uses shape {line.strip()!r}; '
-                    'use a block-style uses: scalar')
+                    f'{name}:{number}: unsupported YAML construct in a workflow ({unsupported}): '
+                    f'rewrite it in plain block style; {line.strip()!r}')
                 continue
-            if value is None:
+            if not key or key.group(1) != 'uses':
                 continue
             # Keep quotes separate from the trailing comment: a # inside a
             # quoted scalar is part of the reference, not a version comment.
             scalar = re.fullmatch(
                 r"""(?:"([^"]*)"|'([^']*)'|([^\s'"#]+))(?:[ \t]+(#[^\r\n]*))?[ \t]*""",
-                value)
+                first)
             reference = (next(group for group in scalar.groups()[:3] if group is not None)
-                         if scalar else value)
+                         if scalar else first)
             comment = (scalar.group(4) or '') if scalar else ''
             yield name, number, reference, comment
+        if sequence:
+            number, line = sequence_start
+            findings.append(
+                f'{name}:{number}: unsupported YAML construct in a workflow (flow sequences): '
+                f'rewrite it in plain block style; {line.strip()!r}')
 
 
 def action_pin_findings(sources: dict[str, str]) -> list[str]:
-    """Check uses scalars and refuse unsupported keys without a YAML dependency."""
+    """Refuse YAML outside the supported subset and check every uses scalar."""
     findings = []
     for name, number, reference, comment in action_uses(sources, findings=findings):
         if reference.startswith(ACTION_PIN_EXEMPT_PREFIXES):

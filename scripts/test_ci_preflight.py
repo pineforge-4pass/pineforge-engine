@@ -228,13 +228,16 @@ def routed_line(before, value):
 class WorkflowActionPins(unittest.TestCase):
     """Check the actual workflow and composite-action references."""
 
+    def action_sources(self):
+        paths = sorted(path for path in (ROOT / '.github/workflows').iterdir()
+                       if path.suffix in ('.yml', '.yaml'))
+        for name in ('action.yml', 'action.yaml'):
+            paths.extend(sorted((ROOT / '.github/actions').rglob(name)))
+        return {str(path.relative_to(ROOT)): path.read_text() for path in paths}
+
     def third_party_uses(self, sources=None):
         if sources is None:
-            paths = sorted(path for path in (ROOT / '.github/workflows').iterdir()
-                           if path.suffix in ('.yml', '.yaml'))
-            for name in ('action.yml', 'action.yaml'):
-                paths.extend(sorted((ROOT / '.github/actions').rglob(name)))
-            sources = {str(path.relative_to(ROOT)): path.read_text() for path in paths}
+            sources = self.action_sources()
         findings = []
         references = [(Path(name), number, reference, comment)
                       for name, number, reference, comment in
@@ -290,11 +293,27 @@ class WorkflowActionPins(unittest.TestCase):
         path = '.github/workflows/grammar.yml'
         text = ('- uses: actions/checkout@0123456789abcdef0123456789abcdef01234567 # v4.4.0\n'
                 '- {uses: actions/checkout@main}\n')
-        expected = (f"{path}:2: unsupported uses shape '- {{uses: actions/checkout@main}}'; "
-                    'use a block-style uses: scalar')
+        expected = (f'{path}:2: unsupported YAML construct in a workflow (flow mappings): '
+                    "rewrite it in plain block style; '- {uses: actions/checkout@main}'")
         with self.assertRaises(AssertionError) as failure:
             self.third_party_uses({path: text})
         self.assertIn(expected, str(failure.exception))
+
+    def test_every_real_action_source_has_zero_findings(self):
+        sources = self.action_sources()
+        self.assertTrue(any(name.startswith('.github/workflows/') for name in sources))
+        self.assertTrue(any(name.startswith('.github/actions/') for name in sources))
+        self.assertEqual(ci_preflight.action_pin_findings(sources), [])
+        # Keep the complete population and a valid pin while introducing a
+        # hidden key: zero findings must mean the grammar was checked too.
+        path = '.github/workflows/grammar-control.yml'
+        line = r'- "\u0075ses": actions/checkout@main'
+        changed = {**sources, path: (
+            '- uses: actions/checkout@0123456789abcdef0123456789abcdef01234567 # v4.4.0\n'
+            + line + '\n')}
+        self.assertEqual(ci_preflight.action_pin_findings(changed), [
+            f'{path}:2: unsupported YAML construct in a workflow (quoted keys): '
+            f'rewrite it in plain block style; {line!r}'])
 
 
 class WorkflowEventFleets(unittest.TestCase):
@@ -651,11 +670,12 @@ class ActionPins(unittest.TestCase):
                          [self.finding(self.ACTION, 5, reference)])
 
     @staticmethod
-    def unsupported_finding(path, line, text):
-        return (f'{path}:{line}: unsupported uses shape {text!r}; '
-                'use a block-style uses: scalar')
+    def unsupported_finding(path, line, text, construct='flow mappings'):
+        return (f'{path}:{line}: unsupported YAML construct in a workflow ({construct}): '
+                f'rewrite it in plain block style; {text!r}')
 
-    def assert_unsupported_step(self, step, *, composite=False, checker=None):
+    def assert_unsupported_step(self, step, *, composite=False, checker=None,
+                                construct='flow mappings'):
         if composite:
             original = (ROOT / self.ACTION).read_text()
             self.assertTrue(original.endswith('\n'))
@@ -668,7 +688,181 @@ class ActionPins(unittest.TestCase):
             self.assertNotEqual(text, original)
             number, path = 6, self.WORKFLOW
         self.assertEqual(self.pin_findings(text, composite=composite, checker=checker),
-                         [self.unsupported_finding(path, number, step)])
+                         [self.unsupported_finding(path, number, step, construct)])
+
+    def assert_yaml_refusals(self, text, rows):
+        # The public checker already exists on f4a03dd712: a red result
+        # is a behavioral mismatch, never a missing-helper/import failure.
+        for path in (self.WORKFLOW, self.ACTION):
+            with self.subTest(path=path):
+                expected = [self.unsupported_finding(path, number, line, construct)
+                            for number, construct, line in rows]
+                self.assertEqual(ci_preflight.action_pin_findings({path: text}), expected)
+
+    def test_escaped_quoted_keys_are_refused(self):
+        for line in (r'- "\u0075ses": actions/checkout@main',
+                     r'- "\x75ses": actions/checkout@main',
+                     r'- "\U00000075ses": actions/checkout@main'):
+            with self.subTest(line=line):
+                self.assert_yaml_refusals(line + '\n', [(1, 'quoted keys', line)])
+
+    def test_all_quoted_keys_are_refused(self):
+        for key in ('"uses"', "'uses'", '"steps"', "'permissions'"):
+            line = f'- {key}: actions/checkout@{self.SHA} # v4.4.0'
+            with self.subTest(key=key):
+                self.assert_yaml_refusals(line + '\n', [(1, 'quoted keys', line)])
+
+    def test_explicit_keys_are_refused(self):
+        text = '- ? uses\n  : actions/checkout@main\n'
+        self.assert_yaml_refusals(text, [
+            (1, 'explicit keys', '- ? uses'),
+            (2, 'explicit keys', ': actions/checkout@main')])
+
+    def test_anchors_are_refused_without_a_uses_key(self):
+        line = 'steps: &checkout'
+        self.assert_yaml_refusals(line + '\n', [(1, 'anchors', line)])
+
+    def test_aliases_are_refused_without_a_uses_key(self):
+        line = '- *checkout'
+        self.assert_yaml_refusals(line + '\n', [(1, 'aliases', line)])
+
+    def test_merge_keys_are_refused(self):
+        line = '<<: *checkout'
+        self.assert_yaml_refusals(line + '\n', [(1, 'merge keys', line)])
+
+    def test_tags_are_refused(self):
+        for tag in ('!!map', '!custom', '!<tag:yaml.org,2002:map>'):
+            line = 'steps: ' + tag
+            with self.subTest(tag=tag):
+                self.assert_yaml_refusals(line + '\n', [(1, 'tags', line)])
+
+    def test_anchored_multiline_mapping_is_refused(self):
+        text = ('steps:\n'
+                '  - &checkout {\n'
+                f'      uses: actions/checkout@{self.SHA} # v4.4.0\n'
+                '    }\n'
+                '  - *checkout\n')
+        self.assert_yaml_refusals(text, [
+            (2, 'anchors', '- &checkout {'),
+            (5, 'aliases', '- *checkout')])
+
+    def test_anchored_run_scalar_is_refused_without_scanning_its_body(self):
+        text = ("steps:\n  - run: &script |\n"
+                "      printf '%s\\n' '\n"
+                "      uses: actions/checkout@main\n"
+                "      '\n")
+        self.assert_yaml_refusals(text, [(2, 'anchors', '- run: &script |')])
+
+    def test_flow_mappings_without_uses_are_refused(self):
+        for line in ('env: {CHECKOUT: main}', '- {name: Checkout}', '- {}',
+                     'env: {} trailing', '- { }', 'labels: [{}]',
+                     'labels: [name: Checkout]'):
+            with self.subTest(line=line):
+                self.assert_yaml_refusals(line + '\n', [(1, 'flow mappings', line)])
+        self.assert_yaml_refusals('env: {\n  CHECKOUT: main\n}\n',
+                                 [(1, 'flow mappings', 'env: {')])
+
+    def test_empty_sequences_require_a_whole_plain_key_value(self):
+        for line in ('- []', 'labels: [[]]', 'labels: [] trailing'):
+            with self.subTest(line=line):
+                self.assert_yaml_refusals(line + '\n', [(1, 'empty collections', line)])
+
+    def test_properties_inside_flow_sequences_are_refused(self):
+        for value, construct in (('&runner linux', 'anchors'), ('*runner', 'aliases'),
+                                 ('!!str linux', 'tags'), ('? uses', 'explicit keys')):
+            line = 'runs-on: [' + value + ']'
+            with self.subTest(value=value):
+                self.assert_yaml_refusals(line + '\n', [(1, construct, line)])
+
+    def test_backslashes_in_yaml_quoted_values_are_refused(self):
+        for line in (r'name: "line\nbreak"', r"name: 'line\nbreak'",
+                     r'runs-on: ["self\u002dhosted", linux]'):
+            with self.subTest(line=line):
+                self.assert_yaml_refusals(line + '\n', [(1, 'quoted escapes', line)])
+
+    def test_quoted_values_must_end_on_their_line(self):
+        for line in ('name: "unfinished', "name: 'finished' trailing", 'labels: ["unfinished'):
+            with self.subTest(line=line):
+                self.assert_yaml_refusals(line + '\n', [(1, 'quoted scalars', line)])
+
+    def test_flow_sequence_boundaries_are_refused(self):
+        for line in ('labels: [linux][windows]', 'labels: [linux] [windows]',
+                     'labels: [linux] trailing', 'labels: [[linux] windows]',
+                     'labels: [linux,'):
+            with self.subTest(line=line):
+                self.assert_yaml_refusals(line + '\n', [(1, 'flow sequences', line)])
+
+    def test_tab_indentation_is_refused(self):
+        for prefix in ('\t', ' \t', '\t  '):
+            line = prefix + f'- uses: actions/checkout@{self.SHA} # v4.4.0'
+            with self.subTest(prefix=prefix):
+                self.assert_yaml_refusals(line + '\n',
+                                         [(1, 'tab indentation', line.strip())])
+        line = f'-\tuses: actions/checkout@{self.SHA} # v4.4.0'
+        self.assert_yaml_refusals(line + '\n', [(1, 'tab indentation', line)])
+        self.assert_yaml_refusals('\t\n', [(1, 'tab indentation', '')])
+
+    def test_workflow_document_markers_are_refused(self):
+        for marker in ('---', '...', '--- # another document', '... # end'):
+            text = 'name: Example\n' + marker + '\n'
+            with self.subTest(marker=marker):
+                self.assert_yaml_refusals(text, [(2, 'document markers', marker)])
+
+    def test_uses_requires_a_same_line_scalar(self):
+        for value in ('', '|', '>-', '{}', '[]', '[./local]'):
+            line = '- uses:' + (' ' + value if value else '')
+            with self.subTest(value=value):
+                self.assert_yaml_refusals(line + '\n', [(1, 'uses keys', line)])
+
+    def test_unrecognised_block_lines_are_refused(self):
+        line = '%YAML 1.2'
+        self.assert_yaml_refusals(line + '\n', [(1, 'block structure', line)])
+
+    def test_supported_yaml_values_and_collections_remain_accepted(self):
+        for value in ('{}', '{ }', '{ \t}', '[]', '[ ]', '[\t ]',
+                      '[linux, [windows, macos]]'):
+            with self.subTest(value=value):
+                self.assertEqual(ci_preflight.action_pin_findings(
+                    {self.WORKFLOW: 'options: ' + value + ' # supported value\n'}), [])
+        text = ('permissions: {} # no permissions\n'
+                'options: [] # no options\n'
+                'branches: [main]\n'
+                'runs-on: ["self-hosted", "pf-gcp-pr"]\n'
+                "cron: '30 1 * * *'\n"
+                "paths-ignore: ['.github/**']\n"
+                'shell: python3 {0}\n'
+                "run: printf '%s\\n' \"${NEXT}\" > VERSION\n"
+                'group: prefix-${{ github.workflow }}-${{ github.run_id }}\n'
+                "if: ${{ !cancelled() && contains('uses: & ! {', 'x') }}\n"
+                'labels: [linux,\n'
+                '  "self-hosted"]\n'
+                'steps:\n'
+                f'  - uses: "actions/checkout@{self.SHA}" # v4.4.0\n')
+        for newline in ('\n', '\r\n'):
+            with self.subTest(newline=newline):
+                sources = {self.WORKFLOW: text.replace('\n', newline)}
+                self.assertEqual(ci_preflight.action_pin_findings(sources), [])
+                changed = sources[self.WORKFLOW].replace(
+                    f'actions/checkout@{self.SHA}', 'actions/checkout@main', 1)
+                self.assertEqual(ci_preflight.action_pin_findings({self.WORKFLOW: changed}), [
+                    self.finding(self.WORKFLOW, 14, 'actions/checkout@main')])
+
+    def test_script_and_other_block_scalar_bodies_are_excluded(self):
+        for key in ('run', 'script', 'path', 'restore-keys'):
+            for indicator in ('|+', '|-', '>2-', '|2+', '>+2'):
+                with self.subTest(key=key, indicator=indicator):
+                    text = (f'with:\n  {key}: {indicator}\n'
+                            '    - "\\u0075ses": actions/checkout@main\n'
+                            '    ? uses\n'
+                            '    <<: *checkout\n'
+                            '    steps: &checkout {uses: actions/checkout@main}\n'
+                            '    ---\n'
+                            '    \t!!str uses: actions/checkout@main\n'
+                            '  next: value\n')
+                    self.assertEqual(ci_preflight.action_pin_findings({self.WORKFLOW: text}), [])
+                    text += '- uses: actions/upload-artifact@main\n'
+                    self.assertEqual(ci_preflight.action_pin_findings({self.WORKFLOW: text}), [
+                        self.finding(self.WORKFLOW, 10, 'actions/upload-artifact@main')])
 
     def test_flow_mapping_mutable_steps_are_refused(self):
         steps = (
@@ -690,7 +884,9 @@ class ActionPins(unittest.TestCase):
         for composite in (False, True):
             for step in steps:
                 with self.subTest(composite=composite, step=step):
-                    self.assert_unsupported_step(step, composite=composite)
+                    construct = ('flow mappings' if step.startswith('- {')
+                                 else 'inline mapping keys')
+                    self.assert_unsupported_step(step, composite=composite, construct=construct)
 
     def test_pinned_flow_mapping_is_refused_as_unsupported(self):
         step = f'- {{uses: actions/checkout@{self.SHA}}} # v4.4.0'
@@ -705,7 +901,7 @@ class ActionPins(unittest.TestCase):
                                 '- {\n          ' + line + '\n        }', 1)
         self.assertNotEqual(text, original)
         self.assertEqual(self.pin_findings(text),
-                         [self.unsupported_finding(self.WORKFLOW, 7, line)])
+                         [self.unsupported_finding(self.WORKFLOW, 6, '- {')])
 
     def test_flow_mapping_reusable_workflow_is_refused(self):
         line = 'call: {uses: example/shared/.github/workflows/build.yml@main}'
@@ -746,12 +942,9 @@ class ActionPins(unittest.TestCase):
         expected = [self.unsupported_finding(self.WORKFLOW, 6, step)]
         self.assertEqual(ci_preflight.action_pin_findings(sources), expected)
         source = inspect.getsource(ci_preflight.action_uses)
-        guard = (
-            '            if uses_keys and (value is None or in_flow or len(uses_keys) != 1):\n'
-            '                findings.append(\n'
-            "                    f'{name}:{number}: unsupported uses shape {line.strip()!r}; '\n"
-            "                    'use a block-style uses: scalar')\n"
-            '                continue\n')
+        start = source.index('            if unsupported is not None:\n')
+        end = source.index("            if not key or key.group(1) != 'uses':\n", start)
+        guard = source[start:end]
         self.assertEqual(source.count(guard), 1)
         mutant = source.replace(guard, '', 1)
         namespace = dict(ci_preflight.action_pin_findings.__globals__)
@@ -3351,6 +3544,19 @@ finally:
 
     def test_harmless_spellings_are_not_findings(self):
         original, others = self.ci_sources(), self.other_sources()
+
+        def quoted_key_findings(sources):
+            # These two existing spellings remain harmless to the runner and
+            # sizing policies, but the YAML whitelist now explicitly refuses
+            # quoted keys. Keep both inputs and require exactly that refusal.
+            findings = []
+            for index in (0, 5):
+                for number, line in enumerate(sources[index].splitlines(), 1):
+                    if re.match(r' *(?:"PF_CI_LABELS"|"runs-on"):', line):
+                        findings.append(ActionPins.unsupported_finding(
+                            CI_SOURCES[index], number, line.strip(), 'quoted keys'))
+            return findings
+
         verify = KERNEL_VERIFY
         edits = (
                 (6, 'kernel-only', '    steps:\n',
@@ -3396,12 +3602,14 @@ finally:
             with self.subTest(file=CI_SOURCES[index], job=job, after=after):
                 changed = original.copy()
                 changed[index] = in_job(changed[index], job, before, after)
-                self.assertEqual(ci_workflow_findings(*changed, others=others), [])
+                self.assertEqual(ci_workflow_findings(*changed, others=others),
+                                 quoted_key_findings(changed))
         changed = original.copy()
         for index, job, before, after in edits:
             if before in (changed[index] if job is None else _jobs(changed[index]).get(job, '')):
                 changed[index] = in_job(changed[index], job, before, after)
-        self.assertEqual(ci_workflow_findings(*changed, others=others), [])
+        self.assertEqual(ci_workflow_findings(*changed, others=others),
+                         quoted_key_findings(changed))
 
     def test_a_finding_is_reported_once(self):
         changed = self.ci_sources()
