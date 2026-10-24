@@ -56,6 +56,7 @@ def test_default_run_with_tmpfs_tmpdir(
     real_cdll = ctypes.CDLL
     probes = []
     memory_path, fallback_path = memory.resolve(), Path("/var/tmp").resolve()
+    spill_path = spill.resolve()
 
     class FilesystemInput:
         def __init__(self, *args, **kwargs):
@@ -69,6 +70,11 @@ def test_default_run_with_tmpfs_tmpdir(
             probes.append(path)
             in_memory = path == memory_path or memory_path in path.parents
             candidate = in_memory or path == fallback_path
+            if backing == "spill" and (path == spill_path or spill_path in path.parents):
+                # The fake engine accepts this explicit tmpfs/ramfs backing.
+                # Its directory must reach the ABI without a harness probe.
+                ctypes.cast(output, ctypes.POINTER(ctypes.c_long))[0] = kind
+                return 0
             if backing == "probe-error" and candidate:
                 ctypes.set_errno(5)  # EIO: uncertainty must never authorize the engine path.
                 return -1
@@ -106,16 +112,23 @@ def test_default_run_with_tmpfs_tmpdir(
         extra.append("--outputs")
     status, stdout, stderr, _ = ordinary.invoke(
         tmp_path, monkeypatch, library=library, extra=extra)
+    if backing == "spill":
+        assert (status, stderr) == (0, ""), stdout
+        assert artifacts and library.installed
+        assert library.scratch_directory == spill
+        assert all(path == spill for path in artifacts), artifacts
+        assert all(path != memory and memory not in path.parents for path in artifacts)
+        assert spill_path not in probes and fallback_path not in probes
+        assert memory_path not in probes
+        assert Path(library.installed[0]).parent == spill
+        assert json.loads(stdout)["summary"]["total_trades"] == 3
+        return
     assert probes, "the harness must reach the real filesystem-type probe"
     assert stderr == "", stdout
     if status == 0:
         assert backing not in {"none", "probe-error"}, stdout
         assert artifacts and library.installed
-        if backing == "spill":
-            # F-3: an explicit directory WINS; a run only succeeds when it is usable.
-            assert _kind(spill) not in MEMORY_FILESYSTEMS and os.access(
-                spill, os.W_OK | os.X_OK), stdout
-        selected = spill if backing == "spill" else Path("/var/tmp")
+        selected = Path("/var/tmp")
         assert all(path == selected for path in artifacts), artifacts
         assert all(path != memory and memory not in path.parents for path in artifacts)
         assert _kind(selected) not in MEMORY_FILESYSTEMS
@@ -129,9 +142,8 @@ def test_default_run_with_tmpfs_tmpdir(
         assert ("tmpfs" in failure["error"] or "ramfs" in failure["error"]
                 or "probe" in failure["error"])
         assert artifacts == [] and library.installed == []
-        if backing in {"available", "spill"}:
-            # F-3: with an explicit directory only that directory is a candidate.
-            candidates = [spill] if backing == "spill" else [Path("/var/tmp")]
+        if backing == "available":
+            candidates = [Path("/var/tmp")]
             for selected in candidates:
                 if selected.is_dir():
                     assert _kind(selected) in MEMORY_FILESYSTEMS or not os.access(

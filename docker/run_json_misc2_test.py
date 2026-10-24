@@ -95,21 +95,19 @@ def test_guard_rejects_uncatalogued_variable(monkeypatch, call):
         codes.assert_run_json_codes_catalogued()
 
 
-@pytest.mark.parametrize("backing,diagnostic", [
-    ("missing", "directory access failed"),
-    ("unwritable", "not writable/searchable"),
-    ("tmpfs", "tmpfs"),
-    ("ramfs", "ramfs"),
-])
-def test_explicit_spill_dir_is_not_replaced(tmp_path, monkeypatch, backing, diagnostic):
+@pytest.mark.parametrize("backing", ["usable", "missing", "unwritable", "tmpfs", "ramfs"])
+@pytest.mark.parametrize("spelling", ["absolute", "relative-pathlike"])
+def test_explicit_spill_dir_is_not_replaced(tmp_path, monkeypatch, backing, spelling):
     monkeypatch.delenv("PINEFORGE_RUN_JSON_PROFILE", raising=False)
+    monkeypatch.chdir(tmp_path)
     explicit = tmp_path / "caller-spill"
+    supplied = str(explicit) if spelling == "absolute" else Path("caller-spill")
     if backing != "missing":
         explicit.mkdir()
     fallback = tmp_path / "usable-fallback"
     fallback.mkdir()
     identity = explicit.stat() if backing != "missing" else None
-    opened, probes, artifacts = [], [], []
+    opened, probes, accessed, artifacts = [], [], [], []
     real_open, real_access = os.open, os.access
 
     def open_directory(path, flags, *args, **kwargs):
@@ -128,6 +126,7 @@ def test_explicit_spill_dir_is_not_replaced(tmp_path, monkeypatch, backing, diag
         return 0xEF53  # usable disk filesystem for the fallback and other probes
 
     def access(path, mode, *args, **kwargs):
+        accessed.append(os.fspath(path))
         if os.fspath(path) == str(explicit) and backing == "unwritable":
             return False
         if os.fspath(path) == "/var/tmp":
@@ -136,26 +135,51 @@ def test_explicit_spill_dir_is_not_replaced(tmp_path, monkeypatch, backing, diag
 
     def artifact(*args, **kwargs):
         artifacts.append((args, kwargs))
-        raise AssertionError("an invalid explicit spill directory created an artifact")
+        raise AssertionError("a named sink must reach the engine before any artifact")
+
+    class EngineLibrary(ordinary.SinkLibrary):
+        def __init__(self):
+            self.descriptors, self.run_called = [], False
+            super().__init__()
+            self.strategy_get_last_error = self.export("last_error", lambda state: (
+                b"engine spill refusal" if self.run_called else b""))
+            self.strategy_get_last_error_code = self.export("last_code", lambda state: (
+                b"report_sink_failed" if self.run_called else b""))
+            self.strategy_get_last_error_args = self.export("last_args", lambda state: (
+                b'{"reason":"scratch_io"}'))
+
+        def install(self, state, pointer):
+            descriptor = pointer._obj
+            path = os.fsdecode(descriptor.path)
+            self.descriptors.append((path, os.fsdecode(descriptor.scratch_dir)))
+            self.installed.append(path)
+            return 0
+
+        def run(self, *args):
+            # The fake engine owns this refusal; the harness must preserve it.
+            self.run_called = True
 
     monkeypatch.setattr(run_json.os, "open", open_directory)
     monkeypatch.setattr(run_json.os, "access", access)
     monkeypatch.setattr(run_json, "_filesystem_type", filesystem_type)
     monkeypatch.setattr(tempfile, "mkstemp", artifact)
     monkeypatch.setattr(tempfile, "TemporaryFile", artifact)
-    library = ordinary.SinkLibrary()
+    assert run_json._disk_report_directory(supplied) == str(explicit)
+    library = EngineLibrary()
+    sink_path = tmp_path / "caller.sink"
     status, stdout, stderr, _ = ordinary.invoke(
-        tmp_path, monkeypatch, library=library, extra=["--spill-dir", str(explicit)])
-    assert opened == [str(explicit)], "the explicit directory must be the only candidate"
-    assert bool(probes) == (backing != "missing")
+        tmp_path, monkeypatch, library=library,
+        extra=["--spill-dir", os.fspath(supplied), "--report-sink", str(sink_path)])
+    assert library.descriptors == [(str(sink_path), str(explicit))]
+    assert library.installed == [str(sink_path)] and library.run_called
+    assert opened == [] and probes == [] and accessed == []
     assert (status, stderr) == (1, ""), stdout
     assert len(stdout.splitlines()) == 1
     failure = json.loads(stdout)
-    assert failure["code"] == "run_request_invalid"
-    assert failure["args"] == {"option": "arguments"}
-    assert "--spill-dir" in failure["error"] and str(explicit) in failure["error"]
-    assert diagnostic in failure["error"]
-    assert artifacts == [] and library.installed == []
+    assert failure["code"] == "report_sink_failed"
+    assert failure["args"] == {"reason": "scratch_io"}
+    assert failure["error"] == "engine spill refusal" and "summary" not in failure
+    assert artifacts == [] and not sink_path.exists()
 
 
 @pytest.mark.parametrize("module,assignment", [

@@ -5913,18 +5913,16 @@ def _filesystem_type(fd, libc=None):
 
 
 def _disk_report_directory(directory=None):
-    """Select engine sink/scratch backing before creating any report artifact."""
+    """Pass explicit backing to the engine; select disk backing only by default."""
+    if directory is not None:
+        return os.path.abspath(os.fspath(directory))
     failures = []
     candidates = []
-    if directory is not None:
-        candidates.append((f"--spill-dir directory {os.fspath(directory)!r}",
-                           os.fspath(directory)))
-    else:
-        try:
-            candidates.append(("default temporary directory", tempfile.gettempdir()))
-        except OSError as error:
-            failures.append(f"TMPDIR default temporary directory is unavailable: {error}")
-        candidates.append(("/var/tmp", "/var/tmp"))
+    try:
+        candidates.append(("default temporary directory", tempfile.gettempdir()))
+    except OSError as error:
+        failures.append(f"TMPDIR default temporary directory is unavailable: {error}")
+    candidates.append(("/var/tmp", "/var/tmp"))
     checked = set()
     for label, candidate in candidates:
         candidate = os.path.abspath(candidate)
