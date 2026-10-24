@@ -89,7 +89,29 @@ int main() {
             require(late.set_report_mode_v1(ReportMode::SUMMARY_ONLY) == PF_REPORT_MODE_ACCEPTED,
                     "ordinary native SUMMARY_ONLY refused");
             install_control(late, selected, calls);
-            run(late, bars);
+            late.run(bars.data(), static_cast<int>(bars.size()));
+            if (late.last_run_status() != 0) {
+                // The X1 series fails this order closed at the earliest point
+                // (begin refuses report_mode_unsupported, or the capture-path
+                // backstop raises engine_invariant): the run fails with a
+                // typed code and no report is ever published.
+                const std::string code = pineforge::run_failure_code_of(late);
+                require(code == "report_mode_unsupported" || code == "engine_invariant",
+                        "late selected/observer SUMMARY_ONLY failed without the typed code: "
+                            + code + " / " + late.last_error());
+                Envelope refused;
+                const int status = late.fill_report_envelope_v1(&refused.value);
+                require(status != PF_REPORT_MODE_ACCEPTED || refused.value.metadata.complete == 0,
+                        "failed late capture was certified complete");
+                require(refused.value.report.equity_curve == nullptr
+                            && refused.value.report.trades == nullptr,
+                        "failed late capture published report arrays");
+                clear_control(late, selected);
+                continue;
+            }
+            // Without the X1 begin refusal the run completes and the envelope
+            // read refuses (below): either way no inexact summary is published.
+            require_completed_run(late, bars);
             require(late.open_lots() == 3, "late capture lacks its three in-window lots");
             // Removing pending configuration cannot erase the admitted capture.
             for (int read = 0; read < 2; ++read) {
