@@ -2,6 +2,7 @@
 """Exercise preflight failure propagation with real child processes."""
 import contextlib
 import io
+import inspect
 import json
 import os
 from pathlib import Path
@@ -155,7 +156,7 @@ jobs:
 
       - name: Mint org App token
         id: app
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1.12.0
         with:
           app-id: ${{ secrets.PINEFORGE_APP_ID }}
           private-key: ${{ secrets.PINEFORGE_APP_PRIVATE_KEY }}
@@ -164,7 +165,7 @@ jobs:
 
       - name: Checkout
         if: ${{ needs.authz.result == 'success' }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
 
@@ -222,6 +223,34 @@ def routed_line(before, value):
     if before.startswith("            runner: '") and value.startswith('['):
         value = "'" + value + "'"
     return before.split(': ', 1)[0] + ': ' + value + '\n'
+
+
+class WorkflowActionPins(unittest.TestCase):
+    """Check the actual workflow and composite-action references."""
+
+    def third_party_uses(self):
+        paths = sorted(path for path in (ROOT / '.github/workflows').iterdir()
+                       if path.suffix in ('.yml', '.yaml'))
+        for name in ('action.yml', 'action.yaml'):
+            paths.extend(sorted((ROOT / '.github/actions').rglob(name)))
+        references = []
+        for path in paths:
+            for number, line in enumerate(path.read_text().splitlines(), 1):
+                match = re.fullmatch(r'[ \t]*(?:-[ \t]+)?uses:[ \t]+(\S+)(.*)', line)
+                if match and not match[1].startswith('./'):
+                    references.append((path.relative_to(ROOT), number, match[1], match[2]))
+        self.assertTrue(references, 'no third-party action references were checked')
+        return references
+
+    def test_third_party_actions_use_full_commit_shas(self):
+        for path, number, reference, _ in self.third_party_uses():
+            with self.subTest(path=str(path), line=number):
+                self.assertRegex(reference, r'^.+@[0-9a-f]{40}$')
+
+    def test_third_party_actions_have_version_comments(self):
+        for path, number, _, comment in self.third_party_uses():
+            with self.subTest(path=str(path), line=number):
+                self.assertRegex(comment, r'^[ \t]+# v[0-9]+\.[0-9]+\.[0-9]+$')
 
 
 class WorkflowEventFleets(unittest.TestCase):
@@ -490,6 +519,176 @@ class WorkflowEventFleets(unittest.TestCase):
             {'pr.yml': caller, 'ci-post.yml': callee}))
 
 
+class ActionPins(unittest.TestCase):
+    SHA = '0123456789abcdef0123456789abcdef01234567'
+    WORKFLOW = '.github/workflows/pinlint.yml'
+    ACTION = '.github/actions/setup-live-curl/action.yml'
+
+    @staticmethod
+    def workflow(value, *, named=False):
+        steps = ('      - name: External action\n'
+                 f'        uses: {value}\n' if named else f'      - uses: {value}\n')
+        return ('on: workflow_dispatch\njobs:\n  inspect:\n'
+                '    runs-on: ["self-hosted","pf-gcp-post"]\n'
+                '    steps:\n' + steps)
+
+    @staticmethod
+    def finding(path, line, reference):
+        return (f'{path}:{line}: third-party uses {reference!r} must be pinned to a '
+                '40-character lowercase hex SHA with a trailing # v<version> comment')
+
+    def pin_findings(self, text, *, composite=False, checker=None):
+        # Use the existing contract entrypoint, so main fails for a missing
+        # finding, not an import error for a newly introduced helper.
+        sources = [(ROOT / path).read_text() for path in CI_SOURCES]
+        checker = ci_workflow_findings if checker is None else checker
+        if composite:
+            findings = checker(*sources, curl_action=text)
+            path = self.ACTION
+        else:
+            findings = checker(*sources, others={Path(self.WORKFLOW).name: text})
+            path = self.WORKFLOW
+        return [finding for finding in findings if finding.startswith(path + ':')]
+
+    def assert_refused(self, value, reference, *, named=False, checker=None):
+        self.assertEqual(
+            self.pin_findings(self.workflow(value, named=named), checker=checker),
+            [self.finding(self.WORKFLOW, 7 if named else 6, reference)])
+
+    def test_mutable_tag_is_refused(self):
+        self.assert_refused('actions/checkout@v4 # v4.2.2', 'actions/checkout@v4')
+
+    def test_branch_ref_is_refused(self):
+        self.assert_refused('actions/checkout@main # v4.2.2', 'actions/checkout@main',
+                            named=True)
+
+    def test_short_sha_is_refused(self):
+        self.assert_refused('actions/checkout@0123456 # v4.2.2', 'actions/checkout@0123456')
+
+    def test_sha_without_same_line_version_is_refused(self):
+        reference = 'actions/checkout@' + self.SHA
+        for value in (reference, reference + '\n        # v4.2.2'):
+            with self.subTest(value=value):
+                self.assert_refused(value, reference)
+
+    def test_malformed_version_comments_are_refused(self):
+        reference = 'actions/checkout@' + self.SHA
+        for comment in ('# 4.2.2', '# vfour', '# v4..2', '# v4.2.',
+                        '# v4.2.2 extra', '# v4.2.2-', '# v4.2.2+'):
+            with self.subTest(comment=comment):
+                self.assert_refused(reference + ' ' + comment, reference)
+
+    def test_uppercase_sha_is_refused(self):
+        reference = 'actions/checkout@' + self.SHA.upper()
+        self.assert_refused(reference + ' # v4.2.2', reference)
+
+    def test_quoted_mutable_values_are_refused(self):
+        for quote in ('"', "'"):
+            for named in (False, True):
+                with self.subTest(quote=quote, named=named):
+                    self.assert_refused(f'{quote}actions/checkout@v4{quote} # v4.2.2',
+                                        'actions/checkout@v4', named=named)
+
+    def test_reference_without_ref_is_refused(self):
+        self.assert_refused('actions/checkout # v4.2.2', 'actions/checkout')
+
+    def test_remote_reusable_workflow_is_refused(self):
+        reference = 'example/shared/.github/workflows/build.yml@main'
+        text = ('on: workflow_dispatch\njobs:\n  call:\n'
+                f'    uses: {reference} # v1.2.3\n')
+        self.assertEqual(self.pin_findings(text),
+                         [self.finding(self.WORKFLOW, 4, reference)])
+
+    def test_composite_step_is_refused(self):
+        reference = 'actions/cache/restore@v4'
+        text = ('name: Example\nruns:\n  using: composite\n  steps:\n'
+                f'    - uses: {reference} # v4.2.2\n')
+        self.assertEqual(self.pin_findings(text, composite=True),
+                         [self.finding(self.ACTION, 5, reference)])
+
+    def test_every_offending_line_is_reported(self):
+        text = self.workflow('actions/checkout@main # v4.2.2')
+        text += '      - uses: actions/upload-artifact@v4 # v4.6.2\n'
+        self.assertEqual(self.pin_findings(text), [
+            self.finding(self.WORKFLOW, 6, 'actions/checkout@main'),
+            self.finding(self.WORKFLOW, 7, 'actions/upload-artifact@v4'),
+        ])
+
+    def test_pinned_quoted_and_local_shapes_are_accepted(self):
+        for named in (False, True):
+            for quote in ('', '"', "'"):
+                for version in ('v4', 'v4.2.2', 'v1.12.0', 'v4.2.2-rc.1',
+                                'v4.2.2+build.7', 'v4.2.2-rc.1+build.7'):
+                    value = f'{quote}actions/checkout@{self.SHA}{quote} # {version}'
+                    with self.subTest(value=value, named=named):
+                        self.assertEqual(self.pin_findings(self.workflow(value, named=named)), [])
+                for reference in ('./.github/actions/x', './.github/workflows/y.yml',
+                                  'docker://alpine:3.20'):
+                    with self.subTest(reference=reference, quote=quote, named=named):
+                        value = quote + reference + quote
+                        text = self.workflow(value, named=named)
+                        text += '      # - uses: actions/checkout@main\n'
+                        self.assertEqual(self.pin_findings(text), [])
+
+    @staticmethod
+    def run_contract(tree):
+        output = io.StringIO()
+        with mock.patch.object(ci_preflight, 'ROOT', tree), \
+                mock.patch.object(sys, 'argv', ['ci_preflight.py', '--check-ci-workflow']), \
+                contextlib.redirect_stdout(output):
+            code = ci_preflight.main()
+        return code, output.getvalue()
+
+    def test_nested_action_yml_and_yaml_are_discovered(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tree = Path(directory)
+            # Copy data inputs only; the real, already imported checker runs.
+            shutil.copytree(ROOT / '.github/workflows', tree / '.github/workflows')
+            shutil.copytree(ROOT / '.github/actions', tree / '.github/actions')
+            (tree / 'tests').mkdir()
+            shutil.copyfile(ROOT / 'tests/CMakeLists.txt', tree / 'tests/CMakeLists.txt')
+            paths = ('.github/actions/nested/alpha/action.yml',
+                     '.github/actions/nested/beta/action.yaml')
+            reference = 'actions/cache/save@main'
+            for name in paths:
+                path = tree / name
+                path.parent.mkdir(parents=True)
+                path.write_text('name: Example\nruns:\n  using: composite\n  steps:\n'
+                                f'    - uses: {reference} # v4.2.2\n')
+            code, output = self.run_contract(tree)
+            self.assertEqual(
+                [line for line in output.splitlines()
+                 if any(line.startswith(name + ':') for name in paths)],
+                [self.finding(name, 5, reference) for name in paths])
+            self.assertEqual(code, 1, output)
+
+    def test_removing_pin_check_is_detected(self):
+        value, reference = 'actions/checkout@main # v4.2.2', 'actions/checkout@main'
+        self.assert_refused(value, reference)
+        source = inspect.getsource(ci_workflow_findings)
+        guard = '    findings += action_pin_findings(action_sources)\n'
+        self.assertEqual(source.count(guard), 1)
+        mutant = source.replace(guard, '', 1)
+        namespace = dict(ci_workflow_findings.__globals__)
+        exec(compile(mutant, '<action-pin-check-removed>', 'exec'), namespace)
+        # Delete the actual integration call, then apply the same regression
+        # assertion to that function. No checker result is stubbed.
+        with self.assertRaises(AssertionError):
+            self.assert_refused(value, reference, checker=namespace['ci_workflow_findings'])
+
+    # Expected to fail with the new check on base c82fd00e until the separate
+    # action-pins lane lands. Keep this a normal test, never an xfail or skip.
+    def test_real_tree_has_only_versioned_action_pins(self):
+        self.assert_refused('actions/checkout@main # v4.2.2', 'actions/checkout@main')
+        for tier in ('all', 'fast', 'github-only'):
+            plan = {entry[0]: entry for entry in check_commands(ROOT, tier=tier)}
+            self.assertEqual(plan['ci-workflow-contract'], (
+                'ci-workflow-contract',
+                [sys.executable, str(ROOT / 'scripts/ci_preflight.py'), '--check-ci-workflow']))
+        code, output = self.run_contract(ROOT)
+        self.assertEqual(code, 0, output)
+
+
 class PreflightFailures(unittest.TestCase):
     def ci_sources(self):
         return [(ROOT / path).read_text() for path in CI_SOURCES]
@@ -721,13 +920,13 @@ class PreflightFailures(unittest.TestCase):
             name = Path(CI_SOURCES[index]).name
             for after in ('', AUTHZ_REFUSE_STEP.replace('exit 1', 'true'),
                           AUTHZ_REFUSE_STEP.replace("!= 'success'", "== 'failure'"),
-                          AUTHZ_REFUSE_STEP + '      - uses: actions/checkout@v4\n'):
+                          AUTHZ_REFUSE_STEP + '      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0\n'):
                 with self.subTest(workflow=name, mutation=after):
                     findings = self.mutated_file_findings(index, job, AUTHZ_REFUSE_STEP, after)
                     self.assertIn(f'{name} {job} must always run and refuse authz first', findings)
             # Keeping the refusal after checkout cannot satisfy refuse-first.
             findings = self.mutated_file_findings(index, job, AUTHZ_REFUSE_STEP,
-                                                  '      - uses: actions/checkout@v4\n' + AUTHZ_REFUSE_STEP)
+                                                  '      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0\n' + AUTHZ_REFUSE_STEP)
             self.assertIn(f'{name} {job} must always run and refuse authz first', findings)
             for condition in ('${{ !cancelled() }}', '${{ success() }}'):
                 findings = self.mutated_file_findings(index, job, '    if: always()\n',
@@ -739,7 +938,7 @@ class PreflightFailures(unittest.TestCase):
         for index, job in ((0, 'preflight'), (0, 'build'), (6, 'build'), (6, 'build-macos'),
                            (6, 'sanitizers'), (6, 'kernel-only')):
             for after in ('', AUTHZ_REFUSE_STEP.replace('exit 1', 'true'),
-                          '      - uses: actions/checkout@v4\n' + AUTHZ_REFUSE_STEP):
+                          '      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0\n' + AUTHZ_REFUSE_STEP):
                 with self.subTest(job=job, mutation=after):
                     findings = self.mutated_file_findings(index, job, AUTHZ_REFUSE_STEP, after)
                     self.assertIn(f'{Path(CI_SOURCES[index]).name} job {job} with a status function must refuse authz first',
@@ -750,7 +949,7 @@ class PreflightFailures(unittest.TestCase):
         self.assertEqual(ci_workflow_findings(*original, others=self.other_sources()), [])
         body = _jobs(original[0])['preflight']
         steps = ci_preflight._steps(body)
-        checkout = ci_preflight._step_named(steps, '      - uses: actions/checkout@v4')
+        checkout = ci_preflight._step_named(steps, '      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0')
         verify = ci_preflight._step_named(steps, '      - name: Verify workflow wiring and source guards')
         guard = f'        if: {ci_preflight.AUTHZ_SUCCESS}\n'
         unnamed_run = '      - run: python3 scripts/ci_preflight.py --output-dir build-ci-preflight\n'
@@ -960,7 +1159,7 @@ class PreflightFailures(unittest.TestCase):
              '    env:\n      KEY: ${{ secrets.PINEFORGE_APP_PRIVATE_KEY }}\n'
              '    steps:\n', guard_finding),
             ('promote-guard', '    steps:\n',
-             '    steps:\n      - uses: actions/checkout@v4\n', guard_finding),
+             '    steps:\n      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0\n', guard_finding),
             ('promote-guard', '    steps:\n',
              '    if: false\n    steps:\n', guard_finding),
             ('promote-guard', '    steps:\n',
@@ -1659,7 +1858,7 @@ exit "$lookup_exit"
             self.assertIn('preflight must keep only checkout, linters, fast checks and diagnostics', findings)
         for step in (
                 '      - run: cmake --build build\n',
-                '      - uses: actions/setup-python@v5\n',
+                '      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0\n',
                 '      - run: python3 scripts/ci_verify.py release\n'):
             findings = self.mutated_file_findings(0, 'preflight', '    steps:\n',
                                                   '    steps:\n' + step)
@@ -1712,12 +1911,12 @@ exit "$lookup_exit"
 
     def test_ci_smoke_cache_refuses_losing_main_fallback_or_pr_writes(self):
         mutations = [
-            ('uses: actions/cache/restore@v4', 'uses: actions/cache@v4'),
+            ('uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830', 'uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830'),
             ('key: ccache-main-', 'key: ccache-pr-'),
             ('            ccache-main-', '            ccache-'),
             ('          restore-keys: |\n', '          restore-keys: |\n            ccache-pr-\n'),
             (ci_preflight.BUILD_CACHE_SAVE, '${{ success() }}'),
-            ('uses: actions/cache/save@v4', 'uses: actions/cache/restore@v4'),
+            ('uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830', 'uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830'),
             ('key: ${{ steps.ccache-restore.outputs.cache-primary-key }}', 'key: ccache-pr'),
         ]
         for index, job in ((0, 'build'), (6, 'build'), (6, 'build-macos')):
@@ -2380,8 +2579,8 @@ exit "$lookup_exit"
         # A step-level declaration also cannot stand in for the actual runner.
         before = f'    runs-on: {PR_RUNNER}\n'
         changed = in_job(workflows['ci.yml'], 'preflight', before, routed_line(before, RELEASE_RUNNER))
-        changed = in_job(changed, 'preflight', '      - uses: actions/checkout@v4\n',
-                         '      - uses: actions/checkout@v4\n        env:\n'
+        changed = in_job(changed, 'preflight', '      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0\n',
+                         '      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0\n        env:\n'
                          f"          PF_CI_LABELS: '{PR_RUNNER}'\n")
         findings = ci_preflight.runner_findings(dict(workflows, **{'ci.yml': changed}))
         self.assertIn(f'ci.yml job preflight must run on {PR_RUNNER}', findings)
@@ -2977,7 +3176,10 @@ finally:
                 (6, 'kernel-only', '      - name: Verify (kernel)\n',
                  '      - name: Verify (kernel), no longer --jobs 4\n'),
                 (6, 'kernel-only', KERNEL_VERIFY,
-                 'uses: nick-fields/retry@v3\n        with:\n          command: python3 scripts/ci_verify.py '
+                 # A wrapper action spelled the way the ORG-ACTIONPINS lint accepts: a (synthetic) 40-hex sha
+                 # and a version comment, so only the harmless spelling of the command is under test here.
+                 'uses: nick-fields/retry@0123456789abcdef0123456789abcdef01234567 # v3.2.0\n        with:\n'
+                 '          command: python3 scripts/ci_verify.py '
                  f'kernel --build-dir build-kernel --jobs {CORES} --ccache'),
                 (2, 'promote', f'    runs-on: {RELEASE_RUNNER}\n',
                  f'    runs-on: {RELEASE_RUNNER}  # isolated release\n'),
@@ -3871,7 +4073,7 @@ finally:
                 ('job permissions', '  probe:\n', '  probe:\n    permissions:\n      contents: write\n'),
                 ('runner', POST_RUNNER, RELEASE_RUNNER),
                 ('PR runner', POST_RUNNER, PR_RUNNER),
-                ('app action', 'actions/create-github-app-token@v1',
+                ('app action', 'actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547',
                  'actions/create-github-app-token@v2'),
                 ('app output', '        id: app', '        id: other'),
                 ('app id', 'secrets.PINEFORGE_APP_ID', 'secrets.OTHER_APP_ID'),
@@ -3916,7 +4118,7 @@ finally:
                    if name != 'release-ruleset-probe.yml'}
         self.assertIn(RULESETS_PROBE_FINDING, ci_workflow_findings(*original, others=missing))
         for before, after in (
-                ('actions/create-github-app-token@v1', 'actions/create-github-app-token@v2'),
+                ('actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547', 'actions/create-github-app-token@v2'),
                 ('secrets.PINEFORGE_APP_ID', 'secrets.OTHER_APP_ID'),
                 ('secrets.PINEFORGE_APP_PRIVATE_KEY', 'secrets.OTHER_PRIVATE_KEY'),
                 ('          repositories: pineforge-engine',
@@ -4743,8 +4945,8 @@ class PinnedLiveCurl(unittest.TestCase):
                     self.assertIn('--curl-dir "${{ steps.curl-deps.outputs.curl-dir }}"', line)
         action = (ROOT / '.github/actions/setup-live-curl/action.yml').read_text()
         self.assertIn('bash scripts/build_live_curl.sh --metadata', action)
-        self.assertIn('uses: actions/cache/restore@v4', action)
-        self.assertIn('uses: actions/cache/save@v4', action)
+        self.assertIn('uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830', action)
+        self.assertIn('uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830', action)
         self.assertIn('bash scripts/build_live_curl.sh build-native-deps 4', action)
 
     def test_shared_curl_pin_and_websocket_build_flags(self):
@@ -4782,7 +4984,7 @@ class IndependentNativeProfiles(unittest.TestCase):
             ('live-v2-${{ matrix.profile }}-', 'live-v2-shared-'),
             ('ccache --zero-stats', 'ccache --show-stats'),
             (NATIVE_CACHE_SAVE, "${{ success() }}"),
-            ('uses: actions/cache/save@v4', 'uses: actions/cache@v4'),
+            ('uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830', 'uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830'),
             ('name: ci-diagnostics-native-live-${{ matrix.profile }}',
              'name: ci-diagnostics-native-live'),
             ('--ccache ', '--ccache --test-timeout 900 '),
@@ -4826,8 +5028,8 @@ class IndependentNativeProfiles(unittest.TestCase):
         for before, after in (
                 ("if: ${{ inputs.cold-cache != 'true' }}", 'if: always()'),
                 (CURL_CACHE_SAVE, '${{ success() }}'),
-                ('uses: actions/cache/restore@v4', 'uses: actions/cache@v4'),
-                ('uses: actions/cache/save@v4', 'uses: actions/cache@v4'),
+                ('uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830', 'uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830'),
+                ('uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830', 'uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830'),
                 ('curl-${{ inputs.cache-namespace }}-', 'curl-shared-'),
                 ('${{ steps.dependencies.outputs.sha256 }}', 'unpinned'),
                 ('${{ steps.dependencies.outputs.identity }}', 'shared-toolchain'),
@@ -4873,9 +5075,9 @@ class IndependentNativeProfiles(unittest.TestCase):
         self.assertIn('if: ${{ !inputs.cold_cache }}', native)
         self.assertIn('cold-cache: ${{ inputs.cold_cache }}', native)
         self.assertIn("if: ${{ inputs.cold-cache != 'true' }}", action)
-        self.assertIn('uses: actions/cache/restore@v4', action)
-        self.assertIn('uses: actions/cache/save@v4', action)
-        self.assertNotIn('uses: actions/cache@v4', action)
+        self.assertIn('uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830', action)
+        self.assertIn('uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830', action)
+        self.assertNotIn('uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830', action)
 
 
 if __name__ == '__main__':

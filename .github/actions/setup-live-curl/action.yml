@@ -34,7 +34,7 @@ runs:
     - name: Restore pinned WebSocket-enabled libcurl
       id: curl-cache
       if: ${{ inputs.cold-cache != 'true' }}
-      uses: actions/cache/restore@v4
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: build-native-deps/curl-install
         key: curl-${{ inputs.cache-namespace }}-${{ steps.dependencies.outputs.version }}-${{ steps.dependencies.outputs.sha256 }}-${{ steps.dependencies.outputs.identity }}-${{ hashFiles('.github/actions/setup-live-curl/action.yml', 'scripts/build_live_curl.sh') }}-${{ runner.os }}-${{ runner.arch }}
@@ -48,7 +48,7 @@ runs:
     # job timeouts must not prevent a valid pinned installation from surviving.
     - name: Save pinned WebSocket-enabled libcurl
       if: ${{ inputs.cold-cache != 'true' && steps.curl-build.outcome == 'success' && steps.curl-cache.outputs.cache-hit != 'true' }}
-      uses: actions/cache/save@v4
+      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: build-native-deps/curl-install
         key: ${{ steps.curl-cache.outputs.cache-primary-key }}

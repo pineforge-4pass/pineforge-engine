@@ -94,7 +94,7 @@ jobs:
       # ci_release_gate.py pins that login for the one-bump phase-1 exemption.
       - name: Mint org App token
         id: app
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1.12.0
         with:
           app-id: ${{ secrets.PINEFORGE_APP_ID }}
           private-key: ${{ secrets.PINEFORGE_APP_PRIVATE_KEY }}
@@ -102,7 +102,7 @@ jobs:
           repositories: pineforge-engine
 
       - name: Checkout (full history)
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
           # App token bypasses the org ruleset (PR-required) for the bump push.
@@ -340,7 +340,7 @@ jobs:
 
       - name: Keep the dry run's run-failure catalog assets as a workflow artifact
         if: ${{ inputs.dry_run }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: run-failure-catalog-${{ steps.bump.outputs.tag }}
           path: ${{ steps.catalog.outputs.assets }}
@@ -381,7 +381,7 @@ jobs:
     steps:
       # A dry run has no tag yet: it builds the dispatched commit.
       - name: Checkout release commit
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ inputs.dry_run && github.sha || needs.release.outputs.sha }}
           fetch-depth: 0   # the version helper still observes the git sha
@@ -511,7 +511,7 @@ jobs:
 
       - name: Keep the dry run's tarball as a workflow artifact
         if: ${{ inputs.dry_run }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ steps.pack.outputs.tarball }}
           path: |
@@ -531,7 +531,7 @@ jobs:
     steps:
       - name: Mint org App token (hub dispatch)
         id: app
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1.12.0
         with:
           app-id: ${{ secrets.PINEFORGE_APP_ID }}
           private-key: ${{ secrets.PINEFORGE_APP_PRIVATE_KEY }}

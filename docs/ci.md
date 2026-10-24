@@ -94,6 +94,15 @@ and fails, never skips, without it.
 Actionlint only accepts declared custom self-hosted runner labels; preflight
 checks the declarations in `.github/actionlint.yaml`.
 
+ORG-ACTIONPINS is enforced by preflight's `ci-workflow-contract`: every
+third-party `uses:` in `.github/workflows/*.yml` (also `.yaml`) and nested
+`.github/actions/**/action.yml` or `action.yaml` must have the shape
+`uses: owner/action@<40 lowercase hex commit SHA> # v4.2.2`, with the version
+comment on the same line; prerelease and build suffixes are allowed. Local
+`./` actions and reusable workflows, and `docker://` images, are exempt.
+To bump an action, resolve the desired upstream version to its full commit
+SHA and update both the SHA and version comment together.
+
 This checks the CI/native workflow syntax, expressions and shell commands,
 source ABI/hash/schema guards, and the verifier's failure-handling tests. A
 failure fails the advisory aggregate `build` job and retains logs in
