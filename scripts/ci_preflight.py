@@ -1136,6 +1136,8 @@ RELEASE_BUMP_PUBLISH_STEP = r'''      - name: Write bumped VERSION, commit, tag,
 '''
 
 # This App installation has administration: read, which exposes bypass_actors.
+# The gate requires one active main pull_request ruleset whose own bypass list
+# is exactly Integration 4105147 with bypass_mode always.
 # The workflow's contents: write GITHUB_TOKEN cannot replace that credential.
 RELEASE_GATE_STEP = r'''      - name: Refuse unless pineforge/verify and pineforge/parity are green
         id: gate
@@ -1160,7 +1162,8 @@ def release_bump_workflow_findings(workflow: str) -> list[str]:
     gate = _step_named(steps, '      - name: Refuse unless pineforge/verify and pineforge/parity are green')
     if _code(gate) != _code(RELEASE_GATE_STEP):
         findings.append('release.yml must keep the unconditional release gate '
-                        'with its administration-readable App token')
+                        'with its administration-readable App token '
+                        'for the App-only main pull_request barrier')
     app = _step_named(steps, '      - name: Mint org App token')
     checkout = _step_named(steps, '      - name: Checkout (full history)')
     if (_step_values(app, 'id') != ['app']
@@ -1944,8 +1947,9 @@ def check_commands(source: Path, output: Path | None = None,
          [sys.executable, str(source / 'scripts/test_report_outputs_keys.py')]),
         ('release-version-tests',
          [sys.executable, str(source / 'scripts/test_release_version.py')]),
-        # Includes App-only main rulesets, permission docs, authenticated bump
-        # identity, gated parent and exact tree diff; binding in both fast/all.
+        # Includes the single App-only main pull_request barrier, complete
+        # Actions/ruleset pages, permission docs, bump identity/parent/tree diff.
+        # Binding in both fast/all.
         ('release-gate-tests', [sys.executable, str(source / 'scripts/test_ci_release_gate.py')]),
         # R5 run-failure codes: the catalog diff release.yml stamps is a tested
         # script, and the code tables of docs/pages/run-failure-codes.md are
