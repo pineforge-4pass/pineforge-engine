@@ -45,9 +45,21 @@
 // epoch, so this TU compiles against the unfixed head; there the default and
 // the swallowed row fail at c7e3cc256, the base-projection row answers the
 // hash, and the C entry points let the typed failure unwind out of C.
+//
+// Round 5: the Pine host's three readers of the fold, the twin row _pine_host
+// (its own executable, built with PINEFORGE_B1_PINE_HOST: see the Pine part
+// below). It is registered only when the source layer is built, so the four
+// rows above stay source-free and keep running in the kernel-only profile.
+//
+// Each twin row is its own executable (tests/cr150.d/s4e-fix-b1.cmake: a lane
+// file names every row after a source of its own), built from this body with
+// PINEFORGE_B1_TWIN_FLAG set to the flag the row stands for.
 #include <pineforge/pineforge.h>
 #include <pineforge/native_host.hpp>
 #include <pineforge/run_failure.hpp>
+#ifdef PINEFORGE_B1_PINE_HOST
+#include <pineforge/source/pine_strategy_host.hpp>
+#endif
 
 #include <algorithm>
 #include <cstddef>
@@ -212,7 +224,8 @@ NativeRunSpec spec() {
     return spec;
 }
 
-void check_failure_code(const FaultHost& host) {
+template <class Host>
+void check_failure_code(const Host& host) {
     const RunFailureValue failure = run_failure_value_of(host);
     if (failure.code != RunFailureCode::scratch_io_failed) {
         std::fprintf(stderr, "run failure %s: %s\n", run_failure_code_name(failure.code),
@@ -221,18 +234,187 @@ void check_failure_code(const FaultHost& host) {
     CHECK(failure.code == RunFailureCode::scratch_io_failed);
 }
 
+#ifdef PINEFORGE_B1_PINE_HOST
+// The Pine host's readers (src/source/pine_strategy_host.cpp): its projection
+// (broker_state_hash_projection, which folds when no script point is
+// latched), the continuation capture (capture_script_continuation_hash, at a
+// batch run's last bar without recording) and the scheduler's row
+// (scheduler_record_broker_hash, at every script bar with recording on). Each
+// one folds, then rethrows a carried failure before it answers, latches or
+// records the value.
+//
+// The run: four script bars on the chart timeframe. Bar 1 places kResidentRows
+// resting strategy.order limits (the book's resident bound, so the journal
+// has paged already); bar 2 places the rest, and the 4,097th live row is the
+// book's first spill: its files are the unlinked descriptors that appear
+// across bar 2's order calls. At the fault bar the script truncates them,
+// then:
+//   Projection  (bar 3) the script asks broker_state_hash() with no script
+//               point latched: the Pine projection folds. Fixed, the call
+//               throws; the script catches it, as a host may.
+//   Capture     (bar 4, the last) the script asks nothing; the last bar's
+//               capture is the first fold. Fixed, it throws before it
+//               latches, and the latch keeps what it held: nothing.
+//   Record      (bar 3; recording on) the scheduler's row is the first fold
+//               after the script. Fixed, it throws before the latch and the
+//               row, so the fault bar records no row.
+// Every case ends the run Failed with scratch_io_failed. Before round 4
+// (28a665131) the run failed too, at the native report point after the
+// script calculation (round 3), but each reader first answered the hash the
+// failed read cut short: the projection returned it, the capture latched it as
+// valid, the scheduler recorded it as the fault bar's row. So each case reads
+// what its reader answered, latched or recorded.
+//
+// Between the script and the capture on the last bar, the scheduler's range
+// end returns at once on a flat position and the adapter's close hook passes
+// its quiet gates (process_orders_on_close is off), so neither reads the book.
+enum class PineMode { Projection, Capture, Record };
+
+constexpr int kPineBars = 4;
+
+class PineFaultHost final : public source::PineStrategyHost {
+public:
+    explicit PineFaultHost(PineMode mode) : mode_(mode) {
+        set_syminfo_timezone("UTC+0");
+        set_syminfo_session("24x7");
+        set_syminfo_mintick(0.25);
+        source::PineStrategyConfig config;
+        config.initial_capital = 1.0e9;
+        config.default_qty_type = static_cast<int>(QtyType::FIXED);
+        config.default_qty_value = 1.0;
+        configure_pine_strategy(config);
+        set_broker_state_hash_recording(mode == PineMode::Record);
+    }
+
+    std::vector<int> spill_files;     // the descriptors the book's first spill opened
+    std::size_t book = 0;
+    bool injected = false;
+    bool asked = false;               // the fault bar's script reached its step
+    bool latched_at_fault = true;     // a script point was latched at the fault
+    std::size_t rows_at_fault = 0;    // Record: the rows recorded before the fault bar
+    bool hash_answered = false;       // Projection: the call returned after the fault
+    bool threw = false;               // Projection: it threw, and the script caught it
+
+    // What the readers left once the run is over.
+    bool latched_after_run() const { return last_script_continuation_valid_; }
+    std::size_t recorded_rows() const { return broker_state_hashes_.size(); }
+
+    void on_source_bar(const Bar&) override {
+        ++bar_;
+        if (bar_ == 1) {
+            for (std::size_t i = 0; i != kResidentRows; ++i) place(i);
+            return;
+        }
+        if (bar_ == 2) {
+            const std::vector<int> before = unlinked_descriptors();
+            for (std::size_t i = kResidentRows; i != kRows; ++i) place(i);
+            for (const int fd : unlinked_descriptors()) {
+                if (std::find(before.begin(), before.end(), fd) == before.end()) {
+                    spill_files.push_back(fd);
+                }
+            }
+            return;
+        }
+        if (bar_ != (mode_ == PineMode::Capture ? kPineBars : kPineBars - 1)) return;
+        book = native_working_requests().size();
+        if (spill_files.empty()) return;
+        latched_at_fault = last_script_continuation_valid_;
+        rows_at_fault = broker_state_hashes_.size();
+        for (const int fd : spill_files) {
+            if (::ftruncate(fd, 0) == 0) injected = true;
+        }
+        asked = true;
+        if (mode_ != PineMode::Projection) return;
+        try {
+            (void) broker_state_hash();
+            hash_answered = true;
+        } catch (...) {
+            threw = true;
+        }
+    }
+
+private:
+    void place(std::size_t i) {
+        strategy_order("rest" + std::to_string(i), true, 1.0,
+                       50.0 - static_cast<double>(i % 100) * 0.25);
+    }
+
+    PineMode mode_;
+    int bar_ = 0;
+};
+
+void run_pine(PineMode mode, const char* name) {
+    const int before = failures;
+    try {
+        PineFaultHost host(mode);
+        std::vector<Bar> bars;
+        const std::int64_t t0 = 1736121600000LL;
+        for (int index = 0; index != kPineBars; ++index) {
+            bars.push_back({100.0, 100.0, 100.0, 100.0, 1.0,
+                            t0 + static_cast<std::int64_t>(index) * 300000});
+        }
+        host.run(bars.data(), static_cast<int>(bars.size()));
+        // Setup: every order rests, the book spilled during bar 2's orders
+        // (if no descriptor appeared across them, the row fails here, and
+        // does not test a site it never reached), and the fault bar's script
+        // truncated the spill files with nothing latched.
+        CHECK(host.book == kRows);
+        CHECK(!host.spill_files.empty());
+        CHECK(host.injected);
+        CHECK(host.asked);
+        // The run ends with the typed failure, not status 0.
+        CHECK(host.native_state().kind == NativeLifecycleKind::Failed);
+        check_failure_code(host);
+        if (mode == PineMode::Projection) {
+            // The projection folded (nothing latched) and never answered.
+            CHECK(!host.latched_at_fault);
+            CHECK(host.threw);
+            CHECK(!host.hash_answered);
+        } else if (mode == PineMode::Capture) {
+            // The capture threw before its latch: the latch holds what it held.
+            CHECK(!host.latched_at_fault);
+            CHECK(!host.latched_after_run());
+        } else {
+            // Rows were recorded before the fault; the fault bar recorded none.
+            CHECK(host.rows_at_fault > 0);
+            CHECK(host.recorded_rows() == host.rows_at_fault);
+        }
+    } catch (const std::exception& error) {
+        ++failures;
+        std::fprintf(stderr, "pine host %s: %s\n", name, error.what());
+    }
+    if (failures != before) std::fprintf(stderr, "pine host %s: red\n", name);
+}
+#endif
+
 }  // namespace
 
 int main(int argc, char** argv) {
+#ifdef PINEFORGE_B1_TWIN_FLAG
+    const char* const flag = PINEFORGE_B1_TWIN_FLAG;
+    (void) argc;
+    (void) argv;
+#else
+    const char* const flag = argc > 1 ? argv[1] : "";
+#endif
+#ifdef PINEFORGE_B1_PINE_HOST
+    (void) flag;
+    run_pine(PineMode::Projection, "projection");
+    run_pine(PineMode::Capture, "capture");
+    run_pine(PineMode::Record, "record");
+    std::printf("test_broker_state_hash_spilled_read_failure_pine_host: %d checks, %d failures\n",
+                checks, failures);
+    return failures == 0 ? 0 : 1;
+#else
     Mode mode = Mode::Hash;
     const char* row = "";
-    if (argc > 1 && std::strcmp(argv[1], "--swallowed") == 0) {
+    if (std::strcmp(flag, "--swallowed") == 0) {
         mode = Mode::Swallowed;
         row = " --swallowed";
-    } else if (argc > 1 && std::strcmp(argv[1], "--base-projection") == 0) {
+    } else if (std::strcmp(flag, "--base-projection") == 0) {
         mode = Mode::BaseProjection;
         row = " --base-projection";
-    } else if (argc > 1 && std::strcmp(argv[1], "--c-entry") == 0) {
+    } else if (std::strcmp(flag, "--c-entry") == 0) {
         mode = Mode::CEntry;
         row = " --c-entry";
     }
@@ -291,4 +473,5 @@ int main(int argc, char** argv) {
     std::printf("test_broker_state_hash_spilled_read_failure%s: %d checks, %d failures\n",
                 row, checks, failures);
     return failures == 0 ? 0 : 1;
+#endif
 }

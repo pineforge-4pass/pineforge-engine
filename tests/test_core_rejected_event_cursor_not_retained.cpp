@@ -260,7 +260,16 @@ void refused_cursors_are_not_read_after_the_call(bool poison) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    const bool poisoned = argc > 1 && std::strcmp(argv[1], "--poisoned") == 0;
+    // The twin row _poisoned is its own executable, built from this body with
+    // PINEFORGE_B1_TWIN_FLAG (tests/cr150.d/s4e-fix-b1.cmake).
+#ifdef PINEFORGE_B1_TWIN_FLAG
+    const char* const flag = PINEFORGE_B1_TWIN_FLAG;
+    (void) argc;
+    (void) argv;
+#else
+    const char* const flag = argc > 1 ? argv[1] : "";
+#endif
+    const bool poisoned = std::strcmp(flag, "--poisoned") == 0;
     try {
         refused_cursors_are_not_read_after_the_call(poisoned);
     } catch (const std::exception& error) {

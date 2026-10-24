@@ -1270,41 +1270,6 @@ list(APPEND TEST_SOURCES test_adapter_quiet_bar)
 list(APPEND TEST_SOURCES test_native_match_rescan_scaling)
 list(APPEND TEST_SOURCES test_native_match_row_reuse)
 list(APPEND TEST_SOURCES test_native_match_hash_witness)
-# 1.7.0 review, lane b1: the matcher over a book past its resident bound
-# reads no spilled row through a saved pointer (B1-01; its twin row
-# test_native_match_spilled_book_snapshot_spilled_only runs the spilled book
-# alone, and the sanitizers profile runs both under AddressSanitizer), a
-# failed spilled read inside the noexcept continuation hash ends the run with
-# scratch_io_failed instead of std::terminate (B1-04), and a winner's lookup
-# walks no queue steps however large the book (B1-05). Source-free.
-list(APPEND TEST_SOURCES test_native_match_spilled_book_snapshot)
-list(APPEND TEST_SOURCES test_continuation_hash_spilled_read_failure)
-list(APPEND TEST_SOURCES test_native_match_winner_cost_flat)
-# Lane b1, B1-02: a close bound to external openings keeps them when its book
-# row spills and when its accepted event is paged. Core only, source-free.
-list(APPEND TEST_SOURCES test_core_external_openings_survive_spill)
-# Lane b1, B1-03 (retirement half): a journal retirement whose codec erase
-# fails leaves the window and retired_through as they were. Core only.
-list(APPEND TEST_SOURCES test_core_codec_retire_failure_is_atomic)
-# Lane b1, round 3 (argon F-01..F-04, B1-03 option d): a spilled NetOfSiblings
-# close is held across its sibling walk (F-01; twin row _spilled_only, the
-# sanitizers profile's AddressSanitizer row); visit_group_recipients copies the
-# applied event before a visitor reads the paged journal (F-02); a failed
-# spilled read under broker_state_hash() and at a host-recorded report point
-# ends the run with scratch_io_failed (F-03; twin row _swallowed); a refused
-# request's external openings reload from a page as stored (F-04); with a
-# journal codec bound the plan-form execution is refused, typed (B1-03 (d)).
-list(APPEND TEST_SOURCES test_native_match_spilled_net_of_siblings_close)
-list(APPEND TEST_SOURCES test_core_visit_group_recipients_visitor_reads_paged_journal)
-list(APPEND TEST_SOURCES test_broker_state_hash_spilled_read_failure)
-list(APPEND TEST_SOURCES test_core_rejected_external_openings_page_reload)
-list(APPEND TEST_SOURCES test_core_codec_plan_execution_refused)
-# Lane b1, round 4 (verifier N-01): a refused request's external openings are
-# copied when its event is built, so no page spill reads the caller's
-# call-local cursor after the call (twin row _poisoned: the same run with the
-# cursor kept but unreadable, red on any build; this row frees it, the
-# sanitizers profile's AddressSanitizer control).
-list(APPEND TEST_SOURCES test_core_rejected_event_cursor_not_retained)
 # R5 PERF-K24 (K2): a retained lower feed hands each script bar its sub-bars
 # by binary search, so a lower-timeframe run stays linear in its length; the
 # values the selection feeds are pinned. Source-free, so it also runs in the
@@ -3734,26 +3699,6 @@ list(APPEND TEST_SOURCES test_native_c_host_report_failure)
 foreach(test_name ${TEST_SOURCES})
     pineforge_add_unit_test(${test_name})
 endforeach()
-
-# 1.7.0 review B1-01: the spilled book alone, from the same binary (the
-# sanitizers profile's AddressSanitizer row for the freed-row read).
-pineforge_add_twin_test(test_native_match_spilled_book_snapshot_spilled_only
-    test_native_match_spilled_book_snapshot --spilled-only)
-# Lane b1 round 3, F-01: the spilled NetOfSiblings close alone (the sanitizers
-# profile's AddressSanitizer row); F-03: a host that catches the hash's throw.
-pineforge_add_twin_test(test_native_match_spilled_net_of_siblings_close_spilled_only
-    test_native_match_spilled_net_of_siblings_close --spilled-only)
-pineforge_add_twin_test(test_broker_state_hash_spilled_read_failure_swallowed
-    test_broker_state_hash_spilled_read_failure --swallowed)
-# Lane b1 round 4, F-03: the base engine's projection, and the two C entry
-# points asked after the run (no exception through C; the typed failure).
-pineforge_add_twin_test(test_broker_state_hash_spilled_read_failure_base_projection
-    test_broker_state_hash_spilled_read_failure --base-projection)
-pineforge_add_twin_test(test_broker_state_hash_spilled_read_failure_c_entry
-    test_broker_state_hash_spilled_read_failure --c-entry)
-# Lane b1 round 4, N-01: refused cursors kept but unreadable after the call.
-pineforge_add_twin_test(test_core_rejected_event_cursor_not_retained_poisoned
-    test_core_rejected_event_cursor_not_retained --poisoned)
 
 # EN-134: each public C ABI fault run is also addressable for red-before and
 # mutant checks. The aggregate and these rows run in the kernel-only profile.
