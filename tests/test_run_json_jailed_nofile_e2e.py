@@ -612,8 +612,7 @@ def test_d_real_jailed_ordinary_file_arena_refuses_without_caller_jailed_flag(tm
                                      tracer=tracer)
         failure = _failure(refused, "report_sink_failed", {"reason": "arena_backing"})
         assert census == {"cwd": [], "TMPDIR": []}, census
-        if tracer:
-            _assert_no_scratch_opens(refused.stderr, library, tape)
+        _assert_no_scratch_opens(refused.stderr, library, tape)
         print(f"CR267 CHECK (d) PASS: ordinary-file fd 5; no caller jailed flag; "
               f"exit=1 code={failure['code']} args={failure['args']} "
               f"reason={failure['reason']}; no report body/trades; "
@@ -629,8 +628,7 @@ def test_e_real_jailed_write_sealed_arena_refuses_before_execution_without_calle
                                      arena="write_sealed_memfd", tracer=tracer)
         failure = _failure(refused, "report_sink_failed", {"reason": "arena_backing"})
         assert census == {"cwd": [], "TMPDIR": []}, census
-        if tracer:
-            _assert_no_scratch_opens(refused.stderr, library, tape)
+        _assert_no_scratch_opens(refused.stderr, library, tape)
         print(f"CR267 CHECK (e) PASS: WRITE-sealed memfd 5; no caller jailed flag; "
               f"exit=1 code={failure['code']} args={failure['args']} "
               f"reason={failure['reason']}; no report body/trades; "
