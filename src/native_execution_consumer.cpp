@@ -3008,12 +3008,12 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
                RunFailureCode::symbol_metadata_rejected, {{"field", "timezone"}});
         return false;
     }
-    // Capture without trade rows cannot supply a complete v1 report. Check
-    // the envelope mode before reset/admission and the first host callback.
-    if (engine.report_mode_ == ReportMode::SUMMARY_ONLY
+    // Capture needs full trade/equity rows or a sink. Check both mode settings
+    // before reset/admission and the first host callback.
+    if ((engine.report_mode_ == ReportMode::SUMMARY_ONLY
+         || engine.pending_equity_report_mode_ == ReportMode::SUMMARY_ONLY)
         && !engine.report_sink_state_.enabled
-        && (selected_epoch_.observer_registered || selected_epoch_.window_configured
-            || selected_epoch_.admitted_selected)) {
+        && (selected_epoch_.observer_registered || selected_epoch_.window_configured)) {
         fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Begin});
         render(engine, "unsupported report mode: SUMMARY_ONLY "
                        "(no pineforge-report/v1 provider bridge for this host)",
