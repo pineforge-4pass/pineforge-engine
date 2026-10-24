@@ -32,6 +32,18 @@ void* operator new(std::size_t size) {
     throw std::bad_alloc();
 }
 void* operator new[](std::size_t size) { return ::operator new(size); }
+// The engine allocates its scratch blocks with the nothrow forms
+// (scratch_store_impl.hpp, command_scratch_cache.cpp). Replace them with the
+// same malloc/free pair: a replaced delete over a block from the sanitizer's own
+// nothrow new is an alloc-dealloc mismatch, and the census would miss the block.
+void* operator new(std::size_t size, const std::nothrow_t&) noexcept {
+    try { return ::operator new(size); } catch (...) { return nullptr; }
+}
+void* operator new[](std::size_t size, const std::nothrow_t&) noexcept {
+    try { return ::operator new(size); } catch (...) { return nullptr; }
+}
+void operator delete(void* ptr, const std::nothrow_t&) noexcept { std::free(ptr); }
+void operator delete[](void* ptr, const std::nothrow_t&) noexcept { std::free(ptr); }
 void operator delete(void* ptr) noexcept { std::free(ptr); }
 void operator delete[](void* ptr) noexcept { std::free(ptr); }
 void operator delete(void* ptr, std::size_t) noexcept { std::free(ptr); }
