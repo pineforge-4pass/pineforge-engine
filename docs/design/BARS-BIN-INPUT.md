@@ -202,8 +202,8 @@ Selected-window selection includes a report policy, any window option or
 `--validate-window-only` (`_selected_requested` docker/run_json.py:4460).
 The refusals above use the ordinary request code, not a window-specific
 code (`_request_invalid` docker/run_json.py:4229). The catalog names
-`run_request_invalid` docker/run_failure_codes.json:1213 and includes the
-option `ohlcv_bin` docker/run_failure_codes.json:1238.
+`run_request_invalid` docker/run_failure_codes.json:1231 and includes the
+option `ohlcv_bin` docker/run_failure_codes.json:1256.
 These request refusals exit 1 and emit the failure JSON line on stdout
 (`exit_status` docker/run_json.py:4229; `write_failure`
 docker/run_json.py:2350).
@@ -221,11 +221,11 @@ Read-only searches covered `docker/`, `scripts/`, `runner/` and repository
 filenames/release notes; `campaign/` and `cloudrun/` are absent. The local
 backtest entry is `main` docker/run_json.py:5086; the catalog itself
 identifies the optimizer-only refusal separately (`description`
-docker/run_failure_codes.json:2002). Neither establishes the production HPO
+docker/run_failure_codes.json:2020). Neither establishes the production HPO
 runner's input support.
 
 Check the separate **pineforge-hpo** repository named by this repository's
-release notes (`HPO` CHANGELOG.md:96): its production runner's accepted
+release notes (`HPO` CHANGELOG.md:172): its production runner's accepted
 arguments, bar loader, and shared/per-trial `bars.csv` preparation must be
 read to establish whether it can consume these binaries or forward
 `--ohlcv-bin` and `--symbol-feeds`. Its deployed worker/image revision also
@@ -333,8 +333,8 @@ Failure JSON uses `engine`, `error`, `code`, `args` (`doc`
 docker/run_json.py:2306; `code` docker/run_json.py:2309; `args`
 docker/run_json.py:2310). The catalog entries are `chart_bars_unreadable`
 docker/run_failure_codes.json:60, `symbol_feeds_refused`
-docker/run_failure_codes.json:1638 and `run_request_invalid`
-docker/run_failure_codes.json:1213. Shared binary-reader helpers additionally
+docker/run_failure_codes.json:1656 and `run_request_invalid`
+docker/run_failure_codes.json:1231. Shared binary-reader helpers additionally
 refuse malformed file `size`, metadata/digests as `sidecar`, and a bad feed
 companion as `close_file` (`bar_count` docker/pf_bars.py:101;
 `check_sidecar` docker/pf_bars.py:137; `check_close_size`
@@ -405,8 +405,8 @@ selected-window `.bin` reader lands.
 | Always emits `capabilities.selected_window_bars_bin_version = 0`, including when the borrowed runtime export is absent. | `selected_window_bars_bin_version` docker/run_json.py:4728; `selected_window_bars_bin_version` tests/test_run_json_bin.py:460 |
 
 Version/info surfaces are separate: the C API exposes `pf_version_get`
-include/pineforge/pineforge.h:1730 and `pf_version_string`
-include/pineforge/pineforge.h:1744. The runner's `engine_version`
+include/pineforge/pineforge.h:1740 and `pf_version_string`
+include/pineforge/pineforge.h:1754. The runner's `engine_version`
 docker/run_json.py:2559 collects `version_string`, `major`, `minor`, `patch`,
 `commit_sha`; none of those fields is the binary-input feature indicator
 (`eng` docker/run_json.py:2562; `eng` docker/run_json.py:2573).

@@ -152,12 +152,12 @@ overrides or imported libraries, its receipt must bind those inputs too.
 
 The carried declaration fields are visible in `PineStrategyConfig` at
 `include/pineforge/source/pine_adapter.hpp:77`. Their `project` projection starts at
-`src/source/pine_adapter.cpp:2888`. The relevant rules are:
+`src/source/pine_adapter.cpp:2900`. The relevant rules are:
 
 | Declaration / native fact | Sizing consequence and evidence |
 | --- | --- |
-| pyramiding | Source entry admission policy, including pending/same-point rules. The optional generic cap is `max_open_lots` at `include/pineforge/native_run_spec.hpp:664`; the Pine projection deliberately leaves it unset (the `max_open_lots` setting spelling is at `src/source/pine_adapter.cpp:2807`). Do not assume this caps strategy.order or use it as an unconditional H. |
-| calc_on_order_fills | Extra source callbacks. The adapter passes its 1<<20 guard `kCoofLoopGuard` through the native cadence at `src/source/pine_adapter.cpp:2988`; the `kCoofLoopGuard` literal is declared at `include/pineforge/source/pine_adapter.hpp:75`. The native point budget is a callback bound, not a total fill bound. |
+| pyramiding | Source entry admission policy, including pending/same-point rules. The optional generic cap is `max_open_lots` at `include/pineforge/native_run_spec.hpp:664`; the Pine projection deliberately leaves it unset (the `max_open_lots` setting spelling is at `src/source/pine_adapter.cpp:2819`). Do not assume this caps strategy.order or use it as an unconditional H. |
+| calc_on_order_fills | Extra source callbacks. The adapter passes its 1<<20 guard `kCoofLoopGuard` through the native cadence at `src/source/pine_adapter.cpp:3000`; the `kCoofLoopGuard` literal is declared at `include/pineforge/source/pine_adapter.hpp:75`. The native point budget is a callback bound, not a total fill bound. |
 | max_recalculations_per_point | Further executions still apply after callbacks stop; see the cadence comment and `max_recalculations_per_point` declaration at `include/pineforge/native_run_spec.hpp:686-695`. The actual counter check is `src/native_execution_consumer.cpp:7765`. |
 | first-open COOF chain | A second source-side guard exists at `src/source/pine_scheduler_native.cpp:888`. Count this source path; a native budget of 8 is not Pine's bound. |
 | process_orders_on_close | Adds a matching opportunity after calculation; projection at `src/source/pine_adapter.cpp:2823`. It does not impose an order/trade count. |
@@ -344,8 +344,8 @@ indexPeak(k) = 24 * slots(k)                       # k > 32
 | Consumed partial-cycle data | (41+2*L)*Q | `include/pineforge/source/pine_adapter.hpp:2727`; joined key at `src/source/pine_adapter.cpp:25357` |
 | Consumed partial-cycle index | indexPeak(Q) | `include/pineforge/detail/id_pair_store.hpp:573` |
 | Ordered consumed-cycle fold | 136*leaves + 2088*branches + 2096*savedPath | `include/pineforge/detail/id_pair_ordered_fold.hpp:161`, `:165`, `:172`, size assertion for `Leaf`, `Branch` and `Snapshot` at `:183` |
-| Successor-root rows | 16*R | `src/native_order.cpp:7984`, row assertion for `Row` at `:7989`, 64-row tail bound `kTailRows` at `:7990` |
-| Frozen external openings | **0 in this certified profile** | Stock source builds owned vectors at `src/source/pine_adapter.cpp:6983`, `:6990`, `:9669`; generic external owners are excluded below |
+| Successor-root rows | 16*R | `src/native_order.cpp:7984`, row assertion for `Row` at `:8264`, 64-row tail bound `kTailRows` at `:8269` |
+| Frozen external openings | **0 in this certified profile** | Stock source builds owned vectors at `src/source/pine_adapter.cpp:6983`, `:6995`, `:9669`; generic external owners are excluded below |
 
 The AVL node is seven uint64 words = 56 bytes, then its value and exact key
 bytes. CohortFacts::Record is handle, cycle, origin_count, origin_digest and
@@ -373,7 +373,7 @@ exit_time (8), qty (8), entry_incarnation (8), side (1), margin flag (1)
 and ID length (4), after the ID bytes. This is not sizeof(Row).
 
 Successor rows are two uint64 values. The WorkingRequestCore method `index_committed`
-defined at `src/native_order.cpp:2991` omits kept-handle replacements and appends a
+defined at `src/native_order.cpp:3243` omits kept-handle replacements and appends a
 root only when a newly issued definition has one. The 64-row RAM tail makes
 charging every issued row conservative. Partial closes create one trade
 row per affected lot: `src/engine_execution.cpp:1241`. Bracket definitions
@@ -554,7 +554,7 @@ non-command certificates exactly.
 
 These formulas apply to the EngineRecorded streamed invocation. The
 selected recorder appends its anchor and selected observations in one
-writer (`equity_scratch` append at `src/engine_report.cpp:1206`), and capture transfers that writer as `metric_curve`
+writer (`equity_scratch` append at `src/engine_report.cpp:1215`), and capture transfers that writer as `metric_curve`
 instead of copying its prefix (`src/native_execution_consumer.cpp:12915`).
 HostRecorded array presentation and a second full curve are outside this
 profile. Adding another persistent scratch user requires another term and
@@ -634,14 +634,14 @@ or trace calls made inside an unknown loop.
 
 Safe signed JSON integers use <=17 characters, hash64 is 18 quoted
 characters, and f64 conservatively uses <=64 characters: the formatter
-`f64` at `src/report_sink_writer.cpp:162` builds scientific output with a fixed
+`f64` at `src/report_sink_writer.cpp:285` builds scientific output with a fixed
 buffer then performs bounded exponent relayout. Each input string byte
 becomes at most six JSON bytes, plus two quotes; see
 `src/report_sink_writer.cpp:207`. Counting delimiters and the LF gives:
 
 | Tag | Maximum line bytes, before taking the hard ceiling | Builder |
 | --- | --- | --- |
-| E | 154 | `src/report_sink_writer.cpp:379` |
+| E | 154 | `src/report_sink_writer.cpp:503` |
 | T | 675 + 12*L + 6*commentBytes | `src/report_sink_writer.cpp:398` |
 | O | 60 + 65*seriesSlots | `src/report_sink_writer.cpp:603` |
 | V | 239 + 6*messageBytes | `src/report_sink_writer.cpp:513` |

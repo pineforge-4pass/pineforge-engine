@@ -58,20 +58,20 @@ hash request would put the work on the per-bar path. The scheduler calls
 its quiet carried-callback branch
 (`src/source/pine_scheduler_native.cpp:639`,
 `src/source/pine_scheduler_native.cpp:725`). With recording enabled this
-calls `broker_state_hash` (`src/source/pine_strategy_host.cpp:3241`).
+calls `broker_state_hash` (`src/source/pine_strategy_host.cpp:3255`).
 `on_native_bar` then refreshes the recorded row after the adapter's close
-(`src/source/pine_strategy_host.cpp:924`); its `recording` guard
-(`src/source/pine_strategy_host.cpp:940`) enables
+(`src/source/pine_strategy_host.cpp:934`); its `recording` guard
+(`src/source/pine_strategy_host.cpp:950`) enables
 `capture_script_continuation_hash`
-(`src/source/pine_strategy_host.cpp:860`). Thus an ordinary recorded script
+(`src/source/pine_strategy_host.cpp:865`). Thus an ordinary recorded script
 bar folds the table twice. Recorded magnifier sub-bars can refresh it too.
 Terminal input updates also call `capture_script_continuation_hash`
-(`src/source/pine_strategy_host.cpp:880`). Without recording, that refresh
+(`src/source/pine_strategy_host.cpp:890`). Without recording, that refresh
 does not call the broker hash; explicit broker/stream hash queries still do.
 Each broker hash reaches `hash_host_extension`
-(`src/engine_state_hash.cpp:123`); the adapter's `hash_state`
-(`src/source/pine_state_hash.cpp:1265`) calls exactly one `fold_sorted`
-(`src/source/pine_state_hash.cpp:571`). A full-table lazy rebuild per dirty
+(`src/engine_state_hash.cpp:129`); the adapter's `hash_state`
+(`src/source/pine_state_hash.cpp:315`) calls exactly one `fold_sorted`
+(`src/source/pine_state_hash.cpp:570`). A full-table lazy rebuild per dirty
 bar is therefore unsuitable.
 
 `IdPairSlabFold` (`include/pineforge/detail/id_pair_slab_fold.hpp:21`)
