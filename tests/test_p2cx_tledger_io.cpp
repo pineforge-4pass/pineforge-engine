@@ -46,6 +46,19 @@ void operator delete(void* pointer) noexcept { std::free(pointer); }
 void operator delete[](void* pointer) noexcept { std::free(pointer); }
 void operator delete(void* pointer, std::size_t) noexcept { std::free(pointer); }
 void operator delete[](void* pointer, std::size_t) noexcept { std::free(pointer); }
+// The nothrow forms must be replaced too: CommandScratchStore allocates with
+// `new (std::nothrow)`, and a block from the sanitizer's own nothrow new would
+// otherwise be released by the free() above (alloc-dealloc-mismatch).
+void* operator new(std::size_t bytes, const std::nothrow_t&) noexcept {
+    void* result = std::malloc(bytes ? bytes : 1);
+    if (result && ledger_io::measuring) ++ledger_io::counts.allocations;
+    return result;
+}
+void* operator new[](std::size_t bytes, const std::nothrow_t& tag) noexcept {
+    return ::operator new(bytes, tag);
+}
+void operator delete(void* pointer, const std::nothrow_t&) noexcept { std::free(pointer); }
+void operator delete[](void* pointer, const std::nothrow_t&) noexcept { std::free(pointer); }
 
 extern "C" ssize_t pread(int fd, void* data, std::size_t length, off_t offset) {
     if (ledger_io::measuring) ++ledger_io::counts.reads;
