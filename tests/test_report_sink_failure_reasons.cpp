@@ -176,8 +176,10 @@ public:
         if (mode == Mode::callback) {
             socket->close_peer();
             output_bar(context.script_bar_open_ms, context.script_bar_open_ms + 60000);
-            // A real V line over one buffer forces I/O inside report_sink_record.
+            // output_event only queues the V line. Clearing publishes it, and
+            // a line over one buffer forces I/O inside report_sink_record.
             output_event(0, 1.0, std::string(writer_buffer + 1, 'v'));
+            output_events_clear();
             throw std::runtime_error("callback write unexpectedly succeeded");
         }
         if (mode == Mode::arena_failure) {
@@ -212,20 +214,43 @@ void begin_peer_translator() {
     expect_engine_failure(host, reason_args("sink_peer_closed"));
 }
 
-void begin_arena_backing_translator() {
-    // Exercise the common path/fd startup before either opens scratch. A bad
-    // inherited-fd declaration must remain an arena cause at the run getter.
+void arena_backing_admission_translator() {
+    // Both C++ sink setters attach before run begin and may throw. Exercise
+    // the C ABI admission boundary that records the typed cause on the handle;
+    // a refused admission must not be followed by a run.
     Environment invalid_fd("PF_SCRATCH_ARENA_FD", "not-a-decimal-fd");
     Directory directory;
     Socket socket;
+    const auto path = directory.file("refused-before-open");
+    const auto expected = reason_args("arena_backing");
     for (const bool fd_sink : {false, true}) {
         Host host;
-        if (fd_sink) install_fd(host, socket.writer.value);
-        else install_path(host, directory.file("refused-before-open"), directory.path);
-        run(host, tape(2));
-        require(host.callbacks == 0 && !detail::ScratchArena::attached(),
+        auto* handle = static_cast<pineforge::BacktestEngine*>(&host);
+        int status = 0;
+        if (fd_sink) {
+            const pf_report_sink_fd_v1 sink{sizeof sink, 1, socket.writer.value, "W1"};
+            status = strategy_set_report_sink_fd_v1(handle, &sink);
+        } else {
+            const pf_report_sink_v1 sink{sizeof sink, 1, path.c_str(), "W1",
+                                         directory.path.c_str()};
+            status = strategy_set_report_sink_v1(handle, &sink);
+        }
+        require(status == -1, "invalid arena backing must refuse sink admission");
+        require(host.callbacks == 0 && host.presentations == 0 && !detail::ScratchArena::attached(),
                 "backing configuration must fail before scratch and callbacks");
-        expect_engine_failure(host, reason_args("arena_backing"));
+        expect_failure(pineforge::run_failure_value_of(host), expected);
+        require(std::string(strategy_get_last_error_code(handle))
+                    == pineforge::run_failure_code_name(pineforge::RunFailureCode::report_sink_failed)
+                    && std::string(strategy_get_last_error_args(handle)) == expected,
+                "admission getters preserve the same complete typed cause");
+        pf_report_sink_receipt_v1 receipt{sizeof receipt, 1};
+        require(strategy_report_sink_receipt_v1(handle, &receipt) == 0 && !receipt.complete
+                    && receipt.sha256_hex[0] == '\0',
+                "refused admission must not complete its sink");
+        require(::access(path.c_str(), F_OK) == -1 && errno == ENOENT,
+                "refused admission opened the sink path");
+        require(::fcntl(socket.writer.value, F_GETFD) >= 0,
+                "refused admission closed the borrowed fd");
     }
 }
 
@@ -386,7 +411,7 @@ int main() {
         writer_origins();
         begin_open_translator();
         begin_peer_translator();
-        begin_arena_backing_translator();
+        arena_backing_admission_translator();
         callback_writer_translator();
         held_equity_translator();
         selected_presentation_translator();
