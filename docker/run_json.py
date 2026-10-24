@@ -5917,13 +5917,14 @@ def _disk_report_directory(directory=None):
     failures = []
     candidates = []
     if directory is not None:
-        candidates.append(("--spill-dir directory", os.fspath(directory)))
+        candidates.append((f"--spill-dir directory {os.fspath(directory)!r}",
+                           os.fspath(directory)))
     else:
         try:
             candidates.append(("default temporary directory", tempfile.gettempdir()))
         except OSError as error:
             failures.append(f"TMPDIR default temporary directory is unavailable: {error}")
-    candidates.append(("/var/tmp", "/var/tmp"))
+        candidates.append(("/var/tmp", "/var/tmp"))
     checked = set()
     for label, candidate in candidates:
         candidate = os.path.abspath(candidate)

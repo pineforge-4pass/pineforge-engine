@@ -1529,6 +1529,9 @@ _CODE_PASSTHROUGHS = [
      "run_failure native fd-sink admission tuple"),
     ("_check_bench_run", "RunFailure(text, code, args)", 1,
      "tuple destructured directly from run_failure for the just-completed trial"),
+    ("enable_outputs",
+     'OutputsError("--outputs: " + (text or "the library refused to record"), code, args)', 1,
+     "engine_failure_code ABI tuple or the literal outputs_rejected fallback"),
 ]
 
 _HELPER_CODE_SOURCES = {
@@ -1541,16 +1544,73 @@ _HELPER_CODE_SOURCES = {
 }
 
 
-def _scoped_nodes(node, scope=(), subclass=False):
+def _run_failure_classes(tree):
+    """Discover the complete local inheritance closure, independent of AST order."""
+    classes = [node for node in ast.walk(tree) if isinstance(node, ast.ClassDef)]
+    names = {"RunFailure"}
+    while True:
+        derived = names | {
+            node.name for node in classes
+            if any(isinstance(base, ast.Name) and base.id in names for base in node.bases)
+        }
+        if derived == names:
+            return names
+        names = derived
+
+
+def _scoped_nodes(node, scope=(), subclass=False, failure_classes=None):
+    if failure_classes is None:
+        failure_classes = _run_failure_classes(node)
     if isinstance(node, ast.ClassDef):
         scope += (node.name,)
-        subclass = any(isinstance(base, ast.Name) and base.id == "RunFailure"
-                       for base in node.bases)
+        subclass = node.name in failure_classes and node.name != "RunFailure"
     elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
         scope += (node.name,)
     yield scope, subclass, node
     for child in ast.iter_child_nodes(node):
-        yield from _scoped_nodes(child, scope, subclass)
+        yield from _scoped_nodes(child, scope, subclass, failure_classes)
+
+
+def _super_init(call):
+    return (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+            and call.func.attr == "__init__" and isinstance(call.func.value, ast.Call)
+            and isinstance(call.func.value.func, ast.Name)
+            and call.func.value.func.id == "super")
+
+
+def _failure_code_argument(call):
+    code = call.args[1] if len(call.args) > 1 else None
+    code = next((item.value for item in call.keywords if item.arg == "code"), code)
+    return None if any(isinstance(arg, ast.Starred) for arg in call.args) else code
+
+
+def _fixed_failure_codes(tree, failure_classes):
+    """Only a one-statement, literal-coded parent initializer fixes a caller's code."""
+    fixed, inherited = {}, {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef) or node.name not in failure_classes:
+            continue
+        initializer = next((item for item in node.body
+                            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+                            and item.name == "__init__"), None)
+        if initializer is None:
+            inherited[node.name] = [base.id for base in node.bases
+                                    if isinstance(base, ast.Name) and base.id in failure_classes]
+            continue
+        # These wrappers take reason/code_args rather than a code. Their entire
+        # initializer must delegate a literal; its super call is also scanned.
+        if len(initializer.body) != 1 or not isinstance(initializer.body[0], ast.Expr):
+            continue
+        call = initializer.body[0].value
+        code = _failure_code_argument(call) if _super_init(call) else None
+        if isinstance(code, ast.Constant) and isinstance(code.value, str):
+            fixed[node.name] = code
+    while True:
+        derived = {name: fixed[bases[0]] for name, bases in inherited.items()
+                   if len(bases) == 1 and bases[0] in fixed and name not in fixed}
+        if not derived:
+            return fixed
+        fixed.update(derived)
 
 
 def _call_key(scope, call):
@@ -1673,28 +1733,24 @@ def assert_run_json_codes_catalogued():
     paths = [source, *(source.parent / (name + ".py") for name in _HELPER_CODE_SOURCES)]
     print("Failure-code guard reads: " + ", ".join(str(path) for path in paths))
     tree = ast.parse(_failure_code_source(source))
+    failure_classes = _run_failure_classes(tree)
+    fixed_codes = _fixed_failure_codes(tree, failure_classes)
     allowed = {
         _call_key(tuple(scope.split(".")), ast.parse(call, mode="eval").body): (count, reason)
         for scope, call, count, reason in _CODE_PASSTHROUGHS
     }
     seen = {key: 0 for key in allowed}
     emitted = set()
-    for scope, subclass, call in _scoped_nodes(tree):
+    for scope, subclass, call in _scoped_nodes(tree, failure_classes=failure_classes):
         if not isinstance(call, ast.Call):
             continue
         direct = (isinstance(call.func, ast.Name)
-                  and call.func.id in {"RunFailure", "write_failure", "failure_line"})
-        parent_init = (subclass and isinstance(call.func, ast.Attribute)
-                       and call.func.attr == "__init__"
-                       and isinstance(call.func.value, ast.Call)
-                       and isinstance(call.func.value.func, ast.Name)
-                       and call.func.value.func.id == "super")
+                  and call.func.id in failure_classes | {"write_failure", "failure_line"})
+        parent_init = subclass and _super_init(call)
         if not (direct or parent_init):
             continue
-        code = call.args[1] if len(call.args) > 1 else None
-        code = next((item.value for item in call.keywords if item.arg == "code"), code)
-        if any(isinstance(arg, ast.Starred) for arg in call.args):
-            code = None
+        code = (fixed_codes[call.func.id] if direct and call.func.id in fixed_codes
+                else _failure_code_argument(call))
         if isinstance(code, ast.Constant) and isinstance(code.value, str):
             emitted.add(_literal_code(code, f"{source}:{call.lineno}"))
             continue
