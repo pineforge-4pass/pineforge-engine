@@ -4,8 +4,9 @@
 
 `pf_report_t` is the legacy backtest payload. This page maps each field to its
 meaning and units, and defines the opt-in `pineforge-report/v1` envelope for
-FULL, SUMMARY_ONLY and STREAMED reports. The envelope and native methods are
-declarations in this slice; their presence does not advertise runtime support.
+FULL, SUMMARY_ONLY and STREAMED reports. Native C++ mode selection and
+envelope reads are implemented, subject to the eligibility and completion
+limitations below.
 
 @see #pf_report_t for the verbatim struct declaration.
 
@@ -101,14 +102,13 @@ The full contract is
 `<pineforge/report_mode.h>` for the C-compatible data declarations. Native C++
 clients use `ReportMode`, `ReportEnvelopeV1`,
 `BacktestEngine::set_report_mode_v1` and
-`BacktestEngine::fill_report_envelope_v1`. The methods are declarations only
-until the runtime implementation lands. C/ctypes clients access the envelope
+`BacktestEngine::fill_report_envelope_v1`. C/ctypes clients access the envelope
 through an explicitly negotiated provider bridge.
 
 | Mode | Metrics and summary scalars | Resident sequences | External sequences |
 | --- | --- | --- | --- |
 | FULL (`0`) | Existing values/bits | Existing owning arrays | None through the explicit FULL envelope |
-| SUMMARY_ONLY (`1`) | Bit-identical to FULL, including all four metric blocks | None | No captured report sequences or private curve tape |
+| SUMMARY_ONLY (`1`) | Exact metrics require an eligible presentation/replay provider | No arrays in the returned report; execution retention uses the controls below | None |
 | STREAMED (`2`) | Same values/bits | None | Complete enabled sequences, in existing report order, through a bounded sink |
 
 Legacy calls, including the existing sink-v1 route, keep their current
@@ -116,6 +116,33 @@ behavior. Explicit FULL conflicts with an installed sink; STREAMED requires
 one; SUMMARY_ONLY conflicts with sequence-sink capture. FULL is an owning-array
 compatibility action and makes no fixed-memory claim. SUMMARY_ONLY must not
 allocate full arrays and delete them after reporting.
+
+`set_report_mode_v1(SUMMARY_ONLY)` selects the returned report shape. By
+itself it retains the ordinary equity history and does not disable trace,
+hash or output recording. It makes no fixed-memory guarantee for execution.
+Bounded summary recording also requires both independent controls before
+the next run:
+
+- `set_equity_report_mode(ReportMode::SUMMARY_ONLY)` keeps the held equity
+  point and fixed metric folds instead of the curve or a private curve tape.
+- `set_optional_report_mode(report_sequence::ReportMode::SummaryOnly)`
+  omits the resident trace/name, broker-hash and output row/event histories.
+
+Check every setter's status. These recording controls are necessary for
+bounded summary storage; they do not supply the exact presentation adapter
+or second replay required by the O1 contract. A provider must establish those
+capabilities before certifying a complete exact summary. Script-readable
+historical trade storage is separate from report capture.
+
+Without a sink, `PineStrategyHost` refuses explicit SUMMARY_ONLY with
+`PF_REPORT_MODE_REPLAY_UNAVAILABLE` (`-5`). With a sink installed, it refuses
+explicit STREAMED with `PF_REPORT_MODE_CONFLICT` (`-4`): its whole-array
+presenter has no exact non-FULL adapter. The general sink conflicts still
+apply, so SUMMARY_ONLY with a sink also returns `-4`. Rejection preserves the
+previous report mode; the legacy FULL sink route remains supported.
+Selected-window or observer capture without a sink also refuses SUMMARY_ONLY
+with `-5`, at mode selection or at envelope read if capture was configured
+later. STREAMED without a sink returns `-4`.
 
 The new data layout wraps the ABI-4 payload rather than growing it:
 
@@ -170,13 +197,18 @@ array. The latter is zero in SUMMARY_ONLY and STREAMED. Ordinary completed
 KernelRecorded reports have one logical point per script bar; selected
 reports have M+1, including the anchor.
 
-SUMMARY_ONLY preserves Sharpe/Sortino through an exact second ordered replay
-when the existing return-count guards require it. Publication checks the
-final trade count, exact ordered trade witness, point count, first/last
-coordinates and final continuation/hash witnesses. Replay repeats no outward
-observer, alert or sink side effects. Reports read a frozen summary rather
-than rerunning callbacks. Nonreplayable hosts/presenters require an exact
-adapter or an explicit refusal; no metric may be silently omitted.
+With equity-summary recording, report assembly freezes a presented first-pass
+snapshot. When the return-count guards require a second pass, Sharpe/Sortino
+remain NaN and the envelope's `complete` stays zero until a matching
+`EquityRatioResult` is installed through `install_equity_ratio_result`.
+The engine does not start a replay from either setter or from an envelope
+read. Installation checks the frozen equity snapshot, including its ordered
+point witness; it does not establish the O1 contract's separate trade and
+continuation witnesses for a provider. An exact replay provider must satisfy
+all those requirements and suppress outward observer, alert and sink side
+effects during replay. Repeated report reads do not rerun execution callbacks.
+Nonreplayable hosts/presenters require an exact adapter or an explicit refusal;
+no metric may be silently omitted.
 
 Transport selection is `--report-mode FULL|SUMMARY_ONLY|STREAMED`. A missing
 provider must refuse before execution with `report_mode_unsupported`, args
@@ -484,9 +516,11 @@ buffer, no formatting.
 ## Metrics (ABI v2)
 
 `pf_report_t::metrics` is a `pf_metrics_t` — four embedded blocks.
-Legacy reports compute them at report time; SUMMARY_ONLY returns the frozen,
-validated metrics without a resident curve or trade array. All 768 bytes,
-including the equity-derived ratios, must match FULL. The complete per-metric
+Ordinary reports assemble metrics on read; selected/observer reports reuse
+their captured metric block. Equity-summary recording uses execution folds
+and any installed matching second-pass ratios, with completion gated as
+described above. All 768 bytes, including the equity-derived ratios, must
+match FULL. The complete per-metric
 reference (definitions, units, NaN rules, validation status) lives on @ref metrics.
 
 | Block | Type | Scope |

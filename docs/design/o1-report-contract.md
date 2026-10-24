@@ -1,9 +1,10 @@
-# O1 report contract, revision 1 (round-2 reader declarations)
+# O1 report contract, revision 1
 
-Status: declarations and consumer contract for the 1.7.0 A1 lanes. This
-document does not advertise implemented SUMMARY_ONLY support. The base is
-`583c2217d2`; runtime implementation, transport negotiation and remote
-verification are separate acceptance gates.
+Status: native C++ runtime and consumer contract for 1.7.0. Mode selection
+and envelope reads are implemented in `src/engine_report.cpp`. Exact bounded
+SUMMARY_ONLY still requires an eligible host and a provider for any required
+second pass; the engine does not schedule that replay. Transport negotiation
+and remote verification remain separate acceptance gates.
 
 ## Versions and entry points
 
@@ -11,14 +12,15 @@ The versioned report envelope is `pineforge-report/v1`. Its C data declarations
 live in `<pineforge/report_mode.h>`; the native C++ declarations are
 `ReportMode`, `ReportEnvelopeV1`, `BacktestEngine::set_report_mode_v1` and
 `BacktestEngine::fill_report_envelope_v1` in `<pineforge/engine.hpp>`.
-These methods have declarations only in this slice.
+The native methods implement mode admission and report assembly, subject to
+the eligibility and completion requirements below.
 
 The single C++ reader/visitor family lives in `<pineforge/report_pages.hpp>`,
 which includes `report_mode.h`; `engine.hpp` includes both. Its namespace is
 `pineforge::report`. It adds no mode enum, envelope version, feature probe or
-C export. The completed-row provider belongs to o1w-ledger; the presented-point
-provider, held point and metric overloads belong to o1w-metrics. No backing
-store or runtime method body is supplied here.
+C export. The completed-row and presented-point provider contracts share the
+ledger and equity-metric boundaries. Reader declarations alone do not
+establish provider availability.
 
 The envelope contains `metadata` followed by `report`, the unchanged ABI-4
 `ReportC` / `pf_report_t` payload. Do not append fields to either legacy struct:
@@ -86,15 +88,25 @@ but no implementation must not be reported as supporting any new mode.
   an installed external sink is a conflict. This compatibility mode has
   O(B + T + E + D) result storage and makes no fixed-memory claim.
 * **SUMMARY_ONLY (1):** the HPO trial. Return every metric block and summary
-  scalar with the same bits as FULL on the same completed execution. Capture
-  no trade rows, equity curve, broker-hash history, trace/name history or
-  recorded output series/events as report output, in RAM or a private tape.
-  Fold finalized rows/points in their existing order and discard them as
-  output. No curve file, tmpfs, memfd or allocate-then-free array is permitted.
+  scalar with the same bits as FULL on the same completed execution, once
+  exact presentation/replay eligibility is established. The current
+  `set_report_mode_v1` selects the returned shape: it omits owning report
+  arrays, but does not change execution-time equity or optional-sequence
+  retention. That setter alone does not establish fixed-memory recording.
+  A bounded summary provider must also select
+  `set_equity_report_mode(ReportMode::SUMMARY_ONLY)` and
+  `set_optional_report_mode(report_sequence::ReportMode::SummaryOnly)`
+  before begin, and supply the exact replay described below. The equity
+  control keeps a held point and fixed folds; the optional-sequence control
+  omits trace/name, hash and output row/event histories. The fixed-memory
+  target folds finalized rows/points in order without retaining report
+  sequences in RAM or a private curve tape; no curve file, tmpfs, memfd or
+  allocate-then-free array qualifies.
   Exact internal historical trade reads required by a script remain the
   ledger lane's responsibility; they are not report capture. A configured
-  sequence sink conflicts with this mode. Recording/trace switches may
-  enable logical counting, but cannot override this mode's capture policy.
+  sequence sink conflicts with this mode. Recording/trace switches remain
+  independent of the returned report shape; configure their retention
+  explicitly rather than inferring it from an empty returned array.
 * **STREAMED (2):** return the same metrics/scalars while emitting complete
   requested sequences to an external, bounded-buffer sink. Require an
   installed `pf_report_sink_v1`; do not silently fall back to owning arrays.

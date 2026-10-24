@@ -196,10 +196,19 @@ PF_API uint32_t pf_report_sink_version(void);
 PF_API int strategy_set_report_sink_v1(pf_strategy_t, const pf_report_sink_v1*);
 
 /** Install, replace or remove (NULL) the single sink using a borrowed fd.
- *  Either setter replaces the other kind; NULL through either setter removes it.
+ *  Mutually exclusive with strategy_set_report_sink_v1: either setter
+ *  replaces the other kind. NULL through either setter removes next-run
+ *  configuration only when the generation guards permit it.
  *  Returns 0 accepted; -1 bad handle, struct_size, version, negative fd or invalid environment arena;
- *  -2 stream running/beginning; -3 run in progress, as the path setter. Descriptor I/O/type validation occurs at run begin;
- *  a closed fd or non-stream descriptor fails the run with report_sink_failed. Summary reports and strategy_report_sink_receipt_v1 follow the path sink rules.
+ *  -2 stream running/beginning; -3 run in progress or removal of a
+ *  scratch-backed or sealed-base generation, as the path setter.
+ *  A successfully completed fd generation permits NULL through either setter
+ *  to detach next-run configuration while preserving its receipt, summary
+ *  and borrowed fd. Path generations have no completed-generation detach:
+ *  their scratch/base guards still apply. A refusal preserves the generation.
+ *  Descriptor I/O/type validation occurs at run begin; a closed fd or a
+ *  non-stream descriptor fails the run with report_sink_failed. Summary
+ *  reports and strategy_report_sink_receipt_v1 follow the path sink rules.
  *  A non-NULL descriptor attaches the environment arena if configured: PF_SCRATCH_ARENA_FD=5 and positive PF_SCRATCH_ARENA_BYTES, with validation passing.
  *  The first successful attach sets SIGXFSZ to SIG_IGN process-wide; the prior disposition is not restored. Same fd/size reattaches are no-ops.
  *  Hosts relying on their SIGXFSZ handler or default termination must account for this before attaching. */

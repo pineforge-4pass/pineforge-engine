@@ -1416,6 +1416,9 @@ public:
     friend class NativeExecutionConsumer;
 
 protected:
+    // Native hosts use the engine's unpresented report values by default.
+    // A host adding a whole-array presenter must override this eligibility.
+    bool report_presenter_supports_non_full() const noexcept override { return true; }
     // broker_state_hash() folds the continuation the kernel latched at the
     // run's last script report point (NativeReportPolicy::KernelRecorded), so a
     // finished run answers its last per-bar row's value, recording on or off.
