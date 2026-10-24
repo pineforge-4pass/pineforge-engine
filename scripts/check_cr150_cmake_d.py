@@ -731,18 +731,29 @@ def _without_final_fast_validation(text: str) -> str:
 
 def _profile_truth(words: list[str], profile: tuple[bool, bool]) -> set[bool]:
     """Possible condition values; unknown CMake predicates can be true or false."""
-    for operator in ("OR", "AND"):
-        depth = 0
-        for index, word in enumerate(words):
-            if word == "(":
-                depth += 1
-            elif word == ")":
-                depth -= 1
-            elif depth == 0 and word.upper() == operator:
-                left = _profile_truth(words[:index], profile)
-                right = _profile_truth(words[index + 1:], profile)
-                return {(a or b) if operator == "OR" else (a and b)
-                        for a in left for b in right}
+    depth = 0
+    start = 0
+    operands: list[list[str]] = []
+    operators: list[str] = []
+    for index, word in enumerate(words):
+        if word == "(":
+            depth += 1
+        elif word == ")":
+            depth -= 1
+        elif depth == 0 and word.upper() in ("AND", "OR"):
+            operands.append(words[start:index])
+            operators.append(word.upper())
+            start = index + 1
+    if operators:
+        operands.append(words[start:])
+        left = _profile_truth(operands[0], profile)
+        # CMake gives AND and OR equal precedence and folds left to right.
+        # Evaluate every operand; NOT and parenthesized groups recurse first.
+        for operator, operand in zip(operators, operands[1:]):
+            right = _profile_truth(operand, profile)
+            left = {(a or b) if operator == "OR" else (a and b)
+                    for a in left for b in right}
+        return left
     if words and words[0].upper() == "NOT":
         return {not value for value in _profile_truth(words[1:], profile)}
     if words and words[0] == "(" and words[-1] == ")":
@@ -804,10 +815,16 @@ def _check_python_modules(prefix: list[Statement], fences: list[Fence]) -> None:
         for statement, words, profiles in _profile_statements(path, statements):
             name = statement.name.lower()
             if (name == "add_library" and len(words) >= 2 and
-                    words[1].upper() == "MODULE" and LITERAL_NAME_RE.fullmatch(words[0])):
-                modules.setdefault(words[0], set()).update(profiles)
+                    LITERAL_NAME_RE.fullmatch(words[0])):
+                # EXCLUDE_FROM_ALL may precede the type. Stop at the first
+                # other word so a source named MODULE cannot change the type.
+                library_type = next((word.upper() for word in words[1:]
+                                     if word.upper() != "EXCLUDE_FROM_ALL"), "")
+                if library_type == "MODULE":
+                    modules.setdefault(words[0], set()).update(profiles)
             tests: list[str] = []
             values: list[str] = []
+            commands: list[list[str]] = []
             if name == "add_test" and len(words) >= 4 and words[0].upper() == "NAME":
                 command = " ".join(words[3:])
                 if ("Python3_EXECUTABLE" in command or
@@ -815,17 +832,35 @@ def _check_python_modules(prefix: list[Statement], fences: list[Fence]) -> None:
                                   command)):
                     rows.setdefault(words[1], set()).update(profiles)
                 tests, values = [words[1]], words[3:]
+                commands = [values]
             elif name == "set_tests_properties":
                 at = next((i for i, word in enumerate(words)
                            if word.upper() == "PROPERTIES"), len(words))
                 tests, values = words[:at], words[at + 2::2]
+                commands = [[value] for key, value in zip(words[at + 1::2], values)
+                            if key.upper() == "COMMAND"]
             elif name == "set_property" and words and words[0].upper() == "TEST":
                 at = next((i for i, word in enumerate(words)
                            if word.upper() == "PROPERTY"), len(words))
                 tests = [word for word in words[1:at]
                          if word.upper() not in ("APPEND", "APPEND_STRING")]
                 values = words[at + 2:]
-            for target in re.findall(r"\$<TARGET_FILE:([A-Za-z0-9_.+-]+)>", " ".join(values)):
+                if at + 1 < len(words) and words[at + 1].upper() == "COMMAND":
+                    commands = [values]
+            # Main-file command lists include the existing ASan preload row.
+            # Lanes/fences must expose commands instead of hiding target reads.
+            if path != CMAKE or statements is not prefix:
+                for command_words in commands:
+                    if (len(command_words) == 1 and
+                            re.fullmatch(r"\$\{[^{}]+\}", command_words[0])):
+                        raise CheckFailure(
+                            f"{path}:{statement.line}: bare COMMAND variable cannot be checked; "
+                            "write out the command in the lane or fence")
+            for file_target, property_target in re.findall(
+                    r"\$<TARGET_(?:(?:FILE|LINKER_FILE|SONAME_FILE)(?:_DIR|_NAME)?:"
+                    r"([A-Za-z0-9_.+-]+)>|PROPERTY:([A-Za-z0-9_.+-]+),)",
+                    " ".join(values)):
+                target = file_target or property_target
                 for test in tests:
                     reads.append((path, statement, test, target, profiles))
     for path, statement, test, target, profiles in reads:
