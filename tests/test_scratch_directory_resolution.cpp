@@ -38,6 +38,48 @@ void row() {
         return pineforge::detail::resolve_scratch_directory(
             configured, refusal, error, proven_memory, Probe{facts, visited, absent_error});
     };
+    {
+        // Unsupported probes supply no evidence, even if they leave a memory
+        // magic in the output word. Keep the original candidate unchanged.
+        const auto no_evidence = [&](const std::string& configured) {
+            visited.clear();
+            const auto probe = [&](const char* path, std::uint64_t& type) {
+                visited.emplace_back(path);
+                type = tmpfs;
+                return ENOTSUP;
+            };
+            return pineforge::detail::resolve_scratch_directory(
+                configured, refusal, error, proven_memory, probe);
+        };
+        {
+            Environment selected("TMPDIR", "/no-evidence/");
+            require(no_evidence("") == "/no-evidence/"
+                        && error == 0 && refusal.empty() && !proven_memory
+                        && visited == std::vector<std::string>{"/no-evidence/"},
+                    "ENOTSUP must keep TMPDIR unchanged without evidence, refusal or fallback");
+        }
+        require(no_evidence("") == "/tmp"
+                    && error == 0 && refusal.empty() && !proven_memory
+                    && visited == std::vector<std::string>{"/tmp"},
+                "ENOTSUP must keep legacy /tmp without evidence, refusal or fallback");
+        {
+            Environment empty("TMPDIR", "");
+            require(no_evidence("") == "/tmp"
+                        && error == 0 && refusal.empty() && !proven_memory
+                        && visited == std::vector<std::string>{"/tmp"},
+                    "empty TMPDIR with ENOTSUP must keep legacy /tmp without fallback");
+        }
+        require(no_evidence("/explicit/") == "/explicit/"
+                    && error == 0 && refusal.empty() && !proven_memory
+                    && visited == std::vector<std::string>{"/explicit/"},
+                "explicit ENOTSUP must retain the configured path unchanged");
+        // /var/tmp is reachable only after positive memory evidence for the
+        // first candidate; a platform with no probe evidence never gets here.
+        require(resolve("", {{"/tmp", tmpfs}}, ENOTSUP) == "/var/tmp"
+                    && error == 0 && refusal.empty() && !proven_memory
+                    && visited == std::vector<std::string>{"/tmp", "/var/tmp"},
+                "ENOTSUP on a reached fallback must accept it without a filesystem claim");
+    }
     require(resolve("", {{"/tmp", tmpfs}, {"/var/tmp", disk}}) == "/var/tmp"
                 && error == 0
                 && refusal.find("legacy /tmp (TMPDIR unset or empty) '/tmp': tmpfs")

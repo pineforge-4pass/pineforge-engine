@@ -4,6 +4,7 @@
 import os
 from pathlib import Path
 import re
+import shutil
 import sys
 import tempfile
 
@@ -84,14 +85,25 @@ def scan(root: Path) -> int:
 
 
 def self_test() -> int:
-    # Retain every generated tree inside the lane's named scratch; no /tmp
-    # scratch or cleanup of files outside our own mkdtemp is involved.
-    scratch = ROOT / "scratch-s4e"
-    refuse_unsafe_path(scratch)
-    scratch.mkdir(exist_ok=True)
-    parent = Path(tempfile.mkdtemp(prefix="predicate-self-test-", dir=scratch))
+    temporary_root = Path(tempfile.gettempdir())
+    refuse_unsafe_path(temporary_root)
+    parent = Path(tempfile.mkdtemp(prefix="predicate-self-test-"))
     refuse_unsafe_path(parent)
-    print(f"S4E self-test fixture root: {parent}", flush=True)
+    created = parent.stat()
+    try:
+        print(f"S4E self-test fixture root: {parent}", flush=True)
+        return self_test_trees(parent)
+    finally:
+        refuse_unsafe_path(parent)
+        current = parent.stat()
+        if (parent.resolve().parent != temporary_root.resolve()
+                or not parent.name.startswith("predicate-self-test-")
+                or (current.st_dev, current.st_ino) != (created.st_dev, created.st_ino)):
+            raise RuntimeError(f"refused cleanup of unowned self-test directory: {parent}")
+        shutil.rmtree(parent)
+
+
+def self_test_trees(parent: Path) -> int:
     canonical_bytes = b"0x01021994\n0x858458f6\n"
 
     def make_tree(name: str, spelling: bytes, in_canonical: bool = False) -> Path:
