@@ -644,7 +644,7 @@ void zero_fsize_child(std::size_t page_bytes) {
     ArenaAttachment attachment(arena_for_store_chunks(3));
     struct sigaction ignored{};
     ignored.sa_handler = SIG_IGN;
-    ::sigemptyset(&ignored.sa_mask);
+    sigemptyset(&ignored.sa_mask);
     require(::sigaction(SIGXFSZ, &ignored, nullptr) == 0, "child ignores SIGXFSZ");
     struct rlimit limit{};
     require(::getrlimit(RLIMIT_FSIZE, &limit) == 0, "read child's file-size limit");

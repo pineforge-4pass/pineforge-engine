@@ -67,7 +67,7 @@ listings and omits them from `sitemap.xml`, without changing C layouts or
 test updates since 1.6.0.
 Use the same-version 1.6.1 pair, with regeneration and relinking as below.
 
-From 1.6.2 (unreleased), the image declares selected-window contract
+From 1.6.2, the image declares selected-window contract
 revision `1.3` again (`["1.3"]` under
 `capabilities.selected_window_contract_revisions` when the runtime supports
 selected windows and `[]` otherwise), now with the EN-115 completeness proof:
@@ -80,7 +80,7 @@ build's literal, and a tuple holding both is invalid (the published 1.5.0
 image declared `1.3-parity`, earlier images carried no revision member; the
 published 1.6.0 image declared `1.3` without a completeness proof; and engine
 1.6.1, released without a hub image, declares `1.3-parity`). The repository's
-[CHANGELOG.md](../../CHANGELOG.md), under *Unreleased*, inventories this
+[CHANGELOG.md](../../CHANGELOG.md), under *1.7.0*, inventories this
 change.
 
 ## Versions

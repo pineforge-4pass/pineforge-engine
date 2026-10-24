@@ -365,7 +365,7 @@ PF_API int pf_run_abort_install_sigterm_v1(void) {
     struct sigaction action {};
     action.sa_handler = run_sigterm_handler;
     action.sa_flags = SA_RESTART;
-    if (::sigemptyset(&action.sa_mask) != 0) return -1;
+    if (sigemptyset(&action.sa_mask) != 0) return -1;
     run_sigterm_stop = 0;
     if (::sigaction(SIGTERM, &action, &previous_sigterm) != 0) return -1;
     sigterm_installed = true;
