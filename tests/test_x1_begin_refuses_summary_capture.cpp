@@ -223,6 +223,19 @@ void legacy_summary_report(Host& host, const ReportC& oracle) {
     compare_totals(report.value, oracle);
 }
 
+// The legacy equity-mode path is not the v1 envelope mode: a selected window under it
+// keeps its released outcome. The window's equity stream is not fed in SUMMARY_ONLY, so
+// the run fails closed in the selected-report view with engine_invariant. The control is
+// that the begin check of the v1 mode does NOT touch this path (no report_mode_unsupported).
+void legacy_window_fails_closed(Host& host) {
+    run(host);
+    require(host.last_run_status() == 1 && !host.last_error().empty(),
+            "legacy SUMMARY_ONLY selected window did not fail the run");
+    require(std::strcmp(run_failure_code_of(host), "engine_invariant") == 0,
+            std::string("legacy SUMMARY_ONLY selected window must keep engine_invariant, got code=")
+                + run_failure_code_of(host) + " error=" + host.last_error());
+}
+
 void refused_at_begin(Host& host) {
     run(host);
     const auto state = host.native_state();
@@ -348,9 +361,7 @@ int main() {
         require(host.set_equity_report_mode(ReportMode::SUMMARY_ONLY) == PF_REPORT_MODE_ACCEPTED,
                 "pending SUMMARY_ONLY setter refused");
         select_window(host);
-        run(host);
-        completed(host);
-        legacy_summary_report(host, oracle.value.report);
+        legacy_window_fails_closed(host);
     })) return 1;
     if (!row("legacy SUMMARY_ONLY observer and selected-window control", [&] {
         Observer observer;
@@ -362,10 +373,7 @@ int main() {
         require(host.set_equity_report_mode(ReportMode::SUMMARY_ONLY) == PF_REPORT_MODE_ACCEPTED,
                 "pending SUMMARY_ONLY setter refused after observer registration");
         select_window(host);
-        run(host);
-        completed(host);
-        legacy_summary_report(host, oracle.value.report);
-        require(observer.calls == 1, "legacy capture did not dispatch the observer once");
+        legacy_window_fails_closed(host);
     })) return 1;
     return good ? 0 : 1;
 }
