@@ -5,21 +5,37 @@
 #include "execution_close_scope.hpp"
 #include "market_driver.hpp"
 #include "native_order_identity.hpp"
+#include "detail/scratch_readback.hpp"
+#include "payload_readback.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <functional>
+#include <iterator>
 #include <limits>
+#include <map>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
+
+namespace pineforge::detail { class ScratchSlab; }
+// The matcher (src/native_execution_consumer.hpp) is declared in the engine
+// epoch, as run_failure.hpp and execution_consumer.hpp declare epoch classes,
+// so the friends below name that one class and no other.
+namespace pineforge {
+inline namespace engine_script_run_v19 {
+class NativeExecutionConsumer;
+}
+}
 
 namespace pineforge::native_order {
 inline namespace native_order_v7 {
@@ -39,6 +55,7 @@ using Flatten = execution::Flatten;
 /// transaction larger than an opposite position still opens the remainder. An
 /// opening denial rejects the ENTIRE transaction, including that remainder.
 using Transact = order_action::Transact;
+using HandleVisitor = void (*)(void*, const RequestHandle&);
 
 /// A host-maintained, run-scoped roster identity.  Zero is invalid and is
 /// never allocated by WorkingRequestCore.
@@ -446,6 +463,43 @@ struct BindOpening {
     RequestHandle opening;
     int64_t cycle = 0;
 };
+/// Immutable membership, independent of a source scratch scope. A successful
+/// read changes out; an error leaves it unchanged. No read allocates.
+class OpeningReadback {
+public:
+    virtual ~OpeningReadback() noexcept = default;
+    virtual std::uint64_t count() const noexcept = 0;
+    virtual detail::ScratchStatus opening_at(
+        std::uint64_t index, RequestHandle& out) const noexcept = 0;
+};
+
+/// Call-local input. Enrollment freezes it before retaining a definition;
+/// neither this object nor its callback/context is retained.
+class OpeningInputCursor final : public OpeningReadback {
+public:
+    using Reader = detail::ScratchStatus (*)(void*, std::uint64_t, RequestHandle&);
+    OpeningInputCursor(std::uint64_t count, void* context, Reader reader) noexcept
+        : count_(count), context_(context), reader_(reader) {}
+    std::uint64_t count() const noexcept override { return count_; }
+    detail::ScratchStatus opening_at(
+        std::uint64_t index, RequestHandle& out) const noexcept override;
+private:
+    std::uint64_t count_;
+    void* context_;
+    Reader reader_;
+};
+
+/// Freeze and canonicalize a same-run, unique stream. Uses bounded workspace
+/// and an exclusive unlinked file; failure leaves out unchanged. Only creation
+/// of the fixed-size retained owner allocates, never a membership read.
+detail::ScratchStatus freeze_openings(
+    const RunIdentity&, const OpeningReadback&,
+    std::shared_ptr<const OpeningReadback>& out);
+
+std::uint64_t opening_count(const std::vector<RequestHandle>&,
+                           const OpeningReadback*) noexcept;
+detail::ScratchStatus opening_at(const std::vector<RequestHandle>&,
+    const OpeningReadback*, std::uint64_t, RequestHandle&) noexcept;
 /// Bind to a fixed cohort of already-live openings. Every handle must be unique,
 /// nonzero, of this run and physically live in `cycle`; enrollment rejects the
 /// ENTIRE request if any member is invalid. The accepted definition keeps the
@@ -454,6 +508,7 @@ struct BindOpening {
 struct BindOpenings {
     std::vector<RequestHandle> openings;
     int64_t cycle = 0;
+    std::shared_ptr<const OpeningReadback> external_openings;
 };
 /// Bind to a host-built roster (cohort_open / cohort_add / cohort_remove), read at
 /// the match rather than frozen at submit. The C surface pairs it with exactly one
@@ -489,6 +544,23 @@ struct Request {
     Owner owner = Independent{};
     Group group = NoGroup{};
     TriggerAnchor anchor = Absolute{};
+};
+
+/// Complete request schema, including owner text and every opening handle.
+/// intent/trigger/capacity/owner/group/anchor have an unsigned variant `tag`;
+/// label/comment are top-level byte fields. See the production freeze codec.
+class RequestReadback final : public detail::PayloadReadback {
+public:
+    RequestReadback() noexcept = default;
+    RequestReadback(const detail::CommandScratchStore& store, detail::ScratchHandle version) noexcept
+        : PayloadReadback(store, version, detail::PayloadSchema::request) {}
+    explicit RequestReadback(detail::PayloadReadback view) noexcept : PayloadReadback(view) {}
+    detail::ScratchStatus label(detail::PayloadField& out) const noexcept {
+        return find("label", out);
+    }
+    detail::ScratchStatus comment(detail::PayloadField& out) const noexcept {
+        return find("comment", out);
+    }
 };
 
 inline OrderIntent intent_from_physical(const execution::Action& action) {
@@ -613,6 +685,7 @@ struct OpeningsClose {
     int64_t cycle = 0;
     Side side = Side::Long;
     Enrollment enrollment;
+    std::shared_ptr<const OpeningReadback> external_openings;
 };
 struct CohortClose {
     CohortHandle cohort;
@@ -696,11 +769,26 @@ struct OpeningObservation {
     bool has_live_matching_lot = false;
 };
 
+/// Borrowed through the enclosing command/evaluation and any prepare/install
+/// pair that copies its TargetObservation, including nested reads.
+class OpeningObservationReadback {
+public:
+    virtual ~OpeningObservationReadback() noexcept = default;
+    virtual std::uint64_t count() const noexcept = 0;
+    virtual detail::ScratchStatus observation_at(
+        std::uint64_t index, OpeningObservation& out) const noexcept = 0;
+};
+
 struct TargetObservation {
     PositionIdentity current_position;
     std::optional<OpeningObservation> opening;
     std::vector<OpeningObservation> openings;
+    const OpeningObservationReadback* external_openings = nullptr;
 };
+
+std::uint64_t opening_observation_count(const TargetObservation&) noexcept;
+detail::ScratchStatus opening_observation_at(
+    const TargetObservation&, std::uint64_t, OpeningObservation&) noexcept;
 
 /// Who authored a request. Host is every request a host submits, replaces or
 /// cancels, and it is the whole existing population: it folds nothing into the
@@ -1325,6 +1413,26 @@ using CommandEvent = std::variant<AcceptedEvent,
                                   MarginCallEvent,
                                   NativeRiskEvent>;
 
+class JournalRecordSource final : public detail::ScratchByteSource {
+public:
+    explicit JournalRecordSource(const CommandEvent&) noexcept;
+    std::uint64_t size() const noexcept override { return length_; }
+    detail::ScratchStatus read(std::uint64_t, detail::ScratchBuffer) const noexcept override;
+private:
+    const CommandEvent* event_;
+    std::uint64_t length_ = 0;
+    detail::ScratchStatus status_ = detail::ScratchStatus::ok;
+};
+JournalRecordSource encode_journal_record(const CommandEvent&) noexcept;
+// Owning decode is an explicit diagnostic surface.
+detail::ScratchStatus decode_journal_record(const detail::ScratchByteSource&,
+    detail::ScratchBuffer, CommandEvent&) noexcept;
+class WorkingRequestCore;
+void bind_journal_codec(WorkingRequestCore&, detail::CommandScratchStore&);
+detail::ScratchStatus append_journal_record(WorkingRequestCore&,
+    const detail::ScratchByteSource&) noexcept;
+const detail::ScratchReadback& journal_readback(const WorkingRequestCore&);
+
 /// Almost every prepared command yields one history event. Keep that ordinary
 /// transactional payload inline; the overflow vector preserves the existing
 /// arbitrary-length behavior for group/lifecycle plans that emit more events.
@@ -1463,6 +1571,7 @@ struct CommandContext {
     /// its held total, and refuses anything else (MatchRejectReason::
     /// UnrepresentableQuantity). Appended last, like the members above.
     bool units_are_scope_boundary = false;
+    const OpeningObservationReadback* external_openings = nullptr;
 };
 
 struct EvaluationContext {
@@ -1685,6 +1794,9 @@ struct GroupEffectReceipt {
 
 class WorkingRequestCore {
 public:
+    class CohortView;
+    class JournalView;
+    class LiveView;
     explicit WorkingRequestCore(RunIdentity identity);
     WorkingRequestCore(const WorkingRequestCore&) = delete;
     WorkingRequestCore& operator=(const WorkingRequestCore&) = delete;
@@ -1693,57 +1805,107 @@ public:
     /// Self move-assignment preserves the current run.
     WorkingRequestCore(WorkingRequestCore&& other) noexcept;
     WorkingRequestCore& operator=(WorkingRequestCore&& other) noexcept;
-
+    void set_successor_roots_directory(const std::string& directory); // After reset, before the first spill; empty uses TMPDIR or /tmp.
+    void bind_scratch_slab(const std::shared_ptr<::pineforge::detail::ScratchSlab>& slab);
     void reset(RunIdentity identity);
 
     const RunIdentity& identity() const noexcept { return identity_; }
     /// The working book, in queue order: ascending LiveRequest::priority,
     /// which is incarnation order until a re-price keeps a handle
     /// (ReplaceOptions::keep_handle) and takes its request to the back.
-    const std::vector<LiveRequest>& live() const noexcept { return live_; }
+    /// The book is a read view (LiveView). Up to a fixed bound its rows are
+    /// resident; a larger book keeps its newest rows outside the heap, in an
+    /// external ordered table, and the view reads them back in queue order.
+    /// A row the view hands out stays valid until the next few spilled rows it
+    /// reads or the next command; a command that targets a row outside the
+    /// heap brings that row back first.
+    LiveView live() const noexcept;
+    /// How many requests are live, resident or not, in O(1); and the request
+    /// at queue rank `rank` (std::out_of_range when none).
+    std::size_t live_size() const noexcept;
+    const LiveRequest& live_at(std::size_t rank) const;
+    /// Whether some live rows are outside the heap: live_at and live_back
+    /// then walk the book in queue order instead of indexing it.
+    bool book_spilled() const noexcept { return spilled_count() != 0; }
     /// The command journal's retained window, oldest first. Commits append at
     /// the back and retire_history drops a prefix, so the window holds the
     /// absolute journal positions [history_base(), history_end()). A core
     /// nothing retires -- every core its consumer runs under a retaining
     /// policy -- keeps the whole journal and history_base() stays 0.
-    const std::vector<CommandEvent>& history() const noexcept { return history_; }
+    /// The window is a read view (JournalView): its newest events are resident
+    /// and its older ones, past a fixed resident bound, live in external
+    /// pages that the view reads back through a fixed page cache. A reference
+    /// it hands out stays valid until the next few page loads or the next
+    /// command; copy an event that must outlive them.
+    JournalView history() const noexcept;
     /// How many events have been retired from the front of the journal.
     std::size_t history_base() const noexcept { return history_base_; }
     /// The absolute journal length: every event this run has committed,
     /// retained or not. EventRange::first_index counts in this space.
-    std::size_t history_end() const noexcept { return history_base_ + history_.size(); }
+    std::size_t history_end() const noexcept;
     /// The event at an absolute journal position; std::out_of_range when it
     /// is not retained.
     const CommandEvent& history_at(std::size_t absolute) const;
     /// Retire the journal prefix whose ordinals are <= through_ordinal. It
     /// stops ahead of the first event a live request still reads -- the head
     /// of a deferred group-adjustment chain (collect_pending_chain) -- and
-    /// moves no live row, counter, receipt or roster: a group-effect receipt
-    /// whose outcome event is retired stands on its own record
-    /// (receipt_lookup), and the cohort lookups read the chain index, never
-    /// the journal. Answers the number of events retired.
+    /// drops group-effect keys whose causes are <= retired_through(). The
+    /// consumer must fold those keys first; queued applied notifications pin
+    /// their causes. Live rows, logical counters and cohort rosters do not
+    /// move. Answers the number of journal events retired.
     std::size_t retire_history(uint64_t through_ordinal);
     /// The ordinal of the newest retired event, 0 while none is.
     uint64_t retired_through() const noexcept { return retired_through_; }
-    const std::vector<CohortRoster>& cohorts() const noexcept { return cohorts_; }
+    /// Logical roster sequence in allocation order, including empty rosters
+    /// whose members have been removed. Walking allocates nothing and does
+    /// no I/O; empty rows are synthesized from the dense handle sequence.
+    CohortView cohorts() const noexcept;
+    /// The retained cohort-receipt window, in command order. Its absolute
+    /// positions are [cohort_receipt_base(), cohort_receipt_count()). A
+    /// standalone core retains all rows until its reader retires them; the
+    /// Window consumer retires each row after folding it into its digest.
     const std::vector<CohortReceipt>& cohort_receipts() const noexcept {
         return cohort_receipts_;
     }
+    std::size_t cohort_receipt_base() const noexcept { return cohort_receipts_base_; }
+    /// Every cohort receipt this run committed, retained or not.
+    std::size_t cohort_receipt_count() const noexcept {
+        return cohort_receipts_base_ + cohort_receipts_.size();
+    }
+    /// Drop the prefix strictly below the absolute position through, clamped
+    /// to the window. The reader must have folded these rows first. Does not
+    /// change rosters, command counters, prepared-command validity or totals.
+    std::size_t retire_cohort_receipts(std::size_t through) noexcept;
     /// The core's two durable counters: the ordinal of the last committed
     /// event and the last incarnation a command consumed. A later command must
     /// exceed both.
     uint64_t last_ordinal() const noexcept { return last_ordinal_; }
     uint64_t last_incarnation() const noexcept { return last_incarnation_; }
-    /// The group-effect receipts, in commit order: the idempotence keys a later
-    /// drain consults. Read-only; the consumer's state continuation folds each
-    /// once, when it commits. Commit order is cause order, and one cause's
-    /// receipts stand in the order they were applied, whatever the recipients'
-    /// incarnations: the consumer's drain applies them in the queue order
-    /// group_recipients answers, which is not incarnation order once a re-price
-    /// has kept its handle (R5 lane K-OCA-KEEP). A receipt for a cause older
-    /// than the newest one's is refused CoreFailure::InvalidCause.
-    std::size_t group_effect_receipt_count() const noexcept { return receipts_.size(); }
+    /// Group-effect keys in cause/commit order, retaining [base, count).
+    /// Count is the total ever committed; base advances with retire_history.
+    /// A cause's recipients stay in drain/queue order, even after keep_handle
+    /// re-pricing. Older-than-newest causes are InvalidCause unless replayed.
+    /// A retired index asserts in Debug and throws out_of_range otherwise.
+    /// Only the newest few keys are resident: the rest of the retained window
+    /// is read back from an external fixed-record log, so a pinned journal
+    /// (a live deferred chain) no longer grows the heap with its receipts.
+    std::size_t group_effect_receipt_base() const noexcept;
+    std::size_t group_effect_receipt_count() const noexcept;
     GroupEffectReceipt group_effect_receipt(std::size_t index) const;
+    /// The prior adjustment ids a TermsResolvedEvent or QuantityBoundEvent
+    /// spent, in chain order, as a paged contract: `visit` is called once per
+    /// id until it answers false. A chain of up to kInlineAdjustmentIds links
+    /// is in the event's own prior_adjustment_ids exactly as before; a longer
+    /// one is not copied into the event (a vector of every id would be O(chain
+    /// length) in the event and in its prepared token) but kept in an external
+    /// list this call reads back in fixed pages. Answers false when
+    /// `resolution` names no such event in the retained window.
+    bool visit_prior_adjustments(const EventId& resolution,
+                                 const std::function<bool(const EventId&)>& visit) const;
+    /// How many prior adjustment ids that event spent (0 when none or unknown).
+    std::size_t prior_adjustment_count(const EventId& resolution) const;
+    /// The longest chain whose ids an event still carries inline.
+    static constexpr std::size_t kInlineAdjustmentIds = 256;
     /// The incarnations this run issued -- every accepted request and every
     /// replace successor -- as disjoint ascending [first, last] ranges: the
     /// half of the chain index that tells a request that ended from one that
@@ -1752,6 +1914,33 @@ public:
         return issued_;
     }
     const LiveRequest* find_live(const RequestHandle& handle) const;
+    /// find_live for a reader that keeps the row across further reads of the
+    /// book. A spilled row's copy lives as long as the answer does, whatever
+    /// the book reads next; a resident row's answer owns nothing and, like
+    /// find_live's, stays valid until the next command. Null when no live
+    /// request has the handle.
+    std::shared_ptr<const LiveRequest> hold_live(const RequestHandle& handle) const;
+    /// A read of the book's spilled rows that failed where its reader cannot
+    /// throw (a noexcept fold of the book): the reader hands the failure here
+    /// and answers true, and from then on every read of the spilled rows and
+    /// every command that moves one throws it again -- an I/O failure as the
+    /// typed scratch failure (scratch_io_failed) -- until reset. False, with
+    /// nothing kept, when the book has never spilled: it then has no such read.
+    bool carry_book_read_failure(std::exception_ptr failure) const noexcept;
+    /// Throws the failure carry_book_read_failure kept, if any.
+    void rethrow_book_read_failure() const;
+    /// How many spilled rows the book has read back to answer a lookup -- by
+    /// handle (find_live, hold_live), by rank (live_at, live_back) -- and how
+    /// many table steps those lookups walked, since this core was built or
+    /// reset. A walk of live() in queue order is not counted, nor is a read of
+    /// a row at the table entry such a walk found it at (the matcher reusing a
+    /// row it scanned): neither searches the book. Diagnostics only: nothing
+    /// folds them and no decision reads them.
+    struct BookLookupReads {
+        std::uint64_t rows = 0;
+        std::uint64_t steps = 0;
+    };
+    BookLookupReads book_lookup_reads() const noexcept;
     const CommandEvent* event_at(const EventId& id) const;
 
     /// Command-boundary roster maintenance.  A rejected add/remove records a
@@ -1892,7 +2081,7 @@ public:
     /// Consumer-only no-event form of the ordinary allowance
     /// refresh. It preserves prepare_evaluation's eligibility and liveness
     /// checks while avoiding a transient mutation envelope per driver point.
-    void refresh_point_allowances(uint64_t point, const PositionIdentity& position) noexcept;
+    void refresh_point_allowances(uint64_t point, const PositionIdentity& position);
     bool refresh_allowance(const RequestHandle& target,
                            const EvaluationContext& context,
                            const TargetObservation& observation);
@@ -1938,13 +2127,18 @@ public:
     /// K-OCA-KEEP).
     std::vector<RequestHandle> group_recipients(const EventId& applied) const;
     std::vector<RequestHandle> waiting_children(const RequestHandle& parent) const;
-    bool has_waiting_children(const RequestHandle& parent) const noexcept;
+    bool has_waiting_children(const RequestHandle& parent) const;
     std::vector<RequestHandle> bound_close_handles() const;
     /// The same three lists written over `out`, whose capacity a caller that
     /// keeps it reuses (R5 lane L3): the same handles in the same order.
     void group_recipients(const EventId& applied, std::vector<RequestHandle>& out) const;
     void waiting_children(const RequestHandle& parent, std::vector<RequestHandle>& out) const;
     void bound_close_handles(std::vector<RequestHandle>& out) const;
+    /// Synchronous queue-order reads. Callbacks may read the core or write a
+    /// separate scratch store; they must not mutate this core.
+    void visit_group_recipients(const EventId&, void*, HandleVisitor) const;
+    void visit_waiting_children(const RequestHandle&, void*, HandleVisitor) const;
+    void visit_bound_close_handles(void*, HandleVisitor) const;
 
     Preparation<PreparedMutation> prepare_group_effect(const EventId& applied,
                                                        const RequestHandle& recipient,
@@ -2100,11 +2294,18 @@ public:
 
 private:
     enum class TargetKind { Live, NotWorking, InvalidHandle };
+    friend void bind_journal_codec(WorkingRequestCore&, detail::CommandScratchStore&);
+    friend detail::ScratchStatus append_journal_record(WorkingRequestCore&,
+        const detail::ScratchByteSource&) noexcept;
+    friend const detail::ScratchReadback& journal_readback(const WorkingRequestCore&);
     friend class PreparedSubmit;
     friend class PreparedReplace;
     friend class PreparedCancel;
     friend class PreparedMutation;
     friend class PreparedExecution;
+    // The matcher reuses a row it scanned outside the heap through the place
+    // its walk found the row at (book_generation, hold_scanned below).
+    friend class ::pineforge::engine_script_run_v19::NativeExecutionConsumer;
 
     static void require_identity(const RunIdentity& identity);
     static void require_grid(std::optional<double> quantity_grid);
@@ -2123,17 +2324,50 @@ private:
                           const CommandContext& context,
                           EventId accepted) const;
     enum class ReceiptLookup : std::uint8_t { Absent = 0, Present = 1, Conflict = 2 };
+    /// What a chain walk keeps of the chain's ids besides its total: the ids
+    /// of a chain of up to kInlineAdjustmentIds links, in chain order, or --
+    /// for a longer one -- where the walk wrote them (an external list of
+    /// 8-byte ordinals), so no vector of every id is ever built.
+    struct ChainIds {
+        std::vector<EventId> inline_ids;
+        uint64_t count = 0;
+        bool external = false;
+        uint64_t offset = 0;
+    };
+    /// Walks the live deferred chain `pending` back from its tail, checking
+    /// every link, then replays it forward in commit order to reproduce the
+    /// total's exact accumulation. False on any link that does not check.
     bool collect_pending_chain(const PendingAdjustments& pending,
                                const RequestHandle& recipient,
-                               std::vector<EventId>* ids,
-                               double* total) const;
+                               ChainIds* ids,
+                               double* total);
     ReceiptLookup receipt_lookup(const EventId& cause, const RequestHandle& recipient,
                                  GroupEffect effect, uint64_t* outcome) const;
     bool authenticate_receipt_outcome(const CommandEvent& event, const EventId& cause,
                                       const RequestHandle& recipient, GroupEffect effect) const;
-    /// The trailing level for a best and an offset, through the one geometry the
-    /// matcher uses (native_matching::checked_trail_stop): finite, and strictly
-    /// past the best for a positive offset. `ladder_tick` is the run's declared
+    /// The first retained group-effect key whose cause is above `retired`
+    /// (the end of the keys when none): the base retire_history moves to. Reads
+    /// the external log, so it may throw; apply_receipt_base cannot.
+    std::size_t receipts_first_above(uint64_t retired) const;
+    void apply_receipt_base(std::size_t base) noexcept;
+    /// The external stores are created on first use, in the directory
+    /// set_successor_roots_directory named.
+    void ensure_receipt_store();
+    void prepare_codec_frames();
+    void ensure_chain_segments();
+    /// Appends one event to the journal (storage reserved by reserve_plan or
+    /// seal_direct) and advances the absolute length. A bound codec reports I/O.
+    void append_event(CommandEvent&& event);
+    /// A first deferred link starts a chain whose head retire_history must
+    /// keep; a row that held a chain and no longer does makes the cached
+    /// floor a lower bound until it is recomputed.
+    void note_chain_birth(const CommandEvent& event) noexcept;
+    void note_chain_loss(const LiveRequest& row) noexcept;
+    /// The working book's row erase: every erase goes through here so the
+    /// chain floor hears of a chain that left with its row.
+    void erase_live(std::size_t index) noexcept;
+    /// A best and offset through native_matching::checked_trail_stop: finite,
+    /// strictly past the best for a positive offset. `ladder_tick` is the run's
     /// price tick (ActivationGrid::ladder_tick); zero keeps the raw subtraction.
     bool trail_level_ok(double best, double offset, bool is_buy, double* stop,
                         double ladder_tick = 0.0) const noexcept;
@@ -2144,7 +2378,7 @@ private:
     /// read from the live row or, for a request that is no longer working,
     /// from the chain index; nullopt for a handle this run never issued.
     std::optional<RequestHandle> canonical_cohort_origin(const RequestHandle& origin) const;
-    std::size_t cohort_index(CohortHandle cohort) const noexcept;
+    bool cohort_exists(CohortHandle cohort) const noexcept;
     /// Records an accepted request's incarnation and, for a replace
     /// successor, its chain root, in the chain index. Storage is reserved by
     /// reserve_plan, so this cannot throw inside commit.
@@ -2175,7 +2409,13 @@ private:
     /// that have left the book once they outnumber its rows. The caller has
     /// reserved one entry.
     void note_repriced(uint64_t incarnation, uint64_t priority) noexcept;
-    TargetKind classify(const RequestHandle& handle, std::size_t* live_index) const;
+    /// classify among the resident rows only.
+    TargetKind classify_resident(const RequestHandle& handle, std::size_t* live_index) const;
+    /// The index of the row a command targets in live_. A target outside the
+    /// heap (a spilled row) is brought back into live_ first -- the one place
+    /// the book changes without a command committing -- so every command
+    /// reads and writes its row where the resident book keeps it.
+    TargetKind classify(const RequestHandle& handle, std::size_t* live_index);
     bool bump_epoch() noexcept;
     void require_epoch_room() const;
     void clear_unbound() noexcept;
@@ -2206,6 +2446,13 @@ private:
         RequestHandle receipt_recipient{};
         GroupEffect receipt_effect = GroupEffect::Reduce;
         uint64_t receipt_outcome = 0;
+        // A resolution event whose chain is longer than kInlineAdjustmentIds
+        // keeps its ids in the external list the chain walk wrote: the event's
+        // ordinal, where the list starts and how many ids it holds.
+        bool chain_segment = false;
+        uint64_t chain_event_ordinal = 0;
+        uint64_t chain_offset = 0;
+        uint64_t chain_count = 0;
     };
     std::optional<InstallError> validate_plan(const MutationPlan& plan) const noexcept;
     // prepare_replace / apply_replace past their checks, for a replace that
@@ -2243,15 +2490,22 @@ private:
     // The direct forms' halves of a plan (R5 lane L3). begin_direct makes
     // begin_plan's checks; seal_direct reserves what seal_plan would reserve
     // for `events` events and the live change and takes the seal's epoch;
-    // append_direct appends one event exactly as commit does (the ordinal
-    // index row, the chain index for a command that consumes an incarnation,
+    // append_direct appends one event exactly as commit does (the journal
+    // append, the chain index for a command that consumes an incarnation,
     // the last ordinal); finish_direct takes commit's epoch and answers the
-    // range. Nothing after seal_direct can throw.
+    // range. Nothing after seal_direct can throw. seal_direct also makes the
+    // journal's room -- it may write the oldest resident events to an
+    // external page first -- so a pointer into the journal taken before it is
+    // read before it, as for prepare_*. `chain_segment` reserves the external
+    // list index row of a resolution whose chain was written externally.
     void begin_direct() const;
     void seal_direct(std::size_t events, bool push_live, bool add_receipt,
-                     bool consume_incarnation);
+                     bool consume_incarnation, bool chain_segment = false);
+    /// Records the external id list of a resolution event just appended by
+    /// append_direct (room made by seal_direct). Cannot throw.
+    void note_chain_segment(uint64_t event_ordinal, uint64_t offset, uint64_t count) noexcept;
     template <class Event>
-    void append_direct(Event&& event, bool consume_incarnation) noexcept;
+    void append_direct(Event&& event, bool consume_incarnation);
     EventRange finish_direct(std::size_t first) noexcept;
     template <class Event>
     Installed end_direct(std::size_t live_index, Event&& event);
@@ -2272,31 +2526,92 @@ private:
     Preparation<ExecutionValues> execution_values(const RequestHandle& target,
                                                   const ExecutionProposal& proposal,
                                                   uint64_t& next_timeline_ordinal,
-                                                  bool open_activation_grant) const;
+                                                  bool open_activation_grant);
+
+    // CR-221 E03--E05. The journal, the group-effect keys and the long
+    // chains' id lists keep a fixed resident part and write the rest to
+    // run-owned scratch files, created on the first spill. They are defined in
+    // native_order.cpp and held by shared_ptr so this header stays complete.
+    struct JournalStore;
+    struct ReceiptStore;
+    struct ChainSegments;
+    // E02: the working book keeps at most a fixed number of rows in live_,
+    // sorted by priority; its newest rows beyond that wait in BookSpill (an
+    // external ordered table of serialized rows), spilled_count() of them.
+    // The queue is the merge of the two in priority order. A row is in
+    // exactly one of them; a command that targets a spilled row brings it
+    // back into live_ (classify), and a row that would not fit pushes the
+    // newest resident rows out first (make_book_room). repriced_ names only
+    // resident rows.
+    // The stores' state lives in the stores (the journal's length, the keys'
+    // base and count, the spilled rows' count) and the directory they spill
+    // into is the successor roots' (scratch_directory), so that the core
+    // itself keeps the size it had before the stores existed.
+    struct BookSpill;
+    std::size_t spilled_count() const noexcept;
+    const std::string& scratch_directory() const noexcept;
+    // A position in the merged queue: the next resident row and the next
+    // spilled one (a table offset, 0 when none) with its priority.
+    struct BookCursor {
+        std::size_t r = 0;
+        uint64_t at = 0;
+        uint64_t spilled_priority = 0;
+    };
+    void make_book_room();
+    bool promote_book_row(uint64_t incarnation, std::size_t* index);
+    const LiveRequest* spilled_row(uint64_t incarnation) const;
+    std::shared_ptr<LiveRequest> spilled_held(uint64_t incarnation) const;
+    const LiveRequest* find_resident(const RequestHandle& handle) const noexcept;
+    // How many times the spilled table has been rebuilt (BookSpill::compact):
+    // a table offset taken under one generation names nothing under the next.
+    uint64_t book_generation() const noexcept;
+    // hold_live for a row a walk of live() stood on outside the heap, at table
+    // offset `at` (LiveView::const_iterator::spilled_at) under `generation`:
+    // the row is read from that entry, with no search of the table, while the
+    // entry still holds the request spilled. Otherwise -- the table rebuilt
+    // since, the row back in the heap or ended -- it answers hold_live(handle).
+    std::shared_ptr<const LiveRequest> hold_scanned(const RequestHandle& handle, uint64_t at,
+                                                    uint64_t generation) const;
+    void forget_repriced(uint64_t incarnation) noexcept;
+    BookCursor book_begin() const;
+    bool book_done(const BookCursor& cursor) const noexcept;
+    bool book_next_spilled(const BookCursor& cursor) const noexcept;
+    void book_step(BookCursor& cursor) const;
+    const LiveRequest& live_back() const;
+    /// Visits every live row in queue order until `visit` answers false. A
+    /// spilled row is a copy that lives only for its visit.
+    template <class Visit>
+    void visit_book(Visit&& visit) const;
 
     RunIdentity identity_;
     std::shared_ptr<InstanceBinding> instance_;
     std::vector<LiveRequest> live_;
-    std::vector<CommandEvent> history_;
+    std::shared_ptr<BookSpill> book_spill_;
     uint64_t last_ordinal_ = 0;
     uint64_t last_incarnation_ = 0;
     uint64_t epoch_ = 0;
-    // (ordinal, ABSOLUTE journal position) of every retained event, in
-    // ordinal order: event_at's lookup. Retiring drops its prefix with the
-    // journal's.
-    std::vector<std::pair<uint64_t, std::size_t>> ordinal_index_;
-    // The journal window: how many events were retired from its front, and
-    // the ordinal of the newest of them.
+    // The journal window: how many events were retired from its front and the
+    // ordinal of the newest retired event. The events themselves -- resident
+    // chunks plus external pages, the ordinal lookup over both, and the
+    // absolute length (the position the next event takes) -- are the store's.
+    std::shared_ptr<JournalStore> journal_;
     std::size_t history_base_ = 0;
     uint64_t retired_through_ = 0;
-    // The chain index -- the only facts the cohort lookups need about a
-    // request that is no longer working, kept instead of its definition: the
-    // incarnations this run issued, as disjoint ascending [first, last]
-    // ranges (one range for a consumer, which issues them densely), and the
-    // chain root of every replace successor, ascending by successor
-    // incarnation. Sixteen bytes per replace; nothing else grows with the run.
+    // The head of the oldest live deferred chain (kNoChainFloor: none), a
+    // lower bound unless chain_floor_exact_ (see note_chain_birth /
+    // note_chain_loss).
+    static constexpr uint64_t kNoChainFloor = std::numeric_limits<uint64_t>::max();
+    mutable uint64_t chain_floor_ = kNoChainFloor;
+    mutable bool chain_floor_exact_ = true;
+    std::shared_ptr<ChainSegments> chain_segments_;
+    // Issued ranges are dense for a consumer. Successor roots spill in order;
+    // the consumer's event fold hashes their logical rows, once each.
+    struct SuccessorRootIndex;
+    void reserve_successor_root();
+    void append_successor_root(uint64_t incarnation, uint64_t root) noexcept;
+    std::optional<uint64_t> successor_root(uint64_t incarnation) const;
     std::vector<std::pair<uint64_t, uint64_t>> issued_;
-    std::vector<std::pair<uint64_t, uint64_t>> successor_roots_;
+    std::shared_ptr<SuccessorRootIndex> successor_roots_;
     // The requests a keep_handle re-price moved in the queue, ascending by
     // incarnation: (incarnation, priority). The book is held by priority, so
     // a handle lookup reads its priority here; a handle absent here is at its
@@ -2305,18 +2620,271 @@ private:
     // until the next re-price prunes it, and a lookup through it finds no
     // row because no other request takes that priority.
     std::vector<std::pair<uint64_t, uint64_t>> repriced_;
-    struct ReceiptKey {
-        EventId cause;
-        RequestHandle recipient;
-        GroupEffect effect = GroupEffect::Reduce;
-        uint64_t outcome_ordinal = 0;
-    };
-    // In commit order: non-decreasing cause ordinal, one cause's in the order
-    // they were applied (receipt_lookup bisects the cause, then walks it).
-    std::vector<ReceiptKey> receipts_;
+    // Readback-only base; total/digest stay in the consumer. Keys are in
+    // cause/drain order, retained at [group_effect_receipt_base(),
+    // group_effect_receipt_count()) and held by the receipt store (a resident
+    // tail over an external log), which also keeps the base and the count.
+    std::shared_ptr<ReceiptStore> receipt_store_;
     std::uint64_t next_cohort_handle_ = 1;
-    std::vector<CohortRoster> cohorts_;
+    // Only rosters with members occupy nodes; erasing an empty roster frees
+    // its member capacity as well. next_cohort_handle_ records the complete
+    // dense sequence of allocated handles, including every empty roster.
+    std::map<std::uint64_t, CohortRoster> cohorts_;
     std::vector<CohortReceipt> cohort_receipts_;
+    // Storage cursor only: the consumer hashes the lifetime count and every
+    // receipt, independently of how many of their rows have been retired.
+    std::size_t cohort_receipts_base_ = 0;
+};
+
+// A non-owning read view. Iteration preserves CohortRoster references for
+// existing typed predicates and iterator arrow reads. An empty row belongs
+// to its input iterator and is valid until that iterator advances or dies.
+// Indexed reads return a value, so a saved row from a temporary view remains
+// valid. Callers that need no copies use the allocation-free iterator walk.
+class WorkingRequestCore::CohortView {
+public:
+    class const_iterator {
+    public:
+        using iterator_category = std::input_iterator_tag;
+        using value_type = CohortRoster;
+        using difference_type = std::ptrdiff_t;
+        using pointer = const CohortRoster*;
+        using reference = const CohortRoster&;
+
+        const_iterator() noexcept = default;
+        reference operator*() const noexcept;
+        pointer operator->() const noexcept { return &**this; }
+        const_iterator& operator++() noexcept { ++index_; return *this; }
+        const_iterator operator++(int) {
+            auto previous = *this;
+            ++*this;
+            return previous;
+        }
+        friend bool operator==(const const_iterator& left, const const_iterator& right) noexcept {
+            return left.core_ == right.core_ && left.index_ == right.index_;
+        }
+        friend bool operator!=(const const_iterator& left, const const_iterator& right) noexcept {
+            return !(left == right);
+        }
+
+    private:
+        friend class CohortView;
+        const_iterator(const WorkingRequestCore* core, std::size_t index) noexcept
+            : core_(core), index_(index) {}
+        const WorkingRequestCore* core_ = nullptr;
+        std::size_t index_ = 0;
+        mutable CohortRoster empty_{};
+    };
+
+    std::size_t size() const noexcept {
+        return static_cast<std::size_t>(core_->next_cohort_handle_ - 1);
+    }
+    bool empty() const noexcept { return size() == 0; }
+    const_iterator begin() const noexcept { return const_iterator(core_, 0); }
+    const_iterator end() const noexcept { return const_iterator(core_, size()); }
+    CohortRoster operator[](std::size_t index) const { return *const_iterator(core_, index); }
+
+private:
+    friend class WorkingRequestCore;
+    explicit CohortView(const WorkingRequestCore* core) noexcept : core_(core) {}
+    const WorkingRequestCore* core_;
+};
+
+// A non-owning read view of the command journal's retained window
+// (WorkingRequestCore::history), with the read interface the window had as a
+// std::vector<CommandEvent>: size, empty, front, back, indexing relative to
+// history_base(), random-access iteration, and a conversion to a vector for
+// a reader that wants an owning copy. The newest events are resident; older
+// ones sit in external pages that the view reads back through a fixed page
+// cache, so a reference it returns stays valid until the next few page loads
+// or the next command, and a read of an old event may do I/O (and so throw).
+// capacity() and max_size() answer one huge bound: nothing is reserved for an
+// external window. Positions are absolute inside the iterator, so an
+// iterator survives a retirement that leaves its event in the window.
+class WorkingRequestCore::JournalView {
+public:
+    class const_iterator {
+    public:
+        using iterator_category = std::random_access_iterator_tag;
+        using value_type = CommandEvent;
+        using difference_type = std::ptrdiff_t;
+        using pointer = const CommandEvent*;
+        using reference = const CommandEvent&;
+
+        const_iterator() noexcept = default;
+        reference operator*() const { return core_->history_at(position_); }
+        pointer operator->() const { return &core_->history_at(position_); }
+        reference operator[](difference_type offset) const { return *(*this + offset); }
+        const_iterator& operator++() noexcept { ++position_; return *this; }
+        const_iterator operator++(int) noexcept {
+            const_iterator previous = *this;
+            ++position_;
+            return previous;
+        }
+        const_iterator& operator--() noexcept { --position_; return *this; }
+        const_iterator operator--(int) noexcept {
+            const_iterator previous = *this;
+            --position_;
+            return previous;
+        }
+        const_iterator& operator+=(difference_type offset) noexcept {
+            position_ = static_cast<std::size_t>(static_cast<difference_type>(position_) + offset);
+            return *this;
+        }
+        const_iterator& operator-=(difference_type offset) noexcept { return *this += -offset; }
+        friend const_iterator operator+(const_iterator iterator, difference_type offset) noexcept {
+            iterator += offset;
+            return iterator;
+        }
+        friend const_iterator operator+(difference_type offset, const_iterator iterator) noexcept {
+            iterator += offset;
+            return iterator;
+        }
+        friend const_iterator operator-(const_iterator iterator, difference_type offset) noexcept {
+            iterator -= offset;
+            return iterator;
+        }
+        friend difference_type operator-(const const_iterator& left,
+                                         const const_iterator& right) noexcept {
+            return static_cast<difference_type>(left.position_)
+                 - static_cast<difference_type>(right.position_);
+        }
+        friend bool operator==(const const_iterator& left, const const_iterator& right) noexcept {
+            return left.position_ == right.position_;
+        }
+        friend bool operator!=(const const_iterator& left, const const_iterator& right) noexcept {
+            return left.position_ != right.position_;
+        }
+        friend bool operator<(const const_iterator& left, const const_iterator& right) noexcept {
+            return left.position_ < right.position_;
+        }
+        friend bool operator>(const const_iterator& left, const const_iterator& right) noexcept {
+            return left.position_ > right.position_;
+        }
+        friend bool operator<=(const const_iterator& left, const const_iterator& right) noexcept {
+            return left.position_ <= right.position_;
+        }
+        friend bool operator>=(const const_iterator& left, const const_iterator& right) noexcept {
+            return left.position_ >= right.position_;
+        }
+
+    private:
+        friend class JournalView;
+        const_iterator(const WorkingRequestCore* core, std::size_t position) noexcept
+            : core_(core), position_(position) {}
+        const WorkingRequestCore* core_ = nullptr;
+        std::size_t position_ = 0;
+    };
+    using value_type = CommandEvent;
+    using size_type = std::size_t;
+    using reference = const CommandEvent&;
+    using const_reference = const CommandEvent&;
+    using iterator = const_iterator;
+
+    std::size_t size() const noexcept { return core_->history_end() - core_->history_base(); }
+    bool empty() const noexcept { return size() == 0; }
+    std::size_t max_size() const noexcept {
+        return static_cast<std::size_t>(std::numeric_limits<std::ptrdiff_t>::max()) / 4;
+    }
+    std::size_t capacity() const noexcept { return max_size(); }
+    const CommandEvent& operator[](std::size_t index) const {
+        return core_->history_at(core_->history_base() + index);
+    }
+    const CommandEvent& at(std::size_t index) const {
+        if (index >= size()) throw std::out_of_range("native journal index is not retained");
+        return (*this)[index];
+    }
+    const CommandEvent& front() const { return (*this)[0]; }
+    const CommandEvent& back() const { return (*this)[size() - 1]; }
+    const_iterator begin() const noexcept { return const_iterator(core_, core_->history_base()); }
+    const_iterator end() const noexcept { return const_iterator(core_, core_->history_end()); }
+    const_iterator cbegin() const noexcept { return begin(); }
+    const_iterator cend() const noexcept { return end(); }
+    operator std::vector<CommandEvent>() const { return std::vector<CommandEvent>(begin(), end()); }
+
+private:
+    friend class WorkingRequestCore;
+    explicit JournalView(const WorkingRequestCore* core) noexcept : core_(core) {}
+    const WorkingRequestCore* core_;
+};
+
+// A non-owning read view of the working book in queue order
+// (WorkingRequestCore::live), with the read interface the book had as a
+// std::vector<LiveRequest>: size, empty, front, back, indexing by queue rank,
+// forward iteration, and a conversion to a vector for a reader that wants an
+// owning copy. The resident rows are read in place; the rows outside the heap
+// (a book past its resident bound) are read back one at a time, in queue
+// order, so an iteration holds at most one of them. A reference to a spilled
+// row stays valid until the next few spilled rows are read or the next
+// command. Iterating costs one external read per spilled row; indexing by rank
+// walks to it.
+class WorkingRequestCore::LiveView {
+public:
+    class const_iterator {
+    public:
+        using iterator_category = std::forward_iterator_tag;
+        using value_type = LiveRequest;
+        using difference_type = std::ptrdiff_t;
+        using pointer = const LiveRequest*;
+        using reference = const LiveRequest&;
+
+        const_iterator() noexcept = default;
+        reference operator*() const;
+        pointer operator->() const { return &**this; }
+        /// The row the iterator stands on, held as hold_live holds it: a
+        /// spilled row stays valid as long as the answer does, however far
+        /// the iterator or any other reader of the book moves on.
+        std::shared_ptr<const LiveRequest> hold() const;
+        const_iterator& operator++();
+        const_iterator operator++(int) {
+            const_iterator previous = *this;
+            ++*this;
+            return previous;
+        }
+        friend bool operator==(const const_iterator& left, const const_iterator& right) noexcept {
+            return left.core_ == right.core_ && left.cursor_.r == right.cursor_.r
+                && left.cursor_.at == right.cursor_.at;
+        }
+        friend bool operator!=(const const_iterator& left, const const_iterator& right) noexcept {
+            return !(left == right);
+        }
+
+    private:
+        friend class LiveView;
+        friend class ::pineforge::engine_script_run_v19::NativeExecutionConsumer;
+        const_iterator(const WorkingRequestCore* core, BookCursor cursor) noexcept
+            : core_(core), cursor_(cursor) {}
+        // The spilled table's offset of the row the iterator stands on, 0
+        // when that row is resident (WorkingRequestCore::hold_scanned).
+        uint64_t spilled_at() const noexcept { return held_ ? cursor_.at : 0; }
+        // Loads the spilled row the cursor stands on, if it does.
+        void settle();
+        const WorkingRequestCore* core_ = nullptr;
+        BookCursor cursor_{};
+        std::shared_ptr<LiveRequest> held_;
+    };
+    using value_type = LiveRequest;
+    using size_type = std::size_t;
+    using reference = const LiveRequest&;
+    using const_reference = const LiveRequest&;
+    using iterator = const_iterator;
+
+    std::size_t size() const noexcept { return core_->live_size(); }
+    bool empty() const noexcept { return size() == 0; }
+    const LiveRequest& operator[](std::size_t rank) const { return core_->live_at(rank); }
+    const LiveRequest& at(std::size_t rank) const { return core_->live_at(rank); }
+    const LiveRequest& front() const { return core_->live_at(0); }
+    const LiveRequest& back() const { return core_->live_back(); }
+    const_iterator begin() const;
+    const_iterator end() const;
+    const_iterator cbegin() const { return begin(); }
+    const_iterator cend() const { return end(); }
+    operator std::vector<LiveRequest>() const;
+
+private:
+    friend class WorkingRequestCore;
+    explicit LiveView(const WorkingRequestCore* core) noexcept : core_(core) {}
+    const WorkingRequestCore* core_;
 };
 
 class PreparedSubmit {

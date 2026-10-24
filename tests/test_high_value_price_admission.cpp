@@ -53,7 +53,7 @@ public:
         }
         if (bar_index_ == 2) { after = signed_position_size(); strategy_close_all(); }
     }
-    const std::vector<Trade>& rows() const { return trades_; }
+    const TradeLedger& rows() const { return trades_; }
 };
 
 void execute(Reversal& engine) {
@@ -136,7 +136,7 @@ public:
         if (bar_index_ == 0) strategy_entry("New", is_long);
         if (bar_index_ == 1) { after = signed_position_size(); strategy_close_all(); }
     }
-    const std::vector<Trade>& rows() const { return trades_; }
+    const TradeLedger& rows() const { return trades_; }
 };
 
 void test_flat_across_price_scales() {

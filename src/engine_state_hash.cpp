@@ -32,7 +32,13 @@ uint64_t BacktestEngine::broker_state_hash() const {
 }
 
 uint64_t BacktestEngine::broker_state_hash_projection() const {
-    return broker_state_hash_from_execution_hash(execution_consumer().continuation_hash());
+    const IExecutionConsumer& consumer = execution_consumer();
+    const std::uint64_t execution = consumer.continuation_hash();
+    // The fold cannot throw: a read of the spilled book that failed inside it
+    // was carried by the core and is thrown here, never folded as a hash it
+    // cut short.
+    as_native_consumer(consumer).request_core().rethrow_book_read_failure();
+    return broker_state_hash_from_execution_hash(execution);
 }
 
 uint64_t BacktestEngine::broker_state_hash_from_execution_hash(

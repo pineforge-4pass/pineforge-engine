@@ -272,7 +272,7 @@ public:
     }
     using BacktestEngine::position_qty_;
     using BacktestEngine::position_side_;
-    const std::vector<Trade>& rows() const { return trades_; }
+    const TradeLedger& rows() const { return trades_; }
 private:
     double current_close_ = kNaN;
 };
@@ -1015,7 +1015,7 @@ public:
         }
         if (bar_index_ == close_bar) strategy_close_all();
     }
-    const std::vector<Trade>& rows() const { return trades_; }
+    const TradeLedger& rows() const { return trades_; }
 };
 
 // The kernel's conversion of `cash` at `price`, raw (ExplicitUnits), on the
