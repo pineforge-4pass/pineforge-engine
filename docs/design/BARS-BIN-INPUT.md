@@ -225,7 +225,7 @@ docker/run_failure_codes.json:2020). Neither establishes the production HPO
 runner's input support.
 
 Check the separate **pineforge-hpo** repository named by this repository's
-release notes (`HPO` CHANGELOG.md:172): its production runner's accepted
+release notes (the `HPO` bullet of the 1.6.1 entry in CHANGELOG.md): its production runner's accepted
 arguments, bar loader, and shared/per-trial `bars.csv` preparation must be
 read to establish whether it can consume these binaries or forward
 `--ohlcv-bin` and `--symbol-feeds`. Its deployed worker/image revision also
