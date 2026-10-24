@@ -7352,7 +7352,17 @@ void NativeExecutionConsumer::match_path(
         if (continuous && winner->t > t_cursor) {
             apply_excursion(engine, winner->price);
             path_cursor = make_cursor(point, winner->t);
+            const uint64_t book_epoch = requests_.epoch_;
             observe_trails(engine, point, path_cursor, continuous, winner->price);
+            // A trail the observation improves may stand outside the heap, and
+            // bringing it back (classify, promote_book_row) spills the heap's
+            // back row and shifts the rest, so a resident row the scan held
+            // can name another request by now. Every such move raises the
+            // book's epoch: the winner is then held again by its handle (lane
+            // b1 round 7, argon F-NEW-01).
+            if (winner_held && requests_.epoch_ != book_epoch) {
+                winner_held = requests_.hold_live(winner->handle);
+            }
         }
         t_cursor = winner->t;
         cursor_price = winner->price;
