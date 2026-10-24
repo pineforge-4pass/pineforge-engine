@@ -1576,7 +1576,7 @@ exit "$lookup_exit"
                 self.assertIn(f'{job} must keep its full population', findings)
                 self.assertEqual(sum('--exclude-label' in body for body in _jobs(changed[0]).values()), 1)
 
-    def assert_full_event_populations(self, ci, release):
+    def assert_release_kernel_native_full_debug_sanitizers_exclude_slow(self, ci, release):
         jobs = _jobs(ci)
         # Full verification no longer carries a label exclusion on any event.
         self.assertEqual({job for job, body in jobs.items() if '--exclude-label' in body},
@@ -1618,10 +1618,11 @@ exit "$lookup_exit"
                         str(ROOT / 'scripts/test_ci_verify.py'), '--log-dir',
                         str(ROOT / 'build-ci-preflight/verifier-tests-shards')])
 
-    def test_main_and_release_keep_every_row_and_verifier_class(self):
+    def test_release_kernel_native_keep_rows_debug_sanitizers_exclude_slow_all_classes(self):
+        # CR-233 keeps the full-event profiles in ci-post.yml (CI_SOURCES[6]).
         ci = self.ci_sources()[6]
         release = (ROOT / '.github/workflows/release.yml').read_text()
-        self.assert_full_event_populations(ci, release)
+        self.assert_release_kernel_native_full_debug_sanitizers_exclude_slow(ci, release)
         # A push path carrying an exclusion must break this coverage control.
         for job in ('build', 'kernel-only', 'sanitizers'):
             for flag in ("${{ github.event_name == 'push' && '--exclude-label slow' || '' }}",
@@ -1630,12 +1631,13 @@ exit "$lookup_exit"
                     changed = in_job(ci, job, ' --ccache', ' --ccache ' + flag)
                     self.assertNotEqual(changed, ci)
                     with self.assertRaises(AssertionError):
-                        self.assert_full_event_populations(changed, release)
+                        self.assert_release_kernel_native_full_debug_sanitizers_exclude_slow(
+                            changed, release)
                     sources = self.ci_sources()
                     sources[6] = changed
                     self.assertNotEqual(ci_workflow_findings(*sources), [])
         with self.assertRaises(AssertionError):
-            self.assert_full_event_populations(
+            self.assert_release_kernel_native_full_debug_sanitizers_exclude_slow(
                 ci, in_job(release, 'release', '    steps:\n',
                            '    steps:\n      - run: python3 scripts/ci_verify.py release --exclude-label slow\n'))
 
