@@ -2,6 +2,7 @@
 #include <pineforge/execution_observer.h>
 #include <pineforge/native_host.hpp>
 #include <pineforge/report_mode.h>
+#include <pineforge/run_failure.hpp>
 #include <pineforge/selected_window.h>
 
 #include <array>
@@ -257,6 +258,113 @@ void full_pending_control(const ReportC& oracle) {
     std::printf("N5/row3 FULL pending window: PASS\n");
 }
 
+void summary_admitted_window_control() {
+    class ZeroTradeHost final : public NativeStrategyHost {
+    public:
+        int begins = 0;
+        int calculations = 0;
+
+        void on_native_run_begin() override {
+            ++begins;
+            calculations = 0;
+        }
+
+        void on_native_bar(const Bar&, const NativeDecisionContext&) override {
+            // Consume the same tape without submitting any entry or exit.
+            ++calculations;
+        }
+    };
+
+    ZeroTradeHost host;
+    NativeRunSpec spec;
+    spec.identity = {"n5-admitted-window", 1};
+    spec.input_tf = spec.script_tf = "1";
+    spec.tickerid = "TEST:N5";
+    spec.timezone = "UTC";
+    spec.session = "24x7";
+    spec.initial_capital = 10000.0;
+    spec.point_value = spec.account_fx = 1.0;
+    spec.price_tick = 0.01;
+    spec.report_policy = NativeReportPolicy::KernelRecorded;
+    spec.report_open_position_at_end = true;
+    require(host.configure_native(spec).status == NativeSetupStatus::Applied,
+            "row 4: native configure refused");
+    require(host.set_report_mode_v1(ReportMode::SUMMARY_ONLY) == PF_REPORT_MODE_ACCEPTED,
+            "row 4: ordinary SUMMARY_ONLY setter refused");
+    const pf_selected_window_config_v1 window{
+        sizeof window, 1, start_ms, start_ms + bar_count * minute_ms};
+    require(strategy_set_selected_window_v1(&host, &window) == 0,
+            "row 4: pending selected window refused");
+
+    const auto bars = tape();
+    host.run(bars.data(), static_cast<int>(bars.size()));
+    if (host.last_run_status() != 0) {
+        // Once the X1(2) begin check is picked, a sinkless SUMMARY_ONLY capture is refused
+        // before any bar, so no generation is ever admitted and the admitted half of the
+        // predicate has nothing left to guard. Accept exactly that typed refusal, never a
+        // different failure, and prove nothing was published.
+        require(std::strcmp(run_failure_code_of(host), "report_mode_unsupported") == 0
+                    && host.begins == 0 && host.calculations == 0,
+                "row 4: zero-trade selected run failed other than by the begin refusal: "
+                    + host.last_error());
+        Envelope refused;
+        require(host.fill_report_envelope_v1(&refused.value) != PF_REPORT_MODE_ACCEPTED
+                    || refused.value.metadata.complete == 0,
+                "row 4: refused begin was certified complete");
+        std::printf("N5/row4 SUMMARY_ONLY admitted window: begin refusal, PASS\n");
+        return;
+    }
+    require(host.last_error().empty()
+                && host.native_state().kind == NativeLifecycleKind::Completed,
+            "row 4: zero-trade selected run did not complete: " + host.last_error());
+    require(host.begins == 1 && host.calculations == bar_count,
+            "row 4: zero-trade fixture did not execute the complete tape");
+    const auto position = host.physical_position();
+    require(position.lot_count == 0 && position.signed_units == 0.0,
+            "row 4: zero-trade fixture opened a position");
+    Report zero;
+    host.fill_report(&zero.value);
+    require(zero.value.total_trades == 0 && zero.value.metrics.all.num_trades == 0
+                && zero.value.metrics.longs.num_trades == 0
+                && zero.value.metrics.shorts.num_trades == 0,
+            "row 4: selected fixture did not retain zero trade counts");
+    pf_selected_window_counts_v1 counts{};
+    counts.struct_size = sizeof counts;
+    counts.version = 1;
+    require(strategy_selected_window_counts_v1(&host, &counts) == 0
+                && counts.run_generation != 0
+                && counts.fed_input_bars == bar_count && counts.fed_script_bars == bar_count
+                && counts.window_input_bars == bar_count && counts.window_script_bars == bar_count
+                && counts.preroll_input_bars == 0 && counts.preroll_script_bars == 0,
+            "row 4: selected window was not admitted with completed results");
+    require(strategy_set_selected_window_v1(&host, nullptr) == 0,
+            "row 4: clearing pending selected window refused");
+
+    for (int read = 0; read < 2; ++read) {
+        Envelope result;
+        const int status = host.fill_report_envelope_v1(&result.value);
+        std::printf("N5/row4 SUMMARY_ONLY admitted window: read=%d status=%d expected=%d complete=%u\n",
+                    read + 1, status, PF_REPORT_MODE_REPLAY_UNAVAILABLE,
+                    result.value.metadata.complete);
+        require(status == PF_REPORT_MODE_REPLAY_UNAVAILABLE,
+                "row 4: clearing pending window erased admitted SUMMARY_ONLY refusal (-5)");
+        const auto& report = result.value.report;
+        require(result.value.metadata.complete == 0
+                    && report.trades == nullptr && report.trades_len == 0
+                    && report.security_diag == nullptr && report.security_diag_len == 0
+                    && report.trace == nullptr && report.trace_len == 0
+                    && report.trace_names == nullptr && report.trace_names_len == 0
+                    && report.equity_curve == nullptr && report.equity_curve_len == 0
+                    && report.broker_state_hash == nullptr && report.broker_state_hash_len == 0,
+                "row 4: refused envelope completed or exposed report arrays");
+        require(host.last_run_status() == 0 && host.last_error().empty()
+                    && host.native_state().kind == NativeLifecycleKind::Completed
+                    && host.begins == 1 && host.calculations == bar_count,
+                "row 4: envelope read changed or re-executed the completed run");
+    }
+    std::printf("N5/row4 SUMMARY_ONLY admitted window: PASS\n");
+}
+
 void summary_after_pending_capture(const ReportC& oracle) {
     Host host;
     configure(host);
@@ -285,6 +393,7 @@ int main() {
         // A failed control stops before the red row.
         pre_run_capture_control(oracle.value);
         full_pending_control(oracle.value);
+        summary_admitted_window_control();
         summary_after_pending_capture(oracle.value);
         std::printf("test_n5_summary_only_envelope_after_pending_capture: PASS\n");
         return 0;
