@@ -3034,7 +3034,8 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
         && (selected_epoch_.observer_registered || selected_epoch_.window_configured)) {
         fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Begin});
         render(engine, "unsupported report mode: SUMMARY_ONLY "
-                       "(no pineforge-report/v1 provider bridge for this host)",
+                       "(a selected window or execution observer needs a pineforge-report/v1 "
+                       "report sink: drop it, attach a sink, or select FULL)",
                RunFailureCode::report_mode_unsupported,
                {{"mode", "SUMMARY_ONLY"}, {"contract", "pineforge-report/v1"}});
         return false;
