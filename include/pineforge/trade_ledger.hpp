@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <iterator>
 #include <memory>
@@ -18,8 +19,10 @@ inline namespace engine_script_run_v19 {
 // A kResidentRows descriptor window and an equally sized fixed byte tail of
 // the string payload stay in memory. All four string payloads and all older
 // mutable/sealed descriptors use the existing run-owned positional scratch
-// files. Owning Trade values belong to readers, so no arbitrary-width string
-// is hidden in the resident window.
+// files. A separate, budgeted read cache retains numeric records and up to
+// kCacheStringBytes of decoded string bytes per row. Wider rows retain their
+// numeric records in the cache and use scratch only for string reads.
+// Owning Trade values still belong to readers.
 //
 // Reads own their values. No reference or contiguous pointer into an
 // evictable page escapes. Iteration visits [base(),size()) as before, now
@@ -33,6 +36,20 @@ public:
     // storage type is complete.
     static constexpr size_type kRecordBytes = 168;
     static constexpr size_type kResidentRows = 64;
+    // One knob for this cache kind: ledger_rows. Each entry contains a
+    // 168-byte numeric/extent record, a global key and validity generation,
+    // and exactly 128 inline string bytes (all four strings combined).
+    // The string-validity flag shares the generation word. On 64-bit targets:
+    // 168 + 16 + 128 = 312 bytes, with no additional alignment padding.
+    // No per-entry heap allocation or growing offset/string directory.
+    static constexpr size_type kCacheStringBytes = 128;
+    static constexpr size_type kLedgerEntryBytes =
+        kRecordBytes + 2 * sizeof(size_type) + kCacheStringBytes;
+    static constexpr size_type kDefaultCacheRows = 65536;
+    static constexpr size_type kMaxCacheRows = 1048576;
+    // A run with a report sink installed keeps the cache inside the sink's
+    // fixed heap window: 128 x 312 = 39,936 B, under one 64 KiB scratch window.
+    static constexpr size_type kSinkCacheRows = 128;
     using Visitor = std::function<bool(size_type, const Trade&)>;
 
     class const_iterator {
@@ -69,6 +86,26 @@ public:
     // Bind before the first spill. No mapping or in-memory offset directory.
     void set_scratch_directory(const std::string&);
     const std::string& scratch_directory() const;
+    // Configure before the first append/spill; clear() preserves the budget.
+    // Valid rows: [1,1048576]; invalid/late settings throw a coded
+    // std::invalid_argument (setting_rejected, reason value_below_minimum,
+    // value_above_maximum or frozen). Default: 65,536 rows, 20,447,232 entry
+    // bytes on 64-bit targets; maximum: 1,048,576 rows, 327,155,712 entry bytes.
+    void set_cache_rows(size_type rows);
+    size_type cache_rows() const;
+    // Accounted ledger/cache storage: rows*kLedgerEntryBytes + a fixed base
+    // (sizeof ledger + State). Excludes allocator overhead, scratch/OS pages,
+    // configured directory strings, returned owning Trades and the explicit
+    // legacy materialize() map. Validates the same row range as the setter.
+    static size_type resident_cache_bytes(size_type rows);
+    // Actual allocation: fixed base plus allocated capacity*kLedgerEntryBytes.
+    // Allocated on the first read, at min(cache_rows(), the next power of two
+    // >= max(64,size())). Further growth invalidates entries; capacity stays
+    // bounded by cache_rows() and independent of the number of bars.
+    size_type cache_resident_bytes() const;
+    // Occupied decoded entries only; separate from resident_size()'s legacy
+    // descriptor/materialization accounting.
+    size_type cache_size() const;
     void clear();
     void reserve(size_type);
     size_type size() const;
@@ -81,15 +118,39 @@ public:
 
     // read() spans the whole exact source; at()/[] retain the checked
     // unsealed-window contract for existing settlement callers.
+    // Hits allocate only the owning strings already required by read().
+    // Direct-mapped eviction above cache_rows(), or oversized strings, retains
+    // the existing scratch path; a history loop can still cost O(T).
     Trade read(size_type global) const;
     Trade operator[](size_type global) const;
     Trade at(size_type global) const;
     Trade back() const;
     // Same checked unsealed-row contract as at(). numeric_at() returns every
-    // numeric field and flag with empty strings, reading only the descriptor;
-    // entry_id_at() reads just that one string when a predicate needs it.
+    // numeric field and flag with empty strings, reading only the descriptor.
+    // entry_id_at() returns only that string and shares the field read cache.
     Trade numeric_at(size_type global) const;
     std::string entry_id_at(size_type global) const;
+    // Pine field reads use the same check(global,true) as at(). A numeric
+    // hit loads just its Record member, without constructing/copying a Trade
+    // or any string. A string hit copies only the requested packed bytes.
+    // Misses retain the numeric record and all strings fitting the allowance.
+    double pnl_at(size_type global) const;
+    double pnl_pct_at(size_type global) const;
+    double commission_at(size_type global) const;
+    std::int32_t entry_bar_index_at(size_type global) const;
+    std::int32_t exit_bar_index_at(size_type global) const;
+    std::uint64_t entry_incarnation_at(size_type global) const;
+    double entry_price_at(size_type global) const;
+    double exit_price_at(size_type global) const;
+    std::int64_t entry_time_at(size_type global) const;
+    std::int64_t exit_time_at(size_type global) const;
+    double qty_at(size_type global) const;
+    double max_runup_at(size_type global) const;
+    double max_drawdown_at(size_type global) const;
+    bool is_long_at(size_type global) const;
+    std::string entry_comment_at(size_type global) const;
+    std::string exit_comment_at(size_type global) const;
+    std::string exit_id_at(size_type global) const;
     void replace(size_type global, const Trade&);
     void modify(size_type global, const std::function<void(Trade&)>&);
 

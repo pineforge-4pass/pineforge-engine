@@ -1,0 +1,6 @@
+list(APPEND TEST_SOURCES test_p2cx_tledger_budget)
+pineforge_add_unit_test(test_p2cx_tledger_budget)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    list(APPEND TEST_SOURCES test_p2cx_tledger_io)
+    pineforge_add_unit_test(test_p2cx_tledger_io)
+endif()
