@@ -1,4 +1,4 @@
-// X1: refuse unsupported SUMMARY_ONLY capture before registration or begin.
+// X1: refuse unsupported capture and never publish inconsistent trade metrics.
 // Public APIs only; the independent FULL run supplies every parity expectation.
 #include <pineforge/execution_observer.h>
 #include <pineforge/native_host.hpp>
@@ -176,9 +176,7 @@ void select_window(Host& host) {
     require(status == 0, "window registration status=" + std::to_string(status));
 }
 
-void run(Host& host, const Observer* observer = nullptr) {
-    const auto bars = tape();
-    host.run(bars.data(), static_cast<int>(bars.size()));
+void check_completed(Host& host, const Observer* observer = nullptr) {
     require(host.last_run_status() == 0 && host.last_error().empty(),
             "run status=" + std::to_string(host.last_run_status())
                 + " code=" + run_failure_code_of(host) + " error=" + host.last_error());
@@ -210,6 +208,12 @@ void run(Host& host, const Observer* observer = nullptr) {
                     + " fault=" + std::to_string(observation.fault_stage)
                     + " outcome=" + std::to_string(observation.attempt_outcome));
     }
+}
+
+void run(Host& host, const Observer* observer = nullptr) {
+    const auto bars = tape();
+    host.run(bars.data(), static_cast<int>(bars.size()));
+    check_completed(host, observer);
 }
 
 void print_report(const char* label, const ReportC& report) {
@@ -296,48 +300,45 @@ bool withheld(const ReportC& report) {
         && !report.broker_state_hash && report.broker_state_hash_len == 0;
 }
 
-bool begin_refused(const char* row, Host& host, const Observer* observer = nullptr) {
-    const auto bars = tape();
-    host.run(bars.data(), static_cast<int>(bars.size()));
+bool failed_closed(const char* row, Host& host, const Observer* observer = nullptr) {
+    const int run_status = host.last_run_status();
     const auto state = host.native_state();
+    const std::string code = run_failure_code_of(host);
+    const std::string args = run_failure_args_of(host);
     pf_execution_observation_v1 observation{};
     observation.struct_size = sizeof observation;
     observation.version = 1;
     const int query = strategy_execution_observation_v1(handle(host), &observation);
     Report report;
     host.fill_report(&report.value);
-    const char* code = run_failure_code_of(host);
-    const char* args = run_failure_args_of(host);
     std::fprintf(stderr,
-        "%s: run_status=%d code=%s args=%s error=%s lifecycle=%u operation=%u "
+        "%s: run_status=%d fill_status=%d code=%s args=%s fill_code=%s fill_args=%s "
+        "error=%s lifecycle=%u operation=%u "
         "begins=%d calculations=%d observer_calls=%d query=%d "
-        "generation=%llu attempt_generation=%llu boundary=%u\n",
-        row, host.last_run_status(), code, args, host.last_error().c_str(),
+        "generation=%llu attempt_generation=%llu boundary=%u phase=%u outcome=%u\n",
+        row, run_status, host.last_run_status(), code.c_str(), args.c_str(),
+        run_failure_code_of(host), run_failure_args_of(host),
+        host.last_error().c_str(),
         static_cast<unsigned>(state.kind), static_cast<unsigned>(state.failure.operation),
         host.begins, host.calculations, observer ? observer->calls : 0, query,
         static_cast<unsigned long long>(observation.run_generation),
         static_cast<unsigned long long>(observation.attempt_generation),
-        observation.boundary_delivered);
+        observation.boundary_delivered, observation.phase, observation.attempt_outcome);
     Checks checks{row};
-    checks.check(host.last_run_status() == 1 && !host.last_error().empty(),
-                 "begin did not fail closed");
-    checks.check(std::strcmp(code, "report_mode_unsupported") == 0,
-                 "begin refusal must carry exactly report_mode_unsupported");
-    checks.check(std::strcmp(args,
-                     "{\"contract\":\"pineforge-report/v1\",\"mode\":\"SUMMARY_ONLY\"}") == 0,
-                 "begin refusal arguments differ from the report contract");
-    checks.check(state.kind == NativeLifecycleKind::Failed
-                     && state.failure.operation == NativeFailureOperation::Begin,
-                 "refusal was not a begin failure");
-    checks.check(host.begins == 0 && host.calculations == 0,
-                 "unsupported capture ran a host callback");
+    checks.check(run_status == 1 && host.last_run_status() == 1 && !host.last_error().empty(),
+                 "run did not fail closed");
+    checks.check(code == "report_mode_unsupported" || code == "engine_invariant",
+                 "run failure must carry report_mode_unsupported or engine_invariant");
+    checks.check(code == run_failure_code_of(host) && args == run_failure_args_of(host),
+                 "plain fill changed the run failure code or arguments");
+    checks.check(state.kind == NativeLifecycleKind::Failed,
+                 "refusal did not leave a failed lifecycle");
     checks.check(!observer || observer->calls == 0,
                  "unsupported capture dispatched the observer");
-    checks.check(query == 0 && observation.run_generation == 0
-                     && observation.attempt_generation == 0
-                     && observation.boundary_delivered == 0,
-                 "refused begin admitted a generation or delivered a boundary");
-    checks.check(withheld(report.value), "refused begin published a report");
+    checks.check(query == 0 && observation.boundary_delivered == 0
+                     && observation.phase != 4 && observation.attempt_outcome != 4,
+                 "failed capture delivered a boundary or opened successful results");
+    checks.check(withheld(report.value), "failed capture published a report");
     if (!checks.good) print_report(row, report.value);
     return checks.good;
 }
@@ -557,7 +558,7 @@ int main() {
 
     // The public window setter bypasses observer-registration admission.
     // B2 keeps the existing envelope gate as a control; B3 independently
-    // requires begin to refuse this mode before callbacks or generation admission.
+    // requires either the begin guard or the capture backstop to fail closed.
     if (!suite.row("B2", [&] {
         Host host;
         configure(host);
@@ -583,7 +584,9 @@ int main() {
         require(host.set_report_mode_v1(ReportMode::SUMMARY_ONLY) == PF_REPORT_MODE_ACCEPTED,
                 "B3: SUMMARY_ONLY setter refused");
         select_window(host);
-        return begin_refused("B3", host);
+        const auto bars = tape();
+        host.run(bars.data(), static_cast<int>(bars.size()));
+        return failed_closed("B3", host);
     });
 
     suite.row("E", [&] {
@@ -633,7 +636,57 @@ int main() {
         attach(host, observer);
         require(host.set_equity_report_mode(ReportMode::SUMMARY_ONLY) == 0,
                 "C/observer-first: legacy SUMMARY_ONLY setter refused");
-        return begin_refused("C/observer-first", host, &observer);
+        const auto bars = tape();
+        host.run(bars.data(), static_cast<int>(bars.size()));
+        if (host.last_run_status() != 0)
+            return failed_closed("C/observer-first", host, &observer);
+        check_completed(host, &observer);
+        Report report;
+        host.fill_report(&report.value);
+        const bool plain_ratios_ready = host.equity_summary_ratios_ready();
+        Envelope result;
+        const int status = host.fill_report_envelope_v1(&result.value);
+        const bool envelope_ratios_ready = host.equity_summary_ratios_ready();
+        std::fprintf(stderr,
+            "C/observer-first: run_status=%d code=%s args=%s error=%s observer_calls=%d "
+            "equity_mode=%u plain_ratios_ready=%u envelope_ratios_ready=%u "
+            "envelope_status=%d mode=%u complete=%u logical_trades=%lld oracle_total=%d\n",
+            host.last_run_status(), run_failure_code_of(host), run_failure_args_of(host),
+            host.last_error().c_str(), observer.calls,
+            static_cast<unsigned>(host.equity_report_mode()),
+            plain_ratios_ready ? 1u : 0u, envelope_ratios_ready ? 1u : 0u,
+            status, result.value.metadata.mode, result.value.metadata.complete,
+            static_cast<long long>(result.value.metadata.trades.logical_count),
+            oracle.value.total_trades);
+        Checks checks{"C/observer-first"};
+        checks.check(host.last_run_status() == 0 && host.last_error().empty(),
+                     "legacy report reads did not preserve successful run status");
+        checks.check(host.equity_report_mode() == ReportMode::SUMMARY_ONLY,
+                     "pending legacy equity mode was not adopted");
+        checks.check(!plain_ratios_ready && !envelope_ratios_ready,
+                     "legacy summary ratios must remain pending on both reads");
+        checks.check(status == PF_REPORT_MODE_ACCEPTED,
+                     "legacy envelope was not accepted");
+        checks.check(result.value.metadata.mode == PF_REPORT_MODE_FULL,
+                     "legacy equity setter changed the versioned report mode");
+        checks.check(result.value.metadata.complete == 0,
+                     "pending legacy ratios certified a complete envelope");
+        checks.check(result.value.metadata.trades.logical_count == oracle.value.total_trades,
+                     "envelope logical trade count differs from FULL");
+        // Each read must independently match the FULL trade oracle. The
+        // legacy held equity tail may differ from FULL, but both reads agree.
+        compare(checks, report.value, oracle.value);
+        compare(checks, result.value.report, oracle.value);
+        checks.check(report.value.trades_len == result.value.report.trades_len
+                         && report.value.equity_curve_len == result.value.report.equity_curve_len,
+                     "plain and envelope resident lengths disagree");
+        checks.check(result.value.metadata.equity_curve.captured
+                         == (result.value.report.equity_curve_len != 0 ? 1u : 0u),
+                     "legacy envelope equity capture flag disagrees with resident curve");
+        const bool plain_good = checks.finish(report.value, oracle.value);
+        const bool envelope_good = checks.finish(
+            result.value.report, oracle.value, &result.value.metadata);
+        return plain_good && envelope_good;
     })) return 1;
 
     if (!suite.row("C/observer-last", [&] {
