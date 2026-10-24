@@ -838,9 +838,10 @@
     }
    },
    "class": "unsupported",
-   "description": "The host has no provider bridge for the requested report mode and contract.",
+   "description": "The requested report mode cannot be provided for this run. Two causes: the host has no provider bridge for the mode and contract (run_json), or the native kernel refuses a SUMMARY_ONLY run that configures a selected window or an execution observer without a report sink at begin, because that capture has no exact trade rows. Remedy for the second cause: drop the window or the observer, attach a report sink, or select FULL.",
    "english": [
-    "unsupported report mode: {mode} (no {contract} provider bridge for this host)"
+    "unsupported report mode: {mode} (no {contract} provider bridge for this host)",
+    "unsupported report mode: {mode} (a selected window or execution observer needs a {contract} report sink: drop it, attach a sink, or select FULL)"
    ],
    "retryable": false,
    "since": "1.7.0"
