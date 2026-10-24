@@ -198,7 +198,7 @@ public:
     bool is_long() const { return position_side_ == PositionSide::LONG; }
     double pos() const { return position_qty_; }
     bool is_flat() const { return position_side_ == PositionSide::FLAT; }
-    const std::vector<Trade>& all_trades() const { return trades_; }
+    const TradeLedger& all_trades() const { return trades_; }
     // Records of the ledger / position AFTER each bar's broker point.
     std::vector<double> ledger_l35_after_bar;
     std::vector<double> pos_after_bar;

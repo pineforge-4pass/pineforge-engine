@@ -41,7 +41,7 @@ Bar bar(std::int64_t timestamp, double open, double high, double low, double clo
 
 class MarginHost : public source::PineStrategyHost {
 public:
-    const Trade& row(int index) const { return get_trade(index); }
+    Trade row(int index) const { return get_trade(index); }
     double position() const { return physical_position().signed_units; }
     double average() const { return physical_position().average_price; }
     double liquidation_price() const { return margin_liquidation_price(); }

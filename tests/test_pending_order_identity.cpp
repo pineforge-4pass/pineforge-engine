@@ -173,7 +173,7 @@ public:
     uint64_t fills() const { return broker_fill_event_seq_; }
     double size() const { return position_qty_; }
     PositionSide side() const { return position_side_; }
-    const std::vector<Trade>& closed() const { return trades_; }
+    const TradeLedger& closed() const { return trades_; }
     void expect_A(bool long_side) const {
         REQUIRE(position_side_ == PositionSide::FLAT);
         REQUIRE(broker_fill_event_seq_ == 2);

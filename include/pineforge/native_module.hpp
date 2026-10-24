@@ -46,7 +46,7 @@
 namespace pineforge {
 namespace native_module {
 
-// The C mirrors are copied field by field (bars) and memcpy'd (report), so
+// Bars are borrowed through the C mirror and reports are memcpy'd, so
 // their layouts must agree exactly.
 static_assert(sizeof(pf_bar_t) == sizeof(Bar),
               "pf_bar_t / pineforge::Bar size mismatch");
@@ -232,15 +232,15 @@ void run_batch(pf_strategy_t strategy, pf_bar_t* bars, int count,
     if (!strategy) return;
     auto* engine = as_engine(strategy);
     try {
-        std::vector<Bar> copied;
-        const Bar* source = nullptr;
-        if (count > 0 && bars != nullptr) {
-            copied.resize(static_cast<std::size_t>(count));
-            for (int i = 0; i < count; ++i) {
-                copied[static_cast<std::size_t>(i)] = copy_bar(bars[i]);
-            }
-            source = copied.data();
-        }
+        const Bar* source = reinterpret_cast<const Bar*>(bars);
+        // The size and every field offset are pinned above, matching the
+        // generated strategy wrapper's borrowed Bar array. The engine reads
+        // these bars only during run(); making a temporary vector here would
+        // charge another complete chart array to every native-module call.
+        // Keep malformed pointer/count pairs intact so the engine's common
+        // begin preflight still owns their diagnostic and lifecycle result.
+        // The caller keeps this array alive through the synchronous run.
+        // Reports own their arrays separately, as publish_report requires.
         if (with_timeframes) {
             engine->run(source, count, input_tf ? input_tf : "",
                         script_tf ? script_tf : "");

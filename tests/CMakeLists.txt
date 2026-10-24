@@ -1380,6 +1380,7 @@ list(APPEND TEST_SOURCES test_native_match_allocations)
 # re-issued strategy.exit's allocations bounded (fails on f71cd820).
 # Source-bound.
 list(APPEND TEST_SOURCES test_adapter_command_allocations)
+list(APPEND TEST_SOURCES test_adapter_exit_scratch)
 # R5 lane PERF-L1: the NativeStrategyHost reads -- the consumer read off the
 # engine's slot, the inline book aggregate, the running lifecycle view --
 # against the lookups they replaced, inside every host hook of randomized
@@ -1395,6 +1396,9 @@ list(APPEND TEST_SOURCES test_native_lean_path)
 # bars without a heap allocation per bar (two to five at f71cd820). Source-free,
 # so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_intrabar_scratch)
+list(APPEND TEST_SOURCES test_parent_terminal_scratch)
+list(APPEND TEST_SOURCES test_same_bar_trade_scratch)
+list(APPEND TEST_SOURCES test_global_exit_recut_scratch)
 # R5 lane PERF-L1: the interval cache's prior answers and the session-point
 # memo hold only what a fresh, memo-free resolution answers, in every host hook
 # of randomized zoned, aggregated and streamed runs. Source-free, so it also
@@ -1496,9 +1500,9 @@ list(APPEND TEST_SOURCES test_native_direct_mutation)
 # R5 lane L3: on warm bare books a command allocates its definition and
 # nothing else, and the kernel's own work -- fills, their dependency drains,
 # the matcher's mutations, the journal's retirement -- nothing but the
-# calendar's session-day spans; a Full read of the whole record allocates its
-# one result vector (fails on 10f20197, several per fill). Source-free, so it
-# also runs in the kernel-only profile.
+# calendar's session-day spans; a Full read of the whole record stays within
+# one result vector plus the definitions decoded from spilled journal pages
+# (fails on 10f20197, several per fill). Source-free: runs in kernel-only too.
 list(APPEND TEST_SOURCES test_native_direct_mutation_allocations)
 # R5 lane V19-D: a replace that keeps its handle or carries a close's book
 # binding (ReplaceOptions::keep_handle / keep_binding) matches exactly what a
@@ -2260,16 +2264,16 @@ add_test(NAME test_selected_window_plan_python
 # path, from the repository root. No check that pytest is installed: the test
 # environment must provide it, and a missing pytest fails these rows.
 add_test(NAME test_run_json_selected_window
-    COMMAND ${Python3_EXECUTABLE} -B -m pytest ${PROJECT_SOURCE_DIR}/tests/test_run_json_selected_window.py
+    COMMAND ${Python3_EXECUTABLE} -B -m pytest -p no:cacheprovider ${PROJECT_SOURCE_DIR}/tests/test_run_json_selected_window.py
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
 add_test(NAME test_run_json_nonfinite_report
-    COMMAND ${Python3_EXECUTABLE} -B -m pytest ${PROJECT_SOURCE_DIR}/tests/test_run_json_nonfinite_report.py
+    COMMAND ${Python3_EXECUTABLE} -B -m pytest -p no:cacheprovider ${PROJECT_SOURCE_DIR}/tests/test_run_json_nonfinite_report.py
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
 add_test(NAME test_run_json_post_execution
-    COMMAND ${Python3_EXECUTABLE} -B -m pytest ${PROJECT_SOURCE_DIR}/tests/test_run_json_post_execution.py
+    COMMAND ${Python3_EXECUTABLE} -B -m pytest -p no:cacheprovider ${PROJECT_SOURCE_DIR}/tests/test_run_json_post_execution.py
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
 add_test(NAME test_compile_inventory_pipeline
-    COMMAND ${Python3_EXECUTABLE} -B -m pytest ${PROJECT_SOURCE_DIR}/tests/test_compile_inventory_pipeline.py
+    COMMAND ${Python3_EXECUTABLE} -B -m pytest -p no:cacheprovider ${PROJECT_SOURCE_DIR}/tests/test_compile_inventory_pipeline.py
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
 
 # The seven ABI-provider manifests and the four receipt-gated rows. The
@@ -3696,6 +3700,29 @@ foreach(test_name ${TEST_SOURCES})
     pineforge_add_unit_test(${test_name})
 endforeach()
 
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    add_executable(test_pending_observer_walk test_pending_observer_walk.cpp)
+    target_link_libraries(test_pending_observer_walk PRIVATE pineforge)
+    target_compile_options(test_pending_observer_walk PRIVATE -ffp-contract=off -UNDEBUG)
+    if(PINEFORGE_ENABLE_COVERAGE)
+        target_compile_options(test_pending_observer_walk PRIVATE ${_pf_cov_test_flags})
+    endif()
+    foreach(_pf_pending_walk_case IN ITEMS
+            pending_walk_oracle pending_walk_cost pending_walk_growth)
+        add_test(NAME ${_pf_pending_walk_case}
+            COMMAND test_pending_observer_walk ${_pf_pending_walk_case})
+    endforeach()
+    # Match the P7/V19-E scaling rows: keep both workloads and correctness
+    # checks everywhere, but gate the ratio and run serially only in Release.
+    if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
+        set_tests_properties(pending_walk_growth PROPERTIES
+            ENVIRONMENT "PINEFORGE_PENDING_WALK_SCALING_GATE=0")
+    endif()
+    if(CMAKE_BUILD_TYPE STREQUAL "Release")
+        set_tests_properties(pending_walk_cost pending_walk_growth PROPERTIES RUN_SERIAL TRUE)
+    endif()
+endif()
+
 # EN-134: each public C ABI fault run is also addressable for red-before and
 # mutant checks. The aggregate and these rows run in the kernel-only profile.
 foreach(_pf_settlement_row_case
@@ -4115,8 +4142,9 @@ add_test(NAME test_oracle_sha256_pin
 target_compile_definitions(test_native_market_vertical PRIVATE
     PINEFORGE_NATIVE_SYNTHETIC_SOURCE_SHA256="${PINEFORGE_NATIVE_MARKET_VERTICAL_SHA256}")
 
-# R5 L3 adapter-neutrality witness: the sizing-bases test reads the whole
-# source layer and proves no Pine translation unit names the new value kinds.
+# R5 L3 adapter-neutrality witness: test_native_sizing_bases reads the source
+# layer and forbids the scope-reduction value kinds outside the kernel codec's
+# payload_fields body in exit_scratch_versions_production.cpp (H2-11).
 # '|' separates the paths because ';' would split the compile definition.
 file(GLOB_RECURSE PINEFORGE_SOURCE_LAYER_FILES CONFIGURE_DEPENDS
      "${PROJECT_SOURCE_DIR}/src/source/*.cpp"
@@ -4125,6 +4153,8 @@ file(GLOB_RECURSE PINEFORGE_SOURCE_LAYER_FILES CONFIGURE_DEPENDS
      "${PROJECT_SOURCE_DIR}/src/compat/*.hpp"
      "${PROJECT_SOURCE_DIR}/include/pineforge/source/*.hpp"
      "${PROJECT_SOURCE_DIR}/include/pineforge/compat/*.hpp")
+# Keep the codec translation unit in the witness. Only its payload_fields
+# dispatcher may name those alternatives; all surrounding source is checked.
 list(LENGTH PINEFORGE_SOURCE_LAYER_FILES PINEFORGE_SOURCE_LAYER_COUNT)
 if(PINEFORGE_SOURCE_LAYER_COUNT LESS 4)
     message(FATAL_ERROR "source-layer neutrality glob found no translation units")
@@ -4659,7 +4689,9 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
     endif()
 endif()
 
-if(PINEFORGE_BUILD_SOURCE_LAYER AND PINEFORGE_BUILD_LIVE_RUNNER)
+# H2-3: this MODULE loads into Python, so its row shares the profile fence.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND PINEFORGE_BUILD_LIVE_RUNNER
+   AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/same_calc_bracket/generated.cpp")
     add_library(same_calc_bracket_strategy MODULE
         fixtures/same_calc_bracket/generated.cpp
@@ -7078,8 +7110,8 @@ foreach(_pf_python_row IN ITEMS
     endif()
 endforeach()
 
-# The two gate suites (registered unconditionally at tests/CMakeLists.txt:2214
-# and :2216) drive the real ci_verify Driver over the floor, exclusion, overlay
+# The two gate suites (test_ci_verify and test_ci_preflight, registered above)
+# drive the real ci_verify Driver over the floor, exclusion, overlay
 # and live-profile paths, and build their tamper trees through
 # tempfile.TemporaryDirectory, which honours TMPDIR: pin TMPDIR to a
 # configure-time directory under the build dir, the shape the private-fixture
@@ -7115,6 +7147,470 @@ set(PINEFORGE_PR_FAST_TESTS
     test_native_bare_host_contracts
     test_native_kernel_edge
 )
+
+# CR-150 P00: append after the pre-existing line-pinned registrations.
+# Keep the unit-test inventory in sync; its main registration loop is above.
+list(APPEND TEST_SOURCES test_cr150_contract_headers)
+pineforge_add_unit_test(test_cr150_contract_headers)
+target_sources(test_cr150_contract_headers PRIVATE test_cr150_contract_headers_c.c)
+set_target_properties(test_cr150_contract_headers PROPERTIES
+    C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+
+# CR-150 L7B: point-source equity metrics.  This registration intentionally
+# follows the P00 line-pinned block above (scope ruling SCOPE-RULING-1818.md).
+list(APPEND TEST_SOURCES test_metrics_point_source)
+pineforge_add_unit_test(test_metrics_point_source)
+
+# CR-150 L15a: append after every existing line-pinned registration.
+list(APPEND TEST_SOURCES test_native_bar_views_l15a)
+pineforge_add_unit_test(test_native_bar_views_l15a)
+
+add_test(NAME test_native_bar_views_guard_l15a
+    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/check_native_cpp_versions.py
+            --self-test-bar-views)
+
+# CR-150 L16: source-layer differential, appended after all line-pinned rows.
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    list(APPEND TEST_SOURCES test_magnifier_path_source_l16)
+    pineforge_add_unit_test(test_magnifier_path_source_l16)
+endif()
+
+# CR-150 L8a: keep the existing CMake line pins stable.
+list(APPEND TEST_SOURCES test_trade_ledger)
+pineforge_add_unit_test(test_trade_ledger)
+
+list(APPEND TEST_SOURCES test_trade_percent_prefix)
+pineforge_add_unit_test(test_trade_percent_prefix)
+
+# CR-150 L7A: isolated trade-fold proof, after all line-pinned registrations.
+list(APPEND TEST_SOURCES test_trade_stats_accumulator)
+pineforge_add_unit_test(test_trade_stats_accumulator)
+
+# CR-150 L0B: append only; private_fixture_reads.evidence pins earlier lines.
+add_test(NAME test_heap_census
+    COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_CURRENT_SOURCE_DIR}/test_heap_census.py)
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    list(APPEND TEST_SOURCES test_heap_census_unique_ids)
+    pineforge_add_unit_test(test_heap_census_unique_ids)
+    target_link_libraries(test_heap_census_unique_ids PRIVATE ${CMAKE_DL_LIBS})
+    set_target_properties(test_heap_census_unique_ids PROPERTIES ENABLE_EXPORTS ON)
+endif()
+
+# O(1) seam 3 journal-codec red clauses: eleven executables over one test file, one clause each.
+# They link the source layer (pine_adapter.hpp, pine_command_scratch_production.hpp), so a
+# kernel-only configure must not create them.
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    set(_o1s3_row 0)
+    foreach(_o1s3_case IN ITEMS
+        s3_separate_journal_owners_and_reset_red
+        s3_native_codec_all_values_cross_page_red
+        s3_admission_codec_allocations_and_order_red
+        s3_journal_islands_fixed_under_pins_red
+        s3_native_window_dependency_frontier_red
+        s3_admission_window_requires_closed_prefix_red
+        s3_native_digest_survives_nonzero_base_red
+        s3_admission_digest_refuses_zero_refold_red
+        s34_readback_never_collects_population_red
+        s34_backing_physical_charge_and_lifetime_red
+        s3_admission_unknown_birth_cause_refused_red)
+        math(EXPR _o1s3_row "${_o1s3_row} + 1")
+        add_executable(${_o1s3_case} test_o1s3_journal_red.cpp)
+        target_link_libraries(${_o1s3_case} PRIVATE pineforge)
+        target_compile_features(${_o1s3_case} PRIVATE cxx_std_17)
+        target_compile_definitions(${_o1s3_case} PRIVATE PINEFORGE_O1S3_CLAUSE=${_o1s3_row})
+        target_compile_options(${_o1s3_case} PRIVATE -ffp-contract=off -UNDEBUG)
+        add_test(NAME ${_o1s3_case} COMMAND ${_o1s3_case} ${_o1s3_case})
+    endforeach()
+    unset(_o1s3_case)
+    unset(_o1s3_row)
+
+    add_executable(test_o1s3_p14_fold_cost test_o1s3_p14_fold_cost.cpp)
+    target_link_libraries(test_o1s3_p14_fold_cost PRIVATE pineforge)
+    target_compile_features(test_o1s3_p14_fold_cost PRIVATE cxx_std_17)
+    target_compile_options(test_o1s3_p14_fold_cost PRIVATE -ffp-contract=off -UNDEBUG)
+    add_test(NAME test_o1s3_p14_fold_cost COMMAND test_o1s3_p14_fold_cost)
+endif()
+
+add_test(NAME test_cr150_cmake_d COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/scripts/check_cr150_cmake_d.py)
+
+# CR-150: one file per lane in tests/cr150.d/<lane>.cmake (see tests/cr150.d/README.md).
+file(GLOB CR150_LANE_CMAKE CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/cr150.d/*.cmake")
+list(SORT CR150_LANE_CMAKE)
+foreach(cr150_lane_file IN LISTS CR150_LANE_CMAKE)
+    include("${cr150_lane_file}")
+endforeach()
+
+# --- CR-150 core-cr150-l6b1 begin ---
+# CR-150 L6B1: appended after every pre-existing line pin. A real source
+# strategy module, with the same whole-archive link as release modules.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
+    add_library(report_sink_l6b1_strategy MODULE test_report_sink_l6b1.cpp)
+    target_compile_definitions(report_sink_l6b1_strategy PRIVATE PINEFORGE_L6B1_MODULE=1)
+    target_link_libraries(report_sink_l6b1_strategy PRIVATE pineforge)
+    if(APPLE)
+        target_link_options(report_sink_l6b1_strategy PRIVATE
+            "-Wl,-force_load,$<TARGET_FILE:pineforge>")
+    else()
+        target_link_options(report_sink_l6b1_strategy PRIVATE
+            "-Wl,--whole-archive" "$<TARGET_FILE:pineforge>" "-Wl,--no-whole-archive")
+    endif()
+    target_compile_options(report_sink_l6b1_strategy PRIVATE -ffp-contract=off -UNDEBUG)
+    set_target_properties(report_sink_l6b1_strategy PROPERTIES
+        PREFIX "" SUFFIX ".so" LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/report_sink_l6b1")
+    list(APPEND TEST_SOURCES test_report_sink_l6b1)
+    pineforge_add_unit_test(test_report_sink_l6b1)
+    target_link_libraries(test_report_sink_l6b1 PRIVATE ${CMAKE_DL_LIBS})
+    target_compile_definitions(test_report_sink_l6b1 PRIVATE
+        PINEFORGE_L6B1_MODULE_PATH="$<TARGET_FILE:report_sink_l6b1_strategy>"
+        PINEFORGE_L6B1_PYTHON="${Python3_EXECUTABLE}"
+        PINEFORGE_L6B1_DOCKER="${PROJECT_SOURCE_DIR}/docker")
+    add_dependencies(test_report_sink_l6b1 report_sink_l6b1_strategy)
+endif()
+# --- CR-150 core-cr150-l6b1 end ---
+
+# --- CR-150 core-cr150-l17a begin ---
+# CR-150 L17A: a kernel-only native host and a real version-1 path sink.
+# The UNIX-only plain registration is in cr150.d/core-cr150-l17a.cmake.
+# No additional target or test settings are required here.
+# --- CR-150 core-cr150-l17a end ---
+
+# --- CR-150 core-cr150-l9a begin ---
+# CR-150 L9A: full JSON through the temporary sink; after every line pin.
+# Preflight also discovers this file through docker/run_json_*_test.py.
+# H2-6: optional native and corpus checks must not skip inside a green row.
+# The native row is in p2cx-cmake.cmake. The corpus byte proof needs a
+# supervisor-supplied PINEFORGE_L9A_CORPUS_CASES manifest, as L9B does, so it
+# stays outside this CI registration.
+add_test(NAME test_run_json_sink_l9a
+    COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/scripts/run_pytest_no_skips.py
+        --artifacts ${CMAKE_CURRENT_BINARY_DIR}/pytest-no-skips/test_run_json_sink_l9a
+        -- -q -p no:cacheprovider
+        ${PROJECT_SOURCE_DIR}/tests/test_run_json_sink.py -k "not native and not corpus")
+# --- CR-150 core-cr150-l9a end ---
+
+# --- CR-150 core-cr150-l19b begin ---
+# CR-150 L19B: match the library Debug-mode precedent for
+# test_native_runtime_ambient_lifo's PINEFORGE_LIBRARY_DEBUG_CHECKS definition (H2-12).
+target_compile_definitions(test_group_receipt_retirement PRIVATE PINEFORGE_LIBRARY_DEBUG_CHECKS=$<CONFIG:Debug>)
+# --- CR-150 core-cr150-l19b end ---
+
+# --- CR-150 core-cr150-l6b3 begin ---
+if(UNIX)
+    target_compile_definitions(test_report_sink_l6b3 PRIVATE
+        PINEFORGE_L6B3_PYTHON="${Python3_EXECUTABLE}"
+        PINEFORGE_L6B3_DOCKER="${PROJECT_SOURCE_DIR}/docker")
+    if(PINEFORGE_BUILD_SOURCE_LAYER)
+        target_compile_definitions(test_report_sink_l6b3 PRIVATE PINEFORGE_L6B3_SOURCE=1)
+    endif()
+endif()
+# --- CR-150 core-cr150-l6b3 end ---
+
+# --- CR-150 core-cr150-l6b2 begin ---
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
+    add_library(report_sink_equity_strategy MODULE test_report_sink_equity.cpp)
+    target_compile_definitions(report_sink_equity_strategy PRIVATE PINEFORGE_L6B2_MODULE=1)
+    target_link_libraries(report_sink_equity_strategy PRIVATE pineforge)
+    if(APPLE)
+        target_link_options(report_sink_equity_strategy PRIVATE
+            "-Wl,-force_load,$<TARGET_FILE:pineforge>")
+    else()
+        target_link_options(report_sink_equity_strategy PRIVATE
+            "-Wl,--whole-archive" "$<TARGET_FILE:pineforge>" "-Wl,--no-whole-archive")
+    endif()
+    target_compile_options(report_sink_equity_strategy PRIVATE -ffp-contract=off -UNDEBUG)
+    set_target_properties(report_sink_equity_strategy PROPERTIES
+        PREFIX "" SUFFIX ".so" LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/report_sink_equity")
+    target_link_libraries(test_report_sink_equity PRIVATE ${CMAKE_DL_LIBS})
+    target_compile_definitions(test_report_sink_equity PRIVATE
+        PINEFORGE_L6B2_MODULE_PATH="$<TARGET_FILE:report_sink_equity_strategy>")
+    add_dependencies(test_report_sink_equity report_sink_equity_strategy)
+endif()
+# --- CR-150 core-cr150-l6b2 end ---
+
+# --- CR-150 core-cr150-l17b begin ---
+if(TARGET test_selected_metrics_l17b)
+    target_compile_definitions(test_selected_metrics_l17b PRIVATE PINEFORGE_LIBRARY_DEBUG_CHECKS=$<CONFIG:Debug>)
+    if(PINEFORGE_BUILD_SOURCE_LAYER)
+        target_compile_definitions(test_selected_metrics_l17b PRIVATE PINEFORGE_L17B_SOURCE=1)
+    endif()
+endif()
+# --- CR-150 core-cr150-l17b end ---
+# --- CR-150 core-cr150-l19f begin ---
+# CR-150 L19F: plain registrations are in cr150.d/core-cr150-l19f.cmake.
+# --- CR-150 core-cr150-l19f end ---
+
+# --- CR-150 core-cr150-l2 begin ---
+if(TARGET outputs_fixture_strategy)
+    set_tests_properties(test_run_json_bin PROPERTIES
+        ENVIRONMENT "PINEFORGE_BIN_STRATEGY_SO=$<TARGET_FILE:outputs_fixture_strategy>")
+endif()
+# --- CR-150 core-cr150-l2 end ---
+
+# --- CR-150 core-cr150-l9b begin ---
+# CR-150 L9B: native named-sink summary rows, after every line pin. The Python
+# row is registered in cr150.d/core-cr150-l9b.cmake. These rows read the real
+# L6B1 and outputs-fixture modules from their ENVIRONMENT, which a lane file may
+# not set, so they are registered here once both modules are declared. The
+# row exists only where both modules do: it never runs without them.
+# The opt-in corpus row (PINEFORGE_L9B_CORPUS_CASES) needs real lab probes that
+# only the supervisor can supply, so it is left out of this registration.
+if(TARGET report_sink_l6b1_strategy AND TARGET outputs_fixture_strategy
+   AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
+    add_test(NAME test_run_json_sink_summary_l9b_native
+        COMMAND ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider
+            ${PROJECT_SOURCE_DIR}/tests/test_run_json_sink_summary.py
+            -k "native and not corpus")
+    set_property(TEST test_run_json_sink_summary_l9b_native APPEND PROPERTY ENVIRONMENT
+        "PINEFORGE_L9B_STRATEGY_SO=$<TARGET_FILE:report_sink_l6b1_strategy>"
+        "PINEFORGE_L9B_OUTPUTS_SO=$<TARGET_FILE:outputs_fixture_strategy>")
+endif()
+# --- CR-150 core-cr150-l9b end ---
+
+# --- CR-150 core-cr150-l9s begin ---
+# CR-150 L9S: native selected-sink rows, after both module declarations.
+# The Python control row stays in cr150.d/core-cr150-l9s.cmake.
+# Corpus rows need a supervisor-supplied manifest; selecting them here would
+# otherwise always SKIP inside a green row.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX AND NOT PINEFORGE_ENABLE_SANITIZERS
+   AND NOT PINEFORGE_ENABLE_COVERAGE
+   AND TARGET report_sink_l6b1_strategy AND TARGET pineforge_window_plan)
+    add_test(NAME test_run_json_selected_sink_native_l9s
+        COMMAND ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider
+            ${PROJECT_SOURCE_DIR}/tests/test_run_json_selected_sink.py
+            -k "native and not corpus")
+    set_property(TEST test_run_json_selected_sink_native_l9s APPEND PROPERTY ENVIRONMENT
+        "PINEFORGE_L9S_STRATEGY_SO=$<TARGET_FILE:report_sink_l6b1_strategy>"
+        "PINEFORGE_L9S_PLANNER_SO=$<TARGET_FILE:pineforge_window_plan>")
+    add_test(NAME test_run_json_selected_sink_memory_l9s
+        COMMAND ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider
+            ${PROJECT_SOURCE_DIR}/tests/test_run_json_selected_sink_memory.py)
+    set_property(TEST test_run_json_selected_sink_memory_l9s APPEND PROPERTY ENVIRONMENT
+        "PINEFORGE_L9S_STRATEGY_SO=$<TARGET_FILE:report_sink_l6b1_strategy>"
+        "PINEFORGE_L9S_PLANNER_SO=$<TARGET_FILE:pineforge_window_plan>")
+    set_tests_properties(test_run_json_selected_sink_memory_l9s PROPERTIES LABELS "slow;mem")
+endif()
+# --- CR-150 core-cr150-l9s end ---
+
+# --- CR-150 core-cr150-l22a begin ---
+if(UNIX)
+    target_link_libraries(test_report_sink_fd PRIVATE Threads::Threads)
+    target_compile_definitions(test_report_sink_fd PRIVATE
+        PINEFORGE_L22A_PYTHON="${Python3_EXECUTABLE}"
+        PINEFORGE_L22A_READER="${CMAKE_CURRENT_SOURCE_DIR}/report_sink_fd_reader.py")
+endif()
+# --- CR-150 core-cr150-l22a end ---
+
+# --- CR-150 core-cr150-l22q begin ---
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
+    target_link_libraries(test_report_sink_summary PRIVATE Threads::Threads)
+endif()
+# --- CR-150 core-cr150-l22q end ---
+
+# --- CR-150 core-cr150-l22s begin ---
+if(UNIX)
+    target_link_libraries(test_scratch_arena_threads PRIVATE Threads::Threads)
+endif()
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_options(test_scratch_arena PRIVATE "-Wl,--wrap=pread" "-Wl,--wrap=fstat" "-Wl,--wrap=mmap")
+endif()
+# --- CR-150 core-cr150-l22s end ---
+
+# --- CR-150 core-cr150-l22p begin ---
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    list(APPEND TEST_SOURCES test_report_scratch_arena)
+    add_executable(test_report_scratch_arena test_report_scratch_arena.cpp)
+    target_link_libraries(test_report_scratch_arena PRIVATE pineforge)
+    target_compile_options(test_report_scratch_arena PRIVATE -ffp-contract=off -UNDEBUG)
+    if(PINEFORGE_ENABLE_COVERAGE)
+        target_compile_options(test_report_scratch_arena PRIVATE ${_pf_cov_test_flags})
+    endif()
+    target_link_options(test_report_scratch_arena PRIVATE
+        "-Wl,--wrap=mkstemp" "-Wl,--wrap=pwrite" "-Wl,--wrap=write"
+        "-Wl,--wrap=ftruncate" "-Wl,--wrap=mmap" "-Wl,--wrap=munmap")
+    add_test(NAME test_report_scratch_arena_curve_bytes
+        COMMAND test_report_scratch_arena curve bytes)
+    add_test(NAME test_report_scratch_arena_curve_fsize
+        COMMAND test_report_scratch_arena curve fsize)
+    add_test(NAME test_report_scratch_arena_curve_exhaustion
+        COMMAND test_report_scratch_arena curve exhaustion)
+    add_test(NAME test_report_scratch_arena_curve_address_space
+        COMMAND test_report_scratch_arena curve address_space)
+    if(PINEFORGE_BUILD_SOURCE_LAYER)
+        target_compile_definitions(test_report_scratch_arena PRIVATE PINEFORGE_L22P_SOURCE=1)
+        add_test(NAME test_report_scratch_arena_position_tail_bytes
+            COMMAND test_report_scratch_arena position_tail bytes)
+        add_test(NAME test_report_scratch_arena_position_tail_fsize
+            COMMAND test_report_scratch_arena position_tail fsize)
+        add_test(NAME test_report_scratch_arena_position_tail_exhaustion
+            COMMAND test_report_scratch_arena position_tail exhaustion)
+        add_test(NAME test_report_scratch_arena_position_tail_address_space
+            COMMAND test_report_scratch_arena position_tail address_space)
+    endif()
+    add_test(NAME test_report_scratch_arena_startup COMMAND test_report_scratch_arena startup)
+endif()
+# --- CR-150 core-cr150-l22p end ---
+
+# --- CR-150 core-cr150-q7 begin ---
+if(UNIX)
+    target_link_libraries(test_run_sigterm_abort PRIVATE Threads::Threads)
+endif()
+if(UNIX AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
+    add_library(run_sigterm_abort_strategy MODULE run_sigterm_abort_strategy.cpp)
+    target_link_libraries(run_sigterm_abort_strategy PRIVATE pineforge)
+    if(APPLE)
+        target_link_options(run_sigterm_abort_strategy PRIVATE
+            "-Wl,-force_load,$<TARGET_FILE:pineforge>")
+    else()
+        target_link_options(run_sigterm_abort_strategy PRIVATE
+            "-Wl,--whole-archive" "$<TARGET_FILE:pineforge>" "-Wl,--no-whole-archive")
+    endif()
+    target_compile_options(run_sigterm_abort_strategy PRIVATE -ffp-contract=off -UNDEBUG)
+    set_target_properties(run_sigterm_abort_strategy PROPERTIES
+        PREFIX "" SUFFIX ".so" LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/run_sigterm_abort")
+    add_test(NAME test_run_sigterm_abort_python
+        COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/tests/test_run_sigterm_abort.py
+            --module $<TARGET_FILE:run_sigterm_abort_strategy>)
+endif()
+# --- CR-150 core-cr150-q7 end ---
+
+# --- CR-150 core-cr150-o1w-contract begin ---
+# Real legacy provider, with an explicit old export surface. The Linux lab
+# exercises negotiation even after new runtime report exports are introduced.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX AND NOT APPLE
+   AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
+    add_library(o1_report_legacy_provider MODULE test_o1_report_contract.cpp)
+    target_compile_definitions(o1_report_legacy_provider PRIVATE PINEFORGE_O1_LEGACY_PROVIDER=1)
+    target_link_libraries(o1_report_legacy_provider PRIVATE pineforge)
+    target_link_options(o1_report_legacy_provider PRIVATE
+        "-Wl,--whole-archive" "$<TARGET_FILE:pineforge>" "-Wl,--no-whole-archive"
+        "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/fixtures/o1_report_contract/legacy.exports")
+    target_compile_options(o1_report_legacy_provider PRIVATE -ffp-contract=off)
+    add_test(NAME test_o1_report_mode_unsupported
+        COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_CURRENT_SOURCE_DIR}/test_o1_report_mode_unsupported.py
+            --module $<TARGET_FILE:o1_report_legacy_provider>
+            --runner ${PROJECT_SOURCE_DIR}/docker/run_json.py
+            --fixture ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/o1_report_contract/summary_only.json)
+endif()
+# --- CR-150 core-cr150-o1w-contract end ---
+
+# --- CR-150 core-cr150-o1c begin ---
+# LAB-o1bk: production command scratch, without a fixture factory definition.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
+    list(APPEND TEST_SOURCES test_o1bk_production_backing)
+    pineforge_add_unit_test(test_o1bk_production_backing)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        target_compile_definitions(test_o1bk_production_backing PRIVATE PINEFORGE_O1BK_WRAP_PWRITE=1)
+        target_link_options(test_o1bk_production_backing PRIVATE "-Wl,--wrap=pwrite")
+    endif()
+endif()
+# --- CR-150 core-cr150-o1c end ---
+
+# --- CR-150 core-cr150-o1-revscratch begin ---
+# A corpus-enabled source build must execute the real reversing probe. Missing
+# fixtures are configure/test failures; this row has no skip or fake module.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX AND PINEFORGE_BUILD_CORPUS_STRATEGIES
+   AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
+    add_library(reversal_scratch_strategy MODULE)
+    target_sources(reversal_scratch_strategy PRIVATE
+        ${PROJECT_SOURCE_DIR}/corpus/validation/bracket-atr-trailing-stop-state-01/generated.cpp)
+    target_link_libraries(reversal_scratch_strategy PRIVATE pineforge)
+    if(APPLE)
+        target_link_options(reversal_scratch_strategy PRIVATE
+            "-Wl,-force_load,$<TARGET_FILE:pineforge>")
+    else()
+        target_link_options(reversal_scratch_strategy PRIVATE
+            "-Wl,--whole-archive" "$<TARGET_FILE:pineforge>" "-Wl,--no-whole-archive")
+    endif()
+    target_compile_options(reversal_scratch_strategy PRIVATE -ffp-contract=off)
+    set_target_properties(reversal_scratch_strategy PROPERTIES
+        PREFIX "" SUFFIX ".so"
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/reversal_scratch")
+    add_test(NAME test_run_json_reversal_scratch
+        COMMAND ${Python3_EXECUTABLE} -B
+            ${PROJECT_SOURCE_DIR}/tests/test_run_json_reversal_scratch.py
+            --so $<TARGET_FILE:reversal_scratch_strategy>
+            --artifacts ${CMAKE_CURRENT_BINARY_DIR}/reversal_scratch)
+endif()
+# --- CR-150 core-cr150-o1-revscratch end ---
+
+# --- CR-150 core-cr150-arena begin ---
+# Set B stays in this fence so the set A lane file can be committed by name.
+if(UNIX)
+    list(APPEND TEST_SOURCES test_command_scratch_arena_bounded)
+    pineforge_add_unit_test(test_command_scratch_arena_bounded)
+endif()
+# --- CR-150 core-cr150-arena end ---
+
+# --- CR-150 core-cr150-privmoves begin ---
+# All rows share test_privmoves.cpp. The lane-file checker requires a source
+# named after each compiled add_test row, so aliases stay with the target.
+# TEST_SOURCES inventory lives in cr150.d/core-cr150-privmoves.cmake.
+if(UNIX)
+    add_executable(test_privmoves test_privmoves.cpp)
+    target_link_libraries(test_privmoves PRIVATE pineforge)
+    target_compile_options(test_privmoves PRIVATE -ffp-contract=off -UNDEBUG)
+    if(PINEFORGE_ENABLE_COVERAGE)
+        target_compile_options(test_privmoves PRIVATE ${_pf_cov_test_flags})
+    endif()
+    add_test(NAME test_privmoves_compare_tables COMMAND test_privmoves compare tables)
+    add_test(NAME test_privmoves_compare_fold COMMAND test_privmoves compare fold)
+    add_test(NAME test_privmoves_compare_roots COMMAND test_privmoves compare roots)
+    add_test(NAME test_privmoves_compare_openings COMMAND test_privmoves compare openings)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        target_link_options(test_privmoves PRIVATE
+            "-Wl,--wrap=mkstemp" "-Wl,--wrap=open" "-Wl,--wrap=openat" "-Wl,--wrap=pread")
+        add_test(NAME test_privmoves_directory COMMAND test_privmoves directory)
+        add_test(NAME test_privmoves_jail_tables COMMAND test_privmoves jail tables)
+        add_test(NAME test_privmoves_jail_fold COMMAND test_privmoves jail fold)
+        add_test(NAME test_privmoves_jail_roots COMMAND test_privmoves jail roots)
+        add_test(NAME test_privmoves_jail_openings COMMAND test_privmoves jail openings)
+    endif()
+endif()
+# --- CR-150 core-cr150-privmoves end ---
+
+# --- CR-150 core-cr150-cr257 begin ---
+# Lane files permit registrations only; the linker flags and extra translation
+# units belong in this lane-owned fence, per check_cr150_cmake_d.py.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_sources(test_cr257_source_exit_scratch_io PRIVATE
+        test_cr257_source_exit_scratch_io_100k.cpp
+        test_cr257_exit_scope_io.cpp
+        test_cr257_scratch_file_io.cpp)
+    target_link_options(test_cr257_source_exit_scratch_io PRIVATE
+        "-Wl,--wrap=pread" "-Wl,--wrap=pwrite"
+        "-Wl,--wrap=read" "-Wl,--wrap=readv"
+        "-Wl,--wrap=preadv" "-Wl,--wrap=preadv2" "-Wl,--wrap=mmap"
+        "-Wl,--wrap=posix_fadvise" "-Wl,--wrap=fdatasync")
+    # preadv2 requires glibc 2.26+; an unavailable symbol must fail linking.
+endif()
+# --- CR-150 core-cr150-cr257 end ---
+
+# --- CR-150 core-cr150-cr289 begin ---
+# CR-289: ctypes needs a test-only bridge to the hidden C++ writer; the module
+# path reaches the pytest row through $<TARGET_FILE:...> in the lane file.
+if(UNIX AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
+    add_library(report_nonfinite_equity_fd MODULE test_report_nonfinite_equity_fd.cpp)
+    target_link_libraries(report_nonfinite_equity_fd PRIVATE pineforge)
+    target_compile_options(report_nonfinite_equity_fd PRIVATE -ffp-contract=off -UNDEBUG)
+endif()
+# --- CR-150 core-cr150-cr289 end ---
+
+# --- CR-150 core-cr150-cr224 begin ---
+# CR-281 ports CR-224 to Linux's sealed-memfd jailed arena. The module's only
+# source is a file of the corpus submodule, so the module and its row exist
+# exactly where that file does: the lab profiles check the submodule out
+# (ci_verify ensure_corpus_submodule) although they turn corpus strategy
+# targets OFF, so the option cannot be the guard; the pull-request build has no
+# submodule and configures without it. The same guard is in
+# cr150.d/core-cr150-cr224.cmake.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND EXISTS "${PROJECT_SOURCE_DIR}/corpus/validation/bracket-same-id-exit-replace-01/generated.cpp" AND CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
+    add_library(cr224_nofile_strategy MODULE ../corpus/validation/bracket-same-id-exit-replace-01/generated.cpp)
+    target_link_libraries(cr224_nofile_strategy PRIVATE pineforge)
+    target_link_options(cr224_nofile_strategy PRIVATE "-Wl,--whole-archive" "$<TARGET_FILE:pineforge>" "-Wl,--no-whole-archive")
+    target_compile_options(cr224_nofile_strategy PRIVATE -ffp-contract=off -Wno-unused-but-set-variable -Wno-unused-variable -Wno-unused-parameter -Wno-unused-function -Wno-sign-compare)
+    set_target_properties(cr224_nofile_strategy PROPERTIES PREFIX "" SUFFIX ".so" LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/cr224_nofile")
+endif()
+# --- CR-150 core-cr150-cr224 end ---
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
         message(FATAL_ERROR "PR fast row or executable is missing: ${_pf_fast_test}")

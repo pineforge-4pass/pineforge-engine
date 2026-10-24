@@ -1,0 +1,9 @@
+# LAB-o1s2: compiled/executed only by the supervisor's LB-446 build hosts.
+if(UNIX)
+    list(APPEND TEST_SOURCES test_o1s2_native_readers)
+    pineforge_add_unit_test(test_o1s2_native_readers)
+    if(PINEFORGE_BUILD_SOURCE_LAYER)
+        list(APPEND TEST_SOURCES test_o1s2_payload_readers)
+        pineforge_add_unit_test(test_o1s2_payload_readers)
+    endif()
+endif()

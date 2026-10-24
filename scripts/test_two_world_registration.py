@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Controls for scripts/check_two_world_registration.py (the two-world check).
 
-Every control runs the REAL check script against a tamper tree: the worktree
+Checker controls run the REAL check script against a tamper tree: the worktree
 by symlink, with the two CMakeLists as real copies a control edits, and -- when
 the overlay is available (PF_PRIVATE_OVERLAY names the read-only private
 clone, or the tree itself holds the overlay's marker file, which is the CI
@@ -43,6 +43,10 @@ Controls:
      an unmodelled parenthesised predicate still exits 2, named
  22. get_test_property binds its output to the property-read NOTFOUND value;
      IN_LIST walks cleanly, and a registration behind that false value is absent
+ 23. a public lane row is evaluated in both worlds from a neutral cwd
+ 24. a pinned private lane row registered in only one world is drift
+ 25. a glob-fed file(STRINGS) reads relative paths against the tree root
+ 26. the lane include fixture excludes a fenced block after the include loop
 """
 from __future__ import annotations
 
@@ -79,10 +83,41 @@ OVERLAY_MARKER = REPO / CHECK_MODULE.OVERLAY_MARKER
 REMOVED_TU_ROW = 'test_trail_activation_tick_reach'
 TREES_DIR = 'tests/CMakeLists.txt'
 RUNNER = 'runner/CMakeLists.txt'
+LANE_FILE = 'tests/cr150.d/e2e-two-world-lane.cmake'
 SHARD_ROW = 'confirmed_capabilities_refusals_pooc_5'
 # A pinned private row that is no refusal shard: added to the list it is
 # pinned and sorted, so only the drift guard can reject it.
 NOT_A_SHARD_ROW = 'test_pooc_close_fill_view_tapes'
+
+
+def lane_include_block(text: str) -> str:
+    """Extract the unique cr150.d glob through its loop's matching end."""
+    lines = text.splitlines(keepends=True)
+    starts = [index for index, line in enumerate(lines)
+              if re.match(r'\s*file\s*\(\s*GLOB\b', line, re.IGNORECASE)
+              and '/cr150.d/*.cmake' in line]
+    if len(starts) != 1:
+        raise AssertionError(
+            f'{TREES_DIR}: expected one cr150.d file(GLOB) statement, '
+            f'found {len(starts)}')
+    start = starts[0]
+    depth = 0
+    for index in range(start + 1, len(lines)):
+        command = re.match(r'\s*(foreach|endforeach)\s*\(',
+                           lines[index], re.IGNORECASE)
+        if command is None:
+            continue
+        if command.group(1).lower() == 'foreach':
+            depth += 1
+        else:
+            if depth == 0:
+                raise AssertionError(
+                    f'{TREES_DIR}:{index + 1}: endforeach() before the lane loop')
+            depth -= 1
+            if depth == 0:
+                return ''.join(lines[start:index + 1])
+    raise AssertionError(
+        f'{TREES_DIR}:{start + 1}: no matching endforeach() for the lane include block')
 
 
 class TamperTree:
@@ -256,13 +291,13 @@ class TwoWorldControls(unittest.TestCase):
         self.tree = TamperTree(self.root)
         self.addCleanup(self._tmp.cleanup)
 
-    def run_check(self, *args: str, overlay: bool = False):
+    def run_check(self, *args: str, overlay: bool = False, cwd: Path | None = None):
         env = dict(os.environ)
         if overlay:
             env['PINEFORGE_PRIVATE_FIXTURES'] = '1'
         return subprocess.run(
             [PY, '-B', str(CHECK), '--root', str(self.root), *args],
-            capture_output=True, text=True, env=env)
+            capture_output=True, text=True, env=env, cwd=cwd)
 
     # control 1: the drift guard names a recorded row whose record was removed
     @needs_overlay
@@ -685,6 +720,102 @@ endif()
         self.assertIn("unmodelled condition '1 VERSION_LESS 2'",
                       result.stdout + result.stderr)
         self.assertIn(RUNNER, result.stdout + result.stderr)
+
+    def lane_tree(self, body: str) -> Path:
+        """An isolated include probe over the copied tree and real pin set."""
+        lanes = self.root / 'tests' / 'cr150.d'
+        self.tree._refuse_repo(lanes.parent)
+        self.assertTrue(lanes.is_symlink(), 'the copied lane directory changed shape')
+        lanes.unlink()                       # the scratch-tree link, never its target
+        shutil.copytree(REPO / 'tests' / 'cr150.d', lanes)
+        self.tree.append(LANE_FILE, body)
+        # Keep the real lane include block, with empty but fully modelled
+        # records around it. Both probes use this same registration fixture.
+        block = lane_include_block((REPO / TREES_DIR).read_text())
+        self.tree._write_target(TREES_DIR).write_text(
+            'set(_pf_source_bound_private_rows)\n' + block)
+        self.tree._write_target(RUNNER).write_text(
+            'set(_pf_refusal_shard_rows)\n'
+            'set(_pf_refusal_shard_first_library)\n'
+            'list(POP_FRONT _pf_refusal_shard_first_library)\n'
+            'set(_pf_confirmed_refusal_requests)\n'
+            'set(_pf_confirmed_refusal_pooc)\n')
+        # Exercise both worlds without requiring the private overlay: only
+        # marker existence is consumed by this fixture, not its file contents.
+        marker = self.root / CHECK_MODULE.OVERLAY_MARKER
+        if not marker.exists():
+            self.tree._refuse_repo(marker.parent)
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            self.tree.append(str(CHECK_MODULE.OVERLAY_MARKER), '// registry probe marker\n')
+        cwd = Path(self._tmp.name) / 'outside-tree'
+        cwd.mkdir()
+        self.assertNotEqual(cwd, self.root)
+        return cwd
+
+    def test_lane_include_block_ignores_a_following_fenced_block(self):
+        cmake = (REPO / TREES_DIR).read_text()
+        tail = (REPO / 'scripts' / 'fixtures' / 'cr150_cmake_d'
+                / 'tail-l6b2.cmake').read_text()
+        tail = tail.replace('core-cr150-l6b2', Path(LANE_FILE).stem)
+        expected = (
+            'file(GLOB CR150_LANE_CMAKE CONFIGURE_DEPENDS '
+            '"${CMAKE_CURRENT_SOURCE_DIR}/cr150.d/*.cmake")\n'
+            'list(SORT CR150_LANE_CMAKE)\n'
+            'foreach(cr150_lane_file IN LISTS CR150_LANE_CMAKE)\n'
+            '    include("${cr150_lane_file}")\n'
+            'endforeach()\n')
+        self.assertEqual(expected, lane_include_block(cmake + tail))
+
+    def test_lane_public_row_is_read_from_a_different_cwd(self):
+        row = 'e2e_two_world_lane_public'
+        cwd = self.lane_tree(
+            f'add_test(NAME {row} COMMAND ${{CMAKE_COMMAND}} -E echo public)\n')
+        self.assertNotIn(row, CHECK_MODULE.load_pinned_rows(self.root))
+        with mock.patch.dict(os.environ, {'PF_TWO_WORLD_SHOW_ROWS': '1'}):
+            result = self.run_check('--both', '--cmakelists', TREES_DIR,
+                                    '--profile', 'release', cwd=cwd)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        for world in ('absent', 'overlay'):
+            self.assertIn(f'{TREES_DIR} [release] {world}-world row: {row}', result.stdout)
+        self.assertIn('absent-only names: 0', result.stdout)
+        self.assertIn('overlay-only names: 0', result.stdout)
+
+    def test_lane_pinned_private_row_is_drift_from_a_different_cwd(self):
+        row = NOT_A_SHARD_ROW
+        self.assertIn(row, CHECK_MODULE.load_pinned_rows(self.root))
+        cwd = self.lane_tree(f'''if(EXISTS "${{PROJECT_SOURCE_DIR}}/{CHECK_MODULE.OVERLAY_MARKER}")
+    add_test(NAME {row} COMMAND ${{CMAKE_COMMAND}} -E echo private)
+endif()
+''')
+        result = self.run_check('--both', '--cmakelists', TREES_DIR,
+                                '--profile', 'release', cwd=cwd)
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+        self.assertIn(f'{TREES_DIR} [release] registers {row} only with the overlay present',
+                      result.stdout)
+        self.assertIn('overlay-only names: 1', result.stdout)
+        self.assertNotIn('FileNotFoundError', result.stdout + result.stderr)
+
+    def test_glob_fed_strings_are_read_from_a_different_cwd(self):
+        row = 'e2e_two_world_glob_strings'
+        cwd = self.lane_tree('')
+        directory = self.root / 'tests' / 'e2e-glob-strings'
+        self.tree._refuse_repo(directory)
+        directory.mkdir()
+        self.tree._write_target('tests/e2e-glob-strings/rows.txt').write_text(row + '\n')
+        self.tree.append(TREES_DIR, '''
+file(GLOB _e2e_strings_files "${CMAKE_CURRENT_SOURCE_DIR}/e2e-glob-strings/*.txt")
+list(GET _e2e_strings_files 0 _e2e_strings_file)
+file(STRINGS ${_e2e_strings_file} _e2e_strings_rows)
+foreach(_e2e_strings_row IN LISTS _e2e_strings_rows)
+    add_test(NAME ${_e2e_strings_row} COMMAND ${CMAKE_COMMAND} -E echo public)
+endforeach()
+''')
+        with mock.patch.dict(os.environ, {'PF_TWO_WORLD_SHOW_ROWS': '1'}):
+            result = self.run_check('--both', '--cmakelists', TREES_DIR,
+                                    '--profile', 'release', cwd=cwd)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        for world in ('absent', 'overlay'):
+            self.assertIn(f'{TREES_DIR} [release] {world}-world row: {row}', result.stdout)
 
 
 if __name__ == '__main__':

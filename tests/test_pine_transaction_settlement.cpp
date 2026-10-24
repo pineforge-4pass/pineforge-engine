@@ -55,7 +55,7 @@ public:
             : position_side_ == PositionSide::LONG ? position_qty_ : -position_qty_;
     }
     uint64_t fills() const { return broker_fill_event_seq_; }
-    const std::vector<Trade>& rows() const { return trades_; }
+    const TradeLedger& rows() const { return trades_; }
     const std::vector<PyramidEntry>& lots() const { return pyramid_entries_; }
 };
 

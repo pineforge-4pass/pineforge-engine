@@ -311,7 +311,7 @@ jobs:
         if: ${{ needs.authz.result == 'success' && runner.os == 'Linux' }}
         run: |
           sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libeigen3-dev tzdata-legacy ccache
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libeigen3-dev tzdata-legacy ccache strace
 
       # PRs restore the newest compatible main cache via the default-branch
       # fallback. Only main writes this namespace, never a PR merge ref.

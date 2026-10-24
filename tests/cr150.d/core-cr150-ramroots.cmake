@@ -1,0 +1,4 @@
+list(APPEND TEST_SOURCES test_successor_roots_ram)
+list(APPEND TEST_SOURCES test_native_roots_ram_run)
+pineforge_add_unit_test(test_successor_roots_ram)
+pineforge_add_unit_test(test_native_roots_ram_run)

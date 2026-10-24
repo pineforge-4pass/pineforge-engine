@@ -64,6 +64,7 @@ bool text_kind(RunFailureArgKind kind) noexcept {
     case RunFailureArgKind::number:
     case RunFailureArgKind::nullable_string:
     case RunFailureArgKind::scalar:
+    case RunFailureArgKind::boolean:
         return false;
     }
     return false;
@@ -213,6 +214,10 @@ RunFailureValue make_run_failure(RunFailureCode code, const RunFailureArgs& args
                 break;
             case RunFailureArgKind::scalar:
                 if (!scalar_value_ok(arg)) return invariant();
+                break;
+            case RunFailureArgKind::boolean:
+                if (arg.type != RunFailureArg::Type::boolean
+                    || (arg.integer != 0 && arg.integer != 1)) return invariant();
                 break;
             case RunFailureArgKind::vocab: {
                 if (arg.type != RunFailureArg::Type::text) return invariant();

@@ -77,7 +77,7 @@ public:
             if (mode_ != Mode::NoReversal) strategy_entry("Attempt", true);
         }
     }
-    const std::vector<Trade>& closed() const { return trades_; }
+    const TradeLedger& closed() const { return trades_; }
     double position() const { return signed_position_size(); }
 };
 bool near(double a, double b, double eps = 1e-8) {
