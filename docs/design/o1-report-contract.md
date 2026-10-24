@@ -124,20 +124,20 @@ but no implementation must not be reported as supporting any new mode.
   pages, formatting scratch, indexes and charged I/O windows may not.
   Completion requires a validated complete sink receipt.
 
-File-backed scratch for ordinary runs requires disk backing even when no sink
-or scratch directory was configured. The default selector first checks that the
-candidate is a searchable directory, then checks the filesystem type with `statfs`:
-use nonempty `TMPDIR` if disk-backed; when `TMPDIR` is unset
-or empty, retain disk-backed `/tmp` as the legacy first candidate. If that
-candidate is proven tmpfs/ramfs, try `/var/tmp`, also only if disk-backed. A failed
-filesystem query stops default resolution with its syscall errno and names the
-failed candidate at every create wrapper; it never permits fallback. Directory
-names never determine the medium, and tmpfs/ramfs is never silently selected.
-Once a disk-backed candidate is selected, ordinary creation/write failures keep
-their existing failure kinds and errno. Every create wrapper retains its established message prefix and
-appends the directory-selection detail. If creation in the selected `/var/tmp`
-fails, the detail names that directory, the rejected first candidate and
-`set TMPDIR to a disk-backed directory`.
+File-backed scratch for ordinary runs requires disk backing even when no sink or scratch directory was configured.
+The default selector first checks that the candidate is a searchable directory, then checks the filesystem type with `statfs`:
+use nonempty `TMPDIR` if disk-backed; when `TMPDIR` is unset or empty, retain disk-backed `/tmp` as the legacy first candidate.
+If that candidate is proven tmpfs/ramfs, try `/var/tmp`, also only if disk-backed. A failed filesystem query stops default resolution
+with its syscall errno and names the failed candidate at every create wrapper; it never permits fallback, except as described below.
+Directory names never determine the medium, and tmpfs/ramfs is never silently selected. Once a disk-backed candidate is selected,
+ordinary creation/write failures keep their existing failure kinds and errno. Every create wrapper retains its established message prefix
+and appends the directory-selection detail. If creation in the selected `/var/tmp` fails, the detail names that directory, the rejected
+first candidate and `set TMPDIR to a disk-backed directory`, except as described below.
+
+An ENOTSUP probe gives no filesystem evidence: use the default candidate as in 1.6.3 (error 0, no tmpfs claim, no refusal note).
+This covers hosts with no probe (neither Linux nor macOS) and real ENOTSUP from stat/faccessat/statfs; the test is by errno value,
+so on Linux ENOTSUP and EOPNOTSUPP are both 95. A FUSE/9p/network mount answering 95 keeps its candidate; a later create failure
+keeps the plain 1.6.3 text. If the first candidate is proven tmpfs/ramfs and /var/tmp answers ENOTSUP, select /var/tmp without the rejected-candidate note.
 
 If both default candidates are proven tmpfs/ramfs, refuse with `ENODEV` and
 `scratch requires disk backing`. The failure detail names every candidate tried

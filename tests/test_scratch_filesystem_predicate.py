@@ -12,8 +12,8 @@ import tempfile
 ROOT = Path(__file__).absolute().parent.parent
 CANONICAL = ROOT / "include/pineforge/detail/scratch_directory.hpp"
 MAGIC = re.compile(
-    rb"\b(?:TMPFS_MAGIC|RAMFS_MAGIC|0x0*(?:1021994|858458f6)[ul]*"
-    rb"|(?:16914836|2240043254)[ul]*)\b",
+    rb"(?:\b(?:TMPFS_MAGIC|RAMFS_MAGIC|0x0*(?:1021994|858458f6|ffffffff858458f6)[ul]*"
+    rb"|(?:16914836|2240043254)[ul]*)|-2054924042[ul]*)\b",
     re.IGNORECASE,
 )
 
@@ -127,6 +127,7 @@ def self_test_trees(parent: Path) -> int:
         b"0x0102'1994", b"0x8584'58f6", b"0x0'102'1994",
         b"16914836", b"2240043254", b"16914836UL", b"2240043254ULL",
         b"16'914'836", b"2'240'043'254",
+        b"-2054924042", b"-2054924042L", b"0xffffffff858458f6",
     )
     for number, spelling in enumerate(spellings):
         for in_canonical in (False, True):

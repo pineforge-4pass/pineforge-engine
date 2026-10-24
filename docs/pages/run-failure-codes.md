@@ -242,16 +242,16 @@ per-store arena share carries this same typed verdict, with needed bytes
 computed as the arena size satisfying that store's required extent. A separate
 command byte-budget refusal retains its status-only I/O behavior.
 
-File-backed scratch must have disk backing. With no scratch directory configured,
-the engine checks filesystem type with `statfs`, using nonempty `TMPDIR` if
-disk-backed, or the legacy `/tmp` candidate when `TMPDIR` is unset or empty.
-Only a successful query proving that first candidate is tmpfs/ramfs permits
-trying `/var/tmp`, also checked by filesystem type. A failed query stops
-resolution with its syscall errno and names the failed candidate. Directory
-names are not a medium test; tmpfs/ramfs is never silently chosen. If both default
-candidates are proven tmpfs/ramfs, the engine retains `ENODEV` /
-`scratch requires disk backing`, names every candidate tried and its rejection
-reason in the failure detail, and adds `set TMPDIR to a disk-backed directory`.
+File-backed scratch must have disk backing. With no scratch directory configured, the engine checks filesystem type with `statfs`,
+using nonempty `TMPDIR` if disk-backed, or the legacy `/tmp` candidate when `TMPDIR` is unset or empty. Only a successful query proving
+that first candidate is tmpfs/ramfs permits trying `/var/tmp`, also checked by filesystem type. A failed query stops resolution with its
+syscall errno and names the failed candidate, except as described below. Directory names are not a medium test; tmpfs/ramfs is never silently chosen.
+If both default candidates are proven tmpfs/ramfs, the engine retains `ENODEV` / `scratch requires disk backing`, names every candidate tried and its rejection reason in the failure detail, and adds `set TMPDIR to a disk-backed directory`.
+
+An ENOTSUP probe gives no filesystem evidence: use the default candidate as in 1.6.3 (error 0, no tmpfs claim, no refusal note).
+This covers hosts with no probe (neither Linux nor macOS) and real ENOTSUP from stat/faccessat/statfs; the test is by errno value,
+so on Linux ENOTSUP and EOPNOTSUPP are both 95. A FUSE/9p/network mount answering 95 keeps its candidate; a later create failure
+keeps the plain 1.6.3 text. If the first candidate is proven tmpfs/ramfs and /var/tmp answers ENOTSUP, select /var/tmp without the rejected-candidate note.
 
 An explicit scratch/spill directory is kept as supplied and never falls back;
 explicit tmpfs/ramfs directories are now refused, including command scratch.
@@ -260,7 +260,7 @@ The explicit sink-path refusal
 still requires a sealed arena and never creates a backing file or falls back to
 `TMPDIR`, `/tmp` or `/var/tmp`. File-backed command scratch uses
 `scratch_io_failed` (class `resource`), including default-directory query
-failures and all-memory refusals. Native runs create command scratch at begin,
+failures other than ENOTSUP and all-memory refusals. Native runs create command scratch at begin,
 before strategy callbacks. Report scratch uses `report_sink_failed` with
 `reason: scratch_io`; auxiliary tables use `scratch_io_failed`; sink-path I/O
 uses `report_sink_failed` with `reason: sink_io`.

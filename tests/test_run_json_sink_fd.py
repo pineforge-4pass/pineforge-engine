@@ -763,7 +763,8 @@ def sealed_arena_fd(size):
 
 def child_run(source, extra, *, transport="pipe", stub=True, jail=False,
               work=None, temporary=None, fault=None, break_after=None, pnls=PNLS,
-              without_arena=False, arena_path=None, arena_fd=None):
+              without_arena=False, arena_path=None, arena_fd=None,
+              without_scratch_overrides=False):
     event_read, event_write = os.pipe()
     with contextlib.ExitStack() as inherited, Stream(transport, break_after=break_after) as stream:
         command = [sys.executable, "-B", str(Path(__file__).resolve()),
@@ -786,8 +787,8 @@ def child_run(source, extra, *, transport="pipe", stub=True, jail=False,
             command += ["--jail"]
         command += ["--", "--ohlcv", str(source), *map(str, extra)]
         if jail and temporary is not None and "--profile" not in extra:
-            # Match the wrapper's explicit, read-only scratch directory for
-            # the path-sink refusal too; tempfile's directory probing is not
+            # Match the wrapper's explicit scratch directory for the
+            # path-sink refusal too; tempfile's directory probing is not
             # the native writer/open failure that this control exercises.
             command += ["--spill-dir", str(temporary)]
         if "--report-sink" not in extra:
@@ -796,6 +797,9 @@ def child_run(source, extra, *, transport="pipe", stub=True, jail=False,
         if without_arena:
             for name in ("PF_SCRATCH_ARENA_FD", "PF_SCRATCH_ARENA_BYTES",
                          "PF_SCRATCH_WINDOW_BYTES"):
+                environment.pop(name, None)
+        if without_scratch_overrides:
+            for name in ("PINEFORGE_COMMAND_SCRATCH_DIR", "PINEFORGE_RUN_JSON_PROFILE"):
                 environment.pop(name, None)
         if temporary is not None:
             environment.update(TMPDIR=str(temporary), TMP=str(temporary), TEMP=str(temporary))
@@ -904,18 +908,76 @@ def test_native_fd_fsize_zero_without_arena_refuses_before_file_operations(tmp_p
         assert failure["reason"] == failure["args"]["reason"]
         assert len(actual[1].splitlines()) == 1 and "summary" not in failure
         assert actual[3] == b"" and snapshot(work, temporary) == before
+    finally:
+        work.chmod(0o755)
+        temporary.chmod(0o755)
+
+
+def test_native_fd_fsize_zero_without_arena_tmpdir_cause(tmp_path):
+    source = bars.csv_file(tmp_path, count=17)
+    extra = ["--so", native_module(False), "--input-tf", "1", "--script-tf", "1"]
+    work, temporary = tmp_path / "work", tmp_path / "tmp"
+    work.mkdir()
+    temporary.mkdir()
+    work.chmod(0o555)
+    temporary.chmod(0o555)
+    try:
+        try:
+            probe = os.open(temporary / "probe", os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except PermissionError:
+            pass
+        else:
+            os.close(probe)
+            pytest.skip("mode-0555 TMPDIR permits create: root or DAC capabilities "
+                        "invalidate this Python row's permission precondition")
+        before = snapshot(work, temporary)
         refused = child_run(source, [*extra, "--report-sink", str(work / "bad.sink")],
-                            stub=False, jail=True, work=work, temporary=temporary)
+                            stub=False, jail=True, work=work, temporary=temporary,
+                            without_arena=True, without_scratch_overrides=True)
         assert refused[0] == 1 and refused[2] == "", refused
-        # This second run is the default (unjailed) profile with no arena, so the
-        # command scratch is a directory file. L6's D1(ii) ruling: the command
-        # scratch resolves TMPDIR like every other scratch and refuses at begin
-        # (docs/pages/run-failure-codes.md, the default scratch directory policy:
-        # scratch_io_failed, class resource). Before the series it used the literal
-        # /tmp, so the read-only TMPDIR was first met by the sink ledger
-        # (report_sink_failed). Nothing may be created in work or TMPDIR either way.
-        assert json.loads(refused[1])["code"] == "scratch_io_failed"
+        # With the unjailed profile and no arena or explicit scratch override,
+        # command scratch resolves TMPDIR and its create fails before sink open.
+        failure = json.loads(refused[1])
+        assert failure["code"] == "scratch_io_failed"
+        assert "command scratch create" in failure["error"], failure
+        assert "requires disk backing" not in failure["error"], failure
         assert snapshot(work, temporary) == before
+    finally:
+        work.chmod(0o755)
+        temporary.chmod(0o755)
+
+
+def test_native_fd_fsize_zero_path_sink_refused_in_read_only_work(tmp_path):
+    source = bars.csv_file(tmp_path, count=17)
+    extra = ["--so", native_module(False), "--input-tf", "1", "--script-tf", "1"]
+    work, temporary = tmp_path / "work", tmp_path / "tmp"
+    work.mkdir()
+    temporary.mkdir()
+    work.chmod(0o555)
+    temporary.chmod(0o755)
+    try:
+        try:
+            probe = os.open(work / "probe", os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except PermissionError:
+            pass
+        else:
+            os.close(probe)
+            pytest.skip("mode-0555 work permits create: root or DAC capabilities "
+                        "invalidate this Python row's permission precondition")
+        before = snapshot(work)
+        # At 3b76e98b86 command scratch used /tmp and succeeded. The old red was
+        # the native writer opening work/bad.sink in mode-0555 work:
+        # engine_report.cpp:1194-1198 -> report_sink_writer.cpp:491-493,
+        # EACCES -> report_sink_failed {reason: sink_io}, before TMPDIR use.
+        # Writable, disk-backed temporary restores that sink-open subject here.
+        refused = child_run(source, [*extra, "--report-sink", str(work / "bad.sink")],
+                            stub=False, jail=True, work=work, temporary=temporary,
+                            without_arena=True, without_scratch_overrides=True)
+        assert refused[0] == 1 and refused[2] == "", refused
+        failure = json.loads(refused[1])
+        assert failure["code"] == "report_sink_failed"
+        assert failure["args"] == {"reason": "sink_io"}
+        assert snapshot(work) == before
     finally:
         work.chmod(0o755)
         temporary.chmod(0o755)
