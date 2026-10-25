@@ -340,8 +340,8 @@ jobs:
           set -euo pipefail
           # The PR head's objects, to read its tree: fetched, never checked out or run.
           git fetch --quiet origin "$BASE_REF" "+refs/pull/$PR_NUMBER/head:refs/remotes/origin/pr-head"
-          if ! git merge-base --is-ancestor "$MERGE_SHA" "origin/$BASE_REF"; then
-            echo "::notice::merge commit $MERGE_SHA is not on origin/$BASE_REF; skipping"
+          if ! git merge-base --is-ancestor "$MERGE_SHA" "refs/remotes/origin/$BASE_REF"; then
+            echo "::notice::merge commit $MERGE_SHA is not on refs/remotes/origin/$BASE_REF; skipping"
             echo "ok=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
           merge_tree=$(git rev-parse "$MERGE_SHA^{tree}")
