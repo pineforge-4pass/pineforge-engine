@@ -4178,17 +4178,14 @@ def _validate_report_result(out: dict, *, validate_summary: bool = True,
     """Required results are finite; only native metric absence is nullable.
     Metric keys come from the producer's ctypes descriptors and alias map,
     after native computation has distinguished absence from computed NaN.
-    The sink read-back validates one trade or point here at a time, deferring
-    its first refusal until assembly. Keep the equity guard in this producer
-    for the ownership checker; equity_only skips the small-field checks."""
+    Sink read-back validates one trade/point at a time, deferring its first refusal until assembly.
+    Keep the equity guard here for the ownership checker; equity_only skips small-field checks."""
     if not equity_only:
         for trade in out["trades"]:
             for key, field in (
                 ("entry_price", "trades.entry_price"),
                 ("exit_price", "trades.exit_price"),
-                ("qty", "trades.qty"),
-                ("pnl", "trades.pnl"),
-                ("pnl_pct", "trades.pnl_pct"),
+                ("qty", "trades.qty"), ("pnl", "trades.pnl"), ("pnl_pct", "trades.pnl_pct"),
                 ("max_runup", "trades.max_runup"),
                 ("max_drawdown", "trades.max_drawdown"),
                 ("commission", "trades.commission"),
@@ -5979,6 +5976,9 @@ class _SinkReportDiagnostics:
     def trades(self, reader):
         # The existing strict reader exhausts its trailer in this same pass;
         # its uncached backing reads fixed 64 KiB windows, never all rows.
+        # O/V/K/X/H are deliberately dropped from this fold: the old trade
+        # fold read only records("T"). The reader still hashes every record
+        # as it iterates, supplying verify()'s digest for the entire sink.
         for record in reader:
             if record.tag == "E":
                 point = record.as_dict()
@@ -6698,6 +6698,10 @@ def _build_sink_report(report, ohlcv_path, n_bars, first_ts, last_ts, elapsed,
     diagnostics = sink.diagnostics
     if diagnostics.equity_failure is not None:
         raise diagnostics.equity_failure
+    # Equity count still equals the receipt without the old point_at walk:
+    # pf_sink.py's strict reader compares trailer counts with records read
+    # ("trailer count mismatch"), and verify() compares receipt counts with
+    # those verified trailer counts.
     trades = _JSONRecordArray(
         lambda: (_sink_trade(row) for row in sink.records("T")), sink.counts["T"])
     equity_curve = _JSONRecordArray(

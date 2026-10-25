@@ -1054,14 +1054,17 @@ def test_stream_batch_byte_bound_and_oversized_record():
             self.total_bytes = end
             return super().write(text)
 
-    # The fallback lets the count-only, pre-round-3 code reach the size
-    # assertion rather than fail because the new constant does not exist.
-    batch_bytes = getattr(run_json, "_STREAM_BATCH_BYTES", 256 * 1024)
+    # Compare bytes with the OLD writer while bounding each write for both
+    # windowed long strings and byte-limited batches of fast-path records.
+    batch_bytes = run_json._STREAM_BATCH_BYTES
     records = [{"text": chr(65 + index % 26) * (64 * 1024)}
                for index in range(64)]
     oversized = {"text": "z" * (2 * 1024 * 1024)}
+    fast_records = [{"text": chr(65 + index % 26) * 1000}
+                    for index in range(4000)]
     for rows in (records, [oversized],
-                 [{"text": "before"}, oversized, {"text": "after"}]):
+                 [{"text": "before"}, oversized, {"text": "after"}],
+                 fast_records):
         document = _array(rows)
         reference, failure = _outcome(_stream_json, document)
         assert failure is None, failure
@@ -1073,15 +1076,24 @@ def test_stream_batch_byte_bound_and_oversized_record():
         longest_record = max(
             len(json.dumps(row, separators=(",", ":"), allow_nan=False))
             for row in rows)
-        # Before round 3, 64 < 512: the final flush joins all 4 MiB of
-        # strings into one write, exceeding 256 KiB + one record's JSON.
+        # Byte identity must hold without any write exceeding the byte cap
+        # plus one record, regardless of which serialization path it uses.
         assert destination.longest_write <= batch_bytes + longest_record
-        if longest_record > batch_bytes:
-            # An oversized record is one write, including its leading comma
-            # when present. Neighbours must each be written separately too.
-            leading_comma = int(rows[0] is not oversized)
-            assert destination.longest_write == longest_record + leading_comma
-            assert destination.writes == len(rows) + 2
+        if rows is fast_records:
+            # These 1000-character strings qualify for the fast path. Byte
+            # flushing precedes the 512-row cap, and nonfinal batches are at
+            # least half full. With equal-sized rows, the first full batch
+            # plus the last span at least two halves; +2 counts the brackets.
+            assert destination.writes <= destination.total_bytes // (batch_bytes // 2) + 2
+        else:
+            # All long strings here are ASCII: a window needs at most six
+            # bytes per character for \uXXXX escapes. Quotes, keys and other
+            # punctuation are separate, smaller writes, so this bound covers
+            # both the 64 KiB strings and the 2 MiB oversized record.
+            assert destination.longest_write <= 6 * run_json._STREAM_FAST_STR_LIMIT
+            # Splitting the long strings requires more writes than one per
+            # record plus two brackets, even with small neighbours.
+            assert destination.writes > len(rows) + 2
 
 
 def _fixed_width_points(count):
