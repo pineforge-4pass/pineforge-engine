@@ -2070,6 +2070,19 @@ def check_commands(source: Path, output: Path | None = None,
          [sys.executable, str(source / 'scripts/check_market_admission_schema.py')]),
         ('source-guard-cancellation',
          [sys.executable, str(source / 'scripts/check_cancellation_hash_coverage.py')]),
+        # CR-150 / C4: a new growable container in the scanned engine, inline
+        # header or generated C++ needs a manifest entry whose bound names only
+        # declared fixed inputs; the existing sites are listed OPEN, never PASS
+        # (ci/cr150-source-bounds.yaml). Unconditional: a merge that adds a site
+        # in a file this change never touched fails here as well. A missing
+        # manifest, an empty file set or a scan with no sites exits 2 (fails).
+        ('source-guard-cr150-source-bounds',
+         [sys.executable, str(source / 'scripts/cr150_source_gate.py'),
+          '--root', str(source)]),
+        # The gate's own mutation controls: each class of unlisted site, bad
+        # bound, empty scan and missing manifest must change the verdict.
+        ('cr150-source-gate-tests',
+         [sys.executable, str(source / 'scripts/test_cr150_source_gate.py')]),
         # R5 lane H-DOCGATES (AUDIT4-opus X17, perf N-2): two random draws whose
         # order C++ leaves to the compiler build a different battery on x86-64
         # GCC than on AppleClang -- XPLAT1's bug class, back at ten sites.
