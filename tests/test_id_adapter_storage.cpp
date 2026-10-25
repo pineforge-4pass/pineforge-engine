@@ -32,9 +32,11 @@ template<class Tag, auto Member> struct Access {
 struct Cohorts { friend auto access(Cohorts); };
 struct CohortFor { friend auto access(CohortFor); };
 struct CohortSlots { friend auto access(CohortSlots); };
+struct BracketFamilies { friend auto access(BracketFamilies); };
 template struct Access<Cohorts, &Adapter::cohorts_by_id_>;
 template struct Access<CohortFor, &Adapter::cohort_for>;
 template struct Access<CohortSlots, &Adapter::cohort_opened_slot_count_>;
+template struct Access<BracketFamilies, &Adapter::bracket_families_>;
 
 void require(bool value, const char* why) {
     if (!value) throw std::runtime_error(why);
@@ -741,12 +743,15 @@ void real_orders_spill_differential() {
 
 class CloseSelectionHost final : public pineforge::source::PineStrategyHost {
 public:
+    static constexpr double kEntryUnits = 0.01;
+
     CloseSelectionHost(int population, bool precheck) : population_(population) {
         pineforge::source::PineStrategyConfig config;
-        config.initial_capital = 1e12;
-        config.margin_long = config.margin_short = 0.0;
-        config.pyramiding = 4096;
-        config.process_orders_on_close = true;
+        // dense.pine defaults: POOC=false, pyramiding=1, margins=100%.
+        // Only the first entry fills; later ids still leave working exit legs.
+        config.initial_capital = 10000.0;
+        config.default_qty_type = static_cast<int>(pineforge::QtyType::FIXED);
+        config.default_qty_value = kEntryUnits;
         configure_pine_strategy(config);
         set_broker_state_hash_recording(true);
         set_syminfo_timezone("UTC");
@@ -754,42 +759,72 @@ public:
         set_syminfo_mintick(0.25);
         adapter_.fixture_bracket_remove_precheck(precheck);
     }
-    void on_source_bar(const pineforge::Bar&) override {
+    void on_source_bar(const pineforge::Bar& bar) override {
         const auto i = pine_bar_index();
         const auto na = std::numeric_limits<double>::quiet_NaN();
         if (i < population_) {
-            const auto id = "close-owner-" + std::to_string(i);
-            strategy_entry(id, true, na, na, 1.0);
-            strategy_exit("close-exit-" + std::to_string(i), id, na, 50.0);
-        } else if (i == population_) {
-            require(trade_count() == 0 && physical_position().signed_units == population_,
-                    "one opening per bar holds N units and none of the N exits filled");
+            const auto id = "E" + std::to_string(i);
+            strategy_entry(id, true); // Market, default fixed size, next bar open.
+            strategy_exit("X" + std::to_string(i), id, na, bar.close * 0.99);
+        }
+        if (i == population_ - 1) {
+            const auto& families = adapter_.*access(BracketFamilies{});
+            families_before_fall = families.size();
+            for (const auto& family : families) {
+                const auto size = family.second.working_tail().size();
+                working_tail_sum_before_fall += size;
+                working_tail_max_before_fall = std::max(working_tail_max_before_fall, size);
+            }
+            require(trade_count() == 0 && physical_position().signed_units == kEntryUnits
+                    && physical_position().lot_count == 1,
+                    "dense's default pyramiding holds one opening and no stop has filled");
             require(native_working_requests().size() == static_cast<std::size_t>(population_),
-                    "the close starts with N real working exit legs");
-            // Arm before requesting the close and stop at its post-Applied
-            // observer, covering this close's admission and settlement.
+                    "the fall starts with N real working exit legs");
+            // The final entry/exit calls above have returned before arming.
+            // No more orders are placed: bar N's low, not a script close,
+            // fills E0's stop and enters on_applied's per-owner flat cleanup.
             auto& scratch = pineforge::source::detail::exit_scratch(adapter_);
             scratch.observation = this;
             scratch.observe_lookup = [](void* opaque, std::size_t) noexcept {
                 ++static_cast<CloseSelectionHost*>(opaque)->close_lookups;
             };
             armed_ = true;
-            strategy_close_all();
         }
     }
     std::uint64_t close_lookups = 0;
+    std::size_t families_before_fall = 0;
+    std::size_t working_tail_sum_before_fall = 0;
+    std::size_t working_tail_max_before_fall = 0;
+    int opening_events = 0;
     int close_events = 0;
+    int close_window_events = 0;
 protected:
     void on_native_applied_event(const no::ExecutionAppliedEvent& event,
                                 const pineforge::NativeDecisionContext&) override {
+        if (event.opened_units != 0.0) {
+            ++opening_events;
+            require(!armed_ && close_events == 0 && event.opened_units == kEntryUnits
+                    && event.closed_units == 0.0 && event.interval_index() == 1
+                    && event.request().label == "E0",
+                    "only E0 opens, at bar 1's open before the close window");
+        }
+        if (event.closed_units > 0.0) {
+            ++close_events;
+            require(armed_, "every close must be inside the single stop-fill window");
+        }
         if (!armed_) return;
-        require(event.closed_units == population_ && event.opened_units == 0.0,
-                "the measured event is the full close of the populated book");
-        ++close_events;
+        ++close_window_events;
+        require(event.closed_units > 0.0 && event.closed_units == kEntryUnits
+                && event.opened_units == 0.0 && event.closed_trade_count == 1
+                && event.interval_index() == population_ && event.request().label == "X0"
+                && close_events == 1,
+                "the window contains only X0's stop fill closing the sole lot on bar N");
         armed_ = false;
         auto& scratch = pineforge::source::detail::exit_scratch(adapter_);
         scratch.observe_lookup = nullptr;
         scratch.observation = nullptr;
+        require(physical_position().signed_units == 0.0 && physical_position().lot_count == 0,
+                "the stop fill leaves the position flat");
         require(native_working_requests().empty(), "the close cancels every pending exit");
     }
 private:
@@ -803,35 +838,69 @@ void close_selection_lookup_growth_and_equivalence() {
         const int n = sample == 0 ? 128 : 256;
         auto bars = chart();
         bars.resize(static_cast<std::size_t>(n + 2), bars.back());
-        for (std::size_t i = 0; i < bars.size(); ++i)
+        for (std::size_t i = 0; i < bars.size(); ++i) {
             bars[i].timestamp = 1736121600000LL + static_cast<std::int64_t>(i) * 60000;
+            // close * 0.99 is 99.0: keep every low two 0.25 ticks above it.
+            // The shared chart's original low of 99.0 would trigger the stops.
+            bars[i].low = 99.5;
+        }
+        // E0 fills at bar 1's open; every later entry is over pyramiding=1.
+        // Exactly one lot exists when bar N crosses its 99.0 stop. Leave a
+        // quiet bar after the fall to expose any additional fill or close.
+        bars[static_cast<std::size_t>(n)].low = 98.0;
+        bars[static_cast<std::size_t>(n)].close = 98.5;
         CloseSelectionHost candidate(n, true), reference(n, false);
-        for (auto* host : {&candidate, &reference}) {
+        for (auto* host : {&candidate, &reference})
             host->run(bars.data(), static_cast<int>(bars.size()), "1", "1");
+        checked[sample] = candidate.close_lookups;
+        unchecked[sample] = reference.close_lookups;
+        // Keep the discriminator visible even if the run or witness fails.
+        std::printf("CR347 close N=%d find_key=%llu precheck_disabled_find_key=%llu"
+                    " families=%zu working_tail_sum=%zu working_tail_max=%zu"
+                    " precheck_disabled_families=%zu precheck_disabled_working_tail_sum=%zu"
+                    " precheck_disabled_working_tail_max=%zu\n", n,
+            static_cast<unsigned long long>(checked[sample]),
+            static_cast<unsigned long long>(unchecked[sample]),
+            candidate.families_before_fall, candidate.working_tail_sum_before_fall,
+            candidate.working_tail_max_before_fall,
+            reference.families_before_fall, reference.working_tail_sum_before_fall,
+            reference.working_tail_max_before_fall);
+        std::fflush(stdout);
+        for (auto* host : {&candidate, &reference}) {
             require(host->last_error().empty(), host->last_error().c_str());
-            require(host->close_events == 1 && host->trade_count() == n,
-                    "close-selection witness executes one close and closes every opening");
+            require(host->families_before_fall == static_cast<std::size_t>(n)
+                    && host->working_tail_sum_before_fall == static_cast<std::size_t>(n)
+                    && host->working_tail_max_before_fall == 1,
+                    "before the fall each of N bracket families holds one working leg");
+            require(host->opening_events == 1 && host->close_events == 1
+                    && host->close_window_events == 1 && host->trade_count() == 1,
+                    "one opening and one stop fill settle dense's sole lot");
             for (int i = 0; i < host->trade_count(); ++i) {
                 const auto& trade = host->get_trade(i);
-                require(trade.qty == 1.0 && !trade.open_at_end && !trade.exit_from_bracket,
-                        "all exits stay pending until the script close");
+                require(trade.qty == CloseSelectionHost::kEntryUnits
+                        && trade.entry_id == "E0"
+                        && trade.exit_id == "X0" && trade.exit_price == 99.0
+                        && trade.entry_time == bars[1].timestamp
+                        && trade.exit_time == bars[static_cast<std::size_t>(n)].timestamp
+                        && trade.entry_bar_index == 1 && trade.exit_bar_index == n
+                        && !trade.open_at_end && trade.exit_from_bracket,
+                        "E0 fills on bar 1 and only its bracket stop closes it on bar N");
             }
         }
         require(report_image(candidate) == report_image(reference)
                 && candidate.broker_state_hash_projection() == reference.broker_state_hash_projection(),
                 "precheck preserves every trade/report byte, recorded hash and final source hash");
-        checked[sample] = candidate.close_lookups;
-        unchecked[sample] = reference.close_lookups;
-        std::printf("CR347 close N=%d find_key=%llu precheck_disabled_find_key=%llu\n", n,
-            static_cast<unsigned long long>(checked[sample]),
-            static_cast<unsigned long long>(unchecked[sample]));
         require(checked[sample] > 0 && unchecked[sample] >=
                     static_cast<std::uint64_t>(n) * static_cast<std::uint64_t>(n + 1) / 2,
                 "the existing find_key hook observes the old triangular family scans");
     }
-    // Red on the old remove_selected: each owner seeks every remaining
-    // family's hot member, N(N+1)/2 seeks. This hook is called by find_key;
-    // all legs are already gone before the later ended_sources.contains pass.
+    // The flat block calls cancel_exit_orders_for_full_close per owner
+    // (pine_adapter.cpp:26328), each visiting every remaining family to remove
+    // its owner's one leg (6547-6551). With one hot member each, the unchecked scanner
+    // (pine_adapter.hpp:1394) seeks N+(N-1)+...+1 times, plus one extra seek
+    // per matched leg when erasing (1408). The precheck skips disjoint
+    // families, leaving two roster seeks per owner. Keep the triangular floor:
+    // the lab must measure it; an old arm that still counts N must fail.
     require(checked[1] < 3 * checked[0], "doubling pending exits must take less than 3x close key seeks");
     require(unchecked[0] > checked[0] && unchecked[1] > checked[1],
             "fixture switch actually disables the precheck");
