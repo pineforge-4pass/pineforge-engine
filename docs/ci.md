@@ -67,16 +67,16 @@ or `slow` rows. The target rebuilds those executables with their library.
 PRs restore the newest compatible default-branch compiler cache, and only
 successful runs on `main` save that cache namespace.
 
-FLEET-POST=A splits verification and documentation routing at the file boundary:
-PR jobs use `["self-hosted","pf-gcp-pr"]`, and post-merge push/schedule/manual
-jobs use `["self-hosted","pf-gcp-post"]`. No job chooses its label by event.
-`corpus-parity-subset.yml` is reusable only from the PR pipeline;
-`corpus-parity.yml` keeps full parity and the full-event subset on the post
-fleet. The checker follows local reusable calls, so a PR caller cannot borrow
-a post workflow even behind a job condition.
+FLEET-POST=A keeps large verification jobs split at the file boundary:
+PR build/preflight and parity subset use `["self-hosted","pf-gcp-pr"]`; post-merge
+verification uses `["self-hosted","pf-gcp-post"]`. No job routes by event.
+CI-RUNNER-SPLIT hosts `authz` in all eight split workflows, both CI `changes`
+and `build-gate` jobs, and `docs.yml`'s `build` on exactly `ubuntu-24.04`.
+These light, secret-free jobs need no VM-only tools, mounts or caches.
+Local reusable calls still cannot mix PR and post-merge verification fleets.
 
 The manual `release-ruleset-probe.yml` workflow runs `authz` on
-`["self-hosted","pf-gcp-pr"]` and `probe` on `["self-hosted","pf-gcp-post"]`.
+hosted `ubuntu-24.04` and `probe` on `["self-hosted","pf-gcp-post"]`.
 
 `docs.yml` retains the PR build name and `.github/**` exclusion.
 `docs-post.yml` builds and deploys on main pushes and manual dispatch.
@@ -184,8 +184,8 @@ the preflight source guard rejects those includes before a build.
 
 CI retains Ubuntu 24.04 and macOS 26 cell names and selects Python 3.12 explicitly.
 Linux post cells request the post fleet and refuse an OS mismatch; the two
-macOS post cells run on the hosted `macos-26` image (LB-535's sole hosted
-exception) and refuse an OS mismatch the same way.
+macOS post cells run on hosted `macos-26` and refuse the same OS mismatch.
+Hosted exceptions include the named light jobs, macOS and the existing release/promotion pins.
 CMake uses the same interpreter as the
 verification driver, so its Python checks do not switch to a different system
 Python. CTest must discover tests; an empty suite is a failure. Which runner
@@ -1646,42 +1646,42 @@ runs, and this page does not claim either target as met.
 
 ## Runners and time limits
 
-FLEET-POST=A (laneboss bulletin #1083, CR-233 ADD 2) supersedes the earlier
-non-release fleet policy. Each non-release workflow has one event class and
-one literal scheduler array, including authz, classification and aggregates:
+CI-RUNNER-SPLIT (R309 + R312) keeps large and credentialed work on our VMs.
+Only the listed light, secret-free jobs move to the pinned hosted image;
+each runner label remains a literal, checked per job:
 
-| Workflow | Events/callers | Every inline job's `runs-on` |
+| Workflow | Events/callers | Inline jobs' `runs-on` |
 | --- | --- | --- |
-| `ci.yml` | Unfiltered `pull_request` | `["self-hosted","pf-gcp-pr"]` |
-| `corpus-parity-subset.yml` | Reusable call from PR CI | `["self-hosted","pf-gcp-pr"]` |
-| `docs.yml` | `pull_request`, except `.github/**`-only diffs | `["self-hosted","pf-gcp-pr"]` |
-| `ci-post.yml` | Push to `main`, 01:30 UTC schedule, dispatch | `["self-hosted","pf-gcp-post"]`, except `build-macos` on hosted `macos-26` |
-| `corpus-parity.yml` | Schedule, dispatch, post CI callers | `["self-hosted","pf-gcp-post"]` |
-| `native-live.yml` | Dispatch and post CI callers | `["self-hosted","pf-gcp-post"]` |
-| `docs-post.yml` | Push to `main`, dispatch | `["self-hosted","pf-gcp-post"]` |
+| `ci.yml` | Unfiltered `pull_request` | `authz`, `changes`, `build-gate`: hosted `ubuntu-24.04`; preflight/build: `["self-hosted","pf-gcp-pr"]` |
+| `corpus-parity-subset.yml` | Reusable call from PR CI | `authz`: hosted `ubuntu-24.04`; subset: `["self-hosted","pf-gcp-pr"]` |
+| `docs.yml` | `pull_request`, except `.github/**`-only diffs | `authz` and `build`: hosted `ubuntu-24.04` |
+| `ci-post.yml` | Push to `main`, 01:30 UTC schedule, dispatch | `authz`, `changes`, `build-gate`: hosted `ubuntu-24.04`; `build-macos`: hosted `macos-26`; other inline jobs: `["self-hosted","pf-gcp-post"]` |
+| `corpus-parity.yml` | Schedule, dispatch, post CI callers | `authz`: hosted `ubuntu-24.04`; both parity jobs: `["self-hosted","pf-gcp-post"]` |
+| `native-live.yml` | Dispatch and post CI callers | `authz`: hosted `ubuntu-24.04`; all native profiles and `native-live-gate`: `["self-hosted","pf-gcp-post"]` |
+| `docs-post.yml` | Push to `main`, dispatch | `authz`: hosted `ubuntu-24.04`; credentialed `build`: `["self-hosted","pf-gcp-post"]` |
 
 The post fleet admits only push, schedule and dispatch on engine `main` and
-refuses all PR events. A reusable workflow inherits the caller's event.
-`workflow_event_routes` and `workflow_fleet_findings` in
-`scripts/ci_preflight.py` follow every local call to a fixed point, refuse
-mixed event classes and require literal fleet arrays on every inline job.
-The fleet is inferred from events and caller reachability, independently of
-workflow file names and job conditions. The command table pins job inventory
-and core-count usage, without assigning fleets by file name.
+refuses all PR events. Reusable workflows inherit their caller's event.
+`workflow_event_routes` and `workflow_fleet_findings` in `scripts/ci_preflight.py`
+follow local calls to a fixed point, refuse mixed event classes and require
+literal VM arrays outside the exact hosted pins; job conditions cannot excuse routing.
+Fork PRs on hosted runners run without our secrets, so the VM-only fork-refusal hook is not needed.
+Hosted light jobs need no VM tools or mounts; leaving VM queues shortens PR wall time.
+Rollback: relabel the affected job to its prior `pf-gcp-pr` or `pf-gcp-post` array and restore its checker/test pin.
 
 All four full build cells retain their check names. The two Linux cells are
 one job on the post fleet; the two macOS cells are a separate job on the
-hosted `macos-26` image, the fixed hosted exception LANEBOSS canon allows for
+hosted `macos-26` image, the fixed macOS exception LANEBOSS canon allows for
 engine and app. Each job refuses an OS mismatch before checkout, and the
 aggregate requires both. `HOSTED_JOB_RUNNERS` in `scripts/ci_preflight.py`
-pins that one job name and image, and the exception never applies to a
-workflow reachable from `pull_request`. The PR build remains
+pins the light jobs and that macOS job's image; only the macOS exception excludes
+workflows reachable from `pull_request`. The PR build remains
 `build (ubuntu-24.04, Release)` and its aggregate remains `build`.
 
 Release and promotion use the isolated release fleet:
 `release`, `notify-hub`, Linux x64 `prebuilt` and baseline `promote` use
 `["self-hosted","pf-gcp-main"]`.
-The release ruleset probe runs `authz` on `["self-hosted","pf-gcp-pr"]` and
+The release ruleset probe runs secret-free `authz` on hosted `ubuntu-24.04` and
 `probe` on `["self-hosted","pf-gcp-post"]`.
 Release's ARM/macOS artifact cells keep their existing hosted pins, and
 promotion runs on a push to `main` plus manual dispatch from `main`.
@@ -1915,8 +1915,8 @@ Dispatch **Release ruleset probe** (`release-ruleset-probe.yml`) once from
 `main` to check actual ruleset visibility with the same App token mint as
 `release.yml`. The workflow file must be on the default branch, and the run
 must use `main`'s copy.
-The probe job runs on `["self-hosted","pf-gcp-post"]`, with `authz` on
-`["self-hosted","pf-gcp-pr"]`.
+The credentialed probe job runs on `["self-hosted","pf-gcp-post"]`, with
+secret-free `authz` on hosted `ubuntu-24.04`.
 `pf-gcp-main` admits only allowlisted workflows (an org runner-group restriction),
 so the one-time probe uses `pf-gcp-post`.
 The dispatch must run from `main`; the workflow itself refuses any other ref
