@@ -1620,6 +1620,9 @@ public:
     void fixture_cohort_implicit_spill_interval(std::size_t calls) noexcept {
         cohorts_by_id_.fixture_implicit_spill_interval(calls);
     }
+    void fixture_verify_source_entry_slots(bool enabled) noexcept {
+        fixture_verify_source_entry_slots_ = enabled;
+    }
     std::uint64_t fixture_auxiliary_disk_bytes() const noexcept;
     std::uint64_t fixture_erased_digest() const noexcept { return placement_.erased_digest(); }
     std::uint64_t fixture_erased_rows() const noexcept { return placement_.erased_rows(); }
@@ -1647,7 +1650,9 @@ public:
     };
     // Snapshot only: O(resident rows + retained origins), no allocation/I/O.
     // Capacities include inline string storage; node/control sizes are
-    // estimates. This is not a bound on pending-order memory.
+    // estimates. bytes_per_row counts PHYSICAL rows (deferred empty rows
+    // inflate it). The policy claim is physical resident rows <= 2x live rows
+    // + 64. This is not a bound on pending-order memory.
     CohortHeapEstimate cohort_heap_estimate() const noexcept;
 
     enum class PositionTailGuard : std::uint8_t {
@@ -2992,6 +2997,11 @@ private:
     SourceId open_exit_first_id_{};
     double open_exit_first_fill_ = 0.0;
     // @source-state end
+    // Diagnostic only: maintained from CohortFacts::opened pushes, erases and
+    // whole-vector clears.
+    // It is deliberately outside source state and the broker hash.
+    std::size_t cohort_opened_slot_count_ = 0;
+    bool fixture_verify_source_entry_slots_ = false;
     // Set while an open's calls that TradingView does not repeat at one
     // price book (run_close_sized_open_calls, open_call_owing_follow_up); the
     // requests submitted meanwhile are listed in unrepeated_margin_calls_

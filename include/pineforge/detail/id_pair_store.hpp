@@ -273,9 +273,16 @@ public:
         enumerate([&](KeyView key) {
             auto first = key.first;
             auto second = key.second;
+            if (data_resource_ == ScratchResource::consumed_data && second
+                && (first.find('\x1f') != std::string_view::npos
+                    || second->find('\x1f') != std::string_view::npos)) {
+                throw ScratchCapacityError(data_resource_,
+                    "order ids cannot contain the control character 0x1f");
+            }
             if (data_resource_ == ScratchResource::consumed_data && !second) {
                 // Consumed singles join two ids with '\x1f'. A boundary
-                // after at most 64 bytes permits ids containing that byte.
+                // after at most 64 bytes is safe because the source id
+                // components are rejected before this representation is made.
                 const auto separator = first.rfind('\x1f', 64);
                 if (separator != std::string_view::npos) {
                     second = first.substr(separator + 1);
@@ -310,6 +317,12 @@ public:
     void preflight_joined_single(std::string_view first, char separator,
                                  std::string_view last) const {
         if (!slab_) return;
+        if (data_resource_ == ScratchResource::consumed_data
+            && (first.find('\x1f') != std::string_view::npos
+                || last.find('\x1f') != std::string_view::npos)) {
+            throw ScratchCapacityError(data_resource_,
+                "order ids cannot contain the control character 0x1f");
+        }
         require_id_components(first.size(), last.size());
         constexpr auto maximum = std::numeric_limits<std::uint64_t>::max();
         if (first.size() >= maximum || last.size() > maximum - first.size() - 1)

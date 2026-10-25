@@ -229,6 +229,15 @@ void consumed_single_string() {
     require(Image(*slab) == before, "joined dead-key ticket needs no bytes");
     store.insert_or_assign(key, std::numeric_limits<std::int64_t>::min());
     require(store.at(key) == std::numeric_limits<std::int64_t>::min(), "signed resurrection keeps all bits");
+    bool refused_control = false;
+    try {
+        store.preflight_joined_single(std::string("bad") + '\x1f', '\x1f', "E");
+    } catch (const detail::ScratchCapacityError& error) {
+        refused_control = error.what() == "order ids cannot contain the control character 0x1f"
+            && classify_run_failure(error).args
+            && *classify_run_failure(error).args == "{\"resource\":\"consumed_data\"}";
+    }
+    require(refused_control, "consumed ids reject the separator before joined splitting");
     bool refused = false;
     try { store.preflight_joined_single("Y", '\x1f', "E"); }
     catch (const detail::ScratchCapacityError& error) {

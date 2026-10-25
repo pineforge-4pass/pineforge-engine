@@ -62,10 +62,13 @@ class DiskResidentIdTable {
 
 public:
     // Physical work only; not logical broker state and never hashed.
+    // A6 counters are single-threaded per run; mutable members are written
+    // from const methods because reads may restore, spill or instrument rows.
     struct WorkCounters {
         std::uint64_t rows_visited_by_spill = 0;
         std::uint64_t find_resident_probes = 0;
         std::uint64_t resident_rows_visited = 0;
+        std::uint64_t iterated_rows = 0;
         std::uint64_t rows_visited_by_capacity = 0;
         std::uint64_t rows_spilled = 0, rows_restored = 0;
     };
@@ -95,9 +98,16 @@ public:
         using reference = std::conditional_t<Const, const Row&, Row&>;
         using pointer = std::conditional_t<Const, const Row*, Row*>;
         Iterator() = default;
-        reference operator*() const noexcept { return *row_; }
-        pointer operator->() const noexcept { return row_.get(); }
+        reference operator*() const noexcept {
+            ++owner_->work_.iterated_rows;
+            return *row_;
+        }
+        pointer operator->() const noexcept {
+            ++owner_->work_.iterated_rows;
+            return row_.get();
+        }
         Iterator& operator++() {
+            ++owner_->work_.iterated_rows;
             if constexpr (Sorted) {
                 const auto next = owner_->index_.next_sorted(at_);
                 row_.reset();
@@ -213,6 +223,7 @@ public:
             spill_interval_ = std::exchange(other.spill_interval_, kSpillFloor);
             calls_since_spill_ = std::exchange(other.calls_since_spill_, 0);
             fixture_spill_interval_ = std::exchange(other.fixture_spill_interval_, 0);
+            fixture_spill_predicate_ = std::exchange(other.fixture_spill_predicate_, nullptr);
             other.resident_by_key_.clear();
             other.resident_.clear();
         }
@@ -347,9 +358,8 @@ public:
         for (auto at = resident_.begin(); at != resident_.end();) {
             ++work_.rows_visited_by_spill;
             if (at->second.owner.use_count() == 1 && at->second.owner->second.spillable()
-#ifdef PINEFORGE_COHORT_SPILL_ALLOWED
-                && PINEFORGE_COHORT_SPILL_ALLOWED(at->second.owner->first)
-#endif
+                && (fixture_spill_predicate_ == nullptr
+                    || fixture_spill_predicate_(at->second.owner->first))
             ) {
                 index_.set(at->first, at->second.owner->second.retired_record());
                 ++work_.rows_spilled;
@@ -376,13 +386,20 @@ public:
     void fixture_implicit_spill_interval(std::size_t calls) noexcept {
         fixture_spill_interval_ = calls;
     }
+    // Test-only observation hook. Production leaves this null, so the hot
+    // spill path has one predictable null check per candidate row.
+    void fixture_spill_predicate(bool (*predicate)(const std::string&)) noexcept {
+        fixture_spill_predicate_ = predicate;
+    }
 
 private:
     void require_live_growth(std::size_t extra) const {
         if (extra == 0 || !index_.bounded_cohorts()) return;
         if (resident_.size() <= kMaxResidentCohorts
             && extra <= kMaxResidentCohorts - resident_.size()) return;
-        // Admission's dry pass must finish before spill can write any bytes.
+        // Admission's O(R) dry pass must finish before spill can write any
+        // bytes. It is at most one such pass per spill, never a per-ticket
+        // scan: callers batch the ticket's extra rows before reaching here.
         // Counting physical rows here would falsely refuse deferred empties
         // (including empty rows pinned by an enclosing iterator).
         std::size_t live = 0;
@@ -446,5 +463,6 @@ private:
     mutable std::size_t spill_threshold_ = kSpillFloor, spill_interval_ = kSpillFloor;
     mutable std::size_t calls_since_spill_ = 0;
     std::size_t fixture_spill_interval_ = 0;
+    bool (*fixture_spill_predicate_)(const std::string&) = nullptr;
 };
 } // namespace pineforge::detail

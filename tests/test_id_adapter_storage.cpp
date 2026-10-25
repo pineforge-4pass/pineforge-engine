@@ -290,6 +290,66 @@ std::vector<pineforge::Bar> chart() {
     return bars;
 }
 
+int old_slot_count(const Adapter& adapter);
+
+class SlotCountHost final : public pineforge::source::PineStrategyHost {
+public:
+    static constexpr int kEntries = 2000;
+
+    SlotCountHost() {
+        pineforge::source::PineStrategyConfig config;
+        config.initial_capital = 1e12;
+        config.margin_long = config.margin_short = 0.0;
+        config.pyramiding = 5000;
+        configure_pine_strategy(config);
+        set_syminfo_timezone("UTC");
+        set_syminfo_session("24x7");
+        set_syminfo_mintick(0.25);
+        adapter_.fixture_verify_source_entry_slots(true);
+    }
+
+    void on_source_bar(const pineforge::Bar&) override {
+        const auto i = pine_bar_index();
+        if (i < kEntries) {
+            const auto na = std::numeric_limits<double>::quiet_NaN();
+            strategy_entry("slot-" + std::to_string(i), true, na, na, 1.0);
+        }
+        auto& table = adapter_.*access(Cohorts{});
+        const auto before = adapter_.cohort_table_work();
+        const auto allocations = global_allocation::allocations;
+        global_allocation::refusing = true;
+        last_slots = adapter_.source_entry_slot_count();
+        global_allocation::refusing = false;
+        const auto after = adapter_.cohort_table_work();
+        require(after.resident_rows_visited - before.resident_rows_visited
+                    == table.resident_size(),
+                "slot oracle visits each resident row exactly once");
+        require(after.find_resident_probes == before.find_resident_probes,
+                "slot oracle does no per-id lookups");
+        require(global_allocation::allocations == allocations,
+                "slot oracle allocates nothing");
+        if (i == kEntries) checked_slots = true;
+    }
+
+    const Adapter& adapter() const { return adapter_; }
+    int last_slots = 0;
+    bool checked_slots = false;
+};
+
+void slot_count_one_pass_and_no_allocation() {
+    auto bars = chart();
+    bars.resize(static_cast<std::size_t>(SlotCountHost::kEntries + 1), bars.back());
+    for (std::size_t i = 0; i < bars.size(); ++i)
+        bars[i].timestamp = 1736121600000LL + static_cast<std::int64_t>(i) * 60000;
+    SlotCountHost host;
+    host.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
+    require(host.last_error().empty(), host.last_error().c_str());
+    require(host.checked_slots && host.last_slots == SlotCountHost::kEntries,
+            "production openings populate the maintained slot counter");
+    require(old_slot_count(host.adapter()) == SlotCountHost::kEntries,
+            "maintained slot counter equals the independent opening sum");
+}
+
 void real_host_recurrence() {
     const auto bars = chart();
     const auto expected_trades = static_cast<int>(bars.size() / 4);
@@ -345,61 +405,6 @@ int old_slot_count(const Adapter& adapter) {
     }
     return sum > static_cast<std::size_t>(std::numeric_limits<int>::max())
         ? std::numeric_limits<int>::max() : static_cast<int>(sum);
-}
-
-void slot_count_one_pass_and_no_allocation() {
-    Adapter adapter;
-    auto& table = adapter.*access(Cohorts{});
-    for (std::size_t i = 0; i < 2000; ++i) {
-        auto row = table.emplace(std::string(40, 'c') + std::to_string(i),
-                                 decltype(table.begin()->second){}).first;
-        row->second.handle.value = i + 1;
-        row->second.origins.push_back(origin_for(i + 1));
-        row->second.origins.push_back(origin_for(i + 3001));
-        row->second.opened.push_back(origin_for(i + 1));
-        row->second.opened.push_back(origin_for(i + 3001));
-        row->second.live_units_by_origin[i + 1] = 2.0;
-        row->second.live_units_by_origin[i + 3001] = 3.0;
-    }
-    const auto check = [&] {
-        const auto before = adapter.cohort_table_work();
-        const auto allocations = global_allocation::allocations;
-        global_allocation::refusing = true;
-        const auto slots = adapter.source_entry_slot_count();
-        global_allocation::refusing = false;
-        const auto after = adapter.cohort_table_work();
-        require(after.resident_rows_visited - before.resident_rows_visited == table.resident_size(),
-                "slot count visits each resident row exactly once");
-        require(after.find_resident_probes == before.find_resident_probes,
-                "slot count does no per-id lookups");
-        require(global_allocation::allocations == allocations, "slot count allocates nothing");
-        require(slots == old_slot_count(adapter), "slot count equals independent old-loop sum");
-        const std::string present = std::string(40, 'c') + "1999", absent = "absent";
-        global_allocation::refusing = true;
-        const auto found = table.find_resident(present);
-        const auto missing = table.find_resident(absent);
-        global_allocation::refusing = false;
-        require((found != table.end()) == (table.resident_size() != 0) && missing == table.end(),
-                "resident lookup allocates nothing with 2000 rows");
-    };
-    check();
-    for (auto& row : table) {
-        const auto opening = row.second.opened.front().incarnation;
-        row.second.live_units_by_origin.at(opening) *= 0.5; // Partial close, same slot.
-    }
-    check();
-    for (auto& row : table) {
-        row.second.live_units_by_origin.erase(row.second.opened.front().incarnation);
-        row.second.opened.erase(row.second.opened.begin()); // One opening ends.
-    }
-    check();
-    for (auto& row : table) {
-        row.second.opened.clear();
-        row.second.live_units_by_origin.clear();
-        row.second.origins.retire_before(row.second.origins.size());
-    }
-    table.spill();
-    check();
 }
 
 // Field serialization excludes addresses and C++ padding. Every published
@@ -485,6 +490,7 @@ public:
         set_syminfo_timezone("UTC");
         set_syminfo_session("24x7");
         set_syminfo_mintick(0.25);
+        adapter_.fixture_verify_source_entry_slots(true);
     }
     void on_source_bar(const pineforge::Bar&) override {
         auto& table = adapter_.*access(Cohorts{});
@@ -613,6 +619,11 @@ public:
     std::uint64_t cohort_operations() const {
         const auto& w = adapter_.cohort_table_work();
         return w.rows_visited_by_spill + w.find_resident_probes + w.resident_rows_visited
+            + w.iterated_rows + w.rows_visited_by_capacity + w.rows_spilled + w.rows_restored;
+    }
+    std::uint64_t cohort_walk_operations() const {
+        const auto& w = adapter_.cohort_table_work();
+        return w.rows_visited_by_spill + w.find_resident_probes + w.resident_rows_visited
             + w.rows_visited_by_capacity + w.rows_spilled + w.rows_restored;
     }
     Adapter::PendingScanWork at_500{}, at_1000{};
@@ -658,6 +669,28 @@ void rolling_modulo_pending_population() {
         require(rolling.trade_count() == 0 && work.entry.max_logical_cohorts == period
                 && work.entry.max_resident_cohorts <= period,
                 "rolling modulo script reuses a fixed cohort population");
+        // Each modulo slot contributes one entry id and one exit id, and this
+        // script can keep at most one deferred bracket leg for that slot.
+        // The four-row slack covers startup and the terminal cancellation
+        // boundary. Live handles are the entry/exit pair plus that same small
+        // boundary slack.
+        constexpr std::uint64_t small = 4;
+        const auto bracket_bound = static_cast<std::uint64_t>(period) + small;
+        const auto placement_bound = static_cast<std::uint64_t>(period)
+            + static_cast<std::uint64_t>(period) + bracket_bound;
+        const auto maximum = [](auto selector, const Adapter::PendingScanWork& value) {
+            return std::max({selector(value.priced_entry), selector(value.entry),
+                             selector(value.standing_exit), selector(value.open_lot)});
+        };
+        const auto max_live_handles = maximum(
+            [](const auto& counter) { return counter.max_live_handles; }, work);
+        const auto max_placement = maximum(
+            [](const auto& counter) { return counter.max_placement; }, work);
+        const auto max_brackets = maximum(
+            [](const auto& counter) { return counter.max_pending_bracket_legs; }, work);
+        require(max_live_handles <= static_cast<std::uint64_t>(2 * period) + small
+                && max_brackets <= bracket_bound && max_placement <= placement_bound,
+                "rolling modulo bounds live handles, placement rows and deferred brackets");
         print_slice(jailed ? "rolling-64-jailed" : "rolling-64-unjailed", work);
         // Pending-order maxima are deliberately logged too: the cohort cap
         // alone is not a proof that placement/order memory is bounded.
@@ -665,7 +698,7 @@ void rolling_modulo_pending_population() {
 }
 
 void dense_operation_growth_and_instrumentation(bool jailed) {
-    std::uint64_t operations[2]{};
+    std::uint64_t operations[2]{}, walk_operations[2]{};
     for (int sample = 0; sample < 2; ++sample) {
         const auto n = sample == 0 ? 1000 : 2000;
         auto bars = chart();
@@ -676,6 +709,7 @@ void dense_operation_growth_and_instrumentation(bool jailed) {
         require(host.last_error().empty(), host.last_error().c_str());
         require(host.trade_count() == 0, "dense entries really remain pending");
         operations[sample] = host.cohort_operations();
+        walk_operations[sample] = host.cohort_walk_operations();
         require(operations[sample] > 0, "cohort work instrumentation is active");
         print_slice(jailed ? "N=500-jailed" : "N=500-unjailed", host.at_500);
         print_slice(jailed ? "N=1000-jailed" : "N=1000-unjailed", host.at_1000);
@@ -732,8 +766,25 @@ void dense_operation_growth_and_instrumentation(bool jailed) {
             heap.total_bytes, heap.bytes_per_row, heap.row_bytes, heap.key_bytes,
             heap.origin_bytes, heap.opened_bytes, heap.live_unit_bytes, heap.directory_bytes);
     }
-    require(operations[1] * 2 <= operations[0] * 5,
-            "doubling dense pending cohorts exceeds 2.5x cohort-table operations");
+    // This is the walks fixed in CR-347 round 4; it deliberately excludes the
+    // retire_origin_prefixes Iterator pass below.
+    require(walk_operations[1] * 2 <= walk_operations[0] * 5,
+            "doubling dense pending cohorts exceeds 2.5x fixed cohort walks");
+    // EXPECTED_RED_UNTIL_RETIRE_DIRTY_SET: iterated_rows measures the known
+    // Theta(R) retire pass. Print the full ratio and keep it unasserted until
+    // that pass has a dirty-set implementation.
+    std::printf("CR347 profile=%s dense_full_ratio=%llu/%llu fixed_walk_ratio=%llu/%llu "
+                "iterated_rows=%llu\n",
+        jailed ? "jailed" : "unjailed",
+        static_cast<unsigned long long>(operations[1]),
+        static_cast<unsigned long long>(operations[0]),
+        static_cast<unsigned long long>(walk_operations[1]),
+        static_cast<unsigned long long>(walk_operations[0]),
+        static_cast<unsigned long long>(
+            // Both runs have separate hosts; this prints the larger observed
+            // retire-pass work as a stable diagnostic for the profile.
+            std::max(operations[0] - walk_operations[0],
+                     operations[1] - walk_operations[1])));
 }
 
 void adapter_cap_rollback() {

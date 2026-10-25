@@ -34,12 +34,11 @@ inline bool observe_spill(const std::string& id) {
 }
 } // namespace tree_ram_fixture
 
-// As in test_adapter_reversal_storage, observe only the storage predicate
-// after the real shared-row pin/spillable checks. No predicate result, row
-// layout, access level, ordering, source command or hash fold is replaced.
-#define PINEFORGE_COHORT_SPILL_ALLOWED(id) ::tree_ram_fixture::observe_spill(id)
+// Observe only the storage predicate after the real shared-row pin/spillable
+// checks. The production table receives this callback through its runtime
+// fixture hook; no predicate, row layout, access level, ordering, source
+// command or hash fold is replaced.
 #include <pineforge/detail/disk_resident_id_table.hpp>
-#undef PINEFORGE_COHORT_SPILL_ALLOWED
 #include <pineforge/source/pine_strategy_host.hpp>
 #include "../src/source/pine_adapter.cpp"
 #include "../src/source/pine_state_hash.cpp"
@@ -50,6 +49,18 @@ namespace no = pineforge::native_order;
 using detail::ScratchManifest;
 using detail::ScratchResource;
 using detail::ScratchSlab;
+using Adapter = source::PineExecutionAdapter;
+template<class Tag, auto Member> struct Access {
+    friend auto access(Tag) { return Member; }
+};
+struct Cohorts { friend auto access(Cohorts); };
+struct CohortFor { friend auto access(CohortFor); };
+struct CohortSides { friend auto access(CohortSides); };
+struct Placements { friend auto access(Placements); };
+template struct Access<Cohorts, &Adapter::cohorts_by_id_>;
+template struct Access<CohortFor, &Adapter::cohort_for>;
+template struct Access<CohortSides, &Adapter::cohort_opened_on_side>;
+template struct Access<Placements, &Adapter::placement_>;
 constexpr double kNa = std::numeric_limits<double>::quiet_NaN();
 constexpr std::int64_t kStart = 1736121600000LL;
 
@@ -117,6 +128,7 @@ public:
         // backends so this unit does not depend on the other two lane binders.
         // This is before this run's first command/id, after the host reset.
         detail::bind_tree_scratch_tables(adapter_, slab_);
+        adapter_.fixture_spill_predicate(&observe_spill);
         adapter_.fixture_cohort_implicit_spill_interval(1);
         reads.clear(); source_reads.clear();
     }
@@ -414,6 +426,118 @@ public:
     bool checked = false;
 };
 
+class ReversalCohortRefusalHost final : public TreeHost {
+public:
+    ReversalCohortRefusalHost() : TreeHost(owner(true, 1, 1, 1, 1), true, false, 2) {}
+    void on_source_bar(const Bar&) override {
+        const auto i = pine_bar_index();
+        if (i == 0) {
+            bind_trees();
+            strategy_entry("A", true);
+            return;
+        }
+        if (i != 1) return;
+        require(live_position_size() > 0.0, "reversal cap witness has a filled first side");
+        const auto broker_before = broker_state_hash();
+        const auto source_before = source_hash();
+        const auto requests_before = native_working_requests().size();
+        capacity_failure("cohort", [&] { strategy_entry("B", false); });
+        require(broker_state_hash() == broker_before && source_hash() == source_before
+                && native_working_requests().size() == requests_before
+                && cohort_open().value == 2,
+                "reversal cohort ticket refuses before the opposite side gets a member");
+        checked = true;
+    }
+    bool checked = false;
+};
+
+class CloseAllSecondSideRefusalHost final : public TreeHost {
+public:
+    CloseAllSecondSideRefusalHost()
+        : TreeHost(owner(true, 1, 1, 1, 1), true, true, 2) {}
+    void on_source_bar(const Bar&) override {
+        const auto i = pine_bar_index();
+        if (i == 0) {
+            bind_trees();
+            strategy_entry("A", true);
+            return;
+        }
+        if (i != 1) return;
+        require(live_position_size() > 0.0, "close-all cap witness has a filled first side");
+        strategy_close_all();
+        const auto broker_before = broker_state_hash();
+        const auto source_before = source_hash();
+        const auto requests_before = native_working_requests().size();
+        capacity_failure("cohort", [&] { strategy_entry("B", false); });
+        require(broker_state_hash() == broker_before && source_hash() == source_before
+                && native_working_requests().size() == requests_before
+                && cohort_open().value == 2,
+                "close-all second-side ticket refuses before the new cohort gets a member");
+        checked = true;
+    }
+    bool checked = false;
+};
+
+class StaleCohortSideHost final : public TreeHost {
+public:
+    StaleCohortSideHost() : TreeHost(owner(true, 128, 16384, 4, 4)) {}
+
+    void on_source_bar(const Bar&) override {
+        if (pine_bar_index() != 0) return;
+        bind_trees();
+        auto& table = adapter_.*access(Cohorts{});
+        (void)(adapter_.*access(CohortFor{}))("old-sides");
+        auto old = table.find("old-sides");
+        require(old != table.end(), "old side-cache cohort was created");
+        const auto old_address = &old->second;
+        for (std::uint64_t i = 0; i < 20; ++i)
+            old->second.origins.push_back({{"stale-sides", 1}, 100 + i});
+        require(!(adapter_.*access(CohortSides{}))(old->second, true),
+                "old side-cache cohort has no opening placement");
+
+        // This is the lifecycle that used to leave a pointer-keyed folded
+        // entry behind: the retained member window becomes empty before the
+        // row is spilled, outside retire_origin_prefixes.
+        old->second.origins.retire_before(old->second.origins.size());
+        old = table.end(); // release the iterator pin before the explicit spill
+        table.spill();
+
+        auto fresh = table.end();
+        for (std::size_t attempt = 0; attempt < 64; ++attempt) {
+            std::string id = "new-00000";
+            auto value = attempt;
+            for (int digit = 8; digit >= 4; --digit) {
+                id[static_cast<std::size_t>(digit)]
+                    = static_cast<char>('0' + value % 10);
+                value /= 10;
+            }
+            (void)(adapter_.*access(CohortFor{}))(id);
+            auto candidate = table.find(id);
+            if (&candidate->second == old_address) {
+                fresh = std::move(candidate);
+                break;
+            }
+            candidate = table.end();
+            table.spill();
+        }
+        require(fresh != table.end(),
+                "the replacement cohort reuses the spilled row address");
+        for (std::uint64_t i = 0; i < 20; ++i)
+            fresh->second.origins.push_back({{"stale-sides", 1}, 1000 + i});
+        source::PlacementSnapshot opening;
+        opening.opening = true;
+        opening.is_long = true;
+        opening.source_id = "new-sides";
+        opening.command_sequence = 1;
+        (adapter_.*access(Placements{})).try_emplace(1000, std::move(opening));
+        require((adapter_.*access(CohortSides{}))(fresh->second, true),
+                "handle-keyed side cache folds the replacement cohort from zero");
+        checked = true;
+    }
+
+    bool checked = false;
+};
+
 class RankRefusalHost final : public TreeHost {
 public:
     explicit RankRefusalHost(bool byte_limit) : TreeHost(owner(true, 1, 1, byte_limit ? 1 : 0, 0)) {}
@@ -471,6 +595,18 @@ void adapter_capacity_before_command_and_financial_commit() {
     CohortRefusalHost cohorts;
     cohorts.run(bars.data(), static_cast<int>(bars.size()));
     require(cohorts.last_error().empty() && cohorts.checked, "cohort ingress ticket witness completed");
+    ReversalCohortRefusalHost reversal;
+    reversal.run(bars.data(), static_cast<int>(bars.size()));
+    require(reversal.last_error().empty() && reversal.checked,
+            "reversal cohort ticket witness completed");
+    CloseAllSecondSideRefusalHost close_all;
+    close_all.run(bars.data(), static_cast<int>(bars.size()));
+    require(close_all.last_error().empty() && close_all.checked,
+            "close-all second-side cohort ticket witness completed");
+    StaleCohortSideHost stale_sides;
+    stale_sides.run(bars.data(), 1);
+    require(stale_sides.last_error().empty() && stale_sides.checked,
+            "handle-keyed cohort side cache witness completed");
     for (const bool bytes : {false, true}) {
         RankRefusalHost ranks(bytes);
         ranks.run(bars.data(), static_cast<int>(bars.size()));

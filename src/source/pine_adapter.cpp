@@ -1690,9 +1690,10 @@ public:
     // exists), and an opening row's `opening` and `is_long` are never written
     // after it is remembered, so the two flags only ever turn on and a fold
     // over the entries appended since the last lookup keeps them exact. Keyed
-    // by stable resident facts; retire_origin_prefixes removes the cache row
-    // before those facts can spill. A restored empty roster answers from its
-    // erased sides, and reset_for_run clears the entire index.
+    // by the durable cohort handle, not a resident row address: a row can
+    // become empty outside retire_origin_prefixes and its storage can be
+    // reused before the derived entry is explicitly erased. A restored empty
+    // roster answers from its erased sides, and reset_for_run clears the index.
     struct CohortSides {
         std::size_t folded = 0;
         bool opened_long = false;
@@ -1700,7 +1701,7 @@ public:
     };
 
     std::uint64_t answers = 0;
-    std::unordered_map<const void*, CohortSides> cohort_sides;
+    std::unordered_map<std::uint64_t, CohortSides> cohort_sides;
 
     // Over the placement table's rows: exit legs by the origin they are
     // bound to and their leg kind, and immediate closes by the bar they were
@@ -1938,7 +1939,7 @@ bool PineExecutionAdapter::cohort_opened_on_side(const CohortFacts& cohort,
     AdapterLookupIndex* index = adapter_lookup_index(bound_consumer(), this, run_counter_);
     if (!index) return walk();
     try {
-        auto& sides = index->cohort_sides[&cohort];
+        auto& sides = index->cohort_sides[cohort.handle.value];
         const auto& roster = cohort.origins;
         if (roster.size() < sides.folded) sides = {};
         for (sides.folded = std::max(sides.folded, roster.base());
@@ -2352,6 +2353,7 @@ void PineExecutionAdapter::purge_brackets_after_applied_reversal(
                     position_tail_summary_->retire_origin(origin.first);
                 position_tail_summary_->live_cohort(&cohort, false);
             }
+            cohort_opened_slot_count_ -= cohort.second.opened.size();
             ::pineforge::detail::clear_exposure_storage(cohort.second.opened);
             ::pineforge::detail::clear_exposure_storage(cohort.second.live_units_by_origin);
         }
@@ -2573,6 +2575,7 @@ void PineExecutionAdapter::reset_for_run() {
     if (auto* index = adapter_lookup_index(bound_consumer(), this, run_counter_, false))
         index->clear();
     admission_journal.reset();
+    cohort_opened_slot_count_ = 0;
     cohorts_by_id_.clear();
     pending_scan_work_ = {};
     placement_.clear();
@@ -5390,14 +5393,20 @@ std::optional<double> PineExecutionAdapter::from_entry_units(
 }
 
 int PineExecutionAdapter::source_entry_slot_count() const noexcept {
-    std::size_t total = 0;
-    for (const auto& row : cohorts_by_id_.resident_rows()) total += row.second.opened.size();
-    return total > static_cast<std::size_t>(std::numeric_limits<int>::max())
-        ? std::numeric_limits<int>::max() : static_cast<int>(total);
+    if (fixture_verify_source_entry_slots_) {
+        std::size_t direct = 0;
+        for (const auto& row : cohorts_by_id_.resident_rows()) direct += row.second.opened.size();
+        if (direct != cohort_opened_slot_count_) std::abort();
+    }
+    return cohort_opened_slot_count_ > static_cast<std::size_t>(std::numeric_limits<int>::max())
+        ? std::numeric_limits<int>::max()
+        : static_cast<int>(cohort_opened_slot_count_);
 }
 
 PineExecutionAdapter::CohortHeapEstimate
 PineExecutionAdapter::cohort_heap_estimate() const noexcept {
+    // bytes_per_row counts PHYSICAL resident rows; deferred empty rows inflate
+    // the estimate even though they carry no live cohort members.
     CohortHeapEstimate result;
     result.resident_rows = cohorts_by_id_.resident_size();
     result.row_bytes = result.resident_rows * CohortTable::resident_row_bytes();
@@ -6267,12 +6276,14 @@ void PineExecutionAdapter::consume_closed_trade_rows(
             && bracket_shadowed_openings_.find(trade.entry_incarnation)
                 == bracket_shadowed_openings_.end();
         if (!close_path && !owned_bracket) return;
-        cohort.opened.erase(
-            std::remove_if(cohort.opened.begin(), cohort.opened.end(),
-                [&](const auto& opening) {
-                    return opening.incarnation == trade.entry_incarnation;
-                }),
-            cohort.opened.end());
+        const auto removed_at = std::remove_if(cohort.opened.begin(), cohort.opened.end(),
+            [&](const auto& opening) {
+                return opening.incarnation == trade.entry_incarnation;
+            });
+        const auto removed = static_cast<std::size_t>(
+            std::distance(removed_at, cohort.opened.end()));
+        cohort.opened.erase(removed_at, cohort.opened.end());
+        cohort_opened_slot_count_ -= removed;
         ::pineforge::detail::release_empty_exposure_capacity(cohort.opened);
         bracket_shadowed_openings_.erase(trade.entry_incarnation);
     };
@@ -25378,6 +25389,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             });
         if (position_tail_summary_) position_tail_summary_->forget_origins();
         for (auto& cohort : cohorts_by_id_) {
+            cohort_opened_slot_count_ -= cohort.second.opened.size();
             ::pineforge::detail::clear_exposure_storage(cohort.second.opened);
             ::pineforge::detail::clear_exposure_storage(cohort.second.live_units_by_origin);
         }
@@ -25525,8 +25537,11 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             const auto cohort = require_cohort(placement_snapshot->source_id);
             auto& facts = cohort->second;
             facts.cycle = event.cycle_after;
-            if (std::find(facts.opened.begin(), facts.opened.end(), event.handle()) == facts.opened.end())
+            if (std::find(facts.opened.begin(), facts.opened.end(), event.handle())
+                    == facts.opened.end()) {
                 facts.opened.push_back(event.handle());
+                ++cohort_opened_slot_count_;
+            }
             facts.live_units_by_origin[event.handle().incarnation]
                 += std::abs(event.opened_units);
             if (position_tail_summary_)
@@ -26311,6 +26326,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         pending_margin_revivals_.clear();
         for (auto& cohort : cohorts_by_id_) {
             if (!cohort.second.opened.empty()) ended_sources.push_back(cohort.first);
+            cohort_opened_slot_count_ -= cohort.second.opened.size();
             ::pineforge::detail::clear_exposure_storage(cohort.second.opened);
             ::pineforge::detail::clear_exposure_storage(cohort.second.live_units_by_origin);
         }
@@ -28813,7 +28829,7 @@ void PineExecutionAdapter::retire_origin_prefixes() {
         origins.retire_before(through);
         if (origins.members().empty()) {
             if (auto* index = adapter_lookup_index(consumer, this, run_counter_, false))
-                index->cohort_sides.erase(&facts);
+                index->cohort_sides.erase(facts.handle.value);
         }
     }
     cohorts_by_id_.spill_implicitly();
