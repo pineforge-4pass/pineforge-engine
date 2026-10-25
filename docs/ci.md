@@ -101,6 +101,59 @@ and fails, never skips, without it.
 Actionlint only accepts declared custom self-hosted runner labels; preflight
 checks the declarations in `.github/actionlint.yaml`.
 
+ORG-ACTIONPINS is enforced by preflight's `ci-workflow-contract`: every
+third-party `uses:` in `.github/workflows/*.yml` (also `.yaml`) and nested
+`.github/actions/**/action.yml` or `action.yaml` must have the shape
+`uses: owner/action@<40 lowercase hex commit SHA> # v4.2.2`, with the version
+comment on the same line; prerelease and build suffixes are allowed. Local
+`./` actions and reusable workflows, and `docker://` images, are exempt.
+The lint accepts plain block-style YAML only, with scalar flow sequences
+(for example `runs-on: ["self-hosted", "pf-gcp-pr"]` and `branches: [main]`)
+and empty `{}` / `[]` on one line as a whole plain `key:` value as exceptions
+(ASCII spaces and tabs inside an empty collection are allowed). In flow
+sequences, quotes may start a quoted scalar only at the start of an element,
+after `[` or `,` and optional ASCII spaces; embedded quotes and mapping
+elements are refused.
+Keys must be unquoted identifiers (`[A-Za-z_][A-Za-z0-9_-]*`); scalar values
+may be plain or single/double quoted on one line, or use `|` / `>` blocks
+with chomping and indentation indicators. GitHub `${{ ... }}` expressions,
+comments and LF/CRLF line endings are supported. Before scanning any YAML,
+the lint refuses a whole file containing a bare CR (U+000D), NEL (U+0085),
+LS (U+2028), PS (U+2029), VT (U+000B) or FF (U+000C) as
+`unsupported line break`, naming the first offending line and code point.
+NUL and every other C0 control except TAB, LF and CR within CRLF are likewise
+refused as `unsupported control character`. These file checks include
+comments and block-scalar bodies; ordinary non-ASCII text remains supported.
+Indented block-scalar bodies are otherwise excluded, including `run:`,
+github-script's `with: script:`, and
+multiline action inputs. A sequence item such as `- |`, `- >-` or `- |2+`
+owns its body from the dash column; `- run: |` uses the key's column.
+Whitespace outside block-scalar bodies must be ASCII-only: indentation and
+key separators use ASCII space (U+0020). Non-ASCII whitespace and a BOM
+(including at the start of the file) are refused as `unsupported whitespace`;
+tabs in indentation remain refused.
+Unsupported `uses` key shapes are refused: every `uses:` value must be a
+scalar on the same line. The lint also refuses anchors, aliases, merge
+keys, explicit keys, tags, nonempty flow mappings (including multiline and
+implicit mappings inside sequences), all quoted keys, backslashes in YAML
+quoted values, tabs in indentation, and `---` / `...` document markers.
+Empty collections outside the whole plain-key value exception, extra
+inline mapping keys, unrecognised block lines and incomplete quoted/flow
+values are refused too. Each refusal names the file, line, construct and
+source text and asks for a rewrite in plain block style.
+This scanner checks a reviewed YAML subset, not arbitrary YAML syntax.
+After refusing a flow collection, it counts braces and brackets on
+continuation lines with quotes treated as plain text, ending that region
+when depth reaches zero or a nonblank, noncomment line outdents to the
+opening line's indentation or less. An aligned closing tail remains part
+of the original refusal; other outdented lines resume block scanning.
+Delimiter characters inside quoted data or comments in an already-refused
+flow can shorten or extend the region until that outdent. Findings inside
+such regions are not exhaustive; exotic YAML outside the documented subset
+must be rewritten in plain block style.
+To bump an action, resolve the desired upstream version to its full commit
+SHA and update both the SHA and version comment together.
+
 This checks the CI/native workflow syntax, expressions and shell commands,
 source ABI/hash/schema guards, and the verifier's failure-handling tests. A
 failure fails the advisory aggregate `build` job and retains logs in
