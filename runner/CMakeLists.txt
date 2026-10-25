@@ -466,6 +466,18 @@ if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)
     if(_pf_genuine_retry_sanitizer)
         list(APPEND _pf_genuine_retry_sanitizer_args --sanitizer ${_pf_genuine_retry_sanitizer})
     endif()
+    # This corpus-backed row belongs to the same runner inventory selected by
+    # live-sanitizers/live-tsan. Missing inputs are an explicit CTest SKIP;
+    # once the driver starts, its failures cannot take the skip exit code.
+    add_test(NAME native_live_equivalence_e2e COMMAND ${Python3_EXECUTABLE} -B
+        ${PROJECT_SOURCE_DIR}/tests/native_live_equivalence_ctest.py
+        --script ${PROJECT_SOURCE_DIR}/tests/native_live_equivalence_e2e.py
+        --root ${PROJECT_SOURCE_DIR} --build-dir ${PROJECT_BINARY_DIR}
+        --libraries-dir ${CMAKE_CURRENT_BINARY_DIR}/native_live_equivalence_e2e/libraries
+        --out ${CMAKE_CURRENT_BINARY_DIR}/native_live_equivalence_e2e/output
+        ${_pf_genuine_retry_sanitizer_args})
+    set_tests_properties(native_live_equivalence_e2e PROPERTIES
+        SKIP_RETURN_CODE 77 LABELS private_fixtures)
     add_test(NAME native_live_genuine_retry_e2e COMMAND ${Python3_EXECUTABLE} -B
         ${PROJECT_SOURCE_DIR}/tests/native_live_genuine_retry_e2e.py
         --runner $<TARGET_FILE:pineforge-live> --library $<TARGET_FILE:native_live_example>
@@ -483,7 +495,7 @@ if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)
             OUTPUT_VARIABLE _pf_genuine_retry_runtime OUTPUT_STRIP_TRAILING_WHITESPACE
             RESULT_VARIABLE _pf_genuine_retry_runtime_result)
         if(NOT _pf_genuine_retry_runtime_result EQUAL 0 OR NOT EXISTS "${_pf_genuine_retry_runtime}")
-            message(FATAL_ERROR "The genuine retry Python test requires the compiler's shared sanitizer runtime")
+            message(FATAL_ERROR "The live ctypes witnesses require the compiler's shared sanitizer runtime")
         endif()
         if(APPLE)
             set(_pf_genuine_retry_environment "DYLD_INSERT_LIBRARIES=${_pf_genuine_retry_runtime}")
@@ -505,6 +517,7 @@ if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)
         else()
             list(APPEND _pf_genuine_retry_environment "TSAN_OPTIONS=halt_on_error=1:second_deadlock_stack=1")
         endif()
-        set_tests_properties(native_live_genuine_retry_e2e PROPERTIES ENVIRONMENT "${_pf_genuine_retry_environment}")
+        set_tests_properties(native_live_genuine_retry_e2e native_live_equivalence_e2e
+            PROPERTIES ENVIRONMENT "${_pf_genuine_retry_environment}")
     endif()
 endif()
