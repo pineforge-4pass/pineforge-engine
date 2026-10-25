@@ -311,6 +311,7 @@ jobs:
     needs: [promote-guard]
     if: ${{ needs.promote-guard.result == 'success' && needs.promote-guard.outputs.ok == 'true' }}
     runs-on: ["self-hosted","pf-gcp-main"]
+    environment: release-bot
     steps:
       - name: Determine repo axis
         id: axis

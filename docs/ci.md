@@ -78,10 +78,10 @@ a post workflow even behind a job condition.
 The manual `release-ruleset-probe.yml` workflow runs `authz` on
 `["self-hosted","pf-gcp-pr"]` and `probe` on `["self-hosted","pf-gcp-post"]`.
 
-`docs.yml` retains the PR build name and `.github/**` exclusion.
-`docs-post.yml` builds and deploys on main pushes and manual dispatch.
-Tag pushes no longer trigger docs: the post fleet admits only engine `main`.
-Release and baseline promotion retain their separate `pf-gcp-main` policy.
+`docs.yml` retains the PR build name and `.github/**` exclusion. `docs-post.yml` builds and deploys on main pushes and manual dispatch.
+Tag pushes no longer trigger docs: the post fleet admits only engine `main`. Release and baseline promotion retain their separate `pf-gcp-main` policy.
+
+CR-304 binds human-dispatched App-token jobs (`release.yml`'s `release` and `notify-hub`, and `release-ruleset-probe.yml`'s `probe`) to `release` (main only, owner review). Automatic `promote-baseline.yml`'s `promote` uses `release-bot` (main only, no reviewer), including manual re-fires. Preflight requires a literal, non-empty environment for visible App minting or private-key secret handoffs. Same-named environment secrets shadow repository secrets. Rollback reverts this preflight guard and its probe pin and removes the `environment:` lines; repository secret copies remain until the owner deletes them after dry runs.
 
 Start with the preflight used by GitHub Actions. Install actionlint 1.7.12,
 ShellCheck and pytest, then run:

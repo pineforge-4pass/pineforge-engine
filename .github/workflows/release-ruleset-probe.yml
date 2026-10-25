@@ -75,6 +75,7 @@ jobs:
   probe:
     needs: [authz]
     runs-on: ["self-hosted","pf-gcp-post"]
+    environment: release
     steps:
       - name: Refuse a dispatch ref other than main
         env:
