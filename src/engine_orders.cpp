@@ -860,12 +860,14 @@ void TradeLedger::modify(size_type global, const std::function<void(Trade&)>& ed
 }
 
 void TradeLedger::push_back(const Trade& trade) {
-    if (size() == std::numeric_limits<size_type>::max())
+    // Writers read the state's own end, never the mirrored size(): a mirror that
+    // fell behind must fail a size() check, not redirect where a row is stored.
+    if (state_->end == std::numeric_limits<size_type>::max())
         throw std::length_error("trade ledger: logical end exhausted");
     // Copies and write-only runs keep a cold cache unallocated. Once a reader
     // allocates it, population growth expands it only up to the configured cap.
-    if (state_->cache) state_->ensure_cache(size() + 1);
-    const auto record = state_->store(size(), trade);
+    if (state_->cache) state_->ensure_cache(state_->end + 1);
+    const auto record = state_->store(state_->end, trade);
     if (state_->count == kResidentRows) state_->evict();
     state_->rows[(state_->head + state_->count) % kResidentRows] = record;
     ++state_->count;
@@ -880,7 +882,7 @@ void TradeLedger::resize(size_type global_end) {
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                        "trade ledger: rewind below resident window");
     state_->invalidate_cache();
-    if (global_end < size()) {
+    if (global_end < state_->end) {
         // Re-cuts may rewind far below the descriptor window. All row bytes
         // are already external; discard the bounded descriptor cache.
         while (state_->count != 0) state_->evict();
@@ -889,7 +891,7 @@ void TradeLedger::resize(size_type global_end) {
         state_->materialized.erase(state_->materialized.lower_bound(global_end),
                                     state_->materialized.end());
     } else {
-        while (size() < global_end) push_back(Trade{});
+        while (state_->end < global_end) push_back(Trade{});
     }
 }
 
