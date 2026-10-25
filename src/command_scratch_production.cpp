@@ -329,7 +329,13 @@ protected:
         if (durability == ScratchDurability::buffered) return ScratchStatus::ok;
         int result;
         do {
+#if defined(__APPLE__)
+            // macOS has no fdatasync and its fsync stops short of stable storage: both modes use F_FULLFSYNC, fsync if it fails.
+            result = ::fcntl(fd_, F_FULLFSYNC) != -1
+                ? 0 : ::fsync(fd_);
+#else
             result = durability == ScratchDurability::data ? ::fdatasync(fd_) : ::fsync(fd_);
+#endif
         } while (result < 0 && errno == EINTR);
         return result == 0 ? ScratchStatus::ok : command_scratch_io_status(errno);
     }
