@@ -18,9 +18,9 @@ inline ScratchManifest default_scratch_manifest(std::uint64_t bars) {
                                    "default scratch replacement reserve overflow");
     return {
         0, 0, // K_q/B_q retained in the descriptor; the q store is removed.
-        8192, 3145728,
-        4096, 2101248,
-        4096, 1048576,
+        262144, 25165824,
+        32768, 4227072,
+        65536, 4194304,
         27, 6912,
         2 * bars,
     };

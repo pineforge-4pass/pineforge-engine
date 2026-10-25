@@ -271,6 +271,18 @@ public:
         std::uint64_t extent = data_bytes_;
         std::size_t ordinal = 0;
         enumerate([&](KeyView key) {
+            auto first = key.first;
+            auto second = key.second;
+            if (data_resource_ == ScratchResource::consumed_data && !second) {
+                // Consumed singles join two ids with '\x1f'. A boundary
+                // after at most 64 bytes permits ids containing that byte.
+                const auto separator = first.rfind('\x1f', 64);
+                if (separator != std::string_view::npos) {
+                    second = first.substr(separator + 1);
+                    first = first.substr(0, separator);
+                }
+            }
+            require_id_components(first.size(), second ? second->size() : 0);
             const auto own_ordinal = ordinal++;
             if (slots_ != 0 && locate(key.first, key.second,
                                      hash_for_key(key.first, key.second)).second.offset_plus_one != 0)
@@ -298,6 +310,7 @@ public:
     void preflight_joined_single(std::string_view first, char separator,
                                  std::string_view last) const {
         if (!slab_) return;
+        require_id_components(first.size(), last.size());
         constexpr auto maximum = std::numeric_limits<std::uint64_t>::max();
         if (first.size() >= maximum || last.size() > maximum - first.size() - 1)
             throw ScratchCapacityError(data_resource_);
@@ -396,6 +409,10 @@ public:
     }
 
 private:
+    void require_id_components(std::size_t first, std::size_t second) const {
+        if (first > 64 || second > 64)
+            throw ScratchCapacityError(data_resource_, "id longer than 64 bytes");
+    }
     void preflight_new_key(std::uint64_t& keys, std::uint64_t& extent,
                            std::uint64_t first, std::uint64_t second) const {
         if (keys >= key_limit_ || keys >= slots_ / 2

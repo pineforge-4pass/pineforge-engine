@@ -107,6 +107,7 @@ public:
         if (!file_.scratch_owner()) return;
         std::uint64_t ordinal = 0, extra_rows = 0, extra_bytes = 0;
         enumerate([&](const std::string& key) {
+            require_id_size(key.size());
             const auto current = ordinal++;
             if (find(key)) return;
             bool repeated = false;
@@ -192,7 +193,13 @@ public:
     }
 
 private:
+    void require_id_size(std::size_t key_size) const {
+        if (file_.scratch_owner() && file_.scratch_resource() == ScratchResource::cohort
+            && key_size > 64)
+            throw ScratchCapacityError(ScratchResource::cohort, "id longer than 64 bytes");
+    }
     void require_new_key(std::size_t key_size) const {
+        require_id_size(key_size);
         require_growth(1, key_size);
     }
     void require_growth(std::uint64_t extra_rows, std::uint64_t extra_bytes) const {
