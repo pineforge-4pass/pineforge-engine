@@ -12176,6 +12176,71 @@
    "ordinal": 1
   },
   {
+   "file": "src/detail/o1_store.cpp",
+   "symbol": "reset",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace detail #1",
+    "namespace o1 #1",
+    "StoreImpl :: StoreImpl ( const Shape & shape , ScratchBacking & backing ) : chunk_bytes_ ( shape . chunk_bytes ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "new std::byte",
+   "ordinal": 1
+  },
+  {
+   "file": "src/detail/o1_store.cpp",
+   "symbol": "reset",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace detail #1",
+    "namespace o1 #1",
+    "StoreImpl :: StoreImpl ( const Shape & shape , ScratchBacking & backing ) : chunk_bytes_ ( shape . chunk_bytes ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "new CommandScratchStore",
+   "ordinal": 1
+  },
+  {
+   "file": "src/detail/o1_store.cpp",
+   "symbol": "transaction",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace detail #1",
+    "namespace o1 #1",
+    "std :: unique_ptr < Tx > StoreImpl :: begin ( ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "new StoreTx",
+   "ordinal": 1
+  },
+  {
+   "file": "src/detail/o1_store.cpp",
+   "symbol": "new:StoreImpl",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace detail #1",
+    "namespace o1 #1",
+    "std :: unique_ptr < Store > Store :: open ( const Shape & shape , ScratchBacking & backing ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "new StoreImpl",
+   "ordinal": 1
+  },
+  {
+   "file": "src/detail/o1_store.cpp",
+   "symbol": "<temp:string>",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace detail #1",
+    "namespace o1 #1",
+    "[ [ noreturn ] ] void StoreImpl :: throw_status ( const char * what , ScratchStatus status ) const #1"
+   ],
+   "cls": "temp",
+   "spelling": "std::string",
+   "ordinal": 1
+  },
+  {
    "file": "src/engine_aux_security.cpp",
    "symbol": "bars",
    "scope": [

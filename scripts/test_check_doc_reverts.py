@@ -40,6 +40,21 @@ The kernel books every lot at its fill price and never rounds it.
 """
 KEEP_HANDLE = "A replacement that keeps its handle keeps its lineage and its dependents too."
 
+_inherited_doc_revert_base: str | None = None
+
+
+def setUpModule() -> None:
+    """Fixture repositories cannot resolve the caller's engine base."""
+    global _inherited_doc_revert_base
+    _inherited_doc_revert_base = os.environ.pop('PINEFORGE_DOC_REVERT_BASE', None)
+
+
+def tearDownModule() -> None:
+    if _inherited_doc_revert_base is None:
+        os.environ.pop('PINEFORGE_DOC_REVERT_BASE', None)
+    else:
+        os.environ['PINEFORGE_DOC_REVERT_BASE'] = _inherited_doc_revert_base
+
 
 class Repo:
     """A git repository with the gate script in every commit."""
@@ -260,6 +275,15 @@ class MustPass(unittest.TestCase):
                      + '\nThe host reads `x` engine.hpp:40 for the price.\n', 'docs: wording')
             code, out = r.run('--base', base)
             self.assertEqual(code, 0, out)
+
+    def test_explicit_base_precedes_environment_base(self) -> None:
+        with repo() as r:
+            base = r.commit(BASE_PAGE, 'docs: the guide')
+            r.commit(with_keep_handle(), 'docs: the next lane adds a sentence')
+            with mock.patch.dict(os.environ, {'PINEFORGE_DOC_REVERT_BASE': '0' * 40}):
+                code, out = r.run('--base', base)
+            self.assertEqual(code, 0, out)
+            self.assertIn('1 commits since ' + base[:guard.SHA_CHARS], out)
 
     def test_a_merged_pull_request_is_the_base_without_a_main_ref(self) -> None:
         """A squash merge on main carries a whole branch's deletions under the pull
