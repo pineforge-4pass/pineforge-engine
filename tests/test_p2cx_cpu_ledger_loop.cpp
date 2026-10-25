@@ -74,7 +74,9 @@ void size_follows_every_writer() {
         CHECK(ledger.size() == rows.size());
         CHECK(ledger.empty() == rows.empty());
         Size seen = 0;
-        for (auto it = ledger.begin(); it != ledger.end(); ++it) ++seen;
+        // Bounded by the oracle: a stale end_ below base() would make begin() never
+        // reach end() and spin forever; the bound turns that into a failed CHECK.
+        for (auto it = ledger.begin(); it != ledger.end() && seen <= rows.size(); ++it) ++seen;
         CHECK(seen == rows.size() - ledger.base());
         if (ledger.size() > ledger.base()) same_trade(ledger.back(), rows.back());
         for (Size i = 0; i < rows.size(); ++i) same_trade(ledger.read(i), rows[i]);
