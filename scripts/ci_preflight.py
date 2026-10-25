@@ -2233,7 +2233,7 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
             or 'BASE_REF: main' not in exacttree
             or 'git fetch --quiet origin "$BASE_REF" "+refs/pull/$PR_NUMBER/head:refs/remotes/origin/pr-head"'
             not in exacttree
-            or 'git merge-base --is-ancestor "$MERGE_SHA" "origin/$BASE_REF"' not in exacttree
+            or 'git merge-base --is-ancestor "$MERGE_SHA" "refs/remotes/origin/$BASE_REF"' not in exacttree
             or '--is-ancestor "$HEAD_SHA"' in promote
             or 'merge_tree=$(git rev-parse "$MERGE_SHA^{tree}")' not in exacttree
             or 'head_tree=$(git rev-parse "$HEAD_SHA^{tree}")' not in exacttree

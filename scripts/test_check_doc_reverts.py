@@ -18,11 +18,13 @@ from __future__ import annotations
 
 import contextlib
 import io
+import os
 from pathlib import Path
 import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 import check_doc_reverts as guard
 
@@ -89,6 +91,73 @@ def repo():
 
 def with_keep_handle(page: str = BASE_PAGE) -> str:
     return page + '\n' + KEEP_HANDLE + '\n'
+
+
+class DefaultBase(unittest.TestCase):
+    def setUp(self) -> None:
+        env = mock.patch.dict(os.environ, {'PINEFORGE_DOC_REVERT_BASE': ''})
+        env.start()
+        self.addCleanup(env.stop)
+
+    def test_tags_cannot_shadow_branch_refs(self) -> None:
+        for ref, tag in (('refs/remotes/origin/main', 'origin/main'),
+                         ('refs/heads/main', 'main')):
+            with self.subTest(ref=ref), repo() as r:
+                common = r.commit(BASE_PAGE, 'docs: common ancestor')
+                r.git('checkout', '-q', '-b', 'tag-history')
+                tag_tip = r.commit(with_keep_handle(), 'docs: unrelated tag history')
+                r.git('tag', tag, tag_tip)
+                r.git('checkout', '-q', 'lane')
+                base = r.commit(BASE_PAGE + '\nThe main branch adds its own sentence.\n',
+                                'docs: main branch')
+                r.git('update-ref', ref, base)
+                r.commit(with_keep_handle(), 'docs: lane after main')
+                self.assertEqual(r.git('merge-base', 'HEAD', f'refs/tags/{tag}'), common)
+                self.assertEqual(r.git('merge-base', 'HEAD', ref), base)
+                self.assertNotEqual(common, base)
+                self.assertEqual(guard.default_base(r.root), base)
+
+    def test_remote_tracking_main_precedes_local_main(self) -> None:
+        with repo() as r:
+            remote = r.commit(BASE_PAGE, 'docs: remote main')
+            r.git('update-ref', 'refs/remotes/origin/main', remote)
+            local = r.commit(with_keep_handle(), 'docs: local main')
+            r.git('update-ref', 'refs/heads/main', local)
+            r.commit(BASE_PAGE + '\nThe lane adds a new sentence after local main.\n',
+                     'docs: lane')
+            self.assertEqual(guard.default_base(r.root), remote)
+
+    def test_local_main_is_used_without_remote_tracking_main(self) -> None:
+        with repo() as r:
+            base = r.commit(BASE_PAGE, 'docs: local main')
+            r.git('update-ref', 'refs/heads/main', base)
+            r.commit(with_keep_handle(), 'docs: lane')
+            self.assertEqual(guard.default_base(r.root), base)
+
+    def test_environment_base_precedes_branch_refs(self) -> None:
+        with repo() as r:
+            override = r.commit(BASE_PAGE, 'docs: explicit base')
+            remote = r.commit(with_keep_handle(), 'docs: remote main')
+            r.git('update-ref', 'refs/remotes/origin/main', remote)
+            local = r.commit(BASE_PAGE + '\nLocal main adds another sentence.\n',
+                             'docs: local main')
+            r.git('update-ref', 'refs/heads/main', local)
+            r.commit(with_keep_handle(), 'docs: lane')
+            with mock.patch.dict(os.environ, {'PINEFORGE_DOC_REVERT_BASE': override}):
+                self.assertEqual(guard.default_base(r.root), override)
+
+    def test_merged_pull_request_is_used_without_branch_refs(self) -> None:
+        with repo() as r:
+            r.commit(BASE_PAGE, 'docs: initial guide')
+            base = r.commit(with_keep_handle(), 'docs: merged guide (#12)')
+            r.commit(BASE_PAGE + '\nThe lane adds a new sentence after the merge.\n',
+                     'docs: lane')
+            self.assertEqual(guard.default_base(r.root), base)
+
+    def test_no_branch_ref_or_merged_pull_request_has_no_base(self) -> None:
+        with repo() as r:
+            r.commit(BASE_PAGE, 'docs: initial guide')
+            self.assertIsNone(guard.default_base(r.root))
 
 
 class MustFail(unittest.TestCase):

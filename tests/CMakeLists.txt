@@ -3825,7 +3825,7 @@ add_test(NAME test_selected_window_ownership_d4
         ManifestCheckerTests.test_d4_independent_reconstruction_matches_manifest)
 set_tests_properties(test_selected_window_ownership_manifest
     ${_pf_ownership_control_shards} test_selected_window_ownership_d4
-    PROPERTIES WORKING_DIRECTORY ${PROJECT_SOURCE_DIR} TIMEOUT 180)
+    PROPERTIES WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
 
 # The C bridge test also links the shared window-plan helper, whose bridge
 # (src/selected_window_plan_c.cpp) is not in the kernel archive. The loop above

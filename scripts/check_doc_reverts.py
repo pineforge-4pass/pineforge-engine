@@ -52,16 +52,16 @@ V19-A's stated revert of PERF-P1's view, must pass with its own message). With
 Without ``--head`` the gate walks the non-merge commits of ``base..HEAD`` one
 by one, each against its parent and with its own message. ``base`` is
 ``--base``, else ``$PINEFORGE_DOC_REVERT_BASE``, else the merge base with
-``origin/main`` or ``main``, else -- in a checkout with no branch refs, as the
-lab's remote hosts have -- the newest first-parent ancestor of ``HEAD`` whose
-subject ends in a pull request number, `` (#N)``: the squash or merge commit
-GitHub wrote on ``main``, which is the merge base CI would find (its branch's
-commits were judged one by one, with their own messages, before it merged; a
-squash commit's message is the pull request's title and cannot name them
-again). Where none resolves, the walk starts at ``HEAD`` and stops at the first
-commit that predates this gate. A commit whose own tree
-has no ``scripts/check_doc_reverts.py`` is never judged: the rule binds from
-the commit that introduced it on. At most ``MAX_COMMITS`` commits are walked.
+``refs/remotes/origin/main`` or ``refs/heads/main``, else -- in a checkout with
+no branch refs, as the lab's remote hosts have -- the newest first-parent
+ancestor of ``HEAD`` whose subject ends in a pull request number, `` (#N)``:
+the squash or merge commit GitHub wrote on ``main``, which is the merge base
+CI would find (its branch's commits were judged one by one, with their own
+messages, before it merged; a squash commit's message is the pull request's
+title and cannot name them again). Where none resolves, the walk starts at
+``HEAD`` and stops at the first commit that predates this gate. A commit whose
+own tree has no ``scripts/check_doc_reverts.py`` is never judged: the rule binds
+from the commit that introduced it on. At most ``MAX_COMMITS`` commits are walked.
 
 Exit 0 when every revert and deletion is named, 1 when one is not, 2 when git
 or a named ref cannot be read.
@@ -352,7 +352,7 @@ def default_base(root: Path) -> str | None:
     env = os.environ.get('PINEFORGE_DOC_REVERT_BASE')
     if env:
         return resolve(env, root)
-    for ref in ('origin/main', 'main'):
+    for ref in ('refs/remotes/origin/main', 'refs/heads/main'):
         tip = git('rev-parse', '--verify', '--quiet', ref + '^{commit}', root=root,
                   check=False).strip()
         if tip:

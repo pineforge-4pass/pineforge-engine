@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+import unicodedata
 import unittest
 from unittest import mock
 
@@ -46,6 +47,8 @@ RULESET_BARRIER_REFUSAL = (
 SINGLE_DOCUMENT_REFUSAL = (
     "returned an HTTP response body with trailing data; "
     "expected exactly one JSON document")
+RULESET_INVENTORY_HEADER = (
+    "branch ruleset inventory (includes_parents=true; branch targets only; tag/push omitted):\n")
 
 
 def _without_comments(text):
@@ -1613,6 +1616,25 @@ class RulesetsProbeTests(unittest.TestCase):
         api.rulesets(release_rulesets() if rows is None else rows)
         return api
 
+    def measurement_rows(self):
+        rows = release_rulesets()
+        rows[0].update(id=13094758, name="default", source_type="Organization",
+                       source="example", updated_at="2026-10-07T16:13:00Z")
+        rows[1].update(id=21476386, name="PineForge strict CI base",
+                       source_type="Repository", source=REPO,
+                       updated_at="2026-09-26T02:40:00Z")
+        return rows
+
+    def measurement_listing(self, org_visibility, repo_visibility):
+        return (
+            RULESET_INVENTORY_HEADER
+            + "ruleset id=13094758 name='default' source_type='Organization' "
+            "source='example' enforcement='active' updated_at='2026-10-07T16:13:00Z' "
+            f"bypass_actors={org_visibility} applies=yes pull_request=yes\n"
+            "ruleset id=21476386 name='PineForge strict CI base' source_type='Repository' "
+            f"source='{REPO}' enforcement='active' updated_at='2026-09-26T02:40:00Z' "
+            f"bypass_actors={repo_visibility} applies=yes pull_request=yes\n")
+
     def run_probe(self, api, *, main=None, repo=REPO):
         stdout, stderr = io.StringIO(), io.StringIO()
         forbidden = mock.Mock(side_effect=AssertionError("probe must not run subprocesses"))
@@ -1629,54 +1651,251 @@ class RulesetsProbeTests(unittest.TestCase):
         return code, stdout.getvalue(), stderr.getvalue()
 
     def test_hidden_org_bypass_actors_refuses_with_the_reader_diagnostic(self):
-        rows = release_rulesets()
-        rows[0].update(id=13094758, name="default", source_type="Organization",
-                       source="example")
+        rows = self.measurement_rows()
         del rows[0]["bypass_actors"]
         api = self.api_for(rows)
         self.assertEqual(self.run_probe(api), (
-            1, "", f"::error::API repos/{REPO}/rulesets/13094758 returned missing or invalid "
+            1, self.measurement_listing("hidden", "visible actors=1"),
+            f"::error::API repos/{REPO}/rulesets/13094758 returned missing or invalid "
             "bypass_actors (token cannot see this ruleset's bypass_actors)\n"))
         self.assertEqual(api.calls, [
             (REPO_API, False, None), (RULESETS_API, True, None),
+            (f"repos/{REPO}/rulesets/13094758", False, None),
+            (f"repos/{REPO}/rulesets/21476386", False, None),
+            (REPO_API, False, None), (RULESETS_API, True, None),
             (f"repos/{REPO}/rulesets/13094758", False, None)])
 
-    def test_two_hidden_rulesets_require_two_dispatches_as_documented(self):
-        docs = (ROOT / "docs/ci.md").read_text()
-        limit = (
-            "Two hidden rulesets need two dispatches: the first refusal names only the\n"
-            "first hidden ruleset; make its `bypass_actors` visible before dispatching again\n"
-            "to identify the second.")
-        message = "docs must explain the first-hidden-ruleset refusal limit"
-        self.assertIn(limit, docs, message)
-        changed = docs.replace(limit, "", 1)
-        self.assertNotEqual(changed, docs)
-        with self.assertRaisesRegex(AssertionError, message):
-            self.assertIn(limit, changed, message)
-
-        rows = release_rulesets()
-        rows[0].update(id=13094758, name="default", source_type="Organization",
-                       source="example")
-        rows[1].update(source_type="Repository", source=REPO)
+    def test_two_hidden_rulesets_are_both_listed_in_one_dispatch_as_documented(self):
+        rows = self.measurement_rows()
         visible_actors = rows[0].pop("bypass_actors")
         del rows[1]["bypass_actors"]
         first = self.api_for(rows)
         self.assertEqual(self.run_probe(first), (
-            1, "", f"::error::API repos/{REPO}/rulesets/13094758 returned missing or invalid "
+            1, self.measurement_listing("hidden", "hidden"),
+            f"::error::API repos/{REPO}/rulesets/13094758 returned missing or invalid "
             "bypass_actors (token cannot see this ruleset's bypass_actors)\n"))
         self.assertEqual(first.calls, [
+            (REPO_API, False, None), (RULESETS_API, True, None),
+            (f"repos/{REPO}/rulesets/13094758", False, None),
+            (f"repos/{REPO}/rulesets/21476386", False, None),
             (REPO_API, False, None), (RULESETS_API, True, None),
             (f"repos/{REPO}/rulesets/13094758", False, None)])
 
         rows[0]["bypass_actors"] = visible_actors
         second = self.api_for(rows)
         self.assertEqual(self.run_probe(second), (
-            1, "", f"::error::API {STRICT_RULESET_API} returned missing or invalid "
+            1, self.measurement_listing("visible actors=5", "hidden"),
+            f"::error::API repos/{REPO}/rulesets/21476386 returned missing or invalid "
             "bypass_actors (token cannot see this ruleset's bypass_actors)\n"))
         self.assertEqual(second.calls, [
             (REPO_API, False, None), (RULESETS_API, True, None),
             (f"repos/{REPO}/rulesets/13094758", False, None),
-            (STRICT_RULESET_API, False, None)])
+            (f"repos/{REPO}/rulesets/21476386", False, None),
+            (REPO_API, False, None), (RULESETS_API, True, None),
+            (f"repos/{REPO}/rulesets/13094758", False, None),
+            (f"repos/{REPO}/rulesets/21476386", False, None)])
+
+        docs = (ROOT / "docs/ci.md").read_text()
+        limit = (
+            "One dispatch lists every branch ruleset, including all hidden lists, even when\n"
+            "the gate refuses on the first hidden ruleset.")
+        message = "docs must explain the complete inventory despite the first refusal"
+        self.assertIn(limit, docs, message)
+        changed = docs.replace(limit, "", 1)
+        self.assertNotEqual(changed, docs)
+        with self.assertRaisesRegex(AssertionError, message):
+            self.assertIn(limit, changed, message)
+
+    def test_detail_http_error_is_listed_and_other_branch_details_are_still_read(self):
+        rows = self.measurement_rows()
+        api = self.api_for(rows)
+        summaries = ruleset_summaries(rows)
+        summaries[0].update(source_type="Organization", source="example",
+                            updated_at="2026-10-07T16:13:00Z")
+        api.responses[RULESETS_API] = http_response(200, json.dumps(summaries))
+        endpoint = f"repos/{REPO}/rulesets/13094758"
+        api.responses[endpoint] = http_response(503, "unavailable")
+        self.assertEqual(self.run_probe(api), (
+            1, RULESET_INVENTORY_HEADER
+            + "ruleset id=13094758 name='default' source_type='Organization' "
+            "source='example' enforcement='active' updated_at='2026-10-07T16:13:00Z' "
+            f"detail=ERROR 'API {endpoint} upstream error 503'\n"
+            "ruleset id=21476386 name='PineForge strict CI base' source_type='Repository' "
+            f"source='{REPO}' enforcement='active' updated_at='2026-09-26T02:40:00Z' "
+            "bypass_actors=visible actors=1 applies=yes pull_request=yes\n",
+            f"::error::API {endpoint} upstream error 503\n"))
+        self.assertEqual(api.calls, [
+            (REPO_API, False, None), (RULESETS_API, True, None),
+            (endpoint, False, None),
+            (f"repos/{REPO}/rulesets/21476386", False, None),
+            (REPO_API, False, None), (RULESETS_API, True, None),
+            (endpoint, False, None)])
+
+    def test_measurement_visibility_is_only_a_list_not_a_valid_bypass_or_rule(self):
+        rows = self.measurement_rows()
+        rows[0]["bypass_actors"] = [{}]
+        rows[0]["conditions"] = {}
+        rows[1]["bypass_actors"] = None
+        rows[1]["rules"] = [{"type": "deletion"}]
+        api = self.api_for(rows)
+        expected = self.measurement_listing("visible actors=1", "hidden")
+        expected = expected.replace("applies=yes", "applies=unreadable", 1)
+        expected = expected.rsplit("pull_request=yes", 1)[0] + "pull_request=no\n"
+        self.assertEqual(self.run_probe(api), (
+            1, expected,
+            f"::error::API repos/{REPO}/rulesets/13094758 returned invalid bypass actor: {{}}\n"))
+
+    def test_empty_visible_list_is_measured_without_counting_it_as_a_barrier(self):
+        rows = self.measurement_rows()
+        rows[0]["bypass_actors"] = []
+        rows[1]["enforcement"] = "disabled"
+        rows[1]["conditions"]["ref_name"]["exclude"] = ["refs/heads/main"]
+        api = self.api_for(rows)
+        listing = self.measurement_listing("visible actors=0", "visible actors=1")
+        listing = listing.replace(
+            "enforcement='active' updated_at='2026-09-26T02:40:00Z'",
+            "enforcement='disabled' updated_at='2026-09-26T02:40:00Z'")
+        listing = listing.rsplit("applies=yes", 1)[0] + "applies=no pull_request=yes\n"
+        self.assertEqual(self.run_probe(api), (
+            1, listing, f"::error::{RULESET_BARRIER_REFUSAL}\n"))
+
+    def test_later_inventory_pages_and_disabled_branch_rulesets_are_all_listed(self):
+        rows = self.measurement_rows()
+        del rows[0]["bypass_actors"]
+        rows.append(ruleset(19359220, enforcement="disabled", rules=("deletion",),
+                            include=["refs/heads/release"]))
+        api = self.api_for(rows)
+        api.responses[RULESETS_API] = (
+            http_response(200, json.dumps(ruleset_summaries(rows[:1])), {
+                "Link": f'<https://api.github.com/{RULESETS_API}&page=2>; rel="next"'})
+            + http_response(200, json.dumps(ruleset_summaries(rows[1:]))))
+        self.assertEqual(self.run_probe(api), (
+            1, self.measurement_listing("hidden", "visible actors=1")
+            + "ruleset id=19359220 name='fixture ruleset 19359220' source_type='<unknown>' "
+            "source='<unknown>' enforcement='disabled' updated_at='<unknown>' "
+            "bypass_actors=visible actors=1 applies=no pull_request=no\n",
+            f"::error::API repos/{REPO}/rulesets/13094758 returned missing or invalid "
+            "bypass_actors (token cannot see this ruleset's bypass_actors)\n"))
+        self.assertEqual(api.calls, [
+            (REPO_API, False, None), (RULESETS_API, True, None),
+            (f"repos/{REPO}/rulesets/13094758", False, None),
+            (f"repos/{REPO}/rulesets/21476386", False, None),
+            (f"repos/{REPO}/rulesets/19359220", False, None),
+            (REPO_API, False, None), (RULESETS_API, True, None),
+            (f"repos/{REPO}/rulesets/13094758", False, None)])
+
+    def test_inventory_failures_are_reported_before_the_unchanged_reader_refusal(self):
+        invalid = {"id": 707, "target": "branch", "enforcement": "unknown"}
+        duplicate = ruleset_summaries([ruleset(), ruleset()])
+        for endpoint, payload, diagnostic in (
+                (REPO_API, json.dumps({"default_branch": "release"}),
+                 f"API {REPO_API} must identify main as the default branch"),
+                (RULESETS_API, http_response(200, json.dumps([invalid])),
+                 f"API {RULESETS_API} returned invalid ruleset summary: {invalid!r}"),
+                (RULESETS_API, http_response(200, json.dumps(duplicate)),
+                 f"API {RULESETS_API} returned duplicate ruleset id 202"),
+                (RULESETS_API, http_response(200, "[]", {
+                    "Link": f'<https://api.github.com/{RULESETS_API}&page=2>; rel="next"'}),
+                 f"API {RULESETS_API} returned incomplete ruleset pagination: "
+                 "unread or unlinked next page")):
+            with self.subTest(endpoint=endpoint, diagnostic=diagnostic):
+                api = self.api_for()
+                api.responses[endpoint] = payload
+                self.assertEqual(self.run_probe(api), (
+                    1, RULESET_INVENTORY_HEADER + f"inventory=ERROR {diagnostic!r}\n",
+                    f"::error::{diagnostic}\n"))
+                reads = [(REPO_API, False, None)]
+                if endpoint == RULESETS_API:
+                    reads.append((RULESETS_API, True, None))
+                self.assertEqual(api.calls, reads * 2)
+
+    def test_long_inventory_errors_are_escaped_shortened_and_keep_the_refusal(self):
+        detail = "gh: Forbidden (HTTP 403)\n" + "x" * 300
+        long_repo = "example/" + "r" * 300
+        long_repo_api = f"repos/{long_repo}"
+        invalid = {"id": 707, "target": "branch", "enforcement": "unknown" + "x" * 300}
+        cases = (
+            ("inventory transport", REPO, RULESETS_API, subprocess.CalledProcessError(
+                1, ["gh", "api", RULESETS_API], stderr=detail),
+             f"API {RULESETS_API} failed with HTTP 403: {detail}"),
+            ("repository transport", REPO, REPO_API, subprocess.CalledProcessError(
+                1, ["gh", "api", REPO_API], stderr=detail),
+             f"API {REPO_API} failed with HTTP 403: {detail}"),
+            ("default branch", long_repo, long_repo_api,
+             json.dumps({"default_branch": "release"}),
+             f"API {long_repo_api} must identify main as the default branch"),
+            ("summary validation", REPO, RULESETS_API,
+             http_response(200, json.dumps([invalid])),
+             f"API {RULESETS_API} returned invalid ruleset summary: {invalid!r}"),
+        )
+        for scenario, repo, endpoint, payload, diagnostic in cases:
+            with self.subTest(scenario=scenario):
+                self.assertGreater(len(diagnostic), 240)
+                api = self.api_for()
+                api.responses[endpoint] = payload
+                expected = (
+                    1, RULESET_INVENTORY_HEADER + f"inventory=ERROR {diagnostic[:240]!r}\n",
+                    f"::error::{diagnostic}\n")
+                # RED on 5a866543573c: every row prints the entire diagnostic.
+                self.assertEqual(self.run_probe(api, repo=repo), expected)
+                reads = [(f"repos/{repo}", False, None)]
+                if endpoint == RULESETS_API:
+                    reads.append((RULESETS_API, True, None))
+                self.assertEqual(api.calls, reads * 2)
+
+                # Revert only the bound in the full module and require this
+                # same exact-output assertion to catch every input row.
+                source = Path(ci_release_gate.__file__).read_text()
+                before = '        lines.append(f"inventory=ERROR {str(exc)[:240]!r}")\n'
+                after = '        lines.append(f"inventory=ERROR {str(exc)!r}")\n'
+                self.assertEqual(source.count(before), 1,
+                                 "mutation must have one source target")
+                mutated = source.replace(before, after, 1)
+                self.assertNotEqual(mutated, source)
+                namespace = {"__name__": "ci_release_inventory_error_bound_mutant"}
+                exec(compile(mutated, ci_release_gate.__file__, "exec"), namespace)
+                mutant_api = self.api_for()
+                mutant_api.responses[endpoint] = payload
+                result = self.run_probe(mutant_api, repo=repo, main=namespace["main"])
+                self.assertEqual(result, (
+                    1, RULESET_INVENTORY_HEADER + f"inventory=ERROR {diagnostic!r}\n",
+                    f"::error::{diagnostic}\n"))
+                with self.assertRaises(AssertionError):
+                    self.assertEqual(result, expected)
+                self.assertEqual(mutant_api.calls, reads * 2)
+
+    def test_detail_transport_error_is_escaped_shortened_and_does_not_hide_next_row(self):
+        rows = self.measurement_rows()
+        api = self.api_for(rows)
+        endpoint = f"repos/{REPO}/rulesets/13094758"
+        detail = "gh: Forbidden (HTTP 403)\n::notice::" + "x" * 300
+        api.responses[endpoint] = subprocess.CalledProcessError(
+            1, ["gh", "api", endpoint], stderr=detail)
+        diagnostic = f"API {endpoint} failed with HTTP 403: {detail}"
+        repo_line = self.measurement_listing("hidden", "visible actors=1").splitlines()[2]
+        self.assertEqual(self.run_probe(api), (
+            1, RULESET_INVENTORY_HEADER
+            + "ruleset id=13094758 name='default' source_type='<unknown>' "
+            "source='<unknown>' enforcement='active' updated_at='<unknown>' "
+            f"detail=ERROR {diagnostic[:240]!r}\n{repo_line}\n",
+            f"::error::{diagnostic}\n"))
+        self.assertIn((f"repos/{REPO}/rulesets/21476386", False, None), api.calls)
+
+    def test_api_display_metadata_is_escaped_in_each_inventory_field(self):
+        rows = self.measurement_rows()
+        rows[0].update(name="org\n::notice::", source_type="Organization\rtest",
+                       source="owner\nname", updated_at="time\tstamp\nnext")
+        del rows[0]["bypass_actors"]
+        listing = self.measurement_listing("hidden", "visible actors=1")
+        listing = listing.replace("name='default'", "name='org\\n::notice::'")
+        listing = listing.replace("source_type='Organization'", "source_type='Organization\\rtest'")
+        listing = listing.replace("source='example'", "source='owner\\nname'")
+        listing = listing.replace(
+            "updated_at='2026-10-07T16:13:00Z'", "updated_at='time\\tstamp\\nnext'")
+        self.assertEqual(self.run_probe(self.api_for(rows)), (
+            1, listing,
+            f"::error::API repos/{REPO}/rulesets/13094758 returned missing or invalid "
+            "bypass_actors (token cannot see this ruleset's bypass_actors)\n"))
 
     def test_probe_dispatch_branch_and_fleets_are_documented(self):
         docs = (ROOT / "docs/ci.md").read_text()
@@ -1712,17 +1931,17 @@ class RulesetsProbeTests(unittest.TestCase):
                     self.assertIn(required, changed, message)
 
     def test_empty_inventory_refusal_and_documented_endpoint_scope(self):
-        # The reader report's complete [] inventory fails on main without an
-        # endpoint. The runtime assertions already hold there; the prose does not.
+        # A complete [] inventory has no barrier; its refusal has no endpoint.
         api = self.api_for([])
         self.assertEqual(self.run_probe(api), (
-            1, "", f"::error::{RULESET_BARRIER_REFUSAL}\n"))
+            1, RULESET_INVENTORY_HEADER, f"::error::{RULESET_BARRIER_REFUSAL}\n"))
         self.assertEqual(api.calls, [
+            (REPO_API, False, None), (RULESETS_API, True, None),
             (REPO_API, False, None), (RULESETS_API, True, None)])
         docs = (ROOT / "docs/ci.md").read_text()
-        scoped = ("stdout and the reader's `::error::` diagnostic; "
+        scoped = ("the reader's unchanged `::error::` diagnostic on stderr; "
                   "API/response failures name the endpoint.")
-        unscoped = ("stdout and the reader's `::error::` diagnostic "
+        unscoped = ("the reader's unchanged `::error::` diagnostic on stderr "
                     "naming the failing endpoint.")
 
         def assert_scope(text):
@@ -1741,8 +1960,16 @@ class RulesetsProbeTests(unittest.TestCase):
         rows = release_rulesets()
         rows[0].update(source_type="Organization", source="example")
         rows[1].update(source_type="Repository", source=REPO)
+        rows.append(ruleset(404, target="push"))
         api = self.api_for(rows)
         self.assertEqual(self.run_probe(api), (0, (
+            RULESET_INVENTORY_HEADER
+            + "ruleset id=101 name='fixture ruleset 101' source_type='Organization' "
+            "source='example' enforcement='active' updated_at='<unknown>' "
+            "bypass_actors=visible actors=5 applies=yes pull_request=yes\n"
+            "ruleset id=202 name='fixture ruleset 202' source_type='Repository' "
+            f"source='{REPO}' enforcement='active' updated_at='<unknown>' "
+            "bypass_actors=visible actors=1 applies=yes pull_request=yes\n"
             "release ruleset barrier ok: ruleset 202 'fixture ruleset 202'\n"
             "branch rulesets: 101 'fixture ruleset 101' active "
             "source='Organization':'example' bypass_actors=visible; "
@@ -1750,7 +1977,7 @@ class RulesetsProbeTests(unittest.TestCase):
             f"source='Repository':'{REPO}' bypass_actors=visible\n"), ""))
         self.assertEqual(api.calls, [
             (REPO_API, False, None), (RULESETS_API, True, None),
-            (DEFAULT_RULESET_API, False, None), (STRICT_RULESET_API, False, None)])
+            (DEFAULT_RULESET_API, False, None), (STRICT_RULESET_API, False, None)] * 2)
 
     def test_barrier_identity_and_inventory_are_not_fixture_constants(self):
         rows = [ruleset(907, enforcement="evaluate"), ruleset(809)]
@@ -1760,6 +1987,13 @@ class RulesetsProbeTests(unittest.TestCase):
         repo = "owner/other"
         api.responses = {key.replace(REPO, repo): value for key, value in api.responses.items()}
         self.assertEqual(self.run_probe(api, repo=repo), (0, (
+            RULESET_INVENTORY_HEADER
+            + "ruleset id=907 name='other\\nprotection' source_type='Organization' "
+            "source='owner' enforcement='evaluate' updated_at='<unknown>' "
+            "bypass_actors=visible actors=1 applies=yes pull_request=yes\n"
+            "ruleset id=809 name='release barrier' source_type='Repository' "
+            "source='owner/other' enforcement='active' updated_at='<unknown>' "
+            "bypass_actors=visible actors=1 applies=yes pull_request=yes\n"
             "release ruleset barrier ok: ruleset 809 'release barrier'\n"
             "branch rulesets: 907 'other\\nprotection' evaluate "
             "source='Organization':'owner' bypass_actors=visible; "
@@ -1769,7 +2003,7 @@ class RulesetsProbeTests(unittest.TestCase):
             (f"repos/{repo}", False, None),
             (f"repos/{repo}/rulesets?includes_parents=true&per_page=100", True, None),
             (f"repos/{repo}/rulesets/907", False, None),
-            (f"repos/{repo}/rulesets/809", False, None)])
+            (f"repos/{repo}/rulesets/809", False, None)] * 2)
 
     def test_missing_display_metadata_does_not_change_the_gate_verdict(self):
         rows = [ruleset()]
@@ -1780,6 +2014,10 @@ class RulesetsProbeTests(unittest.TestCase):
         detail = {key: value for key, value in rows[0].items() if key != "name"}
         api.responses[STRICT_RULESET_API] = json.dumps(detail)
         self.assertEqual(self.run_probe(api), (0, (
+            RULESET_INVENTORY_HEADER
+            + "ruleset id=202 name='<unknown>' source_type='<unknown>' "
+            "source='<unknown>' enforcement='active' updated_at='<unknown>' "
+            "bypass_actors=visible actors=1 applies=yes pull_request=yes\n"
             "release ruleset barrier ok: ruleset 202 '<unknown>'\n"
             "branch rulesets: 202 '<unknown>' active "
             "source='<unknown>':'<unknown>' bypass_actors=visible\n"), ""))
@@ -1802,17 +2040,22 @@ class RulesetsProbeTests(unittest.TestCase):
                     try:
                         ci_release_gate._require_release_rulesets(direct, REPO)
                     except ci_release_gate.ReleaseGateError as exc:
-                        expected = (1, "", f"::error::{exc}\n")
+                        expected = (1, f"::error::{exc}\n")
                     else:
                         expected = None
                     result = self.run_probe(probe)
+                    self.assertTrue(result[1].startswith(RULESET_INVENTORY_HEADER), result)
                     if expected is None:
                         self.assertEqual(result[0], 0, result)
                         self.assertEqual(result[2], "")
-                        self.assertEqual(len(result[1].splitlines()), 2, result)
+                        success_lines = result[1].splitlines()[-2:]
+                        self.assertTrue(success_lines[0].startswith(
+                            "release ruleset barrier ok: ruleset "), result)
+                        self.assertTrue(success_lines[1].startswith("branch rulesets: "), result)
                     else:
-                        self.assertEqual(result, expected)
-                    self.assertEqual(probe.calls, direct.calls)
+                        self.assertEqual((result[0], result[2]), expected)
+                        self.assertNotIn("release ruleset barrier ok:", result[1])
+                    self.assertEqual(probe.calls[-len(direct.calls):], direct.calls)
                     checked.append(result[0])
                     return original(**kwargs)
 
@@ -1827,7 +2070,15 @@ class RulesetsProbeTests(unittest.TestCase):
         rows[0].update(id=13094758, name="default", source_type="Organization",
                        source="example")
         del rows[0]["bypass_actors"]
-        refusal = (1, "", f"::error::API repos/{REPO}/rulesets/13094758 returned missing or "
+        listing = (
+            RULESET_INVENTORY_HEADER
+            + "ruleset id=13094758 name='default' source_type='Organization' "
+            "source='example' enforcement='active' updated_at='<unknown>' "
+            "bypass_actors=hidden applies=yes pull_request=yes\n"
+            "ruleset id=202 name='fixture ruleset 202' source_type='<unknown>' "
+            "source='<unknown>' enforcement='active' updated_at='<unknown>' "
+            "bypass_actors=visible actors=1 applies=yes pull_request=yes\n")
+        refusal = (1, listing, f"::error::API repos/{REPO}/rulesets/13094758 returned missing or "
                    "invalid bypass_actors (token cannot see this ruleset's bypass_actors)\n")
         self.assertEqual(self.run_probe(self.api_for(rows)), refusal)
         source = Path(ci_release_gate.__file__).read_text()
@@ -1840,8 +2091,33 @@ class RulesetsProbeTests(unittest.TestCase):
         exec(compile(mutated, ci_release_gate.__file__, "exec"), namespace)
         api = self.api_for(rows)
         self.assertEqual(self.run_probe(api, main=namespace["main"]), (
-            0, "release ruleset barrier ok: ruleset 0 'unverified'\nbranch rulesets: \n", ""))
-        self.assertEqual(api.calls, [], "the mutant must bypass the real readers")
+            0, listing + "release ruleset barrier ok: ruleset 0 'unverified'\nbranch rulesets: \n",
+            ""))
+        self.assertEqual(api.calls, [
+            (REPO_API, False, None), (RULESETS_API, True, None),
+            (f"repos/{REPO}/rulesets/13094758", False, None),
+            (STRICT_RULESET_API, False, None)],
+            "the mutant must bypass the verdict reader, while retaining measurement")
+
+    def test_full_source_mutant_dropping_listing_loses_only_the_measurement(self):
+        rows = self.measurement_rows()
+        del rows[0]["bypass_actors"]
+        stderr = (f"::error::API repos/{REPO}/rulesets/13094758 returned missing or invalid "
+                  "bypass_actors (token cannot see this ruleset's bypass_actors)\n")
+        self.assertEqual(self.run_probe(self.api_for(rows)), (
+            1, self.measurement_listing("hidden", "visible actors=1"), stderr))
+        source = Path(ci_release_gate.__file__).read_text()
+        before = "    print(_ruleset_inventory_report(api, repo), flush=True)\n"
+        self.assertEqual(source.count(before), 1, "mutation must have one source target")
+        mutated = source.replace(before, "", 1)
+        self.assertNotEqual(mutated, source)
+        namespace = {"__name__": "ci_release_rulesets_listing_mutant"}
+        exec(compile(mutated, ci_release_gate.__file__, "exec"), namespace)
+        api = self.api_for(rows)
+        self.assertEqual(self.run_probe(api, main=namespace["main"]), (1, "", stderr))
+        self.assertEqual(api.calls, [
+            (REPO_API, False, None), (RULESETS_API, True, None),
+            (f"repos/{REPO}/rulesets/13094758", False, None)])
 
 
 class APICommandTests(unittest.TestCase):
@@ -1987,6 +2263,8 @@ class WorkflowPinTests(unittest.TestCase):
         def constant_string(node):
             if isinstance(node, ast.Constant) and isinstance(node.value, str):
                 return node.value
+            if isinstance(node, ast.Constant) and isinstance(node.value, bytes):
+                return node.value.decode("utf-8", errors="replace")
             if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
                 left = constant_string(node.left)
                 right = constant_string(node.right)
@@ -2001,8 +2279,13 @@ class WorkflowPinTests(unittest.TestCase):
             if value is not None:
                 texts.append(value)
         for text in texts:
-            for view in (text.replace("`", "").casefold(),
-                         re.sub(r"""(?:#|//|['"`]|\s)+""", " ", text).casefold()):
+            views = (text.replace("`", ""),
+                     re.sub(r"""(?:\\\r?\n|#|//|['"`]|\s)+""", " ", text))
+            # Compatibility normalization must only add matches to the original views.
+            casefold_views = [view.casefold() for view in views]
+            normalized_views = [unicodedata.normalize("NFKC", view).casefold()
+                                for view in views]
+            for view in casefold_views + normalized_views:
                 self.assertNotRegex(view,
                                     r"\badministration\s*:\s*read\b|\bapp\s+requires\b",
                                     "unverified App permission claim must stay absent")
@@ -2110,6 +2393,103 @@ class WorkflowPinTests(unittest.TestCase):
                     with self.assertRaisesRegex(
                             AssertionError, "unverified App permission claim must stay absent"):
                         self.assert_ruleset_visibility_documentation(*changed)
+
+    def test_ruleset_visibility_guard_rejects_backslash_wrapped_claims(self):
+        original = [Path(ci_release_gate.__file__).read_text(),
+                    (ROOT / "docs/ci.md").read_text(), self.workflow()]
+        self.assert_ruleset_visibility_documentation(*original)
+        for index, claim in (
+                (1, "\nNeeds administration:\\\nread\n"),
+                (2, "\n# Needs administration:\\\n# read\n")):
+            with self.subTest(place=index, claim=claim):
+                changed = original.copy()
+                changed[index] += claim
+                self.assertNotEqual(changed[index], original[index])
+                with self.assertRaisesRegex(
+                        AssertionError, "unverified App permission claim must stay absent"):
+                    self.assert_ruleset_visibility_documentation(*changed)
+
+    def test_ruleset_visibility_guard_rejects_decoded_bytes_claims(self):
+        original = [Path(ci_release_gate.__file__).read_text(),
+                    (ROOT / "docs/ci.md").read_text(), self.workflow()]
+        self.assert_ruleset_visibility_documentation(*original)
+        for expression in (
+                'b"administr\\x61tion: re\\x61d"',
+                'b"administr\\x61tion: re\\x61d".decode()',
+                'b"administr\\x61tion:" + b" re\\x61d"',
+                'b"\\xffadministr\\x61tion: re\\x61d".decode("utf-8", errors="replace")'):
+            with self.subTest(expression=expression):
+                changed = original.copy()
+                changed[0] += f"\nPERMISSION_CLAIM = {expression}\n"
+                self.assertNotEqual(changed[0], original[0])
+                ast.parse(changed[0])
+                with self.assertRaisesRegex(
+                        AssertionError, "unverified App permission claim must stay absent"):
+                    self.assert_ruleset_visibility_documentation(*changed)
+
+    def test_ruleset_visibility_guard_rejects_fullwidth_claims(self):
+        original = [Path(ci_release_gate.__file__).read_text(),
+                    (ROOT / "docs/ci.md").read_text(), self.workflow()]
+        self.assert_ruleset_visibility_documentation(*original)
+        for index in range(len(original)):
+            for claim in ("\n# Ａｐｐ requires\n", "\n# Ａｐｐ\n# requires\n"):
+                with self.subTest(place=index, claim=claim):
+                    changed = original.copy()
+                    changed[index] += claim
+                    self.assertNotEqual(changed[index], original[index])
+                    with self.assertRaisesRegex(
+                            AssertionError, "unverified App permission claim must stay absent"):
+                        self.assert_ruleset_visibility_documentation(*changed)
+
+    def test_ruleset_visibility_guard_rejects_compatibility_suffix_claims(self):
+        original = [Path(ci_release_gate.__file__).read_text(),
+                    (ROOT / "docs/ci.md").read_text(), self.workflow()]
+        self.assert_ruleset_visibility_documentation(*original)
+        for index, claim in (
+                (0, "\n# Needs administration: read\u2122\n"),
+                (1, "\nNeeds administration: read\u2122\n"),
+                (2, "\n# Needs administration: read\u2122\n"),
+                (0, "\n# Needs administration:\n# read\u2122\n"),
+                (1, "\nNeeds administration:\n# read\u2122\n"),
+                (2, "\n# Needs administration:\n# read\u2122\n")):
+            with self.subTest(place=index, claim=claim):
+                changed = original.copy()
+                changed[index] += claim
+                self.assertNotEqual(changed[index], original[index])
+                with self.assertRaisesRegex(
+                        AssertionError, "unverified App permission claim must stay absent"):
+                    self.assert_ruleset_visibility_documentation(*changed)
+
+    def test_ruleset_visibility_guard_casefold_scan_removal_breaks_restoration_controls(self):
+        regression = "test_ruleset_visibility_guard_rejects_compatibility_suffix_claims"
+        original_result = unittest.TestResult()
+        WorkflowPinTests(regression).run(original_result)
+        self.assertEqual(original_result.testsRun, 1)
+        self.assertEqual(original_result.errors, [])
+        self.assertEqual(original_result.failures, [],
+                         "restoration controls must pass before mutation")
+
+        source = Path(__file__).read_text()
+        before = "            for view in casefold_views + normalized_views:\n"
+        self.assertEqual(source.count(before), 1, "mutation must have one source target")
+        mutated = source.replace(before, "            for view in normalized_views:\n", 1)
+        self.assertNotEqual(mutated, source)
+        guard = next(node for node in ast.walk(ast.parse(mutated))
+                     if isinstance(node, ast.FunctionDef)
+                     and node.name == "assert_ruleset_visibility_documentation")
+        namespace = {"ast": ast, "re": re, "unicodedata": unicodedata}
+        exec(compile(ast.Module(body=[guard], type_ignores=[]), __file__, "exec"), namespace)
+        case = WorkflowPinTests(regression)
+        case.assert_ruleset_visibility_documentation = namespace[
+            "assert_ruleset_visibility_documentation"].__get__(case)
+        result = unittest.TestResult()
+        case.run(result)
+        self.assertEqual(result.testsRun, 1)
+        self.assertEqual(result.errors, [])
+        self.assertEqual(len(result.failures), 6,
+                         "removing the casefold-only scan must break every restoration row")
+        for _, traceback in result.failures:
+            self.assertIn("AssertionError not raised", traceback)
 
     def test_prebuilt_builds_the_emitted_sha_and_asserts_tag_identity(self):
         jobs = _jobs(self.workflow())
