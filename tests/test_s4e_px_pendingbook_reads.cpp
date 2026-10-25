@@ -6,6 +6,7 @@
 #include <limits>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -68,6 +69,8 @@ std::vector<RawRow> raw_rows(const Adapter& adapter) {
         const auto found = placements.find(handle.incarnation);
         if (found != placements.end())
             rows.push_back({found->second, handle, true});
+        else
+            rows.push_back({{}, handle, false});
     }
     const auto append = [&](const auto& owner) {
         for (const auto& row : owner)
@@ -147,6 +150,7 @@ PlacementSnapshot snapshot_for(std::size_t serial, PineOrderFamily family) {
 class Fixture {
 public:
     explicit Fixture(std::size_t population) {
+        adapter.fixture_use_memory_auxiliary_tables();
         auto& placements = adapter.*access(Placements{});
         auto& live = adapter.*access(Live{});
         auto& same_bar = adapter.*access(SameBar{});
@@ -204,7 +208,9 @@ void check_returned_values(const Fixture& fixture,
         CHECK(row.from_entry_hash64 == fnv1a(want.snapshot.from_entry));
         CHECK(row.oca_name_hash64 == fnv1a(want.snapshot.oca_name));
         CHECK(row.comment_hash64 == fnv1a(want.snapshot.comment));
-        CHECK(row.type == 2);
+        const int expected_type = want.snapshot.family == PineOrderFamily::Entry
+            ? 1 : (want.snapshot.family == PineOrderFamily::Order ? 3 : 2);
+        CHECK(row.type == expected_type);
         CHECK(row.is_long == (want.snapshot.is_long ? 1U : 0U));
         CHECK(row.limit_price == want.snapshot.exit_levels.limit);
         CHECK(row.stop_price == want.snapshot.exit_levels.stop);
@@ -223,6 +229,16 @@ void check_returned_values(const Fixture& fixture,
     }
 }
 
+void check_projection(const Fixture& fixture) {
+    const auto expected = independent_projection(fixture.adapter);
+    CHECK(fixture.adapter.pending_intent_view().size()
+          == static_cast<int>(expected.size()));
+    check_returned_values(fixture, expected);
+    pf_pending_order_v1_t extra{};
+    CHECK(fixture.adapter.pending_intent_view().copy_v1(
+              static_cast<int>(expected.size()), &extra) == -1);
+}
+
 void check_cross_family_projection() {
     Fixture fixture(4);
     const auto first = raw_rows(fixture.adapter).front().snapshot;
@@ -235,15 +251,55 @@ void check_cross_family_projection() {
     entries.front().snapshot.family = PineOrderFamily::ExitTrail;
     brackets.front().snapshot = first;
 
-    // The existing projection coalesces stop/limit/trail siblings. Keeping
-    // their levels equal isolates identity and first-representative behavior.
-    const auto expected = independent_projection(fixture.adapter);
-    CHECK(fixture.adapter.pending_intent_view().size()
-          == static_cast<int>(expected.size()));
-    check_returned_values(fixture, expected);
-    pf_pending_order_v1_t extra{};
-    CHECK(fixture.adapter.pending_intent_view().copy_v1(
-              static_cast<int>(expected.size()), &extra) == -1);
+    // Equal sibling levels isolate identity and representative selection.
+    // Each change follows a read and keeps the raw population unchanged.
+    check_projection(fixture);
+    auto& changed = same_bar.front().snapshot;
+    changed.source_id += "-rekeyed";
+    check_projection(fixture);
+    changed.source_id = first.source_id;
+    check_projection(fixture);
+    changed.from_entry += "-rekeyed";
+    check_projection(fixture);
+    changed.from_entry = first.from_entry;
+    check_projection(fixture);
+    changed.bracket_origin.run.session_key = "pending-book-other-session";
+    check_projection(fixture);
+    changed.bracket_origin = first.bracket_origin;
+    check_projection(fixture);
+    ++changed.bracket_origin.run.run_number;
+    check_projection(fixture);
+    changed.bracket_origin = first.bracket_origin;
+    check_projection(fixture);
+    ++changed.bracket_origin.incarnation;
+    check_projection(fixture);
+    changed.bracket_origin = first.bracket_origin;
+    check_projection(fixture);
+    changed.family = PineOrderFamily::Entry;
+    check_projection(fixture);
+    changed.family = PineOrderFamily::ExitStop;
+    check_projection(fixture);
+
+    // Erase only the placement: the live roster retains a raw hole. The
+    // next representative is staged, and therefore has no live incarnation.
+    auto& placements = fixture.adapter.*access(Placements{});
+    const auto live_handle = (fixture.adapter.*access(Live{})).front();
+    CHECK(placements.erase(live_handle.incarnation));
+    check_projection(fixture);
+    CHECK(placements.try_emplace(live_handle.incarnation, first).second);
+    check_projection(fixture);
+}
+
+void check_roster_reorder() {
+    Fixture fixture(12);
+    auto& placements = fixture.adapter.*access(Placements{});
+    auto& live = fixture.adapter.*access(Live{});
+    placements.at(live[1].incarnation) = placements.at(live[0].incarnation);
+    check_projection(fixture);
+    // A,A,B becomes B,A,A: count is unchanged, but the second selected raw
+    // ordinal moves from 2 to 1 and must carry that live handle's incarnation.
+    std::swap(live.front(), live.back());
+    check_projection(fixture);
 }
 
 std::uint64_t measure_size(std::size_t population) {
@@ -255,6 +311,24 @@ std::uint64_t measure_size(std::size_t population) {
         fixture.adapter.fixture_pending_projection_operations() - before;
     CHECK(observed == static_cast<int>(expected.size()));
     CHECK(operations > 0);
+
+    // One warm indexed read includes both representative lookups (copy_v1
+    // and short_seed_collision_role), plus the existing raw sibling walk:
+    // 2 * (R validation probes + 1 selected row) + R = 3R + 2 <= 4R.
+    const auto before_indexed =
+        fixture.adapter.fixture_pending_projection_operations();
+    pf_pending_order_v1_t last{};
+    const int copied = fixture.adapter.pending_intent_view().copy_v1(
+        static_cast<int>(population - 1), &last);
+    const auto indexed_operations =
+        fixture.adapter.fixture_pending_projection_operations() - before_indexed;
+    CHECK(indexed_operations > 0);
+    CHECK(indexed_operations <= 4U * population);
+    CHECK(copied == 0);
+    CHECK(std::string(last.id) == expected.back().snapshot.source_id);
+    CHECK(last.incarnation == expected.back().handle.incarnation);
+    std::printf("pending-book indexed R=%zu probes=%llu\n", population,
+                static_cast<unsigned long long>(indexed_operations));
     check_returned_values(fixture, expected);
     return operations;
 }
@@ -265,9 +339,10 @@ int main() {
     const std::uint64_t operations_64 = measure_size(64);
     const std::uint64_t operations_256 = measure_size(256);
 
-    CHECK(operations_64 <= 20U * operations_16);
+    CHECK(operations_64 <= 6U * operations_16);
     CHECK(operations_256 <= 20U * operations_16);
     check_cross_family_projection();
+    check_roster_reorder();
     std::printf("s4e-px2-pendingbook reads: ops16=%llu ops64=%llu ops256=%llu "
                 "checks=%d failures=%d\n",
                 static_cast<unsigned long long>(operations_16),

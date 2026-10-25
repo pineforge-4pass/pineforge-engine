@@ -1548,9 +1548,10 @@ namespace pineforge::source {
 
 // Read-side view facade for Appendix C's later C projection. L2 does not wire
 // the C ABI; this only exposes named truthful sources to native fixture tests.
-// Its derived projection index is warmed and maintained outside hashed source
-// state, so observer reads are side-effect-free and allocation-free after the
-// current working population has been indexed.
+// Reads may allocate when rebuilding the derived projection cache; a valid
+// warm cache needs no allocation. Reads write mutable, non-hashed cache state
+// and require single-threaded observation by contract; execution state is
+// unchanged.
 class PendingIntentView {
 public:
     int size() const noexcept;
@@ -2608,6 +2609,10 @@ private:
         }
     };
     void ensure_pending_projection_cache() const noexcept;
+    int projected_pending_size_fallback() const noexcept;
+    bool projected_pending_at_fallback(
+        int index, const PlacementSnapshot*& snapshot,
+        native_order::RequestHandle& handle) const noexcept;
     int projected_pending_size() const noexcept;
     bool projected_pending_at(int index, const PlacementSnapshot*& snapshot,
                               native_order::RequestHandle& handle) const noexcept;
