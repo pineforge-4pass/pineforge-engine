@@ -1812,12 +1812,22 @@ The dispatch must run from `main`; the workflow itself refuses any other ref
 before minting the App token or checking out repository code.
 It runs `python3 scripts/ci_release_gate.py rulesets-probe --repo OWNER/REPO`,
 reading only repository metadata, the parent-inclusive ruleset inventory and
-branch details. Success prints the barrier id/name and one compact inventory
-line with enforcement, source and bypass visibility. Refusal exits 1 with empty
-stdout and the reader's `::error::` diagnostic; API/response failures name the endpoint.
-Two hidden rulesets need two dispatches: the first refusal names only the
-first hidden ruleset; make its `bypass_actors` visible before dispatching again
-to identify the second.
+branch details. Before the verdict, stdout lists every branch ruleset from the
+complete inventory, one per line; the header states that tag/push targets are omitted.
+Each row records id, name, source type/source, enforcement, update time, bypass
+visibility (and actor count for a visible list), applicability to main and
+whether a `pull_request` rule is present.
+Visibility means only that the detail payload's `bypass_actors` is a list.
+Unreadable ref conditions print `applies=unreadable`; a failed detail GET prints
+`detail=ERROR` on its row and the listing continues with the other branch rulesets.
+An unreadable repository or incomplete/invalid inventory prints `inventory=ERROR`.
+The listing and the verdict independently read repository metadata, inventory and
+branch details, so an endpoint may be read twice.
+Success keeps the existing `release ruleset barrier ok` and compact inventory lines.
+Refusal exits 1 with the listing on stdout and
+the reader's unchanged `::error::` diagnostic on stderr; API/response failures name the endpoint.
+One dispatch lists every branch ruleset, including all hidden lists, even when
+the gate refuses on the first hidden ruleset.
 The probe changes no release evidence or gate verdicts. A release `dry_run`
 on a merged PR does not exercise the bump-only ruleset reader.
 
