@@ -824,6 +824,59 @@ deployments using Docker `--tmpfs /tmp` or Kubernetes `emptyDir` with
   passes). The Linux Debug build of the same run passes. Both are tracked
   for 1.7.1.
 
+## 1.6.3 — 2026-10-23
+
+**[1.6.3](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.6.3)**,
+paired with [pineforge-codegen 1.6.3](https://github.com/pineforge-4pass/pineforge-codegen-oss/releases/tag/v1.6.3).
+This patch release carries CI, release-gate and test-only changes after 1.6.2.
+Nothing under `src/`, `include/`, `cmake/` or `runner/` changed between `v1.6.2`
+and `v1.6.3`; under `docker/` only `run_failure_codes_diff.json` changed, which
+is the run-failure code catalog diff published with the release.
+
+- **CI runs on the GCP fleet.** The engine's CI runs on the GCP fleet
+  (`pf-gcp-pr`, `pf-gcp-main`), fork-gated (#474). The pull-request wall is
+  split from full-event verification (CR-233 A and B, squash of #477, #480).
+- **A release needs full verify and parity green first.** The release job
+  requires both before an engine release (C2, #479).
+- **Test-only.** The live test matches delivery receipts by request sequence
+  (CR-223, #478); a session tape comment no longer names a private repository
+  (#476).
+
+## 1.6.2 — 2026-10-21
+
+**[1.6.2](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.6.2)**,
+paired with [pineforge-codegen 1.6.2](https://github.com/pineforge-4pass/pineforge-codegen-oss/releases/tag/v1.6.2).
+It ships the
+[1.6.2-rc.1](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.6.2-rc.1)
+candidate (2026-10-19) plus the changes merged since it. The release publishes
+a run-failure code catalog (`run_failure_codes-v1.6.2.json`) and its diffs since
+`v1.6.1` and since `v1.6.2-rc.1`. The `pineforge-v1.6.2-linux-x86_64.tar.gz`
+archive was built by the maintainers outside CI, from tag `v1.6.2` (commit
+`dfe5f367e8935ef549ee7a8a38c1d437d1e8e42e`), because a CI runner restriction
+stopped the release job's Linux x86-64 leg; SHA-256
+`7f66c21750982ddcb476758bcf711b9f474a66de60bb658581ba9f0e4853019f`. Regenerate
+strategy C++ with the matching codegen and relink against the matching engine
+headers and archive.
+
+- **Selected-window contract revision `1.3`, with the EN-115 completeness
+  proof (#412).** The engine and `docker/run_json.py --capabilities-json`
+  declare `capabilities.selected_window_contract_revisions` as `["1.3"]` on a
+  supported runtime and `[]` otherwise; 1.6.1 declared `1.3-parity`. The
+  ownership probes were fixed so proof B reads 118/118 (CR-139, #446), and the
+  ownership manifest-controls test is sharded four ways so the Debug and ASan
+  runs stop timing out (CR-196, #445).
+- **Proportional annualisation for runs shorter than a day, never null
+  (CR-202, W-73, #456).**
+- **CI.** Linux x64 jobs run on the pf-ci-spot pool (#420) and release jobs on
+  pf-ci-release (#461); `timeout-minutes` is removed (#462); the actions of
+  `promote-baseline.yml` are pinned by SHA (#443); native-live and the Ubuntu
+  Debug leg are pool-only required pull-request checks (#464); macOS Debug is
+  deferred from pull requests (D3, CR-195, #454); the pull-request tier
+  excludes the slow rows on Release and kernel-only, with registration floors,
+  and defers the slow verifier self-test classes (D1, CR-195, #449); only
+  superseded pull-request runs of the docs workflow are cancelled (#444);
+  the App-token owner follows the repository owner (#439).
+
 ## 1.6.1 — 2026-10-18
 
 **[1.6.1](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.6.1)**,
