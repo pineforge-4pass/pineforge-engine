@@ -809,6 +809,18 @@ deployments using Docker `--tmpfs /tmp` or Kubernetes `emptyDir` with
   with a RETAIN-ladder bound test that exercises an unwithdrawn dormant
   re-issue.
 
+- **On macOS, do not use the descriptor-based report sink in 1.7.0.**
+  `strategy_set_report_sink_fd_v1`, the C++ fd sink and
+  `docker/run_json.py --report-sink-fd N` fail their own tests on macOS
+  (`test_report_nonfinite_equity_cabi_fd`, `test_report_nonfinite_equity_cpp_fd`
+  and `test_report_sink_fd`, ctest #982, #983 and #1014 in the macOS Debug
+  build of the post-merge CI): the engine can change the flags of, or close,
+  the descriptor the caller lends it. The path-based report sink and runs
+  without a sink are not affected. Also on macOS, the 64 MiB report stream of
+  `test_sink_finalize` (ctest #1016) grows peak resident memory by about
+  1.05 MB, so its flat-memory bound is not met there. Linux is not affected.
+  Both are tracked for a fix in 1.7.1.
+
 ## 1.6.1 — 2026-10-18
 
 **[1.6.1](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.6.1)**,
