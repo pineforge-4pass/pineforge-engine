@@ -13,9 +13,9 @@ parity verdict; an outside contributor cannot post them. GitHub Actions is advis
 The PR build (`ci.yml`) runs only the `fast`-labelled CTest rows (`ctest -L '^fast$'`); the post-merge legs (`ci-post.yml`) run
 every row, and a documentation-only change runs preflight alone among verification jobs.
 The seven PR/post-merge verification and documentation workflows start with the canon `authz` job and every other job in them needs it; release uses its status gate and baseline promotion its `promote-guard`. Pull-request
-workflows keep big jobs on `["self-hosted","pf-gcp-pr"]`; post-merge big jobs and credentialed docs-post/probe jobs stay on `["self-hosted","pf-gcp-post"]`. The eight split workflows' secret-free `authz` jobs, both CI `changes`/`build-gate` jobs and `docs.yml`'s `build` run on hosted `ubuntu-24.04`; they need no VM tools, mounts or caches.
-Hosted fork PRs receive no secrets, so they need no VM-only fork-refusal hook; rollback means relabeling the job to its prior `pf-gcp-pr`/`pf-gcp-post` array and restoring its checker/test pin.
-Release jobs stay on `["self-hosted","pf-gcp-main"]`; hosted macOS `build-macos`, release arm64/macOS prebuilt cells and promotion's hosted guard retain their existing pins. The `build-gate` jobs in `ci.yml` and `ci-post.yml` and `native-live.yml`'s `native-live-gate` always run and refuse a non-success authz result first.
+workflows (`ci.yml`, `corpus-parity-subset.yml`, `docs.yml`) run every job on `["self-hosted","pf-gcp-pr"]`;
+post-merge workflows (`ci-post.yml` and the workflows it calls) run on `["self-hosted","pf-gcp-post"]`, and
+release jobs on `["self-hosted","pf-gcp-main"]`. In the CI workflows the only hosted job is the macOS post-merge cell `build-macos`; `release.yml` also uses hosted arm64 and macOS prebuilt cells and `promote-baseline.yml` a hosted guard job. The `build-gate` jobs in `ci.yml` and `ci-post.yml` and `native-live.yml`'s `native-live-gate` always run and refuse a non-success authz result first.
 See `docs/ci.md` for the class table and docs-only exception. The commands below run the full sets.
 
 ```bash
