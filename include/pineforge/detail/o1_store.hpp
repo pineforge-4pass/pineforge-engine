@@ -46,6 +46,12 @@ namespace o1 {
 using Id = std::uint64_t;
 inline constexpr Id kNullId = UINT64_C(0);
 
+// Fixed bounds for one chunk buffer and the store's resident workspace
+// (page_bytes 4096 x 1024 pages = 4 MiB). Larger Shape values are caller errors;
+// raising either bound needs CR150-CX's review.
+inline constexpr std::uint32_t kMaxChunkBytes = 64u * 1024u;
+inline constexpr std::uint32_t kMaxResidentPages = 1024u;
+
 struct Shape {
   std::uint32_t page_bytes = 4096;   // ScratchStore page size; must equal the backing's
   std::uint32_t resident_pages = 64; // ScratchStore resident cache pages; fixed at open

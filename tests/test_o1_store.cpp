@@ -42,6 +42,8 @@ using pineforge::detail::ScratchDurability;
 using pineforge::detail::ScratchPageId;
 using pineforge::detail::ScratchStatus;
 using pineforge::detail::o1::Id;
+using pineforge::detail::o1::kMaxChunkBytes;
+using pineforge::detail::o1::kMaxResidentPages;
 using pineforge::detail::o1::Shape;
 using pineforge::detail::o1::Stats;
 using pineforge::detail::o1::Store;
@@ -368,6 +370,51 @@ void check_lifecycle() {
   REQUIRE(store->stats().bytes_resident <= ceiling);
 
   std::printf("O1STORE lifecycle backing=memory ok\n");
+}
+
+// ---------------------------------------------------------------- shape caps
+
+void check_shape_caps() {
+  {
+    Shape shape = default_shape();
+    shape.chunk_bytes = kMaxChunkBytes;
+    MemoryBacking backing(4096, shape.page_bytes);
+    std::unique_ptr<Store> store = Store::open(shape, backing.get());
+    REQUIRE(store != nullptr);
+
+    std::vector<unsigned char> expected(kMaxChunkBytes);
+    for (std::size_t index = 0; index < expected.size(); ++index)
+      expected[index] = static_cast<unsigned char>(index);
+    const Id id = store->create(expected.size(), 1);
+    REQUIRE(store->size(id) == expected.size());
+    REQUIRE(store->write(id, 0, expected.data(), expected.size()) ==
+            expected.size());
+    std::vector<unsigned char> echoed(expected.size());
+    REQUIRE(store->read(id, 0, echoed.data(), echoed.size()) == echoed.size());
+    REQUIRE(echoed == expected);
+  }
+  {
+    Shape shape = default_shape();
+    shape.chunk_bytes = kMaxChunkBytes + 1;
+    MemoryBacking backing(4096, shape.page_bytes);
+    REQUIRE(throws_invalid_argument(
+        [&] { (void)Store::open(shape, backing.get()); }));
+  }
+  {
+    Shape shape = default_shape();
+    shape.resident_pages = kMaxResidentPages;
+    MemoryBacking backing(4096, shape.page_bytes);
+    std::unique_ptr<Store> store = Store::open(shape, backing.get());
+    REQUIRE(store != nullptr);
+  }
+  {
+    Shape shape = default_shape();
+    shape.resident_pages = kMaxResidentPages + 1;
+    MemoryBacking backing(4096, shape.page_bytes);
+    REQUIRE(throws_invalid_argument(
+        [&] { (void)Store::open(shape, backing.get()); }));
+  }
+  std::printf("O1STORE shape-caps ok\n");
 }
 
 // ---------------------------------------------------------------- chunk boundaries and rollback
@@ -1030,6 +1077,7 @@ void check_no_heap_after_open() {
 int main() {
   try {
     check_lifecycle();
+    check_shape_caps();
     check_chunk_boundaries_and_rollback();
     check_transactions();
     check_never_refuses();

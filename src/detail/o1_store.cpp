@@ -250,8 +250,12 @@ StoreImpl::StoreImpl(const Shape& shape, ScratchBacking& backing)
         "o1 store: page_bytes must be a power of two of at least 512");
   if (shape.resident_pages < scratch_min_page_count)
     throw std::invalid_argument("o1 store: resident_pages must be at least 2");
+  if (shape.resident_pages > kMaxResidentPages)
+    throw std::invalid_argument("o1 store: resident_pages exceeds fixed maximum");
   if (shape.chunk_bytes == 0)
     throw std::invalid_argument("o1 store: chunk_bytes must be at least 1");
+  if (shape.chunk_bytes > kMaxChunkBytes)
+    throw std::invalid_argument("o1 store: chunk_bytes exceeds fixed maximum");
   if (shape.chunk_bytes >
       std::numeric_limits<std::size_t>::max() - kHeaderBytes)
     throw std::invalid_argument("o1 store: chunk_bytes is too large");
