@@ -599,17 +599,19 @@ curl may report the existing unsupported-WebSocket skip; that is not the require
 Linux transport proof.
 
 `live-sanitizers` performs a full all-target build, then runs the complete
-`build-ci-live-sanitizers/runner` CTest inventory (at least twelve rows while
-`runner/transport.cpp` exists, eleven after its removal), including
+`build-ci-live-sanitizers/runner` CTest inventory (at least thirteen rows while
+`runner/transport.cpp` exists, twelve after its removal), including
 `native_live_e2e` and `native_live_startup_e2e`, and requires any additional
-runner `tests/native_live*_e2e.py` on the tree to be registered too. The standalone
-corpus equivalence driver is not a runner CTest row; its harness unit tests remain
-in the engine-wide inventory. The profile does not rerun
+runner `tests/native_live*_e2e.py` on the tree to be registered too, including the
+corpus equivalence driver described below. Its harness unit tests
+remain in the engine-wide inventory. The profile does not rerun
 the engine-wide CTest set or prepare historical ABI providers; those remain
 covered by `sanitizers`. It refuses label exclusions, missing runner compile
-commands, missing ASan/UBSan or frame-pointer flags, skipped/disabled tests,
-and, while `runner/transport.cpp` exists, a missing WebSocket row or transport
-skip even without `--require-websocket`. After transport removal those two
+commands, missing ASan/UBSan or frame-pointer flags, disabled tests and skipped
+required e2e rows. Other unpinned skips also fail (with the fixture overlay
+present, every skip fails). While `runner/transport.cpp` exists, a missing
+WebSocket row or transport skip fails even without `--require-websocket`.
+After transport removal those two
 automatic gates no longer apply; an explicit `--require-websocket` still
 requires the WebSocket test.
 The runner's curl version floor still applies at configure time.
@@ -622,6 +624,60 @@ cache namespace, and its own diagnostic artifact. A failed cell does not
 cancel its peers. The `native-live-gate` job requires the matrix to succeed;
 the caller's `build` aggregate still requires the reusable workflow to succeed.
 Only the native cell accepts the caller's existing PR-only slow-label exclusion.
+
+`native_live_equivalence_e2e` is a permanent CTest row in `runner/CMakeLists.txt`,
+registered when tests, the source layer and the live runner are enabled. It runs
+`tests/native_live_equivalence_e2e.py` through a prerequisite adapter, using the
+configured live build and fresh, retained libraries/results directories under
+`<build>/runner/native_live_equivalence_e2e/`. It executes the driver's default
+eight probes and full scenario population: observer qualification, exact
+batch/stream/loopback action and report comparisons, restart, delivery retry and
+state-selected splits. It uses a loopback receiver with an ephemeral port and
+needs no external venue. The previously measured c5.2xlarge run took about 929 s
+to build and 983 s for the script (109 scenarios, zero failures). Those are
+observations from the CR-223 proof, not timings measured by this registration.
+
+The row needs `bin/pineforge-live`, `compile_commands.json`, `lib/libpineforge.a`
+and the built `native_live_equivalence_observer` object in the selected live
+build; the corpus's `data/ohlcv_ETH-USDT-USDT_1m.csv` and
+`validation/<probe>/generated.cpp` for every probe the driver declares; and
+`tests/native_live_receipts.py`. The receipt helper is tracked in the engine
+repository at base `c32c73238`; no private-fixtures overlay is needed for it.
+A tree or overlay that omits it still receives the explicit prerequisite skip.
+The adapter reads the probe population from the driver without importing that
+helper. A missing binary, compile database, archive, feed, generated probe or
+receipt helper prints one reason line starting
+`SKIP native_live_equivalence_e2e prerequisites absent: ` followed by all missing
+paths, and returns 77. CTest reports **Skipped**, never Passed. A malformed
+driver/compile database, a missing observer object, a runtime failure, an exception
+or a failed sanitizer check fails the row; a driver exit of 77 after the checks
+is a failure too. ASan/TSan builds use the same runtime preload and status-bearing
+cleanup as the genuine-retry witness, including cleanup on the skip path.
+
+The row carries the existing `private_fixtures` label and is added to
+`tests/private_fixture_rows.txt`. The live profiles select the runner directory,
+so this label does not hide it from either sanitizer profile or the native
+profile's `slow` exclusion. Direct CTest records missing prerequisites as a
+skip. In `ci_verify.py`, both live sanitizer profiles reject a skip for any
+required runner e2e row, even a pinned row and even without
+`PINEFORGE_PRIVATE_FIXTURES`. Other pinned-placeholder skips keep their existing
+policy. A skip is recorded in `ctestSkipped` and contributes zero to the run
+count. The pinned list grows from 375 to 376; `LIVE_SANITIZERS_MIN_TESTS` grows
+from 12 to 13, so `profile_min_tests()` returns 13 while transport exists and
+12 after its removal, in both fixture worlds. The native PR registration floor
+grows from 963 to 964. Release/kernel row floors are unchanged, since this row
+needs the live runner and source layer together.
+
+The `runner_e2e_test_names()` equivalence exclusion is removed. Both live
+sanitizer profiles require the row in their inventory and require it to execute;
+inventory membership alone is not execution proof. Although the
+`native-live.yml` checkout step does not initialize submodules, its verifier
+already calls `ensure_corpus_submodule()` before source guards and configure.
+That method initializes and checks the recorded corpus gitlink. Source-layer
+live profiles now explicitly pull the LFS 1m feed, and `native-live.yml`
+installs `git-lfs`, as the corpus-parity workflow already does. A failed fetch
+stops verification before configure. With the build, corpus/feed and tracked
+receipt helper present, the row runs without a private-fixtures overlay.
 
 The kernel profile also gates the CTest row count: `tests/CMakeLists.txt`
 drops every test TU whose include closure reaches `pineforge/source/` or
@@ -1382,6 +1438,8 @@ the one place the path list lives, reports that the change touches a path the
 verifier reads (`include/pineforge`, `src/c_abi.cpp`, `tests/`, `runner/`, the
 workflows and the CI scripts among them); an unknown or unreadable diff
 runs the SLOW classes. Push to `main` and `workflow_dispatch` run every class.
+`NativeLiveEquivalenceCTest` is SLOW until its passing runtime is measured;
+it checks the row wiring, prerequisite skips, driver failures and run-directory isolation.
 The CTest row `test_ci_verify` stays in the `slow` population: the pull-request
 legs exclude it by label and every full run executes it.
 
@@ -1397,7 +1455,7 @@ the selection must remove some rows and leave some, and, with the overlay
 absent, the rows that ran plus the pinned skips must equal the selection with
 no other skip (the `--exclude-label` branch of `enforce_test_floor` in
 `scripts/ci_verify.py`). `EXCLUDED_REGISTERED_MIN` holds 876 for `debug`, 867
-for `sanitizers` and 963 for `native`, and with D1 895 for `release` and 337
+for `sanitizers` and 964 for `native`, and with D1 895 for `release` and 337
 for `kernel`. The two new keys are derived, not measured. `release` is the
 registered count in the sampled public pull-request runs (957) less the 62 rows
 by which the Debug key sits below the Debug registry in the same runs (938 less
