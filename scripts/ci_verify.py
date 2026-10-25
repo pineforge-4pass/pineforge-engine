@@ -936,6 +936,8 @@ PINNED_SLOW_TEST_ROWS = frozenset((
     'test_ledger_history_scale_400k',
     # tests/cr150.d/o1w-tail.cmake:6.
     'test_position_tail_summary_scale',
+    # tests/cr150.d/p2cx-a5s.cmake:3.
+    'test_o1_store',
 ))
 
 
