@@ -233,7 +233,7 @@ void consumed_single_string() {
     try {
         store.preflight_joined_single(std::string("bad") + '\x1f', '\x1f', "E");
     } catch (const detail::ScratchCapacityError& error) {
-        refused_control = error.what() == "order ids cannot contain the control character 0x1f"
+        refused_control = std::string(error.what()) == "order ids cannot contain the control character 0x1f"
             && classify_run_failure(error).args
             && *classify_run_failure(error).args == "{\"resource\":\"consumed_data\"}";
     }
