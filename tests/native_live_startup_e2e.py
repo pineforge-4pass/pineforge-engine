@@ -93,6 +93,10 @@ def base_cmd(strategy, warmup, ledger, config=None, extra=None):
     return cmd
 
 
+def receipts_match_ledger_order(received_bytes, event_rows):
+    return list(received_bytes) == [row[4] for row in event_rows]
+
+
 with tempfile.TemporaryDirectory(prefix='pineforge-native-startup-') as raw:
     root = Path(raw)
     warmup1m = root / 'w1m.csv'
@@ -254,9 +258,23 @@ with tempfile.TemporaryDirectory(prefix='pineforge-native-startup-') as raw:
             'ts_open': 600000 + i * 60000, 'o': 100, 'h': 102, 'l': 99, 'c': 101, 'v': 0.8,
         }} for i in range(40)]
         example_feed.write_text(''.join(json.dumps(row) + '\n' for row in feed_rows))
+        # The byte checks below use receipt order. One in-flight request makes
+        # both initial delivery and offline redelivery preserve ordinal order.
+        example_url = f'http://127.0.0.1:{server.server_port}/webhook'
+        example_routes = root / 'native-example-routes.json'
+        os.environ['PINEFORGE_NATIVE_STARTUP_HMAC'] = 'native-startup-fixture'
+        example_routes.write_text(json.dumps({
+            'schema_version': 1, 'default_target': 'default',
+            'targets': {'default': {'url': example_url,
+                                    'secret_env': 'PINEFORGE_NATIVE_STARTUP_HMAC'}},
+            'rules': [],
+            'delivery': {'max_in_flight': 1, 'transport_retries': 0},
+        }))
+        # Routed delivery reads transport_retries from this document;
+        # --max-attempts only configures the non-routed path.
         example_cmd = [runner, 'run', '--strategy', native_example, '--warmup', str(example_warmup),
                        '--mode', 'bars', '--ledger', str(example_ledger),
-                       '--webhook-url', f'http://127.0.0.1:{server.server_port}/webhook',
+                       '--webhook-url', example_url, '--webhook-routes', str(example_routes),
                        '--allow-insecure-http', '--feed', str(example_feed),
                        '--native-config', str(cfg), '--name', 'native-example']
         failed_delivery = invoke(example_cmd + ['--max-attempts', '1'])
@@ -269,6 +287,9 @@ with tempfile.TemporaryDirectory(prefix='pineforge-native-startup-') as raw:
         assert all(row[2].isdigit() and int(row[2]) != 0 for row in failed_rows['inputs'])
         receipt_sequence = lambda body: json.loads(body)['sequence']
         failed_payloads = receipts_by_sequence(received_bytes, receipt_sequence)
+        assert receipts_match_ledger_order(received_bytes[:2], failed_rows['events'])
+        assert not receipts_match_ledger_order(
+            list(reversed(received_bytes[:2])), failed_rows['events'])
         assert failed_payloads == receipts_by_sequence(
             (row[4] for row in failed_rows['events']), receipt_sequence)
 
@@ -285,6 +306,7 @@ with tempfile.TemporaryDirectory(prefix='pineforge-native-startup-') as raw:
         assert len(committed_rows['events']) == 2, committed_rows
         assert len(received) == 4, received
         replayed_payloads = receipts_by_sequence(received_bytes[2:], receipt_sequence)
+        assert receipts_match_ledger_order(received_bytes[2:], committed_rows['events'])
         assert replayed_payloads == failed_payloads
         assert committed_rows['inputs'][:len(failed_rows['inputs'])] == failed_rows['inputs']
         assert committed_rows['events'][0][:5] == failed_rows['events'][0][:5]

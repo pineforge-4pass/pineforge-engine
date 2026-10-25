@@ -3468,10 +3468,10 @@ PF_API int strategy_native_run_v1(pf_strategy_t s, const pf_bar_t* bars, int n,
          * were, so the lifecycle alone cannot tell it from a finished run: the
          * consumed run-number high-water can, because begin_ready moves it,
          * strictly upward, for every attempt that gets past admission. The
-         * report is not decided here: BacktestEngine::fill_report publishes
-         * the rows of the latest attempt (a started-then-failed run's partial
-         * rows included) and the empty report for an attempt that did not
-         * begin. */
+         * report is decided by BacktestEngine::fill_report: the latest attempt's completed or
+         * partial rows publish unless report_sink_failed is latched, even at finish after run success.
+         * Later reads then give empty ReportC; status, code, arguments and message stay in the run-failure
+         * latch. A call that did not begin also reads empty. */
         const std::uint64_t high_water = host->native_consumed_high_water();
         host->run(reinterpret_cast<const Bar*>(bars), n);
         if (out) {
@@ -3503,11 +3503,11 @@ PF_API int strategy_native_run_v1(pf_strategy_t s, const pf_bar_t* bars, int n,
                     || host->last_error() != error.what()) {
                     throw;
                 }
-                // native_c_api.h promises partial rows when execution began
-                // and failed. Publish the zero-initialized local, whose trade
-                // length names only initialized rows; later arrays stay null.
-                // The caller may have supplied an uninitialized out: overwrite
-                // it without reading or freeing its previous contents.
+                // Reached only for a handle already Failed whose rethrown failure equals the latch:
+                // publish the partial rows. A latched report_sink_failed never gets here (the report
+                // gate returns empty first; a finish-time sink failure rethrows past this branch).
+                // Publish the zero-initialized local: trade length counts only initialized rows; later
+                // arrays stay null. Overwrite a possibly uninitialized out without reading or freeing it.
                 std::memcpy(out, &local, sizeof(local));
                 (void)cleanup.release();
                 return PF_NATIVE_E_RUN_FAILED;

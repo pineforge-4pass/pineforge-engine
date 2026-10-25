@@ -25,7 +25,7 @@ int main() {
     AdmissionProbe probe;
     probe.run(bars.data(), static_cast<int>(bars.size()));
     CHECK(probe.last_error().empty());
-    CHECK(!probe.market_admission_journal().events().empty());
+    CHECK(probe.market_admission_journal().event_count() > 0);
     CHECK(!probe.market_admission_fields().empty());
     std::printf("native market-admission projection: %d failures\n", failures);
     return failures == 0 ? 0 : 1;

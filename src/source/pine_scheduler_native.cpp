@@ -16,9 +16,16 @@
 
 namespace pineforge::source {
 
+PineScheduler::PineScheduler() = default;
+PineScheduler::~PineScheduler() = default;
+
 void PineScheduler::capture_begin(const NativeBeginArgs& args) {
     RetainedBegin next;
-    if (args.bars && args.n > 0) next.bars.assign(args.bars, args.bars + args.n);
+    if (args.bars && args.n > 0) {
+        if (args.is_stream) next.owned.assign(args.bars, args.bars + args.n);
+        next.bars = InputView(args.is_stream ? next.owned.data() : args.bars,
+                              static_cast<std::size_t>(args.n));
+    }
     next.input_tf = args.input_tf; next.script_tf = args.script_tf;
     next.bar_magnifier = args.bar_magnifier; next.magnifier_samples = args.magnifier_samples;
     next.distribution = args.magnifier_distribution;
@@ -28,6 +35,7 @@ void PineScheduler::capture_begin(const NativeBeginArgs& args) {
     next.is_stream = args.is_stream; next.warmup_n = args.warmup_n;
     next.simple_run = args.simple_run;
     retained_ = std::move(next);
+    retained_n_ = retained_.bars.size();
     confirmed_input_bars_ = {};
     confirmed_input_next_ = 0;
     confirmed_input_count_ = 0;
@@ -37,7 +45,14 @@ void PineScheduler::capture_begin(const NativeBeginArgs& args) {
     reset_consumed_digests();
 }
 
+void PineScheduler::release_batch_input() noexcept {
+    if (retained_.is_stream) return;
+    fold_consumed_digests();
+    retained_.bars = {};
+}
+
 void PineScheduler::reset_consumed_digests() noexcept {
+    consumed_script_cursor_.reset();
     consumed_bars_folded_ = 0;
     consumed_bars_digest_ = 1469598103934665603ULL;
     consumed_completes_folded_ = 0;
@@ -67,8 +82,8 @@ void PineScheduler::reset_language() {
     prior_input_script_open_ms_ = std::numeric_limits<std::int64_t>::min();
     awaiting_legacy_script_open_ms_ = std::numeric_limits<std::int64_t>::min();
     last_stream_input_open_ms_ = std::numeric_limits<std::int64_t>::min();
-    input_script_completes_.clear();
-    input_script_boundary_completes_.clear();
+    input_script_cursor.reset();
+    input_script_size_ = 0;
     uses_aux_security_feed_ = false;
     input_is_observed_ticks_ = false;
     confirmed_input_bars_ = {};
@@ -146,7 +161,7 @@ namespace {
 // engine's fault and fails as engine_invariant; no count is guessed.
 int selected_executed_source_bars(const PineStrategyHost& host, const NativeRunSpec* spec,
                                   const pf_selected_window_config_v1& window,
-                                  const std::vector<Bar>& retained) {
+                                  PineScheduler::InputView retained) {
     if (spec == nullptr) {
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                       "selected run begin without a running spec for its "
@@ -184,28 +199,26 @@ void PineScheduler::run_begin(PineStrategyHost& host) {
     const bool needs_aggregation = ratio > 1 || ratio == -1;
     host.diag_script_tf_ratio_ = ratio;
     host.diag_needs_aggregation_ = needs_aggregation;
-    input_script_completes_.assign(retained_.bars.size(), 1U);
-    input_script_boundary_completes_.assign(retained_.bars.size(), 0U);
-    // Which input bars complete a script bar, and which complete the previous
-    // one on the next one's first bar, is the kernel's answer for the whole
-    // retained span (NativeExecutionConsumer::script_bucket_completions, R5
-    // lane B-ADAPTER): the scheduler asks before the first input arrives.
+    input_script_size_ = retained_.bars.size();
+    expected_source_bars_ = static_cast<int>(input_script_size_);
+    // Count once without retaining flags. Input delivery and consumed-prefix
+    // hashing each get their own walk of the very same kernel producer.
+    // Ratio 1 uses complete=1/boundary=0 without constructing any cursor.
     if (needs_aggregation && state.spec) {
-        (void)detail::run_consumer(host).script_bucket_completions(
-            retained_.bars.data(), retained_.bars.size(), input_script_completes_,
-            input_script_boundary_completes_);
-    }
-    expected_source_bars_ = 0;
-    for (const auto complete : input_script_completes_) {
-        expected_source_bars_ += complete != 0U ? 1 : 0;
+        ScriptBucketCursor counting(*state.spec);
+        expected_source_bars_ = 0;
+        for (std::size_t i = 0; i < input_script_size_; ++i)
+            expected_source_bars_ += counting.next(retained_.bars[i]).complete != 0U ? 1 : 0;
+        input_script_cursor = std::make_unique<ScriptBucketCursor>(*state.spec);
+        consumed_script_cursor_ = std::make_unique<ScriptBucketCursor>(*state.spec);
     }
     // A selected admitted batch run executes the script bars of the consumer's
     // own bucket walk, which the aggregator's per-input hint above does not
     // model: the last pending pre-T group is completed at the accepted T and an
     // unsealed window tail is never executed. The tail expectations
     // (terminal_source_bar, the probe tail) read the executed count. An OFF run
-    // and a stream never reach this and keep the hint; the per-input completion
-    // vectors are unchanged either way.
+    // and a stream never reach this and keep the hint; completion cursors are
+    // unchanged either way.
     if (!retained_.is_stream && state.phase == NativeRunPhase::Batch) {
         pf_selected_window_config_v1 window{};
         if (NativeExecutionConsumer::selected_window_admitted(host, &window)) {
@@ -254,6 +267,16 @@ const Bar* PineScheduler::lower_path_bar_at(
     const NativeRunSpec* spec = detail::run_spec(host);
     const auto* lower = spec ? spec->intrabar.lower() : nullptr;
     if (!lower) return nullptr;
+    const auto views = detail::run_consumer(host).bar_views();
+    if (views.lower_path != nullptr) {
+        const auto segment = views.lower_segment;
+        if (segment.size == 0) return nullptr;
+        const auto found = std::lower_bound(
+            segment.data, segment.data + segment.size, context.sub_bar_open_ms,
+            [](const Bar& bar, std::int64_t time) { return bar.timestamp < time; });
+        return found != segment.data + segment.size && found->timestamp == context.sub_bar_open_ms
+            ? found : nullptr;
+    }
     // preflight_intrabar_path admitted the path only with strictly
     // increasing stamps.
     const auto found = std::lower_bound(
@@ -293,9 +316,17 @@ std::optional<PineScheduler::InputWaypoint> PineScheduler::next_input_waypoint(
     // follows its second extreme (tests/fixtures/magnifier_intrabars/
     // mi-coof-refill*, 72 of 72 cascades; R5 lane MAG-INTRABAR).
     const auto* spec = detail::run_spec(host);
-    const auto& path = spec->intrabar.lower()->bars;
-    const InputWaypoint next_open{found + 1 < path.data() + path.size()
-        ? (found + 1)->open : std::numeric_limits<double>::quiet_NaN(), true};
+    const auto views = detail::run_consumer(host).bar_views();
+    const Bar* successor = nullptr;
+    if (views.lower_path != nullptr) {
+        successor = found + 1 < views.lower_segment.data + views.lower_segment.size
+            ? found + 1 : views.lower_path->next_after_segment();
+    } else {
+        const auto& path = spec->intrabar.lower()->bars;
+        if (found + 1 < path.data() + path.size()) successor = found + 1;
+    }
+    const InputWaypoint next_open{successor ? successor->open
+        : std::numeric_limits<double>::quiet_NaN(), true};
     if (single_print(*found)) return next_open;
     const bool high_first = host.adapter_.source_path_uses_high_first(*found);
     const NativePathPhase phase[] = {
@@ -424,6 +455,18 @@ void PineScheduler::input(
     const Bar& bar, const NativeInputContext& context, PineStrategyHost& host) {
     input_is_observed_ticks_ = false;
     retain_confirmed_input(bar, context.script_interval.open_ms);
+    const bool retained_input = context.input_index >= 0
+        && static_cast<std::size_t>(context.input_index) < input_script_size_;
+    ScriptBucketCursor::Flags flags{};
+    if (retained_input && input_script_cursor) {
+        const auto index = static_cast<std::size_t>(context.input_index);
+        auto& cursor = *input_script_cursor;
+        if (cursor.position() > index + 1) cursor.reset();
+        while (cursor.position() <= index)
+            (void)cursor.next(retained_.bars[cursor.position()]);
+        flags = cursor.last();
+    }
+    // Advance before routed, auxiliary and deferred-input early returns too.
     struct InputBarIndexScope {
         PineStrategyHost& host;
         int previous;
@@ -485,12 +528,9 @@ void PineScheduler::input(
     bool boundary = prior_input_script_open_ms_
         != std::numeric_limits<std::int64_t>::min()
         && prior_input_script_open_ms_ != context.script_interval.open_ms;
-    if (context.input_index >= 0
-        && context.input_index < static_cast<int>(input_script_completes_.size())) {
-        calling_bar_complete = input_script_completes_[
-            static_cast<std::size_t>(context.input_index)] != 0U;
-        boundary = input_script_boundary_completes_[
-            static_cast<std::size_t>(context.input_index)] != 0U;
+    if (retained_input) {
+        calling_bar_complete = flags.complete != 0U;
+        boundary = flags.boundary != 0U;
     } else if (retained_.is_stream && context.input_index >= 0) {
         calling_bar_complete = confirmed_script_interval_complete(context);
         boundary = false;

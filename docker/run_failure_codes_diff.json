@@ -1,14 +1,14 @@
 {
   "schema": "pineforge-run-failure-catalog-diff/v1",
   "from": {
-    "version": "1.6.3",
-    "tag": "v1.6.3",
-    "catalogSha256": "7d61bad51f1f624a83fe90abb64646758c89f6e23c099e52167f9f1c11994d26"
+    "version": "1.7.0",
+    "tag": "v1.7.0",
+    "catalogSha256": "400961b4f134c550841fc7d04d4fe82026de133f33512ff1b41604302d6deddd"
   },
   "to": {
     "version": null,
     "unreleased": true,
-    "catalogSha256": "7d61bad51f1f624a83fe90abb64646758c89f6e23c099e52167f9f1c11994d26"
+    "catalogSha256": "400961b4f134c550841fc7d04d4fe82026de133f33512ff1b41604302d6deddd"
   },
   "catalogSchema": {
     "before": "pineforge-run-failure-catalog/v1",

@@ -97,12 +97,15 @@ set(PINEFORGE_SOURCE_LAYER_SOURCES
     src/compat/pine/reservation_expansion.cpp
     src/source/magnifier_intrabars.cpp
     src/source/market_admission.cpp
+    src/source/admission_journal_codec.cpp
     src/source/pine_adapter.cpp
+    src/source/pine_position_tail.cpp
     src/source/pine_path_resolve.cpp
     src/source/pine_scheduler_native.cpp
     src/source/pine_scheduler.cpp
     src/source/pine_strategy_host.cpp
     src/source/pine_strategy_commands.cpp
+    src/source/exit_scratch_versions_production.cpp
     src/source/pine_value_admission.cpp
     src/source/pine_aux_security.cpp
     src/source/pine_security_eval.cpp
@@ -131,9 +134,12 @@ set(PINEFORGE_KERNEL_SOURCES
     src/engine_trade_accessors.cpp
     src/pending_order_mirror.cpp
     src/native_order.cpp
+    src/native_journal_codec.cpp
     src/engine_consumer.cpp
     src/market_driver.cpp
     src/native_execution_consumer.cpp
+    src/command_scratch_production.cpp
+    src/command_scratch_cache.cpp
     src/native_calc_plan.cpp
     src/magnifier.cpp
     src/math.cpp
@@ -148,13 +154,18 @@ set(PINEFORGE_KERNEL_SOURCES
     src/timeframe.cpp
     src/timezone.cpp
     src/native_calendar.cpp
+    src/report_sink_writer.cpp
+    src/sha256.cpp
     src/native_run_spec.cpp
     src/native_fx_curve.cpp
+    src/native_bar_views.cpp
     src/selected_report_view.cpp
     src/selected_window_plan.cpp
+    src/metrics_spill_curve.cpp
+    src/report_scratch.cpp
+    src/scratch_arena.cpp
 )
-# The kernel-only archive. Same objects, same flags as the kernel half of
-# libpineforge.a — a consumer that never speaks Pine links this one.
+# The kernel-only archive: libpineforge.a's kernel objects and flags, for consumers that never speak Pine.
 add_library(pineforge_kernel STATIC ${PINEFORGE_KERNEL_SOURCES})
 add_library(PineForge::kernel ALIAS pineforge_kernel)
 # So a find_package(PineForge) consumer spells it the same way an in-tree one

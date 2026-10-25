@@ -5,11 +5,11 @@ from __future__ import annotations
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
-import shutil
 import tempfile
 import unittest
 
 import check_broker_state_hash_coverage as checker
+import source_clone
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -18,15 +18,13 @@ class Coverage(unittest.TestCase):
     def check(self, mutations=()):
         with tempfile.TemporaryDirectory(prefix="pf-hash-coverage-") as directory:
             root = Path(directory) / "repo"
-            shutil.copytree(ROOT, root, ignore=shutil.ignore_patterns(
+            # source_clone.py excludes volatile bytecode and pytest cache names.
+            source_clone.clone_source_tree(ROOT, root, extra_ignore=(
                 "build*", ".git", "corpus", "*.so", "*.a",
                 # The ABI checker creates this short-lived root sentinel
                 # while CTest runs guards in parallel. It is not source
                 # input to this isolated mutation clone.
-                ".native-fx-introduced-*",
-                # Nor is bytecode, which a parallel Python guard writes
-                # through a temporary file that can vanish mid-copy.
-                "__pycache__", "*.pyc"))
+                ".native-fx-introduced-*"))
             for relative, before, after in mutations:
                 path = root / relative
                 text = path.read_text()
@@ -39,6 +37,34 @@ class Coverage(unittest.TestCase):
 
     def test_current_tree_passes(self):
         self.assertEqual(self.check()[0], 0)
+
+    def test_scratch_store_state_digest_prefix_is_pinned(self):
+        # The old checker ignores this implementation, so every mutation
+        # below returns success there and this test fails. No digest literal
+        # is an oracle: mutate the live folds and derive the verdict from the
+        # coverage check, just as for the other durable-state leaves.
+        result, output = self.check()
+        self.assertEqual(result, 0, output)
+        self.assertIn("leaf=CommandScratchStore.state_digest prefix (24 bytes:", output)
+        for before, after in (
+            ("fold.le64(order_.id);", ""),
+            ("fold.le64(order_.id);", "fold.le64(0);"),
+            ("fold.le64(cur_.next_handle);", ""),
+            ("fold.le64(cur_.next_handle);", "fold.le64(1);"),
+            ("fold.le64(cur_.record_count);", "fold.le64(0);"),
+            ("fold.le64(order_.id);\n            fold.le64(cur_.next_handle);",
+             "fold.le64(cur_.next_handle);\n            fold.le64(order_.id);"),
+            ("if (with_state) {\n            fold.le64(order_.id);",
+             "if (false) {\n            fold.le64(order_.id);"),
+            ("state_->digest(true, page, result)", "state_->digest(false, page, result)"),
+            ("bytes(raw, 8);", "bytes(raw, 4);"),
+            ("(value >> (8 * i)) & 0xFF", "(value >> (8 * (7 - i))) & 0xFF"),
+        ):
+            with self.subTest(before=before, after=after):
+                result, output = self.check(((
+                    "include/pineforge/detail/scratch_store_impl.hpp", before, after),))
+                self.assertEqual(result, 1, output)
+                self.assertIn("CommandScratchStore.state_digest", output)
 
     def test_native_request_state_folds_are_pinned(self):
         # R5 L7b: the anchor rounding and the arm visibility are request
@@ -131,6 +157,148 @@ class Coverage(unittest.TestCase):
             ("src/source/pine_state_hash.cpp", "adapter_.hash_state(f);",
              "adapter_.missing_hash(f);"),))
         self.assertEqual(result, 1, output)
+
+    def test_exit_scratch_fold_is_required(self):
+        result, output = self.check()
+        self.assertEqual(result, 0, output)
+        fold = "hash_exit_scratch(f, exit_scratch_.get());"
+        for replacement in ("", "hash_exit_scratch(f, nullptr);"):
+            with self.subTest(replacement=replacement):
+                result, output = self.check(((
+                    "src/source/pine_state_hash.cpp", fold, replacement),))
+                self.assertEqual(result, 1, output)
+                self.assertIn("exit_scratch_", output)
+
+    def test_exit_scratch_run_identity_helper_is_required(self):
+        # The context-call mutation below cannot catch a helper that silently
+        # drops the session key. This control is red before the helper guard.
+        fold = "f.s(identity.session_key);"
+        for replacement in ("", 'f.s("");', "if (false) { " + fold + " }"):
+            with self.subTest(replacement=replacement):
+                result, output = self.check(((
+                    "src/source/pine_state_hash.cpp", fold, replacement),))
+                self.assertEqual(result, 1, output)
+                self.assertIn("ExitScratchContext run identity", output)
+
+    def test_exit_scratch_scope_counter_is_explicitly_waived(self):
+        self.assertNotIn("next_scope", checker.EXIT_SCRATCH_CONTEXT_FOLDS)
+        self.assertEqual(checker.EXIT_SCRATCH_OBSERVATION_WAIVERS["next_scope"],
+                         "scope-allocation counter, not state; retained records, "
+                         "store digest and run identity are folded")
+        # Reintroducing the counter must invalidate its waiver, even when all
+        # five real context fields still have their required folds.
+        identity = "hash_source_run_identity(f, scratch->run);"
+        result, output = self.check(((
+            "src/source/pine_state_hash.cpp", identity,
+            identity + "\n    f.u(scratch->next_scope);"),))
+        self.assertEqual(result, 1, output)
+        self.assertIn("ExitScratchContext.next_scope", output)
+
+    def test_exit_scratch_teardown_failure_is_explicitly_waived(self):
+        self.assertNotIn("teardown_failure", checker.EXIT_SCRATCH_CONTEXT_FOLDS)
+        self.assertEqual(
+            checker.EXIT_SCRATCH_OBSERVATION_WAIVERS["teardown_failure"],
+            "Run-local failure memory of a failed scope teardown, rethrown at the next "
+            "entry point; the run then ends in a typed failure, no trading decision "
+            "reads it and no durable state carries it.")
+        result, output = self.check()
+        self.assertEqual(result, 0, output)
+        # A diagnostic-only waiver must also reject an accidental hash re-pin.
+        identity = "hash_source_run_identity(f, scratch->run);"
+        result, output = self.check(((
+            "src/source/pine_state_hash.cpp", identity,
+            identity + "\n    f.b(scratch->teardown_failure.pending());"),))
+        self.assertEqual(result, 1, output)
+        self.assertIn("ExitScratchContext.teardown_failure is waived, not folded", output)
+
+    def test_exit_scratch_context_fields_are_required(self):
+        result, output = self.check()
+        self.assertEqual(result, 0, output)
+        self.assertIn("5 exit-context fields", output)
+        for field, fold in checker.EXIT_SCRATCH_CONTEXT_FOLDS.items():
+            for replacement in ("", "if (false) { " + fold + " }"):
+                with self.subTest(field=field, replacement=replacement):
+                    result, output = self.check(((
+                        "src/source/pine_state_hash.cpp", fold, replacement),))
+                    self.assertEqual(result, 1, output)
+                    self.assertIn("ExitScratchContext." + field, output)
+        for before, after in (
+            ("hash_source_run_identity(f, scratch->run);",
+             "hash_source_run_identity(f, {});"),
+            ("f.b(scratch->versions != nullptr);", "f.b(false);"),
+            ("f.b(scratch->lots != nullptr);", "f.b(false);"),
+            ("f.b(scratch->working != nullptr);", "f.b(false);"),
+            ("hash_scratch_store(f, &scratch->store);", "hash_scratch_store(f, nullptr);"),
+        ):
+            with self.subTest(before=before):
+                result, output = self.check(((
+                    "src/source/pine_state_hash.cpp", before, after),))
+                self.assertEqual(result, 1, output)
+                self.assertIn("ExitScratchContext", output)
+
+    def test_new_exit_scratch_context_field_is_not_silently_ignored(self):
+        result, output = self.check()
+        self.assertEqual(result, 0, output)
+        for declaration in (
+            "    std::uint64_t injected_exit_state = 0;\n",
+            "    bool (*injected_exit_reader)(void*) = nullptr;\n",
+        ):
+            with self.subTest(declaration=declaration):
+                result, output = self.check(((
+                    "include/pineforge/source/exit_scratch.hpp",
+                    "struct ExitScratchContext {\n",
+                    "struct ExitScratchContext {\n" + declaration),))
+                self.assertEqual(result, 1, output)
+                self.assertIn("ExitScratchContext fields: unclassified=", output)
+                self.assertIn("injected_exit_", output)
+
+    def test_exit_scratch_observation_waivers_cannot_go_stale(self):
+        result, output = self.check(((
+            "include/pineforge/source/exit_scratch.hpp",
+            "    void* observation = nullptr;\n", ""),))
+        self.assertEqual(result, 1, output)
+        self.assertIn("ExitScratchContext fields:", output)
+        self.assertIn("observation", output)
+
+    def test_trade_scratch_fold_is_required(self):
+        result, output = self.check()
+        self.assertEqual(result, 0, output)
+        fold = "hash_scratch_store(f, trade_scratch_);"
+        for replacement in ("", "hash_scratch_store(f, nullptr);",
+                            "if (false) { " + fold + " }"):
+            with self.subTest(replacement=replacement):
+                result, output = self.check(((
+                    "src/source/pine_state_hash.cpp", fold, replacement),))
+                self.assertEqual(result, 1, output)
+                self.assertIn("trade_scratch_", output)
+
+    def test_trade_scratch_released_and_helper_folds_are_required(self):
+        for fold in (
+            "hash_scratch_digest(f, released->status, released->digest);",
+            "f.b(store != nullptr);",
+            "hash_scratch_digest(f, status, digest);",
+            "f.u(digest);",
+        ):
+            for replacement in ("", "if (false) { " + fold + " }"):
+                with self.subTest(fold=fold, replacement=replacement):
+                    result, output = self.check(((
+                        "src/source/pine_state_hash.cpp", fold, replacement),))
+                    self.assertEqual(result, 1, output)
+                    self.assertIn("trade_scratch_", output)
+        for before, after in (
+            ("f.b(true);\n        hash_scratch_digest(f, released->status, released->digest);",
+             "hash_scratch_digest(f, released->status, released->digest);"),
+            ("hash_scratch_digest(f, released->status, released->digest);",
+             "hash_scratch_digest(f, released->status, 0);"),
+            ("f.u(digest);", "f.u(0);"),
+            ("const auto status = store->state_digest({page.data(), page.size()}, digest);",
+             "const auto status = ::pineforge::detail::ScratchStatus::ok;"),
+        ):
+            with self.subTest(before=before, after=after):
+                result, output = self.check(((
+                    "src/source/pine_state_hash.cpp", before, after),))
+                self.assertEqual(result, 1, output)
+                self.assertIn("trade_scratch_", output)
 
     def test_unknown_waiver_is_rejected(self):
         result, output = self.check((

@@ -21,7 +21,7 @@ from ci_preflight import (AUTHZ_ALWAYS, AUTHZ_REFUSE_STEP, CORES,
                           DOCS_ONLY_SKIP, GITHUB_ONLY_SKIP, HEAVY_SKIP, HOSTED_MATRIX_RUNNER, JOB_COMMANDS,
                           PR_RUNNER, POST_RUNNER, MATRIX_LINUX_RUNNER, MATRIX_RUNNER,
                           NATIVE_EXCLUSION, NATIVE_CACHE_SAVE, CURL_CACHE_SAVE,
-                          PROOF_JOBS, PR_PROOF_JOBS, RELEASE_RUNNER, _jobs, check_commands,
+                          PREFLIGHT_IF, PROOF_JOBS, PR_PROOF_JOBS, RELEASE_RUNNER, _jobs, check_commands,
                           ci_workflow_findings, gated_workflow_findings,
                           native_workflow_findings, run_checks)
 
@@ -56,12 +56,124 @@ FLEET_JOB_IDS = {
     'docs.yml': ('authz', 'build'),
     'docs-post.yml': ('authz', 'build'),
     'release.yml': ('release', 'prebuilt', 'notify-hub'),
+    'release-ruleset-probe.yml': ('authz', 'probe'),
     'promote-baseline.yml': ('promote',),
 }
 HEAVY_CI_JOBS = ('preflight-slow', 'sanitizers', 'kernel-only', 'native-live', 'corpus-parity')
 PREFLIGHT_RUN = ('python3 scripts/ci_preflight.py --output-dir build-ci-preflight --tier '
                  + ci_preflight.PREFLIGHT_TIER)
 PROMOTION_AUTHORIZATION_STEP = 'Only our own merged pull requests and dispatches promote the baseline'
+RULESETS_PROBE_FINDING = (
+    'release-ruleset-probe.yml must keep the dispatch-only read-only probe '
+    'with the same release App token')
+RULESETS_PROBE_REF_FINDING = (
+    'release-ruleset-probe.yml probe must refuse a dispatch ref other than '
+    'refs/heads/main as its first step before minting the App token or checkout')
+RULESETS_PROBE_WORKFLOW = '''name: Release ruleset probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  authz:
+    name: authz
+    # Preflight pins executable workflow lines after removing comment-only lines.
+    # authz uses pf-gcp-pr; the App-token probe uses pf-gcp-post.
+    runs-on: ["self-hosted", "pf-gcp-pr"]
+    permissions: {}
+    # No timeout-minutes: the owner's no-time-limits rule (check-no-time-limits refuses new ones).
+    steps:
+      - name: Only our own pull requests and our own events run CI
+        env:
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
+          ASSOCIATION: ${{ github.event.pull_request.author_association }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          WR_HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+          WR_ACTOR: ${{ github.event.workflow_run.triggering_actor.login }}
+          GH_TOKEN: ${{ github.token }}   # read-only use: one permission lookup for workflow_run
+          # Bot logins whose same-repository pull requests count as ours: dependabot[bot] (CI-DEPBOT A)
+          # and the org's own GitHub App bot logins by name (space-separated), nothing else.
+          ALLOWED_BOTS: "dependabot[bot] pineforge-app[bot]"
+        run: |
+          set -eu
+          fail() { echo "::error title=authz::$1"; echo "authz: REFUSED: $1" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
+          case "$EVENT" in
+            push|workflow_dispatch|schedule|merge_group|release|workflow_call|repository_dispatch)
+              # Only someone with write access to this repository (or our App's token) can cause these
+              # events; none of them runs pull-request code.
+              ;;
+            workflow_run)
+              # LB-437: bind identity to the triggering run and its re-runner.
+              # These two App bots are fixed canon policy; ALLOWED_BOTS is PR-only.
+              [ -n "${WR_HEAD_REPO:-}" ] || fail "workflow_run head repository is missing"
+              [ -n "${WR_ACTOR:-}" ] || fail "workflow_run triggering actor is missing"
+              [ "$WR_HEAD_REPO" = "$REPO" ] || fail "workflow_run head repository does not match this repository"
+              case "$WR_ACTOR" in
+                "pineforge-app[bot]"|"pineforge-ci-dispatcher[bot]") ;;
+                *"[bot]") fail "workflow_run bot is not on the canon allowlist" ;;
+                *)
+                  perm=$(gh api "repos/$REPO/collaborators/$WR_ACTOR/permission" --jq .permission 2>/dev/null) || fail "workflow_run permission lookup failed"
+                  case "$perm" in admin|maintain|write) ;; *) fail "workflow_run triggering actor does not have write permission" ;; esac ;;
+              esac ;;
+            pull_request)
+              [ "$HEAD_REPO" = "$REPO" ] || fail "pull request from another repository (${HEAD_REPO:-unknown})"
+              [ "$HEAD_IS_FORK" = "false" ] || fail "pull request from a fork"
+              case "$ASSOCIATION" in
+                OWNER|MEMBER|COLLABORATOR) ;;
+                *)
+                  case " $ALLOWED_BOTS " in
+                    *" $PR_AUTHOR "*) ;;
+                    *)
+                      # A member whose org membership is private shows as CONTRIBUTOR: ask GitHub for the
+                      # author's permission on this repository; anything but admin/maintain/write (or a
+                      # failed call) refuses.
+                      perm=$(gh api "repos/$REPO/collaborators/$PR_AUTHOR/permission" --jq .permission 2>/dev/null || echo none)
+                      case "$perm" in admin|maintain|write) ;; *) fail "author ${PR_AUTHOR:-unknown} (${ASSOCIATION:-NONE}) has permission '$perm', not write, and is not an allowlisted bot" ;; esac ;;
+                  esac ;;
+              esac ;;
+            *) fail "event $EVENT does not run CI (pull_request_target and other events are not allowed)" ;;
+          esac
+          echo "authz: allowed ($EVENT${PR_AUTHOR:+ by $PR_AUTHOR})" >> "$GITHUB_STEP_SUMMARY"
+
+  probe:
+    needs: [authz]
+    runs-on: ["self-hosted","pf-gcp-post"]
+    steps:
+      - name: Refuse a dispatch ref other than main
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error title=rulesets-probe::$1"; echo "rulesets-probe: REFUSED: $1" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
+          [ "$REF" = refs/heads/main ] || fail "release ruleset probe requires refs/heads/main"
+
+      - name: Mint org App token
+        id: app
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.PINEFORGE_APP_ID }}
+          private-key: ${{ secrets.PINEFORGE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: pineforge-engine
+
+      - name: Checkout
+        if: ${{ needs.authz.result == 'success' }}
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Probe release ruleset barrier
+        if: ${{ needs.authz.result == 'success' }}
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: python3 scripts/ci_release_gate.py rulesets-probe --repo "${GITHUB_REPOSITORY}"
+'''
 
 
 def job_script(ci, job, step_name=None):
@@ -87,6 +199,13 @@ def in_job(workflow, job, before, after):
         raise AssertionError(f'{before!r} is not in job {job}')
     at = workflow.index(before, start)
     return workflow[:at] + after + workflow[at + len(before):]
+
+
+def ready_pr(condition):
+    """Keep the draft guard when mutating another PR job condition."""
+    if not condition.startswith('${{ ') or not condition.endswith(' }}'):
+        raise AssertionError(f'not a workflow condition: {condition!r}')
+    return '${{ !github.event.pull_request.draft && (' + condition[4:-3] + ') }}'
 
 
 def in_step(workflow, job, name, before, after):
@@ -391,21 +510,26 @@ class PreflightFailures(unittest.TestCase):
         workflows = self.workflow_sources()
         routes = ci_preflight.workflow_event_routes(workflows)
         for name, workflow in workflows.items():
-            fleet = ('main' if name in ci_preflight.RELEASE_JOB_RUNNERS else
-                     'post' if routes[name] & {'push', 'schedule', 'workflow_dispatch'} else 'pr')
-            runner = {'pr': PR_RUNNER, 'post': POST_RUNNER, 'main': RELEASE_RUNNER}[fleet]
+            workflow_fleet = ('main' if name in ci_preflight.RELEASE_JOB_RUNNERS else
+                              'post' if routes[name] & {'push', 'schedule', 'workflow_dispatch'} else 'pr')
             for job, body in _jobs(workflow).items():
                 if ci_preflight._job_values(body, 'uses'):
                     continue
                 if (name, job) in (('ci-post.yml', 'build-macos'),
                                    ('promote-baseline.yml', 'promote-guard')):
                     continue  # Both hosted exceptions have their own negative controls.
+                # Per-job pins retain the canon PR fleet or the dispatch post fleet.
+                fixed_runner = ci_preflight.RELEASE_JOB_RUNNERS.get(name, {}).get(job)
+                fleet = {PR_RUNNER: 'pr', POST_RUNNER: 'post'}.get(fixed_runner, workflow_fleet)
+                runner = {'pr': PR_RUNNER, 'post': POST_RUNNER, 'main': RELEASE_RUNNER}[fleet]
                 if (name, job) == ('release.yml', 'prebuilt'):
                     yield name, job, fleet, f'            runner: {RELEASE_RUNNER}\n', RELEASE_MATRIX_FINDING
                     continue
                 value, = ci_preflight._job_values(body, 'runs-on', unquote=False)
                 finding = f'{name} job {job} must run on {runner}'
-                if fleet == 'main':
+                if fixed_runner == POST_RUNNER:
+                    finding += ' (post fleet)'
+                elif fixed_runner is not None and fixed_runner != PR_RUNNER:
                     finding += ' (isolated release)'
                 yield name, job, fleet, f'    runs-on: {value}\n', finding
 
@@ -631,8 +755,9 @@ class PreflightFailures(unittest.TestCase):
         guard = f'        if: {ci_preflight.AUTHZ_SUCCESS}\n'
         unnamed_run = '      - run: python3 scripts/ci_preflight.py --output-dir build-ci-preflight\n'
         for function in ('always()', 'cancelled()', 'failure()', 'success()'):
-            conditioned = in_job(body, None, f'    if: {AUTHZ_ALWAYS}\n',
-                                 '    if: ${{ ' + function + " && needs.authz.result == 'success' }}\n")
+            condition = '${{ ' + function + " && needs.authz.result == 'success' }}"
+            conditioned = in_job(body, None, f'    if: {PREFLIGHT_IF}\n',
+                                 f'    if: {ready_pr(condition)}\n')
             mutations = (
                 (in_job(conditioned, None, AUTHZ_REFUSE_STEP, ''),
                  'ci.yml job preflight with a status function must refuse authz first'),
@@ -935,6 +1060,45 @@ class PreflightFailures(unittest.TestCase):
                 changed[2] = changed[2].replace(before, after, 1)
                 self.assertIn("baseline promotion must run main's copy and require the latest two head statuses",
                               ci_workflow_findings(*changed))
+
+    def test_promotion_guard_rejects_workflow_defaults_and_env(self):
+        original = self.ci_sources()
+        self.assertEqual(ci_workflow_findings(*original), [])
+        self.assertEqual(original[2].count('\njobs:\n'), 1)
+        settings = (
+            ('defaults', 'defaults:\n  run:\n    shell: bash -c "exit 0" -- {0}\n'),
+            ('env', 'env:\n  KEY: ${{ secrets.PINEFORGE_APP_PRIVATE_KEY }}\n'),
+            ('defaults', 'defaults: {}\n'),
+            ('env', 'env: {}\n'),
+            ('defaults', "'defaults': {run: {shell: bash}}\n"),
+            ('env', '"env": {PUBLIC_VALUE: harmless}\n'),
+        )
+        for key, setting in settings:
+            with self.subTest(setting=setting):
+                changed = original.copy()
+                changed[2] = changed[2].replace('\njobs:\n', '\n' + setting + 'jobs:\n', 1)
+                self.assertNotEqual(changed[2], original[2])
+                self.assertEqual(_jobs(changed[2]), _jobs(original[2]))
+                self.assertEqual(ci_workflow_findings(*changed), [
+                    f'baseline promotion must not define workflow-level {key}',
+                ])
+
+    def test_promotion_guard_rejects_job_defaults(self):
+        original = self.ci_sources()
+        self.assertEqual(ci_workflow_findings(*original), [])
+        for setting in (
+                '    defaults:\n      run:\n        shell: bash -c "exit 0" -- {0}\n',
+                '    defaults: {}\n',
+                '    "defaults": {run: {shell: bash}}\n'):
+            with self.subTest(setting=setting):
+                changed = original.copy()
+                changed[2] = in_job(changed[2], 'promote-guard', '    steps:\n',
+                                    setting + '    steps:\n')
+                self.assertNotEqual(changed[2], original[2])
+                self.assertEqual(ci_workflow_findings(*changed), [
+                    'baseline promotion promote-guard must not define job-level defaults',
+                    'baseline promotion must start with the pinned read-only promote-guard',
+                ])
 
     def promotion_guard_result(self, *, workflow=None, **overrides):
         """Run the real workflow shell; only the external gh CLI is stubbed."""
@@ -1338,6 +1502,41 @@ exit "$lookup_exit"
                               + ('unfiltered PR' if index == 0 else 'main push, nightly and manual') + ' triggers',
                               findings)
 
+    def test_ci_split_requires_ready_for_review(self):
+        self.assertEqual(ci_workflow_findings(*self.ci_sources(), others=self.other_sources()), [])
+        findings = self.mutated_file_findings(0, None,
+            '    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]\n',
+            '    types: [opened, synchronize, reopened, converted_to_draft]\n')
+        self.assertIn('ci.yml must keep its exact unfiltered PR triggers', findings)
+        self.assertIn('ci.yml must run on every pull_request without event filters', findings)
+
+    def test_ci_split_requires_converted_to_draft(self):
+        self.assertEqual(ci_workflow_findings(*self.ci_sources(), others=self.other_sources()), [])
+        findings = self.mutated_file_findings(0, None,
+            '    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]\n',
+            '    types: [opened, synchronize, reopened, ready_for_review]\n')
+        self.assertIn('ci.yml must keep its exact unfiltered PR triggers', findings)
+        self.assertIn('ci.yml must run on every pull_request without event filters', findings)
+
+    def test_ci_split_requires_separate_draft_and_ready_concurrency_groups(self):
+        self.assertEqual(ci_workflow_findings(*self.ci_sources(), others=self.other_sources()), [])
+        findings = self.mutated_file_findings(0, None,
+            '  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}'
+            "-${{ github.event.pull_request.draft && 'draft' || 'ready' }}\n",
+            '  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}\n')
+        self.assertIn('ci.yml must keep its exact draft and ready concurrency groups', findings)
+
+    def test_ci_split_requires_draft_guards_on_every_pr_suite_job(self):
+        self.assertEqual(ci_workflow_findings(*self.ci_sources(), others=self.other_sources()), [])
+        for job in ('preflight', *PR_PROOF_JOBS):
+            with self.subTest(job=job):
+                findings = self.mutated_file_findings(0, job, '!github.event.pull_request.draft && ', '')
+                finding = ('preflight must follow authz and changes and run even if classification fails'
+                           if job == 'preflight' else
+                           f'{job} must start alongside preflight, after authz and changes, '
+                           'and skip only its classified path policy')
+                self.assertIn(finding, findings)
+
     def test_ci_split_refuses_deleting_or_renaming_every_job(self):
         ci = self.ci_sources()[0]
         self.assertEqual(set(_jobs(ci)), set(CI_JOB_IDS))
@@ -1561,6 +1760,50 @@ exit "$lookup_exit"
                 self.assertIn('PR fast rows must keep one pinned CMake label list and executable build target',
                               findings)
 
+    def test_fast_rows_refuse_property_writes_after_the_registration_block(self):
+        sources = self.ci_sources()
+        cmake = sources[3]
+        finding = 'PR fast rows must keep one pinned CMake label list and executable build target'
+        self.assertIn('test_ta', ci_preflight.fast_rows(cmake))
+        self.assertNotIn(finding, ci_workflow_findings(*sources, others=self.other_sources()))
+        self.assertNotIn(
+            finding, self.mutated_file_findings(
+                3, None, cmake, cmake + '\n# A comment after registration is harmless.\n'))
+        for statement in (
+                'set_tests_properties(test_ta PROPERTIES LABELS "cr999")',
+                'set_tests_properties(test_ta PROPERTIES SKIP_RETURN_CODE 77)',
+                'set_property(TEST test_ta APPEND PROPERTY LABELS "cr999")',
+                'add_test(NAME test_ta_x COMMAND true)'):
+            with self.subTest(statement=statement):
+                findings = self.mutated_file_findings(
+                    3, None, cmake, cmake + '\n' + statement + '\n')
+                self.assertIn(finding, findings)
+
+    def test_fast_rows_cannot_be_rewritten_after_validation(self):
+        sources = self.ci_sources()
+        block = ci_preflight.FAST_TEST_REGISTRATION
+        finding = 'PR fast rows must keep one pinned CMake label list and executable build target'
+        self.assertEqual(sources[3].count(block), 1)
+        # A terminal block is the positive control even on the BASE tree,
+        # whose real block precedes the lane includes.
+        sources[3] = sources[3].replace(block, '', 1).rstrip() + '\n' + block
+        self.assertNotIn(finding, ci_workflow_findings(*sources))
+        for properties in ('SKIP_RETURN_CODE 1', 'LABELS "slow"'):
+            with self.subTest(properties=properties):
+                changed = list(sources)
+                changed[3] += f'set_tests_properties(test_ta PROPERTIES {properties})\n'
+                self.assertIn(finding, ci_workflow_findings(*changed))
+
+    def test_fast_validation_cannot_precede_a_lane_include(self):
+        sources = self.ci_sources()
+        block = ci_preflight.FAST_TEST_REGISTRATION
+        finding = 'PR fast rows must keep one pinned CMake label list and executable build target'
+        self.assertEqual(sources[3].count(block), 1)
+        sources[3] = sources[3].replace(block, '', 1).rstrip() + '\n' + block
+        self.assertNotIn(finding, ci_workflow_findings(*sources))
+        sources[3] += 'include("${CMAKE_CURRENT_SOURCE_DIR}/cr150.d/late-properties.cmake")\n'
+        self.assertIn(finding, ci_workflow_findings(*sources))
+
     def test_reusable_heavy_profiles_keep_full_populations_and_dispatch(self):
         for before, after in (
                 ('  workflow_dispatch:\n', ''),
@@ -1717,7 +1960,7 @@ exit "$lookup_exit"
                 self.assertIn(f'{job} must keep its full population', findings)
                 self.assertEqual(sum('--exclude-label' in body for body in _jobs(changed[0]).values()), 1)
 
-    def assert_full_event_populations(self, ci, release):
+    def assert_release_kernel_native_full_debug_sanitizers_exclude_slow(self, ci, release):
         jobs = _jobs(ci)
         # Full verification no longer carries a label exclusion on any event.
         self.assertEqual({job for job, body in jobs.items() if '--exclude-label' in body},
@@ -1737,9 +1980,13 @@ exit "$lookup_exit"
         for profile in ('release', 'debug', 'kernel', 'sanitizers', 'native',
                         'live-sanitizers', 'live-tsan'):
             cfg = ci_verify.build_config([profile])
+            # L6 rule 2026-10-24 02:12: the Debug builds of the full registry
+            # (debug, sanitizers) exclude label slow by default; every other
+            # profile, including the runner-only Debug ones, runs every row.
+            default_exclusion = ['-LE', 'slow'] if profile in ('debug', 'sanitizers') else []
             self.assertEqual(ci_verify.ctest_command(cfg, cfg.build_dir, jobs=1, junit=False), [
                 'ctest', '--test-dir', str(cfg.build_dir), '--output-on-failure',
-                '--no-tests=error', '--parallel', '1', '--timeout', '0'])
+                '--no-tests=error', '--parallel', '1', '--timeout', '0'] + default_exclusion)
         discovered = set(discover_test_ids(ROOT / 'scripts/test_ci_verify.py'))
         self.assertTrue(discovered)
         for event in ('push', 'workflow_dispatch', 'schedule', 'release', ''):
@@ -1755,10 +2002,11 @@ exit "$lookup_exit"
                         str(ROOT / 'scripts/test_ci_verify.py'), '--log-dir',
                         str(ROOT / 'build-ci-preflight/verifier-tests-shards')])
 
-    def test_main_and_release_keep_every_row_and_verifier_class(self):
+    def test_release_kernel_native_keep_rows_debug_sanitizers_exclude_slow_all_classes(self):
+        # CR-233 keeps the full-event profiles in ci-post.yml (CI_SOURCES[6]).
         ci = self.ci_sources()[6]
         release = (ROOT / '.github/workflows/release.yml').read_text()
-        self.assert_full_event_populations(ci, release)
+        self.assert_release_kernel_native_full_debug_sanitizers_exclude_slow(ci, release)
         # A push path carrying an exclusion must break this coverage control.
         for job in ('build', 'kernel-only', 'sanitizers'):
             for flag in ("${{ github.event_name == 'push' && '--exclude-label slow' || '' }}",
@@ -1767,12 +2015,13 @@ exit "$lookup_exit"
                     changed = in_job(ci, job, ' --ccache', ' --ccache ' + flag)
                     self.assertNotEqual(changed, ci)
                     with self.assertRaises(AssertionError):
-                        self.assert_full_event_populations(changed, release)
+                        self.assert_release_kernel_native_full_debug_sanitizers_exclude_slow(
+                            changed, release)
                     sources = self.ci_sources()
                     sources[6] = changed
                     self.assertNotEqual(ci_workflow_findings(*sources), [])
         with self.assertRaises(AssertionError):
-            self.assert_full_event_populations(
+            self.assert_release_kernel_native_full_debug_sanitizers_exclude_slow(
                 ci, in_job(release, 'release', '    steps:\n',
                            '    steps:\n      - run: python3 scripts/ci_verify.py release --exclude-label slow\n'))
 
@@ -1837,6 +2086,9 @@ exit "$lookup_exit"
                 'release': '["self-hosted","pf-gcp-main"]',
                 'prebuilt': '${{ matrix.runner }}',
                 'notify-hub': '["self-hosted","pf-gcp-main"]'},
+            'release-ruleset-probe.yml': {
+                'authz': '["self-hosted","pf-gcp-pr"]',
+                'probe': '["self-hosted","pf-gcp-post"]'},
             'promote-baseline.yml': {
                 'promote': '["self-hosted","pf-gcp-main"]'},
         })
@@ -2043,7 +2295,10 @@ exit "$lookup_exit"
 
     def test_gcp_sites_reject_cross_class_routes(self):
         sites = list(self.gcp_sites())
-        self.assertEqual(len(sites), 29)
+        self.assertEqual(len(sites), 31)
+        self.assertCountEqual([(name, job) for name, job, *_ in sites],
+                              [(name, job) for name, jobs in FLEET_JOB_IDS.items()
+                               for job in jobs])
         self.assertEqual(ci_preflight.runner_findings(self.workflow_sources()), [])
         for name, job, fleet, before, finding in sites:
             correct = {'pr': PR_RUNNER, 'post': POST_RUNNER, 'main': RELEASE_RUNNER}[fleet]
@@ -2051,6 +2306,14 @@ exit "$lookup_exit"
                 with self.subTest(workflow=name, job=job, wrong_fleet=runner):
                     findings = self.routed_file_findings(name, job, before, routed_line(before, runner))
                     self.assertIn(finding, findings)
+
+    def test_gcp_sites_pin_probe_to_the_dispatch_fleet(self):
+        sites = [site for site in self.gcp_sites() if site[0] == 'release-ruleset-probe.yml']
+        self.assertEqual([(job, fleet) for _, job, fleet, *_ in sites],
+                         [('authz', 'pr'), ('probe', 'post')])
+        self.assertEqual(sites[1][-1],
+                         f'release-ruleset-probe.yml job probe must run on {POST_RUNNER} '
+                         '(post fleet)')
 
     def test_gcp_sites_reject_retired_and_void_labels(self):
         for name, job, fleet, before, finding in self.gcp_sites():
@@ -2092,6 +2355,7 @@ exit "$lookup_exit"
     def test_gcp_sites_require_every_routed_job(self):
         workflows = self.workflow_sources()
         for name, jobs in FLEET_JOB_IDS.items():
+            self.assertIn(name, workflows, f'{name} required fleet workflow is missing')
             for job in jobs:
                 with self.subTest(workflow=name, missing_job=job):
                     before = '  ' + job + ':' + _jobs(workflows[name])[job]
@@ -2173,13 +2437,19 @@ exit "$lookup_exit"
         self.assertIn(f'ci.yml job preflight must run on {PR_RUNNER}', findings)
 
     def test_ci_contract_pins_the_docs_only_skip(self):
-        """Each proof job waits for authz and changes and skips only its docs-only
-        answer; preflight also waits for the class decision and always runs."""
+        """Keep each pipeline's path policy and dependencies; PR suite jobs
+        also require a ready PR, and post-merge preflight always runs."""
         original, others = self.ci_sources(), self.other_sources()
         self.assertEqual(ci_workflow_findings(*original, others=others), [])
-        docs_skip = f'    if: {DOCS_ONLY_SKIP}\n'
+        docs_skip = f'    if: {ready_pr(DOCS_ONLY_SKIP)}\n'
         mutations = []
         for index, proofs, policy in ((0, PR_PROOF_JOBS, GITHUB_ONLY_SKIP), (6, PROOF_JOBS, DOCS_ONLY_SKIP)):
+            wrong_skips = [f'    if: {ready_pr(condition) if index == 0 else condition}\n'
+                           for condition in (
+                               "${{ needs.changes.outputs.docs_only != 'true' }}",
+                               "${{ !cancelled() && needs.changes.outputs.docs_only == 'false' }}",
+                               "${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}",
+                           )]
             for job in proofs:
                 skip = f'    if: {policy}\n'
                 refused = f'{job} must start alongside preflight, after authz and changes'
@@ -2188,21 +2458,19 @@ exit "$lookup_exit"
                     (index, job, '    needs: [authz, changes]\n', '    needs: [changes, preflight]\n', refused),
                     (index, job, '    needs: [authz, changes]\n', '    needs: preflight\n', refused),
                     (index, job, skip, '', refused),
-                    (index, job, skip, "    if: ${{ needs.changes.outputs.docs_only != 'true' }}\n", refused),
-                    (index, job, skip, "    if: ${{ !cancelled() && needs.changes.outputs.docs_only == 'false' }}\n",
-                     refused),
+                    (index, job, skip, wrong_skips[0], refused),
+                    (index, job, skip, wrong_skips[1], refused),
                     (index, job, skip, skip.replace("!= 'true'", "!= 'true' && github.event_name != 'push'"),
                      refused),
-                    (index, job, skip, "    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}\n",
-                     refused)]
+                    (index, job, skip, wrong_skips[2], refused)]
         mutations += [
             (0, 'preflight', '    needs: [authz, changes]\n', '',
              'preflight must follow authz and changes'),
             (0, 'preflight', '    needs: [authz, changes]\n', '    needs: build\n',
              'preflight must follow authz and changes'),
-            (0, 'preflight', f'    if: {AUTHZ_ALWAYS}\n', docs_skip,
+            (0, 'preflight', f'    if: {PREFLIGHT_IF}\n', docs_skip,
              'preflight must follow authz and changes'),
-            (0, 'preflight', f'    if: {AUTHZ_ALWAYS}\n', '',
+            (0, 'preflight', f'    if: {PREFLIGHT_IF}\n', '',
              'preflight must follow authz and changes'),
             (0, 'changes', '    steps:\n', '    needs: preflight\n    steps:\n',
              'changes must start after authz'),
@@ -2592,8 +2860,8 @@ finally:
                 ('build-gate', 'github_only = False', 'github_only = True'),
                 ('build-gate', 'bool(paths) and all(', 'True or all('),
                 ('build-gate', 'snapshot() != count', 'False'),
-                ('build', GITHUB_ONLY_SKIP, DOCS_ONLY_SKIP),
-                ('corpus-parity-subset', GITHUB_ONLY_SKIP, DOCS_ONLY_SKIP),
+                ('build', GITHUB_ONLY_SKIP, ready_pr(DOCS_ONLY_SKIP)),
+                ('corpus-parity-subset', GITHUB_ONLY_SKIP, ready_pr(DOCS_ONLY_SKIP)),
                 ('preflight', ci_preflight.PREFLIGHT_TIER, "'github-only'"),
                 ('changes', 'pull-requests: read', 'pull-requests: write'),
                 ('build-gate', 'pull-requests: read', 'pull-requests: write')):
@@ -3370,6 +3638,363 @@ finally:
                     'run-json-harness-tests']
         self.assertEqual(argv[9:], ['/nonexistent-pineforge-src/docker/run_json_*_test.py'])
 
+    def test_release_bump_contract_and_gate_tests_remain_binding(self):
+        self.assertEqual(ci_workflow_findings(*self.ci_sources(), others=self.other_sources()), [])
+        for tier in ('all', 'fast'):
+            plan = {entry[0]: entry for entry in check_commands(ROOT, tier=tier)}
+            self.assertEqual(plan['release-gate-tests'], (
+                'release-gate-tests', [sys.executable, str(ROOT / 'scripts/test_ci_release_gate.py')]))
+
+    def test_release_bump_publication_mutations_refuse(self):
+        original, others = self.ci_sources(), self.other_sources()
+        release = others['release.yml']
+        finding = ('release.yml must keep the exact two-file release bump writer, '
+                   'commit and atomic push')
+        for before, after in (
+                ('git add VERSION docker/run_failure_codes_diff.json',
+                 'git add VERSION docker/run_failure_codes_diff.json README.md'),
+                ('git add VERSION docker/run_failure_codes_diff.json', 'git add -A'),
+                ('cp "${RESET}" docker/run_failure_codes_diff.json',
+                 'cp "${RESET}" docker/run_failure_codes.json'),
+                ("printf '%s\\n' \"${NEXT}\" > VERSION",
+                 "printf '%s\\n' \"${NEXT}\" > VERSION\n          chmod +x VERSION"),
+                ('git commit -m "chore(release): ${TAG}"',
+                 'git commit --amend -m "chore(release): ${TAG}"'),
+                ('git push --atomic origin HEAD "${TAG}"', 'git push origin HEAD "${TAG}"')):
+            with self.subTest(after=after):
+                changed = in_step(release, 'release', 'Write bumped VERSION, commit, tag, push',
+                                  before, after)
+                self.assertNotEqual(changed, release)
+                self.assertIn(finding, ci_workflow_findings(
+                    *original, others={**others, 'release.yml': changed}))
+
+    def test_release_bump_app_token_mutations_refuse(self):
+        original, others = self.ci_sources(), self.other_sources()
+        release = others['release.yml']
+        for name, before, after in (
+                ('Checkout (full history)', 'token: ${{ steps.app.outputs.token }}',
+                 'token: ${{ github.token }}'),
+                ('Mint org App token', '        id: app', '        id: another-app'),
+                ('Mint org App token', 'app-id: ${{ secrets.PINEFORGE_APP_ID }}',
+                 'app-id: ${{ secrets.OTHER_APP_ID }}')):
+            with self.subTest(name=name, after=after):
+                changed = in_step(release, 'release', name, before, after)
+                self.assertNotEqual(changed, release)
+                self.assertIn('release.yml bump push must use the release App installation token',
+                              ci_workflow_findings(
+                                  *original, others={**others, 'release.yml': changed}))
+
+    def test_release_ruleset_reader_token_and_invocation_mutations_refuse(self):
+        original, others = self.ci_sources(), self.other_sources()
+        release = others['release.yml']
+        gate_name = 'Refuse unless pineforge/verify and pineforge/parity are green'
+        for before, after in (
+                ('GH_TOKEN: ${{ steps.app.outputs.token }}', 'GH_TOKEN: ${{ github.token }}'),
+                ('        id: gate', '        id: gate\n        if: inputs.dry_run'),
+                ('python3 scripts/ci_release_gate.py gate', 'echo release gate green'),
+                ('--ref "${GITHUB_REF}"', '--ref "${GITHUB_REF}" || true'),
+                ('        run: |', '        continue-on-error: true\n        run: |')):
+            with self.subTest(after=after):
+                changed = in_step(release, 'release', gate_name, before, after)
+                self.assertNotEqual(changed, release)
+                self.assertIn('release.yml must keep the unconditional release gate '
+                              'with its release App token '
+                              'for the App-only main pull_request barrier',
+                              ci_workflow_findings(
+                                  *original, others={**others, 'release.yml': changed}))
+
+    def test_release_ruleset_probe_workflow_is_installed_and_pinned(self):
+        path = ROOT / '.github/workflows/release-ruleset-probe.yml'
+        self.assertTrue(path.is_file(), 'the dispatch-only ruleset probe workflow is missing')
+        self.assertEqual(ci_preflight._code(path.read_text()),
+                         ci_preflight._code(RULESETS_PROBE_WORKFLOW))
+        self.assertEqual(ci_preflight.RELEASE_JOB_RUNNERS.get(path.name),
+                         {'authz': PR_RUNNER, 'probe': POST_RUNNER})
+        probe_app = ci_preflight._step_named(ci_preflight._steps(_jobs(path.read_text())['probe']),
+                                             '      - name: Mint org App token')
+        release_app = ci_preflight._step_named(
+            ci_preflight._steps(_jobs(self.other_sources()['release.yml'])['release']),
+            '      - name: Mint org App token')
+        self.assertEqual(probe_app, release_app, 'the mint steps must stay byte-identical')
+        self.assertEqual(ci_workflow_findings(*self.ci_sources(), others=self.other_sources()), [])
+
+    def test_release_ruleset_probe_post_fleet_is_accepted(self):
+        workflows = {'release-ruleset-probe.yml': RULESETS_PROBE_WORKFLOW}
+        self.assertEqual(ci_preflight.runner_findings(workflows), [])
+        self.assertEqual(ci_preflight.release_rulesets_probe_workflow_findings(
+            RULESETS_PROBE_WORKFLOW, self.other_sources()['release.yml']), [])
+
+    def test_release_ruleset_probe_refuses_release_and_pr_fleets(self):
+        original, others = self.ci_sources(), self.other_sources()
+        finding = (f'release-ruleset-probe.yml job probe must run on {POST_RUNNER} '
+                   '(post fleet)')
+        for runner in (RELEASE_RUNNER, PR_RUNNER):
+            with self.subTest(runner=runner):
+                changed = in_job(RULESETS_PROBE_WORKFLOW, 'probe',
+                                 f'    runs-on: {POST_RUNNER}\n',
+                                 f'    runs-on: {runner}\n')
+                self.assertNotEqual(changed, RULESETS_PROBE_WORKFLOW)
+                self.assertIn(finding, ci_preflight.runner_findings(
+                    {'release-ruleset-probe.yml': changed}))
+                self.assertIn(finding, ci_workflow_findings(
+                    *original, others={**others, 'release-ruleset-probe.yml': changed}))
+                self.assertIn(RULESETS_PROBE_FINDING,
+                              ci_preflight.release_rulesets_probe_workflow_findings(
+                                  changed, others['release.yml']))
+
+    def test_release_ruleset_probe_main_ref_guard_precedes_credentials(self):
+        marker = '      - name: Refuse a dispatch ref other than main'
+        for workflow in (
+                (ROOT / '.github/workflows/release-ruleset-probe.yml').read_text(),
+                ci_preflight.RELEASE_RULESETS_PROBE_WORKFLOW,
+                RULESETS_PROBE_WORKFLOW):
+            with self.subTest(workflow=workflow):
+                steps = ci_preflight._steps(_jobs(workflow)['probe'])
+                self.assertEqual(steps[0].splitlines()[0], marker)
+                self.assertEqual(ci_preflight._step_values(steps[0], 'if'), [])
+                self.assertEqual(ci_preflight._step_values(steps[0], 'continue-on-error'), [])
+                self.assertEqual(ci_preflight._step_values(steps[0], 'env'),
+                                 ['REF: ${{ github.ref }}'])
+                self.assertNotIn('secrets.', steps[0])
+                self.assertNotIn('token', steps[0])
+                self.assertEqual(steps[1].splitlines()[0], '      - name: Mint org App token')
+                self.assertEqual(steps[2].splitlines()[0], '      - name: Checkout')
+
+    def test_release_ruleset_probe_topic_dispatch_stops_before_mint(self):
+        workflow = (ROOT / '.github/workflows/release-ruleset-probe.yml').read_text()
+        steps = ci_preflight._steps(_jobs(workflow)['probe'])
+        mint = next(index for index, step in enumerate(steps)
+                    if step.splitlines()[0] == '      - name: Mint org App token')
+        prefix = []
+        for step in steps[:mint]:
+            self.assertEqual(ci_preflight._step_values(step, 'uses'), [])
+            self.assertEqual(ci_preflight._step_values(step, 'if'), [])
+            self.assertEqual(ci_preflight._step_values(step, 'continue-on-error'), [])
+            self.assertEqual(ci_preflight._step_values(step, 'env'),
+                             ['REF: ${{ github.ref }}'])
+            name, = ci_preflight._step_values(step, 'name')
+            prefix.append(job_script(workflow, 'probe', name))
+        # Execute the real pre-mint shell; the echo marks reaching the action boundary.
+        script = ''.join(prefix) + 'echo "mint step reached"\n'
+        for ref, expected in (
+                ('refs/heads/topic', 1), ('refs/tags/main', 1),
+                ('refs/heads/main/topic', 1), ('refs/heads/Main', 1),
+                ('', 1), ('refs/heads/main', 0)):
+            with self.subTest(ref=ref), tempfile.TemporaryDirectory() as directory:
+                summary = Path(directory) / 'summary'
+                result = subprocess.run(
+                    ['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', script],
+                    env={'PATH': os.environ.get('PATH', '/usr/bin:/bin'),
+                         'REF': ref, 'GITHUB_STEP_SUMMARY': str(summary)},
+                    capture_output=True, text=True)
+                self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
+                self.assertEqual(result.stderr, '')
+                if expected:
+                    self.assertEqual(result.stdout, '::error title=rulesets-probe::'
+                                     'release ruleset probe requires refs/heads/main\n')
+                    self.assertEqual(summary.read_text(), 'rulesets-probe: REFUSED: '
+                                     'release ruleset probe requires refs/heads/main\n')
+                    self.assertNotIn('mint step reached', result.stdout)
+                else:
+                    self.assertEqual(result.stdout, 'mint step reached\n')
+                    self.assertFalse(summary.exists())
+
+    def test_release_ruleset_probe_main_ref_guard_mutations_refuse(self):
+        original, others = self.ci_sources(), self.other_sources()
+        steps = ci_preflight._steps(_jobs(RULESETS_PROBE_WORKFLOW)['probe'])
+        guard, mint, checkout = (step + '\n' for step in steps[:3])
+        no_guard = RULESETS_PROBE_WORKFLOW.replace(guard, '', 1)
+        comparison = ('          [ "$REF" = refs/heads/main ] || fail '
+                      '"release ruleset probe requires refs/heads/main"')
+        guard_name = '      - name: Refuse a dispatch ref other than main\n'
+        for name, before, after in (
+                ('missing main ref guard', guard, ''),
+                ('main ref guard after mint', guard + mint, mint + guard),
+                ('main ref guard after checkout', guard + mint + checkout, mint + checkout + guard),
+                ('dispatch input ref', '          REF: ${{ github.ref }}',
+                 '          REF: ${{ github.event.inputs.ref }}'),
+                ('head ref', '          REF: ${{ github.ref }}',
+                 '          REF: ${{ github.head_ref }}'),
+                ('different ref comparison', comparison,
+                 comparison.replace('[ "$REF" = refs/heads/main ]', '[ "$REF" = refs/heads/topic ]')),
+                ('prefix ref comparison', comparison,
+                 comparison.replace('[ "$REF" = refs/heads/main ]', '[[ "$REF" == refs/heads/main* ]]')),
+                ('masked main ref refusal', comparison,
+                 '          [ "$REF" = refs/heads/main ] || true'),
+                ('neutralized main ref exit', guard, guard.replace('exit 1; }', 'return 0; }')),
+                ('main ref continue-on-error', guard_name,
+                 guard_name + '        continue-on-error: true\n'),
+                ('main ref if false', guard_name, guard_name + '        if: false\n'),
+                ('main ref if always', guard_name, guard_name + '        if: ${{ always() }}\n'),
+                ('main ref guard only in authz', RULESETS_PROBE_WORKFLOW,
+                 in_job(no_guard, 'authz', '    steps:\n', '    steps:\n' + guard))):
+            with self.subTest(invariant=name):
+                self.assertEqual(RULESETS_PROBE_WORKFLOW.count(before), 1, name)
+                changed = RULESETS_PROBE_WORKFLOW.replace(before, after, 1)
+                self.assertNotEqual(changed, RULESETS_PROBE_WORKFLOW)
+                direct = ci_preflight.release_rulesets_probe_workflow_findings(
+                    changed, others['release.yml'])
+                combined = ci_workflow_findings(
+                    *original, others={**others, 'release-ruleset-probe.yml': changed})
+                for findings in (direct, combined):
+                    self.assertIn(RULESETS_PROBE_REF_FINDING, findings)
+                    self.assertIn(RULESETS_PROBE_FINDING, findings)
+
+    def test_release_ruleset_probe_comments_describe_the_actual_pin_scope(self):
+        source = (ROOT / 'scripts/ci_preflight.py').read_text()
+        workflow = (ROOT / '.github/workflows/release-ruleset-probe.yml').read_text()
+        header = (
+            '    # Preflight pins executable workflow lines after removing comment-only lines.\n'
+            '    # authz uses pf-gcp-pr; the App-token probe uses pf-gcp-post.\n')
+        requirements = (
+            (source,
+             '# Scoped CI workflows bind this canon header byte for byte, including its\n'
+             '# fleet comment and comma spacing. The release probe pins executable lines.\n'),
+            (source,
+             '                    # Normalize the runner array here; the probe workflow pin below\n'
+             '                    # compares nonblank lines after removing comment-only lines.\n'),
+            (source, header),
+            (RULESETS_PROBE_WORKFLOW, header),
+            (workflow, header),
+        )
+        message = 'comments must describe the probe pin without claiming its header is bound'
+        for text, required in requirements:
+            self.assertIn(required, text, message)
+            changed = text.replace(required, '', 1)
+            self.assertNotEqual(changed, text)
+            with self.assertRaisesRegex(AssertionError, message):
+                self.assertIn(required, changed, message)
+
+        changed = workflow.replace(header, '    # A different header comment.\n', 1)
+        self.assertNotEqual(changed, workflow)
+        self.assertEqual(ci_workflow_findings(
+            *self.ci_sources(), others={**self.other_sources(),
+                                       'release-ruleset-probe.yml': changed}), [])
+
+    def test_release_ruleset_probe_refuses_the_original_unauthorized_workflow(self):
+        # The concrete main input has neither authz nor needs/step guards.
+        # Main's whole-workflow pin accepts it, so this is red for that omission.
+        workflow = RULESETS_PROBE_WORKFLOW
+        authz = '  authz:' + _jobs(workflow)['authz']
+        self.assertEqual(workflow.count(authz), 1)
+        unguarded = workflow.replace(authz, '', 1)
+        unguarded = unguarded.replace('    needs: [authz]\n', '', 1)
+        guard = "        if: ${{ needs.authz.result == 'success' }}\n"
+        self.assertEqual(unguarded.count(guard), 2)
+        unguarded = unguarded.replace(guard, '')
+        self.assertEqual(list(_jobs(unguarded)), ['probe'])
+        self.assertEqual(ci_preflight._needs(_jobs(unguarded)['probe']), [])
+        self.assertIn(RULESETS_PROBE_FINDING, ci_workflow_findings(
+            *self.ci_sources(), others={**self.other_sources(),
+                                       'release-ruleset-probe.yml': unguarded}))
+
+    def test_release_ruleset_probe_contract_accepts_only_the_requested_workflow(self):
+        others = {**self.other_sources(), 'release-ruleset-probe.yml': RULESETS_PROBE_WORKFLOW}
+        self.assertEqual(ci_workflow_findings(*self.ci_sources(), others=others), [])
+
+    def test_release_ruleset_probe_workflow_mutations_refuse(self):
+        original, others = self.ci_sources(), self.other_sources()
+        # Each row changes an independent invariant of the authorized dispatch
+        # fixture and must reach the real whole-workflow contract.
+        authz = '  authz:' + _jobs(RULESETS_PROBE_WORKFLOW)['authz']
+        for name, before, after in (
+                ('missing authz', authz, ''),
+                ('missing needs', '    needs: [authz]\n', ''),
+                ('disabled authz', '    name: authz\n', '    name: authz\n    if: false\n'),
+                ('authz refusal',
+                 'fail() { echo "::error title=authz::$1"; echo "authz: REFUSED: $1" >> "$GITHUB_STEP_SUMMARY"; exit 1; }',
+                 'fail() { echo "::error title=authz::$1"; echo "authz: REFUSED: $1" >> "$GITHUB_STEP_SUMMARY"; :; }'),
+                ('authz permissions', '    permissions: {}', '    permissions: {contents: read}'),
+                ('authz runner', '    runs-on: ["self-hosted", "pf-gcp-pr"]',
+                 '    runs-on: ["self-hosted", "pf-gcp-post"]'),
+                ('checkout guard', '      - name: Checkout\n'
+                 "        if: ${{ needs.authz.result == 'success' }}\n",
+                 '      - name: Checkout\n'),
+                ('probe guard', '      - name: Probe release ruleset barrier\n'
+                 "        if: ${{ needs.authz.result == 'success' }}\n",
+                 '      - name: Probe release ruleset barrier\n'),
+                ('trigger', '  workflow_dispatch:', '  push:'),
+                ('extra trigger', '  workflow_dispatch:', '  workflow_dispatch:\n  pull_request:'),
+                ('inputs', '  workflow_dispatch:', '  workflow_dispatch:\n    inputs:\n      token:\n        type: string'),
+                ('permissions', '  contents: read', '  contents: write'),
+                ('extra scope', '  contents: read', '  contents: read\n  actions: read'),
+                ('job permissions', '  probe:\n', '  probe:\n    permissions:\n      contents: write\n'),
+                ('runner', POST_RUNNER, RELEASE_RUNNER),
+                ('PR runner', POST_RUNNER, PR_RUNNER),
+                ('app action', 'actions/create-github-app-token@v1',
+                 'actions/create-github-app-token@v2'),
+                ('app output', '        id: app', '        id: other'),
+                ('app id', 'secrets.PINEFORGE_APP_ID', 'secrets.OTHER_APP_ID'),
+                ('private key', 'secrets.PINEFORGE_APP_PRIVATE_KEY', 'secrets.OTHER_PRIVATE_KEY'),
+                ('owner', '${{ github.repository_owner }}', 'another-owner'),
+                ('repository', 'repositories: pineforge-engine', 'repositories: other'),
+                ('token permission set', '          repositories: pineforge-engine',
+                 '          repositories: pineforge-engine\n          permission-administration: read'),
+                ('token consumer', 'GH_TOKEN: ${{ steps.app.outputs.token }}',
+                 'GH_TOKEN: ${{ github.token }}'),
+                ('job token', '  probe:\n',
+                 '  probe:\n    env:\n      GH_TOKEN: ${{ steps.app.outputs.token }}\n'),
+                ('workflow token', 'jobs:', 'env:\n  GH_TOKEN: ${{ steps.app.outputs.token }}\n\njobs:'),
+                ('checkout persistence', 'persist-credentials: false', 'persist-credentials: true'),
+                ('checkout token', '          persist-credentials: false',
+                 '          persist-credentials: false\n          token: ${{ steps.app.outputs.token }}'),
+                ('another token consumer', '      - name: Checkout',
+                 '      - run: echo "${GH_TOKEN}"\n'
+                 '        env:\n          GH_TOKEN: ${{ steps.app.outputs.token }}\n'
+                 '      - name: Checkout'),
+                ('skip', '      - name: Probe release ruleset barrier\n'
+                 "        if: ${{ needs.authz.result == 'success' }}",
+                 '      - name: Probe release ruleset barrier\n        if: false'),
+                ('ignore error', '        run: python3',
+                 '        continue-on-error: true\n        run: python3'),
+                ('subcommand', ' rulesets-probe --repo', ' gate --repo'),
+                ('masked exit', '--repo "${GITHUB_REPOSITORY}"',
+                 '--repo "${GITHUB_REPOSITORY}" || true'),
+                ('extra command', '--repo "${GITHUB_REPOSITORY}"',
+                 '--repo "${GITHUB_REPOSITORY}"; gh api repos/example/engine'),
+                ('token logging', '        run: python3', '        run: echo "$GH_TOKEN"; python3')):
+            with self.subTest(invariant=name):
+                self.assertEqual(RULESETS_PROBE_WORKFLOW.count(before), 1, name)
+                changed = RULESETS_PROBE_WORKFLOW.replace(before, after, 1)
+                self.assertNotEqual(changed, RULESETS_PROBE_WORKFLOW)
+                self.assertIn(RULESETS_PROBE_FINDING, ci_workflow_findings(
+                    *original, others={**others, 'release-ruleset-probe.yml': changed}))
+
+    def test_release_ruleset_probe_refuses_missing_workflow_or_different_release_token(self):
+        original, others = self.ci_sources(), self.other_sources()
+        missing = {name: body for name, body in others.items()
+                   if name != 'release-ruleset-probe.yml'}
+        self.assertIn(RULESETS_PROBE_FINDING, ci_workflow_findings(*original, others=missing))
+        for before, after in (
+                ('actions/create-github-app-token@v1', 'actions/create-github-app-token@v2'),
+                ('secrets.PINEFORGE_APP_ID', 'secrets.OTHER_APP_ID'),
+                ('secrets.PINEFORGE_APP_PRIVATE_KEY', 'secrets.OTHER_PRIVATE_KEY'),
+                ('          repositories: pineforge-engine',
+                 '          repositories: pineforge-engine\n          permission-contents: read')):
+            with self.subTest(release_token=after):
+                changed = in_step(others['release.yml'], 'release', 'Mint org App token', before, after)
+                self.assertIn(RULESETS_PROBE_FINDING, ci_workflow_findings(
+                    *original, others={**others, 'release.yml': changed,
+                                      'release-ruleset-probe.yml': RULESETS_PROBE_WORKFLOW}))
+
+    def test_duplicate_test_name_stages_are_binding_and_pin_the_source_root(self):
+        source = Path('/src')
+        commands = check_commands(source)
+        plan = {entry[0]: entry for entry in commands}
+        tests = 'duplicate-test-names-tests'
+        check = 'duplicate-test-names'
+        self.assertEqual(plan[tests], (
+            tests, [sys.executable, str(source / 'scripts/test_check_duplicate_test_names.py')],
+        ))
+        self.assertEqual(plan[check], (
+            check, [sys.executable, str(source / 'scripts/check_duplicate_test_names.py'),
+                    '--root', str(source)],
+        ))
+        names = [entry[0] for entry in commands]
+        self.assertLess(names.index(tests), names.index(check))
+        fast_names = {entry[0] for entry in check_commands(source, tier='fast')}
+        self.assertTrue({tests, check} <= fast_names)
+
     def test_no_stage_is_advisory_today(self):
         for entry in check_commands(Path('/src')):
             self.assertFalse(len(entry) > 2 and entry[2], entry[0])
@@ -3985,8 +4610,14 @@ class BaselinePromotionResolution(unittest.TestCase):
 
 class CanonAuthz(unittest.TestCase):
     def test_real_workflow_scripts_admit_our_events_and_refuse_untrusted_identity(self):
-        scripts = [job_script((ROOT / path).read_text(), 'authz') for path in CI_SOURCES[:2]]
-        self.assertEqual(scripts[0], scripts[1])
+        paths = (*CI_SOURCES[:2], '.github/workflows/release-ruleset-probe.yml')
+        scripts = []
+        for path in paths:
+            workflow = (ROOT / path).read_text()
+            self.assertIn('authz', _jobs(workflow), f'{path} must authorize before repository code')
+            scripts.append(job_script(workflow, 'authz'))
+        for script in scripts[1:]:
+            self.assertEqual(scripts[0], script)
         base = {'EVENT': 'pull_request', 'REPO': 'owner/engine', 'HEAD_REPO': 'owner/engine',
                 'HEAD_IS_FORK': 'false', 'ASSOCIATION': 'MEMBER', 'PR_AUTHOR': 'member',
                 'WR_HEAD_REPO': '', 'WR_ACTOR': '', 'PERMISSION': 'none', 'LOOKUP_EXIT': '0',
@@ -4001,6 +4632,7 @@ class CanonAuthz(unittest.TestCase):
             ({'ASSOCIATION': 'NONE', 'PR_AUTHOR': 'other[bot]'}, False, True),
             ({'EVENT': 'pull_request_target'}, False, False),
             ({'EVENT': 'push'}, True, False),
+            ({'EVENT': 'workflow_dispatch'}, True, False),
         ]
         for permission in ('admin', 'maintain', 'write', 'read', 'triage', ''):
             cases.append(({'ASSOCIATION': 'CONTRIBUTOR', 'PERMISSION': permission},
@@ -4036,7 +4668,7 @@ class CanonAuthz(unittest.TestCase):
             gh.chmod(0o755)
             for index, script in enumerate(scripts):
                 for case, (change, allowed, lookup) in enumerate(cases):
-                    with self.subTest(workflow=CI_SOURCES[index], identity=change):
+                    with self.subTest(workflow=paths[index], identity=change):
                         log = root / f'lookup-{index}-{case}'
                         env = {**os.environ, **base, **change, 'LOOKUP_LOG': str(log),
                                'GITHUB_STEP_SUMMARY': str(root / f'summary-{index}-{case}'),

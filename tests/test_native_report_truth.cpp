@@ -811,9 +811,9 @@ void closed_rows_by_index() {
     const char* const exit_ids[] = {"exit-long", "exit-short"};
     for (std::size_t i = 0; i < host.closed_trade_count(); ++i) {
         const Trade& row = host.closed_trade(i);
-        CHECK(&row == &host.rows()[i]);
-        CHECK(&row == &host.get_trade(static_cast<int>(i)));
-        CHECK(&row == &host.get_report_trade(static_cast<int>(i)));
+        CHECK(row.entry_incarnation == host.rows()[i].entry_incarnation);
+        CHECK(row.entry_incarnation == host.get_trade(static_cast<int>(i)).entry_incarnation);
+        CHECK(row.entry_incarnation == host.get_report_trade(static_cast<int>(i)).entry_incarnation);
         CHECK(row.entry_id == entry_ids[i]);
         CHECK(row.exit_id == exit_ids[i]);
         CHECK(row.is_long == (i == 0));

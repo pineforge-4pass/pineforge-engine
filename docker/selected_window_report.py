@@ -42,7 +42,8 @@ __all__ = [
     "SelectedWindowCountsC", "SelectedWindowError", "WIRE_VERSION", "WindowRequest",
     "build_report_window", "calendar_record", "calendar_session", "calendar_timezone",
     "canonical_timeframe", "capabilities_record", "check_native_counts",
-    "check_report_placements", "check_selected_curve", "check_unsupported_options",
+    "check_report_placements", "check_selected_curve", "check_selected_sink_curve",
+    "check_unsupported_options",
     "refusal_for_plan", "report_shape_full",
     "retained_rows", "support_policy", "timeframe_seconds", "update_rows_hash",
     "validate_request",
@@ -629,7 +630,30 @@ def check_selected_curve(curve: Sequence[Mapping[str, Any]], start_ms: int,
         if set(point) != {"time_ms", "equity", "open_profit"}:
             raise _invariant(f"point {position} of the selected curve does not have exactly "
                              "time_ms, equity and open_profit")
-    anchor = curve[0]
+    _check_selected_anchor(curve[0], start_ms, initial_capital)
+
+
+def check_selected_sink_curve(anchor: Optional[Mapping[str, Any]], equity_points: int,
+                              start_ms: int, window_script_bars: int,
+                              initial_capital: Any) -> None:
+    """Check a verified sink's E count and first E, without retaining its curve.
+
+    The fixed v1 reader has already checked every point's fields and types and
+    the trailer; the engine's selected latches own pre-roll, contiguity and
+    observation-count checks. Anchor semantics, including unresolved capital,
+    are shared with the array path.
+    """
+    if equity_points != window_script_bars + 1:
+        raise _invariant(f"the selected curve has {equity_points} points, the plan says "
+                         f"{window_script_bars + 1}")
+    if anchor is None or set(anchor) != {"time_ms", "equity", "open_profit"}:
+        raise _invariant("point 0 of the selected curve does not have exactly "
+                         "time_ms, equity and open_profit")
+    _check_selected_anchor(anchor, start_ms, initial_capital)
+
+
+def _check_selected_anchor(anchor: Mapping[str, Any], start_ms: int,
+                           initial_capital: Any) -> None:
     if anchor["time_ms"] != start_ms or anchor["open_profit"] != 0:
         raise _invariant("the selected curve does not start with the window anchor at T with "
                          "open profit 0")

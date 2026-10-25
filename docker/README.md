@@ -277,7 +277,7 @@ emits the four typed codes (`strategy_value_invalid`,
 tested cases, and no completeness claim (the published 1.6.0 image declares
 `1.3`).
 
-From 1.6.2 (unreleased), the engine/codegen image's `run_json.py --so
+From 1.6.2, the engine/codegen image's `run_json.py --so
 <strategy.so> --capabilities-json` probe declares revision `1.3`: with the
 section-4 producers and manifest present and value ownership `complete`
 (EN-115), it emits the four typed codes (`strategy_value_invalid`,

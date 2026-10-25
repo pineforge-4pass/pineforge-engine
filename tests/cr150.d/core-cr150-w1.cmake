@@ -1,0 +1,8 @@
+if(UNIX)
+    list(APPEND TEST_SOURCES test_report_sink_failure_reasons)
+    pineforge_add_unit_test(test_report_sink_failure_reasons)
+    if(PINEFORGE_BUILD_SOURCE_LAYER)
+        list(APPEND TEST_SOURCES test_report_sink_failure_source)
+        pineforge_add_unit_test(test_report_sink_failure_source)
+    endif()
+endif()

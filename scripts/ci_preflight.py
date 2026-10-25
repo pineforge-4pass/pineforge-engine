@@ -47,6 +47,14 @@ POST_RUNNER = '["self-hosted","pf-gcp-post"]'
 RELEASE_RUNNER = '["self-hosted","pf-gcp-main"]'
 CI_EVENTS = '''on:
   pull_request:
+    # LB-387: suite jobs skip on a draft PR (the required aggregate then fails, never passes);
+    # ready_for_review starts the full run when the PR is marked ready.
+    # converted_to_draft re-runs the workflow so its failing aggregate supersedes the earlier ready run.
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+'''
+CI_CONCURRENCY = '''concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}-${{ github.event.pull_request.draft && 'draft' || 'ready' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 '''
 POST_CI_EVENTS = '''on:
   push:
@@ -142,9 +150,11 @@ HOSTED_JOB_RUNNERS = {
 }
 # LB-435 plus addendum 2: isolate releases and the named promotion exception.
 # The strategy pin keeps the existing macOS and Linux ARM hosted legs.
+# The probe's credential-free authz retains the canon non-release fleet.
 RELEASE_JOB_RUNNERS = {
     'release.yml': {'release': RELEASE_RUNNER, 'prebuilt': HOSTED_MATRIX_RUNNER,
                     'notify-hub': RELEASE_RUNNER},
+    'release-ruleset-probe.yml': {'authz': PR_RUNNER, 'probe': POST_RUNNER},
     'promote-baseline.yml': {'promote': RELEASE_RUNNER},
 }
 # Credential-bearing jobs outside the release pins and gated docs build retain
@@ -170,14 +180,16 @@ PR_PROOF_JOBS = {'build': 'BUILD_RESULT', 'corpus-parity-subset': 'PARITY_RESULT
 HEAVY_JOBS = frozenset(('sanitizers', 'kernel-only', 'native-live', 'corpus-parity'))
 AUTHZ_SUCCESS = "${{ needs.authz.result == 'success' }}"
 AUTHZ_ALWAYS = "${{ always() && needs.authz.result == 'success' }}"
+PREFLIGHT_IF = "${{ !github.event.pull_request.draft && (always() && needs.authz.result == 'success') }}"
 AUTHZ_FULL_SUCCESS = "${{ needs.authz.result == 'success' && github.event_name != 'pull_request' }}"
 DOCS_ONLY_SKIP = ("${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || "
                   "needs.changes.outputs.docs_only != 'true') }}")
 # Only the scheduling hint comes from changes. The aggregate recomputes this
 # class from the event-bound API diff inside its own job.
-GITHUB_ONLY_SKIP = ("${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || "
+GITHUB_ONLY_SKIP = ("${{ !github.event.pull_request.draft && (always() && needs.authz.result == 'success' && "
+                    "(needs.changes.result != 'success' || "
                     "(needs.changes.outputs.docs_only != 'true' && (github.event_name != 'pull_request' || "
-                    "needs.changes.outputs.github_only != 'true'))) }}")
+                    "needs.changes.outputs.github_only != 'true')))) }}")
 HEAVY_SKIP = DOCS_ONLY_SKIP
 SLOW_PREFLIGHT_IF = AUTHZ_ALWAYS
 BUILD_VERIFY_RUN = ' '.join(r'''|
@@ -259,8 +271,8 @@ endif()
 # PR-only ALLOWED_BOTS is dependabot[bot] and pineforge-app[bot]. No local canon
 # file is needed on CI runners. Changing the script requires a new canon pin.
 AUTHZ_STEP_SHA256 = '94bf3afefe4588bc33dad5fd4d8fa3d2a104cc45743ad59286c756fa3a17baa6'
-# The canon header is text, not a decoded array: the fleet comment and the
-# space after the comma bind every authz job byte for byte.
+# Scoped CI workflows bind this canon header byte for byte, including its
+# fleet comment and comma spacing. The release probe pins executable lines.
 AUTHZ_JOB_HEADER = '''    name: authz
     # Fleet routing is fixed for this workflow; releases use pf-gcp-main.
     runs-on: ["self-hosted", "pf-gcp-pr"]
@@ -877,8 +889,8 @@ def workflow_fleet_findings(workflows: dict[str, str]) -> list[str]:
     findings = []
     routes = workflow_event_routes(workflows)
     for name, workflow in workflows.items():
-        # These existing isolated-release pins are checked by runner_findings;
-        # they are the two exceptions explicitly retained by FLEET-POST=A.
+        # Per-job release/probe pins are checked by runner_findings; the probe
+        # shares release.yml's App credential and uses the post fleet.
         if name in RELEASE_JOB_RUNNERS:
             continue
         events = _events(workflow)
@@ -988,9 +1000,17 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                                bool(re.fullmatch(r'ubuntu-(?:\d{2}\.\d{2}|latest)-arm', runs_on[0]))))
             if job in fixed_release:
                 # A quoted JSON scalar does not select a YAML label array.
-                if _job_values(body, 'runs-on', unquote=False) != [fixed_release[job]]:
-                    findings.append(f'{name} job {job} must run on {fixed_release[job]} '
-                                    '(isolated release)')
+                actual = _job_values(body, 'runs-on', unquote=False)
+                expected = [fixed_release[job]]
+                if fixed_release[job] == PR_RUNNER:
+                    # Normalize the runner array here; the probe workflow pin below
+                    # compares nonblank lines after removing comment-only lines.
+                    actual = [_runner_value(value) for value in actual]
+                    expected = [_runner_value(value) for value in expected]
+                if actual != expected:
+                    suffix = {PR_RUNNER: '', POST_RUNNER: ' (post fleet)'}.get(
+                        fixed_release[job], ' (isolated release)')
+                    findings.append(f'{name} job {job} must run on {fixed_release[job]}{suffix}')
                 environments = _job_values(workflow, 'env') + _job_values(body, 'env')
                 if any(re.search(r'\bPF_CI_LABELS["\']?\s*:', value) for value in environments):
                     findings.append(f'{name} job {job} must not set PF_CI_LABELS '
@@ -1115,6 +1135,200 @@ def _step_block(step: str, key: str) -> list[str]:
     return _job_block(re.sub(r'^( *)- ', r'\1  ', step, count=1), key)
 
 
+# ci_release_gate.py's phase-1 exemption is bounded by this exact writer.
+RELEASE_BUMP_PUBLISH_STEP = r'''      - name: Write bumped VERSION, commit, tag, push
+        id: publish
+        if: ${{ !inputs.dry_run }}
+        env:
+          NEXT:  ${{ steps.bump.outputs.next }}
+          TAG:   ${{ steps.bump.outputs.tag }}
+          RESET: ${{ steps.catalog.outputs.reset }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "${NEXT}" > VERSION
+          cp "${RESET}" docker/run_failure_codes_diff.json
+          git add VERSION docker/run_failure_codes_diff.json
+          git commit -m "chore(release): ${TAG}"
+          git tag -a "${TAG}" -m "Release ${TAG}"
+          python3 scripts/gen_run_failure_catalog_diff.py --check
+          git push --atomic origin HEAD "${TAG}"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+'''
+
+# The release App token must see bypass_actors on every branch ruleset.
+# release-ruleset-probe.yml reports that visibility with the same token mint.
+# The gate requires one active main pull_request ruleset whose own bypass list
+# is exactly Integration 4105147 with bypass_mode always.
+# The workflow's contents: write GITHUB_TOKEN cannot replace that credential.
+RELEASE_GATE_STEP = r'''      - name: Refuse unless pineforge/verify and pineforge/parity are green
+        id: gate
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_REF: ${{ github.ref }}
+        run: |
+          python3 scripts/ci_release_gate.py gate \
+            --repo "${GITHUB_REPOSITORY}" --sha "${GITHUB_SHA}" --ref "${GITHUB_REF}"
+'''
+
+# This tiny release-class workflow has no writer or release-gate phases.
+# Pin the complete executable shape so no extra token consumer can be hidden
+# in a workflow/job environment, an additional step or an error override.
+RELEASE_RULESETS_PROBE_WORKFLOW = '''name: Release ruleset probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  authz:
+    name: authz
+    # Preflight pins executable workflow lines after removing comment-only lines.
+    # authz uses pf-gcp-pr; the App-token probe uses pf-gcp-post.
+    runs-on: ["self-hosted", "pf-gcp-pr"]
+    permissions: {}
+    # No timeout-minutes: the owner's no-time-limits rule (check-no-time-limits refuses new ones).
+    steps:
+      - name: Only our own pull requests and our own events run CI
+        env:
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
+          ASSOCIATION: ${{ github.event.pull_request.author_association }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          WR_HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+          WR_ACTOR: ${{ github.event.workflow_run.triggering_actor.login }}
+          GH_TOKEN: ${{ github.token }}   # read-only use: one permission lookup for workflow_run
+          # Bot logins whose same-repository pull requests count as ours: dependabot[bot] (CI-DEPBOT A)
+          # and the org's own GitHub App bot logins by name (space-separated), nothing else.
+          ALLOWED_BOTS: "dependabot[bot] pineforge-app[bot]"
+        run: |
+          set -eu
+          fail() { echo "::error title=authz::$1"; echo "authz: REFUSED: $1" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
+          case "$EVENT" in
+            push|workflow_dispatch|schedule|merge_group|release|workflow_call|repository_dispatch)
+              # Only someone with write access to this repository (or our App's token) can cause these
+              # events; none of them runs pull-request code.
+              ;;
+            workflow_run)
+              # LB-437: bind identity to the triggering run and its re-runner.
+              # These two App bots are fixed canon policy; ALLOWED_BOTS is PR-only.
+              [ -n "${WR_HEAD_REPO:-}" ] || fail "workflow_run head repository is missing"
+              [ -n "${WR_ACTOR:-}" ] || fail "workflow_run triggering actor is missing"
+              [ "$WR_HEAD_REPO" = "$REPO" ] || fail "workflow_run head repository does not match this repository"
+              case "$WR_ACTOR" in
+                "pineforge-app[bot]"|"pineforge-ci-dispatcher[bot]") ;;
+                *"[bot]") fail "workflow_run bot is not on the canon allowlist" ;;
+                *)
+                  perm=$(gh api "repos/$REPO/collaborators/$WR_ACTOR/permission" --jq .permission 2>/dev/null) || fail "workflow_run permission lookup failed"
+                  case "$perm" in admin|maintain|write) ;; *) fail "workflow_run triggering actor does not have write permission" ;; esac ;;
+              esac ;;
+            pull_request)
+              [ "$HEAD_REPO" = "$REPO" ] || fail "pull request from another repository (${HEAD_REPO:-unknown})"
+              [ "$HEAD_IS_FORK" = "false" ] || fail "pull request from a fork"
+              case "$ASSOCIATION" in
+                OWNER|MEMBER|COLLABORATOR) ;;
+                *)
+                  case " $ALLOWED_BOTS " in
+                    *" $PR_AUTHOR "*) ;;
+                    *)
+                      # A member whose org membership is private shows as CONTRIBUTOR: ask GitHub for the
+                      # author's permission on this repository; anything but admin/maintain/write (or a
+                      # failed call) refuses.
+                      perm=$(gh api "repos/$REPO/collaborators/$PR_AUTHOR/permission" --jq .permission 2>/dev/null || echo none)
+                      case "$perm" in admin|maintain|write) ;; *) fail "author ${PR_AUTHOR:-unknown} (${ASSOCIATION:-NONE}) has permission '$perm', not write, and is not an allowlisted bot" ;; esac ;;
+                  esac ;;
+              esac ;;
+            *) fail "event $EVENT does not run CI (pull_request_target and other events are not allowed)" ;;
+          esac
+          echo "authz: allowed ($EVENT${PR_AUTHOR:+ by $PR_AUTHOR})" >> "$GITHUB_STEP_SUMMARY"
+
+  probe:
+    needs: [authz]
+    runs-on: ["self-hosted","pf-gcp-post"]
+    steps:
+      - name: Refuse a dispatch ref other than main
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error title=rulesets-probe::$1"; echo "rulesets-probe: REFUSED: $1" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
+          [ "$REF" = refs/heads/main ] || fail "release ruleset probe requires refs/heads/main"
+
+      - name: Mint org App token
+        id: app
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.PINEFORGE_APP_ID }}
+          private-key: ${{ secrets.PINEFORGE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: pineforge-engine
+
+      - name: Checkout
+        if: ${{ needs.authz.result == 'success' }}
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Probe release ruleset barrier
+        if: ${{ needs.authz.result == 'success' }}
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: python3 scripts/ci_release_gate.py rulesets-probe --repo "${GITHUB_REPOSITORY}"
+'''
+
+
+def release_rulesets_probe_workflow_findings(workflow: str, release: str) -> list[str]:
+    steps = _steps(_jobs(workflow).get('probe', ''))
+    expected = _steps(_jobs(RELEASE_RULESETS_PROBE_WORKFLOW)['probe'])
+    findings = []
+    if not steps or _code(steps[0]) != _code(expected[0]):
+        findings.append('release-ruleset-probe.yml probe must refuse a dispatch ref other than '
+                        'refs/heads/main as its first step before minting the App token or checkout')
+    probe_app = _step_named(steps, '      - name: Mint org App token')
+    release_app = _step_named(_steps(_jobs(release).get('release', '')),
+                             '      - name: Mint org App token')
+    if (_code(workflow) != _code(RELEASE_RULESETS_PROBE_WORKFLOW)
+            or _code(probe_app) != _code(release_app)):
+        findings.append('release-ruleset-probe.yml must keep the dispatch-only read-only probe '
+                        'with the same release App token')
+    return findings
+
+
+def release_bump_workflow_findings(workflow: str) -> list[str]:
+    steps = _steps(_jobs(workflow).get('release', ''))
+    publish = _step_named(steps, '      - name: Write bumped VERSION, commit, tag, push')
+    findings = []
+    if _code(publish) != _code(RELEASE_BUMP_PUBLISH_STEP):
+        findings.append('release.yml must keep the exact two-file release bump writer, '
+                        'commit and atomic push')
+    gate = _step_named(steps, '      - name: Refuse unless pineforge/verify and pineforge/parity are green')
+    if _code(gate) != _code(RELEASE_GATE_STEP):
+        findings.append('release.yml must keep the unconditional release gate '
+                        'with its release App token '
+                        'for the App-only main pull_request barrier')
+    app = _step_named(steps, '      - name: Mint org App token')
+    checkout = _step_named(steps, '      - name: Checkout (full history)')
+    if (_step_values(app, 'id') != ['app']
+            or _step_values(app, 'uses') != ['actions/create-github-app-token@v1']
+            or _step_block(app, 'with') != [
+                '        with:',
+                '          app-id: ${{ secrets.PINEFORGE_APP_ID }}',
+                '          private-key: ${{ secrets.PINEFORGE_APP_PRIVATE_KEY }}',
+                '          owner: ${{ github.repository_owner }}',
+                '          repositories: pineforge-engine']
+            or _step_values(checkout, 'uses') != ['actions/checkout@v4']
+            or _step_block(checkout, 'with') != [
+                '        with:', '          fetch-depth: 0',
+                '          token: ${{ steps.app.outputs.token }}']):
+        findings.append('release.yml bump push must use the release App installation token')
+    return findings
+
+
 def fast_rows(cmake: str) -> list[str]:
     """Read the single CMake population; no duplicate Python list of rows."""
     blocks = re.findall(r'^set\(PINEFORGE_PR_FAST_TESTS\n(.*?)^\)', cmake,
@@ -1158,7 +1372,12 @@ def authz_workflow_findings(workflow: str, name: str, aggregate: str) -> list[st
     if events is None or 'pull_request_target' in events:
         findings.append(f'{name} must use readable events without pull_request_target')
     pr = re.search(r'(?m)^  pull_request:[^\n]*(?:\n(?:    [^\n]*|[ \t]*))*', workflow)
-    if name == 'ci.yml' and (not pr or pr[0].strip() != 'pull_request:'):
+    if name == 'ci.yml' and (not pr or pr[0].strip() != (
+            'pull_request:\n'
+            '    # LB-387: suite jobs skip on a draft PR (the required aggregate then fails, never passes);\n'
+            '    # ready_for_review starts the full run when the PR is marked ready.\n'
+            '    # converted_to_draft re-runs the workflow so its failing aggregate supersedes the earlier ready run.\n'
+            '    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]')):
         findings.append('ci.yml must run on every pull_request without event filters')
     if _job_values(workflow, 'permissions') != ['contents: read']:
         findings.append(f'{name} must retain contents: read workflow permissions')
@@ -1379,6 +1598,8 @@ def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[st
     events = CI_EVENTS if pr else POST_CI_EVENTS
     if _job_block(workflow, 'on') != _code(events):
         findings.append(f'{name} must keep its exact {"unfiltered PR" if pr else "main push, nightly and manual"} triggers')
+    if pr and _job_block(workflow, 'concurrency') != _code(CI_CONCURRENCY):
+        findings.append('ci.yml must keep its exact draft and ready concurrency groups')
     jobs = _jobs(workflow)
     proofs = PR_PROOF_JOBS if pr else PROOF_JOBS
     expected_jobs = {'authz', 'changes', 'preflight', *proofs, 'build-gate'}
@@ -1404,7 +1625,7 @@ def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[st
         findings.append("changes must publish the base's scripts/ci_verifier_paths.py answer, exactly")
     preflight = jobs.get('preflight', '')
     if (sorted(_needs(preflight)) != ['authz', 'changes']
-            or _job_values(preflight, 'if') != [AUTHZ_ALWAYS]):
+            or _job_values(preflight, 'if') != [PREFLIGHT_IF if pr else AUTHZ_ALWAYS]):
         findings.append('preflight must follow authz and changes and run even if classification fails')
     if (f'      PINEFORGE_VERIFIER_SLOW: {PREFLIGHT_VERIFIER_SLOW}\n' not in preflight
             or preflight.count('PINEFORGE_VERIFIER_SLOW:') != 1):
@@ -1537,6 +1758,10 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
             or _job_values(_jobs(subset).get('corpus-parity-subset', ''), 'if')):
         findings.append('PR parity workflow must retain only workflow_call, authz and an unconditional subset job')
     findings += docs_workflow_findings(docs, docs_post)
+    if 'release.yml' in workflows:
+        findings += release_bump_workflow_findings(workflows['release.yml'])
+        findings += release_rulesets_probe_workflow_findings(
+            workflows.get('release-ruleset-probe.yml', ''), workflows['release.yml'])
     for name, workflow in workflows.items():
         if name in RELEASE_JOB_RUNNERS:
             continue
@@ -1626,7 +1851,13 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
             or '.["pineforge/parity"] == "success"' not in head_gate
             or head_gate.count('echo "green=false" >> "$GITHUB_OUTPUT"; exit 0') != 2):
         findings.append("baseline promotion must run main's copy and require the latest two head statuses")
+    # The job pin cannot see inherited workflow settings.
+    for key in ('defaults', 'env'):
+        if _job_values(promote, key):
+            findings.append(f'baseline promotion must not define workflow-level {key}')
     promotion_jobs = _jobs(promote)
+    if _job_values(promotion_jobs.get('promote-guard', ''), 'defaults'):
+        findings.append('baseline promotion promote-guard must not define job-level defaults')
     promotion_text = _jobs_text(promote) or ''
     promotion_headers = list(_JOB_HEADER.finditer(promotion_text))
     if ([header.group(1) for header in promotion_headers] != ['promote-guard', 'promote']
@@ -1681,6 +1912,7 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
         rows = []
     if (hashlib.sha256(('\n'.join(rows) + '\n').encode()).hexdigest() != PR_FAST_ROWS_SHA256
             or cmake.count('APPEND PROPERTY LABELS fast') != 1
+            or '\n'.join(_code(cmake)).count('\n'.join(_code(FAST_TEST_REGISTRATION))) != 1
             or _code(cmake)[-len(_code(FAST_TEST_REGISTRATION)):] != _code(FAST_TEST_REGISTRATION)):
         findings.append('PR fast rows must keep one pinned CMake label list and executable build target')
     return list(dict.fromkeys(findings))
@@ -1878,6 +2110,9 @@ def check_commands(source: Path, output: Path | None = None,
          [sys.executable, str(source / 'scripts/test_report_outputs_keys.py')]),
         ('release-version-tests',
          [sys.executable, str(source / 'scripts/test_release_version.py')]),
+        # Includes the single App-only main pull_request barrier, complete
+        # Actions/ruleset pages, permission docs, bump identity/parent/tree diff.
+        # Binding in both fast/all.
         ('release-gate-tests', [sys.executable, str(source / 'scripts/test_ci_release_gate.py')]),
         # R5 run-failure codes: the catalog diff release.yml stamps is a tested
         # script, and the code tables of docs/pages/run-failure-codes.md are
@@ -1938,6 +2173,11 @@ def check_commands(source: Path, output: Path | None = None,
          [sys.executable, str(source / 'scripts/check_pine_to_native_coverage.py')]),
         ('doc-pine-coverage-tests',
          [sys.executable, str(source / 'scripts/test_check_pine_to_native_coverage.py')]),
+        ('duplicate-test-names-tests',
+         [sys.executable, str(source / 'scripts/test_check_duplicate_test_names.py')]),
+        ('duplicate-test-names',
+         [sys.executable, str(source / 'scripts/check_duplicate_test_names.py'),
+          '--root', str(source)]),
     ]
     if tier == 'github-only':
         return [entry for entry in commands if entry[0] in GITHUB_ONLY_PREFLIGHT_STAGES]

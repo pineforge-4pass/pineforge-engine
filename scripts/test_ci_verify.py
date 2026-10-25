@@ -10,6 +10,8 @@ ordering can be asserted. Root must still run the actual profiles.
 from __future__ import annotations
 
 import ast
+from dataclasses import replace
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -85,6 +87,50 @@ _PRIOR_OVERLAY_FLAG: object = _SENTINEL
 FULL_FLOOR = {name: entry[0] for name, entry in ci_verify.PRIVATE_FIXTURE_PROFILE_FLOORS.items()}
 ABSENT_FLOOR = {name: entry[0] - entry[1]
                 for name, entry in ci_verify.PRIVATE_FIXTURE_PROFILE_FLOORS.items()}
+
+# Independent expectations transcribed from the lab's recipes.mjs:57-88,
+# ctest-shard-union/v1. Do not derive these from the engine's stage/floor
+# helpers: a mutation to those helpers must turn the contract assertions red.
+LAB_SHARD_FLOORS = {'release': {False: 603, True: 910},
+                    'kernel': {False: 306, True: 337}}
+# Transcribed ctestExcludeLabel(CI_VERIFY_PROFILES[profile]) results from
+# pineforge-workflow campaign/src/remote/recipes.mjs:38-53, consumed by
+# campaign/src/remote/shards.mjs, merged in b53dba5e44 (PR #211).
+# Typed lab literals: never derive these from the engine's Profile rule.
+LAB_SHARD_EXCLUDE = {
+    'release': None,
+    'debug': 'slow',
+    'sanitizers': 'slow',
+    'kernel': None,
+    'native': None,
+    'live-sanitizers': None,
+    'live-tsan': None,
+}
+LAB_SHARD_GUARDS = frozenset((
+    'source-guard-c-abi', 'source-guard-native-source', 'source-guard-broker-hash',
+    'source-guard-pending-mirror', 'source-guard-native-versions', 'source-guard-native-c-surface',
+    'source-guard-aggregate-versions', 'source-guard-adapter-spec-shadowing',
+    'source-guard-dangling-comment-names', 'source-guard-run-failure-codes',
+    'source-guard-run-failure-diff', 'source-guard-selected-window-ownership',
+))
+LAB_SHARD_EVERY = frozenset((
+    'tool-versions', 'corpus-submodule-init', 'corpus-submodule-status', 'corpus-submodule-pin',
+    'configure', 'profile-options', 'build', 'stale-binaries', 'native-binary',
+    'ctest-list-all', 'ctest-list-shard', 'ctest', 'ctest-floor', 'ctest-shard-accounting',
+))
+LAB_SHARD_ABI = frozenset((
+    'abi-base', 'abi-prior', 'abi-v13', 'abi-v14',
+    'abi-v15-frozen', 'abi-v16-frozen', 'abi-v18-frozen',
+))
+LAB_SHARD_FIRST = LAB_SHARD_GUARDS | frozenset((
+    'install', 'smoke-configure', 'smoke-build', 'smoke-version', 'smoke-version-check',
+))
+# Independent fixture labels, supplied to the command runner rather than
+# copied from a produced summary. All profiles see the same labelled names.
+SHARD_SLOW_FIXTURE_NAMES = ('test_ledger_history_scale_400k',
+                            'test_position_tail_scale_out_100k')
+SCRIPTED_SLOW_FIXTURE_NAMES = (*SHARD_SLOW_FIXTURE_NAMES, 'test_ci_verify',
+                               'test_chart_day_memo', 'test_native_cpp_versions')
 
 
 def guard_environment() -> dict:
@@ -185,6 +231,23 @@ def ctest_output(total: int, skipped=(), not_run=(), disabled=()) -> bytes:
     return ('\n'.join(lines) + '\n').encode()
 
 
+def named_ctest_output(names, *, skipped=(), not_run=(), disabled=()) -> bytes:
+    """Explicit result lines plus the existing closing-summary fixture."""
+    total = len(names) - len(disabled)
+    lines = []
+    for number, name in enumerate(names, 1):
+        result = ('***Not Run (Disabled)' if name in disabled else
+                  '***Skipped' if name in skipped else
+                  '***Not Run' if name in not_run else 'Passed')
+        lines.append(f'{number}/{len(names)} Test #{number}: {name} ........{result} 0.01 sec\n')
+    summary = ctest_output(total, skipped=skipped, not_run=not_run, disabled=disabled)
+    # ctest_output already emits skipped/not-run result lines. Keep only its
+    # summary and final lists so each actual result name occurs once.
+    text = summary.decode()
+    closing = re.search(r'\n\d+% tests passed', text)
+    return (''.join(lines) + text[closing.start():]).encode()
+
+
 class Scripted:
     """Programmable command runner that still executes real source guards/tools."""
 
@@ -279,8 +342,13 @@ class Scripted:
                 'source-guard-broker-hash': 'check_broker_state_hash_coverage.py',
                 'source-guard-pending-mirror': 'gen_pending_order_mirror.py',
                 'source-guard-native-versions': 'check_native_cpp_versions.py',
+                'source-guard-native-c-surface': 'check_native_c_api_surface.py',
                 'source-guard-aggregate-versions': 'check_aggregate_cpp_versions.py',
                 'source-guard-adapter-spec-shadowing': 'check_adapter_spec_shadowing.py',
+                'source-guard-dangling-comment-names': 'check_dangling_comment_names.py',
+                'source-guard-run-failure-codes': 'check_run_failure_codes.py',
+                'source-guard-run-failure-diff': 'gen_run_failure_catalog_diff.py',
+                'source-guard-selected-window-ownership': 'check_selected_window_ownership.py',
                 'source-guard-twin-parity': 'check_twin_parity.py',
             }
             for key, needle in needles.items():
@@ -306,6 +374,25 @@ class Scripted:
         if argv[0] == 'cmake' and '--install' in argv:
             return self._install()
         if argv[0] == 'ctest':
+            if 'ctest_shard_inventory' in self.exits:
+                registry = self.exits['ctest_shard_inventory']
+                names = list(registry)
+                labelled = set(self.exits.get('ctest_shard_labelled', ()))
+                if '-L' in argv:
+                    names = [name for name in names if name in labelled]
+                if '-LE' in argv:
+                    names = [name for name in names if name not in labelled]
+                if '-R' in argv:
+                    expression = argv[argv.index('-R') + 1]
+                    names = [name for name in names if re.search(expression, name)]
+                if '-N' in argv:
+                    listing = ''.join(f'Test #{registry.index(name) + 1}: {name}\n'
+                                      for name in names)
+                    return Completed(0, (listing + f'Total Tests: {len(names)}\n').encode())
+                skipped = tuple(name for name in self.exits.get('ctest_skipped', ())
+                                if name in names)
+                return Completed(int(self.exits.get('ctest', 0)),
+                                 named_ctest_output(names, skipped=skipped))
             if '--show-only=json-v1' in argv:
                 names = {'native_live_help', 'test_live_json',
                          'test_native_live_startup', 'test_native_live_store',
@@ -327,15 +414,16 @@ class Scripted:
                         ci_verify.PROFILE[self.profile], self.source) or KERNEL_MIN_TESTS))
             labelled = self.exits.get('ctest_labelled', 5)
             if '-N' in argv:
-                stage = 'ctest-list-selected' if '-LE' in argv else 'ctest-list-all'
+                stage = ('ctest-list-excluded' if '-L' in argv else
+                         'ctest-list-selected' if '-LE' in argv else 'ctest-list-all')
+                count = (labelled if '-L' in argv else
+                         registered - labelled if '-LE' in argv else registered)
                 if self.exits.get(stage) == 'unreadable':
                     return Completed(0, b'CTest list has no total\n', b'')
                 if self.exits.get(stage) == 'names-less':
                     # A listing whose count parses but carries no row names:
                     # the registry the pinned-rows-that-ran rule reads.
-                    count = registered - labelled if '-LE' in argv else registered
                     return Completed(0, f'Total Tests: {count}\n'.encode(), b'')
-                count = registered - labelled if '-LE' in argv else registered
                 # Every row a run scripts as skipped/not-run/disabled is
                 # registered by its own row, exactly as a real `ctest -N`
                 # lists it; the rest of the registry is filler names.
@@ -344,6 +432,13 @@ class Scripted:
                                 self.exits.get('ctest_not_run', ()),
                                 self.exits.get('ctest_disabled', ())):
                     names += [name for name in implied if name not in names]
+                if '-L' in argv:
+                    names = list(SCRIPTED_SLOW_FIXTURE_NAMES[:labelled])
+                else:
+                    while len(names) < registered - labelled:
+                        names.append(f'test_row_{len(names) + 1}')
+                    if '-LE' not in argv:
+                        names += list(SCRIPTED_SLOW_FIXTURE_NAMES[:labelled])
                 while len(names) < count:
                     names.append(f'test_row_{len(names) + 1}')
                 listing = ''.join(f'Test #{number}: {name}\n'
@@ -643,6 +738,20 @@ def failure_stages(summary: dict) -> list[str]:
 
 
 class ConfigValidation(unittest.TestCase):
+    def test_ctest_shard_rejects_each_invalid_index_count_and_syntax(self):
+        for value in ('0/4', '5/4', '1/9', '9/9', '-1/4', '1/0',
+                      '1/-1', '1', '1/2/3', 'one/4', '1/one', '1.0/4', '1/04'):
+            with self.subTest(shard=value):
+                with self.assertRaises(ConfigError):
+                    parse_args(['debug', '--ctest-shard', value])
+        self.assertEqual(main(['debug', '--ctest-shard', '5/4']), 2)
+        self.assertEqual(main(['debug', '--ctest-shard', '1/9']), 2)
+        self.assertIsNone(parse_args(['debug']).ctest_shard)
+        for count in range(1, 9):
+            for index in range(1, count + 1):
+                args = parse_args(['debug', '--ctest-shard', f'{index}/{count}'])
+                self.assertEqual((args.ctest_shard.index, args.ctest_shard.count), (index, count))
+
     def test_unknown_profile(self):
         with self.assertRaises(ConfigError):
             parse_args(['relaxed'])
@@ -671,6 +780,64 @@ class ConfigValidation(unittest.TestCase):
         self.assertEqual(cfg.exclude_label, 'l4-pending')
         with self.assertRaisesRegex(ConfigError, 'exclude-label'):
             validate_config(parse_args(['release', '--exclude-label', 'bad label']))
+
+    def test_debug_build_types_default_to_excluding_slow(self):
+        for profile in ('debug', 'sanitizers'):
+            with self.subTest(profile=profile):
+                cfg = validate_config(parse_args([profile]))
+                self.assertEqual(cmake_cache_definitions(cfg)['CMAKE_BUILD_TYPE'], 'Debug')
+                self.assertEqual(cfg.exclude_label, 'slow')
+                command = ci_verify.ctest_command(cfg, cfg.build_dir, jobs=1, junit=False)
+                self.assertEqual(command[command.index('-LE') + 1], 'slow')
+
+    def test_release_kernel_native_and_live_only_have_no_default_exclusion(self):
+        for profile in ('release', 'kernel', 'native', 'live-sanitizers', 'live-tsan'):
+            with self.subTest(profile=profile):
+                cfg = validate_config(parse_args([profile]))
+                self.assertIsNone(cfg.exclude_label)
+                self.assertNotIn('-LE', ci_verify.ctest_command(
+                    cfg, cfg.build_dir, jobs=1, junit=False))
+
+    def test_default_exclusion_follows_build_type_for_a_future_profile(self):
+        future = ci_verify.Profile('future-profile', 'Debug', False, False, True, True)
+        with mock.patch.object(ci_verify, 'PROFILES', (*PROFILES, future.name)):
+            for build_type in ('Debug', 'Release', 'RelWithDebInfo', 'MinSizeRel'):
+                with self.subTest(build_type=build_type):
+                    profile = replace(future, build_type=build_type)
+                    with mock.patch.dict(ci_verify.PROFILE, {future.name: profile}):
+                        cfg = validate_config(parse_args([future.name]))
+                    self.assertEqual(cmake_cache_definitions(cfg)['CMAKE_BUILD_TYPE'], build_type)
+                    command = ci_verify.ctest_command(cfg, cfg.build_dir, jobs=1, junit=False)
+                    if build_type == 'Debug':
+                        self.assertEqual(cfg.exclude_label, 'slow')
+                        self.assertEqual(command[command.index('-LE') + 1], 'slow')
+                        self.assertEqual(ci_verify.Driver(cfg).summary['excludeLabel'], 'slow')
+                    else:
+                        self.assertIsNone(cfg.exclude_label)
+                        self.assertNotIn('-LE', command)
+        for name in ('debug', 'sanitizers'):
+            with self.subTest(profile=name, build_type='Release'):
+                profile = replace(ci_verify.PROFILE[name], build_type='Release')
+                with mock.patch.dict(ci_verify.PROFILE, {name: profile}):
+                    cfg = validate_config(parse_args([name]))
+                self.assertIsNone(cfg.exclude_label)
+                self.assertNotIn('-LE', ci_verify.ctest_command(
+                    cfg, cfg.build_dir, jobs=1, junit=False))
+
+    def test_explicit_label_overrides_the_profile_default_where_valid(self):
+        for profile in ('debug', 'release', 'sanitizers', 'kernel', 'native'):
+            with self.subTest(profile=profile):
+                cfg = validate_config(parse_args([profile, '--exclude-label', 'custom-label']))
+                self.assertEqual(cfg.exclude_label, 'custom-label')
+                command = ci_verify.ctest_command(cfg, cfg.build_dir, jobs=1, junit=False)
+                self.assertEqual(command[command.index('-LE') + 1], 'custom-label')
+        for profile in ('live-sanitizers', 'live-tsan'):
+            with self.subTest(profile=profile):
+                with self.assertRaisesRegex(ConfigError, 'every runner row'):
+                    validate_config(parse_args([profile, '--exclude-label', 'slow']))
+        for label in ('', ' '):
+            with self.subTest(label=label), self.assertRaisesRegex(ConfigError, 'simple CTest label'):
+                validate_config(parse_args(['debug', '--exclude-label', label]))
 
     def test_ccache_requires_installed_tool(self):
         args = parse_args(['release', '--ccache'])
@@ -705,6 +872,1074 @@ class ConfigValidation(unittest.TestCase):
 
 
 class RowFloorConfig(unittest.TestCase):
+    def shard_driver(self, profile='sanitizers', shard='1/2', extra=()):
+        temporary = tempfile.TemporaryDirectory(prefix='ci-shard-accounting-')
+        self.addCleanup(temporary.cleanup)
+        argv = [profile, '--build-dir', temporary.name, *extra]
+        if shard is not None:
+            argv += ['--ctest-shard', shard]
+        cfg = ci_verify.build_config(argv, which=lambda name: '/fixture/bin/' + name,
+                                     stream_output=False)
+        return ci_verify.Driver(cfg)
+
+    @staticmethod
+    def discovery(names):
+        listing = ''.join(f'Test #{index}: {name}\n' for index, name in enumerate(names, 1))
+        return Completed(0, (listing + f'Total Tests: {len(names)}\n').encode())
+
+    def test_unsharded_summary_and_ctest_command_keep_the_existing_contract(self):
+        driver = self.shard_driver('native', shard=None)
+        self.assertEqual(set(driver.summary), {
+            'schemaVersion', 'status', 'profile', 'source', 'buildDir', 'installPrefix',
+            'smokeDir', 'jobs', 'generator', 'ccache', 'requireWebsocket', 'curlDir',
+            'minTests', 'excludeLabel', 'ctestRegistered', 'ctestSelected', 'ctestRows',
+            'ctestTotal', 'ctestSkipped', 'ctestNotRun', 'ctestDisabled', 'versionSource',
+            'cmakeDefinitions', 'expectedVersion', 'actualVersion', 'exitCode', 'abi',
+            'abiPrior', 'abiV13', 'abiV14', 'abiV15Frozen', 'abiV16Frozen', 'abiV18Frozen',
+            'stages', 'failures',
+        })
+        self.assertEqual(ci_verify.ctest_command(driver.cfg, driver.cfg.build_dir,
+                                                jobs=4, junit=False),
+                         ['ctest', '--test-dir', str(driver.cfg.build_dir),
+                          '--output-on-failure', '--no-tests=error',
+                          '--parallel', '4', '--timeout', '0'])
+
+    def test_sharded_full_floors_bind_registry_in_both_fixture_worlds(self):
+        for profile in ('release', 'kernel'):
+            for overlay in (False, True):
+                with self.subTest(profile=profile, overlay=overlay):
+                    with mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES':
+                                                     '1' if overlay else ''}):
+                        driver = self.shard_driver(profile)
+                        floor = LAB_SHARD_FLOORS[profile][overlay]
+                        registry = tuple(f'public_{index}' for index in range(floor - 1))
+                        selected = registry[:1]
+                        with mock.patch.object(driver, 'pinned_private_fixture_rows',
+                                               return_value=frozenset()):
+                            driver.enforce_sharded_test_floor(
+                                Completed(0, named_ctest_output(selected)),
+                                registry, registry, selected)
+                    self.assertIn('ctest-floor', failure_stages(driver.summary))
+                    self.assertTrue(any('below the floor' in failure.get('error', '')
+                                        for failure in driver.failures))
+
+    def test_sharded_registry_capacity_cannot_count_a_pinned_placeholder_as_public(self):
+        for profile in ('release', 'kernel'):
+            for missing in (False, True):
+                with self.subTest(profile=profile, missing=missing):
+                    driver = self.shard_driver(profile)
+                    public = tuple(f'public_{index}' for index in
+                                   range(LAB_SHARD_FLOORS[profile][False] - int(missing)))
+                    registry = (*public, 'private')
+                    with mock.patch.object(driver, 'pinned_private_fixture_rows',
+                                           return_value=frozenset({'private'})):
+                        driver.enforce_sharded_test_floor(
+                            Completed(0, named_ctest_output(public[:1])),
+                            registry, registry, public[:1])
+                    self.assertEqual('ctest-floor' in failure_stages(driver.summary), missing)
+
+    def test_sharded_contract_permits_only_the_declared_debug_build_exclusion(self):
+        for profile in ('debug', 'sanitizers'):
+            for extra in ((), ('--exclude-label', 'slow')):
+                with self.subTest(profile=profile, extra=extra):
+                    driver = self.shard_driver(profile, extra=extra)
+                    self.assertEqual(driver.cfg.exclude_label, 'slow')
+        for profile, label in (('release', 'slow'), ('kernel', 'slow'),
+                               ('debug', 'custom-label'), ('sanitizers', 'custom-label')):
+            with self.subTest(profile=profile):
+                with self.assertRaisesRegex(ConfigError, 'declared Debug-build-type exclusion'):
+                    self.shard_driver(profile, extra=('--exclude-label', label))
+        for profile in ('native', 'live-sanitizers', 'live-tsan'):
+            with self.subTest(profile=profile):
+                with self.assertRaisesRegex(ConfigError, 'requires release'):
+                    self.shard_driver(profile)
+
+    def test_sharded_config_cannot_divide_or_lower_the_lab_profile_floor(self):
+        for profile, floors in LAB_SHARD_FLOORS.items():
+            for overlay, floor in floors.items():
+                with self.subTest(profile=profile, overlay=overlay):
+                    with mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES':
+                                                     '1' if overlay else ''}):
+                        for lowered in (floor // 4, floor - 1):
+                            with self.assertRaisesRegex(ConfigError, 'undivided profile floor'):
+                                self.shard_driver(profile, shard='1/4',
+                                                  extra=('--min-tests', str(lowered)))
+                        driver = self.shard_driver(profile, shard='1/4')
+                        self.assertEqual(driver.summary['minTests'], floor)
+                        raised = self.shard_driver(profile, shard='1/4',
+                                                   extra=('--min-tests', str(floor + 1)))
+                        self.assertEqual(raised.summary['minTests'], floor + 1)
+
+    def test_sharded_accounting_refuses_not_run_disabled_and_unpermitted_skips(self):
+        selection = ('a', 'b', *(f'public_{row}' for row in range(1024)))
+        registry = (*selection, *SHARD_SLOW_FIXTURE_NAMES)
+        for category in ('not_run', 'disabled', 'skipped'):
+            with self.subTest(category=category):
+                driver = self.shard_driver(extra=('--min-tests', '1'))
+                driver.summary['ctestExcludedNames'] = sorted(SHARD_SLOW_FIXTURE_NAMES)
+                selected = ('a', 'b')
+                output = named_ctest_output(selected, **{category: ('b',)})
+                driver.enforce_sharded_test_floor(Completed(0, output),
+                                                  registry, selection, selected)
+                self.assertIn('ctest-floor', failure_stages(driver.summary))
+        driver = self.shard_driver(extra=('--min-tests', '3'))
+        driver.summary['ctestExcludedNames'] = sorted(SHARD_SLOW_FIXTURE_NAMES)
+        with self.assertRaises(ValueError):
+            ci_verify.ctest_shard_evidence(b'100% tests passed out of 2\n', ('a', 'b'))
+        # Registry size, rather than the local count, clears an explicit floor.
+        driver.enforce_sharded_test_floor(Completed(0, named_ctest_output(('a',))),
+                                          registry, selection, ('a',))
+        self.assertEqual(driver.failures, [])
+
+    @staticmethod
+    def platform_exclusion_cases(row):
+        # Independent implementation of the documented SHA-256 owner formula;
+        # do not ask the production partitioner which shard should see the row.
+        owner = int(hashlib.sha256(row.encode('utf-8')).hexdigest(), 16) % 4 + 1
+        for profile in ('debug', 'sanitizers'):
+            for extra in ((), ('--exclude-label', 'slow')):
+                for shard in (None, '1/1', f'{owner}/4'):
+                    for overlay in (False, True):
+                        yield profile, extra, shard, overlay
+
+    def exercise_platform_exclusion(self, profile, extra, shard, overlay, *,
+                                    host_platform, skipped=(), missing=()):
+        # Names are independent fixtures, taken from CR-267's source contract,
+        # never from the production allow-list or its predicate.
+        selection = ('test_scratch_arena_jailed_seals', 'test_unlisted_platform_skip',
+                     *(f'public_platform_{index}' for index in range(1024)))
+        excluded = SHARD_SLOW_FIXTURE_NAMES
+        registry = (*selection, *excluded)
+
+        def output(names):
+            # Simulate external CTest results, including a truncated population
+            # when requested. Never edit the accounting function's return value.
+            emitted = tuple(name for name in names if name not in missing)
+            return Completed(0, named_ctest_output(
+                emitted, skipped=tuple(name for name in skipped if name in emitted)))
+
+        def runner(argv, **kwargs):
+            if '--help' in argv:
+                return Completed(0, b'CTest help\n')
+            names = registry
+            if '-L' in argv:
+                names = tuple(name for name in names if name in excluded)
+            if '-LE' in argv:
+                names = tuple(name for name in names if name not in excluded)
+            if '-R' in argv:
+                expression = argv[argv.index('-R') + 1]
+                names = tuple(name for name in names if re.search(expression, name))
+            return self.discovery(names) if '-N' in argv else output(names)
+
+        with mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES':
+                                         '1' if overlay else ''}), \
+                mock.patch.object(ci_verify.sys, 'platform', host_platform):
+            driver = self.shard_driver(profile, shard=shard, extra=extra)
+            if shard is None:
+                driver.enforce_test_floor(
+                    output(selection), registered=len(registry), selected=len(selection),
+                    registered_names=frozenset(registry), excluded_names=frozenset(excluded))
+            else:
+                driver.cfg.runner = runner
+                driver.run_sharded_ctest(driver.cfg.build_dir, 1,
+                                          self.discovery(registry), self.discovery(selection))
+        return driver
+
+    def test_non_linux_seals_skip_is_permitted_for_default_and_explicit_exclusions(self):
+        # m1: ignoring the table makes these otherwise-complete runs fail.
+        row = 'test_scratch_arena_jailed_seals'
+        for host in ('darwin', 'freebsd14'):
+            for profile, extra, shard, overlay in self.platform_exclusion_cases(row):
+                with self.subTest(host=host, profile=profile, extra=extra,
+                                  shard=shard, overlay=overlay):
+                    driver = self.exercise_platform_exclusion(
+                        profile, extra, shard, overlay, host_platform=host, skipped=(row,))
+                    self.assertEqual(driver.failures, [])
+                    self.assertIsNone(driver.summary['minTests'])
+                    self.assertEqual(driver.summary['ctestSkipped'], [row])
+                    self.assertEqual(driver.summary['ctestNotRun'], [])
+                    self.assertEqual(driver.summary['ctestDisabled'], [])
+                    self.assertIn('ctest-exclusion' if shard in (None, '1/1')
+                                  else 'ctest-floor', stage_names(driver.summary))
+
+    def test_linux_seals_skip_is_refused_for_default_and_explicit_exclusions(self):
+        # m2; the N > 1 cases also kill m4's old floorless skip bypass.
+        row = 'test_scratch_arena_jailed_seals'
+        for profile, extra, shard, overlay in self.platform_exclusion_cases(row):
+            with self.subTest(profile=profile, extra=extra, shard=shard, overlay=overlay):
+                driver = self.exercise_platform_exclusion(
+                    profile, extra, shard, overlay, host_platform='linux', skipped=(row,))
+                stage = 'ctest-exclusion' if shard in (None, '1/1') else 'ctest-floor'
+                self.assertEqual(failure_stages(driver.summary), [stage])
+                self.assertIsNone(driver.summary['minTests'])
+                self.assertEqual(driver.summary['ctestSkipped'], [row])
+                self.assertIn(row, driver.failures[0]['error'])
+
+    def test_unlisted_skip_is_refused_for_default_and_explicit_exclusions(self):
+        # m3: arithmetic alone must not authorize an arbitrary skipped row.
+        # m4: debug/sanitizers have no default floor, including on N > 1.
+        row = 'test_unlisted_platform_skip'
+        for host in ('darwin', 'linux'):
+            for profile, extra, shard, overlay in self.platform_exclusion_cases(row):
+                with self.subTest(host=host, profile=profile, extra=extra,
+                                  shard=shard, overlay=overlay):
+                    driver = self.exercise_platform_exclusion(
+                        profile, extra, shard, overlay, host_platform=host, skipped=(row,))
+                    stage = 'ctest-exclusion' if shard in (None, '1/1') else 'ctest-floor'
+                    self.assertEqual(failure_stages(driver.summary), [stage])
+                    self.assertIsNone(driver.summary['minTests'])
+                    self.assertEqual(driver.summary['ctestSkipped'], [row])
+                    self.assertIn(row, driver.failures[0]['error'])
+
+    def test_platform_seals_row_missing_from_results_is_refused(self):
+        # An allowance is for an observed skip, never a credit for a missing row.
+        row = 'test_scratch_arena_jailed_seals'
+        for profile, extra, shard, overlay in self.platform_exclusion_cases(row):
+            with self.subTest(profile=profile, extra=extra, shard=shard, overlay=overlay):
+                driver = self.exercise_platform_exclusion(
+                    profile, extra, shard, overlay, host_platform='darwin', missing=(row,))
+                self.assertEqual(failure_stages(driver.summary),
+                                 ['ctest-exclusion' if shard is None
+                                  else 'ctest-shard-accounting'])
+                if shard is None:
+                    self.assertEqual(driver.summary['ctestSkipped'], [])
+                    self.assertIn('selected 1026, but ran 1025', driver.failures[0]['error'])
+                else:
+                    self.assertIn('result names differ from the selected shard',
+                                  driver.failures[0]['error'])
+
+    def test_debug_min_tests_gates_execution_as_well_as_registration(self):
+        # The registry clears both explicit bounds. The observed seals skip
+        # leaves 1025 executed rows, so 1026 must fail only the execution floor.
+        for profile in ('debug', 'sanitizers'):
+            for label in ((), ('--exclude-label', 'slow')):
+                for shard in (None, '1/1'):
+                    for overlay in (False, True):
+                        for floor in (1025, 1026):
+                            with self.subTest(profile=profile, label=label, shard=shard,
+                                              overlay=overlay, floor=floor):
+                                driver = self.exercise_platform_exclusion(
+                                    profile, (*label, '--min-tests', str(floor)), shard, overlay,
+                                    host_platform='darwin',
+                                    skipped=('test_scratch_arena_jailed_seals',))
+                                self.assertEqual(driver.summary['minTests'], floor)
+                                self.assertEqual(driver.summary['ctestRows'], 1025)
+                                exclusion = next(stage for stage in driver.stages
+                                                 if stage['name'] == 'ctest-exclusion')
+                                self.assertEqual(exclusion['status'], 'passed')
+                                self.assertEqual(failure_stages(driver.summary),
+                                                 [] if floor == 1025 else ['ctest-floor'])
+                                self.assertEqual(stage_names(driver.summary).count('ctest-floor'), 1)
+
+    def test_debug_explicit_floor_one_of_one_supplies_the_required_union_proof(self):
+        for profile in ('debug', 'sanitizers'):
+            for label in ((), ('--exclude-label', 'slow')):
+                with self.subTest(profile=profile, label=label):
+                    summaries = self.shard_summaries(
+                        1, profile=profile, extra=(*label, '--min-tests', '1024'))
+                    self.assertIsNone(ci_verify.validate_ctest_shard_union(summaries))
+                    self.assertEqual(summaries[0]['ctestRows'], 1024)
+                    self.assertEqual(stage_names(summaries[0]).count('ctest-floor'), 1)
+
+    def test_sharded_pinned_rows_cannot_run_without_fixtures_or_skip_with_them(self):
+        for overlay in (False, True):
+            with self.subTest(overlay=overlay):
+                with mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES':
+                                                 '1' if overlay else ''}):
+                    driver = self.shard_driver('release')
+                    output = named_ctest_output(
+                        ('private',), skipped=('private',) if overlay else ())
+                    with mock.patch.object(driver, 'pinned_private_fixture_rows',
+                                           return_value=frozenset({'private'})):
+                        driver.enforce_sharded_test_floor(
+                            Completed(0, output), ('private', 'public'),
+                            ('private', 'public'), ('private',))
+                self.assertIn('ctest-private-fixtures' if overlay else 'ctest-floor',
+                              failure_stages(driver.summary))
+                self.assertTrue(any(
+                    ('did not run' if overlay else 'pinned rows that ran') in
+                    failure.get('error', '') for failure in driver.failures))
+        for result in (frozenset(), OSError('missing pin file')):
+            with self.subTest(pin=result):
+                driver = self.shard_driver('kernel')
+                kwargs = {'side_effect': result} if isinstance(result, OSError) else {
+                    'return_value': result}
+                with mock.patch.object(ci_verify, 'private_fixture_rows', **kwargs):
+                    driver.enforce_sharded_test_floor(
+                        Completed(0, named_ctest_output(('public',))),
+                        ('public', 'other'), ('public', 'other'), ('public',))
+                self.assertIn('ctest-floor', failure_stages(driver.summary))
+
+    def test_shard_one_of_one_delegates_to_identical_unsharded_accounting(self):
+        cases = (
+            ('native', (), (), False),
+            ('native', ('--min-tests', '3'), (), False),
+            ('native', ('--min-tests', '1'), ('private',), False),
+            ('release', ('--min-tests', '1'), ('private',), False),
+            ('release', ('--min-tests', '1'), (), False),
+            ('native', (), ('private',), True),
+            ('debug', ('--exclude-label', 'slow'), (), False),
+            ('sanitizers', (), (), False),
+        )
+        names = ('public', 'private')
+        for profile, extra, skipped, overlay in cases:
+            with self.subTest(profile=profile, extra=extra, skipped=skipped, overlay=overlay):
+                excluded = (SHARD_SLOW_FIXTURE_NAMES
+                            if profile in ('debug', 'sanitizers') else ())
+                selected_names = names
+                if excluded:
+                    selected_names = (*names, *(f'public_fixture_{index}'
+                                               for index in range(1024)))
+                discovery = self.discovery((*selected_names, *excluded))
+                selection = self.discovery(selected_names)
+                output = named_ctest_output(selected_names, skipped=skipped)
+                with mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES':
+                                                 '1' if overlay else ''}):
+                    plain = self.shard_driver(profile, shard=None, extra=extra)
+                    sharded = self.shard_driver(profile, shard='1/1', extra=extra)
+                    def runner(argv, **kwargs):
+                        if '--help' in argv:
+                            return Completed(0, b'CTest help\n')
+                        if '-L' in argv:
+                            return self.discovery(excluded)
+                        return selection if '-N' in argv else Completed(0, output)
+                    sharded.cfg.runner = runner
+                    with mock.patch.object(plain, 'pinned_private_fixture_rows',
+                                           return_value=frozenset({'private'})), \
+                         mock.patch.object(sharded, 'pinned_private_fixture_rows',
+                                           return_value=frozenset({'private'})):
+                        plain.enforce_test_floor(Completed(0, output),
+                                                 registered=len(selected_names) + len(excluded),
+                                                 selected=len(selected_names),
+                                                 registered_names=frozenset(
+                                                     (*selected_names, *excluded)),
+                                                 excluded_names=frozenset(excluded))
+                        sharded.run_sharded_ctest(sharded.cfg.build_dir, 1, discovery, selection)
+                for key in ('ctestRows', 'ctestTotal', 'ctestSkipped',
+                            'ctestNotRun', 'ctestDisabled'):
+                    self.assertEqual(sharded.summary[key], plain.summary[key], key)
+                self.assertEqual(failure_stages(sharded.summary), failure_stages(plain.summary))
+                self.assertIn('ctest-shard-accounting', stage_names(sharded.summary))
+                command = next(stage['argv'] for stage in sharded.stages if stage['name'] == 'ctest')
+                self.assertNotIn('-R', command)
+
+    def test_shard_discovery_and_execution_refuse_lost_or_duplicate_names(self):
+        discovery = self.discovery(('a', 'b', 'c', 'd'))
+        for bad_listing in (self.discovery(('a',)), self.discovery(('a', 'a'))):
+            with self.subTest(listing=bad_listing.stdout):
+                driver = self.shard_driver('release')
+                driver.cfg.runner = mock.Mock(return_value=bad_listing)
+                self.assertIsNone(driver.run_sharded_ctest(driver.cfg.build_dir, 1,
+                                                          discovery, discovery))
+                self.assertIn('ctest-shard-discovery', failure_stages(driver.summary))
+                self.assertNotIn('ctest', stage_names(driver.summary))
+        for output in (
+                named_ctest_output(('c', 'c')),
+                named_ctest_output(('c', 'outsider')),
+                b'100% tests passed out of 2\n'):
+            with self.subTest(output=output):
+                driver = self.shard_driver('release')
+                def runner(argv, **kwargs):
+                    if '--help' in argv:
+                        return Completed(0, b'CTest help\n')
+                    return self.discovery(('c', 'd')) if '-N' in argv else Completed(0, output)
+                driver.cfg.runner = runner
+                driver.run_sharded_ctest(driver.cfg.build_dir, 1, discovery, discovery)
+                self.assertIn('ctest-shard-accounting', failure_stages(driver.summary))
+
+    def test_debug_build_label_discovery_refuses_hidden_or_overlapping_exclusions(self):
+        registry = ('public_a', 'public_b', 'slow_a', 'slow_b')
+        selection = self.discovery(('public_a', 'public_b'))
+        for profile in ('debug', 'sanitizers'):
+            for labelled in (('slow_a',), ('slow_a', 'slow_b', 'outsider'),
+                             ('slow_a', 'slow_b', 'public_a')):
+                with self.subTest(profile=profile, labelled=labelled):
+                    driver = self.shard_driver(profile)
+                    driver.cfg.runner = mock.Mock(return_value=self.discovery(labelled))
+                    self.assertIsNone(driver.run_sharded_ctest(
+                        driver.cfg.build_dir, 1, self.discovery(registry), selection))
+                    self.assertIn('ctest-shard-discovery', failure_stages(driver.summary))
+                    self.assertIn('registry minus labelled exclusions', driver.failures[-1]['error'])
+                    self.assertNotIn('ctest', stage_names(driver.summary))
+
+    def test_ctest_partition_is_exhaustive_disjoint_and_nonempty_for_every_count(self):
+        names = tuple(f'public_{index:03}' for index in range(256))
+        for count in range(1, 9):
+            with self.subTest(count=count):
+                parts = ci_verify.ctest_partitions(names, count)
+                flat = [name for part in parts for name in part]
+                self.assertEqual(sorted(flat), list(names))
+                self.assertEqual(len(flat), len(set(flat)))
+                self.assertEqual(len(parts), count)
+                self.assertTrue(all(parts))
+                self.assertEqual(ci_verify.ctest_partitions(tuple(reversed(names)), count),
+                                 parts)
+        # SHA-256("a"/"b"/"c"/"d") ends in bb/9d/c6/e4 respectively:
+        # independent golden remainders modulo 4, in one-based shard order.
+        self.assertEqual(ci_verify.ctest_partitions(tuple('dcba'), 4),
+                         (('d',), ('b',), ('c',), ('a',)))
+        self.assertEqual(ci_verify.ctest_partitions(tuple('dcba'), 1), (tuple('abcd'),))
+
+    def test_ctest_partition_keeps_existing_owners_when_names_are_added(self):
+        names = tuple(f'public_{index:03}' for index in range(256))
+        for count in range(2, 9):
+            before = ci_verify.ctest_partitions(names, count)
+            after = ci_verify.ctest_partitions((*names, 'a_new_test', 'z_new_test'), count)
+            for index, part in enumerate(before):
+                self.assertTrue(set(part) <= set(after[index]), (count, index))
+
+    def test_ctest_partition_refuses_duplicate_names_empty_rows_and_empty_shards(self):
+        for names, count in ((('a', 'a'), 1), ((), 1), (('a',), 2)):
+            with self.subTest(names=names, count=count):
+                with self.assertRaises(ValueError):
+                    ci_verify.ctest_partitions(names, count)
+        # Hash assignment can leave an empty shard even when len(names) >= N.
+        with self.assertRaisesRegex(ValueError, 'zero rows'):
+            ci_verify.ctest_partitions(('a', 'b'), 2)
+        for index, count in ((0, 4), (5, 4), (1, 0), (1, 9), (True, 2), (1, 2.0)):
+            with self.subTest(index=index, count=count):
+                with self.assertRaises(ConfigError):
+                    ci_verify.CTestShard(index, count)
+
+    def test_ctest_registry_hash_uses_sorted_utf8_names_with_final_newlines(self):
+        # U+E000 precedes U+10000 in UTF-8 byte order but follows it in
+        # JavaScript's default UTF-16 sort. The lab deliberately sorts bytes.
+        names = ('\U00010000', 'beta', '\ue000', 'alpha', 'é')
+        wire = b'alpha\nbeta\n\xc3\xa9\n\xee\x80\x80\n\xf0\x90\x80\x80\n'
+        expected = hashlib.sha256(wire).hexdigest()
+        self.assertEqual(ci_verify.ctest_registry_sha256(names), expected)
+        self.assertEqual(ci_verify.ctest_registry_sha256(tuple(reversed(names))), expected)
+        self.assertNotEqual(expected, hashlib.sha256(wire[:-1]).hexdigest())
+        self.assertNotEqual(ci_verify.ctest_registry_sha256(('alpha', 'gamma')), expected)
+        for listing in (b'Test #1: a\nTest #2: a\nTotal Tests: 2\n',
+                        b'Test #1: a\nTest #1: b\nTotal Tests: 2\n',
+                        b'Test #1: a\nTotal Tests: 2\n', b'Total Tests: 0\n',
+                        b'Test #1: \xff\nTotal Tests: 1\n'):
+            with self.subTest(listing=listing):
+                with self.assertRaises(ValueError):
+                    ci_verify.ctest_registry(listing)
+
+    def test_ctest_shard_evidence_requires_actual_names_and_consistent_categories(self):
+        names = ('pass', 'skip', 'missing', 'disabled')
+        output = named_ctest_output(names, skipped=('skip',), not_run=('missing',),
+                                    disabled=('disabled',))
+        self.assertEqual(ci_verify.ctest_shard_evidence(output, names),
+                         {'ran': ['pass'], 'skipped': ['skip'],
+                          'notRun': ['missing'], 'disabled': ['disabled']})
+        good = named_ctest_output(('a', 'b'))
+        for corrupted in (
+                good.replace(b'2/2 Test #2: b ........Passed 0.01 sec\n', b''),
+                good.replace(b'2/2 Test #2: b', b'2/2 Test #2: a'),
+                good.replace(b'2/2 Test #2: b', b'2/2 Test #2: outsider'),
+                good.replace(b'out of 2', b'out of 3'),
+                b'No tests were found!!!\n'):
+            with self.subTest(output=corrupted):
+                with self.assertRaises(ValueError):
+                    ci_verify.ctest_shard_evidence(corrupted, ('a', 'b'))
+        with self.assertRaises(ValueError):
+            ci_verify.ctest_shard_evidence(
+                output.replace(b' - skip (Skipped)', b' - pass (Skipped)'), names)
+        with self.assertRaises(ValueError):
+            ci_verify.ctest_shard_evidence(
+                b'1/1 Test #1: \xff ........Passed 0.01 sec\n\n'
+                b'100% tests passed out of 1\n', ('\ufffd',))
+
+    def shard_summaries(self, count, *, profile='debug', overlay=False, extra=(),
+                        inventory=None, labelled=SHARD_SLOW_FIXTURE_NAMES, fresh=False, **exits):
+        """Produce original JSON through main -> Driver.run -> write_summary.
+
+        Only external commands are scripted. Never hand-assemble a passed
+        stage table or an expected registry digest. Cache originals within a
+        test; mutations receive independent JSON copies, and partition
+        mutations explicitly request fresh Driver runs.
+        """
+        key = (count, profile, overlay, tuple(extra), inventory, labelled, tuple(sorted(exits.items())))
+        cache = self.__dict__.setdefault('_shard_summaries_cache', {})
+        if not fresh and key in cache:
+            return json.loads(cache[key])
+        pinned = ()
+        if inventory is None:
+            floors = LAB_SHARD_FLOORS.get(profile)
+            public = 1024 if profile in ('debug', 'sanitizers') else 256
+            if floors is not None:
+                public = floors[False]
+            pin_count = 0 if floors is None else floors[True] - floors[False]
+            pinned = tuple(sorted(ci_verify.private_fixture_rows(ROOT))[:pin_count])
+            self.assertEqual(len(pinned), pin_count)
+            inventory = (*pinned, *(f'public_{row:03}' for row in range(public)), *labelled)
+        commands = {name: 0 for name in LAB_SHARD_GUARDS}
+        commands['source-guard-twin-parity'] = 0
+        commands.update(exits)
+        skipped = commands.pop('ctest_skipped', () if overlay else pinned)
+        summaries = []
+        with mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES':
+                                         '1' if overlay else ''}):
+            for index in range(1, count + 1):
+                code, summary, _, _ = DriverOrderingAndAggregation.run_profile(
+                    self, profile, extra=['--ctest-shard', f'{index}/{count}', *extra],
+                    ctest_shard_inventory=inventory, ctest_skipped=skipped,
+                    ctest_shard_labelled=labelled, junit_help='absent', **commands)
+                self.assertEqual(code, 0, summary['failures'])
+                self.assertEqual(summary['profile'], profile)
+                self.assertEqual(summary['status'], 'passed')
+                self.assertEqual(summary['failures'], [])
+                self.assertIs(summary['ctestPrivateFixturesOverlay'], overlay)
+                self.assertEqual(summary['ctestRegisteredNames'], sorted(inventory))
+                self.assertEqual(summary['ctestRegistered'], len(inventory))
+                summaries.append(summary)
+        if not fresh:
+            cache[key] = json.dumps(summaries)
+        return summaries
+
+    def assert_lab_shard_contract(self, summaries):
+        """Lab b53dba5e44 recipes.mjs/shards.mjs literals over producer output."""
+        reference = summaries[0]
+        profile = reference['profile']
+        overlay = reference['ctestPrivateFixturesOverlay']
+        every = LAB_SHARD_EVERY | (
+            {'abi-providers-skipped'} if profile == 'kernel' else LAB_SHARD_ABI)
+        first = set(LAB_SHARD_FIRST)
+        if profile in ('release', 'kernel'):
+            every |= {'examples-assert-live'}
+            first.add('native-include-independence')
+        if profile == 'release':
+            first.add('source-guard-twin-parity')
+        if profile == 'kernel':
+            first.update(('kernel-residuals', 'native-help'))
+        if profile == 'sanitizers':
+            every |= {'sanitizer-public-flag'}
+        floor = LAB_SHARD_FLOORS.get(profile, {}).get(overlay)
+        registry = reference['ctestRegisteredNames']
+        excluded = sorted(SHARD_SLOW_FIXTURE_NAMES) if LAB_SHARD_EXCLUDE[profile] else []
+        selection = sorted(set(registry) - set(excluded))
+        digest = hashlib.sha256(b''.join(
+            name.encode('utf-8') + b'\n' for name in sorted(registry, key=lambda n: n.encode('utf-8'))
+        )).hexdigest()
+        union = []
+        for index, summary in enumerate(summaries, 1):
+            self.assertEqual(summary['ctestShard'], {'index': index, 'count': len(summaries)})
+            self.assertEqual(summary['excludeLabel'], LAB_SHARD_EXCLUDE[profile])
+            self.assertEqual(summary['minTests'], floor)
+            self.assertIs(type(summary['ctestPrivateFixturesOverlay']), bool)
+            self.assertEqual(summary['ctestPrivateFixturesOverlay'], overlay)
+            self.assertEqual(summary['ctestRegisteredNames'], sorted(registry))
+            self.assertEqual(summary['ctestRegistered'], len(registry))
+            self.assertEqual(summary['ctestRegistrySha256'], digest)
+            self.assertEqual(summary['ctestExcludedNames'], excluded)
+            self.assertEqual(summary['ctestUnshardedSelectedNames'], selection)
+            self.assertEqual(summary['ctestUnshardedSelected'], len(selection))
+            self.assertTrue(set(excluded).isdisjoint(summary['ctestUnshardedSelectedNames']))
+            self.assertEqual(sorted(excluded + summary['ctestUnshardedSelectedNames']),
+                             sorted(registry))
+            for field in ('ctestRan', 'ctestSkipped', 'ctestNotRun', 'ctestDisabled'):
+                self.assertIsInstance(summary[field], list, field)
+                self.assertTrue(all(isinstance(n, str) and n for n in summary[field]), field)
+            self.assertEqual(summary['ctestNotRun'], [])
+            self.assertEqual(summary['ctestDisabled'], [])
+            rows = summary['ctestRan'] + summary['ctestSkipped']
+            self.assertTrue(rows)
+            self.assertTrue(set(rows) <= set(selection))
+            self.assertEqual(summary['ctestSelected'], len(rows))
+            self.assertEqual(summary['ctestRows'], len(summary['ctestRan']))
+            self.assertEqual(summary['ctestTotal'], len(rows))
+            for key in ('ctestRegistered', 'ctestUnshardedSelected', 'ctestSelected',
+                        'ctestRows', 'ctestTotal'):
+                self.assertIs(type(summary[key]), int, key)
+            union.extend(rows)
+            stages = {stage['name']: stage for stage in summary['stages']}
+            self.assertEqual(len(stages), len(summary['stages']))
+            for name in every:
+                self.assertEqual((stages[name]['status'], stages[name]['exitCode']),
+                                 ('passed', 0), (index, name))
+                self.assertIs(type(stages[name]['exitCode']), int, name)
+            for name in first:
+                stage = stages[name]
+                if index == 1:
+                    self.assertEqual((stage['status'], stage['exitCode']), ('passed', 0), name)
+                else:
+                    self.assertEqual(stage['status'], 'deferred', name)
+                    self.assertEqual(stage['ownerShard'], 1, name)
+                    self.assertIs(type(stage['ownerShard']), int, name)
+                    self.assertIsNone(stage['exitCode'], name)
+            self.assertEqual({stage['name'] for stage in summary['stages']
+                              if stage['status'] == 'deferred'},
+                             first if index != 1 else set())
+            ctest_log = Path(summary['buildDir']) / 'ci-logs/ctest.log'
+            text = ctest_log.read_text()
+            self.assertRegex(text, r'100% tests passed(?:, 0 tests failed)? out of \d+')
+            self.assertEqual(int(re.findall(r'out of (\d+)', text)[-1]), summary['ctestTotal'])
+        self.assertEqual(sorted(union), selection)
+        self.assertEqual(len(union), len(set(union)))
+        if floor is not None:
+            self.assertGreaterEqual(sum(len(s['ctestRan']) for s in summaries), floor)
+
+    def test_ctest_union_accepts_every_count_and_refuses_a_lost_or_duplicated_row(self):
+        for count in range(1, 9):
+            with self.subTest(count=count):
+                summaries = self.shard_summaries(count)
+                self.assert_lab_shard_contract(summaries)
+                self.assertIsNone(ci_verify.validate_ctest_shard_union(summaries))
+        partition = ci_verify.ctest_partitions
+
+        def drops_one(names, count):
+            parts = [list(part) for part in partition(names, count)]
+            parts[0].pop()
+            return tuple(tuple(part) for part in parts)
+
+        with mock.patch.object(ci_verify, 'ctest_partitions', side_effect=drops_one):
+            lost = self.shard_summaries(4, fresh=True)
+        with self.assertRaisesRegex(ValueError, 'lost or added'):
+            ci_verify.validate_ctest_shard_union(lost)
+
+        def duplicates_one(names, count):
+            parts = [list(part) for part in partition(names, count)]
+            parts[1].append(parts[0][0])
+            return tuple(tuple(part) for part in parts)
+
+        with mock.patch.object(ci_verify, 'ctest_partitions', side_effect=duplicates_one):
+            duplicated = self.shard_summaries(4, fresh=True)
+        with self.assertRaisesRegex(ValueError, 'duplicated CTest row'):
+            ci_verify.validate_ctest_shard_union(duplicated)
+        within = self.shard_summaries(4)
+        within[0]['ctestRan'].append(within[0]['ctestRan'][0])
+        with self.assertRaisesRegex(ValueError, 'duplicated CTest row'):
+            ci_verify.validate_ctest_shard_union(within)
+
+    def test_real_summaries_match_lab_stages_and_floors_in_both_fixture_worlds(self):
+        for profile in ('release', 'debug', 'sanitizers', 'kernel'):
+            for overlay in (False, True):
+                with self.subTest(profile=profile, overlay=overlay):
+                    summaries = self.shard_summaries(2, profile=profile, overlay=overlay)
+                    self.assert_lab_shard_contract(summaries)
+                    self.assertIsNone(ci_verify.validate_ctest_shard_union(summaries))
+
+    def test_debug_exclusion_refuses_unpinned_slow_rows(self):
+        # Red-first expectation on c1d10e15e3: extra labels still clear every count.
+        # Also replace a known label with the outsider: equal counts must fail.
+        outsider = 'test_unpinned_slow_regression'
+        commands = {name: 0 for name in LAB_SHARD_GUARDS}
+        for profile in ('debug', 'sanitizers'):
+            for shard in (None, '1/1', '1/4'):
+                for labelled in ((*SHARD_SLOW_FIXTURE_NAMES, outsider),
+                                 (SHARD_SLOW_FIXTURE_NAMES[0], outsider)):
+                    with self.subTest(profile=profile, shard=shard, labelled=labelled):
+                        inventory = (*(f'public_slow_bound_{row}' for row in range(1024)),
+                                     *SHARD_SLOW_FIXTURE_NAMES, outsider)
+                        code, summary, _, _ = DriverOrderingAndAggregation.run_profile(
+                            self, profile,
+                            extra=[] if shard is None else ['--ctest-shard', shard],
+                            ctest_shard_inventory=inventory, ctest_shard_labelled=labelled,
+                            junit_help='absent', **commands)
+                        self.assertEqual(code, 1)
+                        stage = ('ctest-shard-discovery' if shard == '1/4'
+                                 else 'ctest-exclusion')
+                        self.assertEqual(failure_stages(summary), [stage])
+                        self.assertIn(outsider, summary['failures'][0]['error'])
+                        self.assertIn('unpinned slow rows', summary['failures'][0]['error'])
+
+    def test_slow_exclusion_accepts_conditionally_registered_subset(self):
+        # Only two source-pinned names register here. Equality with the full
+        # policy set would refuse this valid conditional registry.
+        commands = {name: 0 for name in LAB_SHARD_GUARDS}
+        inventory = (*(f'public_slow_bound_{row}' for row in range(1024)),
+                     *SHARD_SLOW_FIXTURE_NAMES)
+        for profile in ('debug', 'sanitizers'):
+            for shard in (None, '1/1', '1/4'):
+                with self.subTest(profile=profile, shard=shard):
+                    code, summary, _, _ = DriverOrderingAndAggregation.run_profile(
+                        self, profile,
+                        extra=[] if shard is None else ['--ctest-shard', shard],
+                        ctest_shard_inventory=inventory,
+                        ctest_shard_labelled=SHARD_SLOW_FIXTURE_NAMES,
+                        junit_help='absent', **commands)
+                    self.assertEqual(code, 0, summary['failures'])
+                    self.assertEqual(summary['status'], 'passed')
+
+    def test_debug_sharded_absent_world_accepts_pinned_skips(self):
+        # Dropping `self.cfg.exclude_label or` at the pinned-row condition
+        # leaves floorless Debug shards with no pins and turns this red.
+        pinned = tuple(sorted(ci_verify.private_fixture_rows(ROOT)
+                              - frozenset(SHARD_SLOW_FIXTURE_NAMES)))
+        self.assertTrue(pinned)
+        outsider = 'public_unpinned_skip'
+        inventory = (*pinned, outsider, *(f'public_skip_{row}' for row in range(1024)),
+                     *SHARD_SLOW_FIXTURE_NAMES)
+        commands = {name: 0 for name in LAB_SHARD_GUARDS}
+        for profile in ('debug', 'sanitizers'):
+            with self.subTest(profile=profile), mock.patch.dict(
+                    os.environ, {'PINEFORGE_PRIVATE_FIXTURES': ''}):
+                summaries = self.shard_summaries(
+                    4, profile=profile, inventory=inventory, ctest_skipped=pinned)
+                self.assert_lab_shard_contract(summaries)
+                self.assertIsNone(ci_verify.validate_ctest_shard_union(summaries))
+                self.assertEqual(sorted(name for summary in summaries
+                                        for name in summary['ctestSkipped']), sorted(pinned))
+                for summary in summaries:
+                    self.assertIsNone(summary['minTests'])
+                    self.assertEqual(summary['status'], 'passed')
+                    self.assertIn('ctest-floor', stage_names(summary))
+                # Independently choose the shard observing one additional skip.
+                owner = int(hashlib.sha256(outsider.encode('utf-8')).hexdigest(), 16) % 4 + 1
+                code, bad, _, _ = DriverOrderingAndAggregation.run_profile(
+                    self, profile, extra=['--ctest-shard', f'{owner}/4'],
+                    ctest_shard_inventory=inventory,
+                    ctest_shard_labelled=SHARD_SLOW_FIXTURE_NAMES,
+                    ctest_skipped=(*pinned, outsider), junit_help='absent', **commands)
+                self.assertEqual(code, 1)
+                self.assertEqual(failure_stages(bad), ['ctest-floor'])
+                self.assertIn(outsider, bad['failures'][0]['error'])
+                self.assertIn('unpermitted skips', bad['failures'][0]['error'])
+
+    def test_debug_builds_declare_all_labelled_names_and_partition_only_selected_names(self):
+        labelled = SHARD_SLOW_FIXTURE_NAMES
+        partition = ci_verify.ctest_partitions
+        for profile in ('debug', 'sanitizers'):
+            for count in (1, 2, 4):
+                with self.subTest(profile=profile, count=count):
+                    with mock.patch.object(ci_verify, 'ctest_partitions', wraps=partition) as calls:
+                        summaries = self.shard_summaries(
+                            count, profile=profile, labelled=labelled, fresh=True)
+                    self.assert_lab_shard_contract(summaries)
+                    registry = set(summaries[0]['ctestRegisteredNames'])
+                    selected = registry - set(labelled)
+                    self.assertEqual(len(calls.call_args_list), count)
+                    for call in calls.call_args_list:
+                        self.assertEqual(set(call.args[0]), selected)
+                        self.assertEqual(call.args[1], count)
+                    for summary in summaries:
+                        self.assertEqual(summary['ctestExcludedNames'], sorted(labelled))
+                        listing = next(stage for stage in summary['stages']
+                                       if stage['name'] == 'ctest-list-excluded')
+                        self.assertEqual(listing['argv'][-3:], ['-N', '-L', 'slow'])
+                        text = (Path(summary['buildDir']) / listing['log']).read_text()
+                        listed = re.findall(r'^Test #\d+: (.+)$', text, re.MULTILINE)
+                        self.assertEqual(sorted(listed), sorted(labelled))
+                        for field in ('ctestRan', 'ctestSkipped', 'ctestNotRun', 'ctestDisabled'):
+                            self.assertTrue(set(summary[field]).isdisjoint(labelled), field)
+                    self.assertIsNone(ci_verify.validate_ctest_shard_union(summaries))
+
+    def test_release_and_kernel_run_the_labelled_rows_by_default(self):
+        for profile in ('release', 'kernel'):
+            with self.subTest(profile=profile):
+                summaries = self.shard_summaries(2, profile=profile)
+                self.assert_lab_shard_contract(summaries)
+                ran = [name for summary in summaries for name in summary['ctestRan']]
+                self.assertTrue(set(SHARD_SLOW_FIXTURE_NAMES) <= set(ran))
+                for summary in summaries:
+                    self.assertIsNone(summary['excludeLabel'])
+                    self.assertEqual(summary['ctestExcludedNames'], [])
+                    self.assertNotIn('ctest-list-excluded', stage_names(summary))
+                    command = next(stage['argv'] for stage in summary['stages']
+                                   if stage['name'] == 'ctest')
+                    self.assertNotIn('-LE', command)
+
+    def test_native_runs_the_labelled_rows_by_default(self):
+        inventory = (*(f'public_{row}' for row in range(1024)), *SHARD_SLOW_FIXTURE_NAMES)
+        commands = {name: 0 for name in LAB_SHARD_GUARDS}
+        code, summary, _, _ = DriverOrderingAndAggregation.run_profile(
+            self, 'native', ctest_shard_inventory=inventory,
+            ctest_shard_labelled=SHARD_SLOW_FIXTURE_NAMES, junit_help='absent', **commands)
+        self.assertEqual(code, 0, summary['failures'])
+        self.assertIsNone(summary['excludeLabel'])
+        self.assertEqual(summary['ctestRegistered'], len(inventory))
+        self.assertEqual(summary['ctestSelected'], len(inventory))
+        self.assertEqual(summary['ctestRows'], len(inventory))
+        ctest = next(stage for stage in summary['stages'] if stage['name'] == 'ctest')
+        self.assertNotIn('-LE', ctest['argv'])
+        text = (Path(summary['buildDir']) / ctest['log']).read_text()
+        ran = re.findall(r'Test #\d+: (.+?) \.+Passed', text)
+        self.assertEqual(sorted(ran), sorted(inventory))
+        self.assertTrue(set(SHARD_SLOW_FIXTURE_NAMES) <= set(ran))
+
+    def test_explicit_release_exclusion_still_uses_unsharded_accounting(self):
+        labelled = SHARD_SLOW_FIXTURE_NAMES
+        inventory = (*(f'public_{row}' for row in range(1024)), *labelled)
+        commands = {name: 0 for name in LAB_SHARD_GUARDS | {'source-guard-twin-parity'}}
+        code, summary, _, _ = DriverOrderingAndAggregation.run_profile(
+            self, 'release', extra=['--exclude-label', 'custom-label'],
+            ctest_shard_inventory=inventory, ctest_shard_labelled=labelled,
+            junit_help='absent', **commands)
+        self.assertEqual(code, 0, summary['failures'])
+        self.assertEqual(summary['excludeLabel'], 'custom-label')
+        self.assertEqual(summary['ctestRegistered'], len(inventory))
+        self.assertEqual(summary['ctestSelected'], len(set(inventory) - set(labelled)))
+        self.assertEqual(summary['ctestRows'], summary['ctestSelected'])
+        self.assertNotIn('ctestExcludedNames', summary)
+        self.assertNotIn('ctestRegisteredNames', summary)
+        self.assertIn('ctest-exclusion', stage_names(summary))
+        command = next(stage['argv'] for stage in summary['stages'] if stage['name'] == 'ctest')
+        self.assertEqual(command[command.index('-LE') + 1], 'custom-label')
+
+    def test_full_driver_one_of_one_preserves_unsharded_execution_and_accounting(self):
+        commands = {name: 0 for name in LAB_SHARD_GUARDS | {'source-guard-twin-parity'}}
+        for profile in ('release', 'debug', 'sanitizers', 'kernel'):
+            with self.subTest(profile=profile):
+                sharded = self.shard_summaries(1, profile=profile)[0]
+                code, plain, _, _ = DriverOrderingAndAggregation.run_profile(
+                    self, profile, ctest_shard_inventory=tuple(sharded['ctestRegisteredNames']),
+                    ctest_shard_labelled=SHARD_SLOW_FIXTURE_NAMES,
+                    ctest_skipped=tuple(sharded['ctestSkipped']), junit_help='absent', **commands)
+                self.assertEqual(code, sharded['exitCode'])
+                self.assertNotIn('ctestShard', plain)
+                self.assertNotIn('ctestRan', plain)
+                self.assertNotIn('ctestExcludedNames', plain)
+                for key in ('status', 'failures', 'minTests', 'excludeLabel', 'ctestRegistered',
+                            'ctestSelected', 'ctestRows', 'ctestTotal',
+                            'ctestSkipped', 'ctestNotRun', 'ctestDisabled'):
+                    self.assertEqual(plain[key], sharded[key], key)
+                plain_command = next(stage['argv'] for stage in plain['stages']
+                                     if stage['name'] == 'ctest')
+                shard_command = next(stage['argv'] for stage in sharded['stages']
+                                     if stage['name'] == 'ctest')
+                plain_command = [arg.replace(plain['buildDir'], '<build>')
+                                 for arg in plain_command]
+                shard_command = [arg.replace(sharded['buildDir'], '<build>')
+                                 for arg in shard_command]
+                self.assertEqual(plain_command, shard_command)
+                self.assertNotIn('-R', shard_command)
+
+    def test_ctest_union_refuses_mismatched_hash_registry_configuration_and_indices(self):
+        changes = (
+            ('ctestRegistrySha256', '0' * 64),
+            ('ctestRegistered', 15), ('ctestUnshardedSelected', 15),
+            ('ctestPrivateFixturesOverlay', True), ('profile', 'sanitizers'),
+            ('status', 'failed'), ('exitCode', 1), ('ctestRows', 0),
+            ('failures', [{'stage': 'ctest', 'exitCode': 1}]),
+            ('excludeLabel', None), ('ctestRan', None),
+            ('ctestPrivateFixturesOverlay', 0), ('ctestSelected', True),
+        )
+        for key, value in changes:
+            with self.subTest(key=key):
+                summaries = self.shard_summaries(4)
+                summaries[1][key] = value
+                with self.assertRaises(ValueError):
+                    ci_verify.validate_ctest_shard_union(summaries)
+        for index, count in ((0, 4), (5, 4), (1, 9), (1, 4), (2, 3)):
+            with self.subTest(index=index, count=count):
+                summaries = self.shard_summaries(4)
+                summaries[1]['ctestShard'] = {'index': index, 'count': count}
+                with self.assertRaises((ValueError, ConfigError)):
+                    ci_verify.validate_ctest_shard_union(summaries)
+        summaries = self.shard_summaries(4)
+        summaries[1]['ctestRegisteredNames'][-1] = 'replacement'
+        with self.assertRaises(ValueError):
+            ci_verify.validate_ctest_shard_union(summaries)
+        with self.assertRaises(ValueError):
+            ci_verify.validate_ctest_shard_union(self.shard_summaries(4)[:-1])
+        empty = self.shard_summaries(4)
+        empty[0]['ctestRan'] = []
+        for key in ('ctestRows', 'ctestTotal', 'ctestSelected'):
+            empty[0][key] = 0
+        with self.assertRaisesRegex(ValueError, 'empty shard'):
+            ci_verify.validate_ctest_shard_union(empty)
+
+    def test_ctest_union_rechecks_global_floor_and_deferred_stage_owner(self):
+        summaries = self.shard_summaries(4, extra=('--min-tests', '1024'))
+        skipped = summaries[0]['ctestRan'].pop()
+        summaries[0]['ctestSkipped'].append(skipped)
+        summaries[0]['ctestRows'] -= 1
+        with self.assertRaisesRegex(ValueError, 'unchanged global floor'):
+            ci_verify.validate_ctest_shard_union(summaries)
+        summaries = self.shard_summaries(4)
+        original = next(stage for stage in summaries[0]['stages'] if stage['name'] == 'install')
+        summaries[0]['stages'] = [stage for stage in summaries[0]['stages']
+                                  if stage['name'] != 'install']
+        with self.assertRaisesRegex(ValueError, 'shard 1 proof'):
+            ci_verify.validate_ctest_shard_union(summaries)
+        summaries[0]['stages'].append(original)
+        self.assertIsNone(ci_verify.validate_ctest_shard_union(summaries))
+        build = next(stage for stage in summaries[1]['stages'] if stage['name'] == 'build')
+        build.update(status='deferred', exitCode=None, ownerShard=1)
+        with self.assertRaisesRegex(ValueError, 'shard 1 proof'):
+            ci_verify.validate_ctest_shard_union(summaries)
+
+    def test_ctest_union_rejects_divided_floors_even_when_all_shards_agree(self):
+        for profile, floors in LAB_SHARD_FLOORS.items():
+            for overlay, floor in floors.items():
+                with self.subTest(profile=profile, overlay=overlay):
+                    summaries = self.shard_summaries(4, profile=profile, overlay=overlay)
+                    self.assert_lab_shard_contract(summaries)
+                    for summary in summaries:
+                        self.assertEqual(summary['minTests'], floor)
+                        summary['minTests'] //= 4
+                    with self.assertRaisesRegex(ValueError, 'lowered the registration floor'):
+                        ci_verify.validate_ctest_shard_union(summaries)
+
+    def test_ctest_union_rejects_deferred_stages_with_the_wrong_owner_or_exit_code(self):
+        for changes in ({'ownerShard': 2}, {'ownerShard': True}, {'exitCode': 0}):
+            with self.subTest(changes=changes):
+                summaries = self.shard_summaries(4)
+                deferred = next(stage for stage in summaries[1]['stages']
+                                if stage['name'] == 'install')
+                self.assertEqual(deferred['status'], 'deferred')
+                deferred.update(changes)
+                with self.assertRaisesRegex(ValueError, 'shard 1 proof'):
+                    ci_verify.validate_ctest_shard_union(summaries)
+
+    def test_ctest_union_requires_every_lab_stage_and_rejects_duplicate_stage_names(self):
+        for profile in ('release', 'debug', 'sanitizers', 'kernel'):
+            baseline = self.shard_summaries(2, profile=profile)
+            local = LAB_SHARD_EVERY | (
+                {'abi-providers-skipped'} if profile == 'kernel' else LAB_SHARD_ABI)
+            if profile in ('release', 'kernel'):
+                local |= {'examples-assert-live'}
+            if profile == 'sanitizers':
+                local |= {'sanitizer-public-flag'}
+            for name in sorted(local):
+                with self.subTest(profile=profile, missing=name):
+                    summaries = json.loads(json.dumps(baseline))
+                    summaries[1]['stages'] = [stage for stage in summaries[1]['stages']
+                                              if stage['name'] != name]
+                    with self.assertRaisesRegex(ValueError, 'did not prove required stage'):
+                        ci_verify.validate_ctest_shard_union(summaries)
+            summaries = json.loads(json.dumps(baseline))
+            summaries[1]['stages'].append(dict(summaries[1]['stages'][0]))
+            with self.assertRaisesRegex(ValueError, 'duplicated stage'):
+                ci_verify.validate_ctest_shard_union(summaries)
+
+    def test_ctest_union_refuses_a_consistently_filtered_unsharded_selection(self):
+        summaries = self.shard_summaries(4)
+        for summary in summaries:
+            summary['ctestUnshardedSelectedNames'].pop()
+            summary['ctestUnshardedSelected'] -= 1
+        with self.assertRaisesRegex(ValueError, 'changed unsharded selection'):
+            ci_verify.validate_ctest_shard_union(summaries)
+
+    def test_declared_exclusion_union_rejects_hidden_names_and_excluded_rows(self):
+        # Hiding the same excluded name on every leaf must also fail: that
+        # name is still registered, but neither selected nor declared excluded.
+        for profile in ('debug', 'sanitizers'):
+            with self.subTest(profile=profile):
+                baseline = self.shard_summaries(2, profile=profile)
+                self.assertIsNone(ci_verify.validate_ctest_shard_union(baseline))
+                hidden = json.loads(json.dumps(baseline))
+                for summary in hidden:
+                    summary['ctestExcludedNames'].pop()
+                with self.assertRaisesRegex(ValueError, 'changed unsharded selection'):
+                    ci_verify.validate_ctest_shard_union(hidden)
+        baseline = self.shard_summaries(2)
+        not_subtracted = json.loads(json.dumps(baseline))
+        for summary in not_subtracted:
+            summary['ctestUnshardedSelectedNames'] = list(summary['ctestRegisteredNames'])
+            summary['ctestUnshardedSelected'] = summary['ctestRegistered']
+        with self.assertRaisesRegex(ValueError, 'changed unsharded selection'):
+            ci_verify.validate_ctest_shard_union(not_subtracted)
+        for category in ('ctestRan', 'ctestSkipped', 'ctestNotRun', 'ctestDisabled'):
+            with self.subTest(category=category):
+                leaked = json.loads(json.dumps(baseline))
+                leaf = leaked[0]
+                leaf[category].append(leaf['ctestExcludedNames'][0])
+                leaf['ctestSelected'] += 1
+                if category != 'ctestDisabled':
+                    leaf['ctestTotal'] += 1
+                if category == 'ctestRan':
+                    leaf['ctestRows'] += 1
+                with self.assertRaisesRegex(ValueError, 'count/name disagreement'):
+                    ci_verify.validate_ctest_shard_union(leaked)
+        for excluded in (None, ['outsider'], baseline[0]['ctestExcludedNames'][::-1],
+                         baseline[0]['ctestExcludedNames'] * 2):
+            with self.subTest(excluded=excluded):
+                invalid = json.loads(json.dumps(baseline))
+                for summary in invalid:
+                    summary['ctestExcludedNames'] = excluded
+                with self.assertRaisesRegex(ValueError, 'invalid CTest excluded names'):
+                    ci_verify.validate_ctest_shard_union(invalid)
+        disagree = json.loads(json.dumps(baseline))
+        disagree[1]['ctestExcludedNames'].pop()
+        with self.assertRaisesRegex(ValueError, 'hash/configuration'):
+            ci_verify.validate_ctest_shard_union(disagree)
+        for profile, wrong_label in (('debug', None), ('release', 'slow'),
+                                      ('sanitizers', None), ('kernel', 'slow')):
+            with self.subTest(profile=profile):
+                summaries = self.shard_summaries(2, profile=profile)
+                for summary in summaries:
+                    summary['excludeLabel'] = wrong_label
+                with self.assertRaisesRegex(ValueError, 'hash/configuration'):
+                    ci_verify.validate_ctest_shard_union(summaries)
+
+    def test_ctest_union_requires_original_logs_for_authorized_absent_stage_skips(self):
+        summaries = self.shard_summaries(
+            2, **{'source-guard-c-abi': 'skip-77', 'prepare': 'skip-77'})
+
+        def read_log(summary, stage):
+            return (Path(summary['buildDir']) / stage['log']).read_text()
+
+        self.assertIsNone(ci_verify.validate_ctest_shard_union(summaries, read_stage_log=read_log))
+        with self.assertRaises(ValueError):
+            ci_verify.validate_ctest_shard_union(summaries)
+        for text in ('', 'SKIP private fixtures not present: \n', 'skipped\n'):
+            with self.subTest(log=text):
+                with self.assertRaises(ValueError):
+                    ci_verify.validate_ctest_shard_union(
+                        summaries, read_stage_log=lambda summary, stage: text)
+        bad_path = json.loads(json.dumps(summaries))
+        skipped = next(stage for stage in bad_path[0]['stages']
+                       if stage['name'] == 'source-guard-c-abi')
+        skipped['log'] = 'ci-logs/another-stage.log'
+        with self.assertRaises(ValueError):
+            ci_verify.validate_ctest_shard_union(bad_path, read_stage_log=read_log)
+        overlay = json.loads(json.dumps(summaries))
+        for summary in overlay:
+            summary['ctestPrivateFixturesOverlay'] = True
+        with self.assertRaises(ValueError):
+            ci_verify.validate_ctest_shard_union(overlay, read_stage_log=read_log)
+        unauthorized = self.shard_summaries(2)
+        unauthorized[0]['stages'].append({
+            'name': 'source-guard-unlisted', 'status': 'skipped', 'exitCode': 77,
+            'log': 'ci-logs/source-guard-unlisted.log',
+        })
+        with self.assertRaisesRegex(ValueError, 'stage did not pass'):
+            ci_verify.validate_ctest_shard_union(
+                unauthorized, read_stage_log=lambda summary, stage:
+                'SKIP private fixtures not present: tests/fixtures/unlisted\n')
+
+    def test_ctest_union_refuses_nonrunning_rows_and_unsuccessful_owner_proofs(self):
+        for category in ('ctestNotRun', 'ctestDisabled'):
+            with self.subTest(category=category):
+                summaries = self.shard_summaries(4)
+                name = summaries[1]['ctestRan'].pop()
+                summaries[1][category].append(name)
+                summaries[1]['ctestRows'] -= 1
+                if category == 'ctestDisabled':
+                    summaries[1]['ctestTotal'] -= 1
+                with self.assertRaisesRegex(ValueError, 'not-run or disabled'):
+                    ci_verify.validate_ctest_shard_union(summaries)
+        for status, code in (('failed', 1), ('passed', 1), ('skipped', 77)):
+            with self.subTest(status=status, code=code):
+                summaries = self.shard_summaries(4)
+                proof = next(stage for stage in summaries[0]['stages']
+                             if stage['name'] == 'install')
+                proof.update(status=status, exitCode=code)
+                with self.assertRaisesRegex(ValueError, 'shard 1 proof'):
+                    ci_verify.validate_ctest_shard_union(summaries)
+
+    def test_sharded_stage_skip_requires_the_lab_literal_and_exact_allowlist(self):
+        good = b'SKIP private fixtures not present: tests/fixtures/missing\n'
+        for stage, output in (
+                ('source-guard-c-abi', b'SKIP private fixtures not present: \n'),
+                ('source-guard-c-abi', b'prefix ' + good),
+                ('source-guard-c-abi', b'exit 77\n'),
+                ('source-guard-unlisted', good)):
+            with self.subTest(stage=stage, output=output):
+                driver = self.shard_driver()
+                driver.cfg.runner = mock.Mock(return_value=Completed(77, output))
+                driver.invoke(stage, ['fixture-guard'], accept_skip=True)
+                self.assertEqual(driver.stages[-1]['status'], 'failed')
+                self.assertIn(stage, failure_stages(driver.summary))
+        for shard in (None, '1/1'):
+            # Keep the line-head unsharded acceptance rule unchanged, also
+            # for 1/1's unsharded stage execution path.
+            driver = self.shard_driver(shard=shard)
+            driver.cfg.runner = mock.Mock(return_value=Completed(
+                77, b'SKIP private fixtures not present: \n'))
+            driver.invoke('source-guard-c-abi', ['fixture-guard'], accept_skip=True)
+            self.assertEqual(driver.stages[-1]['status'], 'skipped')
+        driver = self.shard_driver()
+        driver.cfg.runner = mock.Mock(return_value=Completed(77, good))
+        driver.invoke('abi-base', ['fixture-provider'], accept_skip=True)
+        self.assertEqual(driver.stages[-1]['status'], 'skipped')
+        self.assertEqual(driver.failures, [])
+
     def test_min_tests_must_be_a_positive_integer(self):
         for value in ('0', '-3'):
             with self.subTest(value=value):
@@ -1203,12 +2438,12 @@ class CAbiRuntimeInventory(unittest.TestCase):
             _pf_api_names,
         )
         # The public count is read the way the script reads it: pineforge.h
-        # plus the two additive v1 headers.
+        # plus the three additive v1 headers.
         header = [name for relative in RUNTIME_HEADERS
                   for name in _pf_api_names(ROOT / 'include/pineforge' / relative)]
         runtime = _pf_api_names(ROOT / 'src/c_abi.cpp')
-        self.assertEqual(EXPECTED_PUBLIC_DECLARATIONS, 100)
-        self.assertEqual(EXPECTED_RUNTIME_IMPLEMENTATIONS, 80)
+        self.assertEqual(EXPECTED_PUBLIC_DECLARATIONS, 113)
+        self.assertEqual(EXPECTED_RUNTIME_IMPLEMENTATIONS, 93)
         self.assertEqual(len(EXPECTED_RUNTIME), EXPECTED_RUNTIME_IMPLEMENTATIONS)
         self.assertEqual(len(header), EXPECTED_PUBLIC_DECLARATIONS)
         self.assertEqual(len(header), len(set(header)))
@@ -1218,7 +2453,16 @@ class CAbiRuntimeInventory(unittest.TestCase):
         self.assertIn('strategy_configure_native_fx_curve_v1', runtime)
         self.assertIn('strategy_configure_native_fx_curve_ext_v1', header)
         self.assertIn('strategy_configure_native_fx_curve_ext_v1', runtime)
-        for name in ('strategy_set_symbol_feed', 'strategy_set_symbol_feed_column',
+        for name in ('strategy_set_report_sink_fd_v1',
+                     'strategy_report_sink_summary_v1',
+                     'strategy_report_sink_diagnostics_v1',
+                     'strategy_require_report_scratch_arena_v1',
+                     'strategy_set_scratch_tables_v1',
+                     'pf_run_abort_install_sigterm_v1',
+                     'pf_run_abort_requested_v1',
+                     'pf_run_abort_restore_sigterm_v1',
+                     'strategy_set_symbol_feed', 'strategy_set_symbol_feed_borrowed_v1',
+                     'strategy_set_symbol_feed_column',
                      'strategy_set_symbol_facts', 'strategy_set_recorded_series'):
             self.assertIn(name, header)
             self.assertIn(name, runtime)
@@ -1460,6 +2704,14 @@ class DriverOrderingAndAggregation(unittest.TestCase):
         code = run_driver(profile, build_dir, scripted, extra=extra)
         summary = load_summary(build_dir)
         return code, summary, scripted, build_dir
+
+    def test_profile_summaries_match_lab_exclusion_declarations(self):
+        commands = {name: 0 for name in LAB_SHARD_GUARDS | {'source-guard-twin-parity'}}
+        for profile, excluded in LAB_SHARD_EXCLUDE.items():
+            with self.subTest(profile=profile):
+                code, summary, _, _ = self.run_profile(profile, **commands)
+                self.assertEqual(code, 0, summary['failures'])
+                self.assertEqual(summary['excludeLabel'], excluded)
 
     def test_source_guards_are_real_and_pass_on_this_tree(self):
         for name, argv in source_guard_commands(ROOT):
@@ -1782,7 +3034,7 @@ class DriverOrderingAndAggregation(unittest.TestCase):
             self.assertEqual(Path(ctest_argv[ctest_argv.index('--output-junit') + 1]).resolve(),
                              (build_dir / 'ctest-junit.xml').resolve())
 
-    def test_ctest_label_exclusion_is_forwarded(self):
+    def test_ctest_label_exclusion_is_forwarded_to_ctest_argv(self):
         code, summary, scripted, _ = self.run_profile(
             extra=['--exclude-label', 'l4-pending'])
         self.assertEqual(code, 0, summary['failures'])
@@ -1835,10 +3087,13 @@ class DriverOrderingAndAggregation(unittest.TestCase):
     def test_pr_exclusion_refuses_lost_registration_or_label(self):
         for exits in ({'ctest_registered': 652}, {'ctest_labelled': 0},
                       {'ctest_rows': 647}, {'ctest_skipped': ['silent_skip']},
-                      {'ctest-list-selected': 'unreadable'}):
+                      {'ctest-list-selected': 'unreadable'},
+                      {'ctest-list-excluded': 'unreadable'},
+                      {'ctest-list-excluded': 'names-less'},
+                      {'ctest-list-excluded': 1}):
             with self.subTest(exits=exits):
                 code, summary, _, _ = self.run_profile(
-                    'debug', extra=['--exclude-label', 'slow'], **exits)
+                    'debug', **exits)
                 self.assertEqual(code, 1)
                 self.assertIn('ctest-exclusion', failure_stages(summary))
 
@@ -1848,7 +3103,7 @@ class DriverOrderingAndAggregation(unittest.TestCase):
         ctest_argv = next(argv for argv in scripted.calls if argv[0] == 'ctest' and '--test-dir' in argv)
         self.assertNotIn('--output-junit', ctest_argv)
 
-    def test_ctest_label_exclusion_is_forwarded(self):
+    def test_ctest_label_exclusion_is_forwarded_to_ctest_execution_run(self):
         code, summary, scripted, _ = self.run_profile(extra=['--exclude-label', 'l4-pending'])
         self.assertEqual(code, 0, summary['failures'])
         ctest_argv = next(
@@ -2271,6 +3526,103 @@ class RowFloorDriver(unittest.TestCase):
         with mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES': '1'}):
             return DriverOrderingAndAggregation.run_profile(self, profile, extra=extra, **exits)
 
+    def test_real_ctest_shards_escape_names_and_keep_failed_rows_as_run(self):
+        # a/b/c/d have distinct SHA-256 remainders modulo four.
+        padding = tuple(f'public_padding_{row}' for row in range(1024))
+        names = ('a', 'b', 'c', 'd', 'row.a', 'row[0]', 'row+plus', 'row(one)',
+                 'row$money', 'row^start', 'row|pipe', 'row_plain', *padding)
+        # Real label discovery must satisfy the unchanged registration floor
+        # with public padding, not invented names labelled slow.
+        slow_names = SHARD_SLOW_FIXTURE_NAMES
+        cmake = shutil.which('cmake')
+        self.assertIsNotNone(cmake)
+
+        class RealCTest(Scripted):
+            def _configure(self):
+                result = super()._configure()
+                inventory = self.build_dir / 'CTestTestfile.cmake'
+                failed_row = 'row.a' if self.exits.get('real_failure') else None
+                inventory.write_text(''.join(
+                    f'add_test("{name}" "{cmake}" "-E" '
+                    f'"{"false" if name == failed_row else "true"}")\n'
+                    for name in (*self.exits['real_names'], *slow_names))
+                    + 'set_tests_properties(' + ' '.join(f'"{name}"' for name in slow_names)
+                    + ' PROPERTIES LABELS slow)\n')
+                return result
+
+            def __call__(self, argv, **kwargs):
+                if argv[0] == 'ctest' and '--test-dir' in argv:
+                    return default_runner(argv, **kwargs)
+                return super().__call__(argv, **kwargs)
+
+        guard_exits = {name: 0 for name in LAB_SHARD_GUARDS}
+        with tempfile.TemporaryDirectory(prefix='ci-real-shards-') as temporary:
+            source = Path(temporary)
+            summaries = []
+            for index in range(1, 5):
+                build_dir = source / f'shard-{index}'
+                runner = RealCTest(build_dir, ROOT, 'sanitizers', real_names=names, **guard_exits)
+                code = run_driver('sanitizers', build_dir, runner,
+                                  extra=['--ctest-shard', f'{index}/4'])
+                summary = load_summary(build_dir)
+                self.assertEqual(code, 0, summary['failures'])
+                self.assertEqual(summary['excludeLabel'], 'slow')
+                self.assertEqual(summary['ctestExcludedNames'], sorted(slow_names))
+                self.assertEqual(summary['ctestRegisteredNames'], sorted((*names, *slow_names)))
+                self.assertEqual(summary['ctestUnshardedSelectedNames'], sorted(names))
+                summaries.append(summary)
+            self.assertIsNone(ci_verify.validate_ctest_shard_union(summaries))
+            self.assertEqual(sorted(name for summary in summaries for name in summary['ctestRan']),
+                             sorted(names))
+            # An actual failed executable is still a row that ran; the
+            # CTest process failure must prevent successful verification.
+            build_dir = source / 'failure'
+            runner = RealCTest(build_dir, ROOT, 'sanitizers', real_names=('row.a', *padding),
+                               real_failure=True, **guard_exits)
+            code = run_driver('sanitizers', build_dir, runner, extra=['--ctest-shard', '1/1'])
+            summary = load_summary(build_dir)
+            self.assertNotEqual(code, 0)
+            self.assertEqual(summary['status'], 'failed')
+            self.assertEqual(summary['ctestRan'], sorted(('row.a', *padding)))
+            self.assertIn('ctest', failure_stages(summary))
+
+    def test_full_driver_shards_defer_only_shared_stages_and_prove_local_builds(self):
+        guard_exits = {name: 0 for name, _ in source_guard_commands(ROOT)}
+        for profile in ('debug', 'kernel'):
+            summaries = []
+            for index in (1, 2):
+                with self.subTest(profile=profile, shard=index):
+                    inventory = (*(f'shard_fixture_{row}' for row in range(1024)),
+                                 *SHARD_SLOW_FIXTURE_NAMES)
+                    code, summary, scripted, _ = self.run_profile(
+                        profile, extra=['--ctest-shard', f'{index}/2'],
+                        ctest_shard_inventory=inventory,
+                        ctest_shard_labelled=SHARD_SLOW_FIXTURE_NAMES,
+                        junit_help='absent', **guard_exits)
+                    self.assertEqual(code, 0, summary['failures'])
+                    self.assertEqual(summary['ctestRegistered'], len(inventory))
+                    for name in ('configure', 'profile-options', 'build', 'stale-binaries',
+                                 'native-binary', 'ctest-list-all', 'ctest-list-shard',
+                                 'ctest', 'ctest-floor', 'ctest-shard-accounting'):
+                        stage = next(stage for stage in summary['stages'] if stage['name'] == name)
+                        self.assertEqual(stage['status'], 'passed', name)
+                    shared = {name for name, _ in source_guard_commands(ROOT)} | {
+                        'install', 'smoke-configure', 'smoke-build', 'smoke-version',
+                        'smoke-version-check',
+                    }
+                    if profile == 'kernel':
+                        shared |= {'native-include-independence', 'kernel-residuals', 'native-help'}
+                    for name in shared:
+                        stage = next(stage for stage in summary['stages'] if stage['name'] == name)
+                        self.assertEqual(stage['status'], 'passed' if index == 1 else 'deferred',
+                                         (name, index))
+                    deferred = {stage['name'] for stage in summary['stages']
+                                if stage['status'] == 'deferred'}
+                    self.assertEqual(deferred, shared if index == 2 else set())
+                    self.assertEqual('install' in scripted.names(), index == 1)
+                    summaries.append(summary)
+            self.assertIsNone(ci_verify.validate_ctest_shard_union(summaries))
+
     def test_kernel_floor_passes_when_ctest_reports_enough_rows(self):
         code, summary, _, _ = self.run_profile('kernel')
         self.assertEqual(code, 0, summary['failures'])
@@ -2402,11 +3754,11 @@ class RowFloorDriver(unittest.TestCase):
         # --min-tests stays the override (fail-closed below 1, see
         # RowFloorConfig) and gates the same count: 4 rows, 1 skipped.
         code, summary, _, _ = self.run_profile(
-            'debug', extra=['--min-tests', '3'], ctest_rows=4, ctest_skipped=['test_skip'])
+            'native', extra=['--min-tests', '3'], ctest_rows=4, ctest_skipped=['test_skip'])
         self.assertEqual(code, 0, summary['failures'])
         self.assertEqual(summary['ctestRows'], 3)
         code, summary, _, _ = self.run_profile(
-            'debug', extra=['--min-tests', '4'], ctest_rows=4, ctest_skipped=['test_skip'])
+            'native', extra=['--min-tests', '4'], ctest_rows=4, ctest_skipped=['test_skip'])
         self.assertEqual(code, 1)
         self.assertIn('ctest-floor', failure_stages(summary))
 
@@ -2414,7 +3766,9 @@ class RowFloorDriver(unittest.TestCase):
         # expectation corrected: a 3-row release run passed ungated -> release
         # left this loop, because lane P7 gives it a row floor (the two tests
         # above pin that floor).
-        for profile in ('debug', 'sanitizers', 'native'):
+        # Debug and sanitizers use exclusion accounting with null floors;
+        # their scripted runs must account for the selected population.
+        for profile in ('native',):
             with self.subTest(profile=profile):
                 code, summary, _, _ = self.run_profile(profile, ctest_rows=3)
                 self.assertEqual(code, 0, summary['failures'])
@@ -2423,7 +3777,7 @@ class RowFloorDriver(unittest.TestCase):
                 self.assertEqual(summary['ctestRows'], 3)
 
     def test_min_tests_gates_any_profile_and_overrides_the_kernel_default(self):
-        for profile in ('release', 'debug'):
+        for profile in ('release', 'native'):
             with self.subTest(profile=profile):
                 code, summary, _, _ = self.run_profile(
                     profile, extra=['--min-tests', '4'], ctest_rows=3)
@@ -3229,9 +4583,9 @@ class PrExclusionWithFixturesAbsent(unittest.TestCase):
     SKIP, and the old rule (ran == selected) failed on every one of them --
     D2's probe of the real Driver (debug, 882 registered, 5 slow, 290 pinned
     skipping) exited 1 with 'CTest registered 882, labelled 5, selected 877,
-    but ran 587'. The branch now accepts exactly the pinned skips: every
-    skipped row must be pinned and ran + pinned skips must equal selected,
-    so an unpinned skip and a lost public row both still fail.
+    but ran 587'. Pinned skips are accepted beside the one named non-Linux
+    platform skip covered by RowFloorConfig. Ran plus permitted skips must
+    equal selected, so any other unpinned skip and a lost public row fail.
     """
 
     def run_profile(self, profile='debug', extra=None, **exits):
@@ -3268,7 +4622,8 @@ class PrExclusionWithFixturesAbsent(unittest.TestCase):
                     driver = ci_verify.Driver(cfg)
                     driver.enforce_test_floor(
                         Completed(0, ctest_output(total, skipped)),
-                        registered=registered, selected=selected)
+                        registered=registered, selected=selected,
+                        excluded_names=frozenset(SCRIPTED_SLOW_FIXTURE_NAMES))
                     stage = next(item for item in driver.stages if item['name'] == 'ctest-exclusion')
                     self.assertEqual(stage['status'], status, stage)
                     if message:
@@ -3315,9 +4670,9 @@ class PrExclusionWithFixturesAbsent(unittest.TestCase):
         self.assertIn('selected 877', error)
 
     def test_red_overlay_present_a_pinned_skip_fails_the_exclusion(self):
-        # Control (d): with the overlay present the old rule stands -- every
-        # selected row must run -- so even a pinned row that skips fails, on
-        # the private-fixtures rule and on the exclusion stage.
+        # Control (d): with the overlay present every selected private-fixture
+        # row must run, so a pinned skip fails both the private-fixtures rule
+        # and the exclusion stage. The platform exception is not a fixture.
         with mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES': '1'}):
             code, summary, _, _ = self.run_profile(
                 'debug', ctest_registered=882, ctest_labelled=5, ctest_rows=877,
@@ -3363,7 +4718,8 @@ class PrExclusionWithFixturesAbsent(unittest.TestCase):
             driver = ci_verify.Driver(cfg)
             driver.enforce_test_floor(
                 Completed(0, ctest_output(877, tuple(self.pinned_probe(2))), b''),
-                registered=882, selected=877)
+                registered=882, selected=877,
+                excluded_names=frozenset(SCRIPTED_SLOW_FIXTURE_NAMES))
         self.assertEqual([stage['status'] for stage in driver.stages], ['failed'])
         self.assertIn('a truncated pin cannot clear the rows it lost',
                       driver.stages[0]['error'])
@@ -3509,7 +4865,7 @@ class LiveProfilesWithFixturesAbsent(unittest.TestCase):
         # the floor's, which this profile declares none of).
         pinned = self.pinned_probe(1)
         code, summary, _, _ = self.run_profile(
-            'native', ctest_registered=963, ctest_rows=963,
+            'native', ctest_registered=964, ctest_rows=964,
             ctest_skipped=pinned)
         self.assertEqual(code, 0, summary['failures'])
         self.assertNotIn('live-test-skips', stage_names(summary))
@@ -4034,14 +5390,17 @@ class CTestDeadlines(unittest.TestCase):
                 self.assertNotIn('timeout', run.call_args.kwargs)
                 self.assertEqual(result, Completed(code, b'row output', b'diagnostic'))
 
-    def test_commands_keep_every_profile_inventory_and_only_explicit_label_exclusion(self):
+    def test_commands_apply_only_debug_build_default_or_explicit_label_exclusion(self):
         for profile in ('release', 'debug', 'kernel', 'sanitizers',
                         'native', 'live-sanitizers', 'live-tsan'):
             cfg = ci_verify.build_config([profile])
             argv = ci_verify.ctest_command(cfg, cfg.build_dir, jobs=16, junit=True)
             self.assertNotIn('-R', argv)
             self.assertNotIn('-E', argv)
-            self.assertNotIn('-LE', argv)
+            if profile in ('debug', 'sanitizers'):
+                self.assertEqual(argv[argv.index('-LE') + 1], 'slow')
+            else:
+                self.assertNotIn('-LE', argv)
             self.assertIn('--no-tests=error', argv)
             self.assertEqual(argv[argv.index('--timeout') + 1], '0')
         cfg = ci_verify.build_config(['native', '--exclude-label', 'slow'])

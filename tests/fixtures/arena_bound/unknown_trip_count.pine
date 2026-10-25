@@ -1,0 +1,6 @@
+//@version=6
+strategy("arena unknown trip count")
+int i = 0
+while close > i
+    strategy.entry(str.tostring(i), strategy.long)
+    i += 1

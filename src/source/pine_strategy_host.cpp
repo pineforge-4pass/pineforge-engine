@@ -1,13 +1,15 @@
 #include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/checked_settings.hpp>
 #include <pineforge/query_refusal.hpp>
+#include <pineforge/source/exit_scratch.hpp>
 #include <pineforge/source/pine_policy_support.hpp>
 #include <pineforge/ta.hpp>
 #include <pineforge/timeframe.hpp>
-
+#include "multi_day_periods.hpp"
 #include "../engine_internal.hpp"
 #include "../timezone.hpp"
 #include "../native_execution_consumer.hpp"
+#include "../scratch_table_binders.hpp"
 #include "pine_host_reads.hpp"
 #include "pine_intent_state.hpp"
 #include "pine_quiet_bar.hpp"
@@ -15,24 +17,301 @@
 #include "pine_run_failure.hpp"
 #include "pine_value_admit_decl.hpp"
 #include "pine_value_admit_risk.hpp"
+#include "pine_command_scratch_production.hpp"
+#include "exit_scratch_versions_production.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cerrno>
 #include <cmath>
+#include <cstring>
 #include <cstdlib>
 #include <ctime>
 #include <iterator>
 #include <limits>
+#include <memory>
 #include <numeric>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <variant>
+#include <unistd.h>
 
 namespace pineforge {
 using namespace source;
 
 namespace {
+
+::pineforge::detail::ScratchStoreConfig command_scratch_config(
+        std::size_t page_size, ::pineforge::detail::ScratchKeyOrder order) noexcept {
+    return {2, page_size, 1, 1, order,
+            ::pineforge::detail::ScratchOpenMode::create_empty};
+}
+
+std::size_t command_scratch_page_size() {
+    errno = 0;
+    const long size = ::sysconf(_SC_PAGESIZE);
+    if (size <= 0)
+        throw coded<std::system_error>(RunFailureCode::scratch_io_failed, {},
+            std::system_error(errno ? errno : EINVAL, std::generic_category(),
+                              "command scratch platform page size"));
+    return static_cast<std::size_t>(size);
+}
+
+struct SourceExitScratchRun {
+    // Backings precede their stores/context, so borrowers die first.
+    // The native consumer retains this run through source-adapter destruction.
+    // Geometry is fixed independently of the bar and order populations.
+    const std::size_t page_size = command_scratch_page_size();
+    std::unique_ptr<::pineforge::detail::ScratchBacking> exit_backing =
+        source::detail::make_command_scratch_backing(page_size);
+    ::pineforge::detail::CommandScratchStore exit{
+        command_scratch_config(page_size, source::detail::exit_scratch_key_order()),
+        exit_backing.get()};
+    source::detail::ExitScratchContext exit_context{exit, {}};
+    source::detail::ExitScratchVersionsProduction exit_versions{exit};
+
+    SourceExitScratchRun() {
+        if (exit.status() != ::pineforge::detail::ScratchStatus::ok) {
+            if (exit.status() == ::pineforge::detail::ScratchStatus::io_error)
+                ::pineforge::detail::rethrow_carried_scratch_failure(exit_backing->carried_failure());
+            const auto code = exit.status() == ::pineforge::detail::ScratchStatus::io_error
+                ? RunFailureCode::scratch_io_failed
+                : RunFailureCode::engine_invariant;
+            throw coded<std::logic_error>(code, {},
+                "run command scratch store failed to open");
+        }
+        // This head exposes owning NativeOpenLot rows and snapshot readers,
+        // rather than the reference tree's NativeOpenLotView visitor API.
+        exit_context.versions = &exit_versions;
+        exit_context.lots = [](const NativeStrategyHost& host, double mark, void* context,
+                               bool (*visit)(void*, const NativeOpenLot&)) {
+            for (const auto& lot : host.native_open_lots(mark))
+                if (!visit(context, lot)) return ::pineforge::detail::ScratchStatus::cancelled;
+            return ::pineforge::detail::ScratchStatus::ok;
+        };
+        exit_context.working = [](const NativeStrategyHost& host, void* context,
+                                  bool (*visit)(void*, const NativeWorkingRequest&)) {
+            for (const auto& request : host.native_working_requests())
+                if (!visit(context, request)) return ::pineforge::detail::ScratchStatus::cancelled;
+            return ::pineforge::detail::ScratchStatus::ok;
+        };
+    }
+};
+
+using TradeScratchKey = std::array<std::uint64_t, 4>;
+using TradeScratchHeader = std::array<std::uint64_t, 23>;
+enum : std::uint64_t {
+    scratch_incarnation, scratch_row, scratch_sort, scratch_permutation
+};
+
+::pineforge::detail::ScratchBytes scratch_bytes(const void* data, std::size_t size) noexcept {
+    return {static_cast<const std::byte*>(data), size};
+}
+
+::pineforge::detail::ScratchBuffer scratch_buffer(void* data, std::size_t size) noexcept {
+    return {static_cast<std::byte*>(data), size};
+}
+
+::pineforge::detail::ScratchStatus compare_trade_scratch(
+        void*, const ::pineforge::detail::ScratchByteSource& a, const ::pineforge::detail::ScratchByteSource& b,
+        int& order) noexcept {
+    TradeScratchKey ka{}, kb{};
+    if (a.size() != sizeof ka || b.size() != sizeof kb)
+        return ::pineforge::detail::ScratchStatus::programming_error;
+    auto status = a.read(0, scratch_buffer(ka.data(), sizeof ka));
+    if (status != ::pineforge::detail::ScratchStatus::ok) return status;
+    status = b.read(0, scratch_buffer(kb.data(), sizeof kb));
+    if (status != ::pineforge::detail::ScratchStatus::ok) return status;
+    order = ka < kb ? -1 : kb < ka ? 1 : 0;
+    return ::pineforge::detail::ScratchStatus::ok;
+}
+
+void require_trade_scratch(::pineforge::detail::ScratchStatus status,
+                           const ::pineforge::detail::ScratchReadback& store) {
+    if (status == ::pineforge::detail::ScratchStatus::ok) return;
+    if (status == ::pineforge::detail::ScratchStatus::io_error)
+        ::pineforge::detail::rethrow_carried_scratch_failure(store.carried_failure());
+    const auto code = status == ::pineforge::detail::ScratchStatus::io_error
+        ? RunFailureCode::scratch_io_failed
+        : RunFailureCode::engine_invariant;
+    throw coded<std::logic_error>(code, {},
+        "trade scratch contract operation failed");
+}
+
+// These records are temporary, including on success. Rollback restores the
+// empty store and its handle counter; no scratch state survives a callback.
+class TradeScratchTransaction {
+public:
+    explicit TradeScratchTransaction(::pineforge::detail::CommandScratchStore& store) : store_(store) {
+        require_trade_scratch(store_.begin(), store_);
+    }
+    ~TradeScratchTransaction() {
+        if (store_.transaction_active()) (void)store_.rollback();
+    }
+    void finish() { require_trade_scratch(store_.rollback(), store_); }
+private:
+    ::pineforge::detail::CommandScratchStore& store_;
+};
+
+::pineforge::detail::ScratchHandle scratch_seek(const ::pineforge::detail::CommandScratchStore& store,
+                                  const TradeScratchKey& key) {
+    ::pineforge::detail::ScratchSpanSource probe(scratch_bytes(key.data(), sizeof key));
+    ::pineforge::detail::ScratchHandle handle = ::pineforge::detail::scratch_no_handle;
+    const auto status = store.lower_bound(probe, handle);
+    if (status != ::pineforge::detail::ScratchStatus::end) require_trade_scratch(status, store);
+    return handle;
+}
+
+TradeScratchKey scratch_key(const ::pineforge::detail::ScratchReadback& store,
+                           ::pineforge::detail::ScratchHandle handle) {
+    TradeScratchKey key{};
+    require_trade_scratch(store.read(handle, ::pineforge::detail::ScratchField::key, 0,
+                                     scratch_buffer(key.data(), sizeof key)), store);
+    return key;
+}
+
+::pineforge::detail::ScratchHandle scratch_find(const ::pineforge::detail::CommandScratchStore& store,
+                                  const TradeScratchKey& key) {
+    const auto handle = scratch_seek(store, key);
+    return handle != ::pineforge::detail::scratch_no_handle && scratch_key(store, handle) == key
+        ? handle : ::pineforge::detail::scratch_no_handle;
+}
+
+void scratch_put(::pineforge::detail::CommandScratchStore& store, const TradeScratchKey& key,
+                 const ::pineforge::detail::ScratchByteSource& value) {
+    ::pineforge::detail::ScratchSpanSource source(scratch_bytes(key.data(), sizeof key));
+    ::pineforge::detail::ScratchHandle handle = ::pineforge::detail::scratch_no_handle;
+    require_trade_scratch(store.put(source, value, handle), store);
+}
+
+void scratch_put(::pineforge::detail::CommandScratchStore& store, const TradeScratchKey& key,
+                 ::pineforge::detail::ScratchBytes value = {}) {
+    ::pineforge::detail::ScratchSpanSource source(value);
+    scratch_put(store, key, source);
+}
+
+template<class Visit>
+void scratch_walk(const ::pineforge::detail::CommandScratchStore& store, std::uint64_t kind, Visit&& visit) {
+    auto handle = scratch_seek(store, {kind, 0, 0, 0});
+    while (handle != ::pineforge::detail::scratch_no_handle) {
+        const auto key = scratch_key(store, handle);
+        if (key[0] != kind) break;
+        visit(handle, key);
+        ::pineforge::detail::ScratchHandle next = ::pineforge::detail::scratch_no_handle;
+        const auto status = store.next(handle, next);
+        if (status != ::pineforge::detail::ScratchStatus::end) require_trade_scratch(status, store);
+        handle = next;
+    }
+}
+
+template<class T>
+std::uint64_t scratch_word(const T& value) noexcept {
+    static_assert(sizeof(T) <= sizeof(std::uint64_t), "trade scratch scalar");
+    std::uint64_t word = 0;
+    std::memcpy(&word, &value, sizeof value);
+    return word;
+}
+
+template<class T>
+void scratch_scalar(std::uint64_t word, T& value) noexcept {
+    static_assert(sizeof(T) <= sizeof word, "trade scratch scalar");
+    std::memcpy(&value, &word, sizeof value);
+}
+
+TradeScratchHeader scratch_trade_header(const Trade& row, std::size_t source,
+                                       std::uint8_t phase) noexcept {
+    return {source, phase, scratch_word(row.entry_time), scratch_word(row.exit_time),
+            scratch_word(row.entry_price), scratch_word(row.exit_price), scratch_word(row.qty),
+            scratch_word(row.pnl), scratch_word(row.pnl_pct), scratch_word(row.is_long),
+            scratch_word(row.entry_bar_index), scratch_word(row.exit_bar_index),
+            scratch_word(row.exit_from_bracket), scratch_word(row.max_runup),
+            scratch_word(row.max_drawdown), scratch_word(row.commission),
+            row.entry_incarnation, scratch_word(row.open_at_end), scratch_word(row.close_cause),
+            row.entry_id.size(), row.entry_comment.size(), row.exit_comment.size(),
+            row.exit_id.size()};
+}
+
+void scratch_trade_scalars(const TradeScratchHeader& header, Trade& row) noexcept {
+    scratch_scalar(header[2], row.entry_time);
+    scratch_scalar(header[3], row.exit_time);
+    scratch_scalar(header[4], row.entry_price);
+    scratch_scalar(header[5], row.exit_price);
+    scratch_scalar(header[6], row.qty);
+    scratch_scalar(header[7], row.pnl);
+    scratch_scalar(header[8], row.pnl_pct);
+    scratch_scalar(header[9], row.is_long);
+    scratch_scalar(header[10], row.entry_bar_index);
+    scratch_scalar(header[11], row.exit_bar_index);
+    scratch_scalar(header[12], row.exit_from_bracket);
+    scratch_scalar(header[13], row.max_runup);
+    scratch_scalar(header[14], row.max_drawdown);
+    scratch_scalar(header[15], row.commission);
+    row.entry_incarnation = header[16];
+    scratch_scalar(header[17], row.open_at_end);
+    scratch_scalar(header[18], row.close_cause);
+}
+
+// Scalar amendments plus text borrowed from one ledger value. put streams
+// all five spans without retaining the replacement population in RAM.
+class TradeScratchSource final : public ::pineforge::detail::ScratchByteSource {
+public:
+    TradeScratchSource(TradeScratchHeader header, const Trade& text) noexcept
+        : header_(header), parts_{scratch_bytes(header_.data(), sizeof header_),
+            scratch_bytes(text.entry_id.data(), text.entry_id.size()),
+            scratch_bytes(text.entry_comment.data(), text.entry_comment.size()),
+            scratch_bytes(text.exit_comment.data(), text.exit_comment.size()),
+            scratch_bytes(text.exit_id.data(), text.exit_id.size())} {}
+    std::uint64_t size() const noexcept override {
+        std::uint64_t result = 0;
+        for (const auto part : parts_) result += part.size;
+        return result;
+    }
+    ::pineforge::detail::ScratchStatus read(std::uint64_t offset,
+                              ::pineforge::detail::ScratchBuffer destination) const noexcept override {
+        if (offset > size() || destination.size > size() - offset
+            || (destination.size && !destination.data))
+            return ::pineforge::detail::ScratchStatus::programming_error;
+        if (!destination.size) return ::pineforge::detail::ScratchStatus::ok;
+        for (const auto part : parts_) {
+            if (offset >= part.size) { offset -= part.size; continue; }
+            const auto count = std::min(destination.size,
+                                        part.size - static_cast<std::size_t>(offset));
+            if (count) std::memcpy(destination.data, part.data + offset, count);
+            destination.data += count;
+            destination.size -= count;
+            offset = 0;
+            if (!destination.size) break;
+        }
+        return ::pineforge::detail::ScratchStatus::ok;
+    }
+private:
+    const TradeScratchHeader header_;
+    const std::array<::pineforge::detail::ScratchBytes, 5> parts_;
+};
+
+TradeScratchHeader scratch_read_trade(const ::pineforge::detail::ScratchReadback& store,
+                                     ::pineforge::detail::ScratchHandle handle) {
+    TradeScratchHeader header{};
+    require_trade_scratch(store.read(handle, ::pineforge::detail::ScratchField::value, 0,
+                                     scratch_buffer(header.data(), sizeof header)), store);
+    return header;
+}
+
+void scratch_trade_text(const ::pineforge::detail::ScratchReadback& store, ::pineforge::detail::ScratchHandle handle,
+                        const TradeScratchHeader& header, Trade& row) {
+    const std::array<std::string*, 4> text{
+        &row.entry_id, &row.entry_comment, &row.exit_comment, &row.exit_id};
+    std::uint64_t offset = sizeof header;
+    for (std::size_t index = 0; index < text.size(); ++index) {
+        text[index]->resize(static_cast<std::size_t>(header[19 + index]));
+        require_trade_scratch(store.read(handle, ::pineforge::detail::ScratchField::value, offset,
+            scratch_buffer(text[index]->data(), text[index]->size())), store);
+        offset += text[index]->size();
+    }
+}
 
 [[noreturn]] void reject_begin_bar(int index, const char* field, const char* detail,
                                    const char* reason) {
@@ -141,6 +420,26 @@ void return_feed_bytes(std::vector<NativeInstrumentFeed>& store,
 
 }  // namespace
 
+::pineforge::detail::ScratchKeyOrder source::PineStrategyHost::trade_scratch_order() noexcept {
+    return {0x5830365830370001ULL, nullptr, compare_trade_scratch};
+}
+
+void source::PineStrategyHost::set_trade_scratch(::pineforge::detail::CommandScratchStore& store) {
+    require_trade_scratch(store.status(), store);
+    if (store.transaction_active() || store.record_count() != 0
+        || (trade_scratch_ && trade_scratch_->transaction_active()))
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                      "trade scratch must be exclusively owned and empty");
+    trade_scratch_ = &store;
+}
+
+::pineforge::detail::CommandScratchStore& source::PineStrategyHost::trade_scratch() {
+    if (!trade_scratch_)
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                      "run owner did not provision trade scratch");
+    return *trade_scratch_;
+}
+
 source::PineStrategyHost::PineStrategyHost(compat::pine::CapAttachment cap)
     : NativeStrategyHost(),
       adapter_(*this, cap),
@@ -157,6 +456,10 @@ source::PineStrategyHost::PineStrategyHost(compat::pine::CapAttachment cap)
       is_last_tick_(scheduler_.language().is_last_tick_) {
     // ab9714be LegacyCompatibilityConsumer::refuse was a no-op on this handle.
     host_mutation_guard_inert_ = true;
+    NativeExecutionConsumer::bound(*this).set_batch_input_release(
+        this, [](void* owner) noexcept {
+            static_cast<PineStrategyHost*>(owner)->scheduler_.release_batch_input();
+        });
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
     // A fresh host folds its empty feed as one cleared at a run's end does.
     refresh_aux_security_digest();
@@ -168,9 +471,14 @@ std::uint64_t source::PineStrategyHost::broker_state_hash_projection() const {
     // continuation. Recording only controls whether the per-bar array is
     // retained; the continuation snapshot keeps the scalar independent of
     // that switch and of NativeCompleted teardown.
-    const std::uint64_t execution = last_script_continuation_valid_
-        ? last_script_continuation_hash_
-        : execution_consumer().continuation_hash();
+    if (last_script_continuation_valid_) {
+        return broker_state_hash_from_execution_hash(last_script_continuation_hash_);
+    }
+    const std::uint64_t execution = execution_consumer().continuation_hash();
+    // The fold cannot throw: a read of the spilled book that failed inside it
+    // was carried by the core and is thrown here, never folded as a hash it
+    // cut short.
+    as_native_consumer(execution_consumer()).request_core().rethrow_book_read_failure();
     return broker_state_hash_from_execution_hash(execution);
 }
 
@@ -230,8 +538,14 @@ StagedConfiguration source::PineStrategyHost::staged_configuration() const {
     staged.instrument_feeds.reserve(symbol_feeds_.size());
     for (std::size_t i = 0; i < symbol_feeds_.size(); ++i) {
         const NativeInstrumentFeed& feed = installed_symbol_feed(i);
+        const auto views = NativeExecutionConsumer::bound(*this).bar_views();
+        const auto* slot = views.instrument_feed_count == 0
+            ? nullptr : views.instrument_feeds[i];
+        const auto data = native_instrument_feed_view(feed, slot);
+        const std::size_t count = i < symbol_feed_views_.size() && symbol_feed_views_[i].present
+            ? symbol_feed_views_[i].size : data.bars.size;
         staged.instrument_feeds.push_back(
-            {feed.instrument, feed.tf, feed.bars.size(), feed.columns.size()});
+            {feed.instrument, feed.tf, count, feed.columns.size()});
     }
     return staged;
 }
@@ -242,6 +556,9 @@ void source::PineStrategyHost::prepare_native_begin(const NativeBeginArgs& args)
     // runs before any provider-owned state is changed.
     abort_requested_.store(false, std::memory_order_relaxed);
     validate_source_begin_bars(args);
+    // Admission owns a reentrant begin's refusal. Keep the running caller
+    // span and source state intact until the outer public call unwinds.
+    if (native_state().kind == NativeLifecycleKind::Running) return;
     if (args.syminfo) {
         syminfo_ = *args.syminfo;
         syminfo_mintick_ = syminfo_.mintick;
@@ -314,11 +631,14 @@ void source::PineStrategyHost::prepare_native_begin(const NativeBeginArgs& args)
             "timestamped account-currency FX is not supported with bar magnifier");
 
     adapter_.reset_for_run();
-    // Source placement evidence is retained by request incarnation so a
-    // re-issued bracket can preserve its exact historical projection.  Batch
-    // callers already disclose their bar count here; reserve the ordinary
-    // two-leg-per-bar capacity once instead of repeatedly rehashing that
-    // durable table during a long replay.
+    const auto& scratch = scratch_tables_for_run();
+    ::pineforge::detail::bind_tree_scratch_tables(adapter_, scratch);
+    ::pineforge::detail::bind_id_pair_scratch_tables(adapter_, scratch);
+    auto command_scratch = std::make_shared<SourceExitScratchRun>();
+    auto& consumer = NativeExecutionConsumer::bound(*this);
+    using ScratchBinding = NativeExecutionConsumer::CommandScratchBinding;
+    // Reserve placement evidence by incarnation once for the disclosed batch:
+    // two legs per bar, including re-issued brackets' historical projections.
     if (args.n > 0 && static_cast<std::size_t>(args.n)
         <= adapter_.placement_.max_size() / 2U) {
         adapter_.placement_.reserve(static_cast<std::size_t>(args.n) * 2U);
@@ -342,6 +662,14 @@ void source::PineStrategyHost::prepare_native_begin(const NativeBeginArgs& args)
     std::vector<NativeInstrumentFeed> lent = lend_feed_bytes(symbol_feeds_);
     NativeRunSpec spec = [&] {
         try {
+            const bool has_borrowed_feed = std::any_of(
+                symbol_feed_views_.begin(), symbol_feed_views_.end(),
+                [](const BorrowedFeedSlot& slot) { return slot.present; });
+            if (has_borrowed_feed) {
+                stage_symbol_feed_views();
+            } else {
+                NativeExecutionConsumer::bound(*this).stage_instrument_feed_views(nullptr, 0);
+            }
             return adapter_.project(effective, staged, args, path_order, &lent);
         } catch (...) {
             return_feed_bytes(symbol_feeds_, lent);
@@ -351,6 +679,13 @@ void source::PineStrategyHost::prepare_native_begin(const NativeBeginArgs& args)
     const bool failed_before = native_state().kind == NativeLifecycleKind::Failed;
     NativeSetupResult setup;
     try {
+        // project() establishes the actual run identity and installs a
+        // standalone store. Replace it with the host's service afterwards,
+        // before configure or any run/bar callback can read the adapter.
+        // Keeping this in the feed-return guard also covers binding failure.
+        command_scratch->exit_context.run = spec.identity;
+        adapter_.bind_exit_scratch(command_scratch->exit_context);
+        consumer.retain_command_scratch_owner(ScratchBinding::Exit, command_scratch);
         setup = NativeExecutionConsumer::bound(*this).configure(*this, std::move(spec));
     } catch (...) {
         return_feed_bytes(symbol_feeds_, spec.instrument_feeds);
@@ -382,6 +717,9 @@ void source::PineStrategyHost::prepare_native_begin(const NativeBeginArgs& args)
 }
 
 void source::PineStrategyHost::on_native_run_begin() {
+    NativeExecutionConsumer::bound(*this).provision_run_command_scratch(
+        NativeExecutionConsumer::CommandScratchBinding::Trade,
+        trade_scratch_order(), trade_scratch_);
     // The adapter reads the command journal with its receipt cursor and
     // acknowledges it as it moves (observe_terminal_receipts); acknowledging
     // "nothing read yet" here marks this host as one that polls, so the
@@ -527,7 +865,12 @@ std::int64_t source::PineStrategyHost::symbol_calendar_open_from(std::int64_t at
 void source::PineStrategyHost::capture_script_continuation_hash() {
     // Taken at once: since v19 the fold is the live state alone, which is what
     // a deferred view would have recorded word for word (R5 lane V19-A).
-    last_script_continuation_hash_ = execution_consumer().continuation_hash();
+    const std::uint64_t execution = execution_consumer().continuation_hash();
+    // A read of the spilled book that failed inside the noexcept fold is
+    // thrown here, before the hash it cut short is latched as valid; the
+    // latch keeps what it held.
+    as_native_consumer(execution_consumer()).request_core().rethrow_book_read_failure();
+    last_script_continuation_hash_ = execution;
     last_script_continuation_valid_ = true;
     if (broker_state_hash_recording_ && !broker_state_hashes_.empty()) {
         broker_state_hashes_.back() = broker_state_hash();
@@ -631,7 +974,9 @@ void source::PineStrategyHost::on_native_applied(
         const std::size_t index = event.first_trade_index + i;
         if (index < trades_.size()
             && trades_[index].close_cause == execution::CloseCause::Bracket) {
-            trades_[index].close_cause = execution::CloseCause::Unspecified;
+            trades_.modify(index, [](Trade& row) {
+                row.close_cause = execution::CloseCause::Unspecified;
+            });
         }
     }
     if (source_prepare_failed_) return;
@@ -679,13 +1024,13 @@ void source::PineStrategyHost::on_native_applied(
             for (std::size_t index = event.first_trade_index + event.closed_trade_count;
                  index < trades_.size(); ++index) {
                 if (trades_[index].entry_incarnation == event.handle().incarnation)
-                    trades_[index].entry_time = script_open;
+                    trades_.modify(index, [&](Trade& row) { row.entry_time = script_open; });
             }
         }
         for (std::size_t i = 0; i < event.closed_trade_count; ++i) {
             const std::size_t index = event.first_trade_index + i;
             if (index >= trades_.size()) continue;
-            trades_[index].exit_time = script_open;
+            trades_.modify(index, [&](Trade& row) { row.exit_time = script_open; });
         }
     }
     const auto p = adapter_.placement_.find(event.handle().incarnation);
@@ -759,8 +1104,10 @@ void source::PineStrategyHost::on_native_applied(
         for (std::size_t i = 0; i < event.closed_trade_count; ++i) {
             const std::size_t index = event.first_trade_index + i;
             if (index >= trades_.size()) continue;
-            trades_[index].exit_id.clear();
-            trades_[index].exit_comment = source::kIntradayLossComment;
+            trades_.modify(index, [](Trade& row) {
+                row.exit_id.clear();
+                row.exit_comment = source::kIntradayLossComment;
+            });
         }
     }
     // R5 lane L12 (2.ii l): the kernel used to read these strings back out of
@@ -772,7 +1119,7 @@ void source::PineStrategyHost::on_native_applied(
     for (std::size_t i = 0; i < event.closed_trade_count; ++i) {
         const std::size_t index = event.first_trade_index + i;
         if (index >= trades_.size()) continue;
-        Trade& row = trades_[index];
+        Trade row = trades_[index];
         if (row.exit_id == source::kMarginCallLabel) {
             row.close_cause = execution::CloseCause::Liquidation;
         } else if (row.exit_id.empty()) {
@@ -781,6 +1128,7 @@ void source::PineStrategyHost::on_native_applied(
             else if (row.exit_comment.rfind(source::kIntradayLossComment, 0) == 0)
                 row.close_cause = execution::CloseCause::RiskLimit;
         }
+        trades_.replace(index, row);
     }
     project_short_seed_report_rows(event);
     if (!other_exit_here) order_global_exit_children(event);
@@ -789,8 +1137,11 @@ void source::PineStrategyHost::on_native_applied(
     // recalculation next, in the same drain iteration and at the same cursor
     // (NativeCalculationTrigger::BarCloseAndFills). The range-end row stays
     // after it, exactly where the adapter's own cascade used to put it.
-    if (!scheduler_.coof_recalculation_due(event, context, *this))
-        record_applied_range_end();
+    // Finish the same range-end mark, then any post-calculation journal tail.
+    finish_applied_admission(event, context);
+    // The observer seam: once per applied event, after every row this event
+    // produced has settled. Empty unless a host overrides it.
+    on_native_applied_event(event, context);
 }
 
 void source::PineStrategyHost::record_applied_range_end() {
@@ -847,8 +1198,9 @@ std::optional<double> source::PineStrategyHost::resolve_anchored_level(
 
 NativePrecommitVerdict source::PineStrategyHost::validate_execution_precommit(
         const NativePrecommitView& view) const {
+    const auto verdict = adapter_.validate_precommit(view);
     precommit_held_units_ = std::abs(detail::run_position(*this).signed_units);
-    return adapter_.validate_precommit(view);
+    return verdict;
 }
 
 void source::PineStrategyHost::configure_pine_strategy(const PineStrategyConfig& config) {
@@ -1279,8 +1631,7 @@ void source::PineStrategyHost::adapter_label_bracket_trades(
     for (std::size_t offset = 0; offset < event.closed_trade_count; ++offset) {
         const std::size_t index = event.first_trade_index + offset;
         if (index >= trades_.size()) continue;
-        auto& trade = trades_[index];
-        trade.exit_from_bracket = from_bracket;
+        trades_.modify(index, [&](Trade& trade) { trade.exit_from_bracket = from_bracket; });
     }
 }
 
@@ -1458,10 +1809,12 @@ void source::PineStrategyHost::project_short_seed_report_rows(
             && placement_snapshot->source_id != plan.seed_id)) {
         return;
     }
-    for (auto& trade : trades_) {
+    for (std::size_t index = trades_.base(); index < trades_.size(); ++index) {
+        Trade trade = trades_[index];
         if (trade.entry_incarnation == plan.materialize_long.incarnation
             && trade.entry_id == plan.materialize_label) {
             trade.entry_incarnation = plan.final_short.incarnation;
+            trades_.replace(index, trade);
         }
     }
     const std::size_t begin = event.first_trade_index;
@@ -1469,14 +1822,16 @@ void source::PineStrategyHost::project_short_seed_report_rows(
     for (std::size_t index = begin; index < end && index < trades_.size(); ++index) {
         if (trades_[index].entry_incarnation == plan.final_short.incarnation
             && trades_[index].entry_id == plan.final_short_id) {
-            trades_[index].entry_incarnation = plan.materialize_long.incarnation;
+            trades_.modify(index, [&](Trade& row) {
+                row.entry_incarnation = plan.materialize_long.incarnation;
+            });
         }
     }
     adapter_.short_seed_.report_swap_pending = false;
 }
 
 void source::PineStrategyHost::scheduler_prepare_script_run(
-        const std::vector<Bar>& bars, bool static_eligible,
+        PineScheduler::InputView bars, bool static_eligible,
         int expected_script_bars, bool script_bar_geometry) {
     if (const auto state = native_state(); state.spec) {
         input_tf_ = state.spec->timeframe_undetected ? "" : state.spec->input_tf;
@@ -1538,98 +1893,10 @@ int multi_day_count(const std::string& tf) {
     return parsed->count() >= 2 ? parsed->count() : 0;
 }
 
-// TradingView's N-day bars (lane TAIL-A, lab tv pf-taila-ndgrid-*, tests/
-// fixtures/multi_day_buckets): N consecutive trading dates of the symbol,
-// counted from the first trading date of each calendar year, the year's last
-// bar cut at its end. The trading dates are the session calendar's: every
-// day on a 24x7 symbol, every weekday on OANDA's (a holiday included: the
-// 8D bar of EURUSD opens on 2025-12-25, a date its chart has no bar of), the
-// exchange's sessions on a stock, an index or a future (NYSE:F's 8D bars skip
-// Good Friday). The run knows an exchange's sessions from the bars it holds,
-// the chart's and the auxiliary feed's; a date outside them counts when it is
-// a weekday. Returns each bar's open -- its first trading date's daily bar on
-// a daily chart (NSE's Muhurat session opens its 8D bar at 13:45 IST), that
-// date's day stamp otherwise -- from the bar holding the first held date
-// through the year after the last; empty when the session does not parse or
-// nothing is held.
-std::vector<std::int64_t> tradingview_multi_day_stamps(
-        int days, const Bar* chart, int n_chart, bool daily_chart, const std::vector<Bar>& aux,
-        const std::string& tz, const std::string& session, bool exchange_calendar) {
-    namespace cal = native_calendar;
-    const auto calendar = cal::parse_session(session, tz);
-    if (!calendar || days < 2) return {};
-    // Trading date (days since 1970-01-01) -> its bar's open.
-    std::map<std::int64_t, std::int64_t> held;
-    std::optional<cal::NativeSessionDay> cycle;
-    const auto hold = [&](std::int64_t ts, bool own_open) {
-        cycle = cal::session_day_at(*calendar, session_covered_instant_ms(ts, tz, session));
-        if (cycle && held.find(cycle->ordinal) == held.end()) {
-            held.emplace(cycle->ordinal,
-                         own_open ? ts : session_period_open_ms(ts, tz, session, CalendarPeriod::DAY));
-        }
-    };
-    // An intraday bar trades inside its session day: one inside the day the
-    // bar before it resolved is not resolved again.
-    for (int i = 0; i < n_chart; ++i) {
-        if (daily_chart || !cycle || !cycle->holds(chart[i].timestamp))
-            hold(chart[i].timestamp, daily_chart);
-    }
-    cycle.reset();
-    for (const Bar& bar : aux) {
-        if (!cycle || !cycle->holds(bar.timestamp)) hold(bar.timestamp, false);
-    }
-    if (held.empty()) return {};
-    const std::int64_t first = held.begin()->first;
-    const std::int64_t last = held.rbegin()->first;
-    const bool every_day = session.empty() || session == "24x7";
-    const auto trades = [&](std::int64_t d) {
-        if (exchange_calendar && d >= first && d <= last) return held.count(d) > 0;
-        const std::int64_t weekday = ((d % 7) + 7 + 4) % 7;  // 0 Sunday; 1970-01-01 a Thursday
-        return every_day || (weekday >= 1 && weekday <= 5);
-    };
-    // The bar-opening dates of every year from the first held date's through
-    // the year after the last's, whose first trading date opens a bar.
-    std::vector<std::int64_t> opens;
-    const std::int64_t first_year = cal::native_civil_date(first).year;
-    const std::int64_t last_year = cal::native_civil_date(last).year + 1;
-    for (std::int64_t year = first_year; year <= last_year; ++year) {
-        const std::int64_t end = cal::native_civil_days(year + 1, 1, 1);
-        std::int64_t count = 0;
-        for (std::int64_t d = cal::native_civil_days(year, 1, 1); d < end; ++d) {
-            if (!trades(d)) continue;
-            if (count++ % days == 0) opens.push_back(d);
-        }
-    }
-    auto begin = std::upper_bound(opens.begin(), opens.end(), first);
-    if (begin == opens.begin()) return {};
-    --begin;
-    // Through the next year's bars too, on the weekday rule: a stream's bars
-    // after the held ones.
-    std::vector<std::int64_t> stamps;
-    for (auto it = begin; it != opens.end(); ++it) {
-        const auto found = held.find(*it);
-        if (found != held.end()) {
-            stamps.push_back(found->second);
-            continue;
-        }
-        // A trading date no bar holds: the stamp of the session day holding
-        // its local noon.
-        const cal::NativeCivilDate date = cal::native_civil_date(*it);
-        const auto noon = cal::resolve_civil(tz.empty() ? "UTC" : tz, static_cast<int>(date.year),
-                                             date.month, date.day, 12, 0);
-        if (!noon) return {};
-        stamps.push_back(session_period_open_ms(noon->epoch_ms, tz, session, CalendarPeriod::DAY));
-    }
-    for (std::size_t k = 1; k < stamps.size(); ++k) {
-        if (stamps[k] <= stamps[k - 1]) return {};
-    }
-    return stamps;
-}
-
 }  // namespace
 
 void source::PineStrategyHost::scheduler_prepare_security_sequence(
-        const std::vector<Bar>& bars) {
+        PineScheduler::InputView bars) {
     security_input_tf_ = input_tf_;
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
     if (aux_security_feed_enabled()) security_input_tf_ = aux_security_input_tf_;
@@ -1650,31 +1917,33 @@ void source::PineStrategyHost::scheduler_prepare_security_sequence(
     init_security_eval_states_for_run(security_input_tf_);
     prepare_native_security_feeds(
         bars.empty() ? nullptr : bars.data(), static_cast<int>(bars.size()));
-    // An N-day request's bars are TradingView's (tradingview_multi_day_stamps),
+    // An N-day request's bars are TradingView's (make_multi_day_period_source),
     // its aggregator's period partition: the calendar aggregator split them
-    // into single days.
-    std::map<int, std::vector<std::int64_t>> multi_day;
+    // into single days. The partition is generated from the chart's and the
+    // auxiliary feed's bars as the run asks for it, never stored: it reads
+    // them until the next prepare rebuilds this aggregator.
     for (auto& state : security_eval_states_) {
         const int days = multi_day_count(state.tf);
         if (days == 0 || state.aggregator.calendar_period() != CalendarPeriod::DAY
             || state.aggregator.has_native_periods()) {
             continue;
         }
-        auto found = multi_day.find(days);
-        if (found == multi_day.end()) {
-            static const std::vector<Bar> kNoAux;
-            const std::vector<Bar>* aux = &kNoAux;
+        MultiDayFeeds feeds;
+        feeds.days = days;
+        feeds.chart = bars.data();
+        feeds.n_chart = static_cast<int>(bars.size());
+        feeds.daily_chart = tf_to_seconds(input_tf_) == 86400;
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
-            if (aux_security_feed_enabled()) aux = &aux_security_bars_;
-#endif
-            found = multi_day.emplace(days, tradingview_multi_day_stamps(
-                days, bars.data(), static_cast<int>(bars.size()),
-                tf_to_seconds(input_tf_) == 86400, *aux,
-                syminfo_.timezone, syminfo_.session,
-                session_template_knows_early_close())).first;
+        if (aux_security_feed_enabled()) {
+            feeds.aux = aux_security_bars_.data();
+            feeds.n_aux = aux_security_bars_.size();
         }
-        if (!found->second.empty())
-            state.aggregator.set_native_periods(found->second, found->second, CalendarPeriod::DAY);
+#endif
+        feeds.tz = syminfo_.timezone;
+        feeds.session = syminfo_.session;
+        feeds.exchange_calendar = session_template_knows_early_close();
+        if (auto partition = make_multi_day_period_source(feeds))
+            state.aggregator.set_native_period_source(std::move(partition));
     }
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
     if (aux_security_feed_enabled()) {
@@ -1796,7 +2065,7 @@ bool source::PineStrategyHost::same_symbol_sites_routable(
         }
         if (otc_daily_pins && (state.tf == "D" || state.tf == "1D")) return false;
         // TradingView's N-day bars restart every year and count the symbol's
-        // trading dates (tradingview_multi_day_stamps); the kernel's are a
+        // trading dates (make_multi_day_period_source); the kernel's are a
         // fixed grid of calendar days.
         if (multi_day_count(state.tf) != 0) return false;
         NativeTimeframeSubscription subscription;
@@ -1878,23 +2147,26 @@ void source::PineStrategyHost::scheduler_finish_security_sequence() {
 #endif
 }
 
-static std::optional<std::size_t> sort_same_bar_exit_trades(std::vector<Trade>&,
-                                                            source::PineExecutionAdapter&);
-
 // sort_same_bar_exit_trades' first test, asked before the call (R5 lane D2-D):
 // its group grows past the last row only when the row before it is a bracket
 // exit of the same entry at the same exit time, as the last row is. Otherwise
 // the group is one row, the sort moves nothing and the call answers nullopt.
 // A quiet-bar gate (pine_quiet_bar.hpp): the ungated reference calls the sort
 // at every publication.
-static bool same_bar_exit_group_possible(const std::vector<Trade>& trades) noexcept {
+static bool same_bar_exit_group_possible(const TradeLedger& trades) {
 #if PINEFORGE_PINE_QUIET_BAR_GATES
     if (trades.size() < 2) return false;
-    const Trade& last = trades[trades.size() - 1];
-    const Trade& previous = trades[trades.size() - 2];
-    return previous.exit_from_bracket && last.exit_from_bracket
-        && previous.exit_time == last.exit_time && previous.entry_time == last.entry_time
-        && previous.entry_id == last.entry_id;
+    const auto last_index = trades.size() - 1;
+    const auto previous_index = last_index - 1;
+    const Trade last = trades.numeric_at(last_index);
+    const Trade previous = trades.numeric_at(previous_index);
+    if (!previous.exit_from_bracket || !last.exit_from_bracket
+        || previous.exit_time != last.exit_time || previous.entry_time != last.entry_time)
+        return false;
+    // Entry identity is still exact, but comments and exit IDs are irrelevant
+    // here. Do not decode even the entry IDs unless the numeric test matches.
+    const auto last_entry_id = trades.entry_id_at(last_index);
+    return trades.entry_id_at(previous_index) == last_entry_id;
 #else
     (void)trades;
     return true;
@@ -1902,10 +2174,10 @@ static bool same_bar_exit_group_possible(const std::vector<Trade>& trades) noexc
 }
 
 bool source::PineStrategyHost::report_terminal_quote_eligible() const {
-    if (equity_curve_.empty() || range_end_trades_.empty() || !native_bound()) return false;
+    if (!last_equity_point() || range_end_trades_.empty() || !native_bound()) return false;
     const auto state = as_native_consumer(execution_consumer()).view();
     const auto interval = static_cast<std::int64_t>(script_tf_seconds_) * 1000;
-    const auto last_time = equity_curve_.back().time_ms;
+    const auto last_time = last_equity_point()->time_ms;
     return state.spec && state.spec->report_policy == NativeReportPolicy::KernelRecordedAtHostMarks
         && state.kind == NativeLifecycleKind::Completed && bar_magnifier_enabled_
         && script_tf_seconds_ > 60 && script_tf_seconds_ < 86400
@@ -1973,7 +2245,7 @@ void source::PineStrategyHost::present_report(ReportC* out) const {
         row.pnl_pct = mark.pnl_pct;
         row.commission = mark.commission;
     }
-    out->net_profit = 0.0;
+    out->net_profit = out->total_trades == out->trades_len ? 0.0 : report_closed_net_profit();
     for (int index = 0; index < out->trades_len; ++index) out->net_profit += out->trades[index].pnl;
     last.time_ms = report_quote_time_ms_;
     last.equity = initial_capital_ + out->net_profit;
@@ -1982,7 +2254,7 @@ void source::PineStrategyHost::present_report(ReportC* out) const {
 void source::PineStrategyHost::scheduler_record_range_end(const Bar& terminal_bar) {
     range_end_trades_.clear();
     if (stream_warmup_mode_ || realtime_tail_
-        || position_side_ == PositionSide::FLAT || equity_curve_.empty()
+        || position_side_ == PositionSide::FLAT || !last_equity_point()
         || !std::isfinite(terminal_bar.close)) return;
     const double fill_price = bar_fill_price(terminal_bar.close);
     // R5 audit lane Q6 (duplicate D5): the row loop itself is the kernel's
@@ -1993,19 +2265,19 @@ void source::PineStrategyHost::scheduler_record_range_end(const Bar& terminal_ba
     // dated on the curve's last point and convert at that instant's rate,
     // handed to the producer: the presented clock is never rewritten (R5
     // lane B-ADAPTER; E21's rule -- thread the rate, never the clock).
-    const std::int64_t mark_time = equity_curve_.back().time_ms;
+    const std::int64_t mark_time = last_equity_point()->time_ms;
     const double range_end_pnl = as_native_consumer(execution_consumer())
         .append_open_position_report_rows(*this, fill_price, mark_time, bar_index_,
                                           account_currency_fx_at(mark_time));
     if (stream_phase_ != StreamPhase::REALTIME) {
-        auto& last = equity_curve_.back();
+        auto& last = *last_equity_point();
         last.open_profit = 0.0;
         last.equity = initial_capital_ + net_profit_sum_ + range_end_pnl;
-        max_equity_ = initial_capital_;
-        min_equity_ = initial_capital_;
-        max_drawdown_ = 0.0;
-        max_runup_ = 0.0;
-        for (const auto& point : equity_curve_) fold_equity_extreme(point.equity);
+        // Restore the fold before the held point, then fold its replacement.
+        // Debug checks all four resulting doubles against a complete walk.
+        // The sink-off helper keeps the existing walk and initial seed.
+        // Presentation later receives its own copy of this editable tail.
+        refold_equity_tail();
     }
     if (same_bar_exit_group_possible(trades_)) {
         if (const auto moved = sort_same_bar_exit_trades(trades_, adapter_))
@@ -2059,8 +2331,20 @@ void source::PineStrategyHost::order_global_exit_children(
         || !cause.from_entry.empty()) {
         return;
     }
-    const Trade& head = trades_[first];
-    std::vector<std::string> ids;
+    // Ledger reads own their strings. Retain only the group keys so a wide
+    // comment does not stay resident while another row is being read.
+    Trade head{};
+    {
+        Trade row = trades_[first];
+        head.exit_time = row.exit_time;
+        head.exit_price = row.exit_price;
+        head.exit_id = std::move(row.exit_id);
+        head.is_long = row.is_long;
+        head.entry_id = std::move(row.entry_id);
+    }
+    auto& scratch = trade_scratch();
+    TradeScratchTransaction transaction(scratch);
+    bool different_ids = false;
     for (std::size_t index = first; index < first + count; ++index) {
         const Trade& row = trades_[index];
         if (row.exit_time != head.exit_time || row.exit_price != head.exit_price
@@ -2068,62 +2352,120 @@ void source::PineStrategyHost::order_global_exit_children(
             || !(row.qty > 0.0) || row.open_at_end) {
             return;
         }
-        for (std::size_t earlier = first; earlier < index; ++earlier)
-            if (trades_[earlier].entry_incarnation == row.entry_incarnation) return;
-        if (std::find(ids.begin(), ids.end(), row.entry_id) == ids.end())
-            ids.push_back(row.entry_id);
+        const TradeScratchKey incarnation{scratch_incarnation, row.entry_incarnation, 0, 0};
+        if (scratch_find(scratch, incarnation) != ::pineforge::detail::scratch_no_handle) return;
+        scratch_put(scratch, incarnation);
+        different_ids = different_ids || row.entry_id != head.entry_id;
     }
-    if (ids.size() < 2) return;
+    if (!different_ids) return;
     if (first > 0 && trades_[first - 1].exit_time == head.exit_time
         && trades_[first - 1].exit_price == head.exit_price) {
         return;
     }
-    const auto ranks = adapter_.global_exit_child_ranks(ids);
-    if (!ranks) return;
-    const auto rank_of = [&](std::size_t lot) {
-        const auto id = std::find(ids.begin(), ids.end(), trades_[first + lot].entry_id);
-        return (*ranks)[static_cast<std::size_t>(id - ids.begin())];
+    // Validate one id and each distinct pair through the existing table rule:
+    // a grown table rejects shared buckets, while the original table does
+    // not. Each query owns at most two ids, irrespective of the lot count.
+    // note_exit_rank_key retains at most 27 keys (the existing parity pin),
+    // so distinct-id work is fixed even when one id owns arbitrarily many lots.
+    std::array<std::size_t, 27> ages{};
+    std::array<std::uint32_t, 27> ranks{};
+    std::size_t age_count = 0;
+    const auto age_of = [&](std::size_t lot) {
+        const auto& keys = adapter_.exit_rank_keys_;
+        const auto found = keys.find(trades_[first + lot].entry_id);
+        return found ? static_cast<std::size_t>(keys.get(*found))
+                     : static_cast<std::size_t>(keys.size());
     };
-    std::vector<std::size_t> children(count);
-    std::iota(children.begin(), children.end(), std::size_t{0});
-    std::stable_sort(children.begin(), children.end(),
-        [&](std::size_t a, std::size_t b) { return rank_of(a) < rank_of(b); });
+    const auto key_of = [&](std::size_t age) {
+        SourceId id;
+        adapter_.exit_rank_keys_.for_each_inserted([&](SourceId key, std::uint32_t key_age) {
+            if (key_age == age) id = std::move(key);
+        });
+        return id;
+    };
+    std::vector<SourceId> ids;
+    for (std::size_t lot = 0; lot < count; ++lot) {
+        const auto age = age_of(lot);
+        if (age == adapter_.exit_rank_keys_.size()) return;
+        if (std::find(ages.begin(), ages.begin() + age_count, age) != ages.begin() + age_count)
+            continue;
+        ids.assign(1, trades_[first + lot].entry_id);
+        const auto rank = adapter_.global_exit_child_ranks(ids);
+        if (!rank) return;
+        ranks[age] = rank->front();
+        for (std::size_t earlier = 0; earlier < age_count; ++earlier) {
+            ids.resize(1);
+            ids.push_back(key_of(ages[earlier]));
+            if (!adapter_.global_exit_child_ranks(ids)) return;
+        }
+        ages[age_count++] = age;
+    }
+    const auto rank_of = [&](std::size_t lot) {
+        return ranks[age_of(lot)];
+    };
     // Children in lot order settle exactly as the kernel's one fill did.
-    if (std::is_sorted(children.begin(), children.end())) return;
-    std::vector<Trade> rows;
-    std::vector<std::size_t> sources;
+    bool ordered = true;
+    auto previous_rank = rank_of(0);
+    for (std::size_t lot = 1; lot < count; ++lot) {
+        const auto rank = rank_of(lot);
+        if (rank < previous_rank) ordered = false;
+        previous_rank = rank;
+    }
+    if (ordered) return;
+    const auto visit_children = [&](const auto& visit) {
+        for (std::size_t rank = 0; rank < adapter_.exit_rank_keys_.size(); ++rank)
+            for (std::size_t child = 0; child < count; ++child)
+                if (rank_of(child) == rank && !visit(child)) return false;
+        return true;
+    };
+    std::size_t row_count = 0;
+    const auto emit_row = [&](TradeScratchHeader header, const Trade& text) {
+        const TradeScratchSource row(header, text);
+        scratch_put(scratch, {scratch_row, row_count++, 0, 0}, row);
+    };
+    const auto header_for = [&](std::size_t source, const Trade& row) {
+        const auto phase = adapter_.exit_phase_value(source);
+        return scratch_trade_header(row, source, phase);
+    };
     // The rule the adapter runs under, not the host's live copy a body writes.
     if (run.close_entries_rule_any) {
-        for (const auto lot : children) {
-            rows.push_back(trades_[first + lot]);
-            sources.push_back(first + lot);
-        }
+        visit_children([&](std::size_t lot) {
+            const Trade row = trades_[first + lot];
+            emit_row(header_for(first + lot, row), row);
+            return true;
+        });
     } else {
         const bool fees = commission_value_ != 0.0;
-        struct Slice { std::size_t lot; double qty; std::size_t child; };
-        std::vector<Slice> slices;
-        std::vector<double> left(count);
         for (std::size_t lot = 0; lot < count; ++lot) {
-            left[lot] = trades_[first + lot].qty;
-            if (tv_money_round(left[lot]) != left[lot]) return;
+            const double qty = trades_[first + lot].qty;
+            if (tv_money_round(qty) != qty) return;
         }
-        std::size_t lot = 0;
-        for (std::size_t child = 0; child < children.size(); ++child) {
-            double wanted = trades_[first + children[child]].qty;
-            while (wanted > internal::kQtyEpsilon && lot < count) {
-                const double taken = std::min(left[lot], wanted);
-                slices.push_back({lot, taken, child});
-                left[lot] = tv_money_round(left[lot] - taken);
-                wanted = tv_money_round(wanted - taken);
-                if (left[lot] <= internal::kQtyEpsilon) ++lot;
-            }
-            if (wanted > internal::kQtyEpsilon) return;
-        }
-        if (lot != count) return;
-        for (const auto& slice : slices) {
-            const Trade& whole = trades_[first + slice.lot];
-            const double transaction = trades_[first + children[slice.child]].qty;
-            const double share = slice.qty / whole.qty;
+        const auto visit_slices = [&](const auto& visit) {
+            std::size_t lot = 0;
+            double left = trades_[first].qty;
+            if (!visit_children([&](std::size_t child) {
+                    const double transaction = trades_[first + child].qty;
+                    double wanted = transaction;
+                    while (wanted > internal::kQtyEpsilon && lot < count) {
+                        const double taken = std::min(left, wanted);
+                        visit(lot, taken, transaction);
+                        left = tv_money_round(left - taken);
+                        wanted = tv_money_round(wanted - taken);
+                        if (left <= internal::kQtyEpsilon) {
+                            ++lot;
+                            if (lot < count) left = trades_[first + lot].qty;
+                        }
+                    }
+                    return !(wanted > internal::kQtyEpsilon);
+                })) return false;
+            return lot == count;
+        };
+        // Complete the exact quantity pass before calculating any replacement
+        // money, as the old slice-vector pass did.
+        if (!visit_slices([](std::size_t, double, double) {})) return;
+        visit_slices([&](std::size_t lot, double qty, double transaction) {
+            const Trade& whole = trades_[first + lot];
+            const double share = qty / whole.qty;
             double commission = 0.0;
             if (fees) {
                 const double exit_fee = calc_commission_at(whole.exit_price, whole.qty, 1.0);
@@ -2131,29 +2473,38 @@ void source::PineStrategyHost::order_global_exit_children(
                     tv_money_round(std::max(0.0, whole.commission - exit_fee) * share);
                 const double transaction_fee =
                     tv_money_round(calc_commission_at(whole.exit_price, transaction, 1.0));
-                const double exit_part = tv_money_round(transaction_fee * slice.qty / transaction);
+                const double exit_part = tv_money_round(transaction_fee * qty / transaction);
                 commission = tv_money_round(entry_part + exit_part);
             }
-            Trade row = whole;
-            row.qty = slice.qty;
+            auto header = header_for(first + lot, whole);
+            Trade row{};
+            scratch_trade_scalars(header, row);
+            row.qty = qty;
             row.commission = commission;
             row.pnl = tv_money_round((whole.pnl + whole.commission) * share) - commission;
-            const double cost = whole.entry_price * slice.qty * syminfo_.pointvalue;
+            const double cost = whole.entry_price * qty * syminfo_.pointvalue;
             row.pnl_pct = cost > 0.0 ? row.pnl / cost * 100.0 : 0.0;
             // The lot's excursions taken by share: an approximation where the
             // slice's lot is not its child's own (excursions are not graded).
             row.max_runup = whole.max_runup * share;
             row.max_drawdown = whole.max_drawdown * share;
-            rows.push_back(std::move(row));
-            sources.push_back(first + slice.lot);
-        }
+            header[6] = scratch_word(row.qty);
+            header[7] = scratch_word(row.pnl);
+            header[8] = scratch_word(row.pnl_pct);
+            header[13] = scratch_word(row.max_runup);
+            header[14] = scratch_word(row.max_drawdown);
+            header[15] = scratch_word(row.commission);
+            emit_row(header, whole);
+        });
     }
     // settlement safety guard (an invariant), not Pine parity. Validate all
     // replacements before changing the committed rows or their tallies.
-    for (const auto& row : rows) {
+    scratch_walk(scratch, scratch_row, [&](::pineforge::detail::ScratchHandle handle, const TradeScratchKey&) {
+        Trade row{};
+        scratch_trade_scalars(scratch_read_trade(scratch, handle), row);
         if (!internal::closed_row_all_finite(row))
             throw std::logic_error("non-finite amended trade row");
-    }
+    });
     // strategy.wintrades / losstrades / eventrades and the gross sums count
     // rows: count the children's instead of the kernel's. net_profit_sum_ (the
     // equity) stays the kernel's whole-lot sum: the slices' PnLs can differ
@@ -2166,10 +2517,28 @@ void source::PineStrategyHost::order_global_exit_children(
         else { eventrades_count_ += sign; }
     };
     for (std::size_t index = first; index < first + count; ++index) tally(trades_[index].pnl, -1);
-    for (const auto& row : rows) tally(row.pnl, 1);
+    scratch_walk(scratch, scratch_row, [&](::pineforge::detail::ScratchHandle handle, const TradeScratchKey&) {
+        Trade row{};
+        scratch_trade_scalars(scratch_read_trade(scratch, handle), row);
+        tally(row.pnl, 1);
+    });
     trades_.resize(first);
-    for (auto& row : rows) trades_.push_back(std::move(row));
-    adapter_.permute_exit_phases(first, sources);
+    scratch_walk(scratch, scratch_row, [&](::pineforge::detail::ScratchHandle handle, const TradeScratchKey&) {
+        const auto header = scratch_read_trade(scratch, handle);
+        Trade row{};
+        scratch_trade_scalars(header, row);
+        scratch_trade_text(scratch, handle, header, row);
+        trades_.push_back(std::move(row));
+    });
+    const auto none = static_cast<std::uint8_t>(NativePathPhase::None);
+    scratch_walk(scratch, scratch_row, [&](::pineforge::detail::ScratchHandle handle, const TradeScratchKey& key) {
+        const auto header = scratch_read_trade(scratch, handle);
+        const auto target = first + static_cast<std::size_t>(key[1]);
+        const auto phase = static_cast<std::uint8_t>(header[1]);
+        if (phase == none && adapter_.exit_phase_value(target) == none) return;
+        adapter_.set_exit_phase(target, phase);
+    });
+    transaction.finish();
     native_closed_rows_amended(first);
 }
 
@@ -2178,8 +2547,8 @@ void source::PineStrategyHost::order_global_exit_children(
 // returned), so a sort that moves one answers the first row it moved, which
 // the caller hands to the kernel before the next hash read
 // (NativeStrategyHost::native_closed_rows_amended).
-static std::optional<std::size_t> sort_same_bar_exit_trades(std::vector<Trade>& trades,
-                                                            source::PineExecutionAdapter& adapter) {
+std::optional<std::size_t> source::PineStrategyHost::sort_same_bar_exit_trades(
+        TradeLedger& trades, source::PineExecutionAdapter& adapter) {
     if (trades.size() < 2) return std::nullopt;
     const std::size_t end = trades.size();
     std::size_t start = end - 1;
@@ -2196,26 +2565,73 @@ static std::optional<std::size_t> sort_same_bar_exit_trades(std::vector<Trade>& 
         // fills on the bar OPEN precede intrabar fills chronologically. Sibling
         // bracket exits that fill within the same phase tie-break by command
         // sequence (test_l10m_corpus_parity.cpp).
-        std::vector<std::size_t> indices(end - start);
-        std::iota(indices.begin(), indices.end(), start);
-        std::stable_sort(indices.begin(), indices.end(),
-            [&](std::size_t ia, std::size_t ib) {
-                const bool open_a = adapter.is_open_phase_exit(ia);
-                const bool open_b = adapter.is_open_phase_exit(ib);
-                if (open_a != open_b) return open_a;
-                const auto sa = adapter.command_sequence_for_exit(trades[ia].exit_id, trades[ia].entry_id);
-                const auto sb = adapter.command_sequence_for_exit(trades[ib].exit_id, trades[ib].entry_id);
-                return sa < sb;
+        const auto less = [&](std::size_t ia, std::size_t ib) {
+            const bool open_a = adapter.is_open_phase_exit(ia);
+            const bool open_b = adapter.is_open_phase_exit(ib);
+            if (open_a != open_b) return open_a;
+            const auto sa = adapter.command_sequence_for_exit(trades[ia].exit_id, trades[ia].entry_id);
+            const auto sb = adapter.command_sequence_for_exit(trades[ib].exit_id, trades[ib].entry_id);
+            return sa < sb;
+        };
+        const auto none = static_cast<std::uint8_t>(NativePathPhase::None);
+        bool ordered = true;
+        for (std::size_t index = start + 1; index < end; ++index)
+            if (less(index, index - 1)) { ordered = false; break; }
+        if (ordered) return std::nullopt;
+        auto& scratch = trade_scratch();
+        TradeScratchTransaction transaction(scratch);
+        for (std::size_t source = start; source < end; ++source) {
+            const auto phase = adapter.exit_phase_value(source);
+            const auto sequence = adapter.command_sequence_for_exit(
+                trades[source].exit_id, trades[source].entry_id);
+            scratch_put(scratch,
+                {scratch_sort, adapter.is_open_phase_exit(source) ? 0U : 1U, sequence, source},
+                scratch_bytes(&phase, sizeof phase));
+        }
+        std::size_t target = start;
+        // source is the last key word, so ties retain their original order.
+        // This is a seek walk, not a store callback: the fixed mapping value
+        // is read out before put, and its source never reads the same store.
+        scratch_walk(scratch, scratch_sort,
+            [&](::pineforge::detail::ScratchHandle handle, const TradeScratchKey& key) {
+                std::uint8_t phase = none;
+                require_trade_scratch(scratch.read(handle, ::pineforge::detail::ScratchField::value, 0,
+                                                   scratch_buffer(&phase, sizeof phase)), scratch);
+                const std::array<std::uint64_t, 2> mapping{key[3], phase};
+                scratch_put(scratch, {scratch_permutation, target++, 0, 0},
+                            scratch_bytes(mapping.data(), sizeof mapping));
             });
-        const bool moved = !std::is_sorted(indices.begin(), indices.end());
-        std::vector<Trade> sorted;
-        sorted.reserve(end - start);
-        for (std::size_t idx : indices) sorted.push_back(std::move(trades[idx]));
-        for (std::size_t i = 0; i < sorted.size(); ++i) trades[start + i] = std::move(sorted[i]);
-        // The adapter's exit phases are keyed by trade index: move them with
-        // the trades so the next call reads each trade's own phase.
-        adapter.permute_exit_phases(start, indices);
-        if (moved) return start;
+        // Apply disjoint permutation cycles with one saved Trade. Erasing a
+        // mapping marks that target visited in backing, without a RAM bitmap.
+        for (std::size_t cycle = start; cycle < end; ++cycle) {
+            auto handle = scratch_find(scratch, {scratch_permutation, cycle, 0, 0});
+            if (handle == ::pineforge::detail::scratch_no_handle) continue;
+            const Trade row = trades[cycle];
+            std::size_t current = cycle;
+            for (;;) {
+                std::array<std::uint64_t, 2> mapping{};
+                require_trade_scratch(scratch.read(handle, ::pineforge::detail::ScratchField::value, 0,
+                    scratch_buffer(mapping.data(), sizeof mapping)), scratch);
+                const auto source = static_cast<std::size_t>(mapping[0]);
+                const auto phase = static_cast<std::uint8_t>(mapping[1]);
+                // Both indices are global; only the adapter translates the
+                // sealed base. Clear an existing phase even when None moves
+                // here, without extending an absent all-None tail.
+                if (phase != none || adapter.exit_phase_value(current) != none)
+                    adapter.set_exit_phase(current, phase);
+                if (source == cycle) trades.replace(current, row);
+                else trades.replace(current, trades[source]);
+                require_trade_scratch(scratch.erase(handle), scratch);
+                if (source == cycle) break;
+                current = source;
+                handle = scratch_find(scratch, {scratch_permutation, current, 0, 0});
+                if (handle == ::pineforge::detail::scratch_no_handle)
+                    throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                                  "incomplete trade scratch permutation");
+            }
+        }
+        transaction.finish();
+        return start;
     }
     return std::nullopt;
 }
@@ -2402,6 +2818,47 @@ void source::PineStrategyHost::scheduler_publish_source_bar(
     if (same_bar_exit_group_possible(trades_)) {
         if (const auto moved = sort_same_bar_exit_trades(trades_, adapter_))
             native_closed_rows_amended(*moved);
+    }
+    // CR-150 L8c: publish only the immutable prefix, once at this script-bar
+    // boundary. Keep the last exit-time block AND its predecessor: sorting
+    // and global-child re-cutting both inspect that predecessor.
+    auto& consumer = detail::run_consumer(*this);
+    if (consumer.streams_closed_rows(*this) && consumer.begin_closed_row_seal(bar.timestamp)) {
+        const std::size_t base = trades_.base();
+        auto prefix = consumer.closed_trade_prefix();
+        if (prefix.base != base)
+            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                           "source trade seal has a mismatched base");
+        const bool can_swap = adapter_.short_seed_.final_short.incarnation != 0
+            && adapter_.config_.default_qty_type != static_cast<int>(QtyType::FIXED);
+        const std::size_t next = consumer.closed_rows_sealable(trades_,
+            adapter_.exit_phase_final_, adapter_.source_money_folded_, bar.timestamp,
+            can_swap ? std::optional<std::uint64_t>(adapter_.short_seed_.materialize_long.incarnation)
+                     : std::nullopt);
+        if (next - base > adapter_.trade_exit_phase_.size())
+            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                           "source trade seal exceeds resident exit phases");
+        for (std::size_t index = base; index < next; ++index) {
+            const Trade& row = trades_[index];
+            prefix.exit_phase_digest = PineExecutionAdapter::fold_exit_phase(
+                prefix.exit_phase_digest, adapter_.trade_exit_phase_[index - base]);
+            if (row.pnl > 0.0) prefix.source_gains += row.pnl;
+            else prefix.source_losses += row.pnl;
+            // L18's position-tail spill consumes this row here, before the
+            // seal below retires storage, including older-time barriers.
+        }
+        if (next > base) {
+            // L18: spill the position tail of the whole prefix, in forward row
+            // order, before the seal retires its storage; a throw seals nothing.
+            adapter_.preserve_position_tail_before_seal(
+                next, consumer.report_scratch_directory(*this));
+            consumer.seal_closed_rows(*this, next, prefix.exit_phase_digest,
+                                      prefix.source_gains, prefix.source_losses);
+            for (std::size_t offset = 0; offset < next - base; ++offset)
+                consumer.fold_sealed_exit_phase(adapter_.trade_exit_phase_[offset]);
+            adapter_.trade_exit_phase_.erase(adapter_.trade_exit_phase_.begin(),
+                adapter_.trade_exit_phase_.begin() + (next - base));
+        }
     }
     adapter_.observe_terminal_receipts();
     // ab9714be src/source/pine_scheduler.cpp:242,258: under
@@ -2789,7 +3246,11 @@ void source::PineStrategyHost::scheduler_mark_report_point(std::int64_t script_b
 
 void source::PineStrategyHost::scheduler_record_broker_hash() {
     if (!broker_state_hash_recording_) return;
-    last_script_continuation_hash_ = execution_consumer().continuation_hash();
+    const std::uint64_t execution = execution_consumer().continuation_hash();
+    // As capture_script_continuation_hash: a carried read failure is thrown
+    // before the cut hash is latched or recorded as a row.
+    as_native_consumer(execution_consumer()).request_core().rethrow_book_read_failure();
+    last_script_continuation_hash_ = execution;
     last_script_continuation_valid_ = true;
     broker_state_hashes_.push_back(broker_state_hash());
 }
@@ -2855,7 +3316,7 @@ int64_t source::PineStrategyHost::pine_time_offset(int64_t bar_open_ms, int bars
         return na<int64_t>();
     const std::string& sym_tz = syminfo_.timezone;
     const std::string& sym_session = syminfo_.session;
-    const std::vector<Bar>& input = scheduler_.retained_input();
+    const auto input = scheduler_.retained_input();
     const bool input_is_chart = scheduler_.retained_input_is_chart();
     const bool daily_chart = calendar_period_for(script_tf_) != CalendarPeriod::NONE;
     // A chart bar's own open (the input's stamp) and close, as the chart's
@@ -3065,4 +3526,41 @@ int64_t source::PineStrategyHost::pine_time_offset(int64_t bar_open_ms, int bars
     return close ? tf_close_of(open) : open;
 }
 
+void source::PineStrategyHost::finish_applied_admission(
+        const native_order::ExecutionAppliedEvent& event,
+        const NativeDecisionContext& context) {
+    const bool recalculation_due = scheduler_.coof_recalculation_due(event, context, *this);
+    if (!recalculation_due) record_applied_range_end();
+    // A process-on-close fill can append admission events after on_native_bar.
+    // Retire that completed tail without recapturing the broker-state row:
+    // F0a preserves the existing recording and continuation boundaries.
+    // A synchronous fill inside an unfinished command is folded by the
+    // enclosing on_bar_close instead.
+    if (!recalculation_due && context.is_terminal_sub_bar
+        && context.coordinate.provenance == NativePriceProvenance::AfterCalculationClose
+        && !adapter_.admission_journal.has_unfinished_events()) {
+        adapter_.finish_admission_bar();
+    }
+}
+
 } // namespace pineforge
+
+namespace pineforge {
+
+void source::PineStrategyHost::stage_symbol_feed_views() {
+    if (symbol_feed_views_.size() != symbol_feeds_.size())
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                      "request data: symbol feed view table is out of sync");
+    std::vector<NativeInstrumentFeedView> descriptors(symbol_feed_views_.size());
+    std::vector<const NativeInstrumentFeedView*> slots(symbol_feed_views_.size(), nullptr);
+    for (std::size_t i = 0; i < symbol_feed_views_.size(); ++i) {
+        const BorrowedFeedSlot& slot = symbol_feed_views_[i];
+        if (!slot.present) continue;
+        descriptors[i] = {{slot.bars, slot.size}, slot.close_ms};
+        slots[i] = &descriptors[i];
+    }
+    NativeExecutionConsumer::bound(*this).stage_instrument_feed_views(
+        slots.empty() ? nullptr : slots.data(), slots.size());
+}
+
+}  // namespace pineforge

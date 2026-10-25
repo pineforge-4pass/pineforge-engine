@@ -2,13 +2,17 @@ name: CI
 
 on:
   pull_request:
+    # LB-387: suite jobs skip on a draft PR (the required aggregate then fails, never passes);
+    # ready_for_review starts the full run when the PR is marked ready.
+    # converted_to_draft re-runs the workflow so its failing aggregate supersedes the earlier ready run.
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
 
 permissions:
   contents: read
 
 # Post-merge events live in ci-post.yml; this file only schedules PR jobs.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}-${{ github.event.pull_request.draft && 'draft' || 'ready' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -222,7 +226,7 @@ jobs:
 
   preflight:
     needs: [authz, changes]
-    if: ${{ always() && needs.authz.result == 'success' }}
+    if: ${{ !github.event.pull_request.draft && (always() && needs.authz.result == 'success') }}
     runs-on: ["self-hosted","pf-gcp-pr"]
     env:
       PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64-16"]'
@@ -282,7 +286,7 @@ jobs:
     # successful docs-only or GitHub-only answer skips scheduling; the aggregate
     # independently reads the PR diff before accepting the latter skip.
     needs: [authz, changes]
-    if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || (needs.changes.outputs.docs_only != 'true' && (github.event_name != 'pull_request' || needs.changes.outputs.github_only != 'true'))) }}
+    if: ${{ !github.event.pull_request.draft && (always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || (needs.changes.outputs.docs_only != 'true' && (github.event_name != 'pull_request' || needs.changes.outputs.github_only != 'true')))) }}
     # 360 minutes (the platform maximum): a full-set leg waits on the
     # test_ci_verify CTest row, 976-1288 s on the standard runners at
     # 0d76a099, which more cores do not shorten. No bound of ours may fail a
@@ -384,7 +388,7 @@ jobs:
   # separate parity verdict. build-gate independently verifies GitHub-only skips.
   corpus-parity-subset:
     needs: [authz, changes]
-    if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || (needs.changes.outputs.docs_only != 'true' && (github.event_name != 'pull_request' || needs.changes.outputs.github_only != 'true'))) }}
+    if: ${{ !github.event.pull_request.draft && (always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || (needs.changes.outputs.docs_only != 'true' && (github.event_name != 'pull_request' || needs.changes.outputs.github_only != 'true')))) }}
     uses: ./.github/workflows/corpus-parity-subset.yml
 
   # Advisory aggregate context covering every GitHub Actions lane. The merge
