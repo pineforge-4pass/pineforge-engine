@@ -9,7 +9,8 @@
 
 namespace pineforge::detail {
 
-// The implicit spill policy keeps physical resident rows <= 2x live rows + 64.
+// Physical resident rows <= 2x the rows kept at the last spill pass + 64
+// (+ pinned rows); this is not a bound in terms of currently live rows.
 // Admission still limits non-spillable cohort rows in the bounded scratch
 // profile. This does not bound the number or heap size of pending orders.
 inline constexpr std::size_t kMaxResidentCohorts = 4096;

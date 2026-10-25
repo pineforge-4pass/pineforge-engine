@@ -4,6 +4,7 @@
 #include <pineforge/detail/scratch_defaults.hpp>
 
 #include <algorithm>
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
@@ -30,6 +31,9 @@ namespace pineforge::detail {
 // must use live members, never physical residency, as a decision predicate.
 // all_sorted() visits EVERY logical row, including retired ones, for hashing.
 // size() is the logical count, resident_size() the physical count.
+// Values with an opening/live-unit view additionally supply held(). Their
+// writers call refresh_held() after changing that predicate; admission and
+// restore register it automatically. held_rows() walks exactly that subset.
 template<class Value>
 class DiskResidentIdTable {
     using Index = DiskIdTable<typename Value::Record>;
@@ -59,6 +63,10 @@ class DiskResidentIdTable {
         typename ResidentKeys::iterator key;
     };
     using Residents = std::map<Offset, ResidentRow>;
+    // Derived ordered set of offsets, with a row pin for O(1) dereference.
+    // Only rows whose Value::held() predicate is true belong here. Pending
+    // origins alone do not qualify. One map node per held cohort, O(H) space.
+    using Held = std::map<Offset, std::shared_ptr<Row>>;
 
 public:
     // Physical work only; not logical broker state and never hashed.
@@ -68,6 +76,7 @@ public:
         std::uint64_t rows_visited_by_spill = 0;
         std::uint64_t find_resident_probes = 0;
         std::uint64_t resident_rows_visited = 0;
+        std::uint64_t held_rows_visited = 0;
         std::uint64_t iterated_rows = 0;
         std::uint64_t rows_visited_by_capacity = 0;
         std::uint64_t rows_spilled = 0, rows_restored = 0;
@@ -78,7 +87,8 @@ public:
         // Portable estimate, not allocator accounting: two map nodes'
         // links/color and the shared-row control block.
         return resident_.size() * (sizeof(typename Residents::value_type) + 4 * sizeof(void*)
-            + sizeof(typename ResidentKeys::value_type) + 4 * sizeof(void*) + 2 * sizeof(void*));
+            + sizeof(typename ResidentKeys::value_type) + 4 * sizeof(void*) + 2 * sizeof(void*))
+            + held_.size() * (sizeof(typename Held::value_type) + 4 * sizeof(void*));
     }
 
     template<bool Const, bool Sorted = false, bool Insertion = false>
@@ -185,6 +195,48 @@ public:
         bool operator!=(const ResidentIterator& other) const noexcept { return !(*this == other); }
     };
 
+    // Ascending offsets, like resident_rows(), but only openings/live units.
+    // Membership changes must use refresh_held(). When removing the current
+    // member during a walk, advance the iterator before changing that row.
+    template<bool Const> class HeldIterator {
+        friend class DiskResidentIdTable;
+        using Owner = std::conditional_t<Const, const DiskResidentIdTable, DiskResidentIdTable>;
+        Owner* owner_ = nullptr;
+        typename Held::const_iterator at_{};
+        Offset offset_ = 0;
+        std::shared_ptr<Row> row_;
+        HeldIterator(Owner* owner, typename Held::const_iterator at) noexcept
+            : owner_(owner), at_(at),
+              offset_(at == owner->held_.end() ? 0 : at->first),
+              row_(at == owner->held_.end() ? nullptr : at->second) {}
+    public:
+        using iterator_category = std::forward_iterator_tag;
+        using value_type = Row;
+        using difference_type = std::ptrdiff_t;
+        using reference = std::conditional_t<Const, const Row&, Row&>;
+        using pointer = std::conditional_t<Const, const Row*, Row*>;
+        HeldIterator() = default;
+        reference operator*() const noexcept {
+            ++owner_->work_.held_rows_visited;
+            return *row_;
+        }
+        pointer operator->() const noexcept {
+            ++owner_->work_.held_rows_visited;
+            return row_.get();
+        }
+        HeldIterator& operator++() noexcept {
+            ++at_;
+            offset_ = at_ == owner_->held_.end() ? 0 : at_->first;
+            row_ = at_ == owner_->held_.end() ? nullptr : at_->second;
+            return *this;
+        }
+        HeldIterator operator++(int) noexcept { auto old = *this; ++*this; return old; }
+        bool operator==(const HeldIterator& other) const noexcept {
+            return owner_ == other.owner_ && (!owner_ || at_ == other.at_);
+        }
+        bool operator!=(const HeldIterator& other) const noexcept { return !(*this == other); }
+    };
+
     template<class Iter> struct Range {
         Iter first, last;
         Iter begin() const { return first; }
@@ -218,6 +270,7 @@ public:
             index_ = std::move(other.index_);
             resident_ = std::move(other.resident_);
             resident_by_key_ = std::move(other.resident_by_key_);
+            held_ = std::move(other.held_);
             work_ = std::exchange(other.work_, {});
             spill_threshold_ = std::exchange(other.spill_threshold_, kSpillFloor);
             spill_interval_ = std::exchange(other.spill_interval_, kSpillFloor);
@@ -226,6 +279,8 @@ public:
             fixture_spill_predicate_ = std::exchange(other.fixture_spill_predicate_, nullptr);
             other.resident_by_key_.clear();
             other.resident_.clear();
+            other.held_.clear();
+            assert(held_rows_exact() && other.held_rows_exact());
         }
         return *this;
     }
@@ -265,15 +320,18 @@ public:
         require_live_growth(extra); // At most one dry resident pass for the whole ticket.
     }
     void clear() noexcept {
+        held_.clear();
         resident_by_key_.clear();
         resident_.clear();
         index_.clear();
         work_ = {};
         spill_threshold_ = spill_interval_ = kSpillFloor;
         calls_since_spill_ = 0;
+        assert(held_rows_exact());
     }
     std::uint64_t size() const noexcept { return index_.size(); }
     std::size_t resident_size() const noexcept { return resident_.size(); }
+    std::size_t held_size() const noexcept { return held_.size(); }
     iterator begin() noexcept { return resident_begin<false>(this); }
     iterator end() noexcept { return {this, 0, {}}; }
     const_iterator begin() const noexcept { return resident_begin<true>(this); }
@@ -285,6 +343,41 @@ public:
     auto resident_rows() const noexcept {
         return Range<ResidentIterator<true>>{
             {this, resident_.begin()}, {this, resident_.end()}};
+    }
+    auto held_rows() noexcept {
+        assert(held_rows_exact());
+        return Range<HeldIterator<false>>{{this, held_.begin()}, {this, held_.end()}};
+    }
+    auto held_rows() const noexcept {
+        assert(held_rows_exact());
+        return Range<HeldIterator<true>>{{this, held_.begin()}, {this, held_.end()}};
+    }
+    // O(log H) update using the row's already-known offset and pin. No id
+    // search or full resident walk on the Release mutation path.
+    void refresh_held(const iterator& row) const {
+        assert(row.owner_ == this && row.row_);
+        refresh_held(row.at_, row.row_);
+    }
+    template<bool Const> void refresh_held(const HeldIterator<Const>& row) const {
+        assert(row.owner_ == this && row.row_);
+        refresh_held(row.offset_, row.row_);
+    }
+    // Independent, allocation-free oracles. They deliberately do not charge
+    // production work counters; assert-enabled builds still pay O(R).
+    bool held_rows_exact() const noexcept {
+        auto next = held_.begin();
+        for (const auto& row : resident_) {
+            if (!is_held(row.second.owner->second, 0)) continue;
+            if (next == held_.end() || next->first != row.first
+                || next->second != row.second.owner) return false;
+            ++next;
+        }
+        return next == held_.end();
+    }
+    std::size_t resident_opened_slot_count() const noexcept {
+        std::size_t total = 0;
+        for (const auto& row : resident_) total += row.second.owner->second.opened.size();
+        return total;
     }
     auto resident_ids() const noexcept {
         const auto at = resident_.begin();
@@ -363,6 +456,7 @@ public:
             ) {
                 index_.set(at->first, at->second.owner->second.retired_record());
                 ++work_.rows_spilled;
+                assert(held_.find(at->first) == held_.end());
                 resident_by_key_.erase(at->second.key); // Amortised O(1), no key search.
                 at = resident_.erase(at);
             } else ++at;
@@ -422,10 +516,29 @@ private:
         const auto indexed = resident_by_key_.emplace(key, at);
         try {
             resident_.emplace(at, ResidentRow{row, indexed.first});
+            if (is_held(row->second, 0)) held_.emplace(at, row);
         } catch (...) {
+            resident_.erase(at);
             resident_by_key_.erase(indexed.first);
             throw;
         }
+        assert(held_rows_exact());
+    }
+    template<class T>
+    static auto is_held(const T& value, int) noexcept -> decltype(value.held()) {
+        return value.held();
+    }
+    // Other users of the generic resident table have no opening/live-unit
+    // view and need no held index.
+    static bool is_held(const Value&, long) noexcept { return false; }
+    void refresh_held(Offset at, const std::shared_ptr<Row>& row) const {
+        const auto found = held_.lower_bound(at);
+        if (is_held(row->second, 0)) {
+            if (found == held_.end() || found->first != at) held_.emplace_hint(found, at, row);
+        } else if (found != held_.end() && found->first == at) {
+            held_.erase(found);
+        }
+        assert(held_rows_exact());
     }
     // Codecs that validate stored bytes may accept their physical origin.
     // Keep the original one-argument codec contract for other value types.
@@ -459,6 +572,7 @@ private:
     mutable Index index_;
     mutable Residents resident_;
     mutable ResidentKeys resident_by_key_; // One borrowed key per resident row.
+    mutable Held held_;
     mutable WorkCounters work_{};
     mutable std::size_t spill_threshold_ = kSpillFloor, spill_interval_ = kSpillFloor;
     mutable std::size_t calls_since_spill_ = 0;

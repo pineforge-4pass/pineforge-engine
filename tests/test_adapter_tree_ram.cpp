@@ -426,9 +426,10 @@ public:
     bool checked = false;
 };
 
-class ReversalCohortRefusalHost final : public TreeHost {
+// One-row byte/row ticket witnesses, not witnesses of the 4,096 resident cap.
+class ReversalCohortTicketHost final : public TreeHost {
 public:
-    ReversalCohortRefusalHost() : TreeHost(owner(true, 1, 1, 1, 1), true, false, 2) {}
+    ReversalCohortTicketHost() : TreeHost(owner(true, 1, 1, 1, 1), true, false, 2) {}
     void on_source_bar(const Bar&) override {
         const auto i = pine_bar_index();
         if (i == 0) {
@@ -437,7 +438,7 @@ public:
             return;
         }
         if (i != 1) return;
-        require(live_position_size() > 0.0, "reversal cap witness has a filled first side");
+        require(live_position_size() > 0.0, "reversal ticket witness has a filled first side");
         const auto broker_before = broker_state_hash();
         const auto source_before = source_hash();
         const auto requests_before = native_working_requests().size();
@@ -451,9 +452,9 @@ public:
     bool checked = false;
 };
 
-class CloseAllSecondSideRefusalHost final : public TreeHost {
+class CloseAllSecondSideTicketHost final : public TreeHost {
 public:
-    CloseAllSecondSideRefusalHost()
+    CloseAllSecondSideTicketHost()
         : TreeHost(owner(true, 1, 1, 1, 1), true, true, 2) {}
     void on_source_bar(const Bar&) override {
         const auto i = pine_bar_index();
@@ -463,7 +464,7 @@ public:
             return;
         }
         if (i != 1) return;
-        require(live_position_size() > 0.0, "close-all cap witness has a filled first side");
+        require(live_position_size() > 0.0, "close-all ticket witness has a filled first side");
         strategy_close_all();
         const auto broker_before = broker_state_hash();
         const auto source_before = source_hash();
@@ -595,11 +596,11 @@ void adapter_capacity_before_command_and_financial_commit() {
     CohortRefusalHost cohorts;
     cohorts.run(bars.data(), static_cast<int>(bars.size()));
     require(cohorts.last_error().empty() && cohorts.checked, "cohort ingress ticket witness completed");
-    ReversalCohortRefusalHost reversal;
+    ReversalCohortTicketHost reversal;
     reversal.run(bars.data(), static_cast<int>(bars.size()));
     require(reversal.last_error().empty() && reversal.checked,
             "reversal cohort ticket witness completed");
-    CloseAllSecondSideRefusalHost close_all;
+    CloseAllSecondSideTicketHost close_all;
     close_all.run(bars.data(), static_cast<int>(bars.size()));
     require(close_all.last_error().empty() && close_all.checked,
             "close-all second-side cohort ticket witness completed");

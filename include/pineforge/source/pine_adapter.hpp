@@ -18,6 +18,7 @@
 #include <pineforge/source/exit_scratch.hpp>
 
 #include <algorithm>
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -1340,11 +1341,48 @@ public:
             return std::find(doomed.begin(), doomed.end(), handle) != doomed.end();
         });
     }
+    // Hoisted once per selection, outside the per-family loop. The common
+    // one-leg close needs no scratch reads per family; larger selections
+    // retain their bounded scratch representation rather than a heap vector.
+    struct RemovalSelection {
+        const detail::ExitScratchRows<native_order::RequestHandle>& rows;
+        std::optional<std::uint64_t> single;
+        explicit RemovalSelection(
+                const detail::ExitScratchRows<native_order::RequestHandle>& doomed)
+            : rows(doomed) {
+            if (rows.size() == 1) single = rows.front().incarnation;
+        }
+        template<class Predicate> bool any(Predicate predicate) const {
+            if (single) return predicate(*single);
+            for (const auto& handle : rows)
+                if (predicate(handle.incarnation)) return true;
+            return false;
+        }
+    };
     void remove_selected(const detail::ExitScratchRows<native_order::RequestHandle>& doomed) {
         if (doomed.empty() || hot_.empty()) return;
         detail::ExitScratchIndex members(doomed.context());
         for (const auto& handle : doomed) members.put(handle.incarnation, 0);
-        remove_selected(members, doomed.context().run);
+        const RemovalSelection selection(doomed);
+        remove_selected(members, doomed.context().run, selection);
+    }
+    void remove_selected(const detail::ExitScratchIndex& members,
+                         const native_order::RunIdentity& run,
+                         const RemovalSelection& selection,
+                         bool precheck = true) {
+        // counts_ is exactly the incarnation multiplicity of hot_: push_back
+        // increments, settle uncounts each removed handle, and remove_all_from
+        // decrements. Settled/parked members are never in this index.
+        if (precheck && !selection.any(
+                [&](std::uint64_t incarnation) { return count(incarnation) != 0; })) {
+            // Every doomed incarnation has count zero. Checking that EVERY
+            // hot member has positive count proves this skipped hot_ contains
+            // no doomed member, in O(hot_) without a scratch-tree lookup.
+            assert(std::all_of(hot_.begin(), hot_.end(),
+                [&](const auto& handle) { return count(handle.incarnation) != 0; }));
+            return;
+        }
+        remove_selected(members, run);
     }
     void remove_selected(const detail::ExitScratchIndex& members,
                          const native_order::RunIdentity& run) {
@@ -1627,6 +1665,9 @@ public:
     void fixture_verify_source_entry_slots(bool enabled) noexcept {
         fixture_verify_source_entry_slots_ = enabled;
     }
+    void fixture_bracket_remove_precheck(bool enabled) noexcept {
+        fixture_bracket_remove_precheck_ = enabled;
+    }
     std::uint64_t fixture_auxiliary_disk_bytes() const noexcept;
     std::uint64_t fixture_erased_digest() const noexcept { return placement_.erased_digest(); }
     std::uint64_t fixture_erased_rows() const noexcept { return placement_.erased_rows(); }
@@ -1655,8 +1696,8 @@ public:
     // Snapshot only: O(resident rows + retained origins), no allocation/I/O.
     // Capacities include inline string storage; node/control sizes are
     // estimates. bytes_per_row counts PHYSICAL rows (deferred empty rows
-    // inflate it). The policy claim is physical resident rows <= 2x live rows
-    // + 64. This is not a bound on pending-order memory.
+    // inflate it). Physical resident rows <= 2x the rows kept at the last
+    // spill pass + 64 (+ pinned). This is not a bound on pending-order memory.
     CohortHeapEstimate cohort_heap_estimate() const noexcept;
 
     enum class PositionTailGuard : std::uint8_t {
@@ -2014,6 +2055,7 @@ private:
         Record retired_record() const noexcept;
         static CohortFacts restore_record(const Record&, bool arena_backed = false);
         bool spillable() const noexcept;
+        bool held() const noexcept;
         // R5 lane V19-E: the sides (bit 0 long, bit 1 short) of the openings
         // in `origins` whose placement rows were erased, so a question about
         // every origin the cohort ever accepted still covers them.
@@ -3003,11 +3045,12 @@ private:
     // Diagnostic work counter: written from const methods, never read by a
     // decision, deliberately outside source state and the broker hash.
     mutable PendingScanWork pending_scan_work_{};
-    // Diagnostic only: maintained from CohortFacts::opened pushes, erases and
-    // whole-vector clears.
-    // It is deliberately outside source state and the broker hash.
+    // Derived decision cache, maintained from CohortFacts::opened pushes,
+    // erases and whole-vector clears, asserted against those hashed vectors
+    // in non-Release builds and checked by the fixture oracle in Release.
     std::size_t cohort_opened_slot_count_ = 0;
     bool fixture_verify_source_entry_slots_ = false;
+    bool fixture_bracket_remove_precheck_ = true;
     // Set while an open's calls that TradingView does not repeat at one
     // price book (run_close_sized_open_calls, open_call_owing_follow_up); the
     // requests submitted meanwhile are listed in unrepeated_margin_calls_

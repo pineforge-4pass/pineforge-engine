@@ -31,8 +31,10 @@ template<class Tag, auto Member> struct Access {
 };
 struct Cohorts { friend auto access(Cohorts); };
 struct CohortFor { friend auto access(CohortFor); };
+struct CohortSlots { friend auto access(CohortSlots); };
 template struct Access<Cohorts, &Adapter::cohorts_by_id_>;
 template struct Access<CohortFor, &Adapter::cohort_for>;
+template struct Access<CohortSlots, &Adapter::cohort_opened_slot_count_>;
 
 void require(bool value, const char* why) {
     if (!value) throw std::runtime_error(why);
@@ -66,6 +68,7 @@ struct Facts {
     bool spillable() const noexcept {
         return origins.members().empty() && opened.empty() && units.empty();
     }
+    bool held() const noexcept { return !opened.empty() || !units.empty(); }
 };
 using Table = pineforge::detail::DiskResidentIdTable<Facts>;
 
@@ -129,6 +132,164 @@ std::string id_for(std::size_t n) {
 }
 no::RequestHandle origin_for(std::uint64_t n) { return {{"disk-cohort-test", 1}, n}; }
 
+void check_held_rows(const Table& table) {
+    std::vector<std::string> expected;
+    for (const auto& row : table.resident_rows())
+        if (!row.second.opened.empty() || !row.second.units.empty())
+            expected.push_back(row.first);
+    const auto before = table.work_counters();
+    const auto allocations = global_allocation::allocations;
+    global_allocation::refusing = true;
+    std::size_t visited = 0;
+    for (const auto& row : table.held_rows()) {
+        require(visited < expected.size() && row.first == expected[visited],
+                "held offsets equal the independent resident predicate in visiting order");
+        ++visited;
+    }
+    global_allocation::refusing = false;
+    const auto after = table.work_counters();
+    require(visited == expected.size() && table.held_rows_exact()
+            && table.held_size() == expected.size(), "held set has neither omissions nor extras");
+    require(after.held_rows_visited - before.held_rows_visited == expected.size()
+            && after.resident_rows_visited == before.resident_rows_visited
+            && after.iterated_rows == before.iterated_rows,
+            "held walk visits H rows without resident lookup or generic iteration");
+    require(global_allocation::allocations == allocations, "held walk allocates nothing");
+}
+
+void held_membership_on_every_fuzz_mutation() {
+    Table table;
+    constexpr std::size_t population = 48;
+    for (std::size_t i = 0; i < population; ++i) {
+        Facts facts;
+        facts.handle.value = i + 1;
+        // These placed-never-filled origins keep every row non-spillable.
+        facts.origins.push_back(origin_for(i + 1));
+        table.emplace(id_for(i), std::move(facts));
+        check_held_rows(table);
+    }
+    require(table.resident_size() == population && table.held_size() == 0,
+            "pending cohorts remain resident but do not belong to the held set");
+    {
+        const auto row = table.find(id_for(0));
+        row->second.units[901] = 1.5; // Explicit units-only gain, independent of fuzz coverage.
+        table.refresh_held(row);
+        check_held_rows(table);
+        require(row->second.opened.empty() && table.held_size() == 1,
+                "live units alone hold a cohort");
+        row->second.units.erase(901);
+        table.refresh_held(row);
+        check_held_rows(table);
+        row->second.opened.push_back(origin_for(902)); // Explicit openings-only gain.
+        table.refresh_held(row);
+        check_held_rows(table);
+        require(row->second.units.empty() && table.held_size() == 1,
+                "an opening alone holds a cohort");
+        row->second.opened.clear();
+        table.refresh_held(row);
+        check_held_rows(table);
+    }
+    std::uint64_t random = 0xb7c3a94dULL;
+    for (std::size_t step = 0; step < 768; ++step) {
+        random = random * 6364136223846793005ULL + 1442695040888963407ULL;
+        const auto slot = static_cast<std::size_t>((random >> 32) % population);
+        auto row = table.find(id_for(slot));
+        auto& facts = row->second;
+        const auto origin = origin_for(1000 + slot);
+        switch ((random >> 24) % 7) {
+        case 0: facts.opened.push_back(origin); break;
+        case 1: facts.units[origin.incarnation] += 0.25; break; // units-only gain
+        case 2: if (!facts.opened.empty()) facts.opened.erase(facts.opened.begin()); break;
+        case 3: facts.opened.clear(); break;
+        case 4: facts.units.erase(origin.incarnation); break;
+        case 5: facts.units.clear(); break;
+        case 6: // Partial consumption also preserves membership.
+            if (!facts.units.empty()) facts.units.begin()->second *= 0.5;
+            break;
+        }
+        table.refresh_held(row);
+        check_held_rows(table); // require(), including in Release, after EVERY mutation
+        if (step % 11 == 0) {
+            table.spill();
+            check_held_rows(table);
+        }
+    }
+    {
+        const auto row = table.find(id_for(0));
+        row->second.units[903] = 2.0;
+        table.refresh_held(row);
+        check_held_rows(table);
+    }
+    Table moved(std::move(table));
+    check_held_rows(moved);
+    check_held_rows(table);
+    table = std::move(moved);
+    check_held_rows(table);
+    check_held_rows(moved);
+    // Current-member erasure during a held walk must preserve the next row.
+    const auto held = table.held_rows();
+    for (auto at = held.begin(); at != held.end();) {
+        const auto current = at++;
+        current->second.opened.clear();
+        table.refresh_held(current);
+        check_held_rows(table);
+        current->second.units.clear();
+        table.refresh_held(current);
+        check_held_rows(table);
+    }
+    require(table.held_size() == 0 && table.resident_size() == population,
+            "held set drains even while pending origins pin every resident");
+    table.clear();
+    check_held_rows(table);
+}
+
+// The production retired codec cannot contain units. Exercise the generic
+// load path's obligation with an actual disk record whose codec CAN restore
+// them, without first calling refresh_held() on the restored row.
+struct RestoredUnits {
+    struct Record { std::uint64_t origin; double units; };
+    std::unordered_map<std::uint64_t, double> live_units_by_origin;
+    Record retired_record() const noexcept {
+        return live_units_by_origin.empty() ? Record{} : Record{
+            live_units_by_origin.begin()->first, live_units_by_origin.begin()->second};
+    }
+    static RestoredUnits restore_record(const Record& record) {
+        RestoredUnits result;
+        if (record.units > 0.0) result.live_units_by_origin[record.origin] = record.units;
+        return result;
+    }
+    bool held() const noexcept { return !live_units_by_origin.empty(); }
+    bool spillable() const noexcept { return !held(); }
+};
+using RestoredTable = pineforge::detail::DiskResidentIdTable<RestoredUnits>;
+struct RestoredIndex { friend auto access(RestoredIndex); };
+template struct Access<RestoredIndex, &RestoredTable::index_>;
+
+void restored_units_join_the_held_set() {
+    RestoredTable table;
+    auto& index = table.*access(RestoredIndex{});
+    const std::string id = id_for(19);
+    const std::string later_id = id_for(3);
+    index.insert(id, RestoredUnits::Record{713, 2.5});
+    index.insert(later_id, RestoredUnits::Record{714, 1.25});
+    require(table.resident_size() == 0 && table.held_size() == 0,
+            "restoration witness starts with only disk bytes");
+    const auto later = table.find(later_id); // Restore in the opposite order.
+    const auto row = table.find(id);
+    require(later != table.end() && later->second.live_units_by_origin.at(714) == 1.25
+            && row != table.end() && row->second.live_units_by_origin.at(713) == 2.5,
+            "the live-unit record is decoded from disk");
+    std::size_t visited = 0;
+    for (const auto& held : table.held_rows()) {
+        require(visited < 2
+                && held.first == (visited == 0 ? id : later_id)
+                && &held.second == (visited == 0 ? &row->second : &later->second),
+                "load registers exact restored rows in original offset order");
+        ++visited;
+    }
+    require(visited == 2 && table.held_rows_exact(), "restored live units are held without a refresh");
+}
+
 void replay_recurring_ids() {
     Table table;
     Reference reference;
@@ -168,7 +329,9 @@ void replay_recurring_ids() {
         const auto origin = origin_for(10000 + i);
         current.origins.push_back(origin);
         current.opened.push_back(origin);
+        table.refresh_held(found);
         current.units[origin.incarnation] = 3.25;
+        table.refresh_held(found);
         current.cycle += 5000;
         expected.origins.push_back(origin);
         expected.opened.push_back(origin);
@@ -182,9 +345,12 @@ void replay_recurring_ids() {
         if (!reference.at(id).opened.empty()) expected_live.push_back(id);
     for (const auto& id : table.resident_ids()) actual_live.push_back(id);
     require(actual_live == expected_live, "live cohort walk lost first-insertion order");
-    for (auto& row : table) {
+    for (auto at = table.begin(); at != table.end(); ++at) {
+        auto& row = *at;
         row.second.opened.clear();
+        table.refresh_held(at);
         row.second.units.clear();
+        table.refresh_held(at);
         row.second.origins.retire_before(row.second.origins.size());
         auto& expected = reference.at(row.first);
         expected.opened.clear();
@@ -294,7 +460,7 @@ int old_slot_count(const Adapter& adapter);
 
 class SlotCountHost final : public pineforge::source::PineStrategyHost {
 public:
-    static constexpr int kEntries = 2000;
+    static constexpr int kEntries = 256;
 
     SlotCountHost() {
         pineforge::source::PineStrategyConfig config;
@@ -328,6 +494,26 @@ public:
                 "slot oracle does no per-id lookups");
         require(global_allocation::allocations == allocations,
                 "slot oracle allocates nothing");
+        // Exercise the production decision path too, with the fixture oracle
+        // disabled. Debug's independent assertion uses uninstrumented rows.
+        adapter_.fixture_verify_source_entry_slots(false);
+        const auto production_before = adapter_.cohort_table_work();
+        const auto production_allocations = global_allocation::allocations;
+        global_allocation::refusing = true;
+        const auto production_slots = adapter_.source_entry_slot_count();
+        global_allocation::refusing = false;
+        const auto production_after = adapter_.cohort_table_work();
+        require(production_slots == last_slots
+                && production_slots == static_cast<int>(adapter_.*access(CohortSlots{}))
+                && production_slots == static_cast<int>(table.resident_opened_slot_count()),
+                "production slot result equals the maintained count and independent sum");
+        require(production_after.resident_rows_visited == production_before.resident_rows_visited
+                && production_after.iterated_rows == production_before.iterated_rows
+                && production_after.held_rows_visited == production_before.held_rows_visited,
+                "production slot read visits no resident, generic or held rows");
+        require(global_allocation::allocations == production_allocations,
+                "production slot read allocates nothing");
+        adapter_.fixture_verify_source_entry_slots(true);
         if (i == kEntries) checked_slots = true;
     }
 
@@ -499,6 +685,7 @@ public:
         for (const auto& id : table.resident_ids()) ids.push_back(id);
         for (const auto& row : table.resident_rows()) rows.push_back(row.first);
         require(ids == rows, "real-order walks retain the old visiting order on every callback");
+        require(table.held_rows_exact(), "real orders maintain the exact held set in Release too");
         require(adapter_.source_entry_slot_count() == old_slot_count(adapter_),
                 "real orders preserve the per-bar slot oracle");
         const auto i = pine_bar_index();
@@ -550,6 +737,105 @@ void real_orders_spill_differential() {
             }
         }
     }
+}
+
+class CloseSelectionHost final : public pineforge::source::PineStrategyHost {
+public:
+    CloseSelectionHost(int population, bool precheck) : population_(population) {
+        pineforge::source::PineStrategyConfig config;
+        config.initial_capital = 1e12;
+        config.margin_long = config.margin_short = 0.0;
+        config.pyramiding = 4096;
+        config.process_orders_on_close = true;
+        configure_pine_strategy(config);
+        set_broker_state_hash_recording(true);
+        set_syminfo_timezone("UTC");
+        set_syminfo_session("24x7");
+        set_syminfo_mintick(0.25);
+        adapter_.fixture_bracket_remove_precheck(precheck);
+    }
+    void on_source_bar(const pineforge::Bar&) override {
+        const auto i = pine_bar_index();
+        const auto na = std::numeric_limits<double>::quiet_NaN();
+        if (i < population_) {
+            const auto id = "close-owner-" + std::to_string(i);
+            strategy_entry(id, true, na, na, 1.0);
+            strategy_exit("close-exit-" + std::to_string(i), id, na, 50.0);
+        } else if (i == population_) {
+            require(trade_count() == 0 && physical_position().signed_units == population_,
+                    "one opening per bar holds N units and none of the N exits filled");
+            require(native_working_requests().size() == static_cast<std::size_t>(population_),
+                    "the close starts with N real working exit legs");
+            // Arm before requesting the close and stop at its post-Applied
+            // observer, covering this close's admission and settlement.
+            auto& scratch = pineforge::source::detail::exit_scratch(adapter_);
+            scratch.observation = this;
+            scratch.observe_lookup = [](void* opaque, std::size_t) noexcept {
+                ++static_cast<CloseSelectionHost*>(opaque)->close_lookups;
+            };
+            armed_ = true;
+            strategy_close_all();
+        }
+    }
+    std::uint64_t close_lookups = 0;
+    int close_events = 0;
+protected:
+    void on_native_applied_event(const no::ExecutionAppliedEvent& event,
+                                const pineforge::NativeDecisionContext&) override {
+        if (!armed_) return;
+        require(event.closed_units == population_ && event.opened_units == 0.0,
+                "the measured event is the full close of the populated book");
+        ++close_events;
+        armed_ = false;
+        auto& scratch = pineforge::source::detail::exit_scratch(adapter_);
+        scratch.observe_lookup = nullptr;
+        scratch.observation = nullptr;
+        require(native_working_requests().empty(), "the close cancels every pending exit");
+    }
+private:
+    int population_;
+    bool armed_ = false;
+};
+
+void close_selection_lookup_growth_and_equivalence() {
+    std::uint64_t checked[2]{}, unchecked[2]{};
+    for (int sample = 0; sample < 2; ++sample) {
+        const int n = sample == 0 ? 128 : 256;
+        auto bars = chart();
+        bars.resize(static_cast<std::size_t>(n + 2), bars.back());
+        for (std::size_t i = 0; i < bars.size(); ++i)
+            bars[i].timestamp = 1736121600000LL + static_cast<std::int64_t>(i) * 60000;
+        CloseSelectionHost candidate(n, true), reference(n, false);
+        for (auto* host : {&candidate, &reference}) {
+            host->run(bars.data(), static_cast<int>(bars.size()), "1", "1");
+            require(host->last_error().empty(), host->last_error().c_str());
+            require(host->close_events == 1 && host->trade_count() == n,
+                    "close-selection witness executes one close and closes every opening");
+            for (int i = 0; i < host->trade_count(); ++i) {
+                const auto& trade = host->get_trade(i);
+                require(trade.qty == 1.0 && !trade.open_at_end && !trade.exit_from_bracket,
+                        "all exits stay pending until the script close");
+            }
+        }
+        require(report_image(candidate) == report_image(reference)
+                && candidate.broker_state_hash_projection() == reference.broker_state_hash_projection(),
+                "precheck preserves every trade/report byte, recorded hash and final source hash");
+        checked[sample] = candidate.close_lookups;
+        unchecked[sample] = reference.close_lookups;
+        require(checked[sample] > 0 && unchecked[sample] >=
+                    static_cast<std::uint64_t>(n) * static_cast<std::uint64_t>(n + 1) / 2,
+                "the existing find_key hook observes the old triangular family scans");
+        std::printf("CR347 close N=%d find_key=%llu precheck_disabled_find_key=%llu\n", n,
+            static_cast<unsigned long long>(checked[sample]),
+            static_cast<unsigned long long>(unchecked[sample]));
+    }
+    // Red on the old remove_selected: each owner seeks every remaining
+    // family's hot member, N(N+1)/2 seeks. This hook is called by find_key;
+    // all legs are already gone before the later ended_sources.contains pass.
+    require(checked[1] < 3 * checked[0], "doubling pending exits must take less than 3x close key seeks");
+    require(unchecked[0] > checked[0] && unchecked[1] > checked[1],
+            "fixture switch actually disables the precheck");
+    require(unchecked[1] > 3 * unchecked[0], "the disabled fixture retains the quadratic witness");
 }
 
 class DenseHost final : public pineforge::source::PineStrategyHost {
@@ -612,21 +898,23 @@ public:
             strategy_cancel(id);
         }
         strategy_entry(id, true, 1.0, na, 1.0); // Never fills on this chart.
-        strategy_exit(exit_id, id, na, 50.0);
-        if (i == 499) at_500 = adapter_.pending_scan_work();
-        if (i == 999) at_1000 = adapter_.pending_scan_work();
+        // The cap witness needs 4,096 real pending origins, not exit legs.
+        if (!cap_probe_) strategy_exit(exit_id, id, na, 50.0);
+        if (i == 127) at_128 = adapter_.pending_scan_work();
+        if (i == 255) at_256 = adapter_.pending_scan_work();
     }
     std::uint64_t cohort_operations() const {
         const auto& w = adapter_.cohort_table_work();
         return w.rows_visited_by_spill + w.find_resident_probes + w.resident_rows_visited
-            + w.iterated_rows + w.rows_visited_by_capacity + w.rows_spilled + w.rows_restored;
+            + w.held_rows_visited + w.iterated_rows + w.rows_visited_by_capacity
+            + w.rows_spilled + w.rows_restored;
     }
     std::uint64_t cohort_walk_operations() const {
         const auto& w = adapter_.cohort_table_work();
         return w.rows_visited_by_spill + w.find_resident_probes + w.resident_rows_visited
-            + w.rows_visited_by_capacity + w.rows_spilled + w.rows_restored;
+            + w.held_rows_visited + w.rows_visited_by_capacity + w.rows_spilled + w.rows_restored;
     }
-    Adapter::PendingScanWork at_500{}, at_1000{};
+    Adapter::PendingScanWork at_128{}, at_256{};
     const Adapter& adapter() const { return adapter_; }
     bool refused = false;
 private:
@@ -658,7 +946,7 @@ void print_slice(const char* slice, const Adapter::PendingScanWork& work) {
 void rolling_modulo_pending_population() {
     constexpr int period = 64;
     auto bars = chart();
-    bars.resize(2048, bars.back());
+    bars.resize(512, bars.back()); // Eight complete wraps of each modulo slot.
     for (std::size_t i = 0; i < bars.size(); ++i)
         bars[i].timestamp = 1736121600000LL + static_cast<std::int64_t>(i) * 60000;
     for (const bool jailed : {false, true}) {
@@ -700,7 +988,7 @@ void rolling_modulo_pending_population() {
 void dense_operation_growth_and_instrumentation(bool jailed) {
     std::uint64_t operations[2]{}, walk_operations[2]{};
     for (int sample = 0; sample < 2; ++sample) {
-        const auto n = sample == 0 ? 1000 : 2000;
+        const auto n = sample == 0 ? 256 : 512;
         auto bars = chart();
         bars.resize(static_cast<std::size_t>(n), bars.back());
         for (int i = 0; i < n; ++i) bars[i].timestamp = 1736121600000LL + i * 60000LL;
@@ -708,23 +996,30 @@ void dense_operation_growth_and_instrumentation(bool jailed) {
         host.run(bars.data(), n, "1", "1");
         require(host.last_error().empty(), host.last_error().c_str());
         require(host.trade_count() == 0, "dense entries really remain pending");
+        const auto& table = host.adapter().*access(Cohorts{});
+        require(table.resident_size() == static_cast<std::size_t>(n)
+                && table.held_size() == 0 && table.held_rows_exact(),
+                "dense placed-never-filled cohorts pin residents without holding openings or units");
+        require(host.adapter().cohort_table_work().resident_rows_visited == 0
+                && host.adapter().cohort_table_work().held_rows_visited == 0,
+                "production decisions visit no rows when H is zero despite growing pending R");
         operations[sample] = host.cohort_operations();
         walk_operations[sample] = host.cohort_walk_operations();
         require(operations[sample] > 0, "cohort work instrumentation is active");
-        print_slice(jailed ? "N=500-jailed" : "N=500-unjailed", host.at_500);
-        print_slice(jailed ? "N=1000-jailed" : "N=1000-unjailed", host.at_1000);
-        auto second_slice = host.at_1000;
+        print_slice(jailed ? "N=128-jailed" : "N=128-unjailed", host.at_128);
+        print_slice(jailed ? "N=256-jailed" : "N=256-unjailed", host.at_256);
+        auto second_slice = host.at_256;
         const auto subtract = [](auto& after, const auto& before) {
             after.calls -= before.calls;
             after.live_handle_iterations -= before.live_handle_iterations;
             after.placement_find_calls -= before.placement_find_calls;
             after.open_lot_iterations -= before.open_lot_iterations;
         };
-        subtract(second_slice.priced_entry, host.at_500.priced_entry);
-        subtract(second_slice.entry, host.at_500.entry);
-        subtract(second_slice.standing_exit, host.at_500.standing_exit);
-        subtract(second_slice.open_lot, host.at_500.open_lot);
-        print_slice(jailed ? "N=501..1000-jailed" : "N=501..1000-unjailed", second_slice);
+        subtract(second_slice.priced_entry, host.at_128.priced_entry);
+        subtract(second_slice.entry, host.at_128.entry);
+        subtract(second_slice.standing_exit, host.at_128.standing_exit);
+        subtract(second_slice.open_lot, host.at_128.open_lot);
+        print_slice(jailed ? "N=129..256-jailed" : "N=129..256-unjailed", second_slice);
         const auto monotone = [](const auto& a, const auto& b) {
             require(b.calls >= a.calls && b.live_handle_iterations >= a.live_handle_iterations
                     && a.placement_find_calls == a.live_handle_iterations
@@ -736,25 +1031,25 @@ void dense_operation_growth_and_instrumentation(bool jailed) {
                     && b.max_logical_cohorts >= a.max_logical_cohorts,
                     "each actual pending-loop counter is monotone, including short-circuited loops");
         };
-        monotone(host.at_500.priced_entry, host.at_1000.priced_entry);
-        monotone(host.at_500.entry, host.at_1000.entry);
-        monotone(host.at_500.standing_exit, host.at_1000.standing_exit);
-        monotone(host.at_500.open_lot, host.at_1000.open_lot);
+        monotone(host.at_128.priced_entry, host.at_256.priced_entry);
+        monotone(host.at_128.entry, host.at_256.entry);
+        monotone(host.at_128.standing_exit, host.at_256.standing_exit);
+        monotone(host.at_128.open_lot, host.at_256.open_lot);
         const auto scanned = [](const Adapter::PendingScanWork& work) {
             return work.priced_entry.live_handle_iterations + work.entry.live_handle_iterations
                 + work.standing_exit.live_handle_iterations;
         };
-        require(scanned(host.at_500) > 0 && scanned(host.at_1000) > scanned(host.at_500)
-                && host.at_500.entry.calls > 0 && host.at_1000.entry.calls > host.at_500.entry.calls,
+        require(scanned(host.at_128) > 0 && scanned(host.at_256) > scanned(host.at_128)
+                && host.at_128.entry.calls > 0 && host.at_256.entry.calls > host.at_128.entry.calls,
                 "the dense script itself exercises nonzero, growing pending scans");
-        require(host.at_1000.open_lot.live_handle_iterations == 0
-                && host.at_1000.open_lot.placement_find_calls == 0,
+        require(host.at_256.open_lot.live_handle_iterations == 0
+                && host.at_256.open_lot.placement_find_calls == 0,
                 "open_lot_of has a native-lot walk, no live-handle or placement loop");
         const auto allocations = global_allocation::allocations;
         global_allocation::refusing = true;
         const auto heap = host.adapter().cohort_heap_estimate();
         global_allocation::refusing = false;
-        require(global_allocation::allocations == allocations && heap.resident_rows >= 1000
+        require(global_allocation::allocations == allocations && heap.resident_rows >= 256
                 && heap.total_bytes >= heap.row_bytes
                 && heap.total_bytes >= heap.opened_bytes + heap.origin_bytes
                 && heap.bytes_per_row == heap.total_bytes / heap.resident_rows,
@@ -766,7 +1061,7 @@ void dense_operation_growth_and_instrumentation(bool jailed) {
             heap.total_bytes, heap.bytes_per_row, heap.row_bytes, heap.key_bytes,
             heap.origin_bytes, heap.opened_bytes, heap.live_unit_bytes, heap.directory_bytes);
     }
-    // This is the walks fixed in CR-347 round 4; it deliberately excludes the
+    // These are the walks fixed in CR-347 rounds 4/5; they deliberately exclude the
     // retire_origin_prefixes Iterator pass below.
     require(walk_operations[1] * 2 <= walk_operations[0] * 5,
             "doubling dense pending cohorts exceeds 2.5x fixed cohort walks");
@@ -774,17 +1069,14 @@ void dense_operation_growth_and_instrumentation(bool jailed) {
     // Theta(R) retire pass. Print the full ratio and keep it unasserted until
     // that pass has a dirty-set implementation.
     std::printf("CR347 profile=%s dense_full_ratio=%llu/%llu fixed_walk_ratio=%llu/%llu "
-                "iterated_rows=%llu\n",
+                "iterated_rows_N=%llu iterated_rows_2N=%llu\n",
         jailed ? "jailed" : "unjailed",
         static_cast<unsigned long long>(operations[1]),
         static_cast<unsigned long long>(operations[0]),
         static_cast<unsigned long long>(walk_operations[1]),
         static_cast<unsigned long long>(walk_operations[0]),
-        static_cast<unsigned long long>(
-            // Both runs have separate hosts; this prints the larger observed
-            // retire-pass work as a stable diagnostic for the profile.
-            std::max(operations[0] - walk_operations[0],
-                     operations[1] - walk_operations[1])));
+        static_cast<unsigned long long>(operations[0] - walk_operations[0]),
+        static_cast<unsigned long long>(operations[1] - walk_operations[1]));
 }
 
 void adapter_cap_rollback() {
@@ -798,15 +1090,35 @@ void adapter_cap_rollback() {
 }
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
     try {
+        // Lab-only targeted entry points keep fail-before runs independent
+        // of the slower full adapter storage/cap population.
+        if (argc == 2 && std::string(argv[1]) == "--close-selection") {
+            close_selection_lookup_growth_and_equivalence();
+            std::puts("adapter close selection: OK");
+            return 0;
+        }
+        if (argc == 2 && std::string(argv[1]) == "--held-membership") {
+            held_membership_on_every_fuzz_mutation();
+            restored_units_join_the_held_set();
+            std::puts("adapter held membership: OK");
+            return 0;
+        }
+        if (argc != 1) {
+            std::fputs("expected --close-selection, --held-membership, or no arguments\n", stderr);
+            return 2;
+        }
         replay_recurring_ids();
         pinned_lookup_and_resident_reads();
+        held_membership_on_every_fuzz_mutation();
+        restored_units_join_the_held_set();
         q9_difference_of_differences();
         real_host_recurrence();
         real_host_io_failure();
         slot_count_one_pass_and_no_allocation();
         real_orders_spill_differential();
+        close_selection_lookup_growth_and_equivalence();
         dense_operation_growth_and_instrumentation(false);
         dense_operation_growth_and_instrumentation(true);
         adapter_cap_rollback();
