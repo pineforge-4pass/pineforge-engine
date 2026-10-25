@@ -1,0 +1,58 @@
+entry	file	symbol	container	state_was	word_hits_in_file_at_main	word_hits_in_file_at_oldbase	same_file_group_same_element_type_or_similar_name	VERDICT_gone_not_renamed	reviewer_note
+U0080	include/pineforge/engine.hpp	range_end_trades_	std::vector<Trade>	pending-flat-memory	6	5	end[S]; synthetic_[T]		
+U0094	include/pineforge/engine.hpp	trades_	std::vector<Trade>	pending-flat-memory	63	58	synthetic_[T]		
+U0179	include/pineforge/native_module.hpp	copied	std::vector<Bar>	unreviewed	0	5	-		
+U0186	include/pineforge/native_order.hpp	history_	std::vector<CommandEvent>	pending-flat-memory	0	3	overflow_[T]		
+U0193	include/pineforge/native_order.hpp	ordinal_index_	std::vector<std::pair<uint64_t, std::size_t>>	pending-flat-memory	0	1	index_[S]		
+U0197	include/pineforge/native_order.hpp	receipts_	std::vector<ReceiptKey>	pending-flat-memory	0	2	cohort_receipts_[S]		
+U0199	include/pineforge/native_order.hpp	successor_roots_	std::vector<std::pair<uint64_t, uint64_t>>	unreviewed	1	1	issued_[T]; repriced_[T]		
+U0269	include/pineforge/source/pine_adapter.hpp	by_from_entry	std::unordered_map<std::string, std::uint64_t>	unreviewed	0	2	from_entry[S]		
+U0280	include/pineforge/source/pine_adapter.hpp	cohort_order_	std::vector<SourceId>	unreviewed	0	1	erased_foreign_ids_[T]		
+U0281	include/pineforge/source/pine_adapter.hpp	cohorts_by_id_	std::unordered_map<SourceId, CohortFacts>	unreviewed	1	1	id[S]		
+U0284	include/pineforge/source/pine_adapter.hpp	consumed_partial_exit_cycles_	std::unordered_map<SourceId, std::int64_t>	unreviewed	2	1	consumed_[S]		
+U0292	include/pineforge/source/pine_adapter.hpp	erased_minima_	Minima	unreviewed	4	2	-		
+U0294	include/pineforge/source/pine_adapter.hpp	exit_rank_keys_	std::vector<SourceId>	unreviewed	2	2	erased_foreign_ids_[T]		
+U0342	include/pineforge/source/pine_adapter.hpp	per_entry_child_legs	std::vector<native_order::RequestHandle>	unreviewed	1	1	first_open_newborns_[T]; hot_[T]; items_[T]; live_handles_[T]; members[T]; opened[T]; openings_for[T]; out[T]		
+U0344	include/pineforge/source/pine_adapter.hpp	per_entry_open_entries	std::vector<PerEntryExitChild>	pending-flat-memory	1	1	children[T]		
+U0359	include/pineforge/source/pine_adapter.hpp	sequence_index_	Minima	unreviewed	0	3	-		
+U0360	include/pineforge/source/pine_adapter.hpp	settled_	std::vector<std::uint8_t>	unreviewed	0	11	bytes[T]; settled_bracket_families_[S]		
+U0369	include/pineforge/source/pine_adapter.hpp	trade_exit_phase_	std::vector<std::uint8_t>	unreviewed	3	2	bytes[T]		
+U0371	include/pineforge/source/pine_adapter.hpp	unfolded_	std::vector<std::uint64_t>	unreviewed	0	7	askable_origins[T]; candidate_names[T]; doomed[T]; first_reissues[T]; incarnations[T]; live_groups[T]; lot_openings[T]; released[T]		
+U0397	include/pineforge/source/pine_scheduler.hpp	bars	std::vector<Bar>	unreviewed	25	22	owned[T]		
+U0398	include/pineforge/source/pine_scheduler.hpp	input_script_boundary_completes_	std::vector<unsigned char>	unreviewed	0	1	-		
+U0399	include/pineforge/source/pine_scheduler.hpp	input_script_completes_	std::vector<unsigned char>	unreviewed	0	1	-		
+U0491	src/c_abi.cpp	bars	std::vector<pineforge::Bar>	unreviewed	13	14	-		
+U0522	src/engine_metrics.cpp	month_end	std::vector<double>	unreviewed	1	5	-		
+U0523	src/engine_metrics.cpp	r	std::vector<double>	unreviewed	0	11	-		
+U0643	src/native_execution_consumer.cpp	input_next_ms_	unresolved by the index: input_next_ms_.assign(...)	unreviewed	0	6	next[S]		
+U0650	src/native_execution_consumer.cpp	overflow_snapshot	unresolved by the index: overflow_snapshot.reserve(...)	unreviewed	0	5	-		
+U0656	src/native_execution_consumer.cpp	queue	std::vector<Item>	pending-flat-memory	7	16	-		
+U0657	src/native_execution_consumer.cpp	range_end_trades_	unresolved by the index: range_end_trades_.push_back(...)	pending-flat-memory	5	2	trades[S]		
+U0690	src/native_execution_consumer.hpp	input_next_ms_	std::vector<std::int64_t>	unreviewed	0	3	projected_first_ms[T]		
+U0695	src/native_execution_consumer.hpp	match_snapshot_	std::vector<const native_order::LiveRequest*>	pending-flat-memory	0	1	-		
+U0713	src/native_order.cpp	blocks	std::vector<void*>	unreviewed	1	4	blobs[S]		
+U0720	src/native_order.cpp	free_blocks	unresolved by the index: free_blocks.push_back(...)	unreviewed	0	3	fresh_blobs[S]		
+U0722	src/native_order.cpp	history_	unresolved by the index: history_.reserve(...)	unreviewed	0	19	-		
+U0723	src/native_order.cpp	ids	std::vector<EventId>	unreviewed	18	15	inline_ids[T]; local[T]		
+U0730	src/native_order.cpp	ordinal_index_	unresolved by the index: ordinal_index_.reserve(...)	pending-flat-memory	0	12	-		
+U0732	src/native_order.cpp	prior_adjustment_ids	std::vector<EventId>	pending-flat-memory	10	8	inline_ids[T]; local[T]		
+U0733	src/native_order.cpp	receipts_	unresolved by the index: receipts_.push_back(...)	pending-flat-memory	0	13	cohort_receipts_[S]		
+U0832	src/source/pine_adapter.cpp	cohort_order_	unresolved by the index: cohort_order_.push_back(...)	unreviewed	0	11	cohort_sides[S]; order[S]		
+U0875	src/source/pine_adapter.cpp	index	std::map<SourceId, std::size_t>	unreviewed	298	265	-		
+U1012	src/source/pine_scheduler_native.cpp	bars	unresolved by the index: bars.assign(...)	unreviewed	21	18	-		
+U1022	src/source/pine_scheduler_native.cpp	input_script_boundary_completes_	unresolved by the index: input_script_boundary_completes_.assign(...)	unreviewed	0	4	-		
+U1023	src/source/pine_scheduler_native.cpp	input_script_completes_	unresolved by the index: input_script_completes_.assign(...)	unreviewed	0	6	input_script_cursor[S]		
+U1052	src/source/pine_state_hash.cpp	cohort_keys	std::vector<std::string>	unreviewed	0	4	input_keys[T]; keys[S]; named_cancel_keys[T]		
+U1053	src/source/pine_state_hash.cpp	consumed_partial_keys	std::vector<std::string>	unreviewed	0	6	input_keys[T]; keys[S]; named_cancel_keys[T]		
+U1067	src/source/pine_strategy_host.cpp	children	std::vector<std::size_t>	unreviewed	3	11	-		
+U1074	src/source/pine_strategy_host.cpp	held	std::map<std::int64_t, std::int64_t>	unreviewed	12	23	-		
+U1076	src/source/pine_strategy_host.cpp	indices	std::vector<std::size_t>	unreviewed	1	6	-		
+U1080	src/source/pine_strategy_host.cpp	kNoAux	std::vector<Bar>	unreviewed	0	2	-		
+U1081	src/source/pine_strategy_host.cpp	left	std::vector<double>	unreviewed	7	8	lent[S]		
+U1084	src/source/pine_strategy_host.cpp	multi_day	std::map<int, std::vector<std::int64_t>>	unreviewed	0	4	-		
+U1089	src/source/pine_strategy_host.cpp	rows	std::vector<Trade>	unreviewed	21	26	-		
+U1093	src/source/pine_strategy_host.cpp	slices	std::vector<Slice>	pending-flat-memory	1	4	-		
+U1094	src/source/pine_strategy_host.cpp	sorted	std::vector<Trade>	unreviewed	0	4	-		
+U1096	src/source/pine_strategy_host.cpp	sources	std::vector<std::size_t>	unreviewed	0	4	-		
+U1097	src/source/pine_strategy_host.cpp	stamps	std::vector<std::int64_t>	unreviewed	1	7	-		
+U1101	src/source/pine_strategy_host.cpp	tradingview_multi_day_stamps	std::vector<std::int64_t>	pending-flat-memory	0	4	-		
