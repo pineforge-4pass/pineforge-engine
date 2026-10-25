@@ -531,6 +531,10 @@ private:
     // Other users of the generic resident table have no opening/live-unit
     // view and need no held index.
     static bool is_held(const Value&, long) noexcept { return false; }
+    // May throw (std::bad_alloc from the node insert) AFTER the caller changed
+    // the row: the exception must end the run, as the other allocation
+    // failures on these paths do; a caller that continued would leave held_
+    // missing a row and later held walks would skip it silently.
     void refresh_held(Offset at, const std::shared_ptr<Row>& row) const {
         const auto found = held_.lower_bound(at);
         if (is_held(row->second, 0)) {

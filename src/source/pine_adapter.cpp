@@ -12119,9 +12119,9 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                              PINEFORGE_POSITION_TAIL_DIAGNOSTICS{});
         const auto include_completed = [&](bool is_long, std::uint64_t incarnation,
                                             bool margin_call, const auto& named_entry_matches) {
-            if (is_long != (physical.signed_units > 0.0)) return false;
+            if (is_long != (physical.signed_units > 0.0)) return false; const auto held = cohorts_by_id_.held_rows(); // one range: one exactness assert
             return ancestry_sized_target
-                ? std::any_of(cohorts_by_id_.held_rows().begin(), cohorts_by_id_.held_rows().end(),
+                ? std::any_of(held.begin(), held.end(),
                     [&](const auto& cohort) {
                         return (!fifo_named_entry || cohort.first == from_entry)
                             && cohort.second.live_units_by_origin.count(
