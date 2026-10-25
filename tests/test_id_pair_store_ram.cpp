@@ -303,7 +303,7 @@ void limit_messages_and_oversized_components() {
     // The old oversized fixture remains covered on the ordinary disk path.
     Store disk;
     const std::string first(513, 'a'), second(1025, 'b');
-    require(disk.insert_or_assign(first, second, 17) && disk.at(first, second) == 17,
+    require(disk.insert_or_assign(first, second, 17) && disk.lookup(first, second) == 17u,
             "unjailed id components retain their previous length domain");
 }
 } // namespace
