@@ -1620,6 +1620,10 @@ public:
     void fixture_cohort_implicit_spill_interval(std::size_t calls) noexcept {
         cohorts_by_id_.fixture_implicit_spill_interval(calls);
     }
+    // Test seam (forwarder missing in round 4: the fixtures call it on the adapter).
+    void fixture_spill_predicate(bool (*predicate)(const std::string&)) noexcept {
+        cohorts_by_id_.fixture_spill_predicate(predicate);
+    }
     void fixture_verify_source_entry_slots(bool enabled) noexcept {
         fixture_verify_source_entry_slots_ = enabled;
     }
