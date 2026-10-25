@@ -130,6 +130,8 @@ public:
     // entry_id_at() returns only that string and shares the field read cache.
     Trade numeric_at(size_type global) const;
     std::string entry_id_at(size_type global) const;
+    // entry_id_at(global) == std::string(text, length), with no std::string built on a cache hit.
+    bool entry_id_equals(size_type global, const char* text, std::size_t length) const;
     // Pine field reads use the same check(global,true) as at(). A numeric
     // hit loads just its Record member, without constructing/copying a Trade
     // or any string. A string hit copies only the requested packed bytes.

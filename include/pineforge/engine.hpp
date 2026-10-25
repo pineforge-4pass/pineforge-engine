@@ -1636,6 +1636,12 @@ protected:
         if (idx < 0 || idx >= (int)trades_.size()) return std::string();
         return trades_.entry_id_at(idx);
     }
+    // closed_trade_entry_id(idx) == std::string(text, length): a missing row's id is "", so it is
+    // equal to exactly the zero-length text. `text` may be null only when `length` is 0.
+    bool closed_trade_entry_id_is(int idx, const char* text, std::size_t length) const {
+        if (idx < 0 || idx >= (int)trades_.size()) return length == 0;
+        return trades_.entry_id_equals(idx, text, length);
+    }
     std::string closed_trade_exit_id(int idx) const {
         if (idx < 0 || idx >= (int)trades_.size()) return std::string();
         return trades_.exit_id_at(idx);
