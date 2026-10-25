@@ -1008,7 +1008,9 @@ public:
         for (const auto& row : positions_)
             bytes += sizeof(decltype(positions_)::value_type) + 2 * sizeof(void*)
                 + row.second.capacity() * sizeof(std::size_t);
-        for (const auto& handle : items_) bytes += handle.run.session_key.capacity() + 1;
+        // The per-run session key inside each handle is a shared run-level
+        // object, not per-row storage: not counted (compile fix by CR150-CX,
+        // the lane called a std::string member the type does not have).
         return bytes;
     }
 

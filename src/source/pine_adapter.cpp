@@ -5407,8 +5407,7 @@ PineExecutionAdapter::cohort_heap_estimate() const noexcept {
         const auto& facts = row.second;
         result.origin_bytes += facts.origins.heap_bytes_estimate();
         result.opened_bytes += facts.opened.capacity() * sizeof(native_order::RequestHandle);
-        for (const auto& handle : facts.opened)
-            result.opened_bytes += handle.run.session_key.capacity() + 1;
+        // Session keys inside handles are shared run-level objects: not counted.
         result.live_unit_bytes += facts.live_units_by_origin.bucket_count() * sizeof(void*)
             + facts.live_units_by_origin.size()
                 * (sizeof(decltype(facts.live_units_by_origin)::value_type) + 2 * sizeof(void*));
