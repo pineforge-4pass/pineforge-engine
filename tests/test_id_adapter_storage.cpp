@@ -822,12 +822,12 @@ void close_selection_lookup_growth_and_equivalence() {
                 "precheck preserves every trade/report byte, recorded hash and final source hash");
         checked[sample] = candidate.close_lookups;
         unchecked[sample] = reference.close_lookups;
-        require(checked[sample] > 0 && unchecked[sample] >=
-                    static_cast<std::uint64_t>(n) * static_cast<std::uint64_t>(n + 1) / 2,
-                "the existing find_key hook observes the old triangular family scans");
         std::printf("CR347 close N=%d find_key=%llu precheck_disabled_find_key=%llu\n", n,
             static_cast<unsigned long long>(checked[sample]),
             static_cast<unsigned long long>(unchecked[sample]));
+        require(checked[sample] > 0 && unchecked[sample] >=
+                    static_cast<std::uint64_t>(n) * static_cast<std::uint64_t>(n + 1) / 2,
+                "the existing find_key hook observes the old triangular family scans");
     }
     // Red on the old remove_selected: each owner seeks every remaining
     // family's hot member, N(N+1)/2 seeks. This hook is called by find_key;
