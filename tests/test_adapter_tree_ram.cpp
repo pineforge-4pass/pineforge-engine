@@ -320,14 +320,16 @@ void spilled_empty_cohort_still_cancels_its_queued_exit() {
 }
 
 std::string rank_id(int ordinal) {
-    if (ordinal == 27) return std::string(300, 'Z');
+    // 64 bytes is the longest id the bounded profile admits (the 64-byte cap
+    // of the row-4 base commit refuses 300); 64 still exceeds the 27 rank bytes.
+    if (ordinal == 27) return std::string(64, 'Z');
     return std::string(1, static_cast<char>('A' + ordinal));
 }
 class CutoffHost final : public TreeHost {
 public:
-    // A..[ are 27 one-byte rank ids. The 28th id is 300 bytes: it fits
-    // Coh (U=28,B_U=327), but Rank admits exactly 27 bytes and must IGNORE it.
-    explicit CutoffHost(bool ram) : TreeHost(owner(ram, 28, 327, 27, 27), true, true, 32) {}
+    // A..[ are 27 one-byte rank ids. The 28th id is 64 bytes: it fits
+    // Coh (U=28,B_U=27+64=91), but Rank admits exactly 27 bytes and must IGNORE it.
+    explicit CutoffHost(bool ram) : TreeHost(owner(ram, 28, 91, 27, 27), true, true, 32) {}
     void on_source_bar(const Bar&) override {
         const int i = pine_bar_index();
         if (i == 0) bind_trees();
@@ -350,7 +352,7 @@ void twenty_eighth_rank_key_is_ignored() {
     { ProbeScope scope(disk.operations); disk.run(bars.data(), static_cast<int>(bars.size())); }
     { ProbeScope scope(ram.operations); ram.run(bars.data(), static_cast<int>(bars.size())); }
     compare_runs(disk, ram);
-    // 1+60*27+27=1648; ignoring a 28th id must not spend its 300 bytes.
+    // 1+60*27+27=1648; ignoring a 28th id must not spend its 64 bytes.
     require(ram.extent_at_27 == 1648 && ram.extent_at_28 == 1648
             && ram.slab()->region(ScratchResource::exit_rank).capacity == 1648,
             "27/28 cutoff preserves the exact Rank extent");
