@@ -162,11 +162,11 @@ set(PINEFORGE_KERNEL_SOURCES
     src/selected_report_view.cpp
     src/selected_window_plan.cpp
     src/metrics_spill_curve.cpp
-    src/report_scratch.cpp src/detail/o1_store.cpp
+    src/report_scratch.cpp
+    src/detail/o1_store.cpp
     src/scratch_arena.cpp
 )
-# The kernel-only archive: libpineforge.a's kernel objects and flags, for consumers that never speak Pine.
-add_library(pineforge_kernel STATIC ${PINEFORGE_KERNEL_SOURCES})
+add_library(pineforge_kernel STATIC ${PINEFORGE_KERNEL_SOURCES}) # kernel-only archive: libpineforge.a's kernel objects and flags, for consumers that never speak Pine
 add_library(PineForge::kernel ALIAS pineforge_kernel)
 # So a find_package(PineForge) consumer spells it the same way an in-tree one
 # does: PineForge::kernel, not PineForge::pineforge_kernel.
