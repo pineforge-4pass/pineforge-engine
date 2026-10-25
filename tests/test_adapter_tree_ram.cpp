@@ -37,9 +37,9 @@ inline bool observe_spill(const std::string& id) {
 // As in test_adapter_reversal_storage, observe only the storage predicate
 // after the real shared-row pin/spillable checks. No predicate result, row
 // layout, access level, ordering, source command or hash fold is replaced.
-#define spillable() spillable() && ::tree_ram_fixture::observe_spill(at->second->first)
+#define PINEFORGE_COHORT_SPILL_ALLOWED(id) ::tree_ram_fixture::observe_spill(id)
 #include <pineforge/detail/disk_resident_id_table.hpp>
-#undef spillable
+#undef PINEFORGE_COHORT_SPILL_ALLOWED
 #include <pineforge/source/pine_strategy_host.hpp>
 #include "../src/source/pine_adapter.cpp"
 #include "../src/source/pine_state_hash.cpp"
@@ -117,6 +117,7 @@ public:
         // backends so this unit does not depend on the other two lane binders.
         // This is before this run's first command/id, after the host reset.
         detail::bind_tree_scratch_tables(adapter_, slab_);
+        adapter_.fixture_cohort_implicit_spill_interval(1);
         reads.clear(); source_reads.clear();
     }
     void sample() {

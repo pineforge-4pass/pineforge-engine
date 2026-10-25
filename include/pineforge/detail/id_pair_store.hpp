@@ -313,7 +313,9 @@ public:
         require_id_components(first.size(), last.size());
         constexpr auto maximum = std::numeric_limits<std::uint64_t>::max();
         if (first.size() >= maximum || last.size() > maximum - first.size() - 1)
-            throw ScratchCapacityError(data_resource_);
+            throw ScratchCapacityError(data_resource_, scratch_byte_limit_message(data_resource_,
+                data_resource_ == ScratchResource::erased_data
+                    ? slab_->manifest().B_e : slab_->manifest().B_c));
         const auto length = static_cast<std::uint64_t>(first.size()) + 1 + last.size();
         std::uint64_t hash = 1469598103934665603ULL;
         const auto byte = [&](unsigned char value) { hash ^= value; hash *= 1099511628211ULL; };
@@ -417,12 +419,16 @@ private:
                            std::uint64_t first, std::uint64_t second) const {
         if (keys >= key_limit_ || keys >= slots_ / 2
             || keys >= std::numeric_limits<std::size_t>::max())
-            throw ScratchCapacityError(index_resource_);
+            throw ScratchCapacityError(index_resource_,
+                scratch_count_limit_message(index_resource_, std::min(key_limit_, slots_ / 2)));
         ++keys;
         const auto append = [&](std::uint64_t bytes) {
             const auto capacity = slab_->region(data_resource_).capacity;
             if (extent > capacity || bytes > capacity - extent)
-                throw ScratchCapacityError(data_resource_);
+                throw ScratchCapacityError(data_resource_,
+                    scratch_byte_limit_message(data_resource_,
+                        data_resource_ == ScratchResource::erased_data
+                            ? slab_->manifest().B_e : slab_->manifest().B_c));
             extent += bytes;
         };
         append(sizeof(Header));
@@ -640,7 +646,8 @@ private:
             return inserted;
         }
         if (used_ >= slots_ / 2) {
-            if (slab_) throw ScratchCapacityError(index_resource_);
+            if (slab_) throw ScratchCapacityError(index_resource_,
+                scratch_count_limit_message(index_resource_, std::min(key_limit_, slots_ / 2)));
             grow_index();
             found = locate(first, second, hash);
         }

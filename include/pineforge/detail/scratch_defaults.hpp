@@ -3,10 +3,15 @@
 #include <pineforge/detail/scratch_errors.hpp>
 #include <pineforge/detail/scratch_tables.hpp>
 
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 
 namespace pineforge::detail {
+
+// Admission limit on non-spillable cohort rows in the bounded scratch
+// profile. This does not bound the number or heap size of pending orders.
+inline constexpr std::size_t kMaxResidentCohorts = 4096;
 
 // P0 is a POLICY admission tier, not a measured bound or a proof that a
 // strategy fits. Counts include historical keys and internally generated

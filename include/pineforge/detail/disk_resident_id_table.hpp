@@ -1,13 +1,17 @@
 #pragma once
 
 #include <pineforge/detail/disk_id_table.hpp>
+#include <pineforge/detail/scratch_defaults.hpp>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
+#include <limits>
 #include <map>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 
@@ -21,6 +25,9 @@ namespace pineforge::detail {
 //
 // begin()/end() visit RESIDENT rows, newest first. A spilled row
 // has no live members, so source decisions over live members can omit it.
+// resident_rows() visits them in ascending original offset order, including
+// rows restored from disk. Empty rows can await an implicit spill: readers
+// must use live members, never physical residency, as a decision predicate.
 // all_sorted() visits EVERY logical row, including retired ones, for hashing.
 // size() is the logical count, resident_size() the physical count.
 template<class Value>
@@ -28,8 +35,49 @@ class DiskResidentIdTable {
     using Index = DiskIdTable<typename Value::Record>;
     using Offset = typename Index::Offset;
     using Row = std::pair<const std::string, Value>;
+    struct ResidentProbe {
+        std::string_view key;
+        std::uint64_t* comparisons;
+    };
+    struct ResidentKeyLess {
+        using is_transparent = void;
+        bool operator()(std::string_view a, std::string_view b) const noexcept { return a < b; }
+        bool operator()(const ResidentProbe& a, std::string_view b) const noexcept {
+            ++*a.comparisons;
+            return a.key < b;
+        }
+        bool operator()(std::string_view a, const ResidentProbe& b) const noexcept {
+            ++*b.comparisons;
+            return a < b.key;
+        }
+    };
+    // Borrowed stable keys, worst-case O(log R), no arena reads. The probe
+    // overloads count actual comparisons, not a hard-coded cost per call.
+    using ResidentKeys = std::map<std::string_view, Offset, ResidentKeyLess>;
+    struct ResidentRow {
+        std::shared_ptr<Row> owner;
+        typename ResidentKeys::iterator key;
+    };
+    using Residents = std::map<Offset, ResidentRow>;
 
 public:
+    // Physical work only; not logical broker state and never hashed.
+    struct WorkCounters {
+        std::uint64_t rows_visited_by_spill = 0;
+        std::uint64_t find_resident_probes = 0;
+        std::uint64_t resident_rows_visited = 0;
+        std::uint64_t rows_visited_by_capacity = 0;
+        std::uint64_t rows_spilled = 0, rows_restored = 0;
+    };
+    const WorkCounters& work_counters() const noexcept { return work_; }
+    static constexpr std::size_t resident_row_bytes() noexcept { return sizeof(Row); }
+    std::size_t resident_directory_heap_estimate() const noexcept {
+        // Portable estimate, not allocator accounting: two map nodes'
+        // links/color and the shared-row control block.
+        return resident_.size() * (sizeof(typename Residents::value_type) + 4 * sizeof(void*)
+            + sizeof(typename ResidentKeys::value_type) + 4 * sizeof(void*) + 2 * sizeof(void*));
+    }
+
     template<bool Const, bool Sorted = false, bool Insertion = false>
     class Iterator {
         friend class DiskResidentIdTable;
@@ -53,7 +101,7 @@ public:
             if constexpr (Sorted) {
                 const auto next = owner_->index_.next_sorted(at_);
                 row_.reset();
-                owner_->spill();
+                owner_->spill_implicitly();
                 at_ = next;
                 if (at_ != 0) row_ = owner_->load(at_);
             } else if constexpr (Insertion) {
@@ -61,7 +109,7 @@ public:
                 // offset rather than keeping an invalidatable map iterator.
                 const auto next = owner_->resident_.upper_bound(at_);
                 at_ = next == owner_->resident_.end() ? 0 : next->first;
-                row_ = at_ == 0 ? nullptr : next->second;
+                row_ = at_ == 0 ? nullptr : next->second.owner;
             } else {
                 auto next = owner_->resident_.lower_bound(at_);
                 if (next == owner_->resident_.begin()) {
@@ -70,7 +118,7 @@ public:
                 } else {
                     --next;
                     at_ = next->first;
-                    row_ = next->second;
+                    row_ = next->second.owner;
                 }
             }
             return *this;
@@ -86,6 +134,46 @@ public:
     using sorted_iterator = Iterator<false, true>;
     using const_sorted_iterator = Iterator<true, true>;
     using insertion_iterator = Iterator<true, false, true>;
+
+    // Pin the CURRENT row while walking map nodes directly. A nested lookup
+    // may spill other rows, but cannot erase this node before ++ advances.
+    // This keeps an ascending walk O(R), rather than re-seeking R times.
+    // As with ordinary container ranges, clear/move during a walk is invalid.
+    template<bool Const> class ResidentIterator {
+        friend class DiskResidentIdTable;
+        using Owner = std::conditional_t<Const, const DiskResidentIdTable, DiskResidentIdTable>;
+        Owner* owner_ = nullptr;
+        typename Residents::const_iterator at_{};
+        std::shared_ptr<Row> row_;
+        ResidentIterator(Owner* owner, typename Residents::const_iterator at) noexcept
+            : owner_(owner), at_(at),
+              row_(at == owner->resident_.end() ? nullptr : at->second.owner) {}
+    public:
+        using iterator_category = std::forward_iterator_tag;
+        using value_type = Row;
+        using difference_type = std::ptrdiff_t;
+        using reference = std::conditional_t<Const, const Row&, Row&>;
+        using pointer = std::conditional_t<Const, const Row*, Row*>;
+        ResidentIterator() = default;
+        reference operator*() const noexcept {
+            ++owner_->work_.resident_rows_visited;
+            return *row_;
+        }
+        pointer operator->() const noexcept {
+            ++owner_->work_.resident_rows_visited;
+            return row_.get();
+        }
+        ResidentIterator& operator++() noexcept {
+            ++at_; // The current node is still pinned.
+            row_ = at_ == owner_->resident_.end() ? nullptr : at_->second.owner;
+            return *this;
+        }
+        ResidentIterator operator++(int) noexcept { auto old = *this; ++*this; return old; }
+        bool operator==(const ResidentIterator& other) const noexcept {
+            return owner_ == other.owner_ && (!owner_ || at_ == other.at_);
+        }
+        bool operator!=(const ResidentIterator& other) const noexcept { return !(*this == other); }
+    };
 
     template<class Iter> struct Range {
         Iter first, last;
@@ -113,29 +201,84 @@ public:
     DiskResidentIdTable() = default;
     DiskResidentIdTable(const DiskResidentIdTable&) = delete;
     DiskResidentIdTable& operator=(const DiskResidentIdTable&) = delete;
-    DiskResidentIdTable(DiskResidentIdTable&&) noexcept = default;
-    DiskResidentIdTable& operator=(DiskResidentIdTable&&) noexcept = default;
+    DiskResidentIdTable(DiskResidentIdTable&& other) noexcept { *this = std::move(other); }
+    DiskResidentIdTable& operator=(DiskResidentIdTable&& other) noexcept {
+        if (this != &other) {
+            clear(); // Drop borrowed keys before dropping their row strings.
+            index_ = std::move(other.index_);
+            resident_ = std::move(other.resident_);
+            resident_by_key_ = std::move(other.resident_by_key_);
+            work_ = std::exchange(other.work_, {});
+            spill_threshold_ = std::exchange(other.spill_threshold_, kSpillFloor);
+            spill_interval_ = std::exchange(other.spill_interval_, kSpillFloor);
+            calls_since_spill_ = std::exchange(other.calls_since_spill_, 0);
+            fixture_spill_interval_ = std::exchange(other.fixture_spill_interval_, 0);
+            other.resident_by_key_.clear();
+            other.resident_.clear();
+        }
+        return *this;
+    }
 
     void set_store(ScratchStore store) noexcept { index_.set_store(store); }
     void set_directory(const std::string& directory) { index_.set_directory(directory); }
     void bind_scratch(const std::shared_ptr<ScratchSlab>& slab, ScratchResource resource) {
         index_.bind_scratch(slab, resource);
     }
-    void require_insert(const std::string& key) const { index_.require_insert(key); }
+    // A ticket anticipates making this id live, including a retired id that
+    // is about to reopen. It is read-only even when a dirty empty row awaits
+    // writeback: refusal must precede table AND kernel mutation.
+    void require_insert(const std::string& key) const {
+        index_.require_insert(key);
+        if (!index_.bounded_cohorts()) return;
+        const auto found = find_resident(key);
+        if (found == end() || found->second.spillable()) require_live_growth(1);
+    }
     template<class Enumerate> void require_inserts(Enumerate&& enumerate) const {
         index_.require_inserts(std::forward<Enumerate>(enumerate));
+        if (!index_.bounded_cohorts()) return;
+        std::size_t ordinal = 0, extra = 0;
+        enumerate([&](const std::string& key) {
+            const auto current = ordinal++;
+            const auto found = find_resident(key);
+            if (found != end() && !found->second.spillable()) return;
+            bool repeated = false;
+            std::size_t prior = 0;
+            enumerate([&](const std::string& other) {
+                if (prior++ < current && other == key) repeated = true;
+            });
+            if (!repeated) {
+                if (extra == kMaxResidentCohorts) require_live_growth(extra + 1);
+                ++extra;
+            }
+        });
+        require_live_growth(extra); // At most one dry resident pass for the whole ticket.
     }
-    void clear() noexcept { resident_.clear(); index_.clear(); }
+    void clear() noexcept {
+        resident_by_key_.clear();
+        resident_.clear();
+        index_.clear();
+        work_ = {};
+        spill_threshold_ = spill_interval_ = kSpillFloor;
+        calls_since_spill_ = 0;
+    }
     std::uint64_t size() const noexcept { return index_.size(); }
     std::size_t resident_size() const noexcept { return resident_.size(); }
     iterator begin() noexcept { return resident_begin<false>(this); }
     iterator end() noexcept { return {this, 0, {}}; }
     const_iterator begin() const noexcept { return resident_begin<true>(this); }
     const_iterator end() const noexcept { return {this, 0, {}}; }
+    auto resident_rows() noexcept {
+        return Range<ResidentIterator<false>>{
+            {this, resident_.begin()}, {this, resident_.end()}};
+    }
+    auto resident_rows() const noexcept {
+        return Range<ResidentIterator<true>>{
+            {this, resident_.begin()}, {this, resident_.end()}};
+    }
     auto resident_ids() const noexcept {
         const auto at = resident_.begin();
         const insertion_iterator first{this, at == resident_.end() ? 0 : at->first,
-                                       at == resident_.end() ? nullptr : at->second};
+                                       at == resident_.end() ? nullptr : at->second.owner};
         return Range<KeyIterator<insertion_iterator>>{
             KeyIterator<insertion_iterator>(first),
             KeyIterator<insertion_iterator>(insertion_iterator{this, 0, {}})};
@@ -160,48 +303,113 @@ public:
             visit(index_.key(at));
     }
     iterator find(const std::string& key) {
-        spill();
+        spill_implicitly();
         const auto at = index_.find(key);
         return at ? iterator{this, *at, load(*at)} : end();
     }
     const_iterator find(const std::string& key) const {
-        spill();
+        spill_implicitly();
         const auto at = index_.find(key);
         return at ? const_iterator{this, *at, load(*at)} : end();
     }
     // A retired row cannot carry exposure/opened handles. These reads stay
     // allocation-free and noexcept even when the disk is unavailable.
     iterator find_resident(const std::string& key) noexcept {
-        for (const auto& row : resident_)
-            if (row.second->first == key) return {this, row.first, row.second};
-        return end();
+        const auto at = resident_by_key_.find(ResidentProbe{key, &work_.find_resident_probes});
+        if (at == resident_by_key_.end()) return end();
+        const auto row = resident_.find(at->second);
+        return {this, row->first, row->second.owner};
     }
     const_iterator find_resident(const std::string& key) const noexcept {
-        for (const auto& row : resident_)
-            if (row.second->first == key) return {this, row.first, row.second};
-        return end();
+        const auto at = resident_by_key_.find(ResidentProbe{key, &work_.find_resident_probes});
+        if (at == resident_by_key_.end()) return end();
+        const auto row = resident_.find(at->second);
+        return {this, row->first, row->second.owner};
     }
     std::pair<iterator, bool> emplace(const std::string& key, Value value) {
         // A refused new logical row must not first overwrite/evict an eligible
         // resident row. This search reads index bytes only, without restoring.
         index_.require_insert(key);
-        spill();
+        std::size_t extra = 0;
+        if (index_.bounded_cohorts() && !value.spillable() && !index_.find(key)) {
+            extra = 1; // An existing logical row ignores the incoming value.
+            require_live_growth(extra);
+        }
+        spill_before_admission(extra);
+        spill_implicitly();
         const auto placed = index_.insert(key, value.retired_record());
         if (!placed.second) return {{this, placed.first, load(placed.first)}, false};
         auto row = std::make_shared<Row>(key, std::move(value));
-        resident_.emplace(placed.first, row);
+        insert_resident(placed.first, row);
         return {{this, placed.first, std::move(row)}, true};
     }
     void spill() const {
         for (auto at = resident_.begin(); at != resident_.end();) {
-            if (at->second.use_count() == 1 && at->second->second.spillable()) {
-                index_.set(at->first, at->second->second.retired_record());
+            ++work_.rows_visited_by_spill;
+            if (at->second.owner.use_count() == 1 && at->second.owner->second.spillable()
+#ifdef PINEFORGE_COHORT_SPILL_ALLOWED
+                && PINEFORGE_COHORT_SPILL_ALLOWED(at->second.owner->first)
+#endif
+            ) {
+                index_.set(at->first, at->second.owner->second.retired_record());
+                ++work_.rows_spilled;
+                resident_by_key_.erase(at->second.key); // Amortised O(1), no key search.
                 at = resident_.erase(at);
             } else ++at;
         }
+        const auto count = resident_.size();
+        const auto maximum = std::numeric_limits<std::size_t>::max();
+        spill_threshold_ = std::max(kSpillFloor, count > maximum / 2 ? maximum : count * 2);
+        spill_interval_ = std::max(kSpillFloor, count);
+        calls_since_spill_ = 0;
+    }
+    // Growth and a call budget both trigger a pass. The floor handles a pass
+    // that left zero/one rows; the budget also drains rows closed in place
+    // without further growth. A full pass costs O(rows at the previous pass
+    // + new rows), amortised over that many implicit calls or insertions.
+    void spill_implicitly() const {
+        const auto interval = fixture_spill_interval_ ? fixture_spill_interval_ : spill_interval_;
+        if (++calls_since_spill_ >= interval || resident_.size() >= spill_threshold_) spill();
+    }
+    // Test-only schedule control: 0 selects the production policy, 1 the old
+    // eager policy. The growth guard remains in force for every schedule.
+    void fixture_implicit_spill_interval(std::size_t calls) noexcept {
+        fixture_spill_interval_ = calls;
     }
 
 private:
+    void require_live_growth(std::size_t extra) const {
+        if (extra == 0 || !index_.bounded_cohorts()) return;
+        if (resident_.size() <= kMaxResidentCohorts
+            && extra <= kMaxResidentCohorts - resident_.size()) return;
+        // Admission's dry pass must finish before spill can write any bytes.
+        // Counting physical rows here would falsely refuse deferred empties
+        // (including empty rows pinned by an enclosing iterator).
+        std::size_t live = 0;
+        for (const auto& row : resident_) {
+            ++work_.rows_visited_by_capacity;
+            if (!row.second.owner->second.spillable()) ++live;
+        }
+        if (live > kMaxResidentCohorts || extra > kMaxResidentCohorts - live)
+            throw ScratchCapacityError(ScratchResource::cohort,
+                scratch_resident_cohort_limit_message(kMaxResidentCohorts));
+    }
+    void spill_before_admission(std::size_t extra) const {
+        if (extra != 0 && index_.bounded_cohorts() && resident_.size() >= kMaxResidentCohorts)
+            spill(); // The read-only ticket has already proved this can fit.
+    }
+    void insert_resident(Offset at, const std::shared_ptr<Row>& row) const {
+        // Views borrow the immutable key of a heap-pinned row, never the
+        // caller's string. Erase a view before its last row owner is released.
+        const auto key = std::string_view(row->first);
+        const auto indexed = resident_by_key_.emplace(key, at);
+        try {
+            resident_.emplace(at, ResidentRow{row, indexed.first});
+        } catch (...) {
+            resident_by_key_.erase(indexed.first);
+            throw;
+        }
+    }
     // Codecs that validate stored bytes may accept their physical origin.
     // Keep the original one-argument codec contract for other value types.
     template<class T = Value>
@@ -216,16 +424,27 @@ private:
     static Iterator<Const> resident_begin(Owner* owner) noexcept {
         const auto at = owner->resident_.rbegin();
         return {owner, at == owner->resident_.rend() ? 0 : at->first,
-                at == owner->resident_.rend() ? nullptr : at->second};
+                at == owner->resident_.rend() ? nullptr : at->second.owner};
     }
     std::shared_ptr<Row> load(Offset at) const {
         const auto found = resident_.find(at);
-        if (found != resident_.end()) return found->second;
-        auto row = std::make_shared<Row>(index_.key(at), restore_record(index_.get(at), 0));
-        resident_.emplace(at, row);
+        if (found != resident_.end()) return found->second.owner;
+        auto value = restore_record(index_.get(at), 0);
+        const std::size_t extra = value.spillable() ? 0 : 1;
+        require_live_growth(extra);
+        spill_before_admission(extra);
+        auto row = std::make_shared<Row>(index_.key(at), std::move(value));
+        insert_resident(at, row);
+        ++work_.rows_restored;
         return row;
     }
+    static constexpr std::size_t kSpillFloor = 64;
     mutable Index index_;
-    mutable std::map<Offset, std::shared_ptr<Row>> resident_;
+    mutable Residents resident_;
+    mutable ResidentKeys resident_by_key_; // One borrowed key per resident row.
+    mutable WorkCounters work_{};
+    mutable std::size_t spill_threshold_ = kSpillFloor, spill_interval_ = kSpillFloor;
+    mutable std::size_t calls_since_spill_ = 0;
+    std::size_t fixture_spill_interval_ = 0;
 };
 } // namespace pineforge::detail

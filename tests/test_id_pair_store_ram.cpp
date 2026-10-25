@@ -105,7 +105,7 @@ void compare(const Store& ram, const Store& disk, const Store& oracle,
 void seeded_sequences(bool collide) {
     std::vector<Key> keys{{"", std::nullopt}, {"x", std::nullopt}, {"x", std::string{}},
         {std::string("a\0b", 3), std::string("c\0d", 3)},
-        {std::string(513, 'a'), std::string(1025, 'b')}};
+        {std::string(64, 'a'), std::string(64, 'b')}};
     for (int i = 0; i < 59; ++i)
         keys.emplace_back("exit-" + std::to_string(i), "entry-" + std::to_string(i % 7));
     ScratchManifest manifest;
@@ -253,6 +253,59 @@ void consumed_single_string() {
     require(refused && Image(*short_slab) == short_before && short_store.empty(),
             "joined precommit extent includes separator and whole record before mutation");
 }
+
+template<class F>
+void text_refusal(ScratchResource resource, const std::string& expected, F&& operation) {
+    bool caught = false;
+    try { operation(); }
+    catch (const detail::ScratchCapacityError& error) {
+        caught = true;
+        require(error.what() == expected, "exact limit and workaround from the live manifest");
+        const auto failure = classify_run_failure(error);
+        require(failure.code == RunFailureCode::scratch_capacity_exceeded && failure.args
+                && *failure.args == std::string("{\"resource\":\"")
+                    + detail::scratch_resource_name(resource) + "\"}",
+                "message change preserves code and resource-only args");
+    }
+    require(caught, "message test must trigger the real ticket");
+}
+
+void limit_messages_and_oversized_components() {
+    for (const bool consumed : {false, true}) {
+        ScratchManifest m;
+        m.K_e = m.K_c = 1;
+        m.B_e = m.B_c = 3;
+        const auto data = consumed ? ScratchResource::consumed_data : ScratchResource::erased_data;
+        const auto index = consumed ? ScratchResource::consumed_index : ScratchResource::erased_index;
+        auto slab = std::make_shared<ScratchSlab>(m);
+        Store store;
+        store.bind_scratch_tables(slab, data, index);
+        store.insert_or_assign("a", 1);
+        text_refusal(index, consumed
+            ? "more than 1 keys for partially filled exits in one run; reuse ids, e.g. a modulo of bar_index"
+            : "more than 1 retired order-id keys in one run (each retired order uses 2); reuse ids, e.g. a modulo of bar_index",
+            [&] { store.preflight_assign("b"); });
+        m.K_e = m.K_c = 2;
+        m.B_e = m.B_c = 0; // 80 exact bytes: one 40-byte key + its header fills it.
+        slab = std::make_shared<ScratchSlab>(m);
+        Store bytes;
+        bytes.bind_scratch_tables(slab, data, index);
+        bytes.insert_or_assign(std::string(40, 'x'), 2);
+        text_refusal(data, consumed
+            ? "partially filled exits use more than 0 bytes in one run; use shorter ids or reuse ids"
+            : "retired order ids use more than 0 bytes in one run; use shorter ids or reuse ids",
+            [&] { bytes.preflight_assign(""); });
+        text_refusal(data, "id longer than 64 bytes",
+            [&] { bytes.preflight_assign(std::string(65, 'x')); });
+        text_refusal(data, "id longer than 64 bytes",
+            [&] { bytes.preflight_assign("x", std::string_view(std::string(65, 'y'))); });
+    }
+    // The old oversized fixture remains covered on the ordinary disk path.
+    Store disk;
+    const std::string first(513, 'a'), second(1025, 'b');
+    require(disk.insert_or_assign(first, second, 17) && disk.at(first, second) == 17,
+            "unjailed id components retain their previous length domain");
+}
 } // namespace
 
 int main() {
@@ -261,6 +314,7 @@ int main() {
         seeded_sequences(true);
         boundaries();
         consumed_single_string();
+        limit_messages_and_oversized_components();
         return 0;
     } catch (const std::exception& error) {
         std::fprintf(stderr, "test_id_pair_store_ram: %s\n", error.what());

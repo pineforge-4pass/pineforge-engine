@@ -53,9 +53,9 @@ inline bool allow_spill() noexcept {
 // modes keep the exact production class layout, public access and codec;
 // the reference simply declines eviction, retaining the old map's nodes.
 // Counts are taken after the real pin/spillable checks, before write/erase.
-#define spillable() spillable() && ::reversal_storage_fixture::allow_spill()
+#define PINEFORGE_COHORT_SPILL_ALLOWED(id) ::reversal_storage_fixture::allow_spill()
 #include <pineforge/detail/disk_resident_id_table.hpp>
-#undef spillable
+#undef PINEFORGE_COHORT_SPILL_ALLOWED
 
 #include <pineforge/source/pine_strategy_host.hpp>
 #include "../src/source/pine_placement_retention.hpp"
@@ -143,6 +143,7 @@ public:
         set_broker_state_hash_recording(recording);
     }
     void on_source_bar(const Bar& bar) override {
+        adapter_.fixture_cohort_implicit_spill_interval(1);
         const int i = pine_bar_index();
         const double position = live_position_size();
         if (position != 0.0) {

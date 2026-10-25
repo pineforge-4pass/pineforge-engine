@@ -3,6 +3,7 @@
 #define PINEFORGE_TEST_ALLOCATION_BYTES
 #include "global_allocation_replacement.hpp"
 #include <pineforge/source/pine_strategy_host.hpp>
+#include <pineforge/detail/scratch_defaults.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -21,6 +22,17 @@ namespace {
 using pineforge::BrokerStateHashSink;
 using pineforge::source::OriginRoster;
 namespace no = pineforge::native_order;
+using Adapter = pineforge::source::PineExecutionAdapter;
+
+// The same explicit-instantiation access seam as pending_observer_walk:
+// no changed class definition or production friend.
+template<class Tag, auto Member> struct Access {
+    friend auto access(Tag) { return Member; }
+};
+struct Cohorts { friend auto access(Cohorts); };
+struct CohortFor { friend auto access(CohortFor); };
+template struct Access<Cohorts, &Adapter::cohorts_by_id_>;
+template struct Access<CohortFor, &Adapter::cohort_for>;
 
 void require(bool value, const char* why) {
     if (!value) throw std::runtime_error(why);
@@ -323,6 +335,416 @@ void real_host_io_failure() {
     require(std::string(pineforge::run_failure_code_of(host)) == "scratch_io_failed",
             "scratch failure lost its typed code at the run catcher");
 }
+
+int old_slot_count(const Adapter& adapter) {
+    const auto& table = adapter.*access(Cohorts{});
+    std::size_t sum = 0;
+    for (const auto& id : table.resident_ids()) {
+        const auto found = table.find_resident(id);
+        if (found != table.end()) sum += found->second.opened.size();
+    }
+    return sum > static_cast<std::size_t>(std::numeric_limits<int>::max())
+        ? std::numeric_limits<int>::max() : static_cast<int>(sum);
+}
+
+void slot_count_one_pass_and_no_allocation() {
+    Adapter adapter;
+    auto& table = adapter.*access(Cohorts{});
+    for (std::size_t i = 0; i < 2000; ++i) {
+        auto row = table.emplace(std::string(40, 'c') + std::to_string(i),
+                                 decltype(table.begin()->second){}).first;
+        row->second.handle.value = i + 1;
+        row->second.origins.push_back(origin_for(i + 1));
+        row->second.origins.push_back(origin_for(i + 3001));
+        row->second.opened.push_back(origin_for(i + 1));
+        row->second.opened.push_back(origin_for(i + 3001));
+        row->second.live_units_by_origin[i + 1] = 2.0;
+        row->second.live_units_by_origin[i + 3001] = 3.0;
+    }
+    const auto check = [&] {
+        const auto before = adapter.cohort_table_work();
+        const auto allocations = global_allocation::allocations;
+        global_allocation::refusing = true;
+        const auto slots = adapter.source_entry_slot_count();
+        global_allocation::refusing = false;
+        const auto after = adapter.cohort_table_work();
+        require(after.resident_rows_visited - before.resident_rows_visited == table.resident_size(),
+                "slot count visits each resident row exactly once");
+        require(after.find_resident_probes == before.find_resident_probes,
+                "slot count does no per-id lookups");
+        require(global_allocation::allocations == allocations, "slot count allocates nothing");
+        require(slots == old_slot_count(adapter), "slot count equals independent old-loop sum");
+        const std::string present = std::string(40, 'c') + "1999", absent = "absent";
+        global_allocation::refusing = true;
+        const auto found = table.find_resident(present);
+        const auto missing = table.find_resident(absent);
+        global_allocation::refusing = false;
+        require((found != table.end()) == (table.resident_size() != 0) && missing == table.end(),
+                "resident lookup allocates nothing with 2000 rows");
+    };
+    check();
+    for (auto& row : table) {
+        const auto opening = row.second.opened.front().incarnation;
+        row.second.live_units_by_origin.at(opening) *= 0.5; // Partial close, same slot.
+    }
+    check();
+    for (auto& row : table) {
+        row.second.live_units_by_origin.erase(row.second.opened.front().incarnation);
+        row.second.opened.erase(row.second.opened.begin()); // One opening ends.
+    }
+    check();
+    for (auto& row : table) {
+        row.second.opened.clear();
+        row.second.live_units_by_origin.clear();
+        row.second.origins.retire_before(row.second.origins.size());
+    }
+    table.spill();
+    check();
+}
+
+// Field serialization excludes addresses and C++ padding. Every published
+// scalar/string is compared bit-for-bit, including NaNs and signed zeroes.
+template<class T> void append_bits(std::string& out, const T& value) {
+    out.append(reinterpret_cast<const char*>(&value), sizeof value);
+}
+void append_text(std::string& out, const std::string& text) {
+    append_bits(out, text.size());
+    out += text;
+}
+std::string report_image(const pineforge::BacktestEngine& host) {
+    pineforge::ReportC report{};
+    host.fill_report(&report);
+    struct Release {
+        pineforge::ReportC& report;
+        ~Release() { pineforge::BacktestEngine::free_report(&report); }
+    } release{report};
+    std::string out;
+    append_bits(out, report.total_trades); append_bits(out, report.trades_len);
+    append_bits(out, report.net_profit);
+    append_bits(out, report.input_bars_processed); append_bits(out, report.script_bars_processed);
+    append_bits(out, report.security_feeds_total);
+    append_bits(out, report.security_eval_complete_total);
+    append_bits(out, report.security_eval_partial_total);
+    append_bits(out, report.magnifier_sub_bars_total); append_bits(out, report.magnifier_sample_ticks_total);
+    append_bits(out, report.input_tf_seconds); append_bits(out, report.script_tf_seconds);
+    append_bits(out, report.script_tf_ratio); append_bits(out, report.needs_aggregation);
+    append_bits(out, report.bar_magnifier_enabled);
+    append_bits(out, report.metrics);
+    for (int i = 0; i < report.trades_len; ++i) {
+        const auto& t = report.trades[i];
+        append_bits(out, t.entry_time); append_bits(out, t.exit_time);
+        append_bits(out, t.entry_price); append_bits(out, t.exit_price);
+        append_bits(out, t.pnl); append_bits(out, t.pnl_pct); append_bits(out, t.is_long);
+        append_bits(out, t.max_runup); append_bits(out, t.max_drawdown);
+        append_bits(out, t.qty); append_bits(out, t.commission);
+        append_bits(out, t.entry_bar_index); append_bits(out, t.exit_bar_index);
+        append_bits(out, t.open_at_end);
+    }
+    append_bits(out, report.security_diag_len);
+    for (int i = 0; i < report.security_diag_len; ++i) {
+        const auto& d = report.security_diag[i];
+        append_bits(out, d.sec_id); append_bits(out, d.feed_count);
+        append_bits(out, d.eval_complete_count); append_bits(out, d.eval_partial_count);
+    }
+    append_bits(out, report.trace_names_len);
+    for (int i = 0; i < report.trace_names_len; ++i) append_text(out, report.trace_names[i]);
+    append_bits(out, report.trace_len);
+    for (int i = 0; i < report.trace_len; ++i) {
+        append_bits(out, report.trace[i].timestamp);
+        append_bits(out, report.trace[i].bar_index);
+        append_bits(out, report.trace[i].name_id);
+        append_bits(out, report.trace[i].value);
+    }
+    append_bits(out, report.equity_curve_len);
+    for (std::int64_t i = 0; i < report.equity_curve_len; ++i)
+        append_bits(out, report.equity_curve[i]);
+    append_bits(out, report.broker_state_hash_len);
+    for (std::int64_t i = 0; i < report.broker_state_hash_len; ++i)
+        append_bits(out, report.broker_state_hash[i]);
+    append_bits(out, host.report_trade_count());
+    for (int i = 0; i < host.report_trade_count(); ++i) {
+        const auto t = host.get_report_trade(i);
+        append_text(out, t.entry_id); append_text(out, t.entry_comment);
+        append_text(out, t.exit_comment); append_text(out, t.exit_id);
+        append_bits(out, t.entry_incarnation); append_bits(out, t.exit_from_bracket);
+        append_bits(out, t.close_cause);
+    }
+    return out;
+}
+
+class SpillHost final : public pineforge::source::PineStrategyHost {
+public:
+    SpillHost(std::size_t interval, bool on_close, bool coof) : interval_(interval) {
+        pineforge::source::PineStrategyConfig config;
+        config.process_orders_on_close = on_close;
+        config.calc_on_order_fills = coof;
+        config.margin_long = config.margin_short = 0.0;
+        config.pyramiding = 4;
+        configure_pine_strategy(config);
+        set_broker_state_hash_recording(true);
+        set_syminfo_timezone("UTC");
+        set_syminfo_session("24x7");
+        set_syminfo_mintick(0.25);
+    }
+    void on_source_bar(const pineforge::Bar&) override {
+        auto& table = adapter_.*access(Cohorts{});
+        table.fixture_implicit_spill_interval(interval_);
+        std::vector<std::string> ids, rows;
+        for (const auto& id : table.resident_ids()) ids.push_back(id);
+        for (const auto& row : table.resident_rows()) rows.push_back(row.first);
+        require(ids == rows, "real-order walks retain the old visiting order on every callback");
+        require(adapter_.source_entry_slot_count() == old_slot_count(adapter_),
+                "real orders preserve the per-bar slot oracle");
+        const auto i = pine_bar_index();
+        if (i == previous_) return;
+        previous_ = i;
+        const auto na = std::numeric_limits<double>::quiet_NaN();
+        switch (i % 12) {
+        case 0: strategy_entry("A", true, na, na, 2.0); break;
+        case 1: strategy_exit("partial", "A", 100.0, na, na, na, na, 50.0); break;
+        case 3: strategy_entry("B", false, na, na, 2.0); break;
+        case 5: strategy_close_all(); break;
+        case 7: strategy_entry("C", true, na, na, 2.0); break;
+        case 8: strategy_exit("stop", "C", na, 99.0); break;
+        case 10: strategy_close_all(); break;
+        default: break;
+        }
+    }
+    const auto& work() const { return adapter_.cohort_table_work(); }
+private:
+    std::size_t interval_;
+    int previous_ = -1;
+};
+
+void real_orders_spill_differential() {
+    const auto bars = chart();
+    for (const bool on_close : {false, true}) {
+        for (const bool coof : {false, true}) {
+            SpillHost eager(1, on_close, coof);
+            eager.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
+            require(eager.last_error().empty(), eager.last_error().c_str());
+            bool partial = false, long_side = false, short_side = false;
+            for (int i = 0; i < eager.trade_count(); ++i) {
+                const auto t = eager.get_trade(i);
+                partial = partial || (t.entry_id == "A" && t.qty == 1.0);
+                long_side = long_side || t.is_long;
+                short_side = short_side || !t.is_long;
+            }
+            require(partial && long_side && short_side,
+                    "differential script really fills, partially exits and reverses");
+            require(eager.work().rows_spilled > 0 && eager.work().rows_restored > 0,
+                    "differential script really spills and restores retired cohorts");
+            const auto reference = report_image(eager);
+            for (const std::size_t interval : {0U, 1U, 7U, 1000U}) {
+                SpillHost candidate(interval, on_close, coof);
+                candidate.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
+                require(candidate.last_error().empty(), candidate.last_error().c_str());
+                require(report_image(candidate) == reference,
+                        "implicit spill schedule changes a trade or final report byte");
+            }
+        }
+    }
+}
+
+class DenseHost final : public pineforge::source::PineStrategyHost {
+public:
+    explicit DenseHost(bool jailed = false, bool cap_probe = false, int period = 0)
+        : cap_probe_(cap_probe), period_(period) {
+        pineforge::source::PineStrategyConfig config;
+        config.initial_capital = 1e12;
+        config.margin_long = config.margin_short = 0.0;
+        config.pyramiding = 5000;
+        configure_pine_strategy(config);
+        set_syminfo_mintick(0.25);
+        set_syminfo_timezone("UTC");
+        set_syminfo_session("24x7");
+        if (jailed) {
+            pf_scratch_tables_v1 descriptor{};
+            descriptor.struct_size = static_cast<std::uint32_t>(sizeof descriptor);
+            descriptor.version = 1;
+            descriptor.backend = PF_SCRATCH_TABLE_BOUNDED_MEMORY;
+            require(set_scratch_tables_v1(&descriptor) == 0, "select jailed cohort table");
+        }
+    }
+    void on_source_bar(const pineforge::Bar&) override {
+        const auto i = pine_bar_index();
+        const auto na = std::numeric_limits<double>::quiet_NaN();
+        auto& table = adapter_.*access(Cohorts{});
+        if (cap_probe_ && i == 4096) {
+            const auto logical = table.size();
+            const auto resident = table.resident_size();
+            const auto slab = scratch_tables_for_run();
+            const auto& region = slab->region(pineforge::detail::ScratchResource::cohort);
+            const auto extent = region.logical_extent;
+            std::vector<unsigned char> before(static_cast<std::size_t>(extent));
+            slab->read_at(region, 0, before.data(), before.size());
+            const auto last_handle = table.find_resident("dense-4095")->second.handle;
+            const auto before_hash = broker_state_hash_projection();
+            try { (adapter_.*access(CohortFor{}))("refused-before-kernel"); }
+            catch (const pineforge::detail::ScratchCapacityError& error) {
+                refused = std::string(error.what()).find("4,096") != std::string::npos;
+                const auto failure = pineforge::classify_run_failure(error);
+                require(failure.code == pineforge::RunFailureCode::scratch_capacity_exceeded
+                        && failure.args && *failure.args == "{\"resource\":\"cohort\"}",
+                        "adapter cap refusal retains typed resource");
+            }
+            require(refused && broker_state_hash_projection() == before_hash
+                    && table.size() == logical && table.resident_size() == resident,
+                    "cap ticket refuses before source/kernel state mutation");
+            std::vector<unsigned char> after(before.size());
+            slab->read_at(region, 0, after.data(), after.size());
+            require(before == after && region.logical_extent == extent, "cap preserves index bytes");
+            require(cohort_open().value == last_handle.value + 1,
+                    "refused cohort did not consume a kernel cohort handle");
+            return;
+        }
+        const auto slot = period_ == 0 ? i : i % period_;
+        const auto id = "dense-" + std::to_string(slot);
+        const auto exit_id = "exit-" + std::to_string(slot);
+        if (period_ != 0 && i >= period_) {
+            strategy_cancel(exit_id);
+            strategy_cancel(id);
+        }
+        strategy_entry(id, true, 1.0, na, 1.0); // Never fills on this chart.
+        strategy_exit(exit_id, id, na, 50.0);
+        if (i == 499) at_500 = adapter_.pending_scan_work();
+        if (i == 999) at_1000 = adapter_.pending_scan_work();
+    }
+    std::uint64_t cohort_operations() const {
+        const auto& w = adapter_.cohort_table_work();
+        return w.rows_visited_by_spill + w.find_resident_probes + w.resident_rows_visited
+            + w.rows_visited_by_capacity + w.rows_spilled + w.rows_restored;
+    }
+    Adapter::PendingScanWork at_500{}, at_1000{};
+    const Adapter& adapter() const { return adapter_; }
+    bool refused = false;
+private:
+    bool cap_probe_;
+    int period_;
+};
+
+void print_slice(const char* slice, const Adapter::PendingScanWork& work) {
+    const auto print = [&](const char* name, const Adapter::PendingScanCounter& c) {
+        std::printf("CR347 %s %s calls=%llu live_iterations=%llu placement_finds=%llu "
+                    "lot_iterations=%llu max_live=%llu max_placement=%llu max_brackets=%llu "
+                    "max_resident=%llu max_logical=%llu\n", slice, name,
+            static_cast<unsigned long long>(c.calls),
+            static_cast<unsigned long long>(c.live_handle_iterations),
+            static_cast<unsigned long long>(c.placement_find_calls),
+            static_cast<unsigned long long>(c.open_lot_iterations),
+            static_cast<unsigned long long>(c.max_live_handles),
+            static_cast<unsigned long long>(c.max_placement),
+            static_cast<unsigned long long>(c.max_pending_bracket_legs),
+            static_cast<unsigned long long>(c.max_resident_cohorts),
+            static_cast<unsigned long long>(c.max_logical_cohorts));
+    };
+    print("priced_entry_order_working", work.priced_entry);
+    print("entry_order_working", work.entry);
+    print("standing_exit", work.standing_exit);
+    print("open_lot_of", work.open_lot);
+}
+
+void rolling_modulo_pending_population() {
+    constexpr int period = 64;
+    auto bars = chart();
+    bars.resize(2048, bars.back());
+    for (std::size_t i = 0; i < bars.size(); ++i)
+        bars[i].timestamp = 1736121600000LL + static_cast<std::int64_t>(i) * 60000;
+    for (const bool jailed : {false, true}) {
+        DenseHost rolling(jailed, false, period);
+        rolling.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
+        require(rolling.last_error().empty(), rolling.last_error().c_str());
+        const auto& work = rolling.adapter().pending_scan_work();
+        require(rolling.trade_count() == 0 && work.entry.max_logical_cohorts == period
+                && work.entry.max_resident_cohorts <= period,
+                "rolling modulo script reuses a fixed cohort population");
+        print_slice(jailed ? "rolling-64-jailed" : "rolling-64-unjailed", work);
+        // Pending-order maxima are deliberately logged too: the cohort cap
+        // alone is not a proof that placement/order memory is bounded.
+    }
+}
+
+void dense_operation_growth_and_instrumentation(bool jailed) {
+    std::uint64_t operations[2]{};
+    for (int sample = 0; sample < 2; ++sample) {
+        const auto n = sample == 0 ? 1000 : 2000;
+        auto bars = chart();
+        bars.resize(static_cast<std::size_t>(n), bars.back());
+        for (int i = 0; i < n; ++i) bars[i].timestamp = 1736121600000LL + i * 60000LL;
+        DenseHost host(jailed);
+        host.run(bars.data(), n, "1", "1");
+        require(host.last_error().empty(), host.last_error().c_str());
+        require(host.trade_count() == 0, "dense entries really remain pending");
+        operations[sample] = host.cohort_operations();
+        require(operations[sample] > 0, "cohort work instrumentation is active");
+        print_slice(jailed ? "N=500-jailed" : "N=500-unjailed", host.at_500);
+        print_slice(jailed ? "N=1000-jailed" : "N=1000-unjailed", host.at_1000);
+        auto second_slice = host.at_1000;
+        const auto subtract = [](auto& after, const auto& before) {
+            after.calls -= before.calls;
+            after.live_handle_iterations -= before.live_handle_iterations;
+            after.placement_find_calls -= before.placement_find_calls;
+            after.open_lot_iterations -= before.open_lot_iterations;
+        };
+        subtract(second_slice.priced_entry, host.at_500.priced_entry);
+        subtract(second_slice.entry, host.at_500.entry);
+        subtract(second_slice.standing_exit, host.at_500.standing_exit);
+        subtract(second_slice.open_lot, host.at_500.open_lot);
+        print_slice(jailed ? "N=501..1000-jailed" : "N=501..1000-unjailed", second_slice);
+        const auto monotone = [](const auto& a, const auto& b) {
+            require(b.calls >= a.calls && b.live_handle_iterations >= a.live_handle_iterations
+                    && a.placement_find_calls == a.live_handle_iterations
+                    && b.placement_find_calls == b.live_handle_iterations
+                    && b.max_live_handles >= a.max_live_handles
+                    && b.max_placement >= a.max_placement
+                    && b.max_pending_bracket_legs >= a.max_pending_bracket_legs
+                    && b.max_resident_cohorts >= a.max_resident_cohorts
+                    && b.max_logical_cohorts >= a.max_logical_cohorts,
+                    "each actual pending-loop counter is monotone, including short-circuited loops");
+        };
+        monotone(host.at_500.priced_entry, host.at_1000.priced_entry);
+        monotone(host.at_500.entry, host.at_1000.entry);
+        monotone(host.at_500.standing_exit, host.at_1000.standing_exit);
+        monotone(host.at_500.open_lot, host.at_1000.open_lot);
+        const auto scanned = [](const Adapter::PendingScanWork& work) {
+            return work.priced_entry.live_handle_iterations + work.entry.live_handle_iterations
+                + work.standing_exit.live_handle_iterations;
+        };
+        require(scanned(host.at_500) > 0 && scanned(host.at_1000) > scanned(host.at_500)
+                && host.at_500.entry.calls > 0 && host.at_1000.entry.calls > host.at_500.entry.calls,
+                "the dense script itself exercises nonzero, growing pending scans");
+        require(host.at_1000.open_lot.live_handle_iterations == 0
+                && host.at_1000.open_lot.placement_find_calls == 0,
+                "open_lot_of has a native-lot walk, no live-handle or placement loop");
+        const auto allocations = global_allocation::allocations;
+        global_allocation::refusing = true;
+        const auto heap = host.adapter().cohort_heap_estimate();
+        global_allocation::refusing = false;
+        require(global_allocation::allocations == allocations && heap.resident_rows >= 1000
+                && heap.total_bytes >= heap.row_bytes
+                && heap.total_bytes >= heap.opened_bytes + heap.origin_bytes
+                && heap.bytes_per_row == heap.total_bytes / heap.resident_rows,
+                "heap estimate is a nonallocating function of the actual resident rows");
+        std::printf("CR347 profile=%s N=%d cohort_operations=%llu resident=%zu heap_estimate=%zu "
+                    "bytes_per_row=%zu row=%zu key=%zu origins=%zu opened=%zu units=%zu directory=%zu\n",
+            jailed ? "jailed" : "unjailed", n,
+            static_cast<unsigned long long>(operations[sample]), heap.resident_rows,
+            heap.total_bytes, heap.bytes_per_row, heap.row_bytes, heap.key_bytes,
+            heap.origin_bytes, heap.opened_bytes, heap.live_unit_bytes, heap.directory_bytes);
+    }
+    require(operations[1] * 2 <= operations[0] * 5,
+            "doubling dense pending cohorts exceeds 2.5x cohort-table operations");
+}
+
+void adapter_cap_rollback() {
+    auto bars = chart();
+    bars.resize(4097, bars.back());
+    for (std::size_t i = 0; i < bars.size(); ++i)
+        bars[i].timestamp = 1736121600000LL + static_cast<std::int64_t>(i) * 60000;
+    DenseHost capped(true, true);
+    capped.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
+    require(capped.last_error().empty() && capped.refused, "adapter cap rollback witness ran");
+}
 } // namespace
 
 int main() {
@@ -332,9 +754,16 @@ int main() {
         q9_difference_of_differences();
         real_host_recurrence();
         real_host_io_failure();
+        slot_count_one_pass_and_no_allocation();
+        real_orders_spill_differential();
+        dense_operation_growth_and_instrumentation(false);
+        dense_operation_growth_and_instrumentation(true);
+        adapter_cap_rollback();
+        rolling_modulo_pending_population();
         std::puts("adapter id storage: OK");
     } catch (const std::exception& error) {
         global_allocation::recording = false;
+        global_allocation::refusing = false;
         std::fprintf(stderr, "FAIL: %s\n", error.what());
         return 1;
     }

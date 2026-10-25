@@ -1002,6 +1002,15 @@ public:
         const auto found = positions_.find(incarnation);
         return found == positions_.end() ? nullptr : &found->second;
     }
+    std::size_t heap_bytes_estimate() const noexcept {
+        auto bytes = items_.capacity() * sizeof(native_order::RequestHandle)
+            + positions_.bucket_count() * sizeof(void*);
+        for (const auto& row : positions_)
+            bytes += sizeof(decltype(positions_)::value_type) + 2 * sizeof(void*)
+                + row.second.capacity() * sizeof(std::size_t);
+        for (const auto& handle : items_) bytes += handle.run.session_key.capacity() + 1;
+        return bytes;
+    }
 
 private:
     std::vector<native_order::RequestHandle> items_;
@@ -1606,6 +1615,9 @@ public:
     void set_id_tables_directory(const std::string& directory); // All L19l tables, after reset.
     void set_auxiliary_tables_directory(const std::string& directory); // Same binding.
     void fixture_use_memory_auxiliary_tables();
+    void fixture_cohort_implicit_spill_interval(std::size_t calls) noexcept {
+        cohorts_by_id_.fixture_implicit_spill_interval(calls);
+    }
     std::uint64_t fixture_auxiliary_disk_bytes() const noexcept;
     std::uint64_t fixture_erased_digest() const noexcept { return placement_.erased_digest(); }
     std::uint64_t fixture_erased_rows() const noexcept { return placement_.erased_rows(); }
@@ -1613,6 +1625,29 @@ public:
     fixture_consumed_partial_exit_cycles() const noexcept { return consumed_partial_exit_cycles_; }
 
     // Diagnostic work counters, excluded from broker continuation state.
+    struct PendingScanCounter {
+        std::uint64_t calls = 0;
+        std::uint64_t live_handle_iterations = 0, placement_find_calls = 0;
+        std::uint64_t open_lot_iterations = 0;
+        std::uint64_t max_live_handles = 0, max_placement = 0;
+        std::uint64_t max_pending_bracket_legs = 0;
+        std::uint64_t max_resident_cohorts = 0, max_logical_cohorts = 0;
+    };
+    struct PendingScanWork {
+        PendingScanCounter priced_entry, entry, standing_exit, open_lot;
+    };
+    const PendingScanWork& pending_scan_work() const noexcept { return pending_scan_work_; }
+    const auto& cohort_table_work() const noexcept { return cohorts_by_id_.work_counters(); }
+    struct CohortHeapEstimate {
+        std::size_t resident_rows = 0, total_bytes = 0, bytes_per_row = 0;
+        std::size_t row_bytes = 0, key_bytes = 0, origin_bytes = 0;
+        std::size_t opened_bytes = 0, live_unit_bytes = 0, directory_bytes = 0;
+    };
+    // Snapshot only: O(resident rows + retained origins), no allocation/I/O.
+    // Capacities include inline string storage; node/control sizes are
+    // estimates. This is not a bound on pending-order memory.
+    CohortHeapEstimate cohort_heap_estimate() const noexcept;
+
     enum class PositionTailGuard : std::uint8_t {
         None, Inactive, Invalidated, PublicationRewind, PublicationGap,
         BeforeBarrier, NonmonotoneTime, MissingOrigin, ReactivatedOrigin,
@@ -2179,6 +2214,7 @@ private:
     void set_exit_phase(std::size_t trade_index, std::uint8_t phase);
     std::vector<native_order::RequestHandle> openings_for(const SourceId&) const;
     double cohort_exposure_for(const SourceId&) const noexcept;
+    double cohort_exposure_for(const CohortFacts&) const noexcept;
     // The units an exit's from_entry holds; none when it names no entry.
     std::optional<double> from_entry_units(const SourceId&) const noexcept;
     bool from_entry_filled_this_cycle(const SourceId&) const;
@@ -2676,6 +2712,8 @@ private:
     std::int32_t entry_attempt_bar_ = -1;
     std::uint32_t entry_attempts_on_bar_ = 0;
     CohortTable cohorts_by_id_;
+    mutable PendingScanWork pending_scan_work_{};
+    void observe_pending_scan(PendingScanCounter&) const noexcept;
     CohortTable::iterator require_cohort(const SourceId&);
     PlacementTable placement_;
     std::unordered_map<std::uint64_t, native_order::RequestHandle> live_by_source_key_;
