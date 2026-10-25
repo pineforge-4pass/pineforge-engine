@@ -2723,7 +2723,6 @@ private:
     std::int32_t entry_attempt_bar_ = -1;
     std::uint32_t entry_attempts_on_bar_ = 0;
     CohortTable cohorts_by_id_;
-    mutable PendingScanWork pending_scan_work_{};
     void observe_pending_scan(PendingScanCounter&) const noexcept;
     CohortTable::iterator require_cohort(const SourceId&);
     PlacementTable placement_;
@@ -3001,6 +3000,9 @@ private:
     SourceId open_exit_first_id_{};
     double open_exit_first_fill_ = 0.0;
     // @source-state end
+    // Diagnostic work counter: written from const methods, never read by a
+    // decision, deliberately outside source state and the broker hash.
+    mutable PendingScanWork pending_scan_work_{};
     // Diagnostic only: maintained from CohortFacts::opened pushes, erases and
     // whole-vector clears.
     // It is deliberately outside source state and the broker hash.
