@@ -12203,7 +12203,7 @@
   },
   {
    "file": "src/detail/o1_store.cpp",
-   "symbol": "new:StoreTx",
+   "symbol": "transaction",
    "scope": [
     "namespace pineforge #1",
     "namespace detail #1",
@@ -12213,19 +12213,6 @@
    "cls": "alloc",
    "spelling": "new StoreTx",
    "ordinal": 1
-  },
-  {
-   "file": "src/detail/o1_store.cpp",
-   "symbol": "new:StoreTx",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace detail #1",
-    "namespace o1 #1",
-    "std :: unique_ptr < Tx > StoreImpl :: begin ( ) #1"
-   ],
-   "cls": "alloc",
-   "spelling": "new StoreTx",
-   "ordinal": 2
   },
   {
    "file": "src/detail/o1_store.cpp",
@@ -12247,8 +12234,7 @@
     "namespace pineforge #1",
     "namespace detail #1",
     "namespace o1 #1",
-    "namespace #1",
-    "[ [ noreturn ] ] void throw_status ( const char * what , ScratchStatus status ) #1"
+    "[ [ noreturn ] ] void StoreImpl :: throw_status ( const char * what , ScratchStatus status ) const #1"
    ],
    "cls": "temp",
    "spelling": "std::string",

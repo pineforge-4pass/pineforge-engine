@@ -85,8 +85,10 @@ struct Stats {
 // the outer transaction rollback-only too. While rollback-only begin() and every
 // mutation throw std::logic_error; the outer commit() performs the real rollback
 // and then throws the same error; the outer rollback() always works. There is no
-// savepoint. Destroy all Tx handles before the next outer begin(): destroying an
-// unfinished stale outer handle later can roll that NEW transaction back.
+// savepoint. A backing failure in any call, including a read-only one, makes the
+// open outer transaction rollback-only. Destroy all Tx handles before the next
+// outer begin(): destroying an unfinished stale outer handle later can roll that
+// NEW transaction back.
 class Tx {
  public:
   virtual ~Tx();
