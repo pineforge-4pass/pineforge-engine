@@ -76,10 +76,6 @@ const char* status_text(ScratchStatus status) noexcept {
   return "unknown";
 }
 
-[[noreturn]] void throw_status(const char* what, ScratchStatus status) {
-  throw std::runtime_error(std::string("o1 store: ") + what + ": " + status_text(status));
-}
-
 // ScratchKeyOrder's context is fixed at open, so the two bounded key buffers live
 // in the store object. The comparator reads whatever key length it is handed and
 // never allocates, mutates the store or consults external state.
@@ -150,6 +146,7 @@ class StoreImpl final : public Store {
   void encode_key(Id id, std::uint64_t chunk) const noexcept;
   ScratchStatus lookup(Id id, std::uint64_t chunk, ScratchHandle& handle) const;
   Header header_for(Id id) const;
+  [[noreturn]] void throw_status(const char* what, ScratchStatus status) const;
   void require_mutable() const;
   void take(ScratchStatus status, const char* what);
   void load_chunk(Id id, std::uint64_t chunk, std::size_t value_length) const;
@@ -172,7 +169,7 @@ class StoreImpl final : public Store {
   std::uint64_t bytes_live_ = 0;
   std::uint64_t baseline_bytes_live_ = 0;
   bool outer_active_ = false;
-  bool rollback_only_ = false;
+  mutable bool rollback_only_ = false;
   mutable std::byte key_buffer_[kKeyBytes] = {};
 };
 
@@ -342,6 +339,14 @@ StoreImpl::Header StoreImpl::header_for(Id id) const {
   header.size = load_be64(raw);
   header.align = load_be64(raw + 8);
   return header;
+}
+
+[[noreturn]] void StoreImpl::throw_status(const char* what,
+                                         ScratchStatus status) const {
+  // Lookup/read failures can follow successful chunk puts/erases. Poison before
+  // constructing the exception too: its string allocation can itself throw.
+  if (outer_active_) rollback_only_ = true;
+  throw std::runtime_error(std::string("o1 store: ") + what + ": " + status_text(status));
 }
 
 void StoreImpl::require_mutable() const {
@@ -538,12 +543,16 @@ std::size_t StoreImpl::write(Id id, std::uint64_t off, const void* src,
 
 std::unique_ptr<Tx> StoreImpl::begin() {
   require_mutable();
-  if (outer_active_) return std::unique_ptr<Tx>(new StoreTx(this, false));
+  // Allocate before opening an outer transaction: bad_alloc must not leave an
+  // active transaction whose caller never received a handle.
+  const bool outer = !outer_active_;
+  std::unique_ptr<Tx> transaction(new StoreTx(this, outer));
+  if (!outer) return transaction;
   take(store_->begin(), "begin");
   outer_active_ = true;
   rollback_only_ = false;
   baseline_bytes_live_ = bytes_live_;
-  return std::unique_ptr<Tx>(new StoreTx(this, true));
+  return transaction;
 }
 
 Stats StoreImpl::stats() const {

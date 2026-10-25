@@ -106,10 +106,29 @@ class FaultBacking final : public ScratchBacking {
   void fail_next_write() noexcept { fail_next_write_ = true; }
   bool failed() const noexcept { return failed_; }
 
+  // Borrowed patterns identify data, not page ids or an observed I/O count.
+  void fail_read_containing(ScratchBytes pattern,
+                            ScratchBytes prior_write) noexcept {
+    read_pattern_ = pattern;
+    write_pattern_ = prior_write;
+    read_armed_ = true;
+    read_failed_ = false;
+    prior_write_seen_ = false;
+  }
+  bool read_failed() const noexcept { return read_failed_; }
+  bool prior_write_seen() const noexcept { return prior_write_seen_; }
+
  protected:
   ScratchStatus do_read_page(ScratchPageId id,
                              ScratchBuffer destination) const noexcept override {
-    return inner_.read_page(id, destination);
+    const ScratchStatus status = inner_.read_page(id, destination);
+    if (status == ScratchStatus::ok && read_armed_ &&
+        contains(ScratchBytes{destination.data, destination.size}, read_pattern_)) {
+      read_armed_ = false;
+      read_failed_ = true;
+      return ScratchStatus::io_error;
+    }
+    return status;
   }
 
   ScratchStatus do_write_page(ScratchPageId id,
@@ -119,7 +138,11 @@ class FaultBacking final : public ScratchBacking {
       failed_ = true;
       return ScratchStatus::io_error;
     }
-    return inner_.write_page(id, source);
+    const ScratchStatus status = inner_.write_page(id, source);
+    if (status == ScratchStatus::ok && read_armed_ &&
+        contains(source, write_pattern_))
+      prior_write_seen_ = true;
+    return status;
   }
 
   ScratchStatus do_sync(ScratchDurability durability) noexcept override {
@@ -127,9 +150,21 @@ class FaultBacking final : public ScratchBacking {
   }
 
  private:
+  static bool contains(ScratchBytes bytes, ScratchBytes pattern) noexcept {
+    return pattern.size != 0 &&
+           std::search(bytes.data, bytes.data + bytes.size,
+                       pattern.data, pattern.data + pattern.size) !=
+               bytes.data + bytes.size;
+  }
+
   FixedMemoryScratchBacking& inner_;
   bool fail_next_write_ = false;
   bool failed_ = false;
+  ScratchBytes read_pattern_{};
+  ScratchBytes write_pattern_{};
+  mutable bool read_armed_ = false;
+  mutable bool read_failed_ = false;
+  bool prior_write_seen_ = false;
 };
 
 Shape default_shape() {
@@ -142,12 +177,16 @@ Shape default_shape() {
   return shape;
 }
 
-// ScratchStore's fixed workspace has page_count cache pages, six fixed work
-// pages, and fixed metadata. Eight extra pages are a derived envelope for that
-// metadata at the supported shape sizes; this is independent of object count.
+// For the power-of-two resident page counts used here, metadata is one 24-byte
+// Slot plus two 4-byte buckets per page: 32 * resident_pages bytes. Round that
+// up to pages, then add six work pages and two pages for Core/alignment overhead.
+// The object layer also owns the 16-byte header + chunk_bytes buffer.
 std::uint64_t ceiling_for(const Shape& shape) {
-  return (static_cast<std::uint64_t>(shape.resident_pages) + 8) *
-         shape.page_bytes;
+  const std::uint64_t metadata_bytes = UINT64_C(32) * shape.resident_pages;
+  const std::uint64_t metadata_pages =
+      (metadata_bytes + shape.page_bytes - 1) / shape.page_bytes;
+  return (static_cast<std::uint64_t>(shape.resident_pages) + 6 +
+          metadata_pages + 2) * shape.page_bytes + 16 + shape.chunk_bytes;
 }
 
 struct XorShift {
@@ -328,6 +367,9 @@ void check_lifecycle() {
   std::vector<unsigned char> regrown(50);
   REQUIRE(store->read(growing, 0, regrown.data(), regrown.size()) == regrown.size());
   REQUIRE(regrown == shrunk);
+  const std::vector<unsigned char> regrown_all = read_object(*store, growing);
+  REQUIRE(std::all_of(regrown_all.begin() + 50, regrown_all.end(),
+                      [](unsigned char byte) { return byte == 0; }));
 
   const std::uint64_t live_before = store->stats().bytes_live;
   store->release(small);
@@ -785,9 +827,20 @@ void check_growth_gate(std::uint64_t bars, std::size_t backing_pages) {
   const std::uint64_t salt = UINT64_C(0x9e3779b97f4a7c15);
   constexpr std::uint64_t batch = 10000;
   std::unique_ptr<Tx> transaction;
+  // Store's contract permits one Tx-handle allocation per begin(), and no
+  // allocations for successful mutations after open. ids is already reserved.
+  // bytes_resident only reports ScratchStore's constant workspace, so the old
+  // ceiling/flatness assertions cannot see an object-layer heap leak. This
+  // allocation delta catches even a growing per-object vector outside stats().
+  constexpr std::size_t allocations_per_begin = 1;
+  std::size_t begin_calls = 0;
+  const std::size_t allocations_before = global_allocation::allocations;
 
   for (std::uint64_t index = 0; index < bars; ++index) {
-    if (index % batch == 0) transaction = store->begin();
+    if (index % batch == 0) {
+      transaction = store->begin();
+      ++begin_calls;
+    }
     const Id id = store->create(object_bytes, 8);
     REQUIRE(id != 0);
     const std::uint64_t value = index ^ salt;
@@ -798,6 +851,8 @@ void check_growth_gate(std::uint64_t bars, std::size_t backing_pages) {
       REQUIRE(checkpoints[next_mark].bytes_live ==
               (index + 1) * object_bytes);
       REQUIRE(checkpoints[next_mark].bytes_resident <= ceiling);
+      REQUIRE(global_allocation::allocations - allocations_before ==
+              begin_calls * allocations_per_begin);
       print_stats("growth-gate", index + 1, checkpoints[next_mark], ceiling);
       ++next_mark;
     }
@@ -806,6 +861,8 @@ void check_growth_gate(std::uint64_t bars, std::size_t backing_pages) {
       transaction.reset();
     }
   }
+  REQUIRE(global_allocation::allocations - allocations_before ==
+          begin_calls * allocations_per_begin);
   REQUIRE(next_mark == marks.size());
   REQUIRE(transaction == nullptr);
   REQUIRE(store->alive(ids.back()));
@@ -978,6 +1035,83 @@ void check_io_failure() {
   std::printf("O1STORE backing I/O failure injection rollback ok\n");
 }
 
+void check_read_failure_poisoning() {
+  Shape shape = default_shape();
+  shape.page_bytes = 512;
+  shape.resident_pages = 2;
+  shape.chunk_bytes = 4096;
+  std::vector<std::byte> storage(4096 * shape.page_bytes);
+  FixedMemoryScratchBacking inner(
+      ScratchBuffer{storage.data(), storage.size()}, shape.page_bytes);
+  FaultBacking backing(inner);
+  std::unique_ptr<Store> store = Store::open(shape, backing);
+
+  // Each chunk spans more pages than the cache and has a distinct byte pattern.
+  // Keys/headers cannot contain the 64-byte run borrowed from chunk 1 below.
+  // Thus the armed read is the value read in the SECOND load_chunk(), after
+  // chunk 0's put, rather than a header lookup, key lookup, or write failure.
+  std::vector<unsigned char> expected(3 * shape.chunk_bytes);
+  std::vector<unsigned char> replacement(expected.size());
+  for (std::size_t index = 0; index < expected.size(); ++index) {
+    const std::size_t chunk = index / shape.chunk_bytes;
+    expected[index] = static_cast<unsigned char>(0x41 + chunk);
+    replacement[index] = static_cast<unsigned char>(0xd1 + chunk);
+  }
+  const Id id = store->create(expected.size(), 1);
+  REQUIRE(store->write(id, 0, expected.data(), expected.size()) ==
+          expected.size());
+  REQUIRE(read_object(*store, id) == expected);
+
+  auto outer = store->begin();
+  backing.fail_read_containing(
+      ScratchBytes{reinterpret_cast<const std::byte*>(
+                       expected.data() + shape.chunk_bytes), 64},
+      ScratchBytes{reinterpret_cast<const std::byte*>(replacement.data()), 64});
+  bool write_failed = false;
+  try {
+    (void)store->write(id, 0, replacement.data(), replacement.size());
+  } catch (const std::runtime_error& error) {
+    write_failed = true;
+    REQUIRE(std::strcmp(error.what(), "o1 store: chunk read: io_error") == 0);
+  }
+  REQUIRE(write_failed);
+  REQUIRE(backing.read_failed());
+  REQUIRE(backing.prior_write_seen());
+  REQUIRE(throws_logic_error(
+      [&] { (void)store->write(id, 0, replacement.data(), 1); }));
+  outer->rollback();
+  REQUIRE(store->size(id) == expected.size());
+  REQUIRE(read_object(*store, id) == expected);
+
+  std::printf("O1STORE second-chunk read failure poisons outer transaction ok\n");
+}
+
+void check_begin_allocation_failure() {
+  Shape shape = default_shape();
+  MemoryBacking backing(4096, shape.page_bytes);
+  std::unique_ptr<Store> store = Store::open(shape, backing.get());
+  bool allocation_failed = false;
+  global_allocation::refusing = true;
+  try {
+    (void)store->begin();
+  } catch (const std::bad_alloc&) {
+    allocation_failed = true;
+  } catch (...) {
+    global_allocation::refusing = false;
+    throw;
+  }
+  global_allocation::refusing = false;
+  REQUIRE(allocation_failed);
+
+  // A refused handle allocation must leave no hidden outer transaction:
+  // this begin must own a real rollback, rather than return a joined scope.
+  auto transaction = store->begin();
+  const Id id = store->create(16, 1);
+  transaction->rollback();
+  REQUIRE(!store->alive(id));
+  std::printf("O1STORE refused begin allocation leaves no active transaction ok\n");
+}
+
 // ---------------------------------------------------------------- no heap after open
 
 void check_no_heap_after_open() {
@@ -1026,18 +1160,11 @@ void check_no_heap_after_open() {
   global_allocation::refusing = true;
   try {
     held = held && store->write(committed, 0, buffer.data(), 32) == 32;
-    std::fprintf(stderr, "no-heap committed: write held=%d\n", held ? 1 : 0);
     held = held && store->resize(committed, 100000);
-    std::fprintf(stderr, "no-heap committed: resize held=%d\n", held ? 1 : 0);
     committed_tx->commit();
     held = held && store->alive(committed);
     held = held && store->stats().bytes_resident == resident_before;
-    std::fprintf(stderr, "no-heap committed: end held=%d resident=%llu before=%llu\n",
-                 held ? 1 : 0,
-                 static_cast<unsigned long long>(store->stats().bytes_resident),
-                 static_cast<unsigned long long>(resident_before));
-  } catch (const std::exception& error) {
-    std::fprintf(stderr, "no-heap committed: threw %s\n", error.what());
+  } catch (const std::exception&) {
     held = false;
   } catch (...) {
     held = false;
@@ -1089,6 +1216,8 @@ int main() {
     check_control_mutant_goes_red(control_shape, UINT64_C(1000000), 16);
     check_flattened_transactions();
     check_io_failure();
+    check_read_failure_poisoning();
+    check_begin_allocation_failure();
     check_no_heap_after_open();
     std::printf("test_o1_store: all groups passed\n");
     return 0;

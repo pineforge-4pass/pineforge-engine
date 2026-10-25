@@ -46,9 +46,11 @@ namespace o1 {
 using Id = std::uint64_t;
 inline constexpr Id kNullId = UINT64_C(0);
 
-// Fixed bounds for one chunk buffer and the store's resident workspace
-// (page_bytes 4096 x 1024 pages = 4 MiB). Larger Shape values are caller errors;
-// raising either bound needs CR150-CX's review.
+// Fixed chunk-byte and resident-page-COUNT bounds, not a resident-byte cap.
+// ScratchStore resident = (resident_pages + 6 work pages + metadata in pages)
+// x page_bytes: at most about 1 GiB at its own 1 MiB page-size limit.
+// Larger chunk_bytes/resident_pages are caller errors; raising either bound
+// needs CR150-CX's review.
 inline constexpr std::uint32_t kMaxChunkBytes = 64u * 1024u;
 inline constexpr std::uint32_t kMaxResidentPages = 1024u;
 
@@ -59,8 +61,8 @@ struct Shape {
   // cost of one element write and the object's rounding granularity. Appended after
   // the first contract; the fields above keep their meaning and defaults.
   std::uint32_t chunk_bytes = 1024;
-  // EXT: fixed staging-slot floors handed to the ScratchStore configuration. They
-  // reserve userspace slots, not a bound on transaction length.
+  // EXT: ScratchStore requires these counts >= 1 (zero is normalized to 1 here).
+  // Otherwise passed through; ScratchStore's workspace sizing never reads them.
   std::uint32_t journal_slots = 8;
   std::uint32_t index_slots = 8;
 };
@@ -80,9 +82,11 @@ struct Stats {
 // maps to the ScratchStore transaction. begin() while one is active returns a
 // JOINED scope: its commit() is a no-op, its rollback() marks the outer transaction
 // rollback-only and undoes nothing by itself, and destroying it uncommitted marks
-// the outer transaction rollback-only too. While rollback-only every mutation
-// throws std::logic_error; the outer commit() performs the real rollback and then
-// throws the same error; the outer rollback() always works. There is no savepoint.
+// the outer transaction rollback-only too. While rollback-only begin() and every
+// mutation throw std::logic_error; the outer commit() performs the real rollback
+// and then throws the same error; the outer rollback() always works. There is no
+// savepoint. Destroy all Tx handles before the next outer begin(): destroying an
+// unfinished stale outer handle later can roll that NEW transaction back.
 class Tx {
  public:
   virtual ~Tx();
@@ -90,6 +94,7 @@ class Tx {
   virtual void rollback() = 0;
 };
 
+// Single-threaded: read() const mutates its key and chunk buffers.
 class Store {
  public:
   virtual ~Store();
@@ -114,6 +119,8 @@ class Store {
   virtual std::size_t read(Id, std::uint64_t off, void* dst, std::size_t n) const = 0;
   virtual std::size_t write(Id, std::uint64_t off, const void* src, std::size_t n) = 0;
 
+  // Each successful begin() makes exactly one heap allocation for its Tx handle.
+  // Other successful operations reuse the workspace allocated at open().
   virtual std::unique_ptr<Tx> begin() = 0;
 
   virtual Stats stats() const = 0;
