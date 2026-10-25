@@ -31,10 +31,10 @@ env:
   # catalog from the checked-in diff), which only a clone without tags needs.
   PINEFORGE_REQUIRE_RELEASE_TAGS: "1"
 
-# The canon authz gate admits our events before any checkout. Linux jobs
-# use the post-merge fleet with no hosted fallback; the two macOS cells are
-# the one hosted exception (LB-535), pinned by name and image in
-# scripts/ci_preflight.py.
+# The canon authz gate admits our events before any checkout. Light jobs
+# (authz, changes, build-gate) use hosted ubuntu-24.04; Linux proofs use the
+# post-merge fleet, and macOS uses hosted macos-26. Runner pins are checked
+# by scripts/ci_preflight.py.
 # Each verification sizes its parallelism to the runner that took it.
 # scripts/ci_preflight.py pins every runner, time limit and job count; every
 # job's limit is the platform's own 360-minute maximum, the only hang catcher
@@ -44,7 +44,7 @@ jobs:
   authz:
     name: authz
     # Fleet routing is fixed for this workflow; releases use pf-gcp-main.
-    runs-on: ["self-hosted", "pf-gcp-post"]
+    runs-on: ubuntu-24.04
     permissions: {}
     # No timeout-minutes: the owner's no-time-limits rule (check-no-time-limits refuses new ones).
     steps:
@@ -110,7 +110,7 @@ jobs:
   # builds the site as before. Classification uses the light pool class.
   changes:
     needs: [authz]
-    runs-on: ["self-hosted","pf-gcp-post"]
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     env:
@@ -636,7 +636,7 @@ jobs:
     needs: [authz, changes, preflight, build, build-macos, sanitizers, native-live, kernel-only, corpus-parity-subset, preflight-slow, corpus-parity]
     if: always()
     # The aggregate runs inline Python and shell on the light pool class.
-    runs-on: ["self-hosted","pf-gcp-post"]
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     env:

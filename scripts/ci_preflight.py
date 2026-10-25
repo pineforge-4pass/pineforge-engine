@@ -143,20 +143,20 @@ JOB_COMMANDS = {
     'docs.yml': {'authz': None, 'build': None},
     'docs-post.yml': {'authz': None, 'build': None},
 }
-# LB-535: macOS is the sole hosted exception; pf-gcp-post is the Linux fleet.
-# This fixed exception never applies to a pull_request-reachable workflow.
+# Exact light-job pins; macOS and promotion retain their hosted exceptions.
 HOSTED_JOB_RUNNERS = {
-    'ci-post.yml': {'build-macos': 'macos-26'},
-    # SEC846: the shared credential-free guard stays hosted in every copy.
+    'ci.yml': dict.fromkeys(('authz', 'changes', 'build-gate'), 'ubuntu-24.04'),
+    'ci-post.yml': {**dict.fromkeys(('authz', 'changes', 'build-gate'), 'ubuntu-24.04'), 'build-macos': 'macos-26'},
+    **{name: {'authz': 'ubuntu-24.04'} for name in (
+        'corpus-parity.yml', 'corpus-parity-subset.yml', 'docs-post.yml', 'native-live.yml')},
+    'docs.yml': {'authz': 'ubuntu-24.04', 'build': 'ubuntu-24.04'},
     'promote-baseline.yml': {'promote-guard': 'ubuntu-latest'},
 }
-# LB-435 plus addendum 2: isolate releases and the named promotion exception.
-# The strategy pin keeps the existing macOS and Linux ARM hosted legs.
-# The probe's credential-free authz retains the canon non-release fleet.
+# Release/probe credential pins and ARM/macOS strategies remain isolated.
 RELEASE_JOB_RUNNERS = {
     'release.yml': {'release': RELEASE_RUNNER, 'prebuilt': HOSTED_MATRIX_RUNNER,
                     'notify-hub': RELEASE_RUNNER},
-    'release-ruleset-probe.yml': {'authz': PR_RUNNER, 'probe': POST_RUNNER},
+    'release-ruleset-probe.yml': {'authz': 'ubuntu-24.04', 'probe': POST_RUNNER},
     'promote-baseline.yml': {'promote': RELEASE_RUNNER},
 }
 # Credential-bearing jobs outside the release pins and gated docs build retain
@@ -277,7 +277,7 @@ AUTHZ_STEP_SHA256 = '94bf3afefe4588bc33dad5fd4d8fa3d2a104cc45743ad59286c756fa3a1
 # fleet comment and comma spacing. The release probe pins executable lines.
 AUTHZ_JOB_HEADER = '''    name: authz
     # Fleet routing is fixed for this workflow; releases use pf-gcp-main.
-    runs-on: ["self-hosted", "pf-gcp-pr"]
+    runs-on: ubuntu-24.04
     permissions: {}
 '''
 AUTHZ_REFUSE_STEP = '''      - name: Refuse an unauthorised run before anything else
@@ -1206,13 +1206,13 @@ def workflow_fleet_findings(workflows: dict[str, str]) -> list[str]:
             findings.append(f'{name} must split pull_request and post-merge events into separate workflows')
         runner = POST_RUNNER if reachable & POST_EVENTS else PR_RUNNER
         event_class = 'post-merge events' if reachable & POST_EVENTS else 'pull_request'
-        fixed_hosted = (HOSTED_JOB_RUNNERS.get(name, {})
-                        if reachable & POST_EVENTS and 'pull_request' not in reachable else {})
+        fixed_hosted = {job: label for job, label in HOSTED_JOB_RUNNERS.get(name, {}).items()
+                        if label == 'ubuntu-24.04' or (reachable & POST_EVENTS and 'pull_request' not in reachable)}
         if not reachable:
             findings.append(f'{name} must have a reachable event for fleet routing')
         for job, body in _jobs(workflow).items():
             # runner_findings pins this exact job's hosted label and metadata.
-            # A PR caller disables the exception even through reusable calls.
+            # A PR caller disables the macOS/promotion exceptions through calls.
             if job in fixed_hosted:
                 continue
             uses = _job_values(body, 'uses')
@@ -1236,8 +1236,8 @@ def _workflow_runner(workflow: str) -> str:
 
 
 def _authz_header(workflow: str) -> str:
-    return AUTHZ_JOB_HEADER.replace('"pf-gcp-pr"', '"pf-gcp-post"') \
-        if _workflow_runner(workflow) == POST_RUNNER else AUTHZ_JOB_HEADER
+    # Light canon authz uses the same exact hosted image for every event.
+    return AUTHZ_JOB_HEADER
 
 
 def runner_findings(workflows: dict[str, str]) -> list[str]:
@@ -1251,8 +1251,8 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
         if _LARGER_RUNNER_KEY.search(code):
             findings.append(f'{name} must not define a larger_runner key; use the GCP fleet or hosted exceptions')
         timed = JOB_COMMANDS.get(name, {})
-        fixed_hosted = (HOSTED_JOB_RUNNERS.get(name, {})
-                        if routes[name] & POST_EVENTS and 'pull_request' not in routes[name] else {})
+        fixed_hosted = {job: label for job, label in HOSTED_JOB_RUNNERS.get(name, {}).items()
+                        if label == 'ubuntu-24.04' or (routes[name] & POST_EVENTS and 'pull_request' not in routes[name])}
         fixed_release = RELEASE_JOB_RUNNERS.get(name, {})
         event_runner = POST_RUNNER if routes[name] & POST_EVENTS else PR_RUNNER
         pinned = {job: event_runner for job in timed}
@@ -1313,7 +1313,7 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                     actual = [_runner_value(value) for value in actual]
                     expected = [_runner_value(value) for value in expected]
                 if actual != expected:
-                    suffix = {PR_RUNNER: '', POST_RUNNER: ' (post fleet)'}.get(
+                    suffix = {PR_RUNNER: '', POST_RUNNER: ' (post fleet)', 'ubuntu-24.04': ' (hosted)'}.get(
                         fixed_release[job], ' (isolated release)')
                     findings.append(f'{name} job {job} must run on {fixed_release[job]}{suffix}')
                 environments = _job_values(workflow, 'env') + _job_values(body, 'env')
@@ -1323,8 +1323,7 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
             elif (job in fixed_hosted
                   or (credentials and (name, job) != ('docs-post.yml', 'build'))
                   or (job not in pinned and hosted_platform)):
-                # Authz-gated docs deployment is pinned to the fleet below;
-                # other credential jobs retain their hosted routing.
+                # Exact hosted pins retain their credential/metadata checks.
                 if job in fixed_hosted:
                     hosted_ok = runs_on == [fixed_hosted[job]]
                     if not hosted_ok:
@@ -1335,7 +1334,8 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                 if credentials and not hosted_ok:
                     findings.append(f'{name} job {job} must keep production credentials '
                                     'on a hosted standard runner')
-                environments = _job_values(workflow, 'env') + _job_values(body, 'env')
+                environments = ([] if name in ('ci.yml', 'ci-post.yml') and job in ('changes', 'build-gate')
+                                else _job_values(workflow, 'env') + _job_values(body, 'env'))
                 if any(re.search(r'\bPF_CI_LABELS["\']?\s*:', value) for value in environments):
                     findings.append(f'{name} job {job} must not set PF_CI_LABELS on a hosted job')
             else:
@@ -1492,8 +1492,8 @@ jobs:
   authz:
     name: authz
     # Preflight pins executable workflow lines after removing comment-only lines.
-    # authz uses pf-gcp-pr; the App-token probe uses pf-gcp-post.
-    runs-on: ["self-hosted", "pf-gcp-pr"]
+    # authz uses hosted ubuntu-24.04; the App-token probe uses pf-gcp-post.
+    runs-on: ubuntu-24.04
     permissions: {}
     # No timeout-minutes: the owner's no-time-limits rule (check-no-time-limits refuses new ones).
     steps:
@@ -1743,7 +1743,7 @@ def authz_workflow_findings(workflow: str, name: str, aggregate: str) -> list[st
 # Corpus needs persisted checkout credentials for its HTTPS submodule clone,
 # and docs deploys with Cloudflare secrets: the full authz contract forbids both.
 def gated_workflow_findings(workflow: str, name: str) -> list[str]:
-    """Pin canon authz and its fleet-only dependants without those restrictions."""
+    """Pin canon authz and each hosted/fleet dependant without those restrictions."""
     findings = []
     jobs = _jobs(workflow)
     authz = jobs.get('authz', '')
@@ -1768,7 +1768,7 @@ def gated_workflow_findings(workflow: str, name: str) -> list[str]:
         # Literal arrays may differ in whitespace; quoted JSON scalars and
         # expressions cannot stand in for the fleet's two scheduler labels.
         runners = _job_values(body, 'runs-on', unquote=False)
-        runner = _workflow_runner(workflow)
+        runner = HOSTED_JOB_RUNNERS.get(name, {}).get(job, _workflow_runner(workflow))
         if [_runner_value(value) for value in runners] != [_runner_value(runner)]:
             findings.append(f'{name} job {job} must run on {runner}')
     return findings
