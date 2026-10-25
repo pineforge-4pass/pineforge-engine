@@ -19,6 +19,7 @@
 #include <array>
 #include <cctype>
 #include <cmath>
+#include <cstring>
 #include <map>
 #include <optional>
 #include <stdexcept>
@@ -756,6 +757,19 @@ Trade TradeLedger::numeric_at(size_type global) const {
 
 std::string TradeLedger::entry_id_at(size_type global) const {
     return state_->string_field<&State::Record::entry_id>(global);
+}
+// Same checked row and read cache as entry_id_at(). The id is the first packed string, at offset
+// 0, so a hit compares the cached bytes in place; only a row whose four strings did not fit the
+// cache entry reads (and allocates) the string. `text` may be null only when `length` is 0.
+bool TradeLedger::entry_id_equals(size_type global, const char* text, std::size_t length) const {
+    state_->check(global, true);
+    const auto& entry = state_->load(global);
+    const auto id = entry.record.entry_id;
+    if (id.length != length) return false;
+    if (length == 0) return true;
+    if (entry.strings_valid()) return std::memcmp(entry.strings.data(), text, length) == 0;
+    const std::string spilled = state_->get_string(id);
+    return std::memcmp(spilled.data(), text, length) == 0;
 }
 std::string TradeLedger::entry_comment_at(size_type global) const {
     return state_->string_field<&State::Record::entry_comment>(global);

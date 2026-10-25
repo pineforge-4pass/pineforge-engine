@@ -1,0 +1,2 @@
+list(APPEND TEST_SOURCES test_p2cx_idis)
+pineforge_add_unit_test(test_p2cx_idis)
