@@ -91,6 +91,10 @@ def test_upcoming_failure_codes_are_announced():
     releases = {row["entry"]["since"] for row in diff["added"]
                 if row["collection"] == "codes"}
     upcoming = {name for name, entry in codes.items() if entry["since"] in releases}
-    assert upcoming, "the release diff must identify the upcoming code population"
+    # Right after a release the diff is reset (from that release, nothing added): no
+    # release is upcoming and the page has nothing to announce, so the population is
+    # empty by construction and the comparison below holds for it. (The former
+    # "assert upcoming" failed exactly there; an assertion that every added code is
+    # in `upcoming` would be true by construction, so none is made.)
     announced = set(re.findall(r"`([a-z][a-z0-9_]+)`", failure_code_preamble()))
     assert upcoming <= announced, f"unannounced failure codes: {sorted(upcoming - announced)}"
