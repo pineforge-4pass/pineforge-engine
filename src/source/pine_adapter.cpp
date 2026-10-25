@@ -2718,6 +2718,7 @@ void PineExecutionAdapter::reset_for_run() {
     last_bar_dual_entry_script_open_ms_ =
         std::numeric_limits<std::int64_t>::min();
     pending_projection_cache_initialized_ = false;
+    pending_projection_force_fallback_ = false;
     // Swap to empty (not clear): a run's derived index must not keep the
     // previous run's peak capacity, so retention is one run's peak R.
     decltype(pending_projection_raw_keys_)().swap(pending_projection_raw_keys_);
@@ -27158,10 +27159,10 @@ std::vector<native_order::RequestHandle> PineExecutionAdapter::take_first_open_n
 }
 
 void PineExecutionAdapter::refresh_pending_view() noexcept {
-    // The raw books remain authoritative. Invalidate only the derived
-    // first-representative index; the exact key check in the read path also
-    // catches mutations that do not pass through this boundary.
-    pending_projection_cache_initialized_ = false;
+    // Advisory refresh: reads validate raw count and every ordered key
+    // (including presence and family) before reusing representative ordinals.
+    // Unchanged keys need no rebuild; reset, a key mismatch, or rebuild failure
+    // still invalidates the derived cache. Returned rows are always read afresh.
 }
 
 int PineExecutionAdapter::projected_raw_pending_size() const noexcept {
@@ -27235,6 +27236,14 @@ bool PineExecutionAdapter::same_projected_order(
 }
 
 void PineExecutionAdapter::ensure_pending_projection_cache() const noexcept {
+    if (pending_projection_force_fallback_) {
+        // Match a failed rebuild even when a prior read warmed the cache.
+        pending_projection_raw_keys_.clear();
+        pending_projection_rows_.clear();
+        pending_projection_seen_.clear();
+        pending_projection_cache_initialized_ = false;
+        return;
+    }
     const auto make_key = [](const PlacementSnapshot* row) {
         PendingProjectionKey key;
         if (!row) return key;
