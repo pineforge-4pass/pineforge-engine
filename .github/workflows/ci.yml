@@ -36,7 +36,7 @@ jobs:
   authz:
     name: authz
     # Fleet routing is fixed for this workflow; releases use pf-gcp-main.
-    runs-on: ["self-hosted", "pf-gcp-pr"]
+    runs-on: ubuntu-24.04
     permissions: {}
     # No timeout-minutes: the owner's no-time-limits rule (check-no-time-limits refuses new ones).
     steps:
@@ -102,7 +102,7 @@ jobs:
   # builds the site as before. Classification uses the light pool class.
   changes:
     needs: [authz]
-    runs-on: ["self-hosted","pf-gcp-pr"]
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       pull-requests: read
@@ -399,7 +399,7 @@ jobs:
     needs: [authz, changes, preflight, build, corpus-parity-subset]
     if: always()
     # The aggregate runs inline Python and shell on the light pool class.
-    runs-on: ["self-hosted","pf-gcp-pr"]
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       pull-requests: read

@@ -1900,22 +1900,22 @@ class RulesetsProbeTests(unittest.TestCase):
     def test_probe_dispatch_branch_and_fleets_are_documented(self):
         docs = (ROOT / "docs/ci.md").read_text()
         requirements = (
-            "FLEET-POST=A splits verification and documentation routing at the file boundary:\n"
-            'PR jobs use `["self-hosted","pf-gcp-pr"]`, and post-merge push/schedule/manual\n'
-            'jobs use `["self-hosted","pf-gcp-post"]`.',
+            "FLEET-POST=A keeps large verification jobs split at the file boundary:\n"
+            'PR build/preflight and parity subset use `["self-hosted","pf-gcp-pr"]`; post-merge\n'
+            'verification uses `["self-hosted","pf-gcp-post"]`. No job routes by event.',
             "The manual `release-ruleset-probe.yml` workflow runs `authz` on\n"
-            '`["self-hosted","pf-gcp-pr"]` and `probe` on `["self-hosted","pf-gcp-post"]`.',
+            'hosted `ubuntu-24.04` and `probe` on `["self-hosted","pf-gcp-post"]`.',
             "Release and promotion use the isolated release fleet:\n"
             "`release`, `notify-hub`, Linux x64 `prebuilt` and baseline `promote` use\n"
             '`["self-hosted","pf-gcp-main"]`.\n'
-            'The release ruleset probe runs `authz` on `["self-hosted","pf-gcp-pr"]` and\n'
+            'The release ruleset probe runs secret-free `authz` on hosted `ubuntu-24.04` and\n'
             '`probe` on `["self-hosted","pf-gcp-post"]`.',
             "Dispatch **Release ruleset probe** (`release-ruleset-probe.yml`) once from\n"
             "`main` to check actual ruleset visibility with the same App token mint as\n"
             "`release.yml`. The workflow file must be on the default branch, and the run\n"
             "must use `main`'s copy.\n"
-            'The probe job runs on `["self-hosted","pf-gcp-post"]`, with `authz` on\n'
-            '`["self-hosted","pf-gcp-pr"]`.',
+            'The credentialed probe job runs on `["self-hosted","pf-gcp-post"]`, with\n'
+            'secret-free `authz` on hosted `ubuntu-24.04`.',
             "`pf-gcp-main` admits only allowlisted workflows (an org runner-group restriction),\n"
             "so the one-time probe uses `pf-gcp-post`.",
             "The dispatch must run from `main`; the workflow itself refuses any other ref\n"
