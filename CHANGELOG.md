@@ -119,6 +119,19 @@ unchanged (0 codes added, changed or removed since 1.7.0).
   against an allocation-bound inventory with scoped site identities
   (#469). The inventory is not yet reviewed: its entries are unreviewed or
   pending flat-memory work, and the gate fails on a new container site.
+- **Release gate reads the post-merge run (#526).** The release gate
+  (`scripts/ci_release_gate.py`) now also requires a green, non-skipped
+  `ci-post` run of the commit being released, with all four build legs
+  (`ubuntu-24.04` and `macos-26`, Debug and Release) successful. Until now it
+  read only the `pineforge/verify` and `pineforge/parity` statuses. When the
+  release commit is documentation-only it checks the nearest earlier commit that
+  is not (at most 20 documentation-only commits), and every skipped
+  documentation-only commit needs a successful `ci-post` run of its own. A newer
+  run of the same commit that failed, was cancelled or timed out refuses the
+  release; so does any other non-success result. A newer run whose build legs
+  were all skipped is passed over in favour of an older full green run. Runs on
+  other branches are not counted. The gate only reads results: it changes no
+  build or engine behaviour, and its command line is unchanged.
 - **Live equivalence row.** Corpus equivalence runs as a required CTest row in
   the live suites (#481).
 - **Kernel residuals check.** `scripts/check_kernel_residuals.py` no longer
@@ -132,8 +145,8 @@ unchanged (0 codes added, changed or removed since 1.7.0).
 - **Scratch-on-tmpfs tests ignore co-tenant files.** The default and jailed
   scratch-on-tmpfs tests no longer fail when another job on the same CI machine
   creates files in `/tmp`, `/var/tmp` or `/dev/shm`: the tmpfs candidate is a
-  private directory owned by the test, and in the shared roots only files this
-  process creates through `mkstemp` are counted. Tests only, no change to the
+  private directory owned by the test, and in `/tmp` and `/var/tmp` only files
+  this process creates through `mkstemp` are counted. Tests only, no change to the
   engine or its headers; the stated limit is that scratch created through
   another call in those two roots would not be seen (#521).
 - **Post-runner capability canary.** A dispatch-only workflow
