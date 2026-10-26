@@ -9,3 +9,4 @@ self-hosted-runner:
     - pf-gcp-main
     - pf-ci-x64
     - pf-ci-x64-16
+    - pf-linux-arm64-16

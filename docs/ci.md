@@ -10,7 +10,7 @@ Those earlier PR populations and timing estimates are historical; the current
 | `preflight` | Fast documentation, source and policy stages | Workflow lint and workflow contracts only | The same fast stages |
 | `preflight-slow` | In the post workflow | In the post workflow | All remaining preflight stages |
 | `build (ubuntu-24.04, Release)` | Release smoke, CTest label `fast` | Skipped | Complete Release profile |
-| `build (ubuntu-24.04, Debug)` and both `build (ubuntu-24.04-arm, …)` cells | In the post workflow | In the post workflow | The same Debug/Release profiles on amd64 and arm64; the runner OS must match the cell |
+| `build (ubuntu-24.04, Debug)` and both `build (ubuntu-24.04-arm, …)` cells | In the post workflow | In the post workflow | The same Debug/Release profiles on amd64 and arm64; arm cells use the larger hosted arm runner `pf-linux-arm64-16` (16 CPU, 64 GB); both jobs check OS, arm also requires ARM64 |
 | `sanitizers`, `kernel-only`, all three `native-live` profiles | In the post workflow | In the post workflow | Complete profiles, without label exclusions |
 | `corpus-parity-subset` | Existing advisory subset | Skipped | Existing advisory subset |
 | `corpus-parity` caller | In the post workflow | In the post workflow | Full parity |
@@ -184,7 +184,7 @@ the preflight source guard rejects those includes before a build.
 
 CI uses Ubuntu 24.04 amd64 and arm64 cells and selects Python 3.12 explicitly.
 The amd64 post cells request the post fleet; the two arm64 post cells run on
-hosted `ubuntu-24.04-arm`. Both jobs refuse an OS mismatch.
+the larger hosted arm runner `pf-linux-arm64-16` (16 CPU, 64 GB); both jobs check OS, arm also requires ARM64.
 Hosted exceptions include the named light jobs, arm64 and the existing release/promotion pins.
 CMake uses the same interpreter as the
 verification driver, so its Python checks do not switch to a different system
@@ -1656,7 +1656,7 @@ each runner label remains a literal, checked per job:
 | `ci.yml` | Unfiltered `pull_request` | `authz`, `changes`, `build-gate`: hosted `ubuntu-24.04`; preflight/build: `["self-hosted","pf-gcp-pr"]` |
 | `corpus-parity-subset.yml` | Reusable call from PR CI | `authz`: hosted `ubuntu-24.04`; subset: `["self-hosted","pf-gcp-pr"]` |
 | `docs.yml` | `pull_request`, except `.github/**`-only diffs | `authz` and `build`: hosted `ubuntu-24.04` |
-| `ci-post.yml` | Push to `main`, 01:30 UTC schedule, dispatch | `authz`, `changes`, `build-gate`: hosted `ubuntu-24.04`; `build-arm`: hosted `ubuntu-24.04-arm`; other inline jobs: `["self-hosted","pf-gcp-post"]` |
+| `ci-post.yml` | Push to `main`, 01:30 UTC schedule, dispatch | `authz`, `changes`, `build-gate`: hosted `ubuntu-24.04`; `build-arm`: larger hosted arm runner `pf-linux-arm64-16` (16 CPU, 64 GB); other inline jobs: `["self-hosted","pf-gcp-post"]` |
 | `corpus-parity.yml` | Schedule, dispatch, post CI callers | `authz`: hosted `ubuntu-24.04`; both parity jobs: `["self-hosted","pf-gcp-post"]` |
 | `native-live.yml` | Dispatch and post CI callers | `authz`: hosted `ubuntu-24.04`; all native profiles and `native-live-gate`: `["self-hosted","pf-gcp-post"]` |
 | `docs-post.yml` | Push to `main`, dispatch | `authz`: hosted `ubuntu-24.04`; credentialed `build`: `["self-hosted","pf-gcp-post"]` |
@@ -1668,16 +1668,16 @@ follow local calls to a fixed point, refuse mixed event classes and require
 literal VM arrays outside the exact hosted pins; job conditions cannot excuse routing.
 Fork PRs on hosted runners run without our secrets, so the VM-only fork-refusal hook is not needed.
 Hosted light jobs need no VM tools or mounts; leaving VM queues shortens PR wall time.
-Rollback: relabel the affected job to its prior `pf-gcp-pr` or `pf-gcp-post` array and restore its checker/test pin.
+Rollback: relabel the affected VM job to its prior `pf-gcp-pr` or `pf-gcp-post` array and restore its checker/test pin; if no runner picks up a `build-arm` job within 15 minutes of its start (it stays queued with no steps), the arm legs revert to hosted `ubuntu-24.04-arm` by changing `build-arm`'s runner line and its checker/test pin.
 
 The four full build checks are `build (ubuntu-24.04, Release)`,
 `build (ubuntu-24.04, Debug)`, `build (ubuntu-24.04-arm, Release)` and
 `build (ubuntu-24.04-arm, Debug)`. The two amd64 cells share `build` on the
-post fleet; the two arm64 cells share `build-arm` on hosted `ubuntu-24.04-arm`.
-Both jobs use the same verification steps and profiles. Each refuses an OS
-mismatch before checkout, and the aggregate requires both jobs.
+post fleet; the two arm64 cells share `build-arm` on the larger hosted arm runner `pf-linux-arm64-16` (16 CPU, 64 GB).
+Both jobs use the same verification steps and profiles. Each checks OS;
+arm also requires ARM64 before checkout, and the aggregate requires both jobs.
 `HOSTED_JOB_RUNNERS` in `scripts/ci_preflight.py` pins the light jobs and the
-arm64 image; the arm64 exception excludes workflows reachable from
+arm64 runner label; the arm64 exception excludes workflows reachable from
 `pull_request`. The PR build remains
 `build (ubuntu-24.04, Release)` and its aggregate remains `build`.
 
@@ -1729,8 +1729,8 @@ merge time, and supply readable identity fields; failures there refuse red.
 Legacy `PF_CI_LABELS` metadata does not select runners. Verification and
 parity commands use `$(getconf _NPROCESSORS_ONLN)` for parallelism.
 No job or step declares `timeout-minutes`, and no proof continues on error.
-The checker retains the bans on paid larger-runner labels and
-`larger_runner` keys. GitHub's platform maximum remains the only time bound.
+The checker retains its larger-runner label refusal pattern and the ban on
+`larger_runner` keys; only `build-arm` has the exact larger arm pin. GitHub's platform maximum remains the only time bound.
 
 The read-only `promote-guard` stays hosted on `ubuntu-latest`; the credential
 job keeps main's isolated release runner. Preflight pins the complete guard
