@@ -438,6 +438,8 @@ _DIAGNOSTICS = {
         "magnifier_sub_bars_total", "magnifier_sample_ticks_total",
         "scratch_arena_high_water_bytes", "scratch_arena_bytes")},
     "bar_magnifier_enabled": _boolean,
+    "run_profile": lambda value: type(value) is str and value in ("unjailed", "jailed"),
+    "scratch_arena_jailed": _boolean,
     "annualization": {"cagr": _text, "calmar": _text},
     "phase_timing": {"version": _count, "execution_ms": _number,
                      "result_assembly_ms": _number, "results_digest_ms": _N},

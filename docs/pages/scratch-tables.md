@@ -139,6 +139,16 @@ The Python host reads the environment once at startup, before loading a
 library or creating a handle. No C++ table/order/bar path reads this knob.
 The option configures storage; the external launcher supplies the jail.
 
+Every successful executed report records the frozen effective profile as
+`diagnostics.run_profile`, exactly `"unjailed"` or `"jailed"`.
+`diagnostics.scratch_arena_jailed` is a boolean: it is `true` only when the
+host selected the jailed profile and native arena admission succeeded,
+and `false` for an unjailed run even with an attached sealed arena.
+Both fields appear in ordinary and selected reports, including array
+reports and FD small reports; failures, capabilities and validation-only
+documents carry neither field. They follow the existing optional arena
+size counters without changing those counters.
+
 In this profile every fresh handle gets backend 1 and a fresh P0 descriptor
 after settings/feed selection and before execution: every warmup, repeat,
 ordinary body run, and selected-window execution. Selected mode uses the
@@ -179,6 +189,14 @@ the same envelope as a missing arena: exit status 1, `code`
 admission judges the backend the attachment retained, so an arena attached
 earlier is not re-judged by a rebound fd 5. Off Linux, admission accepts any
 attached arena.
+
+The success marker records that checked host profile and successful native
+admission, not independent OS jail enforcement or a fresh end-of-run backend
+query. In particular, `true` off Linux does not certify Linux seals.
+Neither positive arena sizes nor `PF_SCRATCH_ARENA_JAILED=1` selects the host
+profile or substitutes for admission. A consumer requiring this policy must
+require exact `"jailed"` and boolean `true`, refusing absent or malformed
+values rather than treating an older report as admitted.
 
 `PF_SCRATCH_ARENA_JAILED=1` is an additional, optional way to demand the same
 seals already at attach time, for hosts that attach before they call the

@@ -4843,7 +4843,7 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
                 enable_outputs(lib, st)
             if args.profile == "jailed":
                 apply_scratch_tables(lib, st, default_scratch_manifest(fed_count))
-                _require_jailed_arena(lib, st)
+                args._scratch_arena_admitted = _require_jailed_arena(lib, st)
             sink = _new_report_sink(lib, st, args)
         except BaseException:
             try:
@@ -4958,7 +4958,7 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
             window_anchor=True)
         if sink is None:
             _validate_report_result(out)
-        _add_scratch_arena_diagnostics(lib, out["diagnostics"])
+        _add_scratch_arena_diagnostics(lib, out["diagnostics"], args)
         out["report_window"] = window
         out["report_shape"] = swr.report_shape_full(
             equity_points, sink.counts["T"] if sink is not None else len(out["trades"]))
@@ -5414,7 +5414,7 @@ def _main(argv, binary_inputs) -> int:
                 enable_outputs(lib, st)
             if args.profile == "jailed":
                 apply_scratch_tables(lib, st, default_scratch_manifest(n))
-                _require_jailed_arena(lib, st)
+                args._scratch_arena_admitted = _require_jailed_arena(lib, st)
             sink = _new_report_sink(lib, st, args, body=body)
         except BaseException:
             try:
@@ -5551,7 +5551,7 @@ def _main(argv, binary_inputs) -> int:
             sink if sink is not None else trade_entry_incarnations)
         if sink is None:
             _validate_report_result(out)
-        _add_scratch_arena_diagnostics(lib, out["diagnostics"])
+        _add_scratch_arena_diagnostics(lib, out["diagnostics"], args)
         if timing is not None:
             out["diagnostics"]["timing"] = timing
             out["diagnostics"]["throughput"] = _throughput_block(
@@ -5694,7 +5694,15 @@ def _bind_report_sink(lib) -> None:
             function.restype, function.argtypes = restype, argtypes
 
 
-def _add_scratch_arena_diagnostics(lib, diagnostics):
+def _add_scratch_arena_diagnostics(lib, diagnostics, args=None):
+    _add_scratch_arena_counters(lib, diagnostics)
+    if args is not None:
+        diagnostics["run_profile"] = args.profile
+        diagnostics["scratch_arena_jailed"] = (
+            args.profile == "jailed" and getattr(args, "_scratch_arena_admitted", False) is True)
+
+
+def _add_scratch_arena_counters(lib, diagnostics):
     # Attachment-lifetime counters: read after report finalization, before
     # strategy_free can detach. Never add them to a sink trailer or fingerprint.
     getter = getattr(lib, "pf_report_scratch_arena_stats", None)
@@ -5730,6 +5738,7 @@ def _require_jailed_arena(lib, state):
             raise RunFailure(*failure)
         raise RunFailure("the jailed profile requires an attached scratch arena",
                          "report_sink_failed", {"reason": "arena_backing"})
+    return True
 
 
 def _validate_sink_options(args):

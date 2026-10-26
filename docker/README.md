@@ -54,6 +54,30 @@ The examples below call the image `pineforge`: tag the pulled one that way
 (`docker tag ghcr.io/pineforge-4pass/pineforge-release:latest pineforge`) or
 write its full name.
 
+The next minor release adds two diagnostics to every successful executed
+report from this harness, including ordinary and selected array reports,
+named-sink reports and FD small reports:
+`diagnostics.run_profile` is exactly `"unjailed"` or `"jailed"`, frozen at
+startup from `--profile` or `PINEFORGE_RUN_JSON_PROFILE` (CLI wins; default
+`unjailed`). `diagnostics.scratch_arena_jailed` is boolean `true` only when
+the host used the jailed profile and native arena admission succeeded;
+unjailed runs report `false` even with an attached arena.
+
+The marker records the checked host profile and successful native admission.
+It is not independent OS jail proof or a fresh backend query at report time;
+off Linux admission accepts any attached arena. Neither arena sizes nor
+`PF_SCRATCH_ARENA_JAILED=1` sets it. Consumers requiring the policy must
+require exact `"jailed"` and boolean `true`, refusing absent or malformed
+values. Older reports remain readable by the replay converter without
+inferring these fields. Capabilities, validation-only documents and failure
+lines carry neither field.
+
+For direct `run_json.py --report-sink-fd N` execution, these diagnostics stay
+in the small success JSON on stdout; native `pf-report-sink/v1` records go to
+the inherited stream N. The launcher supplies and drains that endpoint;
+Python closes its owned descriptor before publishing the success document.
+The new fields do not change sink records, receipts or fingerprint versions.
+
 ## Run
 
 ```bash
