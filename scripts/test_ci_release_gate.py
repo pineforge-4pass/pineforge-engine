@@ -2857,13 +2857,15 @@ class CiPostGateTests(unittest.TestCase):
                 if "/actions/workflows/ci-post.yml/runs?" in call[0]
                 or ("/actions/runs/" in call[0] and "/jobs?" in call[0])]
 
-    def assert_post_reads(self, row, *, repo=REPO, newer=()):
+    def assert_post_reads(self, row, *, repo=REPO, newer=(), docs=()):
         # Each examined completed run needs its own jobs read, newest first.
+        # Skipped docs commits need runs only, tip first, before any proof reads.
         self.assertEqual(self.post_calls(), [
+            *[(ci_post_runs_api(sha, repo=repo), True, None) for sha in docs],
             (ci_post_runs_api(row["head_sha"], repo=repo), True, None),
             *[(ci_post_jobs_api(examined["id"], repo=repo), False, None)
               for examined in (*newer, row)],
-        ], "one runs read and exactly the examined completed runs' jobs, in order")
+        ], "docs runs, then proof runs and exactly the examined proof jobs, in order")
 
     def assert_refused(self, reason, *evidence, **kwargs):
         code, stdout, stderr = self.run_gate(**kwargs)
@@ -2875,12 +2877,12 @@ class CiPostGateTests(unittest.TestCase):
         self.assertEqual(stdout, "", "a refusal must never print a green line")
         return stderr
 
-    def assert_no_full_run(self, rows, *evidence):
+    def assert_no_full_run(self, rows, *evidence, docs=()):
         stderr = self.assert_refused(
             "no-full-run", rows[-1]["id"], rows[-1]["head_sha"],
             f"examined {len(rows)}", *evidence)
         # Exhausting non-proving completed runs requires reading all their jobs.
-        self.assert_post_reads(rows[-1], newer=rows[:-1])
+        self.assert_post_reads(rows[-1], newer=rows[:-1], docs=docs)
         return stderr
 
     def assert_green_evidence(self, text, row, *, release_sha=SHA, skipped=(),
@@ -2901,7 +2903,7 @@ class CiPostGateTests(unittest.TestCase):
         self.assertEqual(code, 0, (stdout, stderr))
         self.assertEqual(stderr, "")
         # Skipped-only newer runs are read before the first proving run's jobs.
-        self.assert_post_reads(row, repo=repo, newer=newer_skipped)
+        self.assert_post_reads(row, repo=repo, newer=newer_skipped, docs=skipped)
         self.assert_green_evidence(
             stdout, row, release_sha=sha, skipped=skipped, newer_skipped=newer_skipped)
 
@@ -2913,6 +2915,12 @@ class CiPostGateTests(unittest.TestCase):
     def docs_chain(self, count):
         docs = [SHA] + [f"{index:040x}" for index in range(1, count)]
         ancestor = self.built_ancestor()
+        self.docs_runs = [
+            ci_post_run(self.post_run["id"] + index + 1, sha=sha)
+            for index, sha in enumerate(docs)
+        ]
+        for row in self.docs_runs:
+            self.api.ci_post_runs(row["head_sha"], [row], {})
         commits = [*docs, ancestor["head_sha"]]
         self.history = FakeHistory({
             current: (parent, [f"docs/release-note-{index}.md"])
@@ -2921,6 +2929,18 @@ class CiPostGateTests(unittest.TestCase):
         self.history.responses[ancestor["head_sha"]] = (
             OTHER_TREE, ["src/built_ancestor.cpp"])
         return docs, ancestor
+
+    def assert_docs_red(self, row, *, read_shas):
+        stderr = self.assert_refused(
+            f"docs-commit-red {row['id']} sha {row['head_sha']}",
+            row["status"], row["event"])
+        if row["conclusion"] is None:
+            self.assertRegex(stderr, r"\b(?:None|null)\b")
+        else:
+            self.assertIn(row["conclusion"], stderr)
+        self.assertEqual(self.post_calls(), [
+            (ci_post_runs_api(sha), True, None) for sha in read_shas],
+            "stop at the first refused docs run, without any docs or proof jobs")
 
     def test_plain_pass_reads_non_vacuous_ci_post_and_names_its_evidence(self):
         """R1/R2/R5/R6: block a PR-only green line with no ci-post reads."""
@@ -2975,6 +2995,8 @@ class CiPostGateTests(unittest.TestCase):
             OTHER_HEAD: (ancestor["head_sha"], ["docs/assets/release-flow.svg"]),
             ancestor["head_sha"]: (TREE, ["src/built_ancestor.cpp"]),
         })
+        self.api.ci_post_runs(
+            OTHER_HEAD, [ci_post_run(self.post_run["id"] + 1, sha=OTHER_HEAD)], {})
         self.assert_green(ancestor, skipped=[SHA, OTHER_HEAD])
         self.assertEqual(self.history.calls, [SHA, OTHER_HEAD, ancestor["head_sha"]])
 
@@ -2997,7 +3019,7 @@ class CiPostGateTests(unittest.TestCase):
                             failed["event"], failed_job["name"], failed_job["conclusion"])
         self.assertEqual(self.history.calls, [SHA, failed["head_sha"]])
         # The failed build is more specific than the run conclusion; jobs must be read.
-        self.assert_post_reads(failed)
+        self.assert_post_reads(failed, docs=[SHA])
 
     def test_first_non_documentation_commit_without_run_cannot_use_older_green(self):
         """R1/R3/R4/R6: block skipping CI Markdown, CMake or proof inputs to older green."""
@@ -3017,6 +3039,7 @@ class CiPostGateTests(unittest.TestCase):
                 self.assert_refused("no-run", OTHER_HEAD)
                 self.assertEqual(self.history.calls, [SHA, OTHER_HEAD])
                 self.assertEqual(self.post_calls(), [
+                    (ci_post_runs_api(SHA), True, None),
                     (ci_post_runs_api(OTHER_HEAD), True, None)])
 
     def test_rename_old_non_documentation_side_selects_proof_commit_without_run(self):
@@ -3035,6 +3058,7 @@ class CiPostGateTests(unittest.TestCase):
                 self.assert_refused("no-run", OTHER_HEAD)
                 self.assertEqual(self.history.calls, [SHA, OTHER_HEAD])
                 self.assertEqual(self.post_calls(), [
+                    (ci_post_runs_api(SHA), True, None),
                     (ci_post_runs_api(OTHER_HEAD), True, None)])
 
     def test_no_ci_post_run_refuses(self):
@@ -3633,7 +3657,7 @@ class CiPostGateTests(unittest.TestCase):
         self.assert_refused("newer-run-failed", failed["id"], failed["head_sha"],
                             failed["event"], failed_job["name"], failed_job["conclusion"])
         self.assertEqual(self.history.calls, [SHA, failed["head_sha"]])
-        self.assert_post_reads(failed)
+        self.assert_post_reads(failed, docs=[SHA])
 
     def test_only_skipped_runs_and_a_missing_matrix_name_give_no_full_run(self):
         """Rules 4/5: prove all non-proving runs exhaust; block skipped or missing-cell green."""
@@ -3662,7 +3686,7 @@ class CiPostGateTests(unittest.TestCase):
             proof["head_sha"]: (older["head_sha"], ["src/release_proof.cpp"]),
             older["head_sha"]: (TREE, ["src/older_build.cpp"]),
         })
-        self.assert_no_full_run([proof], skipped_jobs[0]["conclusion"])
+        self.assert_no_full_run([proof], skipped_jobs[0]["conclusion"], docs=[SHA])
         self.assertEqual(self.history.calls, [SHA, proof["head_sha"]])
 
     def test_skipped_only_newer_run_allows_older_full_green(self):
@@ -3866,6 +3890,265 @@ class CiPostGateTests(unittest.TestCase):
                         "newer-run-failed", self.post_run["id"], self.post_run["head_sha"],
                         self.post_run["event"], failed_job["name"], failed_job["conclusion"])
                     self.assert_post_reads(self.post_run)
+
+    def test_docs_tip_red_run_blocks_built_green_ancestor(self):
+        """F-1/a: prove docs run failure blocks; block release using a green ancestor."""
+        docs, ancestor = self.docs_chain(1)
+        failed = {**self.docs_runs[0], "conclusion": "failure"}
+        skipped_jobs = [{**job, "conclusion": "skipped"} for job in ci_post_jobs()]
+        self.api.ci_post(failed, skipped_jobs)
+        self.assert_docs_red(failed, read_shas=docs)
+
+    def test_middle_docs_commit_red_run_stops_before_lower_commits(self):
+        """F-1/b: prove tip-first checking stops at middle red; block tip-only approval."""
+        docs, ancestor = self.docs_chain(3)
+        failed = {**self.docs_runs[1], "conclusion": "failure"}
+        self.api.ci_post_runs(failed["head_sha"], [failed], {})
+        self.assert_docs_red(failed, read_shas=docs[:2])
+
+    def test_docs_tip_without_run_cannot_use_built_green_ancestor(self):
+        """F-1/c: prove missing docs evidence blocks; block inheriting ancestor success."""
+        docs, ancestor = self.docs_chain(1)
+        endpoint = ci_post_runs_api(docs[0])
+        self.api.responses[endpoint] = runs_page([])
+        self.assert_refused(f"docs-commit-no-run sha {docs[0]}")
+        self.assertEqual(self.post_calls(), [(endpoint, True, None)])
+
+    def test_docs_tip_only_wrong_branch_or_sha_runs_refuse(self):
+        """F-1/c: prove exact main/sha filtering; block unrelated docs runs as evidence."""
+        for field, value in (("head_branch", "release"), ("head_sha", OTHER_TREE)):
+            with self.subTest(field=field):
+                self.reset_ci_post()
+                docs, ancestor = self.docs_chain(1)
+                unrelated = {**self.docs_runs[0], field: value}
+                self.api.ci_post_runs(docs[0], [unrelated], {})
+                self.assert_refused(f"docs-commit-no-run sha {docs[0]}")
+                self.assertEqual(self.post_calls(), [
+                    (ci_post_runs_api(docs[0]), True, None)])
+
+    def test_docs_tip_newest_unfinished_run_blocks_older_success(self):
+        """F-1/d: prove newest docs status decides; block an older success rescuing it."""
+        for state in ("queued", "in_progress", "waiting"):
+            with self.subTest(state=state):
+                self.reset_ci_post()
+                docs, ancestor = self.docs_chain(1)
+                newest = {**self.docs_runs[0], "status": state, "conclusion": None}
+                older = ci_post_run(
+                    newest["id"] + 100, sha=docs[0], created_at="2026-10-24T12:00:00Z")
+                self.api.ci_post_runs(docs[0], [older, newest], {})
+                self.assert_docs_red(newest, read_shas=docs)
+
+    def test_docs_tip_completed_non_success_conclusions_refuse(self):
+        """F-1/e: prove docs needs success; block neutral, skipped or absent conclusions."""
+        for conclusion in ("cancelled", "timed_out", "neutral", "skipped", None,
+                           "action_required"):
+            with self.subTest(conclusion=conclusion):
+                self.reset_ci_post()
+                docs, ancestor = self.docs_chain(1)
+                newest = {**self.docs_runs[0], "conclusion": conclusion}
+                older = ci_post_run(
+                    newest["id"] + 100, sha=docs[0], created_at="2026-10-24T12:00:00Z")
+                self.api.ci_post_runs(docs[0], [older, newest], {})
+                self.assert_docs_red(newest, read_shas=docs)
+
+    def test_docs_tip_success_with_four_skipped_builds_needs_no_docs_jobs(self):
+        """F-1/f: prove run-level docs success suffices; block reading its skipped jobs."""
+        docs, ancestor = self.docs_chain(1)
+        skipped_jobs = [{**job, "conclusion": "skipped"} for job in ci_post_jobs()]
+        self.api.ci_post(self.docs_runs[0], skipped_jobs)
+        code, stdout, stderr = self.run_gate()
+        self.assertEqual(code, 0, (stdout, stderr))
+        self.assertEqual(stderr, "")
+        self.assert_post_reads(ancestor, docs=docs)
+        self.assert_green_evidence(stdout, ancestor, skipped=docs)
+        self.assertRegex(stdout, rf"\b{len(docs)} docs-only commit(?:\(s\)|s)? skipped\b")
+
+    def test_docs_tip_newer_red_schedule_blocks_older_green_push(self):
+        """F-1/g: prove all events decide docs health; block a push-only green rescue."""
+        docs, ancestor = self.docs_chain(1)
+        push = self.docs_runs[0]
+        scheduled = ci_post_run(
+            push["id"] + 1, sha=docs[0], event="schedule", conclusion="failure",
+            created_at="2026-10-25T12:01:00Z")
+        self.api.ci_post_runs(docs[0], [push, scheduled], {})
+        self.assert_docs_red(scheduled, read_shas=docs)
+
+    def test_docs_tip_unreadable_runs_name_endpoint_and_are_not_retried(self):
+        """F-1/i: prove docs read errors fail closed; block retries or ancestor fallback."""
+        endpoint = ci_post_runs_api(SHA)
+        cases = [
+            (OSError("connection refused"), "failed: connection refused"),
+            (http_response(200, ""), "returned an empty payload"),
+            (http_response(200, "not JSON"), "returned invalid JSON"),
+            (http_response(403, '{"message":"API rate limit exceeded"}'), "rate limited"),
+            (subprocess.CalledProcessError(
+                1, ["gh", "api", endpoint],
+                stderr="gh: API rate limit exceeded (HTTP 403)\n"), "rate limited"),
+            *[(http_response(code, "unavailable"), f"upstream error {code}")
+              for code in (500, 503, 599)],
+        ]
+        for response, diagnostic in cases:
+            with self.subTest(response=repr(response), diagnostic=diagnostic):
+                self.reset_ci_post()
+                docs, ancestor = self.docs_chain(1)
+                self.api.responses[endpoint] = response
+                self.assert_refused("unreadable", endpoint, docs[0], diagnostic)
+                self.assertEqual(self.post_calls(), [(endpoint, True, None)])
+
+    def test_v1_7_0_docs_release_success_cannot_rescue_red_ancestor(self):
+        """F-1/j: prove a healthy skipped-build tip leaves proof strict; block its rescue."""
+        for build_failed in (False, True):
+            with self.subTest(build_failed=build_failed):
+                self.reset_ci_post()
+                docs, ancestor = self.docs_chain(1)
+                skipped_jobs = [{**job, "conclusion": "skipped"} for job in ci_post_jobs()]
+                self.api.ci_post(self.docs_runs[0], skipped_jobs)
+                failed = {**ancestor, "conclusion": "failure", "event": "schedule"}
+                failed_jobs = ci_post_jobs()
+                evidence = [failed["id"], failed["head_sha"], failed["event"],
+                            failed["conclusion"]]
+                if build_failed:
+                    failed_job = failed_jobs[2]
+                    failed_job["conclusion"] = "failure"
+                    evidence.extend([failed_job["name"], failed_job["conclusion"]])
+                self.api.ci_post(failed, failed_jobs)
+                self.assert_refused(
+                    "newer-run-failed" if build_failed else "not-success", *evidence)
+                self.assert_post_reads(failed, docs=docs)
+
+    def test_phase_two_receipt_cannot_rescue_red_docs_tip(self):
+        """F-1/k: prove phase two checks docs health; block receipt-only release approval."""
+        self.enable_watcher({row["context"]: row["state"] for row in successes()})
+        docs, ancestor = self.docs_chain(1)
+        failed = {**self.docs_runs[0], "conclusion": "failure"}
+        self.api.ci_post_runs(docs[0], [failed], {})
+        self.assert_docs_red(failed, read_shas=docs)
+        self.proof.assert_called_once_with(REPO, docs[0])
+        self.assertEqual(self.api.calls, [
+            (MAIN_API, False, ".commit.sha"),
+            (ci_post_runs_api(docs[0]), True, None),
+        ])
+
+    def test_release_bump_path_cannot_rescue_docs_tip_without_run(self):
+        """F-1/k: prove bump authorization still checks docs; block its no-run exemption."""
+        self.api.release_bump()
+        docs, ancestor = self.docs_chain(1)
+        self.api.ci_post_runs(docs[0], [], {})
+        self.assert_refused(f"docs-commit-no-run sha {docs[0]}")
+        self.assertEqual(self.post_calls(), [
+            (ci_post_runs_api(docs[0]), True, None)])
+        self.assertIn((RUNS_API, True, None), self.api.calls)
+        self.assertIn((STATUSES_API, True, None), self.api.calls)
+
+    def test_docs_tip_newest_rerun_decides_in_both_response_orders(self):
+        """F-1/l: prove newest docs rerun decides; block first-row, largest-id or any-green."""
+        for newest_conclusion in ("success", "failure"):
+            for newest_first in (False, True):
+                with self.subTest(conclusion=newest_conclusion, newest_first=newest_first):
+                    self.reset_ci_post()
+                    docs, ancestor = self.docs_chain(1)
+                    newest = {**self.docs_runs[0], "conclusion": newest_conclusion}
+                    older = ci_post_run(
+                        newest["id"] + 100, sha=docs[0],
+                        conclusion="failure" if newest_conclusion == "success" else "success",
+                        created_at="2026-10-24T12:00:00Z")
+                    rows = [newest, older] if newest_first else [older, newest]
+                    self.api.ci_post_runs(docs[0], rows, {})
+                    if newest_conclusion == "success":
+                        self.assert_green(ancestor, skipped=docs)
+                    else:
+                        self.assert_docs_red(newest, read_shas=docs)
+
+    def test_docs_tip_equal_created_at_uses_higher_run_id_in_both_orders(self):
+        """F-1/newest: prove id breaks timestamp ties; block list order or an older veto."""
+        for newest_conclusion in ("success", "failure"):
+            for newest_first in (False, True):
+                with self.subTest(conclusion=newest_conclusion, newest_first=newest_first):
+                    self.reset_ci_post()
+                    docs, ancestor = self.docs_chain(1)
+                    older = {**self.docs_runs[0],
+                             "conclusion": ("failure" if newest_conclusion == "success"
+                                            else "success")}
+                    newest = {**older, "id": older["id"] + 1, "conclusion": newest_conclusion}
+                    rows = [newest, older] if newest_first else [older, newest]
+                    self.api.ci_post_runs(docs[0], rows, {})
+                    if newest_conclusion == "success":
+                        self.assert_green(ancestor, skipped=docs)
+                    else:
+                        self.assert_docs_red(newest, read_shas=docs)
+
+    def test_lowest_docs_chain_commit_with_one_source_path_needs_full_builds(self):
+        """F-1/m: prove one outside path ends docs walking; block skipped builds as proof."""
+        docs, ancestor = self.docs_chain(3)
+        proof = self.docs_runs[-1]
+        parent, paths = self.history.responses[proof["head_sha"]]
+        self.history.responses[proof["head_sha"]] = (
+            parent, [*paths, "src/lowest_docs_boundary.cpp"])
+        skipped_jobs = [{**job, "conclusion": "skipped"} for job in ci_post_jobs()]
+        self.api.ci_post(proof, skipped_jobs)
+        self.assert_no_full_run(
+            [proof], proof["event"], skipped_jobs[0]["conclusion"], docs=docs[:-1])
+        self.assertEqual(self.history.calls, docs)
+
+    def test_docs_tip_paginated_runs_choose_newest_matching_success_without_jobs(self):
+        """F-1/runs: prove docs pages/filtering precede judgment; block first-page red veto."""
+        docs, ancestor = self.docs_chain(1)
+        newest = self.docs_runs[0]
+        older = ci_post_run(
+            newest["id"] + 200, sha=docs[0], conclusion="failure",
+            created_at="2026-10-24T12:00:00Z")
+        unrelated = [
+            {**newest, "id": newest["id"] + index + 1, "head_branch": "release",
+             "created_at": "2026-10-26T12:00:00Z"}
+            for index in range(99)
+        ]
+        rows = [older, *unrelated, newest]
+        endpoint = ci_post_runs_api(docs[0])
+        self.api.responses[endpoint] = (
+            runs_page(rows[:100], total=len(rows), headers={
+                "Link": f'<https://api.github.com/{endpoint}&page=2>; rel="next"'})
+            + runs_page(rows[100:], total=len(rows), headers={
+                "Link": f'<https://api.github.com/{endpoint}&page=1>; rel="prev"'}))
+        self.assert_green(ancestor, skipped=docs)
+
+    def test_docs_tip_incomplete_runs_pages_refuse_before_proof_reads(self):
+        """F-1/runs: prove complete docs pagination is required; block visible-green rescue."""
+        for failure in ("total", "unread-link", "later-page"):
+            with self.subTest(failure=failure):
+                self.reset_ci_post()
+                docs, ancestor = self.docs_chain(1)
+                endpoint = ci_post_runs_api(docs[0])
+                row = self.docs_runs[0]
+                if failure == "total":
+                    response = runs_page([row], total=2)
+                else:
+                    response = runs_page(
+                        [row], total=2 if failure == "later-page" else 1, headers={
+                            "Link": f'<https://api.github.com/{endpoint}&page=2>; rel="next"'})
+                    if failure == "later-page":
+                        response += http_response(503, "unavailable")
+                diagnostic = ("upstream error 503" if failure == "later-page"
+                              else "incomplete workflow_runs pagination")
+                self.api.responses[endpoint] = response
+                self.assert_refused("unreadable", endpoint, docs[0], diagnostic)
+                self.assertEqual(self.post_calls(), [(endpoint, True, None)])
+
+    def test_docs_tip_runs_at_or_beyond_1000_limit_refuse(self):
+        """F-1/runs: prove docs shares the runs cap; block a capped green list as evidence."""
+        for total in (1000, 1001):
+            with self.subTest(total=total):
+                self.reset_ci_post()
+                docs, ancestor = self.docs_chain(1)
+                endpoint = ci_post_runs_api(docs[0])
+                rows = [{**self.docs_runs[0], "id": self.docs_runs[0]["id"] + index}
+                        for index in range(1000)]
+                self.api.responses[endpoint] = "".join(
+                    runs_page(rows[start:start + 100], total=total, headers={
+                        "Link": f'<https://api.github.com/{endpoint}&page={start // 100 + 2}>; '
+                        'rel="next"'} if start < 900 else None)
+                    for start in range(0, len(rows), 100))
+                self.assert_refused("unreadable", endpoint, docs[0], "1000")
+                self.assertEqual(self.post_calls(), [(endpoint, True, None)])
 
 
 if __name__ == "__main__":
