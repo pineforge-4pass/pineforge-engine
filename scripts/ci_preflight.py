@@ -141,7 +141,7 @@ JOB_COMMANDS = {
 HOSTED_JOB_RUNNERS = {
     'ci.yml': dict.fromkeys(('authz', 'changes', 'build-gate'), 'ubuntu-24.04'),
     'ci-post.yml': {**dict.fromkeys(('authz', 'changes', 'build-gate'), 'ubuntu-24.04'),
-                    'build-arm': 'ubuntu-24.04-arm'},
+                    'build-arm': 'pf-linux-arm64-16'},
     **{name: {'authz': 'ubuntu-24.04'} for name in (
         'corpus-parity.yml', 'corpus-parity-subset.yml', 'docs-post.yml', 'native-live.yml')},
     'docs.yml': {'authz': 'ubuntu-24.04', 'build': 'ubuntu-24.04'},
@@ -215,9 +215,22 @@ POST_PLATFORM_STEP = '''      - name: Require the requested platform
             *) echo "::error::runner OS $ACTUAL_OS cannot verify $REQUESTED_PLATFORM"; exit 1 ;;
           esac
 '''
-POST_ARM_PLATFORM_STEP = POST_PLATFORM_STEP.replace(
-    'REQUESTED_PLATFORM: ${{ matrix.platform.os }}', 'REQUESTED_PLATFORM: ubuntu-24.04-arm'
-).replace('ubuntu-24.04:Linux', 'ubuntu-24.04-arm:Linux')
+POST_ARM_PLATFORM_STEP = '''      - name: Require the requested platform
+        if: ${{ needs.authz.result == 'success' }}
+        env:
+          REQUESTED_PLATFORM: ubuntu-24.04-arm
+          ACTUAL_OS: ${{ runner.os }}
+          ACTUAL_ARCH: ${{ runner.arch }}
+        run: |
+          case "$REQUESTED_PLATFORM:$ACTUAL_OS" in
+            ubuntu-24.04-arm:Linux) ;;
+            *) echo "::error::runner OS $ACTUAL_OS cannot verify $REQUESTED_PLATFORM"; exit 1 ;;
+          esac
+          if [[ "$ACTUAL_ARCH" != "ARM64" ]]; then
+            echo "::error::runner architecture $ACTUAL_ARCH must be ARM64"
+            exit 1
+          fi
+'''
 BUILD_CACHE_KEY = 'ccache-main-${{ runner.os }}-${{ runner.arch }}-${{ matrix.build_type }}-'
 BUILD_CACHE_SAVE = ("${{ success() && github.ref == 'refs/heads/main' "
                     "&& steps.ccache-restore.outputs.cache-hit != 'true' }}")

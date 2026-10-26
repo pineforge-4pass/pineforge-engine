@@ -2319,16 +2319,20 @@ class WorkflowPinTests(unittest.TestCase):
                 types = re.search(r"(?m)^        build_type: \[([^\n]+)\]$", matrix[1])
                 self.assertIsNotNone(types, "the build types must be explicit")
                 build_types = [value.strip() for value in types[1].split(",")]
+                name = re.search(r"(?m)^    name: (.+)$", body)
+                self.assertIsNotNone(name, "the displayed job name must be explicit")
                 if axis:
                     platforms = re.findall(r"(?m)^          - os: (\S+)$", matrix[1])
                 else:
-                    runner = re.search(
-                        r"(?m)^    runs-on: (ubuntu-[0-9]{2}\.[0-9]{2}-arm)$", body)
-                    self.assertIsNotNone(runner, "arm64 must use an explicit hosted Linux runner")
-                    platforms = [runner[1]]
+                    runner = re.search(r"(?m)^    runs-on: (\S+)$", body)
+                    self.assertIsNotNone(runner, "arm64 must use an explicit runner label")
+                    self.assertEqual(runner[1], "pf-linux-arm64-16",
+                                     "arm64 must use its exact larger hosted runner")
+                    self.assertEqual(name[1], "build (ubuntu-24.04-arm, ${{ matrix.build_type }})")
+                    platform = re.fullmatch(r"build \(([^,]+), \$\{\{ matrix\.build_type \}\}\)", name[1])
+                    self.assertIsNotNone(platform, "the displayed arm platform must be explicit")
+                    platforms = [platform[1]]
                 self.assertTrue(platforms)
-                name = re.search(r"(?m)^    name: (.+)$", body)
-                self.assertIsNotNone(name, "the displayed job name must be explicit")
                 for platform in platforms:
                     for build_type in build_types:
                         displayed = name[1]
@@ -2337,7 +2341,7 @@ class WorkflowPinTests(unittest.TestCase):
                         displayed = displayed.replace("${{ matrix.build_type }}", build_type)
                         self.assertNotIn("${{", displayed, "every name axis must be expanded")
                         self.assertEqual(displayed, f"build ({platform}, {build_type})",
-                                         "the displayed platform must match its runner")
+                                         "the displayed platform must match its named matrix cell")
                         expanded.append(displayed)
         self.assertCountEqual(ci_release_gate.CI_POST_BUILD_JOBS, expanded)
         self.assertCountEqual([job["name"] for job in ci_post_jobs()], expanded)

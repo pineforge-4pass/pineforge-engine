@@ -360,7 +360,7 @@ class WorkflowEventFleets(unittest.TestCase):
                 if ci_preflight._job_values(body, 'uses'):
                     continue  # The graph check below follows every local call.
                 if (name, job) == ('ci-post.yml', 'build-arm'):
-                    self.assertEqual(ci_preflight._job_values(body, 'runs-on'), ['ubuntu-24.04-arm'])
+                    self.assertEqual(ci_preflight._job_values(body, 'runs-on'), ['pf-linux-arm64-16'])
                     self.assertNotIn('PF_CI_LABELS', body)
                     continue
                 if job in LIGHT_JOB_IDS.get(name, ()):
@@ -501,11 +501,11 @@ class WorkflowEventFleets(unittest.TestCase):
         post = workflows['ci-post.yml']
         self.assertIn('build-arm', _jobs(post))
         self.assertEqual(ci_preflight.runner_findings(workflows), [])
-        changed = in_job(post, 'build-arm', '    runs-on: ubuntu-24.04-arm\n',
+        changed = in_job(post, 'build-arm', '    runs-on: pf-linux-arm64-16\n',
                          f'    runs-on: {POST_RUNNER}\n')
         self.assertNotEqual(changed, post)
         findings = ci_preflight.runner_findings({**workflows, 'ci-post.yml': changed})
-        self.assertIn('ci-post.yml job build-arm must run on ubuntu-24.04-arm (hosted)', findings)
+        self.assertIn('ci-post.yml job build-arm must run on pf-linux-arm64-16 (hosted)', findings)
         for scope, before, after in (
                 (None, '\nenv:\n', f"\nenv:\n  PF_CI_LABELS: '{POST_RUNNER}'\n"),
                 ('build-arm', '    steps:\n',
@@ -515,6 +515,21 @@ class WorkflowEventFleets(unittest.TestCase):
                 self.assertNotEqual(changed, post)
                 self.assertIn('ci-post.yml job build-arm must not set PF_CI_LABELS on a hosted job',
                               ci_preflight.runner_findings({**workflows, 'ci-post.yml': changed}))
+
+    def test_post_larger_arm_runner_is_exclusive_to_the_arm_job(self):
+        workflows = self.workflows()
+        post = workflows['ci-post.yml']
+        runner, = ci_preflight._job_values(_jobs(post)['build-arm'], 'runs-on')
+        accepted = in_job(post, 'build-arm', f'    runs-on: {runner}\n',
+                          '    runs-on: pf-linux-arm64-16\n')
+        self.assertEqual(ci_preflight.runner_findings({**workflows, 'ci-post.yml': accepted}), [])
+        changed = in_job(accepted, 'build', f'    runs-on: {POST_RUNNER}\n',
+                         '    runs-on: pf-linux-arm64-16\n')
+        self.assertNotEqual(changed, accepted)
+        self.assertEqual(ci_preflight._job_values(_jobs(changed)['build'], 'runs-on'),
+                         ['pf-linux-arm64-16'])
+        self.assertIn(f'ci-post.yml job build must run on {POST_RUNNER}',
+                      ci_preflight.runner_findings({**workflows, 'ci-post.yml': changed}))
 
     def test_post_split_preserves_all_four_matrix_check_names(self):
         # Expand the actual matrix and name expressions so a missing cell or
@@ -560,10 +575,10 @@ class WorkflowEventFleets(unittest.TestCase):
 
     def test_post_hosted_exception_refuses_jobs_outside_the_fixed_allowlist(self):
         post = ('on: workflow_dispatch\njobs:\n  build-arm:\n'
-                '    runs-on: ubuntu-24.04-arm\n    steps:\n      - run: "true"\n')
+                '    runs-on: pf-linux-arm64-16\n    steps:\n      - run: "true"\n')
         # This positive control is red under the old blanket post-fleet rule.
         self.assertEqual(ci_preflight.workflow_fleet_findings({'ci-post.yml': post}), [])
-        for runner in ('ubuntu-latest', 'ubuntu-24.04-arm', 'macos-26'):
+        for runner in ('ubuntu-latest', 'ubuntu-24.04-arm', 'macos-26', 'pf-linux-arm64-16'):
             changed = post + ('\n  unexpected:\n    runs-on: ' + runner
                               + '\n    steps:\n      - run: "true"\n')
             self.assertNotEqual(changed, post)
@@ -571,21 +586,21 @@ class WorkflowEventFleets(unittest.TestCase):
                           ci_preflight.runner_findings({'ci-post.yml': changed}))
         workflows = self.workflows()
         original = workflows['ci-post.yml']
-        changed = in_job(original, 'build-arm', '    runs-on: ubuntu-24.04-arm\n',
+        changed = in_job(original, 'build-arm', '    runs-on: pf-linux-arm64-16\n',
                          '    runs-on: ubuntu-latest\n')
         self.assertNotEqual(changed, original)
-        self.assertIn('ci-post.yml job build-arm must run on ubuntu-24.04-arm (hosted)',
+        self.assertIn('ci-post.yml job build-arm must run on pf-linux-arm64-16 (hosted)',
                       ci_preflight.runner_findings({**workflows, 'ci-post.yml': changed}))
 
     def test_post_hosted_exception_never_applies_to_pull_request(self):
         post = ('on: workflow_dispatch\njobs:\n  build-arm:\n'
-                '    runs-on: ubuntu-24.04-arm\n    steps:\n      - run: "true"\n')
+                '    runs-on: pf-linux-arm64-16\n    steps:\n      - run: "true"\n')
         self.assertEqual(ci_preflight.workflow_fleet_findings({'ci-post.yml': post}), [])
         pr = post.replace('on: workflow_dispatch', 'on: pull_request', 1)
         self.assertNotEqual(pr, post)
         finding = f'ci-post.yml job build-arm must run on {PR_RUNNER} for pull_request'
         self.assertIn(finding, ci_preflight.runner_findings({'ci-post.yml': pr}))
-        changed = pr.replace('    runs-on: ubuntu-24.04-arm\n', f'    runs-on: {POST_RUNNER}\n', 1)
+        changed = pr.replace('    runs-on: pf-linux-arm64-16\n', f'    runs-on: {POST_RUNNER}\n', 1)
         self.assertNotEqual(changed, pr)
         self.assertIn(finding, ci_preflight.runner_findings({'ci-post.yml': changed}))
         # Reusable calls must not make the fixed hosted exception PR-reachable.
@@ -615,7 +630,7 @@ class PostLinuxBuildPolicy(unittest.TestCase):
                           'name: build (ubuntu-24.04-arm,', 1)
         arm = arm.replace('        platform:\n          - os: ubuntu-24.04\n', '', 1)
         arm = arm.replace(f'    runs-on: {POST_RUNNER}\n',
-                          '    runs-on: ubuntu-24.04-arm\n', 1)
+                          '    runs-on: pf-linux-arm64-16\n', 1)
         arm = arm.replace("    env:\n      PF_CI_LABELS: "
                           "'[\"self-hosted\",\"pf-ci\",\"pf-ci-x64-16\"]'\n", '', 1)
         arm = arm.replace('REQUESTED_PLATFORM: ${{ matrix.platform.os }}',
@@ -643,13 +658,63 @@ class PostLinuxBuildPolicy(unittest.TestCase):
 
     def test_post_arm_refuses_a_non_arm_runner(self):
         post = self.arm_post()
-        for runner in ('ubuntu-24.04', POST_RUNNER, 'ubuntu-latest', 'ubuntu-22.04-arm'):
+        current_runner, = ci_preflight._job_values(_jobs(post)['build-arm'], 'runs-on')
+        for runner in ('ubuntu-24.04', POST_RUNNER, 'ubuntu-latest', 'ubuntu-22.04-arm',
+                       'pf-linux-x64-16', 'ubuntu-24.04-large', 'macos-26-xlarge'):
             with self.subTest(runner=runner):
-                changed = in_job(post, 'build-arm', '    runs-on: ubuntu-24.04-arm\n',
+                changed = in_job(post, 'build-arm', f'    runs-on: {current_runner}\n',
                                  f'    runs-on: {runner}\n')
                 self.assertNotEqual(changed, post)
-                self.assertIn('ci-post.yml job build-arm must run on ubuntu-24.04-arm (hosted)',
+                self.assertIn('ci-post.yml job build-arm must run on pf-linux-arm64-16 (hosted)',
                               ci_preflight.runner_findings({'ci-post.yml': changed}))
+
+    def test_post_arm_refuses_the_previous_hosted_runner(self):
+        post = self.arm_post()
+        runner, = ci_preflight._job_values(_jobs(post)['build-arm'], 'runs-on')
+        changed = in_job(post, 'build-arm', f'    runs-on: {runner}\n',
+                         '    runs-on: ubuntu-24.04-arm\n')
+        self.assertEqual(ci_preflight._job_values(_jobs(changed)['build-arm'], 'runs-on'),
+                         ['ubuntu-24.04-arm'])
+        self.assertIn('ci-post.yml job build-arm must run on pf-linux-arm64-16 (hosted)',
+                      ci_preflight.runner_findings({'ci-post.yml': changed}))
+
+    def test_post_arm_requires_the_architecture_check(self):
+        post = self.arm_post()
+        platform = ci_preflight._step_named(ci_preflight._steps(_jobs(post)['build-arm']),
+                                           '      - name: Require the requested platform')
+        without_arch = ci_preflight.POST_PLATFORM_STEP.replace(
+            'REQUESTED_PLATFORM: ${{ matrix.platform.os }}', 'REQUESTED_PLATFORM: ubuntu-24.04-arm'
+        ).replace('ubuntu-24.04:Linux', 'ubuntu-24.04-arm:Linux').rstrip('\n')
+        changed = in_job(post, 'build-arm', platform, without_arch)
+        self.assertNotIn('ACTUAL_ARCH', without_arch)
+        findings = ci_preflight.pipeline_workflow_findings(changed, 'ci-post.yml', pr=False)
+        self.assertIn('full build-arm must refuse a runner whose OS differs from its named platform',
+                      findings)
+        self.assertIn('build-arm must keep the same verification steps as build', findings)
+
+    def test_post_arm_refuses_the_wrong_architecture(self):
+        post = self.arm_post()
+        script = job_script(post, 'build-arm', 'Require the requested platform')
+        for architecture in ('ARM64', 'X64', 'ARM', ''):
+            with self.subTest(architecture=architecture):
+                result = subprocess.run(['bash', '-e', '-c', script], capture_output=True, text=True,
+                    env={'PATH': os.environ.get('PATH', '/usr/bin:/bin'),
+                         'REQUESTED_PLATFORM': 'ubuntu-24.04-arm', 'ACTUAL_OS': 'Linux',
+                         'ACTUAL_ARCH': architecture})
+                self.assertEqual(result.returncode == 0, architecture == 'ARM64',
+                                 result.stdout + result.stderr)
+        platform = ci_preflight._step_named(ci_preflight._steps(_jobs(post)['build-arm']),
+                                           '      - name: Require the requested platform')
+        wrong_arch = '\n'.join(line for line in platform.splitlines()
+                               if not line.startswith('          ACTUAL_ARCH:'))
+        wrong_arch = wrong_arch.replace('          ACTUAL_OS: ${{ runner.os }}',
+                                        '          ACTUAL_OS: ${{ runner.os }}\n'
+                                        '          ACTUAL_ARCH: X64', 1)
+        changed = in_job(post, 'build-arm', platform, wrong_arch)
+        self.assertNotEqual(changed, post)
+        self.assertIn('          ACTUAL_ARCH: X64', _jobs(changed)['build-arm'])
+        self.assertIn('full build-arm must refuse a runner whose OS differs from its named platform',
+                      ci_preflight.pipeline_workflow_findings(changed, 'ci-post.yml', pr=False))
 
     def test_post_arm_requires_both_build_types(self):
         post = self.arm_post()
@@ -2637,7 +2702,8 @@ exit "$lookup_exit"
                     with self.subTest(job=job, requested=requested, actual=actual):
                         result = subprocess.run(['bash', '-e', '-c', script], capture_output=True, text=True,
                             env={'PATH': os.environ.get('PATH', '/usr/bin:/bin'),
-                                 'REQUESTED_PLATFORM': requested, 'ACTUAL_OS': actual})
+                                 'REQUESTED_PLATFORM': requested, 'ACTUAL_OS': actual,
+                                 'ACTUAL_ARCH': 'ARM64'})
                         self.assertEqual(result.returncode == 0,
                                          (requested, actual) == (
                                              'ubuntu-24.04-arm' if job == 'build-arm' else 'ubuntu-24.04',
@@ -3247,7 +3313,7 @@ exit "$lookup_exit"
                          {'ci.yml': {'authz': 'ubuntu-24.04', 'changes': 'ubuntu-24.04',
                                      'build-gate': 'ubuntu-24.04'},
                           'ci-post.yml': {'authz': 'ubuntu-24.04', 'changes': 'ubuntu-24.04',
-                                          'build-gate': 'ubuntu-24.04', 'build-arm': 'ubuntu-24.04-arm'},
+                                          'build-gate': 'ubuntu-24.04', 'build-arm': 'pf-linux-arm64-16'},
                           'corpus-parity.yml': {'authz': 'ubuntu-24.04'},
                           'corpus-parity-subset.yml': {'authz': 'ubuntu-24.04'},
                           'docs.yml': {'authz': 'ubuntu-24.04', 'build': 'ubuntu-24.04'},
@@ -4727,7 +4793,7 @@ finally:
                  f'ci-post.yml job sanitizers must run on {POST_RUNNER}'),
                 ('ci-post.yml', ('sanitizers', POST_RUNNER, 'pf-linux-x64-16'),
                  f'ci-post.yml job sanitizers must run on {POST_RUNNER}'),
-                ('ci-post.yml', ('build-arm', '    runs-on: ubuntu-24.04-arm\n',
+                ('ci-post.yml', ('build-arm', '    runs-on: pf-linux-arm64-16\n',
                                 '    runs-on: macos-26-xlarge\n'),
                  'ci-post.yml must not use larger-runner labels; use the GCP fleet or hosted exceptions'),
                 ('ci-post.yml', ('build', '        build_type: [Release, Debug]\n',
