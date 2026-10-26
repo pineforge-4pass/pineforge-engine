@@ -7617,7 +7617,7 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND EXISTS "${PROJECT_SOURCE_DIR}/corpus/validat
 endif()
 # --- CR-150 core-cr150-cr224 end ---
 # --- CR-150 perf-nopartial begin ---
-# CR-364: one lane-owned executable. Reuse CR-257's syscall accounting and
+# One lane-owned executable. Reuse CR-257's syscall accounting and
 # independent reference; keep its extra translation units to resolve the
 # imported (renamed, uncalled) harness entry without replacing any provider.
 if(PINEFORGE_BUILD_SOURCE_LAYER AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
