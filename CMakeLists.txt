@@ -366,6 +366,9 @@ if(PINEFORGE_STRICT_WARNINGS)
     message(STATUS "Strict warnings: -Wconversion -Wsign-conversion")
 endif()
 
+# === Standalone report-sink stage C ====================================
+include(cmake/PineForgeSinkV2.cmake)
+
 # === Tests =============================================================
 if(PINEFORGE_BUILD_TESTS)
     enable_testing()

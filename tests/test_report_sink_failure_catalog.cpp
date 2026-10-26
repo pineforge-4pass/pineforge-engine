@@ -55,6 +55,10 @@ void reason_rows() {
         "sink_io",
         "sink_peer_closed",
         "sink_exhausted",
+        "v2_input_mismatch",
+        "v2_unrepresentable",
+        "v2_resource",
+        "v2_spool_exhausted",
     };
     for (const char* reason : reasons) {
         const RunFailureArgs args{{"reason", reason}};

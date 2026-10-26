@@ -24,6 +24,14 @@ older supported installations retain their applicable upstream terms.
 These libraries are linked only by the opt-in native runner. Preserve their
 upstream notices when distributing binaries that bundle them.
 
+Standalone report-sink v2 tool (not part of either engine archive)
+-------------------------------------------------------------------
+zstd 1.5.7 (https://github.com/facebook/zstd)
+  Copyright (c) Meta Platforms, Inc. and affiliates.
+  SPDX-License-Identifier: BSD-3-Clause
+  The unmodified source closure and full notice are in third_party/zstd/.
+  Preserve third_party/zstd/LICENSE when distributing the transcoder.
+
 Optional benchmark harness dependencies (not part of libpineforge)
 -------------------------------------------------------------------
 The contents under benchmarks/ may install separate Node.js and Python packages

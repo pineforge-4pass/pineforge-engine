@@ -30,6 +30,9 @@ public:
     void on_source_bar(const pineforge::Bar&) override {
         if (bar_index_ == 0) busy_result = strategy_set_report_sink_v1(this, nullptr);
         if (bar_index_ == 2 && mode == "throw") throw std::runtime_error("fixture failed");
+        // A2 failure must follow a real 64 KiB sink flush, not just buffered
+        // rows that abort can discard. Existing early-throw semantics stay put.
+        if (bar_index_ == 5000 && mode == "throw-after-sink") throw std::runtime_error("fixture failed after sink writes");
         if (bar_index_ == 2 && mode == "abort") request_abort();
         if (mode != "empty" && (bar_index_ == 0 || bar_index_ == 2 || bar_index_ == 4))
             strategy_entry(bar_index_ == 2 ? "S\\\"\n" : "L", bar_index_ != 2,

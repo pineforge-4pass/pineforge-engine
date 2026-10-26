@@ -986,7 +986,11 @@
       "scratch_io",
       "sink_io",
       "sink_peer_closed",
-      "sink_exhausted"
+      "sink_exhausted",
+      "v2_input_mismatch",
+      "v2_unrepresentable",
+      "v2_resource",
+      "v2_spool_exhausted"
      ]
     },
     "sink_bytes": {
@@ -1014,7 +1018,7 @@
     }
    },
    "class": "engine_fault",
-   "description": "The engine could not complete the report sink, scratch storage or spill arena. Every reason, including exhaustion of the engine-certified arena bound or planned sink cap and a closed sink peer during finalization, is an engine fault. reason distinguishes arena exhaustion (arena_exhausted), arena I/O (arena_io), invalid arena backing (arena_backing), file-mode scratch I/O (scratch_io), sink open/write I/O (sink_io), a closed sink peer (sink_peer_closed) and a finalizer stream exceeding its planned cap (sink_exhausted). With arena_exhausted, high_water_bytes and arena_bytes are byte counts, claimed_bytes counts chunk bytes claimed when the failing claim was attempted, and store identifies the requesting scratch user. needed_bytes_lower_bound is the requesting report region's additional whole-chunk demand. For store command it is the arena size needed for the required store extent rounded up to chunks, divided by kCommandScratchArenaShare and rounded up to bytes (saturated at INT64_MAX). Crossing a command store's share is arena_exhausted and the hosting layer re-places the run. With sink_exhausted, the finalizer exits 8; sink_bytes is the bytes read (cap_bytes + 1) and cap_bytes is the planned cap U. APP maps that receipt to this failure and refunds the run; COMPUTE re-places it with 2x U. Other reasons carry no sizes or store identity. All arguments are optional for existing raisers; the run has no completed sink or valid trailer.",
+   "description": "The engine could not complete the report sink, scratch storage or spill arena. Every reason, including exhaustion of the engine-certified arena bound or planned sink cap and a closed sink peer during finalization, is an engine fault. reason distinguishes arena exhaustion (arena_exhausted), arena I/O (arena_io), invalid arena backing (arena_backing), file-mode scratch I/O (scratch_io), sink open/write I/O (sink_io), a closed sink peer (sink_peer_closed) and a finalizer stream exceeding its planned cap (sink_exhausted). With arena_exhausted, high_water_bytes and arena_bytes are byte counts, claimed_bytes counts chunk bytes claimed when the failing claim was attempted, and store identifies the requesting scratch user. needed_bytes_lower_bound is the requesting report region's additional whole-chunk demand. For store command it is the arena size needed for the required store extent rounded up to chunks, divided by kCommandScratchArenaShare and rounded up to bytes (saturated at INT64_MAX). Crossing a command store's share is arena_exhausted and the hosting layer re-places the run. With sink_exhausted, the finalizer exits 8; sink_bytes is the bytes read (cap_bytes + 1) and cap_bytes is the planned cap U. APP maps that receipt to this failure and refunds the run; COMPUTE re-places it with 2x U. Other reasons carry no sizes or store identity. All arguments are optional for existing raisers; the run has no completed sink or valid trailer. Stage C uses v2_input_mismatch for verification disagreement or summary_limit, v2_unrepresentable for unsupported/malformed input or missing trailer, v2_resource for input-cap, I/O or internal/resource failure, and v2_spool_exhausted for output byte/per-file or spool file-count exhaustion (exits 9 and 10). Every cap aborts without publishing an object.",
    "english": [
     "report sink open failed",
     "report sink write failed",

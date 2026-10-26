@@ -502,7 +502,9 @@ class CatalogDiff(unittest.TestCase):
                 "kind": "vocab",
                 "optional": True,
                 "values": ["arena_exhausted", "arena_io", "arena_backing", "scratch_io",
-                           "sink_io", "sink_peer_closed", "sink_exhausted"],
+                           "sink_io", "sink_peer_closed", "sink_exhausted",
+                           "v2_input_mismatch", "v2_unrepresentable", "v2_resource",
+                           "v2_spool_exhausted"],
             },
             "sink_bytes": {"kind": "integer", "optional": True},
             "store": {

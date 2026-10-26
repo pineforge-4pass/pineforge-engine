@@ -1,0 +1,22 @@
+[
+  {"tag":"T","column":0,"encoding":1,"flags":0,"hex":"02 01 02 02"},
+  {"tag":"T","column":1,"encoding":6,"flags":0,"hex":"04 05 04 6c 6f 6e 67 73 68 6f 72 74 6c 6f 6e 67"},
+  {"tag":"T","column":2,"encoding":1,"flags":0,"hex":"c0 c9 b2 fe f9 62 80 9f 49 02 02"},
+  {"tag":"T","column":3,"encoding":1,"flags":0,"hex":"80 bf f4 fe f9 62 80 9f 49 02 02"},
+  {"tag":"T","column":4,"encoding":3,"flags":1,"hex":"02 02 80 b5 18 7d 02"},
+  {"tag":"T","column":5,"encoding":3,"flags":0,"hex":"02 d0 c4 18 19 73 42"},
+  {"tag":"T","column":6,"encoding":3,"flags":0,"hex":"00 02 01 00 02"},
+  {"tag":"T","column":7,"encoding":3,"flags":0,"hex":"01 c8 01 05 39 26"},
+  {"tag":"T","column":8,"encoding":3,"flags":0,"hex":"03 e8 07 19 39 1c"},
+  {"tag":"T","column":9,"encoding":2,"flags":0,"hex":"000000 000000 000000 000000 000000 000000 28281e 40c0c0"},
+  {"tag":"T","column":10,"encoding":3,"flags":0,"hex":"01 46 05 0a 17"},
+  {"tag":"T","column":11,"encoding":3,"flags":0,"hex":"01 00 05 02 00"},
+  {"tag":"T","column":12,"encoding":1,"flags":0,"hex":"02 14 02 02"},
+  {"tag":"T","column":13,"encoding":1,"flags":0,"hex":"14 14 02 02"},
+  {"tag":"T","column":14,"encoding":4,"flags":0,"hex":"00 00 01"},
+  {"tag":"T","column":15,"encoding":1,"flags":0,"hex":"02 01 02 02"},
+  {"tag":"T","column":16,"encoding":1,"flags":0,"hex":"02 01 02 01"},
+  {"tag":"T","column":17,"encoding":6,"flags":0,"hex":"01 01 01 4c 53 4c"},
+  {"tag":"T","column":18,"encoding":6,"flags":0,"hex":"00 02 00 74 70"},
+  {"tag":"T","column":19,"encoding":5,"flags":0,"hex":"01 00 00 00 00"}
+]

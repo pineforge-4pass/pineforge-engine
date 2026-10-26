@@ -448,7 +448,7 @@ citations, 264 are in `src/source/` and its headers; 6 sit in kernel files
   `native_selected_strategy.cpp`), both of which include `native_host.hpp`. Each C host includes
   `<pineforge/pineforge.h>`, which includes `native_c_api.h`. Every one links `PineForge::kernel`
   and checks its own numbers before it prints its summary line. `PINEFORGE_BUILD_EXAMPLES`
-  (`CMakeLists.txt:37`, default OFF) builds them (`add_subdirectory` `CMakeLists.txt:398`) and
+  (`CMakeLists.txt:37`, default OFF) builds them (`add_subdirectory` `CMakeLists.txt:401`) and
   registers each as a CTest row that runs through `examples/native/run_example.cmake`, which
   fails on a nonzero exit, a signal **or** a missing summary line — so a row asserts
   both, which a bare `PASS_REGULAR_EXPRESSION` cannot. `scripts/test_example_runner.py` proves

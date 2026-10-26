@@ -26,6 +26,11 @@ MPL-2.0 applies to Eigen source files as used in your build. See [NOTICE](NOTICE
 
 System packages (e.g. Eigen from `apt` or Homebrew) remain under their upstream licenses.
 
+The standalone `pf_sink_transcode_v2` tool vendors zstd 1.5.7 under its
+[BSD-3-Clause license](third_party/zstd/LICENSE). Its codec objects are linked
+into the separate tool library, and its source manifest is checked at
+configure time. The engine archives do not acquire this dependency.
+
 The optional native live runner (`runner/`, `-DPINEFORGE_BUILD_LIVE_RUNNER=ON`) links SQLite (public domain), libcurl (curl license) and OpenSSL (Apache-2.0 for 3.x) into the `pineforge-live` executable only, never into `libpineforge`; see [NOTICE](NOTICE).
 
 ## Optional benchmark harness (`benchmarks/`)

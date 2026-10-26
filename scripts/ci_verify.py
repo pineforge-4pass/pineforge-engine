@@ -936,6 +936,21 @@ PINNED_SLOW_TEST_ROWS = frozenset((
     'test_ledger_history_scale_400k',
     # tests/cr150.d/o1w-tail.cmake:6.
     'test_position_tail_summary_scale',
+    # tests/cr150.d/core-cr150-sinkv2.cmake (stage C report-sink v2, SINK-V2-171).
+    'test_report_sink_reader_vectors',
+    'test_report_sink_v2_index_scale',
+    'test_sink_transcode_v2_rss',
+    'test_sink_v2_vector_generate',
+    'test_sink_v2_measurement_rss',
+    'test_sink_v2_tee_native',
+    'test_sink_v2_tee_rss_1m',
+    'test_sink_v2_tee_defaults',
+    'test_sink_v2_gate_late_modes',
+    'test_sink_v2_gate_late_mode_mismatch',
+    'test_sink_v2_incremental_vectors',
+    'test_sink_v2_incremental_rss_1m',
+    'test_sink_v2_late_vectors',
+    'test_sink_v2_late_merge',
     # tests/cr150.d/p2cx-a5s.cmake:3.
     'test_o1_store',
 ))
