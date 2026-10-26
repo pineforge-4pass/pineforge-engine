@@ -673,7 +673,8 @@ def test_interleaved_trades_array_bytes_match_strict_reader_and_existing_oracle(
         assert [row.as_dict()["n"] for row in strict] == [1, 2]
 
 
-@pytest.mark.parametrize("tag", [None, "E", "K"])
+# E moved to the new equity scan rows.
+@pytest.mark.parametrize("tag", [None, "K"])
 def test_other_filters_keep_strict_reader_format_errors(tmp_path, tag):
     with _sink(tmp_path, _mixed()) as (sink, _, _):
         path = Path(sink.path)
