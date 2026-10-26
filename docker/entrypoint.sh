@@ -260,10 +260,7 @@ extra=()
 [[ "${PINEFORGE_MAGNIFIER_VOLUME_WEIGHTED:-}" =~ ^(1|true|yes|on)$ ]] && extra+=(--magnifier-volume-weighted)
 [[ -n "${PINEFORGE_SYMINFO:-}" ]]        && extra+=(--syminfo "${PINEFORGE_SYMINFO}")
 [[ -n "${PINEFORGE_SYMBOL_FEEDS:-}" ]]   && extra+=(--symbol-feeds "${PINEFORGE_SYMBOL_FEEDS}")
-# Forward set values, including empty; run_json.py owns validation.
-if [[ -n "${PINEFORGE_REPORT_SINK_FD+x}" ]]; then
-    extra+=(--report-sink-fd "${PINEFORGE_REPORT_SINK_FD}")
-fi
+[[ -n "${PINEFORGE_REPORT_SINK_FD+x}" ]] && extra+=(--report-sink-fd "${PINEFORGE_REPORT_SINK_FD}")  # set values incl. empty; run_json.py validates
 if [[ "${PINEFORGE_BENCH:-}" =~ ^(1|true|yes|on)$ ]]; then
     extra+=(--bench --warmup "${PINEFORGE_WARMUP:-3}" --repeats "${PINEFORGE_REPEATS:-20}")
 fi
