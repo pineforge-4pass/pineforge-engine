@@ -89,9 +89,10 @@ bounds outside the representation range.
 A typed `arena_exhausted` is a failure that a hosting layer MAY answer by
 re-placing the run on a larger arena. The current development service does
 not: it makes one attempt on its fixed template arena, never retries, and
-returns the typed failure as `engine_failed`. Arena exhaustion is never
-charged to the user and raises an alert. The child's private allocations are
-capped by its `RLIMIT_AS`; exceeding that cap is the strategy's own typed
+returns the typed failure as `engine_failed`. COMPUTE's policy is that arena
+exhaustion is not charged to the user and raises an alert; the development
+service's behaviour is the one stated above. The child's private allocations
+are capped by its `RLIMIT_AS`; exceeding that cap is the strategy's own typed
 `memory_limit`, charged to the user. The calculator reports facts and
 verdicts; COMPUTE owns the default arena and any re-placement policy.
 
@@ -771,7 +772,7 @@ The eight JSON vectors were calculated by hand:
 | Unicode | D=2,Q=4,L=2,T=2,R=2,E=2; B=48+64+197+125+260+1024+180+1024+15192+32=18146; b=1+14=15; q=1; A=18*1048576=18874368. |
 | Million points | B=24*1048576+1222=25167046; ceil=25 MiB; b=25+14=39; q=36//13=2; A=(39+6)*1048576=47185920 (45 MiB). K=2 MiB leaves Bcert=39 MiB. Half=23592960 rounds down to 22 complete chunks=23068672, below the actual 24 MiB curve=25165824 even before any command reservation. |
 | All terms | B=18146, b=15, q=1; A=18*1048576=18874368 as for Unicode. Primary one-page RSS/two-page AS; extra bar+two column+close buffers consume four pages with RSS copies=2: RSS=36864, AS=24576. Counts T/E/O/V/K/X/H=3/2/2/5/1/3/2; line maxima 717/154/190/263/71/140/25. U=2097152+2151+308+380+1315+71+420+50=2101847. Private RSS/AS are null and its own flag is true; top-level unbounded=false, unboundedTerms=[], reason="". |
-| Unbounded emitting loop | Null arena inputs except E=2; no finite guessed size. unboundedTerms=[arena,ohlcv,finalizerStream]; childPrivate remains informational. Default attempt-0 arena and escalation apply. |
+| Unbounded emitting loop | Null arena inputs except E=2; no finite guessed size. unboundedTerms=[arena,ohlcv,finalizerStream]; childPrivate remains informational. Default attempt-0 arena applies. |
 
 All eight vectors use the three-term verdict; CR150-CX's combined-arena
 arithmetic leaves the current logical B contributions unchanged. The first six have

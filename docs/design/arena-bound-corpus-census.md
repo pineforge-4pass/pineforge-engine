@@ -47,9 +47,10 @@ currently unavailable facts, each known probe has the three sizing names in
 All 312 known probes therefore have no tightening available. COMPUTE uses
 the default attempt-0 arena: a typed `arena_exhausted` is not retried by
 the current development service (one attempt on a fixed template arena; a
-hosting layer MAY re-place the run on a larger arena), and is never charged
-to the user, with an alert. Today no run has the facts needed
-for certified tightening; the bound tightens nothing yet.
+hosting layer MAY re-place the run on a larger arena). COMPUTE's policy is
+that arena exhaustion is not charged to the user and raises an alert; the
+development service's behaviour is the one stated here. Today no run has the
+facts needed for certified tightening; the bound tightens nothing yet.
 
 | Informational term | Own unbounded/unknown flag | Proved unbounded | UNCLASSIFIED |
 | --- | ---: | ---: | ---: |
