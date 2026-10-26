@@ -329,7 +329,7 @@ omitted arrays:
 | `applied_runtime` | object | Present: selected runtime settings, including the same `report_window` object; `outputs: true` when requested. |
 | `elapsed_seconds` | number | Present: elapsed run time. |
 | `summary` | object | Present: all summary scalars listed below. |
-| `diagnostics` | object | Present: existing processed-bar/magnifier diagnostics and `phase_timing`. |
+| `diagnostics` | object | Present: processed-bar/magnifier diagnostics, `run_profile`, `scratch_arena_jailed`, optional arena size counters, and `phase_timing`. |
 | `report_sink` | object | Present: the six-member reference below, replacing `trades` at its position. |
 | `metrics` | object | Present: complete `all`, `longs`, `shorts`, `equity` metric blocks. |
 | `report_window` | object | Present: unchanged selected-window metadata, also in `applied_runtime` and `fingerprint.provenance.runtime`. |
@@ -341,6 +341,30 @@ omitted arrays:
 
 These omissions are a projection rule, not truncation or empty-array
 sentinels. Metrics and logical counts retain their selected-report meaning.
+
+Every successful executed `run_json.py` report includes these additive
+diagnostics, for ordinary and selected runs, with arrays, a named sink, or
+an FD sink's small stdout report:
+
+| JSON pointer | JSON type | Meaning |
+| --- | --- | --- |
+| `/diagnostics/run_profile` | string | Exactly `"unjailed"` or `"jailed"`: the effective profile frozen at startup, after the CLI override of `PINEFORGE_RUN_JSON_PROFILE`. |
+| `/diagnostics/scratch_arena_jailed` | boolean | `true` only when the host used the jailed profile and native arena admission succeeded; `false` for unjailed runs, including runs with an attached arena. |
+
+The fields are appended in that order after the existing arena diagnostics,
+when available, and before later timing fields. Capabilities, validation-only
+documents and failures carry neither field. Arena sizes and
+`PF_SCRATCH_ARENA_JAILED` do not determine this marker.
+It records the checked host profile and a successful native admission;
+it is not independent proof of an OS jail or a fresh backend observation at
+report time. On Linux admission checks the retained sealed-memfd backend;
+off Linux admission accepts any attached arena.
+
+Consumers requiring this host policy must check the exact string `"jailed"`
+and boolean `true`, refusing absent, unknown or wrong-type values.
+The replay converter retains valid supplied fields and reads older reports
+without them, without inferring a profile or successful admission.
+These diagnostics leave sink wire and fingerprint versions unchanged.
 
 `report_sink` is a reference, not an embedded sink header. Its members are
 present in exactly this order, matching `REFERENCE_KEYS` in

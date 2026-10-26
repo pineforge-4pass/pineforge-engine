@@ -246,6 +246,8 @@ def test_selected_sink_matches_frozen_array_bytes(
     assert after[3].installed, "L9S missing: selected mode never installs the sink"
     assert (before[0], before[2], after[0], after[2]) == (0, "", 0, ""), (before, after)
     assert not before[3].installed
+    sinks.assert_run_profile(json.loads(before[1]))
+    sinks.assert_run_profile(json.loads(after[1]))
     assert masked_bytes(after[1]) == masked_bytes(before[1])
     assert after[3].queried == 1 and not after[3].incarnation_reads
     assert after[3].closed == after[3].installed

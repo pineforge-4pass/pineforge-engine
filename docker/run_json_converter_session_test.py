@@ -72,6 +72,8 @@ def _selected_fd_report(tmp_path, session):
         [session.encode("utf-8")] if session else [])
 
     document, expected = json.loads(produced[1]), json.loads(reference[1])
+    fd.full.assert_run_profile(document)
+    fd.full.assert_run_profile(expected)
     # Only phase durations vary between these executions. Preserve the
     # fd producer's entire timing record in the conversion expectation.
     expected["diagnostics"]["phase_timing"] = document["diagnostics"]["phase_timing"]
@@ -94,6 +96,7 @@ def _assert_round_trip(sink, metadata, document, expected, session):
     result = replay.invoke(sink, metadata, launcher=True, extra=("--run-id", fd.RUN_ID))
     assert result.returncode == 0, result.stderr.decode()
     converted = json.loads(result.stdout)
+    fd.full.assert_run_profile(converted)
     for window in _windows(converted):
         assert window["calendar"]["session"] == session
         if session is None:
