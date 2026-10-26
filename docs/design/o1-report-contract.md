@@ -219,8 +219,8 @@ this revision adds no guessed row, bar or distinct-key limit.
 “Same” below means the identical value/bits from the same FULL execution,
 including NaNs, signed zero, undefined-statistic rules, selected presentation
 and terminal rows. Public and internal spellings differ for the security
-evaluation totals; both are listed. On failure the existing partial-report
-rules apply, with `complete=0`; no complete summary is inferred from a prefix.
+evaluation totals; both are listed. After a fault, payload and logical counts are zero, with
+`complete=0` and the original typed failure. Deliberate abort diagnostics keep their existing rules.
 
 The FULL column describes retained sequences. The equity and optional-sequence
 controls above can omit their respective resident histories in FULL: the

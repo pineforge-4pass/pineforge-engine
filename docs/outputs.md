@@ -88,8 +88,8 @@ bar's events throws `std::runtime_error` coded `outputs_rejected` (reason
 `recalculated_after_clear`), the code of the switch's refusals below.
 Thrown inside a callback, the exception fails the run with its text in
 `last_error()` (`strategy_get_last_error`) and its code in
-`strategy_get_last_error_code`. A caller reads nothing after a failed run:
-the record then holds whatever the run wrote before it failed.
+`strategy_get_last_error_code`. After a fault, public counts and copies are
+empty; retained internal records do not become a partial user result.
 
 **The open and close a C++ host states.** The open is
 `NativeDecisionContext::script_bar_open_ms`. The close is the second argument;

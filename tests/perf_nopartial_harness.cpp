@@ -1,4 +1,4 @@
-// CR-364: reuse the existing real disk accounting, independent trading driver,
+// Failed runs publish no partial report: reuse disk accounting, an independent driver,
 // memory reference and semantic report encoder. The renamed entry is never run.
 // All successful syscalls still forward to libc. These delegates inject only
 // at an armed production I/O boundary, and obtain EBADF from the real kernel.

@@ -5,6 +5,12 @@ README's *Releases* section and on the GitHub releases page. From 1.0.0 the
 version number follows semantic versioning over the surfaces the
 [public contract](docs/pages/public-contract.md) lists.
 
+## Unreleased
+
+After a fault, every public result reader returns an empty report and the original typed failure; incomplete sink artifacts are never promoted to user results. Successful report, trade and hash bytes are unchanged.
+
+Deliberate host aborts retain their existing diagnostic reports and selected-window fences.
+
 ## 1.7.0 — 2026-10-25
 
 This release adds report-sink transport, scratch-backed history and bounded

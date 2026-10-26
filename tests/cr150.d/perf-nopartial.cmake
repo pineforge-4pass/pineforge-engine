@@ -1,4 +1,4 @@
-# CR-364 phase 1. RED rows intentionally fail on the base; GUARD rows must pass.
+# Failed runs publish no partial report; successful results keep their bytes.
 if(PINEFORGE_BUILD_SOURCE_LAYER AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     list(APPEND TEST_SOURCES test_perf_nopartial_success)
     pineforge_add_unit_test(test_perf_nopartial_success)

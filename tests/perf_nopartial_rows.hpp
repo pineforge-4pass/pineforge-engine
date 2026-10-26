@@ -1,6 +1,6 @@
 #pragma once
 
-// CR-364, phase 1. These are real-host lab rows, not locally executed tests.
+// Failed runs publish no partial report. These rows use real native hosts.
 namespace perf_nopartial {
 enum class Fault { read, write, sync, teardown, capacity, typed, callback, sink_record, sink_flush,
                    stream_file };

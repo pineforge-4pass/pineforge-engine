@@ -1,5 +1,5 @@
-// A report failure must overwrite an uninitialized C output with owned rows
-// or an empty report, and preserve an execution failure's earlier diagnostic.
+// A fault must overwrite an uninitialized C output with an empty report
+// and preserve an execution failure's earlier diagnostic.
 #include <pineforge/native_c_api.h>
 #include <pineforge/pineforge.h>
 
@@ -122,6 +122,40 @@ void check_arrays_empty(const pf_report_t& report) {
     CHECK(report.equity_curve == nullptr && report.equity_curve_len == 0);
 }
 
+void check_empty_report(const pf_report_t& report) {
+    check_arrays_empty(report);
+    CHECK(report.total_trades == 0 && report.net_profit == 0);
+    CHECK(report.input_bars_processed == 0 && report.script_bars_processed == 0);
+    CHECK(report.magnifier_sub_bars_total == 0 && report.magnifier_sample_ticks_total == 0);
+    CHECK(report.input_tf_seconds == 0 && report.script_tf_seconds == 0);
+    CHECK(report.script_tf_ratio == 0 && report.needs_aggregation == 0
+          && report.bar_magnifier_enabled == 0);
+    const pf_trade_stats_t* blocks[]{&report.metrics.all, &report.metrics.longs,
+                                    &report.metrics.shorts};
+    for (const auto* stats : blocks) {
+        CHECK(stats->num_trades == 0 && stats->num_wins == 0
+              && stats->num_losses == 0 && stats->num_even == 0);
+        CHECK(stats->max_consecutive_wins == 0 && stats->max_consecutive_losses == 0);
+        const double values[]{
+            stats->percent_profitable, stats->net_profit, stats->net_profit_pct,
+            stats->gross_profit, stats->gross_profit_pct, stats->gross_loss, stats->gross_loss_pct,
+            stats->profit_factor, stats->avg_trade, stats->avg_trade_pct, stats->avg_win,
+            stats->avg_win_pct, stats->avg_loss, stats->avg_loss_pct, stats->ratio_avg_win_avg_loss,
+            stats->largest_win, stats->largest_win_pct, stats->largest_loss, stats->largest_loss_pct,
+            stats->commission_paid, stats->expectancy, stats->avg_bars_in_trade,
+            stats->avg_bars_in_wins, stats->avg_bars_in_losses};
+        for (double value : values) CHECK(value == 0 && !std::signbit(value));
+    }
+    const auto& equity = report.metrics.equity;
+    const double values[]{
+        equity.max_equity_drawdown, equity.max_equity_drawdown_pct,
+        equity.max_equity_runup, equity.max_equity_runup_pct,
+        equity.buy_hold_return, equity.buy_hold_return_pct,
+        equity.sharpe_monthly, equity.sortino_monthly, equity.sharpe_bar, equity.sortino_bar,
+        equity.cagr, equity.calmar, equity.recovery_factor, equity.time_in_market_pct, equity.open_pl};
+    for (double value : values) CHECK(value == 0 && !std::signbit(value));
+}
+
 void run_case(bool fail_callback) {
     row = fail_callback ? "failed_execution_report_throw" : "completed_execution_report_throw";
     Host host;
@@ -174,30 +208,9 @@ void run_case(bool fail_callback) {
         CHECK(text(strategy_get_last_error_code(host.handle)) == "engine_unclassified_error");
         CHECK(text(strategy_get_last_error_args(host.handle)) == "{}");
         CHECK(text(strategy_get_last_error(host.handle)) == "native C callback refused in on_bar");
-        // The header promises the already-closed row even if a later report
-        // metric throws. A zero report here would discard that promised row.
-        CHECK(report.total_trades == 1 && report.trades_len == 1);
-        CHECK(report.trades != nullptr);
-        if (report.trades && report.trades_len == 1) {
-            const auto& trade = report.trades[0];
-            CHECK(trade.entry_time == bars[1].timestamp && trade.exit_time == bars[3].timestamp);
-            CHECK(trade.entry_price == 1 && trade.exit_price == 2 && trade.qty == kQty);
-            CHECK(trade.pnl == pnl && trade.open_at_end == 0);
-        }
-        CHECK(report.net_profit == pnl);
-        CHECK(report.equity_curve != nullptr && report.equity_curve_len > 0);
-        CHECK(report.equity_curve_len < kBars);
-        if (report.equity_curve && report.equity_curve_len > 0
-            && report.equity_curve_len < kBars) {
-            CHECK(report.equity_curve[0].time_ms == kTime);
-            CHECK(report.equity_curve[0].equity == kCapital);
-            for (std::int64_t i = 0; i < report.equity_curve_len; ++i) {
-                CHECK(std::isfinite(report.equity_curve[i].equity));
-                CHECK(std::isfinite(report.equity_curve[i].open_profit));
-            }
-        }
-        CHECK(report.metrics.all.num_trades == 1);
-        CHECK(report.metrics.all.net_profit == pnl);
+        // The real round trip above still occurred. Its faulted report must
+        // expose neither that trade nor a curve/metric prefix.
+        check_empty_report(report);
     } else {
         CHECK(rc == PF_NATIVE_E_STATE);
         CHECK(state.lifecycle == PF_NATIVE_LIFECYCLE_COMPLETED);
@@ -207,7 +220,7 @@ void run_case(bool fail_callback) {
         CHECK(report.total_trades == 0 && report.net_profit == 0);
         CHECK(report.input_bars_processed == 0 && report.script_bars_processed == 0);
         CHECK(report.metrics.all.num_trades == 0 && report.metrics.all.net_profit == 0);
-        check_arrays_empty(report);
+        check_empty_report(report);
     }
     // This block was never assigned because buy/hold throws before the
     // equity-statistics value can be returned; its local starts at zero.
@@ -216,6 +229,21 @@ void run_case(bool fail_callback) {
     CHECK(report.metrics.equity.sharpe_bar == 0 && report.metrics.equity.sortino_bar == 0);
     CHECK(report.metrics.equity.sharpe_monthly == 0 && report.metrics.equity.sortino_monthly == 0);
     check_later_sections_empty(report);
+
+    const std::string first_code = text(strategy_get_last_error_code(host.handle));
+    const std::string first_args = text(strategy_get_last_error_args(host.handle));
+    const std::string first_message = text(strategy_get_last_error(host.handle));
+    pf_report_t later;
+    std::memset(&later, 0xA5, sizeof(later));
+    CHECK(strategy_stream_fill_report(host.handle, &later) == 0);
+    check_empty_report(later);
+    CHECK(text(strategy_get_last_error_code(host.handle)) == first_code);
+    CHECK(text(strategy_get_last_error_args(host.handle)) == first_args);
+    CHECK(text(strategy_get_last_error(host.handle)) == first_message);
+    strategy_native_report_free_v1(&later);
+    check_empty_report(later);
+    strategy_native_report_free_v1(&later);
+    check_empty_report(later);
 
     // Always use the public free, including after a failed CHECK. Garbage
     // pointers left by report assembly must be a sanitizer failure.
