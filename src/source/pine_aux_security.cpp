@@ -26,7 +26,7 @@ bool source::PineStrategyHost::set_aux_security_feed(const Bar* bars, int n,
     if (n == 0) {
         aux_security_bars_.clear();
         aux_security_input_tf_.clear();
-        clear_aux_security_chart_ranges();
+        release_aux_security_chart_ranges();
         return true;
     }
     if (n < 0 || bars == nullptr || input_tf.empty()) {
@@ -517,6 +517,12 @@ void source::PineStrategyHost::feed_deferred_aux_security_for_chart_bar(int char
         }
     }
     security_calling_close_ms_ = 0;
+}
+
+void source::PineStrategyHost::release_aux_security_chart_ranges() {
+    clear_aux_security_chart_ranges();
+    std::vector<std::size_t>().swap(aux_security_chart_begin_);
+    std::vector<std::size_t>().swap(aux_security_chart_end_);
 }
 
 #endif  // PINEFORGE_HAS_AUX_SECURITY_FEED_V1

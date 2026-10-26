@@ -49,6 +49,7 @@ struct Brackets { friend auto access(Brackets); };
 struct Coof { friend auto access(Coof); };
 struct Shadows { friend auto access(Shadows); };
 struct Cohorts { friend auto access(Cohorts); };
+struct CohortSlots { friend auto access(CohortSlots); };
 struct Staged { friend auto access(Staged); };
 struct ShortSeed { friend auto access(ShortSeed); };
 template struct Access<Placements, &Adapter::placement_>;
@@ -59,6 +60,7 @@ template struct Access<Brackets, &Adapter::pending_bracket_legs_>;
 template struct Access<Coof, &Adapter::pending_coof_requests_>;
 template struct Access<Shadows, &Adapter::source_shadow_pending_>;
 template struct Access<Cohorts, &Adapter::cohorts_by_id_>;
+template struct Access<CohortSlots, &Adapter::cohort_opened_slot_count_>;
 template struct Access<Staged, &Adapter::staged_>;
 template struct Access<ShortSeed, &Adapter::short_seed_>;
 
@@ -419,14 +421,19 @@ public:
         adapter.fixture_use_memory_auxiliary_tables();
         adapter.set_staged_configuration(actual.*access(Staged{}));
         auto& cohorts = adapter.*access(Cohorts{});
-        auto& held = cohorts.emplace(
-            "held", decltype(cohorts.begin()->second){}).first->second;
+        const auto row = cohorts.emplace(
+            "held", decltype(cohorts.begin()->second){}).first;
+        auto& held = row->second;
         held.origins.push_back(handle(500));
         held.origins.push_back(handle(501));
         held.origins.push_back(handle(500));
         held.opened.push_back(handle(500));
+        ++(adapter.*access(CohortSlots{}));
+        cohorts.refresh_held(row);
         held.live_units_by_origin[500] = 1.25;
+        cohorts.refresh_held(row);
         held.live_units_by_origin[501] = 0.5;
+        cohorts.refresh_held(row);
     }
     Handle live(const PlacementSnapshot& snapshot, bool hole = false) {
         const auto h = handle(next_incarnation_++);

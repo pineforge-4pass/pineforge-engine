@@ -3,10 +3,17 @@
 #include <pineforge/detail/scratch_errors.hpp>
 #include <pineforge/detail/scratch_tables.hpp>
 
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 
 namespace pineforge::detail {
+
+// Physical resident rows <= 2x the rows kept at the last spill pass + 64
+// (+ pinned rows); this is not a bound in terms of currently live rows.
+// Admission still limits non-spillable cohort rows in the bounded scratch
+// profile. This does not bound the number or heap size of pending orders.
+inline constexpr std::size_t kMaxResidentCohorts = 4096;
 
 // P0 is a POLICY admission tier, not a measured bound or a proof that a
 // strategy fits. Counts include historical keys and internally generated
@@ -18,9 +25,9 @@ inline ScratchManifest default_scratch_manifest(std::uint64_t bars) {
                                    "default scratch replacement reserve overflow");
     return {
         0, 0, // K_q/B_q retained in the descriptor; the q store is removed.
-        8192, 3145728,
-        4096, 2101248,
-        4096, 1048576,
+        262144, 25165824,
+        32768, 4227072,
+        65536, 4194304,
         27, 6912,
         2 * bars,
     };
