@@ -283,6 +283,7 @@ set(TEST_SOURCES
     test_integration
     test_request_security
     test_aux_security_feed
+    test_aux_security_range_capacity
     test_native_security_feed
     test_split_feed_partial_bucket
     test_ltf_lookahead_first_bucket
