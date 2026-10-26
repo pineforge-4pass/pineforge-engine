@@ -39649,6 +39649,64 @@
    "ordinal": 1
   },
   {
+   "file": "src/source/pine_value_admission.cpp",
+   "symbol": "<temp:RunFailureArgs>",
+   "scope": [
+    "namespace pineforge :: source #1",
+    "namespace #1",
+    "void admit_text ( const std :: string & text , const char * field ) #1",
+    "if ( text . find ( ) ! = std :: string :: npos || text . find ( ) ! = std :: string :: npos ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "RunFailureArgs",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_value_admission.cpp",
+   "symbol": "<temp:string>",
+   "scope": [
+    "namespace pineforge :: source #1",
+    "namespace #1",
+    "void admit_text ( const std :: string & text , const char * field ) #1",
+    "if ( text . find ( ) ! = std :: string :: npos || text . find ( ) ! = std :: string :: npos ) #1",
+    "throw coded < std :: invalid_argument > ( RunFailureCode :: pine_invalid_argument , RunFailureArgs #1",
+    "<block> #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_value_admission.cpp",
+   "symbol": "<temp:string>",
+   "scope": [
+    "namespace pineforge :: source #1",
+    "namespace #1",
+    "void admit_text ( const std :: string & text , const char * field ) #1",
+    "if ( text . find ( ) ! = std :: string :: npos || text . find ( ) ! = std :: string :: npos ) #1",
+    "throw coded < std :: invalid_argument > ( RunFailureCode :: pine_invalid_argument , RunFailureArgs #1",
+    "<block> #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: string",
+   "ordinal": 2
+  },
+  {
+   "file": "src/source/pine_value_admission.cpp",
+   "symbol": "<temp:string>",
+   "scope": [
+    "namespace pineforge :: source #1",
+    "namespace #1",
+    "void admit_text ( const std :: string & text , const char * field ) #1",
+    "if ( text . find ( ) ! = std :: string :: npos || text . find ( ) ! = std :: string :: npos ) #1",
+    "throw coded < std :: invalid_argument > ( RunFailureCode :: pine_invalid_argument , RunFailureArgs #1",
+    ", #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
    "file": "src/source/pine_value_admission.hpp",
    "symbol": "<temp:RunFailureArgs>",
    "scope": [

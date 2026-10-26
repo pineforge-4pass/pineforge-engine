@@ -74,7 +74,7 @@ scan:
   generated_files:
     - "tutorial/**/generated*.cpp"
 ceilings:
-  unreviewed: 1241
+  unreviewed: 1243
   pending-flat-memory: 188
 owners:
   - {name: "generated-cpp", globs: ["tutorial/**"]}
@@ -1147,6 +1147,8 @@ entries:
   - {id: "U1108", file: "src/source/pine_ta_length.cpp", symbol: "state_", ops: ["assign"], container: "unresolved by the index: state_ = ...", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 195}
   - {id: "U1109", file: "src/source/pine_ta_length.cpp", symbol: "std::to_string", ops: ["temp"], container: "unresolved by the index: std::to_string(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 29}
   - {id: "U1110", file: "src/source/pine_ta_length.cpp", symbol: "tail_", ops: ["assign", "grow"], container: "unresolved by the index: tail_ = ...", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 104}
+  - {id: "U1487", file: "src/source/pine_value_admission.cpp", symbol: "<temp:RunFailureArgs>", ops: ["temp"], container: "unresolved by the index: RunFailureArgs", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "CR150-CX 10-26 (c171b), class: error-path temporary. One RunFailureArgs list built once in admit_text, only when a strategy identifier containing NUL or the unit separator is refused; the run then fails on the throw. Three short fields; nothing is retained, nothing grows with bars, never on a per-bar path. Bound not argued, so OPEN.", line: 54}
+  - {id: "U1488", file: "src/source/pine_value_admission.cpp", symbol: "<temp:string>", ops: ["temp"], container: "unresolved by the index: std::string", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "CR150-CX 10-26 (c171b), class: error-path temporaries. Three std::string temporaries in the same throw (line 54: the 'strategy.' prefix and the part of the field name before the dot; line 55: the part after the dot), sized by the length of the field name (a literal chosen by the caller), built only when an identifier with NUL or the unit separator is refused, freed on the throw; nothing retained, not per-bar. Bound not argued, so OPEN.", line: 54}
   - {id: "U1111", file: "src/source/pine_value_admission.hpp", symbol: "<temp:RunFailureArgs>", ops: ["temp"], container: "unresolved by the index: RunFailureArgs", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 33}
   - {id: "U1112", file: "src/str_utils.cpp", symbol: "<temp:string>", ops: ["temp"], container: "unresolved by the index: std::string", owner: "script-state", phase: "unclassified", state: "unreviewed", line: 279}
   - {id: "U1113", file: "src/str_utils.cpp", symbol: "<temp:vector>", ops: ["temp"], container: "unresolved by the index: std::vector<StrFormatValue>", owner: "script-state", phase: "unclassified", state: "unreviewed", line: 243}
