@@ -576,6 +576,7 @@ class _StubReader:
         self.complete = False
         self.number = sink.opens = sink.opens + 1
         sink.strict_opens += 1
+        sink.strict_opens_by_tag[sink.record_tag] += 1
 
     def __iter__(self):
         return self
@@ -615,14 +616,15 @@ def _old_strict_records(sink, tag):
 
 
 class _StubRawFile:
-    """Use real bytes and a descriptor for trade scanning, never strict rows."""
-    window = run_json._UncachedSinkFile.window
+    """Fresh bytes and descriptor for each trade or equity scan; never a row iterator."""
+    window = 64 * 1024
 
     def __init__(self, sink, path):
         self.file = open(path, "rb", buffering=0)
         self.sink, self.position, self.eof = sink, 0, False
         sink.opens += 1
         sink.raw_opens += 1
+        sink.raw_opens_by_tag[sink.record_tag] += 1
 
     def fileno(self):
         return self.file.fileno()
@@ -652,12 +654,12 @@ class _StubRawFile:
 
 def _sink_line(value):
     # Nonfinite semantic-error fixtures remain deliberately synthetic. They
-    # fail report assembly before B; successful raw scans have finite T rows.
+    # fail report assembly before B/C; successful raw scans have finite rows.
     return json.dumps(value, separators=(",", ":")).encode("ascii") + b"\n"
 
 
 class _StubSink(run_json._ReportSink):
-    """Exercise verify()/records() with counted strict rows and a raw file."""
+    """Exercise verify()/records() with counted strict rows and separate raw trade and equity files."""
     def __init__(self, rows, *, named=False, refuse_pass=None, receipt_fault=None):
         self.rows = tuple(rows)
         self.expected_counts = dict.fromkeys("ETOVKXH", 0)
@@ -691,14 +693,26 @@ class _StubSink(run_json._ReportSink):
         self.opens = self.next_calls = self.exhausted = 0
         self.strict_opens = self.raw_opens = self.raw_exhausted = self.raw_closes = 0
         self.raw_read_calls = self.raw_bytes_read = 0
+        self.strict_opens_by_tag, self.raw_opens_by_tag = Counter(), Counter()
+        self.record_tag = None
         self.refuse_pass, self.receipt_fault = refuse_pass, receipt_fault
 
     def records(self, tag=None):
         self.calls[tag] += 1
         if isinstance(self, _OldSink):
             # Freeze the inherited old read-back too, without editing _OldSink.
-            return _old_strict_records(self, tag)
-        return super().records(tag)
+            records = _old_strict_records(self, tag)
+        else:
+            records = super().records(tag)
+        return self._records_with_tag(records, tag)
+
+    def _records_with_tag(self, records, tag):
+        previous_tag = self.record_tag
+        self.record_tag = tag
+        try:
+            yield from records
+        finally:
+            self.record_tag = previous_tag
 
     def strategy_report_sink_receipt_v1(self, state, pointer):
         receipt = pointer._obj
@@ -740,7 +754,7 @@ ReportSinkReceiptC = run_json.ReportSinkReceiptC
 
 def _open_uncached_sink(path):
     # The old verify body resolves this alias; each exercise installs its own
-    # strict reader factory. Raw trade scanning uses a separate file factory.
+    # factory with separate strict and raw routes.
     return run_json._open_uncached_sink(path)
 
 
@@ -753,14 +767,14 @@ def _stub_sink_open(monkeypatch, sink):
 
         def sink_stat(requested, *args, **kwargs):
             # Keep the reference's stable public path, but use the real file's
-            # inode/size for A's stat and B's unpatched fstat identity check.
+            # inode/size for A's stat and B/C's unpatched fstat identity checks.
             return original_stat(path if requested == sink.path else requested, *args, **kwargs)
 
         def open_sink(requested, *, raw=False):
             assert requested == sink.path
             if raw:
                 if sink.opens + 1 == sink.refuse_pass:
-                    # A same-size change after A: B must read/hash the changed
+                    # A same-size change after A: B/C must read/hash the changed
                     # bytes and raise its own digest refusal, not a stub error.
                     changed = sink.raw_bytes.replace(b'"engine":"stub"', b'"engine":"Stub"', 1)
                     assert changed != sink.raw_bytes and len(changed) == len(sink.raw_bytes)
@@ -800,14 +814,21 @@ def _exercise_sink(monkeypatch, builder, sink_type, rows, *, named=False,
     if isinstance(sink, _OldSink):
         assert sink.raw_opens == 0
     else:
-        # Every invocation of the new trade path must really open/read B.
-        assert sink.raw_opens == sink.calls["T"]
+        # A is strict; every T/E writer must really open its own raw stream.
+        strict_filters = Counter({tag: count for tag, count in sink.calls.items()
+                                  if tag not in ("T", "E")})
+        assert sink.strict_opens == 1 + sum(strict_filters.values())
+        assert sink.strict_opens_by_tag == Counter({None: 1}) + strict_filters
+        assert sink.raw_opens == sink.calls["T"] + sink.calls["E"]
+        for tag in ("T", "E"):
+            assert sink.raw_opens_by_tag[tag] == sink.calls[tag]
         assert sink.raw_exhausted == sink.raw_closes == sink.raw_opens
         assert sink.raw_bytes_read == sink.raw_opens * len(sink.raw_bytes)
         chunks = (len(sink.raw_bytes) + _StubRawFile.window - 1) // _StubRawFile.window
         assert sink.raw_read_calls == sink.raw_opens * (chunks + 1)
         if failure is None:
-            assert sink.raw_opens == int(not named)
+            assert sink.calls["T"] == sink.calls["E"] == int(not named)
+            assert sink.raw_opens == 2 * int(not named)
     return sink, document, destination.bytes(), failure
 
 
@@ -829,17 +850,18 @@ def test_sink_report_pass_count(monkeypatch):
     assert actual.calls["E"] + 1 <= 2
     assert actual.calls["T"] + 1 <= 2
     assert actual.calls[None] == 0
-    # A and C are strict; B hashes the same bytes and parses only T itself.
-    # Total opens stay three, but B makes no strict __next__/tag visits.
+    # A is strict; B/C hash the same bytes and decode only their own T/E rows.
+    # Total opens stay three; neither writer makes strict __next__/tag visits.
     assert actual.opens == 3
-    assert actual.strict_opens == 2
-    assert actual.raw_opens == 1
-    assert actual.next_calls == 2 * (len(rows) + 1)
-    assert actual.visits["E"] == 2 * actual.expected_counts["E"]
-    assert actual.visits["T"] == 2 * actual.expected_counts["T"]
+    assert actual.strict_opens == 1
+    assert actual.raw_opens == 2
+    assert actual.raw_opens_by_tag["T"] == actual.raw_opens_by_tag["E"] == 1
+    assert actual.next_calls == len(rows) + 1
+    assert actual.visits["E"] == actual.expected_counts["E"]
+    assert actual.visits["T"] == actual.expected_counts["T"]
     assert len(actual.raw_bytes) < _StubRawFile.window
-    assert actual.raw_read_calls == 2  # one byte window and the scanner's EOF check
-    assert actual.raw_bytes_read == len(actual.raw_bytes)
+    assert actual.raw_read_calls == 4  # one data window + EOF for each writer
+    assert actual.raw_bytes_read == 2 * len(actual.raw_bytes)
     assert actual.exhausted == actual.opens
     assert old.next_calls >= 8 * (len(rows) + 1)
 
@@ -869,15 +891,16 @@ def test_sink_report_hostile_pass_bounds(monkeypatch, points, named, window_anch
     assert sink.calls["E"] + 1 <= 2
     assert sink.calls["T"] + 1 <= 2
     writers = int(not named and old_failure is None)
-    assert sink.strict_opens == 1 + writers
-    assert sink.raw_opens == writers
+    assert sink.strict_opens == 1
+    assert sink.raw_opens == 2 * writers
+    assert sink.raw_opens_by_tag["T"] == sink.raw_opens_by_tag["E"] == writers
     assert sink.opens == 1 + 2 * writers
     assert sink.opens <= 3
-    assert sink.next_calls == (1 + writers) * (len(rows) + 1)
-    assert sink.next_calls <= 2 * (len(rows) + 1)
-    assert sink.visits["E"] == (1 + writers) * sink.expected_counts["E"]
-    assert sink.visits["T"] == (1 + writers) * sink.expected_counts["T"]
-    assert sink.raw_bytes_read == writers * len(sink.raw_bytes)
+    assert sink.next_calls == len(rows) + 1
+    assert sink.next_calls <= len(rows) + 1
+    assert sink.visits["E"] == sink.expected_counts["E"]
+    assert sink.visits["T"] == sink.expected_counts["T"]
+    assert sink.raw_bytes_read == 2 * writers * len(sink.raw_bytes)
     assert sink.exhausted == sink.opens
 
 
@@ -1110,17 +1133,23 @@ def test_sink_writer_verifies_trailer_before_publication(monkeypatch, writer_pas
         # _prepare_stream_report serializes into a private artifact before
         # publication. This in-memory private artifact exercises the same writer.
         published = []
-        refusal = "digest differs" if writer_pass == 2 else "trailer SHA-256 mismatch"
+        refusal = "the report sink changed after verification: digest differs"
         with pytest.raises(RunFailure, match=refusal) as failure:
             artifact = _Destination()
             run_json._stream_json(document, artifact)
             published.append(artifact.bytes())
+    assert str(failure.value) == refusal
     assert failure.value.code == "engine_invariant"
     assert published == []
     assert sink.opens == writer_pass
-    assert sink.strict_opens == writer_pass - 1
-    assert sink.raw_opens == sink.raw_exhausted == sink.raw_closes == 1
-    assert sink.raw_bytes_read == len(sink.raw_bytes)
+    assert sink.strict_opens == 1
+    assert sink.strict_opens_by_tag == Counter({None: 1})
+    assert sink.raw_opens == sink.raw_exhausted == sink.raw_closes == writer_pass - 1
+    assert sink.raw_opens_by_tag["T"] == 1
+    assert sink.raw_opens_by_tag["E"] == writer_pass - 2
+    assert sink.raw_bytes_read == (writer_pass - 1) * len(sink.raw_bytes)
+    chunks = (len(sink.raw_bytes) + _StubRawFile.window - 1) // _StubRawFile.window
+    assert sink.raw_read_calls == (writer_pass - 1) * (chunks + 1)
 
 
 class _DiscardDestination:
