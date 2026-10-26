@@ -34,6 +34,19 @@ for two additive diagnostics keys, described below.
 - The release harness file `docker/run_json.py` changed (below). The hub image
   for this pair carries the 1.8.0 copy.
 
+### Run profile in the report diagnostics
+
+- **Two additive success keys.** Every executed success report of
+  `run_json.py` now carries `diagnostics.run_profile` (`"jailed"` or
+  `"unjailed"`, the profile fixed when the run started) and
+  `diagnostics.scratch_arena_jailed` (a boolean, true only when the jailed
+  profile ran and the native scratch arena admission succeeded). A host that
+  needs to know the run was jailed can read them instead of inferring it from
+  the arena sizes. The marker records the checked profile and the admission; it
+  is not an independent check of operating-system confinement. Failure,
+  capability and validate-only documents, and every existing key and its order,
+  are unchanged. The replay converter keeps both keys.
+
 ### Faster `run_json` report handling
 
 - **Fewer passes over the report sink (#517).** `docker/run_json.py`
@@ -85,19 +98,6 @@ for two additive diagnostics keys, described below.
   such as `/var/tmp`; `PINEFORGE_COMMAND_SCRATCH_DIR` covers the command stores
   only, not the trade ledger or the report files. This is not a change of
   behaviour in 1.8.0.
-
-### Run profile in the report diagnostics
-
-- **Two additive success keys.** Every executed success report of
-  `run_json.py` now carries `diagnostics.run_profile` (`"jailed"` or
-  `"unjailed"`, the profile fixed when the run started) and
-  `diagnostics.scratch_arena_jailed` (a boolean, true only when the jailed
-  profile ran and the native scratch arena admission succeeded). A host that
-  needs to know the run was jailed can read them instead of inferring it from
-  the arena sizes. The marker records the checked profile and the admission; it
-  is not an independent check of operating-system confinement. Failure,
-  capability and validate-only documents, and every existing key and its order,
-  are unchanged. The replay converter keeps both keys.
 
 ### Storage building block
 
