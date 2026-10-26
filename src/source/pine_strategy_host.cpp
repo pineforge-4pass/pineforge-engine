@@ -2143,7 +2143,7 @@ void source::PineStrategyHost::scheduler_feed_deferred_aux_security(int chart_in
 void source::PineStrategyHost::scheduler_finish_security_sequence() {
     clear_historical_security_lookahead_projections();
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
-    clear_aux_security_chart_ranges();
+    release_aux_security_chart_ranges();
 #endif
 }
 
