@@ -86,26 +86,20 @@ POST_BUILD_STRATEGY = ('    strategy:\n'
                        '        platform:\n'
                        '          - os: ubuntu-24.04\n'
                        '        build_type: [Release, Debug]\n')
-POST_MACOS_BUILD_STRATEGY = ('    strategy:\n'
-                            '      fail-fast: false\n'
-                            '      matrix:\n'
-                            '        os: [macos-26]\n'
-                            '        build_type: [Release, Debug]\n')
+POST_ARM_BUILD_STRATEGY = ('    strategy:\n'
+                          '      fail-fast: false\n'
+                          '      matrix:\n'
+                          '        build_type: [Release, Debug]\n')
 BUILD_NAME = 'build (${{ matrix.platform.os }}, ${{ matrix.build_type }})'
-POST_MACOS_BUILD_NAME = 'build (${{ matrix.os }}, ${{ matrix.build_type }})'
+POST_ARM_BUILD_NAME = 'build (ubuntu-24.04-arm, ${{ matrix.build_type }})'
 RELEASE_STRATEGY = ('    strategy:\n'
                     '      fail-fast: false\n'
                     '      matrix:\n'
                     '        include:\n'
                     '          - triple: linux-x86_64\n'
                     f'            runner: {RELEASE_RUNNER}\n'
-                    '            cmake_extra: ""\n'
                     '          - triple: linux-aarch64\n'
-                    '            runner: ubuntu-22.04-arm\n'
-                    '            cmake_extra: ""\n'
-                    '          - triple: macos-universal\n'
-                    '            runner: macos-latest\n'
-                    '            cmake_extra: "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64"\n')
+                    '            runner: ubuntu-22.04-arm\n')
 NATIVE_STRATEGY = '''    strategy:
       fail-fast: false
       matrix:
@@ -135,7 +129,7 @@ JOB_COMMANDS = {
     'ci.yml': {'authz': None, 'changes': None, 'preflight': None,
                'build': None, 'build-gate': None},
     'ci-post.yml': {'authz': None, 'changes': None, 'preflight': None,
-                    'preflight-slow': None, 'build': VERIFY, 'build-macos': VERIFY,
+                    'preflight-slow': None, 'build': VERIFY, 'build-arm': VERIFY,
                     'sanitizers': VERIFY, 'kernel-only': VERIFY, 'build-gate': None},
     'native-live.yml': {'authz': None, 'native-live': VERIFY, 'native-live-gate': None},
     'corpus-parity.yml': {'authz': None, 'corpus-parity': PARITY, 'corpus-parity-subset': PARITY},
@@ -143,16 +137,17 @@ JOB_COMMANDS = {
     'docs.yml': {'authz': None, 'build': None},
     'docs-post.yml': {'authz': None, 'build': None},
 }
-# Exact light-job pins; macOS and promotion retain their hosted exceptions.
+# Exact light-job pins; arm64 tests and promotion have separate hosted pins.
 HOSTED_JOB_RUNNERS = {
     'ci.yml': dict.fromkeys(('authz', 'changes', 'build-gate'), 'ubuntu-24.04'),
-    'ci-post.yml': {**dict.fromkeys(('authz', 'changes', 'build-gate'), 'ubuntu-24.04'), 'build-macos': 'macos-26'},
+    'ci-post.yml': {**dict.fromkeys(('authz', 'changes', 'build-gate'), 'ubuntu-24.04'),
+                    'build-arm': 'ubuntu-24.04-arm'},
     **{name: {'authz': 'ubuntu-24.04'} for name in (
         'corpus-parity.yml', 'corpus-parity-subset.yml', 'docs-post.yml', 'native-live.yml')},
     'docs.yml': {'authz': 'ubuntu-24.04', 'build': 'ubuntu-24.04'},
     'promote-baseline.yml': {'promote-guard': 'ubuntu-latest'},
 }
-# Release/probe credential pins and ARM/macOS strategies remain isolated.
+# Release/probe credential pins and ARM strategies remain isolated.
 RELEASE_JOB_RUNNERS = {
     'release.yml': {'release': RELEASE_RUNNER, 'prebuilt': HOSTED_MATRIX_RUNNER,
                     'notify-hub': RELEASE_RUNNER},
@@ -161,7 +156,7 @@ RELEASE_JOB_RUNNERS = {
 }
 # Credential-bearing jobs outside the release pins and gated docs build retain
 # standard hosted labels. Existing hosted exceptions above are pinned separately.
-STANDARD_RUNNERS = ('ubuntu-24.04', 'macos-26')
+STANDARD_RUNNERS = ('ubuntu-24.04',)
 # Refuse paid labels and the old matrix key in every workflow, including the
 # release matrix. Scan code so nested/flow mappings count too.
 _LARGER_RUNNER_LABEL = re.compile(
@@ -174,7 +169,7 @@ _RELEASE_POOL_LABEL = re.compile(r'(?<![\w.-])(?:pf-ci-release|pf-gcp-main)(?![\
 # for authz and changes and skips only when changes succeeded and answered
 # docs-only -- exactly the skip the build aggregate accepts -- so a failed or
 # unanswered classification runs it.
-PROOF_JOBS = {'build': 'BUILD_RESULT', 'build-macos': 'MACOS_BUILD_RESULT',
+PROOF_JOBS = {'build': 'BUILD_RESULT', 'build-arm': 'ARM_BUILD_RESULT',
               'sanitizers': 'SANITIZER_RESULT',
               'kernel-only': 'KERNEL_RESULT', 'native-live': 'NATIVE_RESULT',
               'corpus-parity-subset': 'PARITY_RESULT', 'corpus-parity': 'FULL_PARITY_RESULT'}
@@ -216,11 +211,13 @@ POST_PLATFORM_STEP = '''      - name: Require the requested platform
           ACTUAL_OS: ${{ runner.os }}
         run: |
           case "$REQUESTED_PLATFORM:$ACTUAL_OS" in
-            ubuntu-24.04:Linux|macos-26:macOS) ;;
-            *) echo "::error::post fleet runner OS $ACTUAL_OS cannot verify $REQUESTED_PLATFORM"; exit 1 ;;
+            ubuntu-24.04:Linux) ;;
+            *) echo "::error::runner OS $ACTUAL_OS cannot verify $REQUESTED_PLATFORM"; exit 1 ;;
           esac
 '''
-POST_MACOS_PLATFORM_STEP = POST_PLATFORM_STEP.replace('matrix.platform.os', 'matrix.os')
+POST_ARM_PLATFORM_STEP = POST_PLATFORM_STEP.replace(
+    'REQUESTED_PLATFORM: ${{ matrix.platform.os }}', 'REQUESTED_PLATFORM: ubuntu-24.04-arm'
+).replace('ubuntu-24.04:Linux', 'ubuntu-24.04-arm:Linux')
 BUILD_CACHE_KEY = 'ccache-main-${{ runner.os }}-${{ runner.arch }}-${{ matrix.build_type }}-'
 BUILD_CACHE_SAVE = ("${{ success() && github.ref == 'refs/heads/main' "
                     "&& steps.ccache-restore.outputs.cache-hit != 'true' }}")
@@ -605,7 +602,7 @@ PROMOTE_GUARD = r'''  promote-guard:
 PROMOTE_IF = ("${{ needs.promote-guard.result == 'success' && "
               "needs.promote-guard.outputs.ok == 'true' }}")
 GATE_NEEDS = 'needs: [authz, changes, preflight, build, corpus-parity-subset]'
-POST_GATE_NEEDS = ('needs: [authz, changes, preflight, build, build-macos, sanitizers, native-live, kernel-only, '
+POST_GATE_NEEDS = ('needs: [authz, changes, preflight, build, build-arm, sanitizers, native-live, kernel-only, '
                    'corpus-parity-subset, preflight-slow, corpus-parity]')
 # The matrix dependency already aggregates the selected cells. Its result must
 # never be excused for the PR-only exclusion: no job was created for that cell.
@@ -645,7 +642,7 @@ POST_GATE_STEP = r'''      - name: Require every verification lane to have passe
           DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
           PREFLIGHT_RESULT: ${{ needs.preflight.result }}
           BUILD_RESULT: ${{ needs.build.result }}
-          MACOS_BUILD_RESULT: ${{ needs.build-macos.result }}
+          ARM_BUILD_RESULT: ${{ needs.build-arm.result }}
           SANITIZER_RESULT: ${{ needs.sanitizers.result }}
           NATIVE_RESULT: ${{ needs.native-live.result }}
           KERNEL_RESULT: ${{ needs.kernel-only.result }}
@@ -655,7 +652,7 @@ POST_GATE_STEP = r'''      - name: Require every verification lane to have passe
         run: |
           printf '%s\n' "authz: $AUTHZ_RESULT" "changes: $CHANGES_RESULT, docs only: ${DOCS_ONLY:-unanswered}" \
             "preflight: $PREFLIGHT_RESULT" "matrix: $BUILD_RESULT" \
-            "macOS matrix: $MACOS_BUILD_RESULT" \
+            "arm64 matrix: $ARM_BUILD_RESULT" \
             "sanitizers: $SANITIZER_RESULT" "native: $NATIVE_RESULT" \
             "kernel: $KERNEL_RESULT" "corpus parity (subset): $PARITY_RESULT" \
             "preflight (slow): $SLOW_PREFLIGHT_RESULT" "corpus parity (full): $FULL_PARITY_RESULT"
@@ -667,7 +664,7 @@ POST_GATE_STEP = r'''      - name: Require every verification lane to have passe
           passed() { [[ "$1" == "success" || ( "$docs_only" == "true" && "$1" == "skipped" ) ]]; }
           [[ "$AUTHZ_RESULT" == "success" && "$CHANGES_RESULT" == "success" ]] \
             && [[ "$PREFLIGHT_RESULT" == "success" ]] && passed "$BUILD_RESULT" \
-            && passed "$MACOS_BUILD_RESULT" \
+            && passed "$ARM_BUILD_RESULT" \
             && passed "$SANITIZER_RESULT" && passed "$NATIVE_RESULT" \
             && passed "$KERNEL_RESULT" && passed "$PARITY_RESULT" \
             && [[ "$SLOW_PREFLIGHT_RESULT" == "success" ]] && passed "$FULL_PARITY_RESULT"
@@ -1212,7 +1209,7 @@ def workflow_fleet_findings(workflows: dict[str, str]) -> list[str]:
             findings.append(f'{name} must have a reachable event for fleet routing')
         for job, body in _jobs(workflow).items():
             # runner_findings pins this exact job's hosted label and metadata.
-            # A PR caller disables the macOS/promotion exceptions through calls.
+            # A PR caller disables the arm64/promotion exceptions through calls.
             if job in fixed_hosted:
                 continue
             uses = _job_values(body, 'uses')
@@ -1301,8 +1298,8 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                     findings.append(f'{name} job {job} has a runs-on the runner contract '
                                     'cannot read')
                     continue
-            hosted_platform = (len(runs_on) == 1 and (runs_on[0] == 'macos-26' or
-                               bool(re.fullmatch(r'ubuntu-(?:\d{2}\.\d{2}|latest)-arm', runs_on[0]))))
+            hosted_platform = (len(runs_on) == 1 and
+                               bool(re.fullmatch(r'ubuntu-(?:\d{2}\.\d{2}|latest)-arm', runs_on[0])))
             if job in fixed_release:
                 # A quoted JSON scalar does not select a YAML label array.
                 actual = _job_values(body, 'runs-on', unquote=False)
@@ -1372,8 +1369,8 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
             ('ci.yml', 'build', BUILD_STRATEGY, BUILD_NAME, 'only Ubuntu Release on pull_request'),
             ('ci-post.yml', 'build', POST_BUILD_STRATEGY, BUILD_NAME,
              'only Ubuntu Release/Debug cells on full events'),
-            ('ci-post.yml', 'build-macos', POST_MACOS_BUILD_STRATEGY, POST_MACOS_BUILD_NAME,
-             'only hosted macOS Release/Debug cells on full events')):
+            ('ci-post.yml', 'build-arm', POST_ARM_BUILD_STRATEGY, POST_ARM_BUILD_NAME,
+             'only hosted Linux arm64 Release/Debug cells on full events')):
         if name not in workflows:
             continue
         build = _jobs(workflows[name]).get(job, '')
@@ -1385,7 +1382,10 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
         prebuilt = _jobs(workflows['release.yml']).get('prebuilt', '')
         if _job_block(prebuilt, 'strategy') != _code(RELEASE_STRATEGY):
             findings.append('release.yml prebuilt must use exactly the isolated Linux x64 '
-                            'and hosted ARM/macOS matrix')
+                            'and hosted ARM matrix')
+        if any(re.search(r'macos|darwin|CMAKE_OSX_', '\n'.join(_code(step)), re.IGNORECASE)
+               for step in _steps(prebuilt)):
+            findings.append('release.yml prebuilt must not contain macOS build steps')
         # The workflow's only fan-out is notify-hub's dispatch to the release
         # hub; a rehearsal must never reach it (owner, the 1.6.2 dry cut: the
         # hub's receivers are disabled, so a real dispatch would be lost).
@@ -1913,7 +1913,7 @@ def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[st
     findings += [f'{name} is missing job {job}' for job in sorted(expected_jobs - jobs.keys())]
     if set(jobs) - expected_jobs:
         findings.append(f'{name} must keep only its pinned {"PR" if pr else "full-event"} jobs')
-    for job in expected_jobs - {'authz', 'build', 'build-macos', 'build-gate'}:
+    for job in expected_jobs - {'authz', 'build', 'build-arm', 'build-gate'}:
         if _job_values(jobs.get(job, ''), 'name'):
             findings.append(f'{job} must keep its default check name')
     changes = jobs.get('changes', '')
@@ -1989,7 +1989,7 @@ def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[st
         findings.append('build-gate must independently read the event-bound PR diff before accepting skips')
     if not gate_steps or _code(gate_steps[-1]) != _code(GATE_STEP if pr else POST_GATE_STEP):
         findings.append('build-gate must keep the exact result policy: success or a classified docs-only skip')
-    for job in (('build',) if pr else ('build', 'build-macos')):
+    for job in (('build',) if pr else ('build', 'build-arm')):
         build = jobs.get(job, '')
         build_step = _step_named(_steps(build), '      - name: Verify (${{ matrix.build_type }})')
         if (_step_values(build_step, 'run') != [BUILD_VERIFY_RUN if pr else POST_BUILD_VERIFY_RUN]
@@ -2016,9 +2016,18 @@ def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[st
             findings.append(f'{job} must install pytest only for the full profiles')
         if not pr:
             platform = _step_named(_steps(build), '      - name: Require the requested platform')
-            expected_platform = POST_MACOS_PLATFORM_STEP if job == 'build-macos' else POST_PLATFORM_STEP
+            expected_platform = POST_ARM_PLATFORM_STEP if job == 'build-arm' else POST_PLATFORM_STEP
             if _code(platform) != _code(expected_platform):
                 findings.append(f'full {job} must refuse a runner whose OS differs from its named platform')
+    if not pr:
+        expected_steps = [
+            _code(POST_ARM_PLATFORM_STEP)
+            if _step_values(step, 'name') == ['Require the requested platform']
+            else _code(step.replace('ci-diagnostics-${{ matrix.platform.os }}-',
+                                    'ci-diagnostics-ubuntu-24.04-arm-'))
+            for step in _steps(jobs.get('build', ''))]
+        if [_code(step) for step in _steps(jobs.get('build-arm', ''))] != expected_steps:
+            findings.append('build-arm must keep the same verification steps as build')
     for job, body in jobs.items():
         if any(flag in body for flag in ('--exclude-label', '--include-label', '--class-tier')):
             findings.append(f'{job} must keep its full population')
