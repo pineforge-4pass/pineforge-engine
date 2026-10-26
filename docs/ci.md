@@ -10,7 +10,7 @@ Those earlier PR populations and timing estimates are historical; the current
 | `preflight` | Fast documentation, source and policy stages | Workflow lint and workflow contracts only | The same fast stages |
 | `preflight-slow` | In the post workflow | In the post workflow | All remaining preflight stages |
 | `build (ubuntu-24.04, Release)` | Release smoke, CTest label `fast` | Skipped | Complete Release profile |
-| `build (ubuntu-24.04, Debug)` and both macOS `build` cells | In the post workflow | In the post workflow | Complete Debug/Release profiles; the runner OS must match the cell |
+| `build (ubuntu-24.04, Debug)` and both `build (ubuntu-24.04-arm, …)` cells | In the post workflow | In the post workflow | The same Debug/Release profiles on amd64 and arm64; the runner OS must match the cell |
 | `sanitizers`, `kernel-only`, all three `native-live` profiles | In the post workflow | In the post workflow | Complete profiles, without label exclusions |
 | `corpus-parity-subset` | Existing advisory subset | Skipped | Existing advisory subset |
 | `corpus-parity` caller | In the post workflow | In the post workflow | Full parity |
@@ -182,10 +182,10 @@ Release and native profiles also install into a disposable prefix, remove the
 source-only header trees, and compile the native public roots and examples;
 the preflight source guard rejects those includes before a build.
 
-CI retains Ubuntu 24.04 and macOS 26 cell names and selects Python 3.12 explicitly.
-Linux post cells request the post fleet and refuse an OS mismatch; the two
-macOS post cells run on hosted `macos-26` and refuse the same OS mismatch.
-Hosted exceptions include the named light jobs, macOS and the existing release/promotion pins.
+CI uses Ubuntu 24.04 amd64 and arm64 cells and selects Python 3.12 explicitly.
+The amd64 post cells request the post fleet; the two arm64 post cells run on
+hosted `ubuntu-24.04-arm`. Both jobs refuse an OS mismatch.
+Hosted exceptions include the named light jobs, arm64 and the existing release/promotion pins.
 CMake uses the same interpreter as the
 verification driver, so its Python checks do not switch to a different system
 Python. CTest must discover tests; an empty suite is a failure. Which runner
@@ -884,20 +884,20 @@ clocks agree. `scripts/test_runtime_budget.py` (row
 `test_l4g_runtime_budget_mutations`) pins that the verdict follows CPU time
 and still flips when the candidate's CPU cost doubles. Debug builds run the
 candidate once for correctness only (`--candidate-only`). Every Release lane
-gates the ratio, the hosted macOS one included: A40 rev 6 had registered that
-lane `--candidate-only` because its wall clock was no stable timing host (one
-tree read 12.8x and 17.2x an hour apart), and CPU time removed that reason.
+gates the ratio, including hosted arm64. The former macOS lane had registered
+`--candidate-only` because its wall clock was no stable timing host (one tree
+read 12.8x and 17.2x an hour apart), and CPU time removed that reason.
 `PINEFORGE_RUNTIME_BUDGET_CANDIDATE_ONLY=1` in a Release configure's
 environment is the escape back to a correctness sample. `.github/workflows/ci.yml`
 sets it to `0` on every lane, and `RuntimeBudgetLanes` in
 `scripts/test_ci_verify.py` holds that; the one reason to set it is a runner
 whose CPU accounting cannot time the replay, and that reason, with the log
-lines that show it, belongs here. In the `build (macos-26, Release)` job the
+lines that show it, belongs here. In the `build (ubuntu-24.04-arm, Release)` job the
 row prints `runtime budget: candidate=…s ab9714be=…s ratio=…x limit=15.000x
 (process cpu time; wall …; load average …)` and passes at or below 15x. The
-hosted macOS runner's CPU ratio has not been recorded yet (A40 rev 5 recorded
-its wall-clock ratio, 12.84x best-of-five); Apple Silicon reads 9.9-10.7x CPU
-from load average 80 to 532.
+hosted Linux arm64 runner's CPU ratio has not been recorded yet. Historical
+macOS measurements recorded a wall-clock ratio of 12.84x best-of-five;
+Apple Silicon read 9.9-10.7x CPU from load average 80 to 532.
 
 CTest writes `settlement-abi-receipt.json`, `script-abi-receipt.json`, and
 `aggregate-abi-receipt.json` for the real v16/v17 controls, plus
@@ -1389,15 +1389,16 @@ those profiles exclude `slow` on every event, including push and
 `workflow_dispatch`; Release, kernel and native keep every row on non-PR
 events. Preflight still runs every verifier class on push and dispatch.
 
-Decision D3 keeps Ubuntu Release/Debug and macOS Release on pull requests and
-defers macOS Debug to non-PR events. The PR's own
-`build (macos-26, Release)` must be green and still enforces the Release
-registration floor of 895 rows (L6 condition 2). An expression-driven matrix
-`exclude` removes only macOS Debug on `pull_request` and returns an empty list
-on every other event; the routing `include` entries and leg names stay the same.
-`ci.yml` currently starts on push to `main`, `pull_request` and
-`workflow_dispatch`; the matrix also keeps all four legs for `schedule` and
-`release` event contexts, without adding those triggers or changing `release.yml`.
+The retired matrix policy kept Ubuntu Release/Debug and macOS Release on
+pull requests and deferred macOS Debug to non-PR events. Its
+`build (macos-26, Release)` check enforced a Release registration floor of
+895 rows. An expression-driven matrix `exclude` removed only macOS Debug on
+`pull_request` and returned an empty list on every other event; the routing
+`include` entries and leg names stayed the same. That `ci.yml` started on
+push to `main`, `pull_request` and `workflow_dispatch`; its matrix also kept
+all four legs for `schedule` and `release` event contexts, without adding
+those triggers or changing `release.yml`. The table below records that
+historical policy; the current trigger map is at the top of this page.
 
 | Event | `build` matrix | Release jobs | `kernel-only` | Debug jobs, `sanitizers`, native cell | Verifier classes in `preflight` |
 |---|---|---|---|---|---|
@@ -1498,8 +1499,8 @@ result on `main` in an excluded row or class (the Release and kernel-only
 `slow` rows, or a SLOW verifier class) BLOCKS the next release cut, and the
 author or the release owner fixes or reverts the change within the hour; the
 red is not carried into a release.
-D3 also defers the macOS Debug leg: a red result there on the merge commit
-blocks the next release cut under the same fix-or-revert rule.
+The hosted Linux arm64 Debug leg runs after merge; a red result there blocks
+the next release cut under the same fix-or-revert rule.
 
 ### Documentation-only changes
 
@@ -1640,7 +1641,7 @@ does not assume a build optimization without evidence.
 That model predates decision D1. It keeps Release and kernel at their full
 durations on a pull request, which they no longer have there: both now exclude
 the `slow` rows ([PR tier versus MAIN/RELEASE](#pr-tier-versus-mainrelease-what-is-excluded-where)).
-It also predates D3 and includes macOS Debug, which D3 defers from pull requests.
+It also includes the retired macOS Debug leg.
 The pull-request wall time under that policy is to be measured on real PR
 runs, and this page does not claim either target as met.
 
@@ -1655,7 +1656,7 @@ each runner label remains a literal, checked per job:
 | `ci.yml` | Unfiltered `pull_request` | `authz`, `changes`, `build-gate`: hosted `ubuntu-24.04`; preflight/build: `["self-hosted","pf-gcp-pr"]` |
 | `corpus-parity-subset.yml` | Reusable call from PR CI | `authz`: hosted `ubuntu-24.04`; subset: `["self-hosted","pf-gcp-pr"]` |
 | `docs.yml` | `pull_request`, except `.github/**`-only diffs | `authz` and `build`: hosted `ubuntu-24.04` |
-| `ci-post.yml` | Push to `main`, 01:30 UTC schedule, dispatch | `authz`, `changes`, `build-gate`: hosted `ubuntu-24.04`; `build-macos`: hosted `macos-26`; other inline jobs: `["self-hosted","pf-gcp-post"]` |
+| `ci-post.yml` | Push to `main`, 01:30 UTC schedule, dispatch | `authz`, `changes`, `build-gate`: hosted `ubuntu-24.04`; `build-arm`: hosted `ubuntu-24.04-arm`; other inline jobs: `["self-hosted","pf-gcp-post"]` |
 | `corpus-parity.yml` | Schedule, dispatch, post CI callers | `authz`: hosted `ubuntu-24.04`; both parity jobs: `["self-hosted","pf-gcp-post"]` |
 | `native-live.yml` | Dispatch and post CI callers | `authz`: hosted `ubuntu-24.04`; all native profiles and `native-live-gate`: `["self-hosted","pf-gcp-post"]` |
 | `docs-post.yml` | Push to `main`, dispatch | `authz`: hosted `ubuntu-24.04`; credentialed `build`: `["self-hosted","pf-gcp-post"]` |
@@ -1669,13 +1670,15 @@ Fork PRs on hosted runners run without our secrets, so the VM-only fork-refusal 
 Hosted light jobs need no VM tools or mounts; leaving VM queues shortens PR wall time.
 Rollback: relabel the affected job to its prior `pf-gcp-pr` or `pf-gcp-post` array and restore its checker/test pin.
 
-All four full build cells retain their check names. The two Linux cells are
-one job on the post fleet; the two macOS cells are a separate job on the
-hosted `macos-26` image, the fixed macOS exception LANEBOSS canon allows for
-engine and app. Each job refuses an OS mismatch before checkout, and the
-aggregate requires both. `HOSTED_JOB_RUNNERS` in `scripts/ci_preflight.py`
-pins the light jobs and that macOS job's image; only the macOS exception excludes
-workflows reachable from `pull_request`. The PR build remains
+The four full build checks are `build (ubuntu-24.04, Release)`,
+`build (ubuntu-24.04, Debug)`, `build (ubuntu-24.04-arm, Release)` and
+`build (ubuntu-24.04-arm, Debug)`. The two amd64 cells share `build` on the
+post fleet; the two arm64 cells share `build-arm` on hosted `ubuntu-24.04-arm`.
+Both jobs use the same verification steps and profiles. Each refuses an OS
+mismatch before checkout, and the aggregate requires both jobs.
+`HOSTED_JOB_RUNNERS` in `scripts/ci_preflight.py` pins the light jobs and the
+arm64 image; the arm64 exception excludes workflows reachable from
+`pull_request`. The PR build remains
 `build (ubuntu-24.04, Release)` and its aggregate remains `build`.
 
 Release and promotion use the isolated release fleet:
@@ -1683,7 +1686,8 @@ Release and promotion use the isolated release fleet:
 `["self-hosted","pf-gcp-main"]`.
 The release ruleset probe runs secret-free `authz` on hosted `ubuntu-24.04` and
 `probe` on `["self-hosted","pf-gcp-post"]`.
-Release's ARM/macOS artifact cells keep their existing hosted pins, and
+Release's Linux arm64 artifact cell keeps its hosted `ubuntu-22.04-arm` pin;
+1.8.0 has no macOS test or artifact cells, and
 promotion runs on a push to `main` plus manual dispatch from `main`.
 
 Every split workflow retains the canon authz step and its digest. All other
@@ -1795,7 +1799,7 @@ measurements on the new runners.
 | Job | Platform maximum (min; no declared limit) | Measured basis |
 | --- | --- | --- |
 | `preflight` | 360 (was 45) | 7.3-9.8 min on the standard runner through 1a0e7ea1; cancelled at 10.3 min at 0d76a099, 593 s into `verifier-tests`, which takes about 15 min there at that tree (above), so preflight about 16 min. 4.8-8.2 min on the verification hosts. Preflight supplies no stage deadline -- the old 2400 s stage bound is gone (owner rule, 2026-10-12), and owner #827 (2026-10-20) removed every declared job timeout; the native-live aggregate job names a stop at GitHub's own 6 h platform maximum `HANG (re-run)` in its log; the check still fails. |
-| `build` | 360 (was 75) | Pull requests run Ubuntu Release/Debug and macOS Release; every non-PR event retains all four legs. A Release leg runs its full population on push and dispatch events; a pull request's Release legs, a fork's included, exclude the `slow` rows like its Ubuntu Debug leg, and that pull-request time is to be measured on real PR runs. The following measurements predate D3 and include macOS Debug on pull requests. Measured while Release ran its full population on every event, a fork's pull request included: 30.3 min Ubuntu and 32.0 min macOS on the standard runners at 0d76a099, where the full Debug legs took 43.5 and 37.0 min. Pull-request Debug sets 17.2-17.7 min. 11.1-18.4 min on the verification hosts. |
+| `build`, `build-arm` | 360 (was 75) | Pull requests run the Ubuntu amd64 Release smoke; post-merge runs Ubuntu amd64 and arm64 Release/Debug. Both architectures use the same full-profile commands. The following historical measurements include retired macOS Debug cells on pull requests. Measured while Release ran its full population on every event, a fork's pull request included: 30.3 min Ubuntu and 32.0 min macOS on the standard runners at 0d76a099, where the full Debug legs took 43.5 and 37.0 min. Pull-request Debug sets then took 17.2-17.7 min. 11.1-18.4 min on the verification hosts. Hosted Linux arm64 timings await measurement. |
 | `sanitizers` | 360 (was 120; the verifier's CTest stage bound was 60 min full, 30 min PR) | A fork's pull-request set took 35.2 min on the standard runner, whose compile alone took 1277-1335 s (pull-request run 36139176292, and main at 0d76a099). Full runs on the standard runner took 34.0-69.4 min (at 0d76a099 30 min of build and ABI providers, then 39 min of CTest, 1768 s of it the serial `test_ci_verify` row), and 18.2-19.0 min on the verification hosts. |
 | `kernel-only` | 360 (was 60) | Push and dispatch events run the whole kernel set; a pull request's kernel-only leg excludes the `slow` rows, and that pull-request time is to be measured on real PR runs. Measured while every event ran the whole kernel set: 7.9-22.3 min on the standard runner, 6.5-9.8 min on the verification hosts. The hosted kernel-only run of 2026-10-12 lost its job to the old 1800 s stage bound (exit 124). |
 | `native-live (native)` | 360 (was 75; verification step 65) | Main runs 37398893123, 37461653250 and 37478400505 spent 35.40–40.65 min in native, including 25.32–29.53 min in full CTest. Their matching PRs took 2.39–5.67 min in native CTest with the existing slow exclusion. The longest measured `test_ci_verify` row was 1695 s there and 2178 s on a c5.4xlarge Spot host, cut off by a trial deadline. The verifier supplies no default row or stage deadline and the workflow supplies no step deadline: its old 3600 s row bound is what collided with the 2820 s stage deadline on main's push run 38217844683. These are observed GitHub and Spot timings; final-head cold proof remains required. |

@@ -32,8 +32,8 @@ env:
   PINEFORGE_REQUIRE_RELEASE_TAGS: "1"
 
 # The canon authz gate admits our events before any checkout. Light jobs
-# (authz, changes, build-gate) use hosted ubuntu-24.04; Linux proofs use the
-# post-merge fleet, and macOS uses hosted macos-26. Runner pins are checked
+# (authz, changes, build-gate) use hosted ubuntu-24.04; amd64 proofs use the
+# post-merge fleet, and arm64 builds use hosted ubuntu-24.04-arm. Runner pins are checked
 # by scripts/ci_preflight.py.
 # Each verification sizes its parallelism to the runner that took it.
 # scripts/ci_preflight.py pins every runner, time limit and job count; every
@@ -283,8 +283,8 @@ jobs:
           ACTUAL_OS: ${{ runner.os }}
         run: |
           case "$REQUESTED_PLATFORM:$ACTUAL_OS" in
-            ubuntu-24.04:Linux|macos-26:macOS) ;;
-            *) echo "::error::post fleet runner OS $ACTUAL_OS cannot verify $REQUESTED_PLATFORM"; exit 1 ;;
+            ubuntu-24.04:Linux) ;;
+            *) echo "::error::runner OS $ACTUAL_OS cannot verify $REQUESTED_PLATFORM"; exit 1 ;;
           esac
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         if: ${{ needs.authz.result == 'success' }}
@@ -329,10 +329,9 @@ jobs:
       # debug registers a subset of those rows.
       - name: Verify (${{ matrix.build_type }})
         env:
-          # A40 rev 7: the relative runtime witness gates on process CPU time,
-          # so every Release lane runs it, hosted macOS included (A40 rev 6 had
-          # exempted that VM while the gated sample was wall clock). '1' is the
-          # escape -- the row registers --candidate-only, one sample and no
+          # The relative runtime witness gates on process CPU time on every
+          # Release runner. '1' is the escape -- the row registers
+          # --candidate-only, one sample and no
           # ratio -- for a runner whose CPU accounting is unusable; record the
           # measured reason here and in docs/ci.md before setting it.
           PINEFORGE_RUNTIME_BUDGET_CANDIDATE_ONLY: '0'
@@ -359,18 +358,16 @@ jobs:
           path: ${{ env.CCACHE_DIR }}
           key: ${{ steps.ccache-restore.outputs.cache-primary-key }}
 
-  # LB-535 canon keeps macOS as the sole hosted exception in engine/app.
-  # pf-gcp-post is the Linux fleet, so macOS proof needs a separate hosted job.
-  build-macos:
-    name: build (${{ matrix.os }}, ${{ matrix.build_type }})
+  # Hosted arm64 cells run the same verification steps as the amd64 post fleet.
+  build-arm:
+    name: build (ubuntu-24.04-arm, ${{ matrix.build_type }})
     needs: [authz, changes]
     if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-26]
         build_type: [Release, Debug]
-    runs-on: macos-26
+    runs-on: ubuntu-24.04-arm
 
     steps:
       - name: Refuse an unauthorised run before anything else
@@ -381,12 +378,12 @@ jobs:
       - name: Require the requested platform
         if: ${{ needs.authz.result == 'success' }}
         env:
-          REQUESTED_PLATFORM: ${{ matrix.os }}
+          REQUESTED_PLATFORM: ubuntu-24.04-arm
           ACTUAL_OS: ${{ runner.os }}
         run: |
           case "$REQUESTED_PLATFORM:$ACTUAL_OS" in
-            ubuntu-24.04:Linux|macos-26:macOS) ;;
-            *) echo "::error::post fleet runner OS $ACTUAL_OS cannot verify $REQUESTED_PLATFORM"; exit 1 ;;
+            ubuntu-24.04-arm:Linux) ;;
+            *) echo "::error::runner OS $ACTUAL_OS cannot verify $REQUESTED_PLATFORM"; exit 1 ;;
           esac
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         if: ${{ needs.authz.result == 'success' }}
@@ -406,14 +403,17 @@ jobs:
           python3 -m pip install --disable-pip-version-check --no-input \
             --require-hashes --only-binary ':all:' -r scripts/requirements-preflight.txt
 
-      - name: Install dependencies (macOS)
-        if: ${{ needs.authz.result == 'success' && runner.os == 'macOS' }}
+      # tzdata-legacy carries the backward links test_native_calendar resolves
+      # (US/Eastern, Japan, GB); noble split them out of tzdata, and the hosted
+      # image happens to have it, so the row stays green on a bare runner too.
+      - name: Install dependencies (Linux)
+        if: ${{ needs.authz.result == 'success' && runner.os == 'Linux' }}
         run: |
-          export HOMEBREW_NO_AUTO_UPDATE=1
-          brew install eigen ccache
-          echo "CMAKE_PREFIX_PATH=$(brew --prefix eigen)${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}" >> "$GITHUB_ENV"
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libeigen3-dev tzdata-legacy ccache strace
 
-      # Keep the main cache namespace shared with PR restores. Only main saves.
+      # PRs restore the newest compatible main cache via the default-branch
+      # fallback. Only main writes this namespace, never a PR merge ref.
       - name: Restore ccache
         id: ccache-restore
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
@@ -423,12 +423,16 @@ jobs:
           restore-keys: |
             ccache-main-${{ runner.os }}-${{ runner.arch }}-${{ matrix.build_type }}-
 
-      # The release profile fails below its CTest row floor; debug registers
-      # a subset of those rows, just as in the Linux full profiles.
+      # The release profile fails below its CTest row floor (its row of the
+      # PRIVATE_FIXTURE_PROFILE_FLOORS table in scripts/ci_verify.py);
+      # debug registers a subset of those rows.
       - name: Verify (${{ matrix.build_type }})
         env:
-          # A40 rev 7 gates the runtime witness on process CPU time on hosted
-          # macOS too; the candidate-only escape remains disabled.
+          # The relative runtime witness gates on process CPU time on every
+          # Release runner. '1' is the escape -- the row registers
+          # --candidate-only, one sample and no
+          # ratio -- for a runner whose CPU accounting is unusable; record the
+          # measured reason here and in docs/ci.md before setting it.
           PINEFORGE_RUNTIME_BUDGET_CANDIDATE_ONLY: '0'
         if: ${{ needs.authz.result == 'success' }}
         run: |
@@ -442,7 +446,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: ci-diagnostics-${{ matrix.os }}-${{ matrix.build_type }}
+          name: ci-diagnostics-ubuntu-24.04-arm-${{ matrix.build_type }}
           path: ci-diagnostics/
           if-no-files-found: warn
 
@@ -633,7 +637,7 @@ jobs:
   # maintainers, rather than this build context.
   build-gate:
     name: build
-    needs: [authz, changes, preflight, build, build-macos, sanitizers, native-live, kernel-only, corpus-parity-subset, preflight-slow, corpus-parity]
+    needs: [authz, changes, preflight, build, build-arm, sanitizers, native-live, kernel-only, corpus-parity-subset, preflight-slow, corpus-parity]
     if: always()
     # The aggregate runs inline Python and shell on the light pool class.
     runs-on: ubuntu-24.04
@@ -655,7 +659,7 @@ jobs:
           DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
           PREFLIGHT_RESULT: ${{ needs.preflight.result }}
           BUILD_RESULT: ${{ needs.build.result }}
-          MACOS_BUILD_RESULT: ${{ needs.build-macos.result }}
+          ARM_BUILD_RESULT: ${{ needs.build-arm.result }}
           SANITIZER_RESULT: ${{ needs.sanitizers.result }}
           NATIVE_RESULT: ${{ needs.native-live.result }}
           KERNEL_RESULT: ${{ needs.kernel-only.result }}
@@ -665,7 +669,7 @@ jobs:
         run: |
           printf '%s\n' "authz: $AUTHZ_RESULT" "changes: $CHANGES_RESULT, docs only: ${DOCS_ONLY:-unanswered}" \
             "preflight: $PREFLIGHT_RESULT" "matrix: $BUILD_RESULT" \
-            "macOS matrix: $MACOS_BUILD_RESULT" \
+            "arm64 matrix: $ARM_BUILD_RESULT" \
             "sanitizers: $SANITIZER_RESULT" "native: $NATIVE_RESULT" \
             "kernel: $KERNEL_RESULT" "corpus parity (subset): $PARITY_RESULT" \
             "preflight (slow): $SLOW_PREFLIGHT_RESULT" "corpus parity (full): $FULL_PARITY_RESULT"
@@ -677,7 +681,7 @@ jobs:
           passed() { [[ "$1" == "success" || ( "$docs_only" == "true" && "$1" == "skipped" ) ]]; }
           [[ "$AUTHZ_RESULT" == "success" && "$CHANGES_RESULT" == "success" ]] \
             && [[ "$PREFLIGHT_RESULT" == "success" ]] && passed "$BUILD_RESULT" \
-            && passed "$MACOS_BUILD_RESULT" \
+            && passed "$ARM_BUILD_RESULT" \
             && passed "$SANITIZER_RESULT" && passed "$NATIVE_RESULT" \
             && passed "$KERNEL_RESULT" && passed "$PARITY_RESULT" \
             && [[ "$SLOW_PREFLIGHT_RESULT" == "success" ]] && passed "$FULL_PARITY_RESULT"

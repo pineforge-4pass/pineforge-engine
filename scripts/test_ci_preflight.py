@@ -39,13 +39,13 @@ CI_SOURCES = ('.github/workflows/ci.yml', '.github/workflows/native-live.yml',
               '.github/workflows/docs-post.yml')
 BUILD_RUNNER_FINDING = 'ci.yml build must select only Ubuntu Release on pull_request'
 POST_BUILD_RUNNER_FINDING = 'ci-post.yml build must select only Ubuntu Release/Debug cells on full events'
-POST_MACOS_BUILD_RUNNER_FINDING = ('ci-post.yml build-macos must select '
-                                  'only hosted macOS Release/Debug cells on full events')
+POST_ARM_BUILD_RUNNER_FINDING = ('ci-post.yml build-arm must select '
+                                'only hosted Linux arm64 Release/Debug cells on full events')
 RELEASE_MATRIX_FINDING = ('release.yml prebuilt must use exactly the isolated Linux x64 '
-                          'and hosted ARM/macOS matrix')
+                          'and hosted ARM matrix')
 CI_JOB_IDS = ('authz', 'changes', 'preflight', 'build', 'corpus-parity-subset', 'build-gate')
 POST_CI_JOB_IDS = ('authz', 'changes', 'preflight', 'preflight-slow', 'build',
-                  'build-macos', 'sanitizers', 'kernel-only', 'native-live', 'corpus-parity-subset',
+                  'build-arm', 'sanitizers', 'kernel-only', 'native-live', 'corpus-parity-subset',
                   'corpus-parity', 'build-gate')
 FLEET_JOB_IDS = {
     'ci.yml': ('authz', 'changes', 'preflight', 'build', 'build-gate'),
@@ -359,8 +359,8 @@ class WorkflowEventFleets(unittest.TestCase):
             for job, body in _jobs(workflow).items():
                 if ci_preflight._job_values(body, 'uses'):
                     continue  # The graph check below follows every local call.
-                if (name, job) == ('ci-post.yml', 'build-macos'):
-                    self.assertEqual(ci_preflight._job_values(body, 'runs-on'), ['macos-26'])
+                if (name, job) == ('ci-post.yml', 'build-arm'):
+                    self.assertEqual(ci_preflight._job_values(body, 'runs-on'), ['ubuntu-24.04-arm'])
                     self.assertNotIn('PF_CI_LABELS', body)
                     continue
                 if job in LIGHT_JOB_IDS.get(name, ()):
@@ -496,81 +496,74 @@ class WorkflowEventFleets(unittest.TestCase):
                 self.assertIn(f'{callee} must not admit untrusted caller events to isolated release jobs',
                               ci_preflight.runner_findings({**workflows, 'ci.yml': caller}))
 
-    def test_post_macos_build_rejects_the_linux_post_fleet(self):
+    def test_post_arm_build_rejects_the_amd64_post_fleet(self):
         workflows = self.workflows()
         post = workflows['ci-post.yml']
-        self.assertIn('build-macos', _jobs(post))
+        self.assertIn('build-arm', _jobs(post))
         self.assertEqual(ci_preflight.runner_findings(workflows), [])
-        changed = in_job(post, 'build-macos', '    runs-on: macos-26\n',
+        changed = in_job(post, 'build-arm', '    runs-on: ubuntu-24.04-arm\n',
                          f'    runs-on: {POST_RUNNER}\n')
         self.assertNotEqual(changed, post)
         findings = ci_preflight.runner_findings({**workflows, 'ci-post.yml': changed})
-        self.assertIn('ci-post.yml job build-macos must run on macos-26 (hosted)', findings)
+        self.assertIn('ci-post.yml job build-arm must run on ubuntu-24.04-arm (hosted)', findings)
         for scope, before, after in (
                 (None, '\nenv:\n', f"\nenv:\n  PF_CI_LABELS: '{POST_RUNNER}'\n"),
-                ('build-macos', '    steps:\n',
+                ('build-arm', '    steps:\n',
                  f"    env:\n      PF_CI_LABELS: '{POST_RUNNER}'\n    steps:\n")):
             with self.subTest(metadata_scope=scope):
                 changed = in_job(post, scope, before, after)
                 self.assertNotEqual(changed, post)
-                self.assertIn('ci-post.yml job build-macos must not set PF_CI_LABELS on a hosted job',
+                self.assertIn('ci-post.yml job build-arm must not set PF_CI_LABELS on a hosted job',
                               ci_preflight.runner_findings({**workflows, 'ci-post.yml': changed}))
 
     def test_post_split_preserves_all_four_matrix_check_names(self):
-        # Render both matrix shapes rather than comparing the name templates:
-        # the old platform axis and the hosted job's os axis must agree.
+        # Expand the actual matrix and name expressions so a missing cell or
+        # a changed display name cannot silently change the required checks.
         def names(body):
+            template, = ci_preflight._job_values(body, 'name')
             platforms = re.findall(r'^          - os: (\S+)$', body, re.MULTILINE)
             if not platforms:
-                axis = re.search(r'^        os: \[([^\]]+)\]$', body, re.MULTILINE)
-                self.assertIsNotNone(axis)
-                platforms = [value.strip() for value in axis.group(1).split(',')]
+                platform = re.search(r'\(([^,]+),', template)
+                self.assertIsNotNone(platform)
+                platforms = [platform.group(1)]
             types = re.search(r'^        build_type: \[([^\]]+)\]$', body, re.MULTILINE)
             self.assertIsNotNone(types)
-            template, = ci_preflight._job_values(body, 'name')
             rendered = []
             for platform in platforms:
                 for build_type in (value.strip() for value in types.group(1).split(',')):
-                    values = {'platform.os': platform, 'os': platform, 'build_type': build_type}
-                    name = re.sub(r'\$\{\{\s*matrix\.(platform\.os|os|build_type)\s*\}\}',
+                    values = {'platform.os': platform, 'build_type': build_type}
+                    name = re.sub(r'\$\{\{\s*matrix\.(platform\.os|build_type)\s*\}\}',
                                   lambda match: values[match.group(1)], template)
                     self.assertNotIn('${{', name)
                     rendered.append(name)
             return rendered
 
-        legacy = '''    name: build (${{ matrix.platform.os }}, ${{ matrix.build_type }})
-    strategy:
-      fail-fast: false
-      matrix:
-        platform:
-          - os: ubuntu-24.04
-          - os: macos-26
-        build_type: [Release, Debug]
-'''
         workflows = self.workflows()
         post = workflows['ci-post.yml']
         jobs = _jobs(post)
-        self.assertIn('build-macos', jobs)
-        expected = names(legacy)
+        self.assertIn('build-arm', jobs)
+        self.assertNotIn('build-macos', jobs)
+        expected = ['build (ubuntu-24.04, Release)', 'build (ubuntu-24.04, Debug)',
+                    'build (ubuntu-24.04-arm, Release)', 'build (ubuntu-24.04-arm, Debug)']
         self.assertEqual(len(expected), 4)
-        self.assertCountEqual(names(jobs['build']) + names(jobs['build-macos']), expected)
+        self.assertCountEqual(names(jobs['build']) + names(jobs['build-arm']), expected)
         self.assertEqual(ci_preflight.runner_findings(workflows), [])
-        changed = in_job(post, 'build-macos', '    name: build (',
-                         '    name: build macOS (')
+        changed = in_job(post, 'build-arm', '    name: build (',
+                         '    name: build arm64 (')
         self.assertNotEqual(changed, post)
         mutated = _jobs(changed)
-        self.assertNotEqual(sorted(names(mutated['build']) + names(mutated['build-macos'])),
+        self.assertNotEqual(sorted(names(mutated['build']) + names(mutated['build-arm'])),
                             sorted(expected))
-        self.assertIn('ci-post.yml build-macos legs must keep their names: '
-                      'build (${{ matrix.os }}, ${{ matrix.build_type }})',
+        self.assertIn('ci-post.yml build-arm legs must keep their names: '
+                      'build (ubuntu-24.04-arm, ${{ matrix.build_type }})',
                       ci_preflight.runner_findings({**workflows, 'ci-post.yml': changed}))
 
     def test_post_hosted_exception_refuses_jobs_outside_the_fixed_allowlist(self):
-        post = ('on: workflow_dispatch\njobs:\n  build-macos:\n'
-                '    runs-on: macos-26\n    steps:\n      - run: "true"\n')
+        post = ('on: workflow_dispatch\njobs:\n  build-arm:\n'
+                '    runs-on: ubuntu-24.04-arm\n    steps:\n      - run: "true"\n')
         # This positive control is red under the old blanket post-fleet rule.
         self.assertEqual(ci_preflight.workflow_fleet_findings({'ci-post.yml': post}), [])
-        for runner in ('ubuntu-latest', 'macos-26'):
+        for runner in ('ubuntu-latest', 'ubuntu-24.04-arm', 'macos-26'):
             changed = post + ('\n  unexpected:\n    runs-on: ' + runner
                               + '\n    steps:\n      - run: "true"\n')
             self.assertNotEqual(changed, post)
@@ -578,21 +571,21 @@ class WorkflowEventFleets(unittest.TestCase):
                           ci_preflight.runner_findings({'ci-post.yml': changed}))
         workflows = self.workflows()
         original = workflows['ci-post.yml']
-        changed = in_job(original, 'build-macos', '    runs-on: macos-26\n',
+        changed = in_job(original, 'build-arm', '    runs-on: ubuntu-24.04-arm\n',
                          '    runs-on: ubuntu-latest\n')
         self.assertNotEqual(changed, original)
-        self.assertIn('ci-post.yml job build-macos must run on macos-26 (hosted)',
+        self.assertIn('ci-post.yml job build-arm must run on ubuntu-24.04-arm (hosted)',
                       ci_preflight.runner_findings({**workflows, 'ci-post.yml': changed}))
 
     def test_post_hosted_exception_never_applies_to_pull_request(self):
-        post = ('on: workflow_dispatch\njobs:\n  build-macos:\n'
-                '    runs-on: macos-26\n    steps:\n      - run: "true"\n')
+        post = ('on: workflow_dispatch\njobs:\n  build-arm:\n'
+                '    runs-on: ubuntu-24.04-arm\n    steps:\n      - run: "true"\n')
         self.assertEqual(ci_preflight.workflow_fleet_findings({'ci-post.yml': post}), [])
         pr = post.replace('on: workflow_dispatch', 'on: pull_request', 1)
         self.assertNotEqual(pr, post)
-        finding = f'ci-post.yml job build-macos must run on {PR_RUNNER} for pull_request'
+        finding = f'ci-post.yml job build-arm must run on {PR_RUNNER} for pull_request'
         self.assertIn(finding, ci_preflight.runner_findings({'ci-post.yml': pr}))
-        changed = pr.replace('    runs-on: macos-26\n', f'    runs-on: {POST_RUNNER}\n', 1)
+        changed = pr.replace('    runs-on: ubuntu-24.04-arm\n', f'    runs-on: {POST_RUNNER}\n', 1)
         self.assertNotEqual(changed, pr)
         self.assertIn(finding, ci_preflight.runner_findings({'ci-post.yml': changed}))
         # Reusable calls must not make the fixed hosted exception PR-reachable.
@@ -602,6 +595,99 @@ class WorkflowEventFleets(unittest.TestCase):
         self.assertNotEqual(callee, changed)
         self.assertIn(finding, ci_preflight.runner_findings(
             {'pr.yml': caller, 'ci-post.yml': callee}))
+
+
+class PostLinuxBuildPolicy(unittest.TestCase):
+    """Policy regressions whose inputs can also be constructed from main."""
+
+    def post(self):
+        return (ROOT / '.github/workflows/ci-post.yml').read_text()
+
+    def arm_post(self):
+        post = self.post()
+        if 'build-arm' in _jobs(post):
+            return post
+        # Build a real arm job from the amd64 steps when testing the old tree.
+        # This keeps the negative rows red at their policy assertion, rather
+        # than failing to find a job that main did not yet have.
+        arm = _jobs(post)['build']
+        arm = arm.replace('name: build (${{ matrix.platform.os }},',
+                          'name: build (ubuntu-24.04-arm,', 1)
+        arm = arm.replace('        platform:\n          - os: ubuntu-24.04\n', '', 1)
+        arm = arm.replace(f'    runs-on: {POST_RUNNER}\n',
+                          '    runs-on: ubuntu-24.04-arm\n', 1)
+        arm = arm.replace("    env:\n      PF_CI_LABELS: "
+                          "'[\"self-hosted\",\"pf-ci\",\"pf-ci-x64-16\"]'\n", '', 1)
+        arm = arm.replace('REQUESTED_PLATFORM: ${{ matrix.platform.os }}',
+                          'REQUESTED_PLATFORM: ubuntu-24.04-arm', 1)
+        arm = arm.replace('ubuntu-24.04:Linux|macos-26:macOS',
+                          'ubuntu-24.04-arm:Linux', 1)
+        arm = arm.replace('post fleet runner OS', 'runner OS', 1)
+        arm = arm.replace('ci-diagnostics-${{ matrix.platform.os }}-',
+                          'ci-diagnostics-ubuntu-24.04-arm-', 1)
+        return post + '\n  build-arm:\n' + arm + '\n'
+
+    def test_post_refuses_a_retired_macos_job(self):
+        post = self.post()
+        if 'build-macos' not in _jobs(post):
+            post += ('\n  build-macos:\n    runs-on: macos-26\n'
+                     '    steps:\n      - run: cmake --version\n')
+        self.assertIn('ci-post.yml must keep only its pinned full-event jobs',
+                      ci_preflight.pipeline_workflow_findings(post, 'ci-post.yml', pr=False))
+
+    def test_post_gate_requires_the_arm_job(self):
+        post = self.post().replace(', build-arm,', ',', 1)
+        self.assertNotIn('build-arm', ci_preflight._needs(_jobs(post)['build-gate']))
+        self.assertIn('build-gate must aggregate authz, every proof job, preflight and changes',
+                      ci_preflight.pipeline_workflow_findings(post, 'ci-post.yml', pr=False))
+
+    def test_post_arm_refuses_a_non_arm_runner(self):
+        post = self.arm_post()
+        for runner in ('ubuntu-24.04', POST_RUNNER, 'ubuntu-latest', 'ubuntu-22.04-arm'):
+            with self.subTest(runner=runner):
+                changed = in_job(post, 'build-arm', '    runs-on: ubuntu-24.04-arm\n',
+                                 f'    runs-on: {runner}\n')
+                self.assertNotEqual(changed, post)
+                self.assertIn('ci-post.yml job build-arm must run on ubuntu-24.04-arm (hosted)',
+                              ci_preflight.runner_findings({'ci-post.yml': changed}))
+
+    def test_post_arm_requires_both_build_types(self):
+        post = self.arm_post()
+        for build_type in ('Release', 'Debug'):
+            with self.subTest(remaining=build_type):
+                changed = in_job(post, 'build-arm', '        build_type: [Release, Debug]\n',
+                                 f'        build_type: [{build_type}]\n')
+                self.assertNotEqual(changed, post)
+                self.assertIn('ci-post.yml build-arm must select only hosted Linux arm64 '
+                              'Release/Debug cells on full events',
+                              ci_preflight.runner_findings({'ci-post.yml': changed}))
+
+    def test_post_arm_keeps_the_amd64_steps(self):
+        post = self.arm_post()
+        for before, after in (('libeigen3-dev tzdata-legacy ccache strace',
+                               'libeigen3-dev ccache strace'),
+                              ('--require-hashes', '--no-deps'),
+                              ('PINEFORGE_RUNTIME_BUDGET_CANDIDATE_ONLY: \'0\'',
+                               'PINEFORGE_RUNTIME_BUDGET_CANDIDATE_ONLY: \'1\''),
+                              ('ci-diagnostics-ubuntu-24.04-arm-', 'ci-diagnostics-ubuntu-24.04-')):
+            with self.subTest(replacement=after):
+                changed = in_job(post, 'build-arm', before, after)
+                self.assertNotEqual(changed, post)
+                self.assertIn('build-arm must keep the same verification steps as build',
+                              ci_preflight.pipeline_workflow_findings(changed, 'ci-post.yml', pr=False))
+
+    def test_release_prebuilt_refuses_retired_macos_steps(self):
+        release = (ROOT / '.github/workflows/release.yml').read_text()
+        for step in ("      - name: Install Eigen3 (macOS)\n"
+                     "        if: runner.os == 'macOS'\n"
+                     "        run: brew install eigen\n",
+                     "      - name: Configure universal archive\n"
+                     "        run: cmake -B build -DCMAKE_OSX_ARCHITECTURES=arm64\n"):
+            with self.subTest(step=step):
+                changed = in_job(release, 'prebuilt', '    steps:\n', '    steps:\n' + step)
+                self.assertNotEqual(changed, release)
+                self.assertIn('release.yml prebuilt must not contain macOS build steps',
+                              ci_preflight.runner_findings({'release.yml': changed}))
 
 
 class ActionPins(unittest.TestCase):
@@ -1618,7 +1704,7 @@ class PreflightFailures(unittest.TestCase):
                     self.assertEqual(ci_preflight._job_values(_jobs(self.ci_sources()[index])[job],
                                                              'runs-on'), ['ubuntu-24.04'])
                     continue
-                if (name, job) == ('ci-post.yml', 'build-macos'):
+                if (name, job) == ('ci-post.yml', 'build-arm'):
                     continue
                 actual, = ci_preflight._job_values(_jobs(self.ci_sources()[index])[job],
                                                    'runs-on', unquote=False)
@@ -1783,7 +1869,7 @@ class PreflightFailures(unittest.TestCase):
 
     def test_status_function_jobs_refuse_before_checkout_from_mutated_files(self):
         self.assertEqual(ci_workflow_findings(*self.ci_sources(), others=self.other_sources()), [])
-        for index, job in ((0, 'preflight'), (0, 'build'), (6, 'build'), (6, 'build-macos'),
+        for index, job in ((0, 'preflight'), (0, 'build'), (6, 'build'), (6, 'build-arm'),
                            (6, 'sanitizers'), (6, 'kernel-only')):
             for after in ('', AUTHZ_REFUSE_STEP.replace('exit 1', 'true'),
                           '      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0\n' + AUTHZ_REFUSE_STEP):
@@ -2512,11 +2598,12 @@ exit "$lookup_exit"
             (6, 'build', '          - os: ubuntu-24.04\n', ''),
             (6, 'build', '          - os: ubuntu-24.04\n',
              '          - os: ubuntu-24.04\n          - os: macos-26\n'),
-            (6, 'build-macos', '        os: [macos-26]\n', ''),
-            (6, 'build-macos', '        os: [macos-26]\n', '        os: [ubuntu-24.04]\n'),
-            (6, 'build-macos', '        os: [macos-26]\n', '        os: [macos-26, ubuntu-24.04]\n'),
+            (6, 'build-arm', '        build_type: [Release, Debug]\n', ''),
+            (6, 'build-arm', '      matrix:\n', '      matrix:\n        os: [ubuntu-24.04]\n'),
+            (6, 'build-arm', '      matrix:\n',
+             '      matrix:\n        os: [ubuntu-24.04-arm, ubuntu-24.04]\n'),
         ]
-        for index, job in ((0, 'build'), (6, 'build'), (6, 'build-macos')):
+        for index, job in ((0, 'build'), (6, 'build'), (6, 'build-arm')):
             if index == 6:
                 for build_type in ('Release', 'Debug'):
                     mutations.append((index, job, '        build_type: [Release, Debug]\n',
@@ -2524,7 +2611,7 @@ exit "$lookup_exit"
             for extra in ('        event: ["${{ github.event_name }}"]\n',
                           '        exclude: []\n', '        include: []\n'):
                 mutations.append((index, job, '      matrix:\n', '      matrix:\n' + extra))
-            for os_name in ('ubuntu-24.04', 'macos-26'):
+            for os_name in ('ubuntu-24.04', 'ubuntu-24.04-arm', 'macos-26'):
                 for build_type in ('Release', 'Debug'):
                     axis = f'platform: {{os: {os_name}}}' if job == 'build' else f'os: {os_name}'
                     mutations.append((index, job, '      matrix:\n',
@@ -2536,23 +2623,25 @@ exit "$lookup_exit"
                 changed[index] = in_job(changed[index], job, before, after)
                 self.assertNotEqual(changed[index], original[index])
                 finding = (BUILD_RUNNER_FINDING if index == 0 else
-                           POST_MACOS_BUILD_RUNNER_FINDING if job == 'build-macos' else
+                           POST_ARM_BUILD_RUNNER_FINDING if job == 'build-arm' else
                            POST_BUILD_RUNNER_FINDING)
                 self.assertIn(finding, ci_workflow_findings(*changed, others=others))
 
     def test_post_build_refuses_a_runner_with_the_wrong_os(self):
         post = self.ci_sources()[6]
         for job, platform_step in (('build', ci_preflight.POST_PLATFORM_STEP),
-                                   ('build-macos', ci_preflight.POST_MACOS_PLATFORM_STEP)):
+                                   ('build-arm', ci_preflight.POST_ARM_PLATFORM_STEP)):
             script = job_script(post, job, 'Require the requested platform')
-            for requested in ('ubuntu-24.04', 'macos-26'):
+            for requested in ('ubuntu-24.04', 'ubuntu-24.04-arm', 'macos-26'):
                 for actual in ('Linux', 'macOS', 'Windows', ''):
                     with self.subTest(job=job, requested=requested, actual=actual):
                         result = subprocess.run(['bash', '-e', '-c', script], capture_output=True, text=True,
                             env={'PATH': os.environ.get('PATH', '/usr/bin:/bin'),
                                  'REQUESTED_PLATFORM': requested, 'ACTUAL_OS': actual})
                         self.assertEqual(result.returncode == 0,
-                                         (requested, actual) in {('ubuntu-24.04', 'Linux'), ('macos-26', 'macOS')},
+                                         (requested, actual) == (
+                                             'ubuntu-24.04-arm' if job == 'build-arm' else 'ubuntu-24.04',
+                                             'Linux'),
                                          result.stdout + result.stderr)
             for before, after in ((platform_step, ''),
                                   ('ACTUAL_OS: ${{ runner.os }}', 'ACTUAL_OS: macOS'),
@@ -2780,8 +2869,8 @@ exit "$lookup_exit"
                  'build must run the fast Release smoke only on PRs and full profiles otherwise'),
                 (6, 'build', 'Verify (${{ matrix.build_type }})',
                  'build must run the fast Release smoke only on PRs and full profiles otherwise'),
-                (6, 'build-macos', 'Verify (${{ matrix.build_type }})',
-                 'build-macos must run the fast Release smoke only on PRs and full profiles otherwise')):
+                (6, 'build-arm', 'Verify (${{ matrix.build_type }})',
+                 'build-arm must run the fast Release smoke only on PRs and full profiles otherwise')):
             ci = self.ci_sources()[index]
             step = ci_preflight._step_named(ci_preflight._steps(_jobs(ci)[job]),
                                             '      - name: ' + step_name)
@@ -2804,7 +2893,7 @@ exit "$lookup_exit"
             ('uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830', 'uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830'),
             ('key: ${{ steps.ccache-restore.outputs.cache-primary-key }}', 'key: ccache-pr'),
         ]
-        for index, job in ((0, 'build'), (6, 'build'), (6, 'build-macos')):
+        for index, job in ((0, 'build'), (6, 'build'), (6, 'build-arm')):
             for before, after in mutations:
                 with self.subTest(workflow=CI_SOURCES[index], job=job, replacement=after):
                     findings = self.mutated_file_findings(index, job, before, after)
@@ -3158,7 +3247,7 @@ exit "$lookup_exit"
                          {'ci.yml': {'authz': 'ubuntu-24.04', 'changes': 'ubuntu-24.04',
                                      'build-gate': 'ubuntu-24.04'},
                           'ci-post.yml': {'authz': 'ubuntu-24.04', 'changes': 'ubuntu-24.04',
-                                          'build-gate': 'ubuntu-24.04', 'build-macos': 'macos-26'},
+                                          'build-gate': 'ubuntu-24.04', 'build-arm': 'ubuntu-24.04-arm'},
                           'corpus-parity.yml': {'authz': 'ubuntu-24.04'},
                           'corpus-parity-subset.yml': {'authz': 'ubuntu-24.04'},
                           'docs.yml': {'authz': 'ubuntu-24.04', 'build': 'ubuntu-24.04'},
@@ -3218,8 +3307,8 @@ exit "$lookup_exit"
              'ci-post.yml job native-live calls a workflow the runner contract cannot see; '
              'call one under ./.github/workflows/'),
             # Both split matrices and the PR's one-cell population are exact.
-            (6, 'build-macos', '        os: [macos-26]\n', '        os: [macos-26-large]\n',
-             POST_MACOS_BUILD_RUNNER_FINDING),
+            (6, 'build-arm', '      matrix:\n', '      matrix:\n        os: [ubuntu-24.04-arm]\n',
+             POST_ARM_BUILD_RUNNER_FINDING),
             (6, 'build', '        build_type: [Release, Debug]\n',
              '        build_type: [Release, Debug]\n        include:\n'
              '          - os: ubuntu-24.04\n            build_type: Debug\n',
@@ -3647,7 +3736,7 @@ exit "$lookup_exit"
                                 'Require every verification lane to have passed')
             matrices = [('BUILD_RESULT', 'matrix')]
             if event != 'pull_request':
-                matrices.append(('MACOS_BUILD_RESULT', 'macOS matrix'))
+                matrices.append(('ARM_BUILD_RESULT', 'arm64 matrix'))
             for variable, label in matrices:
                 for outcome in ('success', 'failure', 'cancelled', 'skipped', ''):
                     with self.subTest(event=event, lane=variable, matrix=outcome):
@@ -3862,7 +3951,7 @@ finally:
                     **{job: variable for job, variable in PROOF_JOBS.items()
                        if job not in PR_PROOF_JOBS}}
         self.assertEqual(deferred, {
-            'preflight-slow': 'SLOW_PREFLIGHT_RESULT', 'build-macos': 'MACOS_BUILD_RESULT',
+            'preflight-slow': 'SLOW_PREFLIGHT_RESULT', 'build-arm': 'ARM_BUILD_RESULT',
             'sanitizers': 'SANITIZER_RESULT', 'kernel-only': 'KERNEL_RESULT',
             'native-live': 'NATIVE_RESULT', 'corpus-parity': 'FULL_PARITY_RESULT'})
         sources = self.ci_sources()
@@ -3986,7 +4075,7 @@ finally:
             proof = {'BUILD_RESULT', 'PARITY_RESULT'}
             if not pr:
                 required.add('SLOW_PREFLIGHT_RESULT')
-                proof |= {'MACOS_BUILD_RESULT', 'SANITIZER_RESULT', 'NATIVE_RESULT',
+                proof |= {'ARM_BUILD_RESULT', 'SANITIZER_RESULT', 'NATIVE_RESULT',
                           'KERNEL_RESULT', 'FULL_PARITY_RESULT'}
             for docs_only in ('false', 'true'):
                 base = {name: 'success' for name in required | proof}
@@ -4016,7 +4105,7 @@ finally:
     def test_build_gate_refuses_widened_deferrals_and_lost_heavy_dependencies(self):
         mutations = [
             ('"$docs_only" == "true" && "$1" == "skipped"', '"$1" == "skipped"'),
-            ('passed "$MACOS_BUILD_RESULT"', 'true'),
+            ('passed "$ARM_BUILD_RESULT"', 'true'),
             ('passed "$SANITIZER_RESULT"', 'true'),
             ('&& [[ "$SLOW_PREFLIGHT_RESULT" == "success" ]] && passed "$FULL_PARITY_RESULT"',
              '&& true && passed "$FULL_PARITY_RESULT"'),
@@ -4025,8 +4114,8 @@ finally:
              "PARITY_RESULT: ${{ needs.corpus-parity-subset.result || 'success' }}"),
             ('SLOW_PREFLIGHT_RESULT: ${{ needs.preflight-slow.result }}',
              "SLOW_PREFLIGHT_RESULT: ${{ needs.preflight-slow.result || 'success' }}"),
-            ('MACOS_BUILD_RESULT: ${{ needs.build-macos.result }}',
-             "MACOS_BUILD_RESULT: ${{ needs.build-macos.result || 'success' }}"),
+            ('ARM_BUILD_RESULT: ${{ needs.build-arm.result }}',
+             "ARM_BUILD_RESULT: ${{ needs.build-arm.result || 'success' }}"),
         ]
         for before, after in mutations:
             with self.subTest(replacement=after):
@@ -4036,7 +4125,7 @@ finally:
                     findings)
         ci = self.ci_sources()[6]
         needs, = ci_preflight._job_values(_jobs(ci)['build-gate'], 'needs')
-        for job in ('build-macos', 'preflight-slow', 'corpus-parity', 'native-live', 'sanitizers', 'kernel-only'):
+        for job in ('build-arm', 'preflight-slow', 'corpus-parity', 'native-live', 'sanitizers', 'kernel-only'):
             replacement = ', '.join(item for item in ci_preflight._needs(_jobs(ci)['build-gate'])
                                     if item != job)
             findings = self.mutated_file_findings(6, 'build-gate', '    needs: ' + needs,
@@ -4232,18 +4321,21 @@ finally:
                     self.assertIn(f'release.yml job {job} must run on {RELEASE_RUNNER} '
                                   '(isolated release)', findings)
         # Restoring the old x64 label must fail, as must moving a hosted leg
-        # or changing anything else in the pinned three-leg matrix.
+        # or changing anything else in the pinned two-leg Linux matrix.
         for before, after in ((f'runner: {RELEASE_RUNNER}\n', 'runner: ubuntu-22.04\n'),
                               (f'runner: {RELEASE_RUNNER}\n', f'runner: {MATRIX_LINUX_RUNNER}\n'),
                               (f'runner: {RELEASE_RUNNER}\n',
                                f"runner: ${{{{ fromJSON('{RELEASE_RUNNER}') || 'ubuntu-22.04' }}}}\n"),
                               ('runner: ubuntu-22.04-arm', 'runner: ubuntu-24.04'),
                               ('runner: ubuntu-22.04-arm', f'runner: {RELEASE_RUNNER}'),
-                              ('runner: macos-latest', f'runner: {RELEASE_RUNNER}'),
-                              ('runner: macos-latest', 'runner: macos-26-xlarge'),
+                              ('runner: ubuntu-22.04-arm', 'runner: macos-latest'),
+                              ('runner: ubuntu-22.04-arm', 'runner: macos-26-xlarge'),
+                              ('        include:\n', '        include:\n'
+                               '          - triple: macos-universal\n'
+                               '            runner: macos-latest\n'
+                               '            cmake_extra: "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64"\n'),
                               ('          - triple: linux-aarch64\n'
-                               '            runner: ubuntu-22.04-arm\n'
-                               '            cmake_extra: ""\n', '')):
+                               '            runner: ubuntu-22.04-arm\n', '')):
             with self.subTest(release_runner=after):
                 changed = in_job(release, 'prebuilt', before, after)
                 findings = ci_workflow_findings(*original, others=dict(others, **{'release.yml': changed}))
@@ -4635,7 +4727,8 @@ finally:
                  f'ci-post.yml job sanitizers must run on {POST_RUNNER}'),
                 ('ci-post.yml', ('sanitizers', POST_RUNNER, 'pf-linux-x64-16'),
                  f'ci-post.yml job sanitizers must run on {POST_RUNNER}'),
-                ('ci-post.yml', ('build-macos', '    runs-on: macos-26\n', '    runs-on: macos-26-xlarge\n'),
+                ('ci-post.yml', ('build-arm', '    runs-on: ubuntu-24.04-arm\n',
+                                '    runs-on: macos-26-xlarge\n'),
                  'ci-post.yml must not use larger-runner labels; use the GCP fleet or hosted exceptions'),
                 ('ci-post.yml', ('build', '        build_type: [Release, Debug]\n',
                   '        build_type: [Release, Debug]\n        larger_runner: ubuntu-24.04\n'),
