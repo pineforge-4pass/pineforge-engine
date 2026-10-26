@@ -3,7 +3,9 @@
 #include <pineforge/native_module.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
 
+#include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <limits>
 #include <string>
 #include <vector>
@@ -15,11 +17,86 @@ int failures = 0;
 #define CHECK(condition) do { if (!(condition)) { ++failures; \
     std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #condition); } } while (false)
 
+struct PendingSnapshot {
+    int count = -1;
+    int copy_status = -1;
+    pf_pending_order_v1_t row{};
+
+    void capture(BacktestEngine& engine) {
+        const auto strategy = static_cast<pf_strategy_t>(&engine);
+        count = strategy_pending_orders_len(strategy);
+        copy_status = strategy_pending_order_get(strategy, 0, &row, sizeof row);
+    }
+};
+
+void check_collision_args(const std::string& args) {
+    if (args != "{\"reason\":\"order_key_hash_collision\"}") {
+        std::fprintf(stderr,
+            "collision output args: got %s; want {\"reason\":\"order_key_hash_collision\"}\n",
+            args.c_str());
+    }
+    CHECK(args == "{\"reason\":\"order_key_hash_collision\"}");
+}
+
+void check_retained_order(BacktestEngine& engine, const PendingSnapshot& before,
+                          const std::string& first, double limit, double stop) {
+    const auto strategy = static_cast<pf_strategy_t>(&engine);
+    // Hand oracle: bar 0 submits one unit; bar 1 stays at 100, above the
+    // resting limit (90) or below the resting stop (110). Nothing can fill.
+    CHECK(before.count == 1);
+    CHECK(before.copy_status == 0);
+    CHECK(std::string(before.row.id) == first.substr(0, sizeof before.row.id - 1));
+    CHECK(before.row.id_truncated == (first.size() >= sizeof before.row.id));
+    CHECK(before.row.qty == 1.0);
+    CHECK(std::isnan(limit) ? std::isnan(before.row.limit_price) : before.row.limit_price == limit);
+    CHECK(std::isnan(stop) ? std::isnan(before.row.stop_price) : before.row.stop_price == stop);
+    CHECK(strategy_pending_orders_len(strategy) == before.count);
+    pf_pending_order_v1_t after{};
+    const int copied = strategy_pending_order_get(strategy, 0, &after, sizeof after);
+    CHECK(copied == 0);
+    if (copied == 0 && before.copy_status == 0) {
+        // Compare every public field, including identity, incarnation and
+        // quantity receipts, without depending on C struct padding.
+        int count = 0;
+        const auto* fields = strategy_pending_order_layout(&count);
+        CHECK(fields != nullptr && count > 0);
+        for (int i = 0; fields && i < count; ++i) {
+            const auto& field = fields[i];
+            const bool in_bounds = field.offset <= sizeof after
+                && field.size <= sizeof after - field.offset;
+            CHECK(in_bounds);
+            if (!in_bounds) continue;
+            const bool same = std::memcmp(
+                reinterpret_cast<const unsigned char*>(&before.row) + field.offset,
+                reinterpret_cast<const unsigned char*>(&after) + field.offset, field.size) == 0;
+            if (!same) std::fprintf(stderr, "collision changed pending field %s\n", field.name);
+            CHECK(same);
+        }
+    }
+    // One unchanged first record leaves no slot for the second key.
+    CHECK(strategy_pending_order_get(strategy, 1, &after, sizeof after) == -1);
+    CHECK(engine.trade_count() == 0);
+    CHECK(engine.live_position_size() == 0.0);
+    ReportEnvelopeV1 envelope{};
+    envelope.metadata.struct_size = sizeof envelope.metadata;
+    envelope.metadata.version = 1;
+    CHECK(engine.fill_report_envelope_v1(&envelope) == PF_REPORT_MODE_ACCEPTED);
+    // Failed runs may expose their already completed prefix, but cannot
+    // publish a completed report or a trade from the colliding operation.
+    CHECK(envelope.metadata.complete == 0);
+    CHECK(envelope.metadata.trades.logical_count == 0);
+    CHECK(envelope.report.total_trades == 0);
+    CHECK(envelope.report.trades_len == 0);
+    CHECK(envelope.report.trades == nullptr);
+    BacktestEngine::free_report(&envelope.report);
+}
+
 class SourceKeyAliasProbe : public source::PineStrategyHost {
 public:
     std::string first = "A";
     std::string second = "E";
     bool use_order = false;
+    PendingSnapshot before_second;
 
     SourceKeyAliasProbe() {
         source::PineStrategyConfig config;
@@ -33,6 +110,7 @@ public:
     }
 
     void on_source_bar(const Bar&) override {
+        if (bar_index_ == 1) before_second.capture(*this);
         if (bar_index_ == 0 || bar_index_ == 1) {
             const auto& id = bar_index_ == 0 ? first : second;
             const double limit = bar_index_ == 0 ? 90.0 : 80.0;
@@ -80,12 +158,30 @@ void run_case(const std::string& first, const std::string& second, bool use_orde
                 report.trades_len, error.c_str());
         }
         CHECK(code == "engine_invariant");
-        CHECK(args == "{}");
+        check_collision_args(args);
         CHECK(status == 1);
-        CHECK(error.find("Pine live source key collision") != std::string::npos);
+        CHECK(error == "Pine live source key collision");
+        CHECK(report.total_trades == 0);
         CHECK(report.trades_len == 0);
+        CHECK(report.trades == nullptr);
+        check_retained_order(*probe, probe->before_second, first, 90.0, na);
+
+        // A cheap public-run witness for another invariant: retrying the
+        // failed handle refuses configuration, with no collision reason.
+        pf_report_t retry_report{};
+        run_backtest_full(strategy, bars.data(), static_cast<int>(bars.size()),
+                          "1", "1", 0, 4, PF_MAGNIFIER_ENDPOINTS, &retry_report);
+        CHECK(std::string(strategy_get_last_error_code(strategy)) == "engine_invariant");
+        CHECK(std::string(strategy_get_last_error_args(strategy)) == "{}");
+        CHECK(std::string(strategy_get_last_error(strategy))
+              == "Pine native adapter failed to configure projected run spec");
+        CHECK(strategy_last_run_status(strategy) == 1);
+        CHECK(retry_report.total_trades == 0);
+        CHECK(retry_report.trades_len == 0);
+        report_free(&retry_report);
     } else {
         CHECK(code.empty());
+        CHECK(args.empty());
         CHECK(error.empty());
         CHECK(status == 0);
         CHECK(report.trades_len == expected_trades);
@@ -120,6 +216,8 @@ void run_case(const std::string& first, const std::string& second, bool use_orde
 
 class SourceKeyLookupProbe final : public source::PineStrategyHost {
 public:
+    PendingSnapshot before_second;
+
     SourceKeyLookupProbe(const std::string& first, const std::string& second)
         : first_(first), second_(second) {
         source::PineStrategyConfig config;
@@ -134,7 +232,10 @@ public:
 
     void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) strategy_entry(first_, true, na, 110.0, 1.0);
-        if (bar_index_ == 1) strategy_entry(second_, true, na, 110.0, 3.0);
+        if (bar_index_ == 1) {
+            before_second.capture(*this);
+            strategy_entry(second_, true, na, 110.0, 3.0);
+        }
         if (bar_index_ == 3) strategy_close_all();
     }
 
@@ -165,12 +266,14 @@ void run_lookup_case(const std::string& first, const std::string& second,
                 probe.trade_count(), probe.last_error().c_str());
         }
         CHECK(code == "engine_invariant");
-        CHECK(args == "{}");
+        check_collision_args(args);
         CHECK(status == 1);
-        CHECK(probe.last_error().find("Pine live source key collision") != std::string::npos);
+        CHECK(probe.last_error() == "Pine live source key collision");
         CHECK(probe.trade_count() == 0);
+        check_retained_order(probe, probe.before_second, first, na, 110.0);
     } else {
         CHECK(code.empty());
+        CHECK(args.empty());
         CHECK(probe.last_error().empty());
         CHECK(status == 0);
         CHECK(probe.trade_count() == expected_trades);

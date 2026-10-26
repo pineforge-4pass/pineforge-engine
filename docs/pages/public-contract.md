@@ -158,6 +158,13 @@ The run-failure vocabulary is `docker/run_failure_codes.json`: the codes
 #strategy_get_last_error_code answers, their classes and retryable flags, and
 the arguments #strategy_get_last_error_args answers (@ref run_failure_codes).
 
+| Code | Optional argument | Closed values |
+| --- | --- | --- |
+| `engine_invariant` | `reason` (vocab) | `order_key_hash_collision` |
+
+The reason identifies refusal of two live order keys whose 64-bit hashes
+collide. Other invariant failures keep `{}`, and the English is unchanged.
+
 - **A code is never removed, renamed or reused.** A code that is no longer
   raised stays in the catalog, marked `deprecated` with the codes that replace
   it. A code keeps its class, its retryable flag, its `since` and each

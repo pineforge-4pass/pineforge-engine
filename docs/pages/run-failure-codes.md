@@ -143,7 +143,7 @@ in addition to its six released 1.4.0 reasons.
 | `chart_bars_rejected` | `input` | no | `field` (vocab, 6 values, optional), `index` (integer, optional), `reason` (vocab, 12 values) | The run's chart bars (the request's OHLCV) were refused. |
 | `chart_bars_unreadable` | `input` | no | `reason` (vocab, 9 values) | The harness could not read the run's OHLCV file. |
 | `engine_command_value_invalid` | `engine_fault` | no | `field` (string), `reason` (vocab, 3 values), `stage` (vocab, 7 values) | The engine derived an invalid command value (non-finite, invalid text or an overflowing finite value) from its own book, equity, margin, sizing, fee, slippage or settlement state: an engine fault, never a strategy failure. stage names where it was derived. |
-| `engine_invariant` | `engine_fault` | no | none | An engine invariant failed: a PineForge bug. |
+| `engine_invariant` | `engine_fault` | no | `reason` (vocab, 1 values, optional) | An engine invariant failed: a PineForge bug. |
 | `engine_unclassified_error` | `engine_fault` | no | none | An error no coded site reported: a PineForge bug. |
 | `harness_internal_error` | `engine_fault` | no | none | The run harness failed: a PineForge bug. |
 | `lot_grid_rejected` | `symbol_metadata` | yes | none | The symbol's lot size (syminfo.mincontract, the quantity grid) is not a value the engine accepts. |
@@ -559,3 +559,9 @@ Spaces, quotes, punctuation and other valid UTF-8 bytes remain accepted.
 Comments retain their existing UTF-8 admission, including these two bytes.
 Invalid UTF-8 still raises `strategy_value_invalid` with
 `reason=invalid_unicode`.
+
+Two live order keys whose 64-bit hashes collide are refused with
+`engine_invariant` and `{"reason":"order_key_hash_collision"}`. The optional
+`reason` is a closed vocabulary with only `order_key_hash_collision`;
+other invariant failures keep `{}`. The English remains
+`Pine live source key collision`.
