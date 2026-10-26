@@ -127,8 +127,8 @@ unchanged (0 codes added, changed or removed since 1.7.0).
   release commit is documentation-only it checks the nearest earlier commit that
   is not (at most 20 documentation-only commits), and every skipped
   documentation-only commit needs a successful `ci-post` run of its own. A newer
-  run of the same commit that failed, was cancelled or timed out refuses the
-  release; so does any other non-success result. A newer run whose build legs
+  run of the same commit with a failed, cancelled or timed-out build job
+  refuses the release; so does any other non-success result. A newer run whose build legs
   were all skipped is passed over in favour of an older full green run. Runs on
   other branches are not counted. The gate only reads results: it changes no
   build or engine behaviour, and its command line is unchanged.
