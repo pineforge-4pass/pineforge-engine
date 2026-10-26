@@ -60,6 +60,12 @@ FLEET_JOB_IDS = {
     'release-ruleset-probe.yml': ('authz', 'probe'),
     'promote-baseline.yml': ('promote',),
 }
+# Dispatch-only post-fleet canary: gcp_sites() discovers its single job and the
+# generic post rule routes it. ci_preflight has no pinned-job entry, so it stays
+# outside FLEET_JOB_IDS, which also drives the missing-job deletion control.
+DISPATCH_ONLY_CANARY_JOB_IDS = {
+    'fleet-post-capability.yml': ('capability',),
+}
 LIGHT_JOB_IDS = {
     'ci.yml': ('authz', 'changes', 'build-gate'),
     'ci-post.yml': ('authz', 'changes', 'build-gate'),
@@ -3381,10 +3387,12 @@ exit "$lookup_exit"
 
     def test_gcp_sites_reject_cross_class_routes(self):
         sites = list(self.gcp_sites())
-        self.assertEqual(len(sites), 18)
+        self.assertEqual(len(sites), 19)
         self.assertCountEqual([(name, job) for name, job, *_ in sites],
                               [(name, job) for name, jobs in FLEET_JOB_IDS.items()
-                               for job in jobs if job not in LIGHT_JOB_IDS.get(name, ())])
+                               for job in jobs if job not in LIGHT_JOB_IDS.get(name, ())]
+                              + [(name, job) for name, jobs in DISPATCH_ONLY_CANARY_JOB_IDS.items()
+                                 for job in jobs])
         self.assertEqual(ci_preflight.runner_findings(self.workflow_sources()), [])
         for name, job, fleet, before, finding in sites:
             correct = {'pr': PR_RUNNER, 'post': POST_RUNNER, 'main': RELEASE_RUNNER}[fleet]
@@ -3400,6 +3408,16 @@ exit "$lookup_exit"
         self.assertEqual(sites[0][-1],
                          f'release-ruleset-probe.yml job probe must run on {POST_RUNNER} '
                          '(post fleet)')
+
+    def test_gcp_sites_pin_canary_to_the_dispatch_fleet(self):
+        sites = [site for site in self.gcp_sites() if site[0] == 'fleet-post-capability.yml']
+        self.assertEqual([(job, fleet) for _, job, fleet, *_ in sites],
+                         [('capability', 'post')])
+        self.assertEqual(sites[0][-1],
+                         f'fleet-post-capability.yml job capability must run on {POST_RUNNER}')
+        name, job, _, before, finding = sites[0]
+        findings = self.routed_file_findings(name, job, before, routed_line(before, PR_RUNNER))
+        self.assertIn(finding, findings)
 
     def test_gcp_sites_reject_retired_and_void_labels(self):
         for name, job, fleet, before, finding in self.gcp_sites():
