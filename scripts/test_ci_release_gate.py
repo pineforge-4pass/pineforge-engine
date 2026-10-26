@@ -4151,5 +4151,107 @@ class CiPostGateTests(unittest.TestCase):
                 self.assertEqual(self.post_calls(), [(endpoint, True, None)])
 
 
+    def test_later_parent_failure_only_blocks_after_release_sha_flip(self):
+        """Round 10/1/4/6a: prove SHA decides; block cross-commit vetoes or a dropped filter."""
+        for run_sha in (OTHER_HEAD, SHA):
+            with self.subTest(run_sha=run_sha):
+                self.reset_ci_post()
+                parent = ci_post_run(
+                    self.post_run["id"] + 1, sha=OTHER_HEAD, conclusion="failure",
+                    created_at="2026-10-25T13:00:00Z")
+                failed_jobs = ci_post_jobs()
+                failed_job = failed_jobs[2]
+                failed_job["conclusion"] = "failure"
+                self.api.ci_post(parent, failed_jobs)
+                newer = {**parent, "head_sha": run_sha}
+                self.api.ci_post_runs(SHA, [self.post_run, newer], {
+                    self.post_run["id"]: self.jobs, newer["id"]: failed_jobs})
+                if run_sha == OTHER_HEAD:
+                    self.assert_green(self.post_run)
+                else:
+                    self.assert_refused(
+                        "newer-run-failed", newer["id"], newer["head_sha"],
+                        newer["event"], failed_job["name"], failed_job["conclusion"])
+                    self.assert_post_reads(newer)
+                self.assertNotIn(
+                    (ci_post_runs_api(parent["head_sha"]), True, None), self.api.calls)
+                self.assertEqual(self.history.calls, [self.post_run["head_sha"]])
+
+    def test_later_parent_in_progress_only_blocks_after_release_sha_flip(self):
+        """Round 10/2/6c: prove unfinished runs are SHA-scoped; block cross-commit vetoes."""
+        for run_sha in (OTHER_HEAD, SHA):
+            with self.subTest(run_sha=run_sha):
+                self.reset_ci_post()
+                parent = ci_post_run(
+                    self.post_run["id"] + 1, sha=OTHER_HEAD,
+                    state="in_progress", conclusion=None,
+                    created_at="2026-10-25T13:00:00Z")
+                newer = {**parent, "head_sha": run_sha}
+                self.api.ci_post_runs(SHA, [newer, self.post_run], {
+                    self.post_run["id"]: self.jobs})
+                if run_sha == OTHER_HEAD:
+                    self.assert_green(self.post_run)
+                else:
+                    self.assert_refused(
+                        "run-in-progress", newer["id"], newer["head_sha"], newer["status"])
+                    self.assertEqual(self.post_calls(), [
+                        (ci_post_runs_api(self.post_run["head_sha"]), True, None)])
+                self.assertEqual(self.history.calls, [self.post_run["head_sha"]])
+
+    def test_docs_chain_later_parent_failure_only_blocks_after_proof_sha_flip(self):
+        """Round 10/3/5: prove SHA flips both failure verdicts; block time ordering across commits."""
+        for failed_build in (False, True):
+            for on_proof in (False, True):
+                with self.subTest(failed_build=failed_build, on_proof=on_proof):
+                    self.reset_ci_post()
+                    docs, ancestor = self.docs_chain(1)
+                    parent_sha = self.history.responses[ancestor["head_sha"]][0]
+                    parent = ci_post_run(
+                        ancestor["id"] + 1, sha=parent_sha, conclusion="failure",
+                        created_at="2026-10-25T13:00:00Z")
+                    jobs = ci_post_jobs()
+                    failed_job = jobs[2]
+                    if failed_build:
+                        failed_job["conclusion"] = "failure"
+                    self.api.ci_post(parent, jobs)
+                    newer = {**parent, "head_sha": (
+                        ancestor["head_sha"] if on_proof else parent["head_sha"])}
+                    self.api.ci_post_runs(docs[0], [newer, self.docs_runs[0]], {})
+                    self.api.ci_post_runs(ancestor["head_sha"], [ancestor, newer], {
+                        ancestor["id"]: ci_post_jobs(), newer["id"]: jobs})
+                    if on_proof:
+                        reason = "newer-run-failed" if failed_build else "not-success"
+                        evidence = ((failed_job["name"], failed_job["conclusion"])
+                                    if failed_build else (newer["conclusion"],))
+                        self.assert_refused(
+                            reason, newer["id"], newer["head_sha"], newer["event"], *evidence)
+                        self.assert_post_reads(newer, docs=docs)
+                    else:
+                        self.assert_green(ancestor, skipped=docs)
+                    self.assertNotIn(
+                        (ci_post_runs_api(parent_sha), True, None), self.api.calls)
+                    self.assertEqual(self.history.calls, [*docs, ancestor["head_sha"]])
+
+    def test_later_run_only_vetoes_middle_docs_commit_after_sha_flip(self):
+        """Round 10/6b/6c: prove middle-docs SHA decides; block outside vetoes or red-docs rescue."""
+        for state, conclusion in (("completed", "failure"), ("in_progress", None)):
+            for on_docs in (False, True):
+                with self.subTest(state=state, on_docs=on_docs):
+                    self.reset_ci_post()
+                    docs, ancestor = self.docs_chain(3)
+                    parent_sha = self.history.responses[ancestor["head_sha"]][0]
+                    outside = ci_post_run(
+                        ancestor["id"] + 1, sha=parent_sha, state=state,
+                        conclusion=conclusion, created_at="2026-10-25T13:00:00Z")
+                    newer = {**outside, "head_sha": (
+                        docs[1] if on_docs else outside["head_sha"])}
+                    self.api.ci_post_runs(docs[1], [self.docs_runs[1], newer], {})
+                    if on_docs:
+                        self.assert_docs_red(newer, read_shas=docs[:2])
+                    else:
+                        self.assert_green(ancestor, skipped=docs)
+                        self.assertEqual(self.history.calls, [*docs, ancestor["head_sha"]])
+
+
 if __name__ == "__main__":
     unittest.main()
