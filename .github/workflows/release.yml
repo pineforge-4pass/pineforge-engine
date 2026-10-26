@@ -273,7 +273,7 @@ jobs:
             echo
             echo "### Prebuilt libraries"
             echo
-            echo "Per-arch static-lib + headers tarballs are attached below (C ABI)."
+            echo "Linux amd64 and arm64 static-lib + headers tarballs are attached below (C ABI)."
             echo "For the full PineScript -> backtest image, use \`ghcr.io/pineforge-4pass/pineforge-release\`."
             echo
             echo "### Run-failure codes"
@@ -366,16 +366,8 @@ jobs:
         include:
           - triple: linux-x86_64
             runner: ["self-hosted","pf-gcp-main"]
-            cmake_extra: ""
           - triple: linux-aarch64
             runner: ubuntu-22.04-arm
-            cmake_extra: ""
-          # Single universal slice covers x86_64 + arm64 macs. macos-13
-          # (Intel) runner pool is being phased out and queues for >30min;
-          # cross-build a fat archive on macos-latest (arm64) instead.
-          - triple: macos-universal
-            runner: macos-latest
-            cmake_extra: "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64"
     runs-on: ${{ matrix.runner }}
 
     steps:
@@ -432,17 +424,10 @@ jobs:
           grep -q 'define EIGEN_MAJOR_VERSION 4' "$macros"
           echo "Eigen3 3.4.x present at $(dirname "$(dirname "$hdr")")"
 
-      - name: Install Eigen3 (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          brew install eigen
-          echo "CMAKE_PREFIX_PATH=$(brew --prefix eigen)" >> "$GITHUB_ENV"
-
       - name: Configure
         env:
           TAG:         ${{ needs.release.outputs.tag }}
           TRIPLE:      ${{ matrix.triple }}
-          CMAKE_EXTRA: ${{ matrix.cmake_extra }}
         run: |
           set -euo pipefail
           stage="stage/pineforge-${TAG}-${TRIPLE}"
@@ -450,16 +435,12 @@ jobs:
           # FILE: the version identity is the VERSION file exactly, -rc.N
           # included, however the checkout's tags describe it; a dry run's
           # VERSION has no tag at all.
-          # CMAKE_EXTRA is unquoted so multi-flag strings (e.g. mac fat
-          # archive flag) split into separate argv entries.
-          # shellcheck disable=SC2086
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
             -DPINEFORGE_BUILD_TESTS=OFF \
             -DPINEFORGE_BUILD_TUTORIAL=OFF \
             -DPINEFORGE_VERSION_SOURCE=FILE \
-            -DCMAKE_INSTALL_PREFIX="${PWD}/${stage}" \
-            ${CMAKE_EXTRA}
+            -DCMAKE_INSTALL_PREFIX="${PWD}/${stage}"
 
       - name: Build
         run: cmake --build build -j 4
@@ -491,11 +472,7 @@ jobs:
           base="pineforge-${TAG}-${TRIPLE}"
           tarball="${base}.tar.gz"
           tar -czf "${tarball}" -C stage "${base}"
-          if command -v sha256sum >/dev/null; then
-            sha256sum "${tarball}" > "${tarball}.sha256"
-          else
-            shasum -a 256 "${tarball}" > "${tarball}.sha256"
-          fi
+          sha256sum "${tarball}" > "${tarball}.sha256"
           echo "tarball=${tarball}"           >> "$GITHUB_OUTPUT"
           echo "sha256=${tarball}.sha256"     >> "$GITHUB_OUTPUT"
 
