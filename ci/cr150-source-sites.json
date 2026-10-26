@@ -36836,6 +36836,28 @@
    "ordinal": 1
   },
   {
+   "file": "src/source/pine_aux_security.cpp",
+   "symbol": "<temp:vector>",
+   "scope": [
+    "namespace pineforge #1",
+    "void source :: PineStrategyHost :: release_aux_security_chart_ranges ( ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: vector < std :: size_t >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_aux_security.cpp",
+   "symbol": "<temp:vector>",
+   "scope": [
+    "namespace pineforge #1",
+    "void source :: PineStrategyHost :: release_aux_security_chart_ranges ( ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: vector < std :: size_t >",
+   "ordinal": 2
+  },
+  {
    "file": "src/source/pine_intent_state.hpp",
    "symbol": "id",
    "scope": [
