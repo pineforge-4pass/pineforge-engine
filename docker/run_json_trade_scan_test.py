@@ -6,6 +6,7 @@ neither a sink serializer nor a trade parser. Counters and I/O fault injection
 are test-only wrappers around the real implementation.
 """
 from contextlib import contextmanager
+import errno
 import hashlib
 import io
 import os
@@ -709,3 +710,107 @@ def test_digest_refusal_discards_provisional_report_bytes(tmp_path, monkeypatch)
     assert text == run_json.failure_line(DIGEST_DIFFERS, "engine_invariant", {})
     assert library.freed == library.installed == changed
     assert all(not Path(path).exists() for path in changed)
+
+
+@pytest.mark.parametrize("fault", ["eio", "truncate"],
+                         ids=["injected-EIO", "mid-scan-truncation"])
+def test_oserror_during_trade_scan_is_a_typed_refusal_and_releases_fd(
+        tmp_path, monkeypatch, fault):
+    rows = []
+    for index in range(8001):
+        rows.append(_point(index))
+        if index in (0, 4000, 8000):
+            rows.append(_trade(1 + index // 4000))
+    with _sink(tmp_path, rows) as (sink, _, _):
+        path = Path(sink.path)
+        size = path.stat().st_size
+        assert size > 3 * WINDOW and sink.counts["T"] == 3
+        opened = []
+        calls = 0
+        original_init = run_json._UncachedSinkFile.__init__
+        original_read = run_json._UncachedSinkFile.read
+
+        def initialize(file, stream):
+            original_init(file, stream)
+            opened.append((file, file.fileno()))
+
+        def read(file, count=-1):
+            nonlocal calls
+            calls += 1
+            assert len(opened) == 1 and file is opened[0][0]
+            if calls == 2:
+                assert file.position > 0
+                if fault == "eio":
+                    raise OSError(errno.EIO, "injected")
+                assert count < 0 or count > 17
+                cutoff = file.position + 17
+                assert cutoff < size
+                # B has already opened and read once. Keep a partial window;
+                # the real read, rather than this wrapper, detects the short.
+                with path.open("r+b") as changed:
+                    changed.truncate(cutoff)
+            return original_read(file, count)
+
+        # A verified the complete multi-window sink before either seam exists.
+        monkeypatch.setattr(run_json._UncachedSinkFile, "__init__", initialize)
+        monkeypatch.setattr(run_json._UncachedSinkFile, "read", read)
+        with pytest.raises(run_json.RunFailure) as failure:
+            list(sink.records("T"))
+        _assert_format_error(failure.value)
+        assert calls == 2 and len(opened) == 1
+        file, fd = opened[0]
+        assert file.closed and file.buffer is None
+        with pytest.raises(OSError):
+            os.fstat(fd)
+
+
+def test_trailer_crosses_window_boundary_without_hashing_trailer_bytes(
+        tmp_path, monkeypatch):
+    start = WINDOW - 20
+    trade = _trade(1)
+    rows = [_padding_before(start, following=[trade]), trade]
+    with _sink(tmp_path, rows) as (sink, _, _):
+        raw = Path(sink.path).read_bytes()
+        assert _trailer_start(raw) == start
+        assert len(raw[start:]) > 20 and len(raw) > WINDOW
+        expected = [row for row in _strict(sink.path)[0] if row.tag == "T"]
+        original_hash = hashlib.sha256
+        states = []
+
+        class Digest:
+            def __init__(self, data=b"", **kwargs):
+                self.inner = original_hash(data, **kwargs)
+                self.parts = [bytes(data)] if data else []
+                states.append(self)
+
+            def update(self, data):
+                self.parts.append(bytes(data))
+                return self.inner.update(data)
+
+            def __getattr__(self, name):
+                return getattr(self.inner, name)
+
+        monkeypatch.setattr(hashlib, "sha256", Digest)
+        assert list(sink.records("T")) == expected
+        assert len(states) == 1
+        # Neither the first 20 trailer bytes nor its next-window remainder
+        # belongs to the hash, including when the trailer line is carried.
+        assert b"".join(states[0].parts) == raw[:start]
+
+
+def test_unterminated_trailer_crossing_window_boundary_is_a_format_refusal(tmp_path):
+    start = WINDOW - 20
+    trade = _trade(1)
+    rows = [_padding_before(start, following=[trade]), trade]
+    with _sink(tmp_path, rows) as (sink, _, _):
+        path = Path(sink.path)
+        raw, identity = path.read_bytes(), _identity(path)
+        assert _trailer_start(raw) == start
+        assert len(raw[start:]) > 20 and len(raw) > WINDOW
+        assert raw.endswith(b"\n")
+        # Preserve the verified inode/size and body; remove only trailer LF.
+        path.write_bytes(raw[:-1] + b" ")
+        assert _identity(path) == identity
+        with pytest.raises(run_json.RunFailure) as failure:
+            list(sink.records("T"))
+        _assert_format_error(failure.value)
