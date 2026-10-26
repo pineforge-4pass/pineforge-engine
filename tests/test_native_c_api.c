@@ -10323,11 +10323,11 @@ static void check_started_then_failed_report(void) {
     CHECK_EQ_INT(native_state.failure_code, PF_NATIVE_FAILURE_CALLBACK_EXCEPTION,
                  "the refused reuse changed the durable callback cause");
     CHECK_EQ_INT(strategy_last_run_status(state.host), 1, "the refused reuse changed run status");
-    CHECK(strcmp(strategy_get_last_error_code(state.host), "engine_invariant") == 0
+    CHECK(strcmp(strategy_get_last_error_code(state.host), "engine_unclassified_error") == 0
               && strcmp(strategy_get_last_error_args(state.host), "{}") == 0
               && strcmp(strategy_get_last_error(state.host),
-                        "native host already failed") == 0,
-          "the refused reuse lost its own begin-refusal diagnostic");
+                        "native C callback refused in on_bar") == 0,
+          "the refused reuse changed the original callback diagnostic");
     strategy_native_report_free_v1(&reuse);
     strategy_native_host_free(state.host);
 }
