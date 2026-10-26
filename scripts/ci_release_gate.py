@@ -723,7 +723,7 @@ def _require_ci_post(api: API, repo: str, sha: str, history: History) -> str:
         full = all(values and all(value == "success" for value in values)
                    for values in required.values())
         conclusion = run.get("conclusion")
-        # Fail closed for a run that does not prove (CORE-TOP's table). Past the
+        # Fail closed for a run that does not prove (the newer-run table). Past the
         # failed-build check above, a non-proving run may be passed over for an
         # older proof only when it is a run-level success whose four legs are all
         # present and each success or skipped, or a run-level skipped run whose
