@@ -54,7 +54,7 @@ The examples below call the image `pineforge`: tag the pulled one that way
 (`docker tag ghcr.io/pineforge-4pass/pineforge-release:latest pineforge`) or
 write its full name.
 
-The next minor release adds two diagnostics to every successful executed
+Release 1.8.0 adds two diagnostics to every successful executed
 report from this harness, including ordinary and selected array reports,
 named-sink reports and FD small reports:
 `diagnostics.run_profile` is exactly `"unjailed"` or `"jailed"`, frozen at
