@@ -75,10 +75,49 @@ void run_case(bool duplicate_writer) {
     pipe.close_reader();
     const auto after_close = fd_trace.record("after closing reader");
 
-    require(after_write.flags == flags && after_write.descriptor_flags == descriptor_flags
-            && after_drain.flags == flags && after_drain.descriptor_flags == descriptor_flags
-            && after_close.flags == flags && after_close.descriptor_flags == descriptor_flags,
+#if defined(__APPLE__)
+    const int raw_difference = flags ^ after_write.flags;
+    require(raw_difference == 0 || raw_difference == fd_flag_diagnostics::darwin_was_written,
+            fd_trace.message("pipe write changed more than Darwin's written bit"));
+#else
+    require(after_write.flags == flags && after_drain.flags == flags && after_close.flags == flags,
+            fd_trace.message("pipe write changed raw status flags"));
+#endif
+    require(fd_flag_diagnostics::same_flags(fd_trace.baseline(), after_write)
+            && fd_flag_diagnostics::same_flags(fd_trace.baseline(), after_drain)
+            && fd_flag_diagnostics::same_flags(fd_trace.baseline(), after_close),
+            fd_trace.message("comparable pipe writer flags changed"));
+    require(fd_flag_diagnostics::comparable_status_flags(after_write.flags)
+                == fd_flag_diagnostics::comparable_status_flags(flags)
+            && after_write.descriptor_flags == descriptor_flags
+            && fd_flag_diagnostics::comparable_status_flags(after_drain.flags)
+                == fd_flag_diagnostics::comparable_status_flags(flags)
+            && after_drain.descriptor_flags == descriptor_flags
+            && fd_flag_diagnostics::comparable_status_flags(after_close.flags)
+                == fd_flag_diagnostics::comparable_status_flags(flags)
+            && after_close.descriptor_flags == descriptor_flags,
             fd_trace.message("pipe writer flags changed"));
+
+    // Mutate observations of the real pipe without involving an engine.
+    for (const int bit : {O_NONBLOCK, O_APPEND, O_ACCMODE}) {
+        auto changed = fd_trace.baseline();
+        changed.flags ^= bit;
+        require(fd_flag_diagnostics::comparable_status_flags(changed.flags)
+                    != fd_flag_diagnostics::comparable_status_flags(flags)
+                && !fd_flag_diagnostics::same_flags(fd_trace.baseline(), changed),
+                fd_trace.message("comparison hid a caller-controlled status flag change"));
+    }
+    auto changed_descriptor = fd_trace.baseline();
+    changed_descriptor.descriptor_flags ^= FD_CLOEXEC;
+    require(!fd_flag_diagnostics::same_flags(fd_trace.baseline(), changed_descriptor),
+            fd_trace.message("comparison hid an FD_CLOEXEC change"));
+    auto failed_query = fd_trace.baseline();
+    failed_query.flags = -1;
+    require(fd_flag_diagnostics::comparable_status_flags(failed_query.flags) == failed_query.flags
+            && !fd_flag_diagnostics::same_flags(fd_trace.baseline(), failed_query)
+            && !fd_flag_diagnostics::same_flags(failed_query, fd_trace.baseline())
+            && !fd_flag_diagnostics::same_flags(failed_query, failed_query),
+            fd_trace.message("failed F_GETFL query compared equal"));
 }
 } // namespace
 

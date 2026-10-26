@@ -451,7 +451,9 @@ void completed_fd_removal(const fs::path& directory, const std::vector<Bar>& bar
         fd_trace.record("after second removal checks/fill_report");
         unchanged_storage(host, storage, scratch);
         const auto final_flags = fd_trace.record("final NULL removal assertion");
-        require(final_flags.flags == flags && final_flags.descriptor_flags == descriptor_flags,
+        require(fd_flag_diagnostics::comparable_status_flags(final_flags.flags)
+                    == fd_flag_diagnostics::comparable_status_flags(flags)
+                && final_flags.descriptor_flags == descriptor_flags,
                 fd_trace.message("NULL removal closed the borrowed fd or changed its flags"));
 
         // A retained receipt must not keep the sink installed for the next
@@ -516,7 +518,8 @@ std::string fd_run(const fs::path& directory, const std::vector<Bar>& bars,
         require(strategy_set_report_sink_fd_v1(host.handle(), &invalid) == -1,
                 "bad replacement version accepted");
         require(receipt(host).complete == 1, "bad replacement erased completed receipt");
-        require(::fcntl(output->fd(), F_GETFL) == flags
+        require(fd_flag_diagnostics::comparable_status_flags(::fcntl(output->fd(), F_GETFL))
+                    == fd_flag_diagnostics::comparable_status_flags(flags)
                 && ::fcntl(output->fd(), F_GETFD) == descriptor_flags,
                 "writer changed caller fd flags");
         require(strategy_set_report_sink_v1(host.handle(), nullptr) == 0,

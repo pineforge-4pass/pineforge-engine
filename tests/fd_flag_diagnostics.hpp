@@ -11,6 +11,26 @@
 
 namespace fd_flag_diagnostics {
 
+#if defined(__APPLE__)
+// Darwin FWASWRITTEN is kernel bookkeeping: "descriptor was written".
+// The engine-free test_pipe_writer_fd_flags macOS run observed 0x00010000
+// appear on the first successful pipe write without any engine involved.
+#if defined(FWASWRITTEN)
+inline constexpr int darwin_was_written = FWASWRITTEN;
+#else
+inline constexpr int darwin_was_written = 0x00010000;
+#endif
+static_assert(darwin_was_written == 0x00010000, "unexpected Darwin FWASWRITTEN bit");
+#endif
+
+inline int comparable_status_flags(int flags) {
+#if defined(__APPLE__)
+    return flags < 0 ? flags : flags & ~darwin_was_written;
+#else
+    return flags;
+#endif
+}
+
 struct Snapshot {
     const char* boundary;
     int flags;
@@ -38,7 +58,9 @@ inline Snapshot snapshot(int descriptor, const char* boundary) {
 }
 
 inline bool same_flags(const Snapshot& before, const Snapshot& after) {
-    return before.flags == after.flags && before.descriptor_flags == after.descriptor_flags;
+    return before.flags >= 0 && after.flags >= 0
+        && comparable_status_flags(before.flags) == comparable_status_flags(after.flags)
+        && before.descriptor_flags == after.descriptor_flags;
 }
 
 inline void append_identity(std::ostream& output, const Snapshot& value) {

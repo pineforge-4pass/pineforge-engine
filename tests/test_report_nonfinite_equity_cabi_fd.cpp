@@ -179,7 +179,9 @@ void run_case(int field, double value, bool refuses) {
                 "finite C fd stream did not complete");
     }
     const auto final_flags = fd_trace.record("final assertion");
-    require(flags >= 0 && fd_flags >= 0 && final_flags.flags == flags
+    require(flags >= 0 && fd_flags >= 0
+            && fd_flag_diagnostics::comparable_status_flags(final_flags.flags)
+                == fd_flag_diagnostics::comparable_status_flags(flags)
             && final_flags.descriptor_flags == fd_flags, fd_trace.message("borrowed fd changed"));
 }
 } // namespace
