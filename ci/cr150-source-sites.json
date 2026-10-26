@@ -9031,7 +9031,7 @@
     "class PineExecutionAdapter #1"
    ],
    "cls": "decl",
-   "spelling": "std :: unordered_map < std :: uint64_t , native_order :: RequestHandle >",
+   "spelling": "std :: unordered_map < std :: uint64_t , detail :: LiveSourceHandle >",
    "ordinal": 1
   },
   {
@@ -31524,7 +31524,7 @@
     "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
     "auto submit_leg = [ & ] ( PineOrderFamily family , native_order :: Trigger trigger ) #1",
     ") #1",
-    "if ( defer_new_instance && live_by_source_key_ . find ( key_for ( replacement_key ) ) = = live_by_source_key_ . end ( ) ) #1"
+    "if ( defer_new_instance && live_by_source_key_ . find ( checked_live_key ( replacement_key ) ) = = live_by_source_key_ . end ( ) ) #1"
    ],
    "cls": "assign",
    "spelling": "queued = . . .",
@@ -31538,7 +31538,7 @@
     "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
     "auto submit_leg = [ & ] ( PineOrderFamily family , native_order :: Trigger trigger ) #1",
     ") #1",
-    "if ( defer_new_instance && live_by_source_key_ . find ( key_for ( replacement_key ) ) = = live_by_source_key_ . end ( ) ) #1"
+    "if ( defer_new_instance && live_by_source_key_ . find ( checked_live_key ( replacement_key ) ) = = live_by_source_key_ . end ( ) ) #1"
    ],
    "cls": "grow",
    "spelling": "pending_bracket_legs_ . push_back ( . . . )",
@@ -31552,7 +31552,7 @@
     "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
     "auto submit_leg = [ & ] ( PineOrderFamily family , native_order :: Trigger trigger ) #1",
     ") #1",
-    "if ( defer_new_instance && live_by_source_key_ . find ( key_for ( replacement_key ) ) = = live_by_source_key_ . end ( ) ) #1"
+    "if ( defer_new_instance && live_by_source_key_ . find ( checked_live_key ( replacement_key ) ) = = live_by_source_key_ . end ( ) ) #1"
    ],
    "cls": "assign",
    "spelling": "queued = . . .",
@@ -36601,6 +36601,17 @@
    ],
    "cls": "alloc",
    "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "key",
+   "scope": [
+    "namespace pineforge :: source #5",
+    "std :: uint64_t PineExecutionAdapter :: checked_live_key ( const SourceId & spelling ) const #1"
+   ],
+   "cls": "assign",
+   "spelling": "key = . . .",
    "ordinal": 1
   },
   {
