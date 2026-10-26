@@ -1,4 +1,4 @@
-"""Require the strict diagnostic in its control and absent from the Release archive."""
+"""Require the strict diagnostic in its control and absent from the built library archive."""
 
 import argparse
 from pathlib import Path
@@ -31,9 +31,6 @@ def main() -> int:
     parser.add_argument("--archive", required=True)
     parser.add_argument("--strict-executable", required=True)
     args = parser.parse_args()
-    if args.config.casefold() != "release":
-        print(f"SKIP CONFIG={args.config!r}: archive check requires Release")
-        return 77
     try:
         strict_present = contains_needle(args.strict_executable)
         archive_present = contains_needle(args.archive)
