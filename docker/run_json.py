@@ -6047,6 +6047,10 @@ class _ReportSink:
             descriptor = ReportSinkC(ctypes.sizeof(ReportSinkC), 1, os.fsencode(self.path),
                                      run_id.encode("utf-8"), os.fsencode(self.directory))
             if lib.strategy_set_report_sink_v1(state, ctypes.byref(descriptor)) != 0:
+                failure = run_failure(lib, state)
+                recorded = engine_failure_code(lib, state)
+                if failure is not None and recorded is not None and recorded[0]:
+                    raise RunFailure(*failure)
                 raise _engine_invariant("the fresh strategy refused its report sink")
         except BaseException:
             self.close()

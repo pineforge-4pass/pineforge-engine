@@ -99,6 +99,16 @@ for two additive diagnostics keys, described below.
   only, not the trade ledger or the report files. This is not a change of
   behaviour in 1.8.0.
 
+### Refused internal report sink
+
+- **The typed failure is reported.** When the engine refused the internal
+  report sink of the default route, because the scratch arena descriptor, size
+  or profile flag in the environment was unusable, `run_json.py` reported
+  `engine_invariant` and dropped the failure the engine had recorded. It now
+  reports that failure (`report_sink_failed` with reason `arena_backing`). If
+  the engine recorded nothing, the previous message is kept. Successful runs
+  are unchanged.
+
 ### Storage building block
 
 - **Fixed-shape O(1) store for Pine collections (#515).**
