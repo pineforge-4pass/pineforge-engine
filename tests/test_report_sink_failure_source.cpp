@@ -14,6 +14,16 @@ namespace detail = pineforge::detail;
 constexpr auto chunk = detail::ScratchArena::kChunkBytes;
 constexpr const char* retired_id = "W1-retired-corrupted-cohort";
 
+// The same explicit-instantiation access seam as test_id_adapter_storage: no
+// changed class definition and no production friend. Used only to assert the
+// setup assumption below (the target is on disk, not resident).
+using Adapter = pineforge::source::PineExecutionAdapter;
+template<class Tag, auto Member> struct Access {
+    friend auto access(Tag) { return Member; }
+};
+struct Cohorts { friend auto access(Cohorts); };
+template struct Access<Cohorts, &Adapter::cohorts_by_id_>;
+
 // Locate by the real AVL-node layout AND its unique key, never by an fd
 // number/prefix or an English error. Both file mode and arena mode use the
 // same 56-byte links + 40-byte CohortFacts::Record; offset zero is a sentinel.
@@ -93,6 +103,11 @@ public:
         set_syminfo_timezone("UTC");
         set_syminfo_session("24x7");
         set_syminfo_mintick(0.25);
+        // CR-347 round 3 made the implicit cohort spill amortised (once per
+        // interval, 64 at least); this fixture needs the retired target on
+        // disk after the all_sorted walk, as the eager spill used to leave it.
+        // Only the spill timing changes; the codec rejection is still real.
+        adapter_.fixture_cohort_implicit_spill_interval(1);
     }
     void on_source_bar(const pineforge::Bar&) override {
         const int index = pine_bar_index();
@@ -114,6 +129,11 @@ public:
                     "poison target must follow another cohort in hash order");
             pineforge::BrokerStateHashSink hash;
             adapter_.hash_state(hash);
+            // Setup assumption, named so a later spill change fails HERE and
+            // not as "callbacks=64": the corrupted record is the only copy.
+            const auto& cohorts = adapter_.*access(Cohorts{});
+            require(cohorts.find_resident(retired_id) == cohorts.end(),
+                    "poison target must be spilled (not resident) before it is corrupted");
             poison_cohort(arena_fd);
             poisoned = true;
             // Mutation: replace row.handle == 0 with false in production

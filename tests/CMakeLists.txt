@@ -250,6 +250,7 @@ set(TEST_SOURCES
     test_short_margin_script_state
     test_ringbuffer
     test_timeframe
+    test_session_many_windows
     test_magnifier
     test_magnifier_real_bars
     test_magnifier_distributions
@@ -282,6 +283,7 @@ set(TEST_SOURCES
     test_integration
     test_request_security
     test_aux_security_feed
+    test_aux_security_range_capacity
     test_native_security_feed
     test_split_feed_partial_bucket
     test_ltf_lookahead_first_bucket
@@ -1874,6 +1876,7 @@ list(APPEND TEST_SOURCES
     test_value_admission_risk
     # EN-132 source command admission: public host, synthetic feed, no fixtures.
     test_value_admission_doors
+    test_pine_composite_id_admission
     # The source of test_selected_quote_seal is supplied by a separate change
     # and integrated with this registration before configure.
     test_selected_quote_seal
@@ -7251,6 +7254,19 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     endforeach()
 endif()
 
+add_test(NAME test_run_json_sink_fd_skip_accounting COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/tests/test_run_json_sink_fd_skip_accounting.py --artifacts ${CMAKE_CURRENT_BINARY_DIR}/pytest-no-skips/test_run_json_sink_fd_skip_accounting)
+
+# Property reads and the diagnostic belong before the lane loop;
+# the fence grammar permits target definitions, not get_target_property/message.
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    get_target_property(_pf_source_key_type pineforge TYPE)
+    get_target_property(_pf_source_key_options pineforge COMPILE_OPTIONS)
+    get_target_property(_pf_source_key_definitions pineforge COMPILE_DEFINITIONS)
+    if(NOT _pf_source_key_type STREQUAL "STATIC_LIBRARY")
+        message(STATUS "test_live_source_key_alias and test_live_source_key_spellings_strict not registered: pineforge TYPE is ${_pf_source_key_type}; the adapter overrides require STATIC_LIBRARY")
+    endif()
+endif()
+
 # CR-150: one file per lane in tests/cr150.d/<lane>.cmake (see tests/cr150.d/README.md).
 file(GLOB CR150_LANE_CMAKE CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/cr150.d/*.cmake")
 list(SORT CR150_LANE_CMAKE)
@@ -7637,6 +7653,40 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND EXISTS "${PROJECT_SOURCE_DIR}/corpus/validat
     set_target_properties(cr224_nofile_strategy PROPERTIES PREFIX "" SUFFIX ".so" LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/cr224_nofile")
 endif()
 # --- CR-150 core-cr150-cr224 end ---
+
+# --- CR-150 live-source-key begin ---
+# The wrappers supply adapter symbols before extraction from the static archive.
+# Plain normal-library rows and the custom inventory are in the lane file.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND _pf_source_key_type STREQUAL "STATIC_LIBRARY")
+    add_executable(test_live_source_key_alias
+        test_live_source_key_alias.cpp test_live_source_key_alias_adapter.cpp)
+    target_link_libraries(test_live_source_key_alias PRIVATE pineforge)
+    target_include_directories(test_live_source_key_alias PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    target_compile_options(test_live_source_key_alias PRIVATE -UNDEBUG)
+    if(_pf_source_key_options)
+        target_compile_options(test_live_source_key_alias PRIVATE ${_pf_source_key_options})
+    endif()
+    if(_pf_source_key_definitions)
+        target_compile_definitions(test_live_source_key_alias PRIVATE ${_pf_source_key_definitions})
+    endif()
+    target_compile_definitions(test_live_source_key_alias PRIVATE PINEFORGE_TEST_NARROW_SOURCE_KEY)
+    add_test(NAME test_live_source_key_alias COMMAND test_live_source_key_alias)
+
+    add_executable(test_live_source_key_spellings_strict
+        test_live_source_key_spellings_strict.cpp test_live_source_key_spellings_strict_adapter.cpp)
+    target_link_libraries(test_live_source_key_spellings_strict PRIVATE pineforge)
+    target_include_directories(test_live_source_key_spellings_strict PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    target_compile_options(test_live_source_key_spellings_strict PRIVATE -UNDEBUG -ffp-contract=off)
+    if(_pf_source_key_options)
+        target_compile_options(test_live_source_key_spellings_strict PRIVATE ${_pf_source_key_options})
+    endif()
+    if(_pf_source_key_definitions)
+        target_compile_definitions(test_live_source_key_spellings_strict PRIVATE ${_pf_source_key_definitions})
+    endif()
+    add_test(NAME test_live_source_key_spellings_strict COMMAND test_live_source_key_spellings_strict)
+endif()
+# --- CR-150 live-source-key end ---
+
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
         message(FATAL_ERROR "PR fast row or executable is missing: ${_pf_fast_test}")
