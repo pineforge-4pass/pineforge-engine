@@ -823,15 +823,15 @@ def test_window_edge_sweep_matches_strict_trade_rows(tmp_path, edge, pad):
     case = f"{edge} pad={pad}"
     tail = [_trade(1), _point(0), _point(1), _trade(2), ["K", 50.]]
     replacements = []
-    for row in tail[2:4]:
+    # The escaped edge escapes the FIRST T (at pad) and one E and keeps the
+    # second T literal: swapping rows would reorder the trades and A refuses it.
+    for row in ((tail[0], tail[2]) if edge == "escaped" else tail[2:4]):
         literal = ordinary.encoded(row)
         tag = f'["{row[0]}",'.encode("ascii")
         escaped_tag = b'["\\u00' + f"{ord(row[0]):02x}".encode("ascii") + b'",'
         replacements.append((literal, literal.replace(tag, escaped_tag, 1)))
     extra = sum(len(escaped) - len(literal) for literal, escaped in replacements)
-    if edge == "escaped":
-        tail[0], tail[3] = tail[3], tail[0]
-    padding = (_padding_before(pad) if edge != "trailer" else
+    padding =(_padding_before(pad) if edge != "trailer" else
                _padding_before(pad - extra, following=tail))
     with _sink(tmp_path, [padding, *tail], verify=False) as (sink, library, report):
         # Escape the selected E and T tags, retaining one literal tag of each.
