@@ -7253,6 +7253,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     endforeach()
 endif()
 
+add_test(NAME test_run_json_sink_fd_skip_accounting COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/tests/test_run_json_sink_fd_skip_accounting.py --artifacts ${CMAKE_CURRENT_BINARY_DIR}/pytest-no-skips/test_run_json_sink_fd_skip_accounting)
+
 # CR-150: one file per lane in tests/cr150.d/<lane>.cmake (see tests/cr150.d/README.md).
 file(GLOB CR150_LANE_CMAKE CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/cr150.d/*.cmake")
 list(SORT CR150_LANE_CMAKE)

@@ -134,10 +134,10 @@ ordinary creation/write failures keep their existing failure kinds and errno. Ev
 and appends the directory-selection detail. If creation in the selected `/var/tmp` fails, the detail names that directory, the rejected
 first candidate and `set TMPDIR to a disk-backed directory`, except as described below.
 
-An ENOTSUP probe gives no filesystem evidence: use the default candidate as in 1.6.3 (error 0, no tmpfs claim, no refusal note).
+An ENOTSUP probe gives no filesystem evidence: keep the candidate, initially the legacy TMPDIR-or-/tmp choice (error 0, no tmpfs claim, no refusal note).
 This covers hosts with no probe (neither Linux nor macOS) and real ENOTSUP from stat/faccessat/statfs; the test is by errno value,
 so on Linux ENOTSUP and EOPNOTSUPP are both 95. A FUSE/9p/network mount answering 95 keeps its candidate; a later create failure
-keeps the plain 1.6.3 text. If the first candidate is proven tmpfs/ramfs and /var/tmp answers ENOTSUP, select /var/tmp without the rejected-candidate note.
+keeps the plain create text without a note. If the first candidate is proven tmpfs/ramfs and /var/tmp answers ENOTSUP, select /var/tmp without the rejected-candidate note.
 
 If both default candidates are proven tmpfs/ramfs, refuse with `ENODEV` and
 `scratch requires disk backing`. The failure detail names every candidate tried
