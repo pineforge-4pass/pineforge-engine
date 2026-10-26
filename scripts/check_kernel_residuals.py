@@ -318,6 +318,8 @@ class Hit:
     source: str    # "strings", "nm", "header" (code), "header-literal" or "source-literal"
     line: str      # the text with its location, as a finding prints it
     text: str = "" # the text itself: the line of `strings`/`nm`, the code line, the literal
+    location: str = "" # installed-header/source file:line, for diagnostics only
+    member: str = ""   # an existing nm member heading, for diagnostics only
 
 
 @dataclass(frozen=True)
@@ -408,27 +410,41 @@ def scan(lines: list[str], source: str, *, texts: bool = True,
     header's code (literals blanked) is not. A mangled token is skipped: its
     symbol is judged by the demangled line `nm -C` prints for it."""
     hits: list[Hit] = []
+    member = ""
     for index, raw in enumerate(lines):
         line = raw.rstrip("\n")
+        # Keep the judged line unchanged. GNU nm prints member.o:, while
+        # Apple's nm prints archive(member.o):. Unrecognized headings reset
+        # the diagnostic member rather than carrying the previous one over.
+        if source == "nm" and line.endswith(":"):
+            label = line[:-1]
+            if label.endswith(")") and "(" in label:
+                label = label.rsplit("(", 1)[1][:-1]
+            member = (label if line == line.strip() and label.endswith(".o")
+                      and not any(char.isspace() for char in label) else "")
         if source == "strings" and SANITIZER_FRAME.match(line):
             continue
+        location = locations[index] if locations is not None else ""
         where = f"{locations[index]}: {line}" if locations is not None else line
         for identifier in sorted(set(ARCHIVE_IDENTIFIER.findall(line))):
             if MANGLED.match(identifier) or identifier in LANGUAGE_DUNDERS:
                 continue
             if SENTINEL[1].match(identifier):
                 if texts:
-                    hits.append(Hit("identifier", identifier, SENTINEL[0], source, where, line))
+                    hits.append(Hit("identifier", identifier, SENTINEL[0], source, where, line,
+                                    location=location, member=member))
                 continue
             for name, pattern in IDENTIFIER_PATTERNS:
                 if pattern.search(identifier):
-                    hits.append(Hit("identifier", identifier, name, source, where, line))
+                    hits.append(Hit("identifier", identifier, name, source, where, line,
+                                    location=location, member=member))
                     break
         if texts:
             phrase_line = CLONE_SUFFIX.sub("", line) if source in ("strings", "nm") else line
             for name, pattern in PHRASE_PATTERNS:
                 if pattern.search(phrase_line):
-                    hits.append(Hit("phrase", line, name, source, where, line))
+                    hits.append(Hit("phrase", line, name, source, where, line,
+                                    location=location, member=member))
                     break
     return hits
 
@@ -492,6 +508,54 @@ def vocabulary_name(identifier: str) -> bool:
             or bool(SENTINEL[1].match(identifier)))
 
 
+def hit_context(hit: Hit) -> str:
+    """Display an existing hit, without changing its token or ruling.
+
+    Mark the vocabulary match, retaining the entire original line when it
+    fits. Longer lines use a window around the match, capped at 200 characters
+    including the [[markers]] and any truncation ellipses.
+    """
+    text = hit.text
+    offset = 0
+    if hit.kind == "identifier":
+        identifier = next(match for match in ARCHIVE_IDENTIFIER.finditer(text)
+                          if match.group() == hit.token)
+        target = identifier.group()
+        offset = identifier.start()
+        patterns = IDENTIFIER_PATTERNS + (SENTINEL,)
+    else:
+        target = CLONE_SUFFIX.sub("", text) if hit.source in ("strings", "nm") else text
+        patterns = PHRASE_PATTERNS
+    pattern = next(pattern for name, pattern in patterns if name == hit.pattern)
+    match = pattern.search(target)
+    start, end = ((offset + match.start(), offset + match.end())
+                  if match is not None else (0, len(text)))
+    left, right = 0, len(text)
+    if len(text) + 4 > 200:
+        width = 200 - 4 - 6  # Reserve the markers and both possible ellipses.
+        left = max(0, start - max(0, width - (end - start)) // 2)
+        right = min(len(text), left + width)
+        left = max(0, right - width)
+    marked_start, marked_end = max(start, left), min(end, right)
+    context = (text[left:marked_start] + "[[" + text[marked_start:marked_end] + "]]"
+               + text[marked_end:right])
+    context = ("..." if left else "") + context + ("..." if right < len(text) else "")
+    surface = {"header": "installed header", "header-literal": "installed header",
+               "source-literal": "source"}.get(hit.source, hit.source)
+    fields = [f"surface={surface}"]
+    if hit.source == "strings":
+        # Whole-archive strings -a has neither member labels nor offsets. Do
+        # not guess a member from an archive name-table or cross-member run.
+        fields.append("member=unavailable (strings -a has no member locations)")
+    elif hit.source == "nm":
+        fields.append("member=" + (hit.member or
+                      "unavailable (nm -C emitted no recognized member heading)"))
+    if hit.location:
+        fields.append("location=" + hit.location)
+    fields.append("line=" + context)
+    return "; ".join(fields)
+
+
 def evaluate(strings_lines: list[str], nm_lines: list[str], ruled: Ruled,
              header_lines: tuple[list[str], list[str], list[str], list[str]] | None = None,
              source_literals: tuple[list[str], list[str]] | None = None
@@ -515,10 +579,15 @@ def evaluate(strings_lines: list[str], nm_lines: list[str], ruled: Ruled,
     covered: set[str] = set()
     reported: set[tuple[str, str]] = set()
 
-    def report(kind: str, token: str, detail: str) -> None:
+    def report(kind: str, token: str, detail: str, hit: Hit) -> None:
         if (kind, token) not in reported:
             reported.add((kind, token))
-            findings.append(Finding("unruled", token, detail))
+            try:
+                context = hit_context(hit)
+            except (StopIteration, ValueError):
+                # Diagnostics must never change the verdict or hide the other findings.
+                context = f"surface={hit.source}; line=(context unavailable)"
+            findings.append(Finding("unruled", token, detail + "; " + context))
 
     for hit in hits + header_hits + source_hits:
         if is_text(hit) or hit.kind == "phrase":
@@ -530,7 +599,7 @@ def evaluate(strings_lines: list[str], nm_lines: list[str], ruled: Ruled,
                 if text in ruled.header_only and hit.source in ARCHIVE_SOURCES:
                     report("text", text[:160],
                            f"ruled for the installed headers only (its row says "
-                           f"'{HEADER_ONLY_MARK}'), but {hit.source} carries it")
+                           f"'{HEADER_ONLY_MARK}'), but {hit.source} carries it", hit)
                 else:
                     covered.add(text)
                 continue
@@ -539,16 +608,16 @@ def evaluate(strings_lines: list[str], nm_lines: list[str], ruled: Ruled,
                 if hit.token not in ruled.identifiers and name not in ruled.identifiers:
                     report("identifier", name,
                            f"identifier matches residual vocabulary {hit.pattern!r} via "
-                           f"{hit.source} and has no ADR-0001 row: {hit.line[:160]}")
+                           f"{hit.source} and has no ADR-0001 row", hit)
                     continue
                 report("text", hit.text[:160],
                        f"text names the ruled identifier {name!r} via {hit.source}, and a "
                        "ruled name never covers a text: the text needs its own ADR-0001 "
-                       "row, spelled exactly")
+                       "row, spelled exactly", hit)
                 continue
             report("text", hit.text[:160],
                    f"text matches residual vocabulary {hit.pattern!r} via {hit.source} "
-                   "and no ADR-0001 row spells it")
+                   "and no ADR-0001 row spells it", hit)
             continue
         name = symbol_name(hit.token, hit.source)
         ruled_as = next((candidate for candidate in (hit.token, name)
@@ -556,11 +625,11 @@ def evaluate(strings_lines: list[str], nm_lines: list[str], ruled: Ruled,
         if ruled_as is None:
             report("identifier", name,
                    f"identifier matches residual vocabulary {hit.pattern!r} via {hit.source} "
-                   f"and has no ADR-0001 row: {hit.line[:160]}")
+                   "and has no ADR-0001 row", hit)
         elif ruled_as in ruled.header_only and hit.source in ARCHIVE_SOURCES:
             report("identifier", name,
                    f"ruled for the installed headers only (its row says "
-                   f"'{HEADER_ONLY_MARK}'), but {hit.source} carries it: {hit.line[:160]}")
+                   f"'{HEADER_ONLY_MARK}'), but {hit.source} carries it", hit)
         else:
             present.add(ruled_as)
     for identifier in sorted(ruled.identifiers):

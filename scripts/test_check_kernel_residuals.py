@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import os
 from pathlib import Path
 import shutil
@@ -91,7 +92,8 @@ def find_cxx() -> str | None:
     return None
 
 
-def build_probe_archive(directory: Path, text: str = PROBE_SOURCE) -> Path:
+def build_probe_archive(directory: Path, text: str = PROBE_SOURCE, *,
+                        object_name: str = "residual_probe.o") -> Path:
     """`-g` archive of `text` (PROBE_SOURCE), or a skip when the host cannot build one."""
     compiler = find_cxx()
     if compiler is None:
@@ -100,7 +102,7 @@ def build_probe_archive(directory: Path, text: str = PROBE_SOURCE) -> Path:
         raise unittest.SkipTest("ar is not on PATH")
     source = directory / "residual_probe.cpp"
     source.write_text(text)
-    obj = directory / "residual_probe.o"
+    obj = directory / object_name
     archive = directory / "libresidual_probe.a"
     for argv in ([compiler, "-g", "-O0", "-c", str(source), "-o", str(obj)],
                  ["ar", "rcs", str(archive), str(obj)]):
@@ -406,6 +408,102 @@ class EvaluatorTests(unittest.TestCase):
         self.assertEqual(len(findings), 1)
 
 
+class FindingContextTests(unittest.TestCase):
+    def test_each_surface_marks_the_match_without_changing_the_finding_set(self) -> None:
+        ruled = guard.Ruled(frozenset({"pine_ruled_probe"}), frozenset())
+        text = "payload-prefix+TvJO/payload-suffix"
+        cases = (
+            ("strings", [text, text], ["T TvJO"], {}, "[[TvJO]]",
+             "member=unavailable (strings -a has no member locations)", 4, 0, 0),
+            ("nm", [], ["residual_probe.cpp.o:", "0000000000000000 T TvJO"],
+             {}, "0000000000000000 T [[TvJO]]",
+             "member=residual_probe.cpp.o", 2, 0, 0),
+            ("nm", [], ["libprobe.a(residual_probe.cpp.o):", "0000000000000000 T TvJO"],
+             {}, "0000000000000000 T [[TvJO]]",
+             "member=residual_probe.cpp.o", 2, 0, 0),
+            ("nm", [], ["0000000000000000 T TvJO"],
+             {}, "0000000000000000 T [[TvJO]]",
+             "member=unavailable (nm -C emitted no recognized member heading)", 2, 0, 0),
+            ("nm", [], ["prior.o:", "unrecognized.obj:", "0000000000000000 T TvJO"],
+             {}, "0000000000000000 T [[TvJO]]",
+             "member=unavailable (nm -C emitted no recognized member heading)", 2, 0, 0),
+            ("nm", [], ["prior.o:", "  unrecognized.o:", "0000000000000000 T TvJO"],
+             {}, "0000000000000000 T [[TvJO]]",
+             "member=unavailable (nm -C emitted no recognized member heading)", 2, 0, 0),
+            ("installed header", [], [],
+             {"header_lines": (["int TvJO();"], ["pineforge/probe.hpp:7"], [], [])},
+             "int [[TvJO]]();", "location=pineforge/probe.hpp:7", 1, 1, 0),
+            ("installed header", [], [],
+             {"header_lines": ([], [], [text], ["pineforge/probe.hpp:9"])},
+             "payload-prefix+[[TvJO]]/payload-suffix",
+             "location=pineforge/probe.hpp:9", 1, 1, 0),
+            ("source", [], [],
+             {"source_literals": ([text], ["src/probe.cpp:11"])},
+             "payload-prefix+[[TvJO]]/payload-suffix",
+             "location=src/probe.cpp:11", 1, 0, 1),
+        )
+        for surface, strings, nm, surfaces, marked, location, hits, headers, sources in cases:
+            with self.subTest(surface=surface, nm=nm, surfaces=surfaces):
+                findings, summary = guard.evaluate(
+                    ["pine_ruled_probe"] + strings, nm, ruled, **surfaces)
+                self.assertEqual([(f.kind, f.token) for f in findings], [("unruled", "TvJO")])
+                self.assertEqual(summary, {
+                    "hits": hits, "identifierHits": hits, "phraseHits": 0,
+                    "headerHits": headers, "sourceHits": sources,
+                    "ruledIdentifiersPresent": 1, "ruledPhrasesCovered": 0,
+                    "ruledIdentifiers": 1, "ruledPhrases": 0, "findings": 1,
+                })
+                message = str(findings[0])
+                self.assertIn(f"surface={surface};", message)
+                self.assertIn(location, message)
+                self.assertIn(marked, message)
+                if surface == "strings":
+                    self.assertIn("line=payload-prefix+[[TvJO]]/payload-suffix", message)
+
+    def test_text_and_header_only_findings_also_include_the_marked_context(self) -> None:
+        name = "PineRuled"
+        text = "strategy.entry blocked"
+        cases = (
+            ([text], guard.Ruled(frozenset(), frozenset()), None, text,
+             "line=[[strategy.entry]] blocked"),
+            ([name, "prefix " + name + " suffix"],
+             guard.Ruled(frozenset({name}), frozenset()), None,
+             "prefix " + name + " suffix", "line=prefix [[Pine]]Ruled suffix"),
+            ([name], guard.Ruled(frozenset({name}), frozenset(), frozenset({name})),
+             (["class PineRuled;"], ["pineforge/probe.hpp:4"], [], []), name,
+             "line=[[Pine]]Ruled"),
+            ([text], guard.Ruled(frozenset(), frozenset({text}), frozenset({text})),
+             ([], [], [text], ["pineforge/probe.hpp:4"]), text,
+             "line=[[strategy.entry]] blocked"),
+        )
+        for strings, ruled, headers, token, marked in cases:
+            with self.subTest(strings=strings, header_only=ruled.header_only):
+                findings, summary = guard.evaluate(strings, [], ruled, header_lines=headers)
+                self.assertEqual([(f.kind, f.token) for f in findings], [("unruled", token)])
+                self.assertEqual(summary["findings"], 1)
+                self.assertIn("surface=strings;", str(findings[0]))
+                self.assertIn(marked, str(findings[0]))
+
+    def test_long_lines_keep_the_marked_match_inside_the_200_character_context(self) -> None:
+        ruled = guard.Ruled(frozenset(), frozenset())
+        cases = (
+            ("a" * 240 + "+TvJO/" + "b" * 240, "TvJO", "[[TvJO]]"),
+            ("a" * 240 + "TvJO" + "b" * 240,
+             "a" * 240 + "TvJO" + "b" * 240, "[[aTvJO]]"),
+        )
+        for text, token, marked in cases:
+            with self.subTest(token=token):
+                findings, summary = guard.evaluate([text], [], ruled)
+                self.assertEqual([(f.kind, f.token) for f in findings], [("unruled", token)])
+                self.assertEqual(summary["findings"], 1)
+                self.assertIn("; line=", findings[0].detail)
+                context = findings[0].detail.split("; line=", 1)[1]
+                self.assertLessEqual(len(context), 200)
+                self.assertTrue(context.startswith("..."), context)
+                self.assertTrue(context.endswith("..."), context)
+                self.assertIn(marked, context)
+
+
 class AuditBlindSpotTests(unittest.TestCase):
     """The probes the third audit's two reviewers passed through the gate."""
 
@@ -559,6 +657,42 @@ class HeaderSurfaceTests(unittest.TestCase):
 
 class ArchiveSurfaceTests(unittest.TestCase):
     """What the gate reads out of a real `-g` archive, and what it must not."""
+
+    def test_a_strings_diagnostic_preserves_the_archive_failure_and_evidence(self) -> None:
+        text = "payload-prefix+TvJO/payload-suffix"
+        source = 'extern "C" const char* pine_ruled_probe() { return "' + text + '"; }\n'
+        with tempfile.TemporaryDirectory(prefix="pineforge-residual-context-") as directory:
+            work = Path(directory)
+            archive = build_probe_archive(work, source, object_name="residual_probe.cpp.o")
+            include_root = work / "include"
+            headers = include_root / "pineforge"
+            headers.mkdir(parents=True)
+            (headers / "probe.hpp").write_text("#pragma once\n")
+            (work / "CMakeLists.txt").write_text(
+                "set(PINEFORGE_KERNEL_SOURCES residual_probe.cpp)\n"
+                "install(DIRECTORY include/pineforge DESTINATION include\n"
+                '        PATTERN "source" EXCLUDE)\n')
+            adr = work / "adr.md"
+            adr.write_text(guard.SECTION_HEADING + "\n| `pine_ruled_probe` | archive symbol |\n")
+            evidence = work / "evidence"
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = guard.check(archive, adr, evidence_dir=evidence,
+                                   include_root=include_root, source_root=work)
+            result = json.loads((evidence / "summary.json").read_text())
+            self.assertIn(text, (evidence / "strings.txt").read_text().splitlines())
+        self.assertEqual(code, 1, out.getvalue() + err.getvalue())
+        self.assertEqual([(f["kind"], f["token"]) for f in result["findings"]],
+                         [("unruled", "TvJO")])
+        self.assertEqual(result["summary"]["findings"], 1)
+        self.assertIn("1 findings ... FAIL", out.getvalue())
+        diagnostic = err.getvalue()
+        self.assertIn("surface=strings;", diagnostic)
+        self.assertIn("member=unavailable (strings -a has no member locations)", diagnostic)
+        self.assertIn("line=payload-prefix+[[TvJO]]/payload-suffix", diagnostic)
+        self.assertEqual(diagnostic,
+                         "check_kernel_residuals: " + str(guard.Finding(**result["findings"][0]))
+                         + "\n")
 
     def probe_hits(self, archive: Path, workdir: Path) -> set[str]:
         strings_lines, nm_lines, tool = guard.read_archive(archive, workdir)
