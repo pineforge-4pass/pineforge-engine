@@ -128,7 +128,10 @@ public:
         config.default_qty_value = 1.0;
         config.process_orders_on_close = false;
         configure_pine_strategy(config);
-        set_trade_history_streamable(false);
+        // Sink rows need real T records before failure, rather than retaining
+        // all trades until successful finalization. Array rows still retain.
+        set_trade_history_streamable(fault == Fault::stream_file || fault == Fault::sink_record
+                                     || fault == Fault::sink_flush);
         set_syminfo_timezone("UTC");
         set_syminfo_session("24x7");
         syminfo_mintick_ = 0.25;
@@ -234,10 +237,25 @@ public:
             strategy_exit(cr257::kExitId, cr257::kEntryId, signal.limit, signal.stop,
                           cr257::kNaN, cr257::kNaN, cr257::kNaN, 100.0, "X257 exit");
         trace("nopartial-prefix", static_cast<double>(i));
-        if (fault == Fault::stream_file && i == cr257::kWarmup + 1)
-            // Force a physical whole-window prefix well before the fault.
-            trace(std::string(3 * cr257::kCacheBytes, 'p'), static_cast<double>(i));
-        if (i + 1 != driver.bars.size() || fault == Fault::sink_flush) return;
+        if (i + 1 != driver.bars.size()) return;
+        if (fault == Fault::stream_file || fault == Fault::sink_record
+            || fault == Fault::sink_flush) {
+            // Sink-bearing runs use batch ingress, so witness the live prefix
+            // inside the last callback, before injecting the fault.
+            // Reading the receipt does not assemble or finish the report.
+            pf_report_sink_receipt_v1 receipt{sizeof receipt, 1};
+            require(closed_trade_count() > 0 && output_bars_len() > 0
+                    && output_events_len() > 0,
+                    "SETUP: real trades and output rows/events must precede the sink fault");
+            require(report_sink_receipt_v1(&receipt) == 0 && !receipt.complete
+                    && receipt.count_t > 0 && receipt.count_h > 0 && receipt.count_x > 0,
+                    "SETUP: actual sink records must precede the fault");
+            if (fault == Fault::stream_file)
+                // Flush T-bearing windows only after real trade records exist.
+                trace(std::string(3 * cr257::kCacheBytes, 'p'), static_cast<double>(i));
+            snapshot_observed = true;
+        }
+        if (fault == Fault::sink_flush) return;
         rows_before_fault = closed_trade_count();
         require(snapshot_observed && rows_before_fault > 0
                 && rows_before_fault == driver.trades.size(),
@@ -399,15 +417,22 @@ void failure_case(Fault fault) {
     injection = {};
     Disarm disarm;
     cr257::Measure measure;
-    require(host.stream_begin(driver.bars.data(), static_cast<int>(cr257::kWarmup), "1", "1"),
-            "SETUP: source warmup failed");
     bool success = true;
-    for (Count i = cr257::kWarmup; i < driver.bars.size() && success; ++i) {
-        success = host.stream_push_bar(driver.bars[static_cast<std::size_t>(i)]);
-        if (success && !host.snapshot_observed && host.closed_trade_count() > 0)
-            witness_prefix(host, sink);
+    if (sink) {
+        // stream_begin refuses an enabled report sink before warmup. Batch
+        // ingress still streams records to the installed sink while it runs.
+        host.run(driver.bars.data(), static_cast<int>(driver.bars.size()), "1", "1", false);
+        success = host.last_run_status() == 0;
+    } else {
+        require(host.stream_begin(driver.bars.data(), static_cast<int>(cr257::kWarmup), "1", "1"),
+                "SETUP: source warmup failed");
+        for (Count i = cr257::kWarmup; i < driver.bars.size() && success; ++i) {
+            success = host.stream_push_bar(driver.bars[static_cast<std::size_t>(i)]);
+            if (success && !host.snapshot_observed && host.closed_trade_count() > 0)
+                witness_prefix(host, sink);
+        }
+        if (success) success = host.stream_end();
     }
-    if (success) success = host.stream_end();
     if (fault == Fault::sink_flush) {
         require(success && host.snapshot_observed && host.closed_trade_count() > 0
                 && host.last_run_status() == 0, "SETUP: execution must finish before late fault");
