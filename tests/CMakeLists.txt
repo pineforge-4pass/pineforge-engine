@@ -7238,12 +7238,33 @@ endif()
 
 add_test(NAME test_cr150_cmake_d COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/scripts/check_cr150_cmake_d.py)
 
+# CR-352: regression rows retain the fixture API available on the red base.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    list(APPEND TEST_SOURCES test_scratch_watch_attribution)
+    pineforge_add_unit_test(test_scratch_watch_attribution)
+    target_link_libraries(test_scratch_watch_attribution PRIVATE ${CMAKE_DL_LIBS} Threads::Threads)
+    foreach(_pf_scratch_watch_case IN ITEMS
+            cotenant_default cotenant_jailed cotenant_positive
+            own_tmp own_transient_tmp own_other_tmp own_shm private_non_mkstemp header_scratch)
+        add_test(NAME test_scratch_watch_attribution_${_pf_scratch_watch_case}
+            COMMAND test_scratch_watch_attribution ${_pf_scratch_watch_case})
+    endforeach()
+endif()
+
 # CR-150: one file per lane in tests/cr150.d/<lane>.cmake (see tests/cr150.d/README.md).
 file(GLOB CR150_LANE_CMAKE CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/cr150.d/*.cmake")
 list(SORT CR150_LANE_CMAKE)
 foreach(cr150_lane_file IN LISTS CR150_LANE_CMAKE)
     include("${cr150_lane_file}")
 endforeach()
+
+# --- CR-150 s4e-fix-tmp begin ---
+# CR-352: only these opted-in existing targets need the interposer's linkage.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_libraries(test_default_scratch_tmpfs_tmpdir PRIVATE ${CMAKE_DL_LIBS} Threads::Threads)
+    target_link_libraries(test_jailed_scratch_tmpfs_tmpdir PRIVATE ${CMAKE_DL_LIBS} Threads::Threads)
+endif()
+# --- CR-150 s4e-fix-tmp end ---
 
 # --- CR-150 core-cr150-l6b1 begin ---
 # CR-150 L6B1: appended after every pre-existing line pin. A real source
