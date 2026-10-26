@@ -1,10 +1,10 @@
-"""F2 / round 3: REV2-CX R1/P2 and C3, based on E rows c94d6a4ed.
+"""Equity scan regressions for verified report sinks.
 
-Lab only; not run on the executor Mac. RED/GUARD predictions and the mutation
-for every guard are in REPORT-rjf2-r2.md and beside each test; round 3
-corrections are in REPORT-rjf2-r3.md. Reuse F1's real sink fixtures, the strict
-reader/RecordParser.parse oracle, and the frozen writer. No sink parser or
-serializer is implemented here.
+Use real sink fixtures, the strict reader, RecordParser.parse, and the frozen
+writer as independent references. Cover selective decoding, sequential raw
+reads, digest and count checks, error ordering, and publication cleanup.
+
+Run on the lab's disk-backed workspace.
 """
 import errno
 import hashlib
@@ -124,7 +124,7 @@ def _assert_closed(opened):
 
 
 def _invoke_after_equity_tamper(tmp_path, monkeypatch, mutate, *, library=None):
-    """Use real output staging; alter the file only when C is requested."""
+    """Use real output staging; alter the file when equity records are requested."""
     original = run_json._ReportSink.records
     original_init = run_json._BoundedJSONFile.__init__
     changed, scratch = [], []
@@ -166,7 +166,7 @@ def _invoke_after_equity_tamper(tmp_path, monkeypatch, mutate, *, library=None):
 
 
 def test_equity_pass_parses_only_one_raw_header_at_two_sizes(tmp_path, monkeypatch):
-    """RED C7: F1 calls _parse 2 + sum(counts), at both different sizes."""
+    """The equity scan parses one raw header at both fixture sizes."""
     results = []
     original = pf_sink._parse
     for count in (10, 5000):
@@ -181,7 +181,7 @@ def test_equity_pass_parses_only_one_raw_header_at_two_sizes(tmp_path, monkeypat
                 parsed.append(line)
                 return original(line)
 
-            # Both A and the independent strict oracle have finished.
+            # Verification and the independent strict oracle have both finished.
             with monkeypatch.context() as patch:
                 patch.setattr(pf_sink, "_parse", parse)
                 actual = list(sink.records("E"))
@@ -189,15 +189,15 @@ def test_equity_pass_parses_only_one_raw_header_at_two_sizes(tmp_path, monkeypat
             results.append((count, len(raw), parsed, raw[:raw.index(b"\n") + 1]))
     assert results[0][0] != results[1][0]
     assert results[1][1] > results[0][1] + WINDOW
-    # Measure both populations even on F1: its [15, 5005] is visible in the
-    # failed assertion, rather than stopping after the small population.
+    # Measure both populations before comparing parser calls, so a regression
+    # reports both sizes even when the small population already differs.
     assert [len(parsed) for _, _, parsed, _ in results] == [1, 1]
     for _, _, parsed, header in results:
         assert parsed == [header]
 
 
 def test_verify_still_strictly_parses_every_line(tmp_path, monkeypatch):
-    """GUARD C1/C4; mutation: route A through the selective E scanner."""
+    """Verification strictly parses the header, every record, and the trailer."""
     rows = [_point(0), *_mixed(), _point(1)]
     with _sink(tmp_path, rows, verify=False) as (sink, library, report):
         raw = Path(sink.path).read_bytes()
@@ -217,7 +217,7 @@ def test_verify_still_strictly_parses_every_line(tmp_path, monkeypatch):
 
 
 def test_equity_records_require_a_before_yielding(tmp_path):
-    """RED C1: F1 yields E without A, then refuses only at exhaustion."""
+    """Equity records require verification before the first yield."""
     with _sink(tmp_path, [_point(0)], verify=False) as (sink, _, _):
         observed = []
         with pytest.raises(run_json.RunFailure) as failure:
@@ -230,7 +230,7 @@ def test_equity_records_require_a_before_yielding(tmp_path):
 @pytest.mark.parametrize("escaped_tags", [(), ("E",)], ids=["literal", "escaped-E"])
 def test_verified_equity_decoder_matches_strict_types_hex_and_frozen_bytes(
         tmp_path, escaped_tags):
-    """RED C3: F1 lacks parse_verified; equality is never an empty corpus."""
+    """Verified decoding preserves strict types, float bits, and frozen bytes."""
     rows = [
         ["E", -I53, -0.0, 0.0],
         ["E", I53, 5e-324, -5e-324],
@@ -303,11 +303,11 @@ def test_verified_equity_decoder_matches_strict_types_hex_and_frozen_bytes(
     for column in ("equity", "open-profit") for token in _NON_REPR_FLOAT_TOKENS
 ])
 def test_a_and_verified_decoder_both_refuse_invalid_equity_tokens(tmp_path, line, text):
-    """RED C3: A refuses first; F1 then lacks the independently checked decoder."""
+    """Verification and the verified decoder reject invalid equity tokens."""
     with _sink(tmp_path, [_point(0)], verify=False) as (sink, library, report):
         path = Path(sink.path)
-        # Before A: no verified identity exists and receipt validation cannot
-        # mask the line's lexical/field refusal.
+        # Before verification, no identity or receipt check can mask the line's
+        # lexical or field refusal.
         path.write_bytes(_replace_line(path.read_bytes(), ordinary.encoded(_point(0)), line))
         with pytest.raises(pf_sink.SinkFormatError) as reference:
             _strict(path)
@@ -327,7 +327,7 @@ def test_a_and_verified_decoder_both_refuse_invalid_equity_tokens(tmp_path, line
 
 
 def _replace_line(raw, old, new):
-    """Replace fixture bytes, allowing length changes only before A."""
+    """Replace fixture bytes, allowing length changes only before verification."""
     assert raw.count(b"\n" + old) == 1
     return raw.replace(b"\n" + old, b"\n" + new, 1)
 
@@ -335,7 +335,7 @@ def _replace_line(raw, old, new):
 @pytest.mark.parametrize("space", [b" ", b"\t", b"\r"], ids=["space", "tab", "control-CR"])
 def test_a_refuses_whitespace_but_c_proves_the_same_changed_bytes_by_digest(
         tmp_path, monkeypatch, space):
-    """RED C4: F1 repeats the whitespace refusal in C instead of DIGEST."""
+    """Verification rejects whitespace; later edits fail the raw digest."""
     point = ["E", ordinary.bars.T0, 10000.0, -0.0]
     line = ordinary.encoded(point)
     position = line.index(b",") + 1
@@ -366,7 +366,7 @@ def test_a_refuses_whitespace_but_c_proves_the_same_changed_bytes_by_digest(
 @pytest.mark.parametrize("where", ["equity", "non-E"])
 @pytest.mark.parametrize("wrong_count", [False, True], ids=["count-intact", "count-also-wrong"])
 def test_same_size_equity_or_non_e_flip_has_digest_priority(tmp_path, where, wrong_count):
-    """RED C5/E1/E3: F1 gives strict trailer-SHA text, not exact DIGEST."""
+    """The raw digest detects changed equity or skipped bytes before count checks."""
     with _sink(tmp_path, _mixed()) as (sink, _, _):
         raw = Path(sink.path).read_bytes()
         changed = (_equity_flip(raw)[0] if where == "equity" else
@@ -385,7 +385,7 @@ def test_same_size_equity_or_non_e_flip_has_digest_priority(tmp_path, where, wro
 
 
 def test_non_e_tamper_before_a_keeps_strict_reader_text(tmp_path):
-    """GUARD E2; mutation: A trusts the receipt without checking body digest."""
+    """Verification checks the body digest even when only other tags change."""
     with _sink(tmp_path, _mixed(), verify=False) as (sink, library, report):
         _write_same_identity(sink.path, _replace_once(
             Path(sink.path).read_bytes(), b"event-a", b"event-b"))
@@ -400,7 +400,7 @@ def test_non_e_tamper_before_a_keeps_strict_reader_text(tmp_path):
 
 @pytest.mark.parametrize("delta", [-1, 1], ids=["count-low", "count-high"])
 def test_equity_verified_count_alone_is_not_a_file_change(tmp_path, delta):
-    """RED C5: F1 never compares C's E population with sink.counts['E']."""
+    """A verified equity count mismatch has its own refusal after a matching digest."""
     with _sink(tmp_path, _mixed()) as (sink, _, _):
         raw, digest = Path(sink.path).read_bytes(), sink.sha256
         count = sink.counts["E"]
@@ -416,7 +416,7 @@ def test_equity_verified_count_alone_is_not_a_file_change(tmp_path, delta):
 
 @pytest.mark.parametrize("change", ["append", "shorten", "replace-same", "replace-different"])
 def test_equity_identity_is_an_early_refusal_only(tmp_path, change):
-    """RED C5: F1's E reader has no early inode/size check."""
+    """An inode or size change is refused before yielding equity records."""
     with _sink(tmp_path, _mixed()) as (sink, _, _):
         path = Path(sink.path)
         inode, size = _identity(path)
@@ -447,7 +447,7 @@ def test_equity_identity_is_an_early_refusal_only(tmp_path, change):
 
 
 def test_equity_same_inode_valid_new_receipt_still_differs_from_a(tmp_path):
-    """RED C5: F1 emits its generic change text for a valid rewritten sink."""
+    """A rewritten valid receipt still differs from the original verified digest."""
     rows = _mixed()
     with _sink(tmp_path, rows) as (sink, _, _):
         identity, digest = _identity(sink.path), sink.sha256
@@ -463,7 +463,7 @@ def test_equity_same_inode_valid_new_receipt_still_differs_from_a(tmp_path):
 
 
 def test_equity_digest_refusal_discards_provisional_report_bytes(tmp_path, monkeypatch):
-    """RED C6/E3: F1's E pass reports strict SHA text, not DIGEST."""
+    """A digest refusal discards provisional report bytes before publication."""
     def mutate(sink):
         changed, _ = _equity_flip(Path(sink.path).read_bytes())
         _write_same_identity(sink.path, changed)
@@ -478,7 +478,7 @@ def test_equity_digest_refusal_discards_provisional_report_bytes(tmp_path, monke
     ("wrong-tag", ordinary.encoded(_trade(1)), "record tag is 'T', expected 'E'"),
 ], ids=["non-list", "wrong-tag"])
 def test_verified_equity_decoder_outer_shape_refusals_are_typed(fault, line, detail):
-    """Direct C2 rows: neither shape can be selected by an E-prefix scan."""
+    """Direct decoding gives typed errors for non-array records and wrong tags."""
     parser = pf_sink.RecordParser(ordinary.header(outputs=True))
     if fault == "wrong-tag":
         # A valid T record isolates the E-only decoder's tag refusal.
@@ -512,10 +512,10 @@ def _decoder_fault_line(fault):
 ])
 def test_equity_decoder_exceptions_after_a_are_typed_and_never_published(
         tmp_path, monkeypatch, fault):
-    """RED C2: F1 lacks the cheap decoder; wire faults really reach it after A."""
+    """Malformed equity reaches the verified decoder before any digest verdict."""
     payload = _decoder_fault_line(fault)
-    # Reserve a valid V line before A. Its later replacement is byte-for-byte
-    # the decoder's input, at the same inode/size, before any digest verdict.
+    # Reserve a valid event before verification. Its later replacement is the
+    # decoder's exact input at the same inode and size, before digest comparison.
     size = max(len(payload), len(ordinary.encoded(_event(""))) + 32)
     reserve = _event("p" * (size - len(ordinary.encoded(_event("")))))
     reserve_line = ordinary.encoded(reserve)
@@ -615,15 +615,15 @@ def test_equity_decoder_exceptions_after_a_are_typed_and_never_published(
 ], ids=["line-without-LF", "zero-byte-body"])
 def test_equity_framing_exceptions_after_a_are_typed_and_never_published(
         tmp_path, monkeypatch, fault, detail):
-    """RED C2: F1 lacks the decoder; also guard natural framing/publication."""
+    """Malformed equity framing gives typed errors and prevents publication."""
     with _sink(tmp_path, [_point(0)]) as (sink, _, _):
         path = Path(sink.path)
         raw = path.read_bytes()
         start = raw.index(b'\n["E",') + 1
         end = raw.index(b"\n", start) + 1
         if fault == "no-LF":
-            # Actual unterminated E at EOF, written after A. This negative
-            # decoder call does not go through the early identity check.
+            # Write an unterminated equity record after verification. This direct
+            # decoder call bypasses the early identity check.
             path.write_bytes(raw[:end - 1])
             damaged = path.read_bytes()[start:]
             assert damaged == raw[start:end - 1] and not damaged.endswith(b"\n")
@@ -664,7 +664,7 @@ def test_equity_framing_exceptions_after_a_are_typed_and_never_published(
 
 @pytest.mark.parametrize("fault", ["header", "equity", "trailer-LF", "after-trailer"])
 def test_equity_format_and_eof_refusals_precede_digest_and_count(tmp_path, fault):
-    """GUARD C5; mutation: compare digest/count before decoding/framing EOF."""
+    """Format and EOF errors take priority over digest and count mismatches."""
     with _sink(tmp_path, _mixed()) as (sink, _, _):
         raw = Path(sink.path).read_bytes()
         if fault == "header":
@@ -688,12 +688,12 @@ def test_equity_format_and_eof_refusals_precede_digest_and_count(tmp_path, fault
             assert "invalid UTF-8 or JSON" in str(failure.value)
         elif fault == "trailer-LF":
             assert str(failure.value).endswith("line does not end with LF")
-        # For after-trailer, F1 also parses the now-truncated trailer JSON;
-        # both paths must give a format refusal ahead of digest/count.
+        # Bytes after the trailer must cause a format refusal before the final
+        # digest and count comparisons.
 
 
 def test_one_fresh_raw_equity_stream_supplies_every_hashed_byte(tmp_path, monkeypatch):
-    """RED: F1 uses a buffered header, strict readline and per-record parsing."""
+    """One fresh raw equity stream supplies the decoded and hashed bytes."""
     rows = [_point(0), _trade(1), _event("x" * (3 * WINDOW + 17)), _point(1)]
     with _sink(tmp_path, rows) as (sink, _, _):
         strict = [row for row in _strict(sink.path)[0] if row.tag == "E"]
@@ -758,7 +758,7 @@ def test_one_fresh_raw_equity_stream_supplies_every_hashed_byte(tmp_path, monkey
 @pytest.mark.parametrize("wrong_count", [False, True], ids=["count-intact", "count-also-wrong"])
 def test_transient_equity_read_flip_is_hashed_with_decoded_bytes(
         tmp_path, monkeypatch, wrong_count):
-    """RED: F1's strict C gives trailer-SHA text for the transient flip."""
+    """The digest hashes the same transiently changed bytes that equity decoding sees."""
     with _sink(tmp_path, _mixed()) as (sink, _, _):
         raw, identity = Path(sink.path).read_bytes(), _identity(sink.path)
         original = run_json._UncachedSinkFile.read
@@ -785,7 +785,7 @@ def test_transient_equity_read_flip_is_hashed_with_decoded_bytes(
 
 
 def test_equity_body_flip_in_the_trailer_window_is_still_hashed(tmp_path):
-    """RED: F1 gives strict SHA text; a whole-window trailer cut would miss it."""
+    """Equity bytes sharing a window with the trailer remain inside the digest."""
     point = _point(0)
     start = WINDOW - 20
     with _sink(tmp_path, [_padding_before(start, following=[point]), point]) as (sink, _, _):
@@ -800,7 +800,7 @@ def test_equity_body_flip_in_the_trailer_window_is_still_hashed(tmp_path):
 
 
 def test_equity_early_close_releases_fd_and_skips_final_comparisons(tmp_path, monkeypatch):
-    """GUARD C6; mutation: omit finally/close or check digest on GeneratorExit."""
+    """Early close releases the descriptor without final digest or count checks."""
     with _sink(tmp_path, [_point(0), _event("x" * (3 * WINDOW)), _point(1)]) as (sink, _, _):
         expected = [row for row in _strict(sink.path)[0] if row.tag == "E"]
         opened = []
@@ -825,7 +825,7 @@ def test_equity_early_close_releases_fd_and_skips_final_comparisons(tmp_path, mo
 @pytest.mark.parametrize("fault", ["eio", "truncate"],
                          ids=["injected-EIO", "mid-scan-truncation"])
 def test_oserror_during_equity_scan_is_typed_and_releases_fd(tmp_path, monkeypatch, fault):
-    """GUARD: mutation: let OSError escape, relabel it as change, or leak fd."""
+    """Read errors and truncation give typed format refusals and close the descriptor."""
     rows = [_point(0), _event("x" * (4 * WINDOW)), _point(1)]
     with _sink(tmp_path, rows) as (sink, _, _):
         path = Path(sink.path)
@@ -857,8 +857,8 @@ def test_oserror_during_equity_scan_is_typed_and_releases_fd(tmp_path, monkeypat
         with pytest.raises(run_json.RunFailure) as failure:
             list(sink.records("E"))
         _assert_format_error(failure.value)
-        # F1's strict reader may finish its cached first window before the
-        # real read discovers truncation; C's raw scanner detects it at once.
+        # A real read must detect an I/O failure or a truncation after the first
+        # window; the raw scan must close its descriptor on either refusal.
         assert len(calls) >= 2
         _assert_closed(opened)
 
@@ -866,7 +866,7 @@ def test_oserror_during_equity_scan_is_typed_and_releases_fd(tmp_path, monkeypat
 @pytest.mark.parametrize("population", ["empty", "zero-E", "first", "last",
                                       "first-and-last", "many-in-one-window"])
 def test_equity_population_and_file_order(tmp_path, population):
-    """GUARD: mutation: drop first/last E, yield other tags, or assume E exists."""
+    """Equity scans preserve order across empty, absent, and populated cases."""
     if population == "empty":
         rows, count = [], 0
     elif population == "zero-E":
@@ -895,7 +895,7 @@ def test_equity_population_and_file_order(tmp_path, population):
 @pytest.mark.parametrize("pad", range(WINDOW - 14, WINDOW + 15),
                          ids=lambda pad: f"pad={pad}")
 def test_equity_window_edge_sweep_matches_strict_rows(tmp_path, escaped_tags, edge, pad):
-    """GUARD: mutation: shorten overlap, miscut trailer, or ignore escaped E."""
+    """Literal and escaped equity rows stay exact across record and trailer edges."""
     tail = [_point(0), _trade(1), _event("middle"),
             ["O", 0, ordinary.bars.T0, ordinary.bars.T0 + 1, -0.0, 4294967295.0],
             _point(1), _trade(2), ["K", 50.]]
@@ -933,7 +933,7 @@ def test_equity_window_edge_sweep_matches_strict_rows(tmp_path, escaped_tags, ed
 
 def test_escaped_equity_token_crosses_window_and_non_e_decodes_only_tag(
         tmp_path, monkeypatch):
-    """RED: F1 strictly parses every body, including the long escaped V."""
+    """Escaped equity spans windows while other record bodies remain undecoded."""
     start = WINDOW - 4
     rows = [_padding_before(start - 5), _point(0),
             _event('quoted "E",{' + "x" * (WINDOW + 17)), _trade(1), _point(1)]

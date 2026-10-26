@@ -448,18 +448,18 @@ def test_report_sink_methods_use_uncached_reader_and_preserve_order(tmp_path, mo
         for tag in (None, "E", "T", "O", "V", "K", "absent"):
             raw_before = len(raw_opened)
             actual = list(sink.records(tag))
-            assert len(raw_opened) == raw_before + (1 if tag == "T" else 0)
-            # The T iteration compares the raw route's output in file order.
+            assert len(raw_opened) == raw_before + (1 if tag in ("T", "E") else 0)
+            # The T and E iterations compare raw output in file order.
             assert actual == [row for row in expected if tag is None or row.tag == tag]
         assert [row.tag for row in expected] == [row[0] for row in rows]
         assert expected[-1].values == (50.,)
         last = list(sink.records("E"))[-1]
         assert last.values == (ordinary.bars.T0 + 5002, 15002., -0.)
         assert last.values[-1].hex() == "-0x0.0p+0"
-        # records("T") is the one of the old nine opens that is now raw.
-        # Strict: verify + six filters (None/E/O/V/K/absent) + the tail E read.
-        assert len(strict_opened) == 8
-        assert len(raw_opened) == 1
+        # Strict: verify + five filters (None/O/V/K/absent).
+        # Raw: the T and E filters + the tail E read.
+        assert len(strict_opened) == 6
+        assert len(raw_opened) == 3
         assert len(opened) == len(strict_opened) + len(raw_opened)
     finally:
         sink.close()
@@ -512,7 +512,9 @@ def test_report_sink_changed_after_verification_consumes_the_tail(tmp_path, tag)
         with pytest.raises(run_json.RunFailure) as error:
             observed.extend(sink.records(tag))
         assert error.value.code == "engine_invariant"
-        assert str(error.value) == "the report sink changed after verification"
+        assert str(error.value) == (
+            "the report sink changed after verification: digest differs"
+            if tag == "E" else "the report sink changed after verification")
         assert len(observed) == sum(tag is None or row[0] == tag for row in rows)
         if tag is None:
             assert observed[-1].values == (51.,)
