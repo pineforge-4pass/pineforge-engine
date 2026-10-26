@@ -290,16 +290,28 @@ class GateTests(unittest.TestCase):
         self.proof.side_effect = None
         self.proof.return_value = receipt
 
-    def assert_no_pr_fallback(self):
-        self.assertEqual(self.api.calls, [(MAIN_API, False, ".commit.sha")],
+    def assert_no_pr_fallback(self, *, ci_post=False):
+        reads = [(MAIN_API, False, ".commit.sha")]
+        if ci_post:
+            # A green receipt now also needs ci-post; refusal rows still stop at main.
+            reads.extend([
+                (ci_post_runs_api(self.post_run["head_sha"]), True, None),
+                (ci_post_jobs_api(self.post_run["id"]), False, None),
+            ])
+        self.assertEqual(self.api.calls, reads,
                          "phase 2 must never read PR heads or their statuses")
 
     def run_gate(self, *, repo=REPO, sha=SHA, ref="refs/heads/main"):
+        # Opt in here so old evidence rows reach their original decision with
+        # explicit green ci-post fixtures; the dedicated ci-post harness stays independent.
+        self.post_run = ci_post_run(8341, sha=sha)
+        self.api.ci_post(self.post_run, ci_post_jobs(), repo=repo)
+        self.history = FakeHistory({sha: (OTHER_HEAD, ["src/old_gate_fixture.cpp"])})
         stdout, stderr = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             code = ci_release_gate.main(
                 ["gate", "--repo", repo, "--sha", sha, "--ref", ref],
-                api=self.api, git=self.git)
+                api=self.api, git=self.git, history=self.history)
         return code, stdout.getvalue(), stderr.getvalue()
 
     def assert_refused(self, fragment, **kwargs):
@@ -314,9 +326,11 @@ class GateTests(unittest.TestCase):
         code, stdout, stderr = self.run_gate()
         self.assertEqual(code, 0, stderr)
         self.assertEqual(stderr, "")
+        # Keep the original evidence text exact and append the newly required proof.
         self.assertEqual(stdout, (
             f"release gate green: PR #17 head {HEAD}; pineforge/verify=success; "
-            f"pineforge/parity=success; tree {TREE}\n"))
+            f"pineforge/parity=success; tree {TREE}; "
+            f"ci-post run {self.post_run['id']} for {self.post_run['head_sha']}\n"))
         self.assertIn((MAIN_API, False, ".commit.sha"), self.api.calls)
         self.assertIn((PULLS_API, True, None), self.api.calls)
         self.assertIn((STATUSES_API, True, None), self.api.calls)
@@ -734,11 +748,13 @@ class GateTests(unittest.TestCase):
         code, stdout, stderr = self.run_gate()
         self.assertEqual(code, 0, stderr)
         self.assertEqual(stderr, "")
+        # Phase two retains its receipt evidence and now names ci-post too.
         self.assertEqual(stdout, (
             f"release gate green: main-proof receipt for {SHA}; "
-            "pineforge/verify=success; pineforge/parity=success\n"))
+            "pineforge/verify=success; pineforge/parity=success; "
+            f"ci-post run {self.post_run['id']} for {self.post_run['head_sha']}\n"))
         self.proof.assert_called_once_with(REPO, SHA)
-        self.assert_no_pr_fallback()
+        self.assert_no_pr_fallback(ci_post=True)
 
     def test_main_proof_lite_context_cannot_replace_either_full_context(self):
         for missing in ("pineforge/verify", "pineforge/parity"):
@@ -880,10 +896,12 @@ class ReleaseBumpTests(unittest.TestCase):
         code, stdout, stderr = self.run_gate()
         self.assertEqual(code, 0, (stdout, stderr))
         self.assertEqual(stderr, "")
+        # A valid release bump must now name its own ci-post proof after the parent.
         self.assertEqual(stdout, (
             f"release gate green: release bump {SHA}; parent {BUMP_PARENT}; "
             f"PR #17 head {HEAD}; pineforge/verify=success; "
-            f"pineforge/parity=success; tree {TREE}\n"))
+            f"pineforge/parity=success; tree {TREE}; "
+            f"ci-post run {self.post_run['id']} for {self.post_run['head_sha']}\n"))
 
     def test_bump_on_a_gated_parent_passes(self):
         # RED on main: the exact empty associated-pulls input refuses there.
@@ -1660,12 +1678,14 @@ class ReleaseRulesetTests(unittest.TestCase):
                 namespace = {"__name__": "ci_release_gate_condition_mutant"}
                 exec(compile(mutated, ci_release_gate.__file__, "exec"), namespace)
                 self.api.calls.clear()
+                # The full-module mutant also receives the new history seam and proof.
                 green = namespace["gate"](REPO, SHA, "refs/heads/main",
-                                          api=self.api, git=self.git)
+                                          api=self.api, git=self.git, history=self.history)
                 self.assertEqual(green, (
                     f"release gate green: release bump {SHA}; parent {BUMP_PARENT}; "
                     f"PR #17 head {HEAD}; pineforge/verify=success; "
-                    f"pineforge/parity=success; tree {TREE}"))
+                    f"pineforge/parity=success; tree {TREE}; "
+                    f"ci-post run {self.post_run['id']} for {self.post_run['head_sha']}"))
 
 
 class RulesetsProbeTests(unittest.TestCase):
@@ -2268,6 +2288,40 @@ class MainProofSeamTests(unittest.TestCase):
 class WorkflowPinTests(unittest.TestCase):
     def workflow(self):
         return (ROOT / ".github/workflows/release.yml").read_text()
+
+    def test_ci_post_required_build_jobs_match_workflow_matrices(self):
+        """Tie the implementation's new name tuple and fixtures to both real matrices."""
+        jobs = _jobs((ROOT / ".github/workflows/ci-post.yml").read_text())
+        expanded = []
+        for job_id, axis in (("build", "platform.os"), ("build-macos", "os")):
+            with self.subTest(job=job_id):
+                body = _without_comments(jobs[job_id])
+                matrix = re.search(
+                    r"(?ms)^      matrix:\n(.*?)(?=^ {0,6}\S|\Z)", body)
+                self.assertIsNotNone(matrix, "the build matrix must be readable")
+                axes = re.findall(r"(?m)^        (\w+):", matrix[1])
+                self.assertCountEqual(axes, [axis.split(".")[0], "build_type"],
+                                      "new axes/include/exclude need a gate review")
+                types = re.search(r"(?m)^        build_type: \[([^\n]+)\]$", matrix[1])
+                self.assertIsNotNone(types, "the build types must be explicit")
+                build_types = [value.strip() for value in types[1].split(",")]
+                if axis == "platform.os":
+                    platforms = re.findall(r"(?m)^          - os: (\S+)$", matrix[1])
+                else:
+                    platforms_row = re.search(r"(?m)^        os: \[([^\n]+)\]$", matrix[1])
+                    self.assertIsNotNone(platforms_row, "the platforms must be explicit")
+                    platforms = [value.strip() for value in platforms_row[1].split(",")]
+                self.assertTrue(platforms)
+                name = re.search(r"(?m)^    name: (.+)$", body)
+                self.assertIsNotNone(name, "the displayed job name must be explicit")
+                for platform in platforms:
+                    for build_type in build_types:
+                        displayed = name[1].replace("${{ matrix." + axis + " }}", platform)
+                        displayed = displayed.replace("${{ matrix.build_type }}", build_type)
+                        self.assertNotIn("${{", displayed, "every name axis must be expanded")
+                        expanded.append(displayed)
+        self.assertCountEqual(ci_release_gate.CI_POST_BUILD_JOBS, expanded)
+        self.assertCountEqual([job["name"] for job in ci_post_jobs()], expanded)
 
     def assert_gate_pin(self, workflow):
         steps = _steps(_jobs(workflow).get("release", ""))
