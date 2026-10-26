@@ -6089,6 +6089,9 @@ class _ReportSink:
         if tag == "T":
             yield from self._trade_records()
             return
+        if tag == "E":
+            yield from self._tagged_records(tag)
+            return
         from pf_sink import SinkFormatError
         try:
             with _open_uncached_sink(self.path) as reader:
@@ -6101,7 +6104,10 @@ class _ReportSink:
             raise _engine_invariant(f"the engine's report sink is invalid: {error}") from error
 
     def _trade_records(self):
-        """Hash and extract trades from the same fresh sequential raw reads."""
+        yield from self._tagged_records("T")
+
+    def _tagged_records(self, tag):
+        """Hash and extract one tag from the same fresh sequential raw reads."""
         import pf_sink
         try:
             file = _open_uncached_sink(self.path, raw=True)
@@ -6111,6 +6117,8 @@ class _ReportSink:
                     raise _engine_invariant(
                         "the report sink changed after verification: file identity differs")
                 parser = pf_sink.RecordParser(self.header)
+                decode = parser.parse_verified if tag == "E" else parser.parse
+                needle = f'\n["{tag}",'.encode("ascii")
                 digest = hashlib.sha256()
                 count = offset = processed = 0
                 carry = b""
@@ -6139,11 +6147,11 @@ class _ReportSink:
                     if hash_end:
                         digest.update(chunk[:hash_end])
                     cursor = len(carry) if kind is not None else max(0, processed - base)
-                    trade_at = escaped_at = None
+                    record_at = escaped_at = None
                     while cursor < end:
                         if kind == "tag":
                             # The fallback decodes only the first string token;
-                            # skipped non-T bodies are never walked or retained.
+                            # skipped bodies are never walked or retained.
                             while cursor < end:
                                 byte = data[cursor]
                                 pending.append(byte)
@@ -6159,17 +6167,17 @@ class _ReportSink:
                                     tag_escaped = True
                                 elif byte == 0x22:
                                     try:
-                                        tag = json.loads(bytes(pending[1:]).decode("utf-8"))
+                                        line_tag = json.loads(bytes(pending[1:]).decode("utf-8"))
                                     except (UnicodeError, ValueError, RecursionError) as error:
                                         raise pf_sink.SinkFormatError(
                                             f"invalid UTF-8 or JSON: {error}") from error
-                                    if tag == "T":
-                                        kind = "trade"
+                                    if line_tag == tag:
+                                        kind = "record"
                                     else:
                                         kind = None
                                         pending.clear()
                                         processed = base + cursor
-                                    del tag
+                                    del line_tag
                                     break
                             if kind == "tag":
                                 break
@@ -6185,7 +6193,7 @@ class _ReportSink:
                             if newline < 0:
                                 break
                             if kind == "trailer":
-                                # A verified its receipt; B needs only framing
+                                # A verified its receipt; B/C need only framing
                                 # and EOF, without parsing or hashing the trailer.
                                 if cursor != end or file.read(file.window):
                                     raise pf_sink.SinkFormatError("bytes after the trailer")
@@ -6197,7 +6205,7 @@ class _ReportSink:
                                 pf_sink._parse(bytes(pending))
                                 record = None
                             else:
-                                record = parser.parse(bytes(pending))
+                                record = decode(bytes(pending))
                                 count += 1
                             pending.clear()
                             kind = None
@@ -6206,25 +6214,25 @@ class _ReportSink:
                                 yield record
                                 del record
                             continue
-                        # Cache each next needle so an escaped non-T tag does
-                        # not rescan the remaining window for a distant trade.
-                        # Literal non-T lines need no per-line Python work.
-                        if trade_at is None or trade_at < cursor:
-                            marker = data.find(b'\n["T",', max(0, cursor - 1))
-                            trade_at = marker + 1 if marker >= 0 else end
+                        # Cache each next needle so a skipped escaped tag does
+                        # not rescan the window for a distant matching record.
+                        # Literal skipped lines need no per-line Python work.
+                        if record_at is None or record_at < cursor:
+                            marker = data.find(needle, max(0, cursor - 1))
+                            record_at = marker + 1 if marker >= 0 else end
                         if escaped_at is None or escaped_at < cursor:
                             marker = data.find(b'\n["\\', max(0, cursor - 1))
                             escaped_at = marker + 1 if marker >= 0 else end
                         trailer_at = (trailer_start - base
                                       if trailer_start is not None
                                       and trailer_start >= base + cursor else end)
-                        cursor = min(trade_at, escaped_at, trailer_at)
+                        cursor = min(record_at, escaped_at, trailer_at)
                         if cursor == end:
                             break
                         if cursor == trailer_at:
                             kind = "trailer"
-                        elif cursor == trade_at:
-                            kind = "trade"
+                        elif cursor == record_at:
+                            kind = "record"
                         else:
                             kind = "tag"
                             pending.extend(data[cursor:cursor + 2])
@@ -6236,9 +6244,9 @@ class _ReportSink:
                 if digest.hexdigest() != self.sha256:
                     raise _engine_invariant(
                         "the report sink changed after verification: digest differs")
-                if count != self.counts["T"]:
+                if count != self.counts[tag]:
                     raise _engine_invariant(
-                        "the report sink T scan disagrees with its verified count")
+                        f"the report sink {tag} scan disagrees with its verified count")
             finally:
                 file.close()
         except (OSError, pf_sink.SinkFormatError) as error:

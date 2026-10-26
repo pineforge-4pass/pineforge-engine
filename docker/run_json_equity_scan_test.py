@@ -475,7 +475,7 @@ def test_equity_digest_refusal_discards_provisional_report_bytes(tmp_path, monke
 
 @pytest.mark.parametrize("fault,line,detail", [
     ("non-list", b'{}\n', "record must be a nonempty array with a string tag"),
-    ("wrong-tag", ordinary.encoded(_trade(1)), "record tag is absent from the header"),
+    ("wrong-tag", ordinary.encoded(_trade(1)), "record tag is 'T', expected 'E'"),
 ], ids=["non-list", "wrong-tag"])
 def test_verified_equity_decoder_outer_shape_refusals_are_typed(fault, line, detail):
     """Direct C2 rows: neither shape can be selected by an E-prefix scan."""

@@ -832,7 +832,7 @@ def test_window_edge_sweep_matches_strict_trade_rows(tmp_path, edge, pad):
         escaped_tag = b'["\\u00' + f"{ord(row[0]):02x}".encode("ascii") + b'",'
         replacements.append((literal, literal.replace(tag, escaped_tag, 1)))
     extra = sum(len(escaped) - len(literal) for literal, escaped in replacements)
-    padding =(_padding_before(pad) if edge != "trailer" else
+    padding = (_padding_before(pad) if edge != "trailer" else
                _padding_before(pad - extra, following=tail))
     with _sink(tmp_path, [padding, *tail], verify=False) as (sink, library, report):
         # Escape the selected E and T tags, retaining one literal tag of each.
