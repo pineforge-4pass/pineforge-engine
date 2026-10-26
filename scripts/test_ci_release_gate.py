@@ -3231,6 +3231,40 @@ class CiPostGateTests(unittest.TestCase):
                 self.api.ci_post(self.post_run, self.jobs)
                 self.assert_no_full_run([self.post_run], "missing", missing["name"])
 
+    def test_single_run_with_a_missing_leg_gives_no_full_run(self):
+        """Round 13/2(b): a sole missing-leg run exhausts the proof search.
+
+        Block a not-success refusal when no older run remains to protect.
+        """
+        for index, original in enumerate(ci_post_jobs()):
+            with self.subTest(job=original["name"]):
+                self.reset_ci_post()
+                row = self.post_run
+                missing = self.jobs.pop(index)
+                self.api.ci_post_runs(row["head_sha"], [row], {row["id"]: self.jobs})
+                self.assert_no_full_run(
+                    [row], row["event"], "examined 1 of 1",
+                    f"missing job {missing['name']}")
+
+    def test_missing_leg_run_with_an_older_proof_refuses_not_success(self):
+        """Round 13/2(b): a newer missing-leg run refuses before older proof.
+
+        Block a defective newer success run hiding behind an older green run.
+        """
+        for index, original in enumerate(ci_post_jobs()):
+            with self.subTest(job=original["name"]):
+                self.reset_ci_post()
+                newest = self.post_run
+                missing = self.jobs.pop(index)
+                older = ci_post_run(
+                    newest["id"] - 1, created_at="2026-10-24T12:00:00Z")
+                self.api.ci_post_runs(newest["head_sha"], [newest, older], {
+                    newest["id"]: self.jobs, older["id"]: ci_post_jobs()})
+                self.assert_refused(
+                    f"not-success {newest['id']}", newest["head_sha"], newest["event"],
+                    f"conclusion {newest['conclusion']}", f"missing job {missing['name']}")
+                self.assert_post_reads(newest)
+
     def test_jobs_total_larger_than_returned_rows_refuses(self):
         """R1/R4: block accepting four successes from an incomplete jobs response."""
         endpoint = ci_post_jobs_api(self.post_run["id"])
