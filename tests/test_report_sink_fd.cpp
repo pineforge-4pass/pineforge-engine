@@ -8,6 +8,8 @@
 #include <pineforge/run_failure.hpp>
 #include <pineforge/detail/scratch_arena.hpp>
 
+#include "fd_flag_diagnostics.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cerrno>
@@ -283,14 +285,17 @@ std::string run_diagnostics(Fixture& host, const std::vector<Bar>& bars) {
         + ", last_error=" + host.last_error();
 }
 
-Result execute(Fixture& host, const std::vector<Bar>& bars, Expect expect = Expect::success) {
+Result execute(Fixture& host, const std::vector<Bar>& bars, Expect expect = Expect::success,
+               fd_flag_diagnostics::Trace* fd_trace = nullptr) {
     struct Report {
         pineforge::ReportC value{};
         ~Report() { BacktestEngine::free_report(&value); }
     } report;
     try {
         host.run(bars.data(), static_cast<int>(bars.size()));
+        if (fd_trace) fd_trace->record("after run");
         host.fill_report(&report.value);
+        if (fd_trace) fd_trace->record("after fill_report");
     } catch (const std::exception& error) {
         if (expect == Expect::success) {
             std::fprintf(stderr, "L22A engine exception: %s\n", run_diagnostics(host, bars).c_str());
@@ -315,6 +320,7 @@ Result execute(Fixture& host, const std::vector<Bar>& bars, Expect expect = Expe
         BacktestEngine::free_report(&report.value);
         report.value = {};
         host.fill_report(&report.value);
+        if (fd_trace) fd_trace->record("after repeat fill_report");
         const auto again = receipt(host);
         require(std::memcmp(&again, &result.receipt, sizeof again) == 0,
                 "repeat capture changed receipt");
@@ -406,13 +412,18 @@ void unchanged_storage(Fixture& host, const std::array<std::size_t, 4>& before,
 void completed_fd_removal(const fs::path& directory, const std::vector<Bar>& bars,
                           const std::string& bytes, bool through_path) {
     auto output = stream(Transport::pipe, directory);
-    const int flags = ::fcntl(output->fd(), F_GETFL);
-    const int descriptor_flags = ::fcntl(output->fd(), F_GETFD);
-    require(flags >= 0 && descriptor_flags >= 0, "cannot read removal fixture fd flags");
+    fd_flag_diagnostics::Trace fd_trace(output->fd(), through_path
+        ? "before sink installation (path NULL)" : "before sink installation (fd NULL)");
+    const int flags = fd_trace.baseline().flags;
+    const int descriptor_flags = fd_trace.baseline().descriptor_flags;
+    require(flags >= 0 && descriptor_flags >= 0,
+            fd_trace.message("cannot read removal fixture fd flags"));
     {
         Fixture host;
         install_fd(host, output->fd());
-        const auto before = execute(host, bars);
+        fd_trace.record("after sink installation");
+        const auto before = execute(host, bars, Expect::success, &fd_trace);
+        fd_trace.record("after execute");
         const auto before_summary = summary(host);
         const auto storage = host.report_storage();
         const auto scratch = host.scratch_region();
@@ -425,17 +436,25 @@ void completed_fd_removal(const fs::path& directory, const std::vector<Bar>& bar
             return through_path ? strategy_set_report_sink_v1(host.handle(), nullptr)
                                 : strategy_set_report_sink_fd_v1(host.handle(), nullptr);
         };
+        fd_trace.record("before first NULL removal");
         require(remove() == 0, through_path ? "path NULL refused a completed fd generation"
                                            : "fd NULL refused a completed fd generation");
+        fd_trace.record("after first NULL removal");
         unchanged_storage(host, storage, scratch);
         unchanged_generation(host, before, before_summary);
+        fd_trace.record("after first removal checks/fill_report");
         unchanged_storage(host, storage, scratch);
+        fd_trace.record("before second NULL removal");
         require(remove() == 0, "repeated NULL removal refused a completed fd generation");
+        fd_trace.record("after second NULL removal");
         unchanged_generation(host, before, before_summary);
+        fd_trace.record("after second removal checks/fill_report");
         unchanged_storage(host, storage, scratch);
-        require(::fcntl(output->fd(), F_GETFL) == flags
-                && ::fcntl(output->fd(), F_GETFD) == descriptor_flags,
-                "NULL removal closed the borrowed fd or changed its flags");
+        const auto final_flags = fd_trace.record("final NULL removal assertion");
+        require(fd_flag_diagnostics::comparable_status_flags(final_flags.flags)
+                    == fd_flag_diagnostics::comparable_status_flags(flags)
+                && final_flags.descriptor_flags == descriptor_flags,
+                fd_trace.message("NULL removal closed the borrowed fd or changed its flags"));
 
         // A retained receipt must not keep the sink installed for the next
         // run: that run owns ordinary arrays and writes nothing to this fd.
@@ -457,8 +476,9 @@ void completed_fd_removal(const fs::path& directory, const std::vector<Bar>& bar
         require(receipt(host).complete == 0 && summary(host).complete == 0,
                 "next run retained the previous generation's completion");
     }
-    require(::fcntl(output->fd(), F_GETFD) == descriptor_flags,
-            "destruction after NULL removal closed the borrowed fd");
+    const auto after_destruction = fd_trace.record("after host destruction");
+    require(after_destruction.descriptor_flags == descriptor_flags,
+            fd_trace.message("destruction after NULL removal closed the borrowed fd"));
     require(output->finish() == bytes, "NULL removal or the next run appended sink bytes");
 }
 
@@ -498,7 +518,8 @@ std::string fd_run(const fs::path& directory, const std::vector<Bar>& bars,
         require(strategy_set_report_sink_fd_v1(host.handle(), &invalid) == -1,
                 "bad replacement version accepted");
         require(receipt(host).complete == 1, "bad replacement erased completed receipt");
-        require(::fcntl(output->fd(), F_GETFL) == flags
+        require(fd_flag_diagnostics::comparable_status_flags(::fcntl(output->fd(), F_GETFL))
+                    == fd_flag_diagnostics::comparable_status_flags(flags)
                 && ::fcntl(output->fd(), F_GETFD) == descriptor_flags,
                 "writer changed caller fd flags");
         require(strategy_set_report_sink_v1(host.handle(), nullptr) == 0,

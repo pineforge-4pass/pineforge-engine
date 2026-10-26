@@ -4173,48 +4173,48 @@ def build_report_dict(report: ReportC, ohlcv_path: Path,
     }
 
 
-def _validate_report_result(out: dict, *, validate_summary: bool = True) -> None:
+def _validate_report_result(out: dict, *, validate_summary: bool = True,
+                            equity_only: bool = False) -> None:
     """Required results are finite; only native metric absence is nullable.
     Metric keys come from the producer's ctypes descriptors and alias map,
     after native computation has distinguished absence from computed NaN.
-    The sink pre-pass validates one trade here at a time; its completed summary
-    is checked by the default full validation before the report is serialized."""
-    for trade in out["trades"]:
+    Sink read-back validates one trade/point at a time, deferring its first refusal until assembly.
+    Keep the equity guard here for the ownership checker; equity_only skips small-field checks."""
+    if not equity_only:
+        for trade in out["trades"]:
+            for key, field in (
+                ("entry_price", "trades.entry_price"),
+                ("exit_price", "trades.exit_price"),
+                ("qty", "trades.qty"), ("pnl", "trades.pnl"), ("pnl_pct", "trades.pnl_pct"),
+                ("max_runup", "trades.max_runup"),
+                ("max_drawdown", "trades.max_drawdown"),
+                ("commission", "trades.commission"),
+            ):
+                if trade[key] is None or not math.isfinite(trade[key]):
+                    raise RunFailure(f"the report result {field} is not finite",
+                                     "report_result_invalid",
+                                     {"field": field, "reason": "nonfinite"})
+        if not validate_summary:
+            return
         for key, field in (
-            ("entry_price", "trades.entry_price"),
-            ("exit_price", "trades.exit_price"),
-            ("qty", "trades.qty"),
-            ("pnl", "trades.pnl"),
-            ("pnl_pct", "trades.pnl_pct"),
-            ("max_runup", "trades.max_runup"),
-            ("max_drawdown", "trades.max_drawdown"),
-            ("commission", "trades.commission"),
+            ("win_rate_pct", "summary.win_rate_pct"),
+            ("net_pnl", "summary.net_pnl"),
+            ("avg_trade", "summary.avg_trade"),
+            ("best_trade", "summary.best_trade"),
+            ("worst_trade", "summary.worst_trade"),
+            ("max_drawdown", "summary.max_drawdown"),
         ):
-            if trade[key] is None or not math.isfinite(trade[key]):
+            if not math.isfinite(out["summary"][key]):
                 raise RunFailure(f"the report result {field} is not finite",
                                  "report_result_invalid",
                                  {"field": field, "reason": "nonfinite"})
-    if not validate_summary:
-        return
-    for key, field in (
-        ("win_rate_pct", "summary.win_rate_pct"),
-        ("net_pnl", "summary.net_pnl"),
-        ("avg_trade", "summary.avg_trade"),
-        ("best_trade", "summary.best_trade"),
-        ("worst_trade", "summary.worst_trade"),
-        ("max_drawdown", "summary.max_drawdown"),
-    ):
-        if not math.isfinite(out["summary"][key]):
-            raise RunFailure(f"the report result {field} is not finite",
-                             "report_result_invalid",
-                             {"field": field, "reason": "nonfinite"})
-    for block in ("all", "longs", "shorts", "equity"):
-        for name, value in out["metrics"][block].items():
-            if value is not None and not math.isfinite(value):
-                metric_field = f"metrics.{block}.{name}"
-                raise RunFailure(f"the report result {metric_field} is not finite",
-                                 "report_result_invalid",
-                                 {"field": metric_field, "reason": "nonfinite"})
+        for block in ("all", "longs", "shorts", "equity"):
+            for name, value in out["metrics"][block].items():
+                if value is not None and not math.isfinite(value):
+                    metric_field = f"metrics.{block}.{name}"
+                    raise RunFailure(f"the report result {metric_field} is not finite",
+                                     "report_result_invalid",
+                                     {"field": metric_field, "reason": "nonfinite"})
     for point in out["equity_curve"]:
         for key, field in (
             ("equity", "equity_curve.equity"),
@@ -5953,6 +5953,53 @@ def _disk_report_directory(directory=None):
         + "; set TMPDIR or --spill-dir to a disk-backed directory", "arguments")
 
 
+class _SinkReportDiagnostics:
+    """Only the two E endpoints, their count and the first result refusal."""
+
+    def __init__(self):
+        self.count_e = 0
+        self.first = self.last = None
+        self.trade_at_start = False
+        self.equity_failure = None
+
+    def __len__(self):
+        return self.count_e
+
+    def __getitem__(self, index):
+        if self.count_e:
+            if index == 0:
+                return self.first
+            if index == -1:
+                return self.last
+        raise IndexError(index)
+
+    def trades(self, reader):
+        # The existing strict reader exhausts its trailer in this same pass;
+        # its uncached backing reads fixed 64 KiB windows, never all rows.
+        # O/V/K/X/H are deliberately dropped from this fold: the old trade
+        # fold read only records("T"). The reader still hashes every record
+        # as it iterates, supplying verify()'s digest for the entire sink.
+        for record in reader:
+            if record.tag == "E":
+                point = record.as_dict()
+                if not self.count_e:
+                    self.first = point
+                self.last = point
+                self.count_e += 1
+                if self.equity_failure is None:
+                    try:
+                        _validate_report_result({"equity_curve": (point,)}, equity_only=True)
+                    except RunFailure as error:
+                        # Preserve the exception, but drop its fold traceback
+                        # so it cannot retain the reader or per-row frames.
+                        # Assembly raises it after trade/summary/metric checks.
+                        self.equity_failure = error
+                        error.__traceback__ = None
+            elif record.tag == "T":
+                self.trade_at_start |= record.values[12] <= 0
+                yield record
+
+
 class _ReportSink:
     """A caller-owned path or an owner-only (0600) temporary sink file.
 
@@ -5971,6 +6018,7 @@ class _ReportSink:
     def __init__(self, lib, state, *, directory=None, run_id="", path=None):
         self.directory = _disk_report_directory(directory)
         self.header, self.counts, self.sha256 = {}, {}, ""
+        self.summary = self.summary_failure = self.diagnostics = None
         self.named, self.run_id = path is not None, run_id
         self.keep, self.closed = False, False
         if self.named:
@@ -5996,9 +6044,22 @@ class _ReportSink:
 
     def verify(self, lib, state, report):
         from pf_sink import SinkFormatError
+        diagnostics = _SinkReportDiagnostics()
+        summary = summary_failure = None
         try:
             with _open_uncached_sink(self.path) as reader:
-                for _ in reader:
+                trades = diagnostics.trades(reader)
+                try:
+                    summary = _sink_summary(report, self, records=trades)
+                except RunFailure as error:
+                    # Format/digest/receipt refusals used to precede result
+                    # validation. Defer the first trade refusal and finish the
+                    # very same reader, even when the trade fold stopped early.
+                    summary_failure = error
+                    # Drop the fold traceback so the saved exception cannot
+                    # retain the reader or per-row frames until assembly.
+                    error.__traceback__ = None
+                for _ in trades:
                     pass
                 self.header, self.counts, self.sha256 = reader.header, reader.counts, reader.sha256
         except SinkFormatError as error:
@@ -6014,6 +6075,7 @@ class _ReportSink:
                 or bytes(receipt.sha256_hex) != self.sha256.encode("ascii")
                 or int(report.total_trades) != self.counts["T"]):
             raise _engine_invariant("the report sink trailer differs from its engine receipt")
+        self.summary, self.summary_failure, self.diagnostics = summary, summary_failure, diagnostics
 
     def records(self, tag=None):
         from pf_sink import SinkFormatError
@@ -6358,6 +6420,36 @@ def _stream_json(value, destination):
             del destination._json_active
 
 
+_JSON_SCALAR_TYPES = (int, float, bool, str, type(None))
+# Keep fast dumps to one window's worth of string values; 4096 is the same
+# size as the windowed writer's window below.
+_STREAM_FAST_STR_LIMIT = 4096
+# Equity rows are normally under 128 ASCII bytes: 512 rows use about 64 KiB
+# of joined text (ordinary trade rows stay below about 512 KiB per batch).
+# The record count is fixed, independent of the array length or bar count.
+_STREAM_BATCH_RECORDS = 512
+
+# Cap joined text at 256 KiB too; json.dumps' default ensure_ascii makes
+# len(encoded) a byte count. One oversized record is written alone, unsplit.
+_STREAM_BATCH_BYTES = 262144
+
+
+def _json_scalar_record(value):
+    # The piecewise writer encodes non-string keys as standalone values.
+    # Subclasses can also override items() or string slicing; keep that path.
+    return type(value) is dict and all(
+        type(key) is str and type(item) in _JSON_SCALAR_TYPES
+        for key, item in value.items())
+
+
+def _json_fast_value(value):
+    if type(value) in _JSON_SCALAR_TYPES:
+        return type(value) is not str or len(value) <= _STREAM_FAST_STR_LIMIT
+    if not _json_scalar_record(value):
+        return False
+    return sum(len(item) for item in value.values() if type(item) is str) <= _STREAM_FAST_STR_LIMIT
+
+
 def _stream_json_value(value, destination):
     if isinstance(value, _JSONColumn):
         destination.write("[")
@@ -6368,13 +6460,59 @@ def _stream_json_value(value, destination):
     elif isinstance(value, _JSONRecordArray):
         destination.write("[")
         first = True
-        for item in value.records():
-            if not first:
-                destination.write(",")
-            _stream_json(item, destination)
-            first = False
+        pending = []
+        pending_bytes = 0
+        try:
+            for item in value.records():
+                if _json_fast_value(item):
+                    try:
+                        encoded = json.dumps(item, separators=(",", ":"), allow_nan=False)
+                    except ValueError:
+                        # Replay the failing item below to preserve both the
+                        # old partial record bytes and its precise exception.
+                        pass
+                    else:
+                        encoded_bytes = len(encoded) + (0 if first else 1)
+                        if pending and pending_bytes + encoded_bytes > _STREAM_BATCH_BYTES:
+                            chunk = "".join(pending)
+                            pending.clear()  # never retry a failed write
+                            pending_bytes = 0
+                            destination.write(chunk)
+                        pending.append(encoded if first else "," + encoded)
+                        pending_bytes += encoded_bytes
+                        first = False
+                        if (len(pending) == _STREAM_BATCH_RECORDS
+                                or pending_bytes >= _STREAM_BATCH_BYTES):
+                            chunk = "".join(pending)
+                            pending.clear()  # never retry a failed write
+                            pending_bytes = 0
+                            destination.write(chunk)
+                        continue
+                if pending:
+                    chunk = "".join(pending)
+                    pending.clear()
+                    pending_bytes = 0
+                    destination.write(chunk)
+                if not first:
+                    destination.write(",")
+                _stream_json(item, destination)
+                first = False
+        finally:
+            # A producer can raise after yielding rows. Those completed rows
+            # already belonged to the old writer's prefix, even on failure.
+            if pending:
+                destination.write("".join(pending))
         destination.write("]")
     elif isinstance(value, dict):
+        if _json_fast_value(value):
+            try:
+                encoded = json.dumps(value, separators=(",", ":"), allow_nan=False)
+            except ValueError:
+                # Preserve the piecewise prefix before a non-finite value.
+                pass
+            else:
+                destination.write(encoded)
+                return
         destination.write("{")
         for index, (key, item) in enumerate(value.items()):
             if index:
@@ -6450,11 +6588,17 @@ def _sink_trade(record):
     return dict(zip(record.fields[:16], record.values[:16]))
 
 
-def _sink_summary(report, sink):
+def _sink_summary(report, sink, *, records=None):
     n, wins, losses = 0, 0, 0
     cum, peak, max_dd = 0.0, 0.0, 0.0
     best, worst = 0.0, 0.0
     fd_mode = getattr(sink, "fd_mode", False)
+    if not fd_mode and records is None:
+        if sink.summary_failure is not None:
+            raise sink.summary_failure
+        if sink.summary is None:
+            raise _engine_invariant("the engine's report sink summary is incomplete")
+        return dict(sink.summary)
     if fd_mode:
         summary = sink.summary
         if summary is None or summary.complete != 1 or summary.count_t != sink.counts["T"]:
@@ -6485,7 +6629,7 @@ def _sink_summary(report, sink):
         n, wins, losses = int(summary.count_t), int(summary.wins), int(summary.losses)
         best, worst = float(summary.best_trade), float(summary.worst_trade)
         max_dd = float(summary.max_drawdown)
-    for record in () if fd_mode else sink.records("T"):
+    for record in () if fd_mode else records:
         trade = _sink_trade(record)
         if trade["n"] != n + 1:
             raise _engine_invariant("the report sink trade rows are out of report order")
@@ -6547,27 +6691,25 @@ def _build_sink_report(report, ohlcv_path, n_bars, first_ts, last_ts, elapsed,
         out.pop("equity_curve")
         return out
 
-    def point_at(index):
-        # Diagnostics need only the endpoints. Revisit the verified sink in
-        # bounded memory rather than retaining its equity history. Consume
-        # the pass through its trailer so records() checks its digest and
-        # closes the reader even when the requested point is the first one.
-        point = None
-        for i, row in enumerate(sink.records("E")):
-            if i == index:
-                point = row.as_dict()
-        if point is None:
-            raise _engine_invariant("the report sink equity count differs from its receipt")
-        return point
-
+    # verify() already checked E in record/field order and retained only its
+    # endpoints. Validate the small fields first, exactly where the old E
+    # validation pass began, then surface its first refusal before diagnostics.
+    _validate_report_result(out)
+    diagnostics = sink.diagnostics
+    if diagnostics.equity_failure is not None:
+        raise diagnostics.equity_failure
+    # Equity count still equals the receipt without the old point_at walk:
+    # pf_sink.py's strict reader compares trailer counts with records read
+    # ("trailer count mismatch"), and verify() compares receipt counts with
+    # those verified trailer counts.
     trades = _JSONRecordArray(
         lambda: (_sink_trade(row) for row in sink.records("T")), sink.counts["T"])
     equity_curve = _JSONRecordArray(
-        lambda: (row.as_dict() for row in sink.records("E")), sink.counts["E"], point_at)
+        lambda: (row.as_dict() for row in sink.records("E")), sink.counts["E"])
     out["equity_curve"] = equity_curve
-    _validate_report_result(out)  # the summary pre-pass already checked every T
+    first_bar_trade = ({"entry_bar_index": 0},) if diagnostics.trade_at_start else ()
     out["diagnostics"].update(
-        _annualization_block(equity_curve, out["metrics"], trades, window_anchor))
+        _annualization_block(diagnostics, out["metrics"], first_bar_trade, window_anchor))
     if sink.named:
         reference = {
             "path": sink.path,
