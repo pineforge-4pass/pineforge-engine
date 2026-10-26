@@ -115,6 +115,11 @@ void same_fold(const Table& table, const Reference& reference, const std::vector
 std::string id_for(std::size_t n) {
     return "census-entry-" + std::to_string(n) + std::string("\0tail", 5);
 }
+// Binary keys remain a storage test; successful Pine commands use
+// ordinary IDs. The command-door regression separately pins NUL refusal.
+std::string host_id_for(std::size_t n) {
+    return "census-entry-" + std::to_string(n) + "/tail";
+}
 no::RequestHandle origin_for(std::uint64_t n) { return {{"disk-cohort-test", 1}, n}; }
 
 void replay_recurring_ids() {
@@ -258,7 +263,7 @@ public:
         const int i = pine_bar_index();
         if (i % 4 == 0) {
             const auto ordinal = static_cast<std::size_t>(i / 4);
-            active_ = id_for(period_ == 0 ? ordinal : ordinal % static_cast<std::size_t>(period_));
+            active_ = host_id_for(period_ == 0 ? ordinal : ordinal % static_cast<std::size_t>(period_));
             const auto na = std::numeric_limits<double>::quiet_NaN();
             strategy_entry(active_, true, na, na, 1.0);
         } else if (i % 4 == 1) {
@@ -289,7 +294,7 @@ void real_host_recurrence() {
         require(host.trade_count() == expected_trades, "public host did not complete its trade population");
         for (int i = 0; i < host.trade_count(); ++i) {
             const auto& trade = host.get_trade(i);
-            const auto id = id_for(static_cast<std::size_t>(period == 0 ? i : i % period));
+            const auto id = host_id_for(static_cast<std::size_t>(period == 0 ? i : i % period));
             require(trade.entry_id == id && trade.qty == 1.0 && !trade.open_at_end,
                     "public host changed recurring id or lot identity");
         }

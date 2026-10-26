@@ -220,7 +220,8 @@ bool begin_row(const Row& row, Placement placement, const char* variant) {
 }
 
 void run_and_check(DoorHost& host, Placement placement, const char* field,
-                   const char* reason, bool invalid, bool default_fill = false) {
+                   const char* reason, bool invalid, bool default_fill = false,
+                   bool reserved_id = false) {
     const auto bars = feed();
     if (is_selected(placement)) {
         pf_selected_window_config_v1 window{};
@@ -235,9 +236,15 @@ void run_and_check(DoorHost& host, Placement placement, const char* field,
     if (invalid) {
         CHECK(host.native_state().kind == NativeLifecycleKind::Failed);
         CHECK(!host.last_error().empty());
-        CHECK(std::string(run_failure_code_of(host)) == "strategy_value_invalid");
-        const std::string expected = std::string("{\"field\":\"") + field
-            + "\",\"reason\":\"" + reason + "\"}";
+        CHECK(std::string(run_failure_code_of(host))
+              == (reserved_id ? "pine_invalid_argument" : "strategy_value_invalid"));
+        const std::string name(field);
+        const auto dot = name.find('.');
+        const std::string expected = reserved_id
+            ? std::string("{\"argument\":\"") + name.substr(dot + 1)
+                + "\",\"function\":\"strategy." + name.substr(0, dot)
+                + "\",\"rule\":\"unsupported_combination\"}"
+            : std::string("{\"field\":\"") + field + "\",\"reason\":\"" + reason + "\"}";
         CHECK(std::string(run_failure_args_of(host)) == expected);
         CHECK(run_failure_code_class(run_failure_value_of(host).code) == RunFailureClass::strategy);
         CHECK(host.returned == (placement == Placement::Retained ? 1 : 0));
@@ -300,7 +307,12 @@ void argument_rows() {
                     Raw raw;
                     put_text(raw, row.arg, value.bytes);
                     DoorHost host(row.door, placement, raw);
-                    run_and_check(host, placement, row.field, "", false);
+                    // NUL remains text in a comment, but cannot be
+                    // an ID/entry selector/OCA name used in composite keys.
+                    const bool reserved = value.bytes.find('\0') != std::string::npos
+                        && row.arg != Arg::Comment;
+                    run_and_check(host, placement, row.field, "",
+                                  reserved && must_fail, false, reserved);
                 }
             } else {
                 for (const bool negative : {false, true}) {
