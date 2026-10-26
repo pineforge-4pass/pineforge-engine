@@ -154,9 +154,9 @@ structs and enumerations, and the `PF_*` constants.
 
 ## Run-failure codes
 
-The run-failure vocabulary is `docker/run_failure_codes.json`: the codes
-#strategy_get_last_error_code answers, their classes and retryable flags, and
-the arguments #strategy_get_last_error_args answers (@ref run_failure_codes).
+The run-failure vocabulary is `docker/run_failure_codes.json`: the codes #strategy_get_last_error_code answers, their classes and retryable flags,
+and the arguments #strategy_get_last_error_args answers (@ref run_failure_codes). `engine_invariant.reason` is optional (vocab, closed list: `order_key_hash_collision`).
+Every other `engine_invariant` still carries no argument. Hosts should accept the optional argument rather than pin its absence.
 
 - **A code is never removed, renamed or reused.** A code that is no longer
   raised stays in the catalog, marked `deprecated` with the codes that replace

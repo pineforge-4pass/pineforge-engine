@@ -12,8 +12,8 @@ paired with [pineforge-codegen 1.8.0](https://github.com/pineforge-4pass/pinefor
 A minor release. It speeds up the `run_json` wrapper (the wrapper only, not the
 engine), adds one unused storage building block to the library, states where
 scratch files are placed, and carries release-gate and CI changes. The C ABI
-(`PF_ABI_VERSION` 4), the report keys and the run-failure code catalog are
-unchanged (0 codes added, changed or removed since 1.7.0).
+(`PF_ABI_VERSION` 4) and the report keys are unchanged; the run-failure code
+catalog has 0 codes added, 1 changed and 0 removed since 1.7.0.
 
 ### Compatibility and migration
 
@@ -32,6 +32,11 @@ unchanged (0 codes added, changed or removed since 1.7.0).
   `get_input_int64`.
 - The release harness file `docker/run_json.py` changed (below). The hub image
   for this pair carries the 1.8.0 copy.
+- **Optional collision reason.** `engine_invariant` may now carry
+  `reason=order_key_hash_collision` (two order keys whose 64-bit hashes collide
+  are refused instead of one silently replacing the other). The argument is
+  optional and additive; every other `engine_invariant` still carries no
+  argument.
 
 ### Faster `run_json` report handling
 
