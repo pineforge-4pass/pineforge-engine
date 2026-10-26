@@ -6,11 +6,14 @@ stream wrapper types are shared with production, never its writer functions.
 """
 import ctypes
 from collections import Counter
+from contextlib import contextmanager
+import hashlib
 import io
 import json
 import math
 from pathlib import Path
 import sys
+import tempfile
 import tracemalloc
 
 import pytest
@@ -19,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "docker"))
 
 import run_json
+import pf_sink
 from pf_sink import Record, SinkFormatError
 
 _JSONColumn = run_json._JSONColumn
@@ -571,6 +575,7 @@ class _StubReader:
         self.sha256 = ""
         self.complete = False
         self.number = sink.opens = sink.opens + 1
+        sink.strict_opens += 1
 
     def __iter__(self):
         return self
@@ -596,8 +601,63 @@ class _StubReader:
         return False
 
 
+def _old_strict_records(sink, tag):
+    """Pre-F1 records() path, used only by the unchanged old reference."""
+    try:
+        with _open_uncached_sink(sink.path) as reader:
+            for record in reader:
+                if tag is None or record.tag == tag:
+                    yield record
+            if reader.sha256 != sink.sha256:
+                raise _engine_invariant("the report sink changed after verification")
+    except SinkFormatError as error:
+        raise _engine_invariant(f"the engine's report sink is invalid: {error}") from error
+
+
+class _StubRawFile:
+    """Real bytes and descriptor for F1's scan; never a strict row iterator."""
+    window = run_json._UncachedSinkFile.window
+
+    def __init__(self, sink, path):
+        self.file = open(path, "rb", buffering=0)
+        self.sink, self.position, self.eof = sink, 0, False
+        sink.opens += 1
+        sink.raw_opens += 1
+
+    def fileno(self):
+        return self.file.fileno()
+
+    def read(self, count=-1):
+        count = self.window if count < 0 else min(count, self.window)
+        data = self.file.read(count)
+        self.position += len(data)
+        self.sink.raw_read_calls += 1
+        self.sink.raw_bytes_read += len(data)
+        if count and not data and not self.eof:
+            self.eof = True
+            self.sink.raw_exhausted += 1
+            self.sink.exhausted += 1
+        return data
+
+    def readinto(self, buffer):
+        data = self.read(len(buffer))
+        buffer[:len(data)] = data
+        return len(data)
+
+    def close(self):
+        if not self.file.closed:
+            self.file.close()
+            self.sink.raw_closes += 1
+
+
+def _sink_line(value):
+    # Nonfinite semantic-error fixtures remain deliberately synthetic. They
+    # fail report assembly before B; successful raw scans have finite T rows.
+    return json.dumps(value, separators=(",", ":")).encode("ascii") + b"\n"
+
+
 class _StubSink(run_json._ReportSink):
-    """Use real verify()/records() over a counted in-memory strict-reader stub."""
+    """Real F1 verify/records with counted strict rows and a separate raw file."""
     def __init__(self, rows, *, named=False, refuse_pass=None, receipt_fault=None):
         self.rows = tuple(rows)
         self.expected_counts = dict.fromkeys("ETOVKXH", 0)
@@ -605,18 +665,39 @@ class _StubSink(run_json._ReportSink):
             self.expected_counts[record.tag] += 1
         self.expected_header = {
             "schema": "pf-report-sink", "version": 1, "run_id": "same-run",
+            "engine": "stub",
+            "records": [
+                {"type": tag, "fields": [column[0] for column in columns],
+                 "types": [column[1] for column in columns],
+                 "units": [column[2] for column in columns]}
+                for tag, columns in (
+                    ("E", pf_sink._E), ("T", pf_sink._T), ("O", pf_sink._O),
+                    ("V", pf_sink._V), ("K", ()), ("X", pf_sink._X), ("H", pf_sink._H),
+                )
+            ],
         }
-        self.expected_sha256 = "a" * 64
+        body = _sink_line(self.expected_header) + b"".join(
+            _sink_line([record.tag, *record.values]) for record in self.rows)
+        self.expected_sha256 = hashlib.sha256(body).hexdigest()
+        self.raw_bytes = body + _sink_line({
+            "trailer": "pf-report-sink", "version": 1,
+            "counts": self.expected_counts, "sha256": self.expected_sha256,
+        })
         self.header, self.counts, self.sha256 = {}, {}, ""
         self.named, self.run_id = named, "same-run"
         self.path = "/same/reviewable/report.sink"
         self.summary, self.summary_failure, self.diagnostics = None, None, None
         self.calls, self.visits = Counter(), Counter()
         self.opens = self.next_calls = self.exhausted = 0
+        self.strict_opens = self.raw_opens = self.raw_exhausted = self.raw_closes = 0
+        self.raw_read_calls = self.raw_bytes_read = 0
         self.refuse_pass, self.receipt_fault = refuse_pass, receipt_fault
 
     def records(self, tag=None):
         self.calls[tag] += 1
+        if isinstance(self, _OldSink):
+            # Freeze the inherited old read-back too, without editing _OldSink.
+            return _old_strict_records(self, tag)
         return super().records(tag)
 
     def strategy_report_sink_receipt_v1(self, state, pointer):
@@ -659,14 +740,43 @@ ReportSinkReceiptC = run_json.ReportSinkReceiptC
 
 def _open_uncached_sink(path):
     # The old verify body resolves this alias; each exercise installs its own
-    # reader factory. No file is opened and no hard-coded report is returned.
+    # strict reader factory. F1's raw route has a separate byte-file factory.
     return run_json._open_uncached_sink(path)
+
+
+@contextmanager
+def _stub_sink_open(monkeypatch, sink):
+    with tempfile.TemporaryDirectory(prefix="report-fastpath-") as directory:
+        path = Path(directory) / "report.sink"
+        path.write_bytes(sink.raw_bytes)
+        original_stat = run_json.os.stat
+
+        def sink_stat(requested, *args, **kwargs):
+            # Keep the reference's stable public path, but use the real file's
+            # inode/size for A's stat and B's unpatched fstat identity check.
+            return original_stat(path if requested == sink.path else requested, *args, **kwargs)
+
+        def open_sink(requested, *, raw=False):
+            assert requested == sink.path
+            if raw:
+                if sink.opens + 1 == sink.refuse_pass:
+                    # A same-size change after A: B must read/hash the changed
+                    # bytes and raise its own digest refusal, not a stub error.
+                    changed = sink.raw_bytes.replace(b'"engine":"stub"', b'"engine":"Stub"', 1)
+                    assert changed != sink.raw_bytes and len(changed) == len(sink.raw_bytes)
+                    path.write_bytes(changed)
+                return _StubRawFile(sink, path)
+            return _StubReader(sink)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(run_json, "_open_uncached_sink", open_sink)
+            patch.setattr(run_json.os, "stat", sink_stat)
+            yield
 
 
 def _exercise_sink(monkeypatch, builder, sink_type, rows, *, named=False,
                    window_anchor=False, configure=None, writer=None, **sink_options):
     sink = sink_type(rows, named=named, **sink_options)
-    monkeypatch.setattr(run_json, "_open_uncached_sink", lambda path: _StubReader(sink))
     report = run_json.ReportC()
     report.total_trades = sink.expected_counts["T"]
     report.metrics.all.num_trades = report.total_trades
@@ -676,15 +786,28 @@ def _exercise_sink(monkeypatch, builder, sink_type, rows, *, named=False,
     if configure is not None:
         configure(report)
     destination, document, failure = _Destination(), None, None
-    try:
-        sink.verify(sink, None, report)
-        document = builder(report, Path("fixed.csv"), 3, _START_MS, _START_MS + _DAY_MS,
-                           0.125, {}, {}, {}, sink, window_anchor=window_anchor)
-        (run_json._stream_json if writer is None else writer)(document, destination)
-    except Exception as error:
-        failure = (type(error), str(error), getattr(error, "code", None),
-                   getattr(error, "code_args", None))
+    with _stub_sink_open(monkeypatch, sink):
+        try:
+            sink.verify(sink, None, report)
+            document = builder(report, Path("fixed.csv"), 3, _START_MS, _START_MS + _DAY_MS,
+                               0.125, {}, {}, {}, sink, window_anchor=window_anchor)
+            (run_json._stream_json if writer is None else writer)(document, destination)
+        except Exception as error:
+            failure = (type(error), str(error), getattr(error, "code", None),
+                       getattr(error, "code_args", None))
     assert not hasattr(destination, "_json_active")
+    assert sink.opens == sink.strict_opens + sink.raw_opens
+    if isinstance(sink, _OldSink):
+        assert sink.raw_opens == 0
+    else:
+        # Every invocation of the new trade path must really open/read B.
+        assert sink.raw_opens == sink.calls["T"]
+        assert sink.raw_exhausted == sink.raw_closes == sink.raw_opens
+        assert sink.raw_bytes_read == sink.raw_opens * len(sink.raw_bytes)
+        chunks = (len(sink.raw_bytes) + _StubRawFile.window - 1) // _StubRawFile.window
+        assert sink.raw_read_calls == sink.raw_opens * (chunks + 1)
+        if failure is None:
+            assert sink.raw_opens == int(not named)
     return sink, document, destination.bytes(), failure
 
 
@@ -706,12 +829,17 @@ def test_sink_report_pass_count(monkeypatch):
     assert actual.calls["E"] + 1 <= 2
     assert actual.calls["T"] + 1 <= 2
     assert actual.calls[None] == 0
-    # records(tag) still parses all tags. Three physical opens are allowed:
-    # verified read-back, writer T, writer E; each includes the trailer EOF.
-    assert actual.opens <= 3
-    assert actual.next_calls <= 3 * (len(rows) + 1)
-    assert actual.visits["E"] <= 3 * actual.expected_counts["E"]
-    assert actual.visits["T"] <= 3 * actual.expected_counts["T"]
+    # A and C are strict; B hashes the same bytes and parses only T itself.
+    # Total opens stay three, but B makes no strict __next__/tag visits.
+    assert actual.opens == 3
+    assert actual.strict_opens == 2
+    assert actual.raw_opens == 1
+    assert actual.next_calls == 2 * (len(rows) + 1)
+    assert actual.visits["E"] == 2 * actual.expected_counts["E"]
+    assert actual.visits["T"] == 2 * actual.expected_counts["T"]
+    assert len(actual.raw_bytes) < _StubRawFile.window
+    assert actual.raw_read_calls == 2  # one byte window and the scanner's EOF check
+    assert actual.raw_bytes_read == len(actual.raw_bytes)
     assert actual.exhausted == actual.opens
     assert old.next_calls >= 8 * (len(rows) + 1)
 
@@ -736,12 +864,20 @@ def test_sink_report_hostile_pass_bounds(monkeypatch, points, named, window_anch
         window_anchor=window_anchor)
     assert failure == old_failure
     assert actual_bytes == old_bytes
-    # The same fixed budget applies even when diagnostics short-circuit or
-    # validation refuses the last point: verification + at most one writer/tag.
+    # Named reports omit both writers; result validation refuses nonfinite E
+    # before either writer. Otherwise even an empty E array still runs B/C.
     assert sink.calls["E"] + 1 <= 2
     assert sink.calls["T"] + 1 <= 2
+    writers = int(not named and old_failure is None)
+    assert sink.strict_opens == 1 + writers
+    assert sink.raw_opens == writers
+    assert sink.opens == 1 + 2 * writers
     assert sink.opens <= 3
-    assert sink.next_calls <= 3 * (len(rows) + 1)
+    assert sink.next_calls == (1 + writers) * (len(rows) + 1)
+    assert sink.next_calls <= 2 * (len(rows) + 1)
+    assert sink.visits["E"] == (1 + writers) * sink.expected_counts["E"]
+    assert sink.visits["T"] == (1 + writers) * sink.expected_counts["T"]
+    assert sink.raw_bytes_read == writers * len(sink.raw_bytes)
     assert sink.exhausted == sink.opens
 
 
@@ -780,6 +916,8 @@ def test_sink_report_old_path_bytes(monkeypatch, named, window_anchor, points):
             "path", "schema", "version", "run_id", "counts", "sha256",
         )
         assert sink.opens == 1
+        assert sink.strict_opens == 1
+        assert sink.raw_opens == 0
     assert old_sink.exhausted == old_sink.opens
 
 
@@ -824,18 +962,19 @@ def test_sink_nonfinite_equity_error_order(monkeypatch, named, value, field, pos
 
 def _capture_sink_build_failure(monkeypatch, builder, sink_type, rows, *, before_build=None):
     sink = sink_type(rows)
-    monkeypatch.setattr(run_json, "_open_uncached_sink", lambda path: _StubReader(sink))
     report = run_json.ReportC()
     report.total_trades = report.metrics.all.num_trades = sink.expected_counts["T"]
     report.input_bars_processed = report.script_bars_processed = sink.expected_counts["E"]
     report.net_profit = sum(row.as_dict()["pnl"] for row in rows if row.tag == "T")
     report.metrics.equity.cagr, report.metrics.equity.calmar = 25.0, 2.0
-    sink.verify(sink, None, report)
-    if before_build is not None:
-        before_build(sink)
-    with pytest.raises(RunFailure) as failure:
-        builder(report, Path("fixed.csv"), 3, _START_MS, _START_MS + _DAY_MS,
-                0.125, {}, {}, {}, sink)
+    with _stub_sink_open(monkeypatch, sink):
+        sink.verify(sink, None, report)
+        if before_build is not None:
+            before_build(sink)
+        with pytest.raises(RunFailure) as failure:
+            builder(report, Path("fixed.csv"), 3, _START_MS, _START_MS + _DAY_MS,
+                    0.125, {}, {}, {}, sink)
+    assert sink.raw_opens == 0
     return sink, failure.value
 
 
@@ -961,22 +1100,27 @@ def test_sink_preserves_competing_error_priority(monkeypatch, conflict, order):
 def test_sink_writer_verifies_trailer_before_publication(monkeypatch, writer_pass):
     rows = [_equity(0, 100.0), _equity(1000, 101.0), _trade(1)]
     sink = _StubSink(rows, refuse_pass=writer_pass)
-    monkeypatch.setattr(run_json, "_open_uncached_sink", lambda path: _StubReader(sink))
     report = run_json.ReportC()
     report.total_trades = report.metrics.all.num_trades = 1
-    sink.verify(sink, None, report)
-    document = run_json._build_sink_report(
-        report, Path("fixed.csv"), 2, _START_MS, _START_MS + 1000,
-        0.125, {}, {}, {}, sink)
-    # _prepare_stream_report serializes into a private artifact before
-    # publication. This in-memory private artifact exercises the same writer.
-    published = []
-    with pytest.raises(RunFailure, match="trailer SHA-256 mismatch") as failure:
-        artifact = _Destination()
-        run_json._stream_json(document, artifact)
-        published.append(artifact.bytes())
+    with _stub_sink_open(monkeypatch, sink):
+        sink.verify(sink, None, report)
+        document = run_json._build_sink_report(
+            report, Path("fixed.csv"), 2, _START_MS, _START_MS + 1000,
+            0.125, {}, {}, {}, sink)
+        # _prepare_stream_report serializes into a private artifact before
+        # publication. This in-memory private artifact exercises the same writer.
+        published = []
+        refusal = "digest differs" if writer_pass == 2 else "trailer SHA-256 mismatch"
+        with pytest.raises(RunFailure, match=refusal) as failure:
+            artifact = _Destination()
+            run_json._stream_json(document, artifact)
+            published.append(artifact.bytes())
     assert failure.value.code == "engine_invariant"
     assert published == []
+    assert sink.opens == writer_pass
+    assert sink.strict_opens == writer_pass - 1
+    assert sink.raw_opens == sink.raw_exhausted == sink.raw_closes == 1
+    assert sink.raw_bytes_read == len(sink.raw_bytes)
 
 
 class _DiscardDestination:
