@@ -136,6 +136,15 @@ for two additive diagnostics keys, described below.
   memory still grows with the number of pending orders that never fill, by
   about 2.5 kB each. A fix is planned for a later release.
 
+### Opt-in report descriptor in the container entrypoint
+
+- **`PINEFORGE_REPORT_SINK_FD`.** When set, the entrypoint passes
+  `--report-sink-fd <n>` to `run_json.py`, so a caller that opened a
+  descriptor for the report records can use it through the container. The
+  value is forwarded unchanged and `run_json.py` validates it (a number from 3
+  up, not 5, different from any phase descriptor); a refusal ends the run with
+  the usual entrypoint status. With the variable unset nothing changes.
+
 ### CI and release process
 
 - **Light jobs on a pinned hosted image.** The light, secret-free CI jobs run

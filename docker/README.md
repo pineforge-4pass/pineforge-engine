@@ -168,6 +168,10 @@ header) are configured via separate env vars:
 | `PINEFORGE_BAR_MAGNIFIER`     | `false`        | `true` enables intra-bar OHLC path sampling for stop/limit fills      |
 | `PINEFORGE_MAGNIFIER_SAMPLES` | `4`            | Sub-bar sample count when magnifier is on (≥2)                        |
 | `PINEFORGE_MAGNIFIER_DIST`    | `endpoints`    | `uniform`, `cosine`, `triangle`, `endpoints`, `front_loaded`, `back_loaded` |
+| `PINEFORGE_REPORT_SINK_FD`    | unset          | Raw `--report-sink-fd` value; set-empty is forwarded                    |
+
+The caller must open an inheritable descriptor numbered from 3 through INT_MAX, excluding 5 and any phase descriptor; `run_json.py` closes its copy after capture.
+An invalid value is refused like `--report-sink-fd` (entrypoint exit 4), and the failure line or small success document stays on stdout.
 
 ### Instrument metadata (`PINEFORGE_SYMINFO`)
 

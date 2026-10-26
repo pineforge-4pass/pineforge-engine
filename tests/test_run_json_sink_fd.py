@@ -892,6 +892,34 @@ def test_native_fd_matches_file_document_and_wire(tmp_path, transport, outputs):
     assert all(event["closed"] for event in actual[4][1:])
 
 
+def test_native_fd_records_leave_only_small_stdout(tmp_path):
+    source = bars.csv_file(tmp_path, count=97)
+    module = native_module(False)
+    environment = {key: value for key, value in os.environ.items()
+                   if not key.startswith(("PINEFORGE_", "PF_SCRATCH_"))}
+    environment.update(PYTHONDONTWRITEBYTECODE="1", TMPDIR=str(tmp_path))
+    with Stream() as stream:
+        argv = ["--so", module, "--ohlcv", str(source), "--input-tf", "1",
+                "--script-tf", "1", "--report-sink-fd", str(stream.writer)]
+        process = subprocess.Popen([sys.executable, "-B", str(ROOT / "docker" / "run_json.py"),
+                                    *argv], env=environment, pass_fds=(stream.writer,),
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        stream.close_writer()
+        stdout, stderr = process.communicate()
+    observed = f"observed run_json argv: {argv!r}\n{process.returncode}, {stdout!r}, {stderr!r}"
+    assert process.returncode == 0 and stderr == b"", observed
+    assert stdout.endswith(b"\n") and len(stdout.splitlines()) == 1, observed
+    document = json.loads(stdout)
+    assert document["engine"] == "pineforge" and "summary" in document, observed
+    assert not {"trades", "equity_curve", "report_sink"} & document.keys(), observed
+    with pf_sink.SinkReader(stream=io.BytesIO(stream.data)) as reader:
+        for _ in reader:
+            pass
+        assert reader.complete and reader.trailer is not None, observed
+        assert reader.counts["T"] == document["summary"]["total_trades"], observed
+        assert reader.counts["E"] > 0, observed
+
+
 def test_native_fd_fsize_zero_without_arena_refuses_before_file_operations(tmp_path):
     source = bars.csv_file(tmp_path, count=17)
     extra = ["--so", native_module(False), "--input-tf", "1", "--script-tf", "1"]
