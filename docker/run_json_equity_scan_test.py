@@ -72,7 +72,7 @@ _NON_REPR_FLOAT_TOKENS = tuple(
 
 def _verified_decoder(parser):
     method = getattr(parser, "parse_verified", None)
-    assert callable(method), "F2 requires RecordParser.parse_verified(line)"
+    assert callable(method), "the equity scan requires RecordParser.parse_verified(line)"
     return method
 
 
