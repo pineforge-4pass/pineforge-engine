@@ -4937,8 +4937,11 @@ detail::ScratchStatus compare_dependency_scratch(
 
 void require_dependency_scratch(detail::ScratchStatus status, const detail::ScratchReadback& store) {
     if (status != detail::ScratchStatus::ok) {
-        if (status == detail::ScratchStatus::io_error)
+        if (status == detail::ScratchStatus::io_error) {
             detail::rethrow_carried_scratch_failure(store.carried_failure());
+            throw coded<std::logic_error>(RunFailureCode::scratch_io_failed, {},
+                                          "dependency scratch contract operation failed");
+        }
         throw std::logic_error("dependency scratch contract operation failed");
     }
 }
