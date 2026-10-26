@@ -23,13 +23,14 @@ import re
 import sys
 from typing import Any, BinaryIO, NamedTuple
 
-__all__ = ["I53_MAX", "MAX_LINE_BYTES", "Record", "SinkFormatError", "SinkReader"]
+__all__ = ["I53_MAX", "MAX_LINE_BYTES", "Record", "RecordParser", "SinkFormatError", "SinkReader"]
 
 I53_MAX = (1 << 53) - 1
 MAX_LINE_BYTES = 1024 * 1024
 _ORDER = "ETOVKXH"
 _HEX64 = re.compile(r"[0-9a-f]{16}\Z")
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+_UNPARSED = object()
 
 
 class SinkFormatError(ValueError):
@@ -232,6 +233,66 @@ def _field(value: Any, wire_type: str) -> Any:
     raise SinkFormatError("unknown wire type")
 
 
+class RecordParser:
+    """Parse record lines against one header, without receipt or file state.
+
+    ``parsed`` lets SinkReader forward the value it already decoded while
+    checking for a trailer, preserving one JSON parse per line.
+    """
+
+    def __init__(self, header: dict[str, Any]):
+        self._descriptors = _header(header)
+        self._equity_descriptor = self._descriptors["E"]
+
+    def parse(self, line: bytes, *, parsed: Any = _UNPARSED) -> Record:
+        value = _parse(line) if parsed is _UNPARSED else parsed
+        if type(value) is not list or not value or type(value[0]) is not str:
+            raise SinkFormatError("record must be a nonempty array with a string tag")
+        tag = value[0]
+        if tag not in self._descriptors:
+            raise SinkFormatError("record tag is absent from the header")
+        descriptor = self._descriptors[tag]
+        if len(value) != len(descriptor.fields) + 1:
+            raise SinkFormatError("record field count differs from its descriptor")
+        values = tuple(_field(item, kind) for item, kind in zip(value[1:], descriptor.types))
+        if tag == "T" and values[1] not in ("long", "short"):
+            raise SinkFormatError("trade side must be long or short")
+        return Record(tag, descriptor.fields, values)
+
+    def parse_verified(self, line: bytes) -> Record:
+        """Decode E after strict sink verification, without the lexical walk.
+
+        The caller must prove the scanned bytes still match that verified
+        sink. Keep framing and field checks, including the shared token hooks.
+        """
+        if not line.endswith(b"\n"):
+            raise SinkFormatError("line does not end with LF")
+        if len(line) > MAX_LINE_BYTES:
+            raise SinkFormatError("line exceeds 1 MiB including LF")
+        body = line[:-1]
+        if not body:
+            raise SinkFormatError("blank line")
+        if body.startswith(b"\xef\xbb\xbf"):
+            raise SinkFormatError("UTF-8 BOM is forbidden")
+        try:
+            value = json.loads(body.decode("utf-8"), object_pairs_hook=_pairs,
+                               parse_int=_int_token, parse_float=_float_token,
+                               parse_constant=_constant)
+        except SinkFormatError:
+            raise
+        except (UnicodeError, ValueError, RecursionError) as error:
+            raise SinkFormatError(f"invalid UTF-8 or JSON: {error}") from error
+        if type(value) is not list or not value or type(value[0]) is not str:
+            raise SinkFormatError("record must be a nonempty array with a string tag")
+        if value[0] != "E":
+            raise SinkFormatError(f"record tag is {value[0]!r}, expected 'E'")
+        descriptor = self._equity_descriptor
+        if len(value) != len(descriptor.fields) + 1:
+            raise SinkFormatError("record field count differs from its descriptor")
+        values = tuple(_field(item, kind) for item, kind in zip(value[1:], descriptor.types))
+        return Record("E", descriptor.fields, values)
+
+
 class SinkReader:
     """One-pass, bounded-memory iterator. Exhaustion verifies the entire sink."""
 
@@ -249,8 +310,8 @@ class SinkReader:
         try:
             self._file = stream if stream is not None else open(path, "rb")
             value, line = self._readline()
-            self._descriptors = _header(value)
-            self._counts = {tag: 0 for tag in self._descriptors}
+            self._parser = RecordParser(value)
+            self._counts = {descriptor["type"]: 0 for descriptor in value["records"]}
             self.header = value
             self._hash.update(line)
         except (OSError, SinkFormatError) as error:
@@ -309,22 +370,13 @@ class SinkReader:
             if type(value) is dict:
                 self._finish(value)
                 raise StopIteration
-            if type(value) is not list or not value or type(value[0]) is not str:
-                raise SinkFormatError("record must be a nonempty array with a string tag")
-            tag = value[0]
-            if tag not in self._descriptors:
-                raise SinkFormatError("record tag is absent from the header")
-            descriptor = self._descriptors[tag]
-            if len(value) != len(descriptor.fields) + 1:
-                raise SinkFormatError("record field count differs from its descriptor")
-            values = tuple(_field(item, kind) for item, kind in zip(value[1:], descriptor.types))
-            if tag == "T" and values[1] not in ("long", "short"):
-                raise SinkFormatError("trade side must be long or short")
+            record = self._parser.parse(line, parsed=value)
+            tag = record.tag
             if self._counts[tag] == I53_MAX:
                 raise SinkFormatError("record count exceeds the exact JSON integer bound")
             self._counts[tag] += 1
             self._hash.update(line)
-            return Record(tag, descriptor.fields, values)
+            return record
         except (OSError, SinkFormatError) as error:
             self._refuse(error)
 
