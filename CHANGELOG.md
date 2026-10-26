@@ -12,8 +12,9 @@ paired with [pineforge-codegen 1.8.0](https://github.com/pineforge-4pass/pinefor
 A minor release. It speeds up the `run_json` wrapper (the wrapper only, not the
 engine), adds one unused storage building block to the library, states where
 scratch files are placed, and carries release-gate and CI changes. The C ABI
-(`PF_ABI_VERSION` 4), the report keys and the run-failure code catalog are
-unchanged (0 codes added, changed or removed since 1.7.0).
+(`PF_ABI_VERSION` 4) and the run-failure code catalog are unchanged (0 codes
+added, changed or removed since 1.7.0). The report keys are unchanged except
+for two additive diagnostics keys, described below.
 
 ### Compatibility and migration
 
@@ -84,6 +85,19 @@ unchanged (0 codes added, changed or removed since 1.7.0).
   such as `/var/tmp`; `PINEFORGE_COMMAND_SCRATCH_DIR` covers the command stores
   only, not the trade ledger or the report files. This is not a change of
   behaviour in 1.8.0.
+
+### Run profile in the report diagnostics
+
+- **Two additive success keys.** Every executed success report of
+  `run_json.py` now carries `diagnostics.run_profile` (`"jailed"` or
+  `"unjailed"`, the profile fixed when the run started) and
+  `diagnostics.scratch_arena_jailed` (a boolean, true only when the jailed
+  profile ran and the native scratch arena admission succeeded). A host that
+  needs to know the run was jailed can read them instead of inferring it from
+  the arena sizes. The marker records the checked profile and the admission; it
+  is not an independent check of operating-system confinement. Failure,
+  capability and validate-only documents, and every existing key and its order,
+  are unchanged. The replay converter keeps both keys.
 
 ### Storage building block
 
