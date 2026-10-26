@@ -29069,7 +29069,8 @@ std::uint64_t PineExecutionAdapter::checked_live_key(const SourceId& spelling) c
     }
     if (!existing->second.identity.matches(spelling, previous->second.source_id,
                                            previous->second.from_entry)) {
-        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant,
+                                      {{"reason", "order_key_hash_collision"}},
                                       "Pine live source key collision");
     }
     return key;
