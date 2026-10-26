@@ -199,7 +199,7 @@ void bounded_slab_keeps_the_fold_without_files() {
     const std::vector<std::string> keys{
         "z", "", "a", "ab", std::string("a\0", 2), std::string("a\0b", 3),
         std::string("\0", 1), std::string("\x1f", 1), std::string("\x80", 1),
-        std::string("\xff", 1), std::string(513, 'L'), std::string(4097, 'L')
+        std::string("\xff", 1), std::string(63, 'L'), std::string(64, 'L')
     };
     ScratchManifest manifest;
     manifest.K_c = keys.size();
@@ -311,8 +311,12 @@ void slab_work_bound_and_oracle_4096(bool collide) {
     constexpr std::size_t capacity = 4096;
     constexpr std::uint64_t byte_bound = 257 * 257 * (8 + 16);
     auto manifest = default_scratch_manifest(0);
-    require(manifest.K_c == capacity, "work fixture uses the production consumed-key admission");
-    // Keep production c capacities, with the other independent stores empty.
+    require(manifest.K_c == 32768 && manifest.B_c == 4227072,
+            "production consumed-key/byte admission after the scratch increase");
+    // This remains the 4096-row operation-bound witness (including forced
+    // full-hash collisions). Use an explicit manifest for its exact-cap
+    // refusal; retain every original work bound at the original population.
+    manifest.K_c = capacity;
     manifest.K_e = manifest.B_e = manifest.U = manifest.B_U = manifest.V = manifest.B_V = 0;
     auto slab = std::make_shared<ScratchSlab>(manifest);
     const auto layout = slab->layout();

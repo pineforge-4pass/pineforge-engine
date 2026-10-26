@@ -74,7 +74,7 @@ scan:
   generated_files:
     - "tutorial/**/generated*.cpp"
 ceilings:
-  unreviewed: 1241
+  unreviewed: 1255
   pending-flat-memory: 188
 owners:
   - {name: "generated-cpp", globs: ["tutorial/**"]}
@@ -351,7 +351,7 @@ entries:
   - {id: "U0266", file: "include/pineforge/source/pine_adapter.hpp", symbol: "begin", ops: ["decl"], container: "const_iterator", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 677}
   - {id: "U0267", file: "include/pineforge/source/pine_adapter.hpp", symbol: "bracket_families_", ops: ["decl"], container: "std::unordered_map<std::uint64_t, BracketRoster>", owner: "source-layer", phase: "bar", state: "pending-flat-memory", inventory: "P03", grows_with: ["live-orders"], line: 2522}
   - {id: "U0268", file: "include/pineforge/source/pine_adapter.hpp", symbol: "bracket_shadowed_openings_", ops: ["decl"], container: "std::unordered_set<std::uint64_t>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 2559}
-  - {id: "U0270", file: "include/pineforge/source/pine_adapter.hpp", symbol: "bytes", ops: ["decl", "grow"], container: "std::vector<std::uint8_t>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1025}
+  - {id: "U0270", file: "include/pineforge/source/pine_adapter.hpp", symbol: "bytes", ops: ["assign", "decl", "grow"], container: "std::vector<std::uint8_t>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1025}
   - {id: "U0271", file: "include/pineforge/source/pine_adapter.hpp", symbol: "candidate_names", ops: ["decl"], container: "std::vector<std::uint64_t>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 2815}
   - {id: "U0272", file: "include/pineforge/source/pine_adapter.hpp", symbol: "candidates", ops: ["decl"], container: "std::vector<std::pair<std::uint64_t, const PlacementSnapshot*>>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 2814}
   - {id: "U0273", file: "include/pineforge/source/pine_adapter.hpp", symbol: "carried_trail_retunes_", ops: ["decl"], container: "std::vector<std::pair<native_order::RequestHandle, double>>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 2723}
@@ -886,7 +886,6 @@ entries:
   - {id: "U0828", file: "src/source/pine_adapter.cpp", symbol: "close_logical_units_", ops: ["subscript"], container: "unresolved by the index: close_logical_units_[...]", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 9488}
   - {id: "U0829", file: "src/source/pine_adapter.cpp", symbol: "closed_cohorts", ops: ["decl", "grow"], container: "std::vector<SourceId>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 24697}
   - {id: "U0830", file: "src/source/pine_adapter.cpp", symbol: "closes", ops: ["assign", "decl", "grow"], container: "std::vector<std::pair<native_order::RequestHandle, PlacementSnapshot>>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1885}
-  - {id: "U0831", file: "src/source/pine_adapter.cpp", symbol: "cohort_ids", ops: ["decl", "grow"], container: "std::vector<SourceId>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 7120}
   - {id: "U0833", file: "src/source/pine_adapter.cpp", symbol: "cohort_sides", ops: ["decl", "subscript"], container: "std::unordered_map<const void*, CohortSides>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1551}
   - {id: "U0834", file: "src/source/pine_adapter.cpp", symbol: "cohorts_by_id_", ops: ["grow", "subscript"], container: "unresolved by the index: cohorts_by_id_.emplace(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 3020}
   - {id: "U0835", file: "src/source/pine_adapter.cpp", symbol: "consumed_partial_exit_cycles_", ops: ["grow", "subscript"], container: "unresolved by the index: consumed_partial_exit_cycles_[...]", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 24790}
@@ -1260,8 +1259,8 @@ entries:
   - {id: "U1221", file: "include/pineforge/detail/disk_resident_id_table.hpp", symbol: "end", ops: ["decl"], container: "const_iterator", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 134}
   - {id: "U1222", file: "include/pineforge/detail/disk_resident_id_table.hpp", symbol: "find", ops: ["decl"], container: "const_iterator", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 167}
   - {id: "U1223", file: "include/pineforge/detail/disk_resident_id_table.hpp", symbol: "find_resident", ops: ["decl"], container: "const_iterator", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 179}
-  - {id: "U1224", file: "include/pineforge/detail/disk_resident_id_table.hpp", symbol: "index_", ops: ["decl", "grow"], container: "Index", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 189}
-  - {id: "U1225", file: "include/pineforge/detail/disk_resident_id_table.hpp", symbol: "resident_", ops: ["decl", "grow"], container: "std::map<Offset, std::shared_ptr<Row>>", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 192}
+  - {id: "U1224", file: "include/pineforge/detail/disk_resident_id_table.hpp", symbol: "index_", ops: ["assign", "decl", "grow"], container: "Index", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 189}
+  - {id: "U1225", file: "include/pineforge/detail/disk_resident_id_table.hpp", symbol: "resident_", ops: ["assign", "decl", "grow"], container: "std::map<Offset, std::shared_ptr<Row>>", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 192}
   - {id: "U1226", file: "include/pineforge/detail/disk_resident_id_table.hpp", symbol: "row", ops: ["alloc"], container: "unresolved by the index: make_shared", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 191}
   - {id: "U1227", file: "include/pineforge/detail/id_pair_ordered_fold.hpp", symbol: "reader", ops: ["grow"], container: "unresolved by the index: reader.append(...)", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 224}
   - {id: "U1228", file: "include/pineforge/detail/id_pair_slab_fold.hpp", symbol: "reader", ops: ["grow"], container: "unresolved by the index: reader.append(...)", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 182}
@@ -1273,7 +1272,7 @@ entries:
   - {id: "U1234", file: "include/pineforge/detail/id_pair_store.hpp", symbol: "directory_", ops: ["assign", "decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 189}
   - {id: "U1235", file: "include/pineforge/detail/id_pair_store.hpp", symbol: "end", ops: ["decl"], container: "const_iterator", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 223}
   - {id: "U1236", file: "include/pineforge/detail/id_pair_store.hpp", symbol: "entry_", ops: ["grow"], container: "unresolved by the index: entry_.emplace(...)", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 143}
-  - {id: "U1237", file: "include/pineforge/detail/id_pair_store.hpp", symbol: "first", ops: ["decl", "grow"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 89}
+  - {id: "U1237", file: "include/pineforge/detail/id_pair_store.hpp", symbol: "first", ops: ["assign", "decl", "grow"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 89}
   - {id: "U1238", file: "include/pineforge/detail/id_pair_store.hpp", symbol: "from_entry", ops: ["decl", "grow"], container: "std::optional<std::string>", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 91}
   - {id: "U1239", file: "include/pineforge/detail/id_pair_store.hpp", symbol: "index_", ops: ["assign"], container: "unresolved by the index: index_ = ...", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 587}
   - {id: "U1240", file: "include/pineforge/detail/id_pair_store.hpp", symbol: "memory_", ops: ["alloc", "grow"], container: "unresolved by the index: make_unique", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 361}
@@ -1519,3 +1518,18 @@ entries:
   - {id: "U1480", file: "src/source/pine_strategy_host.cpp", symbol: "key", ops: ["assign", "decl"], container: "SourceId", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 200}
   - {id: "U1481", file: "src/source/pine_strategy_host.cpp", symbol: "slots", ops: ["decl"], container: "std::vector<const NativeInstrumentFeedView*>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 3555}
   - {id: "U1482", file: "src/source/pine_strategy_host.cpp", symbol: "text", ops: ["decl", "grow"], container: "std::array<std::string*, 4>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 305}
+  - {id: "U1487", file: "include/pineforge/detail/disk_resident_id_table.hpp", symbol: "at", ops: ["assign", "decl"], container: "const_iterator", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 168}
+  - {id: "U1488", file: "include/pineforge/detail/disk_resident_id_table.hpp", symbol: "at_", ops: ["assign", "decl"], container: "const_iterator", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 99}
+  - {id: "U1489", file: "include/pineforge/detail/disk_resident_id_table.hpp", symbol: "held_", ops: ["assign", "decl", "grow"], container: "Held", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 273}
+  - {id: "U1490", file: "include/pineforge/detail/disk_resident_id_table.hpp", symbol: "resident_by_key_", ops: ["assign", "decl", "grow"], container: "ResidentKeys", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 272}
+  - {id: "U1491", file: "include/pineforge/detail/scratch_errors.hpp", symbol: "message", ops: ["append", "decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 62}
+  - {id: "U1492", file: "include/pineforge/detail/scratch_errors.hpp", symbol: "scratch_byte_limit_message", ops: ["decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 88}
+  - {id: "U1493", file: "include/pineforge/detail/scratch_errors.hpp", symbol: "scratch_count_limit_message", ops: ["decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 68}
+  - {id: "U1494", file: "include/pineforge/detail/scratch_errors.hpp", symbol: "scratch_limit_message", ops: ["decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 60}
+  - {id: "U1495", file: "include/pineforge/detail/scratch_errors.hpp", symbol: "scratch_limit_number", ops: ["decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 43}
+  - {id: "U1496", file: "include/pineforge/detail/scratch_errors.hpp", symbol: "scratch_resident_cohort_limit_message", ops: ["decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 108}
+  - {id: "U1497", file: "include/pineforge/metrics_fold.hpp", symbol: "held_", ops: ["assign"], container: "unresolved by the index: held_ = ...", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 188}
+  - {id: "U1498", file: "include/pineforge/ta.hpp", symbol: "held_", ops: ["assign"], container: "unresolved by the index: held_ = ...", owner: "ta-series", phase: "unclassified", state: "unreviewed", line: 1406}
+  - {id: "U1499", file: "src/native_order.cpp", symbol: "held_", ops: ["assign"], container: "unresolved by the index: held_ = ...", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 2600}
+  - {id: "U1500", file: "src/source/pine_adapter.cpp", symbol: "cohorts", ops: ["decl", "grow"], container: "std::vector<const CohortRow*>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 8761}
+  - {id: "U1501", file: "src/ta_misc.cpp", symbol: "held_", ops: ["assign"], container: "unresolved by the index: held_ = ...", owner: "ta-series", phase: "unclassified", state: "unreviewed", line: 602}

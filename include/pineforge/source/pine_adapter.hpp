@@ -18,6 +18,7 @@
 #include <pineforge/source/exit_scratch.hpp>
 
 #include <algorithm>
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -1002,6 +1003,17 @@ public:
         const auto found = positions_.find(incarnation);
         return found == positions_.end() ? nullptr : &found->second;
     }
+    std::size_t heap_bytes_estimate() const noexcept {
+        auto bytes = items_.capacity() * sizeof(native_order::RequestHandle)
+            + positions_.bucket_count() * sizeof(void*);
+        for (const auto& row : positions_)
+            bytes += sizeof(decltype(positions_)::value_type) + 2 * sizeof(void*)
+                + row.second.capacity() * sizeof(std::size_t);
+        // The per-run session key inside each handle is a shared run-level
+        // object, not per-row storage: not counted (compile fix by CR150-CX,
+        // the lane called a std::string member the type does not have).
+        return bytes;
+    }
 
 private:
     std::vector<native_order::RequestHandle> items_;
@@ -1329,11 +1341,48 @@ public:
             return std::find(doomed.begin(), doomed.end(), handle) != doomed.end();
         });
     }
+    // Hoisted once per selection, outside the per-family loop. The common
+    // one-leg close needs no scratch reads per family; larger selections
+    // retain their bounded scratch representation rather than a heap vector.
+    struct RemovalSelection {
+        const detail::ExitScratchRows<native_order::RequestHandle>& rows;
+        std::optional<std::uint64_t> single;
+        explicit RemovalSelection(
+                const detail::ExitScratchRows<native_order::RequestHandle>& doomed)
+            : rows(doomed) {
+            if (rows.size() == 1) single = rows.front().incarnation;
+        }
+        template<class Predicate> bool any(Predicate predicate) const {
+            if (single) return predicate(*single);
+            for (const auto& handle : rows)
+                if (predicate(handle.incarnation)) return true;
+            return false;
+        }
+    };
     void remove_selected(const detail::ExitScratchRows<native_order::RequestHandle>& doomed) {
         if (doomed.empty() || hot_.empty()) return;
         detail::ExitScratchIndex members(doomed.context());
         for (const auto& handle : doomed) members.put(handle.incarnation, 0);
-        remove_selected(members, doomed.context().run);
+        const RemovalSelection selection(doomed);
+        remove_selected(members, doomed.context().run, selection);
+    }
+    void remove_selected(const detail::ExitScratchIndex& members,
+                         const native_order::RunIdentity& run,
+                         const RemovalSelection& selection,
+                         bool precheck = true) {
+        // counts_ is exactly the incarnation multiplicity of hot_: push_back
+        // increments, settle uncounts each removed handle, and remove_all_from
+        // decrements. Settled/parked members are never in this index.
+        if (precheck && !selection.any(
+                [&](std::uint64_t incarnation) { return count(incarnation) != 0; })) {
+            // Every doomed incarnation has count zero. Checking that EVERY
+            // hot member has positive count proves this skipped hot_ contains
+            // no doomed member, in O(hot_) without a scratch-tree lookup.
+            assert(std::all_of(hot_.begin(), hot_.end(),
+                [&](const auto& handle) { return count(handle.incarnation) != 0; }));
+            return;
+        }
+        remove_selected(members, run);
     }
     void remove_selected(const detail::ExitScratchIndex& members,
                          const native_order::RunIdentity& run) {
@@ -1606,6 +1655,19 @@ public:
     void set_id_tables_directory(const std::string& directory); // All L19l tables, after reset.
     void set_auxiliary_tables_directory(const std::string& directory); // Same binding.
     void fixture_use_memory_auxiliary_tables();
+    void fixture_cohort_implicit_spill_interval(std::size_t calls) noexcept {
+        cohorts_by_id_.fixture_implicit_spill_interval(calls);
+    }
+    // Test seam (forwarder missing in round 4: the fixtures call it on the adapter).
+    void fixture_spill_predicate(bool (*predicate)(const std::string&)) noexcept {
+        cohorts_by_id_.fixture_spill_predicate(predicate);
+    }
+    void fixture_verify_source_entry_slots(bool enabled) noexcept {
+        fixture_verify_source_entry_slots_ = enabled;
+    }
+    void fixture_bracket_remove_precheck(bool enabled) noexcept {
+        fixture_bracket_remove_precheck_ = enabled;
+    }
     std::uint64_t fixture_auxiliary_disk_bytes() const noexcept;
     std::uint64_t fixture_erased_digest() const noexcept { return placement_.erased_digest(); }
     std::uint64_t fixture_erased_rows() const noexcept { return placement_.erased_rows(); }
@@ -1613,6 +1675,31 @@ public:
     fixture_consumed_partial_exit_cycles() const noexcept { return consumed_partial_exit_cycles_; }
 
     // Diagnostic work counters, excluded from broker continuation state.
+    struct PendingScanCounter {
+        std::uint64_t calls = 0;
+        std::uint64_t live_handle_iterations = 0, placement_find_calls = 0;
+        std::uint64_t open_lot_iterations = 0;
+        std::uint64_t max_live_handles = 0, max_placement = 0;
+        std::uint64_t max_pending_bracket_legs = 0;
+        std::uint64_t max_resident_cohorts = 0, max_logical_cohorts = 0;
+    };
+    struct PendingScanWork {
+        PendingScanCounter priced_entry, entry, standing_exit, open_lot;
+    };
+    const PendingScanWork& pending_scan_work() const noexcept { return pending_scan_work_; }
+    const auto& cohort_table_work() const noexcept { return cohorts_by_id_.work_counters(); }
+    struct CohortHeapEstimate {
+        std::size_t resident_rows = 0, total_bytes = 0, bytes_per_row = 0;
+        std::size_t row_bytes = 0, key_bytes = 0, origin_bytes = 0;
+        std::size_t opened_bytes = 0, live_unit_bytes = 0, directory_bytes = 0;
+    };
+    // Snapshot only: O(resident rows + retained origins), no allocation/I/O.
+    // Capacities include inline string storage; node/control sizes are
+    // estimates. bytes_per_row counts PHYSICAL rows (deferred empty rows
+    // inflate it). Physical resident rows <= 2x the rows kept at the last
+    // spill pass + 64 (+ pinned). This is not a bound on pending-order memory.
+    CohortHeapEstimate cohort_heap_estimate() const noexcept;
+
     enum class PositionTailGuard : std::uint8_t {
         None, Inactive, Invalidated, PublicationRewind, PublicationGap,
         BeforeBarrier, NonmonotoneTime, MissingOrigin, ReactivatedOrigin,
@@ -1968,6 +2055,7 @@ private:
         Record retired_record() const noexcept;
         static CohortFacts restore_record(const Record&, bool arena_backed = false);
         bool spillable() const noexcept;
+        bool held() const noexcept;
         // R5 lane V19-E: the sides (bit 0 long, bit 1 short) of the openings
         // in `origins` whose placement rows were erased, so a question about
         // every origin the cohort ever accepted still covers them.
@@ -2179,6 +2267,7 @@ private:
     void set_exit_phase(std::size_t trade_index, std::uint8_t phase);
     std::vector<native_order::RequestHandle> openings_for(const SourceId&) const;
     double cohort_exposure_for(const SourceId&) const noexcept;
+    double cohort_exposure_for(const CohortFacts&) const noexcept;
     // The units an exit's from_entry holds; none when it names no entry.
     std::optional<double> from_entry_units(const SourceId&) const noexcept;
     bool from_entry_filled_this_cycle(const SourceId&) const;
@@ -2676,6 +2765,7 @@ private:
     std::int32_t entry_attempt_bar_ = -1;
     std::uint32_t entry_attempts_on_bar_ = 0;
     CohortTable cohorts_by_id_;
+    void observe_pending_scan(PendingScanCounter&) const noexcept;
     CohortTable::iterator require_cohort(const SourceId&);
     PlacementTable placement_;
     std::unordered_map<std::uint64_t, native_order::RequestHandle> live_by_source_key_;
@@ -2952,6 +3042,15 @@ private:
     SourceId open_exit_first_id_{};
     double open_exit_first_fill_ = 0.0;
     // @source-state end
+    // Diagnostic work counter: written from const methods, never read by a
+    // decision, deliberately outside source state and the broker hash.
+    mutable PendingScanWork pending_scan_work_{};
+    // Derived decision cache, maintained from CohortFacts::opened pushes,
+    // erases and whole-vector clears, asserted against those hashed vectors
+    // in non-Release builds and checked by the fixture oracle in Release.
+    std::size_t cohort_opened_slot_count_ = 0;
+    bool fixture_verify_source_entry_slots_ = false;
+    bool fixture_bracket_remove_precheck_ = true;
     // Set while an open's calls that TradingView does not repeat at one
     // price book (run_close_sized_open_calls, open_call_owing_follow_up); the
     // requests submitted meanwhile are listed in unrepeated_margin_calls_

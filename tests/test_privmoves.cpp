@@ -135,8 +135,11 @@ std::string id(std::size_t i) {
     if (i == 0) return "";
     if (i == 1) return std::string("a\0", 2);
     if (i == 2) return std::string("a\0b", 3);
-    if (i < 48) return std::string(193 + i, 'p'); // Nested terminators create a deep saved path.
-    return std::string(193, 'p') + static_cast<char>(i) + std::to_string(i);
+    // 16 + i <= 63 bytes: the bounded profile refuses ids over 64 bytes (row-4 base cap),
+    // so the shared prefix is 16 bytes, not 193; the 48-deep prefix chain (the nesting
+    // this fixture exists to build) is unchanged.
+    if (i < 48) return std::string(16 + i, 'p'); // Nested terminators create a deep saved path.
+    return std::string(16, 'p') + static_cast<char>(i) + std::to_string(i);
 }
 
 void check_cycles(const Cycles& store, const std::map<std::string, std::int64_t>& expected,

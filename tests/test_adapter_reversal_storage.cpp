@@ -39,7 +39,7 @@ template<class Container> void old_release_empty(Container&) {}
 template<class Container> void old_clear(Container& container) { container.clear(); }
 inline bool old_retain_cohort() noexcept { return false; }
 
-inline bool allow_spill() noexcept {
+inline bool allow_spill(const std::string&) noexcept {
     if (active && active->keep_cohorts) {
         ++active->retained_rows;
         return old_retain_cohort();
@@ -49,13 +49,11 @@ inline bool allow_spill() noexcept {
 }
 } // namespace reversal_storage_fixture
 
-// Only the predicate call in the storage template is substituted. Both
-// modes keep the exact production class layout, public access and codec;
-// the reference simply declines eviction, retaining the old map's nodes.
-// Counts are taken after the real pin/spillable checks, before write/erase.
-#define spillable() spillable() && ::reversal_storage_fixture::allow_spill()
+// Both modes keep the exact production class layout, public access and codec;
+// the reference callback simply declines eviction, retaining the old map's
+// nodes. Counts are taken after the real pin/spillable checks, before
+// write/erase.
 #include <pineforge/detail/disk_resident_id_table.hpp>
-#undef spillable
 
 #include <pineforge/source/pine_strategy_host.hpp>
 #include "../src/source/pine_placement_retention.hpp"
@@ -141,8 +139,10 @@ public:
         set_syminfo_session("24x7");
         set_syminfo_mintick(0.25);
         set_broker_state_hash_recording(recording);
+        adapter_.fixture_spill_predicate(&allow_spill);
     }
     void on_source_bar(const Bar& bar) override {
+        adapter_.fixture_cohort_implicit_spill_interval(1);
         const int i = pine_bar_index();
         const double position = live_position_size();
         if (position != 0.0) {

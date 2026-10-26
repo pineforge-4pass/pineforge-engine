@@ -48,6 +48,9 @@ public:
     }
     void set_store(ScratchStore store) noexcept { file_.set_store(store); }
     bool arena_backed() const noexcept { return file_.arena_backed(); }
+    bool bounded_cohorts() const noexcept {
+        return file_.scratch_owner() && file_.scratch_resource() == ScratchResource::cohort;
+    }
     void set_directory(const std::string& directory) { file_.set_directory(directory); }
     void bind_scratch(const std::shared_ptr<ScratchSlab>& slab, ScratchResource resource) {
         if (size_ != 0)
@@ -107,6 +110,7 @@ public:
         if (!file_.scratch_owner()) return;
         std::uint64_t ordinal = 0, extra_rows = 0, extra_bytes = 0;
         enumerate([&](const std::string& key) {
+            require_id_size(key.size());
             const auto current = ordinal++;
             if (find(key)) return;
             bool repeated = false;
@@ -116,8 +120,15 @@ public:
             });
             if (repeated) return;
             const auto maximum = std::numeric_limits<std::uint64_t>::max();
-            if (extra_rows == maximum || key.size() > maximum - extra_bytes)
-                throw ScratchCapacityError(file_.scratch_resource());
+            if (extra_rows == maximum || key.size() > maximum - extra_bytes) {
+                const auto resource = file_.scratch_resource();
+                const auto& manifest = file_.scratch_owner()->manifest();
+                throw ScratchCapacityError(resource, extra_rows == maximum
+                    ? scratch_count_limit_message(resource,
+                        resource == ScratchResource::cohort ? manifest.U : manifest.V)
+                    : scratch_byte_limit_message(resource,
+                        resource == ScratchResource::cohort ? manifest.B_U : manifest.B_V));
+            }
             ++extra_rows;
             extra_bytes += key.size();
             require_growth(extra_rows, extra_bytes);
@@ -192,7 +203,13 @@ public:
     }
 
 private:
+    void require_id_size(std::size_t key_size) const {
+        if (file_.scratch_owner() && file_.scratch_resource() == ScratchResource::cohort
+            && key_size > 64)
+            throw ScratchCapacityError(ScratchResource::cohort, "id longer than 64 bytes");
+    }
     void require_new_key(std::size_t key_size) const {
+        require_id_size(key_size);
         require_growth(1, key_size);
     }
     void require_growth(std::uint64_t extra_rows, std::uint64_t extra_bytes) const {
@@ -206,15 +223,16 @@ private:
         // Packed nodes have no inter-row alignment: the append cursor minus
         // the null byte and fixed headers is exactly aggregate stored key bytes.
         const auto key_bytes = end_ - 1 - header * size_;
-        if (size_ > rows || extra_rows > rows - size_
-            || key_bytes > bytes || extra_bytes > bytes - key_bytes)
-            throw ScratchCapacityError(resource);
+        if (size_ > rows || extra_rows > rows - size_)
+            throw ScratchCapacityError(resource, scratch_count_limit_message(resource, rows));
+        if (key_bytes > bytes || extra_bytes > bytes - key_bytes)
+            throw ScratchCapacityError(resource, scratch_byte_limit_message(resource, bytes));
         const auto capacity = slab->region(resource).capacity;
         if (end_ > capacity || extra_rows > (capacity - end_) / header)
-            throw ScratchCapacityError(resource);
+            throw ScratchCapacityError(resource, scratch_byte_limit_message(resource, bytes));
         const auto fixed_bytes = header * extra_rows;
         if (extra_bytes > capacity - end_ - fixed_bytes)
-            throw ScratchCapacityError(resource);
+            throw ScratchCapacityError(resource, scratch_byte_limit_message(resource, bytes));
         slab->require_extend(resource, end_ + fixed_bytes + extra_bytes);
     }
     [[noreturn]] void io_error(int error, const char* operation) const {
