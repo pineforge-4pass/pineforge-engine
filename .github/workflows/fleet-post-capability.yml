@@ -27,7 +27,7 @@ jobs:
       fail-fast: false
       matrix:
         slot: [a, b]
-    runs-on: [self-hosted, "${{ format('pf-gcp-vm-{0}', inputs.vm) }}"]
+    runs-on: [self-hosted, pf-gcp-post]
     env:
       TARGET_VM: ${{ inputs.vm }}
       SLOT: ${{ matrix.slot }}
