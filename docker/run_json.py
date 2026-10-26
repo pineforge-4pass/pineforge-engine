@@ -6018,6 +6018,7 @@ class _ReportSink:
     def __init__(self, lib, state, *, directory=None, run_id="", path=None):
         self.directory = _disk_report_directory(directory)
         self.header, self.counts, self.sha256 = {}, {}, ""
+        self._identity = None
         self.summary = self.summary_failure = self.diagnostics = None
         self.named, self.run_id = path is not None, run_id
         self.keep, self.closed = False, False
@@ -6075,9 +6076,22 @@ class _ReportSink:
                 or bytes(receipt.sha256_hex) != self.sha256.encode("ascii")
                 or int(report.total_trades) != self.counts["T"]):
             raise _engine_invariant("the report sink trailer differs from its engine receipt")
+        try:
+            status = os.stat(self.path)
+        except OSError as error:
+            raise _engine_invariant(f"the engine's report sink is invalid: {error}") from error
+        # Identity is an early check alongside the verified receipt; the
+        # subsequent scan still proves content against A's digest.
+        self._identity = status.st_ino, status.st_size
         self.summary, self.summary_failure, self.diagnostics = summary, summary_failure, diagnostics
 
     def records(self, tag=None):
+        if tag == "T":
+            yield from self._trade_records()
+            return
+        if tag == "E":
+            yield from self._tagged_records(tag)
+            return
         from pf_sink import SinkFormatError
         try:
             with _open_uncached_sink(self.path) as reader:
@@ -6087,6 +6101,157 @@ class _ReportSink:
                 if reader.sha256 != self.sha256:
                     raise _engine_invariant("the report sink changed after verification")
         except SinkFormatError as error:
+            raise _engine_invariant(f"the engine's report sink is invalid: {error}") from error
+
+    def _trade_records(self):
+        yield from self._tagged_records("T")
+
+    def _tagged_records(self, tag):
+        """Hash and extract one tag from the same fresh sequential raw reads."""
+        import pf_sink
+        try:
+            file = _open_uncached_sink(self.path, raw=True)
+            try:
+                status = os.fstat(file.fileno())
+                if (status.st_ino, status.st_size) != self._identity:
+                    raise _engine_invariant(
+                        "the report sink changed after verification: file identity differs")
+                parser = pf_sink.RecordParser(self.header)
+                decode = parser.parse_verified if tag == "E" else parser.parse
+                needle = f'\n["{tag}",'.encode("ascii")
+                digest = hashlib.sha256()
+                count = offset = processed = 0
+                carry = b""
+                pending = bytearray()
+                kind = "header"
+                tag_escaped = False
+                last_byte = trailer_start = None
+                done = False
+                while not done:
+                    chunk = file.read(file.window)
+                    if not chunk:
+                        if pending or (last_byte is not None and last_byte != 0x0A):
+                            raise pf_sink.SinkFormatError("line does not end with LF")
+                        raise pf_sink.SinkFormatError("missing header or trailer")
+                    data = carry + chunk
+                    base, end = offset - len(carry), len(data)
+                    last_byte = chunk[-1]
+                    if trailer_start is None:
+                        marker = data.find(b"\n{")
+                        if marker >= 0:
+                            trailer_start = base + marker + 1
+                    # Only new bytes enter the hash. Remember the absolute cut
+                    # even while a trailer continues across later windows.
+                    hash_end = (len(chunk) if trailer_start is None
+                                else max(0, trailer_start - offset))
+                    if hash_end:
+                        digest.update(chunk[:hash_end])
+                    cursor = len(carry) if kind is not None else max(0, processed - base)
+                    record_at = escaped_at = None
+                    while cursor < end:
+                        if kind == "tag":
+                            # The fallback decodes only the first string token;
+                            # skipped bodies are never walked or retained.
+                            while cursor < end:
+                                byte = data[cursor]
+                                pending.append(byte)
+                                cursor += 1
+                                if len(pending) > pf_sink.MAX_LINE_BYTES:
+                                    raise pf_sink.SinkFormatError("line exceeds 1 MiB including LF")
+                                if byte == 0x0A:
+                                    raise pf_sink.SinkFormatError(
+                                        "invalid UTF-8 or JSON: unterminated record tag")
+                                if tag_escaped:
+                                    tag_escaped = False
+                                elif byte == 0x5C:
+                                    tag_escaped = True
+                                elif byte == 0x22:
+                                    try:
+                                        line_tag = json.loads(bytes(pending[1:]).decode("utf-8"))
+                                    except (UnicodeError, ValueError, RecursionError) as error:
+                                        raise pf_sink.SinkFormatError(
+                                            f"invalid UTF-8 or JSON: {error}") from error
+                                    if line_tag == tag:
+                                        kind = "record"
+                                    else:
+                                        kind = None
+                                        pending.clear()
+                                        processed = base + cursor
+                                    del line_tag
+                                    break
+                            if kind == "tag":
+                                break
+                            continue
+                        if kind is not None:
+                            limit = min(end, cursor + pf_sink.MAX_LINE_BYTES + 1 - len(pending))
+                            newline = data.find(b"\n", cursor, limit)
+                            stop = newline + 1 if newline >= 0 else limit
+                            pending.extend(data[cursor:stop])
+                            cursor = stop
+                            if len(pending) > pf_sink.MAX_LINE_BYTES:
+                                raise pf_sink.SinkFormatError("line exceeds 1 MiB including LF")
+                            if newline < 0:
+                                break
+                            if kind == "trailer":
+                                # A verified its receipt; B/C need only framing
+                                # and EOF, without parsing or hashing the trailer.
+                                if cursor != end or file.read(file.window):
+                                    raise pf_sink.SinkFormatError("bytes after the trailer")
+                                done = True
+                                break
+                            if kind == "header":
+                                # Parse the raw header exactly once: malformed
+                                # JSON must be a format refusal before digest.
+                                pf_sink._parse(bytes(pending))
+                                record = None
+                            else:
+                                record = decode(bytes(pending))
+                                count += 1
+                            pending.clear()
+                            kind = None
+                            processed = base + cursor
+                            if record is not None:
+                                yield record
+                                del record
+                            continue
+                        # Cache each next needle so a skipped escaped tag does
+                        # not rescan the window for a distant matching record.
+                        # Literal skipped lines need no per-line Python work.
+                        if record_at is None or record_at < cursor:
+                            marker = data.find(needle, max(0, cursor - 1))
+                            record_at = marker + 1 if marker >= 0 else end
+                        if escaped_at is None or escaped_at < cursor:
+                            marker = data.find(b'\n["\\', max(0, cursor - 1))
+                            escaped_at = marker + 1 if marker >= 0 else end
+                        trailer_at = (trailer_start - base
+                                      if trailer_start is not None
+                                      and trailer_start >= base + cursor else end)
+                        cursor = min(record_at, escaped_at, trailer_at)
+                        if cursor == end:
+                            break
+                        if cursor == trailer_at:
+                            kind = "trailer"
+                        elif cursor == record_at:
+                            kind = "record"
+                        else:
+                            kind = "tag"
+                            pending.extend(data[cursor:cursor + 2])
+                            cursor += 2
+                            tag_escaped = False
+                    offset += len(chunk)
+                    carry = data[-5:]
+                # Streamed records remain provisional until exhaustion.
+                if digest.hexdigest() != self.sha256:
+                    raise _engine_invariant(
+                        "the report sink changed after verification: digest differs")
+                if count != self.counts[tag]:
+                    raise _engine_invariant(
+                        f"the report sink {tag} scan disagrees with its verified count")
+            finally:
+                file.close()
+        except (OSError, pf_sink.SinkFormatError) as error:
+            # Includes raw read failures (EIO or a mid-scan short read), not
+            # just framing/parser failures; never relabel these as changes.
             raise _engine_invariant(f"the engine's report sink is invalid: {error}") from error
 
     def close(self):
@@ -6303,7 +6468,7 @@ class _BoundedJSONFile:
 
 
 class _UncachedSinkFile(_BoundedJSONFile):
-    """Binary readback after the fixed sink reader has validated its header."""
+    """Uncached binary readback with an independent bounded window."""
     def __init__(self, file):
         position = file.tell()
         super().__init__(file)  # path sinks are unjailed only
@@ -6333,12 +6498,20 @@ class _UncachedSinkFile(_BoundedJSONFile):
         return b"".join(pieces)
 
 
-def _open_uncached_sink(path):
+def _open_uncached_sink(path, *, raw=False):
     """Reuse the strict reader; only its bounded header uses buffered I/O.
 
     The header's existing 1 MiB line bound also bounds that initial cache
     footprint. All subsequent reads bypass cache through a fixed 64 KiB window.
     """
+    if raw:
+        # B owns a new FileIO at byte zero, including the original header.
+        file = open(path, "rb", buffering=0)
+        try:
+            return _UncachedSinkFile(file)
+        except BaseException:
+            file.close()
+            raise
     from pf_sink import SinkReader
     reader = SinkReader(path)
     try:
