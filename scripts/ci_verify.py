@@ -936,7 +936,7 @@ PINNED_SLOW_TEST_ROWS = frozenset((
     'test_ledger_history_scale_400k',
     # tests/cr150.d/o1w-tail.cmake:6.
     'test_position_tail_summary_scale',
-    # tests/cr150.d/core-cr150-sinkv2.cmake (stage C report-sink v2, SINK-V2-171).
+    # tests/cr150.d/core-cr150-sinkv2.cmake (stage C report-sink v2 tool tests).
     'test_report_sink_reader_vectors',
     'test_report_sink_v2_index_scale',
     'test_sink_transcode_v2_rss',

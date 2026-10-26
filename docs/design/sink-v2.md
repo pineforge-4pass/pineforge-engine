@@ -1,41 +1,41 @@
 # Report sink format, version 2 (compressed, columnar, read directly by the app)
 
-Status: DRAFT SPEC, round 10 of lane `core-cr150-l21`, delta from `f9ea1aa218` under CORE-TOP's SUMMARY and fixed-K rulings.
+Status: DRAFT SPEC, delta from `f9ea1aa218` under the SUMMARY and fixed-K acceptance rules.
 Size acceptance is (i), (ii-a), (iii) in 0.5, on the same information with explicit caller-metadata accounting.
 Every verdict in 15.1 is MODEL-ONLY; production SUMMARY and whole-file measurements are PENDING, with no overall size PASS.
-For APP-TOP agreement; the Codex implementation
+Pending application agreement; the implementation
 (writer, C++/Python reference readers, run_json wiring) starts only after that agreement.
 Contract: engine 1.7.0, additive. Version 1 (`DESIGN.md` 3.7, `docker/pf_sink.py`, `src/report_sink_writer.cpp`) is
 not changed by anything in this document.
 
 Origin: owner request (engine channel 05:21) "disk storage must also use the most extreme compression; it may also
-speed up how the app handles reports"; CORE-TOP orders of 05:21-05:23 (binding): the sink gets a compressed format
+speed up how the app handles reports"; requirements of 05:21-05:23 (binding): the sink gets a compressed format
 the APP reads directly, no second stored copy; binary; speed bounded by the gate in 15.5. The 08:55 addition
 sizes finalization for memory-backed scratch and decides JSON compatibility by conversion on download:
 the frozen JSON result string and JSON-object /report stay available in 1.7.0 (14, 21.6).
 The 09:32 ruling replaces the universal size target with (i)-(iii) and makes SUMMARY always zstd-framed.
-The round-8 ruling uses one small-run region, (E<128 AND T<4) OR E<64, including selected_report_view,
+The size acceptance rule uses one small-run region, (E<128 AND T<4) OR E<64, including selected_report_view,
 on comparable bytes (0.5). Its allowance is fixed by 0.5 for BOTH model and measured verdicts.
-A real production SUMMARY measurement comes FIRST in SM-CX's size report, then the two binding checks
-in 15.1; either failing check means FAIL. Round 10 gives SUMMARY its own decoded/stored/window bounds
+A real production SUMMARY measurement comes FIRST in the size report, then the two binding checks
+in 15.1; either failing check means FAIL. The admission policy gives SUMMARY its own decoded/stored/window bounds
 (3.7), consistent with the existing stdout and memory budgets, with the one new byte-budget refusal versus v1 in 0.5.
 
 Nothing in this file was run. Sizes below are derived arithmetic or labelled estimates. The original hand-derived
 full-file vectors in `docs/design/sink-v2-vectors/` are STALE for this revised layout (section 17); they are not
 conformance fixtures. Their section-6 column examples remain useful.
 
-Inventory source for this revision: APP-TOP's `SINKV2-APP-READ-PATHS.md`, **441 lines**, SHA-256
+Inventory source for this revision: the application's `SINKV2-APP-READ-PATHS.md`, **441 lines**, SHA-256
 `29614d122542c21c7a9d7c62d1fea493f92f3db21601077a3c3a1adde5933953`, source tip
-`963fefb5ac9db215a48b6df61040c8a1ed77d247`. Its line 3 says **"DRAFT, NOT YET CLAUDE-READ"**.
+`963fefb5ac9db215a48b6df61040c8a1ed77d247`. Its line 3 records **draft status with an outstanding independent review**.
 It still has **13 need rows** (282-294) and **15 questions** (346-360). References `APP:L` below mean the
 numbered lines of that exact inventory, not independent inspections of APP source. Quoted claims remain draft.
 
-Round-3 sources, read whole: CORE's gating `core-cr150-read-l21-1/REVIEW.md` (findings 1-15), and APP's
+Earlier sources, read whole: the engine review `core-cr150-read-l21-1/REVIEW.md` (findings 1-15), and APP's
 `evidence/SINKV2-SPEC-APP-ANSWER.md` including its 07:54 addendum and `evidence/READ-SINKV2-SPEC.md`
 (APP source tip `723d10158`). `APP-READ` below quotes that review's section/answer and its APP file:line;
-these are APP-supplied facts, not engine-side source checks. CORE source checks are named separately.
+these are APP-supplied facts, not engine-side source checks. Engine source checks are named separately.
 
-Round-4 source, read whole: APP's `platform/evidence/SINKV2-APP-ANSWERS-A-B.md`, 10-20 08:55 with the
+Additional source, read whole: APP's `platform/evidence/SINKV2-APP-ANSWERS-A-B.md`, 10-20 08:55 with the
 08:56 jail addendum (APP source `00dcbbb85`). Its scratch facts and option (i) supersede the earlier disk-only
 and binary-only assumptions. Cloud Run /tmp is memory for both the shared engine and HPO job; disk is Preview,
 with APP's DEV canary due 10-22 18:00, not a v2 prerequisite. The run_json source citations in 21.6 were read
@@ -45,7 +45,7 @@ Contents: 0 Scope and decisions; 1 What v2 keeps from v1; 2 File layout; 3 Primi
 5 Blocks; 6 Column encodings; 7 Record types and columns; 8 Record order and the interleave stream; 9 Footer,
 index, tail, digest, refusal rules; 10 Writer; 11 Readers; 12 zstd policy and libraries; 13 Worked example;
 14 Compatibility; 15 Cost and risk; 16 Conformance table against DESIGN 3.7; 17 Reference vectors;
-18 APP agreement points; 19 APP read paths; 20 Answers to APP-TOP's read-path inventory;
+18 APP agreement points; 19 APP read paths; 20 Answers to the application's read-path inventory;
 21 APP integration decisions, remaining items and normative to-report-json.
 
 ---
@@ -80,12 +80,12 @@ footer so a reader can seek. Standalone serial/tee scheduling changes no wire by
 | D10 | zstd: level chosen by measurement (15.6), shipped default 3 until measured; no dictionary; content size always present; no zstd checksum. One frame per qualifying column, otherwise stored; SUMMARY is ALWAYS one frame, even when it expands (9.1/12.1). | Fast default (owner 05:23); Node and pure-JS decoders read plain frames; decoded CRC/SHA and logical identity do not depend on zstd builds. Caller-metadata accounting follows 0.5(iii); comparable information/framing stay counted even when SUMMARY expands. |
 | D11 | Decoded column CRC-32/SHA-256, descriptor-bound block SHA of the column SHA table, Merkle-verified index pages and whole logical SHA-256; optional SHA-256 of stored bytes before the tail. | Partial reads retain SHA integrity; logical identity stays stable across recompression; section 9 defines every input byte. |
 | D12 | Truncated, failed or aborted run: no published v2 object. A private speculative C tail never authorizes publication; the owner requires runner/A/C/relay success and matching A/C input identity (stage-C contract). | A reader refuses any file whose last 8 bytes are not the tail magic or whose digest does not match; tee replaces the private no-tail premise with owner-only commit. |
-| D13 | Record order across types is kept exactly: an `I` (interleave) stream stores the type of every record in v1 line order, in blocks like any other. | Ordering rules identical to v1 (CORE-TOP). A v2 file converts back to the v1 file the engine would have written, byte for byte (section 11.7). |
+| D13 | Record order across types is kept exactly: an `I` (interleave) stream stores the type of every record in v1 line order, in blocks like any other. | Ordering rules identical to v1 (required). A v2 file converts back to the v1 file the engine would have written, byte for byte (section 11.7). |
 | D14 | FULL keeps 512-byte descriptors, short final pages, ten ranks iff T>0 and ID 18 iff finite E>0. COMPACT omits ranks, ID 18, E descriptor witnesses and index-page framing; it uses 96-byte descriptors and a 320-byte root (9.3.1). | Small runs compute ranks/figures on read; column SHA stays in both profiles. One end-written root flag selects the profile; every reader supports both from day one. |
 | D15 | Parked engine integration uses one writer thread/bounded queue (default 4), or inline. Standalone C is inline in its own process; tee's one 64 KiB slab feeds A/C before the next read. | Block-close order and bytes stay identical; backpressure never changes a trade (10.4). |
 | D16 | Proposed v2 sibling setter, receipt and metadata finalizer (admission: 0.5/3.7); `pf_report_sink_v1` is untouched. | Runner-owned fingerprint/selected metadata is available after engine data completion (10.6, 14.2). |
 | D17 | run_json: `--report-sink-format {1,2}` (default 1) and `--report-sink-level N`. The summary JSON `report_sink.version` says 2. | Opt-in; old callers and the corpus keep today's bytes. |
-| D18 | zstd is the explicitly requested codec; vendoring/package versions and runtime wiring remain implementation choices for CORE/APP to confirm. | This spec adds no dependency. The no-new-dependency rule does not require a second permission request for writing this authorized specification. |
+| D18 | zstd is the explicitly requested codec; vendoring/package versions and runtime wiring remain implementation choices for the engine/application to confirm. | This spec adds no dependency. The no-new-dependency rule does not require a second permission request for writing this authorized specification. |
 
 ### 0.4 What this document does not change
 
@@ -98,7 +98,7 @@ footer so a reader can seek. Standalone serial/tee scheduling changes no wire by
 - The values: a v2 file decodes to the same Unicode strings, the same integers and the same IEEE-754 doubles as the
   v1 file of the same run. APP's semantics do not change.
 
-### 0.5 Measurable size acceptance (CORE-TOP round-8 ruling)
+### 0.5 Measurable size acceptance (size acceptance rule)
 
 Let B be the actual run's bar count, T its trade-record count and E its RAW equity-record count, including
 any selected-window anchor. Choose exactly ONE size clause: **(E<128 AND T<4) OR E<64 uses (ii-a);
@@ -111,7 +111,7 @@ empty example has counts[E,T,O,V,K,X,H] all zero, hence I=0. SUMMARY metadata is
 The original grid has B=N=E; selected-window rows instead have N=E and B>=1000. Measured selected runs
 MUST print B, raw E and anchor count separately.
 
-These are FORMAT-byte comparisons on the SAME information, defined below. CORE-TOP ratifies (ii-a)
+These are FORMAT-byte comparisons on the SAME information, defined below. The size acceptance rule applies (ii-a)
 on COMPARABLE_V2, the same basis as (i), because caller metadata must not become a cap through (ii).
 Full file bytes MUST also be printed. Note: 15.1's empty row also passes on FULL bytes, 2503<=4022;
 N100/T0 does too, 3246/3521/4071<=7874/8524/9824. N999/T0 now passes strict (i), even on full bytes:
@@ -129,7 +129,7 @@ X2 accepts a v1 sink line of at most
 **1,048,575 bytes excluding LF, 1,048,576 including LF** (`max_line` at `src/report_sink_writer.cpp:28`, `Line::append` at `src/report_sink_writer.cpp:43-45`, `line` at `src/report_sink_writer.cpp:458-466`).
 V1's separate run_json report metadata has **no aggregate byte limit**, including applied inputs/runtime,
 fingerprint/provenance and optional/selected metadata (`build_report_dict` at `docker/run_json.py:4051-4157`,
-`_build_sink_report` at `docker/run_json.py:6522-6538`).
+`_build_sink_report` at `docker/run_json.py:6666-6682`).
 That metadata, plus sink_folds, becomes SUMMARY; X2 supplies no decoded-SUMMARY byte bound.
 **The ONE new byte-budget refusal versus v1 is SUMMARY budget refusal:** `WriterError{summary_limit}` means a
 SUMMARY exceeds a hard admission ceiling in 3.7. The writer MUST refuse at write time if decoded length
@@ -157,7 +157,7 @@ every type/field/type/unit descriptor), and trailer `trailer/version/counts/sha2
 DESIGN 3.7 and `src/report_sink_writer.cpp`'s `header`/`write_trailer` define those fields.
 DESIGN 4.3's `summary/metrics/diagnostics/fingerprint` and input/runtime/selected/output metadata belong
 to run_json's SEPARATE report JSON, not the v1 sink header or trailer. `_build_sink_report` and
-`_sink_summary` (`docker/run_json.py:6453-6517`) preserve that distinction; do not add that JSON's bytes
+`_sink_summary` (`docker/run_json.py:6591-6661`) preserve that distinction; do not add that JSON's bytes
 to v1 or pretend the v1 trailer stores those scalars.
 
 Partition the schema-valid decoded SUMMARY into two JSON-object projections, Q and M. Keep original member
@@ -193,7 +193,7 @@ unbounded C_M subtraction or a caller-selected estimate. If probes are unavailab
 and verdict PENDING; full v2 bytes alone remain a diagnostic. This accounting changes no bytes or admission
 rules in 3.7/5.2/9.1; the one SUMMARY budget refusal is stated above, independently of size acceptance.
 
-**Real SUMMARY FIRST.** `scripts/sink_size_report.py` (READERS implements; SM-CX runs) MUST begin its
+**Real SUMMARY FIRST.** `scripts/sink_size_report.py` (implemented and run as part of validation) MUST begin its
 text output, before ANY grid/model/verdict, with a REAL production run_json SUMMARY measurement:
 run_id and captured-run/artifact provenance (including ordinary/selected/outputs mode), decoded J,
 stored C, C/J, HEAD level and zstd build. Also print J_Q/C_Q, J_M/C_M, C_meta, C_comparable and
@@ -277,7 +277,7 @@ offset 0
 EOF
 ```
 
-A cold reader keeps the round-3 discovery pattern: **GET bytes=-4256**, read the fixed 160-byte tail first,
+A cold reader keeps the established discovery pattern: **GET bytes=-4256**, read the fixed 160-byte tail first,
 then select the root ending immediately before it using tail.root_length. FULL uses all 4256 suffix bytes;
 COMPACT needs only the final **480=320+160**. A trusted locator naming COMPACT may request bytes=-480
 directly; without that hint use -4256 once, not a tail-only GET followed by a root GET. If the object is
@@ -663,8 +663,8 @@ text `1.08342` equals `108342 / 1e5`). Note: `-0.0` can never be produced by DEC
 Refuse `k > 12` before indexing POW10, and refuse any reconstructed `|s_i| > 2^50-1`, even though DELTA's
 general integer domain is wider. Writer and readers require strict IEEE-754 binary64, round-to-nearest ties
 to even, with each stated operation rounded to binary64: no fast-math, reciprocal substitution, reassociation,
-FMA contraction or excess-precision division. CORE already uses `-ffp-contract=off` (`CMakeLists.txt:227`);
-the implementing lane must retain the full strict-FP requirement for this codec.
+FMA contraction or excess-precision division. The engine already uses `-ffp-contract=off` (`CMakeLists.txt:227`);
+the implementation must retain the full strict-FP requirement for this codec.
 
 Canonical writer test, per value d (finite) and k:
 
@@ -875,7 +875,7 @@ call order changes the `I` stream and nothing else in the format.
 ### 9.1 End-written summary (decoder admission: 0.5/3.7)
 
 SUMMARY is ALWAYS exactly one standard zstd frame of the canonical JSON bytes, including when zstd
-does not shrink them. Round 5 replaces the old 48+J raw form; both profiles use this same new framing:
+does not shrink them. The current layout replaces the old 48+J raw form; both profiles use this same new framing:
 
 ```text
 off size field
@@ -1137,7 +1137,7 @@ Choose **COMPACT iff N<10,980 AND T<3314 AND D<=128**; otherwise FULL.
 The joint small-run bound avoids omitting the figure table for arbitrarily large E just because T is small,
 or omitting ranks for arbitrarily large T just because E is small. These conservative thresholds amortize
 BOTH omitted structures; their twice-computed derivation, using f=0.25 as the least favorable modelled mix,
-is in 15.1. Round 5 updates round 4's 10958/3307 thresholds for its explicit production-SUMMARY assumption;
+is in 15.1. The current layout updates the earlier 10958/3307 thresholds for its explicit production-SUMMARY assumption;
 these are model-conditional cutoffs, not a proof for arbitrary metadata. D<=128 bounds the compact descriptor fetch.
 Readers accept a FULL file below those thresholds (including the forced-FULL worked/vector fixtures);
 COMPACT above any bound is refused, so its fallback costs remain bounded. Profile choice never changes
@@ -1367,7 +1367,7 @@ State that changes: `ReportSinkState` (`include/pineforge/engine.hpp`, the struc
 receipt numbers (`file_bytes`, `block_count`, `threaded`); `writer` becomes `std::unique_ptr<report_sink::SinkWriter>`.
 The copy constructor copies configuration, never a writer/receipt/spool. New summary folds, phase and digest
 state are report state; no blanket broker-hash waiver or ABI-epoch permission is presumed by this spec.
-The implementing lane must obtain the appropriate supervisor file/epoch scope and prove hash coverage or
+The implementation must obtain the appropriate file/epoch approval and prove hash coverage or
 an explicit report-state waiver using the repository guards. This document edits no frozen header or runtime.
 
 All value checks of v1 (I5, I8, I9 AND X2) run in the engine thread at the `write_*` call, before the record enters a
@@ -1440,7 +1440,7 @@ identity, canonical column/block/stream digests and E witness values stay the sa
 
 ### 10.6 Finish
 
-Proposed two-stage v2 finish, requiring CORE/APP agreement on the sibling API in 14.2:
+Proposed two-stage v2 finish, requiring engine/application agreement on the sibling API in 14.2:
 
 1. Engine fill/capture calls `write_trailer`, closes remaining blocks, drains/joins the queue and enters
    `data_complete`. Counts and O(1) trade-summary accumulators are available, but receipt `complete` is 0,
@@ -1449,7 +1449,7 @@ Proposed two-stage v2 finish, requiring CORE/APP agreement on the sibling API in
    scalars and the final fingerprint/selected metadata, then calls the v2 metadata finalizer. The writer keeps
    n/wins/losses/best/worst/drawdown and the existing nullable-trade rejection latch in canonical T order; the
    Python summary pre-pass need not open an unsealed file. Do not expose private spools as a valid reader.
-   Specifically preserve `_sink_summary` (`docker/run_json.py:6453-6517`): cum/peak/max_dd start at +0.0,
+   Specifically preserve `_sink_summary` (`docker/run_json.py:6591-6661`): cum/peak/max_dd start at +0.0,
    best/worst take the first pnl (or +0.0 if empty); each row updates wins/losses, cum = cum+pnl,
    peak = max(peak,cum), max_dd = min(max_dd,cum-peak), with Python's earlier-operand tie behavior and no
    reassociation/FMA. Net PnL remains report.net_profit; Python still performs the existing rate rounding.
@@ -1534,7 +1534,7 @@ APP's 08:55 answer says **"scratch + output file are RSS"** on Cloud Run's share
 AND HPO jobs. Disk-backed ephemeral scratch is Preview; APP's 1-Gi DEV canary is due 10-22 18:00.
 V2 MUST work with memory-backed scratch now and MUST NOT depend on that canary or on a disk mount.
 
-Normative bounded external construction, including tmpfs (this replaces the round-3 run-file algorithm):
+Normative bounded external construction, including tmpfs (this replaces the earlier run-file algorithm):
 
 - Serial initial run size R=floor(1048576/17)=**61,680** packed tuples, each position:u64, validity:u8,
   key_bits:u64; 17*61680=1,048,560 bytes, leaving 16 bytes in the 1 MiB tuple arena. n=position+1; two rank lanes divide it into 30,840-tuple slices.
@@ -1591,17 +1591,17 @@ Do not label an unrecognized filesystem disk merely because its type is not spel
 The writer MUST still work within its bounded arena and emit the flag on a memory filesystem: the flag
 is diagnostic, not a format refusal; tmpfs is a supported integration. Unknown backing is not proof
 of disk. run_json exposes this receipt flag in the synthesized report_sink object, not hashed SUMMARY.
-SM-CX MUST measure **inclusive RSS**: process RSS plus resident memory-backed scratch/output/curve/spill,
+Performance validation MUST measure **inclusive RSS**: process RSS plus resident memory-backed scratch/output/curve/spill,
 or a host/cgroup counter including them, with no double counting. Count other charged file-cache residency
 when the chosen host counter includes it. Engine finalization's ADDITIONAL state is bounded independently
 of T even on tmpfs; the canonical output, existing curve (24*N bytes) and engine trade spill (30*T bytes)
 remain O(N/T) resident files there. At 400k that existing trade spill alone is **12,000,000 bytes**;
 the new design does not remove it. APP must provision output+curve+spill+engine working set in the service
 and each HPO job (15.1). A disk mount can reduce that resident-file term, but is optional.
-No claim that inclusive whole-run RSS is flat follows from F. SM-CX must measure inclusive RSS and pass
+No claim that inclusive whole-run RSS is flat follows from F. Performance validation must measure inclusive RSS and pass
 the unchanged +16 MiB/slope gates before any v2 flat-RSS PASS.
 
-### 10.8 Interface sketch (for the implementing lane)
+### 10.8 Interface sketch (for the implementation)
 
 ```cpp
 namespace pineforge { namespace report_sink {
@@ -1636,8 +1636,8 @@ sentinel `INT64_MIN` of `O`/`V` times to null (the same file, lines 460-462).
 
 | Reader | Author | Where | Notes |
 |---|---|---|---|
-| Python | Codex READERS lane | `docker/pf_sink2.py` | `open`, `verify`, per-type and merged iteration, seek helpers, `to-v1`, `content-sha256`, normative `to_report_json` / `to-report-json` (21.6); needs a zstd decoder (12.2) |
-| C++ | Codex step | `src/report_sink_reader.{hpp,cpp}` (tests and tools; not a public ABI) | uses libzstd; same functions |
+| Python | Reference implementation | `docker/pf_sink2.py` | `open`, `verify`, per-type and merged iteration, seek helpers, `to-v1`, `content-sha256`, normative `to_report_json` / `to-report-json` (21.6); needs a zstd decoder (12.2) |
+| C++ | Reference implementation | `src/report_sink_reader.{hpp,cpp}` (tests and tools; not a public ABI) | uses libzstd; same functions |
 | TypeScript | APP | APP's shared reader package | Node and Worker-class runtimes; typed block reader AND reference `to-v1` conversion, from this spec and regenerated vectors |
 
 ### 11.2 Operations every reader offers
@@ -1710,12 +1710,12 @@ In FULL the other five keys have a mandatory **position-only permutation per dir
 exit = exit_time, pnl = pnl, pct = pnl_pct, ru = max_runup, **dd = -abs(max_drawdown)** with -0 normalized
 to +0 for comparison only; wire bits stay unchanged. APP-READ's P1-5 states **"APP sorts on -|max_drawdown|"**
 (`run-report.ts:182-183`; `trades-view.ts:32-33`; `report-trades.ts:100-107`).
-CORE's OPEN 2 answer: the built-in engine stores a nonnegative adverse magnitude, starting at +0
+The engine's OPEN 2 answer: the built-in engine stores a nonnegative adverse magnitude, starting at +0
 (`max_drawdown` at `include/pineforge/engine.hpp:153`, `max_drawdown` at `include/pineforge/engine.hpp:209`, `max_drawdown` at `include/pineforge/engine.hpp:241`; `max_drawdown` at `include/pineforge/pineforge.h:182`;
 `max_drawdown` at `src/native_execution_consumer.cpp:3573` takes max(old,max(0,-fav))). The report copies it without sign
 conversion (`max_drawdown` at `src/engine_report.cpp:245` and `max_drawdown` at `src/engine_report.cpp:1398`). The normative -abs comparator also handles a custom presented
 negative value without depending on that invariant. Do not confuse this T field with run_json's nonpositive
-cumulative summary.max_drawdown (`cum`/`peak`/`max_dd` at `docker/run_json.py:6455-6457`). All present finite values sort in the requested
+cumulative summary.max_drawdown (`cum`/`peak`/`max_dd` at `docker/run_json.py:6593-6595`). All present finite values sort in the requested
 direction, null/missing values sort last in **both** directions, ties sort by n ascending then canonical p
 ascending. +0 and -0 compare equal. Direction applies only to the primary key; reversing an ascending array
 would wrongly reverse ties and move nulls first, so it is forbidden.
@@ -1743,7 +1743,7 @@ merely because a FULL locator/page is absent.
 APP-READ answer 1 reports PAGE_SIZE=50 (`trades-view.ts:9`) and 12 wanted T columns: ten numeric, BOOL and
 side. Using 5.4's conservative budgets at n=1024, selected decoded bytes/block are
 `10*9*1024 + 1024 + (3+6*1024+5*1024) = 104451`; at most 50 blocks gives **5,222,550** decoded bytes.
-Round-3 framing read is 50*992=49,600 bytes (SHA table included). For 400k trades with 391 full/default
+The framing read is 50*992=49,600 bytes (SHA table included). For 400k trades with 391 full/default
 blocks, four descriptor pages total 216,576 actual bytes, <=two rank pages are <=131,072, and root+tail
 is 4256: a conservative sum with selected payload is **5,624,054** bytes, excluding HEAD/SUMMARY and
 transport overhead. Stored column payload is <=raw for the canonical writer. These are derived bounds,
@@ -1844,7 +1844,7 @@ Only after exact timestamp union/forward-fill/sum may APP downsample or calculat
   conversion-only oversize record.
   The trailer counts object lists ONLY types in the head, in E,T,O,V,K,X,H order, retaining zero counts;
   never add I or absent types (`enabled` at `src/report_sink_writer.cpp:595-603`; `_keys` at `docker/pf_sink.py:285`).
-  Acceptance test for the implementing lane: run the same strategy twice, once with the v1 sink and once with the
+  Acceptance test for the implementation: run the same strategy twice, once with the v1 sink and once with the
   v2 sink; Python and TS `to-v1` MUST both be byte-identical to the **v1 sink** of the same record stream,
   header/trailer included. This is a sink JSON-lines contract; the existing full run_json report-object export
   is a distinct contract. **In 1.7.0 the frozen JSON result string remains available behind the same field,
@@ -1854,12 +1854,12 @@ Only after exact timestamp union/forward-fill/sum may APP downsample or calculat
 - TypeScript must implement Python-repr-compatible shortest binary64 formatting and v1 escaping (DESIGN
   3.7:866-880); `JSON.stringify(-0)` or ordinary JS number spelling is not sufficient. Test tiny/subnormal,
   exponent-threshold, shortest-digit tie and signed-zero cases against Python. APP builds this TS converter;
-  CORE builds the Python reference. The engine writes binary, not regenerated JSON.
+  The engine builds the Python reference. The engine writes binary, not regenerated JSON.
 - `content-sha256 FILE` returns the v1 trailer digest: SHA-256 of the reconstructed v1 header and record lines
   including LF, **excluding** its trailer. Name it `v1_sha256`; do not confuse it with logical_sha256 or the
   served export's complete-byte digest.
 - `pf_sink2.py to-report-json IN.pfs2 OUT.report.json`, backed by Python `to_report_json`: normative 21.6
-  inverse of run_json assembly, for BOTH profiles. READERS ships it with v1-produced `NAME.report.json`
+  inverse of run_json assembly, for BOTH profiles. The reference implementation ships it with v1-produced `NAME.report.json`
   beside every vector (17); APP's converter must match those bytes, not merely parsed JSON equality.
 - `pf_sink2.py from-v1 IN.jsonl OUT.pfs2 --summary-json META.json --level N [--block-records E=..,T=..,I=..]`: the reference ENCODER
   (a Python implementation of 5.4, 6.9 and 12.1 that reads a v1 file). It is how the vectors are regenerated (17)
@@ -1910,7 +1910,7 @@ table CRC-32, and the `readRange` adapter. It MUST NOT import fs, Buffer-only co
 Worker `DecompressionStream("gzip")` cannot decode zstd. Proposed fallback is `fzstd` pure JavaScript (or a
 pinned WASM libzstd decoder after APP review); no assumption of built-in Worker zstd is made.
 Node may use its built-in decoder, while the same conformance vectors must pass the portable path.
-APP chooses/pins the package version; no runtime/package integration has been executed in this lane.
+APP chooses/pins the package version; no runtime/package integration has been executed for this specification.
 Risks: isolate CPU budget, decompression allocations/window limits, bundle size, WASM startup/compilation policy,
 incremental hashing support, abortability and maintaining exact float formatting in the compatibility exporter.
 Enforce column content size/window<=16MiB and aggregate32MiB caps before decode; SUMMARY uses
@@ -1969,7 +1969,7 @@ is already removed by the block-local string dictionary `DICT` (6.7). A later ve
 |---|---|---|
 | TypeScript on Node | built-in `node:zlib` `zstdDecompressSync` | Node 22.15.0 (or 23.8.0); the Node documentation marks it "Stability: 1 - Experimental" |
 | TypeScript, older Node and Worker-class runtimes | proposed `fzstd` pure JavaScript, or a pinned WASM libzstd decoder | No native module required. Exact package version, Worker compatibility, output/window bounds and CPU budget must be confirmed by APP; not tested here. Section 11.9 is mandatory. |
-| Python | `compression.zstd` (standard library from Python 3.14, PEP 784; from memory, not re-checked in this lane) or PyPI `zstandard` (BSD-3-Clause) | required for every SUMMARY, including files with only stored columns |
+| Python | `compression.zstd` (standard library from Python 3.14, PEP 784; from memory, not re-checked for this specification) or PyPI `zstandard` (BSD-3-Clause) | required for every SUMMARY, including files with only stored columns |
 | C++ | libzstd (BSD-3-Clause, or GPL-2.0 at the user's choice; use BSD-3-Clause) | 1.5.0 for the writer (`ZSTD_CCtx_setParameter`, `ZSTD_compress2`); any 1.4+ for the reader |
 
 No other codec is used or allowed in any column, at any time.
@@ -1978,8 +1978,8 @@ No other codec is used or allowed in any column, at any time.
 
 The engine has no compressor today: a text search for "zstd" over the worktree finds only `tests/native_live_d7_fixtures.py`
 and `scripts/build_live_curl.sh` (which I did not open), and no CMake file, source or header. The brief
-explicitly requests zstd, so this format decision is authorized. No package is added by this lane.
-CORE owns the implementation packaging decision; the following remains a proposal:
+explicitly requests zstd, so this format decision is authorized. No package is added by this specification.
+Engine integration owns the implementation packaging decision; the following remains a proposal:
 
 - Vendor the compression half of libzstd (`lib/common` + `lib/compress`, BSD-3-Clause) under `third_party/zstd`,
   built as a static OBJECT library with hidden symbol visibility (the engine is loaded into Python and Node processes
@@ -1996,7 +1996,7 @@ Everything here was derived by hand and checked a second time by recomputing eac
 different order (varints decoded back to the integers, planes reassembled to the words, decimals divided back to the
 doubles). CRC-32 and SHA-256 values were NOT computed by hand (infeasible to do reliably); they appear as `crc` /
 `sha` placeholders. Only the column bodies match the historical `equity4` and `trades3` vectors (17).
-The pre-round5 SUMMARY/root/tail examples and their totals20157/2237 are STALE. Current offsets below use
+The earlier SUMMARY/root/tail examples and their totals20157/2237 are STALE. Current offsets below use
 a hand-framed decode-only SUMMARY, not invented level3 compression bytes; canonical encoder fixtures remain required.
 
 ### 13.1 A 4-point `E` block
@@ -2075,8 +2075,8 @@ LE words and summing structure sizes independently. `Z(n)` means exactly n zero 
 `[SHA32(name)]` and `[CRC4(name)]` mark bytes not computed. No checksum value or executable fixture is claimed.
 Offsets in structures below are decimal; hex words are little-endian. The head uses equity4's unchanged
 931-byte head_json (run_id vec-equity4, engine 1.7.0, E/T schema, default E/T/I caps), so first block offset
-is 16+931=947. This reuses only the head's non-hash bytes, not the stale round-1 file.
-This is a forced-FULL reader-layout fixture: canonical round-5 output for N=4,T=0 is COMPACT, derived below.
+is 16+931=947. This reuses only the head's non-hash bytes, not the stale original file.
+This is a forced-FULL reader-layout fixture: canonical output for N=4,T=0 is COMPACT, derived below.
 Data columns/descriptors/page widths remain valid; SUMMARY framing and every subsequent offset/root/tail
 value are revised below. The raw-block SUMMARY is reader-valid; it is not claimed to be level3 encoder output.
 
@@ -2223,7 +2223,7 @@ For arbitrary valid encoder frame length C these offsets after SUMMARY are1260+5
 +4608,+5120,+4096,+160, with EOF=**19904+C**. C267 gives20171 independently.
 All checksum fields still require the independent encoder/reader checks of 17.4.
 
-Round-5 COMPACT version of the SAME records, HEAD, blocks, decode-only SUMMARY and logical digest:
+Current COMPACT version of the SAME records, HEAD, blocks, decode-only SUMMARY and logical digest:
 the descriptor table is the first 96 bytes of the E descriptor above with eflags=01, followed by this
 96-byte I descriptor (all offsets within this I entry):
 
@@ -2428,7 +2428,7 @@ only after the tail is written and the file closed. A receipt without `complete`
 
 ### 14.4 run_json
 
-- `--report-sink PATH` (lane L9B) keeps selecting a named sink. New: `--report-sink-format {1,2}` (default `1`) and
+- `--report-sink PATH` (existing option) keeps selecting a named sink. New: `--report-sink-format {1,2}` (default `1`) and
   `--report-sink-level N` (default 0 = engine default; only valid with format 2). Without `--report-sink`, run_json's
   internal temporary sink (`_new_report_sink` at `docker/run_json.py:5781-5808`) stays version 1, because run_json itself reads it back with
   `docker/pf_sink.py` to rebuild today's JSON; run_json needs no zstd decoder for that.
@@ -2437,7 +2437,7 @@ only after the tail is written and the file closed. A receipt without `complete`
   with the Python reference reader before publishing success. Its existing trade-validation behavior is kept;
   nullable T remains valid in the sink schema even if this run_json report adapter refuses it.
   Python requires an approved zstd decoder for verification; absence is an explicit unsupported-runtime failure,
-  never fallback to an unverified sink. CORE owns image packaging.
+  never fallback to an unverified sink. Engine integration owns image packaging.
 - **V2 stdout contract (APP OPEN 3 integration):** on success, exactly one compact UTF-8 JSON object plus LF, containing
   the 9.1 summary members and synthesized report_sink descriptor of 14.5, at most 2 MiB including LF.
   With SUMMARY admitted under 3.7's S_MAX, the existing 2 MiB stdout bound and 2 MiB finalization arena agree
@@ -2454,13 +2454,13 @@ only after the tail is written and the file closed. A receipt without `complete`
   requesting format 2. A C ABI summary-only report alone does not remove today's JSON stdout.
 - Bench repeats write temporary sinks in the requested format.
 
-CORE OPEN 1, source-read answer: **YES for the stored populations/order/values projected into today's
+Engine OPEN 1, source-read answer: **YES for the stored populations/order/values projected into today's
 run_json JSON; NO if "equal" includes APP's later forced-close figure/page adjustment.**
 Ordinary L9a `_build_sink_report` takes equity_curve directly from E and trades from `_sink_trade(T)`
-(`_sink_trade` at `docker/run_json.py:6447-6451`, `_build_sink_report` at `docker/run_json.py:6522-6538`); the latter projects columns 0..15 only. V2 retains all twenty
-T fields, the first sixteen equal those JSON fields. E is copied from verified sink rows (`as_dict` at `docker/run_json.py:6563-6569`);
+(`_sink_trade` at `docker/run_json.py:6585-6589`, `_build_sink_report` at `docker/run_json.py:6666-6682`); the latter projects columns 0..15 only. V2 retains all twenty
+T fields, the first sixteen equal those JSON fields. E is copied from verified sink rows (`as_dict` at `docker/run_json.py:6705-6711`);
 run_json refuses a nonfinite/null T numeric core field (`_validate_report_result` at `docker/run_json.py:4176-4226`,
-`nonfinite_t_field` at `docker/run_json.py:6462-6485`), so a
+`nonfinite_t_field` at `docker/run_json.py:6606-6629`), so a
 successful published run does not have the APP trade-population mismatch described in APP-READ answer 2.
 L9a holds one E point (`prepare_equity_point` at `src/native_execution_consumer.cpp:13619-13638`), presents its final copy at
 `present_report_equity_tail` `src/native_execution_consumer.cpp:13727-13749` and flushes it at `write_e` `src/engine_report.cpp:1260-1263`; T is copied in report order at `write_t` `src/engine_report.cpp:1389-1410`.
@@ -2487,7 +2487,7 @@ existing summary/metrics members retain their contents.
 
 ### 14.6 Transition
 
-Version 1 stays and stays the default until APP-TOP has agreed and 15.5 has passed. Nothing removes v1.
+Version 1 stays and stays the default until application agreement is reached and 15.5 has passed. Nothing removes v1.
 Engine 1.7.0 retains the frozen JSON result string behind the same field and the JSON-object /report;
 v2 is additive and explicit --report-sink-format 2 opt-in. A binary download may be added under explicit
 negotiation. APP's decided option (i) uses 21.6's exact to-report-json for existing JSON routes/field,
@@ -2548,12 +2548,12 @@ their existing hash/key regexes cannot silently be reused for a new prefix.
 Every figure in 15.1 to 15.3 is an ESTIMATE from arithmetic and published zstd speed ranges; none was measured. The
 gate in 15.5 and the level table of 15.6 are what turn them into facts. The measurement script
 `scripts/sink_size_report.py` prints the inputs (bytes per record per type, bytes per column under zlib 9, and a model
-of the **round-1** v2 block layout) from real v1 sinks; SM-CX runs it before the implementation starts.
-Its round-1 model is now explicitly labelled stale in both text/JSON output. Use `--no-model` for the still
-applicable v1 facts/column zlib proxy. READERS must update it for the round-8 accounting and separate
+of the **original** v2 block layout) from real v1 sinks; validation runs it before the implementation starts.
+Its original model is now explicitly labelled stale in both text/JSON output. Use `--no-model` for the still
+applicable v1 facts/column zlib proxy. The implementation must update it for the size accounting and separate
 MODEL-ONLY/MEASURED acceptance rows required by 0.5, using real zstd SUMMARY/column bytes, SHA tables and
 metadata. Its FIRST output must be the real production SUMMARY's run/provenance, J/C/C-to-J and projection
-measurements, or PENDING-REAL-SUMMARY. No real SUMMARY was measured in this text-only round.
+measurements, or PENDING-REAL-SUMMARY. No real SUMMARY was measured in this text-only revision.
 
 ### 15.1 Size, with the arithmetic
 
@@ -2561,7 +2561,7 @@ Acceptance uses exactly one of (i)/(ii-a), assigned by 0.5's small-run partition
 measurement; the limits are respectively COMPARABLE_V2<v1 and <=v1+K, with 0.5's fixed K.
 Clause (iii) applies to all files: SUMMARY is ALWAYS zstd, with report-only caller metadata excluded by0.5's
 bounded compressed-byte accounting. Full bytes stay reported. All following verdicts are MODEL-ONLY;
-READERS/SM-CX must first measure a real production SUMMARY and then repeat the grid/extremes with actual
+Validation must first measure a real production SUMMARY and then repeat the grid/extremes with actual
 whole-file encodings before overall acceptance. PENDING-REAL-SUMMARY applies to this document.
 
 v1 line sizes (text): `E` line = `["E",` (5) + time (13 digits) + `,` + equity text `Le` + `,` + open_profit text `Lo` + `]\n` (2)
@@ -2687,7 +2687,7 @@ Let P_f=(0.2+11*f)*N+55.1*T. The first arithmetic route is component accumulatio
 
 Comparable totals use those same sums with S=52+C_comparable=564, or subtract512 from each full total.
 The wire/profile rule stays **COMPACT iff N<10,980 AND T<3314 AND D<=128** (9.3).
-The following retained round-5 cutoff calculation uses FULL FILE bytes with C1024 and NO exclusion,
+The following retained cutoff calculation uses FULL FILE bytes with C1024 and NO exclusion,
 at f=.25; it is a conservative planning cushion, not the new same-information break-even verdict:
 
 - N axis, worst small nonzero T=1: e=3,t=1,i=1; FULL framing/index/root/tail excluding 40*T is
@@ -2713,8 +2713,8 @@ v1=`38.5*1200+201*3314+956=713270`, saving65 integer bytes.
 At T3313, FULL is713110 versus713069, losing41. These losing adjacent forced-FULL diagnostics are
 not canonical files: the retained rule chooses COMPACT there. The OLD rule's full-byte diagnostics
 at N10958/T1 (423789 versus423038, +751) and N1200/T3307 (712539 versus711863, +676) are historical;
-they are not round-6 comparable-byte verdicts. The two routes justify the retained full-byte planning
-cushion only under Jp/r above, not arbitrary accepted metadata. No profile constant changes in round6.
+they are not current comparable-byte verdicts. The two routes justify the retained full-byte planning
+cushion only under Jp/r above, not arbitrary accepted metadata. No profile constant changes in this revision.
 
 Component ledger for ALL requested N/T pairs. C/F means COMPACT/FULL; H2=947 and tail=160 EVERY row.
 `A=H2+S+block framing+descriptors+ranks+figure+root+tail`, before P_f. Descriptor bytes include
@@ -2952,7 +2952,7 @@ For each original row, f=.50 then adds 2.75*N to v2; f=1 adds 8.25*N to the f=.2
 These increments are integers at every original requested N, so ceiling cannot hide an off-by-one.
 E.g. N100/T1:4039+295+55.1=4389.1 ->4390; +275=4665,+825=5215.
 N1M/T50000:2770599+2950000+2755000=8475599; +2750000=11225599,+8250000=16725599.
-As a separate cross-check against round4's totals, every v2 cell increases by
+As a separate cross-check against the earlier totals, every v2 cell increases by
 `(52+1024)-(304+d(T))=772-d(T):`771/770/769/768/767 bytes for1/2/3/4/5-digit T.
 This reproduces all63 original v2 numbers. There are **no failed cells in this parameterized grid**;
 the v1 correction is independently established above.
@@ -3009,7 +3009,7 @@ real SUMMARY/whole-file evidence is PENDING.
 **Break-even checks against the REAL SUMMARY FIRST, including integer ceilings.**
 Put B0=the v2 total with C=0 (an arithmetic base, not a valid zero-frame file, and not bar count B).
 At fixed profile `(i)` is `B0+C_comparable <= v1-1`; (ii-a) uses v1+3072 instead.
-The following byte limits are MODEL-ONLY because B0/payload/v1 here are modelled. SM-CX MUST plug in
+The following byte limits are MODEL-ONLY because B0/payload/v1 here are modelled. Performance validation MUST plug in
 J_real/C_real/C_meta_real from the FIRST real production SUMMARY block and print the evaluated inequalities,
 not substitute J4096/r.25 or call that evaluation a whole-file measurement. Immediately after that evidence,
 print E1/T1 (ii-a) and E64/T4 (i) at f=.25 FIRST, in that order, before the rest of the grid.
@@ -3056,7 +3056,7 @@ The retained compressible J=1MiB EXCLUDED metadata rows grow ONLY caller metadat
 J=1MiB is now exactly 3.7's decoded ceiling; both retained examples remain admitted:
 J1048576, C262144, J_M1047553, C_M=ceil(J_M/4)=261889;
 C_meta=min(261889,262144-512)=261632, C_comparable512.
-Incompressible rows retain round5's legal raw-block whole-frame accounting C1048609/J1048576.
+Incompressible rows retain the legal raw-block whole-frame accounting C1048609/J1048576.
 For the metadata-only raw-block probe in this MODEL, C_M=J_M+33=1047586;
 C_meta=min(1047586,1048609-512)=1047586, C_comparable1023.
 Those two raw-block counts are NOT real same-level compression probes, an incompressibility measurement,
@@ -3146,8 +3146,8 @@ Subtracting v1 gives full excess260508/260133/259383; adding261633 to comparable
 -1125/-1500/-2250 independently gives the same excesses.
 J=S_MAX+1 refuses first, even though its counterfactual stored52+C=262197 and size clause fit.
 
-The former empty failure, N999 applicability gap and maximum caller-metadata failures in round5 are
-superseded by these MODEL-ONLY rows. Round5's full-frame break-even ratios at J4096 and J1MiB
+The former empty failure, N999 applicability gap and maximum caller-metadata failures in the earlier model are
+superseded by these MODEL-ONLY rows. The earlier full-frame break-even ratios at J4096 and J1MiB
 are STALE as format-size verdicts: compare C_comparable using the REAL SUMMARY FIRST instead.
 There is no overall size PASS without real measurements. For arbitrary O/V/K/X/H the measured report
 must include actual payload/framing/profile descriptors and I; K's column-directory/SHA expansion
@@ -3187,13 +3187,13 @@ These file bytes still depend on N/T on tmpfs. APP must provision them plus work
 to disk leaves an output/curve file under /tmp resident unless TMPDIR/output paths move too.
 The scratch curve holds exactly the
 `E` records (time, equity, open profit as 24-byte binary); reading it back from the v2 `E` blocks instead of a
-separate file would remove it, at the price of coupling the metrics pass to the sink. That is a separate lane and is
+separate file would remove it, at the price of coupling the metrics pass to the sink. That is separate work and is
 NOT part of this format; it is listed in 15.7.
 
 Exact FULL storage accounting is `16+head_len + sum(32+body_len) + 52+summary_stored_len +
 sum_nonempty_tables(65536*(page_count-1)+last_page_bytes) + 4096+160`.
 COMPACT replaces that table sum/root by `96*D+320`; tail stays160. Admission also includes 10.7's fixed
-work files and existing engine scratch/spill at peak overlap. The old round-1 `26*Bs + 142*T + strings + 8KB` upper bound is withdrawn:
+work files and existing engine scratch/spill at peak overlap. The old `26*Bs + 142*T + strings + 8KB` upper bound is withdrawn:
 it omitted rank arrays and last-page costs. No unmeasured claim that the old disk budget automatically suffices.
 
 ### 15.2 CPU, per record
@@ -3206,7 +3206,7 @@ it omitted rank arrays and last-page costs. No unmeasured claim that the old dis
 | Writer thread, per `E` record | | XOR and plane shuffle of two columns about 10 ns; DELTA and gcd about 5 ns; DECIMAL probe about 0.02 ns (noisy columns fail once per block) to 50 ns (decimal columns); zstd level 3 over 17 raw bytes at about 400 MB/s = 42 ns; SHA-256 over about 6 compressed bytes about 35 ns; CRC-32 and `write(2)` about 7 ns: about 0.12 to 0.16 us |
 
 That parked engine-integration timing model excludes decoded column/block/stream hashing and is **not** the
-round-4 cost prediction or gate evidence. FULL descriptor reconstruction costs one O(n) E pass: one subtraction/sample,
+the earlier cost prediction or gate evidence. FULL descriptor reconstruction costs one O(n) E pass: one subtraction/sample,
 two finite masks, up to four strict extreme comparisons and constant witness updates; 384 bytes/block =
 0.09375 bytes/E at n=4096 (within the descriptor, not additional payload). Base descriptor/reserved bytes add
 128/4096=0.03125 bytes/E; page overhead adds 1/15 on full pages, with short final pages.
@@ -3214,12 +3214,12 @@ T descriptor cost is 512/1024=0.5 bytes/trade before page overhead. CRC/SHA proc
 linearly at block close, and index-page hashing/proofs run at finalization. Ten permutations add O(T log T)
 comparison/I/O work at finalization (in-place merging can take O(T log^2 T)); no tuple-spool writes occur at
 T block close. Measure the descriptor rereads, key lookups and footer rewrites of 10.6/10.7 and all these
-costs; no nanosecond claim is made for the added work. Round 3 adds 32*ncols stored SHA bytes/block and hashes
+costs; no nanosecond claim is made for the added work. The current layout adds 32*ncols stored SHA bytes/block and hashes
 each column's canonical values; block SHA hashes the resulting table. Default-figure construction is one
 additional bounded E-only pass in FULL and <=327,680 stored index bytes, included in all timings.
 COMPACT omits those stored witnesses/ranks/figures and pays their bounded query work in the reader.
 
-The earlier 0.78 M bars/s planning rate is useful only to size a measurement table, not to predict round-3
+The earlier 0.78 M bars/s planning rate is useful only to size a measurement table, not to predict current
 overhead. Added decoded hashing, proof construction, descriptor/key rereads and in-place sorts can dominate the previous estimate.
 Single-core/container backpressure must be measured. Level 3 is a provisional fast default; choosing a high
 level because its isolated output is smaller cannot override the full wall-time gate.
@@ -3239,11 +3239,11 @@ Reader RAM is bounded index-page cache + head/summary + one decoded block per ac
 It never requires a full directory or trade permutation in RAM. The eight-cursor merged exporter can be much
 larger than an E-only scan at hard block ceilings; APP must choose concurrency/admission accordingly.
 
-### 15.5 Speed gate (hard, bounded as CORE-TOP addition A)
+### 15.5 Speed gate (hard, bounded as additional requirement A)
 
 v2 MUST NOT make the backtest itself slower in a way that matters. The gate:
 
-- Harness: the perf harness CORE-TOP names for the box (not identified in this worktree). Where only the repository
+- Harness: the perf harness designated for the box (not identified in this worktree). Where only the repository
   tools exist: `docker/run_json.py --bench` (its `diagnostics.timing` fields, `DESIGN.md` 4.2 line 1139) or the in-process
   Google Benchmark `benchmarks/speed/pineforge_bench.cpp`.
 - Arms: sink on with v1, sink on with v2, and sink off as reference; same strategy, same data, same box, same
@@ -3270,7 +3270,7 @@ v2 MUST NOT make the backtest itself slower in a way that matters. The gate:
   term and both hard memory gates stay unchanged.
   It must not be multiplied per key/direction. There are no T-sized private spools; final canonical
   ranks (17,105,920 at400k), output, existing curve and 30*T trade spill remain in inclusive admission.
-  APP's disk canary is optional; test the current memory-backed case too. SM-CX must supply the inclusive
+  APP's disk canary is optional; test the current memory-backed case too. Performance validation must supply the inclusive
   measurement before ANY v2 flat-RSS PASS; the +16 MiB/slope gates are unchanged.
 - Reported together, always: for every run, bytes per trade (`T` bytes / `T` count) and bytes per equity point
   (`E` bytes / `E` count), total file bytes, AND wall time (median, v1 then v2), CPU seconds of the engine thread and
@@ -3283,7 +3283,7 @@ v2 MUST NOT make the backtest itself slower in a way that matters. The gate:
   plus E1/63/64/127/128 at T4. Use actual production metadata, BOTH profiles at their boundaries,
   and every0.5/15.1 extreme: the retained J1MiB EXCLUDED metadata examples, the decoded-ceiling
   extreme's accepted compressible/incompressible variants, and the just-above decoded-budget refusal (3.7/15.1).
-  READERS' scripts/sink_size_report.py MUST print a REAL production SUMMARY FIRST: run/provenance,
+  scripts/sink_size_report.py MUST print a REAL production SUMMARY FIRST: run/provenance,
   J/C/C-to-J, level/build and Q/M probe/exclusion bytes, or PENDING-REAL-SUMMARY. Immediately check the
   binding E1/T1 (ii-a) and E64/T4 (i) cells at f=.25 as in15.1; either failing inequality means FAIL.
   Then print v1/full-v2/
@@ -3294,9 +3294,9 @@ v2 MUST NOT make the backtest itself slower in a way that matters. The gate:
   break-even ratios using the first real SUMMARY, not assumed J4096/r.25. Missing measurements remain
   PENDING; the model supplies no overall size acceptance (21 item17).
 
-### 15.6 Choosing the zstd level (CORE-TOP addition B: by measurement, default fast)
+### 15.6 Choosing the zstd level (additional requirement B: by measurement, default fast)
 
-1. Take the v1 sinks of the three corpus strategies SM-CX measures plus the LARGE run's sink.
+1. Take the v1 sinks of the three corpus strategies used for performance measurement plus the LARGE run's sink.
 2. For each level L in {1, 2, 3, 5, 7, 9, 12, 15, 19} run `pf_sink2.py from-v1 --level L` (the reference encoder)
    and record: total v2 bytes, bytes per `E` and per `T`, encoder CPU seconds per million `E` records on the box.
 3. Fill this table:
@@ -3308,7 +3308,7 @@ v2 MUST NOT make the backtest itself slower in a way that matters. The gate:
    replicates; (b) writer-thread load (encode seconds per `E` x **the measured bars/s of the LARGE run on the same box**)
    is at most 25%, so back-pressure stays
    idle; (c) its total bytes are at least 2% below the next cheaper candidate that passes (otherwise the cheaper one).
-5. Until the table exists the default is 3 (zstd's own default). The chosen level and the table go in the lane report.
+5. Until the table exists the default is 3 (zstd's own default). The chosen level and the table go in the verification report.
 6. If no level passes, v2 is not accepted for rollout. Optimize/revise with APP agreement and remeasure;
    do not omit mandatory indexes, skip verification or weaken zero-difference/memory gates to manufacture a pass.
 
@@ -3316,16 +3316,16 @@ v2 MUST NOT make the backtest itself slower in a way that matters. The gate:
 
 | # | Risk | Mitigation or owner |
 |--:|---|---|
-| R1 | zstd packaging is new engine integration (12.3). | Codec is requested; CORE confirms vendoring/build/license/symbol isolation. |
+| R1 | zstd packaging is new engine integration (12.3). | Codec is requested; engine integration confirms vendoring/build/license/symbol isolation. |
 | R2 | The engine gets its first thread (10.3): fork, sanitizers, single-core containers. | `inline` mode and automatic fallback; thread exists only between `write_header` and `write_trailer`; TSan profile in CI. |
-| R3 | Paged indexes, Merkle proofs and in-place rank merges add rereads/rewrites and finalization CPU. | Fixed 2 MiB construction even on tmpfs; O(T log^2 T) moves/key lookups require the end-to-end gate; CORE owns admission. |
+| R3 | Paged indexes, Merkle proofs and in-place rank merges add rereads/rewrites and finalization CPU. | Fixed 2 MiB construction even on tmpfs; O(T log^2 T) moves/key lookups require the end-to-end gate; engine integration owns admission. |
 | R4 | APP's existing JSON/gzip hashes have different meanings from logical identity. | Explicit digest names, immutable generations and APP migration mapping (9.5, 14.7, 20.Q10). |
-| R5 | run_json needs a Python zstd decoder for full verification even with summary accumulators (14.4). | CORE confirms image packaging; no unverified-success fallback. |
+| R5 | run_json needs a Python zstd decoder for full verification even with summary accumulators (14.4). | Engine integration confirms image packaging; no unverified-success fallback. |
 | R6 | Node and Worker decoder/package/budget choice (11.8-11.10). | Portable pure-JS/WASM path must be tested/pinned by APP; 20.Q12. |
-| R7 | The reference vectors are hand-derived (17); a mistake is possible in them or in the real encoder. | Codex regenerates and diffs; a diff is a finding. |
-| R8 | The hand vectors do not cover `O V K X H` nor a real compressed zstd block. | Codex adds generated vectors for both before APP's tests are considered complete (17.4). |
+| R7 | The reference vectors are hand-derived (17); a mistake is possible in them or in the real encoder. | Regenerate and diff the vectors; a diff is a finding. |
+| R8 | The hand vectors do not cover `O V K X H` nor a real compressed zstd block. | Add generated vectors for both before APP's tests are considered complete (17.4). |
 | R9 | The size and speed figures are estimates. | Gate 15.5, table 15.6, `sink_size_report.py` first. |
-| R10 | The scratch curve becomes the largest file (15.1). | Separate lane: serve the metrics pass from the `E` blocks. |
+| R10 | The scratch curve becomes the largest file (15.1). | Separate work: serve the metrics pass from the `E` blocks. |
 | R11 | Fingerprint is available after engine fill; SUMMARY mapping/admission integration needs APP agreement under 0.5/3.7's fixed budget. | Two-stage v2 finalization proposal, no valid tail until metadata is accepted (9.1, 10.6). |
 | R12 | `DECIMAL` adds an encoder search and a decode division. | Exactness is by identity (6.4); benefit measured by the script before it is kept. |
 
@@ -3370,16 +3370,16 @@ has a v2 home; none is dropped.
 
 ## 17. Reference vectors
 
-**Round-5 warning:** ALL existing `*.v2.hex` and `*.mask.json` describe the obsolete round-1 file layout.
-They are STALE, not merely missing checksums. No round-2/3/4/5 reader conformance claim can use them, even with
+**Obsolete-layout warning:** ALL existing `*.v2.hex` and `*.mask.json` describe the obsolete original file layout.
+They are STALE, not merely missing checksums. No subsequent reader conformance claim can use them, even with
 checksums disabled. `*.records.jsonl` and the raw column-body derivations still describe the same v1 values.
 The v1 fixture trailers also still have invalid all-zero digest placeholders. This is the explicitly disclosed
-stale-vector option in brief2. Section 13.1 now hand-derives current non-hash descriptor/witness/page/root/tail
+stale-vector option. Section 13.1 now hand-derives current non-hash descriptor/witness/page/root/tail
 framing, twice; it does not make the historical files valid or supply their missing CRC/SHA values.
-Round4's raw SUMMARY, FULL20157/COMPACT2237 totals, later offsets/root/tail hex and13.2's H+1937+J
+The earlier raw SUMMARY, FULL20157/COMPACT2237 totals, later offsets/root/tail hex and13.2's H+1937+J
 are also STALE. Section13 now supplies the legal 52+C decode-only SUMMARY framing and dependent offsets;
 real level3 SUMMARY bytes and full checksum-bearing files must be regenerated independently.
-The bundle README's stale warning still applies; only this spec is edited in this round.
+The bundle README's stale warning still applies; only this spec is edited in this revision.
 
 ### 17.1 The bundle
 
@@ -3388,7 +3388,7 @@ Directory `docs/design/sink-v2-vectors/`. For each vector NAME:
 | File | Content |
 |---|---|
 | `NAME.v1.jsonl` | a v1 report of the run (header, records, trailer), valid except that the trailer's `sha256` is the placeholder `0000...0` (64 zeros) |
-| `NAME.v2.hex` | historical round-1 bytes, STALE for rounds 2/3/4/5; hex syntax: comments start with `#`, whitespace ignored |
+| `NAME.v2.hex` | historical original bytes, STALE for subsequent layouts; hex syntax: comments start with `#`, whitespace ignored |
 | `NAME.records.jsonl` | the expected decoded records, one JSON array per line, in merged (v1) order: the body lines of `NAME.v1.jsonl` |
 | `NAME.mask.json` | the list of byte ranges of `NAME.v2.hex` (and the v1 trailer) that are placeholders |
 | `NAME.report.json` | NEW REQUIRED sidecar: exact existing-v1 full run_json writer bytes for the SAME captured run, including LF (21.6); not supplied in the historical hand set |
@@ -3403,7 +3403,7 @@ without a compressor).
 
 ### 17.2 What is hand-derived and what is not
 
-Historical round-1 hand derivation (not a current full-file fixture): every byte of
+Historical original hand derivation (not a current full-file fixture): every byte of
 the heads, block headers, directories, column bytes, index entries, footers and tails EXCEPT the placeholders below. The
 v1 text lines were written by hand from the same values (the `f64` texts are Python `repr` of values chosen to have
 certain `repr`: short decimals, dyadic rationals and `2^-20 = 9.5367431640625e-07`).
@@ -3427,31 +3427,31 @@ content is known. The frames follow RFC 8878: magic `28 B5 2F FD`, frame header 
 checksum, no dictionary), a one-byte content size, then blocks (3-byte header: bit 0 last block, bits 1-2 type
 0 raw / 1 RLE, bits 3-23 size).
 
-### 17.4 Regeneration and diff protocol (the Codex step)
+### 17.4 Regeneration and diff protocol (implementation verification)
 
 1. Write the encoder and Python/TS readers. First create valid v1 fixture digests and matching metadata
    input per vector, then encode with --summary-json, level 3 and the original record caps/run/engine identity.
    Full verification must never be bypassed to admit the all-zero v1 trailer placeholders.
-2. The round-1 whole-file diff is no longer applicable: decode/hash rules, descriptor/index/root/tail bytes changed
+2. The original whole-file diff is no longer applicable: decode/hash rules, descriptor/index/root/tail bytes changed
    intentionally. Diff unchanged section-6 column bodies against the hand derivations; any difference is a
    finding. Independently derive/check the new structures, Merkle paths, both E witness summaries and ten
    sorted permutations. Diff section 13.1's current non-hash bytes/offsets as well, including short page
    lengths, column SHA framing, finite prefixes and ID 18. Do not adjust old masks to hide changed bytes.
-3. Produce complete valid round-5 fixtures/masks with real checksums and byte-for-byte Python/TS to-v1 outputs.
+3. Produce complete valid current-layout fixtures/masks with real checksums and byte-for-byte Python/TS to-v1 outputs.
    Store the existing v1 full-report writer's `NAME.report.json` NEXT TO EVERY vector and require Python
    `to_report_json` / APP TS byte equality, exact SHA/length and frozen result-string equality (21.6).
    Sidecar metadata/elapsed/fingerprint is captured once, never independently retimed or generated by the inverse.
    Refusal/schema-only cases record their typed v1 failure line as 21.6 specifies; corrupt mutations keep
-   the good parent's report sidecar but must refuse. The supervisor commits fixtures/provenance.
+   the good parent's report sidecar but must refuse. Fixtures/provenance are committed with the change.
 4. Add generated vectors for what the hand set cannot cover: `outputs` (`O V K X H` with nulls, a `str?` null and an
    empty message, a `hex64` with the top bit set, a column that falls back to PLAIN64), `zstd-real` (an `E` block of
    4,096 points whose columns libzstd really compresses) and `default-caps` (10,000 `E` and 2,500 `T` at the default
    caps). Add selected-anchor duplicate-time, equal extrema in both series, nonaligned bucket edges, nullable
    sort keys/ties/both directions, corrupted single-block/index proofs and recompression-stable logical identity.
-   Rebuild equity4-zstd as a decode-only round-5 file. Real zstd bytes are decoder fixtures, not portable encoder
+   Rebuild equity4-zstd as a decode-only current-layout file. Real zstd bytes are decoder fixtures, not portable encoder
    byte-identity expectations across zstd builds.
 
-Required ADDITIONAL vectors (a list of future independent-encoder files, not files supplied by this spec lane):
+Required ADDITIONAL vectors (a list of future independent-encoder files, not files supplied by this specification):
 
 Every refusal vector in 17.4 MUST have exactly ONE fault. Repair dependent lengths/checksums/digests so
 all other checks remain valid; 5.2's first failing check determines the expected refusal type.
@@ -3527,22 +3527,22 @@ implementation work under 17.4. They are not covered merely because the plan nam
 
 ---
 
-## 18. Open questions for APP-TOP
+## 18. Open questions for application integration
 
 Question IDs now refer exclusively to **APP's** 15 questions, answered individually in section 20.
 The first-pass local Q1..Q14 numbering is retired to avoid collisions. The single return list of APP decisions
 is section 21. In particular, confirm metadata/cap/finalization, comparator and figure-basis details, portable
 decoder/package budgets, API export negotiation, migration/lifecycle and the treatment of stored derivations.
 
-CORE owns its perf-harness identity, packaging of libzstd/Python decoding, proposed v2 finalizer/receipt,
+Engine integration owns its perf-harness identity, packaging of libzstd/Python decoding, proposed v2 finalizer/receipt,
 bounded external-sort implementation and scratch admission. These implementation dependencies do not authorize
-this spec lane to change ABI/runtime sources, install dependencies or run measurements.
+this specification to change ABI/runtime sources, install dependencies or run measurements.
 
 ---
 
 ## 19. APP read paths
 
-The original three CORE requirements remain mapped here; the complete 13-row APP list and 15 questions are
+The original three engine requirements remain mapped here; the complete 13-row APP list and 15 questions are
 answered by name in section 20. No empty table remains for APP to fill. Fixed-layout additions require agreement
 before freeze; readers refuse nonzero reserved fields rather than guessing extensions.
 
@@ -3599,20 +3599,20 @@ These are format guarantees/proposals, not claims that current APP routes have a
 
 ---
 
-## 20. Answers to APP-TOP's read-path inventory
+## 20. Answers to the application's read-path inventory
 
 This section answers the **441-line draft** identified at the top of this spec, not the earlier 439-line
-inventory named in brief2. Its populations remain 13 needs and Q1..Q15. `APP:L` quotes that draft;
-`APP-READ` supplies the round-3 agree-or-correct facts/cited APP file:line at source tip 723d10158.
+inventory from the earlier review. Its populations remain 13 needs and Q1..Q15. `APP:L` quotes that draft;
+`APP-READ` supplies the earlier agree-or-correct facts/cited APP file:line at source tip 723d10158.
 Those corrections supersede the draft assumptions where stated. No engine-side inspection of APP code or
-runtime verification is implied; CORE's own source-read answers are explicitly identified in 14.4/11.5.1.
-Size acceptance follows CORE-TOP's round-8 ruling and the unique clause assignment in0.5, including
+runtime verification is implied; the engine's own source-read answers are explicitly identified in 14.4/11.5.1.
+Size acceptance follows the size acceptance rule and the unique clause assignment in0.5, including
 ordinary and selected_report_view low-E runs with T1..3, and the E63/64, E127/128 and T3/4 boundaries.
 The single small-run allowance is the fixed K from0.5 for BOTH model and measured verdicts; every other run uses(i).
 (iii) SUMMARY is always zstd; report-only caller metadata uses0.5's bounded compressed-byte exclusion,
 whether compressible or incompressible, with full bytes still reported. The one new SUMMARY byte-budget refusal
 versus v1 is explicit in0.5/3.7, with length/window checks before allocation (5.2).
-READERS/SM-CX print a real production SUMMARY measurement FIRST, or PENDING-REAL-SUMMARY, immediately
+The verification tools print a real production SUMMARY measurement FIRST, or PENDING-REAL-SUMMARY, immediately
 check the binding E1/T1 (ii-a) and E64/T4 (i) cells at f=.25 and say FAIL if either fails (15.1), then print
 the original63 cells plus BOTH ordinary/selected corner grids/extremes with v1/full-v2/comparable bytes,
 profile and clause/limit/differences/PASS-FAIL. Retain the J1MiB EXCLUDED metadata examples and the
@@ -3700,7 +3700,7 @@ APP-READ answer 1 quotes **"earliest 50,000 trades by entry_time"** (`markers.ts
 `report-trades.ts:134-143`): that choice requires a full entry_time-column scan of 391 default T blocks at
 400k trades on every uncached open, then selected-row fetches; the capped n:asc variant reads <=49 full
 default blocks. Byte-closed blocks can increase these block counts. Owner/APP chooses that cost or a
-separate entry-time index requirement; this round adds none.
+separate entry-time index requirement; this revision adds none.
 
 ### Need 7 — Candles
 
@@ -3710,7 +3710,7 @@ aggregation require market data. Section 9.1 names the available paths: $.applie
 $.applied_runtime.script_tf,
 $.fingerprint.provenance.feed.source_values_sha256 and optional
 $.applied_runtime.symbol_feeds.symbols[<symbol>].feeds[<timeframe>]. $.input.ohlcv is just a path;
-there is no guaranteed chart-symbol identity member or candle feed in the record header. APP/CORE must decide external bar-source
+there is no guaranteed chart-symbol identity member or candle feed in the record header. Application/engine integration must decide external bar-source
 references, candle derivation/storage/lifecycle and [startMs,endMs) clipping; no missing feed identity is
 invented. `RunCandles`/`CandleCollector` and Vela need their own market-data reader, not an E/T reconstruction.
 
@@ -3740,7 +3740,7 @@ Served for complete data by `iter_merged`, verified streaming conversion and exa
 trailer; the engine does not convert. No regenerated JSON is kept in application storage.
 The existing full report-object/result-string contract stays available behind the SAME field/routes in
 1.7.0, format1 unchanged. APP's 08:55 option (i) is DECIDED: v2 is additive/opt-in and APP fully decodes on
-download using normative 21.6 to-report-json. READERS ships Python to_report_json and v1 NAME.report.json
+download using normative 21.6 to-report-json. The reference implementation ships Python to_report_json and v1 NAME.report.json
 beside every vector; APP TS matches exact bytes/length/SHA and the result string, including LF.
 The JSON route's x-report-sha256 continues to hash those served JSON bytes; x-report-logical-sha256 is
 additional binary logical identity, not a replacement. No second stored JSON copy; sink JSONL is distinct.
@@ -3842,7 +3842,7 @@ APP:350 asks **"without storing the trade payload in twelve orderings"**.
 same ranks on read with T<=3313. The canonical comparators/page/clamping algorithm is 11.5.1.
 Missing last in both directions; ties by n then position ascending.
 dd is -abs(max_drawdown), comparison zero normalized; the engine's T adverse magnitude is nonnegative
-(CORE source confirmation in 11.5.1). Empty total=0 returns pageCount=1/from=to=0.
+(engine source confirmation in 11.5.1). Empty total=0 returns pageCount=1/from=to=0.
 Costs are 40 bytes/trade (80 for u64 positions), plus full-page 1/15 header amortization and short final
 headers; 400k trades require **17,105,920** actual rank-table bytes. One trade costs 10*(4096+4)=41,000.
 FULL root carries PRESENT per direction; all ten exist iff T>0. FULL missing tables are CORRUPT.
@@ -3879,7 +3879,7 @@ APP must confirm the capped canonical-prefix versus globally earliest-entry disc
 Candles are **OUT OF THE SINK'S SCOPE**: 9.1 names $.applied_runtime.input_tf, $.applied_runtime.script_tf and
 $.fingerprint.provenance.feed.source_values_sha256; additional feeds live at
 $.applied_runtime.symbol_feeds.symbols[<symbol>].feeds[<timeframe>]. No guaranteed chart-symbol path exists,
-and $.input.ohlcv is only a local path. The sink carries no OHLCV/calendar aggregation. APP/CORE decides market-data binding,
+and $.input.ohlcv is only a local path. The sink carries no OHLCV/calendar aggregation. Application/engine integration decides market-data binding,
 source references, storage/derivation ownership and its no-second-copy treatment.
 
 ### Q8 — HPO trial chunks and live frontiers
@@ -3934,7 +3934,7 @@ No legacy backfill is permission to keep a persistent duplicate JSON or piece tr
 ### Q12 — Decoder ownership and Node/Worker package negotiation
 
 APP:357: **"current Workers reader uses DecompressionStream(\"gzip\")"**.
-**PROPOSED:** CORE supplies binary writer/C++/Python reference readers; APP owns the shared TS direct reader,
+**PROPOSED:** The engine supplies binary writer/C++/Python reference readers; APP owns the shared TS direct reader,
 Node/Worker range adapters, compatibility exporter and stable browser DTO adapters (11.1, 11.8-11.10, 12.2).
 APP-READ §12 quotes **"node:22-slim pinned by digest"** (`apps/engine/Dockerfile:28`;
 compute `Dockerfile:15,39`): the pinned minor is unknown, so APP must establish whether it is >=22.15;
@@ -3950,7 +3950,7 @@ APP:358: **"Keep exact served-byte length/digest or verifiable final completion 
 stored JSON."** **DECIDED option (i), APP 08:55:** in1.7.0 the frozen result JSON string, JSON-object /report
 and web .json download remain; format1 unchanged, v2 additive via --report-sink-format 2.
 The normative algorithm in21.6 reconstructs the exact v1 full-report JSON from SUMMARY and E/T/O/V/K;
-X/H/I are verified without inventing object fields. READERS supplies Python to_report_json in
+X/H/I are verified without inventing object fields. The reference implementation supplies Python to_report_json in
 docker/pf_sink2.py and every NAME.report.json; APP TS must be byte-identical in BOTH profiles.
 Do the full counting/hash conversion before headers, then emit under the same immutable generation.
 Content-Length counts the served JSON including LF; x-report-sha256 hashes those decoded bytes.
@@ -4003,7 +4003,7 @@ SUMMARY (9.1), with independent context/receipt checks and service log authority
 ### Second stored copies and serving changes
 
 APP:298 calls section-4 findings **"not approvals to keep them"**. The proposed direct-read integration must
-reconcile every listed family; these are APP changes, not edits implemented by this spec lane:
+reconcile every listed family; these are APP changes, not edits implemented by this specification:
 
 | Draft inventory lines | Required integration disposition |
 |---|---|
@@ -4032,7 +4032,7 @@ trusted/bound, not absorbed as report-authored billing data.
 
 ## 21. APP integration decisions and remaining items
 
-APP-TOP's return list; item 6 is DECIDED by the 08:55 answer and specified normatively below.
+The application's return list; item 6 is DECIDED by the 08:55 answer and specified normatively below.
 Other integration/measurement items remain for agreement or evidence:
 
 1. Permit bounded summary/DB head metadata, FULL's derivable E witnesses including ID 18's <=327,680-byte
@@ -4040,8 +4040,8 @@ Other integration/measurement items remain for agreement or evidence:
    no-second-copy; retire raw/shaped rows, exact curve pages, view trades, marks, figure and PDF stored
    derivations without silently exempting today's caches (Q1).
 2. Confirm complete 4.3 metadata mapping, SUMMARY admission/depth/optional fields, selected additive retention
-   and independent service-context/log binding; coordinate the proposed post-engine metadata finalizer with CORE
-   (Q2). CORE-TOP's round-10 ruling fixes the byte/window budget in3.7; APP confirms integration of that policy.
+   and independent service-context/log binding; coordinate the proposed post-engine metadata finalizer with engine integration
+   (Q2). The admission rule fixes the byte/window budget in3.7; APP confirms integration of that policy.
 3. Accept block/page ceilings and choose Worker/compute decoder allocation, concurrency and admission budgets.
    The format fixes byte ceilings; it cannot certify isolate CPU/RSS from a static spec (Q3/Q12).
 4. Accept the 9.3 profile rule: FULL has ten mandatory position indexes iff T>0 and short final pages;
@@ -4057,7 +4057,7 @@ Other integration/measurement items remain for agreement or evidence:
 6. **DECIDED: APP option (i), additive v2, JSON preserved.** In 1.7.0 run-detail `result` remains the frozen
    JSON string behind the same field; `/report` and the web download remain the JSON object/file.
    Format1 is unchanged; --report-sink-format 2 opts into summary-only engine stdout and binary storage,
-   not a public API break. APP reconstructs on download using normative 21.6 below; READERS ships Python
+   not a public API break. APP reconstructs on download using normative 21.6 below; the reference implementation ships Python
    `to_report_json` in docker/pf_sink2.py and every vector's v1 `NAME.report.json`. No second JSON is stored.
    Later owner/APP options (ii) binary web download with API JSON kept, and (iii) retire JSON everywhere
    with deprecation, remain notes only. Neither is a default or an unresolved 1.7.0 choice.
@@ -4080,34 +4080,34 @@ Other integration/measurement items remain for agreement or evidence:
 13. Choose nullable-T display/analysis adapter policy, preserve independent selected/service authority, and
     resolve the off trade-order foundation's canonical-n versus exit-time-order assumption and old source
     identity mapping (Q15, Need 12). A future trade-ID route requires a separate index requirement (Need 11).
-14. **Lifecycle identity BEFORE first v2 write (APP OPEN 4):** APP-TOP confirms non-null
+14. **Lifecycle identity BEFORE first v2 write (APP OPEN 4):** The application confirms non-null
     sharedBlobHash/blobLifecycleKey, referencedHashes association and claims/holds/fences for
     studio/blobs/<SHA of entire stored object>, including staged/late PUT cleanup; never use readBlob's UTF-8
     path for binary. Owner decides any deletion-semantics change. The unmapped new prefix is withdrawn (14.7).
-15. **run_json v2 stdout (APP OPEN 3):** CORE fixes summary-only JSON plus report_sink, <=2 MiB, no
-    trades/equity_curve/output-row arrays (14.4); format 1 is unchanged. APP-TOP owns switching engine
+15. **run_json v2 stdout (APP OPEN 3):** The engine fixes summary-only JSON plus report_sink, <=2 MiB, no
+    trades/equity_curve/output-row arrays (14.4); format 1 is unchanged. The application owns switching engine
     ingestion/upload from full stdout/inline JSON to the verified binary file and manifest-5 branch.
     With SUMMARY admitted under 3.7's S_MAX, the existing 2 MiB stdout bound and 2 MiB finalization arena agree
     without another SUMMARY byte-budget refusal (10.7).
-    No further CORE format decision is pending; the APP switch is a rollout precondition.
-16. **Receipt/SUMMARY folds (APP OPEN 1/3 integration):** CORE supplies closed_count/open_at_end_count/
+    No further engine format decision is pending; the APP switch is a rollout precondition.
+16. **Receipt/SUMMARY folds (APP OPEN 1/3 integration):** The engine supplies closed_count/open_at_end_count/
     open_at_end_pnl at receipt offsets 208/216/224, receipt size 248, and SUMMARY.sink_folds (10.6/14.2).
-    APP-TOP maps them to view/figure/final-equity DTOs using its canonical-order fold/forced-close rule.
-    CORE's raw E/T projection/hold-back/anchor answer and drawdown answer are in 14.4/11.5.1.
-    APP-TOP also measures production backing/admission (APP OPEN 7). Memory scratch is supported today:
+    The application maps them to view/figure/final-equity DTOs using its canonical-order fold/forced-close rule.
+    The engine's raw E/T projection/hold-back/anchor answer and drawdown answer are in 14.4/11.5.1.
+    The application also measures production backing/admission (APP OPEN 7). Memory scratch is supported today:
     10.7's finalization allowance is fixed at <=2 MiB INCLUDING work files even at400k, with no T-sized
     source-key/rank/tree spool. Existing output/curve/30*T trade spill and live engine buffers still count
     in service/HPO memory. Scratch path is configurable (TMPDIR/default unchanged; existing scratch_dir);
     receipt scratch_flags bit0/bit1 reports memory/unknown backing. APP's disk DEV canary is optional.
-    SM-CX measures inclusive RSS; no flat-RSS PASS before that measurement and the unchanged hard gates.
-17. **Size acceptance, CORE-TOP round8; SUMMARY budget/fixed K, round10:** use exactly one size clause by0.5's small-run partition,
+    Performance validation measures inclusive RSS; no flat-RSS PASS before that measurement and the unchanged hard gates.
+17. **Size acceptance; SUMMARY budget/fixed K:** use exactly one size clause by0.5's small-run partition,
     under BOTH model and measured report; (iii) SUMMARY is ALWAYS zstd, and caller metadata absent
     from v1's sink is excluded only by0.5's compressed-byte attribution.
     V1's report metadata has no aggregate byte limit; SUMMARY uses 3.7's S_MAX and stored bound.
     This is the ONE new byte-budget refusal versus v1, `WriterError{summary_limit}`, for J or52+C over budget (0.5).
     It fails at10.6 step3 before acceptance, leaving an invalid file/no valid tail/complete=0, not a partial-file result.
     Readers check stored length, J and window before allocation under5.2; depth64 remains.
-    READERS' scripts/sink_size_report.py / SM-CX MUST print a REAL production SUMMARY FIRST (run,
+    scripts/sink_size_report.py MUST print a REAL production SUMMARY FIRST (run,
     J/C/C-to-J, build/level and Q/M/exclusion bytes), or PENDING-REAL-SUMMARY. Immediately check E1/T1 (ii-a),
     then E64/T4 (i), both at f=.25: the largest counted-frame lengths that pass are1188 and793 respectively.
     Either failing inequality means FAIL under 0.5's fixed K. All model verdicts remain MODEL-ONLY.
@@ -4129,14 +4129,14 @@ Other integration/measurement items remain for agreement or evidence:
 ### 21.6 Normative to-report-json (DECIDED option (i))
 
 This is the **run_json report object**, distinct from 11.7's sink JSONL. Reference function:
-`docker/pf_sink2.py::to_report_json(source, destination)` in the READERS lane, also exposed as `to-report-json`.
+`docker/pf_sink2.py::to_report_json(source, destination)` in the reference implementation, also exposed as `to-report-json`.
 For every successful reference run, in EITHER profile, its output bytes MUST EQUAL the v1 full-report
 writer's `NAME.report.json` byte for byte. Parsed-object equality is insufficient. No native engine JSON
 regeneration, v1 sink header/trailer, profile tag, report_sink descriptor or sink_folds is added to this object.
 
 The normative producer is this worktree's `docker/run_json.py`: `build_report_dict` at `docker/run_json.py:4051-4157`;
-`_sink_trade` at `docker/run_json.py:6447-6451`; `_sink_summary` at `docker/run_json.py:6453-6517`; `_build_sink_report` at `docker/run_json.py:6522-6538`;
-`_stream_json` / `_prepare_stream_report` at `docker/run_json.py:6382-6429`. Ordinary assembly/extension order and full-writer
+`_sink_trade` at `docker/run_json.py:6585-6589`; `_sink_summary` at `docker/run_json.py:6591-6661`; `_build_sink_report` at `docker/run_json.py:6666-6682`;
+`_stream_json` / `_prepare_stream_report` at `docker/run_json.py:6520-6567`. Ordinary assembly/extension order and full-writer
 serialization are (`out` at `docker/run_json.py:5547-5590`); selected report_window/report_shape/outputs/fingerprint and final serialization
 are (`out` at `docker/run_json.py:4953-5014`). Those are source-read facts, not executed equivalence evidence.
 
@@ -4170,8 +4170,8 @@ are (`out` at `docker/run_json.py:4953-5014`). Those are source-read facts, not 
    frozen report object. `equity_curve`: iterate ALL E in raw order and emit time_ms,equity,open_profit,
    in that order; time is int and the other two finite floats (null/non-finite E is refused in step 2 before any byte is emitted).
    Keep anchors/duplicate times. Do NOT apply 11.6's figure filtering/final-profit adjustment to this raw full-report array.
-5. `outputs`, when present: mirror `build_outputs_block` at `docker/run_json.py:3887-3950`, `_outputs_metadata` at `docker/run_json.py:6620-6626`,
-   `_sink_outputs_block` at `docker/run_json.py:6695-6733` and `_report_output_event` at `docker/run_json.py:6591-6617`. Emit keys EXACTLY in order
+5. `outputs`, when present: mirror `build_outputs_block` at `docker/run_json.py:3887-3950`, `_outputs_metadata` at `docker/run_json.py:6762-6768`,
+   `_sink_outputs_block` at `docker/run_json.py:6837-6875` and `_report_output_event` at `docker/run_json.py:6733-6759`. Emit keys EXACTLY in order
    schema_version,message_format,manifest_sha256,manifest,bars,series,constants,hlines,events.
    The six metadata fields come from SUMMARY.outputs; schema_version is "pineforge-outputs/v1";
    message_format retains the manifest value/default "pineforge/v1". Preserve the original parsed
@@ -4205,8 +4205,8 @@ are (`out` at `docker/run_json.py:4953-5014`). Those are source-read facts, not 
    COMPACT query fallbacks never supply or reorder this object's raw data.
 7. Serialize recursively with EXACT `json.dump(..., separators=(",",":"), allow_nan=False)` /
    `_stream_json` semantics, default **ensure_ascii=True, sort_keys=False**. Emit ASCII bytes, no BOM
-   or whitespace outside strings, then exactly ONE LF (0A), as (`file.write` at `docker/run_json.py:6414`,
-   `buffer.write` at `docker/run_json.py:6439` / `_write_report` at `docker/run_json.py:4646-4671`).
+   or whitespace outside strings, then exactly ONE LF (0A), as (`file.write` at `docker/run_json.py:6552`,
+   `buffer.write` at `docker/run_json.py:6577` / `_write_report` at `docker/run_json.py:4646-4671`).
    Integers use minimal base10; bool/null are true/false/null. Float spelling is Python's shortest
    round-trip binary64 repr, preserving -0.0 and .0 for integral floats; examples 1.0,-0.0,1e-07,
    1e+16 (not JS Number spelling). Preserve subnormals and exponent sign/two-digit minimum exponent.
@@ -4235,7 +4235,7 @@ are (`out` at `docker/run_json.py:4953-5014`). Those are source-read facts, not 
    through JSON.stringify (which changes float/Unicode spelling). Count any outer envelope separately.
    APP's `/report`, resultEnvelope and web proxy must all use the same J_report bytes.
 
-Required evidence: READERS supplies `NAME.report.json` generated by the EXISTING v1 full-report writer
+Required evidence: The reference implementation supplies `NAME.report.json` generated by the EXISTING v1 full-report writer
 with the SAME captured metadata/records, not by the new inverse. Freeze elapsed/timing/fingerprint once
 for both representations; running a strategy twice with different clocks is not a byte-equality fixture.
 Each successful compact/full vector, including outputs/selected/escaping/float cases, requires exact

@@ -1,6 +1,6 @@
 # Standalone report-sink stage C
 
-SINK-V2-171 selectively restores the round-10 codec from `parked/l22t`
+Report sink v2 selectively restores the codec from `parked/l22t`
 (`46b476e2d6b4a28cb151cef353428f8a93ba37d3`) on main
 `dad2530cd4f8e5cc8d77ac9407374a7db1be6bc4`. This document describes the
 standalone adapter. The parked [wire specification](sink-v2.md) remains the

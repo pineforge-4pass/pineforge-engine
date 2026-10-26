@@ -1,6 +1,6 @@
 # Stage-C release vectors and independent reader controls
 
-No checksummed stage-C artifact has been generated in the editing lane.
+No checksummed stage-C artifact has been generated during static review.
 The canonical release generator runs stage A and the real transcoder:
 
 ```sh
@@ -10,7 +10,7 @@ PF_SINK_ZSTD_LIBRARY="$PWD/build/lib/libpineforge_sink_zstd_reference.so" python
 
 Those are lab-only commands. CTest consumes that generated directory and fails
 when its manifest/files are absent. A generator run into this source directory
-must be committed by the supervisor and re-proven on the final clean tree.
+must be committed with the change and re-proven on the final clean tree.
 The current stage-C cases use canonical default policy and stage-A-admissible
 values. Null E, injected frames and forced layouts below are independent reader
 controls, generated separately by tests rather than promoted as release files.
@@ -19,14 +19,14 @@ See [stage C](../sink-v2-stage-c.md) for that scope and the outstanding proofs.
 The retained historical control inventory follows; its pending markers remain
 honest until the lab runs the independent control generator.
 
-# Sink v2 round-6 wire vectors, round-10 admission controls
+# Sink v2 wire vectors and admission controls
 
-**PENDING-GENERATOR: no complete, checksummed round-6 file or report sidecar is claimed yet.**
-The implementation lane is edit-only: no Python, tests, builds or generator
-execution is permitted. CRC-32 and SHA-256 are not hand-computable reliably for
+**PENDING-GENERATOR: no complete, checksummed current-layout file or report sidecar is claimed yet.**
+This review provides static evidence only; no Python, tests, builds or generator
+execution is claimed here. CRC-32 and SHA-256 are not hand-computable reliably for
 these files. The first lab generator run is required verification work.
 
-The obsolete round-1 `*.v2.hex`, checksum-placeholder `*.v1.jsonl` and old
+The obsolete original `*.v2.hex`, checksum-placeholder `*.v1.jsonl` and old
 `*.mask.json` have been removed. Their provenance is the historical bundle at
 `43da65a4e1`, described in sink-v2.md section 17; they are not valid fixtures for
 the current layout. Checksums must never be disabled to admit them.
@@ -40,7 +40,7 @@ ledger is checked separately by the unit test using its synthetic metadata
 in the legal decode-only frame `28 B5 2F FD 60 01 00 09 08 00` + 257 JSON bytes
 (C=267, SUMMARY=319, FULL EOF=20171, COMPACT EOF=2251);
 that framing-only SUMMARY is not presented as a successful run_json report.
-Round-4 bare JSON SUMMARY and its 20157/2237 file sizes are obsolete.
+The earlier bare JSON SUMMARY and its 20157/2237 file sizes are obsolete.
 
 | Vector | Inputs / purpose | Full-file status |
 |---|---|---|
@@ -93,7 +93,7 @@ C=9+8*(131072+3)=1048609, so stored 52+C=1048661 fits the bound exactly
 Its mask records a separate actual HEAD-level library probe and whether that
 probe shrinks. A chosen raw frame is **not proof of incompressibility**.
 Actual nonshrinking schema-valid production metadata remains measurement
-evidence for SM-CX, never a PASS inferred from this decode-only fixture.
+evidence for performance validation, never a PASS inferred from this decode-only fixture.
 
 Inputs for the additional vectors are visible in `tests/sink_v2_cases.py`.
 Its v1 sink text oracle uses Python float formatting with the documented
@@ -160,7 +160,7 @@ header-only J control and C1048641 control are replaced.
 Admission refusal sidecars name `code=summary_limit`, the first failing
 check and the fixed-header/bounded-frame-header stage. Generation requires
 the typed refusal with no read past that stage. Successful masks record
-the accepted J/C/stored-region lengths and the round-10 admission contract.
+the accepted J/C/stored-region lengths and the admission contract.
 COMPACT resealed
 logical/raw-count/finite-count controls must open as UNVERIFIED, refuse a
 verified identity demand with `sink_logical_identity_unverified`, and fail
@@ -261,6 +261,6 @@ for model and measured verdicts; no verdict depends on a model worst cell.
 Missing evidence never inherits a model PASS. No measured size, universal
 compression, RSS or speed PASS is claimed here.
 
-The supervisor must replace this pending status with the generation/verification
+This pending status must be replaced with the generation/verification
 log paths and compressor versions when promoting the produced bundle. C++ and
 TypeScript must read these same generated files with all checks enabled.

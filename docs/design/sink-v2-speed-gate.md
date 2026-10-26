@@ -1,6 +1,6 @@
 # Stage-C lab verification and hard speed gate
 
-Execution owner: WIN-CX, through the lab/cloud host. The editing lane ran none
+Execution environment: the lab/cloud host. The static review ran none
 of these commands. Use committed clean trees, retain raw logs and run IDs,
 and bind every verdict to the exact engine tree and frozen codegen head.
 
@@ -10,7 +10,7 @@ Commit the deliverable after hooks/guards; keep DESIGN-sinkv2.md and
 REPORT-sinkv2.md outside the proof checkout. Record HEAD, HEAD^{tree},
 `git diff --stat dad2530cd4..HEAD`, codegen/corpus revisions, compiler identity,
 host class, uname, CPU governor/affinity, nproc/cgroup cpu.max (>=3 tee cores), relay/owner identities and filesystem/memory configuration.
-No dirty-tree run is acceptance evidence. Do not post statuses from this lane.
+No dirty-tree run is acceptance evidence. Status publication requires maintainer verification.
 
 ## P1: fail-before and source checks
 
@@ -64,7 +64,7 @@ build/bin/test_report_sink_reader_vectors build/sink-v2-vectors
 The generator derives the count and manifest from actual cases/tools, compares
 every field/inverse, compares report bytes to the retained-v1 producer, and
 records typed refusal sidecars where appropriate. No binary/checksum artifact
-was supplied by the editing lane. Reader-only injected frames/null-E/forced
+was supplied during static review. Reader-only injected frames/null-E/forced
 layouts are separate controls, never admitted stage-C success files; independently produced serial/tee COMPACT/FULL bytes, SUMMARY and receipts must match.
 
 If the bundle must be committed under docs/design/sink-v2-vectors, run the same
@@ -111,7 +111,7 @@ Never overlap a corpus rebuild/sweep with external consumers.
 
 ## P6: end-to-end hard gate
 
-WIN-CX supplies the real feed with at least 8,000,000 bars, workload config and
+Gate inputs include the real feed with at least 8,000,000 bars, workload config and
 names, artifact-bound inclusive-memory evidence, producer build/link log map
 and actual caller SUMMARY extremes. The workload set must include a trade-heavy
 fixture with >=10,000 trades, O/V/K, and trace. Keep ordinary and selected size
@@ -125,7 +125,7 @@ SINK_GATE_ZSTD_INFO maps each resolved build root and `reference` to its
 actual producer artifact SHA256, codec build ID, raw build/link log and
 observer zstd-library SHA256, as checked by bind_summary_evidence().
 
-The exact hard-gate command (with supervisor-bound input paths) is:
+The exact hard-gate command (with verification-bound input paths) is:
 
 ```sh
 python3 -B scripts/sink_v2_speed_gate.py --build-roots "$SINK_GATE_LAB/rep1" "$SINK_GATE_LAB/rep2" "$SINK_GATE_LAB/rep3" "$SINK_GATE_LAB/rep4" --ohlcv "$SINK_GATE_FEED" --strategy-config "$SINK_GATE_WORKLOADS" --sizes 10000 100000 1000000 8000000 --replicates 5 --warmups 1 --v2-mode tee --v2-compare-late-modes --v1-a-mode stdout --memory-evidence "$SINK_GATE_MEMORY" --zstd-library "$SINK_GATE_ZSTD" --zstd-build-info "$SINK_GATE_ZSTD_INFO" --incompressible-summary-json "$SINK_GATE_CALLER_SUMMARY" --ceiling-incompressible-summary-json "$SINK_GATE_CEILING_SUMMARY" --output "$SINK_GATE_RESULTS"
@@ -160,7 +160,7 @@ full corpus; any drift requires investigation. The ordinary full sweep is:
 ./scripts/run_corpus.sh
 ```
 
-The supervisor owns this sweep; do not overlap it with any external lib/derived-
+The sweep must not overlap with any external lib/derived-
 feed consumer. Retain moved=0 and raw per-probe evidence. Rebind P0 after every
 fix/generated-vector commit and rerun required proofs on that exact final tree.
 Maintainers alone post pineforge/verify and pineforge/parity.

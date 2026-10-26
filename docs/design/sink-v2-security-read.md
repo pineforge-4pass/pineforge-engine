@@ -1,7 +1,7 @@
-# SINK-V2-171 delta security read
+# Report sink v2 delta security read
 
 Static read only. No executable, build, test, vector generator, jail or
-performance proof was run by the editing lane. This is a code-diff assessment,
+performance proof was run during static review. This is a code-diff assessment,
 not a deployment/security verdict.
 
 Compared main `dad2530cd4f8e5cc8d77ac9407374a7db1be6bc4` with the selected
@@ -96,7 +96,7 @@ paths. No APP/COMPUTE jail implementation or other company's tree was read.
   per-file `--fsize`, a scrubbed wrapper launch environment, limited inherited
   fds and run-owner cleanup after kill/cancellation are still hosting duties.
   The repository does not contain the deployment policy being approved.
-  No L6 requirement is waived by this read.
+  No hosting security requirement is waived by this read.
 - A run owner's immutable source/summary/receipt binding is essential.
   fstat comparisons alone cannot defeat a malicious concurrent writer of the
   same uid. The executable path and its ancestors must also be immutable.
@@ -122,4 +122,4 @@ Required execution evidence: full preflight/Release verification (including
 sink/transcoder rows), generated/check-reproduced vectors, sanitizers, real
 uid-10002 jail caps/signals/env/network/kill cleanup, inclusive memory, four
 independent builds with five timed runs per arm and zero-diff corpus parity.
-No runtime or security PASS is asserted here. Structure/full equivalence, kernel memory and the final gate measurement remain lab/WIN-CX/L6 obligations. One-strategy probe measurements at 1M bars versus STDOUT-mode v1 on four clean builds: structure+4 threads 1.073x, structure+1 thread 1.118x, full 1.337x (about 1.34x); kernel VmHWM transcoder 9.8 MiB and relay 3.3 MiB flat from 100k to 1M. The 1.10 limit holds at default 4 late threads in the probe; a 1-core host misses it. Replace these probe numbers with the gate box's numbers; no gate verdict is claimed.
+No runtime or security PASS is asserted here. Structure/full equivalence, kernel memory and the final gate measurement remain required lab/security verification. One-strategy probe measurements at 1M bars versus STDOUT-mode v1 on four clean builds: structure+4 threads 1.073x, structure+1 thread 1.118x, full 1.337x (about 1.34x); kernel VmHWM transcoder 9.8 MiB and relay 3.3 MiB flat from 100k to 1M. The 1.10 limit holds at default 4 late threads in the probe; a 1-core host misses it. Replace these probe numbers with the gate box's numbers; no gate verdict is claimed.

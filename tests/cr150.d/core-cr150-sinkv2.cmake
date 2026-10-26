@@ -1,4 +1,4 @@
-# SINK-V2-171: independent tool tests; engine run/ABI registrations stay unchanged.
+# Report sink v2: independent tool tests; engine run/ABI registrations stay unchanged.
 list(APPEND TEST_SOURCES test_report_sink_reader)
 pineforge_add_unit_test(test_report_sink_reader)
 list(APPEND TEST_SOURCES test_report_sink_transcode_v2)

@@ -1,7 +1,7 @@
 #pragma once
 
 // Deliberately test-local. No production v2 encoder, codec, layout helper or
-// readers-lane decoder is included. Only the established SHA primitive is
+// reference-reader decoder is included. Only the established SHA primitive is
 // reused; framing, CRC, canonicalization and all column decoders live here.
 #include "../src/sha256.hpp"
 

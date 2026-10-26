@@ -1,4 +1,4 @@
-// L21C: consume the Python lane's bundle without calling its encoder/reader.
+// Consume the Python-generated bundle without calling its encoder/reader.
 #include "../tools/sink_v2/report_sink_reader.hpp"
 #include "../src/sha256.hpp"
 
