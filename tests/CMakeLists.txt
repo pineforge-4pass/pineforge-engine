@@ -3696,6 +3696,11 @@ list(REMOVE_ITEM TEST_SOURCES ${_pf_private_fixture_rows})
 list(APPEND TEST_SOURCES test_metrics_overflow)
 list(APPEND TEST_SOURCES test_native_c_host_report_failure)
 
+# CR-150: engine-free pipe flag control beside the ordinary C++ unit rows.
+if(UNIX)
+    list(APPEND TEST_SOURCES test_pipe_writer_fd_flags)
+endif()
+
 foreach(test_name ${TEST_SOURCES})
     pineforge_add_unit_test(${test_name})
 endforeach()
