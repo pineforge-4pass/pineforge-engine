@@ -4,6 +4,8 @@
 #include <pineforge/report_sink.h>
 #include <pineforge/run_failure.hpp>
 
+#include "fd_flag_diagnostics.hpp"
+
 #include <array>
 #include <cerrno>
 #include <cmath>
@@ -20,7 +22,7 @@ namespace {
 constexpr std::int64_t start = INT64_C(1704067200000);
 constexpr int bar_count = 4;
 
-void require(bool condition, const char* message) {
+void require(bool condition, const std::string& message) {
     if (!condition) throw std::runtime_error(message);
 }
 
@@ -97,8 +99,9 @@ void fd_run(int field, double value, bool refuses) {
     require(strategy_set_report_sink_v1(host.handle(), &replaced) == 0, "path setup refused");
     const pf_report_sink_fd_v1 sink{sizeof sink, 1, pipe.descriptors[1], "CR-289"};
     require(strategy_set_report_sink_fd_v1(host.handle(), &sink) == 0, "fd replacement refused");
-    const int flags = ::fcntl(pipe.descriptors[1], F_GETFL);
-    const int fd_flags = ::fcntl(pipe.descriptors[1], F_GETFD);
+    fd_flag_diagnostics::Trace fd_trace(pipe.descriptors[1], "after sink installation");
+    const int flags = fd_trace.baseline().flags;
+    const int fd_flags = fd_trace.baseline().descriptor_flags;
     std::array<pineforge::Bar, bar_count> bars{};
     for (int i = 0; i < bar_count; ++i)
         bars[static_cast<std::size_t>(i)] =
@@ -109,14 +112,20 @@ void fd_run(int field, double value, bool refuses) {
     } report;
     bool threw = false;
     pineforge::RunFailureValue carried;
+    const char* exception_boundary = "after run (exception)";
     try {
         host.run(bars.data(), bar_count);
+        fd_trace.record("after run");
+        exception_boundary = "after fill_report (exception)";
         host.fill_report(&report.value);
+        fd_trace.record("after fill_report");
     } catch (const std::exception& error) {
+        fd_trace.record(exception_boundary);
         threw = true;
         carried = pineforge::classify_run_failure(error);
         // Same boundary as test_report_sink_fd.cpp's execute()/fd_run().
         pineforge::note_run_failure(host, "CR-289 C++ fd_run", error);
+        fd_trace.record("after note_run_failure");
     }
     require(host.injected, "native held point was never injected");
     const double actual = field == 0 ? host.injected_point.equity : host.injected_point.open_profit;
@@ -127,7 +136,9 @@ void fd_run(int field, double value, bool refuses) {
     receipt.struct_size = sizeof receipt;
     receipt.version = 1;
     require(strategy_report_sink_receipt_v1(host.handle(), &receipt) == 0, "receipt query failed");
+    fd_trace.record("before draining reader");
     const auto bytes = pipe.drain();
+    fd_trace.record("after draining reader");
     if (refuses) {
         require(threw && host.last_run_status() == 1, "C++ run/capture did not report failure");
         require(host.callbacks == 2 && receipt.count_e == 0, "writer did not refuse the first E");
@@ -148,8 +159,9 @@ void fd_run(int field, double value, bool refuses) {
                 && receipt.count_e == bar_count && bytes.find("{\"trailer\":") != std::string::npos,
                 "finite C++ fd stream did not complete");
     }
-    require(flags >= 0 && fd_flags >= 0 && ::fcntl(pipe.descriptors[1], F_GETFL) == flags
-            && ::fcntl(pipe.descriptors[1], F_GETFD) == fd_flags, "borrowed fd changed");
+    const auto final_flags = fd_trace.record("final assertion");
+    require(flags >= 0 && fd_flags >= 0 && final_flags.flags == flags
+            && final_flags.descriptor_flags == fd_flags, fd_trace.message("borrowed fd changed"));
 }
 } // namespace
 

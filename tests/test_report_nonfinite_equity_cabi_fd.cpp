@@ -4,6 +4,8 @@
 #include <pineforge/pineforge.h>
 #include <pineforge/report_sink.h>
 
+#include "fd_flag_diagnostics.hpp"
+
 #include <array>
 #include <cerrno>
 #include <cmath>
@@ -20,7 +22,7 @@ namespace {
 constexpr std::int64_t start = INT64_C(1704067200000);
 constexpr int bar_count = 4;
 
-void require(bool condition, const char* message) {
+void require(bool condition, const std::string& message) {
     if (!condition) throw std::runtime_error(message);
 }
 
@@ -124,8 +126,9 @@ void run_case(int field, double value, bool refuses) {
             "C host configuration failed");
     const pf_report_sink_fd_v1 sink{sizeof sink, 1, pipe.descriptors[1], "CR-289"};
     require(strategy_set_report_sink_fd_v1(host.handle, &sink) == 0, "C fd setter refused");
-    const int flags = ::fcntl(pipe.descriptors[1], F_GETFL);
-    const int fd_flags = ::fcntl(pipe.descriptors[1], F_GETFD);
+    fd_flag_diagnostics::Trace fd_trace(pipe.descriptors[1], "after sink installation");
+    const int flags = fd_trace.baseline().flags;
+    const int fd_flags = fd_trace.baseline().descriptor_flags;
     std::array<pf_bar_t, bar_count> bars{};
     for (int i = 0; i < bar_count; ++i)
         bars[static_cast<std::size_t>(i)] =
@@ -135,6 +138,8 @@ void run_case(int field, double value, bool refuses) {
         ~Report() { strategy_native_report_free_v1(&value); }
     } report;
     const int status = strategy_native_run_v1(host.handle, bars.data(), bar_count, &report.value);
+    // This C API call combines the run and report capture.
+    fd_trace.record("after strategy_native_run_v1 (run/capture)");
     require(host.injected, "native held point was never injected");
     const double actual = field == 0 ? host.injected_point.equity : host.injected_point.open_profit;
     require(std::isnan(value) ? std::isnan(actual) : actual == value, "native poison changed");
@@ -144,7 +149,9 @@ void run_case(int field, double value, bool refuses) {
     receipt.struct_size = sizeof receipt;
     receipt.version = 1;
     require(strategy_report_sink_receipt_v1(host.handle, &receipt) == 0, "receipt query failed");
+    fd_trace.record("before draining reader");
     const auto bytes = pipe.drain();
+    fd_trace.record("after draining reader");
     if (refuses) {
         // A failed run's partial report can itself refuse the poisoned scratch
         // point. Both public failure statuses must retain the typed cause.
@@ -171,8 +178,9 @@ void run_case(int field, double value, bool refuses) {
                 && receipt.count_e == bar_count && bytes.find("{\"trailer\":") != std::string::npos,
                 "finite C fd stream did not complete");
     }
-    require(flags >= 0 && fd_flags >= 0 && ::fcntl(pipe.descriptors[1], F_GETFL) == flags
-            && ::fcntl(pipe.descriptors[1], F_GETFD) == fd_flags, "borrowed fd changed");
+    const auto final_flags = fd_trace.record("final assertion");
+    require(flags >= 0 && fd_flags >= 0 && final_flags.flags == flags
+            && final_flags.descriptor_flags == fd_flags, fd_trace.message("borrowed fd changed"));
 }
 } // namespace
 
