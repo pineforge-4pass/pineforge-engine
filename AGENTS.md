@@ -9,13 +9,13 @@ Both C++ unit tests and full corpus verification must pass.
 The merge ruleset requires `pineforge/verify` and `pineforge/parity` commit
 statuses on the PR head's exact tree. The maintainers post them from their own (private)
 verification tooling after full verification on their x86-64 build hosts and a
-parity verdict; an outside contributor cannot post them. GitHub Actions is advisory: PRs build Ubuntu Release only (`ci.yml`); Debug, sanitizers, kernel-only and the macOS cell run post-merge (`ci-post.yml`).
+parity verdict; an outside contributor cannot post them. GitHub Actions is advisory: PRs build Ubuntu Release only (`ci.yml`); Debug, sanitizers, kernel-only and the Linux arm64 cells run post-merge (`ci-post.yml`).
 The PR build (`ci.yml`) runs only the `fast`-labelled CTest rows (`ctest -L '^fast$'`); the post-merge legs (`ci-post.yml`) run
 every row, and a documentation-only change runs preflight alone among verification jobs.
 The seven PR/post-merge verification and documentation workflows start with the canon `authz` job and every other job in them needs it; release uses its status gate and baseline promotion its `promote-guard`. Pull-request
 workflows keep big jobs on `["self-hosted","pf-gcp-pr"]`; post-merge big jobs and credentialed docs-post/probe jobs stay on `["self-hosted","pf-gcp-post"]`. The eight split workflows' secret-free `authz` jobs, both CI `changes`/`build-gate` jobs and `docs.yml`'s `build` run on hosted `ubuntu-24.04`; they need no VM tools, mounts or caches.
 Hosted fork PRs receive no secrets, so they need no VM-only fork-refusal hook; rollback means relabeling the job to its prior `pf-gcp-pr`/`pf-gcp-post` array and restoring its checker/test pin.
-Release jobs stay on `["self-hosted","pf-gcp-main"]`; hosted macOS `build-macos`, release arm64/macOS prebuilt cells and promotion's hosted guard retain their existing pins. The `build-gate` jobs in `ci.yml` and `ci-post.yml` and `native-live.yml`'s `native-live-gate` always run and refuse a non-success authz result first.
+Release jobs stay on `["self-hosted","pf-gcp-main"]`; the larger hosted arm runner `build-arm`, the release arm64 prebuilt cell and promotion's hosted guard retain their existing pins. The `build-gate` jobs in `ci.yml` and `ci-post.yml` and `native-live.yml`'s `native-live-gate` always run and refuse a non-success authz result first.
 See `docs/ci.md` for the class table and docs-only exception. The commands below run the full sets.
 
 ```bash
