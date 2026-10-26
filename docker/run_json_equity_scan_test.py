@@ -1,9 +1,10 @@
-"""F2 / round 2: REV2-CX C1-C7, red first on F1 ff0a40ca0d89.
+"""F2 / round 3: REV2-CX R1/P2 and C3, based on E rows c94d6a4ed.
 
 Lab only; not run on the executor Mac. RED/GUARD predictions and the mutation
-for every guard are in REPORT-rjf2-r2.md and beside each test. Reuse F1's real
-sink fixtures, the strict reader/RecordParser.parse oracle, and the frozen
-writer. No sink parser or serializer is implemented here.
+for every guard are in REPORT-rjf2-r2.md and beside each test; round 3
+corrections are in REPORT-rjf2-r3.md. Reuse F1's real sink fixtures, the strict
+reader/RecordParser.parse oracle, and the frozen writer. No sink parser or
+serializer is implemented here.
 """
 import errno
 import hashlib
@@ -31,6 +32,42 @@ from run_json_trade_scan_test import (
 
 COUNT_DIFFERS = "the report sink E scan disagrees with its verified count"
 I53 = (1 << 53) - 1
+
+
+# Accepted float tokens come from repr(value), never a hand-spelled variant.
+# Each alternate denotes the same double but violates the strict repr rule.
+_EQUITY_FLOAT_SPELLINGS = (
+    (0.0, ("0.00", "0e+00")),
+    (-0.0, ("-0.00", "-0e+00")),
+    (1.0, ("1.00", "1e+00")),
+    (-1.0, ("-1.00", "-1e+00")),
+    (1.5, ("1.500",)),
+    (0.1, ("0.10000000000000001",)),
+    (0.1 + 0.2, ("0.300000000000000040",)),
+    (1.2345678901234567, ("1.23456789012345670",)),
+    (0.0001, ("0.00010", "1e-04")),
+    (1e-05, ("0.00001", "1e-5")),
+    (1e-06, ("1e-6",)),
+    (1e-07, ("1e-7", "1.0e-07")),
+    (1000000000000000.0, ("1e+15",)),
+    (1e+16, ("1.0e+16", "1e16", "1E+16", "1e+016",
+             "10000000000000000.0")),
+    (1e+22, ("1.0e+22",)),
+    (1.25e+16, ("1.250e+16",)),
+    (1.25e-07, ("1.250e-07",)),
+    (1e+100, ("1e100", "1e+0100")),
+    (1e-100, ("1e-0100",)),
+    (1.25e+100, ("1.250e+100",)),
+    (1.25e-100, ("1.250e-100",)),
+    (5e-324, ("4.9406564584124654e-324",)),
+    (2.2250738585072014e-308, ("2.22507385850720140e-308",)),
+    (2.225073858507201e-308, ("2.2250738585072010e-308",)),
+    (1.7976931348623157e+308, ("1.79769313486231570e+308",)),
+)
+_NON_REPR_FLOAT_TOKENS = tuple(
+    text.encode("ascii") for _, alternates in _EQUITY_FLOAT_SPELLINGS
+    for text in alternates
+)
 
 
 def _verified_decoder(parser):
@@ -203,11 +240,21 @@ def test_verified_equity_decoder_matches_strict_types_hex_and_frozen_bytes(
         ["E", 3, None, None],
         ["E", 4, 1.7976931348623157e308, 0.1 + 0.2],
     ]
+    for index, (value, alternates) in enumerate(_EQUITY_FLOAT_SPELLINGS, start=5):
+        text = repr(value)
+        assert repr(float(text)) == text
+        assert ordinary.encoded(value) == text.encode("ascii") + b"\n"
+        for alternate in alternates:
+            assert alternate != text
+            assert repr(float(alternate)) == text
+            assert float(alternate).hex() == value.hex()
+        # Both signs, with the original seven rows retained above.
+        rows.append(["E", index, value, -value])
     with _sink(tmp_path, rows, escaped_tags=escaped_tags) as (sink, _, _):
         strict, header, counts, digest, _ = _strict(sink.path)
         raw = Path(sink.path).read_bytes()
         lines = raw[:_trailer_start(raw)].splitlines(keepends=True)[1:]
-        assert counts["E"] == len(rows) == len(lines)
+        assert counts["E"] == len(rows) == len(lines) == len(strict)
         assert digest == sink.sha256
         if escaped_tags:
             assert all(line.startswith(b'["\\u0045",') for line in lines)
@@ -226,8 +273,9 @@ def test_verified_equity_decoder_matches_strict_types_hex_and_frozen_bytes(
             parsed.append(reference)
             rows_compared += 1
         assert rows_compared == len(rows) and rows_compared > 0
-        frozen = _array_bytes(parsed)
-        assert _array_bytes(decoded) == frozen
+        frozen = _array_bytes(strict)
+        assert _array_bytes(parsed) == _array_bytes(decoded) == frozen
+        assert _array_bytes(decoded, run_json._stream_json) == frozen
         assert _array_bytes(sink.records("E"), run_json._stream_json) == frozen
         assert b'"equity":-0.0' in frozen and b'"open_profit":-0.0' in frozen
 
@@ -244,8 +292,16 @@ def test_verified_equity_decoder_matches_strict_types_hex_and_frozen_bytes(
     (b'["E",0,1.0,0]\n', "f64 column is not the Python repr of its double"),
     (b'["E",0,1.50,0.0]\n', "f64 column is not the Python repr of its double"),
     (b'["E",0,1E5,0.0]\n', "f64 column is not the Python repr of its double"),
+] + [
+    ((b'["E",0,' + token + b',0.0]\n' if column == "equity" else
+      b'["E",0,1.0,' + token + b']\n'),
+     "f64 column is not the Python repr of its double")
+    for column in ("equity", "open-profit") for token in _NON_REPR_FLOAT_TOKENS
 ], ids=["above-I53", "below-minus-I53", "null-time", "bool-true-time",
-        "bool-false-time", "int-equity", "int-open-profit", "1.50", "1E5"])
+        "bool-false-time", "int-equity", "int-open-profit", "1.50", "1E5"] + [
+    column + "-" + token.decode("ascii")
+    for column in ("equity", "open-profit") for token in _NON_REPR_FLOAT_TOKENS
+])
 def test_a_and_verified_decoder_both_refuse_invalid_equity_tokens(tmp_path, line, text):
     """RED C3: A refuses first; F1 then lacks the independently checked decoder."""
     with _sink(tmp_path, [_point(0)], verify=False) as (sink, library, report):
@@ -417,6 +473,22 @@ def test_equity_digest_refusal_discards_provisional_report_bytes(tmp_path, monke
     assert text == run_json.failure_line(DIGEST_DIFFERS, "engine_invariant", {})
 
 
+@pytest.mark.parametrize("fault,line,detail", [
+    ("non-list", b'{}\n', "record must be a nonempty array with a string tag"),
+    ("wrong-tag", ordinary.encoded(_trade(1)), "record tag is absent from the header"),
+], ids=["non-list", "wrong-tag"])
+def test_verified_equity_decoder_outer_shape_refusals_are_typed(fault, line, detail):
+    """Direct C2 rows: neither shape can be selected by an E-prefix scan."""
+    parser = pf_sink.RecordParser(ordinary.header(outputs=True))
+    if fault == "wrong-tag":
+        # A valid T record isolates the E-only decoder's tag refusal.
+        assert parser.parse(line).tag == "T"
+    with pytest.raises(pf_sink.SinkFormatError) as failure:
+        _verified_decoder(parser)(line)
+    assert type(failure.value) is pf_sink.SinkFormatError
+    assert str(failure.value) == detail
+
+
 def _decoder_fault_line(fault):
     if fault == "recursion":
         prefix, suffix = b'["E",0,', b',0.0]\n'
@@ -427,8 +499,6 @@ def _decoder_fault_line(fault):
     return {
         "invalid-UTF8": b'["E",0,"\xff",0.0]\n',
         "malformed-JSON": b'["E",?,1.0,0.0]\n',
-        "non-list": b'["E",0,1.0,0.0]\n',
-        "wrong-tag": b'["E",0,1.0,0.0]\n',
         "wrong-arity": b'["E",0,1.0]\n',
         "nested-time": b'["E",[],1.0,0.0]\n',
         "nested-equity": b'["E",0,{},0.0]\n',
@@ -437,7 +507,7 @@ def _decoder_fault_line(fault):
 
 
 @pytest.mark.parametrize("fault", [
-    "recursion", "invalid-UTF8", "malformed-JSON", "non-list", "wrong-tag",
+    "recursion", "invalid-UTF8", "malformed-JSON",
     "wrong-arity", "nested-time", "nested-equity", "nested-open-profit",
 ])
 def test_equity_decoder_exceptions_after_a_are_typed_and_never_published(
@@ -503,12 +573,6 @@ def test_equity_decoder_exceptions_after_a_are_typed_and_never_published(
                 if active:
                     recursive.append(True)
                 raise
-            if active and fault == "non-list":
-                # An E-prefix scanner cannot naturally select a non-list.
-                # Inject only the decoded shape, after the real JSON decode.
-                return None
-            if active and fault == "wrong-tag":
-                result[0] = "absent"
             return result
 
         def field(value, kind):
@@ -526,16 +590,14 @@ def test_equity_decoder_exceptions_after_a_are_typed_and_never_published(
     assert seen == [damaged]
     # UTF-8 decoding fails before json.loads can be called.
     assert len(loads_seen) == (0 if fault == "invalid-UTF8" else 1)
+    if fault.startswith("nested-"):
+        assert fields, "the verified decoder must look up the module-global _field"
     assert error.startswith(INVALID)
     if fault in ("recursion", "invalid-UTF8", "malformed-JSON"):
         assert error.startswith(INVALID + "invalid UTF-8 or JSON: ")
         if fault == "recursion":
             assert recursive == [True]
             assert "recursion" in error
-    elif fault == "non-list":
-        assert error == INVALID + "record must be a nonempty array with a string tag"
-    elif fault == "wrong-tag":
-        assert error == INVALID + "record tag is absent from the header"
     elif fault == "wrong-arity":
         assert error == INVALID + "record field count differs from its descriptor"
     elif fault == "nested-time":
@@ -575,11 +637,10 @@ def test_equity_framing_exceptions_after_a_are_typed_and_never_published(
         assert str(reference.value) == detail
         with pytest.raises(pf_sink.SinkFormatError) as decoded:
             _verified_decoder(parser)(damaged)
-        assert str(decoded.value)
+        assert str(decoded.value) == detail
 
-    # The real scanner may refuse framing before invoking the decoder.
-    # Independently require the typed refusal and transactional publication
-    # behavior, this time preserving inode/size to get past the early check.
+    # Preserve inode/size for the pipeline check. No LF is a framing error;
+    # blank lines have no E needle, so their changed bytes fail the digest.
     def mutate(sink):
         raw = Path(sink.path).read_bytes()
         if fault == "no-LF":
@@ -592,9 +653,13 @@ def test_equity_framing_exceptions_after_a_are_typed_and_never_published(
             changed = raw[:start] + b"\n" * (end - start) + raw[end:]
         _write_same_identity(sink.path, changed)
 
-    _, error = _invoke_after_equity_tamper(tmp_path, monkeypatch, mutate)
-    assert error.startswith(INVALID) and error.endswith(detail)
-    assert "changed after verification" not in error
+    text, error = _invoke_after_equity_tamper(tmp_path, monkeypatch, mutate)
+    if fault == "no-LF":
+        assert error.startswith(INVALID) and error.endswith(detail)
+        assert "changed after verification" not in error
+    else:
+        assert error == DIGEST_DIFFERS
+        assert text == run_json.failure_line(DIGEST_DIFFERS, "engine_invariant", {})
 
 
 @pytest.mark.parametrize("fault", ["header", "equity", "trailer-LF", "after-trailer"])
@@ -894,4 +959,7 @@ def test_escaped_equity_token_crosses_window_and_non_e_decodes_only_tag(
         monkeypatch.setattr(pf_sink.json, "loads", loads)
         assert list(sink.records("E")) == expected
         assert parsed == [raw[:raw.index(b"\n") + 1]]
+        assert decoded, "the scan must look up json.loads through the module global"
+        equity_decodes = [value for value in decoded if isinstance(value, list)]
+        assert len(equity_decodes) == len(expected) == sink.counts["E"] == 2
         assert all(not isinstance(value, list) or value[0] == "E" for value in decoded)
