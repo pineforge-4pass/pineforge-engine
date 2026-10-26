@@ -82,16 +82,18 @@ make both its population and byte lengths finite.
 For 1.7.0, COMPUTE starts attempt 0 with its default arena. A certified bound
 only tightens attempt 0 where the required facts exist. A true top-level
 `unbounded` means **no tightening available**: retain the named unresolved
-sizing terms and use the default attempt-0 arena and the escalation ladder.
+sizing terms and use the default attempt-0 arena.
 This applies equally to missing proofs, proved unbounded growth and finite
 bounds outside the representation range.
 
-A typed `arena_exhausted` re-places the run on the next rung of COMPUTE's
-trusted ladder, with escalation cap 2. Arena exhaustion is never charged to
-the user and raises an alert. The child's private allocations are capped by
-its `RLIMIT_AS`; exceeding that cap is the strategy's own typed
+A typed `arena_exhausted` is a failure that a hosting layer MAY answer by
+re-placing the run on a larger arena. The current development service does
+not: it makes one attempt on its fixed template arena, never retries, and
+returns the typed failure as `engine_failed`. Arena exhaustion is never
+charged to the user and raises an alert. The child's private allocations are
+capped by its `RLIMIT_AS`; exceeding that cap is the strategy's own typed
 `memory_limit`, charged to the user. The calculator reports facts and
-verdicts; COMPUTE owns the default, ladder and re-placement policy.
+verdicts; COMPUTE owns the default arena and any re-placement policy.
 
 ## Facts and the producer's proof obligations
 
@@ -950,7 +952,7 @@ and cause incomplete proof coverage to fail. The
 retained: this lab harness must not pass without any certified arena to
 compare with actual usage. It is a certification failure, not a production
 admission or sizing decision. Production still uses the default attempt-0
-arena and escalation ladder without a bound. Every measured run prints actual,
+arena without a bound. Every measured run prints actual,
 bound and actual/bound; the minimum ratio identifies worst conservatism.
 No measured worst ratios exist yet. An 18 MiB allowance for a one-chunk
 curve can be 18x over actual; the fixture's deliberately loose fill/lot

@@ -202,7 +202,9 @@ can add them up; each is read from the source named in
   `scripts/arena_bound.py` returns a certified byte count or marks the term
   `unbounded`. It certifies nothing for a general strategy in this release, because
   the compiler facts it needs are not produced yet, so a host starts from its
-  default arena and re-places the run on a larger one after `arena_exhausted`.
+  default arena and may re-place the run on a larger one after `arena_exhausted`
+  (a host that makes one attempt, such as the current development service,
+  returns the failure instead).
 * An engine export or report field that returns a planned byte count before a
   run: none exists in this release, so the formula and the constants above are the
   only way to size a run before it starts.
@@ -233,7 +235,7 @@ or bounds the row.
 | Signal | Meaning |
 | --- | --- |
 | `scratch_capacity_exceeded`, argument `resource` | A slab region ran out. Admit larger maxima before another attempt |
-| `report_sink_failed`, reason `arena_exhausted` | The inherited arena filled. The host re-places the run on a larger arena |
+| `report_sink_failed`, reason `arena_exhausted` | The inherited arena filled. A host may re-place the run on a larger arena; one that makes a single attempt returns the failure |
 | `scratch_io_failed` | A scratch read, write, create or resize failed, or the command-scratch byte cap was reached |
 | `scratch_configuration_invalid` | `PINEFORGE_COMMAND_SCRATCH_MAX_BYTES` is not a positive decimal |
 | `out_of_memory` | The allocator failed. It is not relabelled as a capacity failure |

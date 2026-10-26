@@ -45,9 +45,10 @@ currently unavailable facts, each known probe has the three sizing names in
 | finalizerStream | 312 | 0 | 312 |
 
 All 312 known probes therefore have no tightening available. COMPUTE uses
-the default attempt-0 arena and its trusted escalation ladder: a typed
-`arena_exhausted` re-places the run on the next rung, escalation cap 2,
-never charged to the user, with an alert. Today no run has the facts needed
+the default attempt-0 arena: a typed `arena_exhausted` is not retried by
+the current development service (one attempt on a fixed template arena; a
+hosting layer MAY re-place the run on a larger arena), and is never charged
+to the user, with an alert. Today no run has the facts needed
 for certified tightening; the bound tightens nothing yet.
 
 | Informational term | Own unbounded/unknown flag | Proved unbounded | UNCLASSIFIED |
@@ -91,7 +92,7 @@ For each source-marked probe:
    probe list, counts for the three names in unboundedTerms, and a separate
    informational childPrivate flag count. Missing input or unclassified
    coverage makes the certification harness fail; production uses the
-   default attempt-0 arena and escalation.
+   default attempt-0 arena.
 
 The source inventory is deliberately not a complete Pine type/dataflow
 analyzer. No trusted general finite-proof producer currently exists in
@@ -105,7 +106,7 @@ retained in `corpus_run`. It guards a lab proof that compares actual arena
 usage to a certified value. Passing without any certified run would claim
 evidence that does not exist. This guard does not implement production
 admission or routing and does not contradict the default arena and
-escalation policy.
+re-placement policy.
 
 ## Re-run on a populated checkout (reading only)
 
