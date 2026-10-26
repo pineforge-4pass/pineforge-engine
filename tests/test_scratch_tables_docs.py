@@ -23,10 +23,10 @@ def test_scratch_page_is_named_in_the_site_index_and_doxygen_navigation():
 def test_published_page_keeps_hand_derived_reservations_and_honest_scope():
     page = (ROOT / "docs/pages/scratch-tables.md").read_text()
     for row in (
-        "| 1,000 | 32,000 | 8 | 1,861 | 7,622,656 |",
-        "| 100,000 | 3,200,000 | 782 | 2,635 | 10,792,960 |",
-        "| 1,000,000 | 32,000,000 | 7,813 | 9,666 | 39,591,936 |",
-        "| 100,000,000 | 3,200,000,000 | 781,250 | 783,103 | 3,207,589,888 |",
+        "| 1,000 | 32,000 | 8 | 14,932 | 61,161,472 |",
+        "| 100,000 | 3,200,000 | 782 | 15,706 | 64,331,776 |",
+        "| 1,000,000 | 32,000,000 | 7,813 | 22,737 | 93,130,752 |",
+        "| 100,000,000 | 3,200,000,000 | 781,250 | 796,174 | 3,261,128,704 |",
     ):
         assert row in page
     assert "not measured bounds" in page
