@@ -3303,6 +3303,79 @@ class CiPostGateTests(unittest.TestCase):
                             newest["event"], newest["conclusion"])
         self.assert_post_reads(newest)
 
+    def test_newest_red_run_with_all_skipped_builds_blocks_older_green(self):
+        """R-A: prove skipped builds cannot hide run failure; block older-green rescue."""
+        for conclusion in ("failure", "cancelled", "timed_out"):
+            with self.subTest(conclusion=conclusion):
+                self.reset_ci_post()
+                newest = ci_post_run(
+                    self.post_run["id"] + 1, conclusion=conclusion,
+                    created_at="2026-10-25T12:01:00Z")
+                skipped_jobs = [{**job, "conclusion": "skipped"} for job in ci_post_jobs()]
+                self.api.ci_post_runs(newest["head_sha"], [newest, self.post_run], {
+                    newest["id"]: skipped_jobs, self.post_run["id"]: self.jobs})
+                self.assert_refused("not-success", newest["id"], newest["head_sha"],
+                                    newest["event"], newest["conclusion"])
+                self.assert_post_reads(newest)
+
+    def test_newest_red_run_with_partly_skipped_builds_blocks_older_green(self):
+        """R-A: prove partial skips cannot hide run failure; block older-green rescue."""
+        for conclusion in ("failure", "cancelled", "timed_out"):
+            for skipped_count in (2, 3):
+                with self.subTest(conclusion=conclusion, skipped_count=skipped_count):
+                    self.reset_ci_post()
+                    newest = ci_post_run(
+                        self.post_run["id"] + 1, conclusion=conclusion,
+                        created_at="2026-10-25T12:01:00Z")
+                    newer_jobs = ci_post_jobs()
+                    for job in newer_jobs[:skipped_count]:
+                        job["conclusion"] = "skipped"
+                    self.api.ci_post_runs(newest["head_sha"], [newest, self.post_run], {
+                        newest["id"]: newer_jobs, self.post_run["id"]: self.jobs})
+                    self.assert_refused("not-success", newest["id"], newest["head_sha"],
+                                        newest["event"], newest["conclusion"])
+                    self.assert_post_reads(newest)
+
+    def test_newest_red_skipped_builds_run_is_sorted_before_skipped_only_and_green(self):
+        """R-A: prove ordered run failure blocks; block list-order or skipped-only rescue."""
+        middle = ci_post_run(self.post_run["id"] + 1, created_at="2026-10-25T12:01:00Z")
+        newest = ci_post_run(
+            self.post_run["id"] + 2, conclusion="failure", created_at="2026-10-25T12:02:00Z")
+        skipped_jobs = [{**job, "conclusion": "skipped"} for job in ci_post_jobs()]
+        # The newest red run is last in the response, behind skipped-only and green runs.
+        self.api.ci_post_runs(newest["head_sha"], [middle, self.post_run, newest], {
+            newest["id"]: skipped_jobs, middle["id"]: skipped_jobs,
+            self.post_run["id"]: self.jobs})
+        self.assert_refused("not-success", newest["id"], newest["head_sha"],
+                            newest["event"], newest["conclusion"])
+        self.assert_post_reads(newest)
+
+    def test_red_run_with_skipped_builds_after_skipped_only_newest_blocks_older_green(self):
+        """R-A: prove every examined run's failure blocks; block newest-only or green rescue."""
+        failed = ci_post_run(
+            self.post_run["id"] + 1, conclusion="failure", created_at="2026-10-25T12:01:00Z")
+        newest = ci_post_run(self.post_run["id"] + 2, created_at="2026-10-25T12:02:00Z")
+        skipped_jobs = [{**job, "conclusion": "skipped"} for job in ci_post_jobs()]
+        self.api.ci_post_runs(failed["head_sha"], [newest, failed, self.post_run], {
+            newest["id"]: skipped_jobs, failed["id"]: skipped_jobs,
+            self.post_run["id"]: self.jobs})
+        self.assert_refused("not-success", failed["id"], failed["head_sha"],
+                            failed["event"], failed["conclusion"])
+        self.assert_post_reads(failed, newer=[newest])
+
+    def test_failed_build_with_skipped_others_overrides_run_failure(self):
+        """R-A: prove build failure takes priority; block not-success or skipped-leg rescue."""
+        newest = ci_post_run(
+            self.post_run["id"] + 1, conclusion="failure", created_at="2026-10-25T12:01:00Z")
+        failed_jobs = [{**job, "conclusion": "skipped"} for job in ci_post_jobs()]
+        failed_job = failed_jobs[2]
+        failed_job["conclusion"] = "failure"
+        self.api.ci_post_runs(newest["head_sha"], [newest, self.post_run], {
+            newest["id"]: failed_jobs, self.post_run["id"]: self.jobs})
+        self.assert_refused("newer-run-failed", newest["id"], newest["head_sha"],
+                            newest["event"], failed_job["name"], failed_job["conclusion"])
+        self.assert_post_reads(newest)
+
     def test_failed_build_overrides_run_failure_and_names_first_failed_job(self):
         """Rule 3: prove build failure has priority; block aggregate-only or last-job reasons."""
         failed = {**self.post_run, "conclusion": "failure"}
@@ -3451,6 +3524,18 @@ class CiPostGateTests(unittest.TestCase):
                 rows = [self.post_run, older] if newest_first else [older, self.post_run]
                 self.api.ci_post_runs(self.post_run["head_sha"], rows, {
                     self.post_run["id"]: self.jobs, older["id"]: failed_jobs})
+                self.assert_green(self.post_run)
+
+    def test_newest_full_green_push_ignores_older_queued_or_in_progress_run(self):
+        """P3: prove full green stops the walk; block older unfinished vetoes or extra reads."""
+        for state in ("queued", "in_progress"):
+            with self.subTest(state=state):
+                self.reset_ci_post()
+                older = ci_post_run(
+                    self.post_run["id"] + 100, state=state, conclusion=None,
+                    created_at="2026-10-24T12:00:00Z")
+                self.api.ci_post_runs(self.post_run["head_sha"], [self.post_run, older], {
+                    self.post_run["id"]: self.jobs, older["id"]: ci_post_jobs()})
                 self.assert_green(self.post_run)
 
     def test_first_proving_run_stops_before_an_older_full_green_run(self):
