@@ -265,6 +265,23 @@ before strategy callbacks. Report scratch uses `report_sink_failed` with
 `reason: scratch_io`; auxiliary tables use `scratch_io_failed`; sink-path I/O
 uses `report_sink_failed` with `reason: sink_io`.
 
+Scratch placement, in short (1.7.0 and later). Without an explicit scratch
+directory a native run, with no scratch arena attached, creates one unlinked
+command-scratch file at begin under the nonempty `TMPDIR`, or under `/tmp`
+when `TMPDIR` is unset or empty. If that candidate is proven tmpfs/ramfs, the
+engine falls back to `/var/tmp`, and only when `/var/tmp` is disk-backed. If
+both candidates are memory-backed the run is refused at begin: the engine
+raises `scratch_io_failed`, and the default unjailed `run_json` profile refuses
+first with `run_request_invalid`; through the hub entrypoint the refusal
+surfaces as container exit code 4. An explicit `PINEFORGE_COMMAND_SCRATCH_DIR`
+on tmpfs/ramfs never falls back and raises `scratch_io_failed`. Example: in a
+container image where `/run` is
+tmpfs while `/tmp` and `/var/tmp` are on ext4, a work directory under `/run`
+is memory-backed; a run with `TMPDIR` set there falls back to `/var/tmp`. To
+choose the location, set `TMPDIR` to a disk-backed directory such as
+`/var/tmp`; `PINEFORGE_COMMAND_SCRATCH_DIR` covers the command stores only, not
+the trade ledger or the report files.
+
 The English templates describe the texts a code is raised with; they are not
 a grammar. A `{name}` marks a part that varies and need not be an argument of
 that name, and one text can sit under more than one code: a frame that fails
