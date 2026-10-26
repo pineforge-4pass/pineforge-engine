@@ -342,6 +342,14 @@ def v1_report(case: Case, *, manifest_factory=output_manifest) -> tuple[dict[str
     fixture_path = Path("fixtures") / (seed["input"].get("fixture", case.name) + ".csv")
     first_ts = seed["input"].get("first_ts", 1700000000000)
     last_ts = seed["input"].get("last_ts", 1700000000000 + max(0, report.input_bars_processed - 1) * 60000)
+    # Like _ReportSink, fold the T rows once and keep the result or the first refusal;
+    # _build_sink_report then reads sink.summary / sink.summary_failure.
+    sink.summary = sink.summary_failure = None
+    try:
+        sink.summary = run._sink_summary(report, sink, records=sink.records("T"))
+    except run.RunFailure as error:
+        sink.summary_failure = error
+        error.__traceback__ = None
     try:
         out = run._build_sink_report(
             report, Path(seed["input"].get("ohlcv", fixture_path)), report.input_bars_processed,
