@@ -3662,7 +3662,7 @@ class CiPostGateTests(unittest.TestCase):
     def test_only_skipped_runs_and_a_missing_matrix_name_give_no_full_run(self):
         """Rules 4/5: prove all non-proving runs exhaust; block skipped or missing-cell green."""
         newest = ci_post_run(self.post_run["id"] + 2, created_at="2026-10-25T12:02:00Z")
-        middle = ci_post_run(self.post_run["id"] + 1, conclusion="skipped",
+        middle = ci_post_run(self.post_run["id"] + 1,
                              created_at="2026-10-25T12:01:00Z")
         skipped_jobs = [{**job, "conclusion": "skipped"} for job in ci_post_jobs()]
         missing_jobs = ci_post_jobs()
@@ -3691,7 +3691,7 @@ class CiPostGateTests(unittest.TestCase):
 
     def test_skipped_only_newer_run_allows_older_full_green(self):
         """Rules 2/4: prove skipped-only falls through; block newest-only or no-jobs passes."""
-        for conclusion in ("success", "skipped"):
+        for conclusion in ("success",):
             for skipped_count in (1, len(ci_post_jobs())):
                 with self.subTest(conclusion=conclusion, skipped_count=skipped_count):
                     self.reset_ci_post()
@@ -4251,6 +4251,69 @@ class CiPostGateTests(unittest.TestCase):
                     else:
                         self.assert_green(ancestor, skipped=docs)
                         self.assertEqual(self.history.calls, [*docs, ancestor["head_sha"]])
+
+
+    def test_newest_non_success_proof_conclusions_block_older_green_for_each_job_shape(self):
+        """Round 11/1: prove non-success conclusions block; stop older-green fallthrough."""
+        for conclusion in ("neutral", "action_required", "stale", "startup_failure", "skipped", None):
+            for job_shape in ("success", "skipped", "absent"):
+                with self.subTest(conclusion=conclusion, job_shape=job_shape):
+                    self.reset_ci_post()
+                    newest = ci_post_run(
+                        self.post_run["id"] + 1, conclusion=conclusion,
+                        created_at="2026-10-25T12:01:00Z")
+                    newer_jobs = ([] if job_shape == "absent" else [
+                        {**job, "conclusion": job_shape} for job in ci_post_jobs()])
+                    self.api.ci_post_runs(newest["head_sha"], [self.post_run, newest], {
+                        newest["id"]: newer_jobs, self.post_run["id"]: self.jobs})
+                    self.assert_refused(
+                        f"not-success {newest['id']}", newest["head_sha"], newest["event"],
+                        f"conclusion {newest['conclusion']}")
+                    self.assert_post_reads(newest)
+
+    def test_non_success_proof_conclusions_after_skipped_newest_block_older_green(self):
+        """Round 11/every run: after successful skipped builds, block older-green fallthrough."""
+        for conclusion in ("neutral", "action_required", "stale", "startup_failure", "skipped", None):
+            with self.subTest(conclusion=conclusion):
+                self.reset_ci_post()
+                blocked = ci_post_run(
+                    self.post_run["id"] + 1, conclusion=conclusion,
+                    created_at="2026-10-25T12:01:00Z")
+                newest = ci_post_run(
+                    self.post_run["id"] + 2, conclusion="success",
+                    created_at="2026-10-25T12:02:00Z")
+                skipped_jobs = [{**job, "conclusion": "skipped"} for job in ci_post_jobs()]
+                self.api.ci_post_runs(blocked["head_sha"], [self.post_run, blocked, newest], {
+                    newest["id"]: skipped_jobs, blocked["id"]: skipped_jobs,
+                    self.post_run["id"]: self.jobs})
+                self.assert_refused(
+                    f"not-success {blocked['id']}", blocked["head_sha"], blocked["event"],
+                    f"conclusion {blocked['conclusion']}")
+                self.assert_post_reads(blocked, newer=[newest])
+
+    def test_neutral_run_refuses_and_failed_build_keeps_priority(self):
+        """Round 11/3: block neutral fallthrough; a failed build must outrank not-success."""
+        for failed_build in (False, True):
+            with self.subTest(failed_build=failed_build):
+                self.reset_ci_post()
+                newest = ci_post_run(
+                    self.post_run["id"] + 1, conclusion="neutral",
+                    created_at="2026-10-25T12:01:00Z")
+                newer_jobs = ci_post_jobs()
+                failed_job = newer_jobs[2]
+                if failed_build:
+                    failed_job["conclusion"] = "failure"
+                self.api.ci_post_runs(newest["head_sha"], [self.post_run, newest], {
+                    newest["id"]: newer_jobs, self.post_run["id"]: self.jobs})
+                if failed_build:
+                    self.assert_refused(
+                        f"newer-run-failed {newest['id']}", newest["head_sha"],
+                        newest["event"], failed_job["name"], failed_job["conclusion"])
+                else:
+                    self.assert_refused(
+                        f"not-success {newest['id']}", newest["head_sha"], newest["event"],
+                        f"conclusion {newest['conclusion']}")
+                self.assert_post_reads(newest)
 
 
 if __name__ == "__main__":
