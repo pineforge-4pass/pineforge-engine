@@ -96,6 +96,16 @@ unchanged (0 codes added, changed or removed since 1.7.0).
   source allocation gate lists its new sites as unreviewed entries
   (no bound is claimed for them).
 
+### Run-failure classification
+
+- **A storage fault on the scratch that orders waiting requests is reported
+  as `scratch_io_failed`.** A read, write or resize fault on the scratch that
+  holds waiting requests used to end the run as `engine_invariant`; it now ends
+  it as `scratch_io_failed` (a non-retryable `resource` failure), as the
+  other scratch consumers already did. A typed failure the storage layer had
+  already recorded keeps its own code. The catalog is unchanged: no code is
+  added, changed or removed.
+
 ### Known limits
 
 - **Memory with never-filled pending orders.** On dense scripts,
