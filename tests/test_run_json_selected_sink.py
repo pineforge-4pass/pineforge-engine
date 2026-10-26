@@ -359,11 +359,13 @@ def test_selected_validation_reads_only_the_first_equity_record(tmp_path, monkey
     monkeypatch.setattr(run_json, "_new_report_sink", counting_sink)
     status, text, stderr, library, _ = invoke(tmp_path, monkeypatch)
     assert library.installed and status == 0 and stderr == "", text
-    # R13 retains main's full finite-result check and annualization reads.
-    # Both endpoint reads finish their digest checks, followed by the
-    # one-point anchor check and the full streaming serialization pass.
+    # Verification now folds the finite-result scan and both annualization
+    # endpoint reads into its strict-reader pass, bypassing sink.records().
+    # records("E") sees only the one-point anchor check and the writer's
+    # complete streaming pass, in that order.
     count = library.counts["E"]
-    assert equity_passes == [count, count, count, 1, count]
+    assert equity_passes == [1, count]
+    assert equity_passes[-1] == count
 
 
 @pytest.mark.parametrize("fault", [
