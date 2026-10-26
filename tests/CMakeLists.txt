@@ -250,6 +250,7 @@ set(TEST_SOURCES
     test_short_margin_script_state
     test_ringbuffer
     test_timeframe
+    test_session_many_windows
     test_magnifier
     test_magnifier_real_bars
     test_magnifier_distributions
