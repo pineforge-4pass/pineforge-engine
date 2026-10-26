@@ -508,11 +508,11 @@ class ManifestCheckerTests(unittest.TestCase):
         path = self.root / "src/source/pine_value_admission.cpp"
         text = path.read_text(encoding="utf-8")
         first = "admit_text(id, value_field::entry_id);"
-        second = "admit_text(comment, value_field::entry_comment);"
+        second = "admit_comment(comment, value_field::entry_comment);"
         self.assertEqual(text.count(first), 1)
         self.assertEqual(text.count(second), 1)
         changed = text.replace(first, "admit_text(id, value_field::entry_comment);", 1)
-        changed = changed.replace(second, "admit_text(comment, value_field::entry_id);", 1)
+        changed = changed.replace(second, "admit_comment(comment, value_field::entry_id);", 1)
         path.write_text(changed, encoding="utf-8")
         self.reject("producer-binding", "admit_strategy_entry: id is labelled entry.comment", copied_tree=True)
 

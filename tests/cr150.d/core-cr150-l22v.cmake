@@ -1,6 +1,6 @@
 if(UNIX)
 add_test(NAME test_run_json_sink_fd_l22v COMMAND ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider ${PROJECT_SOURCE_DIR}/tests/test_run_json_sink_fd.py -k "not native")
 if(PINEFORGE_BUILD_SOURCE_LAYER AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
-add_test(NAME test_run_json_sink_fd_native_l22v COMMAND ${CMAKE_COMMAND} -E env "PINEFORGE_L22V_STRATEGY_SO=$<TARGET_FILE:report_sink_l6b1_strategy>" "PINEFORGE_L22V_OUTPUTS_SO=$<TARGET_FILE:outputs_fixture_strategy>" "PINEFORGE_L22V_PLANNER_SO=$<TARGET_FILE:pineforge_window_plan>" ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider ${PROJECT_SOURCE_DIR}/tests/test_run_json_sink_fd.py -k native)
+add_test(NAME test_run_json_sink_fd_native_l22v COMMAND ${CMAKE_COMMAND} -E env "PINEFORGE_L22V_STRATEGY_SO=$<TARGET_FILE:report_sink_l6b1_strategy>" "PINEFORGE_L22V_OUTPUTS_SO=$<TARGET_FILE:outputs_fixture_strategy>" "PINEFORGE_L22V_PLANNER_SO=$<TARGET_FILE:pineforge_window_plan>" ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/scripts/run_pytest_no_skips.py --artifacts ${CMAKE_CURRENT_BINARY_DIR}/pytest-no-skips/test_run_json_sink_fd_native_l22v -- -q -p no:cacheprovider ${PROJECT_SOURCE_DIR}/tests/test_run_json_sink_fd.py -k native)
 endif()
 endif()

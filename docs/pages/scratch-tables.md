@@ -57,9 +57,9 @@ not depend on the engine's all-zero expansion.
 | Maximum | P0 value |
 | --- | ---: |
 | `K_q`, `B_q` | 0, 0 (q removed) |
-| `K_e`, `B_e` | 8,192 keys, 3,145,728 key bytes |
-| `K_c`, `B_c` | 4,096 keys, 2,101,248 key bytes |
-| `U`, `B_U` | 4,096 IDs, 1,048,576 ID bytes |
+| `K_e`, `B_e` | 262,144 keys, 25,165,824 key bytes |
+| `K_c`, `B_c` | 32,768 keys, 4,227,072 key bytes |
+| `U`, `B_U` | 65,536 IDs, 4,194,304 ID bytes |
 | `V`, `B_V` | 27 IDs, 6,912 ID bytes |
 | `R` for a finite batch | `2*bars`, with checked multiplication |
 | `R` without a declared stream lifetime bar count | 65,536 |
@@ -71,9 +71,9 @@ lifetime bar count: even with warmup bars, the all-zero stream
 default is 65,536. A caller with a finite stream envelope supplies an explicit
 manifest for the whole admitted lifetime.
 
-The key/byte choices came from an admission policy using 4,096 roster entries
-and 256-byte components; they are aggregate descriptor limits, not a new
-per-string length check. Two roots per input bar is an allowance, not an
+The key/byte choices split a 64 MiB budget (65,536 IDs of up to 64 bytes) and
+refuse a single ID longer than 64 bytes before any store mutation; they are
+otherwise aggregate descriptor limits. Two roots per input bar is an allowance, not an
 orders-per-bar bound. Repeated intrabar replacements or loops can exhaust it.
 For larger permitted workloads, the host must admit a larger representable
 manifest before execution and charge the corresponding memory.
@@ -89,27 +89,27 @@ Empty cohort/rank populations reserve zero. Round each region separately:
 | Region | Unrounded P0 bytes | Pages |
 | --- | ---: | ---: |
 | Sequence data / index (q) | 0 / 0 | 0 / 0 |
-| Erased data (e) | `40*8192+3145728 = 3,473,408` | 848 |
-| Erased index (e) | `16*16384 = 262,144` | 64 |
-| Consumed data (c) | `40*4096+2101248 = 2,265,088` | 553 |
-| Consumed index (c) | `16*8192 = 131,072` | 32 |
-| Cohorts | `1+96*4096+1048576 = 1,441,793` | 353 |
+| Erased data (e) | `40*262144+25165824 = 35,651,584` | 8,704 |
+| Erased index (e) | `16*524288 = 8,388,608` | 2,048 |
+| Consumed data (c) | `40*32768+4227072 = 5,537,792` | 1,352 |
+| Consumed index (c) | `16*65536 = 1,048,576` | 256 |
+| Cohorts | `1+96*65536+4194304 = 10,485,761` | 2,561 |
 | Exit rank | `1+60*27+6912 = 8,533` | 3 |
 | Successor roots | `16*(2*bars) = 32*bars` | `ceil(bars/128)` |
 
-The fixed portion is `848+64+553+32+353+3 = 1853` pages, or 7,589,888
+The fixed portion is `8704+2048+1352+256+2561+3 = 14924` pages, or 61,128,704
 bytes. The following totals are hand-derived policy reservations, not an
 allocation/RSS measurement:
 
 | Input bars | Root bytes | Root pages | Total slab pages | Slab bytes |
 | ---: | ---: | ---: | ---: | ---: |
-| 1,000 | 32,000 | 8 | 1,861 | 7,622,656 |
-| 100,000 | 3,200,000 | 782 | 2,635 | 10,792,960 |
-| 1,000,000 | 32,000,000 | 7,813 | 9,666 | 39,591,936 |
-| 100,000,000 | 3,200,000,000 | 781,250 | 783,103 | 3,207,589,888 |
+| 1,000 | 32,000 | 8 | 14,932 | 61,161,472 |
+| 100,000 | 3,200,000 | 782 | 15,706 | 64,331,776 |
+| 1,000,000 | 32,000,000 | 7,813 | 22,737 | 93,130,752 |
+| 100,000,000 | 3,200,000,000 | 781,250 | 796,174 | 3,261,128,704 |
 
 The stream tier reserves 1,048,576 root bytes (256 pages), for a total of
-2,109 pages / 8,638,464 bytes. Region descriptors, shared-owner metadata,
+15,180 pages / 62,177,280 bytes. Region descriptors, shared-owner metadata,
 the existing 1,024-byte root tail, live rows/strings, allocator overhead,
 OHLCV, strategy heap and reports are additional. Page padding is not extra
 admitted capacity. Concurrent HPO trials charge the sum of their slabs;
@@ -138,6 +138,16 @@ Select `--profile jailed` in `docker/run_json.py`, or set
 The Python host reads the environment once at startup, before loading a
 library or creating a handle. No C++ table/order/bar path reads this knob.
 The option configures storage; the external launcher supplies the jail.
+
+Every successful executed report records the frozen effective profile as
+`diagnostics.run_profile`, exactly `"unjailed"` or `"jailed"`.
+`diagnostics.scratch_arena_jailed` is a boolean: it is `true` only when the
+host selected the jailed profile and native arena admission succeeded,
+and `false` for an unjailed run even with an attached sealed arena.
+Both fields appear in ordinary and selected reports, including array
+reports and FD small reports; failures, capabilities and validation-only
+documents carry neither field. They follow the existing optional arena
+size counters without changing those counters.
 
 In this profile every fresh handle gets backend 1 and a fresh P0 descriptor
 after settings/feed selection and before execution: every warmup, repeat,
@@ -179,6 +189,14 @@ the same envelope as a missing arena: exit status 1, `code`
 admission judges the backend the attachment retained, so an arena attached
 earlier is not re-judged by a rebound fd 5. Off Linux, admission accepts any
 attached arena.
+
+The success marker records that checked host profile and successful native
+admission, not independent OS jail enforcement or a fresh end-of-run backend
+query. In particular, `true` off Linux does not certify Linux seals.
+Neither positive arena sizes nor `PF_SCRATCH_ARENA_JAILED=1` selects the host
+profile or substitutes for admission. A consumer requiring this policy must
+require exact `"jailed"` and boolean `true`, refusing absent or malformed
+values rather than treating an older report as admitted.
 
 `PF_SCRATCH_ARENA_JAILED=1` is an additional, optional way to demand the same
 seals already at attach time, for hosts that attach before they call the

@@ -2973,7 +2973,7 @@ def default_scratch_manifest(bars: int | None) -> ScratchTablesC:
     return ScratchTablesC(
         ctypes.sizeof(ScratchTablesC), 1, 1, 0,  # bounded_memory
         0, 0,  # q is removed; retain its ABI fields with zero capacity
-        8192, 3145728, 4096, 2101248, 4096, 1048576, 27, 6912, roots)
+        262144, 25165824, 32768, 4227072, 65536, 4194304, 27, 6912, roots)
 
 
 def apply_scratch_tables(lib, state, manifest: ScratchTablesC) -> None:
@@ -4843,7 +4843,7 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
                 enable_outputs(lib, st)
             if args.profile == "jailed":
                 apply_scratch_tables(lib, st, default_scratch_manifest(fed_count))
-                _require_jailed_arena(lib, st)
+                args._scratch_arena_admitted = _require_jailed_arena(lib, st)
             sink = _new_report_sink(lib, st, args)
         except BaseException:
             try:
@@ -4958,7 +4958,7 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
             window_anchor=True)
         if sink is None:
             _validate_report_result(out)
-        _add_scratch_arena_diagnostics(lib, out["diagnostics"])
+        _add_scratch_arena_diagnostics(lib, out["diagnostics"], args)
         out["report_window"] = window
         out["report_shape"] = swr.report_shape_full(
             equity_points, sink.counts["T"] if sink is not None else len(out["trades"]))
@@ -5414,7 +5414,7 @@ def _main(argv, binary_inputs) -> int:
                 enable_outputs(lib, st)
             if args.profile == "jailed":
                 apply_scratch_tables(lib, st, default_scratch_manifest(n))
-                _require_jailed_arena(lib, st)
+                args._scratch_arena_admitted = _require_jailed_arena(lib, st)
             sink = _new_report_sink(lib, st, args, body=body)
         except BaseException:
             try:
@@ -5551,7 +5551,7 @@ def _main(argv, binary_inputs) -> int:
             sink if sink is not None else trade_entry_incarnations)
         if sink is None:
             _validate_report_result(out)
-        _add_scratch_arena_diagnostics(lib, out["diagnostics"])
+        _add_scratch_arena_diagnostics(lib, out["diagnostics"], args)
         if timing is not None:
             out["diagnostics"]["timing"] = timing
             out["diagnostics"]["throughput"] = _throughput_block(
@@ -5694,7 +5694,15 @@ def _bind_report_sink(lib) -> None:
             function.restype, function.argtypes = restype, argtypes
 
 
-def _add_scratch_arena_diagnostics(lib, diagnostics):
+def _add_scratch_arena_diagnostics(lib, diagnostics, args=None):
+    _add_scratch_arena_counters(lib, diagnostics)
+    if args is not None:
+        diagnostics["run_profile"] = args.profile
+        diagnostics["scratch_arena_jailed"] = (
+            args.profile == "jailed" and getattr(args, "_scratch_arena_admitted", False) is True)
+
+
+def _add_scratch_arena_counters(lib, diagnostics):
     # Attachment-lifetime counters: read after report finalization, before
     # strategy_free can detach. Never add them to a sink trailer or fingerprint.
     getter = getattr(lib, "pf_report_scratch_arena_stats", None)
@@ -5730,6 +5738,7 @@ def _require_jailed_arena(lib, state):
             raise RunFailure(*failure)
         raise RunFailure("the jailed profile requires an attached scratch arena",
                          "report_sink_failed", {"reason": "arena_backing"})
+    return True
 
 
 def _validate_sink_options(args):
@@ -6038,6 +6047,10 @@ class _ReportSink:
             descriptor = ReportSinkC(ctypes.sizeof(ReportSinkC), 1, os.fsencode(self.path),
                                      run_id.encode("utf-8"), os.fsencode(self.directory))
             if lib.strategy_set_report_sink_v1(state, ctypes.byref(descriptor)) != 0:
+                failure = run_failure(lib, state)
+                recorded = engine_failure_code(lib, state)
+                if failure is not None and recorded is not None and recorded[0]:
+                    raise RunFailure(*failure)
                 raise _engine_invariant("the fresh strategy refused its report sink")
         except BaseException:
             self.close()

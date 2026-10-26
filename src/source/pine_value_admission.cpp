@@ -37,9 +37,25 @@ bool valid_utf8(std::string_view text) noexcept {
     return true;
 }
 
-void admit_text(const std::string& text, const char* field) {
+void admit_comment(const std::string& text, const char* field) {
     if (!valid_utf8(text))
         throw_strategy_value_invalid(field, StrategyValueReason::invalid_unicode);
+}
+
+void admit_text(const std::string& text, const char* field) {
+    admit_comment(text, field);
+    // IDs, entry selectors and OCA names feed separator-delimited adapter
+    // keys. Inspect the entire string, including bytes after an embedded NUL.
+    if (text.find('\x1f') != std::string::npos || text.find('\0') != std::string::npos) {
+        const std::string_view name(field);
+        const auto dot = name.find('.');
+        throw coded<std::invalid_argument>(
+            RunFailureCode::pine_invalid_argument,
+            RunFailureArgs{{"function", std::string("strategy.") + std::string(name.substr(0, dot))},
+                           {"argument", std::string(name.substr(dot + 1))},
+                           {"rule", "unsupported_combination"}},
+            "strategy identifiers cannot contain NUL or unit separator");
+    }
 }
 
 void admit_level(double value, const char* field) {
@@ -57,7 +73,7 @@ void admit_strategy_entry(const std::string& id, bool,
     admit_text(id, value_field::entry_id);
     admit_level(limit_price, value_field::entry_limit_price);
     admit_level(stop_price, value_field::entry_stop_price);
-    admit_text(comment, value_field::entry_comment);
+    admit_comment(comment, value_field::entry_comment);
     admit_text(oca_name, value_field::entry_oca_name);
     // Entry qty NaN and both infinities keep the documented default.
 }
@@ -65,7 +81,7 @@ void admit_strategy_entry(const std::string& id, bool,
 void admit_strategy_close(const std::string& id, const std::string& comment,
                           double, double, bool) {
     admit_text(id, value_field::close_id);
-    admit_text(comment, value_field::close_comment);
+    admit_comment(comment, value_field::close_comment);
 }
 
 void admit_strategy_close_token(const std::string& id, const std::string& comment,
@@ -88,7 +104,7 @@ void admit_strategy_exit(const std::string& id, const std::string& from_entry,
     // stop_price and trail_points. Those arguments remain unadmitted.
     admit_level(trail_offset, value_field::exit_trail_offset);
     admit_level(trail_price, value_field::exit_trail_price);
-    admit_text(comment, value_field::exit_comment);
+    admit_comment(comment, value_field::exit_comment);
     admit_text(oca_name, value_field::exit_oca_name);
     admit_level(profit_ticks, value_field::exit_profit_ticks);
     admit_level(loss_ticks, value_field::exit_loss_ticks);
@@ -100,7 +116,7 @@ void admit_strategy_exit_cancel_bracket(const std::string& exit_id,
                                         const std::string& comment) {
     admit_text(exit_id, value_field::exit_cancel_bracket_exit_id);
     admit_text(from_entry, value_field::exit_cancel_bracket_from_entry);
-    admit_text(comment, value_field::exit_cancel_bracket_comment);
+    admit_comment(comment, value_field::exit_cancel_bracket_comment);
 }
 
 void admit_strategy_cancel(const std::string& id) {

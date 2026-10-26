@@ -43,6 +43,7 @@ import run_phase_transport as rpt  # noqa: E402
 import selected_window_plan as swp  # noqa: E402
 import selected_window_report as swr  # noqa: E402
 import test_run_json_selected_window as selected  # noqa: E402
+import test_run_json_sink as sinks  # noqa: E402
 
 # Pinned from the EN-133 brief BEFORE any execution; never derived from output,
 # the catalog or the implementation's validator.
@@ -896,6 +897,8 @@ def test_finite_report_bytes_match_base(harness, base_runner, mode, phase_fd, pn
     after = harness.run(mode, phase_fd=phase_fd, **options)
     assert (before.status, before.stderr, after.status, after.stderr) == (0, "", 0, "")
     document = strict_line(after.stdout)
+    sinks.assert_run_profile(document)
+    assert after.stdout == json.dumps(document, separators=(",", ":"), allow_nan=False) + "\n"
     assert document["summary"] == {
         "total_trades": 2 if pnls else 0, "wins": 1 if pnls else 0,
         "losses": 1 if pnls else 0, "win_rate_pct": 50.0 if pnls else 0.0,
@@ -904,7 +907,10 @@ def test_finite_report_bytes_match_base(harness, base_runner, mode, phase_fd, pn
         "max_drawdown": -7.0 if pnls else 0.0,
         "bars_processed": 9 if mode == "selected" else 10,
     }
-    assert after.stdout.encode("utf-8") == before.stdout.encode("utf-8")
+    del document["diagnostics"]["run_profile"]
+    del document["diagnostics"]["scratch_arena_jailed"]
+    legacy_bytes = (json.dumps(document, separators=(",", ":"), allow_nan=False) + "\n").encode("utf-8")
+    assert legacy_bytes == before.stdout.encode("utf-8")
     assert after.records == before.records
 
 
