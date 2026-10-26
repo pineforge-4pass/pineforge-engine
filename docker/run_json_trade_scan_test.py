@@ -1,9 +1,9 @@
-"""F1 / round 3: real-sink tests for the sequential trade readback.
+"""Test sequential trade readback against real sinks.
 
-Run on the lab's disk-backed workspace. Fixtures, Record values and the byte
-oracle come from the existing L9A/stream-fastpath tests; this file implements
-neither a sink serializer nor a trade parser. Counters and I/O fault injection
-are test-only wrappers around the real implementation.
+Run with files on disk. Fixtures, Record values and the byte oracle come from
+the existing sink and stream-fastpath tests; this file implements neither a
+sink serializer nor a trade parser. Counters and I/O fault injection are
+test-only wrappers around the real implementation.
 """
 from contextlib import contextmanager
 import errno
@@ -500,7 +500,7 @@ def test_public_record_parser_builds_descriptors_once_and_matches_strict(tmp_pat
     with _sink(tmp_path, _mixed()) as (sink, _, _):
         strict, header, _, _, _ = _strict(sink.path)
         parser_type = getattr(pf_sink, "RecordParser", None)
-        assert parser_type is not None, "F1 requires public pf_sink.RecordParser(header)"
+        assert parser_type is not None, "the trade scan requires public pf_sink.RecordParser(header)"
         assert "RecordParser" in pf_sink.__all__
         builds = []
         original = pf_sink._header
@@ -531,7 +531,7 @@ def test_public_record_parser_builds_descriptors_once_and_matches_strict(tmp_pat
 def test_public_record_parser_owns_record_validation(tmp_path, fault, text):
     with _sink(tmp_path, _mixed()) as (sink, _, _):
         parser_type = getattr(pf_sink, "RecordParser", None)
-        assert parser_type is not None, "F1 requires public pf_sink.RecordParser(header)"
+        assert parser_type is not None, "the trade scan requires public pf_sink.RecordParser(header)"
         parser = parser_type(sink.header)
         row = _trade(1)
         if fault == "not-array":
@@ -557,7 +557,7 @@ def test_public_record_parser_owns_record_validation(tmp_path, fault, text):
 
 def test_strict_reader_and_trade_pass_share_one_parser_each(tmp_path, monkeypatch):
     parser_type = getattr(pf_sink, "RecordParser", None)
-    assert parser_type is not None, "F1 requires public pf_sink.RecordParser(header)"
+    assert parser_type is not None, "the trade scan requires public pf_sink.RecordParser(header)"
     original_init, original_parse = parser_type.__init__, parser_type.parse
     parsers, parsed = [], []
 

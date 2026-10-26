@@ -602,7 +602,7 @@ class _StubReader:
 
 
 def _old_strict_records(sink, tag):
-    """Pre-F1 records() path, used only by the unchanged old reference."""
+    """Preserve strict records() readback for the unchanged reference."""
     try:
         with _open_uncached_sink(sink.path) as reader:
             for record in reader:
@@ -615,7 +615,7 @@ def _old_strict_records(sink, tag):
 
 
 class _StubRawFile:
-    """Real bytes and descriptor for F1's scan; never a strict row iterator."""
+    """Use real bytes and a descriptor for trade scanning, never strict rows."""
     window = run_json._UncachedSinkFile.window
 
     def __init__(self, sink, path):
@@ -657,7 +657,7 @@ def _sink_line(value):
 
 
 class _StubSink(run_json._ReportSink):
-    """Real F1 verify/records with counted strict rows and a separate raw file."""
+    """Exercise verify()/records() with counted strict rows and a raw file."""
     def __init__(self, rows, *, named=False, refuse_pass=None, receipt_fault=None):
         self.rows = tuple(rows)
         self.expected_counts = dict.fromkeys("ETOVKXH", 0)
@@ -712,7 +712,7 @@ class _StubSink(run_json._ReportSink):
 
 
 class _OldSink(_StubSink):
-    # Verbatim pre-round-2 _ReportSink.verify, independent of the new read-back.
+    # Preserve the original _ReportSink.verify, independent of trade readback.
     def verify(self, lib, state, report):
         from pf_sink import SinkFormatError
         try:
@@ -740,7 +740,7 @@ ReportSinkReceiptC = run_json.ReportSinkReceiptC
 
 def _open_uncached_sink(path):
     # The old verify body resolves this alias; each exercise installs its own
-    # strict reader factory. F1's raw route has a separate byte-file factory.
+    # strict reader factory. Raw trade scanning uses a separate file factory.
     return run_json._open_uncached_sink(path)
 
 
