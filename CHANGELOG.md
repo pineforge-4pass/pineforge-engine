@@ -85,15 +85,6 @@ unchanged (0 codes added, changed or removed since 1.7.0).
   only, not the trade ledger or the report files. This is not a change of
   behaviour in 1.8.0.
 
-### Opt-in report descriptor in the container entrypoint
-
-- **`PINEFORGE_REPORT_SINK_FD`.** When set, the entrypoint passes
-  `--report-sink-fd <n>` to `run_json.py`, so a caller that opened a
-  descriptor for the report records can use it through the container. The
-  value is forwarded unchanged and `run_json.py` validates it (a number from 3
-  up, not 5, different from any phase descriptor); a refusal ends the run with
-  the usual entrypoint status. With the variable unset nothing changes.
-
 ### Storage building block
 
 - **Fixed-shape O(1) store for Pine collections (#515).**
@@ -110,6 +101,15 @@ unchanged (0 codes added, changed or removed since 1.7.0).
 - **Memory with never-filled pending orders.** On dense scripts,
   memory still grows with the number of pending orders that never fill, by
   about 2.5 kB each. A fix is planned for a later release.
+
+### Opt-in report descriptor in the container entrypoint
+
+- **`PINEFORGE_REPORT_SINK_FD`.** When set, the entrypoint passes
+  `--report-sink-fd <n>` to `run_json.py`, so a caller that opened a
+  descriptor for the report records can use it through the container. The
+  value is forwarded unchanged and `run_json.py` validates it (a number from 3
+  up, not 5, different from any phase descriptor); a refusal ends the run with
+  the usual entrypoint status. With the variable unset nothing changes.
 
 ### CI and release process
 
