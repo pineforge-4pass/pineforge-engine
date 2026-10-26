@@ -121,6 +121,14 @@ unchanged (0 codes added, changed or removed since 1.7.0).
   pending flat-memory work, and the gate fails on a new container site.
 - **Live equivalence row.** Corpus equivalence runs as a required CTest row in
   the live suites (#481).
+- **Kernel residuals check.** `scripts/check_kernel_residuals.py` no longer
+  reports a free-standing `strings` line as an unruled identifier when no
+  symbol, installed header or decoded source literal corroborates it: the macOS
+  arm64 Release archive prints a four-byte machine-code run through
+  `strings -a`, which the check had read as an identifier. The limit is stated
+  in the change: a bare archive identifier with no corroborating evidence is no
+  longer detected by this check (#525, checker and its tests only, no engine
+  behaviour change).
 - **Post-runner capability canary.** A dispatch-only workflow
   (`fleet-post-capability.yml`) checks that a new post runner VM can run the
   post jobs before it joins the post pool. It has no push, pull request or
