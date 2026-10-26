@@ -5,6 +5,165 @@ README's *Releases* section and on the GitHub releases page. From 1.0.0 the
 version number follows semantic versioning over the surfaces the
 [public contract](docs/pages/public-contract.md) lists.
 
+## 1.8.0 — 2026-10-27
+
+**[1.8.0](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.8.0)**,
+paired with [pineforge-codegen 1.8.0](https://github.com/pineforge-4pass/pineforge-codegen-oss/releases/tag/v1.8.0).
+A minor release. It speeds up the `run_json` wrapper (the wrapper only, not the
+engine), adds one unused storage building block to the library, states where
+scratch files are placed, and carries release-gate and CI changes. The C ABI
+(`PF_ABI_VERSION` 4), the report keys and the run-failure code catalog are
+unchanged (0 codes added, changed or removed since 1.7.0).
+
+### Compatibility and migration
+
+- Pairs with codegen 1.8.0 exactly. Regenerate strategy C++ with codegen 1.8.0
+  and relink every strategy library against the 1.8.0 headers and
+  `libpineforge.a`, as for every pair change; replacing the archive alone does
+  not update a statically linked strategy library.
+- No public header changed. The only new header is
+  `include/pineforge/detail/o1_store.hpp`, an internal building block that no
+  engine path uses yet (below); its object code is part of `libpineforge.a`,
+  which therefore grows slightly.
+- Hosts that read the codegen input manifest must recognize the new input type
+  `color` (a packed unsigned `0xAARRGGBB` integer default). That is a codegen
+  change, described in the codegen 1.8.0 notes; the engine side is unchanged:
+  color inputs are still stored and reported as `int64` through
+  `get_input_int64`.
+- The release harness file `docker/run_json.py` changed (below). The hub image
+  for this pair carries the 1.8.0 copy.
+
+### Faster `run_json` report handling
+
+- **Fewer passes over the report sink (#517).** `docker/run_json.py`
+  now takes about three full passes over the report sink instead of about
+  eleven. The verify pass, which already reads the whole sink for its digest,
+  also folds the trade summary, the first and last equity points and the equity
+  finiteness check; the annualization block gets a two-point object instead of
+  five full re-reads (`point_at`); and the report writer emits flat records of
+  exact scalar types with one `json.dumps`, joined in batches fixed at 512
+  records and 256 KiB (a string field over 4096 characters keeps the windowed
+  path). The sink reader (`pf_sink.py`) is untouched. Trades and report
+  bytes are unchanged (identical under the accepted normalization of the timing
+  fields in all six measured cells) and peak RSS is unchanged (72.9 MB against
+  72.7 MB at 100k bars). Measured on one spot box, four repetitions per cell,
+  same tag build and shared library, only the wrapper replaced:
+
+  | bars | script | 1.6.3 | 1.7.0 | 1.8.0 |
+  |---|---|---|---|---|
+  | 20k | fixed ids | 0.36 s | 4.61 s | 1.77 s |
+  | 100k | fixed ids | 1.35 s | 22.31 s | 8.26 s |
+  | 100k | unique ids | 5.39 s | 22.99 s | 8.94 s |
+
+  This removes the wrapper's multi-pass cost, and it is a partial recovery: the
+  1.7.0 wrapper took about 4 to 17 times the 1.6.3 time on these cells (12.8x,
+  16.5x and 4.3x), and 1.8.0 takes about 5 times at 20k bars with fixed ids,
+  about 6 times at 100k bars with fixed ids and about 1.7 times at 100k bars
+  with unique ids. The gap to 1.6.3 is **not** closed. The engine's own
+  per-record sink parse and the dense-script close path are separate work, not in
+  this release.
+
+### Scratch placement (behaviour of 1.7.0 and later, restated)
+
+- **Where scratch goes and when a run is refused.** The text is in
+  [run-failure-codes](docs/pages/run-failure-codes.md) (#518) and restates the
+  1.7.0 rules for hosts that place scratch on memory-backed paths. Without an
+  explicit scratch directory, a native run with no scratch arena attached
+  creates one unlinked command-scratch file at begin, under the nonempty
+  `TMPDIR`, or under `/tmp` when `TMPDIR` is unset or empty. If that candidate
+  is proven tmpfs/ramfs, the engine falls back to `/var/tmp`, and only when
+  `/var/tmp` is disk-backed. If both candidates are memory-backed the run is
+  refused at begin: the engine raises `scratch_io_failed`, and the default
+  unjailed `run_json` profile refuses first with `run_request_invalid`;
+  through the hub entrypoint the refusal surfaces as container exit code 4.
+  An explicit `PINEFORGE_COMMAND_SCRATCH_DIR` on tmpfs/ramfs never falls back
+  and raises `scratch_io_failed`. Example: in a container image where `/run`
+  is tmpfs while `/tmp` and `/var/tmp` are on ext4, a work directory under
+  `/run` is memory-backed; a run with `TMPDIR` set there falls back to
+  `/var/tmp`. To choose the location, set `TMPDIR` to a disk-backed directory
+  such as `/var/tmp`; `PINEFORGE_COMMAND_SCRATCH_DIR` covers the command stores
+  only, not the trade ledger or the report files. This is not a change of
+  behaviour in 1.8.0.
+
+### Storage building block
+
+- **Fixed-shape O(1) store for Pine collections (#515).**
+  `pineforge::detail` gains a chunked store (`o1_store.hpp`, `o1_store.cpp`)
+  whose chunk buffer and resident pages are capped in the constructor
+  (`kMaxChunkBytes` 64 KiB, `kMaxResidentPages` 1024) with a typed refusal at
+  the cap, and transactions with rollback. Nothing in the engine uses it yet,
+  so no run changes. It is tested in `tests/test_o1_store.cpp`, and the
+  source allocation gate lists its new sites as unreviewed entries
+  (no bound is claimed for them).
+
+### Known limits
+
+- **Memory with never-filled pending orders.** On dense scripts,
+  memory still grows with the number of pending orders that never fill, by
+  about 2.5 kB each. A fix is planned for a later release.
+
+### CI and release process
+
+- **Light jobs on a pinned hosted image.** The light, secret-free CI jobs run
+  on a pinned GitHub-hosted image (#514); the AGENTS.md runner
+  routing is documented (#513).
+- **Actions pinned to commit shas.** Every third-party GitHub Action is pinned
+  to a full commit sha with a version comment, and preflight lints it
+  (#508).
+- **Release guard hardening.** The permission-claim text guard also catches
+  backslash-wrapped, bytes-decoded and fullwidth respellings (#506); the
+  release ruleset probe lists every branch ruleset and changes no gate verdict
+  (#505); the promote-baseline ancestry check and the doc-reverts default base
+  fully qualify their remote-tracking refs (#507).
+- **Source allocation bound gate.** CI checks the engine and generated C++
+  against an allocation-bound inventory with scoped site identities
+  (#469). The inventory is not yet reviewed: its entries are unreviewed or
+  pending flat-memory work, and the gate fails on a new container site.
+- **Release gate reads the post-merge run (#526).** The release gate
+  (`scripts/ci_release_gate.py`) now also requires a green, non-skipped
+  `ci-post` run of the commit being released, with all four build legs
+  (`ubuntu-24.04` and `macos-26`, Debug and Release) successful. Until now it
+  read only the `pineforge/verify` and `pineforge/parity` statuses. When the
+  release commit is documentation-only it checks the nearest earlier commit that
+  is not (at most 20 documentation-only commits), and every skipped
+  documentation-only commit needs a successful `ci-post` run of its own. A newer
+  run of the same commit with a failed, cancelled or timed-out build job
+  refuses the release; so does any other non-success result. A newer run whose build legs
+  were all skipped is passed over in favour of an older full green run. Runs on
+  other branches are not counted. The gate only reads results: it changes no
+  build or engine behaviour, and its command line is unchanged.
+- **Live equivalence row.** Corpus equivalence runs as a required CTest row in
+  the live suites (#481).
+- **Kernel residuals check.** `scripts/check_kernel_residuals.py` no longer
+  reports a free-standing `strings` line as an unruled identifier when no
+  symbol, installed header or decoded source literal corroborates it: the macOS
+  arm64 Release archive prints a four-byte machine-code run through
+  `strings -a`, which the check had read as an identifier. The limit is stated
+  in the change: a bare archive identifier with no corroborating evidence is no
+  longer detected by this check (#525, checker and its tests only, no engine
+  behaviour change).
+- **Scratch-on-tmpfs tests ignore co-tenant files.** The default and jailed
+  scratch-on-tmpfs tests no longer fail when another job on the same CI machine
+  creates files in `/tmp`, `/var/tmp` or `/dev/shm`: the tmpfs candidate is a
+  private directory owned by the test, and in `/tmp` and `/var/tmp` only files
+  this process creates through `mkstemp` are counted. Tests only, no change to the
+  engine or its headers; the stated limit is that scratch created through
+  another call in those two roots would not be seen (#521).
+- **Post-runner capability canary.** A dispatch-only workflow
+  (`fleet-post-capability.yml`) checks that a new post runner VM can run the
+  post jobs before it joins the post pool. It has no push, pull request or
+  schedule trigger, builds nothing and runs no engine suite (#520).
+- **Tests and docs.** The `TIMEOUT 180` ctest property is dropped (#504); the
+  run-failure diff tests hold before and after a release reset (#509); the
+  doc-reverts test no longer inherits the caller's base (#516); release notes
+  for earlier engine releases are backfilled (#510); the three borrowed-fd
+  tests compare a descriptor's flags without Darwin's "descriptor was written"
+  bit, with diagnostics that name the flag and step that changed (#519, tests
+  only, no `src/` or `include/` change); the pytest-backed
+  `test_run_json_stream_fastpath` row no longer carries the `fast` label, so the
+  pull request release job's `fast` selection, which installs no pytest, does
+  not run it (#522, tests only).
+
 ## 1.7.0 — 2026-10-25
 
 This release adds report-sink transport, scratch-backed history and bounded
