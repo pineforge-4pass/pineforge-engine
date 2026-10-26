@@ -705,7 +705,7 @@ def _require_ci_post(api: API, repo: str, sha: str, history: History) -> str:
     if not runs:
         raise ReleaseGateError(f"ci-post: no-run {proof}")
     reasons, newer_skipped = [], 0
-    for run in runs[:CI_POST_RUN_LIMIT]:
+    for index, run in enumerate(runs[:CI_POST_RUN_LIMIT]):
         identity = f"{run['id']} sha {proof} event {run['event']}"
         if run.get("status") != "completed":
             raise ReleaseGateError(
@@ -723,12 +723,40 @@ def _require_ci_post(api: API, repo: str, sha: str, history: History) -> str:
         full = all(values and all(value == "success" for value in values)
                    for values in required.values())
         conclusion = run.get("conclusion")
-        # Fail closed: a completed run is red unless its run-level conclusion is
-        # success, whatever its build legs show (skipped legs after a failed
-        # preflight, neutral, action_required, stale, startup_failure, skipped,
-        # null). Only a success run without a full green matrix falls through.
-        if conclusion != "success":
-            raise ReleaseGateError(f"ci-post: not-success {identity}: conclusion {conclusion}")
+        # Fail closed for a run that does not prove (CORE-TOP's table). Past the
+        # failed-build check above, a non-proving run may be passed over for an
+        # older proof only when it is a run-level success whose four legs are all
+        # present and each success or skipped, or a run-level skipped run whose
+        # four legs are all skipped. Every other conclusion refuses, and so does a
+        # leg that is neutral, null, unknown or missing while an older run exists.
+        leg_values = [value for rows in required.values() for value in rows]
+        leg_problems = []
+        for name, rows in required.items():
+            if not rows:
+                leg_problems.append(f"missing job {name}")
+            else:
+                leg_problems.extend(
+                    f"job {name}={value}" for value in rows
+                    if value not in ("success", "skipped"))
+        has_older = index + 1 < len(runs[:CI_POST_RUN_LIMIT])
+        if conclusion == "success":
+            passes_over = not leg_problems
+            refuse = bool(leg_problems) and has_older
+            contradiction = leg_problems
+        elif conclusion == "skipped":
+            contradiction = leg_problems or [
+                f"job {name}={value}" for name, rows in required.items()
+                for value in rows if value != "skipped"]
+            passes_over = not contradiction
+            refuse = bool(contradiction)
+        else:
+            contradiction = leg_problems
+            passes_over = False
+            refuse = True
+        if refuse:
+            raise ReleaseGateError(
+                f"ci-post: not-success {identity}: conclusion {conclusion}"
+                + (f": {', '.join(contradiction)}" if contradiction else ""))
         if full and conclusion == "success":
             evidence = f"ci-post run {run['id']} for {proof}"
             if docs_skipped:
@@ -738,13 +766,10 @@ def _require_ci_post(api: API, repo: str, sha: str, history: History) -> str:
                 evidence += f"; {newer_skipped} newer skipped-only run(s) skipped"
             return evidence
 
-        values = [value for rows in required.values() for value in rows]
         present = all(required.values())
-        if (present and conclusion in ("success", "skipped")
-                and "skipped" in values
-                and all(value in ("success", "skipped") for value in values)):
+        if passes_over:
             newer_skipped += 1
-        if present and all(value == "skipped" for value in values):
+        if present and all(value == "skipped" for value in leg_values):
             detail = ["all four build jobs skipped"]
         else:
             detail = []
