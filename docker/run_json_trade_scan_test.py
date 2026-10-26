@@ -814,3 +814,50 @@ def test_unterminated_trailer_crossing_window_boundary_is_a_format_refusal(tmp_p
         with pytest.raises(run_json.RunFailure) as failure:
             list(sink.records("T"))
         _assert_format_error(failure.value)
+
+
+@pytest.mark.parametrize("edge", ["trade", "trailer"])
+@pytest.mark.parametrize("pad", range(WINDOW - 14, WINDOW + 15),
+                         ids=lambda pad: f"pad={pad}")
+def test_window_edge_sweep_matches_strict_trade_rows(tmp_path, edge, pad):
+    case = f"{edge} pad={pad}"
+    tail = [_trade(1), _point(0), _point(1), _trade(2), ["K", 50.]]
+    replacements = []
+    for row in tail[2:4]:
+        literal = ordinary.encoded(row)
+        tag = f'["{row[0]}",'.encode("ascii")
+        escaped_tag = b'["\\u00' + f"{ord(row[0]):02x}".encode("ascii") + b'",'
+        replacements.append((literal, literal.replace(tag, escaped_tag, 1)))
+    extra = sum(len(escaped) - len(literal) for literal, escaped in replacements)
+    padding = (_padding_before(pad) if edge == "trade" else
+               _padding_before(pad - extra, following=tail))
+    with _sink(tmp_path, [padding, *tail], verify=False) as (sink, library, report):
+        # Escape only the second E and T tags, retaining the literal first pair.
+        # As in _sink, use the fixture encoder and the strict reader's trailer.
+        trailer = _strict(sink.path)[4]
+        path = Path(sink.path)
+        raw = path.read_bytes()
+        body = raw[:_trailer_start(raw)]
+        for literal, escaped in replacements:
+            assert body.count(b"\n" + literal) == 1, case
+            body = body.replace(b"\n" + literal, b"\n" + escaped, 1)
+        library.sha = hashlib.sha256(body).hexdigest()
+        trailer = dict(trailer, sha256=library.sha)
+        path.write_bytes(body + ordinary.encoded(trailer))
+        sink.verify(library, 1, report)
+        assert sink.counts == library.counts and sink.sha256 == library.sha, case
+        assert sink.summary_failure is None, case
+
+        raw = path.read_bytes()
+        if edge == "trade":
+            assert raw.index(b'\n["T",') + 1 == pad, case
+        else:
+            assert _trailer_start(raw) == pad, case
+            assert len(raw) > WINDOW, case
+        assert raw.count(b'\n["T",') == raw.count(b'\n["\\u0054",') == 1, case
+        assert raw.count(b'\n["E",') == raw.count(b'\n["\\u0045",') == 1, case
+        strict, _, counts, _, _ = _strict(sink.path)
+        expected = [row for row in strict if row.tag == "T"]
+        actual = list(sink.records("T"))
+        assert actual == expected, case
+        assert len(actual) == sink.counts["T"] == counts["T"] == report.total_trades == 2, case
