@@ -607,12 +607,12 @@ def git_history(sha: str) -> tuple[str | None, list[str]]:
     return parent, listed[:-1].split("\0") if listed else []
 
 
-def _ci_post_proof(sha: str, history: History) -> tuple[str, int]:
-    proof, skipped = sha, 0
+def _ci_post_proof(sha: str, history: History) -> tuple[str, list[str]]:
+    proof, skipped = sha, []
     while True:
         try:
             parent, paths = history(proof)
-        except Exception as exc:
+        except (OSError, ValueError) as exc:
             raise ReleaseGateError(f"ci-post: walk-blocked {proof}: {exc}") from exc
         if parent is None:
             raise ReleaseGateError(f"ci-post: walk-blocked {proof}: missing first parent")
@@ -625,8 +625,8 @@ def _ci_post_proof(sha: str, history: History) -> tuple[str, int]:
                 f"ci-post: walk-blocked {proof}: unreadable changed-path list")
         if not paths or not all(is_documentation(path) for path in paths):
             return proof, skipped
-        skipped += 1
-        if skipped > DOCS_ONLY_WALK_LIMIT:
+        skipped.append(proof)
+        if len(skipped) > DOCS_ONLY_WALK_LIMIT:
             raise ReleaseGateError(
                 f"ci-post: walk-too-long {sha}: more than "
                 f"{DOCS_ONLY_WALK_LIMIT} docs-only commits")
@@ -690,6 +690,17 @@ def _ci_post_jobs(api: API, repo: str, run_id: int) -> list[dict]:
 
 def _require_ci_post(api: API, repo: str, sha: str, history: History) -> str:
     proof, docs_skipped = _ci_post_proof(sha, history)
+    for docs_sha in docs_skipped:
+        docs_runs = _ci_post_runs(api, repo, docs_sha)
+        if not docs_runs:
+            raise ReleaseGateError(f"ci-post: docs-commit-no-run sha {docs_sha}")
+        docs_run = docs_runs[0]
+        if (docs_run.get("status") != "completed"
+                or docs_run.get("conclusion") != "success"):
+            raise ReleaseGateError(
+                f"ci-post: docs-commit-red {docs_run['id']} sha {docs_sha}: "
+                f"status {docs_run.get('status')} "
+                f"conclusion {docs_run.get('conclusion')} event {docs_run['event']}")
     runs = _ci_post_runs(api, repo, proof)
     if not runs:
         raise ReleaseGateError(f"ci-post: no-run {proof}")
@@ -720,7 +731,7 @@ def _require_ci_post(api: API, repo: str, sha: str, history: History) -> str:
             evidence = f"ci-post run {run['id']} for {proof}"
             if docs_skipped:
                 evidence += (f"; release {sha}; "
-                             f"{docs_skipped} docs-only commit(s) skipped")
+                             f"{len(docs_skipped)} docs-only commit(s) skipped")
             if newer_skipped:
                 evidence += f"; {newer_skipped} newer skipped-only run(s) skipped"
             return evidence
