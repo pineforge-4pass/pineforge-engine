@@ -143,7 +143,7 @@ in addition to its six released 1.4.0 reasons.
 | `chart_bars_rejected` | `input` | no | `field` (vocab, 6 values, optional), `index` (integer, optional), `reason` (vocab, 12 values) | The run's chart bars (the request's OHLCV) were refused. |
 | `chart_bars_unreadable` | `input` | no | `reason` (vocab, 9 values) | The harness could not read the run's OHLCV file. |
 | `engine_command_value_invalid` | `engine_fault` | no | `field` (string), `reason` (vocab, 3 values), `stage` (vocab, 7 values) | The engine derived an invalid command value (non-finite, invalid text or an overflowing finite value) from its own book, equity, margin, sizing, fee, slippage or settlement state: an engine fault, never a strategy failure. stage names where it was derived. |
-| `engine_invariant` | `engine_fault` | no | none | An engine invariant failed: a PineForge bug. |
+| `engine_invariant` | `engine_fault` | no | `reason` (vocab, 1 values, optional) | An engine invariant failed: a PineForge bug. |
 | `engine_unclassified_error` | `engine_fault` | no | none | An error no coded site reported: a PineForge bug. |
 | `harness_internal_error` | `engine_fault` | no | none | The run harness failed: a PineForge bug. |
 | `lot_grid_rejected` | `symbol_metadata` | yes | none | The symbol's lot size (syminfo.mincontract, the quantity grid) is not a value the engine accepts. |
@@ -234,6 +234,11 @@ A code's closed value lists and its English templates are the catalog's own
 values. `retryable` says whether the same request can succeed when it is run
 again: after memory frees up, once the caller refreshes the symbol's
 metadata, or after an aborted run.
+
+`engine_invariant.reason` is optional (vocab, closed list:
+`order_key_hash_collision`); every other `engine_invariant` still carries no
+argument. Hosts should accept the optional argument rather than pin its
+absence.
 
 `report_sink_failed.store` also includes `command` for an attached arena's
 command/exit scratch region. Its `arena_exhausted` exception keeps the original

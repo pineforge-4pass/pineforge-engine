@@ -122,7 +122,15 @@
    "since": "1.5.0"
   },
   "engine_invariant": {
-   "args": {},
+   "args": {
+    "reason": {
+     "kind": "vocab",
+     "optional": true,
+     "values": [
+      "order_key_hash_collision"
+     ]
+    }
+   },
    "class": "engine_fault",
    "description": "An engine invariant failed: a PineForge bug.",
    "english": [
