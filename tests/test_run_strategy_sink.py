@@ -733,6 +733,10 @@ def test_canary_fails_for_damaged_equity_even_when_every_trade_is_intact(
         # sequence: only the independently saved engine count can reject it.
         # Invalid E types must still fail strict decoding, with T untouched.
         report.sink.sha256, report.sink.counts = sha, counts
+        # The rewritten file is the sealed sink this test wants read back, so
+        # its identity (inode and size) replaces the one recorded at verify.
+        sealed = os.stat(report.sink.path)
+        report.sink._identity = sealed.st_ino, sealed.st_size
         assert report.receipt_count_e == expected
         written = [json.loads(line) for line in Path(report.sink.path).read_text().splitlines()]
         assert [row for row in written if isinstance(row, list) and row[0] == "T"] == original_trades
