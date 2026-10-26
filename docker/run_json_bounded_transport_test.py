@@ -412,11 +412,31 @@ def test_report_sink_methods_use_uncached_reader_and_preserve_order(tmp_path, mo
         expected = list(reader)
         expected_header, expected_counts, expected_sha = reader.header, reader.counts, reader.sha256
     opened = []
+    strict_opened, raw_opened, seen_files = [], [], []
     original = run_json._open_uncached_sink
 
-    def open_reader(path):
-        reader = original(path)
-        assert isinstance(reader._file, run_json._UncachedSinkFile)
+    def open_reader(path, **kwargs):
+        reader = original(path, **kwargs)
+        if kwargs.get("raw"):
+            assert isinstance(reader, run_json._UncachedSinkFile)
+            file = reader.file
+            assert isinstance(file, io.FileIO)  # buffering=0, no buffered I/O wrapper
+            descriptor, position = reader.fileno(), reader.position
+            assert descriptor == file.fileno()
+            assert position == file.tell() == 0
+            # Retain FileIO objects: a new wrapper around a reused strict file
+            # must fail, even when that file has already been closed.
+            assert all(file is not previous for previous in seen_files)
+            assert all(previous.closed or descriptor != previous.fileno()
+                       for previous in seen_files)
+            raw_opened.append((descriptor, position))
+        else:
+            assert isinstance(reader, SinkReader)
+            assert isinstance(reader._file, run_json._UncachedSinkFile)
+            file = reader._file.file
+            strict_opened.append(path)
+        # Strict readers own buffered files; compare their underlying FileIOs.
+        seen_files.append(getattr(file, "raw", file))
         opened.append(path)
         return reader
 
@@ -426,14 +446,21 @@ def test_report_sink_methods_use_uncached_reader_and_preserve_order(tmp_path, mo
         assert (sink.header, sink.counts, sink.sha256) == (
             expected_header, expected_counts, expected_sha)
         for tag in (None, "E", "T", "O", "V", "K", "absent"):
+            raw_before = len(raw_opened)
             actual = list(sink.records(tag))
+            assert len(raw_opened) == raw_before + (1 if tag == "T" else 0)
+            # The T iteration compares the raw route's output in file order.
             assert actual == [row for row in expected if tag is None or row.tag == tag]
         assert [row.tag for row in expected] == [row[0] for row in rows]
         assert expected[-1].values == (50.,)
         last = list(sink.records("E"))[-1]
         assert last.values == (ordinary.bars.T0 + 5002, 15002., -0.)
         assert last.values[-1].hex() == "-0x0.0p+0"
-        assert len(opened) == 9  # verify, seven filters, and the repeated tail read
+        # records("T") is the one of the old nine opens that is now raw.
+        # Strict: verify + six filters (None/E/O/V/K/absent) + the tail E read.
+        assert len(strict_opened) == 8
+        assert len(raw_opened) == 1
+        assert len(opened) == len(strict_opened) + len(raw_opened)
     finally:
         sink.close()
     assert Path(sink.path).read_bytes().endswith(
