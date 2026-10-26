@@ -29,11 +29,11 @@ from ci_docs_only import is_documentation
 
 
 CONTEXTS = ("pineforge/verify", "pineforge/parity")
-# ci-post.yml's build and build-macos matrix names; the workflow pin test
-# expands both matrices independently and checks this one required-name tuple.
+# ci-post.yml's build and build-arm matrix names; the workflow pin test
+# expands their displayed names independently and checks this required-name tuple.
 CI_POST_BUILD_JOBS = tuple(
     f"build ({platform}, {build_type})"
-    for platform in ("ubuntu-24.04", "macos-26")
+    for platform in ("ubuntu-24.04", "ubuntu-24.04-arm")
     for build_type in ("Debug", "Release"))
 CI_POST_FAILURES = ("failure", "cancelled", "timed_out")
 CI_POST_RUN_LIMIT = 10
