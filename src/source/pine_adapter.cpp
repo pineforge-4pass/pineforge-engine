@@ -26,7 +26,7 @@
 #include "pine_position_tail.hpp"
 #include "pine_position_tail_binding.hpp"
 #include "pine_position_tail_summary.hpp"
-
+#include "pine_source_key_test.hpp"
 // Only an adapter TU using the existing observation seam selects the
 // counting instantiations. Normal builds select the empty diagnostic tag.
 #ifndef PINEFORGE_POSITION_TAIL_DIAGNOSTICS
@@ -353,7 +353,7 @@ std::uint64_t source_key(const SourceId& left, const SourceId& right) noexcept {
     std::uint64_t value = fnv_string(left);
     const char separator = '\0';
     value = fnv_append(value, &separator, sizeof(separator));
-    return fnv_append(value, right.data(), right.size());
+    return detail::source_key_test_mask(fnv_append(value, right.data(), right.size()));
 }
 
 double nearest_tick(double value, double tick) noexcept {
@@ -4945,7 +4945,7 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
         // a distinct member of it, including replacement incarnations.
         member->cohort = static_cast<std::int64_t>(source_sequence_ + 1U);
     }
-    const auto key = replacement_key.empty() ? 0 : key_for(replacement_key);
+    const auto key = replacement_key.empty() ? 0 : checked_live_key(replacement_key);
     std::optional<native_order::RequestHandle> accepted;
     // The predecessor's placement row, read in place (R5 lane PERF-L5; this
     // was a copy of the whole row). Nothing writes the row between here and
@@ -5308,11 +5308,11 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
     }
     if (key != 0) {
         if (reused_key_node) {
-            reused_key_node.mapped() = *accepted;
+            reused_key_node.mapped() = live_source_value(*accepted, replacement_key);
             auto placed = live_by_source_key_.insert(std::move(reused_key_node));
-            if (!placed.inserted) placed.position->second = *accepted;
+            if (!placed.inserted) { (void)checked_live_key(replacement_key); placed.position->second = live_source_value(*accepted, replacement_key); }
         } else {
-            live_by_source_key_[key] = *accepted;
+            live_by_source_key_[checked_live_key(replacement_key)] = live_source_value(*accepted, replacement_key);
         }
     }
     if (opening) {
@@ -7842,7 +7842,7 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
                     // admitted: no other placement check
                 } else {
                     if (pure_stop_entry) {
-                        if (const auto prior = live_by_source_key_.find(key_for(id));
+                        if (const auto prior = live_by_source_key_.find(checked_live_key(id));
                             prior != live_by_source_key_.end()) {
                             const auto prior_handle = prior->second;
                             const auto result = require_host().cancel(prior_handle);
@@ -7865,7 +7865,7 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
                     || required > equity)) {
                 if (pure_stop_entry) {
                     std::optional<native_order::RequestHandle> prior_handle;
-                    if (const auto prior = live_by_source_key_.find(key_for(id));
+                    if (const auto prior = live_by_source_key_.find(checked_live_key(id));
                         prior != live_by_source_key_.end()) {
                         prior_handle = prior->second;
                     }
@@ -8139,7 +8139,7 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
             // over-cap reissue therefore leaves neither the old nor the new
             // trigger live (ab9714be:pine_strategy_commands.cpp:302-367).
             if (priced) {
-                const auto prior = live_by_source_key_.find(key_for(id));
+                const auto prior = live_by_source_key_.find(checked_live_key(id));
                 if (prior != live_by_source_key_.end()) {
                     const auto handle = prior->second;
                     const auto result = require_host().cancel(handle);
@@ -8710,7 +8710,7 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
         check_slippage_fill_price(snapshot.sizing.price, std::isfinite(snapshot.sizing.mark));
         mark_sizing_equity(snapshot.sizing, snapshot.sizing.mark);
     }
-    const auto predecessor = live_by_source_key_.find(key_for(id));
+    const auto predecessor = live_by_source_key_.find(checked_live_key(id));
     snapshot.replaced_opening = predecessor != live_by_source_key_.end();
     if (snapshot.replaced_opening) {
         const auto prior = placement_.find(predecessor->second.incarnation);
@@ -9013,7 +9013,7 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
             // resting request; a MARKET has no comparable carry.
             if (pure_stop_entry) {
                 std::optional<native_order::RequestHandle> prior_handle;
-                if (const auto prior = live_by_source_key_.find(key_for(id));
+                if (const auto prior = live_by_source_key_.find(checked_live_key(id));
                     prior != live_by_source_key_.end()) {
                     prior_handle = prior->second;
                 }
@@ -9067,7 +9067,7 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
         const double epsilon = std::max(1e-9, std::abs(snapshot.sizing.equity) * 1e-12);
         if (margin > 0.0 && (!std::isfinite(required) || !std::isfinite(snapshot.sizing.equity)
                              || required > snapshot.sizing.equity + epsilon)) {
-            if (const auto prior = live_by_source_key_.find(key_for(id));
+            if (const auto prior = live_by_source_key_.find(checked_live_key(id));
                 prior != live_by_source_key_.end()) {
                 const auto handle = prior->second;
                 const auto result = require_host().cancel(handle);
@@ -9097,7 +9097,7 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
         const double equity = snapshot.sizing.equity;
         if (equity < source_money_round(units * signal_close)
             || source_money_round(source_money_round(equity) / units) < signal_close) {
-            if (const auto prior = live_by_source_key_.find(key_for(id));
+            if (const auto prior = live_by_source_key_.find(checked_live_key(id));
                 prior != live_by_source_key_.end()) {
                 const auto prior_handle = prior->second;
                 const auto result = require_host().cancel(prior_handle);
@@ -9132,7 +9132,7 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
             // Legacy replacement first removes the prior same-id resting
             // stop, then leaves the rejected re-issue absent from the book.
             std::optional<native_order::RequestHandle> prior_handle;
-            if (const auto prior = live_by_source_key_.find(key_for(id));
+            if (const auto prior = live_by_source_key_.find(checked_live_key(id));
                 prior != live_by_source_key_.end()) {
                 prior_handle = prior->second;
             }
@@ -10679,7 +10679,7 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
                 || !point || pending.placement_script_open_ms
                     != point->decision.script_bar_open_ms) continue;
             if (callsite_token != 0) {
-                const auto prior = live_by_source_key_.find(key_for(
+                const auto prior = live_by_source_key_.find(checked_live_key(
                     "__pine_close_site__" + std::to_string(callsite_token)));
                 if (prior != live_by_source_key_.end() && prior->second == handle) continue;
             }
@@ -10959,7 +10959,7 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
     // order; its fill books against the id of the site's first call (tape
     // w3bf02-d1).
     if (default_fifo_close && !config_.process_orders_on_close && callsite_token != 0) {
-        const auto prior = live_by_source_key_.find(key_for(replacement_key));
+        const auto prior = live_by_source_key_.find(checked_live_key(replacement_key));
         const auto point = detail::callback_point(require_host());
         if (prior != live_by_source_key_.end() && point) {
             const auto row = placement_.find(prior->second.incarnation);
@@ -11956,7 +11956,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
     const auto unchanged_dynamic_leg = [&](PineOrderFamily family, double level) {
         const SourceId replacement_key = exit_id + "\x1f" + from_entry
             + std::to_string(static_cast<int>(family));
-        const auto live = live_by_source_key_.find(key_for(replacement_key));
+        const auto live = live_by_source_key_.find(checked_live_key(replacement_key));
         if (live == live_by_source_key_.end()) return false;
         const auto placement = placement_.find(live->second.incarnation);
         if (placement == placement_.end()) return false;
@@ -12003,7 +12003,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         // leaves unchanged (unvoid_exit).
         for (const auto family : {PineOrderFamily::ExitLimit, PineOrderFamily::ExitStop}) {
             if (void_issue) break;
-            const auto live = live_by_source_key_.find(key_for(
+            const auto live = live_by_source_key_.find(checked_live_key(
                 exit_id + "\x1f" + from_entry + std::to_string(static_cast<int>(family))));
             if (live == live_by_source_key_.end()) continue;
             if (const auto row = placement_.find(live->second.incarnation);
@@ -12497,7 +12497,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             // the recalculation of that entry's mid-leg fill (lab tv tapes
             // tests/fixtures/coof_resting_bracket td-m2a and td-m2b; lane
             // TAIL-D). One an earlier recalculation holds stays held.
-            const auto live_stop = live_by_source_key_.find(key_for(replacement_key));
+            const auto live_stop = live_by_source_key_.find(checked_live_key(replacement_key));
             const bool stop_leg_rests = live_stop != live_by_source_key_.end() && [&] {
                 const auto prior = placement_.find(live_stop->second.incarnation);
                 return prior != placement_.end()
@@ -12761,7 +12761,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             // its parent; a named parent keeps the (id, from_entry) key that
             // carries the queue position across a reissue
             // (src/source/pine_strategy_commands.cpp:2627-2648).
-            const auto existing_leg = live_by_source_key_.find(key_for(replacement_key));
+            const auto existing_leg = live_by_source_key_.find(checked_live_key(replacement_key));
             if (!defer_for_same_bar_priority
                 && detail::run_position(require_host()).signed_units == 0.0) {
                 const auto matches_parent = [&](const PlacementSnapshot& row) {
@@ -12796,7 +12796,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                 }
             }
             if (defer_for_same_bar_priority || defer_for_live_parent) {
-                if (const auto existing = live_by_source_key_.find(key_for(replacement_key));
+                if (const auto existing = live_by_source_key_.find(checked_live_key(replacement_key));
                     existing != live_by_source_key_.end()) {
                     const auto predecessor = existing->second;
                     const auto previous = placement_.find(predecessor.incarnation);
@@ -12825,7 +12825,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                     *queued = std::move(staged);
                 return;
             }
-            if (defer_new_instance && live_by_source_key_.find(key_for(replacement_key))
+            if (defer_new_instance && live_by_source_key_.find(checked_live_key(replacement_key))
                 == live_by_source_key_.end()) {
                 auto queued = std::find_if(pending_bracket_legs_.begin(), pending_bracket_legs_.end(),
                     [&](const PendingBracketLeg& row) { return row.replacement_key == replacement_key; });
@@ -12956,7 +12956,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             const auto group_name = oca_name.empty()
                 ? exit_id + "\x1f" + from_entry + "\x1f" + origin_key
                 : oca_name + (origin.incarnation != 0 ? "\x1f" + origin_key : "");
-            const bool has_live_leg = live_by_source_key_.find(key_for(replacement_key))
+            const bool has_live_leg = live_by_source_key_.find(checked_live_key(replacement_key))
                 != live_by_source_key_.end();
             const bool origin_opened = found != cohorts_by_id_.end()
                 && std::find(found->second.opened.begin(), found->second.opened.end(), origin)
@@ -13214,7 +13214,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             if (selected != PineOrderFamily::Entry) {
                 const SourceId replacement_key = exit_id + "\x1f" + from_entry
                     + std::to_string(static_cast<int>(selected));
-                const auto live = live_by_source_key_.find(key_for(replacement_key));
+                const auto live = live_by_source_key_.find(checked_live_key(replacement_key));
                 if (live != live_by_source_key_.end()) {
                     const auto found = placement_.find(live->second.incarnation);
                     if (found != placement_.end()
@@ -13914,7 +13914,7 @@ void PineExecutionAdapter::release_delayed_orders(
             // time (ab9714be pine_strategy_commands.cpp:446), so the stale
             // command never reaches the book and must not resurrect a finished
             // cycle's levels against the new lot.
-            const auto live_existing = live_by_source_key_.find(key_for(order.replacement_key));
+            const auto live_existing = live_by_source_key_.find(checked_live_key(order.replacement_key));
             if (live_existing != live_by_source_key_.end()) {
                 const auto found_p = placement_.find(live_existing->second.incarnation);
                 if (found_p != placement_.end()
@@ -14244,9 +14244,9 @@ void PineExecutionAdapter::flush_pending_same_bar_commands(
         std::stable_sort(queued.begin(), queued.end(), [&](const auto& left,
                                                            const auto& right) {
             const bool left_replaces = live_by_source_key_.find(
-                key_for(left.snapshot.source_id)) != live_by_source_key_.end();
+                checked_live_key(left.snapshot.source_id)) != live_by_source_key_.end();
             const bool right_replaces = live_by_source_key_.find(
-                key_for(right.snapshot.source_id)) != live_by_source_key_.end();
+                checked_live_key(right.snapshot.source_id)) != live_by_source_key_.end();
             return left_replaces && !right_replaces;
         });
         // From flat, a call with an opposite entry on its bar trades its
@@ -25547,12 +25547,12 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                     + std::to_string(static_cast<int>(snapshot.family)) + "\x1f"
                     + std::to_string(origin);
             };
-            const auto old_key = key_for(replacement(0));
+            const auto old_key = checked_live_key(replacement(0));
             const auto old = live_by_source_key_.find(old_key);
             if (old != live_by_source_key_.end() && old->second == handle)
                 live_by_source_key_.erase(old);
             snapshot.bracket_origin = event.handle();
-            live_by_source_key_[key_for(replacement(event.handle().incarnation))] = handle;
+            live_by_source_key_[checked_live_key(replacement(event.handle().incarnation))] = live_source_value(handle, replacement(event.handle().incarnation));
         }
         {
             const auto cohort = require_cohort(placement_snapshot->source_id);
@@ -29049,6 +29049,50 @@ void PineExecutionAdapter::require_tree_precommit(const NativePrecommitView& vie
         && (row->second.family == PineOrderFamily::Entry
             || row->second.family == PineOrderFamily::Order))
         require_exit_rank_key(row->second.source_id);
+}
+
+} // namespace pineforge::source
+
+namespace pineforge::source {
+
+std::uint64_t PineExecutionAdapter::checked_live_key(const SourceId& spelling) const {
+    const auto key = key_for(spelling);
+    const auto existing = live_by_source_key_.find(key);
+    if (existing == live_by_source_key_.end()) return key;
+    // Unrepresented keys retain the original hash-only insert/replace/read/erase.
+    if (existing->second.identity.shape == detail::LiveSourceIdentity::Shape::Unverified)
+        return key;
+    const auto previous = placement_.find(existing->second.incarnation);
+    if (previous == placement_.end()) {
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                      "Pine live source key has no placement");
+    }
+    if (!existing->second.identity.matches(spelling, previous->second.source_id,
+                                           previous->second.from_entry)) {
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                      "Pine live source key collision");
+    }
+    return key;
+}
+
+detail::LiveSourceHandle PineExecutionAdapter::live_source_value(
+        native_order::RequestHandle handle, const SourceId& spelling) const {
+    const auto row = placement_.find(handle.incarnation);
+    if (row == placement_.end()) {
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                      "Pine live source key has no placement");
+    }
+    const auto& snapshot = row->second;
+    const detail::LiveSourceHandle value{handle, spelling, snapshot.source_id, snapshot.from_entry};
+#ifdef PINEFORGE_TEST_SOURCE_KEY_MASK
+    // Only the test adapter objects define this seam; the shipped object has
+    // no missing-spelling throw path, runtime switch, diagnostic state or log.
+    if (value.identity.shape == detail::LiveSourceIdentity::Shape::Unverified) {
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                      "Pine live source key spelling is not represented");
+    }
+#endif
+    return value;
 }
 
 } // namespace pineforge::source

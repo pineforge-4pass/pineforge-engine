@@ -16,7 +16,7 @@
 #include <pineforge/detail/adapter_exposure_storage.hpp>
 #include <pineforge/detail/scratch_sequence.hpp>
 #include <pineforge/source/exit_scratch.hpp>
-
+#include <pineforge/source/live_source_identity.hpp>
 #include <algorithm>
 #include <cassert>
 #include <cstddef>
@@ -2768,7 +2768,7 @@ private:
     void observe_pending_scan(PendingScanCounter&) const noexcept;
     CohortTable::iterator require_cohort(const SourceId&);
     PlacementTable placement_;
-    std::unordered_map<std::uint64_t, native_order::RequestHandle> live_by_source_key_;
+    std::unordered_map<std::uint64_t, detail::LiveSourceHandle> live_by_source_key_;
     std::unordered_map<std::uint64_t, BracketRoster> bracket_families_;
     // Immutable, wholly settled families. All appends restore through
     // bracket_family(); exit_cancel_bracket also consults this archive. The keyed
@@ -3188,6 +3188,8 @@ private:
     void finish_admission_bar();
     void on_bar_close_policy(const Bar&, const NativeDecisionContext&);
     void fold_admission_events() const;
+    std::uint64_t checked_live_key(const SourceId&) const;
+    detail::LiveSourceHandle live_source_value(native_order::RequestHandle, const SourceId&) const;
 };
 
 namespace detail {
