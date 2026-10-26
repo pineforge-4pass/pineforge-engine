@@ -1,7 +1,9 @@
 #include <pineforge/pineforge.h>
 #include <pineforge/checked_settings.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
+#include "../src/native_execution_consumer.hpp"
 #include <cassert>
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
@@ -12,6 +14,47 @@
 
 namespace {
 int allocation_failure = 0;
+
+void assert_empty_report(const pf_report_t& report) {
+    assert(report.total_trades == 0 && report.trades_len == 0 && !report.trades);
+    assert(report.net_profit == 0);
+    assert(report.equity_curve_len == 0 && !report.equity_curve);
+    assert(report.security_diag_len == 0 && !report.security_diag);
+    assert(report.trace_len == 0 && !report.trace);
+    assert(report.trace_names_len == 0 && !report.trace_names);
+    assert(report.broker_state_hash_len == 0 && !report.broker_state_hash);
+    assert(report.input_bars_processed == 0 && report.script_bars_processed == 0);
+    assert(report.security_feeds_total == 0 && report.security_complete_total == 0
+           && report.security_partial_total == 0);
+    assert(report.magnifier_sub_bars_total == 0 && report.magnifier_sample_ticks_total == 0);
+    assert(report.input_tf_seconds == 0 && report.script_tf_seconds == 0
+           && report.script_tf_ratio == 0 && report.needs_aggregation == 0
+           && report.bar_magnifier_enabled == 0);
+    const pf_trade_stats_t* blocks[]{&report.metrics.all, &report.metrics.longs,
+                                    &report.metrics.shorts};
+    for (const auto* stats : blocks) {
+        assert(stats->num_trades == 0 && stats->num_wins == 0 && stats->num_losses == 0
+               && stats->num_even == 0 && stats->max_consecutive_wins == 0
+               && stats->max_consecutive_losses == 0);
+        const double values[]{
+            stats->percent_profitable, stats->net_profit, stats->net_profit_pct,
+            stats->gross_profit, stats->gross_profit_pct, stats->gross_loss, stats->gross_loss_pct,
+            stats->profit_factor, stats->avg_trade, stats->avg_trade_pct, stats->avg_win,
+            stats->avg_win_pct, stats->avg_loss, stats->avg_loss_pct, stats->ratio_avg_win_avg_loss,
+            stats->largest_win, stats->largest_win_pct, stats->largest_loss, stats->largest_loss_pct,
+            stats->commission_paid, stats->expectancy, stats->avg_bars_in_trade,
+            stats->avg_bars_in_wins, stats->avg_bars_in_losses};
+        for (double value : values) assert(value == 0 && !std::signbit(value));
+    }
+    const auto& equity = report.metrics.equity;
+    const double values[]{
+        equity.max_equity_drawdown, equity.max_equity_drawdown_pct,
+        equity.max_equity_runup, equity.max_equity_runup_pct,
+        equity.buy_hold_return, equity.buy_hold_return_pct,
+        equity.sharpe_monthly, equity.sortino_monthly, equity.sharpe_bar, equity.sortino_bar,
+        equity.cagr, equity.calmar, equity.recovery_factor, equity.time_in_market_pct, equity.open_pl};
+    for (double value : values) assert(value == 0 && !std::signbit(value));
+}
 
 class PreparationFailureProbe final : public pineforge::source::PineStrategyHost {
 public:
@@ -164,13 +207,8 @@ void test_stream_snapshot_is_current() {
     std::cout << "stream snapshot: live and ended rows current, refused attempt leaves the empty report PASS\n";
 }
 
-// A batch call refused over a live stream hands out no stream payload as ITS
-// report, and the stream's own snapshot still reads the stream's rows. Both
-// sides run through the unchanged generated wrappers (run_backtest, run_backtest_full)
-// and the C stream seam: admission refuses a begin while the stream runs, the
-// wrapper's fill_report then answers the refused call (empty), while
-// strategy_stream_fill_report asks for the rows' own owner and gets the stream's.
-// Defined fields only: the bar counters and the trade count.
+// A batch begin over a live stream is a durable contract fault. The generated
+// wrappers and the stream snapshot both return empty while retaining its cause.
 void test_refused_batch_over_live_stream() {
     std::vector<pf_bar_t> bars;
     for (int index = 0; index < 60; ++index) {
@@ -196,34 +234,41 @@ void test_refused_batch_over_live_stream() {
             run_backtest_full(strategy, bars.data(), 60, "1", "1", 0, 4,
                               PF_MAGNIFIER_ENDPOINTS, &batch);
         }
-        assert(!std::string(strategy_get_last_error(strategy)).empty());
+        const std::string failure = strategy_get_last_error(strategy);
+        const std::string failure_code = strategy_get_last_error_code(strategy);
+        const std::string failure_args = strategy_get_last_error_args(strategy);
+        assert(!failure.empty());
+        assert(!failure_code.empty());
+        assert(strategy_last_run_status(strategy) == 1);
         assert(batch.total_trades == 0 && batch.trades_len == 0 && !batch.trades);
         assert(batch.input_bars_processed == 0 && batch.script_bars_processed == 0);
         assert(batch.equity_curve_len == 0 && !batch.equity_curve);
+        assert_empty_report(batch);
         report_free(&batch);
-        // The snapshot side: the stream's own rows, unchanged by the refusal.
+        // The snapshot side suppresses the stream's retained rows after the fault.
         pf_report_t after{};
         assert(strategy_stream_fill_report(strategy, &after) == 0);
-        assert(after.script_bars_processed == before.script_bars_processed);
-        assert(after.input_bars_processed == before.input_bars_processed);
-        assert(after.total_trades == before.total_trades);
+        assert(after.script_bars_processed == 0);
+        assert(after.input_bars_processed == 0);
+        assert(after.total_trades == 0);
+        assert_empty_report(after);
+        assert(std::string(strategy_get_last_error(strategy)) == failure);
+        assert(std::string(strategy_get_last_error_code(strategy)) == failure_code);
+        assert(std::string(strategy_get_last_error_args(strategy)) == failure_args);
         report_free(&after);
         report_free(&before);
         strategy_free(strategy);
     }
-    std::cout << "batch refused over a live stream: empty batch report, stream snapshot keeps its rows PASS\n";
+    std::cout << "batch refused over a live stream: empty batch and faulted snapshot reports PASS\n";
 }
 
 // The explicit snapshot hands the batch gate back as it found it. A batch call
-// refused over a live stream closes the gate, so BacktestEngine::fill_report
-// (the function every generated wrapper calls right after run()) answers empty.
-// The snapshot read borrows the rows' own owner while it reads and must restore
-// the closed gate on every way out of the read: when it returns, and when it
-// throws. Both are observed by reading the batch gate directly AFTER the
-// snapshot with no run in between (a later run would reopen the gate and prove
-// nothing). The throw is the next allocation made by the read, injected with
-// the file's operator new, so the snapshot call fails and hands out nothing.
-// Defined fields only: the trade count, the arrays and the bar counters.
+// and a repeated stream begin both close the gate, but only the latter leaves
+// the live stream unfaulted. Use that refusal here so snapshot assembly really
+// allocates. Check the actual ownership gate after normal and throwing reads:
+// fault suppression alone would hide a failure to restore it after a throw.
+// The next allocation uses this file's operator new. Once that allocation
+// faults, later reads are empty and keep the new fault instead of retrying.
 void test_snapshot_restores_batch_gate() {
     std::vector<pf_bar_t> bars;
     for (int index = 0; index < 60; ++index) {
@@ -240,12 +285,18 @@ void test_snapshot_restores_batch_gate() {
         pf_report_t before{};
         assert(strategy_stream_fill_report(strategy, &before) == 0);
         assert(before.script_bars_processed > 0);
-        pf_report_t batch{};
-        run_backtest(strategy, bars.data(), 60, &batch);
+        assert(strategy_stream_begin(strategy, bars.data(), 40, "1", "1") != 0);
         assert(!std::string(strategy_get_last_error(strategy)).empty());
-        assert(batch.total_trades == 0 && !batch.trades && batch.script_bars_processed == 0);
-        report_free(&batch);
+        assert(strategy_last_run_status(strategy) == 0);
         auto* engine = static_cast<pineforge::BacktestEngine*>(strategy);
+        assert(engine->stream_is_realtime());
+        assert(engine->report_publication_allowed());
+        assert(!pineforge::NativeExecutionConsumer::rows_are_current(*engine));
+        pf_report_t batch{};
+        engine->fill_report(reinterpret_cast<pineforge::ReportC*>(&batch));
+        assert(batch.total_trades == 0 && !batch.trades && batch.script_bars_processed == 0);
+        assert_empty_report(batch);
+        report_free(&batch);
         auto batch_reader_is_empty = [&] {
             pf_report_t gated{};
             gated.total_trades = 99;
@@ -261,6 +312,8 @@ void test_snapshot_restores_batch_gate() {
             pf_report_t snapshot{};
             assert(strategy_stream_fill_report(strategy, &snapshot) == 0);
             assert(snapshot.script_bars_processed == before.script_bars_processed);
+            assert(snapshot.input_bars_processed == before.input_bars_processed);
+            assert(snapshot.total_trades == before.total_trades);
             report_free(&snapshot);
         } else {
             allocation_failure = 1;
@@ -270,13 +323,32 @@ void test_snapshot_restores_batch_gate() {
             allocation_failure = 0;
             assert(unconsumed == 0);  // the injected failure fired inside the snapshot read
             assert(broken_rc != 0);
+            assert_empty_report(broken);
+            assert(strategy_last_run_status(strategy) == 1);
+            assert(std::string(strategy_get_last_error_code(strategy)) == "out_of_memory");
+            assert(std::string(strategy_get_last_error_args(strategy)) == "{}");
+            assert(!engine->report_publication_allowed());
             report_free(&broken);
         }
+        assert(!pineforge::NativeExecutionConsumer::rows_are_current(*engine));
         assert(batch_reader_is_empty());  // still closed: nothing ran in between
+        const std::string failure = strategy_get_last_error(strategy);
+        const std::string failure_code = strategy_get_last_error_code(strategy);
+        const std::string failure_args = strategy_get_last_error_args(strategy);
         pf_report_t again{};
         assert(strategy_stream_fill_report(strategy, &again) == 0);
-        assert(again.script_bars_processed == before.script_bars_processed);
-        assert(again.total_trades == before.total_trades);
+        if (mode == 0) {
+            assert(again.script_bars_processed == before.script_bars_processed);
+            assert(again.total_trades == before.total_trades);
+        } else {
+            assert(again.script_bars_processed == 0);
+            assert(again.total_trades == 0);
+            assert_empty_report(again);
+        }
+        assert(!pineforge::NativeExecutionConsumer::rows_are_current(*engine));
+        assert(std::string(strategy_get_last_error(strategy)) == failure);
+        assert(std::string(strategy_get_last_error_code(strategy)) == failure_code);
+        assert(std::string(strategy_get_last_error_args(strategy)) == failure_args);
         report_free(&again);
         report_free(&before);
         strategy_free(strategy);
