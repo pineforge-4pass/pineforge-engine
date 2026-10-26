@@ -129,6 +129,13 @@ unchanged (0 codes added, changed or removed since 1.7.0).
   in the change: a bare archive identifier with no corroborating evidence is no
   longer detected by this check (#525, checker and its tests only, no engine
   behaviour change).
+- **Scratch-on-tmpfs tests ignore co-tenant files.** The default and jailed
+  scratch-on-tmpfs tests no longer fail when another job on the same CI machine
+  creates files in `/tmp`, `/var/tmp` or `/dev/shm`: the tmpfs candidate is a
+  private directory owned by the test, and in the shared roots only files this
+  process creates through `mkstemp` are counted. Tests only, no change to the
+  engine or its headers; the stated limit is that scratch created through
+  another call in those two roots would not be seen (#521).
 - **Post-runner capability canary.** A dispatch-only workflow
   (`fleet-post-capability.yml`) checks that a new post runner VM can run the
   post jobs before it joins the post pool. It has no push, pull request or
