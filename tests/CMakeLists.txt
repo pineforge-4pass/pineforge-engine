@@ -7616,6 +7616,39 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND EXISTS "${PROJECT_SOURCE_DIR}/corpus/validat
     set_target_properties(cr224_nofile_strategy PROPERTIES PREFIX "" SUFFIX ".so" LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/cr224_nofile")
 endif()
 # --- CR-150 core-cr150-cr224 end ---
+# --- CR-150 perf-nopartial begin ---
+# CR-364: one lane-owned executable. Reuse CR-257's syscall accounting and
+# independent reference; keep its extra translation units to resolve the
+# imported (renamed, uncalled) harness entry without replacing any provider.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_sources(test_perf_nopartial_success PRIVATE
+        perf_nopartial_harness.cpp
+        test_perf_nopartial_scratch_read.cpp
+        test_perf_nopartial_scratch_write.cpp
+        test_perf_nopartial_scratch_sync.cpp
+        test_perf_nopartial_scratch_teardown.cpp
+        test_perf_nopartial_scratch_capacity.cpp
+        test_perf_nopartial_typed_failure.cpp
+        test_perf_nopartial_callback_exception.cpp
+        test_perf_nopartial_native_c_callback.cpp
+        test_perf_nopartial_generated.cpp
+        test_perf_nopartial_generated_full.cpp
+        test_perf_nopartial_native_module.cpp
+        test_perf_nopartial_native_module_full.cpp
+        test_perf_nopartial_stream_file.cpp
+        test_perf_nopartial_sink_record.cpp
+        test_perf_nopartial_sink_flush.cpp
+        test_cr257_source_exit_scratch_io_100k.cpp
+        test_cr257_exit_scope_io.cpp
+        test_cr257_scratch_file_io.cpp)
+    target_link_options(test_perf_nopartial_success PRIVATE
+        "-Wl,--wrap=pread" "-Wl,--wrap=pwrite"
+        "-Wl,--wrap=read" "-Wl,--wrap=readv"
+        "-Wl,--wrap=preadv" "-Wl,--wrap=preadv2" "-Wl,--wrap=mmap"
+        "-Wl,--wrap=posix_fadvise" "-Wl,--wrap=fdatasync")
+endif()
+# --- CR-150 perf-nopartial end ---
+
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
         message(FATAL_ERROR "PR fast row or executable is missing: ${_pf_fast_test}")
