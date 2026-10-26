@@ -544,3 +544,18 @@ names, `RunFailureValue`, and the codes `RunFailureCode::none`,
 `setting_rejected` and `out_of_memory` are part of the contract too. Where the
 script is prepared, an exception that already carries a code keeps it; a
 latched failure without one reads `setting_rejected`.
+
+## Strategy identifier admission
+
+The Pine source host's command admission, including selected-window replay,
+refuses IDs, entry selectors and OCA names containing NUL (0x00) or unit
+separator (0x1f) before they can enter the adapter's composite keys. After
+UTF-8 validation, this raises `pine_invalid_argument` (class `strategy`) with
+`rule=unsupported_combination`, `function` naming the strategy command and
+`argument` naming its refused operand. For example, an exit ID carries
+`{"argument":"id","function":"strategy.exit","rule":"unsupported_combination"}`.
+The check uses the string's length, so an embedded NUL is refused too.
+Spaces, quotes, punctuation and other valid UTF-8 bytes remain accepted.
+Comments retain their existing UTF-8 admission, including these two bytes.
+Invalid UTF-8 still raises `strategy_value_invalid` with
+`reason=invalid_unicode`.
