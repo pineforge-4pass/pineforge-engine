@@ -1668,7 +1668,7 @@ follow local calls to a fixed point, refuse mixed event classes and require
 literal VM arrays outside the exact hosted pins; job conditions cannot excuse routing.
 Fork PRs on hosted runners run without our secrets, so the VM-only fork-refusal hook is not needed.
 Hosted light jobs need no VM tools or mounts; leaving VM queues shortens PR wall time.
-Rollback: relabel the affected VM job to its prior `pf-gcp-pr` or `pf-gcp-post` array and restore its checker/test pin; if the larger arm runner is unavailable, the arm legs revert to hosted `ubuntu-24.04-arm` by changing `build-arm`'s runner line and its checker/test pin.
+Rollback: relabel the affected VM job to its prior `pf-gcp-pr` or `pf-gcp-post` array and restore its checker/test pin; if no runner picks up a `build-arm` job within 15 minutes of its start (it stays queued with no steps), the arm legs revert to hosted `ubuntu-24.04-arm` by changing `build-arm`'s runner line and its checker/test pin.
 
 The four full build checks are `build (ubuntu-24.04, Release)`,
 `build (ubuntu-24.04, Debug)`, `build (ubuntu-24.04-arm, Release)` and

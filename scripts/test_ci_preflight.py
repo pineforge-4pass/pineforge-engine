@@ -688,7 +688,7 @@ class PostLinuxBuildPolicy(unittest.TestCase):
         changed = in_job(post, 'build-arm', platform, without_arch)
         self.assertNotIn('ACTUAL_ARCH', without_arch)
         findings = ci_preflight.pipeline_workflow_findings(changed, 'ci-post.yml', pr=False)
-        self.assertIn('full build-arm must refuse a runner whose OS differs from its named platform',
+        self.assertIn("full build-arm must refuse a runner whose OS differs from its named platform or whose architecture is not ARM64",
                       findings)
         self.assertIn('build-arm must keep the same verification steps as build', findings)
 
@@ -713,7 +713,7 @@ class PostLinuxBuildPolicy(unittest.TestCase):
         changed = in_job(post, 'build-arm', platform, wrong_arch)
         self.assertNotEqual(changed, post)
         self.assertIn('          ACTUAL_ARCH: X64', _jobs(changed)['build-arm'])
-        self.assertIn('full build-arm must refuse a runner whose OS differs from its named platform',
+        self.assertIn("full build-arm must refuse a runner whose OS differs from its named platform or whose architecture is not ARM64",
                       ci_preflight.pipeline_workflow_findings(changed, 'ci-post.yml', pr=False))
 
     def test_post_arm_requires_both_build_types(self):
@@ -2712,8 +2712,9 @@ exit "$lookup_exit"
             for before, after in ((platform_step, ''),
                                   ('ACTUAL_OS: ${{ runner.os }}', 'ACTUAL_OS: macOS'),
                                   ('exit 1 ;;', 'true ;;')):
-                self.assertIn(f'full {job} must refuse a runner whose OS differs from its named platform',
-                              self.mutated_file_findings(6, job, before, after))
+                expected = (f'full {job} must refuse a runner whose OS differs from its named platform'
+                            + (' or whose architecture is not ARM64' if job == 'build-arm' else ''))
+                self.assertIn(expected, self.mutated_file_findings(6, job, before, after))
 
     def test_ci_split_requires_every_home_trigger_without_path_filters(self):
         ci = self.ci_sources()[0]

@@ -2031,7 +2031,8 @@ def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[st
             platform = _step_named(_steps(build), '      - name: Require the requested platform')
             expected_platform = POST_ARM_PLATFORM_STEP if job == 'build-arm' else POST_PLATFORM_STEP
             if _code(platform) != _code(expected_platform):
-                findings.append(f'full {job} must refuse a runner whose OS differs from its named platform')
+                findings.append(f'full {job} must refuse a runner whose OS differs from its named platform'
+                                + (' or whose architecture is not ARM64' if job == 'build-arm' else ''))
     if not pr:
         expected_steps = [
             _code(POST_ARM_PLATFORM_STEP)
