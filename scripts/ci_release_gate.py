@@ -723,9 +723,11 @@ def _require_ci_post(api: API, repo: str, sha: str, history: History) -> str:
         full = all(values and all(value == "success" for value in values)
                    for values in required.values())
         conclusion = run.get("conclusion")
-        # A red run is red whatever its build legs show: skipped legs (preflight
-        # failed) must not let the walk slide to an older green run.
-        if conclusion in CI_POST_FAILURES:
+        # Fail closed: a completed run is red unless its run-level conclusion is
+        # success, whatever its build legs show (skipped legs after a failed
+        # preflight, neutral, action_required, stale, startup_failure, skipped,
+        # null). Only a success run without a full green matrix falls through.
+        if conclusion != "success":
             raise ReleaseGateError(f"ci-post: not-success {identity}: conclusion {conclusion}")
         if full and conclusion == "success":
             evidence = f"ci-post run {run['id']} for {proof}"
