@@ -41749,6 +41749,18 @@
   },
   {
    "file": "src/timeframe.cpp",
+   "symbol": "heap_open",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace #3",
+    "struct SessionDaySchedule #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < int >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/timeframe.cpp",
    "symbol": "s",
    "scope": [
     "namespace pineforge #1",
@@ -42050,6 +42062,78 @@
    ],
    "cls": "assign",
    "spelling": "native_late_opens_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/timeframe.cpp",
+   "symbol": "starts",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace #6",
+    "bool SessionDaySchedule :: parse_many ( const std :: string & session ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < int >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/timeframe.cpp",
+   "symbol": "ends",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace #6",
+    "bool SessionDaySchedule :: parse_many ( const std :: string & session ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < int >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/timeframe.cpp",
+   "symbol": "opens",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace #6",
+    "bool SessionDaySchedule :: parse_many ( const std :: string & session ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < int >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/timeframe.cpp",
+   "symbol": "closes",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace #6",
+    "bool SessionDaySchedule :: parse_many ( const std :: string & session ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < int >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/timeframe.cpp",
+   "symbol": "heap_open",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace #6",
+    "bool SessionDaySchedule :: parse_many ( const std :: string & session ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "heap_open . resize ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/timeframe.cpp",
+   "symbol": "heap_close",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace #6",
+    "bool SessionDaySchedule :: parse_many ( const std :: string & session ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "heap_close . resize ( . . . )",
    "ordinal": 1
   },
   {

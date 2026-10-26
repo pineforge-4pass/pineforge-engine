@@ -1215,7 +1215,7 @@ class RealTree(unittest.TestCase):
         self.assertGreater(c['entries_matched'], 0)
         self.assertEqual(c['findings'], 0)
         self.assertEqual(c['PASS(bounded)'], 0)
-        self.assertEqual(c['OPEN'], 1443)
+        self.assertEqual(c['OPEN'], 1449)
         # Every matched entry is exactly one of PASS(bounded) / OPEN.
         self.assertEqual(c['PASS(bounded)'] + c['OPEN'], c['entries_matched'])
         strict = run_gate(ROOT, '--strict')
