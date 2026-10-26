@@ -5,8 +5,10 @@ from __future__ import annotations
 import ast
 import contextlib
 from collections import Counter
+import errno
 import io
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -2687,6 +2689,141 @@ class WorkflowPinTests(unittest.TestCase):
             "GH_TOKEN: ${{ steps.app.outputs.token }}", "GH_TOKEN: ${{ github.token }}", 1), 1)
         self.assert_mutation_refused(
             workflow, changed, "release gate must use the release job's own App token")
+
+
+class GitHistorySeamTests(unittest.TestCase):
+    """Exercise production git history in isolated repositories, without a fake."""
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.tmp = Path(directory.name)
+        self.path = self.tmp / "repo"
+        self.path.mkdir(parents=True, exist_ok=True)
+        self.git_env = {
+            "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_AUTHOR_NAME": "ci", "GIT_AUTHOR_EMAIL": "ci@example.invalid",
+            "GIT_COMMITTER_NAME": "ci", "GIT_COMMITTER_EMAIL": "ci@example.invalid",
+            "GIT_AUTHOR_DATE": "2001-01-01T00:00:00Z",
+            "GIT_COMMITTER_DATE": "2001-01-01T00:00:00Z",
+            "GIT_CEILING_DIRECTORIES": str(self.tmp),
+        }
+        # Isolate git_history's subprocesses as well as the fixture's git calls.
+        isolated = {key: value for key, value in os.environ.items()
+                    if not key.startswith("GIT_")}
+        environment = mock.patch.dict(
+            os.environ, {**isolated, **self.git_env}, clear=True)
+        environment.start()
+        self.addCleanup(environment.stop)
+        self.git("init", "--quiet", "--initial-branch=main")
+        self.git("config", "commit.gpgsign", "false")
+        self.git("config", "core.hooksPath", os.devnull)
+        self.git("config", "core.precomposeunicode", "true")
+        # Cleanups run in reverse order: leave the repo before deleting it.
+        self.addCleanup(os.chdir, Path.cwd())
+        os.chdir(self.path)
+        self.root = self.commit("root", {
+            "docs/history.md": "root documentation\n",
+            "src/history.cpp": "int history = 0;\n",
+        })
+
+    def git(self, *args):
+        return subprocess.run(
+            ["git", "-C", str(self.path), *args], check=True,
+            capture_output=True, text=True, env={**os.environ, **self.git_env}).stdout
+
+    def commit(self, message, write=None):
+        for path, text in (write or {}).items():
+            target = self.path / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text, encoding="utf-8")
+        self.git("add", "--all")
+        self.git("commit", "--quiet", "--allow-empty", "-m", message)
+        return self.git("rev-parse", "HEAD").strip()
+
+    def test_root_commit_returns_no_parent_or_paths(self):
+        """R-B: prove root handling; block inventing a parent or diff for a root."""
+        self.assertEqual(ci_release_gate.git_history(self.root), (None, []))
+
+    def test_normal_commit_returns_parent_and_both_changed_paths(self):
+        """R-B: prove the complete diff; block dropping a docs or source change."""
+        changed = {
+            "docs/history.md": "updated documentation\n",
+            "src/history.cpp": "int history = 1;\n",
+        }
+        sha = self.commit("documentation and source", changed)
+        parent, paths = ci_release_gate.git_history(sha)
+        self.assertEqual(parent, self.root)
+        self.assertCountEqual(paths, changed)
+
+    def test_rename_returns_both_old_source_and_new_docs_paths(self):
+        """R-B: prove both rename sides; block hiding source moved into docs."""
+        old, new = "src/history.cpp", "docs/history.cpp"
+        self.git("mv", old, new)
+        sha = self.commit("move source into docs")
+        parent, paths = ci_release_gate.git_history(sha)
+        self.assertEqual(parent, self.root)
+        self.assertCountEqual(paths, [old, new])
+
+    def test_newline_and_non_ascii_paths_are_preserved_byte_for_byte(self):
+        """R-B: prove NUL framing; block split-newline or quoted Unicode paths."""
+        for path in ("docs/line\nbreak.md", "docs/café.md"):
+            with self.subTest(path=path):
+                expected_parent = self.git("rev-parse", "HEAD").strip()
+                target = self.path / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    target.write_text("unusual path\n", encoding="utf-8")
+                except OSError as exc:
+                    if "\n" in path and exc.errno == errno.EINVAL:
+                        self.skipTest(
+                            f"filesystem rejects a newline filename with EINVAL: {exc}")
+                    raise
+                sha = self.commit(f"add {path!r}")
+                parent, paths = ci_release_gate.git_history(sha)
+                self.assertEqual(parent, expected_parent)
+                self.assertEqual([name.encode("utf-8") for name in paths],
+                                 [path.encode("utf-8")])
+
+    def test_merge_returns_first_parent_and_only_its_diff(self):
+        """R-B: prove first-parent merge diff; block second-parent or combined diffs."""
+        self.git("checkout", "--quiet", "-b", "topic")
+        topic_paths = {"docs/topic.md": "topic documentation\n"}
+        topic = self.commit("topic", topic_paths)
+        self.git("checkout", "--quiet", "main")
+        first_parent = self.commit("main advanced", {
+            "src/main_only.cpp": "int main_only = 1;\n",
+        })
+        self.git("merge", "--quiet", "--no-ff", "--no-edit", "topic")
+        sha = self.git("rev-parse", "HEAD").strip()
+        self.assertEqual(self.git("rev-parse", f"{sha}^1").strip(), first_parent)
+        self.assertEqual(self.git("rev-parse", f"{sha}^2").strip(), topic)
+        parent, paths = ci_release_gate.git_history(sha)
+        self.assertEqual(parent, first_parent)
+        self.assertCountEqual(paths, topic_paths)
+
+    def test_unknown_sha_raises_oserror(self):
+        """R-B: prove unknown commits fail; block swallowing git errors as empty diffs."""
+        unknown = "f" * 40
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.git("cat-file", "-e", unknown)
+        with self.assertRaises(OSError):
+            ci_release_gate.git_history(unknown)
+
+    def test_empty_commit_returns_parent_and_no_paths(self):
+        """R-B: prove an empty commit keeps its parent; block treating it as a root."""
+        sha = self.commit("empty")
+        self.assertNotEqual(sha, self.root)
+        self.assertEqual(ci_release_gate.git_history(sha), (self.root, []))
+
+    def test_directory_without_git_raises_oserror(self):
+        """R-B: prove absent git metadata fails; block an empty or root fallback."""
+        outside = self.tmp / "without-git"
+        outside.mkdir()
+        self.assertFalse((outside / ".git").exists())
+        os.chdir(outside)
+        with self.assertRaises(OSError):
+            ci_release_gate.git_history(self.root)
 
 
 class CiPostGateTests(unittest.TestCase):
