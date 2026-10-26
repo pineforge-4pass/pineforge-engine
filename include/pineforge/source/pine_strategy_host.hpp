@@ -1322,6 +1322,9 @@ protected:
     bool script_average_held_ = false;
     void finish_applied_admission(const native_order::ExecutionAppliedEvent&,
                                   const NativeDecisionContext&);
+#ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
+    void release_aux_security_chart_ranges();
+#endif
 };
 
 using PineNativeHost = PineStrategyHost;

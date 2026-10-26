@@ -47,6 +47,7 @@ struct Placements { friend auto access(Placements); };
 struct Live { friend auto access(Live); };
 struct Children { friend auto access(Children); };
 struct Cohorts { friend auto access(Cohorts); };
+struct CohortSlots { friend auto access(CohortSlots); };
 #if PF_HAS_EXIT_SCRATCH
 struct CancelText { friend auto access(CancelText); };
 struct Relative { friend auto access(Relative); };
@@ -60,6 +61,7 @@ template struct Access<Placements, &Adapter::placement_>;
 template struct Access<Live, &Adapter::live_handles_>;
 template struct Access<Children, &Adapter::per_entry_child_legs>;
 template struct Access<Cohorts, &Adapter::cohorts_by_id_>;
+template struct Access<CohortSlots, &Adapter::cohort_opened_slot_count_>;
 
 constexpr std::size_t kScratchBytes = 1024;
 std::size_t peak_bytes = 0;
@@ -355,10 +357,14 @@ void ended_sources(std::size_t population) {
     auto& placements = adapter.*access(Placements{});
     auto& live = adapter.*access(Live{});
     for (std::size_t i = 0; i < population; ++i) {
-        auto& cohort = cohorts.emplace(
-            "owner-" + std::to_string(i), decltype(cohorts.begin()->second){}).first->second;
+        const auto row = cohorts.emplace(
+            "owner-" + std::to_string(i), decltype(cohorts.begin()->second){}).first;
+        auto& cohort = row->second;
         cohort.opened.push_back(handle(i + 1));
+        ++(adapter.*access(CohortSlots{}));
+        cohorts.refresh_held(row);
         cohort.live_units_by_origin[i + 1] = 1.0;
+        cohorts.refresh_held(row);
         source::PlacementSnapshot pending;
         pending.family = Family::ExitLimit;
         pending.source_id = "exit";

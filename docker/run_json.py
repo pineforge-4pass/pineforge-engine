@@ -2973,7 +2973,7 @@ def default_scratch_manifest(bars: int | None) -> ScratchTablesC:
     return ScratchTablesC(
         ctypes.sizeof(ScratchTablesC), 1, 1, 0,  # bounded_memory
         0, 0,  # q is removed; retain its ABI fields with zero capacity
-        8192, 3145728, 4096, 2101248, 4096, 1048576, 27, 6912, roots)
+        262144, 25165824, 32768, 4227072, 65536, 4194304, 27, 6912, roots)
 
 
 def apply_scratch_tables(lib, state, manifest: ScratchTablesC) -> None:

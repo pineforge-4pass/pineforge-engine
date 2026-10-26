@@ -207,6 +207,10 @@ for two additive diagnostics keys, described below.
   pull request release job's `fast` selection, which installs no pytest, does
   not run it (#522, tests only).
 
+### Run-failure catalog
+
+- `engine_invariant` may now carry `reason=order_key_hash_collision` (two order keys whose 64-bit hashes collide are refused instead of one silently replacing the other).
+
 ## 1.7.0 — 2026-10-25
 
 This release adds report-sink transport, scratch-backed history and bounded

@@ -34,7 +34,7 @@ PROFILE_ENV = "PINEFORGE_RUN_JSON_PROFILE"
 SETTER = "strategy_set_scratch_tables_v1"
 FIELDS = ("K_q", "B_q", "K_e", "B_e", "K_c", "B_c", "U", "B_U", "V", "B_V", "R")
 # P0 policy, independently transcribed from the brief, after q removal.
-P0_FIXED = (0, 0, 8192, 3145728, 4096, 2101248, 4096, 1048576, 27, 6912)
+P0_FIXED = (0, 0, 262144, 25165824, 32768, 4227072, 65536, 4194304, 27, 6912)
 
 
 class Descriptor(ctypes.Structure):

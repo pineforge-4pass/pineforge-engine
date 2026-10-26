@@ -8,7 +8,7 @@
   "to": {
     "version": null,
     "unreleased": true,
-    "catalogSha256": "400961b4f134c550841fc7d04d4fe82026de133f33512ff1b41604302d6deddd"
+    "catalogSha256": "5666a4261b53b7582ae4300dc43ea3b040e9008e61420b070a3cfd97c423dc15"
   },
   "catalogSchema": {
     "before": "pineforge-run-failure-catalog/v1",
@@ -16,7 +16,27 @@
   },
   "metadataChanges": [],
   "added": [],
-  "changed": [],
+  "changed": [
+    {
+      "code": "engine_invariant",
+      "collection": "codes",
+      "fields": [
+        {
+          "path": "args.reason",
+          "beforePresent": false,
+          "afterPresent": true,
+          "before": null,
+          "after": {
+            "kind": "vocab",
+            "optional": true,
+            "values": [
+              "order_key_hash_collision"
+            ]
+          }
+        }
+      ]
+    }
+  ],
   "removed": [],
   "deprecated": []
 }
