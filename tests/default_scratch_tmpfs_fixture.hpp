@@ -1,6 +1,7 @@
 #pragma once
 
-#if defined(__linux__) && !defined(_GNU_SOURCE)
+#if defined(__linux__)
+#if !defined(_GNU_SOURCE)
 #define _GNU_SOURCE
 #endif
 
@@ -27,6 +28,12 @@
 #include <unistd.h>
 #include <utility>
 #include <vector>
+
+#if defined(PINEFORGE_TEST_SCRATCH_ATTRIBUTION)
+#include <dlfcn.h>
+#include <mutex>
+#include <string_view>
+#endif
 
 namespace s4e_tmp {
 
@@ -59,6 +66,127 @@ struct Environment {
     }
 };
 
+#if defined(PINEFORGE_TEST_SCRATCH_ATTRIBUTION)
+inline bool under_directory(std::string_view path, std::string_view directory) {
+    return path == directory || (path.size() > directory.size()
+        && path.compare(0, directory.size(), directory) == 0
+        && path[directory.size()] == '/');
+}
+
+// Only names in the announced scratch roots may be inspected. Reject secret
+// directories and *.env by name even if they appear below an allowed root.
+inline bool scratch_inspection_path(std::string_view path) {
+    if (!under_directory(path, "/dev/shm") && !under_directory(path, "/tmp")
+        && !under_directory(path, "/var/tmp")) return false;
+    for (const auto root : {"/.config/zsh/keys", "/.config/pineforge"}) {
+        const auto position = path.find(root);
+        if (position != std::string_view::npos
+            && (position + std::strlen(root) == path.size()
+                || path[position + std::strlen(root)] == '/')) return false;
+    }
+    std::size_t start = 1;
+    while (start < path.size()) {
+        const auto end = path.find('/', start);
+        const auto component = path.substr(start,
+            end == std::string_view::npos ? path.size() - start : end - start);
+        if (component == "." || component == ".." || component == ".ssh"
+            || component == ".aws" || component == ".codex"
+            || (component.size() >= 4 && component.substr(component.size() - 4) == ".env"))
+            return false;
+        if (end == std::string_view::npos) break;
+        start = end + 1;
+    }
+    return true;
+}
+
+class PrivateTmpdir {
+public:
+    PrivateTmpdir() : path_("/dev/shm/pineforge-tmpwatch-XXXXXX") {
+        std::printf("S4E owned TMPDIR template: %s (only this directory is cleaned)\n",
+                    path_.c_str());
+        require(::mkdtemp(path_.data()) != nullptr, "cannot create the private tmpfs TMPDIR");
+    }
+    ~PrivateTmpdir() {
+        // No recursion or symlink following: remove only entries in the
+        // directory this object created, then that directory itself.
+        bool clean = true;
+        const int opened = ::open(path_.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+        DIR* directory = opened >= 0 ? ::fdopendir(opened) : nullptr;
+        if (!directory) {
+            if (opened >= 0) ::close(opened);
+            clean = false;
+        } else {
+            for (;;) {
+                errno = 0;
+                const auto* entry = ::readdir(directory);
+                if (!entry) { if (errno) clean = false; break; }
+                if (std::strcmp(entry->d_name, ".") == 0
+                    || std::strcmp(entry->d_name, "..") == 0) continue;
+                if (!scratch_inspection_path(path_ + "/" + entry->d_name)
+                    || ::unlinkat(::dirfd(directory), entry->d_name, 0) != 0) clean = false;
+            }
+            if (::closedir(directory) != 0) clean = false;
+        }
+        if (::rmdir(path_.c_str()) != 0) clean = false;
+        if (!clean) {
+            std::fprintf(stderr, "cannot clean owned TMPDIR: %s\n", path_.c_str());
+            std::abort();
+        }
+    }
+    PrivateTmpdir(const PrivateTmpdir&) = delete;
+    PrivateTmpdir& operator=(const PrivateTmpdir&) = delete;
+    const char* path() const { return path_.c_str(); }
+private:
+    std::string path_;
+};
+
+struct MkstempTrace {
+    const pid_t owner = ::getpid();
+    std::vector<std::string> paths;
+    bool failed = false;
+};
+
+struct MkstempRegistry {
+    std::mutex mutex;
+    MkstempTrace* active = nullptr;
+};
+
+inline MkstempRegistry& mkstemp_registry() {
+    static MkstempRegistry registry;
+    return registry;
+}
+
+inline void fail_mkstemp_trace() {
+    auto& registry = mkstemp_registry();
+    std::lock_guard<std::mutex> lock(registry.mutex);
+    if (registry.active && registry.active->owner == ::getpid()) registry.active->failed = true;
+}
+
+inline void record_mkstemp(int descriptor, const char* path) noexcept {
+    auto& registry = mkstemp_registry();
+    std::lock_guard<std::mutex> lock(registry.mutex);
+    auto* trace = registry.active;
+    // A forked co-tenant inherits memory, never ownership of this witness.
+    if (!trace || trace->owner != ::getpid()) return;
+    try {
+        require(scratch_inspection_path(path), "refused scratch inspection path by name");
+        const auto link = std::string("/proc/self/fd/") + std::to_string(descriptor);
+        std::array<char, 4096> target{};
+        const auto length = ::readlink(link.c_str(), target.data(), target.size());
+        require(length > 0 && static_cast<std::size_t>(length) < target.size(),
+                "cannot read the returned mkstemp descriptor's name");
+        const std::string observed(target.data(), static_cast<std::size_t>(length));
+        require(observed == path || observed == std::string(path) + " (deleted)",
+                "mkstemp path disagrees with its own descriptor");
+        trace->paths.emplace_back(path); // Before the caller can unlink/close.
+    } catch (...) {
+        // Instrumentation must not throw across libc or turn a failed
+        // observation into absence of scratch. Every query checks this bit.
+        trace->failed = true;
+    }
+}
+#endif // PINEFORGE_TEST_SCRATCH_ATTRIBUTION
+
 // Every row owns its environment; inherited runner settings cannot turn the
 // default-directory witness into an arena or explicitly configured run.
 struct PlainEnvironment {
@@ -68,7 +196,12 @@ struct PlainEnvironment {
     Environment window{"PF_SCRATCH_WINDOW_BYTES", nullptr};
     Environment command_directory{"PINEFORGE_COMMAND_SCRATCH_DIR", nullptr};
     Environment command_cap{"PINEFORGE_COMMAND_SCRATCH_MAX_BYTES", nullptr};
+#if defined(PINEFORGE_TEST_SCRATCH_ATTRIBUTION)
+    PrivateTmpdir directory;
+    Environment temporary{"TMPDIR", directory.path()};
+#else
     Environment temporary{"TMPDIR", "/dev/shm"};
+#endif
 };
 
 inline bool memory_filesystem(std::uint64_t type) {
@@ -101,8 +234,119 @@ inline std::size_t descriptor_count() {
     return count;
 }
 
-// Inotify observes even immediately unlinked mkstemp files. Looking only at
-// directory contents after the run would miss a jailed fallback.
+#if defined(PINEFORGE_TEST_SCRATCH_ATTRIBUTION)
+// Strict inotify only inside our private TMPDIR; the shared roots are judged
+// by successful mkstemp calls whose returned descriptors belong to this process.
+class CreationWatch {
+public:
+    CreationWatch() : descriptor_(::inotify_init1(IN_NONBLOCK | IN_CLOEXEC)),
+                      directory_(std::getenv("TMPDIR") ? std::getenv("TMPDIR") : "") {
+        require(descriptor_.value >= 0, "cannot create scratch creation watch");
+        constexpr std::string_view prefix = "/dev/shm/pineforge-tmpwatch-";
+        require(scratch_inspection_path(directory_)
+                    && directory_.compare(0, prefix.size(), prefix.data()) == 0,
+                "scratch watch requires the row's private TMPDIR");
+        std::printf("S4E attributable inspection paths: %s, /tmp, /var/tmp, "
+                    "/proc/self/fd/<returned fd> (readlink names only)\n", directory_.c_str());
+        struct stat status{};
+        require(::lstat(directory_.c_str(), &status) == 0 && S_ISDIR(status.st_mode)
+                    && status.st_uid == ::geteuid() && (status.st_mode & 0777) == 0700,
+                "scratch TMPDIR is not a private owned directory");
+        struct statfs memory{};
+        require(::statfs(directory_.c_str(), &memory) == 0
+                    && static_cast<std::uint64_t>(memory.f_type) == UINT64_C(0x01021994),
+                "private TMPDIR must be tmpfs; this row must not skip");
+        require(::inotify_add_watch(descriptor_.value, directory_.c_str(),
+                                   IN_CREATE | IN_MOVED_TO) >= 0,
+                "cannot watch the private scratch candidate");
+        auto& registry = mkstemp_registry();
+        std::lock_guard<std::mutex> lock(registry.mutex);
+        require(registry.active == nullptr, "scratch attribution watches must not overlap");
+        registry.active = &trace_;
+    }
+    ~CreationWatch() {
+        auto& registry = mkstemp_registry();
+        std::lock_guard<std::mutex> lock(registry.mutex);
+        registry.active = nullptr;
+    }
+
+    void collect() {
+        alignas(inotify_event) std::array<char, 16384> buffer{};
+        for (;;) {
+            const auto bytes = ::read(descriptor_.value, buffer.data(), buffer.size());
+            if (bytes < 0 && errno == EINTR) continue;
+            if (bytes < 0 && errno == EAGAIN) break;
+            require(bytes > 0, "cannot read private scratch creation events");
+            std::size_t offset = 0;
+            while (offset < static_cast<std::size_t>(bytes)) {
+                require(static_cast<std::size_t>(bytes) - offset >= sizeof(inotify_event),
+                        "short private scratch creation event");
+                const auto* event = reinterpret_cast<const inotify_event*>(buffer.data() + offset);
+                require(!(event->mask & (IN_Q_OVERFLOW | IN_IGNORED)),
+                        "private scratch creation watch was lost");
+                require(event->len <= static_cast<std::size_t>(bytes) - offset - sizeof(*event),
+                        "short private scratch creation event name");
+                if (event->mask & (IN_CREATE | IN_MOVED_TO)) {
+                    require(event->len != 0, "private scratch creation lacks a name");
+                    const auto path = directory_ + "/" + event->name;
+                    require(scratch_inspection_path(path), "refused scratch event path by name");
+                    private_paths_.push_back(path);
+                }
+                offset += sizeof(*event) + event->len;
+            }
+        }
+        auto& registry = mkstemp_registry();
+        std::lock_guard<std::mutex> lock(registry.mutex);
+        require(!trace_.failed, "mkstemp descriptor attribution failed");
+    }
+
+    std::size_t created_count_in(const char* directory) const {
+        auto& registry = mkstemp_registry();
+        std::lock_guard<std::mutex> lock(registry.mutex);
+        require(!trace_.failed, "mkstemp descriptor attribution failed");
+        std::size_t count = 0;
+        for (const auto& path : trace_.paths)
+            if (scratch_name_in(path, directory)) ++count;
+        for (const auto& path : private_paths_)
+            if (scratch_name_in(path, directory)) ++count;
+        return count;
+    }
+    bool created_in(const char* directory) const { return created_count_in(directory) != 0; }
+    bool tmpdir_empty() const { return private_paths_.empty(); }
+    bool empty() const {
+        auto& registry = mkstemp_registry();
+        std::lock_guard<std::mutex> lock(registry.mutex);
+        require(!trace_.failed, "mkstemp descriptor attribution failed");
+        return private_paths_.empty() && trace_.paths.empty();
+    }
+    void require_removed() const {
+        auto& registry = mkstemp_registry();
+        std::lock_guard<std::mutex> lock(registry.mutex);
+        require(!trace_.failed, "mkstemp descriptor attribution failed");
+        for (const auto& path : trace_.paths) require_removed_path(path);
+        for (const auto& path : private_paths_) require_removed_path(path);
+    }
+
+private:
+    static bool scratch_name_in(const std::string& path, const char* directory) {
+        const auto filename = path.find_last_of('/') + 1;
+        return under_directory(path, directory) && path.compare(filename, 10, "pineforge-") == 0;
+    }
+    static void require_removed_path(const std::string& path) {
+        require(scratch_inspection_path(path), "refused scratch cleanup inspection path by name");
+        std::printf("S4E owned scratch lstat: %s\n", path.c_str());
+        struct stat status{};
+        errno = 0;
+        require(::lstat(path.c_str(), &status) != 0 && errno == ENOENT,
+                "run left a named scratch file: " + path);
+    }
+    Fd descriptor_;
+    std::string directory_;
+    MkstempTrace trace_;
+    std::vector<std::string> private_paths_;
+};
+#else
+// Other fixture consumers keep their original name-based witness.
 class CreationWatch {
 public:
     CreationWatch() : descriptor_(::inotify_init1(IN_NONBLOCK | IN_CLOEXEC)) {
@@ -166,6 +410,7 @@ private:
     std::vector<Created> created_;
     bool any_creation_ = false;
 };
+#endif // PINEFORGE_TEST_SCRATCH_ATTRIBUTION
 
 class Host final : public pineforge::NativeStrategyHost {
 public:
@@ -262,3 +507,30 @@ inline int test_main(const char* name, void (*body)()) {
 }
 
 } // namespace s4e_tmp
+
+#if defined(PINEFORGE_TEST_SCRATCH_ATTRIBUTION)
+// Each opted-in executable has one fixture TU. A strong, visible definition
+// resolves both header-inline calls and references from the pineforge archive.
+extern "C" __attribute__((visibility("default"))) int mkstemp(char* pattern) {
+    const int caller_errno = errno;
+    if (!s4e_tmp::scratch_inspection_path(pattern)) {
+        s4e_tmp::fail_mkstemp_trace();
+        errno = EACCES;
+        return -1;
+    }
+    using Function = int (*)(char*);
+    static const auto real = reinterpret_cast<Function>(::dlsym(RTLD_NEXT, "mkstemp"));
+    if (!real) {
+        s4e_tmp::fail_mkstemp_trace();
+        errno = ENOSYS;
+        return -1;
+    }
+    errno = caller_errno;
+    const int descriptor = real(pattern);
+    const int saved_errno = errno;
+    if (descriptor >= 0) s4e_tmp::record_mkstemp(descriptor, pattern);
+    errno = saved_errno;
+    return descriptor;
+}
+#endif // PINEFORGE_TEST_SCRATCH_ATTRIBUTION
+#endif // __linux__

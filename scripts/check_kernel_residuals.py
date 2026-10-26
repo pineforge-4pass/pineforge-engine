@@ -30,9 +30,10 @@ Against those two sources the checker matches a fixed residual vocabulary:
   * IDENTIFIER_PATTERNS -- a whole identifier (ARCHIVE_IDENTIFIER: at least
     MIN_IDENTIFIER_LENGTH characters, delimited by non-identifier bytes on both
     sides) that contains one of them must be listed in the first column of an
-    ADR table, by its exact name. The whole-identifier rule is also what keeps
-    binary bytes out of the verdict: `strings` happily prints a run like
-    `C0"TV"` out of machine code, and a two-letter fragment is never a name.
+    ADR table, by its exact name. A two-letter fragment such as the `TV` in
+    machine code's `C0"TV"` is never a name. A longer, bare identifier-only
+    strings line also needs independent evidence before it is an unruled
+    finding (see CR-352 below).
   * PHRASE_PATTERNS -- a text (an error message, a label) that contains one of
     them must contain a phrase listed in that column;
   * and every listed name or phrase that the vocabulary matches must still be
@@ -97,6 +98,17 @@ audit passed through the gate:
     --min-ruled-texts floor those counts (scripts/ci_verify.py's
     ADR_RULED_IDENTIFIERS_MIN / ADR_RULED_TEXTS_MIN), so a ruling cannot
     leave together with its name unless the change lowers the floor.
+
+CR-352 distinguishes a free-standing printable instruction run from a name.
+An unruled identifier whose complete stripped `strings` line is that token
+needs corroboration from normalized `nm` names, installed-header tokens, or
+decoded, adjacent kernel-source string literals. Decoding is separate from
+the existing source-literal surface: its findings and locations stay as they
+were. Texts, phrase hits and all other surfaces are judged as before. A ruled
+bare line still keeps its row present, including header-only enforcement.
+This cannot distinguish machine code from data manufactured without a
+literal, symbol or header token (for example a character-array initializer
+or macro-built data); such an uncorroborated bare line is treated as noise.
 
 Exit 0 when every match is ruled and every ruling is live, 1 on a finding,
 2 when the archive, the tools (including the strip tool: the gate fails CLOSED
@@ -281,7 +293,7 @@ IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 # A name as it appears in the archive: a maximal identifier run, delimited by a
 # non-identifier byte on both sides, at least MIN_IDENTIFIER_LENGTH long. The
 # left-hand lookbehind is what makes it maximal (`0abc` is not the name `abc`),
-# and the length floor is what makes machine-code bytes unreadable as names:
+# and the length floor rejects the shortest machine-code fragments:
 # the shortest vocabulary hit needs three characters anyway (`_tv`, `tv_`), so
 # the floor costs the gate no reach.
 MIN_IDENTIFIER_LENGTH = 3
@@ -494,13 +506,16 @@ def vocabulary_name(identifier: str) -> bool:
 
 def evaluate(strings_lines: list[str], nm_lines: list[str], ruled: Ruled,
              header_lines: tuple[list[str], list[str], list[str], list[str]] | None = None,
-             source_literals: tuple[list[str], list[str]] | None = None
+             source_literals: tuple[list[str], list[str]] | None = None,
+             source_identifiers: set[str] | frozenset[str] = frozenset()
              ) -> tuple[list[Finding], dict[str, int]]:
     """Judge the archive's two surfaces and, when given, the installed headers'
     (code lines and their locations, literal texts and theirs; see
     read_headers) and the kernel sources' string literals (texts and their
-    locations; see read_source_literals)."""
-    hits = scan(strings_lines, "strings") + scan(nm_lines, "nm")
+    locations; see read_source_literals). `source_identifiers` is independent
+    evidence from decoded, joined literals, not another finding surface."""
+    nm_hits = scan(nm_lines, "nm")
+    hits = scan(strings_lines, "strings") + nm_hits
     header_hits: list[Hit] = []
     if header_lines is not None:
         code, code_where, literals, literal_where = header_lines
@@ -510,6 +525,10 @@ def evaluate(strings_lines: list[str], nm_lines: list[str], ruled: Ruled,
     if source_literals is not None:
         texts, where = source_literals
         source_hits = scan(texts, "source-literal", locations=where)
+    corroborated = (set(source_identifiers)
+                    | {symbol_name(hit.token, "nm") for hit in nm_hits
+                       if hit.kind == "identifier"}
+                    | {hit.token for hit in header_hits if hit.kind == "identifier"})
     findings: list[Finding] = []
     present: set[str] = set()
     covered: set[str] = set()
@@ -554,6 +573,11 @@ def evaluate(strings_lines: list[str], nm_lines: list[str], ruled: Ruled,
         ruled_as = next((candidate for candidate in (hit.token, name)
                          if candidate in ruled.identifiers), None)
         if ruled_as is None:
+            # Only the finding is suppressed: raw hits and ruled-row presence
+            # retain their old meaning. Never filter texts or phrase hits.
+            if (hit.source == "strings" and hit.text.strip() == hit.token
+                    and hit.token not in corroborated and name not in corroborated):
+                continue
             report("identifier", name,
                    f"identifier matches residual vocabulary {hit.pattern!r} via {hit.source} "
                    f"and has no ADR-0001 row: {hit.line[:160]}")
@@ -643,18 +667,84 @@ def kernel_profile_headers(include_root: Path, cmake_text: str | None = None) ->
 
 
 _IDENT_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_")
+_HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
+_SIMPLE_ESCAPES = {
+    "'": "'", '"': '"', "?": "?", "\\": "\\",
+    "a": "\a", "b": "\b", "f": "\f", "n": "\n",
+    "r": "\r", "t": "\t", "v": "\v",
+}
 
 
-def split_code_and_literals(source: str) -> tuple[str, list[tuple[int, str]]]:
+def decode_string_literal(spelling: str) -> str:
+    """Decode ordinary C++17 literal contents, without Python escape rules.
+
+    Numeric escapes consume all hex digits or at most three octal digits;
+    universal escapes consume exactly four/eight. Fail closed on unsupported
+    escapes or out-of-range numeric bytes rather than silently lose evidence.
+    Backslash-newline splicing precedes escape interpretation.
+    """
+    spelling = spelling.replace("\\\r\n", "").replace("\\\n", "")
+    out: list[str] = []
+    i = 0
+    while i < len(spelling):
+        if spelling[i] != "\\":
+            out.append(spelling[i])
+            i += 1
+            continue
+        i += 1
+        if i == len(spelling):
+            raise InfrastructureError("incomplete escape in a string literal")
+        escape = spelling[i]
+        i += 1
+        if escape in _SIMPLE_ESCAPES:
+            out.append(_SIMPLE_ESCAPES[escape])
+            continue
+        if escape in "01234567":
+            start = i - 1
+            while i < min(start + 3, len(spelling)) and spelling[i] in "01234567":
+                i += 1
+            value = int(spelling[start:i], 8)
+        elif escape == "x":
+            start = i
+            while i < len(spelling) and spelling[i] in _HEX_DIGITS:
+                i += 1
+            if i == start:
+                raise InfrastructureError("empty hexadecimal escape in a string literal")
+            value = int(spelling[start:i], 16)
+        elif escape in ("u", "U"):
+            width = 4 if escape == "u" else 8
+            digits = spelling[i:i + width]
+            if len(digits) != width or any(c not in _HEX_DIGITS for c in digits):
+                raise InfrastructureError("incomplete universal escape in a string literal")
+            value = int(digits, 16)
+            if value > 0x10FFFF or 0xD800 <= value <= 0xDFFF:
+                raise InfrastructureError("invalid universal escape in a string literal")
+            out.append(chr(value))
+            i += width
+            continue
+        else:
+            raise InfrastructureError("unsupported string-literal escape: \\" + escape)
+        if value > 0xFF:
+            raise InfrastructureError("numeric string-literal escape exceeds one byte")
+        out.append(chr(value))
+    return "".join(out)
+
+
+def split_code_and_literals(source: str, *,
+                            decoded_literals: list[tuple[int, str]] | None = None
+                            ) -> tuple[str, list[tuple[int, str]]]:
     """C/C++ text without its comments, string literals blanked to "", and the
     literals' contents (between the quotes) with their 1-based line numbers.
 
     Lexical, not regex: a `//` or `/*` inside a literal never opens a comment,
     raw strings R"d(...)d" are literals, a digit separator is not a character
     literal, and a backslash-newline continues a line comment. Newlines are
-    kept, so every code line keeps its number."""
+    kept, so every code line keeps its number. Optional `decoded_literals`
+    receives decoded, joined values for corroboration only; the return value
+    always preserves the legacy spellings and locations."""
     out: list[str] = []
     literals: list[tuple[int, str]] = []
+    decoded: list[tuple[int, int, int, str, bool]] = []
     i, n, line = 0, len(source), 1
     while i < n:
         c = source[i]
@@ -680,7 +770,9 @@ def split_code_and_literals(source: str) -> tuple[str, list[tuple[int, str]]]:
             k = i - 1
             while k >= 0 and source[k] in _IDENT_CHARS:
                 k -= 1
-            if source[k + 1:i] in ("R", "u8R", "uR", "UR", "LR"):
+            prefix = source[k + 1:i]
+            raw = prefix in ("R", "u8R", "uR", "UR", "LR")
+            if raw:
                 open_paren = source.find("(", i + 1)
                 close = source.find(")" + source[i + 1:open_paren] + '"', open_paren + 1)
                 if open_paren < 0 or close < 0:
@@ -696,6 +788,14 @@ def split_code_and_literals(source: str) -> tuple[str, list[tuple[int, str]]]:
                     end += 1
                 end += 1
             literals.append((line, source[i + 1:end - 1]))
+            if decoded_literals is not None:
+                if end > n or source[end - 1] != '"':
+                    raise InfrastructureError("unterminated string literal")
+                value = (source[open_paren + 1:close] if raw
+                         else source[i + 1:end - 1])
+                start = k + 1 if prefix in ("", "u8", "u", "U", "L",
+                                          "R", "u8R", "uR", "UR", "LR") else i
+                decoded.append((start, end, source.count("\n", 0, i) + 1, value, raw))
             newlines = source.count("\n", i, end)
             out.append('""' + "\n" * newlines)
             line += newlines
@@ -721,7 +821,48 @@ def split_code_and_literals(source: str) -> tuple[str, list[tuple[int, str]]]:
             line += 1
         out.append(c)
         i += 1
-    return "".join(out), literals
+    code = "".join(out)
+    if decoded_literals is not None:
+        # Use blanked code to recognize directives: a '#' inside a literal or
+        # comment is not a directive. Includes are paths, not escaped strings.
+        directives: set[int] = set()
+        includes: set[int] = set()
+        logical = ""
+        for number, content in enumerate(code.split("\n"), start=1):
+            logical += content
+            if logical.lstrip().startswith("#"):
+                directives.add(number)
+                if INCLUDE_DIRECTIVE.match(logical):
+                    includes.add(number)
+            if logical.endswith("\\"):
+                logical = logical[:-1]
+            else:
+                logical = ""
+        previous_end: int | None = None
+        previous_directive = False
+        joined_line, joined = 0, ""
+        for start, end, number, value, raw in decoded:
+            if number in includes:
+                if previous_end is not None:
+                    decoded_literals.append((joined_line, joined))
+                previous_end = None
+                continue
+            value = value if raw else decode_string_literal(value)
+            gap = source[previous_end:start] if previous_end is not None else ""
+            gap = gap.replace("\\\r\n", "").replace("\\\n", "")
+            if (previous_end is not None
+                    and not (previous_directive and "\n" in gap)
+                    and not split_code_and_literals(gap)[0].strip()):
+                joined += value
+            else:
+                if previous_end is not None:
+                    decoded_literals.append((joined_line, joined))
+                joined_line, joined = number, value
+                previous_directive = number in directives
+            previous_end = end
+        if previous_end is not None:
+            decoded_literals.append((joined_line, joined))
+    return code, literals
 
 
 def read_headers(include_root: Path, headers: list[Path]
@@ -823,20 +964,30 @@ def repository_path(path: Path, root: Path) -> str:
         return str(path)
 
 
-def read_source_literals(root: Path, files: list[Path]) -> tuple[list[str], list[str]]:
+def read_source_literals(root: Path, files: list[Path], *,
+                         corroborating_identifiers: set[str] | None = None
+                         ) -> tuple[list[str], list[str]]:
     """The string literals of `files` with their `file:line` locations: comments
-    stripped (split_code_and_literals), an include directive's path skipped."""
+    stripped (split_code_and_literals), an include directive's path skipped.
+    When requested, fill a separate set from decoded, joined values without
+    changing the legacy surface returned to the finding/stale-row evaluator."""
     literals: list[str] = []
     where: list[str] = []
     for path in files:
         text = path.read_text(encoding="utf-8")
         lines = text.split("\n")
         relative = repository_path(path, root)
-        for number, literal in split_code_and_literals(text)[1]:
+        decoded: list[tuple[int, str]] | None = (
+            [] if corroborating_identifiers is not None else None)
+        for number, literal in split_code_and_literals(text, decoded_literals=decoded)[1]:
             if INCLUDE_DIRECTIVE.match(lines[number - 1]):
                 continue
             literals.append(literal)
             where.append(f"{relative}:{number}")
+        if corroborating_identifiers is not None and decoded is not None:
+            for number, literal in decoded:
+                if not INCLUDE_DIRECTIVE.match(lines[number - 1]):
+                    corroborating_identifiers.update(ARCHIVE_IDENTIFIER.findall(literal))
     return literals, where
 
 
@@ -923,10 +1074,13 @@ def check(archive: Path, adr: Path = ADR, *, evidence_dir: Path | None = None,
     with tempfile.TemporaryDirectory(prefix="pineforge-kernel-residuals-") as workdir:
         strings_lines, nm_lines, tool = read_archive(archive, Path(workdir))
     sources = kernel_source_files(source_root, cmake_text, archive_members(archive))
-    source_literals = read_source_literals(source_root, sources)
+    source_identifiers: set[str] = set()
+    source_literals = read_source_literals(
+        source_root, sources, corroborating_identifiers=source_identifiers)
     units = len(kernel_translation_units(cmake_text))
     findings, summary = evaluate(strings_lines, nm_lines, ruled, header_lines=header_lines,
-                                 source_literals=source_literals)
+                                 source_literals=source_literals,
+                                 source_identifiers=source_identifiers)
     findings += floor_findings(summary, min_identifiers, min_texts)
     summary["findings"] = len(findings)
     if evidence_dir is not None:
