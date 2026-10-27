@@ -15,6 +15,7 @@
 
 #include <pineforge/pineforge.h>
 
+#include <math.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
@@ -93,6 +94,8 @@ static void check_native_run(void) {
     host.handle = strategy_native_host_create_v1(&callbacks);
     CHECK(host.handle != NULL, "a C99 caller's callback table was refused");
     if (!host.handle) return;
+    CHECK(isnan(strategy_initial_capital(NULL)),
+          "a NULL initial-capital handle did not return NaN");
 
     memset(&spec, 0, sizeof(spec));
     spec.struct_size = (uint32_t)sizeof(spec);
@@ -120,6 +123,8 @@ static void check_native_run(void) {
     spec.optional_mask = PF_NATIVE_SPEC_OPTIONAL_QUANTITY_GRID;
     spec.quantity_grid = 1.0;
     CHECK(strategy_configure_native_v1(host.handle, &spec) == 0, "the C99 spec was refused");
+    CHECK(strategy_initial_capital(host.handle) == spec.initial_capital,
+          "the initial-capital export changed the configured capital");
     CHECK(strategy_execution_contract(host.handle) == PF_EXECUTION_CONTRACT_NATIVE_MARKET_V1,
           "a native host is not on the native market contract");
     CHECK(strategy_native_run_v1(host.handle, kBars, 4, NULL) == PF_NATIVE_OK,
@@ -160,6 +165,14 @@ static void check_native_run(void) {
     CHECK(strategy_native_position_v1(host.handle, &units, NULL, NULL) == PF_NATIVE_OK
               && units == 1.0,
           "the C99 entry did not leave a long 1");
+    CHECK(strategy_initial_capital(host.handle) == spec.initial_capital,
+          "the completed run lost its configured initial capital");
+    ++spec.run_number;
+    spec.initial_capital *= 2.0;
+    CHECK(strategy_configure_native_v1(host.handle, &spec) == 0,
+          "the completed C99 host could not stage its next run");
+    CHECK(strategy_initial_capital(host.handle) == spec.initial_capital,
+          "the initial-capital export returned the previous run's capital");
     strategy_native_host_free(host.handle);
 }
 
