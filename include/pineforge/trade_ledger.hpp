@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -10,12 +11,13 @@
 namespace pineforge {
 
 struct Trade;
+namespace detail { struct TradeLedgerStorageProbe; }
 
 // The engine-side additions stay in this existing epoch (DESIGN 6:1344-1347).
 inline namespace engine_script_run_v19 {
 
-// Exact global row space. base() is the publication/fold boundary, NOT a
-// storage boundary: an unsealed exit-time group can have arbitrary length.
+// Exact global row space. base() is the publication/fold boundary; an
+// unsealed exit-time group can have arbitrary length and cannot be retired.
 // A kResidentRows descriptor window and an equally sized fixed byte tail of
 // the string payload stay in memory. All four string payloads and all older
 // mutable/sealed descriptors use the existing run-owned positional scratch
@@ -26,7 +28,8 @@ inline namespace engine_script_run_v19 {
 //
 // Reads own their values. No reference or contiguous pointer into an
 // evictable page escapes. Iteration visits [base(),size()) as before, now
-// by value; read()/visit()/previous() also read the sealed history.
+// by value; read()/visit()/previous() also read the sealed history, except
+// when a sink run explicitly admits physical history retirement.
 class TradeLedger {
 public:
     using size_type = std::size_t;
@@ -116,7 +119,9 @@ public:
     size_type resident_base() const;
     bool empty() const;
 
-    // read() spans the whole exact source; at()/[] retain the checked
+    // read() spans the retained source; a read below base() on an explicitly
+    // retiring sink run refuses with coded logic_error engine_invariant.
+    // at()/[] retain the checked
     // unsealed-window contract for existing settlement callers.
     // Hits allocate only the owning strings already required by read().
     // Direct-mapped eviction above cache_rows(), or oversized strings, retains
@@ -180,10 +185,18 @@ public:
     // that can still be relabelled. Write T and advance the exact row, money,
     // metric and phase seeds before advancing this publication boundary.
     // Those predicates may pin every row; physical eviction is independent.
-    // Historical bytes remain readable independently of publication.
+    // Historical bytes remain readable unless the engine admitted retirement
+    // from an explicit no-history generated-module capability.
     void seal(size_type global_end);
 
 private:
+    friend class BacktestEngine;
+    friend struct detail::TradeLedgerStorageProbe;
+    // Run-begin policy and non-public storage census; neither changes this
+    // installed object's layout or the logical trade/hash representation.
+    void set_history_retirement(bool);
+    void check_history_read(size_type) const;
+    std::array<std::uint64_t, 2> scratch_storage_bytes() const;
     struct State;
     std::unique_ptr<State> state_;
 };
