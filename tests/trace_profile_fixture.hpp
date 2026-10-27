@@ -146,11 +146,14 @@ inline void default_and_debug_bytes() {
     strategy_set_trace_enabled(handle(on), 1);
     ReportC recorded{};
     run_debug(on, recorded);
-    // Hand values from the three bars, not generated from the recorder.
+    // Independent base-path oracle: the trace timestamp is the calculation
+    // close assigned to current_bar_ before the callback, not the input bar's
+    // open timestamp. For these 1-minute 24x7 bars, the unchanged parent path
+    // therefore advances each input timestamp by 60,000 ms.
     const TraceEntryC expected[] = {
-        {INT64_C(1704067200000), 0, 0, 102.}, {INT64_C(1704067200000), 0, 1, 15.},
-        {INT64_C(1704067260000), 1, 0, 108.}, {INT64_C(1704067260000), 1, 1, 13.},
-        {INT64_C(1704067320000), 2, 0, 112.}, {INT64_C(1704067320000), 2, 1, 13.},
+        {INT64_C(1704067260000), 0, 0, 102.}, {INT64_C(1704067260000), 0, 1, 15.},
+        {INT64_C(1704067320000), 1, 0, 108.}, {INT64_C(1704067320000), 1, 1, 13.},
+        {INT64_C(1704067380000), 2, 0, 112.}, {INT64_C(1704067380000), 2, 1, 13.},
     };
     static_assert(sizeof(TraceEntryC) == 24, "trace record byte layout");
     require(recorded.trace_len == 6 && recorded.trace_names_len == 2, "debug trace counts");
