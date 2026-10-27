@@ -390,15 +390,18 @@ TreeSnapshot snapshot(const ScratchSlab& slab) {
     }
     return result;
 }
-template<class F> void capacity_failure(const char* resource, F operation) {
+template<class F>
+void capacity_failure(const char* resource, std::uint64_t limit, std::uint64_t need, F operation) {
     bool caught = false;
     try { operation(); }
     catch (const detail::ScratchCapacityError& error) {
         caught = true;
         const auto failure = classify_run_failure(error);
+        // Expected limit/need are hand-derived at each call below.
         require(failure.code == RunFailureCode::scratch_capacity_exceeded && failure.args
-                && *failure.args == std::string("{\"resource\":\"") + resource + "\"}",
-                "adapter capacity carries its closed tree resource");
+                && *failure.args == "{\"limit\":" + std::to_string(limit)
+                    + ",\"need\":" + std::to_string(need) + ",\"resource\":\"" + resource + "\"}",
+                "adapter capacity carries its exact tree limit, need and resource");
     }
     require(caught, "adapter operation must refuse before changing state");
 }
@@ -414,7 +417,8 @@ public:
         const auto source_before = source_hash();
         const auto bytes_before = snapshot(*slab());
         const auto requests_before = native_working_requests().size();
-        capacity_failure("cohort", [&] { strategy_order("B", true, 1.0); });
+        // limit 1=U, need 2: B would add a second distinct cohort after A.
+        capacity_failure("cohort", 1, 2, [&] { strategy_order("B", true, 1.0); });
         require(broker_state_hash() == broker_before && source_hash() == source_before
                 && snapshot(*slab()) == bytes_before
                 && native_working_requests().size() == requests_before,
@@ -442,7 +446,8 @@ public:
         const auto broker_before = broker_state_hash();
         const auto source_before = source_hash();
         const auto requests_before = native_working_requests().size();
-        capacity_failure("cohort", [&] { strategy_entry("B", false); });
+        // limit 1=U, need 2: reversing B needs a second distinct cohort after filled A.
+        capacity_failure("cohort", 1, 2, [&] { strategy_entry("B", false); });
         require(broker_state_hash() == broker_before && source_hash() == source_before
                 && native_working_requests().size() == requests_before
                 && cohort_open().value == 2,
@@ -469,7 +474,8 @@ public:
         const auto broker_before = broker_state_hash();
         const auto source_before = source_hash();
         const auto requests_before = native_working_requests().size();
-        capacity_failure("cohort", [&] { strategy_entry("B", false); });
+        // limit 1=U, need 2: close-all does not remove A's ever-row before the distinct B ticket.
+        capacity_failure("cohort", 1, 2, [&] { strategy_entry("B", false); });
         require(broker_state_hash() == broker_before && source_hash() == source_before
                 && native_working_requests().size() == requests_before
                 && cohort_open().value == 2,
@@ -583,7 +589,8 @@ public:
         view.raw_price = view.resolved_price = 100.0;
         // Exercise the real host hook with an Applied-ready view first, so
         // the pure ticket has an observable before/after operation boundary.
-        capacity_failure("exit_rank", [&] { (void)validate_execution_precommit(view); });
+        // limit 0, need 1: first A rank exceeds V=0, or its one key byte exceeds B_V=0 with V=1.
+        capacity_failure("exit_rank", 0, 1, [&] { (void)validate_execution_precommit(view); });
         require(broker_state_hash() == broker_before && source_hash() == source_before
                 && snapshot(*slab()) == bytes_before, "precommit capacity is read-only");
         // Then reach it through actual settlement. A post-on_applied check
@@ -595,8 +602,9 @@ public:
             (void)execute_current({definition->handle, NativeCurrentPriceRule::NearestTick});
         } catch (const std::exception& error) {
             const auto failure = classify_run_failure(error);
+            // limit 0, need 1: settlement latches the same first-row or first-key-byte refusal.
             require(failure.code == RunFailureCode::scratch_capacity_exceeded && failure.args
-                    && *failure.args == "{\"resource\":\"exit_rank\"}",
+                    && *failure.args == "{\"limit\":0,\"need\":1,\"resource\":\"exit_rank\"}",
                     "current execution throws the latched rank capacity cause");
             execution_threw = true;
         }

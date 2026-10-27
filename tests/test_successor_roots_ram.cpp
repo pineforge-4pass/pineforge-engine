@@ -167,7 +167,7 @@ struct Driver {
 };
 
 template<class Operation>
-void expect_capacity(Operation&& operation) {
+void expect_capacity(std::uint64_t limit, std::uint64_t need, Operation&& operation) {
     bool failed = false;
     try {
         operation();
@@ -175,8 +175,10 @@ void expect_capacity(Operation&& operation) {
         const auto value = pineforge::classify_run_failure(error);
         require(value.code == pineforge::RunFailureCode::scratch_capacity_exceeded,
                 "root capacity has its typed code");
-        require(value.args && *value.args == "{\"resource\":\"successor_roots\"}",
-                "root capacity has only the closed resource argument");
+        // Expected limit/need count replacements from each caller's admitted R, not slab bytes.
+        require(value.args && *value.args == "{\"limit\":" + std::to_string(limit)
+                + ",\"need\":" + std::to_string(need) + ",\"resource\":\"successor_roots\"}",
+                "root capacity has the exact limit, need and resource");
         require(pineforge::run_failure_code_class(value.code) == pineforge::RunFailureClass::resource
                 && !pineforge::run_failure_code_retryable(value.code), "capacity is nonretryable resource");
         failed = true;
@@ -404,7 +406,8 @@ void exact_limit_is_atomic(std::uint64_t limit, bool direct) {
     const auto history_end = driver.core.history_end();
     const auto receipt_count = driver.core.cohort_receipt_count();
     const auto definition = driver.core.find_live(tail)->definition;
-    expect_capacity([&] {
+    // limit R in {0,1,7,63,64,65,128}, need R+1: one new root after exactly R replacements.
+    expect_capacity(limit, limit + 1, [&] {
         if (direct) {
             (void)driver.core.apply_replace(tail, request(), driver.context, driver.incarnation, driver.ordinal);
         } else {
@@ -454,7 +457,8 @@ void rootless_and_kept_plans_are_free(bool direct, std::uint64_t limit) {
     const auto flushed_rows = 64 * (limit / 64);
     require(owner->region(pd::ScratchResource::successor_roots).logical_extent == 16 * flushed_rows,
             "rootless preparations publish full batches without charging another root");
-    expect_capacity([&] {
+    // limit R in {0,1,64}, need R+1: rootless submits and kept handles spent no extra root row.
+    expect_capacity(limit, limit + 1, [&] {
         (void)driver.core.prepare_replace(tail, request(), driver.context, driver.incarnation, driver.ordinal);
     });
 }
@@ -472,7 +476,8 @@ void abandoned_ticket_does_not_consume_capacity() {
             && driver.core.last_incarnation() == root.incarnation, "reservation publishes no logical row");
     const auto tail = driver.replace(root, false);
     require(tail.incarnation == root.incarnation + 1, "chosen ticket consumes the single row");
-    expect_capacity([&] {
+    // limit 1, need 2: the abandoned ticket spent nothing, then the committed replacement spent one.
+    expect_capacity(1, 2, [&] {
         (void)driver.core.prepare_replace(tail, request(), driver.context, driver.incarnation, driver.ordinal);
     });
 }

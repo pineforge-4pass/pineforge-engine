@@ -208,9 +208,10 @@ void capacity_before_financial_commit(bool bytes) {
     const auto bars = tape();
     host.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
     const auto failure = run_failure_value_of(host);
+    // Bytes: limit 49=40*1+9, need 50=40+7+1+2; count: limit 0=K_c, need 1 for the first key.
     require(!host.last_error().empty() && failure.code == RunFailureCode::scratch_capacity_exceeded
-            && failure.args && *failure.args == (bytes ? "{\"resource\":\"consumed_data\"}"
-                                                       : "{\"resource\":\"consumed_index\"}"),
+            && failure.args && *failure.args == (bytes ? "{\"limit\":49,\"need\":50,\"resource\":\"consumed_data\"}"
+                                                       : "{\"limit\":0,\"need\":1,\"resource\":\"consumed_index\"}"),
             "run boundary preserves the precommit capacity exception and exact resource");
     require(host.before_partial.has_value() && host.units_before_partial >= 8.0
             && host.trade_count() == host.trades_before_partial

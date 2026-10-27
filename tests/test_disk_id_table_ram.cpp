@@ -58,7 +58,8 @@ Snapshot snapshot(const ScratchSlab& slab) {
     }
     return out;
 }
-template<class F> void capacity_failure(const char* resource, F operation) {
+template<class F>
+void capacity_failure(const char* resource, std::uint64_t limit, std::uint64_t need, F operation) {
     bool caught = false;
     try { operation(); }
     catch (const detail::ScratchCapacityError& error) {
@@ -67,9 +68,10 @@ template<class F> void capacity_failure(const char* resource, F operation) {
         require(failure.code == RunFailureCode::scratch_capacity_exceeded, "capacity code");
         require(run_failure_code_class(failure.code) == RunFailureClass::resource
                 && !run_failure_code_retryable(failure.code), "nonretryable resource failure");
-        require(failure.args
-                && *failure.args == std::string("{\"resource\":\"") + resource + "\"}",
-                "closed resource argument only");
+        // Expected limit/need are hand-derived at each call below.
+        require(failure.args && *failure.args == "{\"limit\":" + std::to_string(limit)
+                + ",\"need\":" + std::to_string(need) + ",\"resource\":\"" + resource + "\"}",
+                "exact capacity arguments");
     }
     require(caught, "real insertion must refuse capacity before mutation");
 }
@@ -116,7 +118,8 @@ void packed_rotations_lookup_updates_and_orders() {
     table.set(b, value(77));
     require(table.get(b) == value(77) && table.file_bytes() == 680, "overwrite never appends");
     const auto before_refusal = snapshot(*slab);
-    capacity_failure("cohort", [&] { table.insert("h", value(8)); });
+    // limit 7=U, need 8: h is the eighth distinct row; row admission precedes bytes.
+    capacity_failure("cohort", 7, 8, [&] { table.insert("h", value(8)); });
     require(snapshot(*slab) == before_refusal && table.size() == 7 && !table.find("h"),
             "overflow changes no region byte, link, cursor, count or neighbor");
 
@@ -155,8 +158,10 @@ void one_excess_byte_count_tickets_binary_keys_and_rank() {
     const auto before = snapshot(*slab);
     // 1+96*2+3=196; a (1 byte) then bbb (3) needs 197: exactly
     // ONE excess byte, although the physical page still has room.
-    capacity_failure("cohort", [&] { table.require_insert("bbb"); });
-    capacity_failure("cohort", [&] { table.insert("bbb", value(2)); });
+    // limit 3=B_U, need 4=1+3: a then bbb exceed aggregate key bytes before physical extent.
+    capacity_failure("cohort", 3, 4, [&] { table.require_insert("bbb"); });
+    // limit 3=B_U, need 4=1+3: insertion uses the same whole-key ticket.
+    capacity_failure("cohort", 3, 4, [&] { table.insert("bbb", value(2)); });
     require(snapshot(*slab) == before && table.size() == 1, "one-byte overrun is wholly read-only");
     const std::string binary("b\0", 2);
     const auto second = table.insert(binary, value(2));
@@ -165,7 +170,8 @@ void one_excess_byte_count_tickets_binary_keys_and_rank() {
     const auto rank0 = ranks.insert("a", 0);
     require(rank0.second && rank0.first == 1, "Rank reserves byte zero too");
     const auto rank_before = snapshot(*slab);
-    capacity_failure("exit_rank", [&] { ranks.insert("bbb", 1); });
+    // limit 3=B_V, need 4=1+3: a then bbb exceed rank key bytes.
+    capacity_failure("exit_rank", 3, 4, [&] { ranks.insert("bbb", 1); });
     require(snapshot(*slab) == rank_before, "Rank byte refusal preserves both trees");
     const auto rank1 = ranks.insert(binary, 1);
     // Rank=1+60*2+3=124; the second unaligned node starts at 62.
@@ -183,13 +189,15 @@ void one_excess_byte_count_tickets_binary_keys_and_rank() {
     expose_zeroed_capacity(*rows);
     one_row.insert("a", value(1));
     const auto row_before = snapshot(*rows);
-    capacity_failure("cohort", [&] { one_row.insert("b", value(2)); });
+    // limit 1=U, need 2: b follows the admitted a row despite ample byte allowance.
+    capacity_failure("cohort", 1, 2, [&] { one_row.insert("b", value(2)); });
     require(snapshot(*rows) == row_before, "U is enforced even when another header+key fits");
 
     auto empty = std::make_shared<ScratchSlab>(ScratchManifest{});
     Table zero;
     zero.bind_scratch(empty, ScratchResource::cohort);
-    capacity_failure("cohort", [&] { zero.insert("", value(0)); });
+    // limit 0=U, need 1: an empty key still requires the first row.
+    capacity_failure("cohort", 0, 1, [&] { zero.insert("", value(0)); });
     require(zero.size() == 0 && zero.file_bytes() == 0
             && empty->region(ScratchResource::cohort).logical_extent == 0,
             "U=0 cannot spend a reserved null byte or publish an empty key");
@@ -221,7 +229,8 @@ void resident_refusal_precedes_writeback_and_eviction() {
         require(table.resident_size() == 1, "a pinned row cannot be evicted");
     }
     const auto before = snapshot(*slab);
-    capacity_failure("cohort", [&] { table.emplace("bb", Facts{value(2)}); });
+    // limit 2=B_U, need 3=1+2: a plus bb exceeds the index's key-byte allowance.
+    capacity_failure("cohort", 2, 3, [&] { table.emplace("bb", Facts{value(2)}); });
     require(snapshot(*slab) == before && table.size() == 1 && table.resident_size() == 1,
             "emplace ticket precedes dirty writeback, eviction and all index changes");
     require(table.find_resident("a")->second.row == value(9), "refusal retains the physical live row");
@@ -259,7 +268,8 @@ void complete_borrowed_workset_is_one_read_only_ticket() {
     table.insert("a", value(1));
     const auto before = snapshot(*slab);
     const std::array<std::string, 4> refused{{"a", "b", "b", "ccc"}};
-    capacity_failure("cohort", [&] {
+    // limit 4=B_U, need 5=1+1+3: existing a plus deduplicated new b and ccc.
+    capacity_failure("cohort", 4, 5, [&] {
         table.require_inserts([&](auto&& visit) {
             for (const auto& key : refused) visit(key);
         });
@@ -434,16 +444,19 @@ void insertion_order_after_restore_and_spill_equivalence() {
 }
 
 template<class F>
-void capacity_text(const char* resource, const std::string& expected, F&& operation) {
+void capacity_text(const char* resource, std::uint64_t limit, std::uint64_t need,
+                   const std::string& expected, F&& operation) {
     bool caught = false;
     try { operation(); }
     catch (const detail::ScratchCapacityError& error) {
         caught = true;
         require(error.what() == expected, "capacity text includes the live limit and workaround");
         const auto failure = classify_run_failure(error);
+        // Expected limit/need are hand-derived at each call below; English checks remain exact.
         require(failure.code == RunFailureCode::scratch_capacity_exceeded && failure.args
-                && *failure.args == std::string("{\"resource\":\"") + resource + "\"}",
-                "capacity code and resource-only args stay unchanged");
+                && *failure.args == "{\"limit\":" + std::to_string(limit)
+                    + ",\"need\":" + std::to_string(need) + ",\"resource\":\"" + resource + "\"}",
+                "capacity code and exact capacity args");
     }
     require(caught, "capacity text must come from a real refusal");
 }
@@ -479,12 +492,15 @@ void resident_cap_is_active_only_and_read_only() {
     const std::string text =
         "more than 4,096 order ids active at once (placed and not yet closed or cancelled); "
         "close or cancel orders sooner, or reuse ids";
-    capacity_text("cohort", text, [&] { table.require_insert("one-too-many"); });
-    capacity_text("cohort", text, [&] {
+    // limit 4096, need 4097: 4096 nonspillable live-* rows plus one new active id.
+    capacity_text("cohort", 4096, 4097, text, [&] { table.require_insert("one-too-many"); });
+    // limit 4096, need 4097: emplace reserves the same additional active row.
+    capacity_text("cohort", 4096, 4097, text, [&] {
         table.emplace("one-too-many", LiveFacts{value(5001), true});
     });
     const std::array<std::string, 3> workset{{"live-0", "closed-1", "closed-1"}};
-    capacity_text("cohort", text, [&] {
+    // limit 4096, need 4097: live-0 is active already; repeated retired closed-1 adds one.
+    capacity_text("cohort", 4096, 4097, text, [&] {
         table.require_inserts([&](auto&& visit) {
             for (const auto& key : workset) visit(key);
         });
@@ -516,7 +532,8 @@ void cohort_and_rank_refusal_text_uses_manifest() {
     Table table;
     table.bind_scratch(slab, ScratchResource::cohort);
     table.insert("a", value(1));
-    capacity_text("cohort",
+    // limit 1=U, need 2: a already exists when b is requested.
+    capacity_text("cohort", 1, 2,
         "more than 1 distinct order ids in one run; reuse ids, e.g. build the id from a modulo of bar_index",
         [&] { table.require_insert("b"); });
     manifest.U = 2;
@@ -525,16 +542,19 @@ void cohort_and_rank_refusal_text_uses_manifest() {
     Table bytes;
     bytes.bind_scratch(slab, ScratchResource::cohort);
     bytes.insert("a", value(1));
-    capacity_text("cohort",
+    // limit 1=B_U, need 2=1+1: a and b each contribute one key byte.
+    capacity_text("cohort", 1, 2,
         "order ids use more than 1 bytes in one run; use shorter ids or reuse ids",
         [&] { bytes.require_insert("b"); });
     detail::DiskIdTable<std::uint32_t> ranks;
     ranks.bind_scratch(slab, ScratchResource::exit_rank);
     for (unsigned i = 0; i < 27; ++i) ranks.insert(std::to_string(i), i);
-    capacity_text("exit_rank",
+    // limit 27=V, need 28: excess is the next distinct id after 0 through 26.
+    capacity_text("exit_rank", 27, 28,
         "scratch capacity exceeded: more than 27 exit rank ids in one run; reuse ids",
         [&] { ranks.insert("excess", 28); });
-    capacity_text("cohort", "id longer than 64 bytes",
+    // limit 64, need 65: the supplied key has 65 bytes.
+    capacity_text("cohort", 64, 65, "id longer than 64 bytes",
         [&] { bytes.require_insert(std::string(65, 'x')); });
     require(detail::scratch_limit_number(manifest.U) == "2"
             && detail::scratch_limit_number(65536) == "65,536"

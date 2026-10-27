@@ -88,8 +88,10 @@ void overflow_and_stream_tier() {
             require(run_failure_code_class(value.code) == RunFailureClass::resource,
                     "overflow is a resource refusal");
             require(!run_failure_code_retryable(value.code), "overflow is not retryable");
-            require(value.args && *value.args == std::string("{\"resource\":\"layout\"}"),
-                    "overflow carries only the closed layout resource");
+            // limit 2^63-1, need bars (2^63 or 2^64-1): doubling either input cannot fit uint64.
+            require(value.args && *value.args == "{\"limit\":9223372036854775807,\"need\":"
+                    + std::to_string(bars) + ",\"resource\":\"layout\"}",
+                    "overflow carries the exact bar-count limit and requested bars");
         }
         require(caught, "2*bars overflow must refuse before wrapping");
     }

@@ -147,7 +147,7 @@ Bytes image(const ScratchSlab& slab) {
     return result;
 }
 
-void retirement_ticket(std::uint64_t keys, std::uint64_t bytes, const char* failure_resource) {
+void retirement_ticket(std::uint64_t keys, std::uint64_t bytes, const char* expected_failure_args) {
     ScratchManifest manifest;
     manifest.K_e = keys;
     manifest.B_e = bytes;
@@ -170,13 +170,14 @@ void retirement_ticket(std::uint64_t keys, std::uint64_t bytes, const char* fail
             });
         });
     };
-    if (failure_resource) {
+    if (expected_failure_args) {
         bool caught = false;
         try { reserve_all(); }
         catch (const detail::ScratchCapacityError& error) {
             const auto failure = classify_run_failure(error);
+            // K=3,B=4: limit 124=40*3+4, need 125=41+42+42; K=2: limit 2, need 3 distinct keys.
             caught = failure.code == RunFailureCode::scratch_capacity_exceeded && failure.args
-                && *failure.args == std::string("{\"resource\":\"") + failure_resource + "\"}";
+                && *failure.args == expected_failure_args;
         }
         require(caught && image(*slab) == before && table.size() == 3
                 && table.erased_rows() == 0 && table.erased_digest() == digest,
@@ -225,8 +226,10 @@ void individual_erase_and_replace() {
         try { table.erase(1); }
         catch (const detail::ScratchCapacityError& error) {
             const auto failure = classify_run_failure(error);
+            // Index: limit 1, need 2 domains; data: limit 81=40*2+1, need 82=(40+1)*2 for x and (x,"").
             caught = failure.args && *failure.args == (index_failure
-                ? "{\"resource\":\"erased_index\"}" : "{\"resource\":\"erased_data\"}");
+                ? "{\"limit\":1,\"need\":2,\"resource\":\"erased_index\"}"
+                : "{\"limit\":81,\"need\":82,\"resource\":\"erased_data\"}");
         }
         require(caught && image(*slab) == before && table.size() == 1 && table.contains(1)
                 && table.at(1).source_id == "x" && table.erased_rows() == 0
@@ -244,8 +247,10 @@ int main() {
         // Unique workset keys: x, (x,a), (x,b). Duplicate (x,a) rows share
         // storage. K=3,B=5 gives D=120+5=125 exactly; B=4 is one byte short.
         retirement_ticket(3, 5, nullptr);
-        retirement_ticket(3, 4, "erased_data");
-        retirement_ticket(2, 5, "erased_index");
+        // limit 124=40*3+4, need 125=(40+1)+(40+1+1)+(40+1+1): x, (x,a), (x,b).
+        retirement_ticket(3, 4, "{\"limit\":124,\"need\":125,\"resource\":\"erased_data\"}");
+        // limit 2=K_e, need 3: x and (x,a) fit, then the distinct (x,b) needs a third slot.
+        retirement_ticket(2, 5, "{\"limit\":2,\"need\":3,\"resource\":\"erased_index\"}");
         return 0;
     } catch (const std::exception& error) {
         std::fprintf(stderr, "test_placement_q_removed: %s\n", error.what());

@@ -534,8 +534,9 @@ void slab_data_refusal_preserves_fold_and_index() {
     try { store.insert_or_assign("", 1); }
     catch (const ScratchCapacityError& error) {
         const auto failure = pineforge::classify_run_failure(error);
+        // limit 80=40*2, need 120=80+40: the empty new key needs a header after the full record.
         refused = failure.code == pineforge::RunFailureCode::scratch_capacity_exceeded
-            && failure.args && *failure.args == "{\"resource\":\"consumed_data\"}";
+            && failure.args && *failure.args == "{\"limit\":80,\"need\":120,\"resource\":\"consumed_data\"}";
     }
     require(refused && SlabImage(*slab) == before, "data refusal preserves all fold/index bytes and extents");
     std::mt19937_64 random(0x150da7a);

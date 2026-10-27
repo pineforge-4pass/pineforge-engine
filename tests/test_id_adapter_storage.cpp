@@ -950,8 +950,9 @@ public:
             catch (const pineforge::detail::ScratchCapacityError& error) {
                 refused = std::string(error.what()).find("4,096") != std::string::npos;
                 const auto failure = pineforge::classify_run_failure(error);
+                // limit 4096, need 4097: bars 0..4095 placed 4096 live dense-* ids before this new cohort.
                 require(failure.code == pineforge::RunFailureCode::scratch_capacity_exceeded
-                        && failure.args && *failure.args == "{\"resource\":\"cohort\"}",
+                        && failure.args && *failure.args == "{\"limit\":4096,\"need\":4097,\"resource\":\"cohort\"}",
                         "adapter cap refusal retains typed resource");
             }
             require(refused && broker_state_hash_projection() == before_hash

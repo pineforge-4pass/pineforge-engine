@@ -58,7 +58,7 @@ struct Image {
 };
 template<class Operation>
 void refuses_unchanged(const std::shared_ptr<ScratchSlab>& slab, ScratchResource resource,
-                       const Store& store, Operation operation) {
+                       std::uint64_t limit, std::uint64_t need, const Store& store, Operation operation) {
     const Image before(*slab);
     const auto size = store.size();
     bool caught = false;
@@ -69,8 +69,10 @@ void refuses_unchanged(const std::shared_ptr<ScratchSlab>& slab, ScratchResource
         require(failure.code == RunFailureCode::scratch_capacity_exceeded
                 && run_failure_code_class(failure.code) == RunFailureClass::resource
                 && !run_failure_code_retryable(failure.code), "coded nonretryable capacity failure");
-        require(failure.args && *failure.args == std::string("{\"resource\":\"")
-                + detail::scratch_resource_name(resource) + "\"}", "exact closed resource argument");
+        // Expected limit/need are hand-derived at each call below.
+        require(failure.args && *failure.args == "{\"limit\":" + std::to_string(limit)
+                + ",\"need\":" + std::to_string(need) + ",\"resource\":\""
+                + detail::scratch_resource_name(resource) + "\"}", "exact capacity arguments");
     }
     require(caught, "one additional record must refuse before mutation");
     require(Image(*slab) == before && store.size() == size,
@@ -174,7 +176,8 @@ void boundaries() {
     // D while one ever-key slot remains. Page rounding grants no extra byte.
     const std::string exact(42, 'L');
     require(store.insert_or_assign(exact, 1), "exact data fit");
-    refuses_unchanged(slab, ScratchResource::erased_data, store,
+    // limit 82=40*2+2, need 122=82+40: append an empty key after the exact-fit record.
+    refuses_unchanged(slab, ScratchResource::erased_data, 82, 122, store,
                       [&] { store.insert_or_assign("", 2); });
     require(store.erase(exact) && store.insert_or_assign(exact, 9),
             "resurrection at exact capacity reuses old bytes");
@@ -185,7 +188,8 @@ void boundaries() {
     store.preflight_assign("x", std::string_view(""));
     require(Image(*slab) == before, "successful admission is read-only");
     // Header and first fit, but 40+1+42=83 exceeds D=82. No header may land.
-    refuses_unchanged(slab, ScratchResource::erased_data, store,
+    // limit 82=40*2+2, need 83=40+1+42: the whole first pair is reserved.
+    refuses_unchanged(slab, ScratchResource::erased_data, 82, 83, store,
                       [&] { store.insert_or_assign("x", std::string(42, 'R'), 3); });
 
     ScratchManifest load;
@@ -197,10 +201,12 @@ void boundaries() {
     for (int i = 0; i < 32; ++i) half.insert_or_assign(std::string(1, static_cast<char>(i)), i);
     require(loaded->region(ScratchResource::erased_index).capacity == 64 * 16,
             "hand-derived Q/2 load ceiling uses exactly one 64-slot index");
-    refuses_unchanged(loaded, ScratchResource::erased_index, half,
+    // limit 32=min(K=32,Q/2=32), need 33: a new key after 32 distinct inserts.
+    refuses_unchanged(loaded, ScratchResource::erased_index, 32, 33, half,
                       [&] { half.insert_or_assign(std::string(1, 'Z'), 33); });
     require(half.erase(std::string(1, '\0')), "erase keeps an ever-key slot");
-    refuses_unchanged(loaded, ScratchResource::erased_index, half,
+    // limit 32, need 33: erasure leaves all 32 ever-key slots occupied.
+    refuses_unchanged(loaded, ScratchResource::erased_index, 32, 33, half,
                       [&] { half.insert_or_assign(std::string(1, 'Z'), 33); });
     require(half.insert_or_assign(std::string(1, '\0'), 77), "resurrect at Q/2");
 
@@ -208,7 +214,8 @@ void boundaries() {
     Store empty;
     empty.bind_scratch_tables(zero, ScratchResource::erased_data, ScratchResource::erased_index);
     require(!empty.lookup("x") && !empty.erase("x"), "Q=0 reads are empty");
-    refuses_unchanged(zero, ScratchResource::erased_index, empty,
+    // limit 0=min(K=0,Q/2=0), need 1: the first key in an empty manifest.
+    refuses_unchanged(zero, ScratchResource::erased_index, 0, 1, empty,
                       [&] { empty.insert_or_assign("x", 1); });
 }
 
@@ -242,7 +249,8 @@ void consumed_single_string() {
     try { store.preflight_joined_single("Y", '\x1f', "E"); }
     catch (const detail::ScratchCapacityError& error) {
         const auto value = classify_run_failure(error);
-        refused = value.args && *value.args == "{\"resource\":\"consumed_index\"}";
+        // limit 1=K_c, need 2: X<sep>E already occupies the sole ever-key slot.
+        refused = value.args && *value.args == "{\"limit\":1,\"need\":2,\"resource\":\"consumed_index\"}";
     }
     require(refused, "new joined key uses consumed_index capacity");
 
@@ -257,24 +265,28 @@ void consumed_single_string() {
     try { short_store.preflight_joined_single(std::string(39, 'x'), '\x1f', "E"); }
     catch (const detail::ScratchCapacityError& error) {
         const auto value = classify_run_failure(error);
-        refused = value.args && *value.args == "{\"resource\":\"consumed_data\"}";
+        // limit 80=40*2+0, need 81=40+39+1+1: header, first id, separator, second id.
+        refused = value.args && *value.args == "{\"limit\":80,\"need\":81,\"resource\":\"consumed_data\"}";
     }
     require(refused && Image(*short_slab) == short_before && short_store.empty(),
             "joined precommit extent includes separator and whole record before mutation");
 }
 
 template<class F>
-void text_refusal(ScratchResource resource, const std::string& expected, F&& operation) {
+void text_refusal(ScratchResource resource, std::uint64_t limit, std::uint64_t need,
+                  const std::string& expected, F&& operation) {
     bool caught = false;
     try { operation(); }
     catch (const detail::ScratchCapacityError& error) {
         caught = true;
         require(error.what() == expected, "exact limit and workaround from the live manifest");
         const auto failure = classify_run_failure(error);
+        // Expected limit/need are hand-derived at each call below; English checks remain exact.
         require(failure.code == RunFailureCode::scratch_capacity_exceeded && failure.args
-                && *failure.args == std::string("{\"resource\":\"")
+                && *failure.args == "{\"limit\":" + std::to_string(limit)
+                    + ",\"need\":" + std::to_string(need) + ",\"resource\":\""
                     + detail::scratch_resource_name(resource) + "\"}",
-                "message change preserves code and resource-only args");
+                "message change preserves code and exact capacity args");
     }
     require(caught, "message test must trigger the real ticket");
 }
@@ -290,7 +302,8 @@ void limit_messages_and_oversized_components() {
         Store store;
         store.bind_scratch_tables(slab, data, index);
         store.insert_or_assign("a", 1);
-        text_refusal(index, consumed
+        // limit 1=K, need 2: b is the second distinct key after a.
+        text_refusal(index, 1, 2, consumed
             ? "more than 1 keys for partially filled exits in one run; reuse ids, e.g. a modulo of bar_index"
             : "more than 1 retired order-id keys in one run (each retired order uses 2); reuse ids, e.g. a modulo of bar_index",
             [&] { store.preflight_assign("b"); });
@@ -300,13 +313,16 @@ void limit_messages_and_oversized_components() {
         Store bytes;
         bytes.bind_scratch_tables(slab, data, index);
         bytes.insert_or_assign(std::string(40, 'x'), 2);
-        text_refusal(data, consumed
+        // limit 80=40*2, need 120=80+40: an empty key still needs a header after the full record.
+        text_refusal(data, 80, 120, consumed
             ? "partially filled exits use more than 0 bytes in one run; use shorter ids or reuse ids"
             : "retired order ids use more than 0 bytes in one run; use shorter ids or reuse ids",
             [&] { bytes.preflight_assign(""); });
-        text_refusal(data, "id longer than 64 bytes",
+        // limit 64, need 65: the supplied first component has 65 bytes.
+        text_refusal(data, 64, 65, "id longer than 64 bytes",
             [&] { bytes.preflight_assign(std::string(65, 'x')); });
-        text_refusal(data, "id longer than 64 bytes",
+        // limit 64, need 65=max(1,65): the second component is oversized.
+        text_refusal(data, 64, 65, "id longer than 64 bytes",
             [&] { bytes.preflight_assign("x", std::string_view(std::string(65, 'y'))); });
     }
     // The old oversized fixture remains covered on the ordinary disk path.

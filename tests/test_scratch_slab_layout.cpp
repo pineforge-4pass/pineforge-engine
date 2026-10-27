@@ -43,6 +43,26 @@ void capacity_failure(const char* resource, Operation operation) {
 }
 
 template<class Operation>
+void capacity_failure(const char* resource, std::uint64_t limit, std::uint64_t need,
+                      Operation operation) {
+    bool caught = false;
+    try {
+        operation();
+    } catch (const detail::ScratchCapacityError& error) {
+        caught = true;
+        const auto value = classify_run_failure(error);
+        require(value.code == RunFailureCode::scratch_capacity_exceeded, "typed capacity code");
+        require(run_failure_code_class(value.code) == RunFailureClass::resource, "resource class");
+        require(!run_failure_code_retryable(value.code), "capacity is not retryable");
+        // Expected limit/need are hand-derived at each numeric call below.
+        require(value.args && *value.args == "{\"limit\":" + std::to_string(limit)
+                + ",\"need\":" + std::to_string(need) + ",\"resource\":\"" + resource + "\"}",
+                "capacity args include the exact limit, need and resource");
+    }
+    require(caught, "expected a capacity refusal");
+}
+
+template<class Operation>
 void io_failure(Operation operation) {
     bool caught = false;
     try {
@@ -166,9 +186,24 @@ void checked_overflows() {
     manifest = {};
     manifest.B_e = static_cast<std::uint64_t>(std::numeric_limits<off_t>::max());
     // The next page boundary exceeds the host's off_t (or uint64) maximum.
-    capacity_failure("layout", [&] { (void)detail::compute_layout(manifest); });
+    const auto host_limit = std::min(
+        static_cast<std::uint64_t>(std::numeric_limits<off_t>::max()),
+        static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()));
+    if constexpr (std::numeric_limits<off_t>::digits < 64) {
+        // limit min(host maxima), need off_t max+1: page-rounding 2^d-1 bytes gives 2^d.
+        capacity_failure("layout", host_limit, manifest.B_e + 1,
+                         [&] { (void)detail::compute_layout(manifest); });
+    } else {
+        capacity_failure("layout", [&] { (void)detail::compute_layout(manifest); });
+    }
     manifest.B_e = static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max());
-    capacity_failure("layout", [&] { (void)detail::compute_layout(manifest); });
+    if constexpr (std::numeric_limits<std::size_t>::digits < 64) {
+        // limit min(host maxima), need size_t max+1: page-rounding 2^d-1 bytes gives 2^d.
+        capacity_failure("layout", host_limit, manifest.B_e + 1,
+                         [&] { (void)detail::compute_layout(manifest); });
+    } else {
+        capacity_failure("layout", [&] { (void)detail::compute_layout(manifest); });
+    }
     manifest = {};
     manifest.U = maximum / 96 + 1;
     capacity_failure("layout", [&] { (void)detail::compute_layout(manifest); });
@@ -177,7 +212,8 @@ void checked_overflows() {
     capacity_failure("layout", [&] { (void)detail::compute_layout(manifest); });
     manifest = {};
     manifest.V = 28; // Separate fixed rank population rule.
-    capacity_failure("layout", [&] { (void)detail::compute_layout(manifest); });
+    // limit 27, need 28: the manifest declares one rank beyond the fixed population bound.
+    capacity_failure("layout", 27, 28, [&] { (void)detail::compute_layout(manifest); });
 }
 
 struct Snapshot {
@@ -238,17 +274,22 @@ void bounds_reservations_and_reset() {
         slab.write_at(region, 0, pattern.data(), pattern.size());
     }
     const auto full = snapshot(slab);
+    // Exact capacities from worked manifest 2: 0,0,40*2+9,16*64,40*3+11,16*64,1+96*2+7,1+60*2+5,16*3.
+    const Nine capacities{{0, 0, 89, 1024, 131, 1024, 200, 126, 48}};
     for (std::size_t i = 0; i < addresses.size(); ++i) {
         const auto& region = slab.regions()[i];
         require(!slab.can_extend(region, region.capacity + 1), "page padding is not admitted");
         std::uint64_t publication = 0;
-        capacity_failure(names[i], [&] {
+        // limit capacities[i], need capacities[i]+1: reserve one byte past the exact region.
+        capacity_failure(names[i], capacities[i], capacities[i] + 1, [&] {
             slab.require_extend(region, region.capacity + 1);
             ++publication; // Must never be reached on a refused reservation.
             slab.write_at(region, 0, sample.data(), sample.size());
         });
         require(publication == 0, "reservation precedes its caller's first mutation");
-        capacity_failure(names[i], [&] { slab.write_at(region, region.capacity, sample.data(), 1); });
+        // limit capacities[i], need capacities[i]+1: write one byte at the first unadmitted offset.
+        capacity_failure(names[i], capacities[i], capacities[i] + 1,
+                         [&] { slab.write_at(region, region.capacity, sample.data(), 1); });
         capacity_failure(names[i], [&] {
             slab.write_at(region, std::numeric_limits<std::uint64_t>::max(), sample.data(), 1);
         });

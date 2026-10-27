@@ -14,6 +14,7 @@
 #include <initializer_list>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -218,8 +219,11 @@ void capacity_reaches_the_public_failure_channel(std::uint64_t roots) {
     configure(host, true, roots);
     host.run(feed.data(), static_cast<int>(feed.size()));
     require(host.native_state().kind == NativeLifecycleKind::Failed, "root overflow fails the native run");
+    // limit R=64 or 128, need R+1=65 or 129: the next rooted replacement exceeds the admitted rows.
+    const auto expected_args = "{\"limit\":" + std::to_string(roots)
+        + ",\"need\":" + std::to_string(roots + 1) + ",\"resource\":\"successor_roots\"}";
     require(std::strcmp(run_failure_code_of(host), "scratch_capacity_exceeded") == 0
-            && std::strcmp(run_failure_args_of(host), "{\"resource\":\"successor_roots\"}") == 0,
+            && std::strcmp(run_failure_args_of(host), expected_args.c_str()) == 0,
             "public failure preserves the root resource code");
     require(host.begin_calls == 1 && host.replacements == roots && host.closed_trade_count() == 0,
             "failing replacement publishes no successor or financial effect");
