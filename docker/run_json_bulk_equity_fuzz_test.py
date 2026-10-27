@@ -18,14 +18,22 @@ the generator's own rows (expected equity_curve bytes and endpoints) and, for
 the single-mutation rows, the exact pf_sink refusal text each mutation must
 produce.
 
+A second family builds one valid sink of about 76 KiB (read-only, shared by its
+rows) and puts a single fault on, beside and far from the real 64 KiB direct-I/O
+page boundary of the sink reader. Every line index is read off the file's bytes;
+each fault must be refused by the strict reader with its named check at exactly
+that line (or be accepted, for integer -0), at the production window and at 97.
+
 The controls at the end break the bulk acceptance on purpose and require the
-same comparison to fail, and require the engagement check (json.loads count) to
-fail for a bulk path that never accepts anything.
+same comparison to fail (the repr proof, the integer -0 grammar, the time range
+test, the reader's E count and its line number), and require the engagement
+check (json.loads count) to fail for a bulk path that never accepts anything.
 
 No row is skipped or disabled. Run on the lab's disk-backed workspace like the
 other run_json rows; docker/run_json_*_test.py is found by preflight.
 """
 import hashlib
+import inspect
 import json
 import math
 from pathlib import Path
@@ -46,7 +54,7 @@ import run_json
 import test_run_json_sink as ordinary
 import test_run_json_stream_fastpath as oracle
 from run_json_bulk_equity_test import I53, _run
-from run_json_trade_scan_test import _event, _sink, _trade, _trailer_start
+from run_json_trade_scan_test import _event, _point, _sink, _trade, _trailer_start
 
 
 START = 1_700_000_000_000
@@ -57,7 +65,8 @@ SINGLE_SEEDS = (0, 1)
 CHAIN_VARIANTS = 2
 TAMPER_VARIANTS = 3
 CONTROL_SEEDS = tuple(range(6))
-_SALT = {"valid": 1, "single": 2, "chain": 3, "tamper": 4, "long": 5, "control": 6}
+_SALT = {"valid": 1, "single": 2, "chain": 3, "tamper": 4, "long": 5, "control": 6,
+         "page": 7, "pick": 8}
 
 
 def _rng(family, seed, variant=0):
@@ -1054,6 +1063,289 @@ def test_the_catalogue_names_every_listed_corruption():
     assert not missing, missing
 
 
+# ------------------------------------------- faults at the direct-I/O page boundary
+
+# The sink reader pulls the file through 64 KiB direct-I/O pages (run_json's
+# _BoundedJSONFile.window) aligned at file offsets 0, 65536, ... and the bulk window
+# carries the unfinished tail of a line from one page into the next. One valid sink
+# of about 76 KiB holds exactly one such boundary; every row below damages one line
+# of a copy of it. No line index is a constant of this file: _page_positions reads
+# them all off the bytes.
+PAGE = 64 * 1024
+PAGE_POINTS = 1350
+PAGE_WINDOWS = (64 * 1024, 97)
+PAGE_FAULTS = ("equity-0.10", "profit-0.10", "time-minus-zero", "space", "point-deleted",
+               "tag-X")
+# Inside the bulk grammar: only the repr proof refuses these two, and it refuses a whole batch.
+PAGE_PROOF_FAULTS = ("equity-0.10", "profit-0.10")
+PAGE_LABELS = (
+    ("boundary", "before", "after", "first-1", "first-2", "first-3", "last-3", "last-2",
+     "last-1", "after-non-e") + tuple(f"random-{rank}" for rank in range(12)))
+
+
+def _page_cases():
+    """The boundary line and its two neighbours take every fault; each other position one."""
+    cases = []
+    for rank, label in enumerate(PAGE_LABELS):
+        if rank < 3:
+            cases.extend((label, fault) for fault in PAGE_FAULTS)
+        else:
+            cases.append((label, PAGE_FAULTS[rank % len(PAGE_FAULTS)]))
+    return cases
+
+
+PAGE_CASES = _page_cases()
+PAGE_IDS = [f"{label}-{fault}" for label, fault in PAGE_CASES]
+
+
+def _paged_spec(pad):
+    """1350 E points of full-width doubles, five other records and `pad` bytes of event text.
+
+    Full-width reprs make an E line about 57 bytes, so the sink is about 76 KiB and the
+    64 KiB boundary falls near E line 1100, between the other records at E lines 880
+    and 1240. `pad` moves every later byte so the fixture can step the boundary off a
+    line start."""
+    rng = _rng("page", 0)
+    points = [["E", START + index * 60_000, rng.uniform(1000.0, 99999.0),
+               rng.uniform(-999.0, 999.0)] for index in range(PAGE_POINTS)]
+    after = {120: _trade(1, entry_bar_index=1, pnl=12.5), 360: _event("p" * pad),
+             640: ["K", 50.0],
+             880: ["O", 0, ordinary.bars.T0, ordinary.bars.T0 + 1, -0.0, 4294967295.0],
+             1240: _trade(2, entry_bar_index=2, pnl=-3.25)}
+    rows = []
+    for index, point in enumerate(points):
+        rows.append(point)
+        if index in after:
+            rows.append(after[index])
+    return _Spec(rows, points, len(after), 2, False)
+
+
+def _line_starts(lines):
+    starts, offset = [], 0
+    for line in lines:
+        starts.append(offset)
+        offset += len(line) + 1
+    return starts
+
+
+def _boundary_line(lines, starts):
+    """The E line holding both the last byte of page 0 and the first byte of page 1."""
+    for index in range(1, len(lines) - 1):
+        if starts[index] < PAGE < starts[index] + len(lines[index]) + 1:
+            around = (lines[index - 1], lines[index], lines[index + 1])
+            return index if all(line.startswith(_E_PREFIX) for line in around) else None
+    return None
+
+
+def _page_positions(lines, boundary):
+    """Label -> index into `lines` for every fault position, and all E line indices."""
+    e_lines = [i for i in range(1, len(lines)) if lines[i].startswith(_E_PREFIX)]
+    named = {"boundary": boundary, "before": boundary - 1, "after": boundary + 1,
+             "first-1": e_lines[0], "first-2": e_lines[1], "first-3": e_lines[2],
+             "last-3": e_lines[-3], "last-2": e_lines[-2], "last-1": e_lines[-1]}
+    # An E line that resumes a run after a non-E record which itself followed an E line.
+    named["after-non-e"] = next(
+        i for i in range(2, len(lines))
+        if lines[i].startswith(_E_PREFIX) and not lines[i - 1].startswith(_E_PREFIX)
+        and lines[i - 2].startswith(_E_PREFIX))
+    rng = _rng("pick", 0)
+    pool = [i for i in e_lines if i not in named.values()]
+    chosen = []
+    while len(chosen) < 12:
+        pick = pool[rng.randrange(len(pool))]
+        if pick not in chosen:
+            chosen.append(pick)
+    named.update((f"random-{rank}", index) for rank, index in enumerate(chosen))
+    return named, e_lines
+
+
+class _Paged(NamedTuple):
+    spec: _Spec
+    raw: bytes
+    lines: list      # header first, no terminators (the _Image split)
+    starts: list     # file offset of each line
+    boundary: int    # index of the E line that straddles offset PAGE
+    positions: dict  # label -> line index
+    e_lines: list    # line index of every E line, in file order
+
+
+@pytest.fixture(scope="module")
+def paged(tmp_path_factory):
+    """The one valid sink every page row reads and never writes."""
+    directory = tmp_path_factory.mktemp("paged-sink")
+    for pad in range(64):
+        spec = _paged_spec(pad)
+        raw = _original(directory, spec)
+        lines = _Image(raw).lines
+        starts = _line_starts(lines)
+        boundary = _boundary_line(lines, starts)
+        if boundary is not None:
+            positions, e_lines = _page_positions(lines, boundary)
+            return _Paged(spec, raw, lines, starts, boundary, positions, e_lines)
+    raise AssertionError("no event padding put the 64 KiB boundary inside an E line")
+
+
+def _apply_page_fault(fault, line, page_offset):
+    """The damaged line, what the strict reader must do with it, and a note.
+
+    `page_offset` is where the page boundary falls inside this line, or None. Every
+    expectation is traced against pf_sink: _parse, _int_token, _field, RecordParser."""
+    shape = _E_SHAPE.fullmatch(line)
+    assert shape is not None, line
+    if fault in ("equity-0.10", "profit-0.10"):
+        start, end = shape.span(2 if fault.startswith("equity") else 3)
+        # 0.10 is a double but not its repr: the grammar takes it, only the proof refuses.
+        return (line[:start] + b"0.10" + line[end:], REFUSE(F_F64),
+                f"{line[start:end]!r} -> 0.10")
+    if fault == "time-minus-zero":
+        start, end = shape.span(1)
+        # An integer -0 is a valid i64 for the strict reader; the bulk grammar refuses it.
+        return line[:start] + b"-0" + line[end:], ACCEPT, f"{line[start:end]!r} -> -0"
+    if fault == "space":
+        # On the boundary line the space becomes the first byte of the second page.
+        at = len(line) - 1 if page_offset is None else min(max(page_offset, 5), len(line) - 1)
+        return line[:at] + b" " + line[at:], REFUSE(F_WS), f"space inserted at byte {at}"
+    if fault == "point-deleted":
+        start, end = shape.span(2)
+        token = line[start:end]
+        point = token.index(b".")
+        digits = token[:point] + token[point + 1:]
+        # Without its point the equity is a JSON integer: past 2**53 - 1 the integer
+        # bound refuses first, otherwise the f64 column refuses an integer.
+        expect = REFUSE(F_BOUND if int(digits) > I53 else F_F64)
+        return (line[:start + point] + line[start + point + 1:], expect,
+                f"{token!r} lost its point")
+    assert fault == "tag-X", fault
+    return b'["X"' + line[4:], REFUSE(F_ABSENT), "tag E -> X"
+
+
+def _execute_windows(tmp_path, monkeypatch, case, windows):
+    """Strict once, then the bulk path at each window, all on the very same mutated file."""
+    outcomes = {}
+    with _sink(tmp_path, case.spec.rows, verify=False) as (sink, library, report):
+        Path(sink.path).write_bytes(case.mutated.raw)
+        if case.mutated.receipt is not None:
+            library.sha = case.mutated.receipt
+        strict = _run(sink, library, report, monkeypatch, False)
+        for window in windows:
+            with monkeypatch.context() as patch:
+                patch.setattr(run_json, "_BULK_E_WINDOW", window, raising=True)
+                outcomes[window] = _run(sink, library, report, patch, True)
+    return strict, outcomes
+
+
+def _assert_prefix_in_bulk(strict, actual, accepted, context):
+    """About one json.loads fewer per canonical E line that precedes the fault."""
+    saved = strict[2]["verify"] - actual[2]["verify"]
+    assert saved >= accepted // 2, (
+        f"{context}: verify decoded {actual[2]['verify']} documents against "
+        f"{strict[2]['verify']} for the strict reader, which read {accepted} E lines the "
+        f"bulk side should have accepted without a decode")
+
+
+def test_the_page_sink_has_the_geometry_the_fault_rows_rely_on(tmp_path, paged):
+    # Attacks the premise of every page row: that the fixture puts the 64 KiB boundary
+    # strictly inside a canonical E line with E neighbours and other records on both
+    # sides, and that production reads in the 64 KiB pages assumed here. It cannot pass
+    # vacuously: each claim is read off the sink's bytes, and pf_sink's own reader
+    # (independent of run_json) must accept those bytes and count what was built.
+    assert PAGE == run_json._UncachedSinkFile.window == run_json._BULK_E_WINDOW
+    assert 70 * 1024 <= len(paged.raw) <= 90 * 1024, len(paged.raw)
+    lines, starts, index = paged.lines, paged.starts, paged.boundary
+    end = starts[index] + len(lines[index]) + 1
+    assert paged.raw[starts[index]:end] == lines[index] + b"\n"
+    assert starts[index] < PAGE < end and _E_SHAPE.fullmatch(lines[index]), index
+    assert all(lines[i].startswith(_E_PREFIX) for i in (index - 1, index + 1))
+    others = [i for i in range(1, len(lines)) if not lines[i].startswith(_E_PREFIX)]
+    assert len(others) == paged.spec.others and others[0] < index < others[-1], others
+    assert set(paged.positions) == set(PAGE_LABELS)
+    assert len(set(paged.positions.values())) == len(PAGE_LABELS), paged.positions
+    for label, position in paged.positions.items():
+        assert _E_SHAPE.fullmatch(lines[position]), (label, lines[position])
+    path = tmp_path / "page.sink"
+    path.write_bytes(paged.raw)
+    with pf_sink.SinkReader(path) as reader:
+        records = list(reader)
+        assert reader.complete
+        counts = reader.counts
+    assert counts == {"E": PAGE_POINTS, "T": 2, "O": 1, "V": 1, "K": 1}, counts
+    assert len(records) == PAGE_POINTS + paged.spec.others
+
+
+@pytest.mark.parametrize("window", PAGE_WINDOWS, ids=("production-window", "window-97"))
+def test_a_valid_sink_with_an_equity_line_across_the_page_boundary_is_bulk(
+        tmp_path, monkeypatch, paged, window):
+    # Attacks the hand-over of a canonical E line across the page boundary. The clean
+    # sink must be accepted in bulk (json.loads stays O(1) in the E count, which a
+    # per-line fallback would break) and a spy on _BulkEquityFile._fill must have seen
+    # the carry: a refill entered at file position PAGE holding exactly the bytes of the
+    # boundary line that lie before PAGE. Without that hit the fault rows below would
+    # not exercise the carry at all.
+    spec, refills = paged.spec, []
+    fill = run_json._BulkEquityFile._fill
+
+    def spy(self):
+        refills.append((self.file.position, len(self.data) - self.cursor))
+        return fill(self)
+
+    context = f"page valid window={window}"
+    with _sink(tmp_path, spec.rows, verify=False) as (sink, library, report):
+        assert Path(sink.path).read_bytes() == paged.raw, context
+        reference = oracle._Destination()
+        strict = _run(sink, library, report, monkeypatch, False, destination=reference)
+        _assert_oracle(spec, strict, context + " strict")
+        destination = oracle._Destination()
+        with monkeypatch.context() as patch:
+            patch.setattr(run_json, "_BULK_E_WINDOW", window, raising=True)
+            patch.setattr(run_json._BulkEquityFile, "_fill", spy, raising=True)
+            actual = _run(sink, library, report, patch, True, destination=destination)
+    _assert_same(strict, actual, context)
+    assert destination.calls == reference.calls, f"{context}: write boundaries differ"
+    _assert_oracle(spec, actual, context)
+    _assert_engaged(spec, strict, actual, context)
+    carried = PAGE - paged.starts[paged.boundary]
+    assert (PAGE, carried) in refills, (
+        f"{context}: no refill at offset {PAGE} carried the {carried} bytes of the boundary "
+        f"line; the last refills were {refills[-3:]}")
+
+
+@pytest.mark.parametrize("label,fault", PAGE_CASES, ids=PAGE_IDS)
+def test_a_fault_around_the_direct_io_page_boundary_ends_like_the_strict_path(
+        tmp_path, monkeypatch, paged, label, fault):
+    # Attacks the hand-over from the bulk path to the strict reader when one line is
+    # damaged on, beside or far from the 64 KiB page boundary, at the production window
+    # and at 97. It cannot pass vacuously: the file differs from the valid sink in that
+    # one line only, the strict reader must refuse at exactly that line with the named
+    # check (or accept, for -0, and write the changed point), and the bulk side must have
+    # skipped the per-line decode of the E lines before the fault, which a bulk path that
+    # always falls back cannot do (not counted where the repr proof rejects the whole
+    # 64 KiB batch that holds the fault, so that the batch is replayed strictly).
+    index = paged.positions[label]
+    image = _Image(paged.raw)
+    page_offset = PAGE - paged.starts[index] if index == paged.boundary else None
+    image.lines[index], expect, note = _apply_page_fault(fault, image.lines[index], page_offset)
+    mutated = _finish(image, paged.raw, True, [f"line {index}: {note}"], expect)
+    context = f"page {label}-{fault} line={index} {note}"
+    changed = [i for i in range(len(paged.lines)) if image.lines[i] != paged.lines[i]]
+    assert changed == [index] and mutated.changed, context
+    case = _Case(paged.spec, paged.raw, mutated, PAGE_WINDOWS[0])
+    strict, outcomes = _execute_windows(tmp_path, monkeypatch, case, PAGE_WINDOWS)
+    _check_expectation(expect, strict, False, context)
+    accepted = paged.e_lines.index(index)  # canonical E lines before the fault
+    if expect[0] == "refuse":
+        assert f"line {index + 1}: " in strict[1][1], (
+            f"{context}: the strict reader refused elsewhere: {strict[1][1]!r}")
+    else:
+        points = [list(point) for point in paged.spec.points]
+        points[accepted][1] = 0
+        assert _expected_curve(points) in strict[0], f"{context}: the changed point is not written"
+    for window, actual in outcomes.items():
+        where = f"{context} window={window}"
+        _assert_same(strict, actual, where)
+        if accepted >= 20 and (fault not in PAGE_PROOF_FAULTS or window < PAGE):
+            _assert_prefix_in_bulk(strict, actual, accepted, where)
+
+
 # ------------------------------------------------------------------ controls
 
 def _bulk_equity_without_repr_proof(raw):
@@ -1147,3 +1439,121 @@ def test_control_c_a_bulk_path_that_never_engages_fails_the_engagement_check(
     # ... which only the json.loads count can tell from a real bulk run.
     with pytest.raises(AssertionError):
         _assert_engaged(spec, strict, silent, f"control {never}")
+
+
+def _without(function, *statements):
+    """`function` recompiled from its own source minus the consecutive lines `statements`.
+
+    A mutant made of the production code itself cannot drift from run_json.py: the
+    removal must match exactly once or the test fails. Its globals stay run_json's own,
+    so every name another patch replaces is looked up live, as in the original."""
+    lines = inspect.getsource(function).splitlines(keepends=True)
+    stripped = [line.strip() for line in lines]
+    wanted = list(statements)
+    hits = [index for index in range(len(lines) - len(wanted) + 1)
+            if stripped[index:index + len(wanted)] == wanted]
+    assert len(hits) == 1, f"{function.__name__} does not hold {statements!r} exactly once"
+    del lines[hits[0]:hits[0] + len(wanted)]
+    scope = {}
+    exec(compile("".join(lines), f"<{function.__name__} without {statements[0]}>", "exec"),
+         function.__globals__, scope)
+    return scope[function.__name__]
+
+
+def test_control_d_a_bulk_proof_without_the_time_range_test_is_detected(tmp_path, monkeypatch):
+    # Attacks the +-(2**53 - 1) test of run_json._bulk_equity: the E grammar takes up to
+    # 16 digits, so only that test keeps a time of 2**53 or more out of an accepted batch.
+    # The mutant is the real function minus those two lines. It cannot pass vacuously: in
+    # each anchor sink one time is out of range, the strict reader refuses it by name
+    # (F_BOUND), the unpatched bulk side must agree, and the mutant must end with no
+    # refusal at all; the generated sinks then repeat that with a random line and window.
+    mutant = _without(
+        run_json._bulk_equity,
+        "if min(timestamps) < -((1 << 53) - 1) or max(timestamps) > (1 << 53) - 1:",
+        "return None")
+    canonical = (b'["E",1,1.5,2.5]\n["E",-9007199254740991,0.25,-0.0]\n'
+                 b'["E",9007199254740991,1.0,2.0]\n')
+    assert vars(mutant(canonical)) == vars(run_json._bulk_equity(canonical))
+    for line in (b'["E",9007199254740992,1.5,2.5]\n', b'["E",9007199254740993,1.5,2.5]\n',
+                 b'["E",-9007199254740992,1.5,2.5]\n'):
+        assert run_json._bulk_equity(line) is None
+        assert mutant(line) is not None
+    for bad in (I53 + 1, I53 + 2, -I53 - 1):
+        rows = [_point(index) for index in range(6)]
+        rows[3] = ["E", bad, 1.5, 2.5]
+        for window in (97, 64 * 1024):
+            context = f"control D time {bad} window={window}"
+            with _sink(tmp_path, rows, verify=False) as (sink, library, report):
+                strict = _run(sink, library, report, monkeypatch, False)
+                with monkeypatch.context() as patch:
+                    patch.setattr(run_json, "_BULK_E_WINDOW", window, raising=True)
+                    honest = _run(sink, library, report, patch, True)
+                    patch.setattr(run_json, "_bulk_equity", mutant, raising=True)
+                    broken = _run(sink, library, report, patch, True)
+            assert strict[1] is not None and F_BOUND in strict[1][1], f"{context}: {strict[1]!r}"
+            _assert_same(strict, honest, context + " (unpatched)")
+            assert broken[1] is None, f"{context}: the mutant still refused: {broken[1]!r}"
+            with pytest.raises(AssertionError):
+                _assert_same(strict, broken, context + " (patched)")
+    detected = _detections(
+        tmp_path, monkeypatch,
+        lambda seed: [("replace:9007199254740992" if seed % 2 == 0
+                       else "replace:9007199254740993", {"slot": 0})],
+        # docker/run_json.py: _bulk_equity, the accept-only proof of one E window.
+        [(run_json, "_bulk_equity", mutant)])
+    assert detected >= 1, "the comparison cannot see a bulk proof that accepts times past 2**53 - 1"
+
+
+@pytest.mark.parametrize("skipped", ("count", "line-number"))
+def test_control_e_a_bulk_reader_that_skips_its_own_bookkeeping_is_detected(
+        tmp_path, monkeypatch, skipped):
+    # Attacks the two statements with which run_json._bulk_equity_records advances the
+    # strict reader past an accepted batch: its E count (compared with the trailer) and
+    # its line number (printed in every later refusal). Both sit inline in that generator,
+    # so no smaller named function can be patched; the mutant is the generator recompiled
+    # from its own source minus that one line. It cannot pass vacuously: each anchor is a
+    # hand-countable 40-point sink (header is line 1, E lines 2-41, trailer line 42) on
+    # which the strict reader ends at a known text, the unpatched bulk side must agree, and
+    # the mutant must end somewhere else; the generated sinks then repeat that.
+    statement = {"count": 'reader._counts["E"] += batch.count',
+                 "line-number": "reader._line_number += batch.count"}[skipped]
+    mutant = _without(run_json._bulk_equity_records, statement)
+    assert mutant is not run_json._bulk_equity_records
+    rows = [_point(index) for index in range(40)]
+    spec = _Spec(rows, rows, 0, 0, False)
+    raw = _original(tmp_path, spec)
+    if skipped == "count":
+        # A valid sink: only the skipped count can make the trailer disagree.
+        mutated, receipt, expect, notes = raw, None, ACCEPT, ()
+    else:
+        # A trailer whose E count is one too high: strict and honest bulk both refuse it at
+        # the trailer line, whose number only an unskipped line counter can print.
+        image = _Image(raw)
+        image.trailer_edits.append(
+            lambda trailer: trailer["counts"].__setitem__("E", trailer["counts"]["E"] + 1))
+        mutated, receipt = image.render(True)
+        expect, notes = REFUSE(F_TRAILER_COUNT), ("trailer E count +1",)
+    trailer_refusal = "line 42: trailer count mismatch for E"
+    patches = [(run_json, "_bulk_equity_records", mutant)]
+    for window in (97, 64 * 1024):
+        case = _Case(spec, raw, _Mutated(mutated, receipt, notes, expect, mutated != raw), window)
+        context = _context(f"control E {skipped}", case)
+        strict, honest = _execute(tmp_path, monkeypatch, case)
+        _, broken = _execute(tmp_path, monkeypatch, case, patches)
+        _assert_same(strict, honest, context + " (unpatched)")
+        _check_expectation(expect, strict, False, context)
+        assert broken[1] is not None, f"{context}: the mutant ended without a refusal"
+        assert "trailer count mismatch for E" in broken[1][1], f"{context}: {broken[1]!r}"
+        if skipped == "count":
+            assert broken[1][1].endswith(trailer_refusal), f"{context}: {broken[1]!r}"
+        else:
+            assert strict[1][1].endswith(trailer_refusal), f"{context}: {strict[1]!r}"
+            assert "line 42:" not in broken[1][1], f"{context}: {broken[1]!r}"
+        with pytest.raises(AssertionError):
+            _assert_same(strict, broken, context + " (patched)")
+    detected = _detections(
+        tmp_path, monkeypatch,
+        (lambda seed: []) if skipped == "count" else (lambda seed: [("trailer-count", {})]),
+        # docker/run_json.py: _bulk_equity_records, the generator that drives the strict reader.
+        patches)
+    assert detected >= 1, f"the comparison cannot see a bulk reader that skips its {skipped}"
