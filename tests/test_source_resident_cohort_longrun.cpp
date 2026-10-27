@@ -2,13 +2,17 @@
 // declared_over_cap result. A default-derived 2,000,000-bar demand must not
 // refuse this run.
 #include <pineforge/source/pine_strategy_host.hpp>
+#include <pineforge/detail/disk_resident_id_table.hpp>
 #include <pineforge/detail/scratch_defaults.hpp>
+#include <pineforge/detail/scratch_slab.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <limits>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -16,6 +20,7 @@
 namespace {
 using Adapter = pineforge::source::PineExecutionAdapter;
 constexpr std::size_t kBars = 2'000'000;
+constexpr std::size_t kHostBars = 1'000;
 constexpr std::size_t kIdCount = 2;
 
 template<class Tag, auto Member> struct Access {
@@ -26,6 +31,55 @@ template struct Access<Cohorts, &Adapter::cohorts_by_id_>;
 
 void require(bool value, const char* why) {
     if (!value) throw std::runtime_error(why);
+}
+
+struct LiveCohort {
+    struct Record {
+        std::uint64_t handle;
+        std::int64_t cycle;
+        std::uint64_t count, digest, sides;
+    };
+    std::uint64_t handle = 0;
+    bool live = true;
+    Record retired_record() const noexcept { return {handle, 0, 0, 0, 0}; }
+    static LiveCohort restore_record(const Record& row) { return {row.handle, false}; }
+    bool spillable() const noexcept { return !live; }
+};
+static_assert(sizeof(LiveCohort::Record) == 40, "the real cohort fixed-record width");
+
+void table_reused_id_longrun() {
+    const auto manifest = pineforge::detail::default_scratch_manifest(kBars);
+    auto slab = std::make_shared<pineforge::detail::ScratchSlab>(manifest);
+    pineforge::detail::DiskResidentIdTable<LiveCohort> table;
+    // Same R/2 sizing and three-argument binder as bind_tree_scratch_tables.
+    const auto sizing = pineforge::detail::resident_cohort_sizing(slab->manifest().R / 2);
+    require(sizing.need == kBars
+                && sizing.limit == pineforge::detail::kMaxResidentCohortsCap
+                && !sizing.declared_over_cap,
+            "default-derived 2,000,000-bar need must clamp without refusal");
+    table.bind_scratch(slab, pineforge::detail::ScratchResource::cohort, sizing);
+
+    const std::array<std::string, kIdCount> ids{{"Long", "Short"}};
+    for (std::size_t i = 0; i < kBars; ++i) {
+        const auto& id = ids[i % ids.size()];
+        table.require_insert(id);
+        {
+            const auto inserted = table.emplace(id, LiveCohort{i + 1, true});
+            require(inserted.second == (i < kIdCount),
+                    "only the first use of each reused id may add a logical row");
+            auto& cohort = inserted.first->second;
+            // Duplicate emplace restores the retired facts; reopening is an
+            // in-place mutation, just as for a reused adapter cohort.
+            cohort.handle = i + 1;
+            cohort.live = true;
+            require(table.size() <= kIdCount && table.resident_size() <= kIdCount,
+                    "reused ids must keep the resident cohort table small");
+            cohort.live = false;
+        } // Release the iterator pin before retiring the resident row.
+        table.spill();
+        require(table.size() == std::min(i + 1, kIdCount) && table.resident_size() == 0,
+                "retirement must spill facts without accumulating logical or resident rows");
+    }
 }
 
 class LongRunHost final : public pineforge::source::PineStrategyHost {
@@ -80,8 +134,8 @@ public:
 };
 
 std::vector<pineforge::Bar> chart() {
-    std::vector<pineforge::Bar> bars(kBars);
-    for (std::size_t i = 0; i < kBars; ++i)
+    std::vector<pineforge::Bar> bars(kHostBars);
+    for (std::size_t i = 0; i < kHostBars; ++i)
         bars[i] = {100.0, 101.0, 99.0, 100.0, 1000.0,
                    1'736'121'600'000LL + static_cast<std::int64_t>(i) * 60000};
     return bars;
@@ -100,6 +154,7 @@ void jailed_reused_id_longrun() {
 
 int main() {
     try {
+        table_reused_id_longrun();
         jailed_reused_id_longrun();
         std::puts("resident cohort reused-id long run: OK");
         return 0;
