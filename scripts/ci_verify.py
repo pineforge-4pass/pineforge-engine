@@ -909,12 +909,12 @@ def permitted_exclusion_skips(pinned: frozenset[str], host_platform: str) -> fro
         if may_skip(host_platform))
 
 
-# Static slow-label policy: the 43-name CMake loop plus 17
+# Static slow-label policy: the 43-name CMake loop plus 18
 # direct LABELS assignments. Never derive this bound from the run's registry.
 # Conditional registration may omit pins; every discovered slow name must
 # belong to this set. A new slow row requires an explicit policy change.
 # Each verifier and command-after split replaces one slow name with eight (+7).
-# Four report slices replace one direct name (+3); 43 loop + 17 direct = 60, covers unlabelled.
+# Four report slices replace one direct name (+3); 43 loop + 18 direct = 61, covers unlabelled.
 PINNED_SLOW_TEST_ROWS = frozenset((
     # tests/CMakeLists.txt: the timing list, labelled by its slow loop.
     'test_adapter_live_state_equivalence',
@@ -955,6 +955,8 @@ PINNED_SLOW_TEST_ROWS = frozenset((
     'test_native_settlement_carry',
     # tests/CMakeLists.txt:7354.
     'test_run_json_selected_sink_memory_l9s',
+    # tests/CMakeLists.txt:7354 (report-memory bound row).
+    'test_report_sink_scratch_curve_resident',
     # tests/cr150.d/core-cr150-cr257.cmake:10.
     'test_cr257_source_exit_scratch_io_100k',
     # tests/cr150.d/core-cr150-l18.cmake:6,9.
