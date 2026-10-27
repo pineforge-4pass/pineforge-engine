@@ -75,6 +75,7 @@ the row is registered without a SKIP_RETURN_CODE because it cannot skip.
 from __future__ import annotations
 
 import argparse
+import copy
 import fnmatch
 import os
 import re
@@ -335,6 +336,7 @@ class Machine:
         self.rows: set[str] = set()
         self.globals: dict[str, str] = {}
         self.twins: dict[str, str] = {}
+        self.functions: dict[str, tuple] = {}
         # The sequence list(POP_FRONT <list> ...) removed from each list, in
         # order: the consumer of a popped list (the runner's marker-per-row
         # pairing) reads it even though the list itself ends up empty.
@@ -527,6 +529,31 @@ class Machine:
         if '${' in resolved:
             raise Unreadable(f'{self.path}: unexpanded row name {name!r}')
         self.rows.add(resolved)
+
+    def call_function(self, name: str, argument: str) -> None:
+        """Walk a recorded registration helper with CMake's local bindings."""
+        if name not in self.functions:
+            raise Unreadable(f'{self.path}:{self.line}: {name} has no definition')
+        definition, parameters, start, end = self.functions[name]
+        values = [element for token in split_values(argument)
+                  for element in self.elements(token)]
+        if len(values) < len(parameters):
+            raise Unreadable(
+                f'{self.path}:{self.line}: {name} needs {len(parameters)} '
+                f'arguments, got {len(values)}')
+        scope = copy.copy(self)
+        scope.path = definition.path
+        scope.text = definition.text
+        scope.wstatements = definition.wstatements
+        scope.vars = {key: list(value) for key, value in self.vars.items()}
+        for parameter, value in zip(parameters, values):
+            scope.vars[parameter] = [value]
+        scope.vars['ARGC'] = [str(len(values))]
+        scope.vars['ARGV'] = list(values)
+        scope.vars['ARGN'] = values[len(parameters):]
+        for position, value in enumerate(values):
+            scope.vars[f'ARGV{position}'] = [value]
+        scope.run(start, end)
 
     def reaches_source_layer(self, entry) -> bool:
         """The live include-closure walk tests/CMakeLists.txt defines, with the
@@ -850,10 +877,7 @@ class Machine:
                 self.targets.add(self.substitute(name))
                 index += 1
             elif head == 'pineforge_add_unit_test':
-                name = split_values(arguments(statement))[0]
-                self.targets.add(self.substitute(name))
-                if self.substitute(name) != 'test_l4g_runtime_budget':
-                    self.add_row(name)
+                self.call_function(head, arguments(statement))
                 index += 1
             elif head == 'pineforge_add_twin_test':
                 values = split_values(arguments(statement))
@@ -894,14 +918,12 @@ class Machine:
                 sub.globals = self.globals
                 sub.targets = self.targets
                 sub.rows = self.rows
+                sub.functions = self.functions
                 sub.run()
                 index += 1
             elif head in ('function', 'macro'):
-                # The function bodies are modelled as calls above
-                # (pineforge_add_unit_test / pineforge_add_twin_test /
-                # pineforge_test_is_source_bound / pineforge_test_reaches_
-                # source_layer / pineforge_clear_test_labels); their text is
-                # skipped, not interpreted.
+                # Record the real body for the unit-test registration helper.
+                # Other helpers retain their dedicated models above.
                 depth, cursor = 0, index
                 while cursor < len(self.wstatements):
                     body_head = head_of(self.wstatements[cursor][1])
@@ -914,6 +936,10 @@ class Machine:
                     cursor += 1
                 else:
                     raise Unreadable(f'{self.path}:{line}: unclosed {head}')
+                if head == 'function':
+                    values = split_values(arguments(statement))
+                    self.functions[values[0]] = (
+                        self, values[1:], index + 1, cursor)
                 index = cursor + 1
             elif head == 'execute_process':
                 # The ONE probed command the tree runs: the compiler asked for
@@ -965,9 +991,12 @@ class Machine:
                 values = split_values(arguments(statement))
                 mode = values[0].strip('"') if values else ''
                 if mode in ('FATAL_ERROR', 'SEND_ERROR'):
+                    detail = ' '.join(
+                        element for token in values[1:]
+                        for element in self.elements(token))
                     raise Unreadable(
-                        f'{self.path}:{line}: message({mode}) was reached: a '
-                        f'real configure stops here and this sweep does not '
+                        f'{self.path}:{line}: message({mode}) was reached: '
+                        f'{detail}; a real configure stops here and this sweep does not '
                         f'model a stopped configure')
                 index += 1
             elif head == 'unset':
@@ -982,9 +1011,9 @@ class Machine:
                     self.vars.pop(token.strip('"'), None)
                 index += 1
             elif head == 'return':
-                # At function/macro scope the bodies are skipped as text, so
-                # a reached return() is at file scope: CMake stops processing
-                # the file there and this sweep does not model a stopped walk.
+                # Helpers using return() retain dedicated models above; the
+                # interpreted unit-test helper has none. A reached return()
+                # therefore stops a file walk, which this sweep refuses.
                 raise Unreadable(
                     f'{self.path}:{line}: return() at file scope stops a real '
                     f'configure and this sweep does not model that')

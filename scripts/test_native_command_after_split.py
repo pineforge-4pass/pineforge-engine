@@ -212,7 +212,8 @@ def collect_cover(cpp: str, cmake: str) -> dict[str, list[int]]:
     require(helper is not None, 'unit-test target builder is missing')
     branch = re.search(
         rf'if\(test_name STREQUAL "{PREFIX}"\)(.*?)'
-        r'elseif\(NOT test_name STREQUAL "test_l4g_runtime_budget"\)',
+        r'elseif\(NOT test_name STREQUAL "test_l4g_runtime_budget"'
+        r'(?:\s+AND\s+NOT\s+test_name\s+STREQUAL\s+"[^"]+")*\s*\)',
         helper[1], re.DOTALL)
     require(branch is not None,
             'serial registration remains: expected eight slice rows in the target builder')
@@ -431,6 +432,27 @@ class CommandAfterSplitCover(unittest.TestCase):
         expected = {f'{PREFIX}_slice_{selector}': cost
                     for selector, cost in ((1, 60), (2, 60), (3, 60), (8, 600))}
         self.assertEqual(slice_costs(cmake), expected)
+
+    def test_target_builder_branch_allows_additional_literal_exclusions(self):
+        cpp, cmake = read_sources()
+        self.assertIsNone(cover_error(cpp, cmake))
+        conditions = re.findall(
+            r'elseif\(NOT test_name STREQUAL "test_l4g_runtime_budget"[^)]*\)',
+            cmake)
+        self.assertEqual(len(conditions), 1)
+        row = (f'        add_test(NAME {PREFIX}_slice_8\n'
+               '            COMMAND ${test_name} --slice 8/8)\n')
+        self.assertIn(row, cmake)
+        for condition in (
+                'elseif(NOT test_name STREQUAL "test_l4g_runtime_budget")',
+                conditions[0][:-1]
+                + '\n            AND NOT test_name STREQUAL "another_program")'):
+            with self.subTest(condition=condition):
+                changed = cmake.replace(conditions[0], condition, 1)
+                self.assertIsNone(cover_error(cpp, changed))
+                error = cover_error(cpp, changed.replace(row, '', 1))
+                self.assertIsNotNone(error)
+                self.assertIn('registered slice names', error)
 
     def test_cover_and_mutation_controls(self):
         cpp, cmake = read_sources()
