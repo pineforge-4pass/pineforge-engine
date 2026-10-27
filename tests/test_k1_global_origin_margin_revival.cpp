@@ -1,4 +1,4 @@
-// CR-150 L19G G2: standalone base-first witness of global-leg revival.
+// Standalone base-first witness of global-leg revival.
 // Fix12 uses an ordinary next-open close of R, whose Applied trade removes
 // its opened-origin slot before S's next callback (as measured in G1). The
 // reversal/margin suffix is the measured F2 path shifted by three bars. Only

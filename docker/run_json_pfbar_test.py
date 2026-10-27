@@ -1,4 +1,4 @@
-"""CR-150 L1: file-contract and csv2bin proofs (run on the lab, never at authoring).
+"""File-contract and csv2bin proofs (run on the Linux test host, never at authoring).
 
 The red commit deliberately precedes pf_bars and the csv2bin dispatch. Tests use
 the real CLI and real files; no strategy library or engine build is required.

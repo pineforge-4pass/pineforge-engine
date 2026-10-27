@@ -1,4 +1,4 @@
-"""CR-150 L9B preflight discovery for the named-sink summary contract tests."""
+"""Preflight discovery for the named-sink summary contract tests."""
 from pathlib import Path
 import sys
 

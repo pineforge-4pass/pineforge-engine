@@ -6,7 +6,7 @@
  * test_reversal_admission_float_guard.cpp —
  * design-reversal-admission-float-guard.
  *
- * The KI-54 fill-time margin admission gate (engine_fills.cpp) compares
+ * The fill-time margin admission gate (engine_fills.cpp) compares
  *
  *   required = |frozen_default_qty| * admit_price * pointvalue * fx * margin/100
  *   free     = sizing_equity - held          (held == 0 unless same-direction)
@@ -48,7 +48,7 @@
  *
  * Pins below (A-D are the reversal arm; E is the add arm, since lane
  * W5B-ENG-MARGIN-RESIDUAL without slack too; G is the scope control that must
- * NOT move; F rides the SEPARATE true-flat gap-reject upstream of KI-54, which
+ * NOT move; F rides the SEPARATE true-flat gap-reject upstream of the margin gate, which
  * has since dropped its own one-lot slack — design-cntvxiao-gap-reject):
  *   A. Reversal, adverse gap costing LESS than one lot -> DECLINED (the RED:
  *      base admits this).
@@ -60,7 +60,7 @@
  *      (the add arm has no widening either), and its above-one-lot sibling
  *      is DECLINED too.
  *   F. Flat open on the SAME sub-lot adverse gap as pin A -> DECLINED by the
- *      true-flat zero-commission gap-reject upstream of KI-54, which no
+ *      true-flat zero-commission gap-reject upstream of the margin gate, which no
  *      longer grants one lot of slack: TV cancels on ANY positive shortfall.
  *   G. SCOPE: qty_step == 0 (no lot quantization) is unchanged by definition —
  *      the one-lot term was already zero there, so base and patched must agree.
@@ -277,14 +277,14 @@ void test_same_dir_add_has_no_one_lot_slack() {
 }
 
 // F. The FLAT open on pin A's exact gap is DECLINED — by the upstream gate,
-//    not by KI-54. Frozen qty = floor_1(10000/100) = 100, sizing_price 100,
+//    not by the margin gate. Frozen qty = floor_1(10000/100) = 100, sizing_price 100,
 //    and the bar opens at 100.5 — byte-for-byte the same adverse gap that pin
-//    A declines. The true-flat zero-commission gap-reject above the KI-54 gate
+//    A declines. The true-flat zero-commission gap-reject above the margin gate
 //    dropped its one-lot slack (design-cntvxiao-gap-reject): TV re-checks the
 //    frozen margin against the sizing-equity snapshot at fill and cancels on
 //    ANY positive shortfall ($50 here). Evidence: ycelestine77 33/33 true-flat
 //    sub-lot-shortfall rejects on open-uptick fill bars (+0.01..+0.32);
-//    cntvxiao census 0/556 TV positive-shortfall admissions. The KI-54 flat
+//    cntvxiao census 0/556 TV positive-shortfall admissions. The flat
 //    admit (which prices at the SIZING notional, required 10000 == free 10000)
 //    is never reached.
 void test_flat_open_sub_lot_gap_declined() {

@@ -116,6 +116,7 @@ set(PINEFORGE_SOURCE_LAYER_SOURCES
 # These TUs never reach the source layer, so they also stand alone as
 # PineForge::kernel.
 set(PINEFORGE_KERNEL_SOURCES src/array.cpp
+    src/script_string.cpp
     src/c_abi.cpp
     src/run_failure.cpp
     src/native_c_host.cpp
@@ -165,7 +166,7 @@ set(PINEFORGE_KERNEL_SOURCES src/array.cpp
     src/report_scratch.cpp
     src/detail/o1_store.cpp
     src/scratch_arena.cpp
-)
+    src/script_store.cpp)
 add_library(pineforge_kernel STATIC ${PINEFORGE_KERNEL_SOURCES}) # kernel-only archive: libpineforge.a's kernel objects and flags, for consumers that never speak Pine
 add_library(PineForge::kernel ALIAS pineforge_kernel)
 # So a find_package(PineForge) consumer spells it the same way an in-tree one

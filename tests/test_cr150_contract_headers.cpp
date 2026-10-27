@@ -1,4 +1,4 @@
-// CR-150 P00 compile witness. Include every contract in an ordinary test
+// Compile witness. Include every contract in an ordinary test
 // target so the lab build must parse them. All checks are unevaluated or
 // static_asserts: no constructor, destructor or API definition is required.
 #include <pineforge/report_sink.h>

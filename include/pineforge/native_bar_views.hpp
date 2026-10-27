@@ -1,6 +1,6 @@
 #pragma once
 
-// CR-150 P00 declarations only. DESIGN.md revision 6, section 2.2:337-378.
+// Declarations only. DESIGN.md revision 6, section 2.2:337-378.
 // This separate namespace is the side channel; native_run_spec_v3 and
 // native_host.hpp keep their existing layouts (2.2:339-345; 6:1328-1329).
 #include <pineforge/bar.hpp>

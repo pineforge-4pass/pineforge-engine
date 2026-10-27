@@ -1,5 +1,5 @@
 /*
- * test_margin_admission_gate.cpp — KI-54: TradingView's fill-time margin
+ * test_margin_admission_gate.cpp — TradingView's fill-time margin
  * admission for FROZEN default-sized market orders.
  *
  *   same_dir    = position open AND order direction matches it
@@ -14,7 +14,7 @@
  *   A. Flat all-in (pct=100) zero-commission open on a gap-UP bar is REJECTED
  *      when the frozen-qty notional at the fill exceeds the sizing equity by
  *      more than one lot (design-cntvxiao-gap-reject). Flat opens still price
- *      the KI-54 add/reversal gate at the SIZING notional, but this narrower
+ *      the add/reversal gate at the SIZING notional, but this narrower
  *      true-flat zero-comm all-in carve-out re-checks the FILL notional and
  *      silently drops the entry.
  *   B. Same-direction add at pct=100 is DECLINED — the held position keeps
@@ -244,7 +244,7 @@ void test_reversal_admitted_at_exact_tie() {
     }
 }
 
-// F. CASH default sizing skips the KI-54 re-check (no floor invariant bounds
+// F. CASH default sizing skips the re-check (no floor invariant bounds
 //    it by equity) — it is admitted by the unified design-market-entry-
 //    affordability gate instead (strategy_entry placement half): cash 20000
 //    on 10000 capital sizes 200 lots @100 = 20,000 > 10,000 -> DECLINED;
@@ -254,7 +254,7 @@ void test_reversal_admitted_at_exact_tie() {
 //    sizing-type-blind (pin-afford-gapdown: a fixed-qty notional over equity is
 //    rejected at placement), so an over-notional CASH open is rejected the same
 //    way. The historical note that a cash-20k-on-10k transpiled probe "lost 73
-//    trades" to the old gate is retained in engine_fills.cpp's KI-54 comment
+//    trades" to the old gate is retained in engine_fills.cpp's margin comment
 //    for the record; no TV tape of that probe was ever pinned.
 void test_cash_flat_open_gated() {
     std::printf("-- F: cash default sizing gated by the unified rule --\n");
@@ -409,16 +409,16 @@ void test_fractional_add_marked_to_market() {
 // J. Bankrupt account: sizing_equity <= 0 makes the frozen qty NEGATIVE, and
 //    apply_qty_step returns it unfloored. The LEGACY path opened a negative-qty
 //    position; every close of it then emitted a negative-qty trade row that
-//    flipped the exported PnL sign (the KI-72 emission/accounting split).
+//    flipped the exported PnL sign (the emission/accounting split).
 //
-//    KI-72 FIX: a default-sized percent_of_equity MARKET/RAW order whose frozen
+//    FIX: a default-sized percent_of_equity MARKET/RAW order whose frozen
 //    sizing is NON-POSITIVE is now DECLINED CLEANLY (no fill, no trade row) —
 //    a bankrupt account can afford nothing, symmetric on both sides. So the
 //    order does not open and position_qty_ stays 0 (was -50 under the legacy
 //    path). This is the exact behaviour test_short_reversal_emission pins from
 //    the fill side; here it is pinned at the gate.
 void test_negative_equity_reversal_declined_clean() {
-    std::printf("-- J: bankrupt-account order declined cleanly (KI-72) --\n");
+    std::printf("-- J: bankrupt-account order declined cleanly --\n");
     Probe eng(QtyType::PERCENT_OF_EQUITY, 100.0, 1);
     eng.initial_capital_ = -5000.0;
     eng.script = "L..";

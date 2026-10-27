@@ -2240,7 +2240,7 @@ void s34_backing_physical_charge_and_lifetime_red() {
 #endif
 
 #if PINEFORGE_O1S3_CLAUSE == 0 || PINEFORGE_O1S3_CLAUSE == 11
-// CR150-CX, O1-SEAM-MERGE iii: unknown birth causes must refuse before storage.
+// Unknown birth causes must refuse before storage.
 void s3_admission_unknown_birth_cause_refused_red() {
     Rig rig;
     CommandScratchStore store(rig.config(), &rig.backing);

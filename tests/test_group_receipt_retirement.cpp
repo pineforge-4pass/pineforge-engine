@@ -1,4 +1,4 @@
-// CR-150 L19B: group-effect keys leave RAM with their cause's journal window.
+// Group-effect keys leave RAM with their cause's journal window.
 // The red checkpoint uses only the base API: a retired receipt is still
 // readable there, and live heap grows with the number of completed drains.
 // No compile/run result is claimed here; CORE-TOP executes both checkpoints.

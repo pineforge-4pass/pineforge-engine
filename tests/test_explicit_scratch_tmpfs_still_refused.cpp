@@ -15,7 +15,7 @@ void row() {
     require(sink.value >= 0, "lab /var/tmp must support an unlinked disk sink");
     ::unlink(sink_name);
     const auto path = std::string("/proc/self/fd/") + std::to_string(sink.value);
-    std::printf("S4E explicit sink follows only its owned descriptor: %s\n", path.c_str());
+    std::printf("Explicit sink follows only its owned descriptor: %s\n", path.c_str());
     CreationWatch watch;
     const auto before = descriptor_count();
     {

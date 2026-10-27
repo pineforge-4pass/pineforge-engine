@@ -1,4 +1,4 @@
-// CR-150 O1W R12, RED witness on the unchanged tree: a run that ends with P
+// RED witness on the unchanged tree: a run that ends with P
 // physical lots open must not retain one report row per lot.
 //
 // This fixture deliberately uses NO new report API, so it compiles and runs on

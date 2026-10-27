@@ -1,4 +1,4 @@
-"""CR-289 step 1B: native equity poison through the three real report paths.
+"""Native equity poison through the three real report paths.
 
 The selected-window execution stand-in owns native EquityPointC allocations.
 Only its last, ordinary point is poisoned; its anchor stays intact. Arrays
@@ -84,7 +84,7 @@ def native_writer():
     path = Path(os.environ.get(
         "PINEFORGE_REPORT_NONFINITE_EQUITY_WRITER",
         ROOT / "build" / "report_nonfinite_equity" / "report_nonfinite_equity_fd.so"))
-    assert path.is_file(), f"build the CR-289 native writer bridge on the lab: {path}"
+    assert path.is_file(), f"build the native writer bridge on the Linux test host: {path}"
     return NativeWriter(path)
 
 

@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-// CR-150 lane o1w-seq (R14--R18). The optional per-bar sequences -- the
+// Optional per-bar sequences -- the
 // broker-state hashes, the runtime trace, the recorded output rows and their
 // events -- are not part of a report's scalar facts. A full report keeps them
 // where it always did (the owning arrays in ReportC, or the report sink

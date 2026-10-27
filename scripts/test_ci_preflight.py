@@ -28,10 +28,10 @@ from ci_preflight import (AUTHZ_ALWAYS, AUTHZ_REFUSE_STEP, CORES,
                           native_workflow_findings, run_checks)
 
 ROOT = Path(__file__).resolve().parents[1]
-GKE_32 = 'group: gke-runners labels: gke-32cpu-64gb-amd64'
-GKE_16 = 'group: gke-runners labels: gke-16cpu-32gb-amd64'
-GKE_8 = 'group: gke-runners labels: gke-8cpu-16gb-amd64'
-GKE_ARM = 'group: gke-runners labels: gke-16cpu-32gb-arm64'
+GKE_32 = 'gke-32cpu-64gb-amd64'
+GKE_16 = 'gke-16cpu-32gb-amd64'
+GKE_8 = 'gke-8cpu-16gb-amd64'
+GKE_ARM = 'gke-16cpu-32gb-arm64'
 EXPECTED_GKE_JOBS = {
     'ci-post.yml': {'preflight': GKE_8, 'preflight-slow': GKE_8,
                     'build': GKE_32, 'build-debug': GKE_16,
@@ -248,6 +248,7 @@ jobs:
   probe:
     needs: [authz]
     runs-on: ["self-hosted","pf-gcp-post"]
+    environment: release
     steps:
       - name: Refuse a dispatch ref other than main
         env:
@@ -428,6 +429,237 @@ class WorkflowActionPins(unittest.TestCase):
         self.assertEqual(ci_preflight.action_pin_findings(changed), [
             f'{path}:2: unsupported YAML construct in a workflow (quoted keys): '
             f'rewrite it in plain block style; {line!r}'])
+
+
+class AppTokenEnvironments(unittest.TestCase):
+    """Exercise the existing contract entrypoint, including its file loader."""
+
+    WORKFLOW = 'app-token-guard.yml'
+    # CiFileLoading.make_tree reads these two names from the test it is lent to.
+    CONFIG = '.github/actionlint.yaml'
+    CMAKE = 'tests/CMakeLists.txt'
+    SHA = '0123456789abcdef0123456789abcdef01234567'
+    STEP = ('      - uses: actions/create-github-app-token@' + SHA + ' # v1.12.0\n')
+
+    @classmethod
+    def workflow(cls, environment='', steps=None):
+        return ('on: workflow_dispatch\njobs:\n  mint:\n'
+                f'    runs-on: {POST_RUNNER}\n' + environment
+                + '    steps:\n' + (cls.STEP if steps is None else steps))
+
+    @staticmethod
+    def finding(name, job='mint'):
+        return (f'{name} job {job}: App-token minting/private-key use requires a '
+                'literal, non-empty environment; review other minting methods by hand')
+
+    def app_findings(self, workflows, *, checker=None):
+        # This entrypoint exists on main. Missing policy must yield a
+        # missing finding, never an import/setup error for a new helper.
+        sources = [(ROOT / path).read_text() for path in CI_SOURCES]
+        checker = ci_workflow_findings if checker is None else checker
+        findings = checker(*sources, others=workflows)
+        return [finding for finding in findings if ': App-token ' in finding
+                and any(finding.startswith(f'{name} job ') for name in workflows)]
+
+    def assert_refused(self, workflow, *, checker=None):
+        self.assertEqual(self.app_findings({self.WORKFLOW: workflow}, checker=checker),
+                         [self.finding(self.WORKFLOW)])
+
+    def test_mint_action_requires_environment_at_every_ref(self):
+        for ref in (self.SHA, 'v1', 'v2', 'main'):
+            for quote in ('', '"', "'"):
+                with self.subTest(ref=ref, quote=quote):
+                    steps = ('      - name: Obtain installation credential\n'
+                             f'        uses: {quote}actions/create-github-app-token@{ref}'
+                             f'{quote} # v1.12.0\n')
+                    self.assert_refused(self.workflow(steps=steps))
+
+    def test_tibdex_mint_action_requires_environment_whatever_feeds_its_key(self):
+        for ref in (self.SHA, 'v1', 'main'):
+            for quote in ('', '"', "'"):
+                for key_source in ('vars.APP_KEY', 'inputs.key', 'secrets.RELEASE_PEM'):
+                    with self.subTest(ref=ref, quote=quote, key_source=key_source):
+                        steps = ('      - name: Obtain installation credential\n'
+                                 f'        uses: {quote}tibdex/github-app-token@{ref}{quote}\n'
+                                 '        with:\n'
+                                 f'          app_id: 1\n          key: ${{{{ {key_source} }}}}\n')
+                        self.assert_refused(self.workflow(steps=steps))
+                        self.assertEqual(self.app_findings({self.WORKFLOW: self.workflow(
+                            '    environment: release\n', steps=steps)}), [])
+
+    def test_literal_names_and_mapping_names_have_removal_controls(self):
+        for environment in (
+                '    environment: release\n',
+                '    environment: 1a\n',
+                '    environment: "release-bot" # automatic\n',
+                "    environment: 'release'\n",
+                '    environment:\n      name: release\n',
+                '    environment:\n      name: "release-bot"\n'
+                '      url: ${{ steps.deploy.outputs.url }}\n'):
+            with self.subTest(environment=environment):
+                self.assertEqual(self.app_findings(
+                    {self.WORKFLOW: self.workflow(environment)}), [])
+                self.assert_refused(self.workflow())
+
+    def test_empty_expression_and_non_name_environments_are_refused(self):
+        for environment in (
+                '    environment:\n',
+                '    environment: ""\n',
+                "    environment: ''\n",
+                '    environment: "   "\n',
+                '    environment: null\n',
+                '    environment: ~\n',
+                '    environment: false\n',
+                '    environment: 123\n',
+                '    environment: .5\n',
+                '    environment: 0x10\n',
+                '    environment: {}\n',
+                '    environment: []\n',
+                '    environment: ${{ inputs.environment }}\n',
+                '    environment: "release-${{ github.ref_name }}"\n',
+                "    environment: ${{ 'release' }}\n",
+                '    environment:\n      name:\n',
+                '    environment:\n      name: ""\n',
+                '    environment:\n      name: ${{ inputs.environment }}\n',
+                '    environment:\n      url: https://example.com\n',
+                '    environment:\n      name:\n        nested: release\n',
+                '    environment: release\n    environment: release-bot\n',
+                '    environment:\n      name: release\n      name: release-bot\n',
+                '    environment: {name: release}\n'):
+            with self.subTest(environment=environment):
+                self.assert_refused(self.workflow(environment))
+
+    def test_each_job_and_each_workflow_needs_its_own_environment(self):
+        safe = self.workflow('    environment: release\n')
+        second = self.workflow().replace('  mint:', '  later:', 1)
+        second = second.replace('jobs:\n', 'jobs:\n  ordinary:\n'
+                                f'    runs-on: {POST_RUNNER}\n'
+                                '    steps:\n      - run: "true"\n', 1)
+        workflows = {self.WORKFLOW: safe, 'second-app-token.yaml': second}
+        self.assertEqual(self.app_findings(workflows),
+                         [self.finding('second-app-token.yaml', 'later')])
+        same_file = safe + second.split('jobs:\n', 1)[1]
+        self.assertEqual(self.app_findings({self.WORKFLOW: same_file}),
+                         [self.finding(self.WORKFLOW, 'later')])
+
+    def test_quoted_environment_keys_do_not_hide_empty_names(self):
+        for key in ('"environment"', "'environment'"):
+            with self.subTest(key=key):
+                text = self.workflow(f'    {key}: ""\n')
+                self.assert_refused(text)
+                # Existing YAML policy explicitly refuses even a quoted key
+                # with a literal value; it cannot silently skip that job.
+                accepted_name = self.workflow(f'    {key}: release\n')
+                path = f'.github/workflows/{self.WORKFLOW}'
+                self.assertIn(ActionPins.unsupported_finding(
+                    path, 5, f'{key}: release', 'quoted keys'),
+                    ci_preflight.action_pin_findings({path: accepted_name}))
+
+    def test_flow_jobs_and_steps_are_explicit_yaml_refusals(self):
+        path = f'.github/workflows/{self.WORKFLOW}'
+        for text, number, source in (
+                ('on: workflow_dispatch\njobs: {mint: {steps: ['
+                 '{uses: actions/create-github-app-token@v2}]}}\n', 2,
+                 'jobs: {mint: {steps: [{uses: actions/create-github-app-token@v2}]}}'),
+                (self.workflow(steps='      - {uses: actions/create-github-app-token@v2}\n'),
+                 6, '- {uses: actions/create-github-app-token@v2}')):
+            with self.subTest(source=source):
+                self.assertIn(ActionPins.unsupported_finding(path, number, source),
+                              ci_preflight.action_pin_findings({path: text}))
+        # The supported spelling must also refuse the missing environment.
+        self.assert_refused(self.workflow())
+
+    def test_private_key_handoffs_to_other_actions_and_scripts_are_refused(self):
+        for steps in (
+                '      - uses: example/installation-token@' + self.SHA + ' # v1.0.0\n'
+                '        with:\n          private-key: ${{ secrets.RELEASE_PEM }}\n',
+                '      - uses: example/installation-token@' + self.SHA + ' # v1.0.0\n'
+                '        with:\n          private_key: ${{ secrets.RELEASE_PEM }}\n',
+                '      - run: python3 mint.py\n'
+                '        env:\n          APP_KEY: ${{ secrets.PINEFORGE_APP_PRIVATE_KEY }}\n',
+                '      - run: python3 mint.py\n'
+                "        env:\n          APP_KEY: ${{ secrets['PINEFORGE_APP_PRIVATE_KEY'] }}\n",
+                '      - run: python3 mint.py\n'
+                '        env:\n          APP_KEY: ${{ secrets . PINEFORGE_APP_PRIVATE_KEY }}\n',
+                '      - run: python3 mint.py\n'
+                '        env:\n          PRIVATE_KEY: ${{ secrets.RELEASE_PEM }}\n',
+                '      - run: |\n'
+                '          python3 mint.py --private-key "${{ secrets.RELEASE_PEM }}"\n',
+                '      - run: python3 mint.py\n'
+                '        env:\n          PRIVATE_KEY: |\n'
+                '            ${{ secrets.RELEASE_PEM }}\n'):
+            with self.subTest(steps=steps):
+                self.assert_refused(self.workflow(steps=steps))
+                self.assertEqual(self.app_findings({self.WORKFLOW: self.workflow(
+                    '    environment: release\n', steps=steps)}), [])
+
+    def test_inherited_private_key_and_script_mint_indicators_are_refused(self):
+        inherited = self.workflow(steps='      - run: python3 mint.py\n').replace(
+            'jobs:\n', 'env:\n  APP_KEY: ${{ secrets.PINEFORGE_APP_PRIVATE_KEY }}\njobs:\n', 1)
+        self.assert_refused(inherited)
+        for command in (
+                'gh api --method POST "app/installations/$APP_INSTALLATION/access_tokens"',
+                'curl -X POST "https://api.github.com/app/installations/123/access_tokens"',
+                "const auth = createAppAuth({appId, privateKey});",
+                'integration = GithubIntegration(app_id, private_key)',
+                'auth = github.Auth.AppAuth(app_id, private_key)'):
+            with self.subTest(command=command):
+                self.assert_refused(self.workflow(steps='      - run: |\n          '
+                                                 + command + '\n'))
+
+    def test_ordinary_jobs_and_commented_action_names_do_not_need_environment(self):
+        ordinary = self.workflow(steps=(
+            '      # - uses: actions/create-github-app-token@v2\n'
+            '      - run: |\n'
+            '          echo "uses: actions/create-github-app-token@v2"\n'
+            '        env:\n          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n'))
+        self.assertEqual(self.app_findings({self.WORKFLOW: ordinary}), [])
+        self.assert_refused(self.workflow())
+
+    def test_second_workflow_files_are_discovered_by_the_ci_entrypoint(self):
+        tree = CiFileLoading.make_tree(self)
+        for name in ('second-app-token.yml', 'second-app-token.yaml'):
+            with self.subTest(name=name):
+                (tree / '.github/workflows' / name).write_text(self.workflow())
+                code, output = CiFileLoading.run_stage(tree, '--check-ci-workflow')
+                self.assertIn(self.finding(name), output.splitlines())
+                self.assertEqual(code, 1, output)
+
+    def test_disabling_or_loosening_the_guard_breaks_the_regression_assertion(self):
+        self.assert_refused(self.workflow())
+        source = inspect.getsource(ci_workflow_findings)
+        guard = '    findings += app_token_environment_findings(workflows)\n'
+        self.assertEqual(source.count(guard), 1)
+        namespace = dict(ci_workflow_findings.__globals__)
+        exec(compile(source.replace(guard, '', 1),
+                     '<app-token-environment-check-removed>', 'exec'), namespace)
+        with self.assertRaises(AssertionError):
+            self.assert_refused(self.workflow(), checker=namespace['ci_workflow_findings'])
+        source = inspect.getsource(ci_preflight.app_token_environment_findings)
+        guard = '            if not _literal_job_environment(body):\n'
+        self.assertEqual(source.count(guard), 1)
+        mutant = source.replace(guard,
+                                "            if not _job_values(body, 'environment'):\n", 1)
+        exec(compile(mutant, '<app-token-environment-check-loosened>', 'exec'), namespace)
+        exec(compile(inspect.getsource(ci_workflow_findings),
+                     '<contract-with-loosened-environment-check>', 'exec'), namespace)
+        with self.assertRaises(AssertionError):
+            self.assert_refused(self.workflow('    environment: ${{ inputs.environment }}\n'),
+                                checker=namespace['ci_workflow_findings'])
+
+    def test_real_minting_jobs_have_exactly_the_inventoried_environments(self):
+        expected = {
+            ('release.yml', 'release'): ['release'],
+            ('release.yml', 'notify-hub'): ['release'],
+            ('release-ruleset-probe.yml', 'probe'): ['release'],
+            ('promote-baseline.yml', 'promote'): ['release-bot'],
+        }
+        actual = {(path.name, job): ci_preflight._job_values(body, 'environment')
+                  for path in sorted((ROOT / '.github/workflows').iterdir())
+                  if path.suffix in ('.yml', '.yaml')
+                  for job, body in _jobs(path.read_text()).items()
+                  if ci_preflight._job_values(body, 'environment')}
+        self.assertEqual(actual, expected)
 
 
 class WorkflowEventFleets(unittest.TestCase):
@@ -719,7 +951,7 @@ PAID_RUNNER_LABELS = (
 )
 
 def runner_declaration(runner):
-    """Render the independently specified runner pin in workflow block style."""
+    """Render scalar pins and legacy mappings used by refusal controls."""
     if runner.startswith('group: '):
         group, label = runner.removeprefix('group: ').split(' labels: ')
         return f'    runs-on:\n      group: {group}\n      labels: {label}\n'
@@ -752,6 +984,92 @@ class GkeRunnerPolicy(unittest.TestCase):
     def test_exact_gke_route_is_accepted(self):
         self.assertEqual(ci_preflight.workflow_fleet_findings(
             {'ci-post.yml': self.fixture()}), [])
+
+    def assert_gke_shape_refused(self, runner):
+        findings = ci_preflight.runner_findings(
+            {'ci-post.yml': self.fixture(runner=runner)})
+        self.assertIn('ci-post.yml job preflight must use a bare scalar GKE scale-set name',
+                      findings)
+        self.assertIn('ci-post.yml job preflight must run on gke-8cpu-16gb-amd64',
+                      findings)
+
+    def test_gke_group_mapping_is_refused(self):
+        for runner in (
+                'group: gke-runners labels: gke-8cpu-16gb-amd64',
+                '{group: gke-runners, labels: gke-8cpu-16gb-amd64}',
+                '{labels: gke-8cpu-16gb-amd64}',
+                '\n      labels: gke-8cpu-16gb-amd64'):
+            with self.subTest(runner=runner):
+                self.assert_gke_shape_refused(runner)
+
+    def test_gke_single_label_array_is_refused(self):
+        for runner in ('[gke-8cpu-16gb-amd64]', '["gke-8cpu-16gb-amd64"]'):
+            with self.subTest(runner=runner):
+                self.assert_gke_shape_refused(runner)
+
+    def test_gke_self_hosted_array_is_refused(self):
+        self.assert_gke_shape_refused('["self-hosted","gke-8cpu-16gb-amd64"]')
+
+    def test_gke_expression_is_refused(self):
+        for runner in ("${{ 'gke-8cpu-16gb-amd64' }}",
+                       "${{ inputs.runner || 'gke-8cpu-16gb-amd64' }}"):
+            with self.subTest(runner=runner):
+                self.assert_gke_shape_refused(runner)
+
+    def test_gke_wrong_case_is_refused(self):
+        for runner in ('GKE-8CPU-16GB-AMD64', 'gKe-8cpu-16gb-amd64'):
+            with self.subTest(runner=runner):
+                self.assert_gke_shape_refused(runner)
+
+    def test_gke_wrong_size_is_refused(self):
+        findings = ci_preflight.runner_findings(
+            {'ci-post.yml': self.fixture(runner='gke-16cpu-32gb-amd64')})
+        self.assertIn('ci-post.yml job preflight may use GKE routing only at its exact pinned job and label',
+                      findings)
+        self.assertIn('ci-post.yml job preflight must run on gke-8cpu-16gb-amd64',
+                      findings)
+
+    def test_pull_request_graph_refuses_wrong_case_gke_routes(self):
+        runner = 'GKE-8CPU-16GB-AMD64'
+        pr = self.fixture(runner=runner).replace('on: workflow_dispatch', 'on: pull_request')
+        self.assertIn('ci.yml is reachable from pull_request and must not contain GKE routing',
+                      ci_preflight.runner_findings({'ci.yml': pr}))
+        caller = ('on: pull_request\njobs:\n  call:\n'
+                  '    uses: ./.github/workflows/nested.yml\n')
+        nested = ('on: workflow_call\njobs:\n  call:\n'
+                  '    uses: ./.github/workflows/ci-post.yml\n')
+        leaf = self.fixture(runner=runner).replace('on: workflow_dispatch', 'on: workflow_call')
+        self.assertIn('ci-post.yml is reachable from pull_request and must not contain GKE routing',
+                      ci_preflight.runner_findings(
+                          {'ci.yml': caller, 'nested.yml': nested, 'ci-post.yml': leaf}))
+
+    def test_wrong_case_gke_routes_cannot_hide_credentials(self):
+        runner = 'GKE-8CPU-16GB-AMD64'
+        workflow = self.fixture(runner=runner, extra='    environment: production\n')
+        self.assertIn('ci-post.yml job preflight must not expose credentials on GKE',
+                      ci_preflight.runner_findings({'ci-post.yml': workflow}))
+        caller = ('on: workflow_dispatch\njobs:\n  parity:\n'
+                  '    uses: ./.github/workflows/corpus-parity.yml\n'
+                  '    secrets: inherit\n')
+        callee = self.fixture(job='corpus-parity-subset', runner=runner).replace(
+            'on: workflow_dispatch', 'on: workflow_call')
+        self.assertIn('ci-post.yml job parity must not expose credentials on GKE',
+                      ci_preflight.runner_findings(
+                          {'ci-post.yml': caller, 'corpus-parity.yml': callee}))
+
+    def test_gke_cap_cannot_split_a_scale_set_by_case(self):
+        def matrix(count):
+            return ('    strategy:\n      matrix:\n        shard: ['
+                    + ', '.join(str(i) for i in range(1, count + 1)) + ']\n')
+
+        post = self.fixture(runner='gke-8cpu-16gb-amd64', matrix=matrix(5))
+        leaf = self.fixture(job='corpus-parity-subset', runner='GKE-8CPU-16GB-AMD64',
+                            matrix=matrix(4)).replace(
+                                'on: workflow_dispatch', 'on: workflow_call')
+        post += '  parity:\n    uses: ./.github/workflows/corpus-parity.yml\n'
+        self.assertIn('ci-post.yml GKE label gke-8cpu-16gb-amd64 expands to 9 jobs; cap is 8',
+                      ci_preflight.runner_findings(
+                          {'ci-post.yml': post, 'corpus-parity.yml': leaf}))
 
     def test_real_jobs_have_fixed_gke_routes_without_job_containers(self):
         for name, pins in EXPECTED_GKE_JOBS.items():
@@ -873,12 +1191,13 @@ class GkeRunnerPolicy(unittest.TestCase):
                         self.assertIn(f'{name} job {job} must not declare job services on GKE',
                                       ci_preflight.runner_findings({name: changed}))
 
-    def test_gke_group_and_labels_are_confined_to_exact_jobs(self):
+    def test_gke_scale_sets_are_confined_to_exact_jobs(self):
         for name, job, runner in (
                 ('extra.yml', 'preflight', GKE_8),
                 ('ci-post.yml', 'unexpected', GKE_8),
                 ('ci-post.yml', 'preflight', GKE_16),
-                ('ci-post.yml', 'preflight', 'gke-8cpu-16gb-amd64'),
+                ('ci-post.yml', 'preflight',
+                 'group: gke-runners labels: gke-8cpu-16gb-amd64'),
                 ('ci-post.yml', 'preflight',
                  'group: other-runners labels: gke-8cpu-16gb-amd64')):
             with self.subTest(workflow=name, job=job, runner=runner):
@@ -886,8 +1205,8 @@ class GkeRunnerPolicy(unittest.TestCase):
                               ci_preflight.runner_findings(
                                   {name: self.fixture(job=job, runner=runner)}))
 
-    def test_pull_request_graph_refuses_gke_group_and_labels(self):
-        for runner in (GKE_8, 'gke-8cpu-16gb-amd64',
+    def test_pull_request_graph_refuses_gke_routes(self):
+        for runner in (GKE_8, 'group: gke-runners labels: gke-8cpu-16gb-amd64',
                        'group: gke-runners labels: linux'):
             pr = self.fixture(runner=runner).replace('on: workflow_dispatch', 'on: pull_request')
             with self.subTest(runner=runner, route='direct'):
@@ -1157,25 +1476,25 @@ class PostFleetRunnerPolicy(unittest.TestCase):
 
     def test_post_fleet_docs_match_runner_policy(self):
         docs = (ROOT / 'docs/ci.md').read_text()
-        self.assertEqual(len(docs.splitlines()), 2014)
+        self.assertEqual(len(docs.splitlines()), 2016)
         requirements = (
             'Post Release/Debug/kernel and native shards, post sanitizers and both native-live sanitizer\n'
-            'profiles use fixed `gke-runners` size labels directly in runner pods carrying the engine toolchain image and sudo. No job routes by event.',
+            'profiles use fixed bare GKE scale-set names directly in runner pods carrying the engine toolchain image and sudo. No job routes by event.',
             'Local reusable calls cannot mix PR and GKE jobs. A full post run schedules 24 GKE jobs: '
             "amd64 32/16/8 CPU labels carry 8/7/7 jobs and arm64 16 CPU carries 2; each label's cap is 8.",
-            'The amd64 post build shards and the two arm64 post cells use the `gke-runners` group with',
+            'The amd64 post build shards and the two arm64 post cells use bare scalar',
             'Hosted exceptions include the named light jobs and the existing release/promotion pins.',
             '`native-live.yml` runs four `native` shards on `gke-8cpu-16gb-amd64`;\n'
             '`live-sanitizers` and `live-tsan` each build once on `gke-16cpu-32gb-amd64`.',
             "paid 16-core runners' medians over five runs were 1815, 1812, 1770, 2050",
-            'The four amd64 post legs, arm64 cells, preflight, parity and native verification use `gke-runners`; '
+            'The four amd64 post legs, arm64 cells, preflight, parity and native verification use bare GKE scale-set names; '
             'their aggregates use the light image.',
             '| `ci-post.yml` | Push to `main`, 01:30 UTC schedule, dispatch | '
-            'Light jobs and four aggregates: `ubuntu-24.04`; `gke-runners`: '
+            'Light jobs and four aggregates: `ubuntu-24.04`; bare GKE scalars: '
             'Release/sanitizers `gke-32cpu-64gb-amd64`, Debug/kernel `gke-16cpu-32gb-amd64`, '
             'preflight tiers `gke-8cpu-16gb-amd64`, arm64 `gke-16cpu-32gb-arm64` |',
             '| `native-live.yml` | Dispatch and post CI callers on `main` | '
-            '`authz` and both aggregates: hosted `ubuntu-24.04`; `gke-runners`: '
+            '`authz` and both aggregates: hosted `ubuntu-24.04`; bare GKE scalars: '
             'native shards `gke-8cpu-16gb-amd64`, sanitizer profiles `gke-16cpu-32gb-amd64` |',
             'GKE jobs carry no deployment secrets, id-token permissions or environment; '
             'PR-reachable workflows cannot name GKE routing. '
@@ -1185,7 +1504,7 @@ class PostFleetRunnerPolicy(unittest.TestCase):
             'Rollback may restore an earlier GCP fleet pin; paid larger-runner labels remain refused.',
             '`build-debug` shards, and kernel two shards; sanitizers uses four, '
             'all on their fixed GKE sizes.',
-            '`HOSTED_JOB_RUNNERS` pins hosted jobs and exact GKE mappings; every GKE job runs directly '
+            '`HOSTED_JOB_RUNNERS` pins hosted jobs and exact bare GKE scalars; every GKE job runs directly '
             'in a runner pod carrying the engine toolchain image and sudo. The PR build remains',
             'Every paid larger-runner label is refused in every workflow, including pinned jobs;',
         )
@@ -2534,7 +2853,7 @@ class PreflightFailures(unittest.TestCase):
                 marker = runner_declaration(actual)
                 pinned_runner = EXPECTED_GKE_JOBS.get(name, {}).get(job, runner)
                 finding = f'{name} job {job} must run on {pinned_runner}'
-                if name == 'native-live.yml' and not pinned_runner.startswith('group: '):
+                if name == 'native-live.yml' and not pinned_runner.startswith('gke-'):
                     finding += ' (hosted)'
                 for replacement in ('ubuntu-24.04', 'ubuntu-latest',
                                     'pf-linux-x64-64' if actual == 'pf-linux-x64-16' else 'pf-linux-x64-16',
@@ -2898,7 +3217,7 @@ class PreflightFailures(unittest.TestCase):
 
     def test_documented_slow_row_counts_match_literal_population(self):
         text = (ROOT / 'docs/ci.md').read_text()
-        self.assertEqual(len(text.splitlines()), 2014)
+        self.assertEqual(len(text.splitlines()), 2016)
         counts = re.findall(
             r'^the (\d+) CTest rows labelled `slow` in `tests/CMakeLists.txt`$'
             r'|^The label `slow` (?:is|includes) `PINEFORGE_PR_SLOW_TESTS` '
@@ -3193,6 +3512,11 @@ class PreflightFailures(unittest.TestCase):
                 expected = self.quoted_key_lint_findings(changed[2], setting) + [
                     f'baseline promotion must not define workflow-level {key}',
                 ]
+                if key == 'env' and 'secrets.PINEFORGE_APP_PRIVATE_KEY' in setting:
+                    # The inherited key also reaches the unbound guard job;
+                    # retain the original workflow-level refusal below it.
+                    expected.insert(0, AppTokenEnvironments.finding(
+                        'promote-baseline.yml', 'promote-guard'))
                 self.assertEqual(ci_workflow_findings(*changed), expected)
 
     def test_promotion_guard_rejects_job_defaults(self):
@@ -4507,8 +4831,7 @@ exit "$lookup_exit"
             for label in ('pf-ci', 'pf-ci-x64', 'pf-ci-x64-16', 'pf-ci-release',
                           'pf-gcp-engine-pr', 'pf-gcp-engine-main', 'pf-gcp-small'):
                 # Refuse the wrong class alone and extra labels on a valid class.
-                extra = (runner.split(' labels: ')[0] + ' labels: ["'
-                         + runner.split(' labels: ')[1] + f'","{label}"]'
+                extra = (f'["{runner}","{label}"]'
                          if fleet == 'gke' else runner[:-1] + f',"{label}"]')
                 for value in (f'["self-hosted","{label}"]', extra):
                     with self.subTest(workflow=name, job=job, runner=value):
@@ -6937,11 +7260,11 @@ class CanonAuthz(unittest.TestCase):
 
 
 class ActionlintRunnerLabels(unittest.TestCase):
-    def test_actionlint_runner_labels_reads_gke_mapping_labels(self):
+    def test_actionlint_runner_labels_reads_gke_scalar_label(self):
         workflow = self.tree / '.github/workflows/gke-label.yml'
         workflow.write_text(
             'on: workflow_dispatch\njobs:\n  inspect:\n'
-            '    runs-on:\n      group: gke-runners\n      labels: gke-unknown\n'
+            '    runs-on: gke-unknown\n'
             '    steps:\n      - run: "true"\n')
         code, output = self.runner_labels()
         self.assertEqual(code, 1, output)
@@ -7111,11 +7434,11 @@ class HostedNativeProfiles(unittest.TestCase):
             with self.subTest(job=job):
                 self.assertEqual(ci_preflight._job_values(jobs.get(job, ''), 'runs-on'), [label])
                 self.assertNotIn('PF_CI_LABELS', jobs.get(job, ''))
-                suffix = '' if label.startswith('group: ') else ' (hosted)'
-                metadata_class = 'GKE' if label.startswith('group: ') else 'hosted'
+                suffix = '' if label.startswith('gke-') else ' (hosted)'
+                metadata_class = 'GKE' if label.startswith('gke-') else 'hosted'
                 for replacement in (PR_RUNNER, RELEASE_RUNNER, 'pf-linux-x64-16',
                                     'pf-linux-x64-32', 'pf-linux-x64-64',
-                                    'ubuntu-24.04' if label.startswith('group: ') else POST_RUNNER):
+                                    'ubuntu-24.04' if label.startswith('gke-') else POST_RUNNER):
                     changed = in_job(native, job, runner_declaration(label),
                                      f'    runs-on: {replacement}\n')
                     self.assertNotEqual(changed, native)

@@ -1,7 +1,7 @@
 #pragma once
 
 // TradingView's N-day request bars ("2D", "3D", ...) as a generated period
-// partition of bounded memory (CR-150 L19k).
+// partition of bounded memory.
 //
 // The rule (lane TAIL-A, lab tv pf-taila-ndgrid-*, tests/fixtures/
 // multi_day_buckets): N consecutive trading dates of the symbol, counted from
