@@ -1,0 +1,3 @@
+list(APPEND TEST_SOURCES test_resident_cohort_sizing)
+pineforge_add_unit_test(test_resident_cohort_sizing)
+set_tests_properties(test_resident_cohort_sizing PROPERTIES LABELS slow RUN_SERIAL TRUE)
