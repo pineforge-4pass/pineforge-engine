@@ -2765,6 +2765,17 @@ private:
     std::int32_t entry_attempt_bar_ = -1;
     std::uint32_t entry_attempts_on_bar_ = 0;
     CohortTable cohorts_by_id_;
+    // Derived from retained roster fronts and placement membership. Never
+    // checkpointed or hashed; reset and periodic rescans rebuild them.
+    std::unordered_set<SourceId> retire_candidates_;
+    std::unordered_multimap<std::uint64_t, SourceId> retire_fronts_;
+    std::uint64_t retire_rescan_remaining_ = 0;
+    void refresh_retire_candidate(const SourceId&, const CohortFacts&,
+                                  std::uint64_t previous_front);
+    void note_retiring_placement(std::uint64_t, const PlacementSnapshot&);
+    void rebuild_retire_candidates();
+    void compact_retire_indexes();
+    void verify_retire_candidates() const;
     void observe_pending_scan(PendingScanCounter&) const noexcept;
     CohortTable::iterator require_cohort(const SourceId&);
     PlacementTable placement_;

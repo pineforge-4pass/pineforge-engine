@@ -2588,6 +2588,7 @@ void PineExecutionAdapter::reset_for_run() {
     cohorts_by_id_.clear();
     pending_scan_work_ = {}; dense_pending_work_ = {};
     placement_.clear();
+    rebuild_retire_candidates();
     live_by_source_key_.clear();
     clear_bracket_families();
     pending_bracket_legs_.clear();
@@ -3690,6 +3691,10 @@ void PineExecutionAdapter::remember(const native_order::RequestHandle& handle,
     // default-constructing a string-bearing snapshot and move-assigning it.
     const auto inserted = placement_.try_emplace(handle.incarnation, std::move(snapshot));
     if (!inserted.second) placement_.replace(handle.incarnation, std::move(snapshot));
+    const auto fronts = retire_fronts_.equal_range(handle.incarnation);
+    for (auto at = fronts.first; at != fronts.second; ++at)
+        retire_candidates_.erase(at->second);
+    compact_retire_indexes();
     if ((++dense_pending_work_.remember_handles, !live_handles_.contains(handle))) live_handles_.push_back(handle);
     refresh_live_row(handle);
     // A close order is a transient key of the entry-id table while it waits
@@ -4328,7 +4333,11 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
                 cohort->second.erased_opening_sides |= value.is_long ? 1U : 2U;
             }
         }
-        if (!retain_rows) { placement_.erase(incarnation); refresh_live_row(incarnation); }
+        if (!retain_rows) {
+            note_retiring_placement(incarnation, value);
+            placement_.erase(incarnation);
+            refresh_live_row(incarnation);
+        }
         if (!retain_rows) detail::rows_erased.fetch_add(1, std::memory_order_relaxed);
     }
     // Every family settles the members whose rows would be gone (or are gone),
@@ -5319,7 +5328,13 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
         const auto source = placement_.at(accepted->incarnation).source_id;
         const auto cohort = cohort_for(source);
         host.cohort_add(cohort, *accepted);
-        auto& roster = require_cohort(source)->second.origins; roster.push_back(*accepted); live_row_index().append_origin(cohort.value, roster.size() - 1, *accepted);
+        const auto row = require_cohort(source);
+        auto& facts = row->second;
+        const auto previous_front = facts.origins.members().empty()
+            ? 0 : facts.origins.members().front().incarnation;
+        facts.origins.push_back(*accepted);
+        live_row_index().append_origin(cohort.value, facts.origins.size() - 1, *accepted);
+        refresh_retire_candidate(source, facts, previous_front);
     }
     const auto& accepted_snapshot = placement_.at(accepted->incarnation);
     if (coof_recalc_active_
@@ -29001,20 +29016,98 @@ void OriginRoster::retire_before(std::size_t global) {
         positions_.rehash(positions_.size());
 }
 
+void PineExecutionAdapter::refresh_retire_candidate(
+        const SourceId& id, const CohortFacts& facts, std::uint64_t previous_front) {
+    const auto& members = facts.origins.members();
+    const auto front = members.empty() ? 0 : members.front().incarnation;
+    if (front != previous_front) {
+        if (previous_front != 0) {
+            const auto previous = retire_fronts_.equal_range(previous_front);
+            for (auto at = previous.first; at != previous.second; ++at) {
+                if (at->second == id) {
+                    retire_fronts_.erase(at);
+                    break;
+                }
+            }
+        }
+        if (front != 0) retire_fronts_.emplace(front, id);
+    }
+    if (!members.empty() && !placement_.contains(front)) retire_candidates_.insert(id);
+    else retire_candidates_.erase(id);
+}
+
+void PineExecutionAdapter::note_retiring_placement(
+        std::uint64_t incarnation, const PlacementSnapshot& snapshot) {
+    // Called before erase while snapshot is still alive. Treat this one
+    // incarnation as absent; all other fronts must already be unplaced.
+    const auto mark = [&](const SourceId& id) {
+        const auto row = cohorts_by_id_.find_resident(id);
+        if (row == cohorts_by_id_.end()) return;
+        const auto& members = row->second.origins.members();
+        if (!members.empty() && (members.front().incarnation == incarnation
+                || !placement_.contains(members.front().incarnation))) {
+            retire_candidates_.insert(id);
+        }
+    };
+    mark(snapshot.source_id);
+    if (!snapshot.from_entry.empty()) mark(snapshot.from_entry);
+    // Current fronts, rather than source labels, are authoritative: an
+    // adopted handle need not have the cohort's source id in its placement.
+    const auto mark_fronts = [&](std::uint64_t origin) {
+        const auto fronts = retire_fronts_.equal_range(origin);
+        for (auto at = fronts.first; at != fronts.second; ++at) mark(at->second);
+    };
+    mark_fronts(incarnation);
+    if (snapshot.bracket_origin.incarnation != incarnation)
+        mark_fronts(snapshot.bracket_origin.incarnation);
+}
+
+void PineExecutionAdapter::compact_retire_indexes() {
+    if (retire_candidates_.empty())
+        decltype(retire_candidates_){}.swap(retire_candidates_);
+    else if (retire_candidates_.bucket_count() / 4 > retire_candidates_.size())
+        retire_candidates_.rehash(retire_candidates_.size());
+    if (retire_fronts_.empty())
+        decltype(retire_fronts_){}.swap(retire_fronts_);
+    else if (retire_fronts_.bucket_count() / 4 > retire_fronts_.size())
+        retire_fronts_.rehash(retire_fronts_.size());
+}
+
+void PineExecutionAdapter::rebuild_retire_candidates() {
+    retire_candidates_.clear();
+    retire_fronts_.clear();
+    // The table's ordinary walk covers resident rows. Spilled records restore
+    // empty retained windows, so none can be a candidate or a current front.
+    for (const auto& row : cohorts_by_id_)
+        refresh_retire_candidate(row.first, row.second, 0);
+    compact_retire_indexes();
+    retire_rescan_remaining_ = std::max<std::uint64_t>(64, cohorts_by_id_.size());
+}
+
+void PineExecutionAdapter::verify_retire_candidates() const {
+#ifndef NDEBUG
+    // Run independently of the rescan, so a missing mutation hook fails even
+    // on the bar whose scheduled rebuild would otherwise repair the omission.
+    if (!cohorts_by_id_.resident_rows_satisfy([this](const auto& row) {
+            const auto& members = row.second.origins.members();
+            return members.empty() || placement_.contains(members.front().incarnation)
+                || retire_candidates_.find(row.first) != retire_candidates_.end();
+        })) std::abort();
+#endif
+}
+
 // Called at an outermost bar open, after terminal receipts, placement-row
 // erasure and cohort_remove. Keeping an origin's own retained row is more
 // conservative than keeping only live placements, and preserves every old
 // row reader. Explicit names in live/queued placements also pin an origin
-// whose own row has gone. No persistent release bitmap or lookup is added.
+// whose own row has gone.
 void PineExecutionAdapter::retire_origin_prefixes() {
     cohorts_by_id_.spill_implicitly();
+    verify_retire_candidates();
     if (detail::retain_retired_rows()) return;
-    // The front row alone can pin each retained window. Check before building
-    // named, so a resting bracket/stop pair allocates no retirement scratch.
-    if (std::all_of(cohorts_by_id_.begin(), cohorts_by_id_.end(), [this](const auto& row) {
-            const auto& members = row.second.origins.members();
-            return members.empty() || placement_.contains(members.front().incarnation);
-        })) return;
+    if (retire_rescan_remaining_ == 0 || --retire_rescan_remaining_ == 0)
+        rebuild_retire_candidates();
+    if (retire_candidates_.empty()) return;
     IExecutionConsumer* consumer = bound_consumer();
     if (!consumer) return;
     const auto& core = as_native_consumer(*consumer).request_core();
@@ -29044,39 +29137,66 @@ void PineExecutionAdapter::retire_origin_prefixes() {
         const auto at = placement_.find(handle.incarnation);
         if (at != placement_.end()) snapshot_names(at->second);
     };
-    for (const auto& handle : live_handles_) live_names(handle);
-    for (const auto& live : core.live()) {
-        live_names(live.handle());
-        request_names(live.definition->request);
-        if (live.definition->root) name(live.definition->root->incarnation);
-    }
-    for (const auto& leg : pending_bracket_legs_) {
-        snapshot_names(leg.snapshot); request_names(leg.request);
-    }
-    for (const auto& entry : pending_entries_) {
-        snapshot_names(entry.snapshot); request_names(entry.request);
-    }
-    for (const auto& order : delayed_market_orders_) {
-        snapshot_names(order.snapshot); request_names(order.request);
-    }
-    for (const auto& sell : deferred_open_marketable_sells_) snapshot_names(sell.snapshot);
-    for (const auto& row : throttled_reopen_rearm_) snapshot_names(row);
-    for (const auto& command : pending_same_bar_commands_) {
-        snapshot_names(command.snapshot); request_names(command.request);
-    }
-    for (const auto& shadow : source_shadow_pending_) snapshot_names(shadow.snapshot);
-    for (const auto& pending : pending_coof_requests_) {
-        snapshot_names(pending.snapshot); request_names(pending.request);
-    }
-    for (const auto& revival : pending_margin_revivals_) snapshot_names(revival.snapshot);
-    for (const auto& leg : anchored_relative_legs_) {
-        name(leg.handle.incarnation); name(leg.parent.incarnation); request_names(leg.request);
-    }
-    std::sort(named.begin(), named.end());
-    named.erase(std::unique(named.begin(), named.end()), named.end());
-    for (auto& row : cohorts_by_id_) {
+    const auto build_named = [&] {
+        for (const auto& handle : live_handles_) live_names(handle);
+        for (const auto& live : core.live()) {
+            live_names(live.handle());
+            request_names(live.definition->request);
+            if (live.definition->root) name(live.definition->root->incarnation);
+        }
+        for (const auto& leg : pending_bracket_legs_) {
+            snapshot_names(leg.snapshot); request_names(leg.request);
+        }
+        for (const auto& entry : pending_entries_) {
+            snapshot_names(entry.snapshot); request_names(entry.request);
+        }
+        for (const auto& order : delayed_market_orders_) {
+            snapshot_names(order.snapshot); request_names(order.request);
+        }
+        for (const auto& sell : deferred_open_marketable_sells_) snapshot_names(sell.snapshot);
+        for (const auto& row : throttled_reopen_rearm_) snapshot_names(row);
+        for (const auto& command : pending_same_bar_commands_) {
+            snapshot_names(command.snapshot); request_names(command.request);
+        }
+        for (const auto& shadow : source_shadow_pending_) snapshot_names(shadow.snapshot);
+        for (const auto& pending : pending_coof_requests_) {
+            snapshot_names(pending.snapshot); request_names(pending.request);
+        }
+        for (const auto& revival : pending_margin_revivals_) snapshot_names(revival.snapshot);
+        for (const auto& leg : anchored_relative_legs_) {
+            name(leg.handle.incarnation); name(leg.parent.incarnation); request_names(leg.request);
+        }
+        std::sort(named.begin(), named.end());
+        named.erase(std::unique(named.begin(), named.end()), named.end());
+    };
+    bool named_ready = false;
+    for (auto at = retire_candidates_.begin(); at != retire_candidates_.end();) {
+        const auto candidate = at++;
+        const auto found = cohorts_by_id_.find(*candidate);
+        if (found == cohorts_by_id_.end()) {
+            retire_candidates_.erase(candidate);
+            continue;
+        }
+        auto& row = *found; // The lookup pins this row across nested reads.
         auto& facts = row.second;
         auto& origins = facts.origins;
+        const auto& members = origins.members();
+        const auto previous_front = members.empty() ? 0 : members.front().incarnation;
+        if (members.empty() || placement_.contains(previous_front)) {
+            refresh_retire_candidate(row.first, facts, previous_front);
+            continue;
+        }
+        // The four local pins can stop the prefix without allocating named.
+        // Keep candidates they pin: a later bar may release any of these pins.
+        const auto& front = members.front();
+        if (facts.live_units_by_origin.find(front.incarnation)
+                != facts.live_units_by_origin.end()
+            || std::find(facts.opened.begin(), facts.opened.end(), front) != facts.opened.end()
+            || core.cohort_contains(facts.handle, front)) continue;
+        if (!named_ready) {
+            build_named();
+            named_ready = true;
+        }
         std::size_t through = origins.base();
         for (const auto& origin : origins) {
             if (placement_.contains(origin.incarnation)
@@ -29094,7 +29214,10 @@ void PineExecutionAdapter::retire_origin_prefixes() {
             if (auto* index = adapter_lookup_index(consumer, this, run_counter_, false))
                 index->cohort_sides.erase(facts.handle.value);
         }
+        refresh_retire_candidate(row.first, facts, previous_front);
     }
+    compact_retire_indexes();
+    verify_retire_candidates();
     cohorts_by_id_.spill_implicitly();
     if (auto* index = adapter_lookup_index(consumer, this, run_counter_, false)) {
         auto& sides = index->cohort_sides;

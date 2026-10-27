@@ -914,8 +914,9 @@ void close_selection_lookup_growth_and_equivalence() {
 
 class DenseHost final : public pineforge::source::PineStrategyHost {
 public:
-    explicit DenseHost(bool jailed = false, bool cap_probe = false, int period = 0)
-        : cap_probe_(cap_probe), period_(period) {
+    explicit DenseHost(bool jailed = false, bool cap_probe = false, int period = 0,
+                       bool unique_round_trips = false)
+        : cap_probe_(cap_probe), period_(period), unique_round_trips_(unique_round_trips) {
         pineforge::source::PineStrategyConfig config;
         config.initial_capital = 1e12;
         config.margin_long = config.margin_short = 0.0;
@@ -924,6 +925,7 @@ public:
         set_syminfo_mintick(0.25);
         set_syminfo_timezone("UTC");
         set_syminfo_session("24x7");
+        if (unique_round_trips_) set_broker_state_hash_recording(false);
         if (jailed) {
             pf_scratch_tables_v1 descriptor{};
             descriptor.struct_size = static_cast<std::uint32_t>(sizeof descriptor);
@@ -932,9 +934,26 @@ public:
             require(set_scratch_tables_v1(&descriptor) == 0, "select jailed cohort table");
         }
     }
-    void on_source_bar(const pineforge::Bar&) override {
+    void on_source_bar(const pineforge::Bar& bar) override {
         const auto i = pine_bar_index();
         const auto na = std::numeric_limits<double>::quiet_NaN();
+        if (unique_round_trips_) {
+            // Market entries fill at the next open. Stops stay outside this
+            // flat tape; close_all settles the preceding entry every eight
+            // bars. The last close has one more bar in which to fill.
+            if (i == pine_last_bar_index() - 1) {
+                strategy_close_all();
+            } else if (i % 8 == 0) {
+                const bool is_long = (i / 8) % 2 == 0;
+                const auto id = std::string(is_long ? "Long " : "Short ") + std::to_string(i);
+                const auto exit_id = std::string(is_long ? "Long stop " : "Short stop ")
+                    + std::to_string(i);
+                strategy_close_all();
+                strategy_entry(id, is_long, na, na, 1.0);
+                strategy_exit(exit_id, id, na, bar.close * (is_long ? 0.97 : 1.03));
+            }
+            return;
+        }
         auto& table = adapter_.*access(Cohorts{});
         if (cap_probe_ && i == 4096) {
             const auto logical = table.size();
@@ -1007,6 +1026,7 @@ public:
 private:
     bool cap_probe_;
     int period_;
+    bool unique_round_trips_;
 };
 
 void print_slice(const char* slice, const Adapter::PendingScanWork& work) {
@@ -1162,9 +1182,7 @@ void dense_operation_growth_and_instrumentation(bool jailed) {
     // retire_origin_prefixes Iterator pass below.
     require(walk_operations[1] * 2 <= walk_operations[0] * 5,
             "doubling dense pending cohorts exceeds 2.5x fixed cohort walks");
-    // EXPECTED_RED_UNTIL_RETIRE_DIRTY_SET: iterated_rows measures the known
-    // Theta(R) retire pass. Print the full ratio and keep it unasserted until
-    // that pass has a dirty-set implementation.
+    // Bound cohort iteration growth when pending entry ids accumulate.
     std::printf("CR347 profile=%s dense_full_ratio=%llu/%llu fixed_walk_ratio=%llu/%llu "
                 "iterated_rows_N=%llu iterated_rows_2N=%llu\n",
         jailed ? "jailed" : "unjailed",
@@ -1174,6 +1192,72 @@ void dense_operation_growth_and_instrumentation(bool jailed) {
         static_cast<unsigned long long>(walk_operations[0]),
         static_cast<unsigned long long>(operations[0] - walk_operations[0]),
         static_cast<unsigned long long>(operations[1] - walk_operations[1]));
+    require((operations[1] - walk_operations[1]) * 2
+                <= (operations[0] - walk_operations[0]) * 5,
+            "doubling dense pending cohorts exceeds 2.5x iterated rows");
+}
+
+void unique_entry_close_all_cohort_work_scaling() {
+    constexpr int sizes[] = {4000, 8000};
+    std::uint64_t iterated_rows[2]{}, operations[2]{}, logical_rows[2]{};
+    std::size_t resident_rows[2]{};
+    int trades[2]{};
+    bool all_closed[2]{}, flat[2]{};
+    std::string errors[2];
+    for (int sample = 0; sample < 2; ++sample) {
+        const int n = sizes[sample];
+        auto bars = chart();
+        bars.resize(static_cast<std::size_t>(n), bars.back());
+        for (int i = 0; i < n; ++i)
+            bars[i].timestamp = 1736121600000LL + static_cast<std::int64_t>(i) * 60000;
+        DenseHost host(false, false, 0, true);
+        host.run(bars.data(), n, "1", "1");
+        errors[sample] = host.last_error();
+        trades[sample] = host.trade_count();
+        flat[sample] = host.live_position_size() == 0.0;
+        all_closed[sample] = true;
+        for (int i = 0; i < trades[sample]; ++i) {
+            const auto& trade = host.get_trade(i);
+            all_closed[sample] = all_closed[sample] && !trade.open_at_end
+                && !trade.exit_from_bracket && trade.exit_bar_index > trade.entry_bar_index;
+        }
+        const auto& table = host.adapter().*access(Cohorts{});
+        logical_rows[sample] = table.size();
+        resident_rows[sample] = table.resident_size();
+        iterated_rows[sample] = host.adapter().cohort_table_work().iterated_rows;
+        operations[sample] = host.cohort_operations();
+    }
+    // Read only scalar counters after run: no hash replay or table walk in
+    // the measurement. Log before any assertion, including setup checks.
+    std::printf("CR391 N=%d 2N=%d trades=%d/%d logical_rows=%llu/%llu resident_rows=%zu/%zu "
+                "iterated_rows=%llu/%llu iterated_rows_ratio=%.6f "
+                "cohort_operations=%llu/%llu cohort_operations_ratio=%.6f bound=2.5\n",
+        sizes[0], sizes[1], trades[0], trades[1],
+        static_cast<unsigned long long>(logical_rows[0]),
+        static_cast<unsigned long long>(logical_rows[1]),
+        resident_rows[0], resident_rows[1],
+        static_cast<unsigned long long>(iterated_rows[0]),
+        static_cast<unsigned long long>(iterated_rows[1]),
+        iterated_rows[0] ? static_cast<double>(iterated_rows[1]) / iterated_rows[0] : 0.0,
+        static_cast<unsigned long long>(operations[0]),
+        static_cast<unsigned long long>(operations[1]),
+        operations[0] ? static_cast<double>(operations[1]) / operations[0] : 0.0);
+    std::fflush(stdout);
+    for (int sample = 0; sample < 2; ++sample) {
+        require(errors[sample].empty(), errors[sample].c_str());
+        require(trades[sample] > 0 && all_closed[sample] && flat[sample],
+                "CR391 unique entries must fill and close_all must settle every trade");
+    }
+    require(trades[1] > trades[0], "CR391 doubling bars must close more unique-entry trades");
+    require(logical_rows[0] > 0 && logical_rows[1] > logical_rows[0],
+            "CR391 doubling bars must accumulate more logical cohort rows");
+    require(iterated_rows[0] > 0 && iterated_rows[1] > iterated_rows[0]
+            && operations[0] > 0 && operations[1] > operations[0],
+            "CR391 cohort walk and total work instrumentation must be active and grow");
+    require(iterated_rows[1] * 2 <= iterated_rows[0] * 5,
+            "CR391 iterated_rows ratio (2N/N) exceeds 2.5 for unique-entry close_all runs");
+    require(operations[1] * 2 <= operations[0] * 5,
+            "CR391 cohort_operations ratio (2N/N) exceeds 2.5 for unique-entry close_all runs");
 }
 
 void adapter_cap_rollback() {
@@ -1218,6 +1302,7 @@ int main(int argc, char** argv) {
         close_selection_lookup_growth_and_equivalence();
         dense_operation_growth_and_instrumentation(false);
         dense_operation_growth_and_instrumentation(true);
+        unique_entry_close_all_cohort_work_scaling();
         adapter_cap_rollback();
         rolling_modulo_pending_population();
         std::puts("adapter id storage: OK");

@@ -379,6 +379,15 @@ public:
         for (const auto& row : resident_) total += row.second.owner->second.opened.size();
         return total;
     }
+    // Diagnostic predicates, like the oracles above, do not charge production
+    // work counters. Spilled rows have no live members by the codec contract.
+    template<class Predicate>
+    bool resident_rows_satisfy(Predicate&& predicate) const {
+        for (const auto& row : resident_) {
+            if (!predicate(static_cast<const Row&>(*row.second.owner))) return false;
+        }
+        return true;
+    }
     auto resident_ids() const noexcept {
         const auto at = resident_.begin();
         const insertion_iterator first{this, at == resident_.end() ? 0 : at->first,
