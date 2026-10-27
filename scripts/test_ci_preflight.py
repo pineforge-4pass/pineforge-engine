@@ -2401,9 +2401,9 @@ class PreflightFailures(unittest.TestCase):
         inventory = re.findall(
             r'pins all (\d+) source-labelled names: (\d+) from the\n'
             r'`PINEFORGE_PR_SLOW_TESTS` loop and (\d+) direct CMake', text)
-        self.assertEqual(inventory, [('60', '43', '17')])
-        self.assertIn('The timing list contains 43 names, and 17 additional names', text)
-        self.assertIn('making 60 distinct pinned slow names.', text)
+        self.assertEqual(inventory, [('61', '43', '18')])
+        self.assertIn('The timing list contains 43 names, and 18 additional names', text)
+        self.assertIn('making 61 distinct pinned slow names.', text)
 
     def test_floor_table_documentation_anchors_point_to_definition(self):
         source = (ROOT / 'scripts/ci_verify.py').read_text().splitlines()
