@@ -22,10 +22,96 @@ namespace dormant_io {
 // Same executable-local, real-syscall observer as test_p2cx_tledger_io.
 // No result/errno/data is synthesized; every request reaches the kernel.
 inline std::size_t preads = 0;
+struct Read {
+    int fd = 0;
+    off_t offset = 0;
+    std::size_t bytes = 0;
+};
+inline bool attribution = false;
+inline std::array<Read, 4096> records{};
+inline std::size_t recorded = 0;
+inline std::size_t dropped = 0;
+// Separate whole-run first-read map, including calls outside the late window.
+// Raw fd numbers can be reused between runs; no pathname resolution is done.
+inline std::array<Read, 6> first_reads{};
+inline std::size_t fd_count = 0;
+
+void observe(int fd, off_t offset, std::size_t bytes) noexcept {
+    std::size_t first = 0;
+    while (first < fd_count && first_reads[first].fd != fd) ++first;
+    if (first == fd_count && fd_count < first_reads.size())
+        first_reads[fd_count++] = {fd, offset, bytes};
+    if (!attribution) return;
+    if (recorded < records.size()) records[recorded++] = {fd, offset, bytes};
+    else ++dropped;
+}
+
+void begin_bar() noexcept {
+    recorded = 0;
+    dropped = 0;
+    attribution = true;
+}
+
+// Summarize only after the observed interval. All workspace is fixed-size;
+// overflow is visible and never changes the real pread counter or verdict.
+void print(const char* size, std::size_t bar, std::size_t total, const char* phase) {
+    auto sorted = records;
+    std::sort(sorted.begin(), sorted.begin() + recorded, [](const Read& a, const Read& b) {
+        return a.fd < b.fd || (a.fd == b.fd && a.offset < b.offset);
+    });
+    std::size_t fds = 0, distinct = 0, repeats_max = 0;
+    off_t offset_min = recorded ? sorted[0].offset : 0;
+    off_t offset_max = offset_min;
+    for (std::size_t first = 0; first < recorded;) {
+        if (first == 0 || sorted[first - 1].fd != sorted[first].fd) ++fds;
+        auto last = first + 1;
+        while (last < recorded && sorted[last].fd == sorted[first].fd
+               && sorted[last].offset == sorted[first].offset) ++last;
+        ++distinct; // Distinct (fd, offset) pairs, not offsets across unrelated files.
+        repeats_max = std::max(repeats_max, last - first);
+        offset_min = std::min(offset_min, sorted[first].offset);
+        offset_max = std::max(offset_max, sorted[first].offset);
+        first = last;
+    }
+    std::fprintf(stderr, "T1 attr size=%s bar=%zu total=%zu fds=%zu by_fd=",
+                 size, bar, total, fds);
+    for (std::size_t first = 0; first < recorded;) {
+        auto last = first + 1;
+        while (last < recorded && sorted[last].fd == sorted[first].fd) ++last;
+        std::fprintf(stderr, "%s%d:%zu", first ? "," : "", sorted[first].fd, last - first);
+        first = last;
+    }
+    std::fprintf(stderr, " distinct_offsets=%zu repeats_max=%zu offset_min=%jd offset_max=%jd bytes_hist=",
+                 distinct, repeats_max, static_cast<std::intmax_t>(offset_min),
+                 static_cast<std::intmax_t>(offset_max));
+    std::sort(sorted.begin(), sorted.begin() + recorded,
+              [](const Read& a, const Read& b) { return a.bytes < b.bytes; });
+    for (std::size_t first = 0; first < recorded;) {
+        auto last = first + 1;
+        while (last < recorded && sorted[last].bytes == sorted[first].bytes) ++last;
+        std::fprintf(stderr, "%s%zu:%zu", first ? "," : "", sorted[first].bytes, last - first);
+        first = last;
+    }
+    std::fprintf(stderr, " recorded=%zu dropped=%zu phase=%s\n", recorded, dropped, phase);
+    std::fprintf(stderr, "T1 attr offsets size=%s", size);
+    for (std::size_t i = 0; i < std::min(recorded, std::size_t{24}); ++i)
+        std::fprintf(stderr, " (%d,%jd,%zu)", records[i].fd,
+                     static_cast<std::intmax_t>(records[i].offset), records[i].bytes);
+    std::fprintf(stderr, " phase=%s\n", phase);
+}
+
+void print_fdmap() {
+    std::fprintf(stderr, "T1 attr fdmap");
+    for (std::size_t i = 0; i < fd_count; ++i)
+        std::fprintf(stderr, " (%d,%jd,%zu)", first_reads[i].fd,
+                     static_cast<std::intmax_t>(first_reads[i].offset), first_reads[i].bytes);
+    std::fprintf(stderr, "\n");
+}
 }
 
 extern "C" ssize_t pread(int fd, void* data, std::size_t bytes, off_t offset) {
     ++dormant_io::preads;
+    dormant_io::observe(fd, offset, bytes);
     return static_cast<ssize_t>(::syscall(SYS_pread64, fd, data, bytes, offset));
 }
 #endif
@@ -46,7 +132,7 @@ namespace {
 using namespace pineforge;
 namespace no = pineforge::native_order;
 constexpr std::size_t resident = 4096; // kBookMax, unchanged.
-constexpr std::size_t bar_count = 40;
+constexpr std::size_t bar_count = 48; // Capacity for the attribution-only fourth run.
 constexpr std::int64_t start = 1736121600000LL;
 
 void require(bool ok, const char* why) {
@@ -95,6 +181,7 @@ public:
     std::array<std::size_t, bar_count> lookup_steps{};
 #if defined(__linux__)
     std::array<std::size_t, bar_count> preads{};
+    std::size_t attribution_bar = 39;
 #endif
     std::size_t placed = 0;
     bool spilled = false;
@@ -107,6 +194,7 @@ public:
         reads_before_ = consumer().request_core().book_lookup_reads();
 #if defined(__linux__)
         preads_before_ = dormant_io::preads;
+        if (bar_ == attribution_bar) dormant_io::begin_bar();
 #endif
     }
     void on_native_bar(const Bar&, const NativeDecisionContext&) override {
@@ -117,6 +205,7 @@ public:
         lookup_steps[bar_] = reads.steps - reads_before_.steps;
 #if defined(__linux__)
         preads[bar_] = dormant_io::preads - preads_before_;
+        if (bar_ == attribution_bar) dormant_io::attribution = false;
 #endif
         ++bar_;
         // Let resident rows join before the next batch can spill them.
@@ -157,15 +246,18 @@ std::array<Bar, bar_count> tape() {
     return bars;
 }
 
-Costs batch(std::size_t rows) {
+Costs batch(std::size_t rows, [[maybe_unused]] const char* size, std::size_t run_bars = 40) {
 #if defined(__linux__)
     const auto before = dormant_io::preads;
 #endif
     Host h(rows);
+#if defined(__linux__)
+    h.attribution_bar = run_bars - 1;
+#endif
     require(h.configure_native(specification()).status == NativeSetupStatus::Applied,
             "T1 configure refused");
     const auto bars = tape();
-    h.run(bars.data(), static_cast<int>(bars.size()));
+    h.run(bars.data(), static_cast<int>(run_bars));
     require(h.native_state().kind == NativeLifecycleKind::Completed, h.last_error().c_str());
     require(h.placed == rows && h.spilled, "T1 did not cross the real spill boundary");
     require(h.trade_count() == 0 && h.physical_position().signed_units == 0,
@@ -178,6 +270,7 @@ Costs batch(std::size_t rows) {
 #if defined(__linux__)
     require(dormant_io::preads > before, "T1 pread observer saw no real spill I/O");
     result.preads = window(h.preads, 32, 40);
+    dormant_io::print(size, h.attribution_bar, h.preads[h.attribution_bar], "batch");
 #endif
     return result;
 }
@@ -192,7 +285,8 @@ struct StreamWindow {
     std::uint64_t fast_after = 0;
 };
 
-StreamWindow stream(std::size_t rows, bool always_eager, bool force_one) {
+StreamWindow stream(std::size_t rows, bool always_eager, bool force_one,
+                    [[maybe_unused]] const char* size) {
     Host h(rows);
     h.consumer().set_match_dormant(!always_eager);
     require(h.configure_native(specification()).status == NativeSetupStatus::Applied,
@@ -222,6 +316,7 @@ StreamWindow stream(std::size_t rows, bool always_eager, bool force_one) {
         const auto reads_before = h.consumer().request_core().book_lookup_reads();
 #if defined(__linux__)
         const auto preads_before = dormant_io::preads;
+        if (i + 1 == counts.size()) dormant_io::begin_bar();
 #endif
         require(h.stream_push_tick(TradeTick{start + 20 * 300000 + static_cast<std::int64_t>(i),
                                             i + 1, 100, 1}),
@@ -232,6 +327,7 @@ StreamWindow stream(std::size_t rows, bool always_eager, bool force_one) {
         lookup_steps[i] = reads.steps - reads_before.steps;
 #if defined(__linux__)
         preads[i] = dormant_io::preads - preads_before;
+        if (i + 1 == counts.size()) dormant_io::attribution = false;
 #endif
     }
     out.fast_after = h.consumer().fast_points();
@@ -240,6 +336,8 @@ StreamWindow stream(std::size_t rows, bool always_eager, bool force_one) {
     out.costs.lookup_steps = window(lookup_steps, 24, 32);
 #if defined(__linux__)
     out.costs.preads = window(preads, 24, 32);
+    dormant_io::print(size, preads.size() - 1, preads.back(),
+                      always_eager ? "stream-eager" : force_one ? "stream-forced" : "stream");
 #endif
     out.continuation = h.native_continuation_hash();
     require(h.stream_end(false), "T1 stream end failed");
@@ -256,10 +354,14 @@ int main(int argc, char** argv) {
 #if !defined(__linux__)
         require(!io_only, "T1 --io-only requires the Linux real-syscall observer");
 #endif
-        const Costs small = batch(resident + 512);
-        const Costs large = batch(resident + resident);
+        const Costs small = batch(resident + 512, "small");
+        const Costs large = batch(resident + resident, "large");
         // 24 placement bars leave the same late [32,40) window untouched.
-        const Costs largest = batch(resident + 2 * resident);
+        const Costs largest = batch(resident + 2 * resident, "largest");
+#if defined(__linux__)
+        // Forty placement bars, then eight matching bars; costs are not asserted.
+        (void)batch(resident + 4 * resident, "fourth", bar_count);
+#endif
         std::printf("T1 late allocations/bar small=%zu..%zu large=%zu..%zu largest=%zu..%zu\n",
                     small.allocations.low, small.allocations.high,
                     large.allocations.low, large.allocations.high,
@@ -316,10 +418,10 @@ int main(int argc, char** argv) {
                     && largest.lookup_steps.low == largest.lookup_steps.high,
                 "T1 late book lookup steps/bar depend on the spilled row count");
 #ifdef PINEFORGE_TEST_DORMANT_BOOK_PATCHED
-        const auto eager_small = stream(resident + 512, true, false);
-        const auto eager_large = stream(resident + resident, true, false);
-        const auto forced_small = stream(resident + 512, false, true);
-        const auto forced_large = stream(resident + resident, false, true);
+        const auto eager_small = stream(resident + 512, true, false, "small");
+        const auto eager_large = stream(resident + resident, true, false, "large");
+        const auto forced_small = stream(resident + 512, false, true, "small");
+        const auto forced_large = stream(resident + resident, false, true, "large");
         require(forced_small.eager_forced == 1 && forced_large.eager_forced == 1,
                 "T1 did not force exactly one eager point");
         require(forced_small.fast_before > 0 && forced_large.fast_before > 0,
@@ -364,8 +466,15 @@ int main(int argc, char** argv) {
                     "T1 default latch decision changed; C2 must select recovery explicitly");
         }
 #endif
+#if defined(__linux__)
+        dormant_io::print_fdmap();
+#endif
         return 0;
     } catch (const std::exception& e) {
+#if defined(__linux__)
+        dormant_io::attribution = false;
+        dormant_io::print_fdmap();
+#endif
         std::fprintf(stderr, "test_native_dormant_book_cost: %s\n", e.what());
         return 1;
     }
