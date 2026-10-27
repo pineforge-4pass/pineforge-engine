@@ -70,6 +70,7 @@ names a removed path, 1 on a violation, 2 on a construct it cannot parse.
 from __future__ import annotations
 
 import argparse
+import ast
 import re
 import sys
 from pathlib import Path
@@ -80,6 +81,7 @@ REMOVED_PIN = Path('tests/private_fixture_paths.txt')
 ROW_PIN = Path('tests/private_fixture_rows.txt')
 EVIDENCE = Path('tests/private_fixture_reads.evidence')
 SKIP_LITERAL = 'SKIP private fixtures not present: '
+EQUIVALENCE_PARENT = 'native_live_equivalence_e2e'
 
 FAILURES: list[str] = []
 
@@ -140,6 +142,38 @@ def load_pinned_rows(root: Path) -> dict[str, int]:
             rows[name] = lineno
     if not rows:
         raise Unparseable(f'{path}: the row pin parsed empty')
+    if EQUIVALENCE_PARENT not in rows:
+        return rows
+
+    script = root / 'tests' / f'{EQUIVALENCE_PARENT}.py'
+    try:
+        declarations = [
+            node for node in ast.parse(script.read_text()).body
+            if isinstance(node, ast.Assign) and any(
+                isinstance(target, ast.Name) and target.id == 'PROBES'
+                for target in node.targets)
+        ]
+        if (len(declarations) != 1
+                or not isinstance(declarations[0].value, ast.Dict)):
+            raise ValueError(
+                'the equivalence driver must declare one literal PROBES dictionary')
+        probes = [ast.literal_eval(key)
+                  for key in declarations[0].value.keys]
+        if (not probes or any(
+                not isinstance(probe, str)
+                or not re.fullmatch(r'[a-z0-9]+(?:-[a-z0-9]+)*', probe)
+                for probe in probes)
+                or len(probes) != len(set(probes))):
+            raise ValueError(
+                'the equivalence driver must declare distinct probe slugs')
+    except (OSError, SyntaxError, ValueError) as error:
+        raise Unparseable(
+            f'{script}: cannot expand the equivalence private-fixture pin: '
+            f'{error}') from error
+
+    parent_line = rows.pop(EQUIVALENCE_PARENT)
+    for probe in probes:
+        rows.setdefault(f'{EQUIVALENCE_PARENT}_{probe}', parent_line)
     return rows
 
 
