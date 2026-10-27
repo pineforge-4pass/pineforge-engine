@@ -340,7 +340,7 @@ inline Sample run(const std::string& directory, const std::string& name, int pop
         require(host.last_run_status() == 0 && host.last_error().empty(), "Pine run failed");
         require(host.callbacks == bars.size() && host.applied > 0 && host.closes > 0,
                 "fixture did not execute bars/fills/closes");
-        if (!shapes_) {
+        if (!shapes) {
             require(host.closed_trade_count() == static_cast<std::size_t>(population)
                         && host.closes == static_cast<std::size_t>(population),
                     "N bars must close N-1 reversal trades");
@@ -359,7 +359,7 @@ inline Sample run(const std::string& directory, const std::string& name, int pop
         try {
             require(report.total_trades > 0 && report.net_profit == 0,
                     "independent zero-PnL model changed");
-            if (!shapes_)
+            if (!shapes)
                 require(report.total_trades == population + 1,
                         "terminal open lot must add exactly one report-only T row");
             pf_report_sink_receipt_v1 receipt{};
