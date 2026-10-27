@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cassert> // assert
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
