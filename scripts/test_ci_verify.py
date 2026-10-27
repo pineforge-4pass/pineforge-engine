@@ -92,7 +92,7 @@ ABSENT_FLOOR = {name: entry[0] - entry[1]
 
 # Independent expectations for the lab's ctest-shard-union/v1 contract.
 # Three eight-row splits plus four report rows: 910 + 28 = 938, 337 + 28 = 365.
-# CR-319 adds three public Linux scratch cases: 941/368 full, 634/337 absent.
+# Three public Linux scratch cases were added: 941/368 full, 634/337 absent.
 # Do not derive these from stage/floor helpers: mutations must turn them red.
 LAB_SHARD_FLOORS = {'release': {False: 634, True: 941},
                     'kernel': {False: 337, True: 368}}

@@ -646,7 +646,7 @@ ADR_RULED_TEXTS_MIN = 59
 EXCLUDED_REGISTERED_MIN = {
     # +28 rows in every engine profile: verifier 8 + preflight 8 + command-after 8 + report 4.
     # Each is slices + cover - parent; native adds equivalence: 964 + 28 + 8 = 1000.
-    # CR-319: three public Linux scratch-attribution cases in both fixture worlds.
+    # Three public Linux scratch-attribution cases in both fixture worlds.
     # 904/895/1000 + 3 = 907/898/1003; release/kernel 923/365 + 3 = 926/368.
     'debug': 907, 'sanitizers': 898, 'native': 1003,
     # D1, run 39221717231 of the PR TSV, historical REGISTERED counts
@@ -801,7 +801,7 @@ PRIVATE_FIXTURE_SKIP_LITERAL = 'SKIP private fixtures not present: '
 # reads each from one line, and the table references the names. Re-measuring a row
 # means editing these literals and the `pinned` counts in the table.
 # +28 public rows: verifier 8 + preflight 8 + command-after 8 + report 4; 910 + 28 = 938, 337 + 28 = 365.
-# CR-319: aggregate stays one row; nine individual cases become twelve (+3).
+# Scratch attribution: aggregate stays one row; nine individual cases become twelve (+3).
 # Both fixture worlds gain three public Linux rows; pinned populations stay fixed.
 RELEASE_MIN_TESTS = 941
 KERNEL_MIN_TESTS = 368

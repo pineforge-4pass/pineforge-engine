@@ -1,5 +1,5 @@
 // Co-tenant controls are RED against the pid-less fixture at 2561cfb464.
-// CR-319 adds RED controls at 6b33c47fd for exclusive open, fork descendants,
+// Further RED controls at 6b33c47fd cover exclusive open, fork descendants,
 // and path/PID diagnostics. The controls use the pre-change watch API.
 #define PINEFORGE_TEST_SCRATCH_ATTRIBUTION 1
 #include "default_scratch_tmpfs_fixture.hpp"

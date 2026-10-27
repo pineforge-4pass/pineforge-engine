@@ -235,7 +235,7 @@ null default execution floors. Their default runs now enter strict exclusion
 accounting: at least 907 registered rows for `debug`, 898 for `sanitizers`,
 a nonempty exclusion that leaves selected rows, and exact accounting of that
 selection. Verifier 8 + preflight 8 + command-after 8 + report 4 add 28 public rows;
-CR-319 adds three public Linux scratch-attribution cases in both fixture worlds.
+Scratch attribution adds three public Linux cases in both fixture worlds.
 Plain Debug-type runs enforce the increased registration floors. An explicit
 valid `--exclude-label X` still wins on unsharded and 1/1 paths. For `N > 1`,
 only the profile's declared Debug-build-type `slow` exclusion is accepted;
@@ -720,7 +720,7 @@ observed skips:
 | `release` | 941 | 634 | 941 / 941 |
 | `kernel` | 368 | 337 | 368 / 368 |
 
-CR-319 keeps the scratch-attribution aggregate and extends its nine individual
+The scratch-attribution aggregate stays and its nine individual
 Linux cases to twelve: `(1 + 12) - (1 + 9) = 3` additional public rows in each
 fixture world. Release grows from 938 to 941 and kernel from 365 to 368.
 The pinned populations remain 307 and 31, giving absent floors
