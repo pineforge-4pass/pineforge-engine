@@ -11,13 +11,15 @@ version number follows semantic versioning over the surfaces the
 paired with [pineforge-codegen 1.8.0](https://github.com/pineforge-4pass/pineforge-codegen-oss/releases/tag/v1.8.0).
 A minor release. It speeds up the `run_json` wrapper (the wrapper only, not the
 engine), adds one unused storage building block to the library, states where
-scratch files are placed, and carries release-gate and CI changes. The C ABI
-(`PF_ABI_VERSION` 4) and the run-failure code catalog are unchanged (0 codes
-added, changed or removed since 1.7.0). The report keys are unchanged except
-for two additive diagnostics keys, described below.
+scratch files are placed, carries release-gate and CI changes, and stops
+building and publishing macOS. The C ABI (`PF_ABI_VERSION` 4) and the
+run-failure code catalog are unchanged (0 codes added, changed or removed
+since 1.7.0). The report keys are unchanged except for two additive
+diagnostics keys, described below.
 
 ### Compatibility and migration
 
+- **Supported platforms: Linux x86_64 and arm64.** From 1.8.0 the engine is built, tested and published for Linux only: the release carries `pineforge-v1.8.0-linux-x86_64.tar.gz` and `pineforge-v1.8.0-linux-aarch64.tar.gz` (each with a `.sha256`) and no macOS archive, and CI no longer runs macOS jobs. A macOS build is neither tested nor supported.
 - Pairs with codegen 1.8.0 exactly. Regenerate strategy C++ with codegen 1.8.0
   and relink every strategy library against the 1.8.0 headers and
   `libpineforge.a`, as for every pair change; replacing the archive alone does
@@ -164,8 +166,8 @@ for two additive diagnostics keys, described below.
   pending flat-memory work, and the gate fails on a new container site.
 - **Release gate reads the post-merge run (#526).** The release gate
   (`scripts/ci_release_gate.py`) now also requires a green, non-skipped
-  `ci-post` run of the commit being released, with all four build legs
-  (`ubuntu-24.04` and `macos-26`, Debug and Release) successful. Until now it
+  `ci-post` run of the commit being released, with all Linux x86_64
+  and arm64 build legs (Release and Debug) successful. Until now it
   read only the `pineforge/verify` and `pineforge/parity` statuses. When the
   release commit is documentation-only it checks the nearest earlier commit that
   is not (at most 20 documentation-only commits), and every skipped

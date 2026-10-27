@@ -364,6 +364,50 @@ endif()
         # (every refusal and failure line carries the script's own prefix).
         self.assertNotIn('check_two_world_registration:', result.stdout)
 
+    def test_unit_test_helper_follows_argument_branches_and_literal_rows(self):
+        path = self.tree._write_target('tests/helper-registration.cmake')
+        path.write_text('''
+function(pineforge_add_unit_test program)
+    add_executable(${program} ${program}.cpp)
+    set(helper_local changed)
+    if(program STREQUAL "packed_program")
+        add_test(NAME packed_program_slice_1 COMMAND ${program} --slice 1/2)
+        add_test(NAME packed_program_slice_2 COMMAND ${program} --slice 2/2)
+        add_test(NAME packed_program_cover COMMAND ${program} --list)
+    else()
+        add_test(NAME ${program} COMMAND ${program})
+    endif()
+endfunction()
+set(program parent_value)
+set(helper_local parent_value)
+pineforge_add_unit_test(packed_program)
+pineforge_add_unit_test(plain_program)
+add_test(NAME literal_public_row COMMAND plain_program)
+''')
+        world = CHECK_MODULE.World(self.root, set(), set(), virtual=True)
+        machine = CHECK_MODULE.Machine(
+            path, world, CHECK_MODULE.PROFILES['release'], self.root)
+        machine.run()
+        self.assertEqual({
+            'packed_program_slice_1', 'packed_program_slice_2',
+            'packed_program_cover', 'plain_program', 'literal_public_row',
+        }, machine.rows)
+        self.assertEqual({'packed_program', 'plain_program'}, machine.targets)
+        self.assertEqual(['parent_value'], machine.vars['program'])
+        self.assertEqual(['parent_value'], machine.vars['helper_local'])
+
+    def test_deleted_unit_slice_registration_names_the_missing_row(self):
+        row = 'test_native_command_after_slice_4'
+        registration = (f'        add_test(NAME {row}\n'
+                        '            COMMAND ${test_name} --slice 4/8)\n')
+        self.tree.edit(TREES_DIR, registration, '')
+        result = self.run_check('--cmakelists', TREES_DIR, '--profile', 'debug')
+        output = result.stdout + result.stderr
+        self.assertEqual(2, result.returncode, output)
+        self.assertIn(f'PR slow row is no longer registered: {row}', output)
+        self.assertIn('message(FATAL_ERROR) was reached', output)
+        self.assertNotIn('Traceback', output)
+
     # control 6: a refusal-shard row removed from the recorded list is drift
     @needs_overlay
     def test_a_removed_shard_row_is_drift(self):
@@ -731,9 +775,14 @@ endif()
         self.tree.append(LANE_FILE, body)
         # Keep the real lane include block, with empty but fully modelled
         # records around it. Both probes use this same registration fixture.
-        block = lane_include_block((REPO / TREES_DIR).read_text())
+        cmake = (REPO / TREES_DIR).read_text()
+        block = lane_include_block(cmake)
+        helper = re.search(
+            r'(?ms)^function\(pineforge_add_unit_test\b.*?^endfunction\(\)',
+            cmake)
+        self.assertIsNotNone(helper, 'the unit-test registration helper is gone')
         self.tree._write_target(TREES_DIR).write_text(
-            'set(_pf_source_bound_private_rows)\n' + block)
+            'set(_pf_source_bound_private_rows)\n' + helper.group(0) + '\n' + block)
         self.tree._write_target(RUNNER).write_text(
             'set(_pf_refusal_shard_rows)\n'
             'set(_pf_refusal_shard_first_library)\n'
