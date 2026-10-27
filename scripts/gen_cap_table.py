@@ -16,6 +16,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = Path("scripts/cap_table_rows.json")
+MANIFEST_HEADER = Path("include/pineforge/detail/scratch_tables.hpp")
 PAGE = Path("docs/pages/caps-and-defaults.md")
 BEGIN = "<!-- BEGIN generated cap table: python3 scripts/gen_cap_table.py --write -->"
 END = "<!-- END generated cap table -->"
@@ -36,15 +37,11 @@ CONSTANT_RE = re.compile(
     r"(?P<value>[^;]+);"
 )
 FIELD_RE = re.compile(
-    r"(?m)^[ \t]*(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?P<value>[^,;]+)"
-    r"(?:[,;])"
+    r"(?m)^[ \t]*(?:[A-Za-z_][A-Za-z0-9_:<>]*[ \t]+)+"
+    r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)[ \t]*=[ \t]*(?P<value>[^;]+);"
 )
 RESOURCE_RE = re.compile(r"enum\s+class\s+ScratchResource\b[^{}]*\{(?P<body>.*?)\};", re.S)
 RESOURCE_ITEM_RE = re.compile(r"(?m)^[ \t]*(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*(?:=[^,]*)?,?")
-
-MANIFEST_FIELDS = (
-    "K_q", "B_q", "K_e", "B_e", "K_c", "B_c", "U", "B_U", "V", "B_V", "R"
-)
 
 
 def _load_manifest(root: Path) -> dict:
@@ -60,6 +57,10 @@ def _load_manifest(root: Path) -> dict:
 
 def _source_texts(root: Path, rows: list[dict]) -> dict[Path, str]:
     paths = {Path(row["header"]) for row in rows if row.get("header")}
+    if any(isinstance(row.get("constant"), str)
+           and row["constant"].startswith("default_scratch_manifest(bars).")
+           for row in rows):
+        paths.add(MANIFEST_HEADER)
     resource_header = _load_manifest(root).get("resource_header")
     if resource_header:
         paths.add(Path(resource_header))
@@ -83,27 +84,31 @@ def _constant_value(text: str, name: str) -> tuple[str, int] | None:
     return " ".join(match.group("value").split()), line
 
 
-def _struct_field_value(text: str, struct_name: str, field: str) -> tuple[str, int] | None:
+def _struct_fields(text: str, struct_name: str) -> dict[str, tuple[str, int]]:
     struct = re.search(
-        rf"\bstruct\s+{re.escape(struct_name)}\s*\{{(?P<body>.*?)\}};",
+        rf"\bstruct\s+{re.escape(struct_name)}\s*\{{(?P<body>.*?)^[ \t]*\}};",
         text,
-        re.S,
+        re.S | re.M,
     )
     if not struct:
-        return None
+        return {}
+    fields = {}
     for match in FIELD_RE.finditer(struct.group("body")):
-        if match.group("name") == field:
-            line = text.count("\n", 0, struct.start("body") + match.start()) + 1
-            return " ".join(match.group("value").split()), line
-    return None
+        line = text.count("\n", 0, struct.start("body") + match.start()) + 1
+        fields[match.group("name")] = " ".join(match.group("value").split()), line
+    return fields
 
 
-def _manifest_function_values(text: str) -> dict[str, tuple[str, int]]:
+def _struct_field_value(text: str, struct_name: str, field: str) -> tuple[str, int] | None:
+    return _struct_fields(text, struct_name).get(field)
+
+
+def _manifest_function_values(text: str, manifest_text: str) -> dict[str, tuple[str, int]]:
     function = re.search(
         r"default_scratch_manifest\s*\(\s*std::uint64_t\s+bars\s*\)\s*\{"
-        r"(?P<body>.*?)\n\s*\}",
+        r"(?P<body>.*?)^[ \t]*\}[ \t]*$",
         text,
-        re.S,
+        re.S | re.M,
     )
     if not function:
         return {}
@@ -111,28 +116,35 @@ def _manifest_function_values(text: str) -> dict[str, tuple[str, int]]:
     returned = re.search(r"\breturn\s*\{(?P<values>.*?)\}\s*;", body, re.S)
     if not returned:
         return {}
-    aggregate = re.sub(r"//[^\n]*", "", returned.group("values"))
-    values: list[str] = []
-    current: list[str] = []
+    # Keep offsets intact when removing comments so each expression cites its
+    # actual source line, rather than an offset relative to the function body.
+    aggregate = re.sub(r"//[^\n]*", lambda match: " " * len(match.group()),
+                       returned.group("values"))
+    values: list[tuple[str, int]] = []
+    start = 0
     depth = 0
-    for char in aggregate:
+    for index, char in enumerate(aggregate + ","):
         if char in "([{":
             depth += 1
         elif char in ")]}":
             depth -= 1
         if char == "," and depth == 0:
-            values.append(" ".join("".join(current).split()))
-            current = []
-        else:
-            current.append(char)
-    if current:
-        values.append(" ".join("".join(current).split()))
-    start_line = text.count("\n", 0, returned.start("values")) + 1
-    return {
-        field: (values[index], start_line)
-        for index, field in enumerate(MANIFEST_FIELDS)
-        if index < len(values)
-    }
+            fragment = aggregate[start:index]
+            if fragment.strip():
+                offset = (function.start("body") + returned.start("values") + start
+                          + len(fragment) - len(fragment.lstrip()))
+                line = text.count("\n", 0, offset) + 1
+                values.append((" ".join(fragment.split()), line))
+            elif index < len(aggregate):
+                raise ValueError("default_scratch_manifest(bars) has an empty initializer")
+            start = index + 1
+    fields = _struct_fields(manifest_text, "ScratchManifest")
+    if not fields:
+        raise ValueError(f"ScratchManifest fields are missing from {MANIFEST_HEADER}")
+    if depth != 0 or len(fields) != len(values):
+        raise ValueError("default_scratch_manifest(bars) initializer does not match "
+                         f"ScratchManifest: {len(values)} values for {len(fields)} fields")
+    return dict(zip(fields, values))
 
 
 def _manifest_noarg_r_value(text: str) -> tuple[str, int] | None:
@@ -148,7 +160,7 @@ def _manifest_noarg_r_value(text: str) -> tuple[str, int] | None:
     return " ".join(assignment.group(1).split()), line
 
 
-def _source_value(text: str, symbol: str) -> tuple[str, int] | None:
+def _source_value(text: str, symbol: str, manifest_text: str = "") -> tuple[str, int] | None:
     """Resolve a manifest symbol without evaluating it.
 
     The two selector forms beyond a C++ constant are deliberately narrow:
@@ -156,19 +168,19 @@ def _source_value(text: str, symbol: str) -> tuple[str, int] | None:
     ``default_scratch_manifest(bars).FIELD`` reads the returned aggregate.
     They keep the source expression visible in the generated record.
     """
-    if "::" in symbol and symbol.count("::") == 1:
-        struct_name, field = symbol.split("::")
-        return _struct_field_value(text, struct_name, field)
-    if symbol.startswith("default_scratch_manifest(bars)."):
-        return _manifest_function_values(text).get(symbol.rsplit(".", 1)[1])
-    if symbol == "default_scratch_manifest().R":
-        return _manifest_noarg_r_value(text)
     if symbol.startswith("literal:"):
         needle = symbol.removeprefix("literal:")
         match = re.search(re.escape(needle), text)
         if match:
             return needle, text.count("\n", 0, match.start()) + 1
         return None
+    if symbol.startswith("default_scratch_manifest(bars)."):
+        return _manifest_function_values(text, manifest_text).get(symbol.rsplit(".", 1)[1])
+    if symbol == "default_scratch_manifest().R":
+        return _manifest_noarg_r_value(text)
+    selector = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_]*)::([A-Za-z_][A-Za-z0-9_]*)", symbol)
+    if selector:
+        return _struct_field_value(text, selector.group(1), selector.group(2))
     return _constant_value(text, symbol)
 
 
@@ -241,7 +253,7 @@ def _resolved_rows(root: Path) -> tuple[list[dict], list[str]]:
             if not isinstance(symbol, str) or not symbol:
                 raise ValueError(f"row {name} has an invalid constant")
             source_path = Path(row["header"])
-            value = _source_value(texts[source_path], symbol)
+            value = _source_value(texts[source_path], symbol, texts.get(MANIFEST_HEADER, ""))
             if value is None:
                 raise ValueError(f'row "{name}" names missing source constant "{symbol}"')
             value, line = value
@@ -270,7 +282,7 @@ def render_block(rows: list[dict]) -> str:
     for row in rows:
         source = "not a source cap"
         if row["constant"] is not None:
-            source = f"`{row['source_value']}` ({row['header']}:{row['source_line']})"
+            source = f"`{_cell(row['source_value'])}` ({row['header']}:{row['source_line']})"
         lines.append(
             f"| `{row['name']}` | {source} | {_cell(row['unit'])} | "
             f"{_cell(row['enforced'])} | {_cell(row.get('refusal', 'none'))} | "
