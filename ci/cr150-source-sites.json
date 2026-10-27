@@ -8474,6 +8474,17 @@
   },
   {
    "file": "include/pineforge/source/pine_adapter.hpp",
+   "symbol": "reissue_rows_",
+   "scope": [
+    "namespace pineforge :: source #1",
+    "class PlacementTable #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: map < ReissueKey , ReissueRows , ReissueKeyLess >",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_adapter.hpp",
    "symbol": "positions_",
    "scope": [
     "namespace pineforge :: source #1",
@@ -27279,6 +27290,18 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
+   "symbol": "reissue_rows_",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "PlacementTable :: ReissueRows * PlacementTable :: reissue_group ( const PlacementSnapshot & identity ) #1",
+    "if ( group = = reissue_rows_ . end ( ) ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "reissue_rows_ . try_emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
    "symbol": "old_",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
@@ -28343,6 +28366,19 @@
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "first_reissues . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "first_reissues",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
+    "for ( const auto incarnation : released ) #1",
+    "for ( const auto & witness : reissue_basis ( leg ) ) #1"
    ],
    "cls": "grow",
    "spelling": "first_reissues . push_back ( . . . )",

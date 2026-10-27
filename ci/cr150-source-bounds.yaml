@@ -74,7 +74,7 @@ scan:
   generated_files:
     - "tutorial/**/generated*.cpp"
 ceilings:
-  unreviewed: 1264
+  unreviewed: 1266
   pending-flat-memory: 188
 owners:
   - {name: "generated-cpp", globs: ["tutorial/**"]}
@@ -1542,3 +1542,5 @@ entries:
   - {id: "U1499", file: "src/native_order.cpp", symbol: "held_", ops: ["assign"], container: "unresolved by the index: held_ = ...", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 2600}
   - {id: "U1500", file: "src/source/pine_adapter.cpp", symbol: "cohorts", ops: ["decl", "grow"], container: "std::vector<const CohortRow*>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 8761}
   - {id: "U1501", file: "src/ta_misc.cpp", symbol: "held_", ops: ["assign"], container: "unresolved by the index: held_ = ...", owner: "ta-series", phase: "unclassified", state: "unreviewed", line: 602}
+  - {id: "U1531", file: "include/pineforge/source/pine_adapter.hpp", symbol: "reissue_rows_", ops: ["decl"], container: "unresolved by the index: std::map<ReissueKey, ReissueRows, ReissueKeyLess>", owner: "engine-core", phase: "unclassified", state: "unreviewed", note: "CR150-CX 10-27 (A5D witness index), class: retained-row identity index declaration. Bound named: one group node per distinct (cycle, family, source id, entry id) identity that has a retained exit row; row membership is intrusive links inside the retained rows (no allocation); a group is erased when its last member goes; bounded by the number of retained exit rows (the placement table's own population), not by bars. Reason unreviewed: the gate bounded form refuses entries under include/ and covers only guarded scalar vectors. OPEN.", line: 1013}
+  - {id: "U1532", file: "src/source/pine_adapter.cpp", symbol: "reissue_rows_", ops: ["grow"], container: "unresolved by the index: reissue_rows_.try_emplace(...)", owner: "engine-core", phase: "unclassified", state: "unreviewed", note: "CR150-CX 10-27 (A5D witness index), class: retained-row identity group insertion in PlacementTable::reissue_group. Bound named: one group node per distinct (cycle, family, source id, entry id) identity that has a retained exit row; row membership is intrusive links inside the retained rows (no allocation); a group is erased when its last member goes; bounded by the number of retained exit rows (the placement table's own population), not by bars. Reason unreviewed: the gate bounded form refuses the declaration under include/ and covers only guarded scalar vectors, not this map insertion. OPEN.", line: 935}
