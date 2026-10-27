@@ -3,6 +3,7 @@
  */
 
 #include "engine_internal.hpp"
+#include <pineforge/detail/run_usage.hpp>
 #include "native_execution_consumer.hpp"
 #include "selected_report_view.hpp"
 #include <pineforge/metrics_stream.hpp>
@@ -1133,6 +1134,7 @@ void BacktestEngine::set_trade_history_streamable(bool streamable) {
 
 void BacktestEngine::begin_report_sink() {
     auto& sink = report_sink_state_;
+    detail::run_usage_sink_enabled(sink.enabled);
     // A begin owns a fresh run: the optional-sequence witnesses start empty
     // beside the arrays the run resets.
     reset_optional_sequence_witness();

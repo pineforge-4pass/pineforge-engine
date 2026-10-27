@@ -116,9 +116,11 @@ EXPECTED_RUNTIME = frozenset({
     "strategy_selected_window_counts_v1",
     "pf_report_sink_version",
     "pf_report_scratch_arena_stats",
+    "pf_run_usage_v1",
     "strategy_require_report_scratch_arena_v1",
     "strategy_report_sink_diagnostics_v1",
     "pf_run_abort_install_sigterm_v1",
+    "pf_run_budget_install_v1",
     "pf_run_abort_requested_v1",
     "pf_run_abort_restore_sigterm_v1",
     "strategy_set_report_sink_v1",
@@ -139,8 +141,8 @@ RUNTIME_HEADERS = (
     "report_sink.h",
 )
 
-EXPECTED_PUBLIC_DECLARATIONS = 113
-EXPECTED_RUNTIME_IMPLEMENTATIONS = 93
+EXPECTED_PUBLIC_DECLARATIONS = 115
+EXPECTED_RUNTIME_IMPLEMENTATIONS = 95
 
 # Runtime setters whose data a stream cannot take: the source host refuses
 # stream_begin() while any of them holds data (the native daily feed since its

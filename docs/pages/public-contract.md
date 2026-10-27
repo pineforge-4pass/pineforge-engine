@@ -315,3 +315,34 @@ The JSON report keys of `docker/run_json.py` are the release image's schema
 `metrics.equity` keys, which kept `sharpe_tv` / `sortino_tv` when the C
 fields' pre-1.0 spellings were removed. What 1.0 changes for a 0.x user is
 in the repository's `CHANGELOG.md`.
+
+## Run usage receipt
+
+After a run, a C host can call `pf_run_usage_v1` before releasing its strategy
+handle. The versioned receipt is retained after success, failure, and a
+cooperative abort. CPU and wall values are nanoseconds; all other size values
+are bytes except `scratch_file_count_peak`, `sink_rows_written`, and
+`bars_processed`, which are counts.
+
+| Field | Measurement |
+| --- | --- |
+| `cpu_user_ns`, `cpu_system_ns` | Process user and system CPU from `getrusage(RUSAGE_SELF)`, measured from run entry through the query. |
+| `peak_rss_bytes` | Process `ru_maxrss`, converted to bytes for the host platform; it is not an allocation or cgroup counter. |
+| `run_wall_ns` | Monotonic time from run entry through the query; it includes engine cleanup before the query. |
+| `arena_high_water_bytes`, `arena_capacity_bytes` | Claimed high water and supplied capacity of the attached scratch arena; ordinary files are excluded. With no arena, both are measured as zero. |
+| `scratch_file_bytes_peak`, `scratch_file_count_peak` | Peak logical bytes and number of open engine-owned `ScratchFile` regions, including regions held by engine scratch backings; the final report file and host files are excluded. |
+| `sink_bytes_written`, `sink_rows_written` | Logical sink bytes including framing, records and trailer, and emitted data-row count excluding framing; absent when no sink was installed. |
+| `report_bytes` | Final host report size when the engine knows it; this implementation marks it `UNMEASURED` because JSON serialization belongs to the host. |
+| `bars_processed` | Completed script bars dispatched by the engine. |
+
+`unmeasured_mask` is authoritative. `PF_RUN_USAGE_UNMEASURED_CPU_USER` and
+`PF_RUN_USAGE_UNMEASURED_CPU_SYSTEM` cover unavailable process clocks;
+`PF_RUN_USAGE_UNMEASURED_SINK_BYTES` and
+`PF_RUN_USAGE_UNMEASURED_SINK_ROWS` cover runs without a sink; and
+`PF_RUN_USAGE_UNMEASURED_REPORT_BYTES` covers the host-owned report size. A
+set bit means that field was not measured, and the corresponding value is zero
+only because that bit is set.
+Zero is a measured value for an attached-arena absence and for genuine empty
+counts. The receipt query validates `struct_size` and `version` transactionally
+and does not execute callbacks, allocate on the run path, or alter the last
+error.

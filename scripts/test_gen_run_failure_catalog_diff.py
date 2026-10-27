@@ -502,7 +502,8 @@ class CatalogDiff(unittest.TestCase):
                 "kind": "vocab",
                 "optional": True,
                 "values": ["arena_exhausted", "arena_io", "arena_backing", "scratch_io",
-                           "sink_io", "sink_peer_closed", "sink_exhausted"],
+                           "sink_io", "sink_peer_closed", "sink_stalled",
+                           "sink_exhausted"],
             },
             "sink_bytes": {"kind": "integer", "optional": True},
             "store": {
@@ -516,6 +517,7 @@ class CatalogDiff(unittest.TestCase):
         })
         self.assertEqual(entry["english"], [
             "report sink open failed",
+            "report sink stalled",
             "report sink write failed",
             "report sink write made no progress",
         ])

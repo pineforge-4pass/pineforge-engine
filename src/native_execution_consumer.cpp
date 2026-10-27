@@ -7,6 +7,7 @@
 #include "selected_capture_latches.hpp"
 #include "presentation_capture_window.hpp"
 #include "report_sink_writer.hpp"
+#include <pineforge/detail/run_usage.hpp>
 #include "run_abort.hpp"
 #include <pineforge/execution_close_scope.hpp>
 #include <pineforge/market_driver.hpp>
@@ -3069,6 +3070,7 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     for (auto& run : run_command_scratch_) run.reset();
     dependency_scratch_stats_ = {};
     engine.reset_run_state();
+    detail::run_usage_begin();
     engine.reset_trade_percent_prefix();
     closed_trade_prefix_ = {};
     closed_trade_seal_bar_.reset();
@@ -3082,6 +3084,7 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     // before the first host callback of the run.
     admit_selected_generation(engine);
     engine.begin_report_sink();
+    detail::run_usage_scratch_peak_reset();
     // RULING A48: the host's closing-row excursion capability is wired once
     // per run; the kernel then keeps no excursion model of its own.
     if (auto* excursion_owner = native_host(engine)) {
@@ -8651,6 +8654,7 @@ void NativeExecutionConsumer::invoke_callback(BacktestEngine& engine, const Bar&
         return;
     }
     ++engine.diag_script_bars_processed_;
+    detail::run_usage_script_bar();
     count_selected_script(published_label);
     calculation_margin_check(engine, coordinate, bar.close);
     // L9: the third risk evaluation point is the script bar's own close

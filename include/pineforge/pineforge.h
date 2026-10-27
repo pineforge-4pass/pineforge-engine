@@ -2008,6 +2008,56 @@ PF_API int strategy_set_symbol_feed_borrowed_v1(
     pf_strategy_t s, const char* key, const char* timeframe,
     const pf_bar_t* bars, const int64_t* close_ms, int n);
 
+/** Feature probe for the optional run usage receipt. */
+#define PINEFORGE_HAS_RUN_USAGE_V1 1
+
+/** Read the most recent engine run's resource receipt.
+ *
+ *  The receipt is available after a successful, failed or cooperatively
+ *  aborted run and remains available until the next run begins. All byte
+ *  fields are bytes; CPU and wall fields are nanoseconds; RSS is the
+ *  platform's byte conversion of `ru_maxrss`; `bars_processed` counts
+ *  completed script bars. CPU is process CPU consumed from run entry through
+ *  this query, RSS is the process high-water mark, and wall time is monotonic
+ *  time from run entry through this query. Arena bytes are the supplied arena
+ *  capacity and claimed high water; they exclude ordinary files. Scratch
+ *  bytes and count cover engine-owned open ScratchFile regions and exclude
+ *  the sink's final report file. Sink bytes include the sink header, records
+ *  and trailer when present; sink rows exclude those framing lines. Report
+ *  bytes are zero with #PF_RUN_USAGE_UNMEASURED_REPORT_BYTES because final
+ *  JSON serialization is owned by the host. A set bit in `unmeasured_mask`
+ *  means the corresponding value was not measured; zero never means
+ *  unmeasured. The output is transactional: invalid size/version or a
+ *  receipt unavailable before the first run returns -1 and leaves `*out`
+ *  unchanged. */
+struct pf_run_usage_v1 {
+    uint32_t struct_size;
+    uint32_t version;
+    uint64_t cpu_user_ns;
+    uint64_t cpu_system_ns;
+    uint64_t peak_rss_bytes;
+    uint64_t run_wall_ns;
+    uint64_t arena_high_water_bytes;
+    uint64_t arena_capacity_bytes;
+    uint64_t scratch_file_bytes_peak;
+    uint64_t scratch_file_count_peak;
+    uint64_t sink_bytes_written;
+    uint64_t sink_rows_written;
+    uint64_t report_bytes;
+    uint64_t bars_processed;
+    uint64_t unmeasured_mask;
+};
+
+#define PF_RUN_USAGE_UNMEASURED_CPU_USER      (UINT64_C(1) << 0)
+#define PF_RUN_USAGE_UNMEASURED_CPU_SYSTEM    (UINT64_C(1) << 1)
+#define PF_RUN_USAGE_UNMEASURED_SINK_BYTES    (UINT64_C(1) << 2)
+#define PF_RUN_USAGE_UNMEASURED_SINK_ROWS     (UINT64_C(1) << 3)
+#define PF_RUN_USAGE_UNMEASURED_REPORT_BYTES  (UINT64_C(1) << 4)
+PF_STATIC_ASSERT(sizeof(struct pf_run_usage_v1) == 112);
+
+/** Returns 0 and fills the receipt, or -1 without changing it. */
+PF_API int pf_run_usage_v1(struct pf_run_usage_v1* out);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

@@ -7400,6 +7400,13 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
 endif()
 # --- CR-150 core-cr150-l6b1 end ---
 
+# --- CR-150 core-cr150-g1 begin ---
+if(UNIX)
+    target_link_libraries(test_sink_stall_budget PRIVATE Threads::Threads)
+    target_link_libraries(test_run_budget PRIVATE Threads::Threads)
+endif()
+# --- CR-150 core-cr150-g1 end ---
+
 # --- CR-150 core-cr150-l17a begin ---
 # CR-150 L17A: a kernel-only native host and a real version-1 path sink.
 # The UNIX-only plain registration is in cr150.d/core-cr150-l17a.cmake.
