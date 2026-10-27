@@ -260,6 +260,7 @@ set(TEST_SOURCES
     test_recompute
     test_str_utils
     test_ta
+    test_ta_window_optimizations
     test_mfi_source_direction
     test_ta_indicators_extras
     test_kc
