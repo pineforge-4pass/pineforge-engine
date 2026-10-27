@@ -1,5 +1,7 @@
 #pragma once
 #include <pineforge/run_failure.hpp>
+#include <pineforge/detail/matrix_store.hpp>
+#include <pineforge/detail/matrix_sort.hpp>
 #include <vector>
 #include <string>
 #include <type_traits>
@@ -166,9 +168,12 @@ class GenericMatrix {
 
     struct Storage {
         Data data;
+        std::shared_ptr<detail::matrix_store::Cells> external;
 
         Storage() = default;
         explicit Storage(Data value) : data(std::move(value)) {}
+        explicit Storage(std::shared_ptr<detail::matrix_store::Cells> value)
+            : external(std::move(value)) {}
     };
 
     static constexpr const char* kNaIdError =
@@ -180,6 +185,8 @@ class GenericMatrix {
 
     explicit GenericMatrix(Data data)
         : storage_(std::make_shared<Storage>(std::move(data))) {}
+    explicit GenericMatrix(std::shared_ptr<detail::matrix_store::Cells> cells)
+        : storage_(std::make_shared<Storage>(std::move(cells))) {}
 
     Storage& require_storage() {
         if (!storage_) detail::matrix_na_error(kNaIdError);
@@ -191,8 +198,26 @@ class GenericMatrix {
         return *storage_;
     }
 
-    Data& data() { return require_storage().data; }
-    const Data& data() const { return require_storage().data; }
+    Data& native_data() const {
+        (void)require_storage();
+        if (storage_->external) {
+            Data materialized;
+            const auto& cells = *storage_->external;
+            materialized.reserve(static_cast<std::size_t>(cells.rows()));
+            for (std::uint64_t r = 0; r < cells.rows(); ++r) {
+                std::vector<T> row;
+                row.reserve(static_cast<std::size_t>(cells.columns()));
+                for (std::uint64_t c = 0; c < cells.columns(); ++c)
+                    row.push_back(detail::matrix_store::read_value<T>(cells, r * cells.columns() + c));
+                materialized.push_back(std::move(row));
+            }
+            storage_->data.swap(materialized);
+            storage_->external.reset();
+        }
+        return storage_->data;
+    }
+    Data& data() { return native_data(); }
+    const Data& data() const { return native_data(); }
 
 public:
     // A GenericMatrix is a reference handle (a source language's matrix ID).
@@ -216,9 +241,13 @@ public:
     class Snapshot {
         std::shared_ptr<Storage> identity_;
         Data state_;
+        std::shared_ptr<detail::matrix_store::Cells> external_;
 
         Snapshot(std::shared_ptr<Storage> identity, const Data& state)
             : identity_(std::move(identity)), state_(state) {}
+        Snapshot(std::shared_ptr<Storage> identity,
+                 std::shared_ptr<detail::matrix_store::Cells> state)
+            : identity_(std::move(identity)), external_(std::move(state)) {}
 
         friend class GenericMatrix;
 
@@ -236,6 +265,11 @@ public:
             detail::matrix_call_error<std::invalid_argument>(
                 "matrix.new", "negative_dimensions",
                 "matrix.new: negative dimensions");
+        if constexpr (detail::matrix_store::codec<T>::mapped) {
+            if (auto* runtime = detail::matrix_store::current_runtime())
+                return GenericMatrix(detail::matrix_store::make_cells(
+                    *runtime, rows, rows ? cols : 0, init));
+        }
         Data data(static_cast<size_t>(rows),
                   std::vector<T>(static_cast<size_t>(cols), init));
         return GenericMatrix(std::move(data));
@@ -246,15 +280,37 @@ public:
                       "matrix.new: no-init overload requires default-constructible T");
         if (rows < 0 || cols < 0)
             detail::matrix_call_error<std::invalid_argument>(
-                "matrix.new", "negative_dimensions",
-                "matrix.new: negative dimensions");
+                "matrix.new", "negative_dimensions", "matrix.new: negative dimensions");
+        if constexpr (detail::matrix_store::codec<T>::mapped) {
+            if (auto* runtime = detail::matrix_store::current_runtime())
+                return GenericMatrix(detail::matrix_store::make_cells(
+                    *runtime, rows, rows ? cols : 0, T{}));
+        }
         Data data(static_cast<size_t>(rows),
                   std::vector<T>(static_cast<size_t>(cols), T{}));
         return GenericMatrix(std::move(data));
     }
 
+    // Borrowing/ownership transfer follow NumericMatrix's generated-root
+    // protocol. No native directory is retained for borrowed matrix ids.
+    [[nodiscard]] static GenericMatrix borrow_external(
+            detail::matrix_store::Runtime& runtime, detail::o1::Id id) {
+        static_assert(detail::matrix_store::codec<T>::mapped,
+                      "external matrix borrows require an explicit element codec");
+        auto cells = std::make_shared<detail::matrix_store::Cells>(runtime, id);
+        if (cells->width() != detail::matrix_store::codec<T>::record_bytes)
+            detail::matrix_store::invariant("generic matrix record width mismatch");
+        return GenericMatrix(std::move(cells));
+    }
+
+    detail::o1::Id detach_external() {
+        const auto& cells = require_storage().external;
+        if (!cells) detail::matrix_store::invariant("native matrix has no external owner");
+        return cells->detach();
+    }
+
     T get(int row, int col) const {
-        const Data& values = data();
+        const auto& storage = require_storage();
         if (row < 0 || row >= rows())
             detail::matrix_call_error<std::out_of_range>(
                 "matrix.get", "row_index_out_of_range",
@@ -263,11 +319,14 @@ public:
             detail::matrix_call_error<std::out_of_range>(
                 "matrix.get", "column_index_out_of_range",
                 "matrix.get: column index out of range");
-        return values[static_cast<size_t>(row)][static_cast<size_t>(col)];
+        if (storage.external)
+            return detail::matrix_store::read_value<T>(*storage.external,
+                static_cast<std::uint64_t>(row) * storage.external->columns() + col);
+        return storage.data[static_cast<size_t>(row)][static_cast<size_t>(col)];
     }
 
     void set(int row, int col, T val) {
-        Data& values = data();
+        auto& storage = require_storage();
         if (row < 0 || row >= rows())
             detail::matrix_call_error<std::out_of_range>(
                 "matrix.set", "row_index_out_of_range",
@@ -276,70 +335,101 @@ public:
             detail::matrix_call_error<std::out_of_range>(
                 "matrix.set", "column_index_out_of_range",
                 "matrix.set: column index out of range");
-        values[static_cast<size_t>(row)][static_cast<size_t>(col)] = val;
+        if (storage.external) {
+            detail::matrix_store::write_value(*storage.external,
+                static_cast<std::uint64_t>(row) * storage.external->columns() + col, val);
+        } else {
+            storage.data[static_cast<size_t>(row)][static_cast<size_t>(col)] = val;
+        }
     }
 
     void fill(T val) {
+        if (auto& cells = require_storage().external) {
+            detail::matrix_store::Scope transaction(cells->runtime());
+            for (std::uint64_t i = 0, end = cells->count(); i < end; ++i)
+                detail::matrix_store::write_value(*cells, i, val);
+            transaction.commit();
+            return;
+        }
         for (auto& r : data()) std::fill(r.begin(), r.end(), val);
     }
 
     int rows() const {
-        return static_cast<int>(data().size());
+        const auto& storage = require_storage();
+        return static_cast<int>(storage.external ? storage.external->rows() : storage.data.size());
     }
     int columns() const {
+        if (const auto& cells = require_storage().external)
+            return cells->rows() ? static_cast<int>(cells->columns()) : 0;
         const Data& values = data();
         return values.empty() ? 0 : static_cast<int>(values[0].size());
     }
 
     std::vector<T> row(int idx) const {
-        const Data& values = data();
+        (void)require_storage();
         if (idx < 0 || idx >= rows())
             detail::matrix_call_error<std::out_of_range>(
                 "matrix.row", "row_index_out_of_range",
                 "matrix.row: row index out of range");
-        return values[static_cast<size_t>(idx)];
+        if (require_storage().external) {
+            std::vector<T> out;
+            out.reserve(static_cast<std::size_t>(columns()));
+            for (int c = 0; c < columns(); ++c) out.push_back(get(idx, c));
+            return out;
+        }
+        return data()[static_cast<size_t>(idx)];
     }
 
     std::vector<T> col(int idx) const {
-        const Data& values = data();
+        (void)require_storage();
         if (idx < 0 || idx >= columns())
             detail::matrix_call_error<std::out_of_range>(
                 "matrix.col", "column_index_out_of_range",
                 "matrix.col: column index out of range");
         std::vector<T> out;
-        out.reserve(values.size());
-        for (const auto& r : values) out.push_back(r[static_cast<size_t>(idx)]);
+        out.reserve(static_cast<std::size_t>(rows()));
+        for (int r = 0; r < rows(); ++r) out.push_back(get(r, idx));
         return out;
     }
 
     template <typename U = T,
               typename = std::enable_if_t<!std::is_same_v<U, bool>>>
     const std::vector<T>& row_ref(int idx) const {
-        const Data& values = data();
+        (void)require_storage();
         if (idx < 0 || idx >= rows())
             detail::matrix_call_error<std::out_of_range>(
                 "matrix.row", "row_index_out_of_range",
                 "matrix.row_ref: row index out of range");
-        return values[static_cast<size_t>(idx)];
+        return data()[static_cast<size_t>(idx)];
     }
 
     void add_row(int idx, const std::vector<T>& values) {
-        Data& matrix_data = data();
+        (void)require_storage();
         if (idx < 0 || idx > rows())
             detail::matrix_call_error<std::out_of_range>(
                 "matrix.add_row", "row_index_out_of_range",
                 "matrix.add_row: row index out of range");
-        if (!matrix_data.empty() && values.size() != static_cast<size_t>(columns()))
+        if (rows() && values.size() != static_cast<size_t>(columns()))
             detail::matrix_call_error<std::runtime_error>(
                 "matrix.add_row", "values_size_mismatch",
                 "matrix.add_row: values size must equal columns()");
+        if (auto& cells = require_storage().external) {
+            detail::matrix_store::Scope transaction(cells->runtime());
+            cells->insert_row(idx, values.size());
+            for (std::size_t c = 0; c < values.size(); ++c)
+                detail::matrix_store::write_value(*cells,
+                    static_cast<std::uint64_t>(idx) * values.size() + c, values[c]);
+            transaction.commit();
+            return;
+        }
+        Data& matrix_data = data();
         matrix_data.reserve(matrix_data.size() + 1);
         matrix_data.insert(matrix_data.begin() + idx, values);
     }
 
     void add_col(int idx, const std::vector<T>& values) {
-        Data& matrix_data = data();
-        if (matrix_data.empty())
+        (void)require_storage();
+        if (!rows())
             detail::matrix_call_error<std::logic_error>(
                 "matrix.add_col", "empty_matrix",
                 "matrix.add_col on empty matrix: use add_row first");
@@ -347,10 +437,19 @@ public:
             detail::matrix_call_error<std::out_of_range>(
                 "matrix.add_col", "column_index_out_of_range",
                 "matrix.add_col: column index out of range");
-        if (values.size() != matrix_data.size())
+        if (values.size() != static_cast<std::size_t>(rows()))
             detail::matrix_call_error<std::runtime_error>(
                 "matrix.add_col", "values_size_mismatch",
                 "matrix.add_col: values size must equal rows()");
+        if (auto& cells = require_storage().external) {
+            detail::matrix_store::Scope transaction(cells->runtime());
+            cells->insert_column(idx);
+            for (std::size_t r = 0; r < values.size(); ++r)
+                detail::matrix_store::write_value(*cells, r * cells->columns() + idx, values[r]);
+            transaction.commit();
+            return;
+        }
+        Data& matrix_data = data();
         // Strong guarantee: build a new buffer, swap on success.
         Data next;
         next.reserve(matrix_data.size());
@@ -363,48 +462,53 @@ public:
     }
 
     void remove_row(int idx) {
-        (void)data();
+        (void)require_storage();
         if (idx < 0 || idx >= rows())
             detail::matrix_call_error<std::out_of_range>(
                 "matrix.remove_row", "row_index_out_of_range",
                 "matrix.remove_row: row index out of range");
+        if (auto& cells = require_storage().external) { cells->remove_row(idx); return; }
         detail::erase_row(data(), idx);
     }
 
     void remove_col(int idx) {
-        (void)data();
+        (void)require_storage();
         if (idx < 0 || idx >= columns())
             detail::matrix_call_error<std::out_of_range>(
                 "matrix.remove_col", "column_index_out_of_range",
                 "matrix.remove_col: column index out of range");
+        if (auto& cells = require_storage().external) { cells->remove_column(idx); return; }
         detail::erase_col(data(), idx);
     }
 
     void swap_rows(int i, int j) {
-        (void)data();
+        (void)require_storage();
         if (i < 0 || i >= rows() || j < 0 || j >= rows())
             detail::matrix_call_error<std::out_of_range>(
                 "matrix.swap_rows", "row_index_out_of_range",
                 "matrix.swap_rows: row index out of range");
+        if (auto& cells = require_storage().external) { cells->swap_rows(i, j); return; }
         detail::swap_rows_impl(data(), i, j);
     }
 
     void swap_columns(int i, int j) {
-        (void)data();
+        (void)require_storage();
         if (i < 0 || i >= columns() || j < 0 || j >= columns())
             detail::matrix_call_error<std::out_of_range>(
                 "matrix.swap_columns", "column_index_out_of_range",
                 "matrix.swap_columns: column index out of range");
+        if (auto& cells = require_storage().external) { cells->swap_columns(i, j); return; }
         detail::swap_cols_impl(data(), i, j);
     }
 
     [[nodiscard]] GenericMatrix copy() const {
+        if (const auto& cells = require_storage().external) return GenericMatrix(cells->clone());
         return GenericMatrix(data());
     }
 
     [[nodiscard]] GenericMatrix submatrix(int from_row, int to_row,
                                               int from_col, int to_col) const {
-        (void)data();
+        (void)require_storage();
         if (from_row < 0 || to_row > rows())
             detail::matrix_call_error<std::out_of_range>(
                 "matrix.submatrix", "row_index_out_of_range",
@@ -421,6 +525,19 @@ public:
             detail::matrix_call_error<std::invalid_argument>(
                 "matrix.submatrix", "from_col_after_to_col",
                 "matrix.submatrix: from_col must be <= to_col");
+        if (const auto& cells = require_storage().external) {
+            detail::matrix_store::Scope transaction(cells->runtime());
+            const auto rcount = static_cast<std::uint64_t>(to_row - from_row);
+            const auto ccount = rcount ? static_cast<std::uint64_t>(to_col - from_col) : 0;
+            auto out = std::make_shared<detail::matrix_store::Cells>(
+                cells->runtime(), rcount, ccount, cells->width());
+            for (int r = from_row; r < to_row; ++r)
+                for (int c = from_col; c < to_col; ++c)
+                    out->copy_cell(static_cast<std::uint64_t>(r - from_row) * ccount + c - from_col,
+                        *cells, static_cast<std::uint64_t>(r) * cells->columns() + c);
+            transaction.commit();
+            return GenericMatrix(std::move(out));
+        }
         return GenericMatrix(
             detail::copy_submatrix(data(), from_row, to_row,
                                    from_col, to_col));
@@ -429,13 +546,24 @@ public:
     [[nodiscard]] GenericMatrix transpose() const {
         static_assert(std::is_default_constructible_v<T>,
                       "matrix.transpose: requires default-constructible element type");
+        if (const auto& cells = require_storage().external) {
+            detail::matrix_store::Scope transaction(cells->runtime());
+            auto out = std::make_shared<detail::matrix_store::Cells>(
+                cells->runtime(), columns(), columns() ? rows() : 0, cells->width());
+            for (int r = 0; r < rows(); ++r)
+                for (int c = 0; c < columns(); ++c)
+                    out->copy_cell(static_cast<std::uint64_t>(c) * rows() + r, *cells,
+                                  static_cast<std::uint64_t>(r) * columns() + c);
+            transaction.commit();
+            return GenericMatrix(std::move(out));
+        }
         return GenericMatrix(
             detail::transpose_impl(data(), rows(), columns(), T{}));
     }
 
     [[nodiscard]] GenericMatrix concat(const GenericMatrix& other, bool horizontal) const {
-        (void)data();
-        (void)other.data();
+        (void)require_storage();
+        (void)other.require_storage();
         if (horizontal) {
             if (rows() != other.rows())
                 detail::matrix_call_error<std::invalid_argument>(
@@ -447,6 +575,27 @@ public:
                     "matrix.concat", "column_count_mismatch",
                     "matrix.concat: column count mismatch");
         }
+        const auto& own = require_storage().external;
+        const auto& rhs = other.require_storage().external;
+        if (const auto& cells = own ? own : rhs) {
+            detail::matrix_store::Scope transaction(cells->runtime());
+            const auto rcount = static_cast<std::uint64_t>(rows()) + (horizontal ? 0 : other.rows());
+            const auto ccount = rcount ? static_cast<std::uint64_t>(columns()) +
+                                         (horizontal ? other.columns() : 0) : 0;
+            auto out = std::make_shared<detail::matrix_store::Cells>(
+                cells->runtime(), rcount, ccount, cells->width());
+            for (std::uint64_t r = 0; r < rcount; ++r)
+                for (std::uint64_t c = 0; c < ccount; ++c) {
+                    const T value = horizontal
+                        ? (c < static_cast<std::uint64_t>(columns()) ? get(r, c)
+                                                                    : other.get(r, c - columns()))
+                        : (r < static_cast<std::uint64_t>(rows()) ? get(r, c)
+                                                                 : other.get(r - rows(), c));
+                    detail::matrix_store::write_value(*out, r * ccount + c, value);
+                }
+            transaction.commit();
+            return GenericMatrix(std::move(out));
+        }
         GenericMatrix m = copy();
         detail::concat_impl(m.data(), other.data(), horizontal);
         return m;
@@ -455,10 +604,26 @@ public:
     void reshape(int new_rows, int new_cols) {
         static_assert(std::is_default_constructible_v<T>,
                       "matrix.reshape: requires default-constructible element type");
+        if (auto& cells = require_storage().external) {
+            if (new_rows < 0 || new_cols < 0)
+                detail::matrix_call_error<std::runtime_error>(
+                    "matrix.reshape", "negative_dimensions", "GenericMatrix::reshape: negative dimension");
+            const auto total = static_cast<std::int64_t>(new_rows) * new_cols;
+            if (total > std::numeric_limits<int>::max())
+                detail::matrix_limit_error<std::runtime_error>("matrix.reshape: dimension overflow");
+            detail::matrix_store::Scope transaction(cells->runtime());
+            const auto old_count = cells->count();
+            cells->resize(new_rows, new_rows ? new_cols : 0);
+            for (auto i = old_count; i < static_cast<std::uint64_t>(total); ++i)
+                detail::matrix_store::write_value(*cells, i, T{});
+            transaction.commit();
+            return;
+        }
         detail::reshape_impl(data(), new_rows, new_cols, T{});
     }
 
     void reverse() {
+        if (auto& cells = require_storage().external) { cells->reverse(false); return; }
         Data& values = data();
         std::reverse(values.begin(), values.end());
     }
@@ -468,23 +633,68 @@ public:
                       std::is_same_v<T, bool> ||
                       std::is_same_v<T, std::string>,
                       "matrix.sort: requires int, bool, or std::string element type");
+        if (auto& cells = require_storage().external) {
+            detail::matrix_store::sort_rows(*cells, [&](std::uint64_t a, std::uint64_t b) {
+                const auto left = get(static_cast<int>(a), column);
+                const auto right = get(static_cast<int>(b), column);
+                return ascending ? left < right : right < left;
+            });
+            return;
+        }
         detail::sort_impl(data(), column, ascending);
     }
 
     int elements_count() const {
+        if (const auto& cells = require_storage().external) {
+            const auto count = cells->count();
+            if (count > static_cast<std::uint64_t>(std::numeric_limits<int>::max()))
+                detail::matrix_limit_error<std::overflow_error>("matrix.elements_count: total exceeds int range");
+            return static_cast<int>(count);
+        }
         return detail::elements_count_impl(data());
     }
 
     [[nodiscard]] bool is_na() const noexcept { return !storage_; }
+    [[nodiscard]] bool is_external_storage() const noexcept {
+        return storage_ && static_cast<bool>(storage_->external);
+    }
+    [[nodiscard]] detail::o1::Id external_identity() const {
+        const auto& storage = require_storage();
+        return storage.external ? storage.external->identity() : detail::o1::kNullId;
+    }
+    [[nodiscard]] std::uint64_t external_hash() const {
+        const auto& storage = require_storage();
+        return storage.external ? storage.external->hash_state() : 0;
+    }
 
     [[nodiscard]] Snapshot snapshot() const {
         const Storage& storage = require_storage();
+        if (storage.external) return Snapshot(storage_, storage.external->clone());
         return Snapshot(storage_, storage.data);
     }
 
     void restore(const Snapshot& snapshot) {
         if (!snapshot.identity_) {
             detail::matrix_snapshot_error(kInvalidSnapshotError);
+        }
+        if (snapshot.external_) {
+            if (snapshot.identity_->external) {
+                snapshot.identity_->external->restore(*snapshot.external_);
+            } else {
+                Data replacement;
+                const auto& cells = *snapshot.external_;
+                replacement.reserve(static_cast<std::size_t>(cells.rows()));
+                for (std::uint64_t r = 0; r < cells.rows(); ++r) {
+                    std::vector<T> row;
+                    row.reserve(static_cast<std::size_t>(cells.columns()));
+                    for (std::uint64_t c = 0; c < cells.columns(); ++c)
+                        row.push_back(detail::matrix_store::read_value<T>(cells, r * cells.columns() + c));
+                    replacement.push_back(std::move(row));
+                }
+                snapshot.identity_->data.swap(replacement);
+            }
+            storage_ = snapshot.identity_;
+            return;
         }
         Data replacement(snapshot.state_);
         snapshot.identity_->data.swap(replacement);
@@ -503,9 +713,12 @@ class GenericMatrix<bool> {
 
     struct Storage {
         Data data;
+        std::shared_ptr<detail::matrix_store::Cells> external;
 
         Storage() = default;
         explicit Storage(Data value) : data(std::move(value)) {}
+        explicit Storage(std::shared_ptr<detail::matrix_store::Cells> value)
+            : external(std::move(value)) {}
     };
 
     static constexpr const char* kNaIdError =
@@ -517,6 +730,8 @@ class GenericMatrix<bool> {
 
     explicit GenericMatrix(Data data)
         : storage_(std::make_shared<Storage>(std::move(data))) {}
+    explicit GenericMatrix(std::shared_ptr<detail::matrix_store::Cells> cells)
+        : storage_(std::make_shared<Storage>(std::move(cells))) {}
 
     Storage& require_storage() {
         if (!storage_) detail::matrix_na_error(kNaIdError);
@@ -546,9 +761,13 @@ public:
     class Snapshot {
         std::shared_ptr<Storage> identity_;
         Data state_;
+        std::shared_ptr<detail::matrix_store::Cells> external_;
 
         Snapshot(std::shared_ptr<Storage> identity, const Data& state)
             : identity_(std::move(identity)), state_(state) {}
+        Snapshot(std::shared_ptr<Storage> identity,
+                 std::shared_ptr<detail::matrix_store::Cells> state)
+            : identity_(std::move(identity)), external_(std::move(state)) {}
 
         friend class GenericMatrix;
 
@@ -564,6 +783,9 @@ public:
             detail::matrix_call_error<std::invalid_argument>(
                 "matrix.new", "negative_dimensions",
                 "matrix.new: negative dimensions");
+        if (auto* runtime = detail::matrix_store::current_runtime())
+            return GenericMatrix(detail::matrix_store::make_cells(
+                *runtime, rows, rows ? cols : 0, static_cast<char>(init ? 1 : 0)));
         Data data(static_cast<size_t>(rows),
                   std::vector<char>(static_cast<size_t>(cols), init ? 1 : 0));
         return GenericMatrix(std::move(data));
@@ -573,8 +795,22 @@ public:
         return new_(rows, cols, false);
     }
 
+    [[nodiscard]] static GenericMatrix borrow_external(
+            detail::matrix_store::Runtime& runtime, detail::o1::Id id) {
+        auto cells = std::make_shared<detail::matrix_store::Cells>(runtime, id);
+        if (cells->width() != sizeof(char))
+            detail::matrix_store::invariant("boolean matrix record width mismatch");
+        return GenericMatrix(std::move(cells));
+    }
+
+    detail::o1::Id detach_external() {
+        const auto& cells = require_storage().external;
+        if (!cells) detail::matrix_store::invariant("native matrix has no external owner");
+        return cells->detach();
+    }
+
     bool get(int row, int col) const {
-        const Data& values = data();
+        const auto& storage = require_storage();
         if (row < 0 || row >= rows())
             detail::matrix_call_error<std::out_of_range>(
                 "matrix.get", "row_index_out_of_range",
@@ -583,11 +819,14 @@ public:
             detail::matrix_call_error<std::out_of_range>(
                 "matrix.get", "column_index_out_of_range",
                 "matrix.get: column index out of range");
-        return values[static_cast<size_t>(row)][static_cast<size_t>(col)] != 0;
+        if (storage.external)
+            return detail::matrix_store::read_value<char>(*storage.external,
+                static_cast<std::uint64_t>(row) * storage.external->columns() + col) != 0;
+        return storage.data[static_cast<size_t>(row)][static_cast<size_t>(col)] != 0;
     }
 
     void set(int row, int col, bool val) {
-        Data& values = data();
+        auto& storage = require_storage();
         if (row < 0 || row >= rows())
             detail::matrix_call_error<std::out_of_range>(
                 "matrix.set", "row_index_out_of_range",
@@ -596,44 +835,59 @@ public:
             detail::matrix_call_error<std::out_of_range>(
                 "matrix.set", "column_index_out_of_range",
                 "matrix.set: column index out of range");
-        values[static_cast<size_t>(row)][static_cast<size_t>(col)] = val ? 1 : 0;
+        if (storage.external) {
+            detail::matrix_store::write_value(*storage.external,
+                static_cast<std::uint64_t>(row) * storage.external->columns() + col,
+                static_cast<char>(val ? 1 : 0));
+        } else {
+            storage.data[static_cast<size_t>(row)][static_cast<size_t>(col)] = val ? 1 : 0;
+        }
     }
 
     void fill(bool val) {
         char c = val ? 1 : 0;
+        if (auto& cells = require_storage().external) {
+            detail::matrix_store::Scope transaction(cells->runtime());
+            for (std::uint64_t i = 0, end = cells->count(); i < end; ++i)
+                detail::matrix_store::write_value(*cells, i, c);
+            transaction.commit();
+            return;
+        }
         for (auto& r : data()) std::fill(r.begin(), r.end(), c);
     }
 
     int rows() const {
-        return static_cast<int>(data().size());
+        const auto& storage = require_storage();
+        return static_cast<int>(storage.external ? storage.external->rows() : storage.data.size());
     }
     int columns() const {
+        if (const auto& cells = require_storage().external)
+            return cells->rows() ? static_cast<int>(cells->columns()) : 0;
         const Data& values = data();
         return values.empty() ? 0 : static_cast<int>(values[0].size());
     }
 
     std::vector<bool> row(int idx) const {
-        const Data& values = data();
+        (void)require_storage();
         if (idx < 0 || idx >= rows())
             detail::matrix_call_error<std::out_of_range>(
                 "matrix.row", "row_index_out_of_range",
                 "matrix.row: row index out of range");
         std::vector<bool> out;
-        const auto& src = values[static_cast<size_t>(idx)];
-        out.reserve(src.size());
-        for (char c : src) out.push_back(c != 0);
+        out.reserve(static_cast<std::size_t>(columns()));
+        for (int c = 0; c < columns(); ++c) out.push_back(get(idx, c));
         return out;
     }
 
     std::vector<bool> col(int idx) const {
-        const Data& values = data();
+        (void)require_storage();
         if (idx < 0 || idx >= columns())
             detail::matrix_call_error<std::out_of_range>(
                 "matrix.col", "column_index_out_of_range",
                 "matrix.col: column index out of range");
         std::vector<bool> out;
-        out.reserve(values.size());
-        for (const auto& r : values) out.push_back(r[static_cast<size_t>(idx)] != 0);
+        out.reserve(static_cast<std::size_t>(rows()));
+        for (int r = 0; r < rows(); ++r) out.push_back(get(r, idx));
         return out;
     }
 
@@ -641,15 +895,26 @@ public:
     // returning const std::vector<bool>&.
 
     void add_row(int idx, const std::vector<bool>& values) {
-        Data& matrix_data = data();
+        (void)require_storage();
         if (idx < 0 || idx > rows())
             detail::matrix_call_error<std::out_of_range>(
                 "matrix.add_row", "row_index_out_of_range",
                 "matrix.add_row: row index out of range");
-        if (!matrix_data.empty() && values.size() != static_cast<size_t>(columns()))
+        if (rows() && values.size() != static_cast<size_t>(columns()))
             detail::matrix_call_error<std::runtime_error>(
                 "matrix.add_row", "values_size_mismatch",
                 "matrix.add_row: values size must equal columns()");
+        if (auto& cells = require_storage().external) {
+            detail::matrix_store::Scope transaction(cells->runtime());
+            cells->insert_row(idx, values.size());
+            for (std::size_t c = 0; c < values.size(); ++c)
+                detail::matrix_store::write_value(*cells,
+                    static_cast<std::uint64_t>(idx) * values.size() + c,
+                    static_cast<char>(values[c] ? 1 : 0));
+            transaction.commit();
+            return;
+        }
+        Data& matrix_data = data();
         std::vector<char> row;
         row.reserve(values.size());
         for (bool v : values) row.push_back(v ? 1 : 0);
@@ -658,8 +923,8 @@ public:
     }
 
     void add_col(int idx, const std::vector<bool>& values) {
-        Data& matrix_data = data();
-        if (matrix_data.empty())
+        (void)require_storage();
+        if (!rows())
             detail::matrix_call_error<std::logic_error>(
                 "matrix.add_col", "empty_matrix",
                 "matrix.add_col on empty matrix: use add_row first");
@@ -667,10 +932,20 @@ public:
             detail::matrix_call_error<std::out_of_range>(
                 "matrix.add_col", "column_index_out_of_range",
                 "matrix.add_col: column index out of range");
-        if (values.size() != matrix_data.size())
+        if (values.size() != static_cast<std::size_t>(rows()))
             detail::matrix_call_error<std::runtime_error>(
                 "matrix.add_col", "values_size_mismatch",
                 "matrix.add_col: values size must equal rows()");
+        if (auto& cells = require_storage().external) {
+            detail::matrix_store::Scope transaction(cells->runtime());
+            cells->insert_column(idx);
+            for (std::size_t r = 0; r < values.size(); ++r)
+                detail::matrix_store::write_value(*cells, r * cells->columns() + idx,
+                                                  static_cast<char>(values[r] ? 1 : 0));
+            transaction.commit();
+            return;
+        }
+        Data& matrix_data = data();
         Data next;
         next.reserve(matrix_data.size());
         for (size_t r = 0; r < matrix_data.size(); ++r) {
@@ -687,6 +962,7 @@ public:
             detail::matrix_call_error<std::out_of_range>(
                 "matrix.remove_row", "row_index_out_of_range",
                 "matrix.remove_row: row index out of range");
+        if (auto& cells = require_storage().external) { cells->remove_row(idx); return; }
         detail::erase_row(data(), idx);
     }
 
@@ -696,6 +972,7 @@ public:
             detail::matrix_call_error<std::out_of_range>(
                 "matrix.remove_col", "column_index_out_of_range",
                 "matrix.remove_col: column index out of range");
+        if (auto& cells = require_storage().external) { cells->remove_column(idx); return; }
         detail::erase_col(data(), idx);
     }
 
@@ -705,6 +982,7 @@ public:
             detail::matrix_call_error<std::out_of_range>(
                 "matrix.swap_rows", "row_index_out_of_range",
                 "matrix.swap_rows: row index out of range");
+        if (auto& cells = require_storage().external) { cells->swap_rows(i, j); return; }
         detail::swap_rows_impl(data(), i, j);
     }
 
@@ -714,10 +992,12 @@ public:
             detail::matrix_call_error<std::out_of_range>(
                 "matrix.swap_columns", "column_index_out_of_range",
                 "matrix.swap_columns: column index out of range");
+        if (auto& cells = require_storage().external) { cells->swap_columns(i, j); return; }
         detail::swap_cols_impl(data(), i, j);
     }
 
     [[nodiscard]] GenericMatrix copy() const {
+        if (const auto& cells = require_storage().external) return GenericMatrix(cells->clone());
         return GenericMatrix(data());
     }
 
@@ -740,21 +1020,58 @@ public:
             detail::matrix_call_error<std::invalid_argument>(
                 "matrix.submatrix", "from_col_after_to_col",
                 "matrix.submatrix: from_col must be <= to_col");
+        if (const auto& cells = require_storage().external) {
+            detail::matrix_store::Scope transaction(cells->runtime());
+            const auto rcount = static_cast<std::uint64_t>(to_row - from_row);
+            const auto ccount = rcount ? static_cast<std::uint64_t>(to_col - from_col) : 0;
+            auto out = std::make_shared<detail::matrix_store::Cells>(
+                cells->runtime(), rcount, ccount, cells->width());
+            for (int r = from_row; r < to_row; ++r)
+                for (int c = from_col; c < to_col; ++c)
+                    out->copy_cell(static_cast<std::uint64_t>(r - from_row) * ccount + c - from_col,
+                        *cells, static_cast<std::uint64_t>(r) * cells->columns() + c);
+            transaction.commit();
+            return GenericMatrix(std::move(out));
+        }
         return GenericMatrix(
             detail::copy_submatrix(data(), from_row, to_row,
                                    from_col, to_col));
     }
 
     void reshape(int new_rows, int new_cols) {
+        if (auto& cells = require_storage().external) {
+            if (new_rows < 0 || new_cols < 0)
+                detail::matrix_call_error<std::runtime_error>(
+                    "matrix.reshape", "negative_dimensions", "GenericMatrix::reshape: negative dimension");
+            const auto total = static_cast<std::int64_t>(new_rows) * new_cols;
+            if (total > std::numeric_limits<int>::max())
+                detail::matrix_limit_error<std::runtime_error>("matrix.reshape: dimension overflow");
+            detail::matrix_store::Scope transaction(cells->runtime());
+            cells->resize(new_rows, new_rows ? new_cols : 0);
+            transaction.commit();
+            return;
+        }
         detail::reshape_impl(data(), new_rows, new_cols, static_cast<char>(0));
     }
 
     void reverse() {
+        if (auto& cells = require_storage().external) { cells->reverse(false); return; }
         Data& values = data();
         std::reverse(values.begin(), values.end());
     }
 
     [[nodiscard]] GenericMatrix transpose() const {
+        if (const auto& cells = require_storage().external) {
+            detail::matrix_store::Scope transaction(cells->runtime());
+            auto out = std::make_shared<detail::matrix_store::Cells>(
+                cells->runtime(), columns(), columns() ? rows() : 0, cells->width());
+            for (int r = 0; r < rows(); ++r)
+                for (int c = 0; c < columns(); ++c)
+                    out->copy_cell(static_cast<std::uint64_t>(c) * rows() + r, *cells,
+                                  static_cast<std::uint64_t>(r) * columns() + c);
+            transaction.commit();
+            return GenericMatrix(std::move(out));
+        }
         return GenericMatrix(
             detail::transpose_impl(data(), rows(), columns(),
                                    static_cast<char>(0)));
@@ -774,6 +1091,28 @@ public:
                     "matrix.concat", "column_count_mismatch",
                     "matrix.concat: column count mismatch");
         }
+        const auto& own = require_storage().external;
+        const auto& rhs = other.require_storage().external;
+        if (const auto& cells = own ? own : rhs) {
+            detail::matrix_store::Scope transaction(cells->runtime());
+            const auto rcount = static_cast<std::uint64_t>(rows()) + (horizontal ? 0 : other.rows());
+            const auto ccount = rcount ? static_cast<std::uint64_t>(columns()) +
+                                         (horizontal ? other.columns() : 0) : 0;
+            auto out = std::make_shared<detail::matrix_store::Cells>(
+                cells->runtime(), rcount, ccount, cells->width());
+            for (std::uint64_t r = 0; r < rcount; ++r)
+                for (std::uint64_t c = 0; c < ccount; ++c) {
+                    const bool value = horizontal
+                        ? (c < static_cast<std::uint64_t>(columns()) ? get(r, c)
+                                                                    : other.get(r, c - columns()))
+                        : (r < static_cast<std::uint64_t>(rows()) ? get(r, c)
+                                                                 : other.get(r - rows(), c));
+                    detail::matrix_store::write_value(*out, r * ccount + c,
+                                                      static_cast<char>(value ? 1 : 0));
+                }
+            transaction.commit();
+            return GenericMatrix(std::move(out));
+        }
         GenericMatrix m = copy();
         detail::concat_impl(m.data(), other.data(), horizontal);
         return m;
@@ -787,19 +1126,43 @@ public:
     }
 
     int elements_count() const {
+        if (const auto& cells = require_storage().external) {
+            const auto count = cells->count();
+            if (count > static_cast<std::uint64_t>(std::numeric_limits<int>::max()))
+                detail::matrix_limit_error<std::overflow_error>("matrix.elements_count: total exceeds int range");
+            return static_cast<int>(count);
+        }
         return detail::elements_count_impl(data());
     }
 
     [[nodiscard]] bool is_na() const noexcept { return !storage_; }
 
+    [[nodiscard]] bool is_external_storage() const noexcept {
+        return storage_ && static_cast<bool>(storage_->external);
+    }
+    [[nodiscard]] detail::o1::Id external_identity() const {
+        const auto& storage = require_storage();
+        return storage.external ? storage.external->identity() : detail::o1::kNullId;
+    }
+    [[nodiscard]] std::uint64_t external_hash() const {
+        const auto& storage = require_storage();
+        return storage.external ? storage.external->hash_state() : 0;
+    }
+
     [[nodiscard]] Snapshot snapshot() const {
         const Storage& storage = require_storage();
+        if (storage.external) return Snapshot(storage_, storage.external->clone());
         return Snapshot(storage_, storage.data);
     }
 
     void restore(const Snapshot& snapshot) {
         if (!snapshot.identity_) {
             detail::matrix_snapshot_error(kInvalidSnapshotError);
+        }
+        if (snapshot.external_) {
+            snapshot.identity_->external->restore(*snapshot.external_);
+            storage_ = snapshot.identity_;
+            return;
         }
         Data replacement(snapshot.state_);
         snapshot.identity_->data.swap(replacement);
