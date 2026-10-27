@@ -14,6 +14,10 @@
 #include <stdexcept>
 #include <utility>
 
+#ifndef PINEFORGE_STATIC_TA_CACHE
+#define PINEFORGE_STATIC_TA_CACHE 1
+#endif
+
 namespace pineforge::source {
 
 PineScheduler::PineScheduler() = default;
@@ -150,6 +154,11 @@ void PineScheduler::commit_coof_script_state(PineStrategyHost& host) {
 }
 
 namespace {
+// Static TA cache policy seam; CR-401's measured policy sets the default.
+inline bool static_ta_cache_enabled() noexcept {
+    return PINEFORGE_STATIC_TA_CACHE;
+}
+
 // The script bars a SELECTED admitted batch run executes over its retained
 // primary rows: the kernel's count_selected_executed_primary, which walks them as
 // the native consumer does (the groups that open before T, the last pending one
@@ -227,7 +236,8 @@ void PineScheduler::run_begin(PineStrategyHost& host) {
         }
     }
     host.stream_warmup_mode_ = retained_.is_stream;
-    host.scheduler_prepare_script_run(retained_.bars, static_eligible,
+    host.scheduler_prepare_script_run(retained_.bars,
+                                      static_eligible && static_ta_cache_enabled(),
                                       expected_source_bars_, !needs_aggregation);
     // ab9714be pine_scheduler.cpp:717-804 (legacy_run_simple) never configures
     // the request.security evaluator surface; :1249-1323 (run_tf_impl, reached
