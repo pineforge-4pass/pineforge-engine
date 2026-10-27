@@ -1,4 +1,4 @@
-// CR-150 L6b-4. The oracle is an independently retained array, never bytes
+// The oracle is an independently retained array, never bytes
 // copied from the scratch file under test. b3c39238e has neither the internal
 // scratch header nor its definitions: fail-before is a missing-header error.
 // The common brief reserves the actual fail-before/Release/Debug runs for lab.

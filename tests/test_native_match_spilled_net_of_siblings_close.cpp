@@ -226,7 +226,7 @@ void check_run(const Outcome& outcome, std::size_t resting, const char* name) {
 
 int main(int argc, char** argv) {
     // The twin row _spilled_only is its own executable, built from this body
-    // with PINEFORGE_B1_TWIN_FLAG (tests/cr150.d/s4e-fix-b1.cmake).
+    // with PINEFORGE_B1_TWIN_FLAG (the dedicated scratch matching fixture).
 #ifdef PINEFORGE_B1_TWIN_FLAG
     const char* const flag = PINEFORGE_B1_TWIN_FLAG;
     (void) argc;

@@ -1,4 +1,4 @@
-// CR-150 L7c. Compare ArrayCurve, SpillCurve and the UNMODIFIED frozen
+// Compare ArrayCurve, SpillCurve and the UNMODIFIED frozen
 // equity_stats_reference.hpp, including repeated walks and selected counts.
 //
 // FAIL-BEFORE on b3c39238ef: the frozen P00 SpillCurve declaration has no

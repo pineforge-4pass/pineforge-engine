@@ -6,7 +6,7 @@
  * while in a percent-of-equity all-in (pct=100) position, the strategy queues
  *   strategy.entry(opposite)   [created FIRST]
  *   strategy.close(current)    [created AFTER, same on_bar]
- * pyramiding=0/1. Next bar the KI-57/KI-54 reversal-admission gate DECLINES the
+ * pyramiding=0/1. Next bar the reversal-admission gate DECLINES the
  * opposite entry at fill (fill_open > sizing_close by >= one mintick, qty_step
  * 0), because an all-in flip's frozen notional sits within lot-floor slack of
  * equity. TradingView refuses the whole reversal ATOMICALLY and HOLDS the
@@ -18,7 +18,7 @@
  * Harness: modelled on test_margin_admission_gate.cpp (Probe subclass; scripted
  * per-bar actions). initial_capital 10000, PERCENT_OF_EQUITY pct=100, zero
  * commission, margin_call disabled, qty_step_=0 (so a +1-mintick fill-gap
- * DECLINES the reversal — at qty_step_>0 one tick ADMITS per KI-54 pin H). All
+ * DECLINES the reversal — at qty_step_>0 one tick ADMITS per margin-admission rule). All
  * decline fixtures gap the fill bar +1 (>= one mintick) above the signal close.
  *
  * RED/GREEN matrix (design doc):
@@ -36,7 +36,7 @@
  *   G  multiple pending orders: only the matching close is suppressed.
  *   G  strategy.exit bracket NOT suppressed (+ call-time cancel caveat).
  *   G  pin-D fixture (declined reversal, NO co-queued close) unchanged.
- *   G  COOF-kernel cross-check (calc_on_order_fills=1) — RED in the KI-60
+ *   G  COOF-kernel cross-check (calc_on_order_fills=1) — RED in the scheduler
  *      kernel, same bug/other fill loop.
  *   G  POOC inertness (process_orders_on_close=1: no deferred close exists).
  */
@@ -249,7 +249,7 @@ static void test_R5_close_all_freeze() {
 // UNTOUCHED — the hook keys on the reversal decline only. Sequencing note: the
 // sort processes a full close BEFORE a same-direction entry (sort_orders_by_
 // fill_phase's exit-before-same-dir-entry rule), so a same-direction add
-// co-queued with a full close can never reach the KI-54 same_dir DECLINE while
+// co-queued with a full close can never reach the same_dir DECLINE while
 // a held-side close is pending — the close fires first and the add re-opens
 // from flat. That makes a same_dir decline + held-side close structurally
 // unreachable, so the `reversal==true` guard is only ever exercised on genuine
@@ -408,7 +408,7 @@ static void test_G_exit_bracket_not_suppressed() {
 }
 
 // G: pin-D fixture (a declined reversal with NO co-queued close) is unchanged —
-// the fix is inert without a close leg. This is the KI-54 pin D shape.
+// the fix is inert without a close leg. This is the margin-admission shape.
 static void test_G_pin_D_unchanged() {
     std::printf("-- G: pin-D (declined reversal, no close) unchanged --\n");
     Probe p;
@@ -424,7 +424,7 @@ static void test_G_pin_D_unchanged() {
     CHECK(p.trade_count() == 0);
 }
 
-// G: COOF-kernel cross-check. calc_on_order_fills=1 drives the KI-60
+// G: COOF-kernel cross-check. calc_on_order_fills=1 drives the scheduler
 // process_next_pending_order loop, whose candidates are pre-classified BEFORE
 // any candidate is applied — so a flag set mid-segment by the reversal's
 // decline is NOT seen by classify and must be caught by the shared apply-time

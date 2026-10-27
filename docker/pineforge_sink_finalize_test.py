@@ -5,11 +5,12 @@ ordinary rows reuse tests/test_run_json_sink.py's fixture writer. No sink
 fixture or hash is stored here. Fresh stdlib-only probes measure one
 finalizer child before pytest/run_json imports. Three tiny streams and three
 >=64 MiB generated streams are hashed as they are sent. The smallest big
-peak minus the largest tiny peak must be at most 1 MiB; those same extrema
-must fit the tiny baseline +2 MiB headroom, which is implied by that bound.
+peak minus the largest tiny peak must be at most 1 MiB (2 MiB on Darwin);
+those same extrema must fit the unchanged tiny baseline +2 MiB headroom.
 Recorded macOS tiny peaks scattered by about 0.9 MiB, so growth below about
-1 MiB + that scatter can escape this coarse guard. Pure decision rows and
-a real finalizer retaining 4 MiB only for big streams check sensitivity.
+the platform bound + that scatter can escape this coarse guard. Pure decision
+rows and a real finalizer retaining 4 MiB (6 MiB on Darwin) only for big
+streams check sensitivity.
 """
 from __future__ import annotations
 
@@ -36,12 +37,24 @@ EXHAUSTED_RECEIPT_KEYS = (
     "reason", "sink_bytes", "cap_bytes", "sha256", "finalizer_version")
 TYPED_REFUSAL_RECEIPT_KEYS = (
     *RECEIPT_KEYS, "tool", "event", "exit_code", "detail", "code", "args")
-RSS_FLATNESS_BYTES = 1024 * 1024
+
+
+def rss_flatness_bound(platform):
+    # Darwin arm64 uses 16 KiB pages; allocator/high-water RSS granularity
+    # put the reported stdout growth three pages above 1 MiB. Recorded tiny
+    # baselines also scattered by ~0.9 MiB, so round up to 2 MiB rather than
+    # pinning the bound to one three-page overage. Linux and every other
+    # platform retain the original 1 MiB bound.
+    return (2 if platform == "darwin" else 1) * 1024 * 1024
+
+
+RSS_FLATNESS_BYTES = rss_flatness_bound(sys.platform)
 RSS_BASELINE_HEADROOM_BYTES = 2 * 1024 * 1024
 # A touched 2 MiB plant showed only 1.75 MiB of peak growth (7/8).
 # Budget RSS_BASELINE_HEADROOM_BYTES (2 MiB) for tiny scatter:
-# 4 MiB * 7/8 - 2 MiB = 1.5 MiB > RSS_FLATNESS_BYTES (1 MiB).
-RSS_PLANTED_RETENTION_BYTES = 2 * RSS_BASELINE_HEADROOM_BYTES
+# Linux: 4 MiB * 7/8 - 2 MiB = 1.5 MiB > its unchanged 1 MiB bound.
+# Darwin: 6 MiB * 7/8 - 2 MiB = 3.25 MiB > its 2 MiB bound.
+RSS_PLANTED_RETENTION_BYTES = (6 if sys.platform == "darwin" else 4) * 1024 * 1024
 RSS_MEASUREMENT_PAIRS = 3
 STREAM_BYTES = 64 * 1024 * 1024
 
@@ -1096,12 +1109,13 @@ def test_fsync_then_verify_then_publish_and_short_writes(tmp_path, monkeypatch):
     assert out.read_bytes() == payload and list(spool.iterdir()) == []
 
 
-def rss_flatness_verdict(tiny_peaks, big_peaks):
+def rss_flatness_verdict(tiny_peaks, big_peaks, *, platform=None):
     """Judge byte-normalized independent extrema without I/O.
 
     Measured tiny-baseline scatter was about 0.9 MiB. Growth below about
-    1 MiB + that scatter can escape this coarse stream-proportional guard.
+    the platform bound + that scatter can escape this coarse guard.
     """
+    flatness_bytes = rss_flatness_bound(sys.platform if platform is None else platform)
     samples = f"tiny_peaks={tiny_peaks} big_peaks={big_peaks}"
     if (not tiny_peaks or not big_peaks
             or any(peak <= 0 for peak in (*tiny_peaks, *big_peaks))):
@@ -1109,12 +1123,31 @@ def rss_flatness_verdict(tiny_peaks, big_peaks):
     tiny_peak, big_peak = max(tiny_peaks), min(big_peaks)
     delta = big_peak - tiny_peak
     measurement = (f"rss-measurement tiny={tiny_peak} big={big_peak} "
-                   f"delta={delta} {samples}")
+                   f"delta={delta} bound={flatness_bytes} {samples}")
     # A stream-proportional leak raises every big peak. Tiny baseline noise
     # must be accounted for independently of which big probe ran beside it.
-    passed = (delta <= RSS_FLATNESS_BYTES
+    passed = (delta <= flatness_bytes
               and big_peak <= tiny_peak + RSS_BASELINE_HEADROOM_BYTES)
     return passed, measurement
+
+
+@pytest.mark.parametrize("platform,growth,expected", [
+    ("linux", 1024 * 1024, True),
+    ("linux", 1024 * 1024 + 3 * 16 * 1024, False),
+    ("linux", 2 * 1024 * 1024, False),
+    ("darwin", 1024 * 1024 + 3 * 16 * 1024, True),
+    ("darwin", 2 * 1024 * 1024, True),
+    ("darwin", 2 * 1024 * 1024 + 16 * 1024, False),
+])
+def test_rss_flatness_platform_bounds(platform, growth, expected):
+    # Exercise both policies on every host, including the three-page overage.
+    baseline = 22 * 1024 * 1024
+    passed, measurement = rss_flatness_verdict(
+        [baseline] * RSS_MEASUREMENT_PAIRS,
+        [baseline + growth] * RSS_MEASUREMENT_PAIRS, platform=platform)
+
+    assert passed is expected, measurement
+    assert f"delta={growth} bound={rss_flatness_bound(platform)}" in measurement
 
 
 def test_rss_flatness_accepts_recorded_tiny_baseline_scatter():
@@ -1141,7 +1174,7 @@ def test_rss_flatness_accepts_all_five_recorded_macos_pairs():
 
 
 def test_rss_flatness_uses_independent_extrema():
-    # Every paired delta exceeds 1 MiB; pairing must not choose the baseline.
+    # Every paired delta exceeds Linux's 1 MiB; pairing must not choose the baseline.
     mib = 1024 * 1024
     baseline = 22 * mib
     tiny_peaks = [baseline, baseline + mib // 4, baseline + mib // 8]
@@ -1169,11 +1202,11 @@ def test_rss_flatness_rejects_stream_proportional_leak():
 
 
 def test_rss_flatness_rejects_consistently_over_bound_peaks():
-    # Negative control: repetition must not relax the 1 MiB bound.
+    # Negative control: repetition must not relax the platform's bound.
     mib = 1024 * 1024
     tiny_peaks = [22300000, 22900000, 22500000]
     baseline = max(tiny_peaks)
-    delta = 9 * mib // 8
+    delta = RSS_FLATNESS_BYTES + mib // 8
     big_peaks = [baseline + delta] * RSS_MEASUREMENT_PAIRS
 
     passed, measurement = rss_flatness_verdict(tiny_peaks, big_peaks)
@@ -1197,8 +1230,10 @@ def test_rss_flatness_rejects_empty_or_non_positive_peaks(tiny_peaks, big_peaks)
 
 
 @pytest.mark.parametrize("growth,expected", [
-    (2 * 1024 * 1024, False),
+    (2 * 1024 * 1024, sys.platform == "darwin"),
     (1024 * 1024 - 1024, True),
+    (RSS_FLATNESS_BYTES, True),
+    (RSS_FLATNESS_BYTES + 1024, False),
 ])
 def test_rss_flatness_judges_near_bound_retention(growth, expected):
     tiny_peaks = [22300000, 22900000, 22500000]

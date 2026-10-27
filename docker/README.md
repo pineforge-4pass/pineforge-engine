@@ -308,7 +308,7 @@ tested cases, and no completeness claim (the published 1.6.0 image declares
 From 1.6.2, the engine/codegen image's `run_json.py --so
 <strategy.so> --capabilities-json` probe declares revision `1.3`: with the
 section-4 producers and manifest present and value ownership `complete`
-(EN-115), it emits the four typed codes (`strategy_value_invalid`,
+(the completeness proof), it emits the four typed codes (`strategy_value_invalid`,
 `engine_command_value_invalid`, `report_result_invalid` and
 `report_post_execution_failed`). A build declaring `1.3` pairs only with a
 `complete` receipt; `1.3-parity` remains the parity build's literal, and a

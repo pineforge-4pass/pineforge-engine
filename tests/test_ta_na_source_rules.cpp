@@ -1,6 +1,6 @@
 /*
  * test_ta_na_source_rules.cpp — TradingView na-source semantics for
- * ta.ema / ta.sma (KI-66), pinned trade-for-trade by the
+ * ta.ema / ta.sma, pinned trade-for-trade by the
  * pf-probe-ki66-ema-sma-na-rule export (0/11,060 mismatched decision bars
  * per leg once these rules hold).
  *
@@ -27,7 +27,7 @@
  *   G2  pre-seed SMA + na stays na
  *   G3  RMA na behaviour unchanged (guards the scoped-out reference path)
  *   G4  EMA state-continuity across an na run (resume value == no-na control)
- *   G6  KI-55 na_warmup EMA: an na input during warmup neither counts nor
+ *   G6  na_warmup EMA: an na input during warmup neither counts nor
  *       shifts the seed bar (pre-seed behaviour identical either side of fix)
  *   G7  EmaSeeding named per instance (R5 lane P2): the two-argument
  *       constructor fixes the seeding regardless of the ambient default, a
@@ -191,7 +191,7 @@ static void test_sma_32bar_na_run_holds() {
 }
 
 // --------------------------------------------------------------------
-// G6 — KI-55 na_warmup EMA pre-seed unaffected. Under the security
+// G6 — na_warmup EMA pre-seed unaffected. Under the security
 // range-start na_warmup mode, an na input DURING warmup must (a) return na
 // and (b) not count toward the `length` seed accumulation, so the SMA seed
 // still lands on the length-th VALID value. Identical on HEAD and post-fix.

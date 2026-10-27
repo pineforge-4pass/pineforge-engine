@@ -1,4 +1,4 @@
-// CR-150 L19l: the production resident/disk container and real OriginRoster,
+// The production resident/disk container and real OriginRoster,
 // compared with the old unordered-map + insertion-vector logical state.
 #define PINEFORGE_TEST_ALLOCATION_BYTES
 #include "global_allocation_replacement.hpp"
@@ -860,7 +860,7 @@ void close_selection_lookup_growth_and_equivalence() {
         checked[sample] = candidate.close_lookups;
         unchecked[sample] = reference.close_lookups;
         // Keep the discriminator visible even if the run or witness fails.
-        std::printf("CR347 close N=%d find_key=%llu precheck_disabled_find_key=%llu"
+    std::printf("Storage close N=%d find_key=%llu precheck_disabled_find_key=%llu"
                     " families=%zu working_tail_sum=%zu working_tail_max=%zu"
                     " precheck_disabled_families=%zu precheck_disabled_working_tail_sum=%zu"
                     " precheck_disabled_working_tail_max=%zu\n", n,
@@ -998,7 +998,7 @@ private:
 
 void print_slice(const char* slice, const Adapter::PendingScanWork& work) {
     const auto print = [&](const char* name, const Adapter::PendingScanCounter& c) {
-        std::printf("CR347 %s %s calls=%llu live_iterations=%llu placement_finds=%llu "
+    std::printf("Storage %s %s calls=%llu live_iterations=%llu placement_finds=%llu "
                     "lot_iterations=%llu max_live=%llu max_placement=%llu max_brackets=%llu "
                     "max_resident=%llu max_logical=%llu\n", slice, name,
             static_cast<unsigned long long>(c.calls),
@@ -1128,21 +1128,21 @@ void dense_operation_growth_and_instrumentation(bool jailed) {
                 && heap.total_bytes >= heap.opened_bytes + heap.origin_bytes
                 && heap.bytes_per_row == heap.total_bytes / heap.resident_rows,
                 "heap estimate is a nonallocating function of the actual resident rows");
-        std::printf("CR347 profile=%s N=%d cohort_operations=%llu resident=%zu heap_estimate=%zu "
+    std::printf("Storage profile=%s N=%d cohort_operations=%llu resident=%zu heap_estimate=%zu "
                     "bytes_per_row=%zu row=%zu key=%zu origins=%zu opened=%zu units=%zu directory=%zu\n",
             jailed ? "jailed" : "unjailed", n,
             static_cast<unsigned long long>(operations[sample]), heap.resident_rows,
             heap.total_bytes, heap.bytes_per_row, heap.row_bytes, heap.key_bytes,
             heap.origin_bytes, heap.opened_bytes, heap.live_unit_bytes, heap.directory_bytes);
     }
-    // These are the walks fixed in CR-347 rounds 4/5; they deliberately exclude the
+    // These are the walks fixed in the later measurement rounds; they deliberately exclude the
     // retire_origin_prefixes Iterator pass below.
     require(walk_operations[1] * 2 <= walk_operations[0] * 5,
             "doubling dense pending cohorts exceeds 2.5x fixed cohort walks");
     // EXPECTED_RED_UNTIL_RETIRE_DIRTY_SET: iterated_rows measures the known
     // Theta(R) retire pass. Print the full ratio and keep it unasserted until
     // that pass has a dirty-set implementation.
-    std::printf("CR347 profile=%s dense_full_ratio=%llu/%llu fixed_walk_ratio=%llu/%llu "
+    std::printf("Storage profile=%s dense_full_ratio=%llu/%llu fixed_walk_ratio=%llu/%llu "
                 "iterated_rows_N=%llu iterated_rows_2N=%llu\n",
         jailed ? "jailed" : "unjailed",
         static_cast<unsigned long long>(operations[1]),
