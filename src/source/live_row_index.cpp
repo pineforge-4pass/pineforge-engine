@@ -118,6 +118,7 @@ const ClassDefinition classes[] = {
 };
 static_assert(sizeof(classes) / sizeof(classes[0]) == static_cast<std::size_t>(C::Count));
 static_assert(static_cast<std::size_t>(C::Count) <= 64);
+static_assert(LiveHandleSequence::kIndexThreshold == LiveRowIndex::kActivationThreshold);
 
 [[noreturn]] void mismatch(const char* name) {
     throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
@@ -148,9 +149,8 @@ std::vector<H> ordered_values(const Ordered& ordered) {
     return result;
 }
 
-#ifndef NDEBUG
-// Independent oracle, copied from the original loop conditions. It reads
-// canonical rows; neither class table, Record, nor Bucket participates.
+// Original scan predicates, also the independent assertion-build oracle.
+// They read canonical rows; neither class table, Record nor Bucket participates.
 bool oracle_class(C c, const R& r) {
     const auto p = [](double x) { return std::isfinite(x) && x > 0; };
     const bool e = r.family == PineOrderFamily::Entry;
@@ -273,24 +273,59 @@ bool oracle_key(const LiveKey& k, const R& r) {
     }
     return false;
 }
-std::vector<H> oracle_rows(const PlacementTable* table, const LiveHandleSequence* sequence,
-                          C c, const LiveKey& key, int side) {
-    std::vector<H> result;
-    if (!table || !sequence) return result;
+template<class Visit>
+void scan_rows(const PlacementTable* table, const LiveHandleSequence* sequence,
+               C c, const LiveKey& key, int side, Visit visit) {
+    (void)LiveRowIndex::class_name(c);
+    if (!table || !sequence) return;
     for (const auto& h : *sequence) {
         const auto found = table->find(h.incarnation);
         if (found == table->end()) continue;
         const auto& r = found->second;
         if (oracle_class(c, r) && oracle_key(key, r)
-            && (side < 0 || static_cast<int>(r.is_long) == side)) result.push_back(h);
+            && (side < 0 || static_cast<int>(r.is_long) == side)) visit(h, r);
     }
+}
+std::vector<H> oracle_rows(const PlacementTable* table, const LiveHandleSequence* sequence,
+                          C c, const LiveKey& key, int side) {
+    std::vector<H> result;
+    scan_rows(table, sequence, c, key, side, [&](H h, const R&) { result.push_back(h); });
     return result;
 }
-#endif
+std::vector<std::size_t> scan_origin_positions(const LiveHandleSequence* sequence,
+                                              const OriginRoster& roster) {
+    // Original loop: incarnation lookup plus full equality in the roster,
+    // then descending sort/unique. Only matching output positions allocate.
+    std::vector<std::size_t> result;
+    if (sequence) for (const auto& h : *sequence) roster.append_positions_of(h, result);
+    std::sort(result.rbegin(), result.rend());
+    result.erase(std::unique(result.begin(), result.end()), result.end());
+    return result;
+}
 }
 
+void LiveHandleSequence::rebuild_positions() {
+    decltype(positions_) fresh;
+    for (std::size_t i = 0; i != slots_.size(); ++i) {
+        auto& slot = slots_[i];
+        if (!slot.live) continue;
+        auto& positions = fresh[slot.handle];
+        slot.occurrence = positions.size();
+        positions.push_back(i);
+    }
+    positions_ = std::move(fresh);
+    indexed_positions_ = true;
+}
 void LiveHandleSequence::push_back(const Handle& h) {
     if (next_order_ == std::numeric_limits<std::uint64_t>::max()) mismatch("live sequence ordinal exhausted");
+    if (!indexed_positions_) {
+        slots_.push_back({h, next_order_ + 1, true, 0});
+        try {
+            if (live_count_ + 1 >= kIndexThreshold) rebuild_positions();
+        } catch (...) { slots_.pop_back(); throw; }
+        ++next_order_; ++live_count_; snapshot_valid_ = false;
+        return;
+    }
     auto inserted = positions_.try_emplace(h);
     auto& positions = inserted.first->second;
     try { positions.push_back(slots_.size()); }
@@ -306,6 +341,16 @@ void LiveHandleSequence::push_back(const Handle& h) {
     snapshot_valid_ = false;
 }
 std::size_t LiveHandleSequence::erase_handle(const Handle& h) noexcept {
+    if (!indexed_positions_) {
+        // Physical slots are bounded by twice the small live population.
+        std::size_t work = 0;
+        for (auto& slot : slots_) {
+            ++work;
+            if (slot.live && slot.handle == h) { slot.live = false; --live_count_; }
+        }
+        snapshot_valid_ = false;
+        return work + compact_if_needed();
+    }
     const auto found = positions_.find(h);
     if (found == positions_.end()) return 1;
     std::size_t work = found->second.size();
@@ -317,7 +362,7 @@ std::size_t LiveHandleSequence::erase_handle(const Handle& h) noexcept {
 }
 std::size_t LiveHandleSequence::compact_if_needed() noexcept {
     std::size_t work = 0;
-    if (positions_.empty()) {
+    if (live_count_ == 0) {
         slots_.clear();
     } else if (slots_.size() - live_count_ > slots_.size() / 2) {
         // Stable in-place compaction, no allocation and no survivor reordering.
@@ -326,10 +371,15 @@ std::size_t LiveHandleSequence::compact_if_needed() noexcept {
             ++work;
             if (!slots_[i].live) continue;
             if (target != i) slots_[target] = slots_[i];
-            positions_.find(slots_[target].handle)->second[slots_[target].occurrence] = target;
+            if (indexed_positions_)
+                positions_.find(slots_[target].handle)->second[slots_[target].occurrence] = target;
             ++target;
         }
         slots_.resize(target);
+    }
+    if (indexed_positions_ && live_count_ < kIndexThreshold / 2) {
+        decltype(positions_){}.swap(positions_);
+        indexed_positions_ = false;
     }
     return work;
 }
@@ -338,6 +388,19 @@ void LiveHandleSequence::move_to_tail(const Handle& h) {
     if (!contains(target)) return;
     // Append first. push_back rolls back its own allocations; no allocation
     // follows, so an unsuccessful move leaves the original rows untouched.
+    if (!indexed_positions_) {
+        if (next_order_ == std::numeric_limits<std::uint64_t>::max()) mismatch("live sequence ordinal exhausted");
+        // The transient duplicate is not a growing book: a 63-row move must
+        // not activate a position directory only because append comes first.
+        slots_.push_back({target, next_order_ + 1, true, 0});
+        ++next_order_; ++live_count_; snapshot_valid_ = false;
+        for (std::size_t i = 0; i + 1 < slots_.size(); ++i)
+            if (slots_[i].live && slots_[i].handle == target) {
+                slots_[i].live = false; --live_count_;
+            }
+        (void)compact_if_needed();
+        return;
+    }
     push_back(target);
     auto& positions = positions_.find(target)->second;
     for (std::size_t i = 0; i + 1 < positions.size(); ++i) {
@@ -351,12 +414,17 @@ void LiveHandleSequence::move_to_tail(const Handle& h) {
     (void)compact_if_needed();
 }
 void LiveHandleSequence::clear() noexcept {
-    slots_.clear(); positions_.clear(); snapshot_.clear();
+    slots_.clear(); decltype(positions_){}.swap(positions_); snapshot_.clear();
+    indexed_positions_ = false;
     snapshot_valid_ = true; next_order_ = 0; live_count_ = 0;
 }
 std::vector<std::uint64_t> LiveHandleSequence::orders(const Handle& h) const {
     std::vector<std::uint64_t> result;
-    for (const auto position : positions_.at(h)) result.push_back(slots_[position].order);
+    if (!indexed_positions_) {
+        for (const auto& slot : slots_)
+            if (slot.live && slot.handle == h) result.push_back(slot.order);
+        if (result.empty()) (void)positions_.at(h); // Same missing-member contract.
+    } else for (const auto position : positions_.at(h)) result.push_back(slots_[position].order);
     return result;
 }
 void LiveHandleSequence::assign(const std::vector<Handle>& handles) {
@@ -416,19 +484,47 @@ bool LiveRowIndex::oracle_enabled() noexcept {
 bool LiveRowIndex::bound_to(const PlacementTable& table, const LiveHandleSequence& sequence) const noexcept {
     return table_ == &table && sequence_ == &sequence;
 }
+void LiveRowIndex::bind_origin_rebuilder(const void* owner, OriginRebuilder rebuild) noexcept {
+    origin_owner_ = owner;
+    origin_rebuilder_ = rebuild;
+}
+void LiveRowIndex::release_storage() {
+    // Moving a fresh directory frees nodes AND unordered-container capacity;
+    // clear() alone would keep the high-water bucket allocations resident.
+    LiveRowIndex fresh;
+    fresh.table_ = table_; fresh.sequence_ = sequence_; fresh.sources_ = sources_;
+    fresh.origin_owner_ = origin_owner_; fresh.origin_rebuilder_ = origin_rebuilder_;
+    *this = std::move(fresh);
+}
+bool LiveRowIndex::update_activation() {
+    if (active_) {
+        if (sequence_->size() >= kActivationThreshold / 2) return true;
+        release_storage();
+    } else if (sequence_ && sequence_->size() >= kActivationThreshold) {
+        // No inactive hook history is replayed: all projections come from
+        // the real tables after the mutation that crossed the threshold.
+        rebuild_from(*table_, *sequence_);
+        return true;
+    }
+    return false;
+}
 void LiveRowIndex::clear() {
-    records_.clear(); incarnations_.clear(); occurrences_ = 0;
-    ordered_members_.clear();
-    source_owners_.clear(); keys_by_handle_.clear();
-    origins_.clear(); active_origins_.clear(); origin_incidence_.clear();
-    for (auto& bucket : buckets_) bucket.clear();
+    release_storage();
     verify();
 }
 void LiveRowIndex::rebuild_from(const PlacementTable& table, const LiveHandleSequence& sequence) {
     table_ = &table; sequence_ = &sequence;
+    if (sequence.size() < (active_ ? kActivationThreshold / 2 : kActivationThreshold)) {
+        release_storage();
+        return;
+    }
+    active_ = true;
     records_.clear(); incarnations_.clear(); occurrences_ = 0;
     ordered_members_.clear();
     active_origins_.clear();
+    if (origin_rebuilder_) {
+        origins_.clear(); origin_incidence_.clear(); built_origin_rosters_.clear();
+    }
     for (auto& bucket : buckets_) bucket.clear();
     for (const auto& h : sequence) publish(h);
     if (sources_) {
@@ -436,6 +532,7 @@ void LiveRowIndex::rebuild_from(const PlacementTable& table, const LiveHandleSeq
         sources_ = nullptr;
         bind_source_keys(*canonical);
     }
+    if (origin_rebuilder_) origin_rebuilder_(origin_owner_, *this);
     verify();
 }
 LiveRowIndex::Record LiveRowIndex::project(H h) const {
@@ -548,6 +645,7 @@ void LiveRowIndex::publish(H h) {
 }
 void LiveRowIndex::refresh(H h) {
     if (!table_ || !sequence_) mismatch("unbound refresh");
+    if (!update_activation()) return;
     // The shared placement key is incarnation-only; handle membership is full.
     std::vector<H> affected;
     if (const auto found = incarnations_.find(h.incarnation); found != incarnations_.end())
@@ -558,8 +656,12 @@ void LiveRowIndex::refresh(H h) {
     verify();
 }
 void LiveRowIndex::insert(H h) { refresh(h); }
-void LiveRowIndex::erase(H h) { remove(h); verify(); }
+void LiveRowIndex::erase(H h) {
+    if (!update_activation()) return;
+    remove(h); verify();
+}
 void LiveRowIndex::refresh_incarnation(std::uint64_t incarnation) {
+    if (!update_activation()) return;
     const auto found = incarnations_.find(incarnation);
     if (found != incarnations_.end()) {
         // publish does not add/remove incidence when the sequence is unchanged.
@@ -571,6 +673,7 @@ void LiveRowIndex::refresh_incarnation(std::uint64_t incarnation) {
 void LiveRowIndex::bind_source_keys(const SourceMap& source) {
     if (sources_ == &source) return;
     sources_ = &source;
+    if (!active_) return;
     source_owners_.clear(); keys_by_handle_.clear();
     for (const auto& row : source) {
         source_owners_.emplace(row.first, row.second);
@@ -580,6 +683,7 @@ void LiveRowIndex::bind_source_keys(const SourceMap& source) {
 }
 void LiveRowIndex::refresh_source_key(std::uint64_t key) {
     if (!sources_) mismatch("unbound source keys");
+    if (!update_activation()) return;
     if (const auto old = source_owners_.find(key); old != source_owners_.end()) {
         auto reverse = keys_by_handle_.find(old->second);
         reverse->second.erase(key);
@@ -594,6 +698,11 @@ void LiveRowIndex::refresh_source_key(std::uint64_t key) {
 }
 std::vector<std::uint64_t> LiveRowIndex::source_keys(H h) const {
     std::vector<std::uint64_t> result;
+    if (!active_) {
+        if (sources_) for (const auto& row : *sources_)
+            if (row.second == h) result.push_back(row.first);
+        return result;
+    }
     if (const auto found = keys_by_handle_.find(h); found != keys_by_handle_.end())
         result.assign(found->second.begin(), found->second.end());
 #ifndef NDEBUG
@@ -617,10 +726,12 @@ void LiveRowIndex::set_origin_live(H h, bool live) {
     }
 }
 void LiveRowIndex::clear_origins() {
-    origins_.clear(); active_origins_.clear(); origin_incidence_.clear();
+    if (!active_) return;
+    origins_.clear(); active_origins_.clear(); origin_incidence_.clear(); built_origin_rosters_.clear();
     verify();
 }
 void LiveRowIndex::rebuild_origins(std::uint64_t cohort, const OriginRoster& roster) {
+    if (!update_activation()) return;
     retire_origins_before(cohort, std::numeric_limits<std::size_t>::max());
     std::size_t global = roster.base();
     for (const auto& h : roster) {
@@ -629,9 +740,14 @@ void LiveRowIndex::rebuild_origins(std::uint64_t cohort, const OriginRoster& ros
         if (records_.find(h) != records_.end()) active_origins_[cohort].emplace(global, h);
         ++global;
     }
+    if (!roster.members().empty()) built_origin_rosters_.insert(cohort);
     verify();
 }
 void LiveRowIndex::append_origin(std::uint64_t cohort, std::size_t global, H h) {
+    if (!update_activation()) return;
+    // The owner registered every existing roster at activation. An absent
+    // cohort created since then had no retained positions before this append.
+    if (origin_rebuilder_) built_origin_rosters_.insert(cohort);
     auto& roster = origins_[cohort];
     if (const auto before = roster.find(global); before != roster.end()) {
         const auto reverse = origin_incidence_.find(before->second);
@@ -648,6 +764,7 @@ void LiveRowIndex::append_origin(std::uint64_t cohort, std::size_t global, H h) 
     verify();
 }
 void LiveRowIndex::retire_origins_before(std::uint64_t cohort, std::size_t exclusive) {
+    if (!update_activation()) return;
     if (const auto found = origins_.find(cohort); found != origins_.end()) {
         auto& roster = found->second;
         for (auto at = roster.begin(); at != roster.end() && at->first < exclusive;) {
@@ -660,21 +777,26 @@ void LiveRowIndex::retire_origins_before(std::uint64_t cohort, std::size_t exclu
             }
             at = roster.erase(at);
         }
-        if (roster.empty()) origins_.erase(found);
+        if (roster.empty()) {
+            origins_.erase(found);
+            built_origin_rosters_.erase(cohort);
+        }
     }
     verify();
 }
 std::vector<std::size_t> LiveRowIndex::origin_positions(std::uint64_t cohort, const OriginRoster& roster) const {
+    // Standalone clients without an origin owner may first register a roster
+    // while inactive. Its canonical argument remains the exact answer until
+    // an explicit active rebuild registers its incidence.
+    if (!active_ || !built_origin_rosters_.count(cohort))
+        return scan_origin_positions(sequence_, roster);
     std::vector<std::size_t> result;
     if (const auto found = active_origins_.find(cohort); found != active_origins_.end())
         for (auto at = found->second.rbegin(); at != found->second.rend(); ++at) result.push_back(at->first);
 #ifndef NDEBUG
     // Exact old loop text, including incarnation lookup followed by full
     // equality inside append_positions_of; no opening or placement filter.
-    std::vector<std::size_t> old;
-    if (sequence_) for (const auto& handle : *sequence_) roster.append_positions_of(handle, old);
-    std::sort(old.rbegin(), old.rend());
-    old.erase(std::unique(old.begin(), old.end()), old.end());
+    const auto old = scan_origin_positions(sequence_, roster);
     if (result != old) mismatch("OriginPositions");
 #else
     (void)roster;
@@ -696,6 +818,10 @@ void LiveRowIndex::check_query(C c, const LiveKey& key, int side, const std::vec
 #endif
 }
 bool LiveRowIndex::contains(H h) const {
+    if (!active_) {
+        if (sequence_) for (const auto& live : *sequence_) if (live == h) return true;
+        return false;
+    }
     const bool result = records_.find(h) != records_.end();
 #ifndef NDEBUG
     bool old = false;
@@ -705,12 +831,14 @@ bool LiveRowIndex::contains(H h) const {
     return result;
 }
 std::size_t LiveRowIndex::size() const {
+    if (!active_) return sequence_ ? sequence_->size() : 0;
 #ifndef NDEBUG
     if (occurrences_ != (sequence_ ? sequence_->size() : 0)) mismatch("membership size");
 #endif
     return occurrences_;
 }
 std::vector<H> LiveRowIndex::members() const {
+    if (!active_) return sequence_ ? std::vector<H>(sequence_->begin(), sequence_->end()) : std::vector<H>{};
     auto result = ordered_values(ordered_members_);
 #ifndef NDEBUG
     const std::vector<H> old = sequence_ ? sequence_->snapshot() : std::vector<H>{};
@@ -730,6 +858,11 @@ std::size_t LiveRowIndex::missing_rows() const {
 }
 std::size_t LiveRowIndex::count(C c, const LiveKey& key, int side) const {
     side_check(side);
+    if (!active_) {
+        std::size_t result = 0;
+        scan_rows(table_, sequence_, c, key, side, [&](H, const R&) { ++result; });
+        return result;
+    }
     const auto* b = bucket(c, key);
     const auto result = b ? (side < 0 ? b->rows.size() : b->sides[side].size()) : 0;
 #ifndef NDEBUG
@@ -739,6 +872,7 @@ std::size_t LiveRowIndex::count(C c, const LiveKey& key, int side) const {
 }
 std::vector<H> LiveRowIndex::rows(C c, const LiveKey& key, int side) const {
     side_check(side);
+    if (!active_) return oracle_rows(table_, sequence_, c, key, side);
     std::vector<H> result;
     if (const auto* b = bucket(c, key)) {
         result = ordered_values(side < 0 ? b->rows : b->sides[side]);
@@ -748,6 +882,14 @@ std::vector<H> LiveRowIndex::rows(C c, const LiveKey& key, int side) const {
 }
 std::optional<double> LiveRowIndex::min_price(C c, LivePrice field, const LiveKey& key, int side) const {
     side_check(side);
+    if (!active_) {
+        std::optional<double> result;
+        scan_rows(table_, sequence_, c, key, side, [&](H, const R& r) {
+            const auto x = field == LivePrice::Stop ? r.exit_levels.stop : r.exit_levels.limit;
+            if (positive(x) && (!result || x < *result)) result = x;
+        });
+        return result;
+    }
     std::optional<double> result;
     if (const auto* b = bucket(c, key)) for (int s = 0; s < 2; ++s) {
         if (side >= 0 && s != side) continue;
@@ -767,6 +909,14 @@ std::optional<double> LiveRowIndex::min_price(C c, LivePrice field, const LiveKe
 }
 std::optional<double> LiveRowIndex::max_price(C c, LivePrice field, const LiveKey& key, int side) const {
     side_check(side);
+    if (!active_) {
+        std::optional<double> result;
+        scan_rows(table_, sequence_, c, key, side, [&](H, const R& r) {
+            const auto x = field == LivePrice::Stop ? r.exit_levels.stop : r.exit_levels.limit;
+            if (positive(x) && (!result || x > *result)) result = x;
+        });
+        return result;
+    }
     std::optional<double> result;
     if (const auto* b = bucket(c, key)) for (int s = 0; s < 2; ++s) {
         if (side >= 0 && s != side) continue;
@@ -787,7 +937,15 @@ std::optional<double> LiveRowIndex::max_price(C c, LivePrice field, const LiveKe
 std::size_t LiveRowIndex::count_in_range(C c, LivePrice field, double low, double high,
                                        const LiveKey& key, int side) const {
     side_check(side);
+    (void)class_name(c);
     std::size_t result = 0;
+    if (!active_) {
+        scan_rows(table_, sequence_, c, key, side, [&](H, const R& r) {
+            const auto x = field == LivePrice::Stop ? r.exit_levels.stop : r.exit_levels.limit;
+            if (positive(x) && x >= low && x <= high) ++result;
+        });
+        return result;
+    }
     if (low <= high) if (const auto* b = bucket(c, key)) for (int s = 0; s < 2; ++s) {
         if (side >= 0 && side != s) continue;
         const auto& prices = b->prices[static_cast<std::size_t>(field)][s];
@@ -808,6 +966,15 @@ std::size_t LiveRowIndex::count_in_range(C c, LivePrice field, double low, doubl
 std::vector<H> LiveRowIndex::rows_in_range(C c, LivePrice field, double low, double high,
                                         const LiveKey& key, int side) const {
     side_check(side);
+    (void)class_name(c);
+    if (!active_) {
+        std::vector<H> result;
+        scan_rows(table_, sequence_, c, key, side, [&](H h, const R& r) {
+            const auto x = field == LivePrice::Stop ? r.exit_levels.stop : r.exit_levels.limit;
+            if (positive(x) && x >= low && x <= high) result.push_back(h);
+        });
+        return result;
+    }
     Ordered ordered;
     if (low <= high) if (const auto* b = bucket(c, key)) for (int s = 0; s < 2; ++s) {
         if (side >= 0 && side != s) continue;
@@ -830,6 +997,13 @@ std::vector<H> LiveRowIndex::rows_in_range(C c, LivePrice field, double low, dou
 std::vector<H> LiveRowIndex::before_command(C c, std::uint64_t exclusive,
                                           const LiveKey& key, int side) const {
     side_check(side);
+    if (!active_) {
+        std::vector<H> result;
+        scan_rows(table_, sequence_, c, key, side, [&](H h, const R& r) {
+            if (r.command_sequence < exclusive) result.push_back(h);
+        });
+        return result;
+    }
     Ordered ordered;
     if (const auto* b = bucket(c, key))
         for (auto it = b->commands.begin(); it != b->commands.end() && it->first < exclusive; ++it)
@@ -850,6 +1024,12 @@ std::size_t LiveRowIndex::count_before_command(C c, std::uint64_t exclusive,
                                               const LiveKey& key, int side) const {
     side_check(side);
     std::size_t result = 0;
+    if (!active_) {
+        scan_rows(table_, sequence_, c, key, side, [&](H, const R& r) {
+            if (r.command_sequence < exclusive) ++result;
+        });
+        return result;
+    }
     if (const auto* b = bucket(c, key)) {
         for (auto it = b->commands.begin(); it != b->commands.end() && it->first < exclusive; ++it) {
             if (side < 0) result += it->second.size();
@@ -866,6 +1046,15 @@ std::size_t LiveRowIndex::count_before_command(C c, std::uint64_t exclusive,
     return result;
 }
 std::vector<H> LiveRowIndex::reservation_rows(const std::string& from, std::int64_t current) const {
+    if (!active_) {
+        std::vector<H> result;
+        scan_rows(table_, sequence_, C::ReservationEligible, {}, -1,
+            [&](H h, const R& r) {
+                if (r.from_entry == from && (r.family != PineOrderFamily::Close
+                    || r.placement_cycle == 0 || r.placement_cycle >= current)) result.push_back(h);
+            });
+        return result;
+    }
     Ordered ordered;
     if (const auto* b = bucket(C::ReservationExit, LiveKey::from_entry(from)))
         ordered.insert(b->rows.begin(), b->rows.end());
@@ -888,6 +1077,14 @@ std::vector<H> LiveRowIndex::reservation_rows(const std::string& from, std::int6
 }
 std::size_t LiveRowIndex::reservation_count(const std::string& from, std::int64_t current) const {
     std::size_t result = 0;
+    if (!active_) {
+        scan_rows(table_, sequence_, C::ReservationEligible, {}, -1,
+            [&](H, const R& r) {
+                if (r.from_entry == from && (r.family != PineOrderFamily::Close
+                    || r.placement_cycle == 0 || r.placement_cycle >= current)) ++result;
+            });
+        return result;
+    }
     if (const auto* b = bucket(C::ReservationExit, LiveKey::from_entry(from))) result += b->rows.size();
     if (const auto* b = bucket(C::ReservationClose, LiveKey::from_entry(from))) {
         if (const auto zero = b->cycles.find(0); zero != b->cycles.end()) result += zero->second.size();
@@ -906,6 +1103,7 @@ std::size_t LiveRowIndex::reservation_count(const std::string& from, std::int64_
 }
 void LiveRowIndex::verify() const {
 #ifndef NDEBUG
+    if (!active_) return; // No derived row/key/origin state exists to compare.
     for (const auto& cohort : origins_) for (const auto& position : cohort.second) {
         const auto reverse = origin_incidence_.find(position.second);
         if (reverse == origin_incidence_.end() || !reverse->second.count({cohort.first, position.first}))

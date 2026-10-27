@@ -44,6 +44,8 @@ struct SidesTag { friend auto access(SidesTag); };
 template struct PrivateAccess<SidesTag, &source::PineExecutionAdapter::cohort_opened_on_side>;
 struct PositionsTag { friend auto access(PositionsTag); };
 template struct PrivateAccess<PositionsTag, &source::OriginRoster::positions_>;
+struct RebuildTag { friend auto access(RebuildTag); };
+template struct PrivateAccess<RebuildTag, &source::PineExecutionAdapter::rebuild_live_row_index>;
 
 std::vector<Bar> tape(int count) {
     std::vector<Bar> bars;
@@ -252,10 +254,15 @@ public:
             }
         }
         CHECK(found_anchor);
+        // These intentional private canonical edits bypass the production
+        // publication hooks. Publish the completed fixture batch as the
+        // ordering/short-seed fixtures do; keep the Debug oracle enabled.
+        (adapter_.*access(RebuildTag{}))();
         if (i == 8) {
             BrokerStateHashSink before, after;
             adapter_.hash_state(before);
             origins.retire_before(origins.size());
+            (adapter_.*access(RebuildTag{}))();
             adapter_.hash_state(after);
             // The entire source fold is byte-equivalent after retirement,
             // not just a separately computed digest of one helper.
@@ -268,6 +275,8 @@ void a_live_placement_name_pins_a_released_origin_and_the_hash_stays_equal() {
     ReferencePinHost host;
     const auto bars = tape(20);
     host.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
+    if (!host.last_error().empty())
+        std::fprintf(stderr, "ReferencePinHost: %s\n", host.last_error().c_str());
     CHECK(host.last_error().empty());
     CHECK(host.trade_count() == 1);
 }

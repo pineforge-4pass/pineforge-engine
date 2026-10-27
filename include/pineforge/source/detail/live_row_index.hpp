@@ -57,8 +57,8 @@ struct LiveKey {
     bool operator==(const LiveKey&) const;
 };
 
-// Run-owned, derived directory. The adapter's consumer cache owns it; binding
-// never publishes a second executable order or changes canonical row values.
+// Run-owned, derived directory. Small books read the canonical tables without
+// allocating directory storage; binding never changes canonical row values.
 class LiveRowIndex {
     using Handle = native_order::RequestHandle;
     using Ordered = std::map<std::uint64_t, Handle>;
@@ -80,6 +80,11 @@ class LiveRowIndex {
         std::map<std::int64_t, Ordered> cycles;
     };
 public:
+    static constexpr std::size_t kActivationThreshold = 64;
+    // Non-owning, allocation-free binding. Activation asks the owner to
+    // re-register its CURRENT canonical rosters, including inactive appends.
+    using OriginRebuilder = void (*)(const void*, LiveRowIndex&);
+    void bind_origin_rebuilder(const void*, OriginRebuilder) noexcept;
     bool bound_to(const PlacementTable&, const LiveHandleSequence&) const noexcept;
     void rebuild_from(const PlacementTable&, const LiveHandleSequence&);
     void clear();
@@ -120,6 +125,8 @@ public:
     // Assertion builds only: independent whole-book comparison, never repair.
     void verify() const;
 private:
+    bool update_activation();
+    void release_storage();
     Record project(Handle) const;
     void publish(Handle);
     void remove(Handle);
@@ -131,9 +138,13 @@ private:
     const PlacementTable* table_ = nullptr;
     const LiveHandleSequence* sequence_ = nullptr;
     const SourceMap* sources_ = nullptr;
+    const void* origin_owner_ = nullptr;
+    OriginRebuilder origin_rebuilder_ = nullptr;
+    bool active_ = false;
     std::unordered_map<std::uint64_t, Handle> source_owners_;
     std::unordered_map<Handle, std::unordered_set<std::uint64_t>, LiveHandleHash> keys_by_handle_;
     std::unordered_map<std::uint64_t, std::map<std::size_t, Handle>> origins_, active_origins_;
+    std::unordered_set<std::uint64_t> built_origin_rosters_;
     std::unordered_map<Handle, std::set<std::pair<std::uint64_t, std::size_t>>, LiveHandleHash> origin_incidence_;
     std::unordered_map<Handle, Record, LiveHandleHash> records_;
     Ordered ordered_members_;

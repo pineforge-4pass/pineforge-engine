@@ -26,6 +26,7 @@ class LiveHandleSequence {
     using Handle = native_order::RequestHandle;
     struct Slot { Handle handle; std::uint64_t order; bool live = true; std::size_t occurrence = 0; };
 public:
+    static constexpr std::size_t kIndexThreshold = 64;
     class const_iterator {
     public:
         using iterator_category = std::bidirectional_iterator_tag;
@@ -65,12 +66,20 @@ public:
     const_reverse_iterator rbegin() const { return const_reverse_iterator(end()); }
     const_reverse_iterator rend() const { return const_reverse_iterator(begin()); }
     std::size_t size() const noexcept { return live_count_; }
-    bool empty() const noexcept { return positions_.empty(); }
-    bool contains(const Handle& h) const noexcept { return positions_.find(h) != positions_.end(); }
+    bool empty() const noexcept { return live_count_ == 0; }
+    bool contains(const Handle& h) const noexcept {
+        if (indexed_positions_) return positions_.find(h) != positions_.end();
+        for (const auto& slot : slots_) if (slot.live && slot.handle == h) return true;
+        return false;
+    }
     const Handle& front() const { return *begin(); }
     const Handle& back() const { return *rbegin(); }
     const Handle& operator[](std::size_t rank) const { return snapshot()[rank]; }
-    std::uint64_t order(const Handle& h) const { return slots_[positions_.at(h).front()].order; }
+    std::uint64_t order(const Handle& h) const {
+        if (!indexed_positions_)
+            for (const auto& slot : slots_) if (slot.live && slot.handle == h) return slot.order;
+        return slots_[positions_.at(h).front()].order;
+    }
     std::vector<std::uint64_t> orders(const Handle& h) const;
     void push_back(const Handle&);
     // Returns actual slot work (lookup + stable-compaction visits), so the
@@ -87,11 +96,13 @@ public:
         assign(compact);
     }
 private:
+    void rebuild_positions();
     std::size_t compact_if_needed() noexcept;
     std::vector<Slot> slots_;
     // Production remember suppresses duplicates. Raw observer fixtures can
     // deliberately append aliases; preserve those vector-visible occurrences.
     std::unordered_map<Handle, std::vector<std::size_t>, LiveHandleHash> positions_;
+    bool indexed_positions_ = false;
     std::size_t live_count_ = 0;
     mutable std::vector<Handle> snapshot_;
     mutable bool snapshot_valid_ = false;

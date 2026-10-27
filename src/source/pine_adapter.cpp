@@ -1683,7 +1683,7 @@ namespace {
 
 class AdapterLookupIndex final : public detail::PineRunCache {
 public:
-    detail::LiveRowIndex live_rows;
+    // Optional lookups only; the live-row directory belongs to the adapter.
     // Per cohort, over its origin roster: how many roster entries are folded,
     // and whether a folded origin is an opening on each side. The roster only
     // grows (every accepted opening is appended once, after its placement row
@@ -1740,7 +1740,7 @@ public:
     std::uint64_t answered() const noexcept override { return answers; }
 
     void clear() noexcept {
-        cohort_sides.clear(); live_rows = detail::LiveRowIndex{};
+        cohort_sides.clear();
         clear_rows();
         day_lo = 1;
         day_hi = 0;
@@ -2573,7 +2573,7 @@ void PineExecutionAdapter::reset_for_run() {
     position_tail_spill_.reset();
     position_tail_summary_ = std::make_shared<detail::PositionTailSummary>();
     exit_scratch_ = nullptr;
-    pine_view_host_ = nullptr;
+    pine_view_host_ = nullptr; live_rows_ = detail::LiveRowIndex{};
     // Incarnations start over with the run.
     retired_row_scratch_.unsuperseded.clear();
     retired_row_scratch_.reissues.clear();
@@ -3708,7 +3708,7 @@ void PineExecutionAdapter::retire(native_order::RequestHandle handle) {
     dense_pending_work_.retire_handles += live_handles_.erase_handle(handle);
     first_open_newborns_.erase_handle(handle);
     index.erase(handle);
-    for (const auto key : index.source_keys(handle)) { ++dense_pending_work_.retire_keys; const auto found = live_by_source_key_.find(key);
+    if (live_handles_.size() < detail::LiveRowIndex::kActivationThreshold) retire_small_live_source_keys(handle); else for (const auto key : index.source_keys(handle)) { ++dense_pending_work_.retire_keys; const auto found = live_by_source_key_.find(key);
         if (found != live_by_source_key_.end() && found->second == handle) live_by_source_key_.erase(found);
         index.refresh_source_key(key); }
     if (pending_short_seed_.ready && (handle == pending_short_seed_.plan.long_entry
@@ -29325,16 +29325,17 @@ detail::LiveSourceHandle PineExecutionAdapter::live_source_value(
 namespace pineforge::source {
 
 detail::LiveRowIndex& PineExecutionAdapter::live_row_index() const {
-    auto* cache = adapter_lookup_index(bound_consumer(), this, run_counter_);
-    // The previous optional lookup cache can fall back. This directory must
-    // never silently replace an exact query with a Release whole-book scan.
-    if (!cache) throw std::bad_alloc();
-    auto& index = cache->live_rows;
+    auto& index = live_rows_;
     if (!index.bound_to(placement_, live_handles_)) {
-        index.rebuild_from(placement_, live_handles_);
+        // A copied adapter must not retain another owner's canonical bindings.
+        index = detail::LiveRowIndex{};
+        index.bind_origin_rebuilder(this, [](const void* owner, detail::LiveRowIndex& rows) {
+            const auto& adapter = *static_cast<const PineExecutionAdapter*>(owner);
+            for (const auto& row : adapter.cohorts_by_id_.resident_rows())
+                rows.rebuild_origins(row.second.handle.value, row.second.origins);
+        });
         index.bind_source_keys(live_by_source_key_);
-        for (const auto& row : cohorts_by_id_.resident_rows())
-            index.rebuild_origins(row.second.handle.value, row.second.origins);
+        index.rebuild_from(placement_, live_handles_);
     }
     return index;
 }
@@ -29359,11 +29360,18 @@ void PineExecutionAdapter::refresh_live_source_key(std::uint64_t key) const {
 }
 
 void PineExecutionAdapter::rebuild_live_row_index() {
-    auto& index = live_row_index();
-    index.rebuild_from(placement_, live_handles_);
-    index.clear_origins();
-    for (const auto& row : cohorts_by_id_.resident_rows())
-        index.rebuild_origins(row.second.handle.value, row.second.origins);
+    live_row_index().rebuild_from(placement_, live_handles_);
+}
+
+void PineExecutionAdapter::retire_small_live_source_keys(native_order::RequestHandle handle) {
+    // Original forward-map loop: no owning result vector for a small book.
+    for (auto at = live_by_source_key_.begin(); at != live_by_source_key_.end();) {
+        ++dense_pending_work_.retire_keys;
+        if (at->second != handle) { ++at; continue; }
+        const auto key = at->first;
+        at = live_by_source_key_.erase(at);
+        refresh_live_source_key(key);
+    }
 }
 
 } // namespace pineforge::source

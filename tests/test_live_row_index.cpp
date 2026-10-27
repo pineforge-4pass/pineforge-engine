@@ -1,6 +1,11 @@
 #include <pineforge/source/detail/live_row_index.hpp>
 #include <pineforge/source/pine_adapter.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/run_failure.hpp>
+
+#include "../src/native_execution_consumer.hpp"
+#define PINEFORGE_TEST_ALLOCATION_BYTES
+#include "global_allocation_replacement.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -19,6 +24,34 @@ using C = LiveClass;
 
 void require(bool value, const char* message) {
     if (!value) throw std::runtime_error(message);
+}
+
+// The acceptance threshold, independent of product constants so this TU also
+// compiles against I2 for the supervisor's defect-specific red run.
+constexpr std::size_t kAdaptiveThreshold = 64;
+template<class Tag, auto Member> struct PrivateAccess {
+    friend auto access(Tag) { return Member; }
+};
+struct IndexTag { friend auto access(IndexTag); };
+template struct PrivateAccess<IndexTag, &PineExecutionAdapter::live_row_index>;
+struct TableTag { friend auto access(TableTag); };
+template struct PrivateAccess<TableTag, &PineExecutionAdapter::placement_>;
+struct SequenceTag { friend auto access(SequenceTag); };
+template struct PrivateAccess<SequenceTag, &PineExecutionAdapter::live_handles_>;
+struct SourcesTag { friend auto access(SourcesTag); };
+template struct PrivateAccess<SourcesTag, &PineExecutionAdapter::live_by_source_key_>;
+struct CohortsTag { friend auto access(CohortsTag); };
+template struct PrivateAccess<CohortsTag, &PineExecutionAdapter::cohorts_by_id_>;
+
+void pad_for_oracle(PlacementTable& table, LiveHandleSequence& sequence, LiveRowIndex& index) {
+    while (sequence.size() < kAdaptiveThreshold) {
+        const H h{{"oracle-padding", 1}, 10000 + sequence.size()};
+        PlacementSnapshot row;
+        row.family = PineOrderFamily::Risk;
+        table.try_emplace(h.incarnation, std::move(row));
+        sequence.push_back(h);
+        index.insert(h);
+    }
 }
 
 // Independent spelling of the design predicates. Do not call the product's
@@ -382,6 +415,7 @@ void stream() {
         table.try_emplace(1, std::move(r));
         sequence.push_back(h);
         index.insert(h);
+        pad_for_oracle(table, sequence, index);
         table.at(1).opening = false;
         bool caught = false;
         try { (void)index.count(C::EntryOpening); }
@@ -390,6 +424,15 @@ void stream() {
                 && std::string(error.what()).find("EntryOpening") != std::string::npos;
         }
         require(caught, "oracle must name the missed class hook");
+        index.refresh(h);
+        table.at(1).bracket_origin = H{{"missed-origin", 1}, 99};
+        caught = false;
+        try { index.verify(); }
+        catch (const coded<std::logic_error>& error) {
+            caught = error.run_failure_code() == RunFailureCode::engine_invariant
+                && std::string(error.what()).find("Placed identity key") != std::string::npos;
+        }
+        require(caught, "oracle must still reject an unpublished bracket-origin fixture edit");
     }
 }
 
@@ -428,6 +471,8 @@ void edges_and_aliases() {
     }
     require(std::all_of(reached.begin(), reached.end(), [](bool r) { return r; }),
             "every index class must have a positive independent witness");
+    pad_for_oracle(table, sequence, index);
+    live = sequence.snapshot();
     // Existing raw pending-observer fixtures deliberately publish duplicates.
     sequence.push_back(live.front()); live.push_back(live.front()); index.refresh(live.front());
     compare(index, table, live);
@@ -491,6 +536,8 @@ void origin_incidence() {
     LiveHandleSequence sequence;
     const H a{{"origin", 1}, 1}, b{{"origin", 2}, 1}, c{{"origin", 1}, 2};
     sequence.push_back(a); sequence.push_back(c);
+    for (std::size_t i = 0; i != kAdaptiveThreshold; ++i)
+        sequence.push_back(H{{"origin-padding", 1}, 10000 + i});
     // No placement rows: origin incidence has no opening/family predicate.
     LiveRowIndex index;
     index.rebuild_from(table, sequence);
@@ -508,7 +555,17 @@ void origin_incidence() {
     compare_origins();
     sequence.erase_handle(a); index.erase(a); compare_origins();
     sequence.push_back(b); index.insert(b); compare_origins();
-    roster.retire_before(2); index.retire_origins_before(7, roster.base()); compare_origins();
+    roster.retire_before(2);
+    if (LiveRowIndex::oracle_enabled()) {
+        bool caught = false;
+        try { (void)index.origin_positions(7, roster); }
+        catch (const coded<std::logic_error>& error) {
+            caught = error.run_failure_code() == RunFailureCode::engine_invariant
+                && std::string(error.what()).find("OriginPositions") != std::string::npos;
+        }
+        require(caught, "oracle must still reject an unpublished retained-prefix retirement");
+    }
+    index.retire_origins_before(7, roster.base()); compare_origins();
     roster.push_back(b); index.append_origin(7, roster.size() - 1, b); compare_origins();
     sequence.push_back(b); index.refresh(b); compare_origins(); // aliases deduplicate positions
     index.rebuild_from(table, sequence); compare_origins();
@@ -645,6 +702,7 @@ void i2_predicates() {
     check(C::TerminalExplicitMarketEntry, r, false);
     if (LiveRowIndex::oracle_enabled()) {
         check(C::TerminalExplicitMarketEntry, terminal, true);
+        pad_for_oracle(table, sequence, index);
         table.at(h.incarnation).oca_type = 1; // Deliberately omit publication.
         bool caught = false;
         try { (void)index.count(C::TerminalExplicitMarketEntry); }
@@ -741,10 +799,201 @@ void i2_ordered_selections() {
             "I2 cap subtraction covers all opening families and excludes pure limits");
     compare(index, table, sequence.snapshot());
 }
+
+constexpr double kNa = std::numeric_limits<double>::quiet_NaN();
+
+class AdaptiveHost final : public PineStrategyHost {
+public:
+    AdaptiveHost(bool cache, bool small) : small_(small) {
+        PineStrategyConfig config;
+        config.initial_capital = 1e9;
+        config.pyramiding = 1000;
+        config.margin_long = config.margin_short = 0;
+        config.default_qty_type = static_cast<int>(QtyType::FIXED);
+        config.default_qty_value = 1;
+        config.process_orders_on_close = true;
+        configure_pine_strategy(config);
+        set_syminfo_timezone("UTC");
+        set_syminfo_session("24x7");
+        set_syminfo_mintick(0.25);
+        as_native_consumer(execution_consumer()).set_host_cache(cache);
+    }
+
+    void on_source_bar(const Bar&) override {
+        ++evaluations;
+        if (small_) {
+            // Real commands enter through the public host/run surface. The
+            // allocation window below isolates the index's own publication
+            // work; native command allocations are covered by the unchanged
+            // test_adapter_command_allocations bound of 8.
+            for (int i = 0; i != 4; ++i) put(i, 1 + (pine_bar_index() % 2));
+            adapter_.flush_pending_entries();
+            auto& index = (adapter_.*access(IndexTag{}))();
+            const auto handles = index.members();
+            require(handles.size() == 4, "small public book must contain four unreachable limits");
+            // Sequence membership is part of the same index infrastructure.
+            // Warm its canonical slot vector, then require no per-handle
+            // position nodes on ordinary append/erase/move operations.
+            LiveHandleSequence small_sequence;
+            for (const auto& h : handles) small_sequence.push_back(h);
+            small_sequence.move_to_tail(handles.front());
+            small_sequence.clear();
+            const auto sequence_before = global_allocation::allocations;
+            for (const auto& h : handles) small_sequence.push_back(h);
+            small_sequence.move_to_tail(handles.front());
+            for (const auto& h : handles) small_sequence.erase_handle(h);
+            index_allocations += global_allocation::allocations - sequence_before;
+            require(small_sequence.empty(), "small sequence operations must remove the real handles");
+            for (const auto& h : handles) {
+                const auto keys = index.source_keys(h);
+                const auto before = global_allocation::allocations;
+                index.insert(h);
+                index.refresh(h);
+                index.refresh_incarnation(h.incarnation);
+                for (const auto key : keys) index.refresh_source_key(key);
+                const auto count = index.count(C::EntryOpening);
+                const auto missing = index.missing_rows();
+                const auto low = index.min_price(C::EntryOpening, LivePrice::Limit);
+                const auto high = index.max_price(C::EntryOpening, LivePrice::Limit);
+                const auto ranged = index.count_in_range(C::EntryOpening, LivePrice::Limit, 1, 2);
+                const auto commanded = index.count_before_command(C::Placed,
+                    std::numeric_limits<std::uint64_t>::max());
+                const auto reserved = index.reservation_count("", 0);
+                index.verify();
+                index_allocations += global_allocation::allocations - before;
+                ++allocation_windows;
+                require(count == 4 && missing == 0 && low && high && *low == *high
+                            && ranged == 4 && commanded == 4 && reserved == 0,
+                        "small-book scalar queries must read the actual four entry rows");
+            }
+            require(index_allocations == 0, "below T: index hooks/scalar queries allocated");
+        } else {
+            // Each nine-bar cycle visits 63,64,63,32,33,31 live handles,
+            // replaces an existing id, fills one lot, cancels the remainder,
+            // and closes the lot. The 32->33 step must retain the active
+            // index; 31->63 in the next cycle must rebuild from real tables.
+            const int phase = pine_bar_index() % 9;
+            switch (phase) {
+            case 0: for (int i = 0; i != 63; ++i) put(i, 1); break;
+            case 1: put(63, 1); break;
+            case 2: put(0, 2); strategy_cancel(id(63)); break;
+            case 3: for (int i = 32; i != 63; ++i) strategy_cancel(id(i)); break;
+            case 4: put(32, 3); break;
+            case 5: strategy_cancel(id(31)); strategy_cancel(id(32)); break;
+            case 6: put(30, kNa); break;
+            case 7:
+                require(live_position_size() == 1, "one replaced market entry must fill");
+                strategy_cancel_all();
+                strategy_close_all();
+                break;
+            case 8: require(live_position_size() == 0, "the filled lot must close"); break;
+            }
+            adapter_.flush_pending_entries();
+            auto& index = (adapter_.*access(IndexTag{}))();
+            const auto& table = adapter_.*access(TableTag{});
+            const auto& sequence = adapter_.*access(SequenceTag{});
+            const std::size_t wanted[] = {63, 64, 63, 32, 33, 31};
+            if (phase < 6) require(sequence.size() == wanted[phase], "threshold witness book shape");
+            if (phase == 8) require(sequence.empty(), "completed cycle must leave no live requests");
+            // The model spells the original scans independently. This covers
+            // every public row/key/side/price/command/reservation query in
+            // both modes, including exact empty keys and missing-row rules.
+            compare(index, table, sequence.snapshot());
+            const auto& sources = adapter_.*access(SourcesTag{});
+            const auto identity_queries = [&](const LiveRowIndex& queried) {
+                for (const auto& h : sequence) {
+                    std::vector<std::uint64_t> wanted_keys;
+                    for (const auto& row : sources)
+                        if (row.second == h) wanted_keys.push_back(row.first);
+                    auto keys = queried.source_keys(h);
+                    std::sort(keys.begin(), keys.end());
+                    std::sort(wanted_keys.begin(), wanted_keys.end());
+                    require(keys == wanted_keys, "adaptive source ownership must match the forward map");
+                }
+                for (const auto& row : (adapter_.*access(CohortsTag{})).resident_rows()) {
+                    const auto& roster = row.second.origins;
+                    std::vector<std::size_t> wanted_positions;
+                    for (const auto& h : sequence) roster.append_positions_of(h, wanted_positions);
+                    std::sort(wanted_positions.rbegin(), wanted_positions.rend());
+                    wanted_positions.erase(std::unique(wanted_positions.begin(), wanted_positions.end()),
+                                           wanted_positions.end());
+                    require(queried.origin_positions(row.second.handle.value, roster) == wanted_positions,
+                            "adaptive origin positions must match current canonical rosters");
+                }
+            };
+            identity_queries(index);
+            // Record ONLY the independent probe's directory allocations.
+            // Canonical sequence snapshots above are already materialized;
+            // native commands/rows were allocated outside this window.
+            // Bytes, unlike a mode flag, prove both activation and release.
+            global_allocation::recording = true;
+            storage_probe_.rebuild_from(table, sequence);
+            const auto resident = global_allocation::live_bytes;
+            global_allocation::recording = false;
+            require((resident != 0) == (phase >= 1 && phase <= 4),
+                    "adaptive threshold/hysteresis must allocate and release real index storage");
+            if (phase >= 2 && phase <= 4) {
+                // The retained index has already crossed 64, so hysteresis
+                // keeps it active at 63/32/33. A newly bound directory over
+                // the SAME real tables starts below T and must use fallback.
+                LiveRowIndex scanned;
+                scanned.bind_source_keys(sources);
+                scanned.rebuild_from(table, sequence);
+                compare(scanned, table, sequence.snapshot());
+                identity_queries(scanned);
+            }
+        }
+    }
+
+    int evaluations = 0, allocation_windows = 0;
+    std::size_t index_allocations = 0;
+private:
+    static std::string id(int i) { return "adaptive-" + std::to_string(i); }
+    void put(int i, double limit) { strategy_entry(id(i), true, limit, kNa, 1); }
+    bool small_;
+    LiveRowIndex storage_probe_;
+};
+
+void adaptive_public_runs() {
+    std::vector<Bar> bars(27);
+    for (std::size_t i = 0; i != bars.size(); ++i)
+        bars[i] = {100, 100.5, 99.5, 100, 1, 1736121600000LL + static_cast<std::int64_t>(i) * 60000};
+    for (bool cache : {true, false}) for (bool small : {true, false}) {
+        AdaptiveHost host(cache, small);
+        // Repeat on the SAME host, so reset must drop the previous run's
+        // ownership, activation mode, source keys and origin incidence.
+        for (int replay = 0; replay != 2; ++replay) {
+            host.evaluations = host.allocation_windows = 0;
+            host.index_allocations = 0;
+            host.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
+            require(host.last_error().empty(), host.last_error().c_str());
+            require(host.evaluations == static_cast<int>(bars.size()), "adaptive run must consume every bar");
+            if (small) {
+                require(host.allocation_windows == 4 * static_cast<int>(bars.size()),
+                        "every small-book hook allocation window must execute");
+                require(host.index_allocations == 0, "small public run must allocate no index storage");
+                require(host.trade_count() == 0 && host.native_working_requests().size() == 4,
+                        "four limits below 3 cannot fill bars whose low is 99.5");
+            } else {
+                // Three identical cycles: one unit buys and sells at 100 per
+                // cycle. Other limits are <=3 and never touch [99.5,100.5].
+                require(host.trade_count() == 3, "one completed trade per adaptive cycle");
+                require(host.native_working_requests().empty(), "adaptive run must finish with an empty book");
+                for (int i = 0; i != host.trade_count(); ++i) {
+                    const auto& trade = host.get_trade(i);
+                    require(trade.entry_id == "adaptive-30" && trade.qty == 1
+                                && trade.entry_price == 100 && trade.exit_price == 100,
+                            "adaptive fills must preserve the hand-arithmetic trade");
+                }
+            }
+        }
+    }
+}
 }
 
 int main() {
     try {
+        adaptive_public_runs();
         i2_predicates(); i2_ordered_selections();
         edges_and_aliases(); origin_incidence(); stream(); return 0;
     }
