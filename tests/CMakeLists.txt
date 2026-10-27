@@ -7788,6 +7788,20 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX AND NOT PINEFORGE_ENABLE_SANITIZERS
 endif()
 # --- CR-150 perfcx-cr397-refmatrix end ---
 
+# --- CR-150 report-sink-json-sync begin ---
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(test_report_sink_json_deferred_sync test_report_sink_json_deferred_sync.cpp)
+    target_link_libraries(test_report_sink_json_deferred_sync PRIVATE pineforge)
+    target_compile_options(test_report_sink_json_deferred_sync PRIVATE -ffp-contract=off -UNDEBUG)
+    if(PINEFORGE_ENABLE_COVERAGE)
+        target_compile_options(test_report_sink_json_deferred_sync PRIVATE ${_pf_cov_test_flags})
+    endif()
+    target_link_options(test_report_sink_json_deferred_sync PRIVATE
+        "-Wl,--wrap=pwrite" "-Wl,--wrap=ftruncate"
+        "-Wl,--wrap=fdatasync" "-Wl,--wrap=fsync")
+endif()
+# --- CR-150 report-sink-json-sync end ---
+
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
         message(FATAL_ERROR "PR fast row or executable is missing: ${_pf_fast_test}")

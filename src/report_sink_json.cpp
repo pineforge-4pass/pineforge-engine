@@ -474,13 +474,19 @@ public:
         // size may include not-yet-copied bytes from this append; only expose
         // the completed prefix until the final flush.
         if (::ftruncate(fd_, static_cast<off_t>(base_ + used_)) < 0) { error = errno; return; }
+        base_ += used_;
+        used_ = 0;
+    }
+    void finish() {
+        flush();
+        if (fd_ < 0 || error || !size) return;
+        // Prepare calls this once after source acceptance. Private fragments
+        // need no per-window durability; discarded fragments never finish.
 #if defined(__APPLE__)
         if (::fsync(fd_) < 0) { error = errno; return; }
 #else
         if (::fdatasync(fd_) < 0) { error = errno; return; }
 #endif
-        base_ += used_;
-        used_ = 0;
     }
 private:
     int fd_;
@@ -778,8 +784,8 @@ void prepare(Context& context) {
     context.result.diagnostics.count_e = context.result.counts[0];
     context.stage = PF_SINK_JSON_FRAGMENT;
     context.category = PF_SINK_JSON_WRITE;
-    context.equity.flush();
-    context.trades.flush();
+    context.equity.finish();
+    context.trades.finish();
     context.result.equity_json_bytes = context.equity.size;
     context.result.trades_json_bytes = context.trades.size;
     const auto digest = context.equity.hash.hex_digest();
