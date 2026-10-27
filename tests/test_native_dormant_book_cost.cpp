@@ -132,7 +132,7 @@ namespace {
 using namespace pineforge;
 namespace no = pineforge::native_order;
 constexpr std::size_t resident = 4096; // kBookMax, unchanged.
-constexpr std::size_t bar_count = 48; // Forty placement bars plus eight late bars.
+constexpr std::size_t bar_count = 56; // Forty placement bars, eight settling bars, eight late bars.
 constexpr std::int64_t start = 1736121600000LL;
 
 void require(bool ok, const char* why) {
