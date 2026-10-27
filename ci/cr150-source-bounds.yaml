@@ -74,7 +74,7 @@ scan:
   generated_files:
     - "tutorial/**/generated*.cpp"
 ceilings:
-  unreviewed: 1264
+  unreviewed: 1266
   pending-flat-memory: 188
 owners:
   - {name: "generated-cpp", globs: ["tutorial/**"]}
@@ -1360,7 +1360,9 @@ entries:
   - {id: "U1313", file: "include/pineforge/trade_ledger.hpp", symbol: "exit_comment_at", ops: ["decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 152}
   - {id: "U1314", file: "include/pineforge/trade_ledger.hpp", symbol: "exit_id_at", ops: ["decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 153}
   - {id: "U1315", file: "include/pineforge/trade_ledger.hpp", symbol: "index_", ops: ["assign"], container: "unresolved by the index: index_ = ...", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 75}
+  - {id: "U1511", file: "src/command_scratch_cache.cpp", symbol: "budget_", ops: ["grow"], container: "unresolved by the index: budget_.reserve(...)", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 94}
   - {id: "U1316", file: "src/command_scratch_cache.cpp", symbol: "reset", ops: ["alloc"], container: "unresolved by the index: new ", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 25}
+  - {id: "U1512", file: "src/command_scratch_cache.cpp", symbol: "resident_", ops: ["assign"], container: "unresolved by the index: resident_ = ...", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 126}
   - {id: "U1317", file: "src/command_scratch_production.cpp", symbol: "budget", ops: ["alloc"], container: "unresolved by the index: make_shared", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 390}
   - {id: "U1318", file: "src/command_scratch_production.cpp", symbol: "budget_", ops: ["grow"], container: "unresolved by the index: budget_.reserve(...)", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 175}
   - {id: "U1319", file: "src/command_scratch_production.cpp", symbol: "make_unique", ops: ["alloc"], container: "unresolved by the index: make_unique", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 397}

@@ -12513,11 +12513,34 @@
    "symbol": "reset",
    "scope": [
     "namespace pineforge :: detail #1",
-    "CachedScratchBacking :: CachedScratchBacking ( std :: unique_ptr < ScratchBacking > inner , ScratchIoObserver observer ) : ScratchBacking ( inner ? inner -> kind ( ) : ScratchBackingKind :: disk , inner ? inner -> page_size ( ) : 0 , observer ) , inner_ ( std :: move ( inner ) ) , slot_count_ ( page_size ( ) > = kMinPageBytes && page_size ( ) < = kCacheBytes ? kCacheBytes / page_size ( ) : 0 ) #1",
+    "CachedScratchBacking :: CachedScratchBacking ( std :: unique_ptr < ScratchBacking > inner , ScratchIoObserver observer , std :: size_t resident_bytes , std :: shared_ptr < CommandScratchByteBudget > budget ) : ScratchBacking ( inner ? inner -> kind ( ) : ScratchBackingKind :: disk , inner ? inner -> page_size ( ) : 0 , observer ) , inner_ ( std :: move ( inner ) ) , slot_count_ ( page_size ( ) > = kMinPageBytes && page_size ( ) < = kCacheBytes ? kCacheBytes / page_size ( ) : 0 ) , resident_pages_ ( slot_count_ ! = 0 ? std :: min ( resident_bytes , kCacheBytes ) / page_size ( ) : 0 ) , resident_ ( resident_pages_ ! = 0 && inner_ -> page_count ( ) = = 0 ) , budget_ ( std :: move ( budget ) ) #1",
     "if ( slot_count_ ! = 0 ) #1"
    ],
    "cls": "alloc",
    "spelling": "new",
+   "ordinal": 1
+  },
+  {
+   "file": "src/command_scratch_cache.cpp",
+   "symbol": "budget_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "ScratchStatus CachedScratchBacking :: do_write_page ( ScratchPageId id , ScratchBytes source ) noexcept #1"
+   ],
+   "cls": "grow",
+   "spelling": "budget_ . reserve ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/command_scratch_cache.cpp",
+   "symbol": "resident_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "ScratchStatus CachedScratchBacking :: write ( ScratchPageId id , ScratchBytes source ) noexcept #1",
+    "if ( resident_ ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "resident_ = . . .",
    "ordinal": 1
   },
   {
@@ -12541,7 +12564,7 @@
     "namespace pineforge :: detail #1",
     "namespace #2",
     "class CommandScratchFile final : public ScratchBacking #1",
-    "public : CommandScratchFile ( std :: size_t size , ScratchIoObserver observer , CommandScratchByteCap budget ) : ScratchBacking ( ScratchBackingKind :: disk , size , observer ) , budget_ ( std :: move ( budget ) ) #1"
+    "public : CommandScratchFile ( std :: size_t size , ScratchIoObserver observer ) : ScratchBacking ( ScratchBackingKind :: disk , size , observer ) #1"
    ],
    "cls": "decl",
    "spelling": "std :: string",
@@ -12554,7 +12577,7 @@
     "namespace pineforge :: detail #1",
     "namespace #2",
     "class CommandScratchFile final : public ScratchBacking #1",
-    "public : CommandScratchFile ( std :: size_t size , ScratchIoObserver observer , CommandScratchByteCap budget ) : ScratchBacking ( ScratchBackingKind :: disk , size , observer ) , budget_ ( std :: move ( budget ) ) #1"
+    "public : CommandScratchFile ( std :: size_t size , ScratchIoObserver observer ) : ScratchBacking ( ScratchBackingKind :: disk , size , observer ) #1"
    ],
    "cls": "decl",
    "spelling": "std :: string",
@@ -12567,7 +12590,7 @@
     "namespace pineforge :: detail #1",
     "namespace #2",
     "class CommandScratchFile final : public ScratchBacking #1",
-    "public : CommandScratchFile ( std :: size_t size , ScratchIoObserver observer , CommandScratchByteCap budget ) : ScratchBacking ( ScratchBackingKind :: disk , size , observer ) , budget_ ( std :: move ( budget ) ) #1"
+    "public : CommandScratchFile ( std :: size_t size , ScratchIoObserver observer ) : ScratchBacking ( ScratchBackingKind :: disk , size , observer ) #1"
    ],
    "cls": "append",
    "spelling": "path + = . . .",
@@ -12580,25 +12603,11 @@
     "namespace pineforge :: detail #1",
     "namespace #2",
     "class CommandScratchFile final : public ScratchBacking #1",
-    "public : CommandScratchFile ( std :: size_t size , ScratchIoObserver observer , CommandScratchByteCap budget ) : ScratchBacking ( ScratchBackingKind :: disk , size , observer ) , budget_ ( std :: move ( budget ) ) #1"
+    "public : CommandScratchFile ( std :: size_t size , ScratchIoObserver observer ) : ScratchBacking ( ScratchBackingKind :: disk , size , observer ) #1"
    ],
    "cls": "append",
    "spelling": "path + = . . .",
    "ordinal": 2
-  },
-  {
-   "file": "src/command_scratch_production.cpp",
-   "symbol": "budget_",
-   "scope": [
-    "namespace pineforge :: detail #1",
-    "namespace #2",
-    "class CommandScratchFile final : public ScratchBacking #1",
-    "ScratchStatus do_write_page ( ScratchPageId id , ScratchBytes source ) noexcept override #1",
-    "if ( id > = extent_ ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "budget_ . reserve ( . . . )",
-   "ordinal": 1
   },
   {
    "file": "src/command_scratch_production.cpp",
@@ -12616,7 +12625,7 @@
    "symbol": "budget",
    "scope": [
     "namespace pineforge :: detail #1",
-    "std :: unique_ptr < pineforge :: detail :: ScratchBacking > make_command_scratch_backing ( std :: size_t page_size ) #1",
+    "std :: unique_ptr < pineforge :: detail :: ScratchBacking > make_command_scratch_backing ( std :: size_t page_size , std :: size_t resident_bytes ) #1",
     "if ( ! budget && default_cap ! = 0 ) #1",
     "if ( ! budget || budget -> limit ! = default_cap ) #1"
    ],
@@ -12629,7 +12638,7 @@
    "symbol": "make_unique",
    "scope": [
     "namespace pineforge :: detail #1",
-    "std :: unique_ptr < pineforge :: detail :: ScratchBacking > make_command_scratch_backing ( std :: size_t page_size ) #1"
+    "std :: unique_ptr < pineforge :: detail :: ScratchBacking > make_command_scratch_backing ( std :: size_t page_size , std :: size_t resident_bytes ) #1"
    ],
    "cls": "alloc",
    "spelling": "make_unique",
@@ -12640,7 +12649,7 @@
    "symbol": "make_unique",
    "scope": [
     "namespace pineforge :: detail #1",
-    "std :: unique_ptr < pineforge :: detail :: ScratchBacking > make_command_scratch_backing ( std :: size_t page_size ) #1"
+    "std :: unique_ptr < pineforge :: detail :: ScratchBacking > make_command_scratch_backing ( std :: size_t page_size , std :: size_t resident_bytes ) #1"
    ],
    "cls": "alloc",
    "spelling": "make_unique",
@@ -12651,7 +12660,7 @@
    "symbol": "make_unique",
    "scope": [
     "namespace pineforge :: detail #1",
-    "std :: unique_ptr < pineforge :: detail :: ScratchBacking > make_command_scratch_backing ( std :: size_t page_size ) #1"
+    "std :: unique_ptr < pineforge :: detail :: ScratchBacking > make_command_scratch_backing ( std :: size_t page_size , std :: size_t resident_bytes ) #1"
    ],
    "cls": "alloc",
    "spelling": "make_unique",
@@ -12662,7 +12671,7 @@
    "symbol": "make_unique",
    "scope": [
     "namespace pineforge :: detail #1",
-    "std :: unique_ptr < pineforge :: detail :: ScratchBacking > make_command_scratch_backing ( std :: size_t page_size ) #1"
+    "std :: unique_ptr < pineforge :: detail :: ScratchBacking > make_command_scratch_backing ( std :: size_t page_size , std :: size_t resident_bytes ) #1"
    ],
    "cls": "alloc",
    "spelling": "make_unique",
