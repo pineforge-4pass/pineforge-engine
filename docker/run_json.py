@@ -2950,86 +2950,6 @@ class ScratchTablesC(ctypes.Structure):
         ("K_q", "B_q", "K_e", "B_e", "K_c", "B_c", "U", "B_U", "V", "B_V", "R")]
 
 
-# Mirror of include/pineforge/detail/scratch_defaults.hpp. The object header
-# and key are 16 bytes, ScratchStore cells are 64 bytes with 56 payload bytes,
-# the default object chunk is 1024 bytes, and the arena directory is four
-# bytes per claimed 1 MiB chunk. Directory bytes remain separate from the
-# per-object physical charge.
-OBJECT_HEADER_BYTES = 16
-OBJECT_KEY_BYTES = 16
-OBJECT_CELL_BYTES = 64
-OBJECT_CELL_PAYLOAD_BYTES = 56
-OBJECT_CHUNK_BYTES = 1024
-OBJECT_INLINE_PAYLOAD_BYTES = 40
-OBJECT_INDEX_SHARE_BYTES = 40
-OBJECT_SMALL_BYTES = 168
-OBJECT_ARENA_CHUNK_BYTES = 1048576
-OBJECT_ARENA_DIRECTORY_BYTES_PER_CHUNK = 4
-OBJECT_UINT64_MAX = 2 ** 64 - 1
-
-
-def _object_saturating_add(left: int, right: int) -> int:
-    return min(OBJECT_UINT64_MAX, left + right)
-
-
-def _object_saturating_multiply(left: int, right: int) -> int:
-    if left != 0 and right > OBJECT_UINT64_MAX // left:
-        return OBJECT_UINT64_MAX
-    return left * right
-
-
-def _object_saturating_ceil_div(value: int, divisor: int) -> int:
-    quotient, remainder = divmod(value, divisor)
-    return quotient + (1 if remainder else 0)
-
-
-def object_physical_bytes(payload_bytes: int) -> int:
-    """Return the backing charge for one default-shape object record."""
-    if payload_bytes <= OBJECT_INLINE_PAYLOAD_BYTES:
-        return OBJECT_SMALL_BYTES
-    if payload_bytes > OBJECT_UINT64_MAX - OBJECT_HEADER_BYTES:
-        return OBJECT_UINT64_MAX
-    chunks = 1 + (payload_bytes - 1) // OBJECT_CHUNK_BYTES
-    first_payload = min(payload_bytes, OBJECT_CHUNK_BYTES)
-    first_value_cells = _object_saturating_ceil_div(
-        first_payload + OBJECT_HEADER_BYTES, OBJECT_CELL_PAYLOAD_BYTES)
-    remaining = payload_bytes - first_payload
-    full_following_chunks, trailing_payload = divmod(
-        remaining, OBJECT_CHUNK_BYTES)
-    following_value_cells = (
-        _object_saturating_multiply(
-            full_following_chunks,
-            _object_saturating_ceil_div(
-                OBJECT_CHUNK_BYTES, OBJECT_CELL_PAYLOAD_BYTES))
-        + _object_saturating_ceil_div(
-            trailing_payload, OBJECT_CELL_PAYLOAD_BYTES))
-    value_cells = min(OBJECT_UINT64_MAX,
-                      first_value_cells + following_value_cells)
-    value_bytes = _object_saturating_multiply(value_cells, OBJECT_CELL_BYTES)
-    key_bytes = _object_saturating_multiply(chunks, OBJECT_CELL_BYTES)
-    return _object_saturating_add(
-        _object_saturating_add(key_bytes, value_bytes),
-        OBJECT_INDEX_SHARE_BYTES)
-
-
-def object_store_reserve_bytes(
-        bars: int, objects_per_execution: int, record_bytes: int) -> int:
-    """Reserve bars*k object records, saturating at the uint64 maximum.
-
-    objects_per_execution is per script execution: a bar close and each
-    calc_on_order_fills recalculation count separately. The maximum integer is
-    the unbounded sentinel, which remains UNCERTIFIED for the host.
-    """
-    if bars == 0 or objects_per_execution == 0:
-        return 0
-    if objects_per_execution == OBJECT_UINT64_MAX:
-        return OBJECT_UINT64_MAX
-    return _object_saturating_multiply(
-        _object_saturating_multiply(
-            bars, objects_per_execution),
-        object_physical_bytes(record_bytes))
-
-
 def _bind_scratch_tables(lib) -> None:
     if hasattr(lib, "strategy_set_scratch_tables_v1"):
         lib.strategy_set_scratch_tables_v1.argtypes = [
@@ -7426,6 +7346,86 @@ def _discard_stdout() -> None:
         os.dup2(devnull, fd)
     finally:
         os.close(devnull)
+
+
+# Mirror of include/pineforge/detail/scratch_defaults.hpp. The object header
+# and key are 16 bytes, ScratchStore cells are 64 bytes with 56 payload bytes,
+# the default object chunk is 1024 bytes, and the arena directory is four
+# bytes per claimed 1 MiB chunk. Directory bytes remain separate from the
+# per-object physical charge.
+OBJECT_HEADER_BYTES = 16
+OBJECT_KEY_BYTES = 16
+OBJECT_CELL_BYTES = 64
+OBJECT_CELL_PAYLOAD_BYTES = 56
+OBJECT_CHUNK_BYTES = 1024
+OBJECT_INLINE_PAYLOAD_BYTES = 40
+OBJECT_INDEX_SHARE_BYTES = 40
+OBJECT_SMALL_BYTES = 168
+OBJECT_ARENA_CHUNK_BYTES = 1048576
+OBJECT_ARENA_DIRECTORY_BYTES_PER_CHUNK = 4
+OBJECT_UINT64_MAX = 2 ** 64 - 1
+
+
+def _object_saturating_add(left: int, right: int) -> int:
+    return min(OBJECT_UINT64_MAX, left + right)
+
+
+def _object_saturating_multiply(left: int, right: int) -> int:
+    if left != 0 and right > OBJECT_UINT64_MAX // left:
+        return OBJECT_UINT64_MAX
+    return left * right
+
+
+def _object_saturating_ceil_div(value: int, divisor: int) -> int:
+    quotient, remainder = divmod(value, divisor)
+    return quotient + (1 if remainder else 0)
+
+
+def object_physical_bytes(payload_bytes: int) -> int:
+    """Return the backing charge for one default-shape object record."""
+    if payload_bytes <= OBJECT_INLINE_PAYLOAD_BYTES:
+        return OBJECT_SMALL_BYTES
+    if payload_bytes > OBJECT_UINT64_MAX - OBJECT_HEADER_BYTES:
+        return OBJECT_UINT64_MAX
+    chunks = 1 + (payload_bytes - 1) // OBJECT_CHUNK_BYTES
+    first_payload = min(payload_bytes, OBJECT_CHUNK_BYTES)
+    first_value_cells = _object_saturating_ceil_div(
+        first_payload + OBJECT_HEADER_BYTES, OBJECT_CELL_PAYLOAD_BYTES)
+    remaining = payload_bytes - first_payload
+    full_following_chunks, trailing_payload = divmod(
+        remaining, OBJECT_CHUNK_BYTES)
+    following_value_cells = (
+        _object_saturating_multiply(
+            full_following_chunks,
+            _object_saturating_ceil_div(
+                OBJECT_CHUNK_BYTES, OBJECT_CELL_PAYLOAD_BYTES))
+        + _object_saturating_ceil_div(
+            trailing_payload, OBJECT_CELL_PAYLOAD_BYTES))
+    value_cells = min(OBJECT_UINT64_MAX,
+                      first_value_cells + following_value_cells)
+    value_bytes = _object_saturating_multiply(value_cells, OBJECT_CELL_BYTES)
+    key_bytes = _object_saturating_multiply(chunks, OBJECT_CELL_BYTES)
+    return _object_saturating_add(
+        _object_saturating_add(key_bytes, value_bytes),
+        OBJECT_INDEX_SHARE_BYTES)
+
+
+def object_store_reserve_bytes(
+        bars: int, objects_per_execution: int, record_bytes: int) -> int:
+    """Reserve bars*k object records, saturating at the uint64 maximum.
+
+    objects_per_execution is per script execution: a bar close and each
+    calc_on_order_fills recalculation count separately. The maximum integer is
+    the unbounded sentinel, which remains UNCERTIFIED for the host.
+    """
+    if bars == 0 or objects_per_execution == 0:
+        return 0
+    if objects_per_execution == OBJECT_UINT64_MAX:
+        return OBJECT_UINT64_MAX
+    return _object_saturating_multiply(
+        _object_saturating_multiply(
+            bars, objects_per_execution),
+        object_physical_bytes(record_bytes))
 
 
 if __name__ == "__main__":
