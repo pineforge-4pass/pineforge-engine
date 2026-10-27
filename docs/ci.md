@@ -76,7 +76,7 @@ These light, secret-free jobs need no VM-only tools, mounts or caches.
 Local reusable calls cannot mix PR and GKE jobs. A full post run schedules 24 GKE jobs: amd64 32/16/8 CPU labels carry 8/7/7 jobs and arm64 16 CPU carries 2; each label's cap is 8.
 
 The manual `release-ruleset-probe.yml` workflow runs `authz` on
-hosted `ubuntu-24.04` and `probe` on `["self-hosted","pf-gcp-post"]`.
+hosted `ubuntu-24.04` and `probe` on `gke-protected` with `gkp-2cpu-4gb-amd64`.
 
 `docs.yml` retains the PR build name and `.github/**` exclusion.
 `docs-post.yml` builds and deploys on main pushes and manual dispatch.
@@ -1647,7 +1647,7 @@ runs, and this page does not claim either target as met.
 
 ## Runners and time limits
 
-Credentialed work retains its VM pins; secret-free post Linux jobs run directly in GKE runner pods carrying the engine toolchain image and sudo.
+Credentialed work other than the ruleset probe retains its VM pins; secret-free post Linux jobs run directly in GKE runner pods carrying the engine toolchain image and sudo.
 The four amd64 post legs, arm64 cells, preflight, parity and native verification use `gke-runners`; their aggregates use the light image.
 The native matrix is exactly `1..4` with `--ctest-shard I/4`; live sanitizers are unsharded. Each runner label remains a literal, checked per job:
 
@@ -1667,7 +1667,7 @@ refuses all PR events. Reusable workflows inherit their caller's event.
 follow local calls to a fixed point, refuse mixed event classes and require
 literal VM arrays or exact GKE group/label mappings outside hosted pins; job conditions cannot excuse routing.
 Fork PRs on hosted runners run without our secrets, so the VM-only fork-refusal hook is not needed.
-GKE jobs carry no deployment secrets, id-token permissions or environment; PR-reachable workflows cannot name GKE routing. GKE jobs start only from ci-post.yml, corpus-parity.yml and native-live.yml at refs/heads/main (the runner group lists those workflow refs); a dispatch from another ref queues without a runner.
+Jobs in `gke-runners` carry no deployment secrets, id-token permissions or environment; PR-reachable workflows cannot name GKE routing. `gke-runners` jobs start only from ci-post.yml, corpus-parity.yml and native-live.yml at refs/heads/main (the runner group lists those workflow refs); a dispatch from another ref queues without a runner. The `gke-protected` group admits exactly `release.yml@refs/heads/main`, `promote-baseline.yml@refs/heads/main`, `docs-post.yml@refs/heads/main` and `release-ruleset-probe.yml@refs/heads/main`; today only the `probe` job uses it.
 Rollback may restore an earlier GCP fleet pin; paid larger-runner labels remain refused.
 
 The four full build checks are `build (ubuntu-24.04, Release)`,
@@ -1685,7 +1685,7 @@ Release and promotion use the isolated release fleet:
 `release`, `notify-hub`, Linux x64 `prebuilt` and baseline `promote` use
 `["self-hosted","pf-gcp-main"]`.
 The release ruleset probe runs secret-free `authz` on hosted `ubuntu-24.04` and
-`probe` on `["self-hosted","pf-gcp-post"]`.
+`probe` on `gke-protected` with `gkp-2cpu-4gb-amd64`.
 Release's Linux arm64 artifact cell keeps its hosted `ubuntu-22.04-arm` pin;
 1.8.0 has no macOS test or artifact cells, and
 promotion runs on a push to `main` plus manual dispatch from `main`.
@@ -1919,10 +1919,10 @@ Dispatch **Release ruleset probe** (`release-ruleset-probe.yml`) once from
 `main` to check actual ruleset visibility with the same App token mint as
 `release.yml`. The workflow file must be on the default branch, and the run
 must use `main`'s copy.
-The credentialed probe job runs on `["self-hosted","pf-gcp-post"]`, with
+The credentialed probe job runs on `gke-protected` with `gkp-2cpu-4gb-amd64`, with
 secret-free `authz` on hosted `ubuntu-24.04`.
-`pf-gcp-main` admits only allowlisted workflows (an org runner-group restriction),
-so the one-time probe uses `pf-gcp-post`.
+`gke-protected` admits exactly the four workflow refs listed above at `refs/heads/main`,
+and today only the read-only probe uses it.
 The dispatch must run from `main`; the workflow itself refuses any other ref
 before minting the App token or checking out repository code.
 It runs `python3 scripts/ci_release_gate.py rulesets-probe --repo OWNER/REPO`,
