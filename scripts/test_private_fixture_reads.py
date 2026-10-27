@@ -34,6 +34,8 @@ KERNEL_SWEEP = REPO / 'scripts' / 'check_kernel_python_private_reads.py'
 PY = sys.executable
 
 REMOVED_EXAMPLE = 'tests/fixtures/whole_lot_tie'
+EQUIVALENCE_PARENT = 'native_live_equivalence_e2e'
+EQUIVALENCE_PROBE = 'ta-rsi14-cross-50-01'
 
 # ---- the audit-hook trace the kernel sweep's exemptions must earn ----------
 # scripts/check_kernel_python_private_reads.py exempts a row when the absent
@@ -297,6 +299,38 @@ class PrivateFixtureReadsControls(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertIn('unpinned rows naming removed data: 0', result.stdout)
         self.assertIn('skip markers not naming a removed file: 0', result.stdout)
+
+    def test_missing_equivalence_probe_registration_is_caught(self):
+        probe = EQUIVALENCE_PROBE
+        child = f'{EQUIVALENCE_PARENT}_{probe}'
+        self.tree.edit('runner/CMakeLists.txt', f'        {probe}\n', '')
+        result = run_sweep(self.tree.root)
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+        self.assertIn(f'{child} is pinned but no registration', result.stdout)
+
+    def test_driver_probe_without_registration_is_caught(self):
+        probe = 'unregistered-equivalence-probe-01'
+        child = f'{EQUIVALENCE_PARENT}_{probe}'
+        driver = self.tree.root / 'tests' / 'native_live_equivalence_e2e.py'
+        original = driver.read_text()
+        self.assertIn('PROBES = {\n', original)
+        driver.write_text(original.replace(
+            'PROBES = {\n',
+            f'PROBES = {{\n    "{probe}": {{"market"}},\n',
+            1))
+        result = run_sweep(self.tree.root)
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+        self.assertIn(f'{child} is pinned but no registration', result.stdout)
+
+    def test_duplicate_driver_probe_is_rejected(self):
+        driver = self.tree.root / 'tests' / 'native_live_equivalence_e2e.py'
+        original = driver.read_text()
+        line = f'    "{EQUIVALENCE_PROBE}": {{"market"}},\n'
+        self.assertEqual(1, original.count(line))
+        driver.write_text(original.replace(line, line + line, 1))
+        result = run_sweep(self.tree.root)
+        self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+        self.assertIn('distinct probe slugs', result.stdout + result.stderr)
 
     # control 1: an unpinned multi-line add_test( NAME ... row naming removed
     # data
