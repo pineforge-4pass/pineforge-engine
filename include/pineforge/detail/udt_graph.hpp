@@ -28,8 +28,8 @@
 //
 // This module has no destructor-driven release. close() and collect() are
 // ordinary begin() operations using caller handle slots; call them from
-// non-destructor code. Any future RAII wrapper whose destructor calls drop
-// or close must instead use the Store's cleanup slot (begin_cleanup()).
+// non-destructor code. A future RAII wrapper that releases graph state in its
+// destructor must use the Store's cleanup slot, which takes no caller handle.
 //
 // After a graph call fails inside its joined scope, the only valid next
 // operation is rollback of the outer scope. copy_deep() can leave copy/work

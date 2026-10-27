@@ -74,7 +74,7 @@ scan:
   generated_files:
     - "tutorial/**/generated*.cpp"
 ceilings:
-  unreviewed: 1264
+  unreviewed: 1265
   pending-flat-memory: 188
 owners:
   - {name: "generated-cpp", globs: ["tutorial/**"]}
@@ -1542,3 +1542,4 @@ entries:
   - {id: "U1499", file: "src/native_order.cpp", symbol: "held_", ops: ["assign"], container: "unresolved by the index: held_ = ...", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 2600}
   - {id: "U1500", file: "src/source/pine_adapter.cpp", symbol: "cohorts", ops: ["decl", "grow"], container: "std::vector<const CohortRow*>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 8761}
   - {id: "U1501", file: "src/ta_misc.cpp", symbol: "held_", ops: ["assign"], container: "unresolved by the index: held_ = ...", owner: "ta-series", phase: "unclassified", state: "unreviewed", line: 602}
+  - {id: "U1511", file: "src/detail/udt_graph.cpp", symbol: "store_", ops: ["grow"], container: "unresolved by the index: store_.resize(...)", owner: "engine-core", phase: "unclassified", state: "unreviewed", note: "Three Store-backed node resizes in resize_edges and resize_payload; object_bytes checks address-space overflow, but no declared fixed input or supported own-size guard bounds the requested record size.", line: 259}
