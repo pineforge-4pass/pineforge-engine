@@ -1,4 +1,4 @@
-# Source allocation-bound gate: re-emit (reading file for the reviewer)
+# CR-150/C4 source gate: re-emit (reading file for the reviewer)
 
 ## Top block
 

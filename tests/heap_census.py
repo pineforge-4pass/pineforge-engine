@@ -444,7 +444,7 @@ def corpus_worker(probe: Path, bars_limit: int, output: Path) -> int:
 
 
 def _markdown(report: dict) -> str:
-    lines = ["# Measured heap census", "", f"Status: **{report['status']}**.", "",
+    lines = ["# CR-150 L0B measured heap census", "", f"Status: **{report['status']}**.", "",
              f"Engine HEAD: `{report['head']}`. Schema: `{SCHEMA}`.", "",
              "Live Massif requested bytes at native_return; allocator overhead and RSS are separate.",
              "Every positive allocation-site delta is listed in census.json. Unknown sites belong to L19j.", "",

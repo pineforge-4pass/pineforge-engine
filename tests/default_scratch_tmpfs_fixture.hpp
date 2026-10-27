@@ -455,7 +455,7 @@ inline void run(Host& host) {
     try {
         host.run(bars.data(), static_cast<int>(bars.size()));
     } catch (const std::exception& error) {
-        pineforge::note_run_failure(host, "Scratch run boundary", error);
+        pineforge::note_run_failure(host, "S4E scratch run boundary", error);
     }
 }
 
