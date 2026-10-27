@@ -41,7 +41,7 @@ matched exits 1.
 The list() subcommands the two files use are modelled, and the model is
 printed as a table (subcommand, uses, modelled). APPEND and REMOVE_ITEM edit
 the tracked list; SORT orders a tracked list (default ascending or ORDER
-DESCENDING) and refuses an input the walk never saw built. The exact source-tree
+DESCENDING) and refuses an input the walk never saw built. The exact CR-150
 lane glob is tracked, including when empty. LENGTH writes the tracked length
 into its out-var; GET, SUBLIST and
 POP_FRONT write the element(s) they select, so a value a row gets through them
