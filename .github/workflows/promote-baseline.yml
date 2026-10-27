@@ -109,7 +109,7 @@ permissions:
 jobs:
   promote-guard:
     name: promote-guard
-    runs-on: ubuntu-latest
+    runs-on: gke-2cpu-4gb-amd64
     # Resolution needs read access in private repos; no secrets or OIDC here.
     permissions:
       pull-requests: read

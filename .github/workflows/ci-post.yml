@@ -42,7 +42,7 @@ jobs:
   authz:
     name: authz
     # Fleet routing is fixed for this workflow; releases use pf-gcp-main.
-    runs-on: ubuntu-24.04
+    runs-on: gke-2cpu-4gb-amd64
     permissions: {}
     # No timeout-minutes: the owner's no-time-limits rule (check-no-time-limits refuses new ones).
     steps:
@@ -108,7 +108,7 @@ jobs:
   # builds the site as before. Classification uses the light pool class.
   changes:
     needs: [authz]
-    runs-on: ubuntu-24.04
+    runs-on: gke-2cpu-4gb-amd64
     permissions:
       contents: read
     env:
@@ -448,7 +448,7 @@ jobs:
     name: build (ubuntu-24.04, Release)
     needs: [authz, changes, build]
     if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
-    runs-on: ubuntu-24.04
+    runs-on: gke-2cpu-4gb-amd64
     steps:
       - name: Refuse an unauthorised run before anything else
         if: ${{ needs.authz.result != 'success' }}
@@ -468,7 +468,7 @@ jobs:
     name: build (ubuntu-24.04, Debug)
     needs: [authz, changes, build-debug]
     if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
-    runs-on: ubuntu-24.04
+    runs-on: gke-2cpu-4gb-amd64
     steps:
       - name: Refuse an unauthorised run before anything else
         if: ${{ needs.authz.result != 'success' }}
@@ -673,7 +673,7 @@ jobs:
     name: sanitizers
     needs: [authz, changes, sanitizers]
     if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
-    runs-on: ubuntu-24.04
+    runs-on: gke-2cpu-4gb-amd64
     steps:
       - name: Refuse an unauthorised run before anything else
         if: ${{ needs.authz.result != 'success' }}
@@ -779,7 +779,7 @@ jobs:
     name: kernel-only
     needs: [authz, changes, kernel-only]
     if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
-    runs-on: ubuntu-24.04
+    runs-on: gke-2cpu-4gb-amd64
     steps:
       - name: Refuse an unauthorised run before anything else
         if: ${{ needs.authz.result != 'success' }}
@@ -829,7 +829,7 @@ jobs:
     needs: [authz, changes, preflight, build, build-debug, build-release-gate, build-debug-gate, build-arm, sanitizers, sanitizers-gate, native-live, kernel-only, kernel-only-gate, corpus-parity-subset, preflight-slow, corpus-parity]
     if: always()
     # The aggregate runs inline Python and shell on the light pool class.
-    runs-on: ubuntu-24.04
+    runs-on: gke-2cpu-4gb-amd64
     permissions:
       contents: read
     env:
