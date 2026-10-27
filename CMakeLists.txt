@@ -164,7 +164,7 @@ set(PINEFORGE_KERNEL_SOURCES src/array.cpp
     src/selected_window_plan.cpp
     src/metrics_spill_curve.cpp
     src/report_scratch.cpp
-    src/detail/o1_store.cpp
+    src/detail/o1_store.cpp src/detail/udt_graph.cpp
     src/scratch_arena.cpp
     src/detail/matrix_store.cpp
     src/script_store.cpp)
