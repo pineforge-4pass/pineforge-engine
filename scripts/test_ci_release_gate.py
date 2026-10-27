@@ -1992,9 +1992,10 @@ class RulesetsProbeTests(unittest.TestCase):
     def test_probe_dispatch_branch_and_fleets_are_documented(self):
         docs = (ROOT / "docs/ci.md").read_text()
         requirements = (
-            "FLEET-POST=A keeps large verification jobs split at the file boundary:\n"
-            'PR build/preflight and parity subset use `["self-hosted","pf-gcp-pr"]`; post-merge\n'
-            'verification uses `["self-hosted","pf-gcp-post"]`. No job routes by event.',
+            'PR build/preflight and parity subset use `["self-hosted","pf-gcp-pr"]`;\n'
+            'post preflight/parity and credentialed docs use `["self-hosted","pf-gcp-post"]`.\n'
+            'Post Release/Debug/kernel and native shards use `pf-linux-x64-16`; post sanitizers\n'
+            'use `pf-linux-x64-32`; native-live sanitizers use `pf-linux-x64-64`. No job routes by event.',
             "The manual `release-ruleset-probe.yml` workflow runs `authz` on\n"
             'hosted `ubuntu-24.04` and `probe` on `["self-hosted","pf-gcp-post"]`.',
             "Release and promotion use the isolated release fleet:\n"
@@ -2300,47 +2301,82 @@ class WorkflowPinTests(unittest.TestCase):
     def workflow(self):
         return (ROOT / ".github/workflows/release.yml").read_text()
 
-    def test_ci_post_required_build_jobs_match_workflow_matrices(self):
-        """Tie the implementation's new name tuple and fixtures to both real matrices."""
-        jobs = _jobs((ROOT / ".github/workflows/ci-post.yml").read_text())
+    def ci_post_build_names(self, jobs):
+        """Derive release checks from complete shard matrices and the arm matrix."""
         self.assertNotIn("build-macos", jobs, "post-merge verification must be Linux-only")
         expanded = []
-        for job_id, axis in (("build", "platform.os"), ("build-arm", None)):
-            with self.subTest(job=job_id):
-                self.assertIn(job_id, jobs, "both Linux architectures must have a build job")
-                body = _without_comments(jobs[job_id])
-                matrix = re.search(
-                    r"(?ms)^      matrix:\n(.*?)(?=^ {0,6}\S|\Z)", body)
-                self.assertIsNotNone(matrix, "the build matrix must be readable")
-                axes = re.findall(r"(?m)^        (\w+):", matrix[1])
-                expected_axes = [axis.split(".")[0], "build_type"] if axis else ["build_type"]
-                self.assertCountEqual(axes, expected_axes,
-                                      "new axes/include/exclude need a gate review")
-                types = re.search(r"(?m)^        build_type: \[([^\n]+)\]$", matrix[1])
-                self.assertIsNotNone(types, "the build types must be explicit")
-                build_types = [value.strip() for value in types[1].split(",")]
-                if axis:
-                    platforms = re.findall(r"(?m)^          - os: (\S+)$", matrix[1])
-                else:
-                    runner = re.search(
-                        r"(?m)^    runs-on: (ubuntu-[0-9]{2}\.[0-9]{2}-arm)$", body)
-                    self.assertIsNotNone(runner, "arm64 must use an explicit hosted Linux runner")
-                    platforms = [runner[1]]
-                self.assertTrue(platforms)
-                name = re.search(r"(?m)^    name: (.+)$", body)
-                self.assertIsNotNone(name, "the displayed job name must be explicit")
-                for platform in platforms:
-                    for build_type in build_types:
-                        displayed = name[1]
-                        if axis:
-                            displayed = displayed.replace("${{ matrix." + axis + " }}", platform)
-                        displayed = displayed.replace("${{ matrix.build_type }}", build_type)
-                        self.assertNotIn("${{", displayed, "every name axis must be expanded")
-                        self.assertEqual(displayed, f"build ({platform}, {build_type})",
-                                         "the displayed platform must match its runner")
-                        expanded.append(displayed)
+        for job_id, aggregate, build_type, count in (
+                ("build", "build-release-gate", "Release", 4),
+                ("build-debug", "build-debug-gate", "Debug", 2)):
+            self.assertIn(aggregate, jobs, "each amd64 leg must keep its old aggregate check")
+            self.assertIn(job_id, jobs, "each aggregate needs its own shard matrix")
+            body = _without_comments(jobs[job_id])
+            matrix = re.search(
+                r"(?ms)^      matrix:\n(.*?)(?=^ {0,6}\S|\Z)", body)
+            self.assertIsNotNone(matrix, "the shard matrix must be readable")
+            axes = re.findall(r"(?m)^        (\w+):", matrix[1])
+            self.assertCountEqual(axes, ["platform", "build_type", "shard"],
+                                  "new axes/include/exclude need a gate review")
+            types = re.search(r"(?m)^        build_type: \[([^\n]+)\]$", matrix[1])
+            self.assertIsNotNone(types, "the build types must be explicit")
+            self.assertEqual([value.strip() for value in types[1].split(",")], [build_type])
+            platforms = re.findall(r"(?m)^          - os: (\S+)$", matrix[1])
+            self.assertEqual(platforms, ["ubuntu-24.04"])
+            self.assertRegex(body, r"(?m)^    runs-on: pf-linux-x64-16$")
+            shards = re.findall(r"(?m)^        shard: \[([0-9, ]+)\]$", matrix[1])
+            self.assertEqual(len(shards), 1)
+            self.assertEqual([int(value.strip()) for value in shards[0].split(",")],
+                             list(range(1, count + 1)), "no required shard may be dropped")
+            denominators = re.findall(r"--ctest-shard \$\{\{ matrix.shard \}\}/(\d+)", body)
+            self.assertEqual(denominators, [str(count)])
+            gate = _without_comments(jobs[aggregate])
+            needs = re.search(r"(?m)^    needs: \[([^\n]+)\]$", gate)
+            self.assertIsNotNone(needs)
+            self.assertCountEqual([value.strip() for value in needs[1].split(",")],
+                                  ["authz", "changes", job_id])
+            self.assertIn("${{ needs." + job_id + ".result }}", gate)
+            name = re.search(r"(?m)^    name: (.+)$", gate)
+            self.assertIsNotNone(name, "the aggregate check name must be explicit")
+            self.assertEqual(name[1], f"build ({platforms[0]}, {build_type})")
+            expanded.append(name[1])
+        self.assertIn("build-arm", jobs, "arm64 must retain its build job")
+        body = _without_comments(jobs["build-arm"])
+        matrix = re.search(r"(?ms)^      matrix:\n(.*?)(?=^ {0,6}\S|\Z)", body)
+        self.assertIsNotNone(matrix)
+        self.assertEqual(re.findall(r"(?m)^        (\w+):", matrix[1]), ["build_type"],
+                         "new axes/include/exclude need a gate review")
+        types = re.search(r"(?m)^        build_type: \[([^\n]+)\]$", matrix[1])
+        self.assertIsNotNone(types)
+        build_types = [value.strip() for value in types[1].split(",")]
+        self.assertCountEqual(build_types, ["Release", "Debug"])
+        runner = re.search(r"(?m)^    runs-on: (ubuntu-[0-9]{2}\.[0-9]{2}-arm)$", body)
+        self.assertIsNotNone(runner, "arm64 must use an explicit hosted Linux runner")
+        name = re.search(r"(?m)^    name: (.+)$", body)
+        self.assertIsNotNone(name)
+        for build_type in build_types:
+            displayed = name[1].replace("${{ matrix.build_type }}", build_type)
+            self.assertNotIn("${{", displayed, "every name axis must be expanded")
+            self.assertEqual(displayed, f"build ({runner[1]}, {build_type})")
+            expanded.append(displayed)
+        return expanded
+
+    def test_ci_post_required_build_jobs_match_workflow_matrices(self):
+        jobs = _jobs((ROOT / ".github/workflows/ci-post.yml").read_text())
+        expanded = self.ci_post_build_names(jobs)
         self.assertCountEqual(ci_release_gate.CI_POST_BUILD_JOBS, expanded)
         self.assertCountEqual([job["name"] for job in ci_post_jobs()], expanded)
+
+    def test_ci_post_required_build_jobs_reject_dropped_shard(self):
+        workflow = (ROOT / ".github/workflows/ci-post.yml").read_text()
+        self.ci_post_build_names(_jobs(workflow))
+        for job_id, count in (("build", 4), ("build-debug", 2)):
+            with self.subTest(job=job_id):
+                jobs = _jobs(workflow)
+                before = "        shard: [" + ", ".join(str(i) for i in range(1, count + 1)) + "]"
+                self.assertIn(before, jobs[job_id])
+                jobs[job_id] = jobs[job_id].replace(before, before.rsplit(", ", 1)[0] + "]", 1)
+                with self.assertRaisesRegex(AssertionError, "no required shard may be dropped"):
+                    self.ci_post_build_names(jobs)
 
     def test_prebuilt_matrix_and_release_notes_publish_only_linux(self):
         workflow = self.workflow()

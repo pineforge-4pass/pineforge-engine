@@ -222,35 +222,35 @@ Peak measure_report_peak(const BacktestEngine& host, ReportEnvelopeV1& envelope)
     return peak;
 }
 
-void one_population(int lots, bool compare_full) {
-    // 1. FULL: the rows themselves, against the independent old loop.
-    if (compare_full) {
-        HoldHost full(lots);
-        CHECK(run_hold(full, lots));
-        CHECK(!full.rejected());
-        CHECK(full.open_lots() == static_cast<std::size_t>(lots));  // real population
-        CHECK(!full.flat());
-        ReportC report{};
-        full.fill_report(&report);
-        CHECK(report.total_trades == lots);
-        CHECK(report.trades_len == lots);
-        if (report.trades_len == lots) {
-            // Identity strings travel through the legacy accessor; checking a
-            // bounded prefix is enough to pin the boundary without retaining a
-            // materialized row per lot in the fixture itself.
-            const int identity_rows = std::min(lots, 256);
-            for (int i = 0; i < lots; ++i) {
-                if (i != 0 && i % kProgressEvery == 0) progress("full_rows", lots, i);
-                const auto index = static_cast<std::size_t>(i);
-                const Trade expected = full.reference_row(index);
-                check_row(report.trades[i], expected);
-                if (i < identity_rows) check_identity(full.get_report_trade(i), expected);
-            }
+// FULL: the rows themselves, against the independent old loop.
+void full_population(int lots) {
+    HoldHost full(lots);
+    CHECK(run_hold(full, lots));
+    CHECK(!full.rejected());
+    CHECK(full.open_lots() == static_cast<std::size_t>(lots));  // real population
+    CHECK(!full.flat());
+    ReportC report{};
+    full.fill_report(&report);
+    CHECK(report.total_trades == lots);
+    CHECK(report.trades_len == lots);
+    if (report.trades_len == lots) {
+        // Identity strings travel through the legacy accessor; checking a
+        // bounded prefix is enough to pin the boundary without retaining a
+        // materialized row per lot in the fixture itself.
+        const int identity_rows = std::min(lots, 256);
+        for (int i = 0; i < lots; ++i) {
+            if (i != 0 && i % kProgressEvery == 0) progress("full_rows", lots, i);
+            const auto index = static_cast<std::size_t>(i);
+            const Trade expected = full.reference_row(index);
+            check_row(report.trades[i], expected);
+            if (i < identity_rows) check_identity(full.get_report_trade(i), expected);
         }
-        BacktestEngine::free_report(&report);
     }
+    BacktestEngine::free_report(&report);
+}
 
-    // 2. SUMMARY_ONLY: the logical total and the exact folds, no row array.
+// SUMMARY_ONLY: the logical total and the exact folds, no row array.
+void summary_population(int lots) {
     HoldHost summary(lots);
     CHECK(summary.set_report_mode_v1(ReportMode::SUMMARY_ONLY) == PF_REPORT_MODE_ACCEPTED);
     CHECK(run_hold(summary, lots));
@@ -308,13 +308,75 @@ void summary_matches_full_bits() {
     BacktestEngine::free_report(&reference);
 }
 
+enum class ReportBranch { FULL, SUMMARY_ONLY, FULL_SUMMARY_BITS };
+
+struct PopulationBranch {
+    ReportBranch mode;
+    int lots;
+    int slice;
+};
+
+constexpr int kSliceCount = 4;
+// This is the execution population, in the original no-argument order.
+// Keep each large population whole, including its ordered reference fold.
+constexpr PopulationBranch kPopulationBranches[] = {
+    {ReportBranch::FULL, 1, 1},
+    {ReportBranch::SUMMARY_ONLY, 1, 3},
+    {ReportBranch::FULL, 1000, 1},
+    {ReportBranch::SUMMARY_ONLY, 1000, 3},
+    {ReportBranch::FULL, 100000, 2},
+    {ReportBranch::SUMMARY_ONLY, 100000, 4},
+    {ReportBranch::FULL_SUMMARY_BITS, 64, 3},
+};
+
 }  // namespace
 
-int main() {
-    one_population(1, true);
-    one_population(1000, true);
-    one_population(100000, true);
-    summary_matches_full_bits();
+int main(int argc, char** argv) {
+    int slice = 0;  // No argument runs the complete original population.
+    if (argc != 1) {
+        if (argc != 3 || std::strcmp(argv[1], "--slice") != 0
+                || std::strlen(argv[2]) != 3
+                || argv[2][0] < '1' || argv[2][0] > '0' + kSliceCount
+                || argv[2][1] != '/' || argv[2][2] != '0' + kSliceCount) {
+            std::fprintf(stderr, "usage: %s [--slice I/%d], 1 <= I <= %d\n",
+                         argv[0], kSliceCount, kSliceCount);
+            return 2;
+        }
+        slice = argv[2][0] - '0';
+    }
+
+    std::size_t selected = 0;
+    for (const auto& branch : kPopulationBranches) {
+        if (slice != 0 && branch.slice != slice) continue;
+        ++selected;
+        const std::size_t passed_before = passed;
+        const std::size_t failed_before = failed;
+        const char* mode = branch.mode == ReportBranch::FULL ? "FULL"
+            : branch.mode == ReportBranch::SUMMARY_ONLY ? "SUMMARY_ONLY" : "FULL_SUMMARY_BITS";
+        std::fprintf(stderr, "test_open_report_rows_flat: slice=%d/%d mode=%s lots=%d begin\n",
+                     branch.slice, kSliceCount, mode, branch.lots);
+        switch (branch.mode) {
+        case ReportBranch::FULL:
+            full_population(branch.lots);
+            break;
+        case ReportBranch::SUMMARY_ONLY:
+            summary_population(branch.lots);
+            break;
+        case ReportBranch::FULL_SUMMARY_BITS:
+            CHECK(branch.lots == 64);
+            summary_matches_full_bits();
+            break;
+        }
+        std::fprintf(stderr,
+                     "test_open_report_rows_flat: slice=%d/%d mode=%s lots=%d "
+                     "passed=%zu failed=%zu\n",
+                     branch.slice, kSliceCount, mode, branch.lots,
+                     passed - passed_before, failed - failed_before);
+    }
+    if (selected == 0) {
+        std::fprintf(stderr, "test_open_report_rows_flat: empty slice\n");
+        return 2;
+    }
     std::fprintf(stderr, "test_open_report_rows_flat: %zu passed, %zu failed\n",
                  passed, failed);
     return failed == 0 ? 0 : 1;
