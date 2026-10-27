@@ -8,7 +8,7 @@
   "to": {
     "version": null,
     "unreleased": true,
-    "catalogSha256": "8a58673f8f3af433cac43ed8693ac7f5f4ed423f1bb8ac94c33c048b98c80038"
+    "catalogSha256": "fcdfccd13d7c27ff356da9da0d66b950de72b07405ced0c73c99eb831702ba3d"
   },
   "catalogSchema": {
     "before": "pineforge-run-failure-catalog/v1",
@@ -83,6 +83,26 @@
       "collection": "codes",
       "fields": [
         {
+          "path": "args.limit",
+          "beforePresent": false,
+          "afterPresent": true,
+          "before": null,
+          "after": {
+            "kind": "integer",
+            "optional": true
+          }
+        },
+        {
+          "path": "args.need",
+          "beforePresent": false,
+          "afterPresent": true,
+          "before": null,
+          "after": {
+            "kind": "integer",
+            "optional": true
+          }
+        },
+        {
           "path": "args.resource.values",
           "beforePresent": true,
           "afterPresent": true,
@@ -111,6 +131,13 @@
             "successor_roots",
             "store_objects"
           ]
+        },
+        {
+          "path": "description",
+          "beforePresent": true,
+          "afterPresent": true,
+          "before": "The admitted scratch-table layout or a fixed region's capacity was exceeded. The run must be admitted with sufficient finite maxima before retrying.",
+          "after": "The admitted scratch-table layout or a fixed region's capacity was exceeded. The run must be admitted with sufficient finite maxima before retrying. The optional integers limit and need give the exceeded maximum and the smallest value known at the refusal that would admit the operation, in the same units."
         }
       ]
     }
