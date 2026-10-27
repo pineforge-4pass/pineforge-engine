@@ -41,7 +41,7 @@ Metrics re-read scratch through bounded windows
 (`compute_report_sink_metrics` src/engine_report.cpp:1749-1760;
 `ScratchCurveWindow` src/report_scratch.cpp:270-310).
 This bounds resident equity-report buffers; the scratch backing and output
-still grow with the run.
+still grow with the run. The replay needs no descriptor of its own in a jailed run (the arena's inherited descriptor serves it) and exactly one transient anonymous file otherwise; a run leaves the process's descriptor count as it found it.
 
 One line to install it, on an idle handle before the run (it returns 0 when
 accepted):

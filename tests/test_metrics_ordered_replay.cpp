@@ -21,6 +21,10 @@
 #include <vector>
 #include <sys/resource.h>
 #include <unistd.h>
+#ifdef __linux__
+#include <cerrno>
+#include <dirent.h>
+#endif
 
 namespace {
 
@@ -450,6 +454,88 @@ void scratch_write_fault_finalize_row() {
         });
 }
 
+#ifdef __linux__
+bool count_open_descriptors(const std::string& row_name, std::size_t& count) {
+    std::unique_ptr<DIR, int (*)(DIR*)> directory(
+        ::opendir("/proc/self/fd"), ::closedir);
+    DA_CHECK(row_name, directory != nullptr);
+    if (!directory) return false;
+    const int scanner = ::dirfd(directory.get());
+    DA_CHECK(row_name, scanner >= 0);
+    if (scanner < 0) return false;
+    const std::string scanner_name = std::to_string(scanner);
+    std::size_t observed = 0;
+    bool found_scanner = false;
+    errno = 0;
+    while (const auto* entry = ::readdir(directory.get())) {
+        if (entry->d_name[0] == '.') continue;
+        if (scanner_name == entry->d_name) found_scanner = true;
+        else ++observed;
+    }
+    const bool read_ok = errno == 0;
+    DA_CHECK(row_name, read_ok);
+    DA_CHECK(row_name, found_scanner);
+    const bool close_ok = ::closedir(directory.release()) == 0;
+    DA_CHECK(row_name, close_ok);
+    if (!read_ok || !found_scanner || !close_ok) return false;
+    count = observed;
+    return true;
+}
+
+void descriptor_row() {
+    row("ordered-replay-descriptors", [](const std::string& row_name) {
+        const Value value = [](std::int64_t i) {
+            return 100.0 + 0.001 * static_cast<double>(i);
+        };
+        constexpr std::int64_t count = 100'000;
+        std::size_t before_success = 0;
+        if (!count_open_descriptors(row_name, before_success)) return;
+        run_probe(row_name, count, value);
+        std::size_t after_success = 0;
+        if (!count_open_descriptors(row_name, after_success)) return;
+        DA_CHECK(row_name, after_success == before_success);
+
+        std::size_t before_failure = 0;
+        if (!count_open_descriptors(row_name, before_failure)) return;
+        bool typed = false;
+        {
+            detail::ScratchFile blocker;
+            auto* arena = detail::ScratchArena::attached();
+            const bool jailed = arena != nullptr;
+            if (jailed) {
+                blocker.set_store(detail::ScratchStore::curve);
+                blocker.open("ordered-return-descriptor-fault-blocker");
+                const auto free_chunks = arena->stats().chunks_free;
+                if (free_chunks != 0)
+                    blocker.ensure_size(
+                        free_chunks * detail::ScratchArena::kChunkBytes);
+            }
+            ResourceLimit limit(0);
+            DA_CHECK(row_name, jailed || limit.active);
+            if (!jailed && !limit.active) return;
+            try {
+                run_probe(row_name, count, value);
+            } catch (const detail::ReportScratchIoError& error) {
+                const auto failure = classify_run_failure(error);
+                const auto arguments = args_of(failure);
+                typed = failure.code == RunFailureCode::report_sink_failed
+                    && (arguments.find("\"reason\":\"scratch_io\"")
+                            != std::string::npos
+                        || arguments.find("\"reason\":\"arena_exhausted\"")
+                            != std::string::npos)
+                    && (!jailed
+                        || arguments.find("\"store\":\"curve\"")
+                            != std::string::npos);
+            }
+        }
+        DA_CHECK(row_name, typed);
+        std::size_t after_failure = 0;
+        if (!count_open_descriptors(row_name, after_failure)) return;
+        DA_CHECK(row_name, after_failure == before_failure);
+    });
+}
+#endif
+
 std::vector<double> mutation_returns() {
     return {0x1p30, 1.0, -0x1p30, 3.0, 0x1p-20,
             -0x1p-20, 0x1p25, -7.0, 0x1p-25};
@@ -540,6 +626,9 @@ int main(int argc, char** argv) {
     scratch_read_fault_row();
     scratch_write_fault_row();
     scratch_write_fault_finalize_row();
+#ifdef __linux__
+    descriptor_row();
+#endif
     mutation_rows();
     std::printf("ordered replay: %d checks, %d failures\n",
                 checks, failures);
