@@ -416,6 +416,9 @@ class AppTokenEnvironments(unittest.TestCase):
     """Exercise the existing contract entrypoint, including its file loader."""
 
     WORKFLOW = 'app-token-guard.yml'
+    # CiFileLoading.make_tree reads these two names from the test it is lent to.
+    CONFIG = '.github/actionlint.yaml'
+    CMAKE = 'tests/CMakeLists.txt'
     SHA = '0123456789abcdef0123456789abcdef01234567'
     STEP = ('      - uses: actions/create-github-app-token@' + SHA + ' # v1.12.0\n')
 
