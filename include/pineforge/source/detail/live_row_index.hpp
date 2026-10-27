@@ -28,7 +28,9 @@ enum class LiveClass : std::uint8_t {
     ReservationEligible, ReservationExit, ReservationClose, WaypointMargin, Trail, RestedStopForced,
     EntryOpeningU2, DefaultEntryOpening, ReservationParent, UnpricedEntry,
     UnpricedClose, ReverseOpeningEntry, SamePointEligible, SamePointMarket, SamePointStop, SamePointLimit,
-    PureStopEntry, PureBuyLimitOpening, TouchedStopEntry, DropLimit, DropStop, Count
+    PureStopEntry, PureBuyLimitOpening, TouchedStopEntry, DropLimit, DropStop,
+    NonPureLimitOpening, ExitStop, ExitLimit, PureMarketAddOpening,
+    DefaultEntryOpeningU2, TerminalExplicitMarketEntry, Count
 };
 enum class LivePrice : std::uint8_t { Stop, Limit };
 

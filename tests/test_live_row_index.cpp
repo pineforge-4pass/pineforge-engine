@@ -1,5 +1,6 @@
 #include <pineforge/source/detail/live_row_index.hpp>
 #include <pineforge/source/pine_adapter.hpp>
+#include <pineforge/run_failure.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -96,6 +97,58 @@ bool model_class(C c, const PlacementSnapshot& r) {
         return r.family == PineOrderFamily::ExitLimit && !std::isfinite(r.trail_activation_level);
     case C::DropStop:
         return r.family == PineOrderFamily::ExitStop && !std::isfinite(r.trail_activation_level);
+    case C::NonPureLimitOpening:
+        return [](const PlacementSnapshot& row) {
+            const auto finite_positive = [](double x) { return std::isfinite(x) && x > 0.0; };
+            // accepted_entries_in_cycle / place_entry: no family restriction.
+            return row.opening
+                && !(finite_positive(row.exit_levels.limit)
+                    && !finite_positive(row.exit_levels.stop)
+                    && !finite_positive(row.exit_levels.trail_points)
+                    && !finite_positive(row.exit_levels.trail_price)
+                    && !finite_positive(row.exit_levels.trail_offset));
+        }(r);
+    case C::ExitStop:
+        return [](const PlacementSnapshot& leg) {
+            return leg.family == PineOrderFamily::ExitStop;
+        }(r);
+    case C::ExitLimit:
+        return [](const PlacementSnapshot& leg) {
+            return leg.family == PineOrderFamily::ExitLimit;
+        }(r);
+    case C::PureMarketAddOpening:
+        return [](const PlacementSnapshot& add) {
+            const auto finite_positive = [](double x) { return std::isfinite(x) && x > 0.0; };
+            // pure_market_add: source/from-entry wildcard and side are query
+            // arguments; historical cascade reach is deliberately unrestricted.
+            return add.opening
+                && (add.family == PineOrderFamily::Entry || add.family == PineOrderFamily::Order)
+                && !finite_positive(add.exit_levels.limit)
+                && !finite_positive(add.exit_levels.stop)
+                && !finite_positive(add.exit_levels.trail_points)
+                && !finite_positive(add.exit_levels.trail_price)
+                && !finite_positive(add.exit_levels.trail_offset)
+                && !add.birth.from_fill() && !add.birth.at_terminal_fill();
+        }(r);
+    case C::DefaultEntryOpeningU2:
+        return [](const PlacementSnapshot& row) {
+            const auto finite_positive = [](double x) { return std::isfinite(x) && x > 0.0; };
+            // apply_reversal_gap_bracket_policy's source-field selection.
+            return row.opening && row.family == PineOrderFamily::Entry
+                && !std::isfinite(row.requested_qty)
+                && !finite_positive(row.exit_levels.limit) && !finite_positive(row.exit_levels.stop);
+        }(r);
+    case C::TerminalExplicitMarketEntry:
+        return [](const PlacementSnapshot& row) {
+            const auto finite_positive = [](double x) { return std::isfinite(x) && x > 0.0; };
+            // apply_terminal_explicit_market_policy, before its created-bar key.
+            return row.opening && row.family == PineOrderFamily::Entry
+                && finite_positive(row.requested_qty)
+                && !finite_positive(row.exit_levels.limit) && !finite_positive(row.exit_levels.stop)
+                && row.oca_name.empty() && row.oca_type == 0
+                && !row.birth.from_fill() && !row.birth.at_terminal_fill()
+                && !compat::pine::historical_cascade_reach(row.birth_reach);
+        }(r);
     case C::Count: break;
     }
     throw std::runtime_error("unmodelled class");
@@ -237,6 +290,7 @@ PlacementSnapshot random_row(std::mt19937& rng) {
     r.trail_activation_level = value();
     r.qty_type = static_cast<int>(rng() % 4) - 1;
     r.oca_name = rng() % 2 ? "" : "oca";
+    r.oca_type = static_cast<int>(rng() % 3);
     r.placement_script_open_ms = static_cast<int>(rng() % 3) - 1;
     r.projection_created_bar = static_cast<int>(rng() % 3) - 1;
     r.projection_position_side = static_cast<int>(rng() % 3) - 1;
@@ -331,8 +385,9 @@ void stream() {
         table.at(1).opening = false;
         bool caught = false;
         try { (void)index.count(C::EntryOpening); }
-        catch (const std::logic_error& error) {
-            caught = std::string(error.what()).find("EntryOpening") != std::string::npos;
+        catch (const coded<std::logic_error>& error) {
+            caught = error.run_failure_code() == RunFailureCode::engine_invariant
+                && std::string(error.what()).find("EntryOpening") != std::string::npos;
         }
         require(caught, "oracle must name the missed class hook");
     }
@@ -460,10 +515,239 @@ void origin_incidence() {
     roster = OriginRoster::from_retired(roster.size(), roster.digest());
     index.rebuild_origins(7, roster); compare_origins();
 }
+
+void i2_predicates() {
+    PlacementTable table;
+    table.fixture_use_memory_auxiliary_tables();
+    const H h{{"i2-predicate", 1}, 1};
+    table.try_emplace(h.incarnation, PlacementSnapshot{});
+    LiveHandleSequence sequence;
+    sequence.push_back(h);
+    LiveRowIndex index;
+    index.rebuild_from(table, sequence);
+    const auto check = [&](C c, const PlacementSnapshot& r, bool matches) {
+        auto replacement = r;
+        table.replace(h.incarnation, std::move(replacement));
+        index.refresh(h);
+        // A single found row contributes either its one handle or no handle.
+        // These expected values are hand truth-table arithmetic, independent
+        // of both the production predicate table and the test's model switch.
+        const std::vector<H> wanted = matches ? std::vector<H>{h} : std::vector<H>{};
+        require(index.rows(c) == wanted, LiveRowIndex::class_name(c));
+        require(index.count(c) == wanted.size(), "I2 directed predicate count");
+        require(model_class(c, r) == matches, "I2 independent predicate witness");
+    };
+    for (int family = 0; family != 9; ++family) for (bool is_long : {false, true}) {
+        PlacementSnapshot r;
+        r.family = static_cast<PineOrderFamily>(family);
+        r.is_long = is_long;
+        r.opening = true;
+        r.exit_levels.limit = 50;
+        // Every family/side is a pure limit here, including Order and Close.
+        check(C::NonPureLimitOpening, r, false);
+        r.exit_levels.stop = 1;
+        check(C::NonPureLimitOpening, r, true);
+        r.opening = false;
+        check(C::NonPureLimitOpening, r, false);
+        r.opening = true;
+        r.exit_levels.stop = std::numeric_limits<double>::quiet_NaN();
+        r.exit_levels.trail_offset = 1;
+        check(C::NonPureLimitOpening, r, true);
+        r.exit_levels.trail_offset = 0;
+        check(C::NonPureLimitOpening, r, false);
+        r.exit_levels.limit = 0;
+        check(C::NonPureLimitOpening, r, true);
+
+        // A closing void leg with finite activation must remain selectable;
+        // Opening/ReservationExit/Drop* each reject this positive witness.
+        r.opening = false;
+        r.void_issue = true;
+        r.trail_activation_level = 75;
+        r.exit_levels.stop = 50;
+        r.exit_levels.limit = 100;
+        check(C::ExitStop, r, r.family == PineOrderFamily::ExitStop);
+        check(C::ExitLimit, r, r.family == PineOrderFamily::ExitLimit);
+    }
+    for (auto family : {PineOrderFamily::Entry, PineOrderFamily::Order}) {
+        for (bool is_long : {false, true}) {
+            PlacementSnapshot base;
+            base.family = family;
+            base.is_long = is_long;
+            base.opening = true;
+            base.birth_reach = compat::pine::HistoricalBirthReach::ExtremeWaypoints;
+            const double absent[] = {std::numeric_limits<double>::quiet_NaN(),
+                std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity(),
+                -1, -0.0, 0};
+            for (const double x : absent) {
+                auto r = base;
+                r.exit_levels.limit = r.exit_levels.stop = r.exit_levels.trail_points
+                    = r.exit_levels.trail_price = r.exit_levels.trail_offset = x;
+                check(C::PureMarketAddOpening, r, true);
+            }
+            for (int field = 0; field != 5; ++field) {
+                auto r = base;
+                double* levels[] = {&r.exit_levels.limit, &r.exit_levels.stop,
+                    &r.exit_levels.trail_points, &r.exit_levels.trail_price, &r.exit_levels.trail_offset};
+                *levels[field] = 1;
+                check(C::PureMarketAddOpening, r, false);
+            }
+            auto r = base;
+            r.opening = false;
+            check(C::PureMarketAddOpening, r, false);
+            r = base;
+            r.family = PineOrderFamily::Close;
+            check(C::PureMarketAddOpening, r, false);
+            for (unsigned point : {0U, 3U}) {
+                r = base;
+                r.birth = OrderBirth::fill_evaluation(0, 0,
+                    BirthCursor::point(BirthCursorDomain::HistoricalPath, point, 4), 100, 1, 1, 1);
+                check(C::PureMarketAddOpening, r, false);
+            }
+        }
+    }
+    PlacementSnapshot r;
+    r.opening = true;
+    r.requested_qty = std::numeric_limits<double>::infinity();
+    // Neither default U2 nor terminal-explicit selection forbids trails.
+    r.exit_levels.trail_points = 1;
+    check(C::DefaultEntryOpeningU2, r, true);
+    r.exit_levels.stop = 1;
+    check(C::DefaultEntryOpeningU2, r, false);
+    r.exit_levels.stop = 0;
+    r.family = PineOrderFamily::Order;
+    check(C::DefaultEntryOpeningU2, r, false);
+    r.family = PineOrderFamily::Entry;
+    r.requested_qty = 1;
+    check(C::DefaultEntryOpeningU2, r, false);
+    r.qty_type = static_cast<int>(QtyType::PERCENT_OF_EQUITY);
+    r.projection_position_side = static_cast<std::int32_t>(PositionSide::LONG);
+    const auto terminal = r;
+    check(C::TerminalExplicitMarketEntry, r, true);
+    r.oca_type = 1;
+    check(C::TerminalExplicitMarketEntry, r, false);
+    r = terminal; r.oca_name = "group";
+    check(C::TerminalExplicitMarketEntry, r, false);
+    r = terminal; r.birth_reach = compat::pine::HistoricalBirthReach::ExtremeWaypoints;
+    check(C::TerminalExplicitMarketEntry, r, false);
+    r = terminal; r.family = PineOrderFamily::Order;
+    check(C::TerminalExplicitMarketEntry, r, false);
+    r = terminal; r.opening = false;
+    check(C::TerminalExplicitMarketEntry, r, false);
+    r = terminal; r.requested_qty = 0;
+    check(C::TerminalExplicitMarketEntry, r, false);
+    r = terminal; r.exit_levels.limit = 1;
+    check(C::TerminalExplicitMarketEntry, r, false);
+    r = terminal; r.exit_levels.stop = 1;
+    check(C::TerminalExplicitMarketEntry, r, false);
+    r = terminal;
+    r.birth = OrderBirth::fill_evaluation(0, 0,
+        BirthCursor::point(BirthCursorDomain::HistoricalPath, 0, 4), 100, 1, 1, 1);
+    check(C::TerminalExplicitMarketEntry, r, false);
+    if (LiveRowIndex::oracle_enabled()) {
+        check(C::TerminalExplicitMarketEntry, terminal, true);
+        table.at(h.incarnation).oca_type = 1; // Deliberately omit publication.
+        bool caught = false;
+        try { (void)index.count(C::TerminalExplicitMarketEntry); }
+        catch (const coded<std::logic_error>& error) {
+            caught = error.run_failure_code() == RunFailureCode::engine_invariant
+                && std::string(error.what()).find("TerminalExplicitMarketEntry") != std::string::npos;
+        }
+        require(caught, "I2 oracle must name the missed OCA-type publication");
+        index.refresh(h);
+    }
+}
+
+void i2_ordered_selections() {
+    PlacementTable table;
+    table.fixture_use_memory_auxiliary_tables();
+    LiveHandleSequence sequence;
+    LiveRowIndex index;
+    index.rebuild_from(table, sequence);
+    const auto append = [&](PlacementSnapshot r) {
+        const H h{{"i2-order", 1}, 1 + sequence.size()};
+        table.try_emplace(h.incarnation, std::move(r));
+        sequence.push_back(h);
+        index.insert(h);
+        return h;
+    };
+    PlacementSnapshot r;
+    r.family = PineOrderFamily::ExitStop;
+    r.is_long = true;
+    r.void_issue = true;
+    r.trail_activation_level = 75;
+    r.source_id = "exit";
+    r.from_entry = "named";
+    r.exit_levels.stop = 100;
+    const auto high = append(r);
+    r.from_entry = "";
+    r.exit_levels.stop = 50;
+    const auto low = append(r);
+    // Live order deliberately opposes price order; both inclusive endpoints
+    // match. Exact empty from-entry selects only the second closing leg.
+    require(index.rows_in_range(C::ExitStop, LivePrice::Stop, 50, 100, {}, 1)
+                == std::vector<H>({high, low}), "I2 closing stops retain live order");
+    require(index.rows(C::ExitStop, LiveKey::pair("exit", ""), 1) == std::vector<H>{low},
+            "I2 closing-stop exact empty pair");
+    r.family = PineOrderFamily::ExitLimit;
+    r.is_long = false;
+    r.exit_levels.limit = 50;
+    const auto limit = append(r);
+    require(index.rows_in_range(C::ExitLimit, LivePrice::Limit, 50, 50, {}, 0)
+                == std::vector<H>{limit}, "I2 closing-limit side and inclusive price");
+    r.family = PineOrderFamily::ExitTrail;
+    const auto trail = append(r);
+    require(index.rows(C::Trail) == std::vector<H>{trail}, "I2 reuses unrestricted Trail");
+
+    r = PlacementSnapshot{};
+    r.opening = true;
+    r.is_long = true;
+    r.birth_reach = compat::pine::HistoricalBirthReach::ExtremeWaypoints;
+    r.source_id = "named";
+    r.from_entry = "different";
+    const auto entry = append(r);
+    r.family = PineOrderFamily::Order;
+    r.is_long = false;
+    r.source_id = "own";
+    const auto order = append(r);
+    r.is_long = true;
+    r.source_id = "";
+    const auto empty = append(r);
+    require(index.rows(C::PureMarketAddOpening) == std::vector<H>({entry, order, empty}),
+            "I2 market-add wildcard includes Entry, Order and cascade reach");
+    require(index.rows(C::PureMarketAddOpening, LiveKey::source("named"), 1) == std::vector<H>{entry},
+            "I2 from-entry argument selects source_id, not row.from_entry");
+    require(index.rows(C::PureMarketAddOpening, LiveKey::source(""), 1) == std::vector<H>{empty},
+            "I2 market-add exact empty source is not a wildcard");
+    sequence.move_to_tail(order); index.refresh(order);
+    require(index.rows(C::PureMarketAddOpening) == std::vector<H>({entry, empty, order}),
+            "I2 market-add enumeration follows live reorder");
+
+    r = PlacementSnapshot{};
+    r.opening = true;
+    r.is_long = false;
+    r.family = PineOrderFamily::Risk;
+    r.source_id = "own";
+    append(r);
+    r.family = PineOrderFamily::Close;
+    r.source_id = "foreign";
+    append(r);
+    r.family = PineOrderFamily::Order;
+    r.exit_levels.limit = 50;
+    append(r);
+    // Short non-pure rows: own Order + own Risk + foreign Close. The foreign
+    // pure limit contributes nothing: (3 total) - (2 own) = 1.
+    require(index.count(C::NonPureLimitOpening, {}, 0)
+                - index.count(C::NonPureLimitOpening, LiveKey::source("own"), 0) == 1,
+            "I2 cap subtraction covers all opening families and excludes pure limits");
+    compare(index, table, sequence.snapshot());
+}
 }
 
 int main() {
-    try { edges_and_aliases(); origin_incidence(); stream(); return 0; }
+    try {
+        i2_predicates(); i2_ordered_selections();
+        edges_and_aliases(); origin_incidence(); stream(); return 0;
+    }
     catch (const std::exception& error) {
         std::fprintf(stderr, "live row index: %s\n", error.what());
         return 1;

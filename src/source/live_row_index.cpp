@@ -99,6 +99,22 @@ const ClassDefinition classes[] = {
         return r.family == PineOrderFamily::ExitLimit && !std::isfinite(r.trail_activation_level); }},
     {"DropStop", [](const R& r) {
         return r.family == PineOrderFamily::ExitStop && !std::isfinite(r.trail_activation_level); }},
+    // accepted_entries_in_cycle / place_entry: pure_limit_entry has no
+    // family or side restriction. Side/source subtraction belongs to the query.
+    {"NonPureLimitOpening", [](const R& r) {
+        return r.opening && !(positive(r.exit_levels.limit)
+            && !positive(r.exit_levels.stop) && no_trail(r)); }},
+    // Gap-policy closing legs deliberately include void/activated rows.
+    {"ExitStop", [](const R& r) { return r.family == PineOrderFamily::ExitStop; }},
+    {"ExitLimit", [](const R& r) { return r.family == PineOrderFamily::ExitLimit; }},
+    {"PureMarketAddOpening", [](const R& r) {
+        return r.opening && (entry(r) || r.family == PineOrderFamily::Order)
+            && u2(r) && no_trail(r) && !r.birth.from_fill() && !r.birth.at_terminal_fill(); }},
+    {"DefaultEntryOpeningU2", [](const R& r) {
+        return entry(r) && r.opening && !std::isfinite(r.requested_qty) && u2(r); }},
+    {"TerminalExplicitMarketEntry", [](const R& r) {
+        return entry(r) && r.opening && positive(r.requested_qty) && u2(r)
+            && r.oca_name.empty() && r.oca_type == 0 && ordinary_birth(r); }},
 };
 static_assert(sizeof(classes) / sizeof(classes[0]) == static_cast<std::size_t>(C::Count));
 static_assert(static_cast<std::size_t>(C::Count) <= 64);
@@ -108,7 +124,9 @@ static_assert(static_cast<std::size_t>(C::Count) <= 64);
         std::string("live-row index invariant: ") + name);
 }
 void side_check(int side) {
-    if (side < -1 || side > 1) throw std::invalid_argument("live-row side must be -1, 0 or 1");
+    if (side < -1 || side > 1)
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                      "live-row side must be -1, 0 or 1");
 }
 bool full_less(const H& a, const H& b) {
     if (a.run.session_key != b.run.session_key) {
@@ -216,6 +234,26 @@ bool oracle_class(C c, const R& r) {
         return r.family == PineOrderFamily::ExitLimit && !std::isfinite(r.trail_activation_level);
     case C::DropStop:
         return r.family == PineOrderFamily::ExitStop && !std::isfinite(r.trail_activation_level);
+    case C::NonPureLimitOpening:
+        return r.opening && !(p(r.exit_levels.limit) && !p(r.exit_levels.stop)
+            && !p(r.exit_levels.trail_points) && !p(r.exit_levels.trail_price)
+            && !p(r.exit_levels.trail_offset));
+    case C::ExitStop: return r.family == PineOrderFamily::ExitStop;
+    case C::ExitLimit: return r.family == PineOrderFamily::ExitLimit;
+    case C::PureMarketAddOpening:
+        return r.opening && (r.family == PineOrderFamily::Entry || r.family == PineOrderFamily::Order)
+            && !p(r.exit_levels.limit) && !p(r.exit_levels.stop)
+            && !p(r.exit_levels.trail_points) && !p(r.exit_levels.trail_price)
+            && !p(r.exit_levels.trail_offset) && !r.birth.from_fill() && !r.birth.at_terminal_fill();
+    case C::DefaultEntryOpeningU2:
+        return r.opening && r.family == PineOrderFamily::Entry && !std::isfinite(r.requested_qty)
+            && !p(r.exit_levels.limit) && !p(r.exit_levels.stop);
+    case C::TerminalExplicitMarketEntry:
+        return r.opening && r.family == PineOrderFamily::Entry && p(r.requested_qty)
+            && !p(r.exit_levels.limit) && !p(r.exit_levels.stop)
+            && r.oca_name.empty() && r.oca_type == 0
+            && !r.birth.from_fill() && !r.birth.at_terminal_fill()
+            && !compat::pine::historical_cascade_reach(r.birth_reach);
     case C::Count: break;
     }
     mismatch("unknown class");
@@ -364,7 +402,8 @@ bool LiveKey::operator==(const LiveKey& b) const { return !(*this < b) && !(b < 
 
 const char* LiveRowIndex::class_name(C c) {
     const auto i = static_cast<std::size_t>(c);
-    if (i >= kClasses) throw std::invalid_argument("invalid live-row class");
+    if (i >= kClasses)
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {}, "invalid live-row class");
     return classes[i].name;
 }
 bool LiveRowIndex::oracle_enabled() noexcept {

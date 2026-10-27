@@ -1,4 +1,6 @@
 #include <pineforge/source/pine_strategy_host.hpp>
+#include <pineforge/source/detail/live_row_index.hpp>
+#include <pineforge/run_failure.hpp>
 
 #include <cstdint>
 #include <cstdio>
@@ -8,9 +10,71 @@
 #include <vector>
 
 namespace {
+using namespace pineforge;
+using namespace pineforge::source;
+using C = pineforge::source::detail::LiveClass;
+using LiveRowIndex = pineforge::source::detail::LiveRowIndex;
 using Work = pineforge::source::PineExecutionAdapter::DensePendingWork;
 void require(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
+}
+
+class FailureCodeHost final : public PineStrategyHost {
+public:
+    FailureCodeHost(C query_class, int side) : query_class_(query_class), side_(side) {
+        PineStrategyConfig config;
+        config.initial_capital = 1000;
+        configure_pine_strategy(config);
+        set_syminfo_mintick(0.25);
+        set_syminfo_timezone("UTC");
+        set_syminfo_session("24x7");
+    }
+    void on_source_bar(const Bar&) override {
+        ++calls;
+        LiveRowIndex index;
+        try { (void)index.count(query_class_, {}, side_); }
+        catch (const coded<std::logic_error>& error) {
+            saw_coded_invariant = error.run_failure_code() == RunFailureCode::engine_invariant;
+            throw;
+        }
+    }
+    int calls = 0;
+    bool saw_coded_invariant = false;
+private:
+    C query_class_;
+    int side_;
+};
+
+void failure_codes() {
+    // A real source callback propagates the query's exception into the public
+    // run result. No request is submitted, so hand arithmetic gives no trades.
+    // The base side_check/class_name throw plain invalid_argument: their type
+    // safety net gives the same result code, but the coded catch is never hit.
+    Bar bars[2]{};
+    for (int i = 0; i != 2; ++i) {
+        bars[i].timestamp = 1736121600000LL + i * 60000LL;
+        bars[i].open = bars[i].close = 100;
+        bars[i].high = 100.5;
+        bars[i].low = 99.5;
+        bars[i].volume = 1;
+    }
+    const auto check = [&](C query_class, int side, const char* message) {
+        FailureCodeHost host(query_class, side);
+        host.run(bars, 2, "1", "1");
+        require(host.calls == 1, "invalid index query must stop the first source callback");
+        require(host.last_error().find(message) != std::string::npos,
+                "invalid index query must preserve its diagnostic text");
+        require(std::string(run_failure_code_of(host)) == "engine_invariant",
+                "invalid index query must report engine_invariant");
+        require(std::string(run_failure_args_of(host)) == "{}",
+                "invalid index query must not invent failure arguments");
+        require(host.trade_count() == 0, "invalid index query must not trade");
+        require(host.saw_coded_invariant, "live-row query must throw coded engine_invariant");
+    };
+    check(C::Placed, -2, "live-row side must be -1, 0 or 1");
+    check(C::Placed, 2, "live-row side must be -1, 0 or 1");
+    check(C::Count, -1, "invalid live-row class");
+    check(static_cast<C>(255), -1, "invalid live-row class");
 }
 
 class RetiringHost final : public pineforge::source::PineStrategyHost {
@@ -68,6 +132,7 @@ Work run(int n) {
 
 int main() {
     try {
+        failure_codes();
         const auto small = run(256);
         const auto large = run(512);
         // Expected cumulative cost is proportional to N-1 actual removals:
