@@ -2106,7 +2106,7 @@ drawdown/run-up walk, and metrics computed over a real series.
 The per-bar **broker-state hash** is a row of that same report, so
 `KernelRecorded` records it too. It stays behind the recording switch it
 always had — `set_broker_state_hash_recording(true)`
-(`engine.hpp:2402`; C: `strategy_set_broker_state_hash_recording`), off by
+(`engine.hpp:2403`; C: `strategy_set_broker_state_hash_recording`), off by
 default, set while no run is active — because each row is a full
 `broker_state_hash()` over the lots and the closed rows (since v19 a row costs
 the live state, not the run's length: the closed rows enter through a running
@@ -3954,6 +3954,7 @@ It defines `strategy_create`, `strategy_free`, `strategy_set_input`,
 `run_backtest`, `run_backtest_full` and `report_free` — and no other C symbol.
 Every remaining runtime export (`strategy_configure_native_v1`, the
 `strategy_stream_*` family, `strategy_execution_contract`,
+`strategy_initial_capital`,
 `strategy_get_last_error`) is the engine's own; the generated `strategy_create`
 references `pf_abi_version()` so a static link retains it. The host class must
 derive from `NativeStrategyHost` and must not be `final`: the macro wraps it in
@@ -4412,7 +4413,7 @@ fails when this table cites a row once too few or too many.
 | `declare_opened_lot_entry_bar_mask` outside `on_applied` | The C++ seam has no phase rule; the C spelling is legal inside `on_applied` alone and `PF_NATIVE_E_STATE` everywhere else. | `C_V1_EXCLUSIONS["entry_bar_mask_phase"]`; the refusals before and after a run are asserted in `tests/test_native_c_api.c` |
 | `NativeRunSpec::timeframe_undetected` | No C spec carries it and the base spec requires both timeframe literals, so a C run always names its timeframes. | `C_V1_EXCLUSIONS["timeframe_undetected"]` |
 | instrument feeds (`NativeRunSpec::instrument_feeds`, `NativeSeriesSource::InstrumentFeed`) | No lane. A C run spec installs no instrument feed and a C subscription row carries no instrument key, so a C host cannot read another instrument's bars through the kernel: `pf_native_series_source_e` leaves `InstrumentFeed` unnamed, and `pf_native_spec_error_e` / `pf_native_spec_field_e` name its refusals only so the translation stays exhaustive. `strategy_set_symbol_feed` and its three siblings in `pineforge.h` are the Pine source host's door (a bare host answers them `-1`), not a C host's. | `C_V1_EXCLUSIONS["instrument_feeds"]` |
-| run statistics through the inherited accessors (`net_profit()`, `open_profit()`, `open_trades_capital_held()`, `max_runup_percent()`, `max_drawdown_percent()`, `active_account_currency_fx()`, `max_contracts_held_all()` and its long / short siblings, `eventrades()`) | Live, C reads `strategy_current_equity`, `strategy_position_size` and `strategy_native_marked_equity_v1`. Everything else comes from a filled report's `pf_metrics_t`, whose drawdown and run-up are walked from the recorded curve; C has no maximum contracts held and no capital held. | `C_V1_EXCLUSIONS["inherited_statistics"]` |
+| run statistics through the inherited accessors (`net_profit()`, `open_profit()`, `open_trades_capital_held()`, `max_runup_percent()`, `max_drawdown_percent()`, `active_account_currency_fx()`, `max_contracts_held_all()` and its long / short siblings, `eventrades()`) | Live, C reads `strategy_initial_capital`, `strategy_current_equity`, `strategy_position_size` and `strategy_native_marked_equity_v1`. Everything else comes from a filled report's `pf_metrics_t`, whose drawdown and run-up are walked from the recorded curve; C has no maximum contracts held and no capital held. | `C_V1_EXCLUSIONS["inherited_statistics"]` |
 | the hook views' definitions (`NativeExecutionTermsFacts`, `NativePrecommitView`) and the cursors | The C++ views carry the request's definition, its allowance or scope, and the settlement readiness; the C views carry the intent and trigger tags. A C cursor carries the ordinal, the effective time, `t`, the interval index, the provenance and the phase, never the coordinate's interval instants or source price time, and event rows and the decision drop `t`. | `C_V1_EXCLUSIONS["hook_views"]` |
 | the command events' payloads | `pf_native_event_v1` flattens the event kinds into one tagged record with each kind's documented fields. It drops the definitions and the rejected or attempted requests, the command surface, the authority before and after, the remaining, allowance and pending projections, the cause and receipt ids, the attempted terms and the terms' resolved input, the requested delta, prior adjustment ids and `ReplacedEvent::kept_handle()`. | `C_V1_EXCLUSIONS["event_payloads"]` |
 | the command results (`SubmitResult`, `ReplaceResult`, `CancelResult`, `NativeCurrentExecutionResult`) | C returns the handle or the refusal, or a status, without the event ordinal; `strategy_native_execute_current_v1` returns the outcome's code, not the event. The event history (`strategy_native_events_v1`) is the route. | `C_V1_EXCLUSIONS["command_results"]` |
