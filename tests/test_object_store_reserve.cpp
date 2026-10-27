@@ -201,12 +201,25 @@ void slope_row(std::uint64_t payload_bytes) {
             "backing grows monotonically");
 
     const auto expected_per_object = object_physical_bytes(payload_bytes);
-    const auto expected_total = expected_per_object * kN;
+    // 2 * kN objects were created in two halves of kN each.
+    const auto expected_total = expected_per_object * 2 * kN;
     const auto directory_chunks =
         expected_total / kObjectArenaChunkBytes + 1;
     const auto directory_tolerance =
         directory_chunks * kObjectArenaDirectoryBytesPerChunk;
-    const auto measured = (after.bytes_backing - before.bytes_backing) / kN;
+    const auto measured =
+        (after.bytes_backing - before.bytes_backing) / (2 * kN);
+    // The observed numbers are printed before any bound is checked so a
+    // failing bound shows what the store really cost.
+    std::fprintf(stderr,
+                 "slope payload=%llu first_half_per_object=%llu "
+                 "total_per_object=%llu formula=%llu resident=%llu\n",
+                 static_cast<unsigned long long>(payload_bytes),
+                 static_cast<unsigned long long>(
+                     (middle.bytes_backing - before.bytes_backing) / kN),
+                 static_cast<unsigned long long>(measured),
+                 static_cast<unsigned long long>(expected_per_object),
+                 static_cast<unsigned long long>(after.bytes_resident));
     // bytes_backing is a page-granularity upper-bound observation. The
     // formula is the host-reliant physical bound; only the separately named
     // four-byte-per-MiB arena directory is allowed as tolerance. The lower
@@ -215,7 +228,7 @@ void slope_row(std::uint64_t payload_bytes) {
                 <= expected_total + directory_tolerance,
             "backing slope stays below physical bound");
     require(after.bytes_backing - before.bytes_backing >=
-                (expected_per_object / 2) * kN,
+                (expected_per_object / 2) * 2 * kN,
             "backing slope is not a vacuous bound");
     require(measured <= expected_per_object
                 + kObjectArenaDirectoryBytesPerChunk,
