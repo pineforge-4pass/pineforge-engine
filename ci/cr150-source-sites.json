@@ -1988,6 +1988,45 @@
    "ordinal": 3
   },
   {
+   "file": "include/pineforge/detail/scratch_errors.hpp",
+   "symbol": "args",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class ScratchCapacityError final : public std :: runtime_error , public RunFailureInfo #1",
+    "private : static RunFailureValue capacity_args ( ScratchResource resource , std :: uint64_t limit , std :: uint64_t need ) noexcept #1",
+    "try #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/scratch_errors.hpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class ScratchCapacityError final : public std :: runtime_error , public RunFailureInfo #1",
+    "private : static RunFailureValue capacity_args ( ScratchResource resource , std :: uint64_t limit , std :: uint64_t need ) noexcept #1",
+    "try #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/scratch_errors.hpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class ScratchCapacityError final : public std :: runtime_error , public RunFailureInfo #1",
+    "private : static RunFailureValue capacity_args ( ScratchResource resource , std :: uint64_t limit , std :: uint64_t need ) noexcept #1",
+    "try #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 2
+  },
+  {
    "file": "include/pineforge/detail/scratch_file.hpp",
    "symbol": "directory_",
    "scope": [
@@ -5139,106 +5178,6 @@
   },
   {
    "file": "include/pineforge/map.hpp",
-   "symbol": "<temp:PineMap>",
-   "scope": [
-    "namespace pineforge #1"
-   ],
-   "cls": "temp",
-   "spelling": "PineMap",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/map.hpp",
-   "symbol": "<temp:PineMap>",
-   "scope": [
-    "namespace pineforge #1",
-    "template < typename Key , typename Value > class PineMap #1"
-   ],
-   "cls": "temp",
-   "spelling": "PineMap",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/map.hpp",
-   "symbol": "<temp:PineMap>",
-   "scope": [
-    "namespace pineforge #1",
-    "template < typename Key , typename Value > class PineMap #1"
-   ],
-   "cls": "temp",
-   "spelling": "PineMap",
-   "ordinal": 2
-  },
-  {
-   "file": "include/pineforge/map.hpp",
-   "symbol": "<temp:PineMap>",
-   "scope": [
-    "namespace pineforge #1",
-    "template < typename Key , typename Value > class PineMap #1"
-   ],
-   "cls": "temp",
-   "spelling": "PineMap",
-   "ordinal": 3
-  },
-  {
-   "file": "include/pineforge/map.hpp",
-   "symbol": "new_",
-   "scope": [
-    "namespace pineforge #1",
-    "template < typename Key , typename Value > class PineMap #1"
-   ],
-   "cls": "decl",
-   "spelling": "PineMap",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/map.hpp",
-   "symbol": "<temp:PineMap>",
-   "scope": [
-    "namespace pineforge #1",
-    "template < typename Key , typename Value > class PineMap #1",
-    "[ [ nodiscard ] ] static PineMap new_ ( ) #1"
-   ],
-   "cls": "temp",
-   "spelling": "PineMap",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/map.hpp",
-   "symbol": "copy",
-   "scope": [
-    "namespace pineforge #1",
-    "template < typename Key , typename Value > class PineMap #1"
-   ],
-   "cls": "decl",
-   "spelling": "PineMap",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/map.hpp",
-   "symbol": "<temp:PineMap>",
-   "scope": [
-    "namespace pineforge #1",
-    "template < typename Key , typename Value > class PineMap #1",
-    "[ [ nodiscard ] ] PineMap copy ( ) const #1"
-   ],
-   "cls": "temp",
-   "spelling": "PineMap",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/map.hpp",
-   "symbol": "<temp:PineMap>",
-   "scope": [
-    "namespace pineforge #1",
-    "template < typename Key , typename Value > class PineMap #1"
-   ],
-   "cls": "temp",
-   "spelling": "PineMap",
-   "ordinal": 4
-  },
-  {
-   "file": "include/pineforge/map.hpp",
    "symbol": "holder",
    "scope": [
     "namespace pineforge #1",
@@ -5441,6 +5380,16 @@
   },
   {
    "file": "include/pineforge/map.hpp",
+   "symbol": "<temp:PineMap>",
+   "scope": [
+    "namespace pineforge #1"
+   ],
+   "cls": "temp",
+   "spelling": "PineMap",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/map.hpp",
    "symbol": "heap_values",
    "scope": [
     "namespace pineforge #1",
@@ -5453,6 +5402,50 @@
   },
   {
    "file": "include/pineforge/map.hpp",
+   "symbol": "<temp:PineMap>",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename Key , typename Value > class PineMap #1"
+   ],
+   "cls": "temp",
+   "spelling": "PineMap",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/map.hpp",
+   "symbol": "<temp:PineMap>",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename Key , typename Value > class PineMap #1"
+   ],
+   "cls": "temp",
+   "spelling": "PineMap",
+   "ordinal": 2
+  },
+  {
+   "file": "include/pineforge/map.hpp",
+   "symbol": "<temp:PineMap>",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename Key , typename Value > class PineMap #1"
+   ],
+   "cls": "temp",
+   "spelling": "PineMap",
+   "ordinal": 3
+  },
+  {
+   "file": "include/pineforge/map.hpp",
+   "symbol": "new_",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename Key , typename Value > class PineMap #1"
+   ],
+   "cls": "decl",
+   "spelling": "PineMap",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/map.hpp",
    "symbol": "storage",
    "scope": [
     "namespace pineforge #1",
@@ -5461,6 +5454,18 @@
    ],
    "cls": "alloc",
    "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/map.hpp",
+   "symbol": "<temp:PineMap>",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename Key , typename Value > class PineMap #1",
+    "[ [ nodiscard ] ] static PineMap new_ ( ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "PineMap",
    "ordinal": 1
   },
   {
@@ -5529,6 +5534,17 @@
   },
   {
    "file": "include/pineforge/map.hpp",
+   "symbol": "copy",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename Key , typename Value > class PineMap #1"
+   ],
+   "cls": "decl",
+   "spelling": "PineMap",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/map.hpp",
    "symbol": "storage",
    "scope": [
     "namespace pineforge #1",
@@ -5553,6 +5569,18 @@
   },
   {
    "file": "include/pineforge/map.hpp",
+   "symbol": "<temp:PineMap>",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename Key , typename Value > class PineMap #1",
+    "[ [ nodiscard ] ] PineMap copy ( ) const #1"
+   ],
+   "cls": "temp",
+   "spelling": "PineMap",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/map.hpp",
    "symbol": "previous",
    "scope": [
     "namespace pineforge #1",
@@ -5562,6 +5590,17 @@
    "cls": "assign",
    "spelling": "previous = . . .",
    "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/map.hpp",
+   "symbol": "<temp:PineMap>",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename Key , typename Value > class PineMap #1"
+   ],
+   "cls": "temp",
+   "spelling": "PineMap",
+   "ordinal": 4
   },
   {
    "file": "include/pineforge/map.hpp",
@@ -13166,32 +13205,6 @@
   },
   {
    "file": "src/detail/o1_store.cpp",
-   "symbol": "new:StoreImpl",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace detail #1",
-    "namespace o1 #1",
-    "std :: unique_ptr < Store > Store :: open ( const Shape & shape , ScratchBacking & backing ) #1"
-   ],
-   "cls": "alloc",
-   "spelling": "new StoreImpl",
-   "ordinal": 1
-  },
-  {
-   "file": "src/detail/o1_store.cpp",
-   "symbol": "<temp:string>",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace detail #1",
-    "namespace o1 #1",
-    "[ [ noreturn ] ] void StoreImpl :: throw_status ( const char * what , ScratchStatus status ) const #1"
-   ],
-   "cls": "temp",
-   "spelling": "std::string",
-   "ordinal": 1
-  },
-  {
-   "file": "src/detail/o1_store.cpp",
    "symbol": "operator new",
    "scope": [
     "namespace pineforge #1",
@@ -13269,6 +13282,19 @@
   },
   {
    "file": "src/detail/o1_store.cpp",
+   "symbol": "<temp:string>",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace detail #1",
+    "namespace o1 #1",
+    "[ [ noreturn ] ] void StoreImpl :: throw_status ( const char * what , ScratchStatus status ) const #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/detail/o1_store.cpp",
    "symbol": "transaction",
    "scope": [
     "namespace pineforge #1",
@@ -13278,6 +13304,19 @@
    ],
    "cls": "alloc",
    "spelling": "new",
+   "ordinal": 1
+  },
+  {
+   "file": "src/detail/o1_store.cpp",
+   "symbol": "new:StoreImpl",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace detail #1",
+    "namespace o1 #1",
+    "std :: unique_ptr < Store > Store :: open ( const Shape & shape , ScratchBacking & backing ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "new StoreImpl",
    "ordinal": 1
   },
   {
@@ -40842,146 +40881,6 @@
   },
   {
    "file": "src/str_utils.cpp",
-   "symbol": "str_format_values",
-   "scope": [
-    "namespace pineforge #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: string",
-   "ordinal": 1
-  },
-  {
-   "file": "src/str_utils.cpp",
-   "symbol": "str_format",
-   "scope": [
-    "namespace pineforge #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: string",
-   "ordinal": 1
-  },
-  {
-   "file": "src/str_utils.cpp",
-   "symbol": "str_format_time",
-   "scope": [
-    "namespace pineforge #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: string",
-   "ordinal": 1
-  },
-  {
-   "file": "src/str_utils.cpp",
-   "symbol": "fmt",
-   "scope": [
-    "namespace pineforge #1",
-    "std :: string str_format_time ( long long timestamp_ms , const std :: string & format , const std :: string & timezone ) #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: string",
-   "ordinal": 1
-  },
-  {
-   "file": "src/str_utils.cpp",
-   "symbol": "<temp:string>",
-   "scope": [
-    "namespace pineforge #1",
-    "std :: string str_format_time ( long long timestamp_ms , const std :: string & format , const std :: string & timezone ) #1"
-   ],
-   "cls": "temp",
-   "spelling": "std :: string",
-   "ordinal": 1
-  },
-  {
-   "file": "src/str_utils.cpp",
-   "symbol": "str_match",
-   "scope": [
-    "namespace pineforge #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: string",
-   "ordinal": 1
-  },
-  {
-   "file": "src/str_utils.cpp",
-   "symbol": "str_split",
-   "scope": [
-    "namespace pineforge #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < std :: string >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/str_utils.cpp",
-   "symbol": "result",
-   "scope": [
-    "namespace pineforge #1",
-    "std :: vector < std :: string > str_split ( const std :: string & source , const std :: string & separator ) #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < std :: string >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/str_utils.cpp",
-   "symbol": "result",
-   "scope": [
-    "namespace pineforge #1",
-    "std :: vector < std :: string > str_split ( const std :: string & source , const std :: string & separator ) #1",
-    "while ( ( pos = source . find ( separator , start ) ) ! = std :: string :: npos ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "result . push_back ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/str_utils.cpp",
-   "symbol": "result",
-   "scope": [
-    "namespace pineforge #1",
-    "std :: vector < std :: string > str_split ( const std :: string & source , const std :: string & separator ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "result . push_back ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/str_utils.cpp",
-   "symbol": "str_tostring",
-   "scope": [
-    "namespace pineforge #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: string",
-   "ordinal": 1
-  },
-  {
-   "file": "src/str_utils.cpp",
-   "symbol": "oss",
-   "scope": [
-    "namespace pineforge #1",
-    "std :: string str_tostring ( double value , const std :: string & format_mode , double mintick ) #1",
-    "if ( format_mode = = && mintick > 0 . 0 ) #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: ostringstream",
-   "ordinal": 1
-  },
-  {
-   "file": "src/str_utils.cpp",
-   "symbol": "oss",
-   "scope": [
-    "namespace pineforge #1",
-    "std :: string str_tostring ( double value , const std :: string & format_mode , double mintick ) #1",
-    "if ( format_mode = = && mintick > 0 . 0 ) #1"
-   ],
-   "cls": "append",
-   "spelling": "oss < < . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "src/str_utils.cpp",
    "symbol": "result",
    "scope": [
     "namespace pineforge #1",
@@ -41399,6 +41298,26 @@
   },
   {
    "file": "src/str_utils.cpp",
+   "symbol": "str_format_values",
+   "scope": [
+    "namespace pineforge #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/str_utils.cpp",
+   "symbol": "str_format",
+   "scope": [
+    "namespace pineforge #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/str_utils.cpp",
    "symbol": "rendered",
    "scope": [
     "namespace pineforge #1",
@@ -41419,6 +41338,126 @@
    ],
    "cls": "grow",
    "spelling": "rendered . append ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/str_utils.cpp",
+   "symbol": "str_format_time",
+   "scope": [
+    "namespace pineforge #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/str_utils.cpp",
+   "symbol": "fmt",
+   "scope": [
+    "namespace pineforge #1",
+    "std :: string str_format_time ( long long timestamp_ms , const std :: string & format , const std :: string & timezone ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/str_utils.cpp",
+   "symbol": "<temp:string>",
+   "scope": [
+    "namespace pineforge #1",
+    "std :: string str_format_time ( long long timestamp_ms , const std :: string & format , const std :: string & timezone ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/str_utils.cpp",
+   "symbol": "str_match",
+   "scope": [
+    "namespace pineforge #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/str_utils.cpp",
+   "symbol": "str_split",
+   "scope": [
+    "namespace pineforge #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < std :: string >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/str_utils.cpp",
+   "symbol": "result",
+   "scope": [
+    "namespace pineforge #1",
+    "std :: vector < std :: string > str_split ( const std :: string & source , const std :: string & separator ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < std :: string >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/str_utils.cpp",
+   "symbol": "result",
+   "scope": [
+    "namespace pineforge #1",
+    "std :: vector < std :: string > str_split ( const std :: string & source , const std :: string & separator ) #1",
+    "while ( ( pos = source . find ( separator , start ) ) ! = std :: string :: npos ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "result . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/str_utils.cpp",
+   "symbol": "result",
+   "scope": [
+    "namespace pineforge #1",
+    "std :: vector < std :: string > str_split ( const std :: string & source , const std :: string & separator ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "result . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/str_utils.cpp",
+   "symbol": "str_tostring",
+   "scope": [
+    "namespace pineforge #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/str_utils.cpp",
+   "symbol": "oss",
+   "scope": [
+    "namespace pineforge #1",
+    "std :: string str_tostring ( double value , const std :: string & format_mode , double mintick ) #1",
+    "if ( format_mode = = && mintick > 0 . 0 ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: ostringstream",
+   "ordinal": 1
+  },
+  {
+   "file": "src/str_utils.cpp",
+   "symbol": "oss",
+   "scope": [
+    "namespace pineforge #1",
+    "std :: string str_tostring ( double value , const std :: string & format_mode , double mintick ) #1",
+    "if ( format_mode = = && mintick > 0 . 0 ) #1"
+   ],
+   "cls": "append",
+   "spelling": "oss < < . . .",
    "ordinal": 1
   },
   {
