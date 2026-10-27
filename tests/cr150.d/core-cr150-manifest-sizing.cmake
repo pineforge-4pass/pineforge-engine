@@ -1,0 +1,5 @@
+list(APPEND TEST_SOURCES test_scratch_manifest_sizing)
+pineforge_add_unit_test(test_scratch_manifest_sizing)
+add_test(NAME test_scratch_manifest_sizing_admission COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/tests/test_run_json_manifest_sizing.py --native $<TARGET_FILE:test_scratch_manifest_sizing> --admission-only)
+set_tests_properties(test_scratch_manifest_sizing_admission PROPERTIES LABELS slow RUN_SERIAL TRUE)
+add_test(NAME test_run_json_manifest_sizing COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/tests/test_run_json_manifest_sizing.py --native $<TARGET_FILE:test_scratch_manifest_sizing>)
