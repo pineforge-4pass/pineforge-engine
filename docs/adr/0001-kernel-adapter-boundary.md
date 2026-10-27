@@ -86,7 +86,7 @@ summary of it.
   `NativeCoordinate::interval_index` (`market_driver.hpp:74`) is the sequential
   SCRIPT-bar index even when `input_tf` is finer than `script_tf`. The same
   script coordinate books `PyramidEntry::entry_bar_index`, trade-row indices and
-  the inclusive bar metrics (`entry_bar_index` / `exit_bar_index` `engine_orders.cpp:127-128`, `bars` `engine_metrics.cpp:277`).
+  the inclusive bar metrics (`entry_bar_index` / `exit_bar_index` `engine_orders.cpp:127-128`, `bars` `engine_metrics.cpp:273`).
   `NativeCoordinate::input_interval_index` (`market_driver.hpp:79`) names the
   input slot that supplied the point for a host that needs input cadence. Both
   coordinate values are folded by `hash_coordinate`
@@ -181,7 +181,7 @@ summary of it.
   `KernelRecordedAtHostMarks` records the same series at the host's own marks.
   `report_open_position_at_end` books the still-open position as a mark-to-market row under
   `KernelRecorded`. Under `HostRecorded` an unrecorded curve still degenerates —
-  `compute_equity_stats` answers its defined empty-curve metrics with no error (`src/engine_metrics.cpp:449`,
+  `compute_equity_stats` answers its defined empty-curve metrics with no error (`src/engine_metrics.cpp:445`,
   consumed by `fill_metrics_section`, `src/engine_report.cpp:393`) — which is why the policy exists.
 - **Reproducibility.** Two digests, one wrapping the other. `native_continuation_hash()`
   (`native_host.hpp:1406`) returns the consumer's event/continuation hash. **A digest names

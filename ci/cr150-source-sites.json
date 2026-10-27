@@ -5847,7 +5847,7 @@
     "namespace pineforge #1",
     "namespace metrics #1",
     "class EquityMetricsFold #1",
-    "public : void fold ( const pf_equity_point_t & point , int month_key , bool observation = true , bool exposed = false ) #1"
+    "public : void fold ( const pf_equity_point_t & point , std :: int64_t month_key , bool observation = true , bool exposed = false ) #1"
    ],
    "cls": "assign",
    "spelling": "held_ = . . .",
@@ -5860,7 +5860,7 @@
     "namespace pineforge #1",
     "namespace metrics #1",
     "class EquityMetricsFold #1",
-    "bool replace_last ( const pf_equity_point_t & point , int month_key ) #1"
+    "bool replace_last ( const pf_equity_point_t & point , std :: int64_t month_key ) #1"
    ],
    "cls": "assign",
    "spelling": "held_ = . . .",
