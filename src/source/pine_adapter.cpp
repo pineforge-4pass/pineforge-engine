@@ -29133,7 +29133,7 @@ void PineExecutionAdapter::cancel_reversal_exit_owners(
     for (const auto& id : preserved) {
         if (previous && *previous == id) continue;
         previous = &id;
-        if (cohorts_by_id_.find(id) != cohorts_by_id_.end()) --count;
+        if (cohorts_by_id_.contains(id)) --count;
     }
     if (count == 0) return;
 
@@ -29156,7 +29156,7 @@ void PineExecutionAdapter::cancel_reversal_exit_owners(
     std::sort(owners.begin(), owners.end());
     owners.erase(std::unique(owners.begin(), owners.end()), owners.end());
     owners.erase(std::remove_if(owners.begin(), owners.end(), [&](const SourceId& id) {
-        return exempt(id) || cohorts_by_id_.find(id) == cohorts_by_id_.end();
+        return exempt(id) || !cohorts_by_id_.contains(id);
     }), owners.end());
     assert(owners.size() <= count);
 
