@@ -2,7 +2,7 @@ name: CI
 
 on:
   pull_request:
-    # Suite jobs skip on a draft PR (the required aggregate then fails, never passes);
+    # LB-387: suite jobs skip on a draft PR (the required aggregate then fails, never passes);
     # ready_for_review starts the full run when the PR is marked ready.
     # converted_to_draft re-runs the workflow so its failing aggregate supersedes the earlier ready run.
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
@@ -63,7 +63,7 @@ jobs:
               # events; none of them runs pull-request code.
               ;;
             workflow_run)
-              # Bind identity to the triggering run and its re-runner.
+              # LB-437: bind identity to the triggering run and its re-runner.
               # These two App bots are fixed canon policy; ALLOWED_BOTS is PR-only.
               [ -n "${WR_HEAD_REPO:-}" ] || fail "workflow_run head repository is missing"
               [ -n "${WR_ACTOR:-}" ] || fail "workflow_run triggering actor is missing"
