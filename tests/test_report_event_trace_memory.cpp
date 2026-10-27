@@ -86,6 +86,10 @@ void growth(Route route, bool reuse_full, const Directory& directory) {
 int main() {
     try {
         Directory directory;
+        // SessionKey keeps a process-wide identity pool. Populate it before
+        // the first measured sample so its intentional lifetime is outside
+        // the counted allocation window.
+        prime_identity_intern_pool();
         // Fresh sinks/optional summaries already pass on the previous tree.
         // Explicit summary retains all optional records there; reused sinks
         // retain the previous FULL name-vector and hash-bucket capacities.

@@ -50,6 +50,11 @@ inline NativeRunSpec spec(std::uint64_t generation = 1) {
     return result;
 }
 
+inline void prime_identity_intern_pool() {
+    const auto warmup = spec();
+    (void)warmup;
+}
+
 inline std::vector<Bar> feed(int count) {
     require(count > 0, "event/trace feed must be nonempty");
     std::vector<Bar> result;
