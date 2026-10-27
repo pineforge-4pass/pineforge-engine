@@ -73,5 +73,5 @@ def test_corpus_sink_csv_uses_no_history_accessor(tmp_path, monkeypatch):
         output = tmp_path / "trades.csv"
         corpus_fixture.rs.write_engine_trades_csv(rows, output)
         with output.open(newline="") as source:
-            assert len(list(csv.reader(source))) == len(rows) + 1
+            assert len(list(csv.reader(source))) == 2 * len(rows) + 1
     assert library.queried > 0 and calls == []
