@@ -516,7 +516,7 @@ pf_equity_stats_t compute_equity_stats(const PointSource& curve, int64_t n,
             const double compounded = (std::pow(ratio, 1.0 / span_years) - 1.0) * 100.0;
             // A nonfinite compounded value alone permits the proportional
             // fallback. The simple/compounded switch can cause a rare ranking
-            // inversion across the one-day boundary (simple > compounded).
+            // inversion across the one-day boundary (compounded > simple).
             e.cagr = check(std::isfinite(compounded) ? compounded
                            : (ratio - 1.0) * (1.0 / span_years) * 100.0, "cagr");
         }
