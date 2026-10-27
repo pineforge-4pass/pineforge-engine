@@ -1,6 +1,30 @@
-// Behavioral fail-before: without udt_graph.hpp this compiles and drives the
-// owning generated-container idiom. It reaches every bar and late read, then
-// fails the resident bound. --native runs that same control on the new tree.
+// U07 growth rows (100,000 and 1,000,000 bars) through a real native host
+// over synthetic deterministic bars.
+//
+// Script shape, one execution per bar:
+//   type Pivot
+//       int   bar
+//       float price
+//       Pivot prev            // edge 0: the previous bar's object, na on bar 0
+//       array<float> history  // edge 1: nested numeric vector, 4 values
+//       string label          // edge 2: nested string, 32 bytes
+//       array<float> same     // edge 3: the SAME vector again (an alias)
+//   var Pivot last = na
+//   last := Pivot.new(bar_index, close, last, history, label, history)
+// Every object stays reachable from `last`, so the live population grows with
+// bars and nothing is released before the run ends.
+//
+// FAIL-BEFORE (behavioural). Without udt_graph.hpp (base f66318a3) this file
+// compiles in its generated-container mode only: a C++ struct per object that
+// owns a std::vector<double> and a std::string, the objects retained in a
+// std::vector (the shape of tests/test_generic_matrix_udt.cpp's Pivot). It
+// reaches every bar and every late read, then fails the resident bound.
+// `--native` runs the same control on the new tree.
+//
+// GREEN. The same host callback builds the graph through UdtGraph over a Store
+// of fixed Shape. Residency = the Store's fixed workspace + the heap an
+// operation holds, both bounded from the Shape and the o1 contract alone
+// (a5u_test_store.hpp), never from a measurement or from N.
 #pragma once
 
 #define PINEFORGE_TEST_ALLOCATION_BYTES
@@ -26,54 +50,75 @@
 namespace a5u_growth {
 using a5u_test::require;
 
+// 256 resident pages hold the Store's hot index paths for this workload; the
+// bound below is derived from that Shape and does not move with N.
+inline constexpr std::uint32_t kResidentPages = 256;
+inline constexpr std::uint64_t kStoreBound = a5u_test::store_bound(kResidentPages);
+inline constexpr std::uint64_t kResidentBound = kStoreBound + a5u_test::kOperationHeapBound;
+// Logical field bytes one bar adds: vector 4 doubles + label 32 bytes +
+// object fields (int64, double) + the object's four edge ids.
+inline constexpr std::uint64_t kLogicalBytesPerBar = 32 + 32 + 16 + 4 * 8;
+
 inline double price(std::size_t bar) {
+    // Unique exact binary fractions: a store that repeated a window of old
+    // objects could not pass the late reads.
     return 100.0 + static_cast<double>(bar) * 2.0 +
            static_cast<double>((bar * 37) % 8) * 0.125;
 }
 inline std::array<double, 4> history(std::size_t bar) {
     return {{price(bar), -0.0, -price(bar), static_cast<double>(bar) * 0.25}};
 }
-inline unsigned char text_byte(std::uint64_t at) {
-    return static_cast<unsigned char>((at * 131 + at / 251) % 256);
-}
 inline std::array<unsigned char, 32> label(std::size_t bar) {
     std::array<unsigned char, 32> result{};
-    for (std::size_t i = 0; i < result.size(); ++i) result[i] = text_byte(bar * result.size() + i);
+    for (std::size_t i = 0; i < result.size(); ++i) {
+        const std::uint64_t at = static_cast<std::uint64_t>(bar) * result.size() + i;
+        result[i] = static_cast<unsigned char>((at * 131 + at / 251) % 256);
+    }
     return result;
 }
 
-inline std::size_t peak_heap = 0;
+// Retained heap of the family's own operations. Only family calls record:
+// caller-owned bars and the host's own allocations are outside the window.
+inline std::size_t heap_base = 0;
+inline std::size_t heap_peak = 0;
+inline std::size_t window_base = 0;
+inline std::size_t operation_peak = 0;
 inline void allocated(std::size_t) {
-    if (global_allocation::live_bytes > peak_heap) peak_heap = global_allocation::live_bytes;
+    const std::size_t live = global_allocation::live_bytes;
+    if (live > heap_base && live - heap_base > heap_peak) heap_peak = live - heap_base;
+    if (live > window_base && live - window_base > operation_peak) operation_peak = live - window_base;
 }
 struct OperationWindow {
     bool previous = global_allocation::recording;
-    OperationWindow() { global_allocation::recording = true; }
-    ~OperationWindow() { global_allocation::recording = previous; }
+    std::size_t previous_base = window_base;
+    OperationWindow() {
+        window_base = global_allocation::live_bytes;
+        global_allocation::recording = true;
+    }
+    ~OperationWindow() {
+        window_base = previous_base;
+        global_allocation::recording = previous;
+    }
 };
 
-// Same owning fields as tests/test_generic_matrix_udt.cpp's Pivot, plus an
-// explicit previous-object index so native destruction needs no deep stack.
 class NativeFamily {
-    struct Udt {
+    struct Pivot {
         std::int64_t bar;
         double price;
-        std::int64_t previous;
+        std::int64_t previous; // index, so destruction needs no deep stack
         std::vector<double> history;
         std::string label;
     };
-    std::vector<Udt> objects_;
-    std::string text_;
+    std::vector<Pivot> objects_;
+
 public:
-    void append(std::size_t bar, double value) {
+    void append(std::size_t bar, double close) {
         const auto numbers = history(bar);
         const auto bytes = label(bar);
-        objects_.push_back({static_cast<std::int64_t>(bar), value,
+        objects_.push_back({static_cast<std::int64_t>(bar), close,
                             static_cast<std::int64_t>(bar) - 1,
                             std::vector<double>(numbers.begin(), numbers.end()),
                             std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size())});
-        for (unsigned i = 0; i < 8; ++i)
-            text_.push_back(static_cast<char>(text_byte(bar * 8 + i)));
     }
     void verify(std::size_t count) const {
         require(objects_.size() == count, "native object creation was refused");
@@ -91,91 +136,82 @@ public:
                         std::memcmp(object.label.data(), bytes.data(), bytes.size()) == 0,
                     "native old nested string read");
         }
-        require(text_.size() == count * 8, "native growing string size");
-        for (std::size_t i = 0; i < text_.size(); ++i)
-            require(static_cast<unsigned char>(text_[i]) == text_byte(i), "native old growing string byte");
     }
     void finish() {
-        std::vector<Udt> empty;
+        std::vector<Pivot> empty;
         empty.swap(objects_);
-        std::string empty_text;
-        empty_text.swap(text_);
     }
 };
 
 #if PF_A5U_HAS_GRAPH
 class GraphFamily {
     using Id = pineforge::detail::o1::Id;
+    using UdtType = pineforge::detail::o1::UdtType;
+    struct Fields {
+        std::int64_t bar;
+        double price;
+    };
+    static constexpr UdtType kVector{1, sizeof(std::array<double, 4>), 0};
+    static constexpr UdtType kString{2, sizeof(std::array<unsigned char, 32>), 0};
+    static constexpr UdtType kPivot{3, sizeof(Fields), 4};
     pineforge::detail::o1::UdtGraph& graph_;
-    Id holder_;
+    a5u_test::CountingStore& operations_;
     Id root_;
+
 public:
-    explicit GraphFamily(pineforge::detail::o1::UdtGraph& graph)
-        : graph_(graph), holder_(graph.make(0, 2)), root_(graph.root(holder_)) {}
-    void append(std::size_t bar, double value) {
+    GraphFamily(pineforge::detail::o1::UdtGraph& graph, a5u_test::CountingStore& operations)
+        : graph_(graph), operations_(operations), root_(graph.root()) {}
+    void append(std::size_t bar, double close) {
+        const auto calls = operations_.data_calls;
+        const auto scopes = operations_.begin_calls;
         auto transaction = graph_.begin();
         const auto numbers = history(bar);
         const auto bytes = label(bar);
-        const Id vector = graph_.make(sizeof(numbers));
-        graph_.write(vector, 0, numbers.data(), sizeof(numbers));
-        const Id string = graph_.make(bytes.size());
-        graph_.write(string, 0, bytes.data(), bytes.size());
-        const Id object = graph_.make(2 * sizeof(std::uint64_t), 4);
-        graph_.set_scalar(object, static_cast<std::int64_t>(bar));
-        graph_.set_scalar(object, value, sizeof(std::int64_t));
-        graph_.set_edge(object, 0, graph_.edge(holder_, 0));
-        graph_.set_edge(object, 1, vector);
-        graph_.set_edge(object, 2, string);
-        graph_.set_edge(object, 3, vector); // The same child, counted once.
-        graph_.set_edge(holder_, 0, object);
-        // A generated unbounded string view streams fixed-size graph leaves.
-        // Never decode the growing value to a whole native std::string.
-        const Id text = graph_.make(8, 1);
-        const auto off = bar * 8;
-        std::array<unsigned char, 8> appended{};
-        for (std::size_t i = 0; i < appended.size(); ++i) appended[i] = text_byte(off + i);
-        graph_.write(text, 0, appended.data(), appended.size());
-        graph_.set_edge(text, 0, graph_.edge(holder_, 1));
-        graph_.set_edge(holder_, 1, text);
+        const Id vector = graph_.make(kVector, numbers.data(), nullptr);
+        const Id string = graph_.make(kString, bytes.data(), nullptr);
+        const Fields fields{static_cast<std::int64_t>(bar), close};
+        const std::array<Id, 4> children{{graph_.edge(root_, 0), vector, string, vector}};
+        graph_.set_edge(root_, 0, graph_.make(kPivot, &fields, children.data()));
         transaction->commit();
+        // Three makes: control read, create, staged write, head write each;
+        // four child validations; root read (header + edge); rebind (child
+        // header + root header + edge write). Bar zero skips a na validation.
+        constexpr std::uint64_t append_calls = 3 * (1 + 1 + 1 + 1) + 4 + 2 + 3;
+        constexpr std::uint64_t append_scopes = 1 + 3; // caller plus three makes
+        require(operations_.data_calls - calls <= append_calls &&
+                    operations_.begin_calls - scopes <= append_scopes,
+                "per-bar graph append exceeded its constant Store operation bound");
     }
     void verify(std::size_t count) const {
-        Id current = graph_.edge(holder_, 0);
+        Id current = graph_.edge(root_, 0);
         for (std::size_t remaining = count; remaining > 0; --remaining) {
-            const auto bar = remaining - 1;
-            require(graph_.scalar<std::int64_t>(current) == static_cast<std::int64_t>(bar) &&
-                        graph_.scalar<double>(current, sizeof(std::int64_t)) == price(bar),
+            const std::size_t bar = remaining - 1;
+            require(current != 0, "old UDT object is na");
+            const auto calls = operations_.data_calls;
+            Fields fields{};
+            std::array<Id, 4> children{};
+            graph_.read_object(current, kPivot, &fields, children.data());
+            require(fields.bar == static_cast<std::int64_t>(bar) && fields.price == price(bar),
                     "old UDT scalar read");
-            require(graph_.edge(current, 1) == graph_.edge(current, 3), "late read split a UDT alias");
+            require(children[1] != 0 && children[1] == children[3],
+                    "late read split the aliased vector");
             const auto expected_numbers = history(bar);
             std::array<double, 4> numbers{};
-            const auto vector = graph_.edge(current, 1);
-            require(graph_.payload_size(vector) == sizeof(numbers), "old nested vector size");
-            graph_.read(vector, 0, numbers.data(), sizeof(numbers));
+            graph_.read_object(children[1], kVector, numbers.data(), nullptr);
             require(std::memcmp(numbers.data(), expected_numbers.data(), sizeof(numbers)) == 0,
                     "old nested vector bits");
-            const auto expected_bytes = label(bar);
             std::array<unsigned char, 32> bytes{};
-            graph_.read(graph_.edge(current, 2), 0, bytes.data(), bytes.size());
-            require(bytes == expected_bytes, "old nested string bytes");
-            current = graph_.edge(current, 0);
+            graph_.read_object(children[2], kString, bytes.data(), nullptr);
+            require(bytes == label(bar), "old nested string bytes");
+            require(operations_.data_calls - calls == 3,
+                    "late read repeated a node header lookup");
+            current = children[0];
         }
-        require(current == 0, "UDT chain lost its na terminator or contains extra objects");
-        Id text = graph_.edge(holder_, 1);
-        std::array<unsigned char, 8> bytes{};
-        for (std::size_t remaining = count; remaining > 0; --remaining) {
-            require(graph_.payload_size(text) == bytes.size(), "growing string chunk extent");
-            graph_.read(text, 0, bytes.data(), bytes.size());
-            const auto off = (remaining - 1) * bytes.size();
-            for (std::size_t i = 0; i < bytes.size(); ++i)
-                require(bytes[i] == text_byte(off + i), "old byte in growing string");
-            text = graph_.edge(text, 0);
-        }
-        require(text == 0, "growing string dropped or added chunks");
+        require(current == 0, "UDT chain lost its na terminator or holds extra objects");
     }
-    void finish() {
+    std::uint64_t finish() {
         graph_.drop_root(root_);
-        graph_.collect();
+        return graph_.collect();
     }
 };
 #endif
@@ -184,6 +220,7 @@ template<class Family>
 class Host final : public pineforge::NativeStrategyHost {
     Family& family_;
     std::size_t callbacks_ = 0;
+
 public:
     explicit Host(Family& family) : family_(family) {
         pineforge::NativeRunSpec spec;
@@ -228,58 +265,72 @@ void drive(Family& family, std::size_t count) {
     require(host.last_error().empty(), host.last_error().c_str());
     require(host.callbacks() == count, "UDT workload did not reach every synthetic bar");
     OperationWindow window;
-    family.verify(count); // Every old object and byte, after the last bar.
+    family.verify(count); // every old object and byte, after the last bar
 }
 
 inline int run(std::size_t count, int argc, char** argv) {
     try {
-        require(count * sizeof(history(0)) > a5u_test::kResidentBound, "population cannot cross its bound");
         require(argc == 1 || (argc == 2 && std::strcmp(argv[1], "--native") == 0),
                 "usage: test_a5u_growth [--native]");
+        // The logical field bytes alone cross the whole resident bound eight
+        // times, so a GREEN cannot pass without spilling to the backing.
+        require(count * kLogicalBytesPerBar > 8 * kResidentBound,
+                "population cannot cross its bound");
         const bool native = !PF_A5U_HAS_GRAPH || argc == 2;
+        heap_base = global_allocation::live_bytes;
+        heap_peak = 0;
+        operation_peak = 0;
         global_allocation::on_recorded = &allocated;
         if (native) {
             NativeFamily family;
             drive(family, count);
-            {
-                OperationWindow window;
-                family.finish();
-            }
+            OperationWindow window;
+            family.finish();
         } else {
 #if PF_A5U_HAS_GRAPH
-            a5u_test::StoreFixture fixture;
-            pineforge::detail::o1::UdtGraph graph(*fixture.store);
+            a5u_test::StoreFixture fixture(kResidentPages);
+            a5u_test::CountingStore operations(*fixture.store);
+            pineforge::detail::o1::UdtGraph graph(operations);
             const auto empty_live = fixture.store->stats().bytes_live;
-            GraphFamily family(graph);
             const auto initial = fixture.store->stats();
+            GraphFamily family(graph, operations);
             drive(family, count);
             const auto stats = fixture.store->stats();
+            std::printf("A5U bars=%zu live=%llu resident=%llu backing=%llu store_bound=%llu\n",
+                        count, static_cast<unsigned long long>(stats.bytes_live),
+                        static_cast<unsigned long long>(stats.bytes_resident),
+                        static_cast<unsigned long long>(stats.bytes_backing),
+                        static_cast<unsigned long long>(kStoreBound));
             require(stats.bytes_resident == initial.bytes_resident &&
-                        stats.bytes_resident <= a5u_test::kStoreBound,
+                        stats.bytes_resident <= kStoreBound,
                     "real store workspace grew with objects");
-            require(stats.bytes_live >= count * (sizeof(history(0)) + sizeof(label(0)) + 16) &&
-                        stats.bytes_backing > stats.bytes_live &&
-                        stats.bytes_backing > a5u_test::kResidentBound,
+            require(stats.bytes_live >= count * kLogicalBytesPerBar &&
+                        stats.bytes_backing > 8 * kResidentBound,
                     "live graph population did not spill beyond the resident window");
             {
                 OperationWindow window;
-                family.finish();
-                require(fixture.store->stats().bytes_live == empty_live, "unreachable UDT objects leaked");
+                // Three nodes per bar (object, vector, string; the aliased
+                // vector is one node) plus the dropped root.
+                require(family.finish() == 3 * static_cast<std::uint64_t>(count) + 1,
+                        "collection released a different node count than the graph holds");
+                require(fixture.store->stats().bytes_live == empty_live,
+                        "unreachable UDT objects leaked");
                 graph.close();
                 require(fixture.store->stats().bytes_live == 0, "graph close retained records");
             }
-            std::printf("A5U bars=%zu live=%llu resident=%llu backing=%llu\n", count,
-                        static_cast<unsigned long long>(stats.bytes_live),
-                        static_cast<unsigned long long>(stats.bytes_resident),
-                        static_cast<unsigned long long>(stats.bytes_backing));
-            require(stats.bytes_resident + peak_heap <= a5u_test::kResidentBound,
-                    "graph heap outside the real store exceeds the derived fixed bound");
+            require(heap_peak <= a5u_test::kOperationHeapBound,
+                    "graph retained heap across operation windows");
+            require(operation_peak <= a5u_test::kOperationHeapBound,
+                    "one graph operation held heap beyond its Tx handles");
+            require(stats.bytes_resident + heap_peak <= kResidentBound,
+                    "graph residency exceeds the derived fixed bound");
 #endif
         }
-        std::printf("A5U bars=%zu operation_heap_peak=%zu bound=%llu mode=%s\n", count, peak_heap,
-                    static_cast<unsigned long long>(a5u_test::kResidentBound),
+        std::printf("A5U bars=%zu retained_heap_peak=%zu operation_heap_peak=%zu bound=%llu mode=%s\n",
+                    count, heap_peak, operation_peak,
+                    static_cast<unsigned long long>(kResidentBound),
                     native ? "native-RED" : "store-GREEN");
-        require(peak_heap <= a5u_test::kResidentBound, "UDT owning fields retain heap proportional to bars");
+        require(heap_peak <= kResidentBound, "UDT owning fields retain heap proportional to bars");
         global_allocation::on_recorded = nullptr;
         return 0;
     } catch (const std::exception& error) {
@@ -288,4 +339,5 @@ inline int run(std::size_t count, int argc, char** argv) {
         return 1;
     }
 }
+
 } // namespace a5u_growth
