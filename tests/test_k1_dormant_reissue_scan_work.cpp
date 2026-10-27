@@ -25,10 +25,9 @@ struct DeducedPrivateAccess {
 };
 template struct DeducedPrivateAccess<CohortsTag, &ps::PineExecutionAdapter::cohorts_by_id_>;
 struct CycleTag {
-    using type = std::int64_t ps::PineExecutionAdapter::*;
-    friend type access(CycleTag);
+    friend auto access(CycleTag);
 };
-template struct PrivateAccess<CycleTag, &ps::PineExecutionAdapter::current_position_cycle_>;
+template struct DeducedPrivateAccess<CycleTag, &ps::PineExecutionAdapter::current_position_cycle_>;
 
 struct Work {
     std::uint64_t pairs = 0;
