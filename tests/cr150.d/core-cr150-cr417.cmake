@@ -1,0 +1,3 @@
+list(APPEND TEST_SOURCES test_object_store_reserve)
+pineforge_add_unit_test(test_object_store_reserve)
+set_tests_properties(test_object_store_reserve PROPERTIES LABELS "mem")
