@@ -515,11 +515,11 @@ struct CommandObserver {
             return;
         }
         const bool write = charge.operation == pd::ScratchIoOperation::write_page;
-        // Every WRITE charge is the page write that just reached the file. A READ
-        // charge is either that physical pread (a miss) or, with a cache above the
-        // backing, a HIT that issued no syscall (no valid last page I/O); a valid
-        // last page I/O that does not match the charged page is still an error.
-        const bool cache_hit = !write && !last_page_io.valid;
+        // The outer backing charges every logical read AND write, including
+        // resident hits that issue no syscall. When physical I/O occurred,
+        // retain its page/direction/descriptor checks; the resident workloads
+        // below additionally require exactly zero physical calls and bytes.
+        const bool cache_hit = !last_page_io.valid;
         self.invalid |= charge.bytes != platform_page
             || (!cache_hit && (!last_page_io.valid
                 || last_page_io.write != write || last_page_io.fd != counters.page_fd
@@ -894,13 +894,12 @@ SourceRun source_run(Count n) {
         result.context.records_changed = observer.erased;
         validate(result.io);
         require(!observer.invalid && observer.extent_pages > 0 && observer.writes > 0
-                && result.io.page_fd >= 0
-                && observer.writes == result.io.pages.pwrite.calls
-                // The observer is charged by the outermost backing once per LOGICAL
-                // read_page (a cache above the physical backing still charges its
-                // hits), so it equals the store's own attempted reads; the wrapped
-                // physical preads can only be fewer (a hit issues none).
-                && result.io.pages.pread.calls <= observer.reads
+                && result.io.page_fd == -1
+                && result.io.pages.pwrite.calls == 0 && result.io.pages.pwrite.bytes == 0
+                // The <=64-KiB extent premise below keeps every page resident.
+                // Logical reads/writes must still equal the store's counters;
+                // the forwarding syscall wrappers must see no page traffic.
+                && result.io.pages.pread.calls == 0 && result.io.pages.pread.bytes == 0
                 && observer.writes == after.page_writes - before.page_writes
                 && observer.reads == after.page_reads - before.page_reads
                 && observer.syncs == after.syncs - before.syncs
@@ -973,8 +972,10 @@ SourceRun scope_erase_run(Count records) {
             && observer.scopes.cleared_scopes == 1
             && observer.scopes.commit_allowance == ceil_div(records, sd::kExitScopeEraseBatch)
             && observer.extent_pages > 0 && observer.writes > 0
-            && observer.writes == result.io.pages.pwrite.calls
-            && result.io.pages.pread.calls <= observer.reads
+            && after.backing_pages * platform_page <= kCacheBytes
+            && result.io.page_fd == -1
+            && result.io.pages.pwrite.calls == 0 && result.io.pages.pwrite.bytes == 0
+            && result.io.pages.pread.calls == 0 && result.io.pages.pread.bytes == 0
             && observer.writes == after.page_writes - before.page_writes
             && observer.reads == after.page_reads - before.page_reads
             && observer.syncs == after.syncs - before.syncs
