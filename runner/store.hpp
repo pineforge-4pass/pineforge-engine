@@ -5,12 +5,51 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace pineforge::live {
 
 void refuse_legacy_ledger(const std::string& path, const std::string& legacy_identity);
+
+inline constexpr std::uint64_t kDefaultReportCheckpointInterval = 1024;
+
+struct LedgerOptions {
+    std::uint64_t report_checkpoint_interval = kDefaultReportCheckpointInterval;
+};
+
+enum class CheckpointFailureCode {
+    missing_integrity,
+    integrity_mismatch,
+    previous_hash_mismatch,
+    payload_hash_mismatch,
+    invalid_payload,
+};
+
+class CheckpointFailure final : public std::runtime_error {
+public:
+    CheckpointFailure(CheckpointFailureCode code, std::uint64_t cursor,
+                      const std::string& message)
+        : std::runtime_error(message), code_(code), cursor_(cursor) {}
+    CheckpointFailureCode code() const noexcept { return code_; }
+    std::uint64_t cursor() const noexcept { return cursor_; }
+
+private:
+    CheckpointFailureCode code_;
+    std::uint64_t cursor_;
+};
+
+struct CheckpointDiagnostic {
+    CheckpointFailureCode code;
+    std::uint64_t cursor = 0;
+    std::string message;
+};
+
+struct ReportReadStats {
+    std::uint64_t checkpoint_rows = 0;
+    std::uint64_t delta_rows = 0;
+};
 
 struct Event {
     std::string id;
@@ -55,7 +94,8 @@ struct DeliveryScan {
 // Payloads are opaque bytes and are never reserialized or changed on delivery.
 class Ledger {
 public:
-    Ledger(const std::string& path, const std::string& deployment_identity);
+    Ledger(const std::string& path, const std::string& deployment_identity,
+           LedgerOptions options = {});
     ~Ledger();
     Ledger(const Ledger&) = delete;
     Ledger& operator=(const Ledger&) = delete;
@@ -72,6 +112,8 @@ public:
                       const std::string& report_json = {});
     void verify_report(std::uint64_t cursor, const std::string& report_json,
                        const std::function<std::string()>& legacy_report = {});
+    std::optional<std::uint64_t> verified_report_checkpoint(std::uint64_t target) const;
+    void verify_report_checkpoint(std::uint64_t cursor, const std::string& report_json) const;
 
 #ifdef PINEFORGE_LIVE_LEGACY_TEST_API
     std::optional<StoredEvent> pending_event() const;
@@ -115,7 +157,11 @@ public:
     std::vector<StoredEvent> redelivery_events(const std::string& target,
                                               std::uint64_t from, bool failed_only) const;
     std::string status_json() const;
-    std::string report_json(std::optional<std::uint64_t> cursor = std::nullopt) const;
+    std::string report_json(std::optional<std::uint64_t> cursor = std::nullopt,
+                            ReportReadStats* stats = nullptr) const;
+    std::string report_json_full(std::optional<std::uint64_t> cursor = std::nullopt,
+                                 ReportReadStats* stats = nullptr) const;
+    std::optional<CheckpointDiagnostic> checkpoint_diagnostic() const;
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

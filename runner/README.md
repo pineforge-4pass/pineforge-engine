@@ -38,26 +38,33 @@ pineforge-live report --ledger orders.sqlite3 --deployment DEPLOYMENT --at-input
 is a committed-message cursor (the number of messages, not the zero-based input
 index, action sequence or bar count); 0 denotes warmup. Omit it for the latest
 committed report. An unavailable cursor or mismatched optional deployment exits
-1. Reading is safe while a runner owns the ledger. Export re-verifies the whole
-committed report-integrity chain in one read snapshot, including inputs, stored
-state hashes and immutable actions, even for an earlier requested cursor.
-A missing or mismatched digest refuses export. These SHA-256 digests detect
-ledger corruption, not edits by someone able to replace both data and digests;
-only `run` recomputes engine state by replay. `run --report-jsonl` mirrors
+1. Reading is safe while a runner owns the ledger. Export uses the nearest
+verified report checkpoint at or below the requested cursor and folds only the
+following deltas. The checkpoint carries the cumulative report bytes, its
+report-integrity chain value and a payload hash. A missing or mismatched
+checkpoint witness falls back to full report reconstruction and records a
+typed diagnostic. These SHA-256 digests detect ledger corruption, not edits by
+someone able to replace both data and digests; only `run` recomputes engine
+state by replay. `run --report-jsonl` mirrors
 each newly committed report to stdout, followed by the existing operational run
 summary; replayed source-prefix messages are not mirrored again. A closed
 stdout pipe fails clearly with exit 1, never SIGPIPE; the last input and report
 are already durable, and export remains available.
 
 The input, engine hash, actions, cumulative report and its integrity digest commit in one SQLite
-transaction. Append-only `pineforge-native-report-delta/v1` rows contain changed
-scalar fields and appended/replaced array suffixes, not historical full-report
-copies. Export folds these rows through the selected cursor into byte-identical
-canonical report JSON. Recovery verifies each input's engine hash, actions and
-exact report delta before delivery. Existing full-report rows remain immutable
-and readable; recovery verifies them against the reconstructed full report, then
-new inputs use deltas. This avoids quadratic report storage without changing the
-export schema or engine computation.
+transaction. A report checkpoint is written in that transaction at every
+checkpoint interval. The default interval is 1024 committed inputs and can be
+changed with `--checkpoint-interval K`; smaller values trade more checkpoint
+rows and writes for a shorter report reconstruction tail. Append-only
+`pineforge-native-report-delta/v1` rows contain changed scalar fields and
+appended/replaced array suffixes, not historical full-report copies. Export
+folds these rows through the selected cursor into byte-identical canonical
+report JSON. Recovery still replays every committed strategy input because the
+strategy state has no restore API; it verifies each input's engine hash, actions
+before delivery, verifies the recomputed report at the
+checkpoint and later inputs, and uses the checkpoint only for the report-side
+prefix. This bounds report export work after a verified checkpoint, while
+strategy-state recovery remains replay work.
 Array suffix replacement assumes at most one provisional trailing element for
 equity points and broker hashes. The runner never enables tracing and refuses
 nonempty `trace`: traces can contain several records per bucket, so enabling
@@ -96,7 +103,8 @@ no report field is silently excluded from the confirmed-bar E2E comparison.
 pineforge-live run --strategy strategy.so --warmup history-15m.csv --script-tf 15 \
   --symbol EXCHANGE:SYMBOL --mode bars --feed - --ledger orders.sqlite3 \
   --status-file status.json --status-interval 1 --control-dir control \
-  --feed-idle-timeout 15 --feed-message-timeout 15 --max-ledger-bytes 1073741824
+  --feed-idle-timeout 15 --feed-message-timeout 15 --checkpoint-interval 1024 \
+  --max-ledger-bytes 1073741824
 pineforge-live probe --status-file status.json --max-age 3
 pineforge-live probe --status-file status.json --max-age 3 --ready
 ```
@@ -184,6 +192,9 @@ pineforge-live probe --status-file status.json --max-age 3 --ready
   and the bounded delivery drain can exceed it. Reserve free space for both;
   an actual I/O failure exits 1. No automatic pruning or report retention
   policy is applied.
+- `--checkpoint-interval K` writes a cumulative report checkpoint every K
+  committed inputs. K must be positive and defaults to 1024. Checkpoints are
+  report recovery aids; they do not serialize or restore strategy state.
 
 ### Live redelivery control files
 
@@ -602,10 +613,12 @@ process; it never continues with an advanced but uncommitted strategy.
 
 Restart uses the original strategy/warmup/settings, reconstructs the same
 native instance by replaying committed inputs, and compares hashes and every
-action payload before sending anything. Strategy private members are not
+action payload before sending anything. Report export can start at a verified
+checkpoint, but restart cannot restore strategy state from it and therefore
+still replays the committed strategy inputs. Strategy private members are not
 serialized: hand-written strategies must be deterministic and avoid external
-I/O/random state influencing decisions. The hash covers observable engine
-and stream state, not arbitrary C++ private variables.
+I/O/random state influencing decisions. The hash covers observable engine and
+stream state, not arbitrary C++ private variables.
 
 Replay fails closed if changed timezone rules or session configuration make
 recorded input incompatible with the calendar. A cadence or input-gap refusal

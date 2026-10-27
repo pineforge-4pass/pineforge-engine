@@ -79,6 +79,22 @@ diagnostics keys, described below.
   per-record sink parse and the dense-script close path are separate work, not in
   this release.
 
+### Native live report checkpoints
+
+The live runner now writes an immutable cumulative report checkpoint in the
+same transaction as every configured checkpoint boundary. Report export starts
+from the nearest verified checkpoint and applies only the following deltas,
+with a structural tail bound of the checkpoint interval plus the checkpoint
+row. A payload or integrity witness failure records a typed diagnostic and
+falls back to full report reconstruction. The default interval is 1024 inputs
+and can be changed with `--checkpoint-interval K`.
+
+The checkpoint contains report state only. The engine has no state restore
+entry point, so restart recovery still replays committed strategy inputs and
+validates their state hashes and actions. The diagnostic measurement row prints
+the lab's file, WAL, RSS, descriptor and timing values; this release does not
+claim those unmeasured values in its documentation.
+
 ### Scratch placement (behaviour of 1.7.0 and later, restated)
 
 - **Where scratch goes and when a run is refused.** The text is in

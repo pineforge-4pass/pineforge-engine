@@ -4745,6 +4745,15 @@ environment defaults for spec fields. Omitted CLI clock/symbol flags take the
 file. Explicit `--input-tf`, `--script-tf`, `--timezone`, `--session`,
 `--chart-timezone`, or `--symbol` must equal the file.
 
+Live report export uses immutable cumulative checkpoints written with the
+input transaction. The default checkpoint interval is 1024 committed inputs;
+`--checkpoint-interval K` selects another positive interval. Export starts at
+the nearest verified checkpoint and applies the following report deltas, so its
+report-side tail is bounded by that interval and one checkpoint row. A failed
+checkpoint witness falls back to full report reconstruction. Checkpoints do
+not serialize strategy state: restart recovery still replays the committed
+strategy inputs because the stream ABI has no state restore operation.
+
 `input_mode` is the CLI `--mode` (`bars` or `ticks`), not a JSON key.
 Timestamps in the spec, warmup CSV, and JSONL are Unix milliseconds.
 

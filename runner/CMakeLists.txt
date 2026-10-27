@@ -185,6 +185,22 @@ if(PINEFORGE_BUILD_TESTS)
         add_test(NAME ${native_test} COMMAND ${native_test})
     endforeach()
     set_tests_properties(test_native_live_websocket PROPERTIES SKIP_RETURN_CODE 77)
+    add_executable(test_native_live_checkpoint
+        ${PROJECT_SOURCE_DIR}/tests/test_native_live_checkpoint.cpp)
+    target_link_libraries(test_native_live_checkpoint PRIVATE pineforge_live_legacy_test_support)
+    target_compile_options(test_native_live_checkpoint PRIVATE -UNDEBUG)
+    add_test(NAME test_native_live_checkpoint COMMAND test_native_live_checkpoint)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_executable(test_native_live_checkpoint_measurement
+            ${PROJECT_SOURCE_DIR}/tests/test_native_live_checkpoint_measurement.cpp)
+        target_link_libraries(test_native_live_checkpoint_measurement PRIVATE
+            pineforge_live_legacy_test_support)
+        target_compile_options(test_native_live_checkpoint_measurement PRIVATE -UNDEBUG)
+        add_test(NAME test_native_live_checkpoint_measurement
+            COMMAND test_native_live_checkpoint_measurement)
+        set_tests_properties(test_native_live_checkpoint_measurement PROPERTIES
+            LABELS "slow;diagnostic" RUN_SERIAL TRUE)
+    endif()
     if(PINEFORGE_BUILD_SOURCE_LAYER)
         add_test(NAME native_live_routing_e2e COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/tests/native_live_routing_e2e.py $<TARGET_FILE:pineforge-live>

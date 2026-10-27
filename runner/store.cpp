@@ -153,6 +153,219 @@ void verify_report_integrity(sqlite3* database, std::uint64_t cursor, const std:
     }
 }
 
+struct CheckpointRow {
+    std::uint64_t cursor = 0;
+    std::string integrity_digest;
+    std::string previous_integrity_digest;
+    std::string payload_hash;
+    std::string payload;
+};
+
+std::optional<std::string> stored_report_digest(sqlite3* database, std::uint64_t cursor) {
+    Statement query(database, "SELECT digest FROM report_integrity WHERE input_cursor=?");
+    query.bind(1, cursor);
+    return query.row() ? std::optional<std::string>(query.text(0)) : std::nullopt;
+}
+
+std::optional<CheckpointRow> nearest_checkpoint(sqlite3* database, std::uint64_t target,
+                                                ReportReadStats* stats) {
+    Statement query(database,
+        "SELECT input_cursor,report_integrity_digest,previous_integrity_digest,payload_hash,payload "
+        "FROM report_checkpoints WHERE input_cursor<=? ORDER BY input_cursor DESC LIMIT 1");
+    query.bind(1, target);
+    if (!query.row()) return std::nullopt;
+    if (stats) ++stats->checkpoint_rows;
+    return CheckpointRow{query.integer(0), query.text(1), query.text(2), query.text(3), query.text(4)};
+}
+
+std::optional<CheckpointRow> checkpoint_at(sqlite3* database, std::uint64_t cursor) {
+    Statement query(database,
+        "SELECT input_cursor,report_integrity_digest,previous_integrity_digest,payload_hash,payload "
+        "FROM report_checkpoints WHERE input_cursor=?");
+    query.bind(1, cursor);
+    if (!query.row()) return std::nullopt;
+    return CheckpointRow{query.integer(0), query.text(1), query.text(2), query.text(3), query.text(4)};
+}
+
+Json verify_checkpoint(sqlite3* database, const CheckpointRow& checkpoint) {
+    if (!checkpoint.cursor)
+        throw CheckpointFailure(CheckpointFailureCode::invalid_payload, checkpoint.cursor,
+                                "native ledger report checkpoint has an invalid cursor");
+    if (sha256_hex(checkpoint.payload) != checkpoint.payload_hash)
+        throw CheckpointFailure(CheckpointFailureCode::payload_hash_mismatch, checkpoint.cursor,
+                                "native ledger report checkpoint payload hash mismatch");
+    Json document;
+    try {
+        document = parse_json(checkpoint.payload);
+    } catch (const std::exception&) {
+        throw CheckpointFailure(CheckpointFailureCode::invalid_payload, checkpoint.cursor,
+                                "native ledger report checkpoint payload is invalid");
+    }
+    if (document.kind != Json::Kind::Object)
+        throw CheckpointFailure(CheckpointFailureCode::invalid_payload, checkpoint.cursor,
+                                "native ledger report checkpoint payload is not an object");
+
+    std::string previous_hash;
+    if (checkpoint.cursor) {
+        const auto previous = stored_report_digest(database, checkpoint.cursor - 1);
+        if (!previous)
+            throw CheckpointFailure(CheckpointFailureCode::missing_integrity, checkpoint.cursor,
+                                    "native ledger report checkpoint has no previous integrity digest");
+        previous_hash = *previous;
+    }
+    if (checkpoint.previous_integrity_digest != previous_hash)
+        throw CheckpointFailure(CheckpointFailureCode::previous_hash_mismatch, checkpoint.cursor,
+                                "native ledger report checkpoint previous hash does not chain");
+    const auto stored = stored_report_digest(database, checkpoint.cursor);
+    if (!stored)
+        throw CheckpointFailure(CheckpointFailureCode::missing_integrity, checkpoint.cursor,
+                                "native ledger report checkpoint has no integrity digest");
+    if (*stored != checkpoint.integrity_digest)
+        throw CheckpointFailure(CheckpointFailureCode::integrity_mismatch, checkpoint.cursor,
+                                "native ledger report checkpoint integrity digest mismatch");
+
+    Statement report(database, "SELECT payload FROM report_snapshots WHERE input_cursor=?");
+    report.bind(1, checkpoint.cursor);
+    if (!report.row())
+        throw CheckpointFailure(CheckpointFailureCode::missing_integrity, checkpoint.cursor,
+                                "native ledger report checkpoint has no report snapshot");
+    std::string expected;
+    try {
+        expected = report_integrity(database, checkpoint.cursor, report.text(0), previous_hash);
+    } catch (const std::exception&) {
+        throw CheckpointFailure(CheckpointFailureCode::integrity_mismatch, checkpoint.cursor,
+                                "native ledger report checkpoint integrity chain cannot be verified");
+    }
+    if (expected != checkpoint.integrity_digest)
+        throw CheckpointFailure(CheckpointFailureCode::integrity_mismatch, checkpoint.cursor,
+                                "native ledger report checkpoint integrity chain mismatch");
+    return document;
+}
+
+void apply_report_snapshot(Json& document, const std::string& bytes) {
+    auto payload = parse_json(bytes);
+    if (payload.kind == Json::Kind::Object &&
+        payload.members.count("schema_version") &&
+        payload.at("schema_version").kind == Json::Kind::String &&
+        payload.at("schema_version").text() == "pineforge-native-report-delta/v1")
+        apply_report_delta(document, payload);
+    else
+        document = std::move(payload);
+}
+
+Json read_full_report(sqlite3* database, std::uint64_t target, ReportReadStats* stats) {
+    Json document;
+    std::uint64_t expected_cursor = 0;
+    std::string previous_hash;
+    Statement report(database,
+        "SELECT input_cursor,payload FROM report_snapshots WHERE input_cursor<=? ORDER BY input_cursor");
+    report.bind(1, target);
+    while (report.row()) {
+        const auto cursor = report.integer(0);
+        if (cursor != expected_cursor++)
+            throw std::runtime_error("cumulative report delta hole");
+        const auto bytes = report.text(1);
+        const auto stored = stored_report_digest(database, cursor);
+        if (!stored)
+            throw std::runtime_error("resume this ledger with run before exporting reports");
+        const auto digest = report_integrity(database, cursor, bytes, previous_hash);
+        if (*stored != digest) throw std::runtime_error("native ledger report integrity mismatch");
+        apply_report_snapshot(document, bytes);
+        previous_hash = digest;
+        if (stats) ++stats->delta_rows;
+    }
+    if (!expected_cursor || expected_cursor - 1 != target)
+        throw std::runtime_error("no cumulative report at requested input cursor");
+    return document;
+}
+
+Json read_checkpointed_report(sqlite3* database, std::uint64_t target,
+                              const CheckpointRow& checkpoint, ReportReadStats* stats) {
+    auto document = verify_checkpoint(database, checkpoint);
+    std::string previous_hash = checkpoint.integrity_digest;
+    std::uint64_t expected_cursor = checkpoint.cursor + 1;
+    Statement report(database,
+        "SELECT input_cursor,payload FROM report_snapshots "
+        "WHERE input_cursor>? AND input_cursor<=? ORDER BY input_cursor");
+    report.bind(1, checkpoint.cursor);
+    report.bind(2, target);
+    while (report.row()) {
+        const auto cursor = report.integer(0);
+        if (cursor != expected_cursor++)
+            throw std::runtime_error("cumulative report delta hole");
+        const auto bytes = report.text(1);
+        const auto stored = stored_report_digest(database, cursor);
+        if (!stored)
+            throw std::runtime_error("resume this ledger with run before exporting reports");
+        const auto digest = report_integrity(database, cursor, bytes, previous_hash);
+        if (*stored != digest) throw std::runtime_error("native ledger report integrity mismatch");
+        apply_report_snapshot(document, bytes);
+        previous_hash = digest;
+        if (stats) ++stats->delta_rows;
+    }
+    if (expected_cursor != target + 1)
+        throw std::runtime_error("cumulative report delta hole");
+    return document;
+}
+
+Json read_report_document(sqlite3* database, std::uint64_t target, bool use_checkpoints,
+                          bool checkpoints_available, ReportReadStats* stats) {
+    if (use_checkpoints && checkpoints_available) {
+        if (const auto checkpoint = nearest_checkpoint(database, target, stats))
+            return read_checkpointed_report(database, target, *checkpoint, stats);
+    }
+    return read_full_report(database, target, stats);
+}
+
+void write_report_checkpoint(sqlite3* database, std::uint64_t cursor) {
+    const auto digest = stored_report_digest(database, cursor);
+    if (!digest) throw std::runtime_error("native ledger report checkpoint lacks its integrity digest");
+    std::optional<std::string> previous;
+    if (cursor) previous = stored_report_digest(database, cursor - 1);
+    if (cursor && !previous)
+        throw std::runtime_error("native ledger report checkpoint lacks its previous integrity digest");
+
+    Json document;
+    try {
+        document = read_report_document(database, cursor, true, true, nullptr);
+    } catch (const CheckpointFailure&) {
+        document = read_report_document(database, cursor, false, false, nullptr);
+    }
+    const auto payload = document.dump();
+    if (payload.empty())
+        throw std::runtime_error("native ledger report checkpoint payload is empty");
+    Statement insert(database,
+        "INSERT INTO report_checkpoints(input_cursor,report_integrity_digest,"
+        "previous_integrity_digest,payload_hash,payload) VALUES(?,?,?,?,?)");
+    insert.bind(1, cursor);
+    insert.bind(2, *digest);
+    insert.bind(3, previous.value_or(""));
+    insert.bind(4, sha256_hex(payload));
+    insert.bind(5, payload);
+    insert.done();
+}
+
+std::string export_report(sqlite3* database, std::optional<std::uint64_t> cursor,
+                          bool checkpoints_available, bool use_checkpoints,
+                          ReportReadStats* stats) {
+    exec(database, "BEGIN");
+    struct ReadEnd {
+        sqlite3* database;
+        ~ReadEnd() { sqlite3_exec(database, "ROLLBACK", nullptr, nullptr, nullptr); }
+    } read_end{database};
+    Statement available(database,
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN "
+        "('report_snapshots','report_integrity')");
+    if (!available.row() || available.integer(0) != 2)
+        throw std::runtime_error("resume this ledger before exporting reports");
+    const auto committed = scalar(database, "SELECT COUNT(*) FROM inputs");
+    const auto target = cursor.value_or(committed);
+    if (target > committed)
+        throw std::runtime_error("invalid cumulative report cursor");
+    if (stats) *stats = {};
+    return read_report_document(database, target, use_checkpoints, checkpoints_available, stats).dump();
+}
+
 std::uint64_t commit_time() {
     return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count());
@@ -218,6 +431,7 @@ struct Ledger::Impl {
     sqlite3* db = nullptr;
     int lock_fd = -1;
     int database_fd = -1;
+    std::uint64_t checkpoint_interval = kDefaultReportCheckpointInterval;
     mutable std::recursive_mutex mutex;
     ~Impl() {
         if (db) sqlite3_close_v2(db);
@@ -235,8 +449,12 @@ struct Ledger::Impl {
     }
 };
 
-Ledger::Ledger(const std::string& path, const std::string& deployment_identity)
+Ledger::Ledger(const std::string& path, const std::string& deployment_identity,
+               LedgerOptions options)
     : impl_(std::make_unique<Impl>()) {
+    if (!options.report_checkpoint_interval)
+        throw std::runtime_error("native ledger report checkpoint interval must be positive");
+    impl_->checkpoint_interval = options.report_checkpoint_interval;
     validate_bytes(deployment_identity, "deployment identity");
     if (path.empty() || path == ":memory:" || path.find('\0') != std::string::npos)
         throw std::runtime_error("native ledger requires an on-disk path");
@@ -281,7 +499,8 @@ Ledger::Ledger(const std::string& path, const std::string& deployment_identity)
         Statement q(impl_->db, "INSERT INTO metadata VALUES(1,1,?)");
         q.bind(1, deployment_identity);
         q.done();
-    } else if (table_count != 3 && table_count != 6 && table_count != 7 && table_count != 8 && table_count != 9) {
+    } else if (table_count != 3 && table_count != 6 && table_count != 7 && table_count != 8 &&
+               table_count != 9 && table_count != 10) {
         throw std::runtime_error("native ledger is not an empty or supported ledger database");
     }
     {
@@ -297,6 +516,10 @@ Ledger::Ledger(const std::string& path, const std::string& deployment_identity)
         "CREATE TABLE IF NOT EXISTS report_integrity (input_cursor INTEGER PRIMARY KEY REFERENCES report_snapshots(input_cursor),digest TEXT NOT NULL);"
         "CREATE TRIGGER IF NOT EXISTS report_integrity_no_update BEFORE UPDATE ON report_integrity BEGIN SELECT RAISE(ABORT,'report integrity is immutable'); END;"
         "CREATE TRIGGER IF NOT EXISTS report_integrity_no_delete BEFORE DELETE ON report_integrity BEGIN SELECT RAISE(ABORT,'report integrity is immutable'); END;"
+        "CREATE TABLE IF NOT EXISTS report_checkpoints (input_cursor INTEGER PRIMARY KEY REFERENCES report_snapshots(input_cursor),"
+        "report_integrity_digest TEXT NOT NULL,previous_integrity_digest TEXT NOT NULL,payload_hash TEXT NOT NULL,payload TEXT NOT NULL);"
+        "CREATE TRIGGER IF NOT EXISTS report_checkpoint_no_update BEFORE UPDATE ON report_checkpoints BEGIN SELECT RAISE(ABORT,'report checkpoints are immutable'); END;"
+        "CREATE TRIGGER IF NOT EXISTS report_checkpoint_no_delete BEFORE DELETE ON report_checkpoints BEGIN SELECT RAISE(ABORT,'report checkpoints are immutable'); END;"
         "CREATE TABLE IF NOT EXISTS routing_configuration (singleton INTEGER PRIMARY KEY CHECK(singleton=1),document TEXT NOT NULL);"
         "CREATE TABLE IF NOT EXISTS event_routes (ordinal INTEGER PRIMARY KEY REFERENCES events(ordinal),"
         "target_id TEXT,delivery_id TEXT NOT NULL);"
@@ -426,9 +649,12 @@ void Ledger::commit_input(std::uint64_t index, const std::string& canonical_json
         route.done();
     }
     if (!report_json.empty()) {
+        const auto cursor = index + 1;
         Statement report(impl_->db, "INSERT INTO report_snapshots VALUES(?,?)");
-        report.bind(1, index + 1); report.bind(2, report_json); report.done();
-        verify_report_integrity(impl_->db, index + 1, report_json);
+        report.bind(1, cursor); report.bind(2, report_json); report.done();
+        verify_report_integrity(impl_->db, cursor, report_json);
+        if (cursor % impl_->checkpoint_interval == 0)
+            write_report_checkpoint(impl_->db, cursor);
     }
     tx.commit();
 }
@@ -455,6 +681,33 @@ void Ledger::verify_report(std::uint64_t cursor, const std::string& report_json,
         insert.bind(1, cursor); insert.bind(2, report_json); insert.done();
     }
     verify_report_integrity(impl_->db, cursor, stored_payload);
+    transaction.commit();
+}
+
+std::optional<std::uint64_t> Ledger::verified_report_checkpoint(std::uint64_t target) const {
+    std::lock_guard<std::recursive_mutex> lock(impl_->mutex);
+    if (scalar(impl_->db,
+               "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='report_checkpoints'") != 1)
+        return std::nullopt;
+    const auto checkpoint = nearest_checkpoint(impl_->db, target, nullptr);
+    if (!checkpoint) return std::nullopt;
+    verify_checkpoint(impl_->db, *checkpoint);
+    return checkpoint->cursor;
+}
+
+void Ledger::verify_report_checkpoint(std::uint64_t cursor,
+                                      const std::string& report_json) const {
+    std::lock_guard<std::recursive_mutex> lock(impl_->mutex);
+    if (report_json.empty())
+        throw std::runtime_error("invalid cumulative report checkpoint");
+    Transaction transaction(impl_->db);
+    const auto checkpoint = checkpoint_at(impl_->db, cursor);
+    if (!checkpoint)
+        throw CheckpointFailure(CheckpointFailureCode::missing_integrity, cursor,
+                                "native ledger report checkpoint is missing");
+    const auto document = verify_checkpoint(impl_->db, *checkpoint);
+    if (document.dump() != report_json)
+        throw std::runtime_error("native replay report checkpoint mismatch");
     transaction.commit();
 }
 
@@ -652,6 +905,8 @@ std::optional<RequestedDelivery> Ledger::next_redelivery_event(std::uint64_t req
 struct LedgerView::Impl {
     sqlite3* db = nullptr;
     bool routed = false;
+    bool checkpoints = false;
+    mutable std::optional<CheckpointDiagnostic> checkpoint_failure;
     ~Impl() { if (db) sqlite3_close_v2(db); }
 };
 
@@ -663,6 +918,8 @@ LedgerView::LedgerView(const std::string& path) : impl_(std::make_unique<Impl>()
     Statement metadata(impl_->db, "SELECT schema_version FROM metadata WHERE singleton=1");
     if (!metadata.row() || metadata.integer(0) != 1) database_error();
     impl_->routed = scalar(impl_->db, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='event_routes'") == 1;
+    impl_->checkpoints =
+        scalar(impl_->db, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='report_checkpoints'") == 1;
 }
 
 LedgerView::~LedgerView() = default;
@@ -706,42 +963,26 @@ std::vector<StoredEvent> LedgerView::redelivery_events(const std::string& target
     return result;
 }
 
-std::string LedgerView::report_json(std::optional<std::uint64_t> cursor) const {
-    exec(impl_->db, "BEGIN");
-    struct ReadEnd {
-        sqlite3* database;
-        ~ReadEnd() { sqlite3_exec(database, "ROLLBACK", nullptr, nullptr, nullptr); }
-    } read_end{impl_->db};
-    Statement available(impl_->db, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('report_snapshots','report_integrity')");
-    if (!available.row() || available.integer(0) != 2)
-        throw std::runtime_error("resume this ledger with run before exporting reports");
-    const auto committed = scalar(impl_->db, "SELECT COUNT(*) FROM inputs");
-    const auto target = cursor.value_or(committed);
-    Statement report(impl_->db, "SELECT input_cursor,payload FROM report_snapshots ORDER BY input_cursor");
-    Json document;
-    bool found = false;
-    std::uint64_t expected = 0;
-    std::string previous_hash;
-    while (report.row()) {
-        const auto index = report.integer(0);
-        if (index != expected++) throw std::runtime_error("cumulative report delta hole");
-        const auto bytes = report.text(1);
-        Statement stored(impl_->db, "SELECT digest FROM report_integrity WHERE input_cursor=?");
-        stored.bind(1, index);
-        if (!stored.row()) throw std::runtime_error("resume this ledger with run before exporting reports");
-        const auto digest = report_integrity(impl_->db, index, bytes, previous_hash);
-        if (stored.text(0) != digest) throw std::runtime_error("native ledger report integrity mismatch");
-        previous_hash = digest;
-        if (index > target) continue;
-        auto payload = parse_json(bytes);
-        if (payload.members.count("schema_version") && payload.at("schema_version").text() == "pineforge-native-report-delta/v1") {
-            apply_report_delta(document, payload);
-        } else document = std::move(payload);
-        found = index == target;
+std::string LedgerView::report_json(std::optional<std::uint64_t> cursor,
+                                    ReportReadStats* stats) const {
+    impl_->checkpoint_failure.reset();
+    try {
+        return export_report(impl_->db, cursor, impl_->checkpoints, true, stats);
+    } catch (const CheckpointFailure& failure) {
+        impl_->checkpoint_failure = CheckpointDiagnostic{
+            failure.code(), failure.cursor(), failure.what()};
+        return export_report(impl_->db, cursor, impl_->checkpoints, false, stats);
     }
-    if (expected != committed + 1) throw std::runtime_error("cumulative report delta hole");
-    if (!found) throw std::runtime_error("no cumulative report at requested input cursor");
-    return document.dump();
+}
+
+std::string LedgerView::report_json_full(std::optional<std::uint64_t> cursor,
+                                         ReportReadStats* stats) const {
+    impl_->checkpoint_failure.reset();
+    return export_report(impl_->db, cursor, impl_->checkpoints, false, stats);
+}
+
+std::optional<CheckpointDiagnostic> LedgerView::checkpoint_diagnostic() const {
+    return impl_->checkpoint_failure;
 }
 
 std::string LedgerView::status_json() const {

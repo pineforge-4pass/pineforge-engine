@@ -55,6 +55,7 @@ struct Config {
     std::optional<pineforge::native_calendar::SessionCalendar> input_calendar;
     mutable pineforge::native_calendar::SessionDayMemo input_calendar_memo;
     std::uint64_t from_input = 0, max_events = 0, max_attempts = 8;
+    std::uint64_t checkpoint_interval = kDefaultReportCheckpointInterval;
     std::uint64_t status_interval = 1, max_ledger_bytes = 0, feed_idle_timeout = 15, feed_message_timeout = 15;
     long poll_ms = 1000;
     bool check = false, allow_http = false, report_jsonl = false;
@@ -73,6 +74,7 @@ void help() {
                  "         --webhook-secret-env NAME --allow-insecure-http\n"
                  "         --webhook-routes FILE (strict per-action routing; optional webhooks)\n"
                  "         --from-input N --max-events N --max-attempts 8\n"
+                 "         --checkpoint-interval K (default 1024)\n"
                  "         --native-config FILE (strict native run specification)\n"
                  "         --check (one HTTP snapshot) --poll-ms 1000\n"
                  "         --report-jsonl (mirror committed cumulative reports to stdout)\n"
@@ -195,6 +197,11 @@ Config args(int argc, char **argv) {
             c.max_events = unsigned_arg(v);
         else if (a == "--max-attempts")
             c.max_attempts = unsigned_arg(v);
+        else if (a == "--checkpoint-interval") {
+            c.checkpoint_interval = unsigned_arg(v);
+            if (!c.checkpoint_interval)
+                throw std::runtime_error("checkpoint-interval must be positive");
+        }
         else if (a == "--native-config")
             c.native_config = v;
         else if (a == "--status-file") c.status_file = v;
@@ -910,7 +917,9 @@ int run(Config c) {
     if (c.native.present)
         require_native_warmup(c.native, warmup);
     ControlDirectory controls(c.control_dir);
-    Ledger ledger(c.ledger, deployment);
+    LedgerOptions ledger_options;
+    ledger_options.report_checkpoint_interval = c.checkpoint_interval;
+    Ledger ledger(c.ledger, deployment, ledger_options);
     ServiceFile service(c.status_file, c.status_interval * 1000);
     ledger.bind_routing(c.routing.stored_document());
     ReportDeltas report_deltas;
@@ -918,6 +927,12 @@ int run(Config c) {
     Cursor cursor;
     cursor.bar_timestamp = warmup.back().timestamp;
     auto recorded = ledger.input_count();
+    std::optional<std::uint64_t> verified_report_checkpoint;
+    try {
+        verified_report_checkpoint = ledger.verified_report_checkpoint(recorded);
+    } catch (const CheckpointFailure&) {
+        verified_report_checkpoint.reset();
+    }
     auto recovering = Json::object({{"deployment", Json::string(deployment)}, {"state", Json::string("recovering")},
         {"ready", Json::boolean(false)}, {"readiness", Json::object({
             {"validated_strategy_warmup", Json::boolean(true)}, {"recovered_ledger", Json::boolean(false)},
@@ -942,7 +957,13 @@ int run(Config c) {
             if (events[k].id != row->events[k].id || events[k].payload != row->events[k].payload ||
                 events[k].target_id != row->events[k].target_id || events[k].delivery_id != row->events[k].delivery_id)
                 throw std::runtime_error("native replay order-action mismatch");
-        ledger.verify_report(i + 1, cumulative_report(strategy, deployment, i + 1, report_deltas), [&] { return report_deltas.json(); });
+        auto report = cumulative_report(strategy, deployment, i + 1, report_deltas);
+        if (!verified_report_checkpoint || i + 1 > *verified_report_checkpoint) {
+            ledger.verify_report(i + 1, report, [&] { return report_deltas.json(); });
+        } else if (i + 1 == *verified_report_checkpoint) {
+            ledger.verify_report(i + 1, report, [&] { return report_deltas.json(); });
+            ledger.verify_report_checkpoint(i + 1, report_deltas.json());
+        }
         strategy.clear(strategy.state);
         recovering.members["metrics"].members["report_cursor"] = num(ledger.report_cursor());
         service.publish(recovering);
