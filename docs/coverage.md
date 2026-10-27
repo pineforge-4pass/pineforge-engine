@@ -100,7 +100,7 @@ module inventory; the grouped table below is a guide, not the count:
 | `strategy_configure_native_fx_curve_v1` | Stage or clear an immutable FX curve on a Ready native handle     |
 | `strategy_get_last_error`                | Error message from the most recent failed run                     |
 | `pf_version_get`                         | Runtime version (struct)                                          |
-| `pf_abi_version`                         | Caller-allocated POD layout version                               |
+| `pf_abi_version`                         | Strategy-module compatibility and caller-allocated POD layout version |
 | `pf_version_string`                      | Runtime version (string)                                          |
 
 

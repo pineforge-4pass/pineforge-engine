@@ -3178,8 +3178,9 @@ a `pf_strategy_t` from `strategy_native_host_create_v1` unchanged — and
 `strategy_native_submit_v1` (`native_c_api.h:2748`) obeys the one legality
 rule its C++ spelling does.
 
-Rebuild strategy libraries against this engine. An ABI-v4 module without the
-native contract is legacy and cannot take `--native-config`.
+Rebuild strategy libraries against this engine's ABI 5. A module with the
+matching ABI but without the native contract is legacy and cannot take
+`--native-config`; a module stamped 4 is refused by the ABI check first.
 
 ## Errors
 

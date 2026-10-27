@@ -98,7 +98,7 @@ void report_free(pf_report_t* report) {
 #include <pineforge/metrics_stream.hpp>
 #include <type_traits>
 
-static_assert(PF_ABI_VERSION == 4, "the legacy caller-allocated report must not grow");
+static_assert(PF_ABI_VERSION == 5, "strategy module ABI version changed");
 static_assert(sizeof(pf_metrics_t) == 768, "the complete metrics block is unchanged");
 static_assert(std::is_standard_layout<pf_report_envelope_v1>::value,
               "the envelope must remain usable by C consumers");

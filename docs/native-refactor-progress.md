@@ -141,8 +141,8 @@ was v2. Each of those has moved since: the tree now declares `native_order_v8`,
 `engine_script_run_v19`, `native-consumer/v9`, `pineforge-broker-state/v19`,
 `pineforge-source-adapter/v4` and `native_run_spec_v3`. Unchanged since R4-C:
 identity values `native_order_v1`, the calendar `native_calendar_v2`, the
-driver `native_driver_v5`, `PF_ABI_VERSION` 4, and the frozen ab9714b provider
-at v16 for the required bidirectional rejection pairs.
+driver `native_driver_v5`, and the frozen ab9714b provider at v16 for the
+runtime-budget baseline. `PF_ABI_VERSION` is now 5 for the 1.8.0 module rebuild.
 
 ## Completed R3 settlement and observation milestones
 

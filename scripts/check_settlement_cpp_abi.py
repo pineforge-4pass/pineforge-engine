@@ -214,9 +214,16 @@ def prepare_order_baseline(current_build: Path, output: Path, jobs: int) -> dict
                 ORDER_BASE_COMMIT + "^{tree}"]).decode().strip()
     if (commit, tree) != (ORDER_BASE_COMMIT, ORDER_BASE_TREE):
         raise PairingError("pre-bump order provider commit/tree mismatch")
+    # Keep the frozen build's whole tracked input tree, including data files
+    # included from outside src/ (metrics_annualization.hpp reads docker/).
+    # Only the corpus gitlink and the unused benchmark/documentation trees
+    # are omitted; do not guess a source/header dependency whitelist.
+    source_paths = run(["git", "-C", str(ROOT), "ls-tree", "-z", "--name-only",
+                        ORDER_BASE_COMMIT]).decode().split("\0")
+    source_paths = [path for path in source_paths
+                    if path and path not in {"corpus", "benchmarks", "docs"}]
     source_raw = run(["git", "-C", str(ROOT), "archive", "--format=tar",
-                      ORDER_BASE_COMMIT, "CMakeLists.txt", "VERSION", "cmake",
-                      "include", "src", REPORT_FIXTURE])
+                      ORDER_BASE_COMMIT, *source_paths])
     output.mkdir()
     (output / "source.tar").write_bytes(source_raw)
     source, build = output / "source", output / "build"
@@ -246,6 +253,7 @@ def prepare_order_baseline(current_build: Path, output: Path, jobs: int) -> dict
     receipt = {"commit": commit, "tree": tree, "archive": str(archive),
                "archiveSha256": identity(archive)["sha256"],
                "sourceArchive": identity(output / "source.tar"),
+               "sourcePaths": source_paths,
                "fixture": identity(source / REPORT_FIXTURE),
                "settings": settings, "configureArgv": configure, "buildArgv": build_argv,
                "networkFetches": 0}

@@ -14,7 +14,7 @@ public:
 };
 }
 int main() {
-    CHECK(PF_ABI_VERSION == 4);
+    CHECK(PF_ABI_VERSION == 5);
     NoopStrategy s;
     CHECK(s.last_run_status() == 0);
     const Bar bars[] = {flat_bar(100.0, 0), flat_bar(101.0, 60'000)};

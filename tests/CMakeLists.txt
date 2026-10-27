@@ -4280,6 +4280,23 @@ if(PINEFORGE_ENABLE_COVERAGE)
 endif()
 pineforge_add_twin_test(test_c_abi test_c_abi)
 
+# Public ABI-stamp probes reuse the runner contract modules and the real
+# run_json loader. They need neither private fixtures nor the live runner.
+if(UNIX)
+    foreach(_pf_abi_probe previous current)
+        add_library(strategy_abi_${_pf_abi_probe} MODULE test_live_contract_plugins.cpp)
+        target_include_directories(strategy_abi_${_pf_abi_probe} PRIVATE
+            ${PROJECT_SOURCE_DIR}/include ${PROJECT_BINARY_DIR}/include)
+        target_compile_options(strategy_abi_${_pf_abi_probe} PRIVATE -fvisibility=hidden)
+        set_target_properties(strategy_abi_${_pf_abi_probe} PROPERTIES PREFIX "")
+    endforeach()
+    target_compile_definitions(strategy_abi_previous PRIVATE PF_LIVE_ABI_STAMP=4)
+    target_compile_definitions(strategy_abi_current PRIVATE PF_LIVE_ABI_STAMP=PF_ABI_VERSION)
+    add_test(NAME test_strategy_module_abi_epoch
+        COMMAND ${Python3_EXECUTABLE} -E -B ${PROJECT_SOURCE_DIR}/tests/test_run_json_bin.py
+            --abi-epoch $<TARGET_FILE:strategy_abi_previous> $<TARGET_FILE:strategy_abi_current>)
+endif()
+
 # Lane REL10: the four spellings ADR-0001 "Deprecated public spellings"
 # scheduled for removal -- pf_equity_stats_t::sharpe_tv / sortino_tv and
 # exit_legs::Domain::Coof / MagnifierCoof -- are gone at 1.0. The row compiles

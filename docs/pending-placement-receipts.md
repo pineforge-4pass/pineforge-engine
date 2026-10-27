@@ -43,6 +43,6 @@ twins check those value projections separately from the immutable v1 prefix.
 
 The retired compatibility-order Boolean census is no longer a runtime design
 surface. Native request definitions, adapter placement snapshots, and terminal
-receipts carry the corresponding causal facts. Public C ABI version 4 and the
-pending mirror v1 layout remain unchanged; value fidelity is enforced by the
-native-route mirror tests rather than asserted by this document.
+receipts carry the corresponding causal facts. The current C ABI version is 5;
+the pending mirror v1 layout remains unchanged, and value fidelity is enforced
+by the native-route mirror tests rather than asserted by this document.

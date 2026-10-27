@@ -772,6 +772,18 @@ populations stay the same. Preflight still runs the complete unsharded driver;
 see [the controls commands](../tests/ownership/README.md#manifest-checker-controls)
 for parallel CTest and individual shard invocations.
 
+The public Unix row `test_strategy_module_abi_epoch` adds one registered/run
+row in every engine profile, in either fixture world. It builds previous-stamp
+and current-header-stamp variants of `tests/test_live_contract_plugins.cpp`,
+then uses `tests/test_run_json_bin.py --abi-epoch` to exercise the real typed
+Python loader. It requires the ABI mismatch text and arguments, zero strategy
+calls on refusal, and acceptance of the current stamp. The row has no private
+fixture or live-runner dependency and no skip path. The two public order
+controls, `test_native_order_epoch_reject` and
+`test_native_order_epoch_rebuild_bytes`, remain registered independently.
+These rows raise actual counts above the pinned minimum floors; they do not
+change the receipt/private-fixture populations or runner-only floors.
+
 Preflight also runs the detached-comment census of the kernel compile closure
 (`detached-comments`: `scripts/measure_detached_comments.py --check-ceiling`)
 against the checked-in `DETACHED_LINE_CEILING`, which is 0: R5 lane B-DOCS
