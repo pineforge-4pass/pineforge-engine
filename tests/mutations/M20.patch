@@ -1,0 +1,11 @@
+diff --git a/src/native_execution_consumer.cpp b/src/native_execution_consumer.cpp
+--- a/src/native_execution_consumer.cpp
++++ b/src/native_execution_consumer.cpp
+@@ -14353,7 +14353,6 @@
+ 
+ bool NativeExecutionConsumer::MatchDormantPoint::scan() {
+     const bool previous = fast_;
+-    if (fast_ && !eligible()) fall_back();
+     if (fast_) {
+         // No request-core mutation occurs inside candidate selection. A
+         // callback/trigger/observe_trails may shift live_ only afterwards;

@@ -160,6 +160,22 @@ void one(double from, double to, double level, bool buy, int kind,
 
 int main() {
     try {
+        // M10: public bars/ticks reject nonfinite prices before matching.
+        // Exercise the SAME finite-segment predicate used by eligible(),
+        // just as the rest of T8 exercises its unreachable grid envelope.
+        // Independent classification: the first four values are finite
+        // (including the largest finite double); the last three are not.
+        const std::array<double, 7> endpoints{{
+            0.0, 100.0, -100.0, std::numeric_limits<double>::max(),
+            std::numeric_limits<double>::infinity(),
+            -std::numeric_limits<double>::infinity(),
+            std::numeric_limits<double>::quiet_NaN()
+        }};
+        for (std::size_t i = 0; i < endpoints.size(); ++i)
+            for (std::size_t j = 0; j < endpoints.size(); ++j)
+                require(pineforge::NativeExecutionConsumer::dormant_segment_finite(
+                            endpoints[i], endpoints[j]) == (i < 4 && j < 4),
+                        "T8 production finite-segment guard disagrees with endpoint classification");
         Rng rng;
         std::size_t absent = 0, reachable = 0;
         for (int trial = 0; trial < 64; ++trial) {

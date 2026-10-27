@@ -2678,7 +2678,7 @@ public:
     std::uint64_t grid_active_points() const noexcept { return grid_points(); }
     std::uint64_t class_guard_failures() const noexcept { return match_book_class_guard_failures(); }
     std::uint64_t index_poisonings() const noexcept { return match_book_index_poisonings(); }
-    std::uint64_t dormant_poisonings() const noexcept { return match_book_index_poisonings(); }
+    std::uint64_t dormant_setup_failures() const noexcept { return match_book_setup_failed_ ? 1 : 0; }
     // C1 delegates to its actual class predicate, including mutation builds.
     // Tests use real recorded contexts and the independent base policy oracle.
     bool dormant_driver_permitted(const native_order::EvaluationContext&, bool limit) const noexcept;
@@ -2695,6 +2695,8 @@ public:
     static bool dormant_reachable(bool ge, double level, double lo,
                                   double hi, double delta) noexcept;
     static double dormant_margin(double lo, double hi, double grid_tick) noexcept;
+    // Shared with T8; eligible() uses this exact gate, never a test copy.
+    static bool dormant_segment_finite(double from, double to) noexcept;
     // Both return dormant_reachable in production. Separate accessors let T8
     // exercise the actual join/wake call sites under M6 and M7 mutations.
     static DormantReach dormant_join_reach() noexcept;
@@ -2751,6 +2753,7 @@ private:
     std::uint64_t match_book_projected_reads() const noexcept;
     std::uint64_t match_book_class_guard_failures() const noexcept;
     std::uint64_t match_book_index_poisonings() const noexcept;
+    void match_book_note_class_guard_failure(const native_order::EvaluationContext&) noexcept;
     bool match_book_join(const native_order::RequestHandle&,
                          const native_order::EvaluationContext&,
                          double lo, double hi, double delta, DormantReach);
@@ -2821,6 +2824,28 @@ private:
     // Only BookSpill's index poison is permanent until the next run.
     bool match_dormant_was_fast_ = false;
     MatchDormantCounts match_dormant_counts_;
+};
+
+// The same lazy backing used by RunCommandScratch's Book binding. Kept in
+// this internal header so the empty-store digest contract can exercise its
+// actual preparation without a product test switch or a second implementation.
+class DormantBookScratchBacking final : public detail::ScratchBacking {
+public:
+    explicit DormantBookScratchBacking(std::size_t page_size) noexcept;
+    void prepare();
+    std::uint64_t page_count() const noexcept override;
+    std::optional<std::uint64_t> arena_capacity_bytes() const noexcept override;
+    const detail::ReportScratchIoError* carried_failure() const noexcept override;
+
+protected:
+    detail::ScratchStatus do_read_page(
+        detail::ScratchPageId, detail::ScratchBuffer) const noexcept override;
+    detail::ScratchStatus do_write_page(
+        detail::ScratchPageId, detail::ScratchBytes) noexcept override;
+    detail::ScratchStatus do_sync(detail::ScratchDurability) noexcept override;
+
+private:
+    std::unique_ptr<detail::ScratchBacking> inner_;
 };
 
 // Selected-sink presentation borrows only this many final points. The logical

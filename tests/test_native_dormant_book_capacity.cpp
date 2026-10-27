@@ -140,6 +140,9 @@ int main() {
                     "K4 never-filled long book changed membership or traded");
             require(h.consumer().eager_points() == 0 && h.consumer().fast_path_exits() == 0,
                     "K4 final point poisoned or latched the fast path");
+            require(h.consumer().index_poisonings() == 0
+                        && h.consumer().dormant_setup_failures() == 0,
+                    "K4 long Book run reported index poison or setup degradation");
             require(io.errors == 0 && io.writes > 0,
                     "K4 Book backing refused work or was never written");
             const auto book = h.consumer().released_command_scratch(book_binding);

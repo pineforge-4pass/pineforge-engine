@@ -7137,8 +7137,8 @@ void NativeExecutionConsumer::match_path(
         eval.driver_class = driver_class;
         eval.existing_matching_bit = point.matching;
         std::optional<Candidate> winner;
-        // Candidate selection makes no request-core mutation; only the
-        // selected winner can replace or retire a later request afterwards.
+        assert(!match_book_middle_spill_ && "native retained candidates require back-only spills");
+        // Candidate selection is read-only; only its winner can mutate later rows.
         // The selection walks the book itself and reads each row where the
         // view's iterator stands on it: the iterator keeps that row alive. A
         // row outside the heap is a copy the book's small ring of recent reads
@@ -14216,6 +14216,11 @@ bool NativeExecutionConsumer::dormant_reachable(
     return ge ? level >= lo - delta : level <= hi + delta;
 }
 
+bool NativeExecutionConsumer::dormant_segment_finite(double from, double to) noexcept {
+    if (!std::isfinite(from) || !std::isfinite(to)) return false;
+    return true;
+}
+
 double NativeExecutionConsumer::dormant_margin(
         double lo, double hi, double grid_tick) noexcept {
     if (!std::isfinite(lo) || !std::isfinite(hi) || lo > hi
@@ -14226,33 +14231,15 @@ double NativeExecutionConsumer::dormant_margin(
     // the 2^-20 relative allowance or the two-tick allowance without T8.
     const double scale = std::max({1.0, std::abs(lo), std::abs(hi)});
     const double relative = std::ldexp(scale, -20);
-#ifdef PINEFORGE_TEST_MUTATION_M22
-    return relative + grid_tick;
-#else
     return relative + 2.0 * grid_tick;
-#endif
 }
 
 NativeExecutionConsumer::DormantReach NativeExecutionConsumer::dormant_join_reach() noexcept {
-#ifdef PINEFORGE_TEST_MUTATION_M6
-    return +[](bool ge, double level, double lo, double hi, double) noexcept {
-        return dormant_reachable(ge, level, lo, hi, 0.0);
-    };
-#else
     return &dormant_reachable;
-#endif
 }
 
 NativeExecutionConsumer::DormantReach NativeExecutionConsumer::dormant_wake_reach() noexcept {
-#ifdef PINEFORGE_TEST_MUTATION_M7
-    return +[](bool ge, double level, double lo, double hi, double delta) noexcept {
-        if (!std::isfinite(level) || !std::isfinite(lo) || !std::isfinite(hi)
-            || lo > hi || !std::isfinite(delta) || delta < 0.0) return true;
-        return ge ? level > lo - delta : level < hi + delta;
-    };
-#else
     return &dormant_reachable;
-#endif
 }
 
 bool NativeExecutionConsumer::dormant_join_reachable(
@@ -14323,9 +14310,7 @@ NativeExecutionConsumer::MatchDormantPoint::~MatchDormantPoint() noexcept {
 
 bool NativeExecutionConsumer::MatchDormantPoint::eligible() const noexcept {
     if (!consumer_.match_dormant_ || grid_) return false;
-#ifndef PINEFORGE_TEST_MUTATION_M10
-    if (!std::isfinite(from_) || !std::isfinite(to_)) return false;
-#endif
+    if (!dormant_segment_finite(from_, to_)) return false;
     return consumer_.match_book_fast_path_ok(evaluation_);
 }
 
@@ -14379,9 +14364,7 @@ void NativeExecutionConsumer::MatchDormantPoint::start() {
 
 bool NativeExecutionConsumer::MatchDormantPoint::scan() {
     const bool previous = fast_;
-#ifndef PINEFORGE_TEST_MUTATION_M20
     if (fast_ && !eligible()) fall_back();
-#endif
     if (fast_) {
         // No request-core mutation occurs inside candidate selection. A
         // callback/trigger/observe_trails may shift live_ only afterwards;
@@ -14394,6 +14377,7 @@ bool NativeExecutionConsumer::MatchDormantPoint::scan() {
             counted_fast_ = true;
         }
     } else if (!counted_eager_) {
+        consumer_.match_book_note_class_guard_failure(evaluation_);
         ++consumer_.match_dormant_counts_.eager;
         counted_eager_ = true;
     }
@@ -14428,15 +14412,9 @@ bool NativeExecutionConsumer::MatchDormantPoint::before_winner(
     if (!begun_ || closed_) return !consumer_.failed();
     try {
         if (native_matching::double_bits(t) == native_matching::double_bits(0.0)) {
-#ifndef PINEFORGE_TEST_MUTATION_M8
             consumer_.match_book_advance(priority);
-#endif
         } else {
-#ifdef PINEFORGE_TEST_MUTATION_M9
-            consumer_.match_book_advance(priority);
-#else
             complete();
-#endif
         }
     } catch (const std::exception& error) {
         failure(error);
@@ -14459,7 +14437,6 @@ void NativeExecutionConsumer::MatchDormantPoint::complete() {
     if (closed_) return;
     closed_ = true;
     if (!begun_) return;
-#ifndef PINEFORGE_TEST_MUTATION_M23
     const bool finish = !consumer_.failed() && std::uncaught_exceptions() == exceptions_;
     try {
         consumer_.match_book_complete(finish);
@@ -14468,7 +14445,6 @@ void NativeExecutionConsumer::MatchDormantPoint::complete() {
     } catch (...) {
         unclassified_failure();
     }
-#endif
 }
 
 bool NativeExecutionConsumer::collect_match_trails(
@@ -14493,9 +14469,6 @@ bool NativeExecutionConsumer::collect_match_trails(
                 break;
             }
         }
-#ifdef PINEFORGE_TEST_MUTATION_M19
-        tracking = false;
-#endif
         if (!tracking) return false;
         handles.clear();
         handles.reserve(resident.active);
@@ -14527,50 +14500,49 @@ void NativeExecutionConsumer::provision_run_command_scratch_for_run() {
                                   dependency_scratch_order(), dependency_scratch_);
 }
 
-namespace {
-
 // The empty CommandScratchStore can answer lower_bound/state_digest
 // without touching backing pages. Keep that store and its release snapshot,
 // but open the production backing/cache only when a dormant row will use it.
 // All subsequent page traffic goes to the same production implementation.
-class DormantBookScratchBacking final : public detail::ScratchBacking {
-public:
-    explicit DormantBookScratchBacking(std::size_t page_size) noexcept
-        : ScratchBacking(detail::ScratchBackingKind::disk, page_size) {}
+DormantBookScratchBacking::DormantBookScratchBacking(std::size_t page_size) noexcept
+    : ScratchBacking(detail::ScratchBackingKind::disk, page_size) {}
 
-    void prepare() {
-        if (!inner_) inner_ = detail::make_command_scratch_backing(page_size());
-    }
-    std::uint64_t page_count() const noexcept override {
-        return inner_ ? inner_->page_count() : 0;
-    }
-    std::optional<std::uint64_t> arena_capacity_bytes() const noexcept override {
-        return inner_ ? inner_->arena_capacity_bytes() : std::nullopt;
-    }
-    const detail::ReportScratchIoError* carried_failure() const noexcept override {
-        return inner_ ? inner_->carried_failure() : nullptr;
-    }
+void DormantBookScratchBacking::prepare() {
+    if (!inner_) inner_ = detail::make_command_scratch_backing(page_size());
+}
 
-protected:
-    detail::ScratchStatus do_read_page(
-            detail::ScratchPageId id, detail::ScratchBuffer destination) const noexcept override {
-        return inner_ ? inner_->read_page(id, destination) : detail::ScratchStatus::not_found;
-    }
-    detail::ScratchStatus do_write_page(
-            detail::ScratchPageId id, detail::ScratchBytes source) noexcept override {
-        // Admission prepares before index_put. Reject an unprepared writer
-        // as a programming error without publishing any index entry.
-        return inner_ ? inner_->write_page(id, source) : detail::ScratchStatus::programming_error;
-    }
-    detail::ScratchStatus do_sync(detail::ScratchDurability durability) noexcept override {
-        if (inner_) return inner_->sync(durability);
-        return durability == detail::ScratchDurability::buffered
-            ? detail::ScratchStatus::ok : detail::ScratchStatus::programming_error;
-    }
+std::uint64_t DormantBookScratchBacking::page_count() const noexcept {
+    return inner_ ? inner_->page_count() : 0;
+}
 
-private:
-    std::unique_ptr<detail::ScratchBacking> inner_;
-};
+std::optional<std::uint64_t> DormantBookScratchBacking::arena_capacity_bytes() const noexcept {
+    return inner_ ? inner_->arena_capacity_bytes() : std::nullopt;
+}
+
+const detail::ReportScratchIoError* DormantBookScratchBacking::carried_failure() const noexcept {
+    return inner_ ? inner_->carried_failure() : nullptr;
+}
+
+detail::ScratchStatus DormantBookScratchBacking::do_read_page(
+        detail::ScratchPageId id, detail::ScratchBuffer destination) const noexcept {
+    return inner_ ? inner_->read_page(id, destination) : detail::ScratchStatus::not_found;
+}
+
+detail::ScratchStatus DormantBookScratchBacking::do_write_page(
+        detail::ScratchPageId id, detail::ScratchBytes source) noexcept {
+    // Admission prepares before index_put. Reject an unprepared writer
+    // as a programming error without publishing any index entry.
+    return inner_ ? inner_->write_page(id, source) : detail::ScratchStatus::programming_error;
+}
+
+detail::ScratchStatus DormantBookScratchBacking::do_sync(
+        detail::ScratchDurability durability) noexcept {
+    if (inner_) return inner_->sync(durability);
+    return durability == detail::ScratchDurability::buffered
+        ? detail::ScratchStatus::ok : detail::ScratchStatus::programming_error;
+}
+
+namespace {
 
 std::unique_ptr<detail::ScratchBacking> make_book_scratch_backing(std::size_t page_size) {
     return std::make_unique<DormantBookScratchBacking>(page_size);

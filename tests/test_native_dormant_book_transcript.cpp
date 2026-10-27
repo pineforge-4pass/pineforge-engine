@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <cstdio>
 #include <exception>
 #include <limits>
@@ -801,7 +802,8 @@ inline Trace run_ring_window(bool prepared, bool enabled = true) {
 // still identify the correct row, in order, at the same point and price.
 class MiddleSpillHost final : public NativeStrategyHost {
 public:
-    MiddleSpillHost(bool prepared, bool enabled) {
+    MiddleSpillHost(bool prepared, bool enabled, bool force_eager)
+        : enabled_(enabled), force_eager_(force_eager) {
         set_broker_state_hash_recording(true);
         consumer().set_direct_mutation(!prepared);
 #ifdef PINEFORGE_TEST_DORMANT_BOOK_PATCHED
@@ -813,11 +815,33 @@ public:
     Trace trace;
     std::size_t filled = 0;
     bool spilled = false;
+    bool middle_spilled = false;
+    bool forced_eager = false;
     NativeExecutionConsumer& consumer() { return as_native_consumer(execution_consumer()); }
     const std::vector<std::uint64_t>& recorded_hashes() const { return broker_state_hashes_; }
     void on_native_bar(const Bar&, const NativeDecisionContext&) override {
         snapshot(*this, trace, 100);
-        if (++bar_ != 1) return;
+        ++bar_;
+        if (bar_ == 4 && force_eager_) {
+            // The notification's two new remote rows have now joined on
+            // later points. Two grouped rows occupy the vacancies from the
+            // later fills, leaving those newer dormant rows in the middle.
+            // An eager next point must promote the earlier spilled victim
+            // while these higher-priority dormant rows still remain.
+            for (std::size_t i = 0; i < 2; ++i) {
+                no::Request r{no::Transact{1}, "middle-active-tail", ""};
+                r.trigger = no::Limit{50};
+                no::Member member;
+                member.group = 900000 + i;
+                r.group = member;
+                require(submit(r).handle.has_value(), "T3 middle active-tail placement refused");
+            }
+#ifdef PINEFORGE_TEST_DORMANT_BOOK_PATCHED
+            consumer().set_match_dormant(false);
+#endif
+            forced_eager = true;
+        }
+        if (bar_ != 1) return;
         for (std::size_t i = 0; i < resident; ++i) {
             const bool winner = i == resident - 6 || i >= resident - 2;
             no::Request r{no::Transact{winner ? static_cast<double>(i - (resident - 7)) : 1},
@@ -826,6 +850,7 @@ public:
             const auto result = submit(r);
             require(result.handle.has_value(), "T3 middle-spill population refused");
             if (winner) winners_[next_++] = *result.handle;
+            if (i == resident - 3) middle_ = *result.handle;
         }
     }
     void on_native_applied(const no::ExecutionAppliedEvent& e,
@@ -840,36 +865,62 @@ public:
                 "T3 middle-spill read another resident row's quantity");
         if (filled++ == 0) {
             point_ = e.cursor.point.ordinal;
+            const auto& core = consumer().request_core();
+            require(e.terminal && core.find_live(e.handle()) == nullptr,
+                    "T3 notification ran before its winner was consumed");
+            const auto before = core.book_lookup_reads().rows;
+            require(static_cast<bool>(core.hold_live(middle_)),
+                    "T3 notification middle row was absent before submissions");
+            require(core.book_lookup_reads().rows == before,
+                    "T3 notification middle row was already spilled");
             for (std::size_t i = 0; i < 2; ++i) {
                 no::Request r{no::Transact{1}, "middle-new", ""};
                 r.trigger = no::Limit{50};
                 require(submit(r).handle.has_value(), "T3 middle callback submit refused");
             }
-            spilled = consumer().request_core().book_spilled();
+            spilled = core.book_spilled();
+#ifdef PINEFORGE_TEST_DORMANT_BOOK_PATCHED
+            if (enabled_) {
+                const auto reads = core.book_lookup_reads().rows;
+                require(static_cast<bool>(core.hold_live(middle_)),
+                        "T3 notification lost the middle dormant row");
+                require(core.book_lookup_reads().rows == reads + 1,
+                        "T3 notification did not spill the middle dormant row");
+                middle_spilled = true;
+            }
+#endif
         }
         require(e.cursor.point.ordinal == point_, "T3 middle-spill deferred a later candidate");
         snapshot(*this, trace, 102);
     }
 private:
     int bar_ = 0;
+    bool enabled_;
+    bool force_eager_;
     std::size_t next_ = 0;
     std::uint64_t point_ = 0;
     std::array<no::RequestHandle, 3> winners_{};
+    no::RequestHandle middle_{};
 };
 
-inline Trace run_middle_spill(bool prepared, bool enabled = true) {
-    MiddleSpillHost h(prepared, enabled);
+inline Trace run_middle_spill(bool prepared, bool enabled = true, bool force_eager = false) {
+    MiddleSpillHost h(prepared, enabled, force_eager);
     require(h.configure_native(specification()).status == NativeSetupStatus::Applied,
             "T3 middle-spill configure refused");
     const auto bars = tape();
-    h.run(bars.data(), 4);
+    h.run(bars.data(), force_eager ? 5 : 4);
     require(h.native_state().kind == NativeLifecycleKind::Completed, h.last_error().c_str());
     require(h.spilled && h.filled == 3, "T3 middle-spill callback/candidates did not execute");
 #ifdef PINEFORGE_TEST_DORMANT_BOOK_PATCHED
-    if (enabled)
+    if (enabled) {
+        require(h.middle_spilled, "T3 notification middle-spill witness was vacuous");
         require(h.consumer().dormant_rows() > 0 && h.consumer().fast_points() > 0
                     && h.consumer().scanned_rows() > 0,
                 "T3 middle-spill never established the fast path");
+        if (force_eager)
+            require(h.forced_eager && h.consumer().eager_points() > 0,
+                    "T3 middle-spill followup did not exercise retained-candidate promotion");
+    }
 #endif
     finish(h, h.trace);
     return std::move(h.trace);
@@ -1171,6 +1222,14 @@ public:
                 const bool expected = base_priced_permission(driver, limit);
                 require(facts.driver_ok == expected,
                         "T3 real driver disagrees with the base Limit/Other permission matrix");
+#ifdef PINEFORGE_TEST_DORMANT_BOOK_PATCHED
+                // The base policy above is independent of the derived class
+                // guard. Check that guard on every recorded cell as well:
+                // suppressing a permitted class can otherwise hide behind
+                // successful joins in the other class.
+                require(consumer().dormant_driver_permitted(context, limit) == expected,
+                        "T3 dormant driver disagrees with the base Limit/Other permission matrix");
+#endif
                 ++visits[cls][kind];
                 if (!facts.driver_ok) ++refused[cls][kind];
                 trace.add(118 + 2 * cls + kind, facts.driver_ok);
@@ -1233,9 +1292,20 @@ inline Trace run_driver_matrix(bool prepared, bool enabled = true) {
 } // namespace dormant_test
 
 #ifndef PINEFORGE_DORMANT_BOOK_NO_MAIN
-int main() {
+int main(int argc, char** argv) {
     try {
         using namespace dormant_test;
+        if (argc == 2 && std::strcmp(argv[1], "--notification-middle-spill") == 0) {
+            for (const bool prepared : {false, true}) {
+                const auto off = run_middle_spill(prepared, false, true);
+                const auto on = run_middle_spill(prepared, true, true);
+                require(off.words == on.words,
+                        "T3 notification middle-spill eager/dormant transcript bytes differ");
+                on.print(prepared ? "notification-middle-prepared" : "notification-middle-direct");
+            }
+            return 0;
+        }
+        require(argc == 1, "T3 unknown transcript row selector");
         run_fast(0x12345678, false).print("fast-a");
         run_fast(0x9abcdef0, false).print("fast-b");
         run_fast(0x12345678, false, true, false, true).print("spilled-grid");

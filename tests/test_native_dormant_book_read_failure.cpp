@@ -17,6 +17,7 @@
 #include <cstdio>
 #include <exception>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #include <sys/stat.h>
@@ -47,11 +48,15 @@ std::vector<int> unlinked_descriptors() {
     return out;
 }
 
-enum class Mode { Continuation, Broker, Carried };
+enum class Mode { Continuation, Broker, Carried, Promotion };
 
 class Host final : public NativeStrategyHost {
 public:
-    explicit Host(Mode mode) : mode_(mode) {}
+    explicit Host(Mode mode, bool enabled) : mode_(mode), enabled_(enabled) {
+#ifdef PINEFORGE_TEST_DORMANT_BOOK_PATCHED
+        consumer().set_match_dormant(enabled);
+#endif
+    }
     std::size_t input_bars = 0;
     std::size_t script_bars = 0;
     std::size_t tick_callbacks = 0;
@@ -77,22 +82,36 @@ public:
                 if (std::find(before.begin(), before.end(), fd) == before.end())
                     book_files.push_back(fd);
             for (std::size_t i = resident + 1; i < resident + 512; ++i) put(i);
-        } else if (script_bars == 3 && mode_ != Mode::Carried) {
+        } else if (script_bars == 3
+                   && mode_ != Mode::Carried && mode_ != Mode::Promotion) {
             inject_and_read();
         }
     }
     void on_native_tick(const Bar&, const NativeTickContext&) override {
         ++tick_callbacks;
-        if (mode_ == Mode::Carried && !injected) inject_and_read();
+        if ((mode_ == Mode::Carried || mode_ == Mode::Promotion) && !injected)
+            inject_and_read();
     }
 private:
     void inject_and_read() {
         require(consumer().request_core().book_spilled(), "T6 book did not spill");
         require(!book_files.empty(), "T6 first spill opened no observable file");
 #ifdef PINEFORGE_TEST_DORMANT_BOOK_PATCHED
-        require(consumer().dormant_rows() > 0, "T6 fault did not reach a dormant book");
-        require(consumer().fast_points() > 0, "T6 fault never followed fast matching");
+        if (enabled_) {
+            require(consumer().dormant_rows() > 0, "T6 fault did not reach a dormant book");
+            require(consumer().fast_points() > 0, "T6 fault never followed fast matching");
+        }
 #endif
+        if (mode_ == Mode::Promotion) {
+            // Prove the selected command must decode a spilled target before
+            // cutting its file. A lookup reads once; promotion itself does not
+            // increment this public lookup census.
+            const auto reads = consumer().request_core().book_lookup_reads().rows;
+            require(static_cast<bool>(consumer().request_core().hold_live(victim_)),
+                    "T6 promotion victim missing before fault");
+            require(consumer().request_core().book_lookup_reads().rows == reads + 1,
+                    "T6 promotion victim was resident instead of spilled");
+        }
         for (const int fd : book_files) {
             require(::ftruncate(fd, 0) == 0, "T6 could not truncate a book file");
             injected = true;
@@ -103,6 +122,11 @@ private:
         } else if (mode_ == Mode::Broker) {
             (void)broker_state_hash();
             answered = true;
+        } else if (mode_ == Mode::Promotion) {
+            // A real command must promote/decode its target. Dormant-only
+            // setup degradation must never swallow this genuine read error.
+            (void)cancel(victim_);
+            answered = native_state().kind != NativeLifecycleKind::Failed;
         } else {
             // The noexcept kernel fold carries the REAL read failure.
             // on_native_tick precedes matching at this observed point:
@@ -120,13 +144,30 @@ private:
     void put(std::size_t i) {
         no::Request r{no::Transact{(i & 1) ? -1.0 : 1.0}, "rest", ""};
         r.trigger = no::Limit{(i & 1) ? 200.0 : 50.0};
-        require(submit(r).handle.has_value(), "T6 placement refused");
+        const auto result = submit(r);
+        require(result.handle.has_value(), "T6 placement refused");
+        if (i + 1 == resident) victim_ = *result.handle;
     }
     Mode mode_;
+    bool enabled_;
+    no::RequestHandle victim_{};
 };
 
-void run(Mode mode, const char* name) {
-    Host h(mode);
+struct FailureTrace {
+    RunFailureCode code;
+    NativeFailureCode native;
+    NativeFailureOperation operation;
+    std::size_t input, script, ticks;
+    std::string text;
+    bool operator==(const FailureTrace& other) const {
+        return code == other.code && native == other.native && operation == other.operation
+            && input == other.input && script == other.script && ticks == other.ticks
+            && text == other.text;
+    }
+};
+
+FailureTrace run(Mode mode, const char* name, bool enabled = true) {
+    Host h(mode, enabled);
     NativeRunSpec s;
     s.identity = {"c3-dormant-read-failure", 1};
     s.input_tf = "5"; s.script_tf = "5";
@@ -141,10 +182,10 @@ void run(Mode mode, const char* name) {
     for (std::size_t i = 0; i < bars.size(); ++i)
         bars[i] = {100, 100, 100, 100, 1,
                    1736121600000LL + static_cast<std::int64_t>(i) * 300000};
-    if (mode == Mode::Carried) {
+    if (mode == Mode::Carried || mode == Mode::Promotion) {
         require(h.stream_begin(bars.data(), 3, "5", "5"), "T6 carried warmup failed");
         require(!h.stream_push_tick({1736122500000LL, 1, 100, 1}),
-                "T6 carried read failure did not fail the observed matching point");
+                "T6 command/carried read failure did not fail the observed matching point");
     } else {
         h.run(bars.data(), static_cast<int>(bars.size()));
     }
@@ -153,9 +194,10 @@ void run(Mode mode, const char* name) {
     const auto failure = run_failure_value_of(h);
     require(failure.code == RunFailureCode::scratch_io_failed, h.last_error().c_str());
     require(h.script_bars == 3, "T6 failure moved to a later script callback");
-    if (mode == Mode::Carried) {
-        require(h.carried && h.input_bars == 3 && h.tick_callbacks == 1,
-                "T6 carry did not surface at the first observed matching point");
+    if (mode == Mode::Carried || mode == Mode::Promotion) {
+        require((mode == Mode::Promotion || h.carried)
+                    && h.input_bars == 3 && h.tick_callbacks == 1,
+                "T6 command/carry did not surface at the first observed matching point");
     } else {
         require(h.input_bars == 3, "T6 public hash failure moved from the fault callback");
     }
@@ -163,6 +205,8 @@ void run(Mode mode, const char* name) {
                 name, h.input_bars, h.script_bars, h.tick_callbacks, run_failure_code_name(failure.code),
                 static_cast<unsigned>(h.native_state().failure.code),
                 static_cast<unsigned>(h.native_state().failure.operation), h.last_error().c_str());
+    return {failure.code, h.native_state().failure.code, h.native_state().failure.operation,
+            h.input_bars, h.script_bars, h.tick_callbacks, h.last_error()};
 }
 } // namespace
 
@@ -171,6 +215,9 @@ int main() {
         run(Mode::Continuation, "continuation");
         run(Mode::Broker, "broker");
         run(Mode::Carried, "carried");
+        const auto eager = run(Mode::Promotion, "promotion-eager", false);
+        const auto dormant = run(Mode::Promotion, "promotion-dormant", true);
+        require(eager == dormant, "T6 promotion read failure changed the base code or failure point");
         return 0;
     } catch (const std::exception& e) {
         std::fprintf(stderr, "test_native_dormant_book_read_failure: %s\n", e.what());

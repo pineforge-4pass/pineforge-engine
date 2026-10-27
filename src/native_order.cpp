@@ -2074,8 +2074,7 @@ void WorkingRequestCore::forget_repriced(uint64_t incarnation) noexcept {
 // Room for one more resident row: spills the newest resident rows, one by one,
 // until live_ is below its bound. Every spill writes before it drops, and
 // everything that can throw comes before the row leaves live_, so a refusal
-// leaves the book as it was. A re-priced row leaves repriced_ with it; the
-// priority it stood at is filed in the spilled table's incarnation links.
+// leaves the book intact; a re-priced row's priority moves to incarnation links.
 // Rows leaving live_ shift what a prepared token indexed, so a spill raises
 // the epoch: a token prepared before it installs as stale.
 void WorkingRequestCore::make_book_room() {
@@ -2091,6 +2090,7 @@ void WorkingRequestCore::make_book_room() {
     if (spill.worth_compacting()) spill.compact();
     while (live_.size() >= kBookMax) {
         const std::size_t at = spill.spill_index(*this);
+        assert((spill.middle_spill || at + 1 == live_.size()) && "native retained candidates require back-only spills");
         const LiveRequest& row = live_[at];
         const uint64_t incarnation = row.handle().incarnation;
         spill.spill(row, spill.resident[at]);
@@ -8543,7 +8543,6 @@ inline namespace engine_script_run_v19 {
 bool NativeExecutionConsumer::match_book_fast_path_ok(
         const native_order::EvaluationContext& context) const noexcept {
     if (match_book_setup_failed_) return false;
-    if (requests_.book_spill_) requests_.book_spill_->level_index = match_book_scratch_;
     return !requests_.book_spill_
         || requests_.book_spill_->fast_path_ok(requests_, context);
 }
@@ -8570,8 +8569,13 @@ std::uint64_t NativeExecutionConsumer::match_book_class_guard_failures() const n
 }
 
 std::uint64_t NativeExecutionConsumer::match_book_index_poisonings() const noexcept {
-    return (requests_.book_spill_ ? requests_.book_spill_->poison_events : 0)
-        + static_cast<std::uint64_t>(match_book_setup_failed_);
+    return requests_.book_spill_ ? requests_.book_spill_->poison_events : 0;
+}
+
+void NativeExecutionConsumer::match_book_note_class_guard_failure(
+        const native_order::EvaluationContext& context) noexcept {
+    if (auto* book = requests_.book_spill_.get())
+        if (!book->class_guards_ok(requests_, context)) ++book->class_guard_failures;
 }
 
 detail::ScratchKeyOrder NativeExecutionConsumer::match_book_scratch_order() noexcept {

@@ -1,0 +1,12 @@
+diff --git a/src/native_order_book.hpp b/src/native_order_book.hpp
+--- a/src/native_order_book.hpp
++++ b/src/native_order_book.hpp
+@@ -407,7 +407,7 @@
+         assert_index_complete();
+     }
+     void wake_on_classify(WorkingRequestCore& core, std::size_t at) noexcept {
+-        wake_resident(core, at);
++        (void)core; (void)at;
+         assert(!resident[at].dormant);
+     }
+     uint64_t wake_by_price(WorkingRequestCore& core, const EvaluationContext& context,

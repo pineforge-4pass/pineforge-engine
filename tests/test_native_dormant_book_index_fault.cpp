@@ -96,6 +96,10 @@ Trace run(bool enabled, bool fault) {
     require(h.consumer().released_command_scratch(book_binding).has_value(),
             "T7 Book binding was never provisioned");
     if (fault) {
+        require(h.consumer().index_poisonings() > 0,
+                "T7 index write failure did not count an index poisoning");
+        require(h.consumer().dormant_setup_failures() == 0,
+                "T7 index write failure was counted as a setup failure");
         require(charges.errors > 0 && h.errors_at_fault > 0,
                 "T7 Book fault was not observed");
         require(charges.errors == h.errors_at_fault, "T7 poisoned index was retried");
@@ -103,6 +107,9 @@ Trace run(bool enabled, bool fault) {
         require(h.consumer().eager_points() > h.eager_at_fault,
                 "T7 poison did not continue through eager points");
     } else if (enabled) {
+        require(h.consumer().index_poisonings() == 0
+                    && h.consumer().dormant_setup_failures() == 0,
+                "T7 healthy index reported a setup failure or poisoning");
         require(charges.errors == 0 && charges.writes > 0 && h.saw_dormant,
                 "T7 healthy control did not exercise the Book index");
         require(h.consumer().fast_points() > 0 && h.consumer().eager_points() == 0,

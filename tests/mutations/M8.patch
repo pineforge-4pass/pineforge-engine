@@ -1,0 +1,11 @@
+diff --git a/src/native_execution_consumer.cpp b/src/native_execution_consumer.cpp
+--- a/src/native_execution_consumer.cpp
++++ b/src/native_execution_consumer.cpp
+@@ -14403,7 +14403,6 @@
+     if (!begun_ || closed_) return !consumer_.failed();
+     try {
+         if (native_matching::double_bits(t) == native_matching::double_bits(0.0)) {
+-            consumer_.match_book_advance(priority);
+         } else {
+             complete();
+         }

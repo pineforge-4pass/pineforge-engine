@@ -138,7 +138,7 @@ struct WorkingRequestCore::BookSpill {
     bool poison = false;  // permanent; class/active-spill guards are per point
     uint64_t poison_events = 0;
     mutable uint64_t projected_reads = 0;
-    mutable uint64_t class_guard_failures = 0;
+    uint64_t class_guard_failures = 0;
 
     explicit BookSpill(const std::vector<LiveRequest>& live) {
         // A fixed resident book, not a key/population admission limit. Files
@@ -234,52 +234,6 @@ struct WorkingRequestCore::BookSpill {
                                                      context.existing_matching_bit);
         if (context.cursor.point.provenance == NativePriceProvenance::CurrentExecution)
             permitted = false;
-#ifdef PINEFORGE_TEST_MUTATION_M11
-        if (context.driver_class == DriverEligibilityClass::CarriedOpen && cls == 1)
-            permitted = true;
-#endif
-#if defined(PINEFORGE_TEST_MUTATION_M11_OBSERVED_PRINT_LIMIT) || defined(PINEFORGE_TEST_MUTATION_DRIVER_OBSERVED_LIMIT)
-        if (context.driver_class == DriverEligibilityClass::ObservedPrint && cls == 0) permitted = !permitted;
-#endif
-#if defined(PINEFORGE_TEST_MUTATION_M11_OBSERVED_PRINT_OTHER) || defined(PINEFORGE_TEST_MUTATION_DRIVER_OBSERVED_OTHER)
-        if (context.driver_class == DriverEligibilityClass::ObservedPrint && cls == 1) permitted = !permitted;
-#endif
-#if defined(PINEFORGE_TEST_MUTATION_M11_CARRIED_OPEN_LIMIT) || defined(PINEFORGE_TEST_MUTATION_DRIVER_CARRIED_LIMIT)
-        if (context.driver_class == DriverEligibilityClass::CarriedOpen && cls == 0) permitted = !permitted;
-#endif
-#if defined(PINEFORGE_TEST_MUTATION_M11_CARRIED_OPEN_OTHER) || defined(PINEFORGE_TEST_MUTATION_DRIVER_CARRIED_OTHER)
-        if (context.driver_class == DriverEligibilityClass::CarriedOpen && cls == 1) permitted = !permitted;
-#endif
-#if defined(PINEFORGE_TEST_MUTATION_M11_TICK_AFTER_CALCULATION_LIMIT) || defined(PINEFORGE_TEST_MUTATION_DRIVER_TICK_AFTER_CALC_LIMIT)
-        if (context.driver_class == DriverEligibilityClass::TickAfterCalculation && cls == 0) permitted = !permitted;
-#endif
-#if defined(PINEFORGE_TEST_MUTATION_M11_TICK_AFTER_CALCULATION_OTHER) || defined(PINEFORGE_TEST_MUTATION_DRIVER_TICK_AFTER_CALC_OTHER)
-        if (context.driver_class == DriverEligibilityClass::TickAfterCalculation && cls == 1) permitted = !permitted;
-#endif
-#if defined(PINEFORGE_TEST_MUTATION_M11_CONFIRMED_OPEN_LIMIT) || defined(PINEFORGE_TEST_MUTATION_DRIVER_CONFIRMED_OPEN_LIMIT)
-        if (context.driver_class == DriverEligibilityClass::ConfirmedOpen && cls == 0) permitted = !permitted;
-#endif
-#if defined(PINEFORGE_TEST_MUTATION_M11_CONFIRMED_OPEN_OTHER) || defined(PINEFORGE_TEST_MUTATION_DRIVER_CONFIRMED_OPEN_OTHER)
-        if (context.driver_class == DriverEligibilityClass::ConfirmedOpen && cls == 1) permitted = !permitted;
-#endif
-#if defined(PINEFORGE_TEST_MUTATION_M11_CONFIRMED_EXCURSION_LIMIT) || defined(PINEFORGE_TEST_MUTATION_DRIVER_CONFIRMED_EXCURSION_LIMIT)
-        if (context.driver_class == DriverEligibilityClass::ConfirmedExcursion && cls == 0) permitted = !permitted;
-#endif
-#if defined(PINEFORGE_TEST_MUTATION_M11_CONFIRMED_EXCURSION_OTHER) || defined(PINEFORGE_TEST_MUTATION_DRIVER_CONFIRMED_EXCURSION_OTHER)
-        if (context.driver_class == DriverEligibilityClass::ConfirmedExcursion && cls == 1) permitted = !permitted;
-#endif
-#if defined(PINEFORGE_TEST_MUTATION_M11_CONFIRMED_AFTER_CALCULATION_CLOSE_LIMIT) || defined(PINEFORGE_TEST_MUTATION_DRIVER_CONFIRMED_AFTER_CALC_LIMIT)
-        if (context.driver_class == DriverEligibilityClass::ConfirmedAfterCalculationClose && cls == 0) permitted = !permitted;
-#endif
-#if defined(PINEFORGE_TEST_MUTATION_M11_CONFIRMED_AFTER_CALCULATION_CLOSE_OTHER) || defined(PINEFORGE_TEST_MUTATION_DRIVER_CONFIRMED_AFTER_CALC_OTHER)
-        if (context.driver_class == DriverEligibilityClass::ConfirmedAfterCalculationClose && cls == 1) permitted = !permitted;
-#endif
-#if defined(PINEFORGE_TEST_MUTATION_M11_CURRENT_EXECUTION_LIMIT) || defined(PINEFORGE_TEST_MUTATION_DRIVER_CURRENT_LIMIT)
-        if (context.driver_class == DriverEligibilityClass::CurrentExecution && cls == 0) permitted = !permitted;
-#endif
-#if defined(PINEFORGE_TEST_MUTATION_M11_CURRENT_EXECUTION_OTHER) || defined(PINEFORGE_TEST_MUTATION_DRIVER_CURRENT_OTHER)
-        if (context.driver_class == DriverEligibilityClass::CurrentExecution && cls == 1) permitted = !permitted;
-#endif
         return permitted;
     }
     bool fast_path_ok(const WorkingRequestCore& core,
@@ -287,15 +241,16 @@ struct WorkingRequestCore::BookSpill {
         assert_aligned(core);
         if (poison || !level_index || active_spilled != 0
             || resident.size() != core.live_.size()) return false;
-#ifndef PINEFORGE_TEST_MUTATION_M15
         if (failure) return false;
-#endif
+        return class_guards_ok(core, context);
+    }
+    bool class_guards_ok(const WorkingRequestCore& core,
+                         const EvaluationContext& context) const noexcept {
         for (unsigned cls = 0; cls != reg.size(); ++cls) {
             const auto& r = reg[cls];
             if (r.guarded && class_permitted(core, context, cls)
                 && (context.cursor.point.ordinal <= r.max_acceptance
                     || context.cursor.point.effective_time_ms < r.max_floor)) {
-                ++class_guard_failures;
                 return false;
             }
         }
@@ -353,10 +308,8 @@ struct WorkingRequestCore::BookSpill {
         return {UINT64_C(0x5046424f4f4b0001), nullptr, compare_keys};
     }
     void index_failed() noexcept {
-#ifndef PINEFORGE_TEST_MUTATION_M16
         if (!poison) ++poison_events;
         poison = true;
-#endif
         if (level_index && level_index->transaction_active()) (void)level_index->rollback();
     }
     bool index_ok(detail::ScratchStatus status) noexcept {
@@ -457,11 +410,7 @@ struct WorkingRequestCore::BookSpill {
         assert_index_complete();
     }
     void wake_on_classify(WorkingRequestCore& core, std::size_t at) noexcept {
-#ifndef PINEFORGE_TEST_MUTATION_M12
         wake_resident(core, at);
-#else
-        (void)core; (void)at;
-#endif
         assert(!resident[at].dormant);
     }
     uint64_t wake_by_price(WorkingRequestCore& core, const EvaluationContext& context,
@@ -533,7 +482,6 @@ struct WorkingRequestCore::BookSpill {
             r.in_progress = true;
             if (r.spilled_dormant != 0) core.epoch_ += 2;
         }
-        mutate_keepalive(core);
     }
     void sweep(WorkingRequestCore& core, uint64_t priority, bool finish) {
         assert_aligned(core);
@@ -563,17 +511,12 @@ struct WorkingRequestCore::BookSpill {
                 throw coded<std::overflow_error>(RunFailureCode::engine_invariant, {},
                                                   "native working-request epoch exhausted");
             allowance = AllowanceUnits{r.cur, meta.initial, meta.initial};
-#ifdef PINEFORGE_TEST_MUTATION_M18
-            ++core.epoch_;
-#else
             core.epoch_ += 2;
-#endif
         }
         for (auto& r : reg) {
             if (r.in_progress) r.W = finish ? std::numeric_limits<uint64_t>::max()
                                            : std::max(r.W, priority);
         }
-        mutate_keepalive(core);
     }
     void advance(WorkingRequestCore& core, uint64_t priority) { sweep(core, priority, false); }
     void complete(WorkingRequestCore& core, bool finish_sweep) {
@@ -582,7 +525,6 @@ struct WorkingRequestCore::BookSpill {
         if (!finish_sweep) return;
         sweep(core, std::numeric_limits<uint64_t>::max(), true);
         for (auto& r : reg) r.in_progress = false;
-        mutate_keepalive(core);
     }
     void project(const WorkingRequestCore& core, const BookSlot& slot,
                  LiveRequest& row) const noexcept {
@@ -590,12 +532,10 @@ struct WorkingRequestCore::BookSpill {
         const auto& r = reg[(slot.dormancy >> 1) & 1u];
         if (slot.stamp >= r.seq) return;
         uint64_t point = r.cur;
-#ifndef PINEFORGE_TEST_MUTATION_M17
         if (r.in_progress && row.priority() >= r.W) {
             if (slot.stamp >= r.seq - 1) return;
             point = r.prev;
         }
-#endif
         const Allowance eager = core.evaluated_allowance(row, point);
         const auto& expected = std::get<AllowanceUnits>(eager);
         const auto* before = std::get_if<AllowanceUnits>(&row.allowance);
@@ -604,33 +544,15 @@ struct WorkingRequestCore::BookSpill {
             ++projected_reads;
         row.allowance = eager;
     }
-    // Only deliberately bad mutation builds touch held copies. In production
-    // this is empty: the side ring is a KEEPALIVE, never a lookup cache, and
-    // a copy held across a watermark change stays frozen exactly as in base.
-    void mutate_keepalive(const WorkingRequestCore& core) noexcept {
-#ifdef PINEFORGE_TEST_MUTATION_M25
-        for (auto& held : side) {
-            DormantSpec spec;
-            if (held && dormant_class(core, *held, spec))
-                held->allowance = core.evaluated_allowance(*held, reg[spec.cls].cur);
-        }
-#endif
-#ifdef PINEFORGE_TEST_MUTATION_M26
-        side = {};
-#endif
-        (void)core;
-    }
+    // The side ring is a KEEPALIVE, never a lookup cache. A copy held across
+    // a watermark change stays frozen exactly as in base; project only at read.
 
     std::size_t spill_index(const WorkingRequestCore& core) const noexcept {
         assert_aligned(core);
         // K1: retained winners/candidates keep the back-only contract. Middle
         // erasure requires a consumer scope with no retained resident alias;
         // completing an allowance sweep alone never grants that scope.
-#ifdef PINEFORGE_TEST_MUTATION_M24
-        const bool may_erase = true;
-#else
         const bool may_erase = middle_spill;
-#endif
         if (may_erase)
             for (std::size_t i = resident.size(); i != 0; --i)
                 if (resident[i - 1].dormant) return i - 1;
@@ -644,10 +566,6 @@ struct WorkingRequestCore::BookSpill {
         } else ++active_spilled;
         if (std::holds_alternative<BookClose>(core.live_[at].authority))
             ++spilled_book_closes;
-#ifdef PINEFORGE_TEST_MUTATION_M24
-        core.live_.erase(core.live_.begin() + static_cast<std::ptrdiff_t>(at));
-        resident.erase(resident.begin() + static_cast<std::ptrdiff_t>(at));
-#else
         if (at + 1 == core.live_.size()) {
             core.live_.pop_back();
             resident.pop_back();
@@ -656,7 +574,6 @@ struct WorkingRequestCore::BookSpill {
             core.live_.erase(core.live_.begin() + static_cast<std::ptrdiff_t>(at));
             resident.erase(resident.begin() + static_cast<std::ptrdiff_t>(at));
         }
-#endif
         ever_spilled = true;
         ++alive;
         assert_aligned(core);
@@ -665,17 +582,11 @@ struct WorkingRequestCore::BookSpill {
         const auto& row = core.live_[at];
         if (std::holds_alternative<BookClose>(row.authority)) --spilled_book_closes;
         if ((slot.dormancy & 1u) != 0) {
-#ifndef PINEFORGE_TEST_MUTATION_M3
             erase_index(core, row);
-#endif
-#ifndef PINEFORGE_TEST_MUTATION_M21
             --reg[(slot.dormancy >> 1) & 1u].spilled_dormant;
-#endif
         } else --active_spilled;
-#ifndef PINEFORGE_TEST_MUTATION_M4
         resident.insert(resident.begin() + static_cast<std::ptrdiff_t>(at),
                         active_meta(row.priority()));
-#endif
         assert_aligned(core);
     }
     void pushed(const WorkingRequestCore& core) noexcept {
@@ -684,28 +595,16 @@ struct WorkingRequestCore::BookSpill {
     }
     void erasing(std::size_t at) noexcept {
         assert(!resident[at].dormant);
-#ifndef PINEFORGE_TEST_MUTATION_M5
         resident.erase(resident.begin() + static_cast<std::ptrdiff_t>(at));
-#else
-        (void)at;
-#endif
     }
     void replacing(std::size_t at, uint64_t priority) noexcept {
         assert(!resident[at].dormant);
-#ifndef PINEFORGE_TEST_MUTATION_M13
         std::rotate(resident.begin() + static_cast<std::ptrdiff_t>(at),
                     resident.begin() + static_cast<std::ptrdiff_t>(at + 1), resident.end());
         resident.back() = active_meta(priority);
-#else
-        (void)at; (void)priority;
-#endif
     }
     bool scan_spilled_closes() const noexcept {
-#ifdef PINEFORGE_TEST_MUTATION_M14
-        return false;
-#else
         return spilled_book_closes != 0;
-#endif
     }
     bool carries_read_failure() const noexcept {
         return ever_spilled;
@@ -747,14 +646,9 @@ struct WorkingRequestCore::BookSpill {
             slot.dormancy = 1u | (uint64_t{meta.cls} << 1);
             slot.stamp = r.seq;
             if (r.in_progress && priority >= r.W && r.seq != 0) {
-#ifndef PINEFORGE_TEST_MUTATION_M2
                 slot.stamp = r.seq - 1;
-#endif
             }
         }
-#ifdef PINEFORGE_TEST_MUTATION_M1
-        slot.stamp = slot.dormancy = 0;
-#endif
         if (priority != incarnation) {
             IncarnationSlot link;
             link.priority = priority;

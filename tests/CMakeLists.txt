@@ -3761,6 +3761,7 @@ list(APPEND TEST_SOURCES test_native_dormant_book_switch)
 list(APPEND TEST_SOURCES test_native_dormant_book_tokens)
 list(APPEND TEST_SOURCES test_native_dormant_book_read_failure)
 list(APPEND TEST_SOURCES test_native_dormant_book_index_fault)
+list(APPEND TEST_SOURCES test_native_dormant_book_allocation_fault)
 list(APPEND TEST_SOURCES test_native_dormant_book_reachability)
 list(APPEND TEST_SOURCES test_native_dormant_book_core_contract)
 list(APPEND TEST_SOURCES test_native_dormant_book_capacity)
@@ -3773,6 +3774,10 @@ endif()
 foreach(test_name ${TEST_SOURCES})
     pineforge_add_unit_test(${test_name})
 endforeach()
+
+add_test(NAME test_native_dormant_book_notification_middle_spill
+    COMMAND test_native_dormant_book_transcript --notification-middle-spill)
+set_tests_properties(test_native_dormant_book_capacity PROPERTIES LABELS "slow")
 
 if(PINEFORGE_BUILD_SOURCE_LAYER)
     add_executable(test_pending_observer_walk test_pending_observer_walk.cpp)
