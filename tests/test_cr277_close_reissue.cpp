@@ -1,4 +1,4 @@
-// CR-277: public pending-order, native-event and trade observations.
+// Public pending-order, native-event and trade observations.
 //
 // The probe rows preserve the draft Pine sequence. Their expected replacement
 // result comes from the engine's same-id contract, NOT a TradingView export:
@@ -921,7 +921,7 @@ int main(int argc, char** argv) {
                      row.name, failures == before ? "PASS" : "FAIL", failures - before);
     }
     if (!matched) {
-        std::fprintf(stderr, "unknown CR-277 row\n");
+        std::fprintf(stderr, "unknown pending-order row\n");
         return 2;
     }
     return failures == 0 ? 0 : 1;

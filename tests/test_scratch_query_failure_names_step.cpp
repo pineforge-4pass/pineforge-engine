@@ -28,7 +28,7 @@ void expect_check_failure(Operation operation, const char* prefix,
 
 void row() {
     using namespace s4e_tmp;
-    std::puts("S4E inspection path: /dev/null (directory metadata only)");
+    std::puts("Inspection path: /dev/null (directory metadata only)");
     PlainEnvironment environment;
     Environment temporary("TMPDIR", "/dev/null");
     pineforge::detail::ScratchFile file;

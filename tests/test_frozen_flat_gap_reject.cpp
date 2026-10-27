@@ -18,7 +18,7 @@
  * is NO one-lot amnesty and the opening commission is NOT part of the test
  * (also covered by test_market_admission_commission). pct<100 or gap-DOWN
  * entries are untouched, and a commissioned entry whose cost fits but whose cost + fee
- * does not keeps the KI-61 fill-then-trim path. See the gate in
+ * does not keep the fill-then-trim path. See the gate in
  * engine_fills.cpp apply_filled_order_to_state for the evidence trail.
  *
  * RED-4  SHORT true-flat zero-comm above-lot gap  -> rejected (FLAT, no rows).
@@ -31,7 +31,7 @@
  * RED-7  commissioned twin of RED-6 (10% fee, 9 x 120 = 1080 > 1000): rejected
  *        (FLAT, no rows); it used to fill and take a 4-lot Margin-call trim.
  * GREEN-C commissioned fee-only shortfall (9 x 110 = 990 <= 1000 < 990 + 99):
- *        fills then takes the KI-61 one-lot Margin-call trim.
+ *        fills then takes the one-lot Margin-call trim.
  * GREEN-D pct=99 twin: fills (rule requires EXACTLY 100).
  * GREEN-E gap-DOWN true-flat: fills with the frozen qty.
  */
@@ -233,7 +233,7 @@ void test_commissioned_all_in_gap_rejected() {
 
 // GREEN-C. Commissioned fee-only shortfall: the same 9 lots at a 110 fill
 // cost 990 <= 1000 (admitted, the fee excluded), but 990 + the 99 opening fee
-// is unaffordable, so the KI-61 entry-bar affordability trim fires: restore
+// is unaffordable, so the entry-bar affordability trim fires: restore
 // 9 - (1000 - 99)/110 = 0.809 -> floors to 0 -> the opening event's one-lot
 // fallback closes 1 @ 110, leaving 8.
 void test_commissioned_fee_only_shortfall_fills_then_trims() {

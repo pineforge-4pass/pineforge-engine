@@ -581,7 +581,7 @@ class EvaluatorTests(unittest.TestCase):
 
 
 class BareStringsTests(unittest.TestCase):
-    """CR-352: printable instructions need independent evidence of a name."""
+    """Printable instructions need independent evidence of a name."""
 
     def test_an_uncorroborated_bare_identifier_is_not_a_finding(self) -> None:
         # RED on b7e16f56: each line is an unruled identifier via strings.

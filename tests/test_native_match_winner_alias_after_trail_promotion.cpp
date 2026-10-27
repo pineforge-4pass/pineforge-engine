@@ -1,4 +1,4 @@
-// 1.7.0 review F-NEW-01 (argon read of the lane b1 series head 5454eba7be): a
+// 1.7.0 review: a
 // resident winner the matcher's full scan holds is still that request's row
 // after the trail observation that runs before it is used.
 //
@@ -272,7 +272,7 @@ void check_run(const Outcome& outcome, std::size_t resting, const char* name) {
 
 int main(int argc, char** argv) {
     // The twin row _spilled_only is its own executable, built from this body
-    // with PINEFORGE_B1_TWIN_FLAG (tests/cr150.d/s4e-fix-b1-alias.cmake).
+    // with PINEFORGE_B1_TWIN_FLAG (the dedicated scratch matching fixture).
 #ifdef PINEFORGE_B1_TWIN_FLAG
     const char* const flag = PINEFORGE_B1_TWIN_FLAG;
     (void) argc;

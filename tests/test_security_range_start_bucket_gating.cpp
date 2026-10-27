@@ -1,4 +1,4 @@
-// test_security_range_start_bucket_gating — pins the KI-55 range-start cut on
+// test_security_range_start_bucket_gating — pins the range-start cut on
 // HTF-BUCKET opens (finding 452, rank 2).
 //
 // TradingView's deep-backtest request.security series are built from the HTF

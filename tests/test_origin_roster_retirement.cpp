@@ -1,4 +1,4 @@
-// CR-150 L19D: exercise the real adapter before testing its storage helper.
+// Exercise the real adapter before testing its storage helper.
 // The real-run witness at test-first commit 2f27bfa80 uses only the base API.
 // Its expected red is completed same-id openings retained in OriginRoster;
 // no declaration, sink option or module is missing. Executed red evidence

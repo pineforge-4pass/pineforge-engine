@@ -38,7 +38,7 @@ Against those two sources the checker matches a fixed residual vocabulary:
     ADR table, by its exact name. A two-letter fragment such as the `TV` in
     machine code's `C0"TV"` is never a name. A longer, bare identifier-only
     strings line also needs independent evidence before it is an unruled
-    finding (see CR-352 below).
+    finding (see the residual-census rule below).
   * PHRASE_PATTERNS -- a text (an error message, a label) that contains one of
     them must contain a phrase listed in that column;
   * and every listed name or phrase that the vocabulary matches must still be
@@ -104,7 +104,7 @@ audit passed through the gate:
     ADR_RULED_IDENTIFIERS_MIN / ADR_RULED_TEXTS_MIN), so a ruling cannot
     leave together with its name unless the change lowers the floor.
 
-CR-352 distinguishes a free-standing printable instruction run from a name.
+The residual census distinguishes a free-standing printable instruction run from a name.
 An unruled identifier whose complete stripped `strings` line is that token
 needs corroboration from normalized `nm` names, installed-header tokens, or
 decoded, adjacent kernel-source string literals. Decoding is separate from

@@ -25,6 +25,8 @@ static_assert(darwin_was_written == 0x00010000, "unexpected Darwin FWASWRITTEN b
 
 inline int comparable_status_flags(int flags) {
 #if defined(__APPLE__)
+    // Ignore only FWASWRITTEN: Darwin sets it after a write without F_SETFL.
+    // Every caller-controlled status bit and all F_GETFD bits must still match.
     return flags < 0 ? flags : flags & ~darwin_was_written;
 #else
     return flags;
@@ -59,6 +61,7 @@ inline Snapshot snapshot(int descriptor, const char* boundary) {
 
 inline bool same_flags(const Snapshot& before, const Snapshot& after) {
     return before.flags >= 0 && after.flags >= 0
+        && before.descriptor_flags >= 0 && after.descriptor_flags >= 0
         && comparable_status_flags(before.flags) == comparable_status_flags(after.flags)
         && before.descriptor_flags == after.descriptor_flags;
 }
@@ -97,6 +100,13 @@ public:
         snapshots_.push_back(current);
         errno = saved_errno;
         return current;
+    }
+
+    bool unchanged() const {
+        for (const auto& current : snapshots_) {
+            if (!same_flags(baseline(), current)) return false;
+        }
+        return true;
     }
 
     // Observations never assert: existing callers retain their final checks.

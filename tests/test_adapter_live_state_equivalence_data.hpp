@@ -414,7 +414,7 @@
 // in each label (the same harvest against main 7a1f01c0 reproduces every old value):
 //   brackets seed 314188: 5626204446991468979 -> 13444318351679181243
 //   chains seed 314189: 18266502754563434276 -> 300926759266208037
-// expectation corrected (CR-277, 1 of 108 configurations), because PineExecutionAdapter::close("") and close_all() now
+// expectation corrected (1 of 108 configurations), because PineExecutionAdapter::close("") and close_all() now
 // store the pending entry's real source id as its replacement key (they stored the empty string of a moved-from
 // SourceId). When the full close fills, the entry transferred behind it is released with that key: before, it was
 // released under key 0, so it was never registered under its id and a later same-id command could not see it

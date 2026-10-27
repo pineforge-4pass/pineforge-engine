@@ -3826,7 +3826,7 @@ bool PineExecutionAdapter::lifecycle_readable(const PlacementSnapshot& row) cons
 // again: the revival never picks an ended cycle, and origin_leg_consumed only
 // asks about opened origins, so its lifecycle is read by nobody.
 //
-// CR-150 L19G: nor does K1 keep a dormant leg bound to an askable origin,
+// Nor does K1 keep a dormant leg bound to an askable origin,
 // or an origin-free current-cycle leg, once the superseded test answers -- some
 // row of the cycle names it (or its target) as its predecessor, or a later-bar
 // exit of the same family and ids has a different stop. K2 and K3 keep one such row for as long
@@ -6686,8 +6686,8 @@ void PineExecutionAdapter::retire_in_position_exits_at_flat(
 std::uint64_t PineExecutionAdapter::command_sequence_for_exit(
         const SourceId& exit_id, const SourceId& from_entry) const {
     // The same-bar exit sort asks this on every script bar while its tail
-    // group persists; the table answers from its per-id index instead of a
-    // scan over every placement ever retained (quadratic over a long run).
+    // group persists; the table scans retained placements and consults the
+    // historical minima for erased rows.
     return placement_.command_sequence_for(exit_id, from_entry);
 }
 
@@ -7770,7 +7770,7 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
             // transaction of its own quantity plus the earlier pending market
             // call's, and TradingView costs that transaction at the signal:
             // past the equity it drops the later call (lab tv
-            // w6-f10g-pair-gross; the KI-65 NQ probe on CME_MINI:NQ1! 15),
+            // w6-f10g-pair-gross; the NQ probe on CME_MINI:NQ1! 15),
             // the commission left out (w6b-p1b/p1c-pair-gross-*). A market
             // call under pyramiding 2 is the batch's, whose exact pair is
             // admitted when it is finalized (p2_explicit_pair).
@@ -10265,7 +10265,7 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
         // same-bar market entry the script placed before it; an under-cap add
         // issued earlier in the pass therefore survives the flat
         // (pine_strategy_commands.cpp:2437-2446) instead of being flattened
-        // with the book.  The script keeps the pre-close position view (KI-64).
+        // with the book.  The script keeps the pre-close position view.
         const bool pooc_ordinary_close_all = config_.process_orders_on_close
             && !immediately && !config_.calc_on_order_fills && !coof_recalc_active_;
         if (pooc_ordinary_close_all && accepted) {
@@ -12231,7 +12231,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                 const bool closing_long = physical.signed_units > 0.0;
                 if (family == PineOrderFamily::ExitLimit
                     && finite_positive(limit_price) && finite_positive(endpoint)) {
-                    // ab9714be pine_fills.cpp:563-583 (KI-67 Model S): a priced
+                    // ab9714be pine_fills.cpp:563-583 (cascade Model S): a priced
                     // exit born in a mid-bar fill recalculation is held on the
                     // remainder of its in-flight leg.  It gap-fills at the
                     // leg-end waypoint when its level lies in that remainder
@@ -13238,7 +13238,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                             // the pass that placed it: the rest of the pass
                             // keeps the pre-fill strategy.position_size and
                             // strategy.position_avg_price, as an ordinary
-                            // close_all keeps the size (KI-64). lab tv
+                            // close_all keeps the size. lab tv
                             // synthetics tests/fixtures/pooc_close_fill_view.
                             const auto& view = detail::pooc_close_fill_view_switches();
                             auto* pine_host = view.current_exit_keeps_position_view
@@ -16896,7 +16896,7 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_source_terms(
         && finite_positive(source.projection_tv_carry_qty)
         && result.units && finite_positive(*result.units);
     if (deferred_flip_from_flat) {
-        // ab9714be pine_orders.cpp:676-696 (KI-64): an opposite priced entry
+        // ab9714be pine_orders.cpp:676-696: an opposite priced entry
         // which outlives the position it was placed against opens its own
         // units plus the captured carried side.
         result.units = *result.units + source.projection_tv_carry_qty;
@@ -17700,7 +17700,7 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
         }
         // The frozen tuple protects a rate rollover (the FX opening checkpoint
         // owns that later adjustment), but an ordinary price gap is still
-        // rechecked at the fill just as the legacy KI-54 admission path does.
+        // rechecked at the fill just as the legacy admission path does.
         const double active_fx = active_staged_fx(view.cursor.point.effective_time_ms);
         if (active_fx == source.sizing.fx) {
             double fill_required = view.account.resulting_abs_notional * fraction;
@@ -17774,12 +17774,12 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
                 && std::holds_alternative<native_order::Market>(
                     view.definition->request.trigger);
             // ab9714be pine_fills.cpp:5288-5390 (gap-reject), :5392-5526
-            // (KI-54 frozen sizing) and engine_fills.cpp:4618
+            // (frozen sizing) and engine_fills.cpp:4618
             // (stop_entry_margin_admission_declines): a TRUE-FLAT all-in
             // default percent_of_equity==100 opening is costed against the
             // PRE-commission placement equity snapshot.  Commission is
             // EXCLUDED from fill-time affordability -- a fee-only (or one-tick
-            // grid-rounding) overage admits here and the KI-61 entry-bar
+            // grid-rounding) overage admits here and the entry-bar
             // margin-call trim downstream books the observable residual lot
             // that closes again on the entry bar.  Judging the same opening
             // against the post-commission marked equity instead declines the
@@ -22465,7 +22465,7 @@ void PineExecutionAdapter::apply_reversal_gap_bracket_policy(
 
 void PineExecutionAdapter::reaccept_gapped_bracket_behind_same_id_add(
         const Bar& bar, const NativeDecisionContext& context) {
-    // ab9714be pine_fills.cpp:3799-3845 (KI-62, samebar_add_exit_first): a
+    // ab9714be pine_fills.cpp:3799-3845 (samebar_add_exit_first): a
     // from_entry PRICED bracket leg gapped through at the open and its own
     // same-id pure MARKET pyramid add both fill at the opening tick, where
     // the owner's priority is buy-market(1) > sell-market(2) > gapped
@@ -22509,7 +22509,7 @@ void PineExecutionAdapter::reaccept_gapped_bracket_behind_same_id_add(
         if (found == placement_.end()) continue;
         const auto& leg = found->second;
         const bool global_leg = leg.from_entry.empty() && fill_time_global_exit(leg);
-        // The same-id KI-62 order is the owner's without calc_on_order_fills
+        // The same-id order is the owner's without calc_on_order_fills
         // only; TradingView's from_entry "" order holds with it too
         // (w4-f19a-plain-coof cell B).
         if (config_.calc_on_order_fills && !global_leg) continue;
@@ -26891,7 +26891,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
     }
     apply_fx_opening_margin_slice(event, context);
     refresh_pending_view();
-    // ab9714be pine_fills.cpp:7026-7033 and pine_orders.cpp:444-480 (KI-62):
+    // ab9714be pine_fills.cpp:7026-7033 and pine_orders.cpp:444-480:
     // after a priced from_entry bracket leg fills, every same-id MARKET
     // pyramid add opened on this bar is still open behind the leg's own
     // (FIFO) reduction; the owner covers it at the leg's booked price as a
@@ -28717,7 +28717,7 @@ void PineExecutionAdapter::begin_position_tail_summary() {
 
 namespace pineforge::source {
 
-// CR-150 L19D. These definitions are appended so existing source citations
+// These definitions are appended so existing source citations
 // keep their line numbers. Only the retained window is addressable; the
 // original count and append digest remain the source hash's logical words.
 const native_order::RequestHandle& OriginRoster::operator[](std::size_t global) const {
@@ -28914,7 +28914,7 @@ bool PineExecutionAdapter::CohortFacts::held() const noexcept {
     return !opened.empty() || !live_units_by_origin.empty();
 }
 
-// CR-150 L19l merge of parts A and C: the one place that binds the scratch
+// The one place that binds the scratch
 // directory of every adapter-owned L19l table -- part A's cohort and
 // entry-rank tables, part C's placement-minima and consumed-cycle tables --
 // the way set_successor_roots_directory binds every table of the kernel core.
@@ -28945,7 +28945,7 @@ PineExecutionAdapter::require_cohort(const SourceId& id) {
 
 } // namespace pineforge::source
 
-// CR-150 L19l-C. Keep the new storage wiring together, away from part A's
+// Keep the new storage wiring together, away from part A's
 // cohort / entry-id changes in this translation unit. These paths and file
 // offsets describe storage of existing state, not additional broker state.
 namespace pineforge::source {

@@ -62,7 +62,7 @@ inline std::string describe_cells(const ScratchEffectiveCapabilities& capabiliti
 
 inline ScratchEffectiveCapabilities read_scratch_effective_capabilities() {
     // No caller-supplied paths: only this fixed procfs file can be opened.
-    std::puts("S4E capability inspection path: /proc/self/status (fixed path only)");
+    std::puts("Capability inspection path: /proc/self/status (fixed path only)");
     std::ifstream status("/proc/self/status");
     if (!status) return {};
     std::string line;
