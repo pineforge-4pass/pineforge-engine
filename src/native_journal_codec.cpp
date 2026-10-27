@@ -3,7 +3,7 @@
 #include <new>
 
 namespace pineforge::native_order {
-inline namespace native_order_v7 {
+inline namespace native_order_v8 {
 namespace {
 namespace jc = detail::journal_codec;
 using Status = detail::ScratchStatus;
@@ -297,5 +297,5 @@ detail::ScratchStatus scan_journal_record(const detail::ScratchByteSource& sourc
         ordinal = std::visit([](const auto& event) { return event.ordinal; }, result);
     return status;
 }
-} // inline namespace native_order_v7
+} // inline namespace native_order_v8
 } // namespace pineforge::native_order

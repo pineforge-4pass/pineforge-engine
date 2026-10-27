@@ -1,4 +1,4 @@
-"""Strict, streaming pf-report-sink version-1 reader (CR-150 DESIGN 3.7/4.4).
+"""Strict, streaming pf-report-sink version-1 reader.
 
 Use ``with SinkReader(path) as reader:`` and consume the iterator to its end.
 For a blocking binary file or pipe, use ``SinkReader(stream=file)`` instead;

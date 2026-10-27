@@ -1,4 +1,4 @@
-// EN-132 D6 rows 15/16/18. Written first; each G row pins code/args from
+// D6 rows 15/16/18. Written first; each G row pins code/args from
 // MAP.md, never from an executed output. Uses the existing module C ABI
 // wrapper over scripted PineStrategyHost callbacks, not a copied run loop.
 #include <pineforge/native_module.hpp>

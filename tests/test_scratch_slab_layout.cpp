@@ -1,4 +1,4 @@
-// CR-150 RAM foundation. Remote fail-before: the frozen closure has no
+// Scratch-storage foundation. Remote fail-before: the frozen closure has no
 // pineforge/detail/scratch_slab.hpp. Record the actual first diagnostic there;
 // no fail-before or green execution was performed by this edit-only lane.
 #include "global_allocation_replacement.hpp"

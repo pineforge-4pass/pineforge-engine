@@ -1,4 +1,4 @@
-"""CR-150 L9B summaries and native temporary-sink corpus projections.
+"""Named-sink summaries and native temporary-sink corpus projections.
 
 Only native calls are replaced in the Python rows. The real reader, report
 assembly and JSON writer run unchanged. The corpus row uses real native

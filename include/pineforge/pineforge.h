@@ -83,20 +83,20 @@
   #define PF_API
 #endif
 
-/** Monotonic ABI version of pf_report_t / pf_trade_t layout. Bumped
- *  whenever a caller-visible struct grows. Consumers MUST verify
+/** Monotonic strategy-module compatibility version. Bumped for layout growth
+ *  or a required module rebuild. Consumers MUST verify
  *  pf_abi_version() == PF_ABI_VERSION before calling run_backtest.
- *  pf_report_t is caller-allocated: growth causes silent stack corruption
- *  in old callers that under-size the struct. pf_trade_t is runtime-
- *  allocated: growth causes array-stride misindexing in old readers that
- *  iterate the trades array with the stale sizeof. Value 2 = first
- *  versioned layout (metrics + equity curve); .so files predating this
- *  macro have no pf_abi_version symbol — treat dlsym failure as
- *  version 1. Value 3 appends pf_trade_t::open_at_end (the range-end
- *  close flag); a v2 reader iterating trades with the v2 stride would
- *  misindex every row after the first. Value 4 appends the live-runtime
- *  accessors and the per-bar broker-state hash array to pf_report_t. */
-#define PF_ABI_VERSION 4
+ *  pf_report_t is caller-allocated: growth silently corrupts an undersized buffer.
+ *  pf_trade_t is runtime-allocated: growth changes the array stride.
+ *  Value 2 introduced metrics and the equity curve. Modules predating this
+ *  macro have no pf_abi_version symbol; treat dlsym failure as version 1.
+ *  Value 3 appended pf_trade_t::open_at_end (the range-end close
+ *  flag); a v2 reader would misindex every row after the first.
+ *  Value 4 appended live-runtime accessors and the per-bar broker-state
+ *  hash array to pf_report_t.
+ *  Value 5 requires a 1.8.0 module rebuild for the native order layouts,
+ *  without growing the caller-allocated C report/trade layouts. */
+#define PF_ABI_VERSION 5
 
 /** Feature probe for the opt-in split chart/request.security feed boundary.
  *  When defined, #strategy_set_aux_security_feed is available. */
@@ -1271,7 +1271,7 @@ typedef enum pf_fill_qty_partition_e {
  *  `affordability_close_only` (entry leg declined at placement), the
  *  priced-entry `prior_cycle_close_only` rule (opposite live position whose
  *  cycle the order was not placed in -- `created_position_side !=` the
- *  live side -- and not a KI-65 `reverses_same_bar_market_from_flat`), the
+ *  live side -- and not a `reverses_same_bar_market_from_flat`), the
  *  same-cycle frozen explicit-FIXED transaction the close consumes exactly,
  *  a finalized flat MARKET pair against an opposite position, or one of the
  *  two reversal kernels above opening nothing. Where the order was created
@@ -1427,7 +1427,7 @@ typedef enum pf_close_cause_e {
  *  check first, though doing that check is still good practice. */
 PF_API int strategy_closed_trade_close_cause(pf_strategy_t s, int trade_index);
 /** Task 9: the script-facing signed position size (`strategy.position_size`;
- *  KI-64 freeze-aware -- while a same-bar `process_orders_on_close` close is
+ *  Freeze-aware -- while a same-bar `process_orders_on_close` close is
  *  frozen for the current bar, this reads the PRE-close position, matching
  *  what the script itself observes). NaN when @p s is NULL. */
 PF_API double strategy_position_size(pf_strategy_t s);

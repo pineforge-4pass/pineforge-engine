@@ -129,7 +129,7 @@ public:
         set_syminfo_mintick(0.0001);
     }
     // Pin C's shape (test_declined_reversal_close_leg.cpp): all-in
-    // percent-of-equity so the KI-54/KI-57 reversal-admission gate declines
+    // percent-of-equity so the reversal-admission gate declines
     // an opposite MARKET entry whose fill bar opens one mintick above the
     // signal close (qty_step 0).
     void all_in_percent_of_equity() {

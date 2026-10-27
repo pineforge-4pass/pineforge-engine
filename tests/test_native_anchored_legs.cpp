@@ -1191,7 +1191,7 @@ const std::vector<TwinExpected>& twin_expected() {
     return rows;
 }
 
-// The R4 harness's parent-rejection tape (KI-54 decline fixture).
+// The R4 harness's parent-rejection tape (decline fixture).
 std::vector<Bar> rejection_tape() {
     std::vector<Bar> bars;
     auto push = [&](double o, double h, double l, double c) {

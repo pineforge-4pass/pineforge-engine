@@ -1,4 +1,4 @@
-// LB-446: not built/run here. Frozen-base first diagnostic must be the absent
+// Not built/run here. Frozen-base first diagnostic must be the absent
 // exit_payload_readback.hpp; with headers transplanted, the provider must link.
 #include <pineforge/source/exit_payload_readback.hpp>
 #include <pineforge/source/pine_adapter.hpp>

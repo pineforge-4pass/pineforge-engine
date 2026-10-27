@@ -35,7 +35,7 @@ using pineforge::detail::ScratchSpanSource;
 using pineforge::detail::ScratchStatus;
 using pineforge::detail::CommandScratchStore;
 
-// CR-265: at most this many scope rows per teardown transaction. The final
+// At most this many scope rows per teardown transaction. The final
 // partial batch commits once; scope population never sizes resident storage.
 inline constexpr std::size_t kExitScopeEraseBatch = 64;
 

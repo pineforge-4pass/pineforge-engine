@@ -3,8 +3,8 @@
  * LIFECYCLE across declined in-position reversal signals.
  *
  * TV rule set (stevenygabbyperez derivation, 162/162 episodes):
- *   KILL     — a declined in-position opposite MARKET reversal (the KI-54/
- *              KI-72 decline arms, the "tradeless reversal") cancels the live
+ *   KILL     — a declined in-position opposite MARKET reversal (the margin
+ *              decline arms, the "tradeless reversal") cancels the live
  *              position's standing PRICED strategy.exit brackets. Not the
  *              "__close__" family, not stale exits bound to unfilled entries.
  *   DORMANT  — a killed bracket never matches a fill (118/118 TV stop-skips),
@@ -22,7 +22,7 @@
  * scripted per-bar actions; initial_capital 10000, PERCENT_OF_EQUITY pct=100,
  * zero commission, qty_step 0). The canonical decline fixture is the same
  * +1-gap open: LONG 100 @100, signal close 110 (eq 11000, frozen opposite qty
- * 100), fill bar opens 111 -> required 11100 > 11000 -> KI-54 DECLINE.
+ * 100), fill bar opens 111 -> required 11100 > 11000 -> DECLINE.
  *
  * Matrix:
  *   KILL      declined reversal kills the bracket; a same-bar stop touch does
@@ -36,7 +36,7 @@
  *             the entire remainder at that price under the bracket's id.
  *   R5        close_all co-queued with the declined reversal still fires
  *             (the "__close__" family is excluded from the kill).
- *   COOF      KI-60 kernel mirror: the dormant flag set mid-segment by an
+ *   COOF      Kernel mirror: the dormant flag set mid-segment by an
  *             earlier candidate's decline is caught at apply time (the COOF
  *             kernel pre-classifies its candidates, so classify's Skip alone
  *             cannot see it). RED without the apply-time mirror.
@@ -353,14 +353,14 @@ static void test_R5_close_all_still_fires() {
     if (p.trade_count() == 1) CHECK_NEAR(p.x_price(0), 111.0, 1e-9);
 }
 
-// COOF mirror: under calc_on_order_fills the KI-60 kernel pre-classifies its
+// COOF mirror: under calc_on_order_fills the kernel pre-classifies its
 // whole candidate set before applying any candidate, so the dormant flag set
 // by the reversal's decline mid-segment is invisible to classify — the shared
 // apply-time guard must catch it. bar3 declines S at the 111 open and its low
 // 104 crosses the 105 stop pre-classified in the same candidate set. RED
 // without the apply-time mirror (the stop fills @105 -> FLAT).
 static void test_coof_kernel_mirror() {
-    std::printf("-- COOF: KI-60 kernel apply-time mirror --\n");
+    std::printf("-- COOF: kernel apply-time mirror --\n");
     Probe p;
     p.calc_on_order_fills_ = true;
     p.plan = {

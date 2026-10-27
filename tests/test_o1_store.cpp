@@ -1,4 +1,4 @@
-// CR-150 A5 — ScratchStore-backed O(1) object-layer tests.
+// ScratchStore-backed O(1) object-layer tests.
 //
 // FAIL-BEFORE. frozen2 has no pineforge/detail/o1_store.hpp, no Store target,
 // and no object layer that can split a partial write into ScratchStore chunk
@@ -41,13 +41,17 @@ using pineforge::detail::ScratchBytes;
 using pineforge::detail::ScratchDurability;
 using pineforge::detail::ScratchPageId;
 using pineforge::detail::ScratchStatus;
+using pineforge::detail::o1::CleanupSkip;
 using pineforge::detail::o1::Id;
 using pineforge::detail::o1::kMaxChunkBytes;
+using pineforge::detail::o1::kMaxLiveObjectsCap;
 using pineforge::detail::o1::kMaxResidentPages;
+using pineforge::detail::o1::kMaxTxHandles;
 using pineforge::detail::o1::Shape;
 using pineforge::detail::o1::Stats;
 using pineforge::detail::o1::Store;
 using pineforge::detail::o1::Tx;
+using pineforge::detail::o1::TxPoolExhausted;
 
 #define REQUIRE(condition)                                                        \
   do {                                                                            \
@@ -316,11 +320,14 @@ void check_lifecycle() {
   std::unique_ptr<Store> store = Store::open(shape, backing.get());
   const std::uint64_t ceiling = ceiling_for(shape);
   REQUIRE(store->stats().bytes_resident <= ceiling);
+  REQUIRE(store->stats().objects_live == 0);
+  REQUIRE(store->stats().max_live_objects == kMaxLiveObjectsCap);
 
   const Id small = store->create(10, 1);
   REQUIRE(small != pineforge::detail::o1::kNullId);
   REQUIRE(store->alive(small));
   REQUIRE(store->size(small) == 10);
+  REQUIRE(store->stats().objects_live == 1);
 
   const std::array<unsigned char, 10> bytes{{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}};
   REQUIRE(store->write(small, 0, bytes.data(), bytes.size()) == bytes.size());
@@ -337,9 +344,11 @@ void check_lifecycle() {
   const Id default_aligned = store->create(16, 0);
   REQUIRE(aligned != default_aligned && aligned != 0 && default_aligned != 0);
   REQUIRE(throws_invalid_argument([&] { (void)store->create(8, 3); }));
+  REQUIRE(store->stats().objects_live == 3);
 
   const Id empty = store->create(0, 1);
   REQUIRE(store->size(empty) == 0);
+  REQUIRE(store->stats().objects_live == 4);
   REQUIRE(store->read(empty, 0, echoed.data(), echoed.size()) == 0);
 
   const Id growing = store->create(100, 1);
@@ -372,9 +381,11 @@ void check_lifecycle() {
                       [](unsigned char byte) { return byte == 0; }));
 
   const std::uint64_t live_before = store->stats().bytes_live;
+  const std::uint64_t objects_before = store->stats().objects_live;
   store->release(small);
   REQUIRE(!store->alive(small));
   REQUIRE(store->stats().bytes_live + 10 == live_before);
+  REQUIRE(store->stats().objects_live + 1 == objects_before);
   std::uint8_t dead_byte = 0;
   REQUIRE(throws_invalid_argument(
       [&] { (void)store->read(small, 0, &dead_byte, 1); }));
@@ -383,6 +394,7 @@ void check_lifecycle() {
       [&] { (void)store->write(small, 0, &dead_byte, 1); }));
   REQUIRE(throws_invalid_argument([&] { (void)store->resize(small, 1); }));
   REQUIRE(throws_invalid_argument([&] { store->release(small); }));
+  REQUIRE(store->stats().objects_live + 1 == objects_before);
   const Id after_release = store->create(8, 1);
   REQUIRE(after_release > small);
   REQUIRE(!store->alive(small));
@@ -398,13 +410,16 @@ void check_lifecycle() {
   REQUIRE(object_checksum(*store, survivor) == survivor_hash);
 
   Id aborted = 0;
+  const std::uint64_t objects_before_abort = store->stats().objects_live;
   {
     auto transaction = store->begin();
     aborted = store->create(32, 1);
     REQUIRE(store->alive(aborted));
+    REQUIRE(store->stats().objects_live == objects_before_abort + 1);
     transaction->rollback();
   }
   REQUIRE(aborted != 0 && !store->alive(aborted));
+  REQUIRE(store->stats().objects_live == objects_before_abort);
   REQUIRE(throws_invalid_argument([&] { (void)store->size(aborted); }));
   const Id after_abort = store->create(8, 1);
   REQUIRE(after_abort > aborted);
@@ -549,6 +564,7 @@ void check_transactions() {
 
   const std::uint64_t baseline_hash = store_checksum(*store, ids);
   const Stats baseline_stats = store->stats();
+  REQUIRE(baseline_stats.objects_live == object_count);
   std::vector<std::uint64_t> baseline_sizes;
   baseline_sizes.reserve(ids.size());
   for (Id id : ids) baseline_sizes.push_back(store->size(id));
@@ -579,11 +595,14 @@ void check_transactions() {
 
   std::vector<Id> mutated = ids;
   mutated.insert(mutated.end(), created.begin(), created.end());
+  REQUIRE(store->stats().objects_live ==
+          baseline_stats.objects_live - released.size() + created.size());
   REQUIRE(store_checksum(*store, mutated) != baseline_hash);
   transaction->rollback();
 
   REQUIRE(store_checksum(*store, ids) == baseline_hash);
   REQUIRE(store->stats().bytes_live == baseline_stats.bytes_live);
+  REQUIRE(store->stats().objects_live == baseline_stats.objects_live);
   for (std::size_t index = 0; index < ids.size(); ++index)
     REQUIRE(store->size(ids[index]) == baseline_sizes[index]);
   for (Id id : released) REQUIRE(store->alive(id));
@@ -732,10 +751,24 @@ class HeapVectorStore final : public Store {
     return std::unique_ptr<Tx>(new NullTx());
   }
 
+  std::unique_ptr<Tx> begin_cleanup() override {
+    return begin();
+  }
+
+  bool join_active_tx() override { return false; }
+  void abandon_joined_tx() noexcept override {}
+
+  void note_cleanup_skipped(CleanupSkip reason) noexcept override {
+    if (reason == CleanupSkip::rollback_only) ++cleanup_skipped_rollback_only_;
+    else ++cleanup_failed_;
+  }
+
   Stats stats() const override {
     Stats stats;
     stats.bytes_live = resident_;
     stats.bytes_resident = resident_;
+    stats.cleanup_skipped_rollback_only = cleanup_skipped_rollback_only_;
+    stats.cleanup_failed = cleanup_failed_;
     return stats;
   }
 
@@ -770,6 +803,8 @@ class HeapVectorStore final : public Store {
 
   std::vector<Object> objects_;
   std::uint64_t resident_ = 0;
+  std::uint64_t cleanup_skipped_rollback_only_ = 0;
+  std::uint64_t cleanup_failed_ = 0;
 };
 
 bool ceiling_holds(const Store& store, const Shape& shape) {
@@ -827,12 +862,12 @@ void check_growth_gate(std::uint64_t bars, std::size_t backing_pages) {
   const std::uint64_t salt = UINT64_C(0x9e3779b97f4a7c15);
   constexpr std::uint64_t batch = 10000;
   std::unique_ptr<Tx> transaction;
-  // Store's contract permits one Tx-handle allocation per begin(), and no
-  // allocations for successful mutations after open. ids is already reserved.
+  // Successful begin() and mutations allocate nothing after open.
+  // ids is already reserved.
   // bytes_resident only reports ScratchStore's constant workspace, so the old
   // ceiling/flatness assertions cannot see an object-layer heap leak. This
   // allocation delta catches even a growing per-object vector outside stats().
-  constexpr std::size_t allocations_per_begin = 1;
+  constexpr std::size_t allocations_per_begin = 0;
   std::size_t begin_calls = 0;
   const std::size_t allocations_before = global_allocation::allocations;
 
@@ -1086,33 +1121,471 @@ void check_read_failure_poisoning() {
   std::printf("O1STORE second-chunk read failure poisons outer transaction ok\n");
 }
 
-void check_begin_allocation_failure() {
+struct FullCallerPool {
+  explicit FullCallerPool(Store& store, bool finish_at_once = false) {
+    for (;;) {
+      try {
+        auto next = store.begin();
+        REQUIRE(count < handles.size());
+        if (finish_at_once) next->commit();
+        handles[count++] = std::move(next);
+      } catch (const TxPoolExhausted& error) {
+        REQUIRE(std::strcmp(error.what(),
+                            "o1 store: transaction handle pool exhausted") == 0);
+        break;
+      }
+    }
+    REQUIRE(count == Store::max_caller_handles());
+  }
+
+  void commit_joined() {
+    for (std::size_t index = 1; index < count; ++index)
+      handles[index]->commit();
+  }
+
+  std::array<std::unique_ptr<Tx>, kMaxTxHandles> handles{};
+  std::size_t count = 0;
+};
+
+void check_finished_begin_exhaustion() {
   Shape shape = default_shape();
   MemoryBacking backing(4096, shape.page_bytes);
   std::unique_ptr<Store> store = Store::open(shape, backing.get());
-  bool allocation_failed = false;
+  // Fill until the typed guard fires, retaining finished handles so that no
+  // outer transaction is active when the next reservation is rejected.
+  FullCallerPool retained(*store, true);
+  const Stats before = store->stats();
+  const std::size_t allocations_before = global_allocation::allocations;
+  const std::size_t refused_before = global_allocation::refused;
+  bool exhausted = false;
   global_allocation::refusing = true;
   try {
     (void)store->begin();
-  } catch (const std::bad_alloc&) {
-    allocation_failed = true;
+  } catch (const TxPoolExhausted& error) {
+    exhausted = true;
+    REQUIRE(std::strcmp(error.what(),
+                        "o1 store: transaction handle pool exhausted") == 0);
   } catch (...) {
     global_allocation::refusing = false;
     throw;
   }
   global_allocation::refusing = false;
-  REQUIRE(allocation_failed);
+  REQUIRE(exhausted);
+  REQUIRE(global_allocation::allocations == allocations_before);
+  REQUIRE(global_allocation::refused == refused_before);
+  const Stats after = store->stats();
+  REQUIRE(after.bytes_live == before.bytes_live);
+  REQUIRE(after.bytes_resident == before.bytes_resident);
+  REQUIRE(after.bytes_backing == before.bytes_backing);
+  REQUIRE(after.pages_spilled == before.pages_spilled);
+  REQUIRE(after.max_live_handles == before.max_live_handles);
+  REQUIRE(after.cleanup_skipped_rollback_only == 0);
+  REQUIRE(after.cleanup_failed == 0);
 
-  // A refused handle allocation must leave no hidden outer transaction:
+  // A refused handle reservation must leave no hidden outer transaction:
   // this begin must own a real rollback, rather than return a joined scope.
+  retained.handles.back().reset();
   auto transaction = store->begin();
   const Id id = store->create(16, 1);
   transaction->rollback();
   REQUIRE(!store->alive(id));
-  std::printf("O1STORE refused begin allocation leaves no active transaction ok\n");
+  REQUIRE(store->stats().bytes_live == before.bytes_live);
+  std::printf("O1STORE exhausted begin pool leaves no active transaction ok\n");
+}
+
+void check_joined_begin_exhaustion() {
+  Shape shape = default_shape();
+  MemoryBacking backing(4096, shape.page_bytes);
+  std::unique_ptr<Store> store = Store::open(shape, backing.get());
+  FullCallerPool pool(*store);
+  const Id id = store->create(16, 1);
+  fill_pattern(*store, id, 617);
+  const std::uint64_t checksum = object_checksum(*store, id);
+  pool.commit_joined();
+  const Stats before = store->stats();
+  const std::size_t allocations_before = global_allocation::allocations;
+  const std::size_t refused_before = global_allocation::refused;
+  bool exhausted = false;
+  try {
+    (void)store->begin();
+  } catch (const TxPoolExhausted&) {
+    exhausted = true;
+  }
+  REQUIRE(exhausted);
+  REQUIRE(global_allocation::allocations == allocations_before);
+  REQUIRE(global_allocation::refused == refused_before);
+  REQUIRE(store->stats().bytes_live == before.bytes_live);
+  REQUIRE(store->stats().bytes_backing == before.bytes_backing);
+  REQUIRE(store->stats().pages_spilled == before.pages_spilled);
+  REQUIRE(store->stats().max_live_handles == Store::max_caller_handles());
+  REQUIRE(store->stats().cleanup_skipped_rollback_only == 0);
+  REQUIRE(store->stats().cleanup_failed == 0);
+  REQUIRE(object_checksum(*store, id) == checksum);
+
+  // A rejected joined begin must neither poison nor finish the live outer
+  // transaction, and deleting a finished handle must make its slot reusable.
+  pool.handles.back().reset();
+  auto replacement = store->begin();
+  replacement->commit();
+  pool.handles.front()->commit();
+  REQUIRE(store->alive(id));
+  REQUIRE(object_checksum(*store, id) == checksum);
+  std::printf("O1STORE exhausted joined begin preserves outer transaction ok\n");
+}
+
+void check_finished_handle_lifetime() {
+  Shape shape = default_shape();
+  MemoryBacking backing(4096, shape.page_bytes);
+  std::unique_ptr<Store> store = Store::open(shape, backing.get());
+  auto outer = store->begin();
+  auto joined = store->begin();
+  joined->commit();
+  outer->commit();
+  REQUIRE(throws_logic_error([&] { outer->commit(); }));
+  REQUIRE(throws_logic_error([&] { joined->rollback(); }));
+
+  auto moved = std::move(joined);
+  REQUIRE(joined == nullptr);
+  joined.reset();
+  outer.reset();
+  outer.reset();
+  {
+    auto reused = store->begin();
+    reused->rollback();
+  }
+  store.reset();
+  // The surviving handle is finished: its methods only reject reuse, and
+  // deletion must return its still-live pool slot without touching the store.
+  REQUIRE(throws_logic_error([&] { moved->commit(); }));
+  moved.reset();
+  moved.reset();
+  std::printf("O1STORE moved and finished handles preserve pool lifetime ok\n");
+}
+
+void check_cleanup_begin_exhaustion() {
+  Shape shape = default_shape();
+  shape.chunk_bytes = 32;
+  MemoryBacking backing(4096, shape.page_bytes);
+  std::unique_ptr<Store> store = Store::open(shape, backing.get());
+  const std::uint64_t baseline_live = store->stats().bytes_live;
+  const Id id = store->create(64, 8);
+  fill_pattern(*store, id, 4243);
+  const std::uint64_t baseline_checksum = object_checksum(*store, id);
+  const auto require_caller_pool_exhausted = [&] {
+    bool exhausted = false;
+    try {
+      (void)store->begin();
+    } catch (const TxPoolExhausted&) {
+      exhausted = true;
+    }
+    REQUIRE(exhausted);
+  };
+
+  const std::size_t allocations_before = global_allocation::allocations;
+  const std::size_t refused_before = global_allocation::refused;
+  global_allocation::refusing = true;
+  try {
+    {
+      FullCallerPool pool(*store);
+      require_caller_pool_exhausted();
+      {
+        auto cleanup = store->begin_cleanup();
+        store->release(id);
+        cleanup->commit();
+      }
+      REQUIRE(!store->alive(id));
+      REQUIRE(store->stats().bytes_live == baseline_live);
+      require_caller_pool_exhausted();
+      pool.commit_joined();
+      // A cleanup commit joins the outer transaction; its release must undo.
+      pool.handles.front()->rollback();
+    }
+    REQUIRE(store->alive(id));
+    REQUIRE(object_checksum(*store, id) == baseline_checksum);
+    REQUIRE(store->stats().bytes_live == baseline_live + 64);
+
+    {
+      FullCallerPool pool(*store);
+      require_caller_pool_exhausted();
+      {
+        auto cleanup = store->begin_cleanup();
+        store->release(id);
+        cleanup->commit();
+      }
+      pool.commit_joined();
+      pool.handles.front()->commit();
+      REQUIRE(!store->alive(id));
+      REQUIRE(store->stats().bytes_live == baseline_live);
+
+      // All caller handles are now finished but still occupy their slots.
+      // Cleanup must also start a real outer transaction in this state.
+      require_caller_pool_exhausted();
+      const Id next = store->create(64, 8);
+      fill_pattern(*store, next, 4243);
+      {
+        auto cleanup = store->begin_cleanup();
+        store->release(next);
+        cleanup->rollback();
+      }
+      REQUIRE(store->alive(next));
+      REQUIRE(object_checksum(*store, next) == baseline_checksum);
+      REQUIRE(store->stats().bytes_live == baseline_live + 64);
+      auto cleanup = store->begin_cleanup();
+      store->release(next);
+      cleanup->commit();
+      REQUIRE(!store->alive(next));
+      REQUIRE(store->stats().bytes_live == baseline_live);
+      require_caller_pool_exhausted();
+      REQUIRE(store->stats().max_live_handles == Store::max_caller_handles());
+      REQUIRE(store->stats().cleanup_skipped_rollback_only == 0);
+      REQUIRE(store->stats().cleanup_failed == 0);
+      // All finished caller and cleanup handles may outlive the store and return
+      // slots without accessing the destroyed store.
+      store.reset();
+      cleanup.reset();
+    }
+  } catch (...) {
+    global_allocation::refusing = false;
+    throw;
+  }
+  global_allocation::refusing = false;
+  REQUIRE(global_allocation::allocations == allocations_before);
+  REQUIRE(global_allocation::refused == refused_before);
+  std::printf("O1STORE cleanup releases with active and finished caller pools full ok\n");
+}
+
+void check_handle_high_water() {
+  Shape shape = default_shape();
+  MemoryBacking backing(4096, shape.page_bytes);
+  auto store = Store::open(shape, backing.get());
+  REQUIRE(store->stats().max_live_handles == 0);
+  REQUIRE(store->stats().cleanup_skipped_rollback_only == 0);
+  REQUIRE(store->stats().cleanup_failed == 0);
+  {
+    auto outer = store->begin();
+    REQUIRE(store->stats().max_live_handles == 1);
+    auto joined = store->begin();
+    joined->commit();
+    REQUIRE(store->stats().max_live_handles == 2);
+    auto finished = store->begin();
+    finished->commit();
+    REQUIRE(store->stats().max_live_handles == 3);
+    {
+      auto cleanup = store->begin_cleanup();
+      const Id id = store->create(8, 8);
+      store->release(id);
+      cleanup->commit();
+    }
+    REQUIRE(store->stats().max_live_handles == 3);
+    joined.reset();
+    {
+      auto replacement = store->begin();
+      replacement->commit();
+    }
+    REQUIRE(store->stats().max_live_handles == 3);
+    outer->rollback();
+  }
+  {
+    auto next = store->begin();
+    next->commit();
+  }
+  REQUIRE(store->stats().max_live_handles == 3);
+  REQUIRE(store->stats().cleanup_skipped_rollback_only == 0);
+  REQUIRE(store->stats().cleanup_failed == 0);
+  std::printf("O1STORE caller high-water includes retained finished handles ok\n");
+}
+
+void check_cleanup_counters() {
+  Shape shape = default_shape();
+  MemoryBacking backing(4096, shape.page_bytes);
+  auto store = Store::open(shape, backing.get());
+  REQUIRE(store->stats().cleanup_skipped_rollback_only == 0);
+  REQUIRE(store->stats().cleanup_failed == 0);
+  std::uint64_t rollback_skips = 0;
+  std::uint64_t failures = 0;
+  {
+    auto outer = store->begin();
+    store->note_cleanup_skipped(CleanupSkip::rollback_only);
+    ++rollback_skips;
+    REQUIRE(store->stats().cleanup_skipped_rollback_only == rollback_skips);
+    REQUIRE(store->stats().cleanup_failed == failures);
+    store->note_cleanup_skipped(CleanupSkip::failed);
+    ++failures;
+    REQUIRE(store->stats().cleanup_skipped_rollback_only == rollback_skips);
+    REQUIRE(store->stats().cleanup_failed == failures);
+    outer->rollback();
+  }
+  REQUIRE(store->stats().cleanup_skipped_rollback_only == rollback_skips);
+  REQUIRE(store->stats().cleanup_failed == failures);
+  store->note_cleanup_skipped(CleanupSkip::failed);
+  ++failures;
+  REQUIRE(store->stats().cleanup_skipped_rollback_only == rollback_skips);
+  REQUIRE(store->stats().cleanup_failed == failures);
+  store->note_cleanup_skipped(CleanupSkip::rollback_only);
+  ++rollback_skips;
+  REQUIRE(store->stats().cleanup_skipped_rollback_only == rollback_skips);
+  REQUIRE(store->stats().cleanup_failed == failures);
+  std::printf("O1STORE separate cleanup counters survive rollback ok\n");
+}
+
+void check_operation_scopes() {
+  Shape shape = default_shape();
+  MemoryBacking backing(4096, shape.page_bytes);
+  auto store = Store::open(shape, backing.get());
+  const Id id = store->create(8, 8);
+  fill_pattern(*store, id, 718);
+  const auto checksum = object_checksum(*store, id);
+  {
+    auto owned = store->scope();
+    store->release(id);
+    owned.rollback();
+    REQUIRE(throws_logic_error([&] { owned.commit(); }));
+  }
+  REQUIRE(store->alive(id));
+  {
+    auto abandoned = store->scope();
+    store->release(id);
+  }
+  REQUIRE(store->alive(id));
+  {
+    FullCallerPool pool(*store);
+    const auto before = store->stats();
+    const auto allocations_before = global_allocation::allocations;
+    const auto refused_before = global_allocation::refused;
+    global_allocation::refusing = true;
+    try {
+      auto joined = store->scope();
+      auto child = store->scope();
+      store->release(id);
+      child.commit();
+      joined.commit();
+    } catch (...) {
+      global_allocation::refusing = false;
+      throw;
+    }
+    global_allocation::refusing = false;
+    REQUIRE(global_allocation::allocations == allocations_before);
+    REQUIRE(global_allocation::refused == refused_before);
+    REQUIRE(store->stats().max_live_handles == before.max_live_handles);
+    pool.commit_joined();
+    pool.handles.front()->rollback();
+  }
+  REQUIRE(store->alive(id));
+  REQUIRE(object_checksum(*store, id) == checksum);
+  {
+    auto outer = store->begin();
+    auto joined = store->scope();
+    store->release(id);
+    joined.rollback();
+    REQUIRE(!store->alive(id)); // Joined rollback has no savepoint.
+    REQUIRE(throws_logic_error([&] { (void)store->scope(); }));
+    REQUIRE(throws_logic_error([&] { outer->commit(); }));
+  }
+  REQUIRE(store->alive(id));
+  {
+    auto outer = store->begin();
+    try {
+      auto joined = store->scope();
+      store->release(id);
+      throw std::runtime_error("operation callback failed");
+    } catch (const std::runtime_error&) {
+    }
+    REQUIRE(throws_logic_error([&] { outer->commit(); }));
+  }
+  REQUIRE(store->alive(id));
+  REQUIRE(object_checksum(*store, id) == checksum);
+  {
+    auto owned = store->scope();
+    store->release(id);
+    owned.commit();
+  }
+  REQUIRE(!store->alive(id));
+  REQUIRE(store->stats().bytes_live == 0);
+  REQUIRE(store->stats().cleanup_skipped_rollback_only == 0);
+  REQUIRE(store->stats().cleanup_failed == 0);
+  std::printf("O1STORE operation scopes join without handles and preserve rollback ok\n");
+}
+
+void check_joined_cleanup_failure() {
+  Shape shape = default_shape();
+  MemoryBacking backing(4096, shape.page_bytes);
+  auto store = Store::open(shape, backing.get());
+  const Id id = store->create(8, 8);
+  auto outer = store->begin();
+  try {
+    auto cleanup = store->begin_cleanup();
+    store->release(id);
+    throw std::runtime_error("cleanup callback failed");
+  } catch (const std::runtime_error&) {
+  }
+  REQUIRE(!store->alive(id));
+  REQUIRE(throws_logic_error([&] { (void)store->begin(); }));
+  REQUIRE(throws_logic_error([&] { outer->commit(); }));
+  REQUIRE(store->alive(id));
+  REQUIRE(store->stats().cleanup_skipped_rollback_only == 0);
+  REQUIRE(store->stats().cleanup_failed == 0);
+  std::printf("O1STORE unfinished joined cleanup poisons its outer transaction ok\n");
 }
 
 // ---------------------------------------------------------------- no heap after open
+
+void check_begin_no_heap_after_open() {
+  Shape shape = default_shape();
+  MemoryBacking backing(4096, shape.page_bytes);
+  std::unique_ptr<Store> store = Store::open(shape, backing.get());
+  const Id id = store->create(sizeof(std::uint64_t), alignof(std::uint64_t));
+  constexpr std::size_t cycles = 128;
+  const std::size_t allocations_before = global_allocation::allocations;
+  const std::size_t refused_before = global_allocation::refused;
+  for (std::size_t cycle = 0; cycle < cycles; ++cycle) {
+    const std::uint64_t committed = cycle * 2 + 1;
+    const std::uint64_t discarded = committed + 1;
+    std::uint64_t echoed = 0;
+    {
+      auto transaction = store->begin();
+      REQUIRE(store->write(id, 0, &committed, sizeof committed) ==
+              sizeof committed);
+      transaction->commit();
+    }
+    REQUIRE(store->read(id, 0, &echoed, sizeof echoed) == sizeof echoed);
+    REQUIRE(echoed == committed);
+    {
+      auto transaction = store->begin();
+      REQUIRE(store->write(id, 0, &discarded, sizeof discarded) ==
+              sizeof discarded);
+      transaction->rollback();
+    }
+    REQUIRE(store->read(id, 0, &echoed, sizeof echoed) == sizeof echoed);
+    REQUIRE(echoed == committed);
+    {
+      auto outer = store->begin();
+      auto joined = store->begin();
+      REQUIRE(store->write(id, 0, &discarded, sizeof discarded) ==
+              sizeof discarded);
+      joined->commit();
+      outer->commit();
+    }
+    REQUIRE(store->read(id, 0, &echoed, sizeof echoed) == sizeof echoed);
+    REQUIRE(echoed == discarded);
+    {
+      auto outer = store->begin();
+      auto joined = store->begin();
+      REQUIRE(store->write(id, 0, &committed, sizeof committed) ==
+              sizeof committed);
+      joined->commit();
+      outer->rollback();
+    }
+    REQUIRE(store->read(id, 0, &echoed, sizeof echoed) == sizeof echoed);
+    REQUIRE(echoed == discarded);
+  }
+  const std::size_t allocations =
+      global_allocation::allocations - allocations_before;
+  std::printf("O1STORE begin-no-heap cycles=%zu begins=%zu allocations=%zu\n",
+              cycles, cycles * 6, allocations);
+  std::fflush(stdout);
+  REQUIRE(global_allocation::refused == refused_before);
+  REQUIRE(allocations == 0);
+}
 
 void check_no_heap_after_open() {
   Shape shape = default_shape();
@@ -1196,7 +1669,78 @@ void check_no_heap_after_open() {
   REQUIRE(global_allocation::allocations == allocations_before);
   REQUIRE(store->stats().bytes_resident == resident_before);
 
+  allocations_before = global_allocation::allocations;
+  refused_before = global_allocation::refused;
+  held = true;
+  // Release the two finished handles before reserving another nested pair.
+  committed_tx.reset();
+  discarded_tx.reset();
+  global_allocation::refusing = true;
+  try {
+    auto outer = store->begin();
+    auto joined = store->begin();
+    joined->commit();
+    outer->rollback();
+  } catch (...) {
+    held = false;
+  }
+  global_allocation::refusing = false;
+  REQUIRE(held);
+  REQUIRE(global_allocation::refused == refused_before);
+  REQUIRE(global_allocation::allocations == allocations_before);
+
   std::printf("O1STORE no-heap-after-open backing=memory ok\n");
+}
+
+void check_alive_failure_is_observable() {
+  Shape shape = default_shape();
+  shape.page_bytes = 512;
+  shape.resident_pages = 2;
+  shape.chunk_bytes = 16;
+  MemoryBacking memory(16384, shape.page_bytes);
+  FaultBacking backing(memory.get());
+  auto store = Store::open(shape, backing);
+  // More raw 16-byte object/chunk keys than the entire resident workspace can
+  // hold: an alive() sweep must read a cold page, irrespective of cache order.
+  constexpr std::uint64_t key_bytes = 2 * sizeof(std::uint64_t);
+  const std::uint64_t count = ceiling_for(shape) / key_bytes + 1;
+  std::vector<Id> ids;
+  ids.reserve(static_cast<std::size_t>(count));
+  for (std::uint64_t index = 0; index < count; ++index) {
+    const Id id = store->create(sizeof index, alignof(std::uint64_t));
+    REQUIRE(store->write(id, 0, &index, sizeof index) == sizeof index);
+    ids.push_back(id);
+  }
+  const auto baseline = store->stats().bytes_live;
+  auto outer = store->begin();
+  // Every stored key in this population contains zero in its high id bytes.
+  // The existing backing hook fails the first cold page containing that byte.
+  const std::byte zero{};
+  backing.fail_read_containing(ScratchBytes{&zero, 1}, ScratchBytes{&zero, 1});
+  bool rejected = false;
+  for (const Id id : ids) {
+    try {
+      REQUIRE(store->alive(id)); // A backing error must never mean "dead".
+    } catch (const std::runtime_error& error) {
+      REQUIRE(std::strcmp(error.what(), "o1 store: alive lookup: io_error") == 0);
+      rejected = true;
+      break;
+    }
+  }
+  REQUIRE(rejected);
+  REQUIRE(backing.read_failed());
+  REQUIRE(throws_logic_error([&] { (void)store->begin(); }));
+  outer->rollback();
+  REQUIRE(store->stats().bytes_live == baseline);
+  for (std::size_t index = 0; index < ids.size(); ++index) {
+    std::uint64_t value = 0;
+    REQUIRE(store->alive(ids[index]));
+    REQUIRE(store->read(ids[index], 0, &value, sizeof value) == sizeof value);
+    REQUIRE(value == index);
+  }
+  REQUIRE(store->stats().cleanup_skipped_rollback_only == 0);
+  REQUIRE(store->stats().cleanup_failed == 0);
+  std::printf("O1STORE liveness lookup failures propagate and poison the outer ok\n");
 }
 
 }  // namespace
@@ -1208,6 +1752,7 @@ int main() {
     check_chunk_boundaries_and_rollback();
     check_transactions();
     check_never_refuses();
+    check_begin_no_heap_after_open();
     check_growth_gate(UINT64_C(100000), 32768);
     check_growth_gate(UINT64_C(1000000), 131072);
     Shape control_shape = default_shape();
@@ -1217,8 +1762,16 @@ int main() {
     check_flattened_transactions();
     check_io_failure();
     check_read_failure_poisoning();
-    check_begin_allocation_failure();
+    check_finished_begin_exhaustion();
+    check_joined_begin_exhaustion();
+    check_finished_handle_lifetime();
+    check_cleanup_begin_exhaustion();
+    check_handle_high_water();
+    check_cleanup_counters();
+    check_operation_scopes();
+    check_joined_cleanup_failure();
     check_no_heap_after_open();
+    check_alive_failure_is_observable();
     std::printf("test_o1_store: all groups passed\n");
     return 0;
   } catch (const std::exception& error) {

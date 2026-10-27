@@ -26,7 +26,7 @@
 #include <variant>
 
 namespace pineforge::native_order {
-inline namespace native_order_v7 {
+inline namespace native_order_v8 {
 
 namespace {
 using ReadStatus = detail::ScratchStatus;
@@ -1696,11 +1696,11 @@ struct WorkingRequestCore::JournalStore {
         return *codec_values[slot];
     }
     // A page holds a contiguous prefix of one chunk, bounded by bytes as well
-    // as kChunk events. The resident part may hold up to kMaxResident events;
-    // a window that grows past it, including within one bar before retirement,
-    // spills its oldest chunks to pages. A spill never takes
-    // the resident part below kKeepResident events, so the newest events stay
-    // in memory.
+    // as kChunk events. Before appending a command's events, make_room spills
+    // while resident_count() + incoming exceeds kMaxResident and the existing
+    // resident count exceeds kKeepResident. The final chunk prefix can take
+    // that count below kKeepResident by up to kChunk - 1 events; this is a
+    // stopping threshold, not a minimum resident count.
     static constexpr std::size_t kChunk = 32;
     static constexpr std::size_t kMaxResident = 2048;
     static constexpr std::size_t kKeepResident = 128;
@@ -8255,7 +8255,7 @@ static_assert(std::variant_size_v<Owner> == 5);
 static_assert(std::variant_size_v<Authority> == 8);
 static_assert(std::variant_size_v<ExecutionScope> == 3);
 
-// CR-150 L19A. This helper stays in the core's owning epoch and translation
+// This helper stays in the core's owning epoch and translation
 // unit. Its shared_ptr permits an incomplete private type in the public
 // header; WorkingRequestCore is noncopyable, so the file has one owner.
 // Only physical storage changes: note_committed_events still folds every
@@ -8518,7 +8518,7 @@ std::optional<uint64_t> WorkingRequestCore::successor_root(uint64_t incarnation)
 // holds only the resident tail, and a pinned journal's older keys sit in the
 // external log.
 
-}  // inline namespace native_order_v7
+}  // inline namespace native_order_v8
 }  // namespace pineforge::native_order
 
 namespace pineforge::detail {

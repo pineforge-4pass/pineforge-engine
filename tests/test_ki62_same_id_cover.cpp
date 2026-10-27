@@ -1,7 +1,7 @@
 /*
  * test_ki62_same_id_cover.cpp — lane W8E-EXITS.
  *
- * KI-62 (ab9714be pine_fills.cpp:7026-7033): when a priced from_entry exit
+ * Same-id cover (ab9714be pine_fills.cpp:7026-7033): when a priced from_entry exit
  * fills on the bar a MARKET pyramid add of its own entry id opened, the exit
  * first closes the id's older lot (FIFO) and then covers the whole same-bar
  * add at its own fill price. The cover ran after any such leg fill, even

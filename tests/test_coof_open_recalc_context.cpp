@@ -54,7 +54,7 @@
  * born in the first-O recalc at O (S1..S4 and the close_all on 10-02), fills
  * every sibling born in one mid-bar recalc at the same waypoint (S1..S4 at W1
  * on 10-04), and rolls the close_alls born in the recalcs after those W1
- * fills to the next open; the engine's KI-60/67 scheduler admits one more
+ * fills to the next open; the engine's scheduler admits one more
  * fill at O and one fill per waypoint. That is why the sensor tapes are not
  * replayed row-for-row here.
  */

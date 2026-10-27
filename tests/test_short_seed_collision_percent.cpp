@@ -315,7 +315,7 @@ void run_cash_remnant_case() {
 }
 
 // Non-trigger control: an all-in (100%) book whose reversal legs face a
-// gap-up decline must NOT be tagged — the projection mirrors the KI-54
+// gap-up decline must NOT be tagged — the projection mirrors the margin gate
 // frozen reversal re-check, and the ordinary path's atomic decline
 // (entry declined, co-queued close suppressed, same-direction re-add
 // declined) is preserved byte-for-byte.

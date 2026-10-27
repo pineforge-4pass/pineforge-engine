@@ -25,17 +25,20 @@ void row() {
         require_success(host);
         watch.collect();
         require(watch.created_in("/var/tmp"),
-                "native ledger never used its own disk-backed /var/tmp scratch");
+                "native ledger never used its own disk-backed /var/tmp scratch"
+                    + watch.diagnostics());
         watch.require_removed();
     }
     const auto native_creations = watch.created_count_in("/var/tmp");
     exercise_command_scratch(pineforge::detail::ScratchBackingKind::disk);
     watch.collect();
-    require(watch.created_in("/var/tmp"), "default run never used disk-backed /var/tmp");
+    require(watch.created_in("/var/tmp"),
+            "default run never used disk-backed /var/tmp" + watch.diagnostics());
     require(watch.created_count_in("/var/tmp") > native_creations,
-            "production command scratch lacks its own /var/tmp creation witness");
+            "production command scratch lacks its own /var/tmp creation witness"
+                + watch.diagnostics());
     require(watch.tmpdir_empty() && !watch.created_in("/dev/shm") && !watch.created_in("/tmp"),
-            "TMPDIR on tmpfs must resolve directly to /var/tmp");
+            "TMPDIR on tmpfs must resolve directly to /var/tmp" + watch.diagnostics());
     watch.require_removed();
     require(descriptor_count() == before, "default run leaked an unlinked scratch descriptor");
 }

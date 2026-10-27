@@ -1,4 +1,4 @@
-"""S4E jailed/guard controls; execute on the lab box, never skip a row."""
+"""Jailed/guard controls; execute on the Linux test host, never skip a row."""
 import inspect
 import json
 import os

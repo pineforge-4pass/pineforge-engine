@@ -5,6 +5,7 @@
 #include <vector>
 
 #include <pineforge/na.hpp>
+#include <pineforge/script_string.hpp>
 
 namespace pineforge {
 
@@ -27,6 +28,25 @@ struct StrFormatValue {
     StrFormatValue(bool value) : kind(Kind::Text), text(value ? "true" : "false") {}
     StrFormatValue(const std::string& value) : kind(Kind::Text), text(value) {}
     StrFormatValue(const char* value) : kind(Kind::Text), text(value) {}
+};
+
+// The external-string argument keeps text as a retained slice. In particular,
+// building the format argument list never copies an accumulated text payload.
+struct ScriptStrFormatValue {
+    enum class Kind { Number, Text };
+    Kind kind;
+    double number = 0.0;
+    ScriptString text;
+    template <class T, std::enable_if_t<std::is_arithmetic_v<T>
+                                        && !std::is_same_v<T, bool>, int> = 0>
+    ScriptStrFormatValue(T value) : kind(Kind::Number), number(static_cast<double>(value)) {
+        if constexpr (std::is_integral_v<T> && std::is_signed_v<T>) {
+            if (value == std::numeric_limits<T>::min()) number = na<double>();
+        }
+    }
+    ScriptStrFormatValue(bool value) : kind(Kind::Text), text(value ? "true" : "false") {}
+    ScriptStrFormatValue(ScriptString value) : kind(Kind::Text), text(std::move(value)) {}
+    ScriptStrFormatValue(const char* value) : kind(Kind::Text), text(value) {}
 };
 
 // The source language's MessageFormat subset: `{i}` inserts argument i, and
@@ -78,6 +98,41 @@ std::string str_tostring(double value,
                          const std::string& format_mode = "",
                          double mintick = 0.0);
 
+ScriptString script_str_format_values(const ScriptString&,
+                                      const std::vector<ScriptStrFormatValue>&);
+ScriptString script_str_format(const ScriptString&, const std::vector<ScriptString>&);
+ScriptString str_tostring(detail::o1::Store&, double value,
+                          const ScriptString& format_mode = {}, double mintick = 0.0);
+
+// Constrain the source argument so existing calls with C string literals still
+// resolve to their std::string ABI. A ScriptString source selects this path
+// without converting a literal to a different owning representation first.
+template <class Text, std::enable_if_t<std::is_same_v<std::decay_t<Text>, ScriptString>, int> = 0>
+inline ScriptString str_format_values(Text&& format, const std::vector<ScriptStrFormatValue>& args) {
+    return script_str_format_values(format, args);
+}
+template <class Text, std::enable_if_t<std::is_same_v<std::decay_t<Text>, ScriptString>, int> = 0>
+inline ScriptString str_format(Text&& format, const std::vector<ScriptString>& args) {
+    return script_str_format(format, args);
+}
+template <class Text, std::enable_if_t<std::is_same_v<std::decay_t<Text>, ScriptString>, int> = 0>
+inline ScriptStringParts str_split(Text&& source, const ScriptString& separator) {
+    return ScriptStringParts(std::forward<Text>(source), separator);
+}
+template <class Text, std::enable_if_t<std::is_same_v<std::decay_t<Text>, ScriptString>, int> = 0>
+inline ScriptStringParts str_split(Text&& source, std::string_view separator) {
+    auto& store = source.store() ? *source.store() : ScriptStringScope::current();
+    return ScriptStringParts(std::forward<Text>(source), ScriptString(store, separator));
+}
+template <class Text, std::enable_if_t<std::is_same_v<std::decay_t<Text>, ScriptString>, int> = 0>
+inline ScriptStringParts str_split(Text&& source, const char* separator) {
+    return str_split(std::forward<Text>(source), std::string_view(separator));
+}
+template <class Text, std::enable_if_t<std::is_same_v<std::decay_t<Text>, ScriptString>, int> = 0>
+inline ScriptStringParts str_split(Text&& source, const std::string& separator) {
+    return str_split(std::forward<Text>(source), std::string_view(separator));
+}
+
 // Deprecated `pine_*` spellings: exact inline forwards kept for generated code
 // and the source adapter. New code calls the neutral names above.
 
@@ -106,6 +161,20 @@ inline std::string pine_str_tostring(double value,
                                      const std::string& format_mode = "",
                                      double mintick = 0.0) {
     return str_tostring(value, format_mode, mintick);
+}
+
+template <class Text, std::enable_if_t<std::is_same_v<std::decay_t<Text>, ScriptString>, int> = 0>
+inline ScriptString pine_str_format(Text&& format, const std::vector<ScriptString>& args) {
+    return script_str_format(format, args);
+}
+template <class Text, class Separator,
+          std::enable_if_t<std::is_same_v<std::decay_t<Text>, ScriptString>, int> = 0>
+inline ScriptStringParts pine_str_split(Text&& source, Separator&& separator) {
+    return str_split(std::forward<Text>(source), std::forward<Separator>(separator));
+}
+inline ScriptString pine_str_tostring(detail::o1::Store& store, double value,
+                                      const ScriptString& format = {}, double mintick = 0.0) {
+    return str_tostring(store, value, format, mintick);
 }
 
 } // namespace pineforge

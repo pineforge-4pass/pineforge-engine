@@ -556,7 +556,7 @@ ExitBindingRuleSwitches& exit_binding_rule_switches() noexcept;
 // stays invisible to the script pass that placed it. Both parts act only at
 // the re-issued exit that exit() fills at its call (its current-close path,
 // stop or limit leg); an ordinary close_all keeps its own size freeze
-// (KI-64). All on; only tests change one. Process-wide, read by every adapter;
+// Freeze-aware. All on; only tests change one. Process-wide, read by every adapter;
 // not installed API, and no strategy input reaches it.
 struct PoocCloseFillViewSwitches {
     // The rest of the pass reads the pre-fill strategy.position_size (and so
@@ -1903,7 +1903,7 @@ public:
     }
     bool take_intraday_loss_relabel(std::uint64_t ordinal) noexcept;
     void set_margin_call_enabled(bool enabled) noexcept;
-    // KI-62 (moved out of PyramidEntry by R5 lane L12, 2.ii j): the physical
+    // Moved out of PyramidEntry: the physical
     // lots opened by request incarnation `incarnation` came from a
     // same-direction MARKET pyramid add — not the base open, not a priced
     // entry.  When a from_entry priced bracket exit fills on such an add's OWN
@@ -3087,7 +3087,7 @@ private:
         std::vector<std::uint64_t> first_reissues;
         std::vector<const PlacementSnapshot*> origin_pins; // Rebuilt each sweep; not state.
         std::vector<std::uint64_t> doomed;
-        // CR-150 L19G: K1 legs that supersession can release (incarnation,
+        // K1 legs that supersession can release (incarnation,
         // row, read-through high water, released flag); released incarnations sorted.
         struct HeldLeg {
             std::uint64_t incarnation = 0;

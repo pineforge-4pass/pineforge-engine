@@ -65,7 +65,7 @@ SelectedEquityCurve build_selected_equity_curve(
 }  // namespace report
 }  // namespace pineforge
 
-// CR-150 L17A. Kept after the existing view so its cited lines do not move.
+// Kept after the existing view so its cited lines do not move.
 namespace pineforge {
 namespace report_sink { class LineWriter; }
 namespace report {

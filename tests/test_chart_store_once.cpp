@@ -1,4 +1,4 @@
-// CR-150 L3: the chart is borrowed for a batch, owned once for stream
+// The chart is borrowed for a batch, owned once for stream
 // warmup, and never read after the batch call returns. These checks use the
 // pre-L3 public surface so the base fails on copies/lifetime, not a new API.
 #include <pineforge/native_module.hpp>
