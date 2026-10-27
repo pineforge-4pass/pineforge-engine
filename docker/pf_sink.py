@@ -296,7 +296,8 @@ class RecordParser:
 class SinkReader:
     """One-pass, bounded-memory iterator. Exhaustion verifies the entire sink."""
 
-    def __init__(self, path: str | Path | None = None, *, stream: BinaryIO | None = None):
+    def __init__(self, path: str | Path | None = None, *,
+                 stream: BinaryIO | None = None, keep_open: bool = False):
         if (path is None) == (stream is None):
             raise TypeError("supply exactly one of path and stream")
         self.header: dict[str, Any] = {}
@@ -307,6 +308,7 @@ class SinkReader:
         self._hash = hashlib.sha256()
         self._file: BinaryIO | None = None
         self._failed = False
+        self._keep_open = bool(keep_open)
         try:
             self._file = stream if stream is not None else open(path, "rb")
             value, line = self._readline()
@@ -352,7 +354,8 @@ class SinkReader:
             raise SinkFormatError("trailer SHA-256 mismatch")
         if self._file is None or self._file.read(1):
             raise SinkFormatError("bytes after the trailer")
-        self.close()
+        if not self._keep_open:
+            self.close()
         self.trailer = value
         self.sha256 = digest
         self.complete = True

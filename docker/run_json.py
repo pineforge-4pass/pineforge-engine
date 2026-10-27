@@ -193,8 +193,9 @@ import tempfile
 import time
 import traceback
 import types
-from contextlib import ExitStack, closing
+from contextlib import ExitStack
 from datetime import datetime, timezone
+from itertools import chain
 from pathlib import Path
 
 
@@ -268,6 +269,16 @@ _INPUT_RE = re.compile(
 SOURCE_FEED_CANONICALIZATION = "pf-ohlcv-barc-le-v1"
 _SOURCE_FEED_HASH_PREFIX = b"pineforge:ohlcv:barc-le:v1\0"
 _SOURCE_FEED_RECORD = struct.Struct("<5dq")
+_BAR_HEADER = b"timestamp,open,high,low,close,volume\n"
+_BAR_FLOAT = (
+    rb"[+-]?(?:(?:[0-9]+\.[0-9]*|\.[0-9]+)"
+    rb"(?:[eE][+-]?[0-9]+)?|[0-9]+[eE][+-]?[0-9]+)"
+)
+_BAR_CANONICAL_LINE = re.compile(
+    rb"([0-9]{13}),(" + _BAR_FLOAT + rb"),(" + _BAR_FLOAT
+    + rb"),(" + _BAR_FLOAT + rb"),(" + _BAR_FLOAT + rb"),("
+    + _BAR_FLOAT + rb")\n")
+_BAR_BULK_SLAB_ROWS = 4096
 
 
 def _new_source_feed_hasher():
@@ -2610,17 +2621,101 @@ def _bars_unreadable(text: str, reason: str) -> ChartBarsError:
     return ChartBarsError(text, reason)
 
 
-def load_bars(csv_path: Path) -> tuple[ctypes.Array, int, str]:
-    """Load the source tape once and return bars, count, and canonical hash.
-    A file it cannot read is a ChartBarsError (a ValueError),
-    chart_bars_unreadable{reason}: io (the file cannot be opened or read),
-    columns (a row lacks a column), value (a value is not a number, or the file
-    is not a UTF-8 CSV). An empty tape is returned as zero bars (main refuses
-    it: reason empty)."""
+def _bar_bulk_layout_matches() -> bool:
+    return (
+        sys.byteorder == "little"
+        and ctypes.sizeof(BarC) == _SOURCE_FEED_RECORD.size
+        and [getattr(BarC, name).offset for name in (
+            "open", "high", "low", "close", "volume", "timestamp"
+        )] == [0, 8, 16, 24, 32, 40]
+    )
+
+
+def _read_bar_bytes(csv_path: Path) -> bytes:
+    try:
+        with csv_path.open("rb", buffering=0) as source:
+            pieces = []
+            while True:
+                piece = source.read(64 * 1024)
+                if not piece:
+                    break
+                pieces.append(piece)
+    except OSError as error:
+        raise _bars_unreadable(
+            f"--ohlcv: {csv_path}: {error.strerror or error}", "io") from None
+    return b"".join(pieces)
+
+
+def _pack_bar_bulk_slab(matches):
+    columns = tuple(zip(*matches))
+    timestamps = list(map(int, columns[0]))
+    float_columns = [list(map(float, values)) for values in columns[1:]]
+    for raw_values, values in zip(columns[1:], float_columns):
+        for raw, value in zip(raw_values, values):
+            text = raw.decode("ascii")
+            if (not math.isfinite(value)
+                    or (value == 0.0 and text.startswith("-"))
+                    or repr(value) != text):
+                return None
+    packed = bytearray(_SOURCE_FEED_RECORD.size * len(timestamps))
+    struct.pack_into(
+        "<" + "5dq" * len(timestamps),
+        packed,
+        0,
+        *chain.from_iterable(zip(*float_columns, timestamps)),
+    )
+    return packed
+
+
+def _load_bars_bulk(raw: bytes):
+    if not _bar_bulk_layout_matches() or not raw.startswith(_BAR_HEADER):
+        return None
+    body = raw[len(_BAR_HEADER):]
+    packed = bytearray()
+    hasher = _new_source_feed_hasher()
+    count = 0
+    batch = []
+    cursor = 0
+    for match in _BAR_CANONICAL_LINE.finditer(body):
+        if match.start() != cursor:
+            return None
+        batch.append(match.groups())
+        cursor = match.end()
+        if len(batch) == _BAR_BULK_SLAB_ROWS:
+            slab = _pack_bar_bulk_slab(batch)
+            if slab is None:
+                return None
+            packed.extend(slab)
+            hasher.update(slab)
+            count += len(batch)
+            batch.clear()
+    if cursor != len(body):
+        return None
+    if batch:
+        slab = _pack_bar_bulk_slab(batch)
+        if slab is None:
+            return None
+        packed.extend(slab)
+        hasher.update(slab)
+        count += len(batch)
+    bars = (BarC * count)()
+    if packed:
+        source = (ctypes.c_char * len(packed)).from_buffer(packed)
+        ctypes.memmove(ctypes.addressof(bars), ctypes.addressof(source), len(packed))
+    return bars, count, hasher.hexdigest()
+
+
+def _load_bars_legacy(csv_path: Path, raw: bytes | None = None):
+    """The original DictReader path, optionally replayed from retained bytes."""
     rows: list[tuple[float, float, float, float, float, int]] = []
     feed_hasher = _new_source_feed_hasher()
+    source = None
     try:
-        with csv_path.open(newline="", encoding="utf-8") as f:
+        source = (
+            io.TextIOWrapper(io.BytesIO(raw), newline="", encoding="utf-8")
+            if raw is not None else csv_path.open(newline="", encoding="utf-8")
+        )
+        with source as f:
             reader = csv.DictReader(f)
             for row in reader:
                 try:
@@ -2655,6 +2750,17 @@ def load_bars(csv_path: Path) -> tuple[ctypes.Array, int, str]:
         bars[i].volume    = v
         bars[i].timestamp = ts
     return bars, n, feed_hasher.hexdigest()
+
+
+def load_bars(csv_path: Path) -> tuple[ctypes.Array, int, str]:
+    """Load the source tape once and return bars, count, and canonical hash.
+    Canonical ASCII tapes use the bounded packed path; every other tape is
+    replayed through the unchanged DictReader/conversion contract."""
+    raw = _read_bar_bytes(csv_path)
+    bulk = _load_bars_bulk(raw)
+    if bulk is not None:
+        return bulk
+    return _load_bars_legacy(csv_path, raw)
 
 
 class _MappedBars(dict):
@@ -5014,11 +5120,11 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
             # verify() checked every record and the receipt. The engine's
             # selected latches own the window observations; only the anchor
             # and trailer count are needed here, including the M = 0 case.
-            with closing(sink.records("E")) as points:
-                anchor = next(points, None)
-                swr.check_selected_sink_curve(
-                    anchor.as_dict() if anchor is not None else None, equity_points,
-                    request.start_ms, plan["window_script_bars"], initial_capital)
+            anchor = sink.diagnostics.first
+            swr.check_selected_sink_curve(
+                anchor.as_dict() if hasattr(anchor, "as_dict") else anchor,
+                equity_points, request.start_ms,
+                plan["window_script_bars"], initial_capital)
         elif sink is None:
             swr.check_selected_curve(out["equity_curve"], request.start_ms,
                                      plan["window_script_bars"], initial_capital)
@@ -6032,6 +6138,13 @@ def _bulk_equity(raw):
     return _BulkEquity(raw, count, first, last)
 
 
+def _bulk_equity_ascii(batch):
+    rows = _BULK_E_LINE.sub(
+        rb'{"time_ms":\1,"equity":\2,"open_profit":\3},' + b"\n",
+        batch.raw).splitlines()
+    return b"".join(rows)[:-1] if rows else b""
+
+
 class _BulkEquityFile:
     """Look ahead within a loaded direct page; replay all other bytes strictly."""
     def __init__(self, file):
@@ -6167,18 +6280,20 @@ class _SinkReportDiagnostics:
                 return self.last
         raise IndexError(index)
 
-    def trades(self, reader):
+    def trades(self, reader, sink=None):
         # The existing strict reader exhausts its trailer in this same pass;
         # canonical E windows need only their count and decoded endpoints.
-        # O/V/K/X/H are deliberately dropped from this fold: the old trade
-        # fold read only records("T"). The reader still hashes every record
-        # as it iterates, supplying verify()'s digest for the entire sink.
+        # O/V/K/X/H do not enter the trade fold. A fused sink supplies the
+        # optional sink argument so those records can be dispatched to their
+        # bounded artifacts while the reader hashes every record.
         for record in _bulk_equity_records(reader):
             if isinstance(record, _BulkEquity):
                 if not self.count_e:
                     self.first = record.first
                 self.last = record.last
                 self.count_e += record.count
+                if sink is not None:
+                    sink._append_equity_batch(record)
             elif record.tag == "E":
                 point = record.as_dict()
                 if not self.count_e:
@@ -6194,9 +6309,105 @@ class _SinkReportDiagnostics:
                         # Assembly raises it after trade/summary/metric checks.
                         self.equity_failure = error
                         error.__traceback__ = None
+                if sink is not None:
+                    sink._append_equity_record(point)
             elif record.tag == "T":
                 self.trade_at_start |= record.values[12] <= 0
+                if sink is not None:
+                    sink._append_trade_record(record)
                 yield record
+            elif sink is not None:
+                sink._append_output_record(record)
+
+
+class _FusedOutputState:
+    """Bounded output columns produced while the verified sink is dispatched."""
+
+    def __init__(self, sink, lib, state):
+        self.named = sink.named
+        self.failure = None
+        self.raw_manifest = None
+        self.slots = 0
+        self.manifest = None
+        self.outputs = {}
+        self.entries = []
+        self.constant_encodings = {}
+        self.constants = ()
+        self.expected_row = 0
+        self.opens = self.closes = self.events = None
+        self.columns = []
+        if self.named:
+            return
+        try:
+            descriptor = next(
+                entry for entry in sink.header["records"] if entry["type"] == "O")
+            self.slots = len(descriptor["fields"]) - 3
+            self.raw_manifest = _outputs_manifest(lib, state)
+            metadata = _outputs_metadata(self.raw_manifest, self.slots, ())
+            self.manifest = metadata["manifest"]
+            self.outputs = {
+                entry["index"]: entry
+                for entry in _manifest_entries(
+                    self.manifest, "outputs", ("index", "id"))
+            }
+            self.entries = sorted(
+                _manifest_entries(
+                    self.manifest, "series", ("slot", "output")),
+                key=lambda entry: entry["slot"])
+            self.constant_encodings = {
+                entry["index"]: entry.get("encoding")
+                for entry in _manifest_entries(
+                    self.manifest, "constants", ("index",))
+            }
+            resources = sink._spool_resources
+            directory = sink.directory
+            self.opens = _JSONColumn(resources, directory)
+            self.closes = _JSONColumn(resources, directory)
+            self.columns = [
+                _JSONColumn(resources, directory) for _ in self.entries
+            ]
+            self.events = _JSONColumn(resources, directory)
+        except Exception as error:
+            self.remember(error)
+
+    def remember(self, error):
+        if self.failure is None:
+            if isinstance(error, OSError):
+                error = RunFailure(
+                    "report sink write failed", "report_sink_failed",
+                    {"reason": "scratch_io"})
+            self.failure = error
+            if hasattr(error, "__traceback__"):
+                error.__traceback__ = None
+
+    def append(self, record):
+        if record.tag == "K":
+            self.constants = tuple(
+                float("nan") if value is None else value
+                for value in record.values)
+            return
+        if self.named or self.failure is not None:
+            return
+        try:
+            if record.tag == "O":
+                row, open_ms, close_ms, *values = record.values
+                if row != self.expected_row:
+                    self.remember(
+                        _engine_invariant("the report sink output rows are out of order"))
+                    return
+                self.expected_row += 1
+                self.opens.append(None if open_ms is None else _output_time(open_ms))
+                self.closes.append(None if close_ms is None else _output_time(close_ms))
+                for entry, column in zip(self.entries, self.columns):
+                    value = values[entry["slot"]]
+                    column.append(
+                        None if value is None
+                        else _output_value(value, entry.get("encoding")))
+            elif record.tag == "V":
+                self.events.append(
+                    _report_output_event(record.as_dict(), self.outputs))
+        except Exception as error:
+            self.remember(error)
 
 
 class _ReportSink:
@@ -6219,6 +6430,13 @@ class _ReportSink:
         self.header, self.counts, self.sha256 = {}, {}, ""
         self._identity = None
         self.summary = self.summary_failure = self.diagnostics = None
+        self._fused_pass = True
+        self._spool_resources = ExitStack()
+        self._equity_spool = self._trades_spool = None
+        self._spool_failure = None
+        self._spool_open_failure = False
+        self._equity_spool_failed = self._trades_spool_failed = False
+        self._fused_outputs = None
         self.named, self.run_id = path is not None, run_id
         self.keep, self.closed = False, False
         if self.named:
@@ -6246,7 +6464,7 @@ class _ReportSink:
             self.close()
             raise
 
-    def verify(self, lib, state, report):
+    def _verify_legacy(self, lib, state, report):
         from pf_sink import SinkFormatError
         diagnostics = _SinkReportDiagnostics()
         summary = summary_failure = None
@@ -6287,6 +6505,174 @@ class _ReportSink:
         # subsequent scan still proves content against A's digest.
         self._identity = status.st_ino, status.st_size
         self.summary, self.summary_failure, self.diagnostics = summary, summary_failure, diagnostics
+
+    def _remember_spool_failure(self, error, *, open_failure=False):
+        if self._spool_failure is None:
+            if isinstance(error, OSError):
+                error = RunFailure(
+                    "report sink write failed", "report_sink_failed",
+                    {"reason": "scratch_io"})
+            self._spool_failure = error
+            if hasattr(error, "__traceback__"):
+                error.__traceback__ = None
+        self._spool_open_failure |= open_failure
+
+    def _prepare_fused_artifacts(self, lib, state):
+        if not self.named:
+            try:
+                self._equity_spool = _JSONColumn(
+                    self._spool_resources, self.directory)
+                self._trades_spool = _JSONColumn(
+                    self._spool_resources, self.directory)
+            except Exception as error:
+                self._remember_spool_failure(error, open_failure=True)
+                self._equity_spool = self._trades_spool = None
+        if any(entry["type"] in "OVK" for entry in self.header["records"]):
+            self._fused_outputs = _FusedOutputState(self, lib, state)
+
+    def _append_equity_batch(self, batch):
+        if (self.named or self._equity_spool is None
+                or self._equity_spool_failed):
+            return
+        try:
+            self._equity_spool.append_ascii(_bulk_equity_ascii(batch))
+        except Exception as error:
+            self._equity_spool_failed = True
+            self._remember_spool_failure(error)
+
+    def _append_equity_record(self, point):
+        if (self.named or self._equity_spool is None
+                or self._equity_spool_failed):
+            return
+        try:
+            self._equity_spool.append(point)
+        except Exception as error:
+            self._equity_spool_failed = True
+            self._remember_spool_failure(error)
+
+    def _append_trade_record(self, record):
+        if (self.named or self._trades_spool is None
+                or self._trades_spool_failed):
+            return
+        try:
+            self._trades_spool.append(_sink_trade(record))
+        except Exception as error:
+            self._trades_spool_failed = True
+            self._remember_spool_failure(error)
+
+    def _append_output_record(self, record):
+        if self._fused_outputs is not None:
+            self._fused_outputs.append(record)
+
+    def _close_fused_artifacts(self):
+        resources = getattr(self, "_spool_resources", None)
+        if resources is not None:
+            resources.close()
+
+    @staticmethod
+    def _check_fused_identity(reader, path, named):
+        start = reader._open_identity
+        try:
+            end = os.fstat(reader._open_fd)
+        except OSError as error:
+            raise _engine_invariant(
+                f"the engine's report sink is invalid: {error}") from error
+        if (
+            end.st_dev != start.st_dev
+            or end.st_ino != start.st_ino
+            or end.st_size != start.st_size
+            or end.st_mtime_ns != start.st_mtime_ns
+        ):
+            raise _engine_invariant(
+                "the report sink changed after verification: file identity differs")
+        if named:
+            try:
+                path_status = os.stat(path)
+            except OSError as error:
+                raise _engine_invariant(
+                    f"the engine's report sink is invalid: {error}") from error
+            if (path_status.st_dev, path_status.st_ino) != (
+                    start.st_dev, start.st_ino):
+                raise _engine_invariant(
+                    "the report sink changed after verification: file identity differs")
+        return end
+
+    @staticmethod
+    def _close_fused_reader(reader):
+        if reader._file is None:
+            return
+        try:
+            reader.close()
+        except OSError as error:
+            from pf_sink import SinkFormatError
+            raise SinkFormatError(
+                f"line {reader._line_number}: {error}") from error
+
+    def _verify_fused(self, lib, state, report):
+        from pf_sink import SinkFormatError
+        diagnostics = _SinkReportDiagnostics()
+        summary = summary_failure = None
+        try:
+            with _open_uncached_sink(self.path) as reader:
+                self.header, self.counts = reader.header, reader.counts
+                self._prepare_fused_artifacts(lib, state)
+                trades = diagnostics.trades(reader, sink=self)
+                try:
+                    summary = _sink_summary(report, self, records=trades)
+                except RunFailure as error:
+                    # Keep strict/trailer/receipt/identity refusals ahead of
+                    # deferred result checks, and do not retain fold frames.
+                    summary_failure = error
+                    error.__traceback__ = None
+                for _ in trades:
+                    pass
+                self.header, self.counts, self.sha256 = (
+                    reader.header, reader.counts, reader.sha256)
+                if self.header["run_id"] != self.run_id:
+                    raise _engine_invariant(
+                        "the report sink run id differs from the request")
+                receipt = ReportSinkReceiptC()
+                receipt.struct_size, receipt.version = ctypes.sizeof(receipt), 1
+                if (lib.strategy_report_sink_receipt_v1(
+                        state, ctypes.byref(receipt)) != 0
+                        or receipt.complete != 1):
+                    raise _engine_invariant(
+                        "the engine's report sink receipt is incomplete")
+                counts = {
+                    tag: getattr(receipt, "count_" + tag.lower())
+                    for tag in "ETOVKXH"
+                }
+                if (
+                    any(counts[tag] != self.counts.get(tag, 0)
+                        for tag in counts)
+                    or bytes(receipt.sha256_hex) != self.sha256.encode("ascii")
+                    or int(report.total_trades) != self.counts["T"]
+                ):
+                    raise _engine_invariant(
+                        "the report sink trailer differs from its engine receipt")
+                self._check_fused_identity(reader, self.path, self.named)
+                self._close_fused_reader(reader)
+        except SinkFormatError as error:
+            raise _engine_invariant(
+                f"the engine's report sink is invalid: {error}") from error
+        self._identity = (
+            reader._open_identity.st_ino, reader._open_identity.st_size)
+        self.summary, self.summary_failure, self.diagnostics = (
+            summary, summary_failure, diagnostics)
+
+    def verify(self, lib, state, report):
+        if not getattr(self, "_fused_pass", False):
+            return self._verify_legacy(lib, state, report)
+        try:
+            return self._verify_fused(lib, state, report)
+        except BaseException:
+            # Verification selected its refusal before artifact cleanup. A
+            # failing auxiliary close must not replace that exception.
+            try:
+                self._close_fused_artifacts()
+            except BaseException:
+                pass
+            raise
 
     def records(self, tag=None):
         if tag == "T":
@@ -6478,12 +6864,22 @@ class _ReportSink:
 
     def close(self):
         if not self.closed:
-            if not self.named and not self.keep:
+            preserve_failure = (sys.exc_info()[1] is not None
+                                or getattr(self, "_spool_failure", None) is not None)
+            try:
+                self._close_fused_artifacts()
+            except BaseException:
+                if not preserve_failure:
+                    raise
+            finally:
                 try:
-                    os.unlink(self.path)
-                except FileNotFoundError:
-                    pass
-            self.closed = True
+                    if not self.named and not self.keep:
+                        try:
+                            os.unlink(self.path)
+                        except FileNotFoundError:
+                            pass
+                finally:
+                    self.closed = True
 
 
 # The harness uses the temporary-only spelling with no caller-owned path.
@@ -6734,34 +7130,41 @@ class _UncachedSinkFile(_BoundedJSONFile):
 
 
 def _open_uncached_sink(path, *, raw=False):
-    """Reuse the strict reader; only its bounded header uses buffered I/O.
-
-    The header's existing 1 MiB line bound also bounds that initial cache
-    footprint. All subsequent reads bypass cache through a fixed 64 KiB window.
-    """
-    if raw:
-        # B owns a new FileIO at byte zero, including the original header.
-        file = open(path, "rb", buffering=0)
-        try:
-            return _UncachedSinkFile(file)
-        except BaseException:
-            file.close()
-            raise
-    from pf_sink import SinkReader
-    reader = SinkReader(path)
+    """Open one unbuffered fd, including the header, through a bounded window."""
+    file = open(path, "rb", buffering=0)
     try:
-        reader._file = _UncachedSinkFile(reader._file)
-    except OSError as error:
-        reader._refuse(error)
+        uncached = _UncachedSinkFile(file)
+        if raw:
+            return uncached
+        from pf_sink import SinkReader
+        identity = os.fstat(file.fileno())
+        try:
+            reader = SinkReader(stream=uncached, keep_open=True)
+        except TypeError:
+            # Keep compatibility with the pre-fused reader seam used by the
+            # older summary harness. The product reader above always accepts
+            # the stream form and remains the one-fd path.
+            uncached.close()
+            reader = SinkReader(path)
+            reader._keep_open = True
+            reader._open_fd = reader._file.fileno()
+            reader._open_identity = os.fstat(reader._open_fd)
+            return reader
+        reader._open_fd = file.fileno()
+        reader._open_identity = identity
+        return reader
     except BaseException:
-        reader.close()
+        try:
+            file.close()
+        except BaseException:
+            pass
         raise
-    return reader
 
 
-class _JSONColumn:
+class _JSONColumn(_JSONRecordArray):
     """A comma-separated, already encoded column in an unlinked temporary."""
     def __init__(self, resources, directory):
+        super().__init__(lambda: iter(()))
         self.file = _json_temporary(resources, directory)
         self.empty = True
 
@@ -6770,6 +7173,16 @@ class _JSONColumn:
             if not self.empty:
                 self.file.write(",")
             _stream_json(value, self.file)
+        except OSError as error:
+            raise RunFailure("report sink write failed", "report_sink_failed",
+                             {"reason": "scratch_io"}) from error
+        self.empty = False
+
+    def append_ascii(self, data):
+        try:
+            if not self.empty:
+                self.file.write_ascii(b",")
+            self.file.write_ascii(data)
         except OSError as error:
             raise RunFailure("report sink write failed", "report_sink_failed",
                              {"reason": "scratch_io"}) from error
@@ -7032,9 +7445,29 @@ def _prepare_report_json(document, resources, args, sink):
         buffer.write("\n")
         buffer.seek(0)
         return buffer
-    return _prepare_stream_report(
-        document, resources, sink.directory if sink is not None else args.spill_dir,
-        sink_errors=sink is not None)
+    fused = getattr(sink, "_fused_pass", False)
+    try:
+        if fused and sink._spool_failure is not None:
+            # A rewind flushes the source column. Do not retry a write that
+            # already failed while verification was still in progress.
+            raise sink._spool_failure
+        # Keep the final artifact provisional until auxiliary files have closed.
+        with ExitStack() as prepared_files:
+            prepared = _prepare_stream_report(
+                document, prepared_files,
+                sink.directory if sink is not None else args.spill_dir,
+                sink_errors=sink is not None)
+            if fused:
+                sink._close_fused_artifacts()
+            resources.enter_context(prepared_files.pop_all())
+    except BaseException:
+        if fused:
+            try:
+                sink._close_fused_artifacts()
+            except BaseException:
+                pass
+        raise
+    return prepared
 
 
 def _sink_trade(record):
@@ -7155,6 +7588,31 @@ def _build_sink_report(report, ohlcv_path, n_bars, first_ts, last_ts, elapsed,
     diagnostics = sink.diagnostics
     if diagnostics.equity_failure is not None:
         raise diagnostics.equity_failure
+    if getattr(sink, "_fused_pass", False):
+        if sink._spool_open_failure:
+            raise sink._spool_failure
+        first_bar_trade = (
+            {"entry_bar_index": 0},) if diagnostics.trade_at_start else ()
+        out["diagnostics"].update(
+            _annualization_block(
+                diagnostics, out["metrics"], first_bar_trade, window_anchor))
+        if sink.named:
+            reference = {
+                "path": sink.path,
+                "schema": sink.header["schema"],
+                "version": sink.header["version"],
+                "run_id": sink.header["run_id"],
+                "counts": sink.counts,
+                "sha256": sink.sha256,
+            }
+            return {
+                ("report_sink" if key == "trades" else key):
+                    (reference if key == "trades" else value)
+                for key, value in out.items() if key != "equity_curve"
+            }
+        out["trades"] = sink._trades_spool
+        out["equity_curve"] = sink._equity_spool
+        return out
     # Equity count still equals the receipt without the old point_at walk:
     # pf_sink.py's strict reader compares trailer counts with records read
     # ("trailer count mismatch"), and verify() compares receipt counts with
@@ -7295,7 +7753,50 @@ def _legacy_streamed_outputs_block(lib, state, *, validate=False):
     return block
 
 
+def _fused_sink_outputs_block(lib, state, sink, *, summary_only=False):
+    fused = sink._fused_outputs
+    if sink.counts.get("K") != 1:
+        raise _engine_invariant(
+            "the report sink must contain one output constants record")
+    if fused.named:
+        descriptor = next(
+            entry for entry in sink.header["records"] if entry["type"] == "O")
+        slots = len(descriptor["fields"]) - 3
+        raw_manifest = _outputs_manifest(lib, state)
+        block = _outputs_metadata(raw_manifest, slots, fused.constants)
+        if summary_only:
+            return {key: block[key] for key in (
+                "schema_version", "message_format", "manifest_sha256",
+                "manifest", "constants", "hlines")}
+        raise _engine_invariant(
+            "the named report sink cannot publish output arrays")
+    if fused.raw_manifest is None:
+        if fused.failure is not None:
+            raise fused.failure
+        raise _outputs_incompatible(
+            "the report sink has no output manifest", "outputs_manifest_invalid")
+    if fused.failure is not None and fused.opens is None:
+        raise fused.failure
+    block = _outputs_metadata(
+        fused.raw_manifest, fused.slots, fused.constants)
+    if summary_only:
+        return {key: block[key] for key in (
+            "schema_version", "message_format", "manifest_sha256",
+            "manifest", "constants", "hlines")}
+    if fused.failure is not None:
+        raise fused.failure
+    block["bars"] = {"open_ms": fused.opens, "close_ms": fused.closes}
+    for entry, column in zip(block["series"], fused.columns):
+        entry["values"] = column
+    block["events"] = fused.events
+    return block
+
+
 def _sink_outputs_block(lib, state, sink, resources, *, summary_only=False):
+    if (getattr(sink, "_fused_pass", False)
+            and getattr(sink, "_fused_outputs", None) is not None):
+        return _fused_sink_outputs_block(
+            lib, state, sink, summary_only=summary_only)
     if getattr(sink, "fd_mode", False):
         if sink.counts.get("K") != 1:
             raise _engine_invariant("the report sink must contain one output constants record")
