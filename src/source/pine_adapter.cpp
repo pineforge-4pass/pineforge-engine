@@ -52,6 +52,11 @@
 #ifndef PINEFORGE_RETIREMENT_OBSERVE
 #define PINEFORGE_RETIREMENT_OBSERVE(rows, cycle, askable, roots, candidates, first) ((void)0)
 #endif
+// Differential fixtures substitute the original first-principles scan for
+// both retirement call sites. Normal builds have no runtime selector.
+#ifndef PINEFORGE_REISSUE_BASIS
+#define PINEFORGE_REISSUE_BASIS(rows, cycle, own) (rows).reissue_basis(cycle, own)
+#endif
 #ifndef PINEFORGE_MARGIN_REVIVAL_OBSERVE
 #define PINEFORGE_MARGIN_REVIVAL_OBSERVE(before, rows, event, context, units, cycle, selected) ((void)0)
 #endif
@@ -895,6 +900,97 @@ PoocCloseFillViewSwitches& pooc_close_fill_view_switches() noexcept {
 }  // namespace detail
 
 // R5 lane V19-E: the placement table's storage.
+PlacementTable::ReissueKeyView PlacementTable::reissue_key(
+        const PlacementSnapshot& row) noexcept {
+    return {row.placement_cycle, row.family, row.source_id, row.from_entry};
+}
+
+PlacementTable::ReissueKeyView PlacementTable::reissue_key_view(
+        const ReissueKey& key) noexcept {
+    return {std::get<0>(key), std::get<1>(key), std::get<2>(key), std::get<3>(key)};
+}
+
+bool PlacementTable::ReissueKeyLess::operator()(
+        const ReissueKey& a, const ReissueKey& b) const noexcept {
+    PINEFORGE_TAIL_WORK("k3_pairs", 1);
+    return reissue_key_view(a) < reissue_key_view(b);
+}
+
+bool PlacementTable::ReissueKeyLess::operator()(
+        const ReissueKey& a, const ReissueKeyView& b) const noexcept {
+    PINEFORGE_TAIL_WORK("k3_pairs", 1);
+    return reissue_key_view(a) < b;
+}
+
+bool PlacementTable::ReissueKeyLess::operator()(
+        const ReissueKeyView& a, const ReissueKey& b) const noexcept {
+    PINEFORGE_TAIL_WORK("k3_pairs", 1);
+    return a < reissue_key_view(b);
+}
+
+bool PlacementTable::ReissueIncarnationLess::operator()(
+        std::uint64_t a, std::uint64_t b) const noexcept {
+    PINEFORGE_TAIL_WORK("k3_pairs", 1);
+    return a < b;
+}
+
+void PlacementTable::index_reissue(
+        std::uint64_t incarnation, const PlacementSnapshot& identity,
+        const PlacementSnapshot* node) {
+    if (identity.family != PineOrderFamily::ExitLimit
+        && identity.family != PineOrderFamily::ExitStop
+        && identity.family != PineOrderFamily::ExitTrail) return;
+    auto group = reissue_rows_.find(reissue_key(identity));
+    if (group == reissue_rows_.end()) {
+        group = reissue_rows_.try_emplace(ReissueKey{
+            identity.placement_cycle, identity.family, identity.source_id, identity.from_entry}).first;
+    }
+    try {
+        group->second.emplace(incarnation, node);
+    } catch (...) {
+        if (group->second.empty()) reissue_rows_.erase(group);
+        throw;
+    }
+}
+
+void PlacementTable::unindex_reissue(
+        std::uint64_t incarnation, const PlacementSnapshot& row) noexcept {
+    if (row.family != PineOrderFamily::ExitLimit && row.family != PineOrderFamily::ExitStop
+        && row.family != PineOrderFamily::ExitTrail) return;
+    const auto group = reissue_rows_.find(reissue_key(row));
+    assert(group != reissue_rows_.end());
+    group->second.erase(incarnation);
+    if (group->second.empty()) reissue_rows_.erase(group);
+}
+
+void PlacementTable::replace(std::uint64_t incarnation, PlacementSnapshot&& snapshot) {
+    static_assert(std::is_nothrow_move_assignable_v<PlacementSnapshot>,
+                  "reissue membership publication requires a nonthrowing row rewrite");
+    auto& row = at(incarnation);
+    // Allocate the new membership before removing the old one. On a rewrite
+    // within the same identity, emplace simply keeps the stable node pointer.
+    index_reissue(incarnation, snapshot, &row);
+    if (reissue_key(row) != reissue_key(snapshot)) unindex_reissue(incarnation, row);
+    row = std::move(snapshot);
+}
+
+PlacementTable::ReissueBasis PlacementTable::reissue_basis(
+        std::int64_t cycle, const PlacementSnapshot& own) const {
+    ReissueBasis basis{};
+    const auto group = reissue_rows_.find(
+        ReissueKeyView{cycle, own.family, own.source_id, own.from_entry});
+    if (group == reissue_rows_.end()) return basis;
+    PINEFORGE_TAIL_WORK("k3_pairs", 1); // The matched identity entry.
+    for (const auto& peer : group->second) {
+        PINEFORGE_TAIL_WORK("k3_pairs", 1); // Each examined retained row.
+        if (basis[0].second
+            && !same_double_bits(basis[0].second->exit_levels.stop, peer.second->exit_levels.stop))
+            basis[1] = basis[0];
+        basis[0] = peer;
+    }
+    return basis;
+}
+
 void PlacementTable::place(std::uint64_t incarnation, std::unique_ptr<PlacementSnapshot> node) {
     if (window_rows_ == 0 && (old_.empty() || incarnation > old_.back().first)) {
         // An empty window restarts at the new row, above every older row.
@@ -3969,21 +4065,10 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
     // either its stop differs from newest, or the other member witnesses it.
     // Check the strict age/identity predicate again before releasing a leg;
     // delayed adoption or same-bar placement must never manufacture an answer.
-    // The pair is stack scratch, not a per-bar allocation or durable state.
+    // The pair is stack scratch. The table maintains identity memberships at
+    // every insert/rewrite/erase, so unrelated live rows are never examined.
     const auto reissue_basis = [&](const PlacementSnapshot& own) {
-        std::array<std::pair<std::uint64_t, const PlacementSnapshot*>, 2> basis{};
-        placement_.visit_rows([&](std::uint64_t incarnation, const PlacementSnapshot& peer) {
-            PINEFORGE_TAIL_WORK("k3_pairs", 1);
-            if (peer.placement_cycle != cycle || peer.family != own.family
-                || peer.source_id != own.source_id || peer.from_entry != own.from_entry)
-                return false;
-            if (basis[0].second
-                && !same_double_bits(basis[0].second->exit_levels.stop, peer.exit_levels.stop))
-                basis[1] = basis[0];
-            basis[0] = {incarnation, &peer};
-            return false;
-        });
-        return basis;
+        return PINEFORGE_REISSUE_BASIS(placement_, cycle, own);
     };
     const auto release_superseded = [&] {
         if (held.empty()) return;

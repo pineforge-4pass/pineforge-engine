@@ -376,6 +376,10 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     // O1W's terminally filled, non-revivable limits use the same erase/fold
     // path. This deliberately changes values inside the retirement epoch;
     // no hash of a mutable placement is cached.
+    // PlacementTable's reissue_rows_ is only a derived identity membership
+    // index over these same nodes, rebuilt by insert/replace/erase/clear.
+    // Like retired_row_scratch_'s reissue memo it adds no independent state;
+    // the ordered rows below already fold its complete reconstruction input.
     PINEFORGE_BROKER_HASH_OBSERVE(placement_, bracket_families_,
                                 settled_bracket_families_, settled_bracket_digest_);
     f.u(placement_.high_water()); f.u(placement_.erased_rows()); f.u(placement_.erased_digest());

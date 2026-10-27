@@ -18,6 +18,7 @@
 #include <pineforge/source/exit_scratch.hpp>
 #include <pineforge/source/live_source_identity.hpp>
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
@@ -30,6 +31,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -675,6 +677,7 @@ public:
         window_.reserve(std::min<std::size_t>(count, kWindowReserve));
     }
     void clear() noexcept {
+        reissue_rows_.clear();
         window_.clear();
         head_ = 0;
         base_ = 1;
@@ -790,16 +793,27 @@ public:
         }
         PlacementSnapshot* row = node.get();
         place(incarnation, std::move(node));
+        try {
+            index_reissue(incarnation, *row, row);
+        } catch (...) {
+            // No row may become visible without its identity membership.
+            take(incarnation);
+            throw;
+        }
         ++size_;
         high_water_ = std::max(high_water_, incarnation);
         return {iterator(this, incarnation, row), true};
     }
 
-    // Queries scan retained identities directly. Replacement has no scratch
-    // workset to refold/reserve, and never changes the erased minima.
-    void replace(std::uint64_t incarnation, PlacementSnapshot&& snapshot) {
-        at(incarnation) = std::move(snapshot);
-    }
+    // Whole-row rewrites also move the row's reissue identity membership.
+    void replace(std::uint64_t incarnation, PlacementSnapshot&& snapshot);
+
+    using ReissueBasis =
+        std::array<std::pair<std::uint64_t, const PlacementSnapshot*>, 2>;
+    // The old ordered scan, restricted to this exact retained identity.
+    // Placement identity is immutable between insertion and replace();
+    // lifecycle/level receipts are read from the live nodes, never cached.
+    ReissueBasis reissue_basis(std::int64_t cycle, const PlacementSnapshot& own) const;
 
     // Borrow the complete retirement workset before touching any row, cohort
     // side, bracket fact or digest. Duplicate single/pair keys are counted once.
@@ -823,6 +837,7 @@ public:
         // Fold the admitted pair before taking the node as well: a disk I/O
         // failure must not lose its retained-row query evidence.
         fold_sequence(erased_minima_, *row);
+        unindex_reissue(incarnation, *row);
         std::unique_ptr<PlacementSnapshot> node = take(incarnation);
         remember_erased(*node);
         --size_;
@@ -931,6 +946,26 @@ private:
     std::unique_ptr<PlacementSnapshot> take(std::uint64_t incarnation) noexcept;
     void remember_erased(const PlacementSnapshot& row);
 
+    using ReissueKey = std::tuple<std::int64_t, PineOrderFamily, SourceId, SourceId>;
+    using ReissueKeyView =
+        std::tuple<std::int64_t, PineOrderFamily, std::string_view, std::string_view>;
+    static ReissueKeyView reissue_key(const PlacementSnapshot& row) noexcept;
+    static ReissueKeyView reissue_key_view(const ReissueKey& key) noexcept;
+    struct ReissueKeyLess {
+        using is_transparent = void;
+        bool operator()(const ReissueKey&, const ReissueKey&) const noexcept;
+        bool operator()(const ReissueKey&, const ReissueKeyView&) const noexcept;
+        bool operator()(const ReissueKeyView&, const ReissueKey&) const noexcept;
+    };
+    struct ReissueIncarnationLess {
+        bool operator()(std::uint64_t, std::uint64_t) const noexcept;
+    };
+    using ReissueRows =
+        std::map<std::uint64_t, const PlacementSnapshot*, ReissueIncarnationLess>;
+    void index_reissue(std::uint64_t incarnation, const PlacementSnapshot& identity,
+                       const PlacementSnapshot* node);
+    void unindex_reissue(std::uint64_t incarnation, const PlacementSnapshot& row) noexcept;
+
     // window_[head_ + i] holds incarnation base_ + i, or null; old_ holds the
     // rows below base_, ascending.
     std::vector<std::unique_ptr<PlacementSnapshot>> window_;
@@ -951,6 +986,12 @@ private:
     // holds the row it was erased with, which nothing reads, until the next
     // placement overwrites it.
     std::vector<std::unique_ptr<PlacementSnapshot>> spare_;
+    // Pure retained-row index, like the retirement scratch's reissue memo:
+    // no independent lifecycle state and no extra hash leaf. hash_placement
+    // already folds every key/level and incarnation needed to reconstruct it.
+    // One member per retained exit row; an empty identity is removed at once.
+    // Owning keys and stable node pointers survive compact() and table moves.
+    std::map<ReissueKey, ReissueRows, ReissueKeyLess> reissue_rows_;
 };
 
 // Acceptance-ordered opening roster. size()/digest() describe all accepted
