@@ -180,8 +180,14 @@ public:
             sweep(); // Second sweep, after a host-observed fill and before cancel/close.
         }
         if (bar == 0) strategy_entry("S", false, kNa, kNa, 40.0);
-        if (bar == 1)
-            strategy_exit("X", "S", kNa, 150.0, kNa, kNa, kNa, 100.0, "Y");
+        if (bar == 1) {
+            // The dynamic X and its later explicit issues have different
+            // replacement keys. Its untouched 150 stop keeps reserving its
+            // share even while dormant: reserve 40 * 50% = 20 in FillCycle,
+            // leaving 20 units available for the independent one-unit F.
+            const double percent = scenario_ == Scenario::FillCycle ? 50.0 : 100.0;
+            strategy_exit("X", "S", kNa, 150.0, kNa, kNa, kNa, percent, "Y");
+        }
         // Cancel an already observed dormant issue before this bar's new
         // commands. strategy_cancel withdraws lifecycle legs; it does not
         // stamp the separate PineCancellationReceipt::cause field.
@@ -260,21 +266,72 @@ public:
     }
 
 private:
-    void check_pending_fill() const {
+    void dump_pending_fill() const {
         const auto& rows = adapter_.*access(PlacementTag{});
-        require(fill_incarnation_ != 0 && rows.contains(fill_incarnation_),
-                "F must have a real placement before the fill sweep");
+        std::fprintf(stderr, "A5D pending F failure bar=%d scan=%d fill_incarnation=%llu "
+                     "position=%.17g placements=%zu\n",
+                     pine_bar_index(), scan_mode ? 1 : 0,
+                     static_cast<unsigned long long>(fill_incarnation_),
+                     live_position_size(), rows.size());
+        for (const auto item : rows) {
+            const auto& row = item.second;
+            const auto& levels = row.exit_levels;
+            std::fprintf(stderr, "  placement incarnation=%llu source_id=\"%s\" "
+                         "from_entry=\"%s\" family=%d requested_qty=%.17g "
+                         "qty_percent=%.17g projection_remaining_qty=%.17g "
+                         "exit_levels={limit=%.17g stop=%.17g trail_points=%.17g "
+                         "trail_offset=%.17g trail_price=%.17g profit_ticks=%.17g "
+                         "loss_ticks=%.17g} legs={dormant=%d "
+                         "suspended={limit=%d stop=%d trail=%d} "
+                         "retired={limit=%d stop=%d trail=%d}}\n",
+                         static_cast<unsigned long long>(item.first),
+                         row.source_id.c_str(), row.from_entry.c_str(),
+                         static_cast<int>(row.family), row.requested_qty,
+                         row.qty_percent, row.projection_remaining_qty,
+                         levels.limit, levels.stop, levels.trail_points,
+                         levels.trail_offset, levels.trail_price,
+                         levels.profit_ticks, levels.loss_ticks, row.legs.dormant() ? 1 : 0,
+                         row.legs.suspended(exit_legs::Leg::Limit) ? 1 : 0,
+                         row.legs.suspended(exit_legs::Leg::Stop) ? 1 : 0,
+                         row.legs.suspended(exit_legs::Leg::Trail) ? 1 : 0,
+                         row.legs.retired(exit_legs::Leg::Limit) ? 1 : 0,
+                         row.legs.retired(exit_legs::Leg::Stop) ? 1 : 0,
+                         row.legs.retired(exit_legs::Leg::Trail) ? 1 : 0);
+        }
+        const auto working = native_working_requests();
+        std::fprintf(stderr, "  native_working_requests count=%zu\n", working.size());
+        for (const auto& request : working)
+            std::fprintf(stderr, "    handle incarnation=%llu label=\"%s\"\n",
+                         static_cast<unsigned long long>(request.definition->handle.incarnation),
+                         request.definition->request.label.c_str());
+    }
+
+    void check_pending_fill() const {
+        const auto check = [&](bool holds, const char* message) {
+            if (!holds) dump_pending_fill();
+            require(holds, message);
+        };
+        const auto& rows = adapter_.*access(PlacementTag{});
+        check(fill_incarnation_ != 0 && rows.contains(fill_incarnation_),
+              "F must have a real placement before the fill sweep");
+        // Count the actual rows, independently of the production identity
+        // lookup and of the handle remembered by capture().
+        std::size_t fill_rows = 0;
+        for (const auto item : rows)
+            if (item.second.source_id == "F") ++fill_rows;
+        check(fill_rows == 1, "the one F call must have exactly one real placement");
         const auto& row = rows.at(fill_incarnation_);
-        require(row.family == ps::PineOrderFamily::ExitLimit && row.from_entry == "S"
-                && row.exit_levels.limit == 95.0 && row.requested_qty == 1.0
-                && !row.filled_exit && !row.legs.dormant(),
-                "first sweep must retain the unfilled, active one-unit F limit");
+        check(row.source_id == "F" && row.family == ps::PineOrderFamily::ExitLimit
+              && row.from_entry == "S" && row.exit_levels.limit == 95.0
+              && row.requested_qty == 1.0 && !row.filled_exit && !row.legs.dormant()
+              && !row.legs.retired(exit_legs::Leg::Limit),
+              "first sweep must retain the unfilled, active one-unit F limit");
         bool working = false;
         for (const auto& request : native_working_requests())
             if (request.definition->handle.incarnation == fill_incarnation_)
                 working = true;
-        require(working && live_position_size() == -40.0,
-                "first sweep lost the working F limit or changed the origin");
+        check(working && live_position_size() == -40.0,
+              "first sweep lost the working F limit or changed the origin");
     }
 
     void check_fill() {
