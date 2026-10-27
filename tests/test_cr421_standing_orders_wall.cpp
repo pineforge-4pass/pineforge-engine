@@ -43,6 +43,12 @@ using namespace pineforge;
 constexpr std::int64_t kStart = 1736121600000LL;
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 
+struct RunWork {
+    double wall_ms = kNaN;
+    std::uint64_t cohort_rows = 0;
+    std::size_t preads = 0;
+};
+
 void require(bool condition, const std::string& message) {
     if (!condition) throw std::runtime_error(message);
 }
@@ -103,6 +109,14 @@ public:
                     static_cast<unsigned long long>(lookups.steps));
         print_dormant(consumer, 0);
     }
+
+    std::uint64_t cohort_rows() const {
+        return adapter_.cohort_table_work().iterated_rows;
+    }
+
+    std::uint64_t scanned_rows() const {
+        return as_native_consumer(execution_consumer()).scanned_rows();
+    }
 };
 
 std::vector<Bar> tape(int count) {
@@ -114,7 +128,7 @@ std::vector<Bar> tape(int count) {
     return bars;
 }
 
-double run(int n) {
+RunWork run(int n) {
     Host host;
     const auto bars = tape(n);
 #if defined(__linux__)
@@ -155,25 +169,68 @@ double run(int n) {
     require(orders == n, "CR421 pending orders expected " + std::to_string(n)
                         + ", observed " + std::to_string(orders));
     require(closed == 0, "CR421 closed trades expected 0, observed " + std::to_string(closed));
-    return wall_ms;
+    // The first request is born at the first close; each subsequent open
+    // admits exactly the previous close's one new request to the dormant book.
+    const auto scanned = host.scanned_rows();
+    require(scanned == static_cast<std::uint64_t>(n - 1),
+            "CR421 scanned_rows expected N-1, observed " + std::to_string(scanned));
+    RunWork work;
+    work.wall_ms = wall_ms;
+    work.cohort_rows = host.cohort_rows();
+#if defined(__linux__)
+    work.preads = reads;
+#endif
+    return work;
 }
 
-std::array<int, 3> parse_grid(const char* value) {
-    std::array<int, 3> grid{};
+std::vector<int> parse_grid(const char* value) {
+    std::vector<int> grid;
     const char* cursor = value;
-    for (std::size_t i = 0; i < grid.size(); ++i) {
+    for (;;) {
         char* end = nullptr;
         errno = 0;
         const long count = std::strtol(cursor, &end, 10);
         if (errno != 0 || end == cursor || count <= 0
             || count > std::numeric_limits<int>::max()
-            || (i + 1 < grid.size() ? *end != ',' : *end != '\0'))
-            throw std::runtime_error("CR421 --n requires three positive int counts: --n=a,b,c");
-        grid[i] = static_cast<int>(count);
-        cursor = end;
-        if (i + 1 < grid.size()) ++cursor;
+            || (*end != ',' && *end != '\0') || grid.size() == 4)
+            throw std::runtime_error("CR421 --n requires three or four positive int counts");
+        grid.push_back(static_cast<int>(count));
+        if (*end == '\0') break;
+        cursor = end + 1;
     }
+    require(grid.size() >= 3, "CR421 --n requires three or four positive int counts");
     return grid;
+}
+
+void require_linear_work(const std::vector<int>& grid,
+                         const std::vector<RunWork>& work) {
+    // Hand operation budget: Accepted-only bars cannot release an origin or
+    // retire a retained prefix. Appending its origin costs one keyed visit;
+    // a full cohort walk costs two iterator operations per row (read + next).
+    // Eight operations per cohort allow the append plus three full walks
+    // and one extra visit, without fitting a bound to observed wall times.
+    // A per-bar roster walk violates this even below the spill knee.
+    for (std::size_t i = 0; i < grid.size(); ++i)
+        require(work[i].cohort_rows <= 8ULL * static_cast<std::uint64_t>(grid[i]),
+                "CR421 cohort_iterated_rows exceeds 8*N at N=" + std::to_string(grid[i])
+                + ": observed " + std::to_string(work[i].cohort_rows));
+    // The default 3:1 population increase permits 4:1 cohort work (4/3
+    // slack). Cross multiplication also admits the legitimate all-zero case.
+    for (std::size_t i = 1; i < grid.size(); ++i)
+        require(static_cast<long double>(work[i].cohort_rows) * grid[0]
+                    <= static_cast<long double>(work[0].cohort_rows) * grid[i] * 4.0L / 3.0L,
+                "CR421 cohort_iterated_rows growth exceeds linear budget at N="
+                + std::to_string(grid[i]));
+#if defined(__linux__)
+    // One spill per new request and a terminal read of each spill are linear.
+    // Allow twice population growth for tree depth / spill-knee overhead:
+    // at 7500 / 2500 this is the required maximum ratio of six.
+    for (std::size_t i = 1; i < grid.size(); ++i)
+        require(static_cast<long double>(work[i].preads) * grid[0]
+                    <= static_cast<long double>(work[0].preads) * grid[i] * 2.0L,
+                "CR421 preads growth exceeds linear spill budget at N="
+                + std::to_string(grid[i]));
+#endif
 }
 
 double parse_cap(const char* value) {
@@ -189,7 +246,7 @@ double parse_cap(const char* value) {
 
 int main(int argc, char** argv) {
     try {
-        std::array<int, 3> grid{{2500, 5000, 7500}};
+        std::vector<int> grid{2500, 5000, 7500, 10000};
         double cap_seconds = 600.0;
         for (int i = 1; i < argc; ++i) {
             if (std::strncmp(argv[i], "--n=", 4) == 0)
@@ -197,15 +254,19 @@ int main(int argc, char** argv) {
             else if (std::strncmp(argv[i], "--cap-seconds=", 14) == 0)
                 cap_seconds = parse_cap(argv[i] + 14);
             else
-                throw std::runtime_error("CR421 usage: [--n=a,b,c] [--cap-seconds=s]");
+                throw std::runtime_error("CR421 usage: [--n=a,b,c[,d]] [--cap-seconds=s]");
         }
-        std::array<double, 3> walls{{kNaN, kNaN, kNaN}};
+        std::vector<RunWork> work(grid.size());
+        std::vector<double> walls(grid.size(), kNaN);
+        bool capped = false;
         for (std::size_t i = 0; i < grid.size(); ++i) {
-            walls[i] = run(grid[i]);
+            work[i] = run(grid[i]);
+            walls[i] = work[i].wall_ms;
             // A completed-leg cap, not an interrupt or a successful stub run.
             // The lab supervisor owns the outer timeout for an individual leg.
             if (walls[i] / 1000.0 > cap_seconds) {
                 std::printf("CR421 capped N=%d\n", grid[i]);
+                capped = true;
                 break;
             }
         }
@@ -218,6 +279,8 @@ int main(int argc, char** argv) {
                     grid[2], grid[1], walls[2] / walls[1],
                     linear_a * linear_a, linear_b * linear_b, linear_a, linear_b);
         std::fflush(stdout);
+        require(!capped, "CR421 scaling grid incomplete after completed-leg cap");
+        require_linear_work(grid, work);
         return 0;
     } catch (const std::exception& error) {
         std::fprintf(stderr, "CR421 FAIL: %s\n", error.what());

@@ -3123,14 +3123,27 @@ private:
         // lots and those no roster holds as a root, the origins leaving a
         // roster (cohort, incarnation), and the handle a lot is looked up by
         // (its run identity copied only when it changes) -- and whether a
-        // receipt read has seen a command event since its last pass (a memo:
-        // with none, the pass would take nothing off; a run begin sets it).
+        // receipt read has seen a command other than Accepted since its last
+        // pass (a memo: fresh working roots release nothing; begin sets it).
         std::vector<std::uint64_t> working_roots;
         std::vector<std::uint64_t> lot_openings;
         std::vector<std::uint64_t> successor_lots;
         std::vector<std::pair<native_order::CohortHandle, std::uint64_t>> released_origins;
         native_order::RequestHandle lot_probe{};
         bool roster_pass_due = true;
+        // CR-421: derived bookkeeping only, reconstructed from placements /
+        // live handles. No independent lifecycle or hash state is added.
+        // Families are contiguous Entry..Risk; extra slots count unpriced
+        // Order rows and rows eligible for dynamic-exit / capture policy.
+        static constexpr std::size_t family_count =
+            static_cast<std::size_t>(PineOrderFamily::Risk) + 1;
+        static constexpr std::size_t market_order_slot = family_count;
+        static constexpr std::size_t exit_policy_slot = family_count + 1;
+        std::size_t live_families[family_count + 2]{};
+        // True certifies the existing retire_origin_prefixes early return:
+        // each nonempty front has a placement. Only placement erasure can
+        // falsify it; a new origin is appended after remember().
+        bool origin_fronts_pinned = true;
         void clear() noexcept {
             roots.clear();
             askable_origins.clear();
@@ -3150,6 +3163,16 @@ private:
         }
     };
     RetiredRowScratch retired_row_scratch_;
+    void remember_live(const native_order::RequestHandle&, PlacementSnapshot&&);
+    void forget_live(const native_order::RequestHandle&) noexcept;
+    void requeue_live(const native_order::RequestHandle&);
+    void clear_live() noexcept;
+    void erase_placement(std::uint64_t);
+    void count_live(const PlacementSnapshot&, bool adding) noexcept;
+    void assert_live_counts() const noexcept;
+    bool has_live_family(PineOrderFamily) const noexcept;
+    bool has_live_exit_policy() const noexcept;
+    bool has_live_trail_policy() const noexcept;
     // The configuration's part of the margin and admission scopes, which the
     // per-bar path asks several times a bar: each a conjunction of reads of
     // config_ and staged_ alone, formed again whenever either is set
