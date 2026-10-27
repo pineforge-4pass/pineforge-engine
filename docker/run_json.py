@@ -3979,7 +3979,8 @@ EQUITY_REPORT_KEYS = {"sharpe_monthly": "sharpe_tv", "sortino_monthly": "sortino
 MIN_ANNUALIZATION_SPAN_MS = 86_400_000
 
 
-def _annualization_diagnostics(curve, metrics, trades=(), window_anchor=False):
+def _annualization_diagnostics(curve, metrics, trades=(), window_anchor=False,
+                               initial_capital=None):
     """Name the simple proportional form of cagr, and of the calmar made from it.
 
     No span makes cagr, calmar, sharpe_bar or sortino_bar null, so the writer
@@ -3987,14 +3988,17 @@ def _annualization_diagnostics(curve, metrics, trades=(), window_anchor=False):
     the simple form: a finite cagr on a positive sub-day span is flagged. From
     one day on it takes the compounded form unless that is not finite, so the
     writer repeats the kernel's arithmetic on the curve's own marks: the ratio
-    of the last mark to the initial capital. The initial capital is the first
-    mark only when the rows prove it untouched: the selected-window anchor
-    (window_anchor), or no open profit and no trade entered at it. With no such
-    proof the writer makes no claim and names nothing. calmar is cagr over the
-    drawdown percent, so it carries the same flag as the cagr it was computed
-    from: its key is present exactly when the cagr key is and calmar is not
-    null (zero drawdown leaves it null: then no calmar key). The bar ratios use
-    one formula on every span and have no reason.
+    of the last mark to the engine's initial capital when the optional
+    strategy_initial_capital export supplied a finite positive value. Older
+    libraries without that export fall back to the first mark only when the
+    rows prove it untouched: the selected-window anchor (window_anchor), or no
+    open profit and no trade entered at it. An invalid exported value also uses
+    that fallback. With no such proof the writer makes no claim and names
+    nothing. calmar is cagr over the drawdown percent, so it carries the same
+    flag as the cagr it was computed from: its key is present exactly when the
+    cagr key is and calmar is not null (zero drawdown leaves it null: then no
+    calmar key). The bar ratios use one formula on every span and have no
+    reason.
     Python's integer subtraction is exact across the full int64 timestamp
     domain; convert the difference to double just as the kernel does.
     """
@@ -4008,10 +4012,18 @@ def _annualization_diagnostics(curve, metrics, trades=(), window_anchor=False):
     if span_ms < MIN_ANNUALIZATION_SPAN_MS:
         form = "simple_proportional_subday"
     else:
-        if not window_anchor and (curve[0]["open_profit"] != 0
-                                  or any(row["entry_bar_index"] <= 0 for row in trades)):
-            return {}
-        capital, final = curve[0]["equity"], curve[-1]["equity"]
+        capital = initial_capital
+        try:
+            valid_capital = (
+                capital is not None and math.isfinite(capital) and capital > 0)
+        except (TypeError, ValueError, OverflowError):
+            valid_capital = False
+        if not valid_capital:
+            if not window_anchor and (curve[0]["open_profit"] != 0
+                                      or any(row["entry_bar_index"] <= 0 for row in trades)):
+                return {}
+            capital = curve[0]["equity"]
+        final = curve[-1]["equity"]
         if not (math.isfinite(capital) and capital > 0 and math.isfinite(final) and final > 0):
             return {}
         span_years = span_ms / (365.25 * 86400.0 * 1000.0)
@@ -4027,9 +4039,11 @@ def _annualization_diagnostics(curve, metrics, trades=(), window_anchor=False):
     return {"cagr": form, "calmar": form}
 
 
-def _annualization_block(curve, metrics, trades=(), window_anchor=False) -> dict:
+def _annualization_block(curve, metrics, trades=(), window_anchor=False,
+                         initial_capital=None) -> dict:
     """The diagnostics entry for revision 3.1: present only when cagr used a simple form."""
-    reasons = _annualization_diagnostics(curve, metrics, trades, window_anchor)
+    reasons = _annualization_diagnostics(
+        curve, metrics, trades, window_anchor, initial_capital)
     return {"annualization": reasons} if reasons else {}
 
 
@@ -4055,9 +4069,10 @@ def build_report_dict(report: ReportC, ohlcv_path: Path,
                       applied_overrides: dict[str, str],
                       applied_runtime: dict[str, object] | None = None,
                       trade_entry_incarnations=None,
-                      window_anchor: bool = False) -> dict:
-    # window_anchor: the curve's first point is the selected-window anchor, the
-    # engine's own initial capital by construction (_annualization_diagnostics).
+                      window_anchor: bool = False,
+                      initial_capital=None) -> dict:
+    # window_anchor: the curve's first point is the selected-window anchor. It
+    # remains the fallback proof when the runtime lacks strategy_initial_capital.
     def trade_at(i):
         t = report.trades[i]
         return {
@@ -4165,7 +4180,8 @@ def build_report_dict(report: ReportC, ohlcv_path: Path,
             "magnifier_sub_bars_total":     int(report.magnifier_sub_bars_total),
             "magnifier_sample_ticks_total": int(report.magnifier_sample_ticks_total),
             "bar_magnifier_enabled":        bool(report.bar_magnifier_enabled),
-            **_annualization_block(equity_curve, metrics, trades, window_anchor),
+            **_annualization_block(
+                equity_curve, metrics, trades, window_anchor, initial_capital),
         },
         "trades": trades,
         "metrics": metrics,
@@ -4950,12 +4966,13 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
             # list pre-pass. These read-only values are revisited during output.
             for i in range(report.trades_len):
                 trade_entry_incarnations(i)
+        engine_initial_capital = _read_strategy_initial_capital(lib, state)
         builder = _build_sink_report if sink is not None else build_report_dict
         out = builder(
             report, args.ohlcv, fed_count, plan["fed_first_data_ms"], plan["fed_last_data_ms"],
             elapsed, inputs, overrides, applied_runtime,
             sink if sink is not None else trade_entry_incarnations,
-            window_anchor=True)
+            window_anchor=True, initial_capital=engine_initial_capital)
         if sink is None:
             _validate_report_result(out)
         _add_scratch_arena_diagnostics(lib, out["diagnostics"], args)
@@ -5544,11 +5561,13 @@ def _main(argv, binary_inputs) -> int:
         if trade_entry_incarnations is not None:
             for i in range(report.trades_len):
                 trade_entry_incarnations(i)
+        engine_initial_capital = _read_strategy_initial_capital(lib, state)
         builder = _build_sink_report if sink is not None else build_report_dict
         out = builder(
             report, args.ohlcv, n, first_ts, last_ts,
             elapsed, inputs, overrides, applied_runtime,
-            sink if sink is not None else trade_entry_incarnations)
+            sink if sink is not None else trade_entry_incarnations,
+            initial_capital=engine_initial_capital)
         if sink is None:
             _validate_report_result(out)
         _add_scratch_arena_diagnostics(lib, out["diagnostics"], args)
@@ -7101,14 +7120,15 @@ def _sink_summary(report, sink, *, records=None):
 
 def _build_sink_report(report, ohlcv_path, n_bars, first_ts, last_ts, elapsed,
                        applied_inputs, applied_overrides, applied_runtime, sink,
-                       window_anchor=False):
+                       window_anchor=False, initial_capital=None):
     if report.trades or report.trades_len or report.equity_curve or report.equity_curve_len:
         raise _engine_invariant("a report with a sink must contain summary scalars only")
     # Reuse the unchanged producer for its small fields and exact key order.
     # The C ABI supplied no arrays, so this cannot walk native report rows.
     out = build_report_dict(report, ohlcv_path, n_bars, first_ts, last_ts, elapsed,
                             applied_inputs, applied_overrides, applied_runtime,
-                            window_anchor=window_anchor)
+                            window_anchor=window_anchor,
+                            initial_capital=initial_capital)
     out["summary"] = _sink_summary(report, sink)
     if getattr(sink, "fd_mode", False):
         _validate_report_result(out)  # the engine's summary checked every T
@@ -7120,7 +7140,8 @@ def _build_sink_report(report, ohlcv_path, n_bars, first_ts, last_ts, elapsed,
         ] if diagnostics.count_e else ()
         first_bar_trade = ({"entry_bar_index": 0},) if diagnostics.trade_at_start else ()
         out["diagnostics"].update(
-            _annualization_block(endpoints, out["metrics"], first_bar_trade, window_anchor))
+            _annualization_block(
+                endpoints, out["metrics"], first_bar_trade, window_anchor, initial_capital))
         # stdout.json has the small report only. The wrapper/finalizer owns
         # the stream's artifact and receipt; no child-local path names it.
         out.pop("trades")
@@ -7148,7 +7169,8 @@ def _build_sink_report(report, ohlcv_path, n_bars, first_ts, last_ts, elapsed,
     out["equity_curve"] = equity_curve
     first_bar_trade = ({"entry_bar_index": 0},) if diagnostics.trade_at_start else ()
     out["diagnostics"].update(
-        _annualization_block(diagnostics, out["metrics"], first_bar_trade, window_anchor))
+        _annualization_block(
+            diagnostics, out["metrics"], first_bar_trade, window_anchor, initial_capital))
     if sink.named:
         reference = {
             "path": sink.path,
@@ -7332,6 +7354,15 @@ def _sink_outputs_block(lib, state, sink, resources, *, summary_only=False):
         entry["values"] = column
     block["events"] = events
     return block
+
+
+def _read_strategy_initial_capital(lib, state):
+    accessor = getattr(lib, "strategy_initial_capital", None)
+    if accessor is None:
+        return None
+    accessor.argtypes = [ctypes.c_void_p]
+    accessor.restype = ctypes.c_double
+    return accessor(state)
 
 
 def _discard_stdout() -> None:
