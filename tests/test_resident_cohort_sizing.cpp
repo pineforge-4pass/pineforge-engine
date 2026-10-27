@@ -68,7 +68,8 @@ void pure_sizing_boundaries() {
             "default-derived over-cap need clamps to cap without refusal");
 
     const auto declared_terms = detail::resident_cohort_sizing(100, 2, 7, 11, true);
-    require(declared_terms.limit == 218 && declared_terms.need == 218
+    // need = 100 x 2 + 7 + 11 = 218 is far below the floor, so the limit is the floor.
+    require(declared_terms.limit == detail::kMaxResidentCohorts && declared_terms.need == 218
                 && !declared_terms.declared_over_cap,
             "fresh rate, literals and fixed allowance all contribute");
 
