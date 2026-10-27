@@ -202,7 +202,7 @@ jobs:
               # events; none of them runs pull-request code.
               ;;
             workflow_run)
-              # Bind identity to the triggering run and its re-runner.
+              # LB-437: bind identity to the triggering run and its re-runner.
               # These two App bots are fixed canon policy; ALLOWED_BOTS is PR-only.
               [ -n "${WR_HEAD_REPO:-}" ] || fail "workflow_run head repository is missing"
               [ -n "${WR_ACTOR:-}" ] || fail "workflow_run triggering actor is missing"
@@ -6979,7 +6979,7 @@ class IndependentNativeProfiles(unittest.TestCase):
                 if authz != 'success' or result != 'success' or shards != 'success':
                     self.assertEqual(ran.returncode, 1, ran.stdout)
                 # A cancelled profile job is how the platform stops a hang at the job maximum: the
-                # aggregate still fails, and the log names it as a HANG to re-run.
+                # aggregate still fails, and the log names it as a HANG to re-run (EN-116).
                 self.assertEqual(b'HANG (re-run)' in ran.stdout,
                                  'cancelled' in (result, shards), ran.stdout)
 
