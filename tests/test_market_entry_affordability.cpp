@@ -2,7 +2,7 @@
  * test_market_entry_affordability.cpp — design-market-entry-affordability:
  * TradingView's broker admission for a MARKET entry, unified over explicit-qty
  * and default FIXED / CASH sizing (default percent_of_equity keeps its own
- * pinned KI-54 / gap-reject / gross-admission family).
+ * pinned margin-admission / gap-reject / gross-admission family).
  *
  * Rule pinned against TradingView behaviour (recorded tapes are kept outside
  * this repository):

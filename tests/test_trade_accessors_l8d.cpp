@@ -1,4 +1,4 @@
-// CR-150 L8d: sealed report rows keep their global indices but have no C view.
+// Sealed report rows keep their global indices but have no C view.
 // Include the C declarations first: engine.hpp suppresses per-strategy decls.
 #include <pineforge/pineforge.h>
 #include <pineforge/engine.hpp>

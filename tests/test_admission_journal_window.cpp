@@ -1,4 +1,4 @@
-// CR-150 L19E: exercise retirement on the real Pine host with recording OFF.
+// Exercise retirement on the real Pine host with recording OFF.
 // The first checkpoint uses only base-tree APIs, before any hash/report query:
 // an append-only journal fails because completed events still own their payloads.
 #include <pineforge/compat/pine/market_admission.hpp>

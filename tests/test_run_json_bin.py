@@ -1,4 +1,4 @@
-"""CR-150 L2: binary load contract, ownership and CSV/report equivalence.
+"""Binary load contract, ownership and CSV/report equivalence.
 
 The red commit keeps the L1 implementation unchanged. The CLI success row
 therefore fails because --ohlcv-bin cannot select a chart, and the mapped

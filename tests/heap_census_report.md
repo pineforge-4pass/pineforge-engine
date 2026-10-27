@@ -1,4 +1,4 @@
-# CR-150 L0B heap census handoff
+# Heap census handoff
 
 **OPEN LAB — source inventory and measurement harness checked in; no measured
 census or bytes-per-id verdict is claimed.** CORE-TOP forbids building, compiling

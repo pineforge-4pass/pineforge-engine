@@ -1251,6 +1251,95 @@ def _job_block(body: str, key: str) -> list[str]:
     return []
 
 
+_PRIVATE_KEY_WORD = re.compile(r'private[-_]?key', re.IGNORECASE)
+_SECRET_REFERENCE = re.compile(
+    r'\bsecrets\s*(?:\.\s*([A-Za-z_]\w*)|\[([^\]]+)\])', re.IGNORECASE)
+_APP_MINT_SCRIPT = re.compile(
+    r'\bapp/installations/[^\s]*?/access_tokens\b|@octokit/auth-app'
+    r'|\b(?:createAppAuth|GithubIntegration|(?:github\.)?Auth\.AppAuth)\s*\(',
+    re.IGNORECASE)
+
+
+def _literal_environment_name(value: str) -> bool:
+    """Accept a nonempty string scalar, never an expression or YAML collection."""
+    code, _, _ = _action_yaml_visible(value)
+    if _ACTION_YAML_QUOTED.fullmatch(code):
+        name = code[1:-1]
+    else:
+        if (not code or _action_yaml_value(code, whole_key=True, sequence=[]) is not None
+                or code.startswith(('{', '[', '|', '>'))
+                or code.casefold() in {'null', '~', 'true', 'false', 'yes', 'no', 'on', 'off'}
+                or re.fullmatch(
+                    r'[-+]?(?:0x[0-9a-f_]+|0o[0-7_]+|0b[01_]+'
+                    r'|(?:[0-9][0-9_]*(?:\.[0-9_]*)?|\.[0-9_]+)'
+                    r'(?:e[-+]?[0-9_]+)?|\.inf|\.nan)', code, re.IGNORECASE)):
+            return False
+        name = code
+    return bool(name.strip()) and '${{' not in name
+
+
+def _literal_job_environment(body: str) -> bool:
+    values = _job_values(body, 'environment', unquote=False)
+    if len(values) != 1:
+        return False
+    block = _job_block(body, 'environment')
+    if block:
+        names = _job_values('\n'.join(block[1:]), 'name', unquote=False)
+        return len(names) == 1 and _literal_environment_name(names[0])
+    return _literal_environment_name(values[0])
+
+
+def _private_key_handoff(text: str) -> bool:
+    """Recognize key-named secrets and secret-fed private-key inputs/arguments."""
+    lines = [_action_yaml_visible(line)[0] for line in _code(text)]
+    for match in _SECRET_REFERENCE.finditer('\n'.join(lines)):
+        if _PRIVATE_KEY_WORD.search(match.group(1) or match.group(2)):
+            return True
+    for index, line in enumerate(lines):
+        if not _PRIVATE_KEY_WORD.search(line):
+            continue
+        value = [line]
+        # A private-key input/env may be a block scalar. Do not let an
+        # unrelated sibling's secret turn a non-secret key into a handoff.
+        for follow in lines[index + 1:]:
+            if _indent(follow) <= _indent(line):
+                break
+            value.append(follow)
+        if _SECRET_REFERENCE.search('\n'.join(value)):
+            return True
+    return False
+
+
+def app_token_environment_findings(workflows: dict[str, str]) -> list[str]:
+    """Require an environment for every visible App mint/private-key handoff.
+
+    The contract's action-pin lint rejects YAML outside its reviewed block
+    subset (including quoted keys and flow mappings); the runner contract
+    refuses unreadable job mappings. Neither shape can silently bypass this
+    job scan. Script/API signatures are conservative human-review indicators,
+    not shell/Python/JavaScript interpretation or transitive action inspection.
+    """
+    findings = []
+    for name, workflow in workflows.items():
+        inherited_env = '\n'.join(_job_values(workflow, 'env'))
+        for job, body in _jobs(workflow).items():
+            references = (reference for _, _, reference, _ in
+                          action_uses({name: body}, findings=[]))
+            action_mint = any(reference.partition('@')[0].casefold()
+                              in {'actions/create-github-app-token',
+                                  'tibdex/github-app-token'}
+                              for reference in references)
+            text = inherited_env + '\n' + body
+            if not (action_mint or _private_key_handoff(text)
+                    or _APP_MINT_SCRIPT.search('\n'.join(_code(text)))):
+                continue
+            if not _literal_job_environment(body):
+                findings.append(
+                    f'{name} job {job}: App-token minting/private-key use requires a '
+                    'literal, non-empty environment; review other minting methods by hand')
+    return findings
+
+
 def _counted_text(body: str) -> str:
     """A job's code for the core-count rule: comments, step names and the
     hashFiles() arguments of cache keys -- names of files, not commands -- out."""
@@ -1973,6 +2062,7 @@ jobs:
   probe:
     needs: [authz]
     runs-on: ["self-hosted","pf-gcp-post"]
+    environment: release
     steps:
       - name: Refuse a dispatch ref other than main
         env:
@@ -2637,6 +2727,7 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
     curl_action = None if curl_action is None else _universal_newlines(curl_action)
     findings = runner_findings(workflows)
     findings += action_pin_findings(action_sources)
+    findings += app_token_environment_findings(workflows)
     findings += pipeline_workflow_findings(ci, 'ci.yml', pr=True)
     findings += pipeline_workflow_findings(post, 'ci-post.yml', pr=False)
     findings += native_workflow_findings(native, curl_action)

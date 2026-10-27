@@ -1,4 +1,4 @@
-// CR-289 step 1B: test-only ctypes bridge to the production sink writer.
+// Test-only ctypes bridge to the production sink writer.
 // Python's existing sink doubles format their own records; they cannot
 // exercise LineWriter::write_e. This module formats no JSON and classifies
 // only exceptions actually thrown by production code.
@@ -45,7 +45,7 @@ extern "C" PF_API int cr289_write_equity(
     try {
         if ((path == nullptr) == (fd == nullptr)
                 || points == nullptr || count < 2 || receipt == nullptr)
-            throw std::invalid_argument("invalid CR-289 writer fixture arguments");
+            throw std::invalid_argument("invalid writer fixture arguments");
         std::unique_ptr<pineforge::report_sink::LineWriter> writer;
         if (fd != nullptr)
             writer = std::make_unique<pineforge::report_sink::LineWriter>(*fd);

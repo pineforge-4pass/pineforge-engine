@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CR-150 arena proof harness. Runtime/corpus modes are Linux LAB ONLY.
+"""Arena proof harness. Runtime/corpus modes are Linux test-host only.
 
 Formula tests consume hand-derived vectors. Runtime tests build generated.cpp
 and arena_bound_bridge.cpp into one module against an already rebuilt archive.

@@ -58,7 +58,7 @@ SCHEDULER_CACHE_WAIVERS: dict[str, str] = {
         "Derived completion lookup over retained_.bars and the run's timeframe "
         "configuration; input() answers a repeated index from the last flags "
         "or rebuilds by reset-and-rescan. The independent consumed-prefix "
-        "cursor is folded in hash_state and is not waived (CR-150 L4)."
+        "cursor is folded in hash_state and is not waived."
     ),
 }
 

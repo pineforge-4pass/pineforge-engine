@@ -1,4 +1,4 @@
-// EN-134: full runs through the public C ABI, including report production.
+// Full runs through the public C ABI, including report production.
 // Written before the guards. Fault rows must answer PF_NATIVE_E_RUN_FAILED,
 // engine_invariant and zero report trades. On the base they complete and
 // carry the supplied non-finite excursion (or overflowed pnl_pct).

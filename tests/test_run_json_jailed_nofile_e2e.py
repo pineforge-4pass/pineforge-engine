@@ -1,4 +1,4 @@
-"""CR-281/CR-267: real-native sink-OFF file jail and internal arena admission.
+"""Real-native sink-OFF file jail and internal arena admission.
 
 CTest builds the unchanged WIDE corpus probe. The jailed children use the real
 run_json profile, table setter and arena admission. Only the unjailed reference
@@ -450,7 +450,7 @@ def _inputs(tmp_path):
     inputs = tmp_path / "readonly-inputs"
     inputs.mkdir()
     tape = inputs / "chart-1m.csv"
-    # Preserve CR-224's three days of the distributed REAL feed and native
+    # Preserve the three days of the distributed REAL feed and native
     # 1m -> 15m aggregation. No derived feed is read or materialized.
     with FEED.open("rb") as source, tape.open("wb") as target:
         header = next(source)

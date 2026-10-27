@@ -1,4 +1,4 @@
-// CR-150 L15a: execute the frozen V1/V2 contract over synthetic data.
+// Execute the frozen V1/V2 contract over synthetic data.
 // Red on ee3083d4a: the accessor, context overloads and staging members are
 // declared but undefined. No compiler or runtime result is claimed locally.
 #include "native_instrument_feed_fixture.hpp"

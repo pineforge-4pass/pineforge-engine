@@ -103,7 +103,7 @@ public:
         set_syminfo_timezone("UTC");
         set_syminfo_session("24x7");
         set_syminfo_mintick(0.25);
-        // CR-347 round 3 made the implicit cohort spill amortised (once per
+        // The later measurement made the implicit cohort spill amortised (once per
         // interval, 64 at least); this fixture needs the retired target on
         // disk after the all_sorted walk, as the eager spill used to leave it.
         // Only the spill timing changes; the codec rejection is still real.
