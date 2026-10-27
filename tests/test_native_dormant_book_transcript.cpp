@@ -813,10 +813,15 @@ inline Trace run_ring_window(bool prepared, bool enabled = true) {
     return std::move(h.trace);
 }
 
-// REV2 C1: a t=0 fill drains its applied notification before the point's
-// complete. The row between the winner and the resident bound is still
-// resident and beyond W, so every callback reader must see the eager point
-// allowance before a replace-by-id wakes it.
+// A t=0 fill drains its notification before complete. In the eager run a
+// later-priority row has not had its Evaluate turn yet, so its allowance
+// still belongs to the preceding eligible point. Compare that callback read
+// with dormant matching before a replace-by-id wakes the resident victim.
+struct ResidentWindowTrace {
+    Trace trace;
+    Trace callback_allowance;
+};
+
 class ResidentWindowHost final : public NativeStrategyHost {
 public:
     ResidentWindowHost(bool prepared, bool enabled) {
@@ -829,6 +834,7 @@ public:
 #endif
     }
     Trace trace;
+    Trace callback_allowance;
     bool callback = false;
     NativeExecutionConsumer& consumer() { return as_native_consumer(execution_consumer()); }
     const std::vector<std::uint64_t>& recorded_hashes() const { return broker_state_hashes_; }
@@ -902,9 +908,8 @@ public:
                      units ? units->initial : -1.0, units ? units->left : -1.0,
                      static_cast<unsigned long long>(consumer().dormant_watermark_for_test()),
                      static_cast<unsigned long long>(live_at_rank.priority()));
-        require(units && units->point_ordinal == e.cursor.point.ordinal
-                    && units->initial == 1.0 && units->left == 1.0,
-                "resident-window callback read stale allowance");
+        require(units != nullptr, "resident-window callback allowance was not units");
+        record_allowance(callback_allowance, 150, live_at_rank.allowance);
         record_allowance(trace, 150, live_at_rank.allowance);
 
         no::Request replacement{no::Transact{1}, "resident-window-replaced", ""};
@@ -930,7 +935,7 @@ private:
     no::RequestHandle victim_{};
 };
 
-inline Trace run_resident_window(bool prepared, bool enabled = true) {
+inline ResidentWindowTrace run_resident_window(bool prepared, bool enabled = true) {
     ResidentWindowHost h(prepared, enabled);
     require(h.configure_native(specification()).status == NativeSetupStatus::Applied,
             "resident-window configure refused");
@@ -947,7 +952,7 @@ inline Trace run_resident_window(bool prepared, bool enabled = true) {
     }
 #endif
     finish(h, h.trace);
-    return std::move(h.trace);
+    return {std::move(h.trace), std::move(h.callback_allowance)};
 }
 
 // REV-CX K1/M24: the back two rows are real later candidates, hence awake
@@ -1455,9 +1460,11 @@ int main(int argc, char** argv) {
             for (const bool prepared : {false, true}) {
                 const auto off = run_resident_window(prepared, false);
                 const auto on = run_resident_window(prepared, true);
-                require(off.words == on.words,
+                require(off.callback_allowance.words == on.callback_allowance.words,
+                        "resident-window callback allowance differs from eager");
+                require(off.trace.words == on.trace.words,
                         "resident-window eager/dormant transcript bytes differ");
-                on.print(prepared ? "resident-window-prepared" : "resident-window-direct");
+                on.trace.print(prepared ? "resident-window-prepared" : "resident-window-direct");
             }
             return 0;
         }

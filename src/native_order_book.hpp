@@ -523,37 +523,12 @@ struct WorkingRequestCore::BookSpill {
                                            : std::max(r.W, priority);
         }
     }
-    void refresh_resident_suffix(WorkingRequestCore& core) noexcept {
-        assert_aligned(core);
-        for (std::size_t i = 0; i != resident.size(); ++i) {
-            const auto& meta = resident[i];
-            if (!meta.dormant) continue;
-            const auto& r = reg[meta.cls];
-            if (!r.in_progress || meta.priority < r.W) continue;
-            auto& allowance = core.live_[i].allowance;
-            const auto* units = std::get_if<AllowanceUnits>(&allowance);
-            if (units && units->point_ordinal == r.cur) continue;
-            if (core.epoch_ > std::numeric_limits<uint64_t>::max() - 2) {
-                index_failed();
-                return;
-            }
-            allowance = core.evaluated_allowance(core.live_[i], r.cur);
-            core.epoch_ += 2;
-        }
-    }
-    void advance(WorkingRequestCore& core, uint64_t priority) {
-        sweep(core, priority, false);
-        refresh_resident_suffix(core);
-    }
+    void advance(WorkingRequestCore& core, uint64_t priority) { sweep(core, priority, false); }
     void complete(WorkingRequestCore& core, bool finish_sweep) {
         // A failed or unwinding point keeps partial W; no recovery is intended.
         if (!finish_sweep) return;
-        refresh_resident_suffix(core);
-        for (auto& r : reg) {
-            if (!r.in_progress) continue;
-            r.W = std::numeric_limits<uint64_t>::max();
-            r.in_progress = false;
-        }
+        sweep(core, std::numeric_limits<uint64_t>::max(), true);
+        for (auto& r : reg) r.in_progress = false;
     }
     void project(const WorkingRequestCore& core, const BookSlot& slot,
                  LiveRequest& row) const noexcept {

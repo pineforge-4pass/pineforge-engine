@@ -39,6 +39,6 @@ M23	tests/mutations/M23.patch	test_native_dormant_book_transcript	T3 complete-be
 M24	tests/mutations/M24.patch	test_native_dormant_book_transcript	T3 --notification-middle-spill retained promotion after callback
 M25	tests/mutations/M25.patch	test_native_dormant_book_tokens	T5 frozen held ring copies
 M26	tests/mutations/M26.patch	test_native_dormant_book_tokens	T5 keepalive lifetime before raw dereference
-M-resident-window	tests/mutations/M-resident-window.patch	test_native_dormant_book_transcript	T3 --resident-window resident callback read/replace beyond W
+M-resident-window	tests/mutations/M-resident-window.patch	test_native_dormant_book_transcript	T3 --resident-window wrong-point sweep breaks callback allowance equality with eager
 M-middle-in-match-path	tests/mutations/M-middle-in-match-path.patch	test_native_dormant_book_transcript	T3 --notification-middle-spill retained-candidate scope invariant
 M-first-ensure-throws	tests/mutations/M-first-ensure-throws.patch	test_native_dormant_book_allocation_fault	HK1 first Book ensure allocation fault must degrade to eager
