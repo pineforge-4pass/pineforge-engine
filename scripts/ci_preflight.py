@@ -104,7 +104,7 @@ GKE_JOB_LABELS = {
     'native-live.yml': {'native-live': GKE_16_LABEL, 'native-live-shards': GKE_8_LABEL},
 }
 GKE_JOB_RUNNERS = {
-    name: {job: f'group: gke-runners labels: {label}' for job, label in jobs.items()}
+    name: dict(jobs)
     for name, jobs in GKE_JOB_LABELS.items()
 }
 CI_EVENTS = '''on:
@@ -279,7 +279,7 @@ JOB_COMMANDS = {
     'docs.yml': {'authz': None, 'build': None},
     'docs-post.yml': {'authz': None, 'build': None},
 }
-# Exact hosted pins and GKE group/size mappings, checked per job.
+# Exact hosted pins and bare GKE scale-set names, checked per job.
 # Historical name: this table also holds the exact GKE pins.
 HOSTED_JOB_RUNNERS = {
     'ci.yml': dict.fromkeys(('authz', 'changes', 'build-gate'), 'ubuntu-24.04'),
@@ -1409,7 +1409,8 @@ def _authz_header(workflow: str) -> str:
     return AUTHZ_JOB_HEADER
 
 
-_GKE_ROUTE = re.compile(r'(?<![\w.-])gke-[\w.-]+')
+_GKE_ROUTE = re.compile(r'(?<![\w.-])gke-[\w.-]+', re.IGNORECASE)
+_GKE_SCALE_LABEL = re.compile(r'(?<![\w.-])gke-\d+cpu-\d+gb-(?:amd64|arm64)(?![\w.-])')
 
 
 def _matrix_rows(body: str) -> list[dict[str, str]] | None:
@@ -1542,8 +1543,8 @@ def _gke_cap_findings(workflows: dict[str, str]) -> list[str]:
             if _input_condition_skips(body, inputs):
                 continue
             runners = ' '.join(_job_values(body, 'runs-on'))
-            labels = _GKE_ROUTE.findall(runners)
-            labels = [label for label in labels if label != 'gke-runners']
+            labels = [label.lower() for label in _GKE_ROUTE.findall(runners)
+                      if label.lower() != 'gke-runners']
             callees = calls[(name, job)]
             if not labels and not callees:
                 continue
@@ -1612,6 +1613,10 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
             runs_on, uses = _job_values(body, 'runs-on'), _job_values(body, 'uses')
             gke_pin = GKE_JOB_RUNNERS.get(name, {}).get(job)
             has_gke = bool(_GKE_ROUTE.search(' '.join(runs_on)))
+            raw_runners = _job_values(body, 'runs-on', unquote=False)
+            if has_gke and (len(raw_runners) != 1
+                            or not _GKE_SCALE_LABEL.fullmatch(raw_runners[0])):
+                findings.append(f'{name} job {job} must use a bare scalar GKE scale-set name')
             if has_gke and runs_on != [gke_pin]:
                 findings.append(f'{name} job {job} may use GKE routing only at its exact pinned job and label')
             if has_gke and _job_values(body, 'container'):
