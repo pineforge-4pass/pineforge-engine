@@ -894,6 +894,14 @@ public:
         require(live_at_rank.priority() > consumer().dormant_watermark_for_test(),
                 "resident-window victim was not beyond W");
         const auto* units = std::get_if<no::AllowanceUnits>(&live_at_rank.allowance);
+        std::fprintf(stderr,
+                     "resident-window allowance: is_units=%d point_ordinal=%llu cursor_ordinal=%llu initial=%.17g left=%.17g watermark=%llu priority=%llu\n",
+                     units ? 1 : 0,
+                     units ? static_cast<unsigned long long>(units->point_ordinal) : 0ULL,
+                     static_cast<unsigned long long>(e.cursor.point.ordinal),
+                     units ? units->initial : -1.0, units ? units->left : -1.0,
+                     static_cast<unsigned long long>(consumer().dormant_watermark_for_test()),
+                     static_cast<unsigned long long>(live_at_rank.priority()));
         require(units && units->point_ordinal == e.cursor.point.ordinal
                     && units->initial == 1.0 && units->left == 1.0,
                 "resident-window callback read stale allowance");
