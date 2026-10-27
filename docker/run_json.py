@@ -6605,8 +6605,9 @@ class _BoundedJSONFile:
     Disk files use Linux O_DIRECT or Darwin F_NOCACHE. Legacy libraries with
     no engine sink can also use tmpfs/ramfs for the unjailed JSON artifact.
     Engine sink and scratch directories are selected by _disk_report_directory.
-    One aligned 64 KiB anonymous window is the I/O working set. Every write
-    window is synchronized before reuse. Jailed and fd routes use StringIO.
+    Writes reuse one aligned 64 KiB anonymous window and synchronize at flush.
+    Readback can grow that window to at most 1 MiB. Jailed and fd routes use
+    StringIO.
     """
     window = 64 * 1024
 
@@ -6650,30 +6651,39 @@ class _BoundedJSONFile:
     def fileno(self):
         return self.file.fileno()
 
-    def _sync_window(self):
-        if not self.used:
+    def _sync_window(self, *, final=False):
+        if final and self.size == getattr(self, "_synced_size", 0):
             return
-        # Only the final disk block is padded. Truncation removes the padding
-        # before any reader can publish it. A partial window stays available
-        # for append, e.g. a flush before the trailer/last delimiter.
-        aligned = (self.used + 4095) & ~4095
-        self.buffer[self.used:aligned] = b"\0" * (aligned - self.used)
-        while True:
-            written = self.libc.pwrite(self.file.fileno(), self.address, aligned, self.base)
-            if written >= 0 or ctypes.get_errno() != 4:  # EINTR
-                break
-        if written < 0:
-            self._io_error()
-        if written != aligned:
-            raise OSError("short report artifact write")
-        os.ftruncate(self.file.fileno(), self.size)
-        if hasattr(os, "fdatasync"):
-            os.fdatasync(self.file.fileno())
-        else:
-            os.fsync(self.file.fileno())
-        if self.used == self.window:
-            self.base += self.window
-            self.used = 0
+        fd = self.file.fileno()
+        if self.used:
+            # Full windows already have their exact length. Only a partial
+            # final disk block needs padding, removed before any reader can
+            # publish it. Keep a partial window available for later append.
+            aligned = (self.used + 4095) & ~4095
+            if aligned != self.used:
+                ctypes.memset(self.address + self.used, 0, aligned - self.used)
+            while True:
+                written = self.libc.pwrite(fd, self.address, aligned, self.base)
+                if written >= 0 or ctypes.get_errno() != 4:  # EINTR
+                    break
+            if written < 0:
+                self._io_error()
+            if written != aligned:
+                raise OSError("short report artifact write")
+            if aligned != self.used:
+                os.ftruncate(fd, self.size)
+            if self.used == self.window:
+                self.base += self.window
+                self.used = 0
+        if final:
+            # A completed pwrite is visible to this process without syncing.
+            # Retain one checked sync before publication, including an exact
+            # full-window tail. A flush followed by seek must not repeat it.
+            if hasattr(os, "fdatasync"):
+                os.fdatasync(fd)
+            else:
+                os.fsync(fd)
+            self._synced_size = self.size
 
     def write(self, text):
         if self.reading:
@@ -6694,7 +6704,7 @@ class _BoundedJSONFile:
     def flush(self):
         self.file.flush()  # retain checked flush/close failure behavior
         if not self.reading:
-            self._sync_window()
+            self._sync_window(final=True)
 
     def seek(self, position):
         if position != 0:
@@ -6708,12 +6718,25 @@ class _BoundedJSONFile:
         if not self.reading:
             self.seek(0)
         count = 1024 * 1024 if count < 0 else min(count, 1024 * 1024)
+        count = min(count, self.size - self.position)
+        if count <= 0:
+            return b"" if self.binary else ""
+        # Match the bounded request with aligned I/O. Strict sink line
+        # readers still request at most their existing 64 KiB window.
+        window = min(1024 * 1024, (count + 4095) & ~4095)
+        if window > len(self.buffer):
+            buffer = mmap.mmap(-1, window)
+            address = ctypes.addressof(ctypes.c_char.from_buffer(buffer))
+            self.buffer.close()
+            self.buffer, self.address = buffer, address
+            self.read_base, self.read_size = -1, 0
+        window = len(self.buffer)
         pieces = []
         while count > 0 and self.position < self.size:
-            base = self.position // self.window * self.window
+            base = self.position // window * window
             if base != self.read_base:
                 while True:
-                    copied = self.libc.pread(self.file.fileno(), self.address, self.window, base)
+                    copied = self.libc.pread(self.file.fileno(), self.address, window, base)
                     if copied >= 0 or ctypes.get_errno() != 4:  # EINTR
                         break
                 if copied < 0:
@@ -6725,8 +6748,12 @@ class _BoundedJSONFile:
             take = min(count, self.read_size - offset, self.size - self.position)
             if take <= 0:
                 raise OSError("short report artifact read")
-            data = self.buffer[offset:offset + take]
-            pieces.append(data if self.binary else data.decode("ascii"))
+            if self.binary:
+                pieces.append(self.buffer[offset:offset + take])
+            else:
+                # Decode the mapped bytes directly, without a bytes slice.
+                with memoryview(self.buffer) as view:
+                    pieces.append(str(view[offset:offset + take], "ascii"))
             count -= take
             self.position += take
         return (b"" if self.binary else "").join(pieces)
@@ -6831,10 +6858,15 @@ class _NativeSinkJSONColumn:
         digest, copied = hashlib.sha256(), 0
         destination.write("[")
         file.seek(0)
-        while chunk := file.read(64 * 1024):
-            copied += len(chunk)
-            digest.update(chunk.encode("ascii"))
-            destination.write(chunk)
+        binary = file.binary
+        try:
+            file.binary = True
+            while chunk := file.read(1024 * 1024):
+                copied += len(chunk)
+                digest.update(chunk)
+                destination.write(chunk.decode("ascii"))
+        finally:
+            file.binary = binary
         if copied != expected or digest.hexdigest().encode("ascii") != expected_digest:
             raise _engine_invariant("the native report sink JSON fragment digest differs")
         destination.write("]")
