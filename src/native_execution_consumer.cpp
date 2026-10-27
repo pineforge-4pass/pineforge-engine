@@ -18,6 +18,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
@@ -3067,6 +3068,24 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     // The generation is admitted here: after the reset and the last refusal,
     // before the first host callback of the run.
     admit_selected_generation(engine);
+    // All existing option/bar/calendar refusals precede this read. PLAIN's
+    // external declaration is necessary but cannot override the actual
+    // admitted cadence, selection, path, or stream family.
+    const bool metrics_shape = phase == NativeRunPhase::Batch && !begin_is_stream_
+        && !spec.timeframe_undetected && !spec.input_tf.empty()
+        && spec.input_tf == spec.script_tf
+        && pairing_.pairing == native_calendar::TimeframePairing::Passthrough
+        && spec.slot_label_policy == NativeSlotLabelPolicy::FeedTolerant
+        && (spec.report_policy == NativeReportPolicy::KernelRecordedAtHostMarks
+            || spec.report_policy == NativeReportPolicy::KernelRecorded)
+        && (spec.calculation == NativeCalculationTrigger::BarClose
+            || spec.calculation == NativeCalculationTrigger::BarCloseAndFills)
+        && spec.intrabar.is_none() && spec.subscriptions.empty()
+        && !selected_epoch_.window_configured && !selected_epoch_.admitted_selected;
+    engine.begin_metrics_streaming_v1(metrics_shape);
+    if (phase != NativeRunPhase::Batch)
+        engine.metrics_streaming_.receipt.route_reason =
+            metrics::MetricsRouteReasonV1::LiveSnapshot;
     engine.begin_report_sink();
     // RULING A48: the host's closing-row excursion capability is wired once
     // per run; the kernel then keeps no excursion model of its own.
@@ -8313,6 +8332,9 @@ void NativeExecutionConsumer::invoke_applied_callback(
                 &requests_.history_at(*notification.margin_call_index));
             if (margin_call) {
                 const auto receipt = *margin_call;
+                if (engine.metrics_streaming_.fold)
+                    engine.metrics_streaming_.receipt.stop_boundary.kind =
+                        metrics::MetricsStopBoundaryKindV1::MarginCallback;
                 host->on_native_margin_call(receipt);
             }
         }
@@ -10840,6 +10862,12 @@ void NativeExecutionConsumer::pump_batch(BacktestEngine& engine, const Bar* bars
             // its previous input has finished and no callback is in flight.
             if (!check_sigterm_abort(engine, true)) return;
             if (i != 0 && !check_abort(engine, NativeFailureOperation::Input)) return;
+            if (engine.metrics_streaming_.fold) {
+                auto& boundary = engine.metrics_streaming_.receipt.stop_boundary;
+                boundary.completed_marks = engine.metrics_streaming_.points;
+                boundary.input_index = i;
+                boundary.kind = metrics::MetricsStopBoundaryKindV1::IntraBar;
+            }
             if (!consume_confirmed_input(engine, bars[i], i, i + 1 == n)) {
                 if (!failed()) {
                     fail(engine, NativeFailure{NativeFailureCode::Preflight,
@@ -10884,6 +10912,7 @@ void NativeExecutionConsumer::run_simple(BacktestEngine& engine, const Bar* bars
     const BacktestEngine::ReportSinkCallScope sink_call(engine);
     const EntryExitGuard exit_scope(*this, engine, false);
     if (refuse_dispatch_reentry()) return;
+    const BacktestEngine::MetricsStreamingAttemptV1 metrics_attempt(engine);
     const AttemptScope attempt(*this);
     if (!mint_attempt(engine, exit_scope.nested())) return;
     NativeBeginArgs args{bars, n, {}, {}, false, 4,
@@ -10925,6 +10954,7 @@ void NativeExecutionConsumer::run_tf(BacktestEngine& engine,
     const BacktestEngine::ReportSinkCallScope sink_call(engine);
     const EntryExitGuard exit_scope(*this, engine, false);
     if (refuse_dispatch_reentry()) return;
+    const BacktestEngine::MetricsStreamingAttemptV1 metrics_attempt(engine);
     const AttemptScope attempt(*this);
     if (!mint_attempt(engine, exit_scope.nested())) return;
     const NativeBeginArgs args{input_bars, n_input, input_tf, script_tf, bar_magnifier,
@@ -10981,6 +11011,7 @@ void NativeExecutionConsumer::run_rich(BacktestEngine& engine,
     const BacktestEngine::ReportSinkCallScope sink_call(engine);
     const EntryExitGuard exit_scope(*this, engine, false);
     if (refuse_dispatch_reentry()) return;
+    const BacktestEngine::MetricsStreamingAttemptV1 metrics_attempt(engine);
     const AttemptScope attempt(*this);
     if (!mint_attempt(engine, exit_scope.nested())) return;
     NativeBeginArgs args{input_bars, n_input, input_tf, script_tf, bar_magnifier,
@@ -11028,6 +11059,7 @@ bool NativeExecutionConsumer::stream_begin(BacktestEngine& engine,
     const BacktestEngine::ReportSinkCallScope sink_call(engine, true);
     const EntryExitGuard exit_scope(*this, engine, true);
     if (refuse_dispatch_reentry()) return false;
+    const BacktestEngine::MetricsStreamingAttemptV1 metrics_attempt(engine);
     const AttemptScope attempt(*this);
     // Sink streams are outside v1; refuse before staging or touching the file.
     if (!mint_attempt(engine, exit_scope.nested())) return false;
@@ -13137,6 +13169,7 @@ void NativeExecutionConsumer::capture_presentation(BacktestEngine& engine) {
                     local.net_profit, engine.initial_capital_, engine.chart_timezone_,
                     selected_first_open_, selected_last_close_,
                     engine.bars_in_market_, metric_observations);
+                engine.observe_metrics_curve_v1(curve, metric_equity_len, &local.metrics.equity);
             } else {
                 internal::compute_report_metrics(
                     local.metrics, local.trades, local.trades_len,
@@ -13144,6 +13177,8 @@ void NativeExecutionConsumer::capture_presentation(BacktestEngine& engine) {
                     engine.initial_capital_, engine.chart_timezone_,
                     selected_first_open_, selected_last_close_,
                     engine.bars_in_market_, metric_observations);
+                engine.observe_metrics_curve_v1(
+                    local.equity_curve, metric_equity_len, &local.metrics.equity);
             }
         } else if (engine.report_sink_state_.equity_scratch) {
             engine.compute_report_sink_metrics(&local, metric_equity_len);
@@ -13153,6 +13188,8 @@ void NativeExecutionConsumer::capture_presentation(BacktestEngine& engine) {
                 local.equity_curve, metric_equity_len, local.net_profit,
                 engine.initial_capital_, engine.chart_timezone_,
                 engine.first_bar_open_, engine.current_bar_.close, engine.bars_in_market_);
+            engine.observe_metrics_curve_v1(
+                local.equity_curve, metric_equity_len, &local.metrics.equity);
         }
         if (sink_trades && (selected_epoch_.admitted_selected
             || !engine.report_sink_state_.equity_scratch)) {
@@ -13552,6 +13589,62 @@ int native_selected_window_counts_v1(const BacktestEngine* engine,
     return NativeExecutionConsumer::selected_window_counts_v1(engine, out);
 }
 
+metrics::MetricsStreamingStatusV1 BacktestEngine::admit_metrics_plain_v1(
+        const MetricsPlainInputsV1& inputs, const metrics::MetricsExtentPlanV1& plan,
+        metrics::MetricsExtentReceiptV1* out) {
+    using namespace metrics;
+    if (report_sink_setter_status() != 0) return MetricsStreamingStatusV1::Busy;
+    std::uint64_t failed = 0;
+    const auto require = [&](bool yes, unsigned bit) {
+        if (!yes) failed |= 1ULL << bit;
+    };
+    // Stable input bits in declaration order, followed by invocation order.
+    // Missing metadata is NO, never evidence of an ordinary presenter.
+    const auto* d = inputs.declaration;
+    require(d != nullptr, 0);
+    const bool versioned = d && d->struct_size == sizeof(*d) && d->version == 1;
+    require(versioned, 1);
+    require(inputs.module_contract_bound == 1, 2);
+    require(versioned && d->builtin_presenter == 1, 3);
+    require(versioned && d->builtin_marks == 1, 4);
+    require(versioned && d->builtin_scheduler == 1, 5);
+    require(versioned && d->security_sites == 0, 6);
+    require(versioned && d->lower_tf_sites == 0, 7);
+    require(versioned && d->magnifier_declared == 0, 8);
+    require(versioned && d->calculation_trigger <= 1, 9);
+    require(versioned && d->calc_on_every_history_tick == 0, 10);
+    require(inputs.historical_batch == 1, 11);
+    require(inputs.equal_resolved_timeframes == 1, 12);
+    require(inputs.timeframe_undetected == 0, 13);
+    require(inputs.begin_bar_magnifier == 0, 14);
+    require(inputs.intrabar_none == 1, 15);
+    require(inputs.pending_selected_window == 0, 16);
+    require(inputs.admitted_selected_window == 0, 17);
+    require(inputs.realtime_tail == 0, 18);
+    require(inputs.probe_suppress_tail_logic == 0, 19);
+    require(inputs.builtin_host_marks == 1, 20);
+    require(inputs.feed_tolerant_passthrough == 1, 21);
+    require(inputs.calculation_trigger <= 1, 22);
+    require(inputs.final_admitted_view_bound == 1, 23);
+    auto& s = metrics_streaming_;
+    s.pending_plan = plan;
+    s.pending_plain = failed == 0;
+    s.pending_failed_plain_inputs = failed;
+    s.prepared = false;
+    MetricsExtentReceiptV1 receipt;
+    receipt.extent_plan = plan;
+    receipt.plain_subset = s.pending_plain ? 1u : 0u;
+    receipt.failed_plain_inputs = failed;
+    receipt.streaming_sharpe = s.configuration.streaming_sharpe;
+    receipt.metrics_needed = s.configuration.metrics_needed;
+    receipt.route = MetricsRatioRouteV1::LegacyActualCurve;
+    receipt.route_reason = s.pending_plain ? MetricsRouteReasonV1::NoRecoveryProof
+                                          : MetricsRouteReasonV1::PlainNo;
+    if (!s.active) s.receipt = receipt;
+    if (out) *out = receipt;
+    return MetricsStreamingStatusV1::Ok;
+}
+
 // CR-150 L6b-2: report-tail helpers share the consumer's engine epoch.
 // Keep them in this scope so their definitions have the header's ABI owner.
 
@@ -13668,6 +13761,9 @@ void BacktestEngine::fold_report_equity_extreme(double equity) {
 }
 
 void BacktestEngine::refold_equity_tail() {
+    metrics_streaming_.receipt_final = false;
+    sync_metrics_streaming_held_v1();
+    if (refold_summary_equity_tail()) return;
     if (report_sink_state_.enabled
         && (last_equity_point() || report_sink_state_.equity_scratch)) {
         if (const auto* held = last_equity_point()) {

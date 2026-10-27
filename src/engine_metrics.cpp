@@ -8,13 +8,19 @@
 #include <pineforge/metrics_fold.hpp>
 #include <pineforge/native_calendar.hpp>
 
+#include "report_scratch.hpp"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <ctime>
 #include <limits>
 #include <memory>
+#include <stdexcept>
 #include <vector>
 
 #include "metrics_month_memo.hpp"
@@ -141,7 +147,373 @@ void for_each_bar_return(const PointSource& curve, std::int64_t n, Emit emit) {
     }
 }
 
+// Streaming-ratio arithmetic is report-only. No strategy callback, floating
+// environment change, shared state, or regrouped downside sum enters it.
+// Return bytes are copied through the run-owned positional scratch stream.
+namespace streaming_v1 {
+constexpr const char* sf = "metrics.equity.sharpe_bar";
+constexpr const char* df = "metrics.equity.sortino_bar";
+
+double years(const MetricsExtentV1& extent) {
+    if (extent.empty) return 0.0;
+    const auto first = extent.first_time_ms, last = extent.last_time_ms;
+    const double span = last >= first
+        ? static_cast<double>(static_cast<std::uint64_t>(last)
+                              - static_cast<std::uint64_t>(first))
+        : -static_cast<double>(static_cast<std::uint64_t>(first)
+                               - static_cast<std::uint64_t>(last));
+    return span / (365.25 * 86400.0 * 1000.0);
+}
+bool operands(const MetricsExtentV1& extent, double& rf, double& ann) {
+    const double span_years = years(extent);
+    if (extent.count < 3 || !(span_years > 0.0)) return false;
+    const double bars_per_year = static_cast<double>(extent.count - 1) / span_years;
+    rf = 0.02 / bars_per_year;
+    ann = std::sqrt(bars_per_year);
+    return true;
+}
+void trace(MetricsRatioTraceSinkV1 sink, std::int64_t i, const char* operation,
+           const char* field, bool failed = false, const char* stage = "bar") {
+    if (sink.emit)
+        sink.emit(sink.context, {stage, i, operation,
+            failed ? "report_result_invalid" : nullptr, field,
+            failed ? "nonfinite" : nullptr});
+}
+
+// Exact fallback, including the old interleaving and promotion order.
+// Only our local arithmetic sentinel is caught; provider/I/O exceptions keep
+// their existing type, code and args.
+struct Nonfinite {};
+template<class Generate>
+void legacy(Generate generate, const MetricsExtentV1& extent,
+            MetricsStreamingResultV1& out, MetricsRatioTraceSinkV1 sink) {
+    std::uint64_t m = 0;
+    double sum = 0.0, rf = kNaN, ann = kNaN;
+    std::int64_t deferred = -1;
+    const char* deferred_operation = nullptr;
+    generate([&](double r) {
+        if (!std::isfinite(r) && deferred < 0) {
+            deferred = static_cast<std::int64_t>(m);
+            deferred_operation = "promote.return.first_pass";
+        }
+        trace(sink, static_cast<std::int64_t>(m), "return.first_pass", sf,
+              false, "bar.first_pass");
+        sum += r;
+        if (!std::isfinite(sum) && deferred < 0) {
+            deferred = static_cast<std::int64_t>(m);
+            deferred_operation = "promote.sum";
+        }
+        trace(sink, static_cast<std::int64_t>(m), "sum", sf, false, "bar.first_pass");
+        ++m;
+    });
+    out.receipt.eligible_returns = m;
+    if (!operands(extent, rf, ann) || m < 2) return;
+    const auto check = [&](double value, std::int64_t i,
+                           const char* operation, const char* field) {
+        const bool bad = !std::isfinite(value);
+        trace(sink, i, operation, field, bad);
+        if (bad) {
+            out.failure_code = "report_result_invalid";
+            out.failure_field = field;
+            out.failure_reason = "nonfinite";
+            throw Nonfinite{};
+        }
+        return value;
+    };
+    try {
+        check(rf, -1, "rf", sf);
+        check(ann, -1, "annualizer", sf);
+        if (deferred >= 0) check(kNaN, deferred, deferred_operation, sf);
+        check(sum, -1, "sum.final", sf);
+        const double mean = check(sum / static_cast<double>(m), -1, "mean", sf);
+        std::int64_t i = 0;
+        generate([&](double r) {
+            check(r, i, "return.second_pass", sf);
+            const double delta = check(r - mean, i, "delta", sf);
+            out.centered_sum = check(out.centered_sum + delta * delta,
+                                     i, "variance.add_square", sf);
+            const double d = std::min(0.0, check(r - rf, i, "downside.subtract", df));
+            out.downside_sum = check(out.downside_sum + d * d,
+                                     i, "downside.add_square", df);
+            ++i;
+        });
+        const double sd = check(std::sqrt(out.centered_sum / static_cast<double>(m - 1)),
+                                -1, "sample.sd", sf);
+        const double dd = check(std::sqrt(out.downside_sum / static_cast<double>(m)),
+                                -1, "downside.sd", df);
+        if (sd > 0.0)
+            out.sharpe_bar = check((mean - rf) / sd * ann, -1, "sharpe", sf);
+        if (dd > 0.0)
+            out.sortino_bar = check((mean - rf) / dd * ann, -1, "sortino", df);
+    } catch (const Nonfinite&) {
+    }
+}
+
+// The metric route stores only the binary64 return values. One pending batch
+// is both the append buffer and the readback window; no return cache or
+// numerical certificate is retained in the fold state.
+class PackedReturnStream {
+public:
+    static constexpr std::size_t kBatchDoubles =
+        report_sink::kScratchWindowBytes / sizeof(double);
+    static_assert(sizeof(double) == 8, "packed return stream requires binary64");
+    static_assert(kBatchDoubles == 8192, "return stream batch is one 64 KiB window");
+
+    PackedReturnStream()
+        : file_("", ::pineforge::detail::ScratchStore::curve) {}
+    PackedReturnStream(const PackedReturnStream&) = delete;
+    PackedReturnStream& operator=(const PackedReturnStream&) = delete;
+
+    void append(double value) {
+        constexpr auto max_doubles = static_cast<std::uint64_t>(
+            std::numeric_limits<std::int64_t>::max() / sizeof(double));
+        if (count_ >= max_doubles)
+            throw coded<std::overflow_error>(RunFailureCode::engine_invariant, {},
+                "ordered return scratch offset exhausted");
+        pending_[pending_count_++] = value;
+        ++count_;
+        if (pending_count_ == pending_.size()) flush();
+    }
+
+    template<class Emit>
+    void replay(Emit emit) const {
+        auto& stream = const_cast<PackedReturnStream&>(*this);
+        stream.flush();
+        if (stream.flushed_ != stream.count_)
+            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                "ordered return scratch extent differs from its append count");
+        std::uint64_t first = 0;
+        while (first < stream.count_) {
+            const auto remaining = stream.count_ - first;
+            const auto batch = static_cast<std::size_t>(
+                std::min<std::uint64_t>(remaining, kBatchDoubles));
+            stream.file_.read(stream.byte_offset(first), stream.pending_.data(),
+                              batch * sizeof(double));
+            for (std::size_t i = 0; i < batch; ++i)
+                emit(stream.pending_[i]);
+            first += batch;
+        }
+    }
+
+    std::uint64_t count() const noexcept { return count_; }
+
+private:
+    static std::int64_t byte_offset(std::uint64_t first) {
+        constexpr auto max_doubles = static_cast<std::uint64_t>(
+            std::numeric_limits<std::int64_t>::max() / sizeof(double));
+        if (first > max_doubles)
+            throw coded<std::overflow_error>(RunFailureCode::engine_invariant, {},
+                "ordered return scratch offset exhausted");
+        return static_cast<std::int64_t>(first * sizeof(double));
+    }
+
+    void flush() {
+        if (pending_count_ == 0) return;
+        file_.write(byte_offset(flushed_), pending_.data(),
+                    pending_count_ * sizeof(double));
+        flushed_ += pending_count_;
+        pending_count_ = 0;
+    }
+
+    mutable report_sink::ScratchFile file_;
+    mutable std::array<double, kBatchDoubles> pending_{};
+    std::uint64_t count_ = 0;
+    std::uint64_t flushed_ = 0;
+    mutable std::size_t pending_count_ = 0;
+};
+
+struct Prefix {
+    MetricsExtentV1 extent;
+    std::uint64_t m = 0;
+    double previous_equity = 0.0;
+    std::uint64_t point_witness = 1469598103934665603ULL;
+    PackedReturnStream returns;
+
+    void fold(const pf_equity_point_t& point, int month) {
+        if (extent.empty) {
+            extent.empty = 0;
+            extent.first_time_ms = point.time_ms;
+        } else if (previous_equity > 0.0) {
+            // This is deliberately the same expression and eligibility test
+            // as for_each_bar_return. The bytes are the legacy r_i values.
+            const double r = point.equity / previous_equity - 1.0;
+            returns.append(r);
+            ++m;
+        }
+        ++extent.count;
+        extent.last_time_ms = point.time_ms;
+        previous_equity = point.equity;
+        fold_detail::witness_word(point_witness, static_cast<std::uint64_t>(point.time_ms));
+        fold_detail::witness_double(point_witness, point.equity);
+        fold_detail::witness_double(point_witness, point.open_profit);
+        fold_detail::witness_word(point_witness, static_cast<std::uint64_t>(month));
+    }
+
+    template<class Emit>
+    void generate(Emit emit) const {
+        returns.replay(emit);
+    }
+};
+
+class Fold final : public StreamingEquityRatiosV1 {
+public:
+    Fold(MetricsStreamingConfigV1 config, MetricsExtentPlanV1 plan,
+         MetricsRatioTraceSinkV1 sink)
+        : config_(config), plan_(plan), sink_(sink) {}
+    MetricsStreamingStatusV1 append(const pf_equity_point_t& point, int month) override {
+        if (have_held_) prefix_.fold(held_, held_month_);
+        held_ = point;
+        held_month_ = month;
+        have_held_ = true;
+        return MetricsStreamingStatusV1::Ok;
+    }
+    MetricsStreamingStatusV1 amend_held(
+            std::int64_t index, const pf_equity_point_t& point, int month) override {
+        // Deliberately not assert(): this invariant also binds Release.
+        if (!have_held_ || index != prefix_.extent.count) std::abort();
+        held_ = point;
+        held_month_ = month;
+        return MetricsStreamingStatusV1::Ok;
+    }
+    std::size_t state_size_bytes() const override { return sizeof(*this); }
+    MetricsStreamingStatusV1 finish(
+            MetricsStreamingResultV1& out, MetricsRatioCurveV1 curve) const override {
+        auto actual = prefix_.extent;
+        if (have_held_) {
+            if (actual.empty) {
+                actual.empty = 0;
+                actual.first_time_ms = held_.time_ms;
+            }
+            ++actual.count;
+            actual.last_time_ms = held_.time_ms;
+        }
+        double tail_return = 0.0;
+        const bool tail_eligible = have_held_ && !prefix_.extent.empty
+            && prefix_.previous_equity > 0.0;
+        if (tail_eligible)
+            tail_return = held_.equity / prefix_.previous_equity - 1.0;
+        const std::uint64_t total_returns = prefix_.m
+            + (tail_eligible ? 1U : 0U);
+        const auto generate = [this, tail_eligible, tail_return](auto emit) {
+            prefix_.generate(emit);
+            if (tail_eligible) emit(tail_return);
+        };
+        out = {};
+        auto& receipt = out.receipt;
+        receipt.extent_plan = plan_;
+        receipt.actual_extent = actual;
+        receipt.actual_attempt = config_.attempt;
+        receipt.actual_input_generation = config_.input_generation;
+        receipt.actual_admitted_view = config_.admitted_view;
+        receipt.actual_spec_identity = config_.spec_identity;
+        receipt.authoritative_attempt = config_.attempt;
+        receipt.eligible_returns = total_returns;
+        receipt.metrics_needed = config_.metrics_needed;
+        receipt.streaming_sharpe = config_.streaming_sharpe;
+        receipt.mismatch_fields = fold_detail::extent_mismatch_v1(plan_, config_, actual);
+        receipt.witness = !plan_.present ? MetricsExtentWitnessV1::NotEvaluated
+            : receipt.mismatch_fields ? MetricsExtentWitnessV1::Mismatch
+                                      : MetricsExtentWitnessV1::Match;
+        const auto need = config_.metrics_needed;
+        const bool sharpe = (need & kMetricsNeedSharpeBarV1) != 0;
+        const bool sortino = (need & kMetricsNeedSortinoBarV1) != 0;
+        auto reason = MetricsRouteReasonV1::None;
+        if (need & kMetricsNeedCurveV1) reason = MetricsRouteReasonV1::CurveNeeded;
+        else if (need & kMetricsNeedReturnsV1) reason = MetricsRouteReasonV1::ReturnsNeeded;
+        else if (need & kMetricsNeedMonthlyRatiosV1) reason = MetricsRouteReasonV1::CurveNeeded;
+        else if (sharpe && config_.streaming_sharpe == StreamingSharpeV1::Off)
+            reason = MetricsRouteReasonV1::SharpeSwitchOff;
+        else if (sortino && !plan_.present) reason = MetricsRouteReasonV1::NoExtentProof;
+        else if (sortino && receipt.mismatch_fields) reason = MetricsRouteReasonV1::ExtentMismatch;
+        else if (sortino && config_.deterministic_replay != 1)
+            reason = MetricsRouteReasonV1::NoRecoveryProof;
+
+        double rf = kNaN, ann = kNaN;
+        const bool enabled = operands(actual, rf, ann) && total_returns >= 2;
+        if (reason == MetricsRouteReasonV1::None && enabled && (sharpe || sortino)) {
+            // The packed stream is the authoritative source. `legacy` makes
+            // the same two sequential passes and the same left-fold
+            // operations as the former vector generator.
+            legacy(generate, actual, out, sink_);
+        }
+        if (reason == MetricsRouteReasonV1::None) {
+            receipt.route = MetricsRatioRouteV1::Streaming;
+            receipt.route_reason = MetricsRouteReasonV1::OrderedReplay;
+            return MetricsStreamingStatusV1::Ok;
+        }
+        // Drop ALL speculative arithmetic, not just planned downside.
+        out.sharpe_bar = out.sortino_bar = kNaN;
+        out.centered_sum = out.downside_sum = 0.0;
+        receipt.route_reason = reason;
+        if (!config_.curve_available) {
+            receipt.route = MetricsRatioRouteV1::LegacyRerun;
+            // This is a request for the host's one authoritative replay,
+            // not a claim that this pure fold executed strategy callbacks.
+            receipt.replay_attempts = config_.deterministic_replay == 1 ? 1u : 0u;
+            receipt.authoritative_attempt = 0; // supplied by the resolving host
+            return MetricsStreamingStatusV1::Ok;
+        }
+        receipt.route = MetricsRatioRouteV1::LegacyActualCurve;
+        if (curve.read && curve.count >= 0) {
+            auto& actual = receipt.actual_extent;
+            actual = {};
+            actual.count = curve.count;
+            actual.empty = curve.count == 0;
+            if (curve.count > 0) {
+                actual.first_time_ms = curve.read(curve.context, 0).time_ms;
+                actual.last_time_ms = curve.read(curve.context, curve.count - 1).time_ms;
+            }
+            receipt.mismatch_fields = fold_detail::extent_mismatch_v1(plan_, config_, actual);
+            receipt.witness = !plan_.present ? MetricsExtentWitnessV1::NotEvaluated
+                : receipt.mismatch_fields ? MetricsExtentWitnessV1::Mismatch
+                                          : MetricsExtentWitnessV1::Match;
+            const auto generate = [&](auto emit) {
+                if (curve.count <= 1) return;
+                double previous = curve.read(curve.context, 0).equity;
+                for (std::int64_t i = 1; i < curve.count; ++i) {
+                    const double equity = curve.read(curve.context, i).equity;
+                    if (previous > 0.0) emit(equity / previous - 1.0);
+                    previous = equity;
+                }
+            };
+            legacy(generate, actual, out, sink_);
+        } else if (!(need & (kMetricsNeedCurveV1 | kMetricsNeedReturnsV1
+                             | kMetricsNeedMonthlyRatiosV1))) {
+            // The ordered stream is also an exact provider for a forced
+            // legacy bar-ratio route when no equity curve was supplied.
+            legacy(generate, actual, out, sink_);
+        } else {
+            // A caller promising a curve must supply its checked provider
+            // when a curve/returns/monthly result was requested.
+            return MetricsStreamingStatusV1::InvalidArgument;
+        }
+        return MetricsStreamingStatusV1::Ok;
+    }
+private:
+    MetricsStreamingConfigV1 config_;
+    MetricsExtentPlanV1 plan_;
+    MetricsRatioTraceSinkV1 sink_;
+    Prefix prefix_;
+    pf_equity_point_t held_{};
+    int held_month_ = 0;
+    bool have_held_ = false;
+};
+static_assert(sizeof(Fold) <= report_sink::kScratchWindowBytes + 4096,
+              "streaming-ratio state is one bounded scratch batch plus scalars");
+} // namespace streaming_v1
+
 }  // namespace
+
+MetricsStreamingStatusV1 make_streaming_equity_ratios_v1(
+        const MetricsStreamingConfigV1& config, const MetricsExtentPlanV1& plan,
+        MetricsRatioTraceSinkV1 sink, std::unique_ptr<StreamingEquityRatiosV1>& out) {
+    if ((config.streaming_sharpe != StreamingSharpeV1::Off
+         && config.streaming_sharpe != StreamingSharpeV1::On)
+        || (config.metrics_needed & ~kMetricsNeedAllV1))
+        return MetricsStreamingStatusV1::InvalidArgument;
+    out = std::make_unique<streaming_v1::Fold>(config, plan, sink);
+    return MetricsStreamingStatusV1::Ok;
+}
 
 namespace detail {
 
