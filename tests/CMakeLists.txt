@@ -1383,6 +1383,7 @@ list(APPEND TEST_SOURCES test_native_match_allocations)
 # Source-bound.
 list(APPEND TEST_SOURCES test_adapter_command_allocations)
 list(APPEND TEST_SOURCES test_adapter_exit_scratch)
+list(APPEND TEST_SOURCES test_reversal_exit_owner_gate)
 # R5 lane PERF-L1: the NativeStrategyHost reads -- the consumer read off the
 # engine's slot, the inline book aggregate, the running lifecycle view --
 # against the lookups they replaced, inside every host hook of randomized
