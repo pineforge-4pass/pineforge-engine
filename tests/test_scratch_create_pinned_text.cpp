@@ -1,7 +1,6 @@
-// Pin the create diagnostics from src/command_scratch_production.cpp and
-// src/report_scratch.cpp through real opens, with explicit paths.
-// No TMPDIR changes or injected failures. RED at e36e585064 is predicted,
-// not observed: compile and execute this unit only on the supervisor's box.
+// Pin the create diagnostics of the scratch files and the wrappers that open
+// them (command, report, id-pair and successor-roots scratch) through real
+// opens, with explicit paths. No TMPDIR changes or injected failures.
 #include "scratch_process_fixture.hpp"
 #include "../src/command_scratch_production.hpp"
 #include "../src/report_scratch.hpp"
