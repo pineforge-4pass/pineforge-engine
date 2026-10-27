@@ -5683,7 +5683,7 @@ bool PineExecutionAdapter::compute_exit_reservation(
             row->queued_exit = row->queued_exit && queued_exit;
         }
     };
-    for (const auto& handle : live_handles_) { ++dense_pending_work_.compute_exit_reservation_handles;
+    for (const auto& handle : live_row_index().reservation_rows(from_entry, current_position_cycle_)) { ++dense_pending_work_.compute_exit_reservation_handles;
         const auto found = placement_.find(handle.incarnation);
         if (found != placement_.end()) observe(found->second);
     }
@@ -6394,7 +6394,7 @@ bool PineExecutionAdapter::origin_is_pending(
 std::vector<std::size_t> PineExecutionAdapter::live_origin_positions(
         const CohortFacts& cohort) const {
     std::vector<std::size_t> positions;
-    for (const auto& handle : live_handles_) { ++dense_pending_work_.live_origin_handles; cohort.origins.append_positions_of(handle, positions); }
+    for (const auto position : live_row_index().origin_positions(cohort.handle.value, cohort.origins)) { ++dense_pending_work_.live_origin_handles; positions.push_back(position); }
     std::sort(positions.rbegin(), positions.rend());
     positions.erase(std::unique(positions.begin(), positions.end()), positions.end());
     return positions;
@@ -7562,28 +7562,28 @@ std::size_t PineExecutionAdapter::accepted_entries_in_cycle(
                 ++accepted_in_cycle;
         }
     }
-    for (const auto& handle : live_handles_) {
-        const auto placement = placement_.find(handle.incarnation);
-        // ab9714be pine_strategy_commands.cpp:446-464: remove_same_id_pending_orders excludes replaced id before pyramiding check
-        // TradingView counts a pending same-side MARKET entry against the
-        // cap and never a pending LIMIT entry (lane W8A-SIGSTATE-1 R-B,
-        // tests/fixtures/pyramiding_open_order).
-        if (placement != placement_.end() && placement->second.opening
-            && placement->second.source_id != id
-            && placement->second.is_long == is_long
-            && !pure_limit_entry(placement->second)) ++accepted_in_cycle;
-    }
+    const auto& index = live_row_index();
+    const int side = is_long ? 1 : 0;
+    const auto total = index.count(
+        detail::LiveClass::NonPureLimitOpening, {}, side);
+    const auto own = index.count(
+        detail::LiveClass::NonPureLimitOpening, detail::LiveKey::source(id), side);
+    accepted_in_cycle += total;
+    accepted_in_cycle -= own;
+    // NonPureLimitOpening covers every opening family in the old live term.
+    // The exact source subtraction preserves replacement and empty-id rules.
+    // The held-origin contribution above remains in its original traversal.
     return accepted_in_cycle;
 }
 
 bool PineExecutionAdapter::opposite_entry_opening_pending(bool is_long) const {
-    return std::any_of(live_handles_.begin(), live_handles_.end(),
-        [&](const native_order::RequestHandle& handle) { ++dense_pending_work_.entry_opposite_pending;
-            const auto existing = placement_.find(handle.incarnation);
-            return existing != placement_.end() && existing->second.opening
-                && existing->second.family == PineOrderFamily::Entry
-                && existing->second.is_long != is_long;
-        });
+    const int opposite = is_long ? 0 : 1;
+    return live_row_index().count(detail::LiveClass::EntryOpening, {}, opposite) != 0;
+    // The class query excludes missing placement rows by contract.
+    // Its side key is the exact opposite of the requested entry side.
+    // No pending container contributes to this helper.
+    // The diagnostic is intentionally not a live-book walk anymore.
+    // The query oracle remains enabled in assertion builds.
 }
 
 void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_price,
@@ -7674,21 +7674,21 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
         && detail::margin_rule_switches().close_first_admission;
     native_order::RequestHandle preceding_close_request{};
     if (source_point) {
-        for (auto it = live_handles_.rbegin(); it != live_handles_.rend(); ++it) { ++dense_pending_work_.entry_prior_closes;
-            const auto& handle = *it;
-            const auto prior = placement_.find(handle.incarnation);
-            if (prior == placement_.end()) continue;
-            const auto& row = prior->second;
-            if ((row.family == PineOrderFamily::Close
-                 || row.family == PineOrderFamily::CloseAll)
-                && !row.immediately
-                && row.placement_script_open_ms
-                    == source_point->decision.script_bar_open_ms) {
-                close_precedes_entry = true;
-                preceding_close_request = handle;
-                break;
-            }
+        const auto prior_closes = live_row_index().rows(
+            detail::LiveClass::NonImmediateClose,
+            detail::LiveKey::script_time(source_point->decision.script_bar_open_ms));
+        dense_pending_work_.entry_prior_closes += prior_closes.size();
+        if (!prior_closes.empty()) {
+            close_precedes_entry = true;
+            preceding_close_request = prior_closes.back();
         }
+        // rows() is forward ordered, so back() is the old reverse first match.
+        // The index's assertion oracle compares this exact selected sequence.
+        // Pending same-bar close quantities remain handled above.
+        // No placement payload is copied into the index result.
+        // The selected handle is still the canonical full handle.
+        // The close request continues through the existing admission path.
+        // The reverse selection remains last-wins.
     }
     limit_price = source_level_on_price_grid(
         limit_price, staged_.syminfo.mintick, value_field::entry_limit_price);
@@ -7974,7 +7974,7 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
     // A later source entry is outside a previously captured POOC global-exit
     // population. Keep the native close live, but stop advertising it as a
     // full-live dynamic reservation.
-    for (const auto& handle : live_handles_) { ++dense_pending_work_.entry_dynamic_exits;
+    for (const auto& handle : live_row_index().rows(detail::LiveClass::DynamicGlobalExit)) { ++dense_pending_work_.entry_dynamic_exits;
         const auto existing = placement_.find(handle.incarnation);
         if (existing != placement_.end()
             && existing->second.pooc_global_full_exit_dynamic_qty) {
@@ -7996,22 +7996,22 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
     // without that bound, every fill's recalculation under the magnifier and
     // calc_on_order_fills re-issued such an add past pyramiding=1: 85 lots on
     // one bar where TradingView's tape books none -- R5 lane PAR-ORDERS.)
-    const bool opposite_opening_in_close_pass = std::any_of(
-        live_handles_.begin(), live_handles_.end(),
-        [&](const native_order::RequestHandle& handle) { ++dense_pending_work_.entry_opposite_close_pass;
-            const auto existing = placement_.find(handle.incarnation);
-            if (existing == placement_.end()) return false;
-            const auto& row = existing->second;
-            if (!row.opening || row.family != PineOrderFamily::Entry
-                || row.is_long == is_long) {
-                return false;
-            }
-            const bool market = !finite_positive(row.exit_levels.limit)
-                && !finite_positive(row.exit_levels.stop);
-            return market
-                || (source_point
-                    && row.placement_script_open_ms == source_point->decision.script_bar_open_ms);
-        });
+    const int opposite_side = is_long ? 0 : 1;
+    const bool opposite_opening_in_close_pass =
+        live_row_index().count(detail::LiveClass::EntryOpeningU2, {}, opposite_side) != 0
+        || (source_point && live_row_index().count(
+            detail::LiveClass::EntryOpening,
+            detail::LiveKey::script_time(source_point->decision.script_bar_open_ms),
+            opposite_side) != 0);
+    // The two indexed populations are a Boolean union; duplicate membership
+    // cannot change the answer.
+    // U2 retains the old finite-positive distinction for both levels.
+    // The time bucket is queried only when the callback point exists.
+    // The native close pass below remains unchanged.
+    // No source/native priority is inferred here.
+    // The query oracle checks both class predicates independently.
+    // The existing pending command terms remain separate.
+    // This preserves the old context ordering.
     // ab9714be src/compat/pine/market_admission.cpp:33-37: the explicit
     // flat-pair scope (explicit_pair_scope) carries no commission term;
     // a commissioned pyramiding=2 pair keeps the gross transaction.
@@ -8032,10 +8032,10 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
     }
     const bool fixed_market_batch_candidate = fixed_unmargined_market_batch_scope()
         && !source_batch_mutated_
-        && std::none_of(live_handles_.begin(), live_handles_.end(), [&](const auto& handle) { ++dense_pending_work_.entry_batch_openings;
-            const auto prior = placement_.find(handle.incarnation);
-            return prior != placement_.end() && prior->second.opening;
-        })
+        && live_row_index().count(detail::LiveClass::Opening) == 0
+        // Opening count covers only found live placement rows.
+        // An empty class is the exact old none_of proof.
+        // Pending entry and delayed-order terms remain below.
         && std::none_of(pending_entries_.begin(), pending_entries_.end(),
             [](const auto& pending) { return pending.snapshot.opening; })
         && std::none_of(delayed_market_orders_.begin(), delayed_market_orders_.end(),
@@ -8112,16 +8112,16 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
         // entries the bar placed before this one, in place of the cycle's
         // entry count (open_ledger_records).
         if (const auto records = open_ledger_records(); PF_RARE(records.has_value())) {
-            std::size_t pending = 0;
-            for (const auto& handle : live_handles_) {
-                const auto placement = placement_.find(handle.incarnation);
-                if (placement != placement_.end() && placement->second.opening
-                    && placement->second.source_id != id
-                    && placement->second.is_long == is_long
-                    && !pure_limit_entry(placement->second)) {
-                    ++pending;
-                }
-            }
+            const int side = is_long ? 1 : 0;
+            // This is the same-side open-ledger replacement term.
+            // The exact-id subtraction preserves source replacement semantics.
+            // Held-origin records remain supplied by open_ledger_records().
+            // The query class includes all opening families from the old loop.
+            const auto pending = live_row_index().count(
+                detail::LiveClass::NonPureLimitOpening, {}, side)
+                - live_row_index().count(
+                    detail::LiveClass::NonPureLimitOpening,
+                    detail::LiveKey::source(id), side);
             accepted_in_cycle = *records + pending;
         }
         // Pine's cap is a monotone entry-incarnation count for the current
@@ -9558,7 +9558,7 @@ void PineExecutionAdapter::submit_entry_with_policy(
             // pre-exit add eligible to grow the finite reservation at fill,
             // but close the open-population marker now so later entries never
             // acquire that reservation merely by arriving before the match.
-            for (const auto& handle : live_handles_) { ++dense_pending_work_.entry_reservation_captures;
+            for (const auto& handle : live_row_index().before_command(detail::LiveClass::ReservationCapture, entry_sequence)) { ++dense_pending_work_.entry_reservation_captures;
                 if (handle == *accepted) continue;
                 const auto existing = placement_.find(handle.incarnation);
                 if (existing == placement_.end()) continue;
@@ -11185,12 +11185,12 @@ bool PineExecutionAdapter::priced_entry_order_working(const SourceId* id) const 
         if (entry_of(pending.snapshot)) return true;
     for (const auto& pending : pending_same_bar_commands_)
         if (entry_of(pending.snapshot)) return true;
-    for (const auto& handle : live_handles_) {
-        ++work.live_handle_iterations;
-        ++work.placement_find_calls;
-        const auto row = placement_.find(handle.incarnation);
-        if (row != placement_.end() && entry_of(row->second)) return true;
-    }
+    const auto key = id == nullptr ? detail::LiveKey{} : detail::LiveKey::source(*id);
+    if (live_row_index().max_price(detail::LiveClass::EntryLikeOpening,
+                                    detail::LivePrice::Limit, key)
+            || live_row_index().max_price(detail::LiveClass::EntryLikeOpening,
+                                          detail::LivePrice::Stop, key)) return true;
+    // Positive finite source prices are the only indexed price members.
     return false;
 }
 
@@ -11215,12 +11215,12 @@ bool PineExecutionAdapter::entry_order_working(const SourceId* id) const {
         if (entry_of(pending.snapshot)) return true;
     for (const auto& delayed : delayed_market_orders_)
         if (entry_of(delayed.snapshot)) return true;
-    for (const auto& handle : live_handles_) {
-        ++work.live_handle_iterations;
-        ++work.placement_find_calls;
-        const auto row = placement_.find(handle.incarnation);
-        if (row != placement_.end() && entry_of(row->second)) return true;
-    }
+    const auto key = id == nullptr ? detail::LiveKey{} : detail::LiveKey::source(*id);
+    if (live_row_index().count(detail::LiveClass::EntryLikeOpening, key) != 0)
+        return true;
+    // Pending collections above retain their original wildcard behavior.
+    // The exact source key keeps an empty id distinct from the wildcard.
+    // The index query has already compared the old live-row predicate.
     return false;
 }
 
@@ -11253,12 +11253,12 @@ bool PineExecutionAdapter::standing_exit(const SourceId& exit_id,
         return exit && !row.void_issue && row.source_id == exit_id
             && row.from_entry == from_entry;
     };
-    for (const auto& handle : live_handles_) {
-        ++work.live_handle_iterations;
-        ++work.placement_find_calls;
-        const auto row = placement_.find(handle.incarnation);
-        if (row != placement_.end() && standing(row->second)) return true;
-    }
+    if (live_row_index().count(
+            detail::LiveClass::ReservationExit,
+            detail::LiveKey::pair(exit_id, from_entry)) != 0) return true;
+    // Bracket, COOF, delayed and relative pending collections remain below.
+    // The pair key is exact for both source and from-entry.
+    // Void live exits are excluded by ReservationExit.
     for (const auto& pending : pending_bracket_legs_)
         if (standing(pending.snapshot)) return true;
     for (const auto& pending : pending_coof_requests_)
@@ -11738,14 +11738,14 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
     for (const auto& parent : pending_coof_requests_)
         observe_staged_parent(parent.snapshot);
     const auto cohort = cohorts_by_id_.find(from_entry);
-    for (const auto& handle : live_handles_) { ++dense_pending_work_.exit_staged_parents;
-        const auto parent = placement_.find(handle.incarnation);
-        const bool already_opened = cohort != cohorts_by_id_.end()
-            && std::find(cohort->second.opened.begin(), cohort->second.opened.end(), handle)
-                != cohort->second.opened.end();
-        if (parent != placement_.end() && !already_opened)
-            observe_staged_parent(parent->second);
-    }
+    if (!parent_filled_this_cycle && !(from_entry.empty() && physical.signed_units != 0.0 && detail::exit_binding_rule_switches().global_exit_binds_held_position)) {
+        const auto parents = live_row_index().rows(detail::LiveClass::EntryOpening, from_entry.empty() ? detail::LiveKey{} : detail::LiveKey::source(from_entry));
+        dense_pending_work_.exit_staged_parents += parents.size();
+        for (const auto& handle : parents) {
+            const auto parent = placement_.find(handle.incarnation); const bool already_opened = cohort != cohorts_by_id_.end() && std::find(cohort->second.opened.begin(), cohort->second.opened.end(), handle) != cohort->second.opened.end();
+            if (parent != placement_.end() && !already_opened) observe_staged_parent(parent->second);
+            // The returned rows retain forward live order and full handles.
+        } }
     // ab9714be src/source/pine_fills.cpp:4560-4564: a pending same-id origin
     // never defers the levels once the id has filled in this cycle.
     if (cohort != cohorts_by_id_.end() && !parent_filled_this_cycle) {
@@ -12044,13 +12044,13 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
     for (const auto& pending : pending_entries_)
         binds_pending_reversal_entry = binds_pending_reversal_entry
             || pending_default_reversal_parent(pending.snapshot);
-    for (const auto& handle : live_handles_) { ++dense_pending_work_.exit_reversal_parents;
-        const auto found = placement_.find(handle.incarnation);
-        if (found != placement_.end()
-            && pending_default_reversal_parent(found->second)) {
-            binds_pending_reversal_entry = true;
-        }
-    }
+    if (!binds_pending_reversal_entry && physical.signed_units != 0.0)
+        binds_pending_reversal_entry = live_row_index().count(
+            detail::LiveClass::DefaultEntryOpening,
+            detail::LiveKey::source(from_entry),
+            physical.signed_units > 0.0 ? 0 : 1) != 0;
+    // The empty from-entry is an exact source key in this branch.
+    // Physical flatness and pending-container observations stay above.
     double reserved_exit_qty = kNaN;
     double pending_parent_units = 0.0;
     const auto reservation_point = detail::callback_point(require_host());
@@ -12067,9 +12067,9 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             ? std::abs(parent.requested_qty) : parent.frozen_market_own_units;
         if (finite_positive(units)) pending_parent_units += units;
     };
-    for (const auto& handle : live_handles_) { ++dense_pending_work_.exit_reservation_parents;
-        const auto parent = placement_.find(handle.incarnation);
-        if (parent != placement_.end()) observe_pending_parent(parent->second);
+    if (reservation_point) {
+        const auto parents = live_row_index().rows(detail::LiveClass::ReservationParent, detail::LiveKey::source_time(from_entry, reservation_point->decision.script_bar_open_ms)); dense_pending_work_.exit_reservation_parents += parents.size(); for (const auto& handle : parents) { const auto parent = placement_.find(handle.incarnation); if (parent != placement_.end()) observe_pending_parent(parent->second); }
+        // The returned positive-unit rows are added in forward live order.
     }
     for (const auto& parent : pending_entries_) observe_pending_parent(parent.snapshot);
     // TradingView's default strategy.exit(from_entry) under FIFO closes the
@@ -12525,13 +12525,13 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             const double source_position = std::abs(detail::run_position(require_host()).signed_units);
             if (std::isfinite(reserved_exit_qty)) {
                 snapshot.projection_remaining_qty = reserved_exit_qty;
-                const bool foreign_pending_opening = std::any_of(
-                    live_handles_.begin(), live_handles_.end(), [&](const auto& handle) { ++dense_pending_work_.exit_foreign_pending_handles;
-                        const auto candidate = placement_.find(handle.incarnation);
-                        return candidate != placement_.end()
-                            && candidate->second.opening
-                            && candidate->second.source_id != from_entry;
-                    }) || std::any_of(
+                const bool foreign_pending_opening =
+                    // The live count difference is the original foreign-opening
+                    // Boolean; pending entries remain a separate contribution.
+                    live_row_index().count(detail::LiveClass::Opening)
+                        != live_row_index().count(
+                            detail::LiveClass::Opening, detail::LiveKey::source(from_entry))
+                    || std::any_of(
                     pending_entries_.begin(), pending_entries_.end(),
                     [&](const PendingEntry& candidate) {
                         return candidate.snapshot.opening
@@ -12782,13 +12782,13 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                         break;
                     }
                 }
-                for (const auto& live : live_handles_) { ++dense_pending_work_.exit_live_parents;
-                    const auto parent = placement_.find(live.incarnation);
-                    if (parent == placement_.end()) continue;
-                    if (!matches_parent(parent->second)) continue;
-                    has_pending_parent = true;
-                    break;
-                }
+                if (!has_pending_parent)
+                    has_pending_parent = live_row_index().count(
+                        detail::LiveClass::EntryOpening,
+                        snapshot.from_entry.empty()
+                            ? detail::LiveKey{} : detail::LiveKey::source(snapshot.from_entry)) != 0;
+                // Pending staged entries were checked first, as before.
+                // The live count preserves empty-from-entry wildcard behavior.
                 if (has_pending_parent
                     && (existing_leg != live_by_source_key_.end()
                         || snapshot.from_entry.empty())) {
@@ -12940,8 +12940,8 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             std::vector<std::size_t> positions;
             if (const auto* zero = roster.positions_of(0))
                 positions.insert(positions.end(), zero->begin(), zero->end());
-            for (const auto& live : live_handles_) { ++dense_pending_work_.exit_origin_handles;
-                if (origin_is_pending(live)) roster.append_positions_of(live, positions); }
+            for (const auto position : live_row_index().origin_positions(found->second.handle.value, roster)) { ++dense_pending_work_.exit_origin_handles;
+                if (origin_is_pending(roster[position])) positions.push_back(position); }
             for (const auto& opened : found->second.opened)
                 roster.append_positions_of(opened, positions);
             std::sort(positions.begin(), positions.end());
@@ -13177,11 +13177,11 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         };
         if (drop_limit || drop_stop) {
             std::vector<native_order::RequestHandle> withdrawn;
-            for (const auto& handle : live_handles_) { ++dense_pending_work_.exit_drop_legs;
-                const auto found = placement_.find(handle.incarnation);
-                if (found != placement_.end() && dropped(found->second))
-                    withdrawn.push_back(handle);
-            }
+            std::vector<std::pair<std::uint64_t, native_order::RequestHandle>> ordered; std::unordered_map<native_order::RequestHandle, std::size_t, detail::LiveHandleHash> occurrences;
+            const auto append = [&](const auto& rows) { for (const auto& handle : rows) { const auto orders = live_handles_.orders(handle); ordered.emplace_back(orders[occurrences[handle]++], handle); } };
+            if (drop_limit) append(live_row_index().rows(detail::LiveClass::DropLimit, detail::LiveKey::pair(exit_id, from_entry)));
+            if (drop_stop) append(live_row_index().rows(detail::LiveClass::DropStop, detail::LiveKey::pair(exit_id, from_entry)));
+            std::sort(ordered.begin(), ordered.end(), [](const auto& left, const auto& right) { return left.first < right.first; }); withdrawn.reserve(ordered.size()); for (const auto& row : ordered) withdrawn.push_back(row.second); dense_pending_work_.exit_drop_legs += withdrawn.size();
             for (const auto& handle : withdrawn) {
                 const auto result = require_host().cancel(handle);
                 if (result.status == native_order::CancelStatus::Cancelled) retire(handle);

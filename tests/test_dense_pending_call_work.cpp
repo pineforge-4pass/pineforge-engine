@@ -158,10 +158,17 @@ Measurement measure(const char* script, int period, int n) {
     require(host.last_error().empty(), host.last_error().c_str());
     require(host.source_bars() == n, "the public run must evaluate every source bar");
     const Measurement result{host.work(), host.dense_work()};
+    const auto& cohort_work = host.cohort_table_work();
     visit_counters(result, [&](const std::string& name, std::uint64_t value) {
         std::printf("CR391B %s N=%d %s=%llu\n", script, n, name.c_str(),
                     static_cast<unsigned long long>(value));
     });
+    std::printf("CR391B %s N=%d cohort_table rows_restored=%llu rows_spilled=%llu "
+                "iterated_rows=%llu\n",
+                script, n,
+                static_cast<unsigned long long>(cohort_work.rows_restored),
+                static_cast<unsigned long long>(cohort_work.rows_spilled),
+                static_cast<unsigned long long>(cohort_work.iterated_rows));
     std::fflush(stdout);
     if (period == 0) {
         require(host.trade_count() == 0, "unreachable entry limits must produce zero trades");
@@ -171,6 +178,30 @@ Measurement measure(const char* script, int period, int n) {
                 "dense pending entry count after the run must equal N");
     }
     return result;
+}
+
+bool piece_a_counter(const std::string& name) {
+    return name == "priced_entry_order_working.live_handle_iterations"
+        || name == "priced_entry_order_working.placement_find_calls"
+        || name == "entry_order_working.live_handle_iterations"
+        || name == "entry_order_working.placement_find_calls"
+        || name == "standing_exit.live_handle_iterations"
+        || name == "standing_exit.placement_find_calls"
+        || name == "live_origin_positions.handles"
+        || name == "place_entry.prior_closes"
+        || name == "place_entry.dynamic_exits"
+        || name == "opposite_entry_opening_pending.handles"
+        || name == "place_entry.opposite_close_pass"
+        || name == "place_entry.batch_openings"
+        || name == "submit_entry_with_policy.reservation_captures"
+        || name == "exit.staged_parents"
+        || name == "exit.reversal_parents"
+        || name == "exit.reservation_parents"
+        || name == "exit.live_parents"
+        || name == "exit.origin_handles"
+        || name == "exit.drop_legs"
+        || name == "exit.foreign_pending_openings"
+        || name == "compute_exit_reservation.handles";
 }
 
 void dense_pending_call_work() {
@@ -194,10 +225,11 @@ void dense_pending_call_work() {
         else
             std::printf("CR391B ratio %s %.2f\n", name.c_str(),
                         static_cast<double>(large) / static_cast<double>(small));
-        // Infrastructure only: doubling the commands permits 2.5x work.
-        // These four counts include the two retirement walks; zero/positive
-        // must fail as well. The other conversion lanes own their bounds.
-        if ((name == "remember.handles" || name == "origin_is_pending.handles"
+        // Doubling the commands permits 2.5x work. A converted counter is
+        // checked even when its smaller run is zero: zero/positive is a
+        // failure, not a skipped assertion.
+        if ((piece_a_counter(name)
+             || name == "remember.handles" || name == "origin_is_pending.handles"
              || name == "retire.handles" || name == "retire.source_keys")
             && large * 2 > small * 5)
             throw std::runtime_error("dense counter " + name + " exceeds 2.5x");

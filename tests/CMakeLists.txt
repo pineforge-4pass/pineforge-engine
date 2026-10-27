@@ -7711,3 +7711,9 @@ endforeach()
 if(PINEFORGE_BUILD_SOURCE_LAYER)
     add_custom_target(pineforge_pr_smoke DEPENDS ${PINEFORGE_PR_FAST_TESTS})
 endif()
+
+# CR-391B-A: public-run variants for indexed per-call selections.
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    list(APPEND TEST_SOURCES test_s4e391b_a_variants)
+    pineforge_add_unit_test(test_s4e391b_a_variants)
+endif()
