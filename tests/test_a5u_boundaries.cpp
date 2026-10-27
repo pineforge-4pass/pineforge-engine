@@ -6,6 +6,7 @@
 #include <array>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <vector>
 
 namespace {
@@ -94,6 +95,66 @@ void schema_checked_reads() {
     }
     graph.close();
     require(fixture.store->stats().bytes_live == 0, "schema read workload retained nodes");
+}
+
+template<class F>
+void invariant_error(const char* reason, F&& operation) {
+    bool threw = false;
+    try {
+        operation();
+    } catch (const pineforge::coded<std::logic_error>& error) {
+        require(error.run_failure_code() == pineforge::RunFailureCode::engine_invariant &&
+                    std::strcmp(error.what(), reason) == 0,
+                "schema read reported the wrong typed failure");
+        threw = true;
+    }
+    require(threw, "invalid schema read did not stop");
+}
+
+void schema_failure_diagnostics() {
+    a5u_test::StoreFixture fixture;
+    UdtGraph graph(*fixture.store);
+    const Id leaf = graph.make(0);
+    const std::array<Id, 2> children{{leaf, leaf}};
+    // Check both the staged and streaming paths. A smaller object with a
+    // valid header belongs to its own schema; it is not a truncated object
+    // of the requested schema.
+    for (const std::size_t size : {std::size_t{19}, 3 * std::size_t{a5u_test::kChunkBytes} + 13}) {
+        const UdtType requested{size * 17, size, children.size()};
+        auto actual = bytes_for(size, size * 131);
+        std::array<Id, 2> actual_children{{0, leaf}};
+        const auto unchanged_bytes = actual;
+        const auto unchanged_children = actual_children;
+        for (const std::size_t stored_size : {std::size_t{1}, size + 1}) {
+            const auto stored_bytes = bytes_for(stored_size, stored_size * 29);
+            const UdtType stored_type{requested.tag + 1, stored_size, children.size()};
+            const Id object = graph.make(stored_type, stored_bytes.data(), children.data());
+            const auto before = graph.hash_state();
+            invariant_error("UDT schema mismatch", [&] {
+                graph.read_object(object, requested, actual.data(), actual_children.data());
+            });
+            require(actual == unchanged_bytes && actual_children == unchanged_children &&
+                        graph.hash_state() == before,
+                    "wrong-schema read changed its destinations or graph state");
+        }
+
+        const auto fields = bytes_for(size, requested.tag);
+        const Id truncated = graph.make(requested, fields.data(), children.data());
+        // Keep the complete nine-word header but remove its declared body.
+        // This is genuinely short for its own schema, unlike the ids above.
+        constexpr std::size_t record_bytes = 9 * sizeof(std::uint64_t);
+        require(fixture.store->resize(truncated, record_bytes), "truncate the declared object body");
+        invariant_error("UDT short record read", [&] {
+            graph.read_object(truncated, requested, actual.data(), actual_children.data());
+        });
+        require(actual == unchanged_bytes && actual_children == unchanged_children,
+                "short staged body changed a destination prefix");
+        // Restore the declared extent before close() traverses the record.
+        require(fixture.store->resize(truncated, record_bytes + size + sizeof(children)),
+                "restore the declared object extent");
+    }
+    graph.close();
+    require(fixture.store->stats().bytes_live == 0, "schema diagnostic rows retained graph state");
 }
 
 void overlapping_payload_and_edge_moves() {
@@ -292,6 +353,7 @@ void liveness_during_backing_failure() {
 int main() {
     try {
         schema_checked_reads();
+        schema_failure_diagnostics();
         overlapping_payload_and_edge_moves();
         liveness_during_backing_failure();
         std::puts("UDT schema reads, payload/edge moves, rollback and backing-read failures reached");

@@ -160,9 +160,6 @@ void UdtGraph::validate_child(Id child) const {
 Id UdtGraph::make_node(const UdtType& type, const void* payload, const Id* children,
                        std::uint64_t flags) {
     const std::uint64_t total = object_bytes(type.payload_bytes, type.edge_count);
-    if (children != nullptr) {
-        for (std::uint64_t i = 0; i < type.edge_count; ++i) validate_child(children[i]);
-    }
     Node n;
     n.owner = control_;
     n.next = get<Control>(control_).head;
@@ -201,6 +198,9 @@ Id UdtGraph::make(const UdtType& type) { return make(type, nullptr, nullptr); }
 
 Id UdtGraph::make(const UdtType& type, const void* payload, const Id* children) {
     (void)object_bytes(type.payload_bytes, type.edge_count);
+    if (children != nullptr) {
+        for (std::uint64_t i = 0; i < type.edge_count; ++i) validate_child(children[i]);
+    }
     auto transaction = store_.begin();
     const Id id = make_node(type, payload, children, 0);
     transaction->commit();
@@ -212,6 +212,7 @@ std::uint64_t UdtGraph::payload_size(Id id) const { return node(id).payload_byte
 std::uint64_t UdtGraph::edge_count(Id id) const { return node(id).edge_count; }
 
 Id UdtGraph::root(Id value) {
+    validate_child(value);
     auto transaction = store_.begin();
     const Id id = make_node(UdtType{0, 0, 1}, nullptr, &value, kRoot | kRegistered);
     transaction->commit();
@@ -302,16 +303,16 @@ void UdtGraph::read_object(Id id, const UdtType& type, void* payload, Id* childr
     if (id == kNullId) pine_na_stop("udt_object", "Cannot access a field of an na UDT object.");
     const std::uint64_t total = object_bytes(type.payload_bytes, type.edge_count);
     std::array<unsigned char, kStageBytes> stage{};
+    const auto staged = static_cast<std::size_t>(std::min<std::uint64_t>(total, stage.size()));
+    const auto received = store_.read(id, 0, stage.data(), staged);
+    // A short body can still contain the complete header of another schema.
+    if (received < sizeof(Node)) fail("UDT short record read");
     Node n;
-    if (total <= stage.size()) {
-        read_exact(id, 0, stage.data(), total);
-        std::memcpy(&n, stage.data(), sizeof(Node));
-        if (n.self != id || n.owner != control_) fail("UDT id is not a node of this graph");
-    } else {
-        n = node(id);
-    }
+    std::memcpy(&n, stage.data(), sizeof(Node));
+    if (n.self != id || n.owner != control_) fail("UDT id is not a node of this graph");
     if (n.type != type.tag || n.payload_bytes != type.payload_bytes || n.edge_count != type.edge_count)
         fail("UDT schema mismatch");
+    if (received != staged) fail("UDT short record read");
     if (total <= stage.size()) {
         if (payload != nullptr && n.payload_bytes != 0)
             std::memcpy(payload, stage.data() + sizeof(Node), static_cast<std::size_t>(n.payload_bytes));

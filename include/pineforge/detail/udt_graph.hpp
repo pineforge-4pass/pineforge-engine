@@ -25,6 +25,13 @@
 // open additional handles. begin() explicitly requested by a caller counts
 // as another caller handle. Scopes flatten; joining is not a savepoint.
 //
+// After a graph call fails inside its joined scope, the only valid next
+// operation is rollback of the outer scope. copy_deep() can leave copy/work
+// links set until that rollback; do not retry it in the same scope, where a
+// stale copy link still names a clone. Child validation in make()/root()
+// runs before joining: a rejected argument leaves the caller's scope usable
+// unless validation encounters a backing failure.
+//
 // Reclamation requires compiler safe points. If at most F nodes are made
 // per bar, collection is at most K bars apart, and L nodes survive each
 // collection (roots included), the directory has at most L + F*K nodes
@@ -118,7 +125,7 @@ public:
 
     // A node with zero field bytes and na edges, or with the given initial
     // field bytes / edge ids (either pointer may be null). Children are
-    // validated before anything is written.
+    // validated before opening a transaction or writing anything.
     Id make(std::uint64_t payload_bytes, std::uint64_t edge_count = 0);
     Id make(const UdtType&);
     Id make(const UdtType&, const void* payload, const Id* children);
@@ -146,7 +153,8 @@ public:
     // Read a whole generated schema (tag AND both extents must match).
     // Either output may be null to omit it. Small records use one fixed
     // staging buffer and one Store read; larger records stream to the
-    // caller's buffers. A schema mismatch changes neither output.
+    // caller's buffers. Header identity and schema are checked before a
+    // short body is reported. A schema mismatch changes neither output.
     void read_object(Id, const UdtType&, void* payload, Id* children) const;
     template<class T>
     T scalar(Id id, std::uint64_t off = 0) const {
@@ -182,8 +190,8 @@ private:
         std::uint64_t flags = 0;
         std::uint64_t payload_bytes = 0;
         std::uint64_t edge_count = 0;
-        Id copy = 0; // copy_deep source -> clone link; zero at call boundaries
-        Id work = 0; // collect/copy_deep work list; zero at call boundaries
+        Id copy = 0; // copy_deep source -> clone link; zero after successful calls
+        Id work = 0; // collect/copy_deep work list; zero after successful calls
     };
     static_assert(sizeof(Control) == 8 && sizeof(Node) == 72, "fixed graph records");
     static_assert(std::is_trivially_copyable_v<Node>, "records are stored as bytes");
