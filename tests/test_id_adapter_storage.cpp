@@ -1159,9 +1159,7 @@ void dense_operation_growth_and_instrumentation(bool jailed) {
     // retire_origin_prefixes Iterator pass below.
     require(walk_operations[1] * 2 <= walk_operations[0] * 5,
             "doubling dense pending cohorts exceeds 2.5x fixed cohort walks");
-    // EXPECTED_RED_UNTIL_RETIRE_DIRTY_SET: iterated_rows measures the known
-    // Theta(R) retire pass. Print the full ratio and keep it unasserted until
-    // that pass has a dirty-set implementation.
+    // Bound cohort iteration growth when pending entry ids accumulate.
     std::printf("CR347 profile=%s dense_full_ratio=%llu/%llu fixed_walk_ratio=%llu/%llu "
                 "iterated_rows_N=%llu iterated_rows_2N=%llu\n",
         jailed ? "jailed" : "unjailed",
@@ -1171,6 +1169,9 @@ void dense_operation_growth_and_instrumentation(bool jailed) {
         static_cast<unsigned long long>(walk_operations[0]),
         static_cast<unsigned long long>(operations[0] - walk_operations[0]),
         static_cast<unsigned long long>(operations[1] - walk_operations[1]));
+    require((operations[1] - walk_operations[1]) * 2
+                <= (operations[0] - walk_operations[0]) * 5,
+            "doubling dense pending cohorts exceeds 2.5x iterated rows");
 }
 
 void unique_entry_close_all_cohort_work_scaling() {
