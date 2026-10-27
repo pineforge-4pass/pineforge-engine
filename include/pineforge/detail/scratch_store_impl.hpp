@@ -1294,6 +1294,28 @@ public:
         return st;
     }
 
+    Status reset_empty() noexcept {
+        if (open_status_ != Status::ok || active_ || poisoned_ || busy_ != 0
+            || cur_.record_count != 0) {
+            return Status::programming_error;
+        }
+        const auto next_handle = cur_.next_handle;
+        const Status st = backing_->reset();
+        if (st != Status::ok) {
+            note_backing_failure(st);
+            return st;
+        }
+        invalidate_all();
+        cur_ = Super{};
+        cur_.next_handle = next_handle;
+        snap_ = cur_;
+        tick_ = 0;
+        carried_failure_.reset();
+        backing_io_failed_ = false;
+        tainted_slot_ = kNoSlot;
+        return Status::ok;
+    }
+
     // ---- mutations ----------------------------------------------------------------
 
     Status put_impl(const ScratchByteSource& key, const ScratchByteSource& value, std::uint64_t& result) noexcept {
@@ -1792,6 +1814,9 @@ inline ScratchStatus CommandScratchStore::commit(ScratchDurability durability) n
 }
 inline ScratchStatus CommandScratchStore::rollback() noexcept {
     return state_ == nullptr ? ScratchStatus::programming_error : state_->rollback();
+}
+inline ScratchStatus CommandScratchStore::reset_empty() noexcept {
+    return state_ == nullptr ? ScratchStatus::programming_error : state_->reset_empty();
 }
 inline ScratchStatus CommandScratchStore::point(ScratchHandle handle, ScratchRecordInfo& info) const noexcept {
     return state_ == nullptr ? ScratchStatus::programming_error : state_->point(handle, info);

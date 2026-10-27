@@ -105,6 +105,11 @@ public:
     // until the next operation/destruction; inspect before cleanup I/O.
     // Disk/test backings retain their existing status-only behavior.
     virtual const ReportScratchIoError* carried_failure() const noexcept { return nullptr; }
+    // Drop the whole physical region after the owning logical store is empty.
+    // A compatibility backing may keep its existing extent and answer success;
+    // production backings override this to release their region. This is
+    // separate from page I/O accounting.
+    virtual ScratchStatus reset() noexcept { return ScratchStatus::ok; }
 
     ScratchStatus read_page(ScratchPageId id, ScratchBuffer destination) const noexcept {
         const auto status = valid_page(id, destination.data, destination.size)
@@ -175,6 +180,10 @@ public:
         return page_size() ? storage_.size / page_size() : 0;
     }
     std::uint64_t page_count() const noexcept override { return extent_; }
+    ScratchStatus reset() noexcept override {
+        extent_ = 0;
+        return status();
+    }
 
 protected:
     ScratchStatus do_read_page(ScratchPageId id, ScratchBuffer destination) const noexcept override {

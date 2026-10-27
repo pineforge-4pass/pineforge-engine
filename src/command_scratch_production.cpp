@@ -147,6 +147,13 @@ public:
         if (budget_) budget_->release(extent_ * static_cast<std::uint64_t>(page_size()));
     }
     std::uint64_t page_count() const noexcept override { return extent_; }
+    ScratchStatus reset() noexcept override {
+        failure_.reset();
+        if (budget_) budget_->release(extent_ * static_cast<std::uint64_t>(page_size()));
+        extent_ = 0;
+        file_.clear();
+        return ScratchStatus::ok;
+    }
     std::optional<std::uint64_t> arena_capacity_bytes() const noexcept override { return capacity_; }
     const ReportScratchIoError* carried_failure() const noexcept override {
         return failure_ ? &*failure_ : nullptr;
@@ -162,6 +169,16 @@ protected:
     }
     ScratchStatus do_write_page(ScratchPageId id, ScratchBytes source) noexcept override {
         failure_.reset();
+        if (!file_.opened()) {
+            try {
+                file_.open_bounded("pineforge-command", capacity_);
+            } catch (const ReportScratchIoError& error) {
+                failure_ = error;
+                return ScratchStatus::io_error;
+            } catch (...) {
+                return ScratchStatus::io_error;
+            }
+        }
         const auto size = static_cast<std::uint64_t>(page_size());
         const auto limit = static_cast<std::uint64_t>(std::numeric_limits<off_t>::max());
         if (id >= limit / size) return ScratchStatus::programming_error;
@@ -267,6 +284,18 @@ public:
     }
 
     std::uint64_t page_count() const noexcept override { return extent_; }
+    ScratchStatus reset() noexcept override {
+        if (fd_ < 0) {
+            extent_ = 0;
+            return ScratchStatus::ok;
+        }
+        int result;
+        do { result = ::ftruncate(fd_, 0); } while (result < 0 && errno == EINTR);
+        if (result < 0) return command_scratch_io_status(errno);
+        if (budget_) budget_->release(extent_ * static_cast<std::uint64_t>(page_size()));
+        extent_ = 0;
+        return ScratchStatus::ok;
+    }
 
 protected:
     ScratchStatus do_read_page(ScratchPageId id, ScratchBuffer destination) const noexcept override {

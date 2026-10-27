@@ -103,6 +103,29 @@ journal caps give a per-engine definition plateau of 1,890,980 bytes (about
 1.9 MB) on GCC 13.4 on x86-64. That figure moves with definition size and is not
 a bound on total engine memory.
 
+### Event-driven retention
+
+The default Window event record retires acknowledged command rows, and a
+callback-only host retires them at each script-bar boundary. It keeps no
+driver point or account row. Commands retains the whole command journal and
+40-byte `NativeAccountObservation` rows; Full additionally retains one
+`NativeDriverPoint` per driver point. A command row is variable-width. These
+two modes are O(events) because their `native_events()` contract promises
+historical readback; no arena bound is claimed for them.
+
+Source exit versions use a 32-byte key plus a variable serialized placement or
+request payload. A completed exit-scratch scope erases its rows and, when the
+store is empty, releases its physical command-scratch region while preserving
+the logical next-handle high water. The exit-phase sequence stores one byte per
+live mutable trade row; consuming its complete prefix releases its physical
+region.
+
+The trade ledger keeps a 168-byte descriptor plus four variable strings per
+closed trade. Its report-sink path writes rows and maintains summary folds, but
+the closed-trade API and source state hash still read sealed rows. Until that
+reader contract changes, the ledger remains O(closed trades) in its scratch
+backing and is reported as an unresolved event-driven term.
+
 ## Scratch bytes: the formula and a worked example {#memory_formula}
 
 The scratch backing of a run is a sum of terms, one per store, each a count

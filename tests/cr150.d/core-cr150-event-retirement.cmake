@@ -1,0 +1,3 @@
+list(APPEND TEST_SOURCES test_event_retirement)
+pineforge_add_unit_test(test_event_retirement)
+set_tests_properties(test_event_retirement PROPERTIES LABELS "memory")

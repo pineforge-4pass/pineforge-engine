@@ -94,7 +94,20 @@ public:
         if (first.owner_ != this || last.owner_ != this
             || first.index_ != 0 || last.index_ > size())
             throw std::logic_error("scratch sequence erase is not a prefix");
-        base_ += last.index_;
+        flush();
+        const auto retired = last.index_;
+        if (retired == size()) {
+            // Once the whole logical sequence has been consumed, no caller
+            // can read its old positions: all public readers are relative to
+            // the current prefix. Release the physical region as well as the
+            // logical prefix so a streamed run does not retain one byte per
+            // retired event in the arena or scratch file.
+            if (file_.opened()) file_.truncate(0);
+            base_ = end_ = page_ = loaded_ = 0;
+            dirty_ = false;
+            return;
+        }
+        base_ += retired;
     }
     template<class Compare>
     void stable_sort(Compare before) {

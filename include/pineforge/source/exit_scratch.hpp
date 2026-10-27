@@ -425,6 +425,13 @@ inline void exit_scratch_erase_scope_noexcept(CommandScratchStore& store,
     }
 }
 
+inline void exit_scratch_reset_empty_noexcept(ExitScratchContext& context) noexcept {
+    if (context.teardown_failure.pending() || context.store.record_count() != 0) return;
+    const auto status = context.store.reset_empty();
+    if (status != ScratchStatus::ok)
+        context.teardown_failure.remember(status, context.store);
+}
+
 class ExitScratchScope {
 public:
     explicit ExitScratchScope(ExitScratchContext& context) : context_(&context) {
@@ -445,6 +452,8 @@ public:
             if (!(context_->versions && context_->versions->teardown_failed()))
                 exit_scratch_erase_scope_noexcept(context_->store, scope_, 0,
                     std::numeric_limits<std::uint64_t>::max(), context_->teardown_failure);
+            if (!(context_->versions && context_->versions->teardown_failed()))
+                exit_scratch_reset_empty_noexcept(*context_);
         }
         // Normal scope exit is a throwing boundary, even for the final scope
         // in a callback. During unwinding preserve the active exception and
@@ -457,6 +466,7 @@ public:
         exit_scratch_check_teardown(*context_);
         exit_scratch_erase_scope_noexcept(context_->store, scope_, 0,
             std::numeric_limits<std::uint64_t>::max(), context_->teardown_failure);
+        exit_scratch_reset_empty_noexcept(*context_);
         exit_scratch_check_teardown(*context_);
     }
 private:

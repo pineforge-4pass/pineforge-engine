@@ -160,6 +160,12 @@ public:
     // where it stopped and completes once the backing answers.
     ScratchStatus rollback() noexcept;
 
+    // Production run owners may reset an empty store's physical region. The
+    // logical next-handle high water is preserved, so state_digest remains
+    // identical to the empty store before the reset. A nonempty or active store
+    // refuses the operation.
+    ScratchStatus reset_empty() noexcept;
+
     // While the active transaction is rollback-only, every read, walk and
     // digest below returns programming_error (its pending state may be partial).
     ScratchStatus point(ScratchHandle, ScratchRecordInfo&) const noexcept override;

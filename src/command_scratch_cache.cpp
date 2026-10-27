@@ -34,6 +34,12 @@ std::uint64_t CachedScratchBacking::page_count() const noexcept {
     return inner_->page_count();
 }
 
+ScratchStatus CachedScratchBacking::reset() noexcept {
+    const auto status = inner_->reset();
+    if (status == ScratchStatus::ok) page_ids_.fill(scratch_no_page);
+    return status;
+}
+
 std::size_t CachedScratchBacking::slot(ScratchPageId id) const noexcept {
     return static_cast<std::size_t>(id % slot_count_);
 }

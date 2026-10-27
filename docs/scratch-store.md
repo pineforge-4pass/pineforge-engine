@@ -80,6 +80,13 @@ workspace (`resident_bytes`, constant for the life of the object), the backing
 extent and the number of backing calls the store issued; it exists so a growth
 gate and an I/O audit can read these without an implementation detail.
 
+An owning run may call `reset_empty()` after all records have been erased and
+the store is inactive. This releases the whole production backing region and
+preserves the next-handle high water, so `state_digest` is unchanged for the
+empty logical store. A nonempty or active store refuses the reset. The reset
+does not issue a logical page I/O charge; a backing failure is returned as
+`io_error` and retains its carried diagnostic.
+
 Supported geometry is exactly: at least two cache pages, a power-of-two page
 size of at least 512 bytes that equals the backing's page size, at least one
 journal slot and at least one index slot, a nonzero order id and a comparator.
@@ -318,7 +325,10 @@ own status. Reads preserve backing `io_error`/`corrupt` and comparator failures.
 8. Choose the backing kind explicitly and provision its extent. Do not map
    `programming_error` to a capacity or retry code.
 9. Use `test_memory` only in tests, and commit with `buffered` there.
-10. Add a status, a field or a header only additively and announce it.
+10. When an event scope has no remaining reader and `record_count() == 0`, use
+    `reset_empty()` so an arena-backed run does not retain its old physical
+    extent.
+11. Add a status, a field or a header only additively and announce it.
 
 ## Fixtures
 

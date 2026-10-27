@@ -30,6 +30,7 @@ public:
     ~CachedScratchBacking() noexcept override = default;
 
     std::uint64_t page_count() const noexcept override;
+    ScratchStatus reset() noexcept override;
     // The decorator adds no state of its own to these two: the arena share the
     // stores size their directory by, and the typed failure the owner rethrows,
     // both belong to the inner backing.
