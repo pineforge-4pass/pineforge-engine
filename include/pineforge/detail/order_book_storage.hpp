@@ -149,7 +149,7 @@ private:
         cursor_ = (cursor_ + 1) % resident_capacity;
     }
 
-    Table table_;
+    Table table_{Table::BackingPolicy::bounded};
     mutable std::array<Slot, resident_capacity> window_{};
     mutable std::size_t cursor_ = 0;
     mutable std::size_t resident_size_ = 0;

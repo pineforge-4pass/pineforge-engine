@@ -31,13 +31,24 @@ class DiskIdTable {
 
 public:
     using Offset = std::uint64_t;
+    enum class BackingPolicy { unbounded, bounded };
     DiskIdTable() = default;
+    // Opt-in physical policy only: no eager open and no logical row limit.
+    // File mode bounds cache traffic; arena mode reserves its whole directory
+    // on first open, using the attached arena's fixed allocatable byte budget.
+    explicit DiskIdTable(BackingPolicy policy)
+        : bounded_backing_(policy == BackingPolicy::bounded) {
+        if (bounded_backing_) file_.bound_cache();
+    }
     DiskIdTable(const DiskIdTable&) = delete;
     DiskIdTable& operator=(const DiskIdTable&) = delete;
     DiskIdTable(DiskIdTable&& other) noexcept { *this = std::move(other); }
     DiskIdTable& operator=(DiskIdTable&& other) noexcept {
         if (this != &other) {
             file_ = std::move(other.file_);
+            // Like ScratchFile's cache policy, retain this in the reusable
+            // moved-from object as well as transferring it to the destination.
+            bounded_backing_ = other.bounded_backing_;
             root_ = std::exchange(other.root_, 0);
             first_ = std::exchange(other.first_, 0);
             last_ = std::exchange(other.last_, 0);
@@ -163,7 +174,7 @@ public:
         ScratchFile::check_extent(end_ + header, key.size(), arena, ScratchFile::IoRaiser::auxiliary);
         if (size_ == std::numeric_limits<std::uint64_t>::max())
             throw AuxiliaryScratchIoError(EFBIG, "scratch id count exhausted");
-        file_.open("pineforge-ids");
+        open();
         at = end_;
         Links row;
         row.parent = parent;
@@ -203,6 +214,17 @@ public:
     }
 
 private:
+    void open() {
+        // Slab-bound tables already use checked, preallocated regions. Keep
+        // that backend and every default table's original open path unchanged.
+        if (bounded_backing_ && !file_.opened() && !file_.scratch_owner()) {
+            if (auto* arena = ScratchArena::attached()) {
+                file_.open_bounded("pineforge-ids", arena->stats().bytes_total);
+                return;
+            }
+        }
+        file_.open("pineforge-ids");
+    }
     void require_id_size(std::size_t key_size) const {
         if (file_.scratch_owner() && file_.scratch_resource() == ScratchResource::cohort
             && key_size > 64)
@@ -316,6 +338,7 @@ private:
     }
 
     ScratchFile file_{ScratchFile::IoRaiser::auxiliary};
+    bool bounded_backing_ = false; // configuration survives clear and moves
     Offset root_ = 0, first_ = 0, last_ = 0, end_ = 1;
     std::uint64_t size_ = 0;
 };
