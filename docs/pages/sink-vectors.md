@@ -27,7 +27,7 @@ the engine's own reader, `pf_sink.SinkReader`.
 `valid.pfsink`'s header carries placeholders: `run_id` is empty, `engine` is
 the string `"test"`, and its record descriptors come from the test header
 builder (`header` at `tests/test_run_json_sink.py:52`; the added X and H
-descriptors are `descriptor` at `tests/test_run_json_sink_summary.py:67`). A real stream fills these header
+descriptors are `descriptor` at `tests/test_run_json_sink_summary.py:76-78`). A real stream fills these header
 fields from the writer and the sink request:
 
 | Header field | Meaning and source |
