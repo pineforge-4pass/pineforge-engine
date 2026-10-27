@@ -514,7 +514,9 @@ private:
         }
         if (live > limit || extra > limit - live)
             throw ScratchCapacityError(ScratchResource::cohort,
-                scratch_resident_cohort_limit_message(limit));
+                scratch_resident_cohort_limit_message(
+                    limit, static_cast<std::uint64_t>(live) + extra,
+                    static_cast<std::uint64_t>(kMaxResidentCohortsCap)));
     }
     void spill_before_admission(std::size_t extra) const {
         if (extra != 0 && index_.bounded_cohorts()

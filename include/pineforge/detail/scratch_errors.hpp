@@ -105,10 +105,17 @@ inline std::string scratch_byte_limit_message(ScratchResource resource, std::uin
     }
 }
 
-inline std::string scratch_resident_cohort_limit_message(std::uint64_t limit) {
-    return scratch_limit_message("more than ", limit,
+inline std::string scratch_resident_cohort_limit_message(
+    std::uint64_t limit, std::uint64_t live, std::uint64_t cap) {
+    std::string message = scratch_limit_message("more than ", limit,
         " order ids active at once (placed and not yet closed or cancelled); "
-        "close or cancel orders sooner, or reuse ids");
+        "close or cancel orders sooner, or reuse ids; ");
+    message += "live count ";
+    message += scratch_limit_number(live);
+    message += ", cap ";
+    message += scratch_limit_number(cap);
+    message += "; declare a higher freshPerBar";
+    return message;
 }
 
 class ScratchCapacityError final : public std::runtime_error, public RunFailureInfo {
