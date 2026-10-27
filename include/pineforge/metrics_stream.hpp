@@ -1,6 +1,6 @@
 #pragma once
 
-// CR-150 P00 declarations only. DESIGN.md revision 6, section 3.3:513-567,
+// Declarations only. DESIGN.md revision 6, section 3.3:513-567,
 // with scratch storage in 3.8:902-909 and selected observations in 3.6:745-773.
 // Existing array entry points in metrics.hpp remain unchanged.
 #include <pineforge/metrics.hpp>

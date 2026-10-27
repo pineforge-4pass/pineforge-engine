@@ -15,7 +15,7 @@ struct DescriptorPopulation {
 };
 
 DescriptorPopulation descriptor_population() {
-    std::puts("S4E inspection path: /proc/self/fd (entry names only; never follow descriptors)");
+    std::puts("Inspection path: /proc/self/fd (entry names only; never follow descriptors)");
     DIR* directory = ::opendir("/proc/self/fd");
     require(directory != nullptr, "cannot enumerate current descriptors");
     DescriptorPopulation result;

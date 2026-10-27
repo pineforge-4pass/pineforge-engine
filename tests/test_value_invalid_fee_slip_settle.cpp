@@ -1,4 +1,4 @@
-// EN-132 D6 rows 11, 12, 13, 14, 21, 22, 23. Expectations were pinned in
+// Rows 11, 12, 13, 14, 21, 22, 23. Expectations were pinned in
 // .lane-out/MAP.md before product edits. No assert(): Release defines NDEBUG.
 // Scripted callbacks drive the public native C ABI. The source fixture also
 // supplies the ordinary per-strategy run_backtest_full C ABI bridge.
@@ -405,7 +405,7 @@ void counter_rows() {
 }
 
 // D6 rows 21 and 22 are ruled KEEP engine_invariant (ENGINE-TOP 14:09, EN-134 decides that branch):
-// a non-finite settlement row keeps the typed engine_invariant failure that EN-134's own rows pin
+// a non-finite settlement row keeps the typed engine_invariant failure pinned by the settlement safety rows
 // (tests/test_native_settlement_row_finite.cpp), so this file carries no settlement.row row.
 
 void finite_fee_slippage_bits() {

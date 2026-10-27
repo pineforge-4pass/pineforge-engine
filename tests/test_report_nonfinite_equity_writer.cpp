@@ -1,4 +1,4 @@
-// CR-289: native doubles must be refused before an E line changes writer state.
+// Native doubles must be refused before an E line changes writer state.
 #include <pineforge/run_failure.hpp>
 
 #include <array>

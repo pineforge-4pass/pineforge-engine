@@ -50,7 +50,7 @@ NATIVE_FX_CURVE_HEADER = "include/pineforge/native_fx_curve.hpp"
 NATIVE_FX_CURVE_SOURCE = "src/native_fx_curve.cpp"
 NATIVE_FX_CURVE_NAMESPACE = "native_fx_curve_v1"
 
-# CR-150: approved v1 sibling bridges, as narrow as the original v3 digest
+# Approved v1 sibling bridges, as narrow as the original v3 digest
 # exception. Every other definition stays owned by its existing epoch.
 NATIVE_BAR_VIEWS_HEADER = 'include/pineforge/native_bar_views.hpp'
 NATIVE_BAR_VIEWS_SOURCE = 'src/native_bar_views.cpp'

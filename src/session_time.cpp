@@ -243,7 +243,7 @@ int64_t reach(const ZoneInterval& slot, int64_t from, int64_t direction) {
 // localtime_r under the CACHED tz_util::ScopedTimezone only for a stamp outside
 // them, so a run pays neither the process lock nor a tzset per call: each
 // changed-TZ tzset() on macOS is a notifyd Mach-IPC round trip (~173us; ~888k/run
-// over the full feed -> minutes of apparent "hang", KI-35). DST stays exact:
+// over the full feed -> minutes of apparent "hang"). DST stays exact:
 // every interval edge is a localtime_r answer. External linkage only so
 // tests/test_local_time_fields.cpp can compare it with libc field by field; not
 // part of the installed API.
@@ -338,7 +338,7 @@ static int64_t calendar_day_open_local_ms_tz(int64_t bar_ms, const std::string& 
 int64_t calendar_day_open_local_ms(int64_t bar_ms, const std::string& tz) {
     // UTC needs no tzset: local midnight is exact integer floor. Avoiding
     // ScopedTimezone(UTC) here keeps the process TZ from flipping to UTC every
-    // bar (which would re-slow the strategy's hour()/minute() zone) — see KI-35.
+    // bar (which would re-slow the strategy's hour()/minute() zone).
     if (utc_zone(tz)) {
         time_t secs = static_cast<time_t>(bar_ms / 1000);
         return static_cast<int64_t>((secs / 86400) * 86400) * 1000;
@@ -430,7 +430,7 @@ static int64_t calendar_week_open_local_ms(int64_t bar_ms, const std::string& tz
     // tm_wday 4; the slow path opens weeks on Monday via (tm_wday + 6) % 7).
     // Avoiding ScopedTimezone(UTC) here keeps the process TZ from flipping to
     // UTC every bar (which would re-slow the strategy's hour()/minute() zone)
-    // — see KI-35: time("W") under UTC alternating with hour(time, tz) defeats
+    // — time("W") under UTC alternating with hour(time, tz) defeats
     // the single-slot g_active_tz cache and pays a tzset->notifyd round trip
     // per bar.
     if (utc_zone(tz)) {
@@ -467,7 +467,7 @@ static int64_t calendar_month_open_local_ms(int64_t bar_ms, const std::string& t
     // day is exactly 86400 s, so the month open is the day floor minus
     // (tm_mday - 1) days. Avoiding ScopedTimezone(UTC) here keeps the process
     // TZ from flipping to UTC every bar (which would re-slow the strategy's
-    // hour()/minute() zone) — see KI-35.
+    // hour()/minute() zone).
     if (utc_zone(tz)) {
         time_t secs = static_cast<time_t>(bar_ms / 1000);
         int64_t days = static_cast<int64_t>(secs) / 86400;
@@ -543,7 +543,7 @@ static int64_t compute_tf_close_ms(int64_t open_ms,
     if (cp != CalendarPeriod::NONE && utc_zone(tz) && in_civil_span(static_cast<int64_t>(osec))) {
         // What mktime answers below under TZ=UTC, where it is civil arithmetic:
         // the next period's 00:00 (the next day, seven days on, the first of the
-        // next month), without switching the process TZ to UTC (KI-35).
+        // next month), without switching the process TZ to UTC.
         const int64_t days = static_cast<int64_t>(osec) / 86400
             - (static_cast<int64_t>(osec) % 86400 < 0 ? 1 : 0);
         int64_t next = days + (cp == CalendarPeriod::DAY ? 1 : 7);

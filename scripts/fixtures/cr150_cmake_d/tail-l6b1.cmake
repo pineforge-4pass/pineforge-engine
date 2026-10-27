@@ -1,6 +1,6 @@
 
 # --- CR-150 core-cr150-l6b1 begin ---
-# CR-150 L6B1: appended after every pre-existing line pin. A real source
+# Appended after every pre-existing line pin. A real source
 # strategy module, with the same whole-archive link as release modules.
 if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
     add_library(report_sink_l6b1_strategy MODULE test_report_sink_l6b1.cpp)

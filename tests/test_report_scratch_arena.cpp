@@ -1,4 +1,4 @@
-// CR-150 L22P. Real report writers/codecs, independent byte models, and real
+// Real report writers/codecs, independent byte models, and real
 // Linux limits. Linker observers exist only in this executable.
 #if !defined(_GNU_SOURCE)
 #define _GNU_SOURCE

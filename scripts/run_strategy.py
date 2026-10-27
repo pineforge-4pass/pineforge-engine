@@ -3705,7 +3705,7 @@ def format_trade_qty(qty: float) -> str:
     step) printed as ``923941``, 897902.68 printed as ``897903`` (rounded UP),
     92293.36 as ``92293.4``, and anything >= 1e6 as ``1e+06``. The ledger held
     the exact value; only the CSV lied, which put a spurious 0.01-0.5 unit
-    "qty miss" on 1933/2708 entries of the EURUSD KI-52 all-in probe and on
+    "qty miss" on 1933/2708 entries of the EURUSD all-in probe and on
     every giua64 entry while the fills themselves were exact.
 
     Eight decimals cover every lot step in use (1 share, 0.01 unit, 0.0001

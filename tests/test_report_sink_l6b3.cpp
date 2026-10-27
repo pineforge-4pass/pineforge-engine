@@ -1,4 +1,4 @@
-// CR-150 L6b-3 red contract on f00151f223d35d7638c299a60ab401df3f36cf0d:
+// Red contract on f00151f223d35d7638c299a60ab401df3f36cf0d:
 // the header advertises O/V/K/X/H, but the runtime writes none of them.
 // Existing APIs only: the first post-fill assertion diagnoses missing O rows.
 #include <pineforge/native_host.hpp>

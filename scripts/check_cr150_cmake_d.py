@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check the CR-150 per-lane CMake registration directory."""
+"""Check the per-lane CMake registration directory."""
 from __future__ import annotations
 
 import re
@@ -58,7 +58,7 @@ TARGET_COMMANDS = frozenset({
 })
 # This exact terminal validation is the sole unfenced tail exception.
 # Keep standalone checker controls usable without importing the CI driver.
-# test_s4e_ci_guard_gaps compares it with ci_preflight's pinned block.
+# The CI guard-gap test compares it with ci_preflight's pinned block.
 FINAL_FAST_VALIDATION = '''foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
         message(FATAL_ERROR "PR fast row or executable is missing: ${_pf_fast_test}")

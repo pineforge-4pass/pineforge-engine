@@ -1,5 +1,5 @@
 /*
- * KI-67: calc_on_order_fills cascade eligibility replaces the fill-event budget.
+ * Calc-on-order-fills cascade eligibility replaces the fill-event budget.
  *
  * TradingView has NO per-bar fill-event budget. The historical 4-tick path is
  * O -> W1 -> W2 -> C (W1/W2 are the bar's two extremes in proximity order).
@@ -310,7 +310,7 @@ void test_g4_flag_off_path_is_legacy_identical() {
 // !bar_magnifier_enabled_). A recalc-created bracket under magnifier still
 // fills at its exact stop level off the real sub-bar ticks — green before AND
 // after. (The full test_calc_on_order_fills magnifier suite is the broader
-// magnifier-regression guard; this pins the KI-67 scoping directly.)
+// magnifier-regression guard; this pins the scoping directly.)
 class MagnifierBracketProbe final : public CoofBase {
 public:
     void on_source_bar(const Bar&) override {

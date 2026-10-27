@@ -225,7 +225,7 @@ std::vector<Bar> feed(Shape shape) {
         bars.push_back(mk(static_cast<int>(bars.size()), o, h, l, c));
     };
     if (shape == Shape::ParentRejection) {
-        // The KI-54 decline fixture: LONG the whole equity at 100, the signal
+        // The decline fixture: LONG the whole equity at 100, the signal
         // bar closes at 110, and the fill bar gaps +1 so the frozen opposite
         // quantity is unaffordable and the reversal is declined.
         push(100.0, 100.0, 100.0, 100.0);
@@ -659,7 +659,7 @@ public:
         case Shape::RelDeclined:
             if (bar == 0) strategy_entry("L", true);
             if (bar == 2) {
-                // The reversal is declined at the +1 gap open (KI-54), so its
+                // The reversal is declined at the +1 gap open, so its
                 // relative bracket never gets a fill to resolve against.
                 strategy_entry("S", false);
                 strategy_exit("SX", "S", kNaN, kNaN, kNaN, kNaN, kNaN, 100.0, "", kNaN, "",

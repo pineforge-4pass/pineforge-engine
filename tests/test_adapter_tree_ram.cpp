@@ -1,4 +1,4 @@
-// CR-150 TREE. Full bodies, no harvested pins. Predicted first red on
+// Full bodies, no harvested pins. Predicted first red on
 // d91c96d47d is the missing DiskResidentIdTable::bind_scratch below; with that
 // primitive supplied alone the real adapter arm still hits the refusing tree
 // binder. The supervisor records the executed first diagnostic on the lab.

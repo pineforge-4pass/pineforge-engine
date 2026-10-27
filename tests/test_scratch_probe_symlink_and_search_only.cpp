@@ -17,7 +17,7 @@ struct ProbeDirectory {
             disk_link = path + "/disk-link";
             memory_link = path + "/memory-link";
             search_only = path + "/mode0300";
-            std::printf("S4E owned inspection paths: %s -> %s, %s -> /dev/shm, %s (0300)\n",
+        std::printf("Owned inspection paths: %s -> %s, %s -> /dev/shm, %s (0300)\n",
                         disk_link.c_str(), path.c_str(), memory_link.c_str(), search_only.c_str());
             require(::symlink(path.c_str(), disk_link.c_str()) == 0,
                     "cannot create disk-directory symlink");

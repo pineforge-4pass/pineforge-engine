@@ -13,7 +13,7 @@ struct CandidateDirectory {
         require(::mkdtemp(name) != nullptr, "cannot create candidate-message fixture");
         path = name;
         missing = path + "/missing";
-        std::printf("S4E owned inspection paths: %s, %s (deliberately absent)\n",
+        std::printf("Owned inspection paths: %s, %s (deliberately absent)\n",
                     path.c_str(), missing.c_str());
     }
     ~CandidateDirectory() { ::rmdir(path.c_str()); }
