@@ -26,7 +26,7 @@ void policy_fields(const detail::ScratchManifest& m, std::uint64_t roots) {
     require(m.K_e == 262144 && m.B_e == 25165824, "P0 erased key/byte policy");
     require(m.K_c == 32768 && m.B_c == 4227072, "P0 consumed key/byte policy");
     require(m.U == 65536 && m.B_U == 4194304, "P0 cohort row/byte policy");
-    require(detail::kMaxResidentCohorts == 4096, "active cohort policy remains the old U");
+    require(detail::kMaxResidentCohorts == 65536, "active cohort policy is 65,536");
     require(m.V == 27 && m.B_V == 6912, "P0 rank row/byte policy");
     require(m.R == roots, "replacement policy uses this run's bar count");
 }

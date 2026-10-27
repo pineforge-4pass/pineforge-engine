@@ -78,6 +78,20 @@ orders-per-bar bound. Repeated intrabar replacements or loops can exhaust it.
 For larger permitted workloads, the host must admit a larger representable
 manifest before execution and charge the corresponding memory.
 
+The bounded profile additionally admits at most 65,536 live, non-spillable
+resident cohorts: order IDs placed and not yet closed or cancelled. Admission
+beyond that ceiling refuses with `more than 65,536 order ids active at once`.
+This is separate from `U`, which counts historical IDs too; the smaller
+remaining allowance governs admission. Live rows stay on the heap and cannot
+spill just to fit this ceiling. Closing or cancelling can release resident
+admission without reclaiming a historical ID slot.
+
+The internal `resident_cohort_limit(std::size_t requested)` accessor defaults
+to 65,536 and clamps to the same compile-time hard cap. Tables currently use
+the default; parameter sizing has no formula or public setting yet. This
+ceiling does not bound pending-order bytes or the variable heap payload of
+each cohort.
+
 ### Hand arithmetic (4096-byte pages)
 
 Define `Q(0)=0`; for positive K, `Q(K)=pow2ceil(max(64,2*K))`.

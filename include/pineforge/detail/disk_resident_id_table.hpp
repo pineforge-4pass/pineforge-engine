@@ -313,7 +313,7 @@ public:
                 if (prior++ < current && other == key) repeated = true;
             });
             if (!repeated) {
-                if (extra == kMaxResidentCohorts) require_live_growth(extra + 1);
+                if (extra == resident_cohort_limit()) require_live_growth(extra + 1);
                 ++extra;
             }
         });
@@ -489,8 +489,9 @@ public:
 private:
     void require_live_growth(std::size_t extra) const {
         if (extra == 0 || !index_.bounded_cohorts()) return;
-        if (resident_.size() <= kMaxResidentCohorts
-            && extra <= kMaxResidentCohorts - resident_.size()) return;
+        const auto limit = resident_cohort_limit();
+        if (resident_.size() <= limit
+            && extra <= limit - resident_.size()) return;
         // Admission's O(R) dry pass must finish before spill can write any
         // bytes. It is at most one such pass per spill, never a per-ticket
         // scan: callers batch the ticket's extra rows before reaching here.
@@ -501,12 +502,12 @@ private:
             ++work_.rows_visited_by_capacity;
             if (!row.second.owner->second.spillable()) ++live;
         }
-        if (live > kMaxResidentCohorts || extra > kMaxResidentCohorts - live)
+        if (live > limit || extra > limit - live)
             throw ScratchCapacityError(ScratchResource::cohort,
-                scratch_resident_cohort_limit_message(kMaxResidentCohorts));
+                scratch_resident_cohort_limit_message(limit));
     }
     void spill_before_admission(std::size_t extra) const {
-        if (extra != 0 && index_.bounded_cohorts() && resident_.size() >= kMaxResidentCohorts)
+        if (extra != 0 && index_.bounded_cohorts() && resident_.size() >= resident_cohort_limit())
             spill(); // The read-only ticket has already proved this can fit.
     }
     void insert_resident(Offset at, const std::shared_ptr<Row>& row) const {

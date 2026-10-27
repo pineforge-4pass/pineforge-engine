@@ -13,7 +13,14 @@ namespace pineforge::detail {
 // (+ pinned rows); this is not a bound in terms of currently live rows.
 // Admission still limits non-spillable cohort rows in the bounded scratch
 // profile. This does not bound the number or heap size of pending orders.
-inline constexpr std::size_t kMaxResidentCohorts = 4096;
+inline constexpr std::size_t kMaxResidentCohorts = 65536;
+
+// Compile-time hard cap and fixed fallback share the policy above. Future
+// parameter sizing supplies requested here; no formula or setting yet.
+inline constexpr std::size_t resident_cohort_limit(
+    std::size_t requested = kMaxResidentCohorts) noexcept {
+    return requested < kMaxResidentCohorts ? requested : kMaxResidentCohorts;
+}
 
 // P0 is a POLICY admission tier, not a measured bound or a proof that a
 // strategy fits. Counts include historical keys and internally generated
