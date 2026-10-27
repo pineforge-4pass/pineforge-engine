@@ -2,12 +2,12 @@
 
 @tableofcontents
 
-**ABI v4** (`PF_ABI_VERSION == 4`) appends 24 exports and two `pf_report_t`
+**ABI v4** (`PF_ABI_VERSION == 4`) appends 25 exports and two `pf_report_t`
 fields for a host that runs a strategy live by recomputing `run_backtest_full`
 over its accumulated bars. They were written for the earlier Python `pineforge-live`
 runtime, which is retired; the native runner in `runner/` replaces it.
 ABI v4 ships in v1.0.0; v0.13.1, the last 0.x release, has ABI 3. Every one
-of the 24 symbols is
+of the 25 symbols is
 **default off / read-only** and **never changes a historical run**: the
 four configuration setters below default to the pre-v4 behavior, and every
 accessor is a pure read over state the engine already computed for its own
@@ -22,7 +22,7 @@ uses `strategy_stream_*` instead (see @ref streaming and `runner/README.md`).
 Its live extension API, journals and verification scope are separate from
 these recomputation controls.
 
-## The 24 symbols
+## The 25 symbols
 
 | Symbol | Purpose | Default | Changes history when off? |
 | --- | --- | --- | --- |
@@ -48,6 +48,7 @@ these recomputation controls.
 | `strategy_closed_trade_exit_comment` | The exit comment string, same row space and lifetime as `strategy_closed_trade_entry_id`. | N/A — read-only. | No |
 | `strategy_closed_trade_close_cause` | Why the *i*-th trade exited: `0` UNKNOWN (reserved for a valid trade with no cause; no live derivation currently returns it), `1` SCRIPT, `2` BRACKET, `3` MARGIN_CALL, `4` INTRADAY_LOSS_CAP, `5` INTRADAY_FILL_CAP, `6` RANGE_END (always wins). `-1` if `s` is `NULL` or `trade_index` is out of range, matching every other indexed accessor's bad-index convention. | N/A — read-only. | No |
 | `strategy_position_size` | The script-facing signed position size (`strategy.position_size`; while a same-bar `process_orders_on_close` close is frozen it reads the pre-close position). `NaN` if `s` is `NULL`. | N/A — read-only. | No |
+| `strategy_initial_capital` | The engine's effective configured initial capital after the native run specification or strategy override. `NaN` if `s` is `NULL` or the read raises. | N/A — read-only. | No |
 | `strategy_current_equity` | `initial_capital + netprofit` — **not** Pine's `strategy.equity`, which also adds open profit. `NaN` if `s` is `NULL`. | N/A — read-only. | No |
 | `strategy_script_bars_processed` | Total script bars dispatched by the most recent `run()`, mirroring `pf_report_t::script_bars_processed`; includes a stream's warmup leg plus every realtime tick-driven bar. `-1` if `s` is `NULL`. | N/A — read-only. | No |
 
