@@ -1,0 +1,54 @@
+diff --git a/src/native_order.cpp b/src/native_order.cpp
+--- a/src/native_order.cpp
++++ b/src/native_order.cpp
+@@ -2117,7 +2117,7 @@ struct WorkingRequestCore::BookSpill {
+     mutable std::array<std::shared_ptr<LiveRequest>, kSide> side{};
+     mutable std::size_t side_next = 0;
+-    // A read failure a reader that cannot throw handed over
+-    // (carry_book_read_failure); every later read of these rows throws it.
++    bool may_have_book_close = false; // Conservative metadata, not logical state.
++    // A carried read failure is rethrown by every subsequent read.
+     std::exception_ptr failure;
+     // book_lookup_reads: rows read back and table steps walked by lookups.
+     mutable uint64_t lookup_rows = 0;
+@@ -2145,7 +2145,7 @@ struct WorkingRequestCore::BookSpill {
+-    // Writes `row` out and files it under its priority. The caller drops the
+-    // resident row once this has returned.
++    // A failed spill may leave a conservative positive; never a false negative.
+     void spill(const LiveRequest& row) {
++        may_have_book_close |= std::holds_alternative<BookClose>(row.authority);
+         ByteWriter out;
+         SaveAr ar{out};
+         ar(row);
+         const uint64_t priority = row.priority();
+@@ -2207,9 +2207,9 @@ struct WorkingRequestCore::BookSpill {
+-    // Replaces the serialized row of the live entry at `at`, keeping its
+-    // priority. Bytes of the same length (a refreshed allowance usually is)
++    // Replaces the live entry at `at`, keeping its priority. Same-length bytes
+     // overwrite the old ones in place; anything else is appended and the
+     // entry points at it, the old bytes becoming garbage.
+     void rewrite(uint64_t at, BookSlot slot, const LiveRequest& row) {
++        may_have_book_close |= std::holds_alternative<BookClose>(row.authority);
+         ByteWriter out;
+         SaveAr ar{out};
+         ar(row);
+         if (out.size() == slot.length) {
+@@ -5149,12 +5149,12 @@ void WorkingRequestCore::refresh_point_allowances(uint64_t point,
+-    // The rows outside the heap get the same refresh: read back, refreshed,
+-    // and written again where it changed them. Rewriting an entry moves
+-    // neither its place in the table nor any other entry, so the walk goes on.
+-    // A refresh that stops half way (an unreadable file) leaves the rest
+-    // behind the point; the next call picks them up, a row already at the
+-    // point being skipped.
++    // No spilled BookClose means no spilled allowance can change. Preserve
++    // carried failures and the existing compaction point even on that path.
++    // Otherwise refresh in place; a retry skips rows already at this point.
+     BookSpill& spill = *book_spill_;
+     spill.check();
++#if !defined(PINEFORGE_C3K_DISABLE_SPILL_AUTHORITY_GATE)
++    if (!spill.may_have_book_close && !spill.worth_compacting()) return;
++#endif
+     for (uint64_t at = spill.first_alive(); at != 0; at = spill.next_alive(at)) {
+         const BookSlot slot = spill.rows.get(at);
+         LiveRequest row = spill.read(*this, slot);
+         if (refresh(row)) spill.rewrite(at, slot, row);
