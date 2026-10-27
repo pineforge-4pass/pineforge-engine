@@ -86,7 +86,7 @@ PR_SLOW_ROWS = (
     'test_native_settlement_carry',
 )
 PR_FAST_ROWS_SHA256 = '0509b2219786efb6878b193639344c299ff8075ba4532dbe09e80e6e97b60a9a'
-# Linux PR jobs retain their fleet; secret-free post jobs use fixed GKE sizes.
+# Admitted PR jobs and secret-free post jobs use fixed GKE sizes.
 # Release artifacts and baseline promotion retain their isolated -main policy.
 PR_RUNNER = '["self-hosted","pf-gcp-pr"]'
 POST_RUNNER = '["self-hosted","pf-gcp-post"]'
@@ -275,7 +275,6 @@ JOB_COMMANDS = {
     'native-live.yml': {'authz': None, 'native-live': VERIFY, 'native-live-shards': VERIFY,
                         'native-live-native': None, 'native-live-gate': None},
     'corpus-parity.yml': {'authz': None, 'corpus-parity': PARITY, 'corpus-parity-subset': PARITY},
-    'corpus-parity-subset.yml': {'authz': None, 'corpus-parity-subset': PARITY},
     'docs.yml': {'authz': None, 'build': None},
     'docs-post.yml': {'authz': None, 'build': None},
 }
@@ -288,8 +287,7 @@ HOSTED_JOB_RUNNERS = {
     'ci-post.yml': {**dict.fromkeys(('authz', 'changes', 'build-gate'), 'ubuntu-24.04'),
                     **dict.fromkeys(POST_LEG_GATES, 'ubuntu-24.04'),
                     **GKE_JOB_RUNNERS['ci-post.yml']},
-    **{name: {'authz': 'ubuntu-24.04'} for name in (
-        'corpus-parity-subset.yml', 'docs-post.yml')},
+    'docs-post.yml': {'authz': 'ubuntu-24.04'},
     'native-live.yml': {'authz': 'ubuntu-24.04', **GKE_JOB_RUNNERS['native-live.yml'],
                         'native-live-native': 'ubuntu-24.04', 'native-live-gate': 'ubuntu-24.04'},
     'corpus-parity.yml': {'authz': 'ubuntu-24.04', **GKE_JOB_RUNNERS['corpus-parity.yml']},
@@ -505,7 +503,7 @@ ADMIT_MAX_TOTAL_BYTES = 4 * 1024 * 1024
 ADMIT_MAX_FILES = 100
 TRUSTED_CACHE_FILES = frozenset((
     'ci-post.yml', 'native-live.yml', 'corpus-parity.yml',
-    'corpus-parity-subset.yml', 'docs-post.yml', 'release.yml',
+    'docs-post.yml', 'release.yml',
     'promote-baseline.yml', 'release-ruleset-probe.yml',
     '.github/actions/setup-live-curl/action.yml',
 ))
@@ -1750,6 +1748,11 @@ def gke_admit_workflow_findings(workflow: str, name: str = 'gke-pr.yml') -> list
                 '| sudo apt-get update sudo DEBIAN_FRONTEND=noninteractive apt-get install -y '
                 'libeigen3-dev tzdata-legacy ccache']):
             findings.append(f'{name} {job} must install only its smoke dependencies')
+    subset = _step_named(steps.get('corpus-parity-subset', []),
+                         '      - name: Check TradingView parity over the pull-request subset')
+    if (_step_values(subset, 'run') != [f'{PARITY_COMMAND} --subset']
+            or _step_values(subset, 'if') or _step_values(subset, 'continue-on-error')):
+        findings.append(f'{name} corpus-parity-subset must run its unconditional inline subset command')
     legs = jobs.get('legs', '')
     legs_if = GKE_PROOF_IF.replace('${{ ', '${{ always() && ', 1)
     if (_needs(legs) != ['admit', 'build', 'build-debug', 'corpus-parity-subset']
@@ -3158,12 +3161,7 @@ def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[st
     for job, body in jobs.items():
         if any(flag in body for flag in ('--exclude-label', '--include-label', '--class-tier')):
             findings.append(f'{job} must keep its full population')
-    if pr:
-        subset = jobs.get('corpus-parity-subset', '')
-        if (_job_values(subset, 'uses') != ['./.github/workflows/corpus-parity-subset.yml']
-                or _job_values(subset, 'with')):
-            findings.append('PR corpus-parity-subset must call only corpus-parity-subset.yml without mode inputs')
-    else:
+    if not pr:
         if ('      exclude_slow: false' not in _code(jobs.get('native-live', ''))
                 or _job_values(jobs.get('native-live', ''), 'uses') != ['./.github/workflows/native-live.yml']):
             findings.append('native-live must receive the full population input')
@@ -3208,7 +3206,7 @@ def _universal_newlines(text: str) -> str:
 
 
 def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
-                         parity: str, docs: str, post: str, subset: str, docs_post: str,
+                         parity: str, docs: str, post: str, docs_post: str,
                          others: dict[str, str] | None = None,
                          *, curl_action: str | None = None,
                          actions: dict[str, str] | None = None) -> list[str]:
@@ -3218,7 +3216,7 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
     them so, and every other check gets the universal-newline view it always had.
     """
     workflows = {'ci.yml': ci, 'ci-post.yml': post, 'native-live.yml': native,
-                 'corpus-parity.yml': parity, 'corpus-parity-subset.yml': subset,
+                 'corpus-parity.yml': parity,
                  'docs.yml': docs, 'docs-post.yml': docs_post,
                  'promote-baseline.yml': promote, **(others or {})}
     action_sources = {f'.github/workflows/{name}': text for name, text in workflows.items()}
@@ -3226,8 +3224,8 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
     if curl_action is not None:
         action_sources.setdefault('.github/actions/setup-live-curl/action.yml', curl_action)
     workflows = {name: _universal_newlines(text) for name, text in workflows.items()}
-    ci, native, promote, cmake, parity, docs, post, subset, docs_post = map(
-        _universal_newlines, (ci, native, promote, cmake, parity, docs, post, subset, docs_post))
+    ci, native, promote, cmake, parity, docs, post, docs_post = map(
+        _universal_newlines, (ci, native, promote, cmake, parity, docs, post, docs_post))
     curl_action = None if curl_action is None else _universal_newlines(curl_action)
     findings = runner_findings(workflows)
     findings += action_pin_findings(action_sources)
@@ -3239,13 +3237,9 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
     findings += pipeline_workflow_findings(post, 'ci-post.yml', pr=False)
     findings += native_workflow_findings(native, curl_action)
     findings += corpus_parity_trigger_findings(parity)
-    for name, workflow in (('corpus-parity.yml', parity), ('corpus-parity-subset.yml', subset),
-                           ('docs.yml', docs), ('docs-post.yml', docs_post)):
+    for name, workflow in (('corpus-parity.yml', parity), ('docs.yml', docs),
+                           ('docs-post.yml', docs_post)):
         findings += gated_workflow_findings(workflow, name)
-    if (_events(subset) != {'workflow_call'}
-            or set(_jobs(subset)) != {'authz', 'corpus-parity-subset'}
-            or _job_values(_jobs(subset).get('corpus-parity-subset', ''), 'if')):
-        findings.append('PR parity workflow must retain only workflow_call, authz and an unconditional subset job')
     findings += docs_workflow_findings(docs, docs_post)
     if 'release.yml' in workflows:
         findings += release_bump_workflow_findings(workflows['release.yml'])
@@ -3822,7 +3816,7 @@ def main() -> int:
     if args.check_ci_workflow:
         workflows = ROOT / '.github/workflows'
         named = ('ci.yml', 'native-live.yml', 'promote-baseline.yml', 'corpus-parity.yml',
-                 'docs.yml', 'ci-post.yml', 'corpus-parity-subset.yml', 'docs-post.yml')
+                 'docs.yml', 'ci-post.yml', 'docs-post.yml')
         # Every file is read as stored: the lint must see a bare CR on disk.
         # A file that is not UTF-8 is a finding here, and the curl action is
         # read twice (as an action and as the native job's input): list it once.
@@ -3838,7 +3832,6 @@ def main() -> int:
             read_ci_text(workflows / 'corpus-parity.yml', findings),
             read_ci_text(workflows / 'docs.yml', findings),
             read_ci_text(workflows / 'ci-post.yml', findings),
-            read_ci_text(workflows / 'corpus-parity-subset.yml', findings),
             read_ci_text(workflows / 'docs-post.yml', findings),
             {path.name: read_ci_text(path, findings) for path in sorted(workflows.iterdir())
              if path.suffix in ('.yml', '.yaml') and path.name not in named},

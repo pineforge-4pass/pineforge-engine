@@ -21,7 +21,7 @@ name: Corpus parity
 # cores do not shorten, so the whole population cannot be held to the ~25 min
 # a required pull-request check is budgeted for. Full parity therefore runs
 # nightly (01:30 UTC), on `workflow_dispatch`, and on the full-event pipeline.
-# The pull-request early signal lives in corpus-parity-subset.yml.
+# The pull-request early signal is the inline corpus-parity-subset job in gke-pr.yml.
 #
 # FULL-EVENT SUBSET. The `corpus-parity-subset` job below
 # re-runs the 54 probes scripts/corpus_parity_subset.txt names -- in parallel,
