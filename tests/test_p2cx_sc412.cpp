@@ -930,8 +930,23 @@ void bypass() {
 
 int main(int argc, char** argv) {
     try {
-        const std::string row = argc > 1 ? argv[1] : "io";
-        if (row == "io") repeated_lookups();
+        // No argument runs every row; one row can still be named for a rerun.
+        const std::string row = argc > 1 ? argv[1] : "all";
+        if (row == "all") {
+            repeated_lookups();
+            append_reads();
+            fold_append_reads();
+            write_through();
+            write_failure();
+            invalidation();
+            eof();
+            bypass();
+            fixed_budget();
+            default_disabled();
+            thrash();
+            allocation_failure();
+        }
+        else if (row == "io") repeated_lookups();
         else if (row == "append") append_reads();
         else if (row == "fold_append") fold_append_reads();
         else if (row == "write") write_through();
