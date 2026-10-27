@@ -157,7 +157,9 @@ struct BarTape {
     std::vector<Bar> bars;
 
     explicit BarTape(int trade_count) {
-        const std::size_t count = static_cast<std::size_t>(trade_count) + 1;
+        // Bar zero submits, bar one opens, and each later filled reversal
+        // closes one row. The final open lot is deliberately not reported.
+        const std::size_t count = static_cast<std::size_t>(trade_count) + 2;
         bars.reserve(count);
         for (std::size_t index = 0; index < count; ++index) {
             const double price = 100.0 + static_cast<double>(index % 17) * 0.25;

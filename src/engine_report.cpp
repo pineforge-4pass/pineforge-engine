@@ -7,7 +7,7 @@
 #include "selected_report_view.hpp"
 #include <pineforge/metrics_stream.hpp>
 #include "report_scratch.hpp"
-
+#include "strategy_history_policy.hpp"
 #include <pineforge/metrics.hpp>
 #include <pineforge/detail/scratch_sequence.hpp>
 #include "report_value_invalid.hpp"
@@ -1117,7 +1117,6 @@ int BacktestEngine::report_sink_diagnostics_v1(
     *out = local;
     return 0;
 }
-
 void BacktestEngine::set_trade_history_streamable(bool streamable) {
     if (report_sink_setter_status() != 0)
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
@@ -1130,7 +1129,6 @@ void BacktestEngine::set_trade_history_streamable(bool streamable) {
                                       "trade history policy cannot retain sealed trade rows");
     report_sink_state_.trade_history_streamable = streamable;
 }
-
 void BacktestEngine::begin_report_sink() {
     auto& sink = report_sink_state_;
     // A begin owns a fresh run: the optional-sequence witnesses start empty
@@ -1169,6 +1167,8 @@ void BacktestEngine::begin_report_sink() {
         return; // No curve writer, region, file, or sink publication.
     }
     if (!sink.enabled) return;
+    trades_.set_history_retirement(sink.trade_history_streamable
+        && !detail::strategy_reads_history_by_index(*this));
     // The new run owns these histories. Drop capacity left by a previous
     // sink-off run before callbacks, even if outputs are disabled this time.
     std::vector<uint64_t>().swap(broker_state_hashes_);
