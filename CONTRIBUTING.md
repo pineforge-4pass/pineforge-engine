@@ -83,7 +83,7 @@ ctest --test-dir build --output-on-failure
 
 You need CMake ≥ 3.16 (3.20 for `ctest --test-dir`), a C++17 compiler whose standard
 library has floating-point `std::to_chars` (libstdc++ from GCC 11 or later, or libc++ 14
-or later; on macOS a deployment target of 13.3 or later),
+or later),
 Python 3 and Eigen 3.3+ (fetched automatically if absent). The corpus's 1m
 feed is a Git LFS object, so install Git LFS (`git lfs install`) before the
 submodule update; `ci_preflight.py` needs actionlint 1.7.12 and ShellCheck;
@@ -310,9 +310,8 @@ A pull request body has two parts and no third:
 The merge gate is two commit statuses on the PR head, `pineforge/verify` and
 `pineforge/parity`, which the maintainers post after running the full
 `ci_verify.py` profiles and their parity verification on it. The GitHub Actions
-jobs (PR builds on Ubuntu in Release and Debug and macOS in Release; non-PR
-builds also include macOS Debug; sanitizers, ctest, the source guards, the
-install/`find_package` smoke test and the parity subset) are advisory. A change
+jobs (Linux x86_64 and arm64, Release and Debug; sanitizers, ctest, the source
+guards, the install/`find_package` smoke test and the parity subset) are advisory. A change
 that touches documentation only runs the preflight guards and the documentation
 build and skips the rest; `docs/ci.md` names the rule.
 

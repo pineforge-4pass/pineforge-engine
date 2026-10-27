@@ -9,7 +9,7 @@ A minimal end-to-end build, install, and link.
 | Requirement | Minimum | Notes |
 | --- | --- | --- |
 | CMake | 3.16 | `ctest --test-dir` below needs 3.20. |
-| C++ compiler | libstdc++ from GCC 11, or libc++ 14; on macOS a deployment target of 13.3 | C++17 with floating-point `std::to_chars`. |
+| C++ compiler | libstdc++ from GCC 11, or libc++ 14 | C++17 with floating-point `std::to_chars`. |
 | Eigen | 3.3+ | Optional — fetched automatically via `FetchContent` if no system install is found. |
 
 ## Build + test
