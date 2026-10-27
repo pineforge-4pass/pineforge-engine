@@ -250,6 +250,7 @@ set(TEST_SOURCES
     test_short_margin_script_state
     test_ringbuffer
     test_timeframe
+    test_session_many_windows
     test_magnifier
     test_magnifier_real_bars
     test_magnifier_distributions
@@ -282,6 +283,7 @@ set(TEST_SOURCES
     test_integration
     test_request_security
     test_aux_security_feed
+    test_aux_security_range_capacity
     test_native_security_feed
     test_split_feed_partial_bucket
     test_ltf_lookahead_first_bucket
@@ -1874,6 +1876,7 @@ list(APPEND TEST_SOURCES
     test_value_admission_risk
     # EN-132 source command admission: public host, synthetic feed, no fixtures.
     test_value_admission_doors
+    test_pine_composite_id_admission
     # The source of test_selected_quote_seal is supplied by a separate change
     # and integrated with this registration before configure.
     test_selected_quote_seal
@@ -2226,10 +2229,37 @@ endif()
 
 add_test(NAME test_cmake_version_source
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_cmake_version_source.py)
-add_test(NAME test_ci_verify
-    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_ci_verify.py)
-add_test(NAME test_ci_preflight
-    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_ci_preflight.py)
+# Compute each slice from real unittest collection at invocation, never from
+# a handwritten method list. One parent becomes eight slices plus a cover: +8.
+set(PINEFORGE_CI_VERIFY_SLICE_COUNT 8)
+set(PINEFORGE_CI_VERIFY_SLICES)
+foreach(_pf_ci_verify_slice RANGE 1 ${PINEFORGE_CI_VERIFY_SLICE_COUNT})
+    add_test(NAME test_ci_verify_slice_${_pf_ci_verify_slice}
+        COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_ci_verify.py
+            --slice ${_pf_ci_verify_slice}/${PINEFORGE_CI_VERIFY_SLICE_COUNT})
+    list(APPEND PINEFORGE_CI_VERIFY_SLICES test_ci_verify_slice_${_pf_ci_verify_slice})
+endforeach()
+add_test(NAME test_ci_verify_slices_cover
+    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_ci_verify_split.py
+        --slice-count ${PINEFORGE_CI_VERIFY_SLICE_COUNT})
+add_test(NAME test_ci_preflight_slice_1
+    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_ci_preflight.py --slice 1/8)
+add_test(NAME test_ci_preflight_slice_2
+    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_ci_preflight.py --slice 2/8)
+add_test(NAME test_ci_preflight_slice_3
+    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_ci_preflight.py --slice 3/8)
+add_test(NAME test_ci_preflight_slice_4
+    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_ci_preflight.py --slice 4/8)
+add_test(NAME test_ci_preflight_slice_5
+    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_ci_preflight.py --slice 5/8)
+add_test(NAME test_ci_preflight_slice_6
+    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_ci_preflight.py --slice 6/8)
+add_test(NAME test_ci_preflight_slice_7
+    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_ci_preflight.py --slice 7/8)
+add_test(NAME test_ci_preflight_slice_8
+    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_ci_preflight.py --slice 8/8)
+add_test(NAME test_ci_preflight_slices_cover
+    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_ci_preflight_split.py)
 # F10's source-only benchmark witnesses require the pinned Git history.
 add_test(NAME test_benchmark_harness
     COMMAND ${Python3_EXECUTABLE} -m unittest discover -s benchmarks/tests)
@@ -3407,7 +3437,35 @@ function(pineforge_add_unit_test test_name)
     if(PINEFORGE_ENABLE_COVERAGE)
         target_compile_options(${test_name} PRIVATE ${_pf_cov_test_flags})
     endif()
-    if(NOT test_name STREQUAL "test_l4g_runtime_budget")
+    if(test_name STREQUAL "test_native_command_after")
+        # Slice 8 runs book 67 alone; the other heavy books go to slices 1..3.
+        # These rows share the executable above and keep their slow labels.
+        add_test(NAME test_native_command_after_slice_1
+            COMMAND ${test_name} --slice 1/8)
+        add_test(NAME test_native_command_after_slice_2
+            COMMAND ${test_name} --slice 2/8)
+        add_test(NAME test_native_command_after_slice_3
+            COMMAND ${test_name} --slice 3/8)
+        add_test(NAME test_native_command_after_slice_4
+            COMMAND ${test_name} --slice 4/8)
+        add_test(NAME test_native_command_after_slice_5
+            COMMAND ${test_name} --slice 5/8)
+        add_test(NAME test_native_command_after_slice_6
+            COMMAND ${test_name} --slice 6/8)
+        add_test(NAME test_native_command_after_slice_7
+            COMMAND ${test_name} --slice 7/8)
+        add_test(NAME test_native_command_after_slice_8
+            COMMAND ${test_name} --slice 8/8)
+        # COST orders starts by expected work; it does not impose a time limit.
+        set_tests_properties(test_native_command_after_slice_8 PROPERTIES COST 600)
+        set_tests_properties(test_native_command_after_slice_1 PROPERTIES COST 60)
+        set_tests_properties(test_native_command_after_slice_2 PROPERTIES COST 60)
+        set_tests_properties(test_native_command_after_slice_3 PROPERTIES COST 60)
+        add_test(NAME test_native_command_after_slices_cover
+            COMMAND ${Python3_EXECUTABLE}
+                ${PROJECT_SOURCE_DIR}/scripts/test_native_command_after_split.py)
+    elseif(NOT test_name STREQUAL "test_l4g_runtime_budget"
+            AND NOT test_name STREQUAL "test_open_report_rows_flat")
         add_test(NAME ${test_name} COMMAND ${test_name})
     endif()
 endfunction()
@@ -3695,6 +3753,11 @@ list(REMOVE_ITEM TEST_SOURCES ${_pf_private_fixture_rows})
 # Report arithmetic and C-host failure ownership, with source-free includes.
 list(APPEND TEST_SOURCES test_metrics_overflow)
 list(APPEND TEST_SOURCES test_native_c_host_report_failure)
+
+# CR-150: engine-free pipe flag control beside the ordinary C++ unit rows.
+if(UNIX)
+    list(APPEND TEST_SOURCES test_pipe_writer_fd_flags)
+endif()
 
 foreach(test_name ${TEST_SOURCES})
     pineforge_add_unit_test(${test_name})
@@ -4544,7 +4607,7 @@ test_declined_reversal_close_leg_l4c
 # adjacent to the earlier lane labels so every repaired witness is required.
 pineforge_clear_test_labels(
 test_bracket_lifecycle_declined_reversal_l4c
-    test_ci_verify
+    ${PINEFORGE_CI_VERIFY_SLICES}
     test_direct_short_reversal_affordability_l4b
     test_dropped_reversal_mc_first_l4c
     test_explicit_qty_fill_admission_l4b
@@ -4629,12 +4692,26 @@ set(PINEFORGE_PR_SLOW_TESTS
     test_aggregate_cpp_versions
     test_broker_state_hash_coverage_mutations
     test_chart_day_memo
-    test_ci_verify
+    test_ci_verify_slice_1
+    test_ci_verify_slice_2
+    test_ci_verify_slice_3
+    test_ci_verify_slice_4
+    test_ci_verify_slice_5
+    test_ci_verify_slice_6
+    test_ci_verify_slice_7
+    test_ci_verify_slice_8
     test_l10recon1_merge_fill_liveness
     test_local_time_fields
     test_magnifier_endpoints4
     test_native_bar_open_hook
-    test_native_command_after
+    test_native_command_after_slice_1
+    test_native_command_after_slice_2
+    test_native_command_after_slice_3
+    test_native_command_after_slice_4
+    test_native_command_after_slice_5
+    test_native_command_after_slice_6
+    test_native_command_after_slice_7
+    test_native_command_after_slice_8
     test_native_cpp_abi
     test_native_cpp_versions
     test_native_definition_index
@@ -7110,25 +7187,36 @@ foreach(_pf_python_row IN ITEMS
     endif()
 endforeach()
 
-# The two gate suites (test_ci_verify and test_ci_preflight, registered above)
+# The gate suites (test_ci_verify slices/cover and the preflight slices/cover, above)
 # drive the real ci_verify Driver over the floor, exclusion, overlay
 # and live-profile paths, and build their tamper trees through
 # tempfile.TemporaryDirectory, which honours TMPDIR: pin TMPDIR to a
 # configure-time directory under the build dir, the shape the private-fixture
 # controls rows use, instead of letting the rows write into the host's /tmp.
-# test_ci_verify ran 957.74 s (release A), 979.32 s (kernel A) and 781.00 s
+# The unsplit test_ci_verify ran 957.74 s (release A), 979.32 s (kernel A) and 781.00 s
 # (release B) in the campaign's lab jobs; with no TIMEOUT property and no
 # verifier stage bound it is never cut off for slowness (owner rule,
 # 2026-10-12), and its 3600 s collision with the native-live stage deadline is
-# gone with both. test_ci_preflight passed in 2.79 s there, so it stays off
-# PINEFORGE_PR_SLOW_TESTS, while test_ci_verify sits in that timing-derived PR
-# exclusion population and full runs (the lab job set among them, which is
-# where its controls run) still execute it. Both rows are PUBLIC -- no LABELS,
-# no SKIP_RETURN_CODE -- and register in both fixture modes like their
-# neighbours there.
-set_tests_properties(test_ci_verify PROPERTIES
+# gone with both. The preflight suite uses eight slices of sorted unittest
+# IDs plus one collection-only cover, outside PINEFORGE_PR_SLOW_TESTS; the
+# test_ci_verify slices inherit that timing-derived PR exclusion population and
+# full runs (the lab job set among them, which is where its controls run) still
+# execute every slice. Both covers only collect and stay outside the slow
+# population. All are PUBLIC with no private-fixture label or SKIP_RETURN_CODE,
+# and register in both fixture modes.
+set_tests_properties(${PINEFORGE_CI_VERIFY_SLICES} test_ci_verify_slices_cover PROPERTIES
     ENVIRONMENT "TMPDIR=${CMAKE_CURRENT_BINARY_DIR}/tmp")
-set_tests_properties(test_ci_preflight PROPERTIES
+set_tests_properties(
+    test_ci_preflight_slice_1
+    test_ci_preflight_slice_2
+    test_ci_preflight_slice_3
+    test_ci_preflight_slice_4
+    test_ci_preflight_slice_5
+    test_ci_preflight_slice_6
+    test_ci_preflight_slice_7
+    test_ci_preflight_slice_8
+    test_ci_preflight_slices_cover
+    PROPERTIES
     ENVIRONMENT "TMPDIR=${CMAKE_CURRENT_BINARY_DIR}/tmp")
 
 # CR-233: a public, receipt-independent Release smoke. Build these executables
@@ -7233,12 +7321,46 @@ endif()
 
 add_test(NAME test_cr150_cmake_d COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/scripts/check_cr150_cmake_d.py)
 
+# CR-352: regression rows retain the fixture API available on the red base.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    list(APPEND TEST_SOURCES test_scratch_watch_attribution)
+    pineforge_add_unit_test(test_scratch_watch_attribution)
+    target_link_libraries(test_scratch_watch_attribution PRIVATE ${CMAKE_DL_LIBS} Threads::Threads)
+    foreach(_pf_scratch_watch_case IN ITEMS
+            cotenant_default cotenant_jailed cotenant_positive
+            own_tmp own_transient_tmp own_other_tmp own_shm private_non_mkstemp header_scratch)
+        add_test(NAME test_scratch_watch_attribution_${_pf_scratch_watch_case}
+            COMMAND test_scratch_watch_attribution ${_pf_scratch_watch_case})
+    endforeach()
+endif()
+
+add_test(NAME test_run_json_sink_fd_skip_accounting COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/tests/test_run_json_sink_fd_skip_accounting.py --artifacts ${CMAKE_CURRENT_BINARY_DIR}/pytest-no-skips/test_run_json_sink_fd_skip_accounting)
+
+# Property reads and the diagnostic belong before the lane loop;
+# the fence grammar permits target definitions, not get_target_property/message.
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    get_target_property(_pf_source_key_type pineforge TYPE)
+    get_target_property(_pf_source_key_options pineforge COMPILE_OPTIONS)
+    get_target_property(_pf_source_key_definitions pineforge COMPILE_DEFINITIONS)
+    if(NOT _pf_source_key_type STREQUAL "STATIC_LIBRARY")
+        message(STATUS "test_live_source_key_alias and test_live_source_key_spellings_strict not registered: pineforge TYPE is ${_pf_source_key_type}; the adapter overrides require STATIC_LIBRARY")
+    endif()
+endif()
+
 # CR-150: one file per lane in tests/cr150.d/<lane>.cmake (see tests/cr150.d/README.md).
 file(GLOB CR150_LANE_CMAKE CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/cr150.d/*.cmake")
 list(SORT CR150_LANE_CMAKE)
 foreach(cr150_lane_file IN LISTS CR150_LANE_CMAKE)
     include("${cr150_lane_file}")
 endforeach()
+
+# --- CR-150 s4e-fix-tmp begin ---
+# CR-352: only these opted-in existing targets need the interposer's linkage.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_libraries(test_default_scratch_tmpfs_tmpdir PRIVATE ${CMAKE_DL_LIBS} Threads::Threads)
+    target_link_libraries(test_jailed_scratch_tmpfs_tmpdir PRIVATE ${CMAKE_DL_LIBS} Threads::Threads)
+endif()
+# --- CR-150 s4e-fix-tmp end ---
 
 # --- CR-150 core-cr150-l6b1 begin ---
 # CR-150 L6B1: appended after every pre-existing line pin. A real source
@@ -7611,6 +7733,40 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND EXISTS "${PROJECT_SOURCE_DIR}/corpus/validat
     set_target_properties(cr224_nofile_strategy PROPERTIES PREFIX "" SUFFIX ".so" LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/cr224_nofile")
 endif()
 # --- CR-150 core-cr150-cr224 end ---
+
+# --- CR-150 live-source-key begin ---
+# The wrappers supply adapter symbols before extraction from the static archive.
+# Plain normal-library rows and the custom inventory are in the lane file.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND _pf_source_key_type STREQUAL "STATIC_LIBRARY")
+    add_executable(test_live_source_key_alias
+        test_live_source_key_alias.cpp test_live_source_key_alias_adapter.cpp)
+    target_link_libraries(test_live_source_key_alias PRIVATE pineforge)
+    target_include_directories(test_live_source_key_alias PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    target_compile_options(test_live_source_key_alias PRIVATE -UNDEBUG)
+    if(_pf_source_key_options)
+        target_compile_options(test_live_source_key_alias PRIVATE ${_pf_source_key_options})
+    endif()
+    if(_pf_source_key_definitions)
+        target_compile_definitions(test_live_source_key_alias PRIVATE ${_pf_source_key_definitions})
+    endif()
+    target_compile_definitions(test_live_source_key_alias PRIVATE PINEFORGE_TEST_NARROW_SOURCE_KEY)
+    add_test(NAME test_live_source_key_alias COMMAND test_live_source_key_alias)
+
+    add_executable(test_live_source_key_spellings_strict
+        test_live_source_key_spellings_strict.cpp test_live_source_key_spellings_strict_adapter.cpp)
+    target_link_libraries(test_live_source_key_spellings_strict PRIVATE pineforge)
+    target_include_directories(test_live_source_key_spellings_strict PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    target_compile_options(test_live_source_key_spellings_strict PRIVATE -UNDEBUG -ffp-contract=off)
+    if(_pf_source_key_options)
+        target_compile_options(test_live_source_key_spellings_strict PRIVATE ${_pf_source_key_options})
+    endif()
+    if(_pf_source_key_definitions)
+        target_compile_definitions(test_live_source_key_spellings_strict PRIVATE ${_pf_source_key_definitions})
+    endif()
+    add_test(NAME test_live_source_key_spellings_strict COMMAND test_live_source_key_spellings_strict)
+endif()
+# --- CR-150 live-source-key end ---
+
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
         message(FATAL_ERROR "PR fast row or executable is missing: ${_pf_fast_test}")

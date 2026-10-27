@@ -48,11 +48,17 @@ vocabulary reads Pine's other dotted namespaces (`timeframe.`, `input.`,
 trade-date built-ins; a row whose second column says "no archive symbol" is
 held to it; the printed counts are the rulings the vocabulary reads; and the
 counts have floors that scripts/ci_verify.py passes.
+
+CR-352 adds bare-line corroboration controls: the machine-code-shaped TvJO
+line is ignored without independent evidence, while symbols, installed
+headers and compiled escaped/adjacent literals still fail. The legacy
+source-literal findings and ruled-row presence remain independently tested.
 """
 from __future__ import annotations
 
 import contextlib
 import io
+import json
 import os
 from pathlib import Path
 import shutil
@@ -100,9 +106,9 @@ def build_probe_archive(directory: Path, text: str = PROBE_SOURCE) -> Path:
         raise unittest.SkipTest("ar is not on PATH")
     source = directory / "residual_probe.cpp"
     source.write_text(text)
-    obj = directory / "residual_probe.o"
+    obj = directory / (source.name + ".o")
     archive = directory / "libresidual_probe.a"
-    for argv in ([compiler, "-g", "-O0", "-c", str(source), "-o", str(obj)],
+    for argv in ([compiler, "-std=c++17", "-g", "-O0", "-c", str(source), "-o", str(obj)],
                  ["ar", "rcs", str(archive), str(obj)]):
         result = subprocess.run(argv, capture_output=True, text=True)
         if result.returncode:
@@ -266,8 +272,8 @@ class RuledTableTests(unittest.TestCase):
 
 
 class EvaluatorTests(unittest.TestCase):
-    def evaluate(self, strings: list[str], nm: list[str]):
-        return evaluate_table(strings, nm)
+    def evaluate(self, strings: list[str], nm: list[str], **surfaces):
+        return evaluate_table(strings, nm, **surfaces)
 
     def test_the_table_alone_passes(self) -> None:
         findings, summary = self.evaluate(*table_archive())
@@ -288,7 +294,10 @@ class EvaluatorTests(unittest.TestCase):
                          "process_orders_on_close_mode", "tradingview_mode"):
             with self.subTest(intruder=intruder):
                 strings, nm = table_archive()
-                findings, _ = self.evaluate(strings + [intruder], nm)
+                # A real one-name literal has independent source evidence.
+                findings, _ = self.evaluate(
+                    strings + [intruder], nm,
+                    source_literals=([intruder], ["src/probe.cpp:1"]))
                 self.assertEqual([f.kind for f in findings], ["unruled"])
                 self.assertEqual(findings[0].token, intruder)
 
@@ -406,14 +415,173 @@ class EvaluatorTests(unittest.TestCase):
         self.assertEqual(len(findings), 1)
 
 
+class BareStringsTests(unittest.TestCase):
+    """CR-352: printable instructions need independent evidence of a name."""
+
+    def test_an_uncorroborated_bare_identifier_is_not_a_finding(self) -> None:
+        # RED on b7e16f56: each line is an unruled identifier via strings.
+        # Two unrelated spellings prevent a token-specific workaround.
+        for line in ("TvJO", "TvQZ", " \tTvJO "):
+            with self.subTest(line=line):
+                strings, nm = table_archive()
+                findings, summary = evaluate_table(strings + [line], nm)
+                self.assertEqual(findings, [], [str(f) for f in findings])
+                self.assertEqual(summary["findings"], 0)
+                _, baseline = evaluate_table(strings, nm)
+                self.assertEqual(summary["identifierHits"], baseline["identifierHits"] + 1)
+
+    def test_nm_corroborates_a_bare_string_after_symbol_normalization(self) -> None:
+        for token in ("TvJO", "tv_foo", "tv_"):
+            for decoration in ("", "_"):
+                with self.subTest(token=token, decoration=decoration):
+                    strings, nm = table_archive()
+                    findings, _ = evaluate_table(
+                        strings + [token], nm + ["T " + decoration + token])
+                    self.assertEqual([(f.kind, f.token) for f in findings],
+                                     [("unruled", token)])
+                    # A surviving nm finding alone would not prove corroboration.
+                    self.assertIn("via strings", findings[0].detail)
+
+    def test_an_nm_only_residual_still_fails(self) -> None:
+        strings, nm = table_archive()
+        findings, _ = evaluate_table(strings, nm + ["T tv_foo"])
+        self.assertEqual([(f.kind, f.token) for f in findings], [("unruled", "tv_foo")])
+        self.assertIn("via nm", findings[0].detail)
+
+    def test_installed_code_and_literal_tokens_corroborate_archive_names(self) -> None:
+        for surface in ("header", "header-literal"):
+            with self.subTest(surface=surface):
+                code, code_where, literals, literal_where = table_headers()
+                if surface == "header":
+                    code.append("int TvJO();")
+                    code_where.append("pineforge/probe.hpp:1")
+                else:
+                    literals.append("TvJO")
+                    literal_where.append("pineforge/probe.hpp:1")
+                strings, nm = table_archive()
+                findings, _ = evaluate_table(
+                    strings + ["TvJO"], nm,
+                    header_lines=(code, code_where, literals, literal_where))
+                self.assertEqual([(f.kind, f.token) for f in findings],
+                                 [("unruled", "TvJO")])
+                self.assertIn("via strings", findings[0].detail)
+
+    def test_texts_and_separators_do_not_need_corroboration(self) -> None:
+        for text in ("xx TvJO yy", "xx TvJOabc yy", "TvJO.cold", "TvJO::probe"):
+            with self.subTest(text=text):
+                strings, nm = table_archive()
+                findings, _ = evaluate_table(strings + [text], nm)
+                token = "TvJOabc" if text == "xx TvJOabc yy" else "TvJO"
+                self.assertEqual([(f.kind, f.token) for f in findings],
+                                 [("unruled", token)])
+                self.assertIn("via strings", findings[0].detail)
+
+    def test_a_phrase_hit_on_a_bare_line_is_still_judged(self) -> None:
+        strings, nm = table_archive()
+        findings, _ = evaluate_table(strings + ["Pine"], nm)
+        phrase_findings = [f for f in findings
+                           if "text matches residual vocabulary 'Pine prose'" in f.detail]
+        self.assertEqual([(f.kind, f.token) for f in phrase_findings],
+                         [("unruled", "Pine")])
+
+    def test_a_ruled_bare_string_stays_present_without_corroboration(self) -> None:
+        strings, nm = table_archive()
+        self.assertIn("tv_carry_qty", strings)
+        self.assertNotIn("tv_carry_qty",
+                         {guard.symbol_name(h.token, h.source)
+                          for h in guard.scan(nm, "nm")})
+        self.assertNotIn("tv_carry_qty", table_headers()[0] + table_headers()[2])
+        findings, summary = evaluate_table(strings, nm)
+        self.assertEqual(findings, [], [str(f) for f in findings])
+        strings.remove("tv_carry_qty")
+        findings, absent = evaluate_table(strings, nm)
+        self.assertEqual([(f.kind, f.token) for f in findings],
+                         [("stale", "tv_carry_qty")])
+        self.assertEqual(summary["ruledIdentifiersPresent"],
+                         absent["ruledIdentifiersPresent"] + 1)
+
+
+class DecodedLiteralCorroborationTests(unittest.TestCase):
+    """Real archive + source probes, using check()'s unchanged public entry."""
+
+    def check_literal(self, spelling: str, token: str, *, visible: bool = False) -> None:
+        with tempfile.TemporaryDirectory(prefix="pineforge-residual-decoded-") as directory:
+            root = Path(directory)
+            source_dir = root / "src"
+            source_dir.mkdir()
+            (source_dir / "empty.hpp").write_text("")
+            # Keep all non-header ADR rows live; installed headers supply the
+            # header-only rows, just as they do in the built-archive test.
+            table = sorted((RULED.identifiers | RULED.phrases)
+                           - RULED.header_only - RULED.debug_only)
+            table_text = ",\n".join(json.dumps(text) for text in table)
+            text = ('extern "C" const char* table_texts[] = {\n' + table_text + '\n};\n'
+                    'extern "C" const char probe_text[] = "\\0" ' + spelling + ' "\\0";\n'
+                    'extern "C" const char* probe_value() { return probe_text + 1; }\n')
+            archive = build_probe_archive(source_dir, text)
+            (root / "CMakeLists.txt").write_text(
+                'set(PINEFORGE_KERNEL_SOURCES src/residual_probe.cpp)\n'
+                'install(DIRECTORY include/pineforge DESTINATION include\n'
+                '        PATTERN "source" EXCLUDE PATTERN "compat" EXCLUDE)\n')
+            source = source_dir / "residual_probe.cpp"
+            literals = guard.read_source_literals(root, [source])
+            old_source_hits = guard.scan(literals[0], "source-literal")
+            self.assertEqual(token in {h.token for h in old_source_hits}, visible)
+            strings, nm, _ = guard.read_archive(archive, root)
+            self.assertIn(token, [line.strip() for line in strings])
+            self.assertNotIn(token, {guard.symbol_name(h.token, h.source)
+                                     for h in guard.scan(nm, "nm")})
+            evidence = root / "evidence"
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = guard.check(archive, source_root=root, evidence_dir=evidence)
+            result = json.loads((evidence / "summary.json").read_text())
+            self.assertEqual(code, 1, (out.getvalue(), err.getvalue()))
+            self.assertEqual([(f["kind"], f["token"]) for f in result["findings"]],
+                             [("unruled", token)])
+            self.assertIn("via strings", result["findings"][0]["detail"])
+            self.assertEqual(result["summary"]["sourceHits"], len(old_source_hits))
+            self.assertIn("1 findings ... FAIL", out.getvalue())
+
+    def test_an_ordinary_source_literal_corroborates_a_bare_string(self) -> None:
+        for token in ("TvJO", "tv_foo"):
+            with self.subTest(token=token):
+                self.check_literal(json.dumps(token), token, visible=True)
+
+    def test_escaped_literals_corroborate_their_decoded_identifiers(self) -> None:
+        for spelling, token in (
+                (r'"\x54\x76\x4a\x4f"', "TvJO"),
+                (r'"\x00000054\x76\x4a\x4f"', "TvJO"),
+                (r'"\x54vJO"', "TvJO"),
+                (r'"\x74\x76\x5f\x66\x6f\x6f"', "tv_foo"),
+                (r'"\124\166\112\117"', "TvJO"),
+                (r'"\u0074\u0076\u005f\u0066\u006f\u006f"', "tv_foo"),
+                (r'"\U00000054\U00000076\U0000004a\U0000004f"', "TvJO"),
+                (r'"\t\x54\x76\x4a\x4f\n"', "TvJO")):
+            with self.subTest(spelling=spelling):
+                self.check_literal(spelling, token)
+
+    def test_adjacent_literals_corroborate_their_joined_identifiers(self) -> None:
+        for spelling, token in (
+                ('"T" /* between tokens */ "vJO"', "TvJO"),
+                ('"t"\n"v_foo"', "tv_foo"),
+                ('u8"T" u8"vJO"', "TvJO"),
+                ('R"first(T)first" R"second(vJO)second"', "TvJO"),
+                ('"T" \\\n"vJO"', "TvJO"),
+                ('\n#define UNUSED "prefix"\n"T" "vJO"', "TvJO"),
+                ('\n#include "empty.hpp"\n"T" "vJO"', "TvJO")):
+            with self.subTest(spelling=spelling):
+                self.check_literal(spelling, token)
+
+
 class AuditBlindSpotTests(unittest.TestCase):
     """The probes the third audit's two reviewers passed through the gate."""
 
-    def evaluate(self, strings: list[str], nm: list[str]):
-        return evaluate_table(strings, nm)
+    def evaluate(self, strings: list[str], nm: list[str], **surfaces):
+        return evaluate_table(strings, nm, **surfaces)
 
-    def unruled(self, strings: list[str], nm: list[str]) -> set[str]:
-        findings, _ = self.evaluate(strings, nm)
+    def unruled(self, strings: list[str], nm: list[str], **surfaces) -> set[str]:
+        findings, _ = self.evaluate(strings, nm, **surfaces)
         return {f.token for f in findings if f.kind == "unruled"}
 
     def test_opus2_blind_probes_are_caught_as_text_and_as_symbols(self) -> None:
@@ -436,7 +604,9 @@ class AuditBlindSpotTests(unittest.TestCase):
                             ("session_ismarket_probe", "session_ismarket_probe")):
             with self.subTest(line=line):
                 strings, nm = table_archive()
-                self.assertIn(token, self.unruled(strings + [line], nm))
+                self.assertIn(token, self.unruled(
+                    strings + [line], nm,
+                    source_literals=([line], ["src/blind_probe.cpp:1"])))
         strings, nm = table_archive()
         findings, _ = self.evaluate(strings + ["session.ismarket requires a session"], nm)
         self.assertEqual([f.kind for f in findings], ["unruled"])
@@ -450,7 +620,9 @@ class AuditBlindSpotTests(unittest.TestCase):
                      "ta_highestbars_probe", "barstate_isconfirmed_probe"):
             with self.subTest(word=word):
                 strings, nm = table_archive()
-                self.assertEqual(self.unruled(strings + [word], nm), {word})
+                self.assertEqual(self.unruled(
+                    strings + [word], nm,
+                    source_literals=([word], ["src/blind_probe.cpp:1"])), {word})
 
     def test_a_mangled_symbol_is_judged_by_its_demangled_name(self) -> None:
         """`strings` reads the symbol table's mangled spelling, `nm -C` the
@@ -563,7 +735,8 @@ class ArchiveSurfaceTests(unittest.TestCase):
     def probe_hits(self, archive: Path, workdir: Path) -> set[str]:
         strings_lines, nm_lines, tool = guard.read_archive(archive, workdir)
         self.assertIn(tool, {name for name, _ in guard.STRIP_TOOLS})
-        findings, _ = guard.evaluate(strings_lines, nm_lines, RULED)
+        literals = guard.read_source_literals(workdir, [workdir / "residual_probe.cpp"])
+        findings, _ = guard.evaluate(strings_lines, nm_lines, RULED, source_literals=literals)
         # Only the unruled half is this archive's business: it holds none of
         # the kernel's ruled names, so every ADR row is legitimately stale here.
         return {f.token for f in findings if f.kind == "unruled"}
@@ -764,7 +937,9 @@ class ReachTests(unittest.TestCase):
                      "isfirstbar_regular", "heikinashi_bar", "renko_brick", "time_tradingday"):
             with self.subTest(name=name):
                 strings, nm = table_archive()
-                self.assertEqual(self.unruled(strings + [name], nm), {name})
+                self.assertEqual(self.unruled(
+                    strings + [name], nm,
+                    source_literals=([name], ["src/probe.cpp:1"])), {name})
                 self.assertEqual(self.unruled(strings, nm + ["T " + name]), {name})
         # Machine-code runs that only resemble them are not names.
         strings, nm = table_archive()

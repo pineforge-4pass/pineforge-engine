@@ -115,7 +115,7 @@ set(PINEFORGE_SOURCE_LAYER_SOURCES
 # The kernel: the independent backtest + forward-execution state machine.
 # These TUs never reach the source layer, so they also stand alone as
 # PineForge::kernel.
-set(PINEFORGE_KERNEL_SOURCES
+set(PINEFORGE_KERNEL_SOURCES src/array.cpp
     src/c_abi.cpp
     src/run_failure.cpp
     src/native_c_host.cpp
@@ -163,10 +163,10 @@ set(PINEFORGE_KERNEL_SOURCES
     src/selected_window_plan.cpp
     src/metrics_spill_curve.cpp
     src/report_scratch.cpp
+    src/detail/o1_store.cpp
     src/scratch_arena.cpp
 )
-# The kernel-only archive: libpineforge.a's kernel objects and flags, for consumers that never speak Pine.
-add_library(pineforge_kernel STATIC ${PINEFORGE_KERNEL_SOURCES})
+add_library(pineforge_kernel STATIC ${PINEFORGE_KERNEL_SOURCES}) # kernel-only archive: libpineforge.a's kernel objects and flags, for consumers that never speak Pine
 add_library(PineForge::kernel ALIAS pineforge_kernel)
 # So a find_package(PineForge) consumer spells it the same way an in-tree one
 # does: PineForge::kernel, not PineForge::pineforge_kernel.

@@ -10,7 +10,9 @@ The probe measures the inventory before an independent verdict read.
 Phase 1 checks a unique tree-matching merged PR head or one authenticated,
 two-file release bump on that gated parent. Phase 2 requires the exact main
 sha's proof receipt after the fixed watcher cut-over, with no PR/bump fallback.
-Tests inject API and git callables and patch the read_main_proof seam.
+Both paths also require a fully green ci-post run, walking only over docs-only
+commits to select its proof sha.
+Tests inject API, git and history callables and patch the read_main_proof seam.
 """
 from __future__ import annotations
 
@@ -23,8 +25,19 @@ import sys
 from typing import Callable
 from urllib.parse import parse_qs, urlsplit
 
+from ci_docs_only import is_documentation
+
 
 CONTEXTS = ("pineforge/verify", "pineforge/parity")
+# ci-post.yml's build and build-arm matrix names; the workflow pin test
+# expands their displayed names independently and checks this required-name tuple.
+CI_POST_BUILD_JOBS = tuple(
+    f"build ({platform}, {build_type})"
+    for platform in ("ubuntu-24.04", "ubuntu-24.04-arm")
+    for build_type in ("Debug", "Release"))
+CI_POST_FAILURES = ("failure", "cancelled", "timed_out")
+CI_POST_RUN_LIMIT = 10
+DOCS_ONLY_WALK_LIMIT = 20
 # Confirmed operator PAT; additions require a reviewed code change (docs/ci.md).
 ALLOWED_STATUS_CREATORS = (("luisleo526", "User"),)
 # release.yml pushes protected main with its PINEFORGE_APP_ID installation token.
@@ -44,6 +57,7 @@ release job, an environment variable or a workflow input.
 """
 API = Callable[..., str]
 Git = Callable[[str, str], bool]
+History = Callable[[str], tuple[str | None, list[str]]]
 # gh may print the next page's headers directly after a JSON array or object.
 _HTTP_RESPONSE = re.compile(
     r"(?:^|(?<=[}\]]))HTTP/\S+ ([0-9]{3})[^\r\n]*\r?\n"
@@ -559,6 +573,219 @@ def git_is_ancestor(ancestor: str, descendant: str) -> bool:
     return result.returncode == 0
 
 
+def _history_git(*args: str) -> str:
+    command = ["git", *args]
+    try:
+        result = subprocess.run(command, check=False, capture_output=True, text=True)
+    except (OSError, UnicodeError) as exc:
+        raise OSError(f"{' '.join(command)} failed: {exc}") from exc
+    if result.returncode:
+        detail = result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}"
+        raise OSError(f"{' '.join(command)} failed: {detail}")
+    return result.stdout
+
+
+def git_history(sha: str) -> tuple[str | None, list[str]]:
+    """Read the first parent and every changed path in the current checkout."""
+    revision = f"{sha}^"
+    try:
+        parent = _history_git("rev-parse", revision).strip()
+    except OSError:
+        # A missing parent is a root only if the commit itself is readable
+        # and its parent list is empty. Other rev-parse failures stay errors.
+        if _history_git("rev-list", "--parents", "--max-count=1", sha).split() == [sha]:
+            return None, []
+        raise
+    if not _is_sha(parent):
+        raise OSError(f"git rev-parse {revision} returned an invalid first parent: {parent!r}")
+    # NUL framing preserves paths containing newlines or non-ASCII characters;
+    # disabling renames exposes both the old and new path to the classifier.
+    listed = _history_git("diff", "--name-only", "--no-renames", "--no-ext-diff",
+                          "-z", revision, sha, "--")
+    if listed and not listed.endswith("\0"):
+        raise OSError(f"git diff {revision} {sha} returned an unreadable changed-path list")
+    return parent, listed[:-1].split("\0") if listed else []
+
+
+def _ci_post_proof(sha: str, history: History) -> tuple[str, list[str]]:
+    proof, skipped = sha, []
+    while True:
+        try:
+            parent, paths = history(proof)
+        except (OSError, ValueError) as exc:
+            raise ReleaseGateError(f"ci-post: walk-blocked {proof}: {exc}") from exc
+        if parent is None:
+            raise ReleaseGateError(f"ci-post: walk-blocked {proof}: missing first parent")
+        if not _is_sha(parent) or parent == proof:
+            raise ReleaseGateError(
+                f"ci-post: walk-blocked {proof}: invalid first parent {parent!r}")
+        if (not isinstance(paths, list)
+                or any(not isinstance(path, str) or not path or "\0" in path for path in paths)):
+            raise ReleaseGateError(
+                f"ci-post: walk-blocked {proof}: unreadable changed-path list")
+        if not paths or not all(is_documentation(path) for path in paths):
+            return proof, skipped
+        skipped.append(proof)
+        if len(skipped) > DOCS_ONLY_WALK_LIMIT:
+            raise ReleaseGateError(
+                f"ci-post: walk-too-long {sha}: more than "
+                f"{DOCS_ONLY_WALK_LIMIT} docs-only commits")
+        proof = parent
+
+
+def _ci_post_runs(api: API, repo: str, sha: str) -> list[dict]:
+    endpoint = f"repos/{repo}/actions/workflows/ci-post.yml/runs?head_sha={sha}&per_page=100"
+    try:
+        runs = _read_json(api, endpoint, paginate=True, items_key="workflow_runs")
+        if len(runs) >= 1000:
+            raise ReleaseGateError(
+                f"API {endpoint} returned incomplete workflow_runs pagination: "
+                "filtered search reached the 1000-run limit")
+        matches, seen = [], set()
+        for row in runs:
+            if (not isinstance(row, dict) or not _is_sha(row.get("head_sha"))
+                    or "head_branch" not in row
+                    or (row["head_branch"] is not None
+                        and not isinstance(row["head_branch"], str))):
+                raise ReleaseGateError(
+                    f"API {endpoint} returned invalid workflow run: {row!r}")
+            if row["head_branch"] != "main" or row["head_sha"] != sha:
+                continue
+            if (type(row.get("id")) is not int or row["id"] <= 0
+                    or not isinstance(row.get("event"), str) or not row["event"]
+                    or row["id"] in seen):
+                raise ReleaseGateError(
+                    f"API {endpoint} returned invalid or duplicate workflow run: {row!r}")
+            try:
+                created = datetime.strptime(row.get("created_at"), "%Y-%m-%dT%H:%M:%SZ")
+            except (TypeError, ValueError) as exc:
+                raise ReleaseGateError(
+                    f"API {endpoint} returned invalid created_at: {row.get('created_at')!r}") from exc
+            seen.add(row["id"])
+            matches.append((created, row["id"], row))
+        return [row for _, _, row in sorted(matches, key=lambda item: item[:2], reverse=True)]
+    except ReleaseGateError as exc:
+        raise ReleaseGateError(f"ci-post: unreadable {exc}") from exc
+
+
+def _ci_post_jobs(api: API, repo: str, run_id: int) -> list[dict]:
+    endpoint = f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=100"
+    try:
+        payload = _read_json(api, endpoint)
+        if (not isinstance(payload, dict) or not isinstance(payload.get("jobs"), list)
+                or type(payload.get("total_count")) is not int or payload["total_count"] < 0):
+            raise ReleaseGateError(f"API {endpoint} returned an invalid jobs page")
+        jobs = payload["jobs"]
+        if payload["total_count"] > len(jobs):
+            raise ReleaseGateError(
+                f"API {endpoint} returned incomplete jobs: "
+                f"expected {payload['total_count']} rows, got {len(jobs)}")
+        if any(not isinstance(job, dict) or not isinstance(job.get("name"), str)
+               or not job["name"] for job in jobs):
+            raise ReleaseGateError(f"API {endpoint} returned an invalid job row")
+        return jobs
+    except ReleaseGateError as exc:
+        raise ReleaseGateError(f"ci-post: unreadable {exc}") from exc
+
+
+def _require_ci_post(api: API, repo: str, sha: str, history: History) -> str:
+    proof, docs_skipped = _ci_post_proof(sha, history)
+    for docs_sha in docs_skipped:
+        docs_runs = _ci_post_runs(api, repo, docs_sha)
+        if not docs_runs:
+            raise ReleaseGateError(f"ci-post: docs-commit-no-run sha {docs_sha}")
+        docs_run = docs_runs[0]
+        if (docs_run.get("status") != "completed"
+                or docs_run.get("conclusion") != "success"):
+            raise ReleaseGateError(
+                f"ci-post: docs-commit-red {docs_run['id']} sha {docs_sha}: "
+                f"status {docs_run.get('status')} "
+                f"conclusion {docs_run.get('conclusion')} event {docs_run['event']}")
+    runs = _ci_post_runs(api, repo, proof)
+    if not runs:
+        raise ReleaseGateError(f"ci-post: no-run {proof}")
+    reasons, newer_skipped = [], 0
+    for index, run in enumerate(runs[:CI_POST_RUN_LIMIT]):
+        identity = f"{run['id']} sha {proof} event {run['event']}"
+        if run.get("status") != "completed":
+            raise ReleaseGateError(
+                f"ci-post: run-in-progress {identity}: status {run.get('status')}")
+        required = {name: [] for name in CI_POST_BUILD_JOBS}
+        for job in _ci_post_jobs(api, repo, run["id"]):
+            name, conclusion = job["name"], job.get("conclusion")
+            if name not in required:
+                continue
+            # Check every row: a duplicate success cannot mask a failed job.
+            if conclusion in CI_POST_FAILURES:
+                raise ReleaseGateError(
+                    f"ci-post: newer-run-failed {identity}: job {name}={conclusion}")
+            required[name].append(conclusion)
+        full = all(values and all(value == "success" for value in values)
+                   for values in required.values())
+        conclusion = run.get("conclusion")
+        # Fail closed for a run that does not prove (the newer-run table). Past the
+        # failed-build check above, a non-proving run may be passed over for an
+        # older proof only when it is a run-level success whose four legs are all
+        # present and each success or skipped, or a run-level skipped run whose
+        # four legs are all skipped. Every other conclusion refuses, and so does a
+        # leg that is neutral, null, unknown or missing while an older run exists.
+        leg_values = [value for rows in required.values() for value in rows]
+        leg_problems = []
+        for name, rows in required.items():
+            if not rows:
+                leg_problems.append(f"missing job {name}")
+            else:
+                leg_problems.extend(
+                    f"job {name}={value}" for value in rows
+                    if value not in ("success", "skipped"))
+        has_older = index + 1 < len(runs[:CI_POST_RUN_LIMIT])
+        if conclusion == "success":
+            passes_over = not leg_problems
+            refuse = bool(leg_problems) and has_older
+            contradiction = leg_problems
+        elif conclusion == "skipped":
+            contradiction = leg_problems or [
+                f"job {name}={value}" for name, rows in required.items()
+                for value in rows if value != "skipped"]
+            passes_over = not contradiction
+            refuse = bool(contradiction)
+        else:
+            contradiction = leg_problems
+            passes_over = False
+            refuse = True
+        if refuse:
+            raise ReleaseGateError(
+                f"ci-post: not-success {identity}: conclusion {conclusion}"
+                + (f": {', '.join(contradiction)}" if contradiction else ""))
+        if full and conclusion == "success":
+            evidence = f"ci-post run {run['id']} for {proof}"
+            if docs_skipped:
+                evidence += (f"; release {sha}; "
+                             f"{len(docs_skipped)} docs-only commit(s) skipped")
+            if newer_skipped:
+                evidence += f"; {newer_skipped} newer skipped-only run(s) skipped"
+            return evidence
+
+        present = all(required.values())
+        if passes_over:
+            newer_skipped += 1
+        if present and all(value == "skipped" for value in leg_values):
+            detail = ["all four build jobs skipped"]
+        else:
+            detail = []
+            for name, rows in required.items():
+                if not rows:
+                    detail.append(f"missing job {name}")
+                else:
+                    detail.extend(f"job {name}={value}" for value in rows if value != "success")
+        if conclusion != "success":
+            detail.append(f"run conclusion {conclusion}")
+        reasons.append(f"run {identity}: {', '.join(detail)}")
+    raise ReleaseGateError(
+        f"ci-post: no-full-run {proof}: examined {len(reasons)} of {len(runs)} run(s); "
+        + "; ".join(reasons))
+
+
 def read_main_proof(repo: str, sha: str) -> dict | None:
     """Return normalized context -> state evidence for this exact repo/main sha.
 
@@ -601,7 +828,8 @@ def _require_full_contexts(latest: dict, subject: str) -> str:
     return "; ".join(f"{context}={latest[context]}" for context in CONTEXTS)
 
 
-def gate(repo: str, sha: str, ref: str, *, api: API, git: Git = git_is_ancestor) -> str:
+def gate(repo: str, sha: str, ref: str, *, api: API, git: Git = git_is_ancestor,
+         history: History = git_history) -> str:
     if ref != "refs/heads/main":
         raise ReleaseGateError(f"release requires refs/heads/main, got {ref}")
     if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo) is None:
@@ -630,16 +858,17 @@ def gate(repo: str, sha: str, ref: str, *, api: API, git: Git = git_is_ancestor)
                        for context, state in proof.items())):
             raise ReleaseGateError(f"{subject}: invalid or empty context map")
         states = _require_full_contexts(proof, subject)
-        return f"release gate green: {subject}; {states}"
-
-    evidence = _phase_one(api, repo, sha, allow_missing_pr=True)
-    if evidence is None:
-        try:
-            evidence = _release_bump(api, repo, sha)
-        except ReleaseGateError as exc:
-            raise ReleaseGateError(
-                f"no merged pull request associated with {sha}; release bump refused: {exc}") from exc
-    return f"release gate green: {evidence}"
+        evidence = f"{subject}; {states}"
+    else:
+        evidence = _phase_one(api, repo, sha, allow_missing_pr=True)
+        if evidence is None:
+            try:
+                evidence = _release_bump(api, repo, sha)
+            except ReleaseGateError as exc:
+                raise ReleaseGateError(
+                    f"no merged pull request associated with {sha}; release bump refused: {exc}") from exc
+    post = _require_ci_post(api, repo, sha, history)
+    return f"release gate green: {evidence}; {post}"
 
 
 def _phase_one(api: API, repo: str, sha: str, *, allow_missing_pr: bool = False,
@@ -695,7 +924,8 @@ def _phase_one(api: API, repo: str, sha: str, *, allow_missing_pr: bool = False,
     return f"PR #{number} head {head}; {states}; tree {tree}"
 
 
-def main(argv=None, *, api: API | None = None, git: Git | None = None) -> int:
+def main(argv=None, *, api: API | None = None, git: Git | None = None,
+         history: History | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     modes = parser.add_subparsers(dest="mode", required=True)
     check = modes.add_parser("gate", help="require full release proof for the current main sha")
@@ -710,7 +940,8 @@ def main(argv=None, *, api: API | None = None, git: Git | None = None) -> int:
             green = rulesets_probe(args.repo, api=api if api is not None else gh_api)
         else:
             green = gate(args.repo, args.sha, args.ref, api=api if api is not None else gh_api,
-                         git=git if git is not None else git_is_ancestor)
+                         git=git if git is not None else git_is_ancestor,
+                         history=history if history is not None else git_history)
     except ReleaseGateError as exc:
         print(f"::error::{exc}", file=sys.stderr)
         return 1

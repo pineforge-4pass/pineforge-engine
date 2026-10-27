@@ -168,6 +168,8 @@ def test_named_summary_matches_frozen_projection(
                         forbid_output_arrays=outputs)
     assert before[0] == after[0] == 0 and before[2] == after[2] == "", after[1]
     assert not before[3].installed
+    full.assert_run_profile(json.loads(before[1]))
+    full.assert_run_profile(json.loads(after[1]))
     reference = read_reference(path)
     expected = project_summary(json.loads(before[1]), reference)
     assert after[1] == json.dumps(expected, separators=(",", ":"), allow_nan=False) + "\n"
@@ -275,6 +277,8 @@ def test_full_mode_with_run_id_and_spill_keeps_frozen_bytes(
                         extra=["--run-id", "caller id", "--spill-dir", str(tmp_path)])
     assert before[0] == after[0] == 0 and before[2] == after[2] == ""
     assert not before[3].installed
+    full.assert_run_profile(json.loads(before[1]))
+    full.assert_run_profile(json.loads(after[1]))
     assert after[1] == before[1]
     assert library.descriptors[0][1:] == ("caller id", str(tmp_path))
     assert not Path(library.installed[0]).exists()

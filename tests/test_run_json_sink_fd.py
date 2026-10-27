@@ -431,6 +431,9 @@ def test_fd_matches_file_document_and_wire(tmp_path, transport, outputs, pnls):
             os.fstat(stream.writer)
         assert closed.value.errno == errno.EBADF
     assert stream.data == sink_path.read_bytes()
+    full.assert_run_profile(json.loads(reference[1]))
+    full.assert_run_profile(json.loads(full_reference[1]))
+    full.assert_run_profile(json.loads(actual[1]))
     assert_document(actual[1], projection(reference[1]))
     assert_document(actual[1], projection(full_reference[1]))
     assert library.queried == library.summary_queries == 1
@@ -696,6 +699,8 @@ def test_selected_fd_preserves_document_and_stream(tmp_path, outputs, empty):
     assert actual[0] == 0 and actual[2] == "", actual
     assert stream.data == path.read_bytes()
     expected, document = projection(reference[1]), json.loads(actual[1])
+    full.assert_run_profile(expected)
+    full.assert_run_profile(document)
     # The sole selected wall-clock field is outside the fingerprint.
     expected["diagnostics"].pop("phase_timing")
     document["diagnostics"].pop("phase_timing")
@@ -796,7 +801,7 @@ def child_run(source, extra, *, transport="pipe", stub=True, jail=False,
         environment = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
         if without_arena:
             for name in ("PF_SCRATCH_ARENA_FD", "PF_SCRATCH_ARENA_BYTES",
-                         "PF_SCRATCH_WINDOW_BYTES"):
+                         "PF_SCRATCH_WINDOW_BYTES", "PF_SCRATCH_ARENA_JAILED"):
                 environment.pop(name, None)
         if without_scratch_overrides:
             for name in ("PINEFORGE_COMMAND_SCRATCH_DIR", "PINEFORGE_RUN_JSON_PROFILE"):
@@ -858,10 +863,12 @@ def test_fd_child_epipe_closes_before_typed_failure_line(tmp_path, transport):
                                for event in result[4][1:])
 
 
-def native_module(outputs):
+def native_module(outputs, *, required=False):
     name = "PINEFORGE_L22V_OUTPUTS_SO" if outputs else "PINEFORGE_L22V_STRATEGY_SO"
     module = os.environ.get(name)
     if module is None:
+        if required:
+            pytest.fail("required native module not supplied: " + name)
         pytest.skip("SKIP lab module not supplied: " + name)
     assert Path(module).is_file(), module
     return module
@@ -878,9 +885,39 @@ def test_native_fd_matches_file_document_and_wire(tmp_path, transport, outputs):
     actual = child_run(source, extra, stub=False, transport=transport)
     assert actual[0] == 0 and actual[2] == "", actual
     assert actual[3] == path.read_bytes()
+    full.assert_run_profile(json.loads(reference[1]))
+    full.assert_run_profile(json.loads(actual[1]))
     assert_document(actual[1], projection(reference[1]))
     assert actual[4][0] == {"event": "closed"}
     assert all(event["closed"] for event in actual[4][1:])
+
+
+def test_native_fd_records_leave_only_small_stdout(tmp_path):
+    source = bars.csv_file(tmp_path, count=97)
+    module = native_module(False)
+    environment = {key: value for key, value in os.environ.items()
+                   if not key.startswith(("PINEFORGE_", "PF_SCRATCH_"))}
+    environment.update(PYTHONDONTWRITEBYTECODE="1", TMPDIR=str(tmp_path))
+    with Stream() as stream:
+        argv = ["--so", module, "--ohlcv", str(source), "--input-tf", "1",
+                "--script-tf", "1", "--report-sink-fd", str(stream.writer)]
+        process = subprocess.Popen([sys.executable, "-B", str(ROOT / "docker" / "run_json.py"),
+                                    *argv], env=environment, pass_fds=(stream.writer,),
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        stream.close_writer()
+        stdout, stderr = process.communicate()
+    observed = f"observed run_json argv: {argv!r}\n{process.returncode}, {stdout!r}, {stderr!r}"
+    assert process.returncode == 0 and stderr == b"", observed
+    assert stdout.endswith(b"\n") and len(stdout.splitlines()) == 1, observed
+    document = json.loads(stdout)
+    assert document["engine"] == "pineforge" and "summary" in document, observed
+    assert not {"trades", "equity_curve", "report_sink"} & document.keys(), observed
+    with pf_sink.SinkReader(stream=io.BytesIO(stream.data)) as reader:
+        for _ in reader:
+            pass
+        assert reader.complete and reader.trailer is not None, observed
+        assert reader.counts["T"] == document["summary"]["total_trades"], observed
+        assert reader.counts["E"] > 0, observed
 
 
 def test_native_fd_fsize_zero_without_arena_refuses_before_file_operations(tmp_path):
@@ -991,7 +1028,24 @@ def test_native_jailed_fd_without_arena_refuses_before_scratch_or_sink(tmp_path)
     failure = json.loads(actual[1])
     assert (failure["code"], failure["args"]) == (
         "report_sink_failed", {"reason": "arena_backing"})
+    full.assert_no_run_profile(failure)
     assert actual[3] == b"" and "summary" not in failure
+
+
+def test_native_unjailed_fd_without_arena_reports_default_profile(tmp_path):
+    source = bars.csv_file(tmp_path, count=17)
+    actual = child_run(
+        source, ["--so", native_module(False, required=True),
+                 "--input-tf", "1", "--script-tf", "1"],
+        stub=False, without_arena=True, without_scratch_overrides=True)
+    assert (actual[0], actual[2]) == (0, ""), actual
+    document = json.loads(actual[1])
+    full.assert_run_profile(document)
+    assert tuple(document["diagnostics"][key] for key in full.ARENA_DIAGNOSTICS) == (0, 0)
+    assert "trades" not in document and "equity_curve" not in document
+    with pf_sink.SinkReader(stream=io.BytesIO(actual[3])) as reader:
+        list(reader)
+        assert reader.complete
 
 
 def test_native_jailed_fd_with_arena_and_zero_fsize_creates_no_files(tmp_path):
@@ -1015,11 +1069,17 @@ def test_native_jailed_fd_with_arena_and_zero_fsize_creates_no_files(tmp_path):
     try:
         before = snapshot(work, temporary)
         actual = child_run(
-            source, ["--so", native_module(False), "--profile", "jailed",
+            source, ["--so", native_module(False, required=True), "--profile", "jailed",
                      "--input-tf", "1", "--script-tf", "1"],
-            stub=False, jail=True, work=work, temporary=temporary, **arena_args)
+            stub=False, jail=True, work=work, temporary=temporary,
+            without_arena=True, without_scratch_overrides=True, **arena_args)
         assert actual[0] == 0 and actual[2] == "", actual
         document = json.loads(actual[1])
+        full.assert_run_profile(document, "jailed", admitted=True)
+        diagnostics = document["diagnostics"]
+        assert diagnostics["scratch_arena_bytes"] == 16 * 1024 * 1024, diagnostics
+        high_water = diagnostics["scratch_arena_high_water_bytes"]
+        assert type(high_water) is int and 0 <= high_water <= diagnostics["scratch_arena_bytes"], diagnostics
         assert "trades" not in document and "equity_curve" not in document
         assert document["summary"]["bars_processed"] == 17
         with pf_sink.SinkReader(stream=io.BytesIO(actual[3])) as reader:
@@ -1059,11 +1119,80 @@ def test_native_selected_fd_keeps_the_file_document_and_wire(tmp_path, empty):
     assert actual[0] == 0 and actual[2] == "", actual
     assert actual[3] == path.read_bytes()
     expected, document = projection(reference[1]), json.loads(actual[1])
+    full.assert_run_profile(expected)
+    full.assert_run_profile(document)
     expected["diagnostics"].pop("phase_timing")
     document["diagnostics"].pop("phase_timing")
     assert_document(json.dumps(document, separators=(",", ":")) + "\n", expected)
     assert actual[4][0] == {"event": "closed"}
     assert all(event["closed"] for event in actual[4][1:])
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"),
+                    reason="requires Linux sealed memfd admission")
+@pytest.mark.parametrize("empty", [False, True], ids=["nonempty-window", "empty-window"])
+def test_native_selected_jailed_fd_preserves_window_and_wire(tmp_path, empty):
+    module = native_module(False, required=True)
+    planner = os.environ.get("PINEFORGE_L22V_PLANNER_SO")
+    assert planner and Path(planner).is_file(), f"required native planner: {planner!r}"
+    count = 97
+    argv = selected_sinks.native_argv(
+        tmp_path, module, count=count, start=count if empty else 0, empty=empty)
+    source, path = Path(argv[1]), tmp_path / "selected-reference.sink"
+    extra = ["--so", module, *argv[2:], "--run-id", RUN_ID]
+    reference = child_run(
+        source, [*extra, "--profile", "unjailed", "--report-sink", str(path)],
+        stub=False, without_arena=True, without_scratch_overrides=True)
+    assert (reference[0], reference[2]) == (0, ""), reference
+    arena_bytes = 16 * 1024 * 1024
+    arena = sealed_arena_fd(arena_bytes)
+    work, temporary = tmp_path / "work", tmp_path / "tmp"
+    work.mkdir(mode=0o555)
+    temporary.mkdir(mode=0o555)
+    try:
+        before = snapshot(work, temporary)
+        actual = child_run(
+            source, [*extra, "--profile", "jailed"],
+            stub=False, jail=True, work=work, temporary=temporary, arena_fd=arena,
+            without_arena=True, without_scratch_overrides=True)
+        assert (actual[0], actual[2]) == (0, ""), actual
+        expected, document = json.loads(reference[1]), json.loads(actual[1])
+        full.assert_run_profile(document, "jailed", admitted=True)
+        full.assert_run_profile(expected)
+        assert actual[3] == path.read_bytes()
+        for key in ("input", "applied_inputs", "applied_overrides", "applied_runtime",
+                    "elapsed_seconds", "summary", "metrics", "report_window",
+                    "report_shape", "fingerprint"):
+            assert full.encoded(document[key]) == full.encoded(expected[key]), (
+                key, document[key], expected[key])
+        for key in ("input_bars_processed", "script_bars_processed",
+                    "magnifier_sub_bars_total", "magnifier_sample_ticks_total",
+                    "bar_magnifier_enabled", "annualization"):
+            assert document["diagnostics"].get(key) == expected["diagnostics"].get(key), (
+                key, document["diagnostics"], expected["diagnostics"])
+        window = document["report_window"]
+        assert window["window"]["coverage"] == ("empty" if empty else "nonempty"), window
+        assert document["applied_runtime"]["report_window"] == window
+        assert document["fingerprint"]["provenance"]["runtime"]["report_window"] == window
+        assert document["fingerprint"]["version"] == 2
+        diagnostics = document["diagnostics"]
+        assert diagnostics["scratch_arena_bytes"] == arena_bytes, diagnostics
+        high_water = diagnostics["scratch_arena_high_water_bytes"]
+        assert type(high_water) is int and 0 <= high_water <= arena_bytes, diagnostics
+        with pf_sink.SinkReader(stream=io.BytesIO(actual[3])) as reader:
+            records = list(reader)
+            assert reader.complete
+            assert sum(row.tag == "T" for row in records) == document["summary"]["total_trades"]
+            assert sum(row.tag == "E" for row in records) == document["report_shape"]["emitted_equity_points"]
+        assert "trades" not in document and "equity_curve" not in document
+        assert "report_sink" not in document
+        assert actual[4][0] == {"event": "closed"}
+        assert all(event["closed"] for event in actual[4][1:])
+        assert snapshot(work, temporary) == before
+    finally:
+        os.close(arena)
+        work.chmod(0o755)
+        temporary.chmod(0o755)
 
 
 def test_named_sink_open_refusal_keeps_typed_failure_through_cleanup(tmp_path):

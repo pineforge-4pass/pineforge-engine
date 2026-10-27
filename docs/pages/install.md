@@ -4,7 +4,7 @@
 
 ## From source
 
-The canonical install path. Works on Linux and macOS.
+The canonical install path. Supported platforms: Linux x86_64 and arm64.
 
 ```bash
 git clone https://github.com/pineforge-4pass/pineforge-engine.git
@@ -51,7 +51,9 @@ ${prefix}/
 
 ## Prebuilt tarballs
 
-A release attaches the library prebuilt to its GitHub release. For
+A release attaches the library prebuilt to its GitHub release. From 1.8.0,
+only Linux x86_64 and arm64 archives are published. Releases up to 1.7.0
+also carry a macOS archive. For
 [v1.3.0](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.3.0)
 they are `pineforge-v1.3.0-linux-x86_64.tar.gz`,
 `pineforge-v1.3.0-linux-aarch64.tar.gz` and
@@ -64,21 +66,22 @@ each with a `.sha256`. A tarball unpacks to one directory,
 ```bash
 curl -LO https://github.com/pineforge-4pass/pineforge-engine/releases/download/v1.3.0/pineforge-v1.3.0-linux-x86_64.tar.gz
 curl -LO https://github.com/pineforge-4pass/pineforge-engine/releases/download/v1.3.0/pineforge-v1.3.0-linux-x86_64.tar.gz.sha256
-sha256sum -c pineforge-v1.3.0-linux-x86_64.tar.gz.sha256   # macOS: shasum -a 256 -c
+sha256sum -c pineforge-v1.3.0-linux-x86_64.tar.gz.sha256   # macOS (for releases up to 1.7.0): shasum -a 256 -c
 tar -xzf pineforge-v1.3.0-linux-x86_64.tar.gz
 ```
 
 A CMake consumer finds it with
 `-DCMAKE_PREFIX_PATH=$PWD/pineforge-v1.3.0-linux-x86_64` (@ref integration_cmake).
 The package config asks for Eigen 3.3 or later (`find_dependency(Eigen3 3.3)`):
-install it on Linux (`libeigen3-dev` on Debian and Ubuntu); the macOS tarball
-carries Eigen 3.4.0's headers and CMake package, which the same prefix finds.
+install it on Linux (`libeigen3-dev` on Debian and Ubuntu); for releases up to
+1.7.0, the macOS tarball carries Eigen 3.4.0's headers and CMake package, which
+the same prefix finds.
 
 ## Docker
 
-This repository publishes no container image: a release attaches prebuilt
-static-lib tarballs, `pineforge-vX.Y.Z-linux-x86_64.tar.gz`,
-`pineforge-vX.Y.Z-linux-aarch64.tar.gz` and `pineforge-vX.Y.Z-macos-universal.tar.gz`
+This repository publishes no container image: from 1.8.0, a release attaches
+prebuilt static-lib tarballs, `pineforge-vX.Y.Z-linux-x86_64.tar.gz` and
+`pineforge-vX.Y.Z-linux-aarch64.tar.gz`
 (each with a `.sha256`; `lib/`, `include/`, the CMake package, `LICENSE`,
 `NOTICE`, `VERSION`), to its GitHub release and notifies the release hub,
 pineforge-release. The hub publishes the image,

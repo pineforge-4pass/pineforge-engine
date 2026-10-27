@@ -23,6 +23,7 @@ permissions:
 
 # A reusable workflow's github.workflow is its caller, so use a distinct prefix.
 # Only post-merge callers and main/manual runs use this workflow.
+# Native shards and both sanitizer profiles use the post-merge GCP fleet.
 concurrency:
   group: native-live-${{ github.workflow }}-${{ github.run_id }}
   cancel-in-progress: false
@@ -39,7 +40,7 @@ jobs:
   authz:
     name: authz
     # Fleet routing is fixed for this workflow; releases use pf-gcp-main.
-    runs-on: ["self-hosted", "pf-gcp-post"]
+    runs-on: ubuntu-24.04
     permissions: {}
     # No timeout-minutes: the owner's no-time-limits rule (check-no-time-limits refuses new ones).
     steps:
@@ -101,27 +102,18 @@ jobs:
   native-live:
     name: native-live (${{ matrix.profile }})
     needs: [authz]
-    # All three post-merge profiles use the same fixed fleet.
+    # Each instrumented tree builds once on the post-merge GCP fleet.
     runs-on: ["self-hosted","pf-gcp-post"]
     strategy:
       fail-fast: false
       matrix:
         include:
-          - profile: native
-            build_dir: build-live
           - profile: live-sanitizers
             build_dir: build-live-sanitizers
           - profile: live-tsan
             build_dir: build-live-tsan
-    # 360 minutes is GitHub's job maximum. It is deliberately the ONLY time
-    # limit here (owner rule, 2026-10-12): the old 75/45/45-minute budgets and
-    # the verifier's 2700/2820 and 900/1200-second row and stage deadlines
-    # cut off runs whose own rows were merely slow -- main's 2820s stage
-    # deadline refused this very row set's 3600s TIMEOUT property -- so no
-    # stage, step or row carries a bound of ours any more. Only a hang reaches
-    # the platform maximum. No row inventory changes.
+    # Keep every runner row and let the platform supply its own job maximum.
     env:
-      PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64-16"]'
       CCACHE_DIR: ${{ github.workspace }}/.ccache/${{ matrix.profile }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -172,7 +164,7 @@ jobs:
 
       - name: Verify (${{ matrix.profile }})
         id: verify
-        run: python3 scripts/ci_verify.py ${{ matrix.profile }} --build-dir ${{ matrix.build_dir }} --jobs "$(getconf _NPROCESSORS_ONLN)" --generator Ninja --curl-dir "${{ steps.curl-deps.outputs.curl-dir }}" --ccache ${{ matrix.profile == 'native' && '--require-websocket' || '' }} ${{ matrix.profile == 'native' && inputs.exclude_slow && '--exclude-label slow' || '' }}
+        run: python3 scripts/ci_verify.py ${{ matrix.profile }} --build-dir ${{ matrix.build_dir }} --jobs "$(getconf _NPROCESSORS_ONLN)" --generator Ninja --curl-dir "${{ steps.curl-deps.outputs.curl-dir }}" --ccache
 
       - name: Stage and summarize diagnostics
         if: always()
@@ -205,12 +197,158 @@ jobs:
           path: ${{ env.CCACHE_DIR }}
           key: ${{ steps.ccache-restore.outputs.cache-primary-key }}
 
-  native-live-gate:
-    needs: [authz, native-live]
-    if: always()
+  native-live-shards:
+    name: native-live-shard (${{ matrix.profile }}, ${{ matrix.shard }}/4)
+    needs: [authz]
     runs-on: ["self-hosted","pf-gcp-post"]
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+        include:
+          - profile: native
+            build_dir: build-live
+    outputs:
+      shard_1: ${{ steps.shard-proof.outputs.shard_1 }}
+      shard_2: ${{ steps.shard-proof.outputs.shard_2 }}
+      shard_3: ${{ steps.shard-proof.outputs.shard_3 }}
+      shard_4: ${{ steps.shard-proof.outputs.shard_4 }}
     env:
-      PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64"]'
+      CCACHE_DIR: ${{ github.workspace }}/.ccache/${{ matrix.profile }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+
+      - name: Install the CTest pytest runner
+        run: |
+          python3 -m pip install --disable-pip-version-check --no-input \
+            --require-hashes --only-binary ':all:' -r scripts/requirements-preflight.txt
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y cmake ninja-build libeigen3-dev tzdata-legacy libsqlite3-dev libssl-dev zlib1g-dev ccache git-lfs strace
+
+      # Each shard has its own save key; four cold builds cannot reserve one key.
+      - name: Restore ccache
+        id: ccache-restore
+        if: ${{ !inputs.cold_cache }}
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ runner.arch }}-live-v2-${{ matrix.profile }}-shard-${{ matrix.shard }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ runner.arch }}-live-v2-${{ matrix.profile }}-shard-${{ matrix.shard }}-
+
+      - name: Set up pinned WebSocket-enabled libcurl
+        id: curl-deps
+        uses: ./.github/actions/setup-live-curl
+        with:
+          cache-namespace: ${{ matrix.profile }}
+          cold-cache: ${{ inputs.cold_cache }}
+
+      - name: Record compiler cache before verification
+        run: |
+          mkdir -p "${{ matrix.build_dir }}"
+          ccache --show-stats > "${{ matrix.build_dir }}/ccache-before.log"
+          ccache --zero-stats
+
+      - name: Verify (${{ matrix.profile }}, ${{ matrix.shard }}/4)
+        id: verify
+        run: python3 scripts/ci_verify.py ${{ matrix.profile }} --build-dir ${{ matrix.build_dir }} --jobs "$(getconf _NPROCESSORS_ONLN)" --generator Ninja --curl-dir "${{ steps.curl-deps.outputs.curl-dir }}" --ccache --require-websocket ${{ matrix.profile == 'native' && inputs.exclude_slow && '--exclude-label slow' || '' }} --ctest-shard ${{ matrix.shard }}/4
+
+      - name: Stage and summarize diagnostics
+        if: always()
+        env:
+          CURL_CACHE_HIT: ${{ steps.curl-deps.outputs.cache-hit }}
+          CCACHE_CACHE_HIT: ${{ steps.ccache-restore.outputs.cache-hit }}
+          CCACHE_RESTORE_KEY: ${{ steps.ccache-restore.outputs.cache-matched-key }}
+          COLD_CACHE: ${{ inputs.cold_cache }}
+        run: |
+          python3 scripts/collect_ci_diagnostics.py --build-dir ${{ matrix.build_dir }} --profile ${{ matrix.profile }} --dependency-dir build-native-deps
+          printf 'cold_cache=%s\ncompiler_exact_hit=%s\ncompiler_restore_key=%s\n' "$COLD_CACHE" "$CCACHE_CACHE_HIT" "$CCACHE_RESTORE_KEY" > ci-diagnostics/cache-info.txt
+          if [[ -f "${{ matrix.build_dir }}/ccache-before.log" ]]; then
+            cp "${{ matrix.build_dir }}/ccache-before.log" ci-diagnostics/ccache-before.log
+          fi
+
+      - name: Retain CI diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci-diagnostics-native-live-${{ matrix.profile }}-${{ matrix.shard }}of4
+          path: ci-diagnostics/
+          if-no-files-found: warn
+
+      - name: Save ccache after verification
+        if: ${{ !cancelled() && !inputs.cold_cache && steps.verify.outcome != 'skipped' && steps.ccache-restore.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ steps.ccache-restore.outputs.cache-primary-key }}
+
+      - name: Record native shard proof
+        id: shard-proof
+        shell: python
+        env:
+          SHARD_INDEX: ${{ matrix.shard }}
+        run: |
+          import json
+          import os
+          from pathlib import Path
+          source = Path("build-live/ci-summary.json")
+          print(f"Reading native shard proof: {source}", flush=True)
+          summary = json.loads(source.read_text())
+          index = int(os.environ["SHARD_INDEX"])
+          if (summary.get("profile") != "native" or summary.get("status") != "passed"
+                  or type(summary.get("exitCode")) is not int or summary["exitCode"] != 0
+                  or summary.get("failures") != []
+                  or summary.get("ctestShard") != {"index": index, "count": 4}):
+              raise SystemExit("native shard summary did not pass")
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+              output.write(f"shard_{index}=success\n")
+
+  native-live-native:
+    name: native-live (native)
+    needs: [authz, native-live-shards]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Refuse an unauthorised run before anything else
+        if: ${{ needs.authz.result != 'success' }}
+        run: |
+          echo "::error::authz did not pass; nothing of this run's code is checked out or run"
+          exit 1
+      - name: Require every native shard to have passed
+        env:
+          AUTHZ_RESULT: ${{ needs.authz.result }}
+          SHARDS_RESULT: ${{ needs.native-live-shards.result }}
+          SHARD_1_RESULT: ${{ needs.native-live-shards.outputs.shard_1 }}
+          SHARD_2_RESULT: ${{ needs.native-live-shards.outputs.shard_2 }}
+          SHARD_3_RESULT: ${{ needs.native-live-shards.outputs.shard_3 }}
+          SHARD_4_RESULT: ${{ needs.native-live-shards.outputs.shard_4 }}
+        run: |
+          printf 'native shards: %s\n' "$SHARDS_RESULT"
+          if test "$SHARDS_RESULT" = cancelled; then
+            printf 'HANG (re-run): a native shard job was cancelled\n'
+          fi
+          test "$AUTHZ_RESULT" = success
+          test "$SHARDS_RESULT" = success
+          test "$SHARD_1_RESULT" = success
+          test "$SHARD_2_RESULT" = success
+          test "$SHARD_3_RESULT" = success
+          test "$SHARD_4_RESULT" = success
+
+  native-live-gate:
+    needs: [authz, native-live, native-live-native]
+    if: always()
+    runs-on: ubuntu-24.04
     steps:
       - name: Refuse an unauthorised run before anything else
         if: ${{ needs.authz.result != 'success' }}
@@ -221,10 +359,13 @@ jobs:
         env:
           AUTHZ_RESULT: ${{ needs.authz.result }}
           PROFILES_RESULT: ${{ needs.native-live.result }}
+          NATIVE_RESULT: ${{ needs.native-live-native.result }}
         run: |
           printf 'native profiles: %s\n' "$PROFILES_RESULT"
-          if test "$PROFILES_RESULT" = cancelled; then
+          printf 'native shard aggregate: %s\n' "$NATIVE_RESULT"
+          if test "$PROFILES_RESULT" = cancelled || test "$NATIVE_RESULT" = cancelled; then
             printf 'HANG (re-run): a native profile job was cancelled, which is how the platform stops a job at its 360-minute maximum\n'
           fi
           test "$AUTHZ_RESULT" = success
           test "$PROFILES_RESULT" = success
+          test "$NATIVE_RESULT" = success

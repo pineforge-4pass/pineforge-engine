@@ -246,6 +246,8 @@ def test_selected_sink_matches_frozen_array_bytes(
     assert after[3].installed, "L9S missing: selected mode never installs the sink"
     assert (before[0], before[2], after[0], after[2]) == (0, "", 0, ""), (before, after)
     assert not before[3].installed
+    sinks.assert_run_profile(json.loads(before[1]))
+    sinks.assert_run_profile(json.loads(after[1]))
     assert masked_bytes(after[1]) == masked_bytes(before[1])
     assert after[3].queried == 1 and not after[3].incarnation_reads
     assert after[3].closed == after[3].installed
@@ -335,7 +337,9 @@ def test_selected_named_sink_yields_the_summary_projection(
     assert directories == [str(spill)]
 
 
-def test_selected_validation_reads_only_the_first_equity_record(tmp_path, monkeypatch):
+@pytest.mark.parametrize("bulk", [False, True], ids=["strict", "bulk"])
+def test_selected_validation_reads_only_the_first_equity_record(tmp_path, monkeypatch, bulk):
+    monkeypatch.setattr(run_json, "_BULK_E_ENABLED", bulk)
     new_sink, equity_passes = run_json._new_report_sink, []
 
     def counting_sink(*args, **kwargs):
@@ -359,11 +363,20 @@ def test_selected_validation_reads_only_the_first_equity_record(tmp_path, monkey
     monkeypatch.setattr(run_json, "_new_report_sink", counting_sink)
     status, text, stderr, library, _ = invoke(tmp_path, monkeypatch)
     assert library.installed and status == 0 and stderr == "", text
-    # R13 retains main's full finite-result check and annualization reads.
-    # Both endpoint reads finish their digest checks, followed by the
-    # one-point anchor check and the full streaming serialization pass.
+    # Verification now folds the finite-result scan and both annualization
+    # endpoint reads into its strict-reader pass, bypassing sink.records().
+    # records("E") sees only the one-point anchor check and the writer's
+    # complete streaming pass, in that order. The bulk path of a concrete path
+    # sink writes the equity array from the raw sink bytes (verified and
+    # copied window by window) and never calls sink.records("E") for it, so
+    # only the anchor check remains observable there; the strict row keeps the
+    # original two passes.
     count = library.counts["E"]
-    assert equity_passes == [count, count, count, 1, count]
+    if bulk:
+        assert equity_passes == [1]
+    else:
+        assert equity_passes == [1, count]
+        assert equity_passes[-1] == count
 
 
 @pytest.mark.parametrize("fault", [

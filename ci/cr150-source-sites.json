@@ -2,6 +2,234 @@
  "schema": "cr150-source-sites/v1",
  "sites": [
   {
+   "file": "include/pineforge/array.hpp",
+   "symbol": "load_string",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace detail :: script_array #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/array.hpp",
+   "symbol": "index",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace detail :: script_array #1",
+    "inline std :: uint64_t checked ( std :: int64_t raw , std :: uint64_t size , const char * method , bool relative , bool end = false ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "index = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/array.hpp",
+   "symbol": "value",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace detail :: script_array #1"
+   ],
+   "cls": "decl",
+   "spelling": "Index",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/array.hpp",
+   "symbol": "decode",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace detail :: script_array #1",
+    "template < > struct ElementCodec < std :: string , void > #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/array.hpp",
+   "symbol": "value",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class T > class ScriptArray #1",
+    "T remove_at ( std :: uint64_t index ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "value = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/array.hpp",
+   "symbol": "result",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class T > class ScriptArray #1",
+    "detail :: o1 :: Id clone_into ( detail :: o1 :: Store & destination ) const #1"
+   ],
+   "cls": "grow",
+   "spelling": "result . reserve ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/array.hpp",
+   "symbol": "result",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class T > class ScriptArray #1",
+    "static ScriptArray preallocated ( detail :: o1 :: Store & store , std :: uint64_t capacity ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "result . reserve ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/array.hpp",
+   "symbol": "result",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class T > class ScriptArray #1",
+    "static ScriptArray from ( detail :: o1 :: Store & store , std :: initializer_list < T > values ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "result . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/array.hpp",
+   "symbol": "index",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class T > class ScriptArray #1"
+   ],
+   "cls": "decl",
+   "spelling": "Index",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/array.hpp",
+   "symbol": "index",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class T > class ScriptArray #1"
+   ],
+   "cls": "decl",
+   "spelling": "Index",
+   "ordinal": 2
+  },
+  {
+   "file": "include/pineforge/array.hpp",
+   "symbol": "index",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class T > class ScriptArray #1"
+   ],
+   "cls": "decl",
+   "spelling": "Index",
+   "ordinal": 3
+  },
+  {
+   "file": "include/pineforge/array.hpp",
+   "symbol": "index",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class T > class ScriptArray #1"
+   ],
+   "cls": "decl",
+   "spelling": "Index",
+   "ordinal": 4
+  },
+  {
+   "file": "include/pineforge/array.hpp",
+   "symbol": "index",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class T > class ScriptArray #1"
+   ],
+   "cls": "decl",
+   "spelling": "Index",
+   "ordinal": 5
+  },
+  {
+   "file": "include/pineforge/array.hpp",
+   "symbol": "index",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class T > class ScriptArray #1"
+   ],
+   "cls": "decl",
+   "spelling": "Index",
+   "ordinal": 6
+  },
+  {
+   "file": "include/pineforge/array.hpp",
+   "symbol": "index",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class T > class ScriptArray #1"
+   ],
+   "cls": "decl",
+   "spelling": "Index",
+   "ordinal": 7
+  },
+  {
+   "file": "include/pineforge/array.hpp",
+   "symbol": "index",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class T > class ScriptArray #1"
+   ],
+   "cls": "decl",
+   "spelling": "Index",
+   "ordinal": 8
+  },
+  {
+   "file": "include/pineforge/array.hpp",
+   "symbol": "value",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class T > class ScriptArray #1",
+    "template < class Function > void mutate ( std :: int64_t index , Function && function ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "value = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/array.hpp",
+   "symbol": "store_",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class T > class ScriptArray #1",
+    "void reserve ( std :: uint64_t count ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "store_ . resize ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/array.hpp",
+   "symbol": "index",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class T > class ScriptArray #1"
+   ],
+   "cls": "decl",
+   "spelling": "Index",
+   "ordinal": 9
+  },
+  {
+   "file": "include/pineforge/array.hpp",
+   "symbol": "index",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class T > class ScriptArray #1"
+   ],
+   "cls": "decl",
+   "spelling": "Index",
+   "ordinal": 10
+  },
+  {
    "file": "include/pineforge/checked_settings.hpp",
    "symbol": "number",
    "scope": [
@@ -713,6 +941,176 @@
   },
   {
    "file": "include/pineforge/detail/disk_resident_id_table.hpp",
+   "symbol": "at_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Value > class DiskResidentIdTable #1",
+    "template < bool Const , bool Sorted = false , bool Insertion = false > class Iterator #1"
+   ],
+   "cls": "assign",
+   "spelling": "at_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/disk_resident_id_table.hpp",
+   "symbol": "at_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Value > class DiskResidentIdTable #1",
+    "template < bool Const , bool Sorted = false , bool Insertion = false > class Iterator #1",
+    "Iterator & operator + + ( ) #1",
+    "if constexpr ( Sorted ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "at_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/disk_resident_id_table.hpp",
+   "symbol": "at_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Value > class DiskResidentIdTable #1",
+    "template < bool Const , bool Sorted = false , bool Insertion = false > class Iterator #1",
+    "Iterator & operator + + ( ) #1",
+    "else if constexpr ( Insertion ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "at_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/disk_resident_id_table.hpp",
+   "symbol": "at_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Value > class DiskResidentIdTable #1",
+    "template < bool Const , bool Sorted = false , bool Insertion = false > class Iterator #1",
+    "Iterator & operator + + ( ) #1",
+    "else #1",
+    "if ( next = = owner_ -> resident_ . begin ( ) ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "at_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/disk_resident_id_table.hpp",
+   "symbol": "at_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Value > class DiskResidentIdTable #1",
+    "template < bool Const , bool Sorted = false , bool Insertion = false > class Iterator #1",
+    "Iterator & operator + + ( ) #1",
+    "else #1",
+    "else #1"
+   ],
+   "cls": "assign",
+   "spelling": "at_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/disk_resident_id_table.hpp",
+   "symbol": "at_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Value > class DiskResidentIdTable #1",
+    "template < bool Const > class ResidentIterator #1"
+   ],
+   "cls": "decl",
+   "spelling": "const_iterator",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/disk_resident_id_table.hpp",
+   "symbol": "at",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Value > class DiskResidentIdTable #1",
+    "template < bool Const > class ResidentIterator #1"
+   ],
+   "cls": "decl",
+   "spelling": "const_iterator",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/disk_resident_id_table.hpp",
+   "symbol": "at_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Value > class DiskResidentIdTable #1",
+    "template < bool Const > class HeldIterator #1"
+   ],
+   "cls": "decl",
+   "spelling": "const_iterator",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/disk_resident_id_table.hpp",
+   "symbol": "at",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Value > class DiskResidentIdTable #1",
+    "template < bool Const > class HeldIterator #1"
+   ],
+   "cls": "decl",
+   "spelling": "const_iterator",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/disk_resident_id_table.hpp",
+   "symbol": "index_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Value > class DiskResidentIdTable #1",
+    "DiskResidentIdTable & operator = ( DiskResidentIdTable && other ) noexcept #1",
+    "if ( this ! = & other ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "index_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/disk_resident_id_table.hpp",
+   "symbol": "resident_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Value > class DiskResidentIdTable #1",
+    "DiskResidentIdTable & operator = ( DiskResidentIdTable && other ) noexcept #1",
+    "if ( this ! = & other ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "resident_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/disk_resident_id_table.hpp",
+   "symbol": "resident_by_key_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Value > class DiskResidentIdTable #1",
+    "DiskResidentIdTable & operator = ( DiskResidentIdTable && other ) noexcept #1",
+    "if ( this ! = & other ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "resident_by_key_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/disk_resident_id_table.hpp",
+   "symbol": "held_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Value > class DiskResidentIdTable #1",
+    "DiskResidentIdTable & operator = ( DiskResidentIdTable && other ) noexcept #1",
+    "if ( this ! = & other ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "held_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/disk_resident_id_table.hpp",
    "symbol": "begin",
    "scope": [
     "namespace pineforge :: detail #1",
@@ -735,6 +1133,102 @@
   },
   {
    "file": "include/pineforge/detail/disk_resident_id_table.hpp",
+   "symbol": "at",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Value > class DiskResidentIdTable #1",
+    "auto resident_ids ( ) const noexcept #1"
+   ],
+   "cls": "assign",
+   "spelling": "at = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/disk_resident_id_table.hpp",
+   "symbol": "at",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Value > class DiskResidentIdTable #1",
+    "auto all_sorted ( ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "at = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/disk_resident_id_table.hpp",
+   "symbol": "at",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Value > class DiskResidentIdTable #1",
+    "auto all_sorted ( ) const #1"
+   ],
+   "cls": "assign",
+   "spelling": "at = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/disk_resident_id_table.hpp",
+   "symbol": "at",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Value > class DiskResidentIdTable #1",
+    "template < class F > void for_each_id ( F && visit ) const #1"
+   ],
+   "cls": "assign",
+   "spelling": "at = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/disk_resident_id_table.hpp",
+   "symbol": "at",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Value > class DiskResidentIdTable #1",
+    "template < class F > void for_each_id ( F && visit ) const #1"
+   ],
+   "cls": "assign",
+   "spelling": "at = . . .",
+   "ordinal": 2
+  },
+  {
+   "file": "include/pineforge/detail/disk_resident_id_table.hpp",
+   "symbol": "at",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Value > class DiskResidentIdTable #1",
+    "template < class F > void for_each_sorted_id ( F && visit ) const #1"
+   ],
+   "cls": "assign",
+   "spelling": "at = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/disk_resident_id_table.hpp",
+   "symbol": "at",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Value > class DiskResidentIdTable #1",
+    "template < class F > void for_each_sorted_id ( F && visit ) const #1"
+   ],
+   "cls": "assign",
+   "spelling": "at = . . .",
+   "ordinal": 2
+  },
+  {
+   "file": "include/pineforge/detail/disk_resident_id_table.hpp",
+   "symbol": "at",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Value > class DiskResidentIdTable #1",
+    "iterator find ( const std :: string & key ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "at = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/disk_resident_id_table.hpp",
    "symbol": "find",
    "scope": [
     "namespace pineforge :: detail #1",
@@ -742,6 +1236,18 @@
    ],
    "cls": "decl",
    "spelling": "const_iterator",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/disk_resident_id_table.hpp",
+   "symbol": "at",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Value > class DiskResidentIdTable #1",
+    "const_iterator find ( const std :: string & key ) const #1"
+   ],
+   "cls": "assign",
+   "spelling": "at = . . .",
    "ordinal": 1
   },
   {
@@ -758,6 +1264,18 @@
   },
   {
    "file": "include/pineforge/detail/disk_resident_id_table.hpp",
+   "symbol": "at",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Value > class DiskResidentIdTable #1",
+    "iterator find_resident ( const std :: string & key ) noexcept #1"
+   ],
+   "cls": "assign",
+   "spelling": "at = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/disk_resident_id_table.hpp",
    "symbol": "find_resident",
    "scope": [
     "namespace pineforge :: detail #1",
@@ -765,6 +1283,18 @@
    ],
    "cls": "decl",
    "spelling": "const_iterator",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/disk_resident_id_table.hpp",
+   "symbol": "at",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Value > class DiskResidentIdTable #1",
+    "const_iterator find_resident ( const std :: string & key ) const noexcept #1"
+   ],
+   "cls": "assign",
+   "spelling": "at = . . .",
    "ordinal": 1
   },
   {
@@ -793,14 +1323,91 @@
   },
   {
    "file": "include/pineforge/detail/disk_resident_id_table.hpp",
+   "symbol": "at",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Value > class DiskResidentIdTable #1",
+    "void spill ( ) const #1"
+   ],
+   "cls": "assign",
+   "spelling": "at = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/disk_resident_id_table.hpp",
+   "symbol": "at",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Value > class DiskResidentIdTable #1",
+    "void spill ( ) const #1",
+    ") #1",
+    "if ( at -> second . owner . use_count ( ) = = 1 && at -> second . owner -> second . spillable ( ) && ( fixture_spill_predicate_ = = nullptr || fixture_spill_predicate_ ( at -> second . owner -> first ) ) ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "at = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/disk_resident_id_table.hpp",
+   "symbol": "resident_by_key_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Value > class DiskResidentIdTable #1",
+    "void insert_resident ( Offset at , const std :: shared_ptr < Row > & row ) const #1"
+   ],
+   "cls": "grow",
+   "spelling": "resident_by_key_ . emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/disk_resident_id_table.hpp",
    "symbol": "resident_",
    "scope": [
     "namespace pineforge :: detail #1",
     "template < class Value > class DiskResidentIdTable #1",
-    "std :: pair < iterator , bool > emplace ( const std :: string & key , Value value ) #1"
+    "void insert_resident ( Offset at , const std :: shared_ptr < Row > & row ) const #1",
+    "try #1"
    ],
    "cls": "grow",
    "spelling": "resident_ . emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/disk_resident_id_table.hpp",
+   "symbol": "held_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Value > class DiskResidentIdTable #1",
+    "void insert_resident ( Offset at , const std :: shared_ptr < Row > & row ) const #1",
+    "try #1"
+   ],
+   "cls": "grow",
+   "spelling": "held_ . emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/disk_resident_id_table.hpp",
+   "symbol": "held_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Value > class DiskResidentIdTable #1",
+    "void refresh_held ( Offset at , const std :: shared_ptr < Row > & row ) const #1",
+    "if ( is_held ( row -> second , 0 ) ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "held_ . emplace_hint ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/disk_resident_id_table.hpp",
+   "symbol": "at",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Value > class DiskResidentIdTable #1",
+    "template < bool Const , class Owner > static Iterator < Const > resident_begin ( Owner * owner ) noexcept #1"
+   ],
+   "cls": "assign",
+   "spelling": "at = . . .",
    "ordinal": 1
   },
   {
@@ -813,18 +1420,6 @@
    ],
    "cls": "alloc",
    "spelling": "make_shared",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/detail/disk_resident_id_table.hpp",
-   "symbol": "resident_",
-   "scope": [
-    "namespace pineforge :: detail #1",
-    "template < class Value > class DiskResidentIdTable #1",
-    "std :: shared_ptr < Row > load ( Offset at ) const #1"
-   ],
-   "cls": "grow",
-   "spelling": "resident_ . emplace ( . . . )",
    "ordinal": 1
   },
   {
@@ -846,7 +1441,29 @@
     "template < class Value > class DiskResidentIdTable #1"
    ],
    "cls": "decl",
-   "spelling": "std :: map < Offset , std :: shared_ptr < Row > >",
+   "spelling": "Residents",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/disk_resident_id_table.hpp",
+   "symbol": "resident_by_key_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Value > class DiskResidentIdTable #1"
+   ],
+   "cls": "decl",
+   "spelling": "ResidentKeys",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/disk_resident_id_table.hpp",
+   "symbol": "held_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Value > class DiskResidentIdTable #1"
+   ],
+   "cls": "decl",
+   "spelling": "Held",
    "ordinal": 1
   },
   {
@@ -1086,6 +1703,34 @@
    ],
    "cls": "temp",
    "spelling": "const_iterator",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/id_pair_store.hpp",
+   "symbol": "first",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Value , bool MaintainSortedFold = false > class IdPairStore #1",
+    "template < class Enumerate > void preflight_keys ( const Enumerate & enumerate ) const #1",
+    "enumerate ( [ & ] ( KeyView key ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "first = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/id_pair_store.hpp",
+   "symbol": "first",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Value , bool MaintainSortedFold = false > class IdPairStore #1",
+    "template < class Enumerate > void preflight_keys ( const Enumerate & enumerate ) const #1",
+    "enumerate ( [ & ] ( KeyView key ) #1",
+    "if ( data_resource_ = = ScratchResource :: consumed_data && ! second ) #1",
+    "if ( separator ! = std :: string_view :: npos ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "first = . . .",
    "ordinal": 1
   },
   {
@@ -1397,6 +2042,89 @@
    "cls": "decl",
    "spelling": "std :: string",
    "ordinal": 3
+  },
+  {
+   "file": "include/pineforge/detail/scratch_errors.hpp",
+   "symbol": "scratch_limit_number",
+   "scope": [
+    "namespace pineforge :: detail #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/scratch_errors.hpp",
+   "symbol": "scratch_limit_message",
+   "scope": [
+    "namespace pineforge :: detail #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/scratch_errors.hpp",
+   "symbol": "message",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "inline std :: string scratch_limit_message ( const char * prefix , std :: uint64_t limit , const char * suffix ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/scratch_errors.hpp",
+   "symbol": "message",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "inline std :: string scratch_limit_message ( const char * prefix , std :: uint64_t limit , const char * suffix ) #1"
+   ],
+   "cls": "append",
+   "spelling": "message + = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/scratch_errors.hpp",
+   "symbol": "message",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "inline std :: string scratch_limit_message ( const char * prefix , std :: uint64_t limit , const char * suffix ) #1"
+   ],
+   "cls": "append",
+   "spelling": "message + = . . .",
+   "ordinal": 2
+  },
+  {
+   "file": "include/pineforge/detail/scratch_errors.hpp",
+   "symbol": "scratch_count_limit_message",
+   "scope": [
+    "namespace pineforge :: detail #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/scratch_errors.hpp",
+   "symbol": "scratch_byte_limit_message",
+   "scope": [
+    "namespace pineforge :: detail #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/scratch_errors.hpp",
+   "symbol": "scratch_resident_cohort_limit_message",
+   "scope": [
+    "namespace pineforge :: detail #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
   },
   {
    "file": "include/pineforge/detail/scratch_file.hpp",
@@ -5113,6 +5841,32 @@
    "ordinal": 1
   },
   {
+   "file": "include/pineforge/metrics_fold.hpp",
+   "symbol": "held_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace metrics #1",
+    "class EquityMetricsFold #1",
+    "public : void fold ( const pf_equity_point_t & point , int month_key , bool observation = true , bool exposed = false ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "held_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/metrics_fold.hpp",
+   "symbol": "held_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace metrics #1",
+    "class EquityMetricsFold #1",
+    "bool replace_last ( const pf_equity_point_t & point , int month_key ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "held_ = . . .",
+   "ordinal": 1
+  },
+  {
    "file": "include/pineforge/native_calendar.hpp",
    "symbol": "literal_",
    "scope": [
@@ -8029,6 +8783,18 @@
   },
   {
    "file": "include/pineforge/source/pine_adapter.hpp",
+   "symbol": "bytes",
+   "scope": [
+    "namespace pineforge :: source #1",
+    "class OriginRoster #1",
+    "std :: size_t heap_bytes_estimate ( ) const noexcept #1"
+   ],
+   "cls": "assign",
+   "spelling": "bytes = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_adapter.hpp",
    "symbol": "items_",
    "scope": [
     "namespace pineforge :: source #1",
@@ -9031,7 +9797,7 @@
     "class PineExecutionAdapter #1"
    ],
    "cls": "decl",
-   "spelling": "std :: unordered_map < std :: uint64_t , native_order :: RequestHandle >",
+   "spelling": "std :: unordered_map < std :: uint64_t , detail :: LiveSourceHandle >",
    "ordinal": 1
   },
   {
@@ -11070,6 +11836,18 @@
    "ordinal": 2
   },
   {
+   "file": "include/pineforge/ta.hpp",
+   "symbol": "held_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace ta #1",
+    "class PivotPointLevels #1"
+   ],
+   "cls": "assign",
+   "spelling": "held_ = . . .",
+   "ordinal": 1
+  },
+  {
    "file": "include/pineforge/timeframe.hpp",
    "symbol": "detect_timeframe",
    "scope": [
@@ -11408,6 +12186,161 @@
    ],
    "cls": "decl",
    "spelling": "std :: deque < double >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/array.cpp",
+   "symbol": "args",
+   "scope": [
+    "namespace pineforge :: detail :: script_array #1",
+    "namespace #1",
+    "[ [ noreturn ] ] void array_stop ( const char * reason , const char * method_or_null , const char * english ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "RunFailureArgs",
+   "ordinal": 1
+  },
+  {
+   "file": "src/array.cpp",
+   "symbol": "args",
+   "scope": [
+    "namespace pineforge :: detail :: script_array #1",
+    "namespace #1",
+    "[ [ noreturn ] ] void array_stop ( const char * reason , const char * method_or_null , const char * english ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "args . emplace_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/array.cpp",
+   "symbol": "<temp:string>",
+   "scope": [
+    "namespace pineforge :: detail :: script_array #1",
+    "void index_error ( const char * method , std :: int64_t raw , std :: uint64_t size , bool missing ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/array.cpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge :: detail :: script_array #1",
+    "void index_error ( const char * method , std :: int64_t raw , std :: uint64_t size , bool missing ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/array.cpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge :: detail :: script_array #1",
+    "void index_error ( const char * method , std :: int64_t raw , std :: uint64_t size , bool missing ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 2
+  },
+  {
+   "file": "src/array.cpp",
+   "symbol": "<temp:string>",
+   "scope": [
+    "namespace pineforge :: detail :: script_array #1",
+    "void index_error_double ( const char * method , double raw , std :: uint64_t size ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/array.cpp",
+   "symbol": "<temp:string>",
+   "scope": [
+    "namespace pineforge :: detail :: script_array #1",
+    "void index_error_double ( const char * method , double raw , std :: uint64_t size ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: string",
+   "ordinal": 2
+  },
+  {
+   "file": "src/array.cpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge :: detail :: script_array #1",
+    "void index_error_double ( const char * method , double raw , std :: uint64_t size ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/array.cpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge :: detail :: script_array #1",
+    "void index_error_double ( const char * method , double raw , std :: uint64_t size ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 2
+  },
+  {
+   "file": "src/array.cpp",
+   "symbol": "<temp:string>",
+   "scope": [
+    "namespace pineforge :: detail :: script_array #1",
+    "void empty_array_error ( const char * method ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/array.cpp",
+   "symbol": "<temp:string>",
+   "scope": [
+    "namespace pineforge :: detail :: script_array #1",
+    "void inverted_range_error ( const char * method ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/array.cpp",
+   "symbol": "load_string",
+   "scope": [
+    "namespace pineforge :: detail :: script_array #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/array.cpp",
+   "symbol": "<temp:string>",
+   "scope": [
+    "namespace pineforge :: detail :: script_array #1",
+    "std :: string load_string ( const o1 :: Store & store , o1 :: Id id ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/array.cpp",
+   "symbol": "result",
+   "scope": [
+    "namespace pineforge :: detail :: script_array #1",
+    "std :: string load_string ( const o1 :: Store & store , o1 :: Id id ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
    "ordinal": 1
   },
   {
@@ -12173,6 +13106,71 @@
    ],
    "cls": "grow",
    "spelling": "selected . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/detail/o1_store.cpp",
+   "symbol": "reset",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace detail #1",
+    "namespace o1 #1",
+    "StoreImpl :: StoreImpl ( const Shape & shape , ScratchBacking & backing ) : chunk_bytes_ ( shape . chunk_bytes ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "new std::byte",
+   "ordinal": 1
+  },
+  {
+   "file": "src/detail/o1_store.cpp",
+   "symbol": "reset",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace detail #1",
+    "namespace o1 #1",
+    "StoreImpl :: StoreImpl ( const Shape & shape , ScratchBacking & backing ) : chunk_bytes_ ( shape . chunk_bytes ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "new CommandScratchStore",
+   "ordinal": 1
+  },
+  {
+   "file": "src/detail/o1_store.cpp",
+   "symbol": "transaction",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace detail #1",
+    "namespace o1 #1",
+    "std :: unique_ptr < Tx > StoreImpl :: begin ( ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "new StoreTx",
+   "ordinal": 1
+  },
+  {
+   "file": "src/detail/o1_store.cpp",
+   "symbol": "new:StoreImpl",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace detail #1",
+    "namespace o1 #1",
+    "std :: unique_ptr < Store > Store :: open ( const Shape & shape , ScratchBacking & backing ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "new StoreImpl",
+   "ordinal": 1
+  },
+  {
+   "file": "src/detail/o1_store.cpp",
+   "symbol": "<temp:string>",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace detail #1",
+    "namespace o1 #1",
+    "[ [ noreturn ] ] void StoreImpl :: throw_status ( const char * what , ScratchStatus status ) const #1"
+   ],
+   "cls": "temp",
+   "spelling": "std::string",
    "ordinal": 1
   },
   {
@@ -20316,6 +21314,19 @@
   },
   {
    "file": "src/native_order.cpp",
+   "symbol": "held_",
+   "scope": [
+    "namespace pineforge :: native_order #1",
+    "inline namespace native_order_v7 #1",
+    "void WorkingRequestCore :: LiveView :: const_iterator :: settle ( ) #1",
+    "if ( core_ -> book_next_spilled ( cursor_ ) ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "held_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order.cpp",
    "symbol": "first",
    "scope": [
     "namespace pineforge :: native_order #1",
@@ -26969,7 +27980,7 @@
     "class AdapterLookupIndex final : public detail :: PineRunCache #1"
    ],
    "cls": "decl",
-   "spelling": "std :: unordered_map < const void * , CohortSides >",
+   "spelling": "std :: unordered_map < std :: uint64_t , CohortSides >",
    "ordinal": 1
   },
   {
@@ -27422,7 +28433,7 @@
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
-    "for ( const auto & cohort : cohorts_by_id_ ) #1"
+    "for ( const auto & cohort : cohorts_by_id_ . held_rows ( ) ) #1"
    ],
    "cls": "grow",
    "spelling": "askable_origins . push_back ( . . . )",
@@ -28030,7 +29041,7 @@
    "symbol": "positions",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "double PineExecutionAdapter :: cohort_exposure_for ( const SourceId & id ) const noexcept #1",
+    "double PineExecutionAdapter :: cohort_exposure_for ( const CohortFacts & facts ) const noexcept #1",
     ") #1",
     "for ( const auto & unit : facts . live_units_by_origin ) #1"
    ],
@@ -29203,39 +30214,6 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "cohort_ids",
-   "scope": [
-    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "std :: size_t PineExecutionAdapter :: accepted_entries_in_cycle ( bool is_long , const SourceId & id ) const #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < SourceId >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_adapter.cpp",
-   "symbol": "cohort_ids",
-   "scope": [
-    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "std :: size_t PineExecutionAdapter :: accepted_entries_in_cycle ( bool is_long , const SourceId & id ) const #1"
-   ],
-   "cls": "grow",
-   "spelling": "cohort_ids . reserve ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_adapter.cpp",
-   "symbol": "cohort_ids",
-   "scope": [
-    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "std :: size_t PineExecutionAdapter :: accepted_entries_in_cycle ( bool is_long , const SourceId & id ) const #1"
-   ],
-   "cls": "grow",
-   "spelling": "cohort_ids . push_back ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_adapter.cpp",
    "symbol": "pending_entries_",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
@@ -29551,38 +30529,38 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "cohort_ids",
+   "symbol": "cohorts",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: place_entry ( const SourceId & id , bool is_long , double limit_price , double stop_price , double qty , const std :: string & comment , const std :: string & oca_name , int oca_type , int qty_type ) #1",
     "if ( special_sell_replacement && current_point ) #1"
    ],
    "cls": "decl",
-   "spelling": "std :: vector < SourceId >",
+   "spelling": "std :: vector < const CohortRow * >",
    "ordinal": 1
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "cohort_ids",
+   "symbol": "cohorts",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: place_entry ( const SourceId & id , bool is_long , double limit_price , double stop_price , double qty , const std :: string & comment , const std :: string & oca_name , int oca_type , int qty_type ) #1",
     "if ( special_sell_replacement && current_point ) #1"
    ],
    "cls": "grow",
-   "spelling": "cohort_ids . reserve ( . . . )",
+   "spelling": "cohorts . reserve ( . . . )",
    "ordinal": 1
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "cohort_ids",
+   "symbol": "cohorts",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: place_entry ( const SourceId & id , bool is_long , double limit_price , double stop_price , double qty , const std :: string & comment , const std :: string & oca_name , int oca_type , int qty_type ) #1",
     "if ( special_sell_replacement && current_point ) #1"
    ],
    "cls": "grow",
-   "spelling": "cohort_ids . push_back ( . . . )",
+   "spelling": "cohorts . push_back ( . . . )",
    "ordinal": 1
   },
   {
@@ -29592,7 +30570,7 @@
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: place_entry ( const SourceId & id , bool is_long , double limit_price , double stop_price , double qty , const std :: string & comment , const std :: string & oca_name , int oca_type , int qty_type ) #1",
     "if ( special_sell_replacement && current_point ) #1",
-    "for ( const auto & cohort_id : cohort_ids ) #1",
+    "for ( const auto * cohort : cohorts ) #1",
     "for ( const auto & origin : cohort -> second . opened ) #1",
     "if ( prior ! = placement_ . end ( ) && prior -> second . is_long ! = is_long ) #1"
    ],
@@ -29607,7 +30585,7 @@
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: place_entry ( const SourceId & id , bool is_long , double limit_price , double stop_price , double qty , const std :: string & comment , const std :: string & oca_name , int oca_type , int qty_type ) #1",
     "if ( special_sell_replacement && current_point ) #1",
-    "for ( const auto & cohort_id : cohort_ids ) #1",
+    "for ( const auto * cohort : cohorts ) #1",
     "for ( const auto & origin : cohort -> second . opened ) #1",
     "if ( prior ! = placement_ . end ( ) && prior -> second . is_long ! = is_long ) #1"
    ],
@@ -31459,7 +32437,7 @@
     "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
     "auto submit_leg = [ & ] ( PineOrderFamily family , native_order :: Trigger trigger ) #1",
     ") #1",
-    "if ( defer_new_instance && live_by_source_key_ . find ( key_for ( replacement_key ) ) = = live_by_source_key_ . end ( ) ) #1"
+    "if ( defer_new_instance && live_by_source_key_ . find ( checked_live_key ( replacement_key ) ) = = live_by_source_key_ . end ( ) ) #1"
    ],
    "cls": "assign",
    "spelling": "queued = . . .",
@@ -31473,7 +32451,7 @@
     "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
     "auto submit_leg = [ & ] ( PineOrderFamily family , native_order :: Trigger trigger ) #1",
     ") #1",
-    "if ( defer_new_instance && live_by_source_key_ . find ( key_for ( replacement_key ) ) = = live_by_source_key_ . end ( ) ) #1"
+    "if ( defer_new_instance && live_by_source_key_ . find ( checked_live_key ( replacement_key ) ) = = live_by_source_key_ . end ( ) ) #1"
    ],
    "cls": "grow",
    "spelling": "pending_bracket_legs_ . push_back ( . . . )",
@@ -31487,7 +32465,7 @@
     "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
     "auto submit_leg = [ & ] ( PineOrderFamily family , native_order :: Trigger trigger ) #1",
     ") #1",
-    "if ( defer_new_instance && live_by_source_key_ . find ( key_for ( replacement_key ) ) = = live_by_source_key_ . end ( ) ) #1"
+    "if ( defer_new_instance && live_by_source_key_ . find ( checked_live_key ( replacement_key ) ) = = live_by_source_key_ . end ( ) ) #1"
    ],
    "cls": "assign",
    "spelling": "queued = . . .",
@@ -33092,7 +34070,7 @@
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "std :: optional < std :: int64_t > PineExecutionAdapter :: flat_sibling_placement ( std :: size_t min_lots ) const #1",
-    "for ( const auto & cohort : cohorts_by_id_ ) #1",
+    "for ( const auto & cohort : cohorts_by_id_ . held_rows ( ) ) #1",
     "for ( const auto & [ incarnation , units ] : cohort . second . live_units_by_origin ) #1"
    ],
    "cls": "assign",
@@ -33105,7 +34083,7 @@
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "std :: size_t PineExecutionAdapter :: add_sibling_lots ( std :: int64_t placed ) const #1",
-    "for ( const auto & cohort : cohorts_by_id_ ) #1",
+    "for ( const auto & cohort : cohorts_by_id_ . held_rows ( ) ) #1",
     "for ( const auto & [ incarnation , units ] : cohort . second . live_units_by_origin ) #1"
    ],
    "cls": "assign",
@@ -35446,7 +36424,8 @@
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: on_applied ( const native_order :: ExecutionAppliedEvent & event , const NativeDecisionContext & context ) #1",
     "if ( placement_snapshot && placement_snapshot -> opening && std :: abs ( event . opened_units ) > 0 . 0 ) #1",
-    "<block> #1"
+    "<block> #1",
+    "if ( std :: find ( facts . opened . begin ( ) , facts . opened . end ( ) , event . handle ( ) ) = = facts . opened . end ( ) ) #1"
    ],
    "cls": "grow",
    "spelling": "opened . push_back ( . . . )",
@@ -35747,6 +36726,19 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
+   "symbol": "id",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "void PineExecutionAdapter :: on_applied ( const native_order :: ExecutionAppliedEvent & event , const NativeDecisionContext & context ) #1",
+    "if ( placement_snapshot && placement_snapshot -> opening ) #2",
+    "for ( const auto & cohort : cohorts_by_id_ . held_rows ( ) ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "id = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
    "symbol": "key",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
@@ -35869,7 +36861,7 @@
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: on_applied ( const native_order :: ExecutionAppliedEvent & event , const NativeDecisionContext & context ) #1",
     "if ( detail :: run_position ( require_host ( ) ) . signed_units = = 0 . 0 ) #1",
-    "for ( auto & cohort : cohorts_by_id_ ) #1"
+    ") #1"
    ],
    "cls": "grow",
    "spelling": "ended_sources . push_back ( . . . )",
@@ -36539,6 +37531,17 @@
    "ordinal": 1
   },
   {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "key",
+   "scope": [
+    "namespace pineforge :: source #5",
+    "std :: uint64_t PineExecutionAdapter :: checked_live_key ( const SourceId & spelling ) const #1"
+   ],
+   "cls": "assign",
+   "spelling": "key = . . .",
+   "ordinal": 1
+  },
+  {
    "file": "src/source/pine_aux_security.cpp",
    "symbol": "aux_security_bars_",
    "scope": [
@@ -36769,6 +37772,28 @@
    "cls": "decl",
    "spelling": "std :: vector < DeferredAuxBar >",
    "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_aux_security.cpp",
+   "symbol": "<temp:vector>",
+   "scope": [
+    "namespace pineforge #1",
+    "void source :: PineStrategyHost :: release_aux_security_chart_ranges ( ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: vector < std :: size_t >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_aux_security.cpp",
+   "symbol": "<temp:vector>",
+   "scope": [
+    "namespace pineforge #1",
+    "void source :: PineStrategyHost :: release_aux_security_chart_ranges ( ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: vector < std :: size_t >",
+   "ordinal": 2
   },
   {
    "file": "src/source/pine_intent_state.hpp",
@@ -39584,6 +40609,64 @@
    "ordinal": 1
   },
   {
+   "file": "src/source/pine_value_admission.cpp",
+   "symbol": "<temp:RunFailureArgs>",
+   "scope": [
+    "namespace pineforge :: source #1",
+    "namespace #1",
+    "void admit_text ( const std :: string & text , const char * field ) #1",
+    "if ( text . find ( ) ! = std :: string :: npos || text . find ( ) ! = std :: string :: npos ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "RunFailureArgs",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_value_admission.cpp",
+   "symbol": "<temp:string>",
+   "scope": [
+    "namespace pineforge :: source #1",
+    "namespace #1",
+    "void admit_text ( const std :: string & text , const char * field ) #1",
+    "if ( text . find ( ) ! = std :: string :: npos || text . find ( ) ! = std :: string :: npos ) #1",
+    "throw coded < std :: invalid_argument > ( RunFailureCode :: pine_invalid_argument , RunFailureArgs #1",
+    "<block> #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_value_admission.cpp",
+   "symbol": "<temp:string>",
+   "scope": [
+    "namespace pineforge :: source #1",
+    "namespace #1",
+    "void admit_text ( const std :: string & text , const char * field ) #1",
+    "if ( text . find ( ) ! = std :: string :: npos || text . find ( ) ! = std :: string :: npos ) #1",
+    "throw coded < std :: invalid_argument > ( RunFailureCode :: pine_invalid_argument , RunFailureArgs #1",
+    "<block> #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: string",
+   "ordinal": 2
+  },
+  {
+   "file": "src/source/pine_value_admission.cpp",
+   "symbol": "<temp:string>",
+   "scope": [
+    "namespace pineforge :: source #1",
+    "namespace #1",
+    "void admit_text ( const std :: string & text , const char * field ) #1",
+    "if ( text . find ( ) ! = std :: string :: npos || text . find ( ) ! = std :: string :: npos ) #1",
+    "throw coded < std :: invalid_argument > ( RunFailureCode :: pine_invalid_argument , RunFailureArgs #1",
+    ", #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
    "file": "src/source/pine_value_admission.hpp",
    "symbol": "<temp:RunFailureArgs>",
    "scope": [
@@ -40643,6 +41726,18 @@
    "ordinal": 1
   },
   {
+   "file": "src/ta_misc.cpp",
+   "symbol": "held_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace ta #1",
+    "std :: vector < double > PivotPointLevels :: recompute ( PivotLevelsType type , bool anchor , bool developing , double open , double high , double low , double close ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "held_ = . . .",
+   "ordinal": 1
+  },
+  {
    "file": "src/ta_moving_averages.cpp",
    "symbol": "addends_",
    "scope": [
@@ -41128,6 +42223,18 @@
   },
   {
    "file": "src/timeframe.cpp",
+   "symbol": "heap_open",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace #3",
+    "struct SessionDaySchedule #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < int >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/timeframe.cpp",
    "symbol": "s",
    "scope": [
     "namespace pineforge #1",
@@ -41429,6 +42536,78 @@
    ],
    "cls": "assign",
    "spelling": "native_late_opens_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/timeframe.cpp",
+   "symbol": "starts",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace #6",
+    "bool SessionDaySchedule :: parse_many ( const std :: string & session ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < int >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/timeframe.cpp",
+   "symbol": "ends",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace #6",
+    "bool SessionDaySchedule :: parse_many ( const std :: string & session ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < int >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/timeframe.cpp",
+   "symbol": "opens",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace #6",
+    "bool SessionDaySchedule :: parse_many ( const std :: string & session ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < int >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/timeframe.cpp",
+   "symbol": "closes",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace #6",
+    "bool SessionDaySchedule :: parse_many ( const std :: string & session ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < int >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/timeframe.cpp",
+   "symbol": "heap_open",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace #6",
+    "bool SessionDaySchedule :: parse_many ( const std :: string & session ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "heap_open . resize ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/timeframe.cpp",
+   "symbol": "heap_close",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace #6",
+    "bool SessionDaySchedule :: parse_many ( const std :: string & session ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "heap_close . resize ( . . . )",
    "ordinal": 1
   },
   {

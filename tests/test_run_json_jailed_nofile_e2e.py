@@ -438,6 +438,8 @@ def _failure(result, code, arguments):
     assert document["engine"] == "pineforge", document
     assert isinstance(document["error"], str) and document["error"], document
     assert (document["code"], document["args"]) == (code, arguments), document
+    for key in ("run_profile", "scratch_arena_jailed"):
+        assert key not in document and key not in document.get("diagnostics", {}), document
     assert "summary" not in document and "trades" not in document, document
     return document
 

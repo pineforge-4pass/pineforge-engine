@@ -1,7 +1,9 @@
 // Negative control: sealed-arena admission and a real fd-sink native run,
-// with inotify watching even transient directory creations.
+// with strict private-TMPDIR inotify and own-process mkstemp attribution.
+#define PINEFORGE_TEST_SCRATCH_ATTRIBUTION 1
 #include "default_scratch_tmpfs_fixture.hpp"
 
+#if defined(__linux__)
 #include <sys/mman.h>
 
 namespace {
@@ -31,8 +33,8 @@ private:
 };
 
 void row() {
-    PlainEnvironment environment;
     require_filesystems(false);
+    PlainEnvironment environment;
     // Reserve fd 5 before the inotify and pipe descriptors are opened.
     InheritedArena backing;
     CreationWatch watch;
@@ -99,3 +101,4 @@ void row() {
 int main() {
     return s4e_tmp::test_main("test_jailed_scratch_tmpfs_tmpdir", row);
 }
+#endif // __linux__

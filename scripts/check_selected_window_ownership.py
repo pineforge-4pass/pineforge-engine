@@ -609,7 +609,7 @@ def check_producer_bindings(cpp_files, constants, root, findings):
         family = name.removeprefix("admit_strategy_")
         if family == "close_token":
             family = "close"
-        for _, _, _, args in cpp.calls({"admit_text", "admit_level"}, definition["start"], definition["end"]):
+        for _, _, _, args in cpp.calls({"admit_text", "admit_comment", "admit_level"}, definition["start"], definition["end"]):
             if len(args) != 2 or len(args[0]) != 1 or not IDENT.fullmatch(args[0][0]):
                 findings.add("producer-binding", f"{name}: unresolved source operand")
                 continue

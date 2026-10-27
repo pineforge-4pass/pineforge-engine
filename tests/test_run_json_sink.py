@@ -105,6 +105,22 @@ class Receipt(ctypes.Structure):
 ARENA_DIAGNOSTICS = ("scratch_arena_high_water_bytes", "scratch_arena_bytes")
 
 
+def assert_run_profile(document, profile="unjailed", *, admitted=False):
+    diagnostics = document.get("diagnostics", {})
+    observed = {key: diagnostics.get(key, "<absent>") for key in (
+        "run_profile", "scratch_arena_jailed")}
+    assert type(observed["run_profile"]) is str and observed["run_profile"] == profile, (
+        f"observed {observed!r}; expected run_profile={profile!r}")
+    assert observed["scratch_arena_jailed"] is admitted, (
+        f"observed {observed!r}; expected scratch_arena_jailed={admitted!r}")
+
+
+def assert_no_run_profile(document):
+    for key in ("run_profile", "scratch_arena_jailed"):
+        assert key not in document and key not in document.get("diagnostics", {}), (
+            f"unexpected {key}: {document!r}")
+
+
 @pytest.fixture(params=[False, True], ids=["older-module", "arena-stats"])
 def arena_stats(request):
     # Fixture-owned counters exercise integer transport beyond 32 bits.
@@ -306,6 +322,8 @@ def test_full_json_installs_sink_and_matches_frozen(
     assert after[3].queried == 1
     assert (before[0], before[2], after[0], after[2]) == (0, "", 0, "")
     assert not before[3].installed
+    assert_run_profile(json.loads(before[1]))
+    assert_run_profile(json.loads(after[1]))
     assert after[1] == before[1]  # fixed clock: not even wall-clock masks are needed
     for name in ARENA_DIAGNOSTICS:
         assert (name in json.loads(after[1])["diagnostics"]) == (arena_stats is not None)

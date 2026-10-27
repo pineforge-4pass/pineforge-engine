@@ -2973,7 +2973,7 @@ def default_scratch_manifest(bars: int | None) -> ScratchTablesC:
     return ScratchTablesC(
         ctypes.sizeof(ScratchTablesC), 1, 1, 0,  # bounded_memory
         0, 0,  # q is removed; retain its ABI fields with zero capacity
-        8192, 3145728, 4096, 2101248, 4096, 1048576, 27, 6912, roots)
+        262144, 25165824, 32768, 4227072, 65536, 4194304, 27, 6912, roots)
 
 
 def apply_scratch_tables(lib, state, manifest: ScratchTablesC) -> None:
@@ -4173,48 +4173,48 @@ def build_report_dict(report: ReportC, ohlcv_path: Path,
     }
 
 
-def _validate_report_result(out: dict, *, validate_summary: bool = True) -> None:
+def _validate_report_result(out: dict, *, validate_summary: bool = True,
+                            equity_only: bool = False) -> None:
     """Required results are finite; only native metric absence is nullable.
     Metric keys come from the producer's ctypes descriptors and alias map,
     after native computation has distinguished absence from computed NaN.
-    The sink pre-pass validates one trade here at a time; its completed summary
-    is checked by the default full validation before the report is serialized."""
-    for trade in out["trades"]:
+    Sink read-back validates one trade/point at a time, deferring its first refusal until assembly.
+    Keep the equity guard here for the ownership checker; equity_only skips small-field checks."""
+    if not equity_only:
+        for trade in out["trades"]:
+            for key, field in (
+                ("entry_price", "trades.entry_price"),
+                ("exit_price", "trades.exit_price"),
+                ("qty", "trades.qty"), ("pnl", "trades.pnl"), ("pnl_pct", "trades.pnl_pct"),
+                ("max_runup", "trades.max_runup"),
+                ("max_drawdown", "trades.max_drawdown"),
+                ("commission", "trades.commission"),
+            ):
+                if trade[key] is None or not math.isfinite(trade[key]):
+                    raise RunFailure(f"the report result {field} is not finite",
+                                     "report_result_invalid",
+                                     {"field": field, "reason": "nonfinite"})
+        if not validate_summary:
+            return
         for key, field in (
-            ("entry_price", "trades.entry_price"),
-            ("exit_price", "trades.exit_price"),
-            ("qty", "trades.qty"),
-            ("pnl", "trades.pnl"),
-            ("pnl_pct", "trades.pnl_pct"),
-            ("max_runup", "trades.max_runup"),
-            ("max_drawdown", "trades.max_drawdown"),
-            ("commission", "trades.commission"),
+            ("win_rate_pct", "summary.win_rate_pct"),
+            ("net_pnl", "summary.net_pnl"),
+            ("avg_trade", "summary.avg_trade"),
+            ("best_trade", "summary.best_trade"),
+            ("worst_trade", "summary.worst_trade"),
+            ("max_drawdown", "summary.max_drawdown"),
         ):
-            if trade[key] is None or not math.isfinite(trade[key]):
+            if not math.isfinite(out["summary"][key]):
                 raise RunFailure(f"the report result {field} is not finite",
                                  "report_result_invalid",
                                  {"field": field, "reason": "nonfinite"})
-    if not validate_summary:
-        return
-    for key, field in (
-        ("win_rate_pct", "summary.win_rate_pct"),
-        ("net_pnl", "summary.net_pnl"),
-        ("avg_trade", "summary.avg_trade"),
-        ("best_trade", "summary.best_trade"),
-        ("worst_trade", "summary.worst_trade"),
-        ("max_drawdown", "summary.max_drawdown"),
-    ):
-        if not math.isfinite(out["summary"][key]):
-            raise RunFailure(f"the report result {field} is not finite",
-                             "report_result_invalid",
-                             {"field": field, "reason": "nonfinite"})
-    for block in ("all", "longs", "shorts", "equity"):
-        for name, value in out["metrics"][block].items():
-            if value is not None and not math.isfinite(value):
-                metric_field = f"metrics.{block}.{name}"
-                raise RunFailure(f"the report result {metric_field} is not finite",
-                                 "report_result_invalid",
-                                 {"field": metric_field, "reason": "nonfinite"})
+        for block in ("all", "longs", "shorts", "equity"):
+            for name, value in out["metrics"][block].items():
+                if value is not None and not math.isfinite(value):
+                    metric_field = f"metrics.{block}.{name}"
+                    raise RunFailure(f"the report result {metric_field} is not finite",
+                                     "report_result_invalid",
+                                     {"field": metric_field, "reason": "nonfinite"})
     for point in out["equity_curve"]:
         for key, field in (
             ("equity", "equity_curve.equity"),
@@ -4843,7 +4843,7 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
                 enable_outputs(lib, st)
             if args.profile == "jailed":
                 apply_scratch_tables(lib, st, default_scratch_manifest(fed_count))
-                _require_jailed_arena(lib, st)
+                args._scratch_arena_admitted = _require_jailed_arena(lib, st)
             sink = _new_report_sink(lib, st, args)
         except BaseException:
             try:
@@ -4958,7 +4958,7 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
             window_anchor=True)
         if sink is None:
             _validate_report_result(out)
-        _add_scratch_arena_diagnostics(lib, out["diagnostics"])
+        _add_scratch_arena_diagnostics(lib, out["diagnostics"], args)
         out["report_window"] = window
         out["report_shape"] = swr.report_shape_full(
             equity_points, sink.counts["T"] if sink is not None else len(out["trades"]))
@@ -5414,7 +5414,7 @@ def _main(argv, binary_inputs) -> int:
                 enable_outputs(lib, st)
             if args.profile == "jailed":
                 apply_scratch_tables(lib, st, default_scratch_manifest(n))
-                _require_jailed_arena(lib, st)
+                args._scratch_arena_admitted = _require_jailed_arena(lib, st)
             sink = _new_report_sink(lib, st, args, body=body)
         except BaseException:
             try:
@@ -5551,7 +5551,7 @@ def _main(argv, binary_inputs) -> int:
             sink if sink is not None else trade_entry_incarnations)
         if sink is None:
             _validate_report_result(out)
-        _add_scratch_arena_diagnostics(lib, out["diagnostics"])
+        _add_scratch_arena_diagnostics(lib, out["diagnostics"], args)
         if timing is not None:
             out["diagnostics"]["timing"] = timing
             out["diagnostics"]["throughput"] = _throughput_block(
@@ -5694,7 +5694,15 @@ def _bind_report_sink(lib) -> None:
             function.restype, function.argtypes = restype, argtypes
 
 
-def _add_scratch_arena_diagnostics(lib, diagnostics):
+def _add_scratch_arena_diagnostics(lib, diagnostics, args=None):
+    _add_scratch_arena_counters(lib, diagnostics)
+    if args is not None:
+        diagnostics["run_profile"] = args.profile
+        diagnostics["scratch_arena_jailed"] = (
+            args.profile == "jailed" and getattr(args, "_scratch_arena_admitted", False) is True)
+
+
+def _add_scratch_arena_counters(lib, diagnostics):
     # Attachment-lifetime counters: read after report finalization, before
     # strategy_free can detach. Never add them to a sink trailer or fingerprint.
     getter = getattr(lib, "pf_report_scratch_arena_stats", None)
@@ -5730,6 +5738,7 @@ def _require_jailed_arena(lib, state):
             raise RunFailure(*failure)
         raise RunFailure("the jailed profile requires an attached scratch arena",
                          "report_sink_failed", {"reason": "arena_backing"})
+    return True
 
 
 def _validate_sink_options(args):
@@ -5953,6 +5962,224 @@ def _disk_report_directory(directory=None):
         + "; set TMPDIR or --spill-dir to a disk-backed directory", "arguments")
 
 
+_BULK_E_ENABLED = True
+_BULK_E_WINDOW = 64 * 1024
+# A finite double's repr is at most 24 ASCII bytes. The lookahead bounds
+# rejected tokens too, avoiding unbounded regex work on a malformed line.
+_BULK_E_FLOAT = (
+    rb"(?=[-+0-9.e]{1,24}[,\]])-?(?:0|[1-9][0-9]*)"
+    rb"(?:\.[0-9]+(?:e[+-]?[0-9]+)?|e[+-]?[0-9]+)"
+)
+_BULK_E_LINE = re.compile(
+    rb'\["E",(0|-?[1-9][0-9]{0,15}),(' + _BULK_E_FLOAT
+    + rb"),(" + _BULK_E_FLOAT + rb")\]\n")
+# Lines per regex call. The engine matches a repeated group with its whole
+# backtracking state on a heap stack that is freed only when the call returns:
+# every alternation and bounded repeat of a line nests a frame, about 2 KiB per
+# canonical line. A call over a full window of 33-byte lines (about 2,000)
+# would therefore hold several MiB, and a call over a shorter file less, so the
+# transient memory would follow the window and the file instead of staying flat.
+# The bound keeps that stack, and every list built from one batch, the same for
+# any window and any file length; a window is consumed in successive batches.
+_BULK_E_BATCH = 128
+_BULK_E_RUN = re.compile(rb"(?:" + _BULK_E_LINE.pattern + (rb"){1,%d}" % _BULK_E_BATCH))
+_BULK_E_LINE_BYTES = 80
+
+
+class _BulkEquity:
+    """One accepted batch of lines, with only its two decoded endpoints retained."""
+    def __init__(self, raw, count, first, last):
+        self.raw, self.count, self.first, self.last = raw, count, first, last
+
+
+def _bulk_equity(raw):
+    """Accept a strict subset; a failed proof never supplies an error.
+
+    ``raw`` is one run of at most _BULK_E_BATCH lines; a longer one is no match.
+    """
+    if not raw or _BULK_E_RUN.fullmatch(raw) is None:
+        return None
+    times, equities, profits = zip(*_BULK_E_LINE.findall(raw))
+    timestamps = list(map(int, times))
+    if min(timestamps) < -((1 << 53) - 1) or max(timestamps) > (1 << 53) - 1:
+        return None
+    texts = list(map(bytes.decode, equities + profits))
+    numbers = list(map(float, texts))
+    if not all(map(math.isfinite, numbers)) or list(map(repr, numbers)) != texts:
+        return None
+    count = len(timestamps)
+    first = dict(time_ms=timestamps[0], equity=numbers[0], open_profit=numbers[count])
+    last = dict(time_ms=timestamps[-1], equity=numbers[count - 1], open_profit=numbers[-1])
+    return _BulkEquity(raw, count, first, last)
+
+
+class _BulkEquityFile:
+    """Look ahead within a loaded direct page; replay all other bytes strictly."""
+    def __init__(self, file):
+        self.file, self.data, self.cursor, self.eof = file, b"", 0, False
+
+    def _fill(self):
+        self.data, self.cursor = self.data[self.cursor:], 0
+        room = _BULK_E_WINDOW - len(self.data)
+        if not room or self.eof:
+            return
+        first = self.file.read(1)  # populate exactly the page readline would use
+        if not first:
+            self.eof = True
+            return
+        self.data += first
+        available = self.file.read_base + self.file.read_size - self.file.position
+        take = min(room - 1, available)
+        if take:
+            self.data += self.file.read(take)
+
+    def window(self):
+        if self.cursor == len(self.data):
+            self._fill()
+        # A canonical line can cross a page. Carry only its bounded tail;
+        # longer or malformed lines go back to the strict readline limit.
+        while (not self.eof and len(self.data) - self.cursor < _BULK_E_LINE_BYTES
+               and len(self.data) - self.cursor < _BULK_E_WINDOW
+               and self.data.find(b"\n", self.cursor) < 0):
+            self._fill()
+        return self.data, self.cursor
+
+    def readline(self, limit):
+        stop = min(len(self.data), self.cursor + limit)
+        newline = self.data.find(b"\n", self.cursor, stop)
+        if newline >= 0:
+            stop = newline + 1
+        head = self.data[self.cursor:stop]
+        self.cursor = stop
+        if newline >= 0 or len(head) == limit:
+            return head
+        return head + self.file.readline(limit - len(head))
+
+    def read(self, count):
+        stop = min(len(self.data), self.cursor + count)
+        head = self.data[self.cursor:stop]
+        self.cursor = stop
+        return head if len(head) == count else head + self.file.read(count - len(head))
+
+    def close(self):
+        self.data = b""
+        self.file.close()
+
+
+class _BulkEquityHash:
+    """Keep the strict reader's byte order, updating SHA only by window."""
+    def __init__(self, digest):
+        self.digest, self.pending = digest, bytearray()
+
+    def update(self, data):
+        view, offset = memoryview(data), 0
+        while offset < len(view):
+            take = min(_BULK_E_WINDOW - len(self.pending), len(view) - offset)
+            self.pending.extend(view[offset:offset + take])
+            offset += take
+            if len(self.pending) == _BULK_E_WINDOW:
+                self.digest.update(self.pending)
+                self.pending.clear()
+
+    def hexdigest(self):
+        if self.pending:
+            self.digest.update(self.pending)
+            self.pending.clear()
+        return self.digest.hexdigest()
+
+
+def _bulk_equity_records(reader):
+    """Advance the real strict reader only after a complete E-batch proof."""
+    import pf_sink
+    # Alternate readers retain their own iteration and refusal semantics.
+    if (not _BULK_E_ENABLED or not isinstance(reader, pf_sink.SinkReader)
+            or not isinstance(reader._file, _UncachedSinkFile)):
+        yield from reader
+        return
+    file = reader._file = _BulkEquityFile(reader._file)
+    reader._hash = _BulkEquityHash(reader._hash)
+    while not reader.complete:
+        try:
+            data, cursor = file.window()
+        except OSError as error:
+            # _readline increments only after a successful read.
+            reader._refuse(error)
+        match = _BULK_E_RUN.match(data, cursor)
+        if match is not None:
+            batch = _bulk_equity(data[cursor:match.end()])
+            if batch is None or reader._counts["E"] + batch.count > pf_sink.I53_MAX:
+                yield from reader
+                return
+            reader._counts["E"] += batch.count
+            reader._line_number += batch.count
+            reader._hash.update(batch.raw)
+            file.cursor = match.end()
+            yield batch
+            continue
+        try:
+            record = next(reader)
+        except StopIteration:
+            return
+        yield record
+        if record.tag == "E":
+            # Includes nulls, escaped tags and accepted noncanonical integers.
+            # No second failed proof is attempted later in this file.
+            yield from reader
+            return
+
+
+class _SinkReportDiagnostics:
+    """Only the two E endpoints, their count and the first result refusal."""
+
+    def __init__(self):
+        self.count_e = 0
+        self.first = self.last = None
+        self.trade_at_start = False
+        self.equity_failure = None
+
+    def __len__(self):
+        return self.count_e
+
+    def __getitem__(self, index):
+        if self.count_e:
+            if index == 0:
+                return self.first
+            if index == -1:
+                return self.last
+        raise IndexError(index)
+
+    def trades(self, reader):
+        # The existing strict reader exhausts its trailer in this same pass;
+        # canonical E windows need only their count and decoded endpoints.
+        # O/V/K/X/H are deliberately dropped from this fold: the old trade
+        # fold read only records("T"). The reader still hashes every record
+        # as it iterates, supplying verify()'s digest for the entire sink.
+        for record in _bulk_equity_records(reader):
+            if isinstance(record, _BulkEquity):
+                if not self.count_e:
+                    self.first = record.first
+                self.last = record.last
+                self.count_e += record.count
+            elif record.tag == "E":
+                point = record.as_dict()
+                if not self.count_e:
+                    self.first = point
+                self.last = point
+                self.count_e += 1
+                if self.equity_failure is None:
+                    try:
+                        _validate_report_result({"equity_curve": (point,)}, equity_only=True)
+                    except RunFailure as error:
+                        # Preserve the exception, but drop its fold traceback
+                        # so it cannot retain the reader or per-row frames.
+                        # Assembly raises it after trade/summary/metric checks.
+                        self.equity_failure = error
+                        error.__traceback__ = None
+            elif record.tag == "T":
+                self.trade_at_start |= record.values[12] <= 0
+                yield record
+
+
 class _ReportSink:
     """A caller-owned path or an owner-only (0600) temporary sink file.
 
@@ -5971,6 +6198,8 @@ class _ReportSink:
     def __init__(self, lib, state, *, directory=None, run_id="", path=None):
         self.directory = _disk_report_directory(directory)
         self.header, self.counts, self.sha256 = {}, {}, ""
+        self._identity = None
+        self.summary = self.summary_failure = self.diagnostics = None
         self.named, self.run_id = path is not None, run_id
         self.keep, self.closed = False, False
         if self.named:
@@ -5989,6 +6218,10 @@ class _ReportSink:
             descriptor = ReportSinkC(ctypes.sizeof(ReportSinkC), 1, os.fsencode(self.path),
                                      run_id.encode("utf-8"), os.fsencode(self.directory))
             if lib.strategy_set_report_sink_v1(state, ctypes.byref(descriptor)) != 0:
+                failure = run_failure(lib, state)
+                recorded = engine_failure_code(lib, state)
+                if failure is not None and recorded is not None and recorded[0]:
+                    raise RunFailure(*failure)
                 raise _engine_invariant("the fresh strategy refused its report sink")
         except BaseException:
             self.close()
@@ -5996,9 +6229,22 @@ class _ReportSink:
 
     def verify(self, lib, state, report):
         from pf_sink import SinkFormatError
+        diagnostics = _SinkReportDiagnostics()
+        summary = summary_failure = None
         try:
             with _open_uncached_sink(self.path) as reader:
-                for _ in reader:
+                trades = diagnostics.trades(reader)
+                try:
+                    summary = _sink_summary(report, self, records=trades)
+                except RunFailure as error:
+                    # Format/digest/receipt refusals used to precede result
+                    # validation. Defer the first trade refusal and finish the
+                    # very same reader, even when the trade fold stopped early.
+                    summary_failure = error
+                    # Drop the fold traceback so the saved exception cannot
+                    # retain the reader or per-row frames until assembly.
+                    error.__traceback__ = None
+                for _ in trades:
                     pass
                 self.header, self.counts, self.sha256 = reader.header, reader.counts, reader.sha256
         except SinkFormatError as error:
@@ -6014,8 +6260,22 @@ class _ReportSink:
                 or bytes(receipt.sha256_hex) != self.sha256.encode("ascii")
                 or int(report.total_trades) != self.counts["T"]):
             raise _engine_invariant("the report sink trailer differs from its engine receipt")
+        try:
+            status = os.stat(self.path)
+        except OSError as error:
+            raise _engine_invariant(f"the engine's report sink is invalid: {error}") from error
+        # Identity is an early check alongside the verified receipt; the
+        # subsequent scan still proves content against A's digest.
+        self._identity = status.st_ino, status.st_size
+        self.summary, self.summary_failure, self.diagnostics = summary, summary_failure, diagnostics
 
     def records(self, tag=None):
+        if tag == "T":
+            yield from self._trade_records()
+            return
+        if tag == "E":
+            yield from self._tagged_records(tag)
+            return
         from pf_sink import SinkFormatError
         try:
             with _open_uncached_sink(self.path) as reader:
@@ -6025,6 +6285,176 @@ class _ReportSink:
                 if reader.sha256 != self.sha256:
                     raise _engine_invariant("the report sink changed after verification")
         except SinkFormatError as error:
+            raise _engine_invariant(f"the engine's report sink is invalid: {error}") from error
+
+    def _trade_records(self):
+        yield from self._tagged_records("T")
+
+    def _tagged_records(self, tag, *, bulk=False):
+        """Hash and extract one tag from the same fresh sequential raw reads."""
+        import pf_sink
+        bulk = bulk and _BULK_E_ENABLED and tag == "E"
+        try:
+            file = _open_uncached_sink(self.path, raw=True)
+            try:
+                status = os.fstat(file.fileno())
+                if (status.st_ino, status.st_size) != self._identity:
+                    raise _engine_invariant(
+                        "the report sink changed after verification: file identity differs")
+                parser = pf_sink.RecordParser(self.header)
+                decode = parser.parse_verified if tag == "E" else parser.parse
+                needle = f'\n["{tag}",'.encode("ascii")
+                digest = hashlib.sha256()
+                count = offset = processed = 0
+                carry = b""
+                pending = bytearray()
+                kind = "header"
+                tag_escaped = False
+                last_byte = trailer_start = None
+                done = False
+                while not done:
+                    chunk = file.read(min(file.window, _BULK_E_WINDOW) if bulk else file.window)
+                    if not chunk:
+                        if pending or (last_byte is not None and last_byte != 0x0A):
+                            raise pf_sink.SinkFormatError("line does not end with LF")
+                        raise pf_sink.SinkFormatError("missing header or trailer")
+                    data = carry + chunk
+                    base, end = offset - len(carry), len(data)
+                    last_byte = chunk[-1]
+                    if trailer_start is None:
+                        marker = data.find(b"\n{")
+                        if marker >= 0:
+                            trailer_start = base + marker + 1
+                    # Only new bytes enter the hash. Remember the absolute cut
+                    # even while a trailer continues across later windows.
+                    hash_end = (len(chunk) if trailer_start is None
+                                else max(0, trailer_start - offset))
+                    if hash_end:
+                        digest.update(chunk[:hash_end])
+                    cursor = len(carry) if kind is not None else max(0, processed - base)
+                    record_at = escaped_at = None
+                    while cursor < end:
+                        if bulk and kind == "record" and not pending:
+                            match = _BULK_E_RUN.match(data, cursor)
+                            if match is not None:
+                                batch = _bulk_equity(data[cursor:match.end()])
+                                if batch is not None:
+                                    cursor = match.end()
+                                    processed = base + cursor
+                                    kind = None
+                                    count += batch.count
+                                    yield batch
+                                    del batch
+                                    continue
+                                bulk = False
+                        if kind == "tag":
+                            # The fallback decodes only the first string token;
+                            # skipped bodies are never walked or retained.
+                            while cursor < end:
+                                byte = data[cursor]
+                                pending.append(byte)
+                                cursor += 1
+                                if len(pending) > pf_sink.MAX_LINE_BYTES:
+                                    raise pf_sink.SinkFormatError("line exceeds 1 MiB including LF")
+                                if byte == 0x0A:
+                                    raise pf_sink.SinkFormatError(
+                                        "invalid UTF-8 or JSON: unterminated record tag")
+                                if tag_escaped:
+                                    tag_escaped = False
+                                elif byte == 0x5C:
+                                    tag_escaped = True
+                                elif byte == 0x22:
+                                    try:
+                                        line_tag = json.loads(bytes(pending[1:]).decode("utf-8"))
+                                    except (UnicodeError, ValueError, RecursionError) as error:
+                                        raise pf_sink.SinkFormatError(
+                                            f"invalid UTF-8 or JSON: {error}") from error
+                                    if line_tag == tag:
+                                        kind = "record"
+                                    else:
+                                        kind = None
+                                        pending.clear()
+                                        processed = base + cursor
+                                    del line_tag
+                                    break
+                            if kind == "tag":
+                                break
+                            continue
+                        if kind is not None:
+                            limit = min(end, cursor + pf_sink.MAX_LINE_BYTES + 1 - len(pending))
+                            newline = data.find(b"\n", cursor, limit)
+                            stop = newline + 1 if newline >= 0 else limit
+                            pending.extend(data[cursor:stop])
+                            cursor = stop
+                            if len(pending) > pf_sink.MAX_LINE_BYTES:
+                                raise pf_sink.SinkFormatError("line exceeds 1 MiB including LF")
+                            if newline < 0:
+                                break
+                            if kind == "trailer":
+                                # A verified its receipt; B/C need only framing
+                                # and EOF, without parsing or hashing the trailer.
+                                if cursor != end or file.read(file.window):
+                                    raise pf_sink.SinkFormatError("bytes after the trailer")
+                                done = True
+                                break
+                            if kind == "header":
+                                # Parse the raw header exactly once: malformed
+                                # JSON must be a format refusal before digest.
+                                pf_sink._parse(bytes(pending))
+                                record = None
+                            else:
+                                record = _bulk_equity(bytes(pending)) if bulk else None
+                                if record is None:
+                                    bulk = False
+                                    record = decode(bytes(pending))
+                                    count += 1
+                                else:
+                                    count += record.count
+                            pending.clear()
+                            kind = None
+                            processed = base + cursor
+                            if record is not None:
+                                yield record
+                                del record
+                            continue
+                        # Cache each next needle so a skipped escaped tag does
+                        # not rescan the window for a distant matching record.
+                        # Literal skipped lines need no per-line Python work.
+                        if record_at is None or record_at < cursor:
+                            marker = data.find(needle, max(0, cursor - 1))
+                            record_at = marker + 1 if marker >= 0 else end
+                        if escaped_at is None or escaped_at < cursor:
+                            marker = data.find(b'\n["\\', max(0, cursor - 1))
+                            escaped_at = marker + 1 if marker >= 0 else end
+                        trailer_at = (trailer_start - base
+                                      if trailer_start is not None
+                                      and trailer_start >= base + cursor else end)
+                        cursor = min(record_at, escaped_at, trailer_at)
+                        if cursor == end:
+                            break
+                        if cursor == trailer_at:
+                            kind = "trailer"
+                        elif cursor == record_at:
+                            kind = "record"
+                        else:
+                            kind = "tag"
+                            pending.extend(data[cursor:cursor + 2])
+                            cursor += 2
+                            tag_escaped = False
+                    offset += len(chunk)
+                    carry = data[-5:]
+                # Streamed records remain provisional until exhaustion.
+                if digest.hexdigest() != self.sha256:
+                    raise _engine_invariant(
+                        "the report sink changed after verification: digest differs")
+                if count != self.counts[tag]:
+                    raise _engine_invariant(
+                        f"the report sink {tag} scan disagrees with its verified count")
+            finally:
+                file.close()
+        except (OSError, pf_sink.SinkFormatError) as error:
+            # Includes raw read failures (EIO or a mid-scan short read), not
+            # just framing/parser failures; never relabel these as changes.
             raise _engine_invariant(f"the engine's report sink is invalid: {error}") from error
 
     def close(self):
@@ -6081,6 +6511,13 @@ class _JSONRecordArray:
         if not 0 <= index < len(self):
             raise IndexError(index)
         return self.item(index)
+
+
+class _JSONEquityArray(_JSONRecordArray):
+    """The ordinary record interface plus an opt-in encoded path-sink scan."""
+    def __init__(self, sink):
+        super().__init__(lambda: (row.as_dict() for row in sink.records("E")), sink.counts["E"])
+        self.sink = sink
 
 
 class _JSONUTF8:
@@ -6181,17 +6618,23 @@ class _BoundedJSONFile:
         if self.reading:
             raise ValueError("a prepared report artifact is read-only")
         for offset in range(0, len(text), self.window):
-            data = text[offset:offset + self.window].encode("ascii")
-            position = 0
-            while position < len(data):
-                count = min(self.window - self.used, len(data) - position)
-                self.buffer[self.used:self.used + count] = data[position:position + count]
-                self.used += count
-                self.size += count
-                position += count
-                if self.used == self.window:
-                    self._sync_window()
+            self.write_ascii(text[offset:offset + self.window].encode("ascii"))
         return len(text)
+
+    def write_ascii(self, data):
+        """Append already encoded ASCII through the same aligned I/O window."""
+        if self.reading:
+            raise ValueError("a prepared report artifact is read-only")
+        position = 0
+        while position < len(data):
+            count = min(self.window - self.used, len(data) - position)
+            self.buffer[self.used:self.used + count] = data[position:position + count]
+            self.used += count
+            self.size += count
+            position += count
+            if self.used == self.window:
+                self._sync_window()
+        return len(data)
 
     def flush(self):
         self.file.flush()  # retain checked flush/close failure behavior
@@ -6241,7 +6684,7 @@ class _BoundedJSONFile:
 
 
 class _UncachedSinkFile(_BoundedJSONFile):
-    """Binary readback after the fixed sink reader has validated its header."""
+    """Uncached binary readback with an independent bounded window."""
     def __init__(self, file):
         position = file.tell()
         super().__init__(file)  # path sinks are unjailed only
@@ -6271,12 +6714,20 @@ class _UncachedSinkFile(_BoundedJSONFile):
         return b"".join(pieces)
 
 
-def _open_uncached_sink(path):
+def _open_uncached_sink(path, *, raw=False):
     """Reuse the strict reader; only its bounded header uses buffered I/O.
 
     The header's existing 1 MiB line bound also bounds that initial cache
     footprint. All subsequent reads bypass cache through a fixed 64 KiB window.
     """
+    if raw:
+        # B owns a new FileIO at byte zero, including the original header.
+        file = open(path, "rb", buffering=0)
+        try:
+            return _UncachedSinkFile(file)
+        except BaseException:
+            file.close()
+            raise
     from pf_sink import SinkReader
     reader = SinkReader(path)
     try:
@@ -6358,6 +6809,81 @@ def _stream_json(value, destination):
             del destination._json_active
 
 
+_JSON_SCALAR_TYPES = (int, float, bool, str, type(None))
+# Keep fast dumps to one window's worth of string values; 4096 is the same
+# size as the windowed writer's window below.
+_STREAM_FAST_STR_LIMIT = 4096
+# Equity rows are normally under 128 ASCII bytes: 512 rows use about 64 KiB
+# of joined text (ordinary trade rows stay below about 512 KiB per batch).
+# The record count is fixed, independent of the array length or bar count.
+_STREAM_BATCH_RECORDS = 512
+
+# Cap joined text at 256 KiB too; json.dumps' default ensure_ascii makes
+# len(encoded) a byte count. One oversized record is written alone, unsplit.
+_STREAM_BATCH_BYTES = 262144
+
+
+def _json_scalar_record(value):
+    # The piecewise writer encodes non-string keys as standalone values.
+    # Subclasses can also override items() or string slicing; keep that path.
+    return type(value) is dict and all(
+        type(key) is str and type(item) in _JSON_SCALAR_TYPES
+        for key, item in value.items())
+
+
+def _json_fast_value(value):
+    if type(value) in _JSON_SCALAR_TYPES:
+        return type(value) is not str or len(value) <= _STREAM_FAST_STR_LIMIT
+    if not _json_scalar_record(value):
+        return False
+    return sum(len(item) for item in value.values() if type(item) is str) <= _STREAM_FAST_STR_LIMIT
+
+
+def _write_json_ascii(destination, data):
+    if isinstance(destination, _BoundedJSONFile):
+        destination.write_ascii(data)
+    else:
+        destination.write(data.decode("ascii"))
+
+
+def _stream_equity_array(value, destination):
+    destination.write("[")
+    pending, count, first = [], 0, True
+    # Fixed E fields, a <=17-byte integer and two <=24-byte reprs make an
+    # encoded row plus comma <=103 bytes. The ordinary 512-row boundary
+    # therefore precedes its 256 KiB byte boundary, including strict fallback.
+    try:
+        for record in value.sink._tagged_records("E", bulk=True):
+            if isinstance(record, _BulkEquity):
+                # sub and splitlines walk the entire batch in C. No Python
+                # loop, decoder or serializer visits its individual points.
+                rows = _BULK_E_LINE.sub(
+                    rb'{"time_ms":\1,"equity":\2,"open_profit":\3},' + b"\n",
+                    record.raw).splitlines()
+            else:
+                # The existing verified decoder owns all noncanonical cases.
+                rows = [json.dumps(record.as_dict(), separators=(",", ":"),
+                                   allow_nan=False).encode("ascii") + b","]
+            offset = 0
+            while offset < len(rows):
+                take = min(_STREAM_BATCH_RECORDS - count, len(rows) - offset)
+                chunk = b"".join(rows[offset:offset + take])[:-1]
+                pending.append(chunk if first else b"," + chunk)
+                first = False
+                count += take
+                offset += take
+                if count == _STREAM_BATCH_RECORDS:
+                    chunk = b"".join(pending)
+                    pending.clear()  # never retry a failed write
+                    count = 0
+                    _write_json_ascii(destination, chunk)
+    finally:
+        # Match the ordinary array writer's completed prefix on producer error.
+        if pending:
+            _write_json_ascii(destination, b"".join(pending))
+    destination.write("]")
+
+
 def _stream_json_value(value, destination):
     if isinstance(value, _JSONColumn):
         destination.write("[")
@@ -6365,16 +6891,64 @@ def _stream_json_value(value, destination):
         while chunk := value.file.read(64 * 1024):
             destination.write(chunk)
         destination.write("]")
+    elif isinstance(value, _JSONEquityArray) and _BULK_E_ENABLED:
+        _stream_equity_array(value, destination)
     elif isinstance(value, _JSONRecordArray):
         destination.write("[")
         first = True
-        for item in value.records():
-            if not first:
-                destination.write(",")
-            _stream_json(item, destination)
-            first = False
+        pending = []
+        pending_bytes = 0
+        try:
+            for item in value.records():
+                if _json_fast_value(item):
+                    try:
+                        encoded = json.dumps(item, separators=(",", ":"), allow_nan=False)
+                    except ValueError:
+                        # Replay the failing item below to preserve both the
+                        # old partial record bytes and its precise exception.
+                        pass
+                    else:
+                        encoded_bytes = len(encoded) + (0 if first else 1)
+                        if pending and pending_bytes + encoded_bytes > _STREAM_BATCH_BYTES:
+                            chunk = "".join(pending)
+                            pending.clear()  # never retry a failed write
+                            pending_bytes = 0
+                            destination.write(chunk)
+                        pending.append(encoded if first else "," + encoded)
+                        pending_bytes += encoded_bytes
+                        first = False
+                        if (len(pending) == _STREAM_BATCH_RECORDS
+                                or pending_bytes >= _STREAM_BATCH_BYTES):
+                            chunk = "".join(pending)
+                            pending.clear()  # never retry a failed write
+                            pending_bytes = 0
+                            destination.write(chunk)
+                        continue
+                if pending:
+                    chunk = "".join(pending)
+                    pending.clear()
+                    pending_bytes = 0
+                    destination.write(chunk)
+                if not first:
+                    destination.write(",")
+                _stream_json(item, destination)
+                first = False
+        finally:
+            # A producer can raise after yielding rows. Those completed rows
+            # already belonged to the old writer's prefix, even on failure.
+            if pending:
+                destination.write("".join(pending))
         destination.write("]")
     elif isinstance(value, dict):
+        if _json_fast_value(value):
+            try:
+                encoded = json.dumps(value, separators=(",", ":"), allow_nan=False)
+            except ValueError:
+                # Preserve the piecewise prefix before a non-finite value.
+                pass
+            else:
+                destination.write(encoded)
+                return
         destination.write("{")
         for index, (key, item) in enumerate(value.items()):
             if index:
@@ -6450,11 +7024,17 @@ def _sink_trade(record):
     return dict(zip(record.fields[:16], record.values[:16]))
 
 
-def _sink_summary(report, sink):
+def _sink_summary(report, sink, *, records=None):
     n, wins, losses = 0, 0, 0
     cum, peak, max_dd = 0.0, 0.0, 0.0
     best, worst = 0.0, 0.0
     fd_mode = getattr(sink, "fd_mode", False)
+    if not fd_mode and records is None:
+        if sink.summary_failure is not None:
+            raise sink.summary_failure
+        if sink.summary is None:
+            raise _engine_invariant("the engine's report sink summary is incomplete")
+        return dict(sink.summary)
     if fd_mode:
         summary = sink.summary
         if summary is None or summary.complete != 1 or summary.count_t != sink.counts["T"]:
@@ -6485,7 +7065,7 @@ def _sink_summary(report, sink):
         n, wins, losses = int(summary.count_t), int(summary.wins), int(summary.losses)
         best, worst = float(summary.best_trade), float(summary.worst_trade)
         max_dd = float(summary.max_drawdown)
-    for record in () if fd_mode else sink.records("T"):
+    for record in () if fd_mode else records:
         trade = _sink_trade(record)
         if trade["n"] != n + 1:
             raise _engine_invariant("the report sink trade rows are out of report order")
@@ -6547,27 +7127,28 @@ def _build_sink_report(report, ohlcv_path, n_bars, first_ts, last_ts, elapsed,
         out.pop("equity_curve")
         return out
 
-    def point_at(index):
-        # Diagnostics need only the endpoints. Revisit the verified sink in
-        # bounded memory rather than retaining its equity history. Consume
-        # the pass through its trailer so records() checks its digest and
-        # closes the reader even when the requested point is the first one.
-        point = None
-        for i, row in enumerate(sink.records("E")):
-            if i == index:
-                point = row.as_dict()
-        if point is None:
-            raise _engine_invariant("the report sink equity count differs from its receipt")
-        return point
-
+    # verify() already checked E in record/field order and retained only its
+    # endpoints. Validate the small fields first, exactly where the old E
+    # validation pass began, then surface its first refusal before diagnostics.
+    _validate_report_result(out)
+    diagnostics = sink.diagnostics
+    if diagnostics.equity_failure is not None:
+        raise diagnostics.equity_failure
+    # Equity count still equals the receipt without the old point_at walk:
+    # pf_sink.py's strict reader compares trailer counts with records read
+    # ("trailer count mismatch"), and verify() compares receipt counts with
+    # those verified trailer counts.
     trades = _JSONRecordArray(
         lambda: (_sink_trade(row) for row in sink.records("T")), sink.counts["T"])
     equity_curve = _JSONRecordArray(
-        lambda: (row.as_dict() for row in sink.records("E")), sink.counts["E"], point_at)
+        lambda: (row.as_dict() for row in sink.records("E")), sink.counts["E"])
+    if _BULK_E_ENABLED and type(sink) is _ReportSink:
+        # Preserve subclass-provided readers and the non-path report routes.
+        equity_curve = _JSONEquityArray(sink)
     out["equity_curve"] = equity_curve
-    _validate_report_result(out)  # the summary pre-pass already checked every T
+    first_bar_trade = ({"entry_bar_index": 0},) if diagnostics.trade_at_start else ()
     out["diagnostics"].update(
-        _annualization_block(equity_curve, out["metrics"], trades, window_anchor))
+        _annualization_block(diagnostics, out["metrics"], first_bar_trade, window_anchor))
     if sink.named:
         reference = {
             "path": sink.path,

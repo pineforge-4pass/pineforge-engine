@@ -143,7 +143,7 @@ in addition to its six released 1.4.0 reasons.
 | `chart_bars_rejected` | `input` | no | `field` (vocab, 6 values, optional), `index` (integer, optional), `reason` (vocab, 12 values) | The run's chart bars (the request's OHLCV) were refused. |
 | `chart_bars_unreadable` | `input` | no | `reason` (vocab, 9 values) | The harness could not read the run's OHLCV file. |
 | `engine_command_value_invalid` | `engine_fault` | no | `field` (string), `reason` (vocab, 3 values), `stage` (vocab, 7 values) | The engine derived an invalid command value (non-finite, invalid text or an overflowing finite value) from its own book, equity, margin, sizing, fee, slippage or settlement state: an engine fault, never a strategy failure. stage names where it was derived. |
-| `engine_invariant` | `engine_fault` | no | none | An engine invariant failed: a PineForge bug. |
+| `engine_invariant` | `engine_fault` | no | `reason` (vocab, 1 values, optional) | An engine invariant failed: a PineForge bug. |
 | `engine_unclassified_error` | `engine_fault` | no | none | An error no coded site reported: a PineForge bug. |
 | `harness_internal_error` | `engine_fault` | no | none | The run harness failed: a PineForge bug. |
 | `lot_grid_rejected` | `symbol_metadata` | yes | none | The symbol's lot size (syminfo.mincontract, the quantity grid) is not a value the engine accepts. |
@@ -248,10 +248,10 @@ that first candidate is tmpfs/ramfs permits trying `/var/tmp`, also checked by f
 syscall errno and names the failed candidate, except as described below. Directory names are not a medium test; tmpfs/ramfs is never silently chosen.
 If both default candidates are proven tmpfs/ramfs, the engine retains `ENODEV` / `scratch requires disk backing`, names every candidate tried and its rejection reason in the failure detail, and adds `set TMPDIR to a disk-backed directory`.
 
-An ENOTSUP probe gives no filesystem evidence: use the default candidate as in 1.6.3 (error 0, no tmpfs claim, no refusal note).
+An ENOTSUP probe gives no filesystem evidence: keep the candidate, initially the legacy TMPDIR-or-/tmp choice (error 0, no tmpfs claim, no refusal note).
 This covers hosts with no probe (neither Linux nor macOS) and real ENOTSUP from stat/faccessat/statfs; the test is by errno value,
 so on Linux ENOTSUP and EOPNOTSUPP are both 95. A FUSE/9p/network mount answering 95 keeps its candidate; a later create failure
-keeps the plain 1.6.3 text. If the first candidate is proven tmpfs/ramfs and /var/tmp answers ENOTSUP, select /var/tmp without the rejected-candidate note.
+keeps the plain create text without a note. If the first candidate is proven tmpfs/ramfs and /var/tmp answers ENOTSUP, select /var/tmp without the rejected-candidate note.
 
 An explicit scratch/spill directory is kept as supplied and never falls back;
 explicit tmpfs/ramfs directories are now refused, including command scratch.
@@ -264,6 +264,23 @@ failures other than ENOTSUP and all-memory refusals. Native runs create command 
 before strategy callbacks. Report scratch uses `report_sink_failed` with
 `reason: scratch_io`; auxiliary tables use `scratch_io_failed`; sink-path I/O
 uses `report_sink_failed` with `reason: sink_io`.
+
+Scratch placement, in short (1.7.0 and later). Without an explicit scratch
+directory a native run, with no scratch arena attached, creates one unlinked
+command-scratch file at begin under the nonempty `TMPDIR`, or under `/tmp`
+when `TMPDIR` is unset or empty. If that candidate is proven tmpfs/ramfs, the
+engine falls back to `/var/tmp`, and only when `/var/tmp` is disk-backed. If
+both candidates are memory-backed the run is refused at begin: the engine
+raises `scratch_io_failed`, and the default unjailed `run_json` profile refuses
+first with `run_request_invalid`; through the hub entrypoint the refusal
+surfaces as container exit code 4. An explicit `PINEFORGE_COMMAND_SCRATCH_DIR`
+on tmpfs/ramfs never falls back and raises `scratch_io_failed`. Example: in a
+container image where `/run` is
+tmpfs while `/tmp` and `/var/tmp` are on ext4, a work directory under `/run`
+is memory-backed; a run with `TMPDIR` set there falls back to `/var/tmp`. To
+choose the location, set `TMPDIR` to a disk-backed directory such as
+`/var/tmp`; `PINEFORGE_COMMAND_SCRATCH_DIR` covers the command stores only, not
+the trade ledger or the report files.
 
 The English templates describe the texts a code is raised with; they are not
 a grammar. A `{name}` marks a part that varies and need not be an argument of
@@ -527,3 +544,24 @@ names, `RunFailureValue`, and the codes `RunFailureCode::none`,
 `setting_rejected` and `out_of_memory` are part of the contract too. Where the
 script is prepared, an exception that already carries a code keeps it; a
 latched failure without one reads `setting_rejected`.
+
+## Strategy identifier admission
+
+The Pine source host's command admission, including selected-window replay,
+refuses IDs, entry selectors and OCA names containing NUL (0x00) or unit
+separator (0x1f) before they can enter the adapter's composite keys. After
+UTF-8 validation, this raises `pine_invalid_argument` (class `strategy`) with
+`rule=unsupported_combination`, `function` naming the strategy command and
+`argument` naming its refused operand. For example, an exit ID carries
+`{"argument":"id","function":"strategy.exit","rule":"unsupported_combination"}`.
+The check uses the string's length, so an embedded NUL is refused too.
+Spaces, quotes, punctuation and other valid UTF-8 bytes remain accepted.
+Comments retain their existing UTF-8 admission, including these two bytes.
+Invalid UTF-8 still raises `strategy_value_invalid` with
+`reason=invalid_unicode`.
+
+Two live order keys whose 64-bit hashes collide are refused with
+`engine_invariant` and `{"reason":"order_key_hash_collision"}`. The optional
+`reason` is a closed vocabulary with only `order_key_hash_collision`;
+other invariant failures keep `{}`. The English remains
+`Pine live source key collision`.

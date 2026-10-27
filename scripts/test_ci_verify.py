@@ -9,6 +9,7 @@ ordering can be asserted. Root must still run the actual profiles.
 """
 from __future__ import annotations
 
+import argparse
 import ast
 from dataclasses import replace
 import hashlib
@@ -25,6 +26,7 @@ from unittest import mock
 
 import check_abi_receipt_skips
 import ci_verify
+from test_native_live_equivalence_split import driver_probes
 from ci_verify import (
     Completed,
     ConfigError,
@@ -88,11 +90,11 @@ FULL_FLOOR = {name: entry[0] for name, entry in ci_verify.PRIVATE_FIXTURE_PROFIL
 ABSENT_FLOOR = {name: entry[0] - entry[1]
                 for name, entry in ci_verify.PRIVATE_FIXTURE_PROFILE_FLOORS.items()}
 
-# Independent expectations transcribed from the lab's recipes.mjs:57-88,
-# ctest-shard-union/v1. Do not derive these from the engine's stage/floor
-# helpers: a mutation to those helpers must turn the contract assertions red.
-LAB_SHARD_FLOORS = {'release': {False: 603, True: 910},
-                    'kernel': {False: 306, True: 337}}
+# Independent expectations for the lab's ctest-shard-union/v1 contract.
+# Three eight-row splits plus four report rows: 910 + 28 = 938, 337 + 28 = 365.
+# Do not derive these from stage/floor helpers: mutations must turn them red.
+LAB_SHARD_FLOORS = {'release': {False: 631, True: 938},
+                    'kernel': {False: 334, True: 365}}
 # Transcribed ctestExcludeLabel(CI_VERIFY_PROFILES[profile]) results from
 # pineforge-workflow campaign/src/remote/recipes.mjs:38-53, consumed by
 # campaign/src/remote/shards.mjs, merged in b53dba5e44 (PR #211).
@@ -129,7 +131,7 @@ LAB_SHARD_FIRST = LAB_SHARD_GUARDS | frozenset((
 # copied from a produced summary. All profiles see the same labelled names.
 SHARD_SLOW_FIXTURE_NAMES = ('test_ledger_history_scale_400k',
                             'test_position_tail_scale_out_100k')
-SCRIPTED_SLOW_FIXTURE_NAMES = (*SHARD_SLOW_FIXTURE_NAMES, 'test_ci_verify',
+SCRIPTED_SLOW_FIXTURE_NAMES = (*SHARD_SLOW_FIXTURE_NAMES, 'test_ci_verify_slice_1',
                                'test_chart_day_memo', 'test_native_cpp_versions')
 
 
@@ -377,6 +379,10 @@ class Scripted:
             if 'ctest_shard_inventory' in self.exits:
                 registry = self.exits['ctest_shard_inventory']
                 names = list(registry)
+                if '--show-only=json-v1' in argv:
+                    return Completed(0, json.dumps({
+                        'tests': [{'name': name} for name in names],
+                    }).encode())
                 labelled = set(self.exits.get('ctest_shard_labelled', ()))
                 if '-L' in argv:
                     names = [name for name in names if name in labelled]
@@ -397,7 +403,8 @@ class Scripted:
                 names = {'native_live_help', 'test_live_json',
                          'test_native_live_startup', 'test_native_live_store',
                          'test_native_live_routing',
-                         'test_native_example_batch', 'test_native_example_selected'}
+                         'test_native_example_batch', 'test_native_example_selected',
+                         'test_native_live_equivalence_split'}
                 if (self.source / 'runner' / 'transport.cpp').is_file():
                     names.add('test_native_live_websocket')
                 names.update(ci_verify.runner_e2e_test_names(self.source))
@@ -757,6 +764,38 @@ class ConfigValidation(unittest.TestCase):
             parse_args(['relaxed'])
         self.assertEqual(main(['relaxed']), 2)
 
+    def test_native_live_profiles_accept_ctest_shard_two_of_four(self):
+        for profile in ('native', 'live-sanitizers', 'live-tsan'):
+            with self.subTest(profile=profile):
+                cfg = validate_config(
+                    parse_args([profile, '--ctest-shard', '2/4']),
+                    which=lambda name: '/fixture/bin/' + name)
+                self.assertEqual(cfg.profile.name, profile)
+                self.assertEqual(cfg.ctest_shard, ci_verify.CTestShard(2, 4))
+                self.assertIsNone(cfg.exclude_label)
+                self.assertEqual(cfg.min_tests,
+                                 ci_verify.profile_min_tests(ci_verify.PROFILE[profile], ROOT))
+        self.assertEqual(ci_verify.CTEST_SHARD_PROFILES, {
+            'release', 'debug', 'sanitizers', 'kernel', 'native', 'live-sanitizers', 'live-tsan',
+        })
+
+    def test_unknown_profile_still_refuses_a_valid_ctest_shard(self):
+        argv = ['relaxed', '--ctest-shard', '2/4']
+        with self.assertRaisesRegex(ConfigError, "argument profile: invalid choice: 'relaxed'"):
+            parse_args(argv)
+        self.assertEqual(main(argv), 2)
+
+    def test_future_profile_cannot_inherit_multi_shard_support(self):
+        future = ci_verify.Profile('future-profile', 'Release', False, False, True, True)
+        with mock.patch.object(ci_verify, 'PROFILES', (*PROFILES, future.name)), \
+                mock.patch.dict(ci_verify.PROFILE, {future.name: future}):
+            with self.assertRaises(ConfigError) as refused:
+                validate_config(parse_args([future.name, '--ctest-shard', '2/4']))
+        self.assertEqual(
+            str(refused.exception),
+            '--ctest-shard with N > 1 requires release, debug, sanitizers, kernel, '
+            'native, live-sanitizers or live-tsan')
+
     def test_unknown_argument_is_rejected(self):
         with self.assertRaises(ConfigError):
             parse_args(['release', '--skip-tests'])
@@ -949,10 +988,12 @@ class RowFloorConfig(unittest.TestCase):
             with self.subTest(profile=profile):
                 with self.assertRaisesRegex(ConfigError, 'declared Debug-build-type exclusion'):
                     self.shard_driver(profile, extra=('--exclude-label', label))
-        for profile in ('native', 'live-sanitizers', 'live-tsan'):
+        with self.assertRaisesRegex(ConfigError, 'declared Debug-build-type exclusion'):
+            self.shard_driver('native', extra=('--exclude-label', 'slow'))
+        for profile in ('live-sanitizers', 'live-tsan'):
             with self.subTest(profile=profile):
-                with self.assertRaisesRegex(ConfigError, 'requires release'):
-                    self.shard_driver(profile)
+                with self.assertRaisesRegex(ConfigError, 'every runner row'):
+                    self.shard_driver(profile, extra=('--exclude-label', 'slow'))
 
     def test_sharded_config_cannot_divide_or_lower_the_lab_profile_floor(self):
         for profile, floors in LAB_SHARD_FLOORS.items():
@@ -1375,10 +1416,18 @@ class RowFloorConfig(unittest.TestCase):
         with mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES':
                                          '1' if overlay else ''}):
             for index in range(1, count + 1):
-                code, summary, _, _ = DriverOrderingAndAggregation.run_profile(
-                    self, profile, extra=['--ctest-shard', f'{index}/{count}', *extra],
+                temporary = tempfile.TemporaryDirectory(prefix='ci-shard-summary-')
+                self.addCleanup(temporary.cleanup)
+                build_dir = Path(temporary.name) / 'build'
+                scripted = Scripted(
+                    build_dir, ROOT, profile,
                     ctest_shard_inventory=inventory, ctest_skipped=skipped,
                     ctest_shard_labelled=labelled, junit_help='absent', **commands)
+                code = run_driver(
+                    profile, build_dir, scripted,
+                    extra=['--ctest-shard', f'{index}/{count}', *extra])
+                self.assertEqual(code, 0, f'{profile} shard {index}/{count} was refused or failed')
+                summary = load_summary(build_dir)
                 self.assertEqual(code, 0, summary['failures'])
                 self.assertEqual(summary['profile'], profile)
                 self.assertEqual(summary['status'], 'passed')
@@ -1390,6 +1439,256 @@ class RowFloorConfig(unittest.TestCase):
         if not fresh:
             cache[key] = json.dumps(summaries)
         return summaries
+
+    @staticmethod
+    def native_live_inventory():
+        required = {
+            'native_live_help', 'test_live_json', 'test_native_live_startup',
+            'test_native_live_store', 'test_native_live_routing',
+            'test_native_example_batch', 'test_native_example_selected',
+            'test_native_live_equivalence_split',
+        }
+        if (ROOT / 'runner' / 'transport.cpp').is_file():
+            required.add('test_native_live_websocket')
+        required.update(path.stem for path in (ROOT / 'tests').glob('native_live*_e2e.py'))
+        required.remove('native_live_equivalence_e2e')
+        probes = driver_probes((ROOT / 'tests' / 'native_live_equivalence_e2e.py').read_text())
+        required.update('native_live_equivalence_e2e_' + probe for probe in probes)
+        # 86 - 1 parent + 8 probe rows + 1 cover row = 94; keep the synthetic rows.
+        return (*sorted(required),
+                *(f'runner_synthetic_{index:03}' for index in range(94 - len(required))))
+
+    def test_native_live_inventory_requires_probe_rows_and_split_cover(self):
+        inventory = self.native_live_inventory()
+        probes = driver_probes((ROOT / 'tests' / 'native_live_equivalence_e2e.py').read_text())
+        required = {'test_native_live_equivalence_split',
+                    *('native_live_equivalence_e2e_' + probe for probe in probes)}
+        self.assertEqual(required - set(inventory), set())
+        self.assertNotIn('native_live_equivalence_e2e', inventory)
+        self.assertEqual(len(inventory), 94)
+        self.assertEqual(len(inventory), len(set(inventory)))
+
+    def test_native_live_shards_cover_94_rows_and_use_the_profile_test_directory(self):
+        inventory = self.native_live_inventory()
+        self.assertEqual(len(inventory), 94)
+        for profile in ('native', 'live-sanitizers', 'live-tsan'):
+            with self.subTest(profile=profile):
+                extra = (('--require-websocket',) if profile == 'native'
+                         and (ROOT / 'runner' / 'transport.cpp').is_file() else ())
+                summaries = self.shard_summaries(
+                    4, profile=profile, inventory=inventory, labelled=(), extra=extra)
+                flat = []
+                for index, summary in enumerate(summaries, 1):
+                    expected = sorted(name for name in inventory if
+                                      int(hashlib.sha256(name.encode()).hexdigest(), 16) % 4
+                                      == index - 1)
+                    self.assertEqual(summary['ctestRan'], expected)
+                    self.assertEqual(summary['ctestRegisteredNames'], sorted(inventory))
+                    self.assertEqual(summary['ctestUnshardedSelectedNames'], sorted(inventory))
+                    self.assertEqual(summary['ctestExcludedNames'], [])
+                    self.assertIsNone(summary['excludeLabel'])
+                    self.assertEqual(summary['ctestSelected'], len(expected))
+                    flat.extend(summary['ctestRan'])
+                    test_dir = Path(summary['buildDir'])
+                    if profile != 'native':
+                        test_dir /= 'runner'
+                    for stage in summary['stages']:
+                        argv = stage.get('argv', [])
+                        if argv and argv[0] == 'setarch':
+                            self.assertEqual(argv[2], '-R')
+                            argv = argv[3:]
+                        if argv and argv[0] == 'ctest' and '--test-dir' in argv:
+                            self.assertEqual(argv[argv.index('--test-dir') + 1], str(test_dir))
+                            self.assertNotIn('-LE', argv)
+                            self.assertNotIn('-L', argv)
+                self.assertEqual(sorted(flat), sorted(inventory))
+                self.assertEqual(len(flat), len(set(flat)))
+                self.assertIsNone(ci_verify.validate_ctest_shard_union(summaries))
+                lost = json.loads(json.dumps(summaries))
+                lost[0]['ctestRan'].pop()
+                for key in ('ctestSelected', 'ctestRows', 'ctestTotal'):
+                    lost[0][key] -= 1
+                with self.assertRaisesRegex(ValueError, 'CTest shard union lost or added a row'):
+                    ci_verify.validate_ctest_shard_union(lost)
+
+    def test_native_live_shard_result_accounting_refuses_one_lost_row(self):
+        inventory = self.native_live_inventory()
+        for profile in ('native', 'live-sanitizers', 'live-tsan'):
+            with self.subTest(profile=profile):
+                driver = self.shard_driver(profile, shard='2/4')
+
+                def runner(argv, **kwargs):
+                    if argv[0] == 'setarch':
+                        self.assertEqual(argv[2], '-R')
+                        argv = argv[3:]
+                    if '--help' in argv:
+                        return Completed(0, b'CTest help\n')
+                    expression = argv[argv.index('-R') + 1]
+                    names = tuple(name for name in inventory if re.search(expression, name))
+                    if '-N' in argv:
+                        return self.discovery(names)
+                    self.assertGreater(len(names), 1)
+                    return Completed(0, named_ctest_output(names[:-1]))
+
+                driver.cfg.runner = runner
+                test_dir = driver.cfg.build_dir
+                if profile != 'native':
+                    test_dir /= 'runner'
+                driver.run_sharded_ctest(
+                    test_dir, 1, self.discovery(inventory), self.discovery(inventory))
+                self.assertEqual(failure_stages(driver.summary), ['ctest-shard-accounting'])
+                self.assertIn('result names differ from the selected shard (lost or extra row)',
+                              driver.failures[0]['error'])
+
+    def test_native_live_one_of_one_union_accepts_original_driver_summaries(self):
+        for profile in ('native', 'live-sanitizers', 'live-tsan'):
+            with self.subTest(profile=profile):
+                summaries = self.shard_summaries(
+                    1, profile=profile, inventory=self.native_live_inventory(), labelled=())
+                self.assertIsNone(ci_verify.validate_ctest_shard_union(summaries))
+
+    def test_native_live_union_requires_local_proofs_and_shard_one_shared_proofs(self):
+        inventory = self.native_live_inventory()
+        for profile in ('native', 'live-sanitizers', 'live-tsan'):
+            with self.subTest(profile=profile):
+                extra = (('--require-websocket',) if profile == 'native'
+                         and (ROOT / 'runner' / 'transport.cpp').is_file() else ())
+                baseline = self.shard_summaries(
+                    4, profile=profile, inventory=inventory, labelled=(), extra=extra)
+                local = LAB_SHARD_EVERY | {'examples-assert-live'}
+                shared = LAB_SHARD_FIRST | {'native-help'}
+                if baseline[0]['requireWebsocket']:
+                    shared |= {'require-websocket'}
+                if profile == 'native':
+                    local |= LAB_SHARD_ABI
+                    shared |= {'source-guard-twin-parity', 'native-include-independence'}
+                else:
+                    local |= {'abi-providers-skipped', 'live-test-inventory',
+                              'live-test-inventory-required'}
+                if profile == 'live-sanitizers':
+                    local |= {'sanitizer-public-flag', 'live-sanitizer-coverage'}
+                if profile == 'live-tsan':
+                    local |= {'runner-thread-sanitizer-coverage'}
+                self.assertEqual(ci_verify.ctest_every_stages(profile), local)
+                self.assertEqual(ci_verify.ctest_shared_stages(
+                    profile, baseline[0]['requireWebsocket']), shared)
+                for index, summary in enumerate(baseline, 1):
+                    stages = {stage['name']: stage for stage in summary['stages']}
+                    for name in local:
+                        self.assertEqual((stages[name]['status'], stages[name]['exitCode']),
+                                         ('passed', 0), (index, name))
+                    for name in shared:
+                        self.assertEqual(stages[name]['status'],
+                                         'passed' if index == 1 else 'deferred', (index, name))
+                    self.assertEqual({stage['name'] for stage in summary['stages']
+                                      if stage['status'] == 'deferred'},
+                                     shared if index != 1 else set())
+                self.assertIsNone(ci_verify.validate_ctest_shard_union(baseline))
+                for name in sorted(local | shared):
+                    changed = json.loads(json.dumps(baseline))
+                    position = 1 if name in local else 0
+                    changed[position]['stages'] = [
+                        stage for stage in changed[position]['stages'] if stage['name'] != name]
+                    with self.subTest(missing=name), self.assertRaisesRegex(
+                            ValueError, 'did not prove required stage|no successful shard 1 proof'):
+                        ci_verify.validate_ctest_shard_union(changed)
+                changed = json.loads(json.dumps(baseline))
+                native_help = next(stage for stage in changed[1]['stages']
+                                   if stage['name'] == 'native-help')
+                native_help.update(status='passed', exitCode=0)
+                with self.assertRaisesRegex(ValueError, 'shared stage must defer'):
+                    ci_verify.validate_ctest_shard_union(changed)
+                if profile != 'native':
+                    changed = json.loads(json.dumps(baseline))
+                    changed[1]['requireWebsocket'] = int(changed[1]['requireWebsocket'])
+                    with self.assertRaisesRegex(
+                            ValueError, 'failed shard or mismatched CTest registry hash/configuration'):
+                        ci_verify.validate_ctest_shard_union(changed)
+
+    def test_live_only_shard_floors_remain_undivided_with_or_without_transport(self):
+        original_is_file = Path.is_file
+        for present in (False, True):
+            def is_file(path):
+                if path == ROOT / 'runner' / 'transport.cpp':
+                    return present
+                return original_is_file(path)
+            with mock.patch.object(Path, 'is_file', autospec=True, side_effect=is_file):
+                for profile in ('live-sanitizers', 'live-tsan'):
+                    with self.subTest(profile=profile, transport=present):
+                        floor = 21 if present else 20
+                        driver = self.shard_driver(profile, shard='2/4')
+                        self.assertEqual(driver.summary['minTests'], floor)
+                        with self.assertRaisesRegex(ConfigError, 'undivided profile floor'):
+                            self.shard_driver(profile, shard='2/4',
+                                              extra=('--min-tests', str(floor - 1)))
+                        registry = tuple(f'capacity_{index}' for index in range(floor - 1))
+                        driver.enforce_sharded_test_floor(
+                            Completed(0, named_ctest_output(registry[:1])),
+                            registry, registry, registry[:1])
+                        self.assertEqual(failure_stages(driver.summary), ['ctest-floor'])
+                        self.assertIn(f'below the floor of {floor}', driver.failures[0]['error'])
+                        summaries = self.shard_summaries(
+                            4, profile=profile, inventory=self.native_live_inventory(), labelled=())
+                        self.assertIsNone(ci_verify.validate_ctest_shard_union(summaries))
+                        for summary in summaries:
+                            self.assertEqual(summary['minTests'], floor)
+                            summary['minTests'] = floor // 4
+                        with self.assertRaisesRegex(ValueError, 'lowered the registration floor'):
+                            ci_verify.validate_ctest_shard_union(summaries)
+
+    def test_live_only_union_requires_skip_proofs_and_the_global_execution_floor(self):
+        original = self.native_live_inventory()
+        pinned = next(name for name in sorted(ci_verify.private_fixture_rows(ROOT))
+                      if name not in original)
+        inventory = (*original[:-1], pinned)
+        for profile in ('live-sanitizers', 'live-tsan'):
+            with self.subTest(profile=profile):
+                baseline = self.shard_summaries(
+                    4, profile=profile, inventory=inventory, labelled=(), ctest_skipped=(pinned,))
+                self.assertIsNone(ci_verify.validate_ctest_shard_union(baseline))
+                self.assertEqual(sum(summary['ctestRows'] for summary in baseline), 93)
+                changed = json.loads(json.dumps(baseline))
+                skipped = next(summary for summary in changed if summary['ctestSkipped'])
+                skipped['stages'] = [stage for stage in skipped['stages']
+                                     if stage['name'] != 'live-test-skips']
+                with self.assertRaisesRegex(
+                        ValueError, 'did not prove required stage live-test-skips'):
+                    ci_verify.validate_ctest_shard_union(changed)
+                changed = json.loads(json.dumps(baseline))
+                for summary in changed:
+                    summary['minTests'] = 94
+                with self.assertRaisesRegex(ValueError, 'unchanged global floor'):
+                    ci_verify.validate_ctest_shard_union(changed)
+
+    def test_live_only_union_cannot_lower_the_floor_or_credit_a_websocket_skip(self):
+        original = self.native_live_inventory()
+        websocket = 'test_native_live_websocket'
+        self.assertIn(websocket, original)
+        pinned = next(name for name in sorted(ci_verify.private_fixture_rows(ROOT))
+                      if name not in original)
+        inventory = (*original[:-1], pinned)
+        for profile in ('live-sanitizers', 'live-tsan'):
+            with self.subTest(profile=profile):
+                baseline = self.shard_summaries(
+                    1, profile=profile, inventory=inventory, labelled=(), ctest_skipped=(pinned,))
+                self.assertIsNone(ci_verify.validate_ctest_shard_union(baseline))
+                changed = json.loads(json.dumps(baseline))
+                changed[0]['requireWebsocket'] = 1
+                with self.assertRaisesRegex(ValueError, 'WebSocket requirement must be a boolean'):
+                    ci_verify.validate_ctest_shard_union(changed)
+                changed = json.loads(json.dumps(baseline))
+                changed[0]['requireWebsocket'] = False
+                changed[0]['minTests'] = LIVE_SANITIZERS_MIN_TESTS - 1
+                with self.assertRaisesRegex(ValueError, 'lowered the registration floor'):
+                    ci_verify.validate_ctest_shard_union(changed)
+                changed = json.loads(json.dumps(baseline))
+                changed[0]['ctestRan'].remove(websocket)
+                changed[0]['ctestRan'].append(pinned)
+                changed[0]['ctestRan'].sort()
+                changed[0]['ctestSkipped'] = [websocket]
+                changed[0]['minTests'] = 94
+                with self.assertRaisesRegex(ValueError, 'unchanged global floor'):
+                    ci_verify.validate_ctest_shard_union(changed)
 
     def assert_lab_shard_contract(self, summaries):
         """Lab b53dba5e44 recipes.mjs/shards.mjs literals over producer output."""
@@ -2129,9 +2428,13 @@ class ProfileOptions(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, 'must run every runner row'):
             self.definitions('live-tsan', ['--exclude-label', 'slow'])
         self.assertIn('native_live_routing_e2e', ci_verify.runner_e2e_test_names(ROOT))
-        # Every driver, including corpus equivalence, must be a required row.
+        # Corpus equivalence requires every probe row instead of its old parent.
+        probes = driver_probes((ROOT / 'tests' / 'native_live_equivalence_e2e.py').read_text())
+        expected = {path.stem for path in (ROOT / 'tests').glob('native_live*_e2e.py')}
+        expected.remove('native_live_equivalence_e2e')
+        expected.update('native_live_equivalence_e2e_' + probe for probe in probes)
         self.assertEqual(ci_verify.runner_e2e_test_names(ROOT),
-                         {path.stem for path in (ROOT / 'tests').glob('native_live*_e2e.py')})
+                         expected)
 
     def test_kernel_drops_the_source_layer_and_keeps_the_live_runner(self):
         values, argv = self.definitions('kernel')
@@ -3045,8 +3348,18 @@ class DriverOrderingAndAggregation(unittest.TestCase):
 
     def test_pr_exclusion_proves_registered_minus_labelled_equals_ran(self):
         self.assertEqual(ci_verify.EXCLUDED_REGISTERED_MIN,
-                         {'debug': 876, 'sanitizers': 867, 'native': 964,
-                          'release': 895, 'kernel': 337})
+                         {'debug': 904, 'sanitizers': 895, 'native': 1000,
+                          'release': 923, 'kernel': 365})
+        self.assertNotIn('test_open_report_rows_flat', ci_verify.PINNED_SLOW_TEST_ROWS)
+        self.assertNotIn('test_open_report_rows_flat_slices_cover',
+                         ci_verify.PINNED_SLOW_TEST_ROWS)
+        self.assertEqual({
+            'test_open_report_rows_flat_slice_1',
+            'test_open_report_rows_flat_slice_2',
+            'test_open_report_rows_flat_slice_3',
+            'test_open_report_rows_flat_slice_4',
+        }, {name for name in ci_verify.PINNED_SLOW_TEST_ROWS
+            if name.startswith('test_open_report_rows_flat')})
         for profile, registered in ci_verify.EXCLUDED_REGISTERED_MIN.items():
             with self.subTest(profile=profile):
                 code, summary, scripted, _ = self.run_profile(
@@ -3458,6 +3771,7 @@ class DriverOrderingAndAggregation(unittest.TestCase):
 
     def test_live_sanitizers_refuse_a_missing_required_row(self):
         names = ci_verify.runner_e2e_test_names(ROOT)
+        names.add('test_native_live_equivalence_split')
         if (ROOT / 'runner' / 'transport.cpp').is_file():
             names.add('test_native_live_websocket')
         for name in sorted(names):
@@ -4097,7 +4411,8 @@ class PrivateFixtureFloors(unittest.TestCase):
         labelled = labelled_private_fixture_rows(
             ROOT / 'tests' / 'CMakeLists.txt', ROOT / 'runner' / 'CMakeLists.txt')
         pinned = set(ci_verify.private_fixture_rows(ROOT))
-        self.assertEqual(len(pinned), ci_verify.PRIVATE_FIXTURE_ROW_COUNT)
+        probes = driver_probes((ROOT / 'tests' / 'native_live_equivalence_e2e.py').read_text())
+        self.assertEqual(len(pinned), ci_verify.PRIVATE_FIXTURE_ROW_COUNT - 1 + len(probes))
         self.assertEqual(pinned, labelled)
 
     def test_red_the_comparison_fails_on_a_real_mismatch(self):
@@ -4153,9 +4468,15 @@ class PrivateFixtureFloors(unittest.TestCase):
         # feeds them. A profile outside the table keeps its declared value, and
         # PRIVATE_FIXTURE_ROW_COUNT bounds the pinned half by construction.
         self.assertEqual(ci_verify.PRIVATE_FIXTURE_PROFILE_FLOORS,
-                         {'release': (910, 307), 'kernel': (337, 31)})
-        self.assertEqual(FULL_FLOOR, {'release': 910, 'kernel': 337})
-        self.assertEqual(ABSENT_FLOOR, {'release': 603, 'kernel': 306})
+                         {'release': (938, 307), 'kernel': (365, 31)})
+        self.assertEqual(FULL_FLOOR, {'release': 938, 'kernel': 365})
+        self.assertEqual(ABSENT_FLOOR, {'release': 631, 'kernel': 334})
+        self.assertEqual(
+            {name for name in ci_verify.PINNED_SLOW_TEST_ROWS
+             if name.startswith('test_native_command_after')},
+            {f'test_native_command_after_slice_{index}' for index in range(1, 9)})
+        self.assertEqual(len(ci_verify.PINNED_SLOW_TEST_ROWS), 61)
+        self.assertEqual(LIVE_SANITIZERS_MIN_TESTS, 21)
         for name, (full, pinned) in ci_verify.PRIVATE_FIXTURE_PROFILE_FLOORS.items():
             with self.subTest(profile=name):
                 self.assertEqual(ci_verify.PROFILE[name].min_tests, full)
@@ -4182,8 +4503,8 @@ class PrivateFixtureFloors(unittest.TestCase):
             self.assertEqual(validate_config(parse_args(['kernel'])).min_tests,
                              FULL_FLOOR['kernel'])
         self.assertEqual(ci_verify.EXCLUDED_REGISTERED_MIN,
-                         {'debug': 876, 'sanitizers': 867, 'native': 964,
-                          'release': 895, 'kernel': 337})
+                         {'debug': 904, 'sanitizers': 895, 'native': 1000,
+                          'release': 923, 'kernel': 365})
 
     def test_overlay_flag_moves_the_floor_and_is_the_only_input(self):
         # F9: the flag must MOVE the value. A test that only reads the
@@ -4355,13 +4676,14 @@ class PrivateFixtureFloors(unittest.TestCase):
         # Two absent-world shapes driven through the real Driver. The dated
         # kernel absent run (rj-20261012t003154-1c9988) registered 337 rows
         # with its 28 pinned placeholders skipping: 309 ran. The current
-        # kernel shape has 31 pinned skips: 337 - 31 = 306 ran, at the floor.
-        # The R2 review's shrunken registry registered 900 with 298 pinned skips:
-        # 602 ran, still below the current 603 (910 - 307) floor, so it FAILS --
-        # the two rows the twin guards drop (R2-F2) are not bought back by a
-        # registry that shrank with them. That is the RED the old observed-skip
+        # kernel shape has 31 pinned skips: 365 - 31 = 334 ran, at the floor.
+        # The historical shrunken registry registered 900 with 298 pinned skips:
+        # 602 ran, still below the current 631 (938 - 307) floor, so it fails.
+        # The two rows the twin guards drop are not bought back by a registry
+        # that shrank with them. That is the red the old observed-skip
         # floor could not show (it passed 603 against 602).
-        code, summary, _, _ = self.absent_run('kernel', 337, self.pinned_probe(31))
+        code, summary, _, _ = self.absent_run(
+            'kernel', FULL_FLOOR['kernel'], self.pinned_probe(31))
         self.assertEqual(code, 0, summary['failures'])
         self.assertEqual(summary['minTests'], ABSENT_FLOOR['kernel'])
         self.assertEqual(summary['ctestRows'], ABSENT_FLOOR['kernel'])
@@ -4372,28 +4694,28 @@ class PrivateFixtureFloors(unittest.TestCase):
         self.assertEqual(summary['ctestRows'], 602)
 
     def test_min_tests_values_are_never_lowered(self):
-        # R2-F8: the lowering keys on the PROFILE, not on the floor's value, so
-        # an explicit --min-tests 325 is used verbatim in the absent world --
-        # where the profile's own floor is 306 -- and fails a 306-row run the
-        # default accepts. The replaced code lowered an explicit 325 by the
-        # observed skips (204) and passed it.
+        # Lowering keys on the profile, not on the floor's value: an explicit
+        # --min-tests 365 is used verbatim in the absent world, where the
+        # profile's own floor is 334. It fails the same 334-row run the default
+        # accepts; an explicit 334 passes. The replaced rule lowered explicit
+        # values by observed skips and passed a run below its requested floor.
         pinned = self.pinned_probe(31)
-        code, summary, _, _ = self.absent_run('kernel', 337, pinned)
+        code, summary, _, _ = self.absent_run('kernel', FULL_FLOOR['kernel'], pinned)
         self.assertEqual(code, 0, summary['failures'])
         self.assertEqual(summary['minTests'], ABSENT_FLOOR['kernel'])
         with self.overlay_absent():
             code, summary, _, _ = self.run_profile(
-                'kernel', extra=['--min-tests', '325'], ctest_registered=337,
-                ctest_rows=337, ctest_skipped=pinned)
+                'kernel', extra=['--min-tests', '365'], ctest_registered=365,
+                ctest_rows=365, ctest_skipped=pinned)
         self.assertEqual(code, 1)
         self.assertIn('ctest-floor', failure_stages(summary))
-        self.assertEqual(summary['minTests'], 325)
+        self.assertEqual(summary['minTests'], 365)
         with self.overlay_absent():
             code, summary, _, _ = self.run_profile(
-                'kernel', extra=['--min-tests', '306'], ctest_registered=337,
-                ctest_rows=337, ctest_skipped=pinned)
+                'kernel', extra=['--min-tests', '334'], ctest_registered=365,
+                ctest_rows=365, ctest_skipped=pinned)
         self.assertEqual(code, 0, summary['failures'])
-        self.assertEqual(summary['minTests'], 306)
+        self.assertEqual(summary['minTests'], 334)
 
     def test_the_lowered_note_prints_only_for_the_tables_own_lowering(self):
         # N5: an explicit --min-tests that happens to equal full minus pinned
@@ -4497,7 +4819,7 @@ class PrivateFixtureFloors(unittest.TestCase):
                      if item['stage'] == 'ctest-floor')
         self.assertIn('pinned rows that ran: 1', error)
         self.assertIn(pinned[-1], error)
-        # 337 - 30 = 307 ran, one ABOVE the 306 floor: only this rule sees it.
+        # 365 - 30 = 335 ran, one above the 334 floor: only this rule sees it.
         self.assertEqual(summary['ctestRows'], ABSENT_FLOOR['kernel'] + 1)
 
     def test_green_absent_every_registered_pinned_row_skips(self):
@@ -4530,7 +4852,7 @@ class PrivateFixtureFloors(unittest.TestCase):
         # N6: main's kernel floor counted test_native_live_websocket's 77 as a
         # run (its number sat one below the registered count). The table's full
         # floor counts that row as running, so the one named row keeps the
-        # allowance: 337 registered, 31 pinned + 1 websocket skipping, 305 ran.
+        # allowance: 365 registered, 31 pinned + 1 websocket skipping, 333 ran.
         pinned = self.pinned_probe(
             ci_verify.PRIVATE_FIXTURE_PROFILE_FLOORS['kernel'][1])
         with self.overlay_absent():
@@ -4600,7 +4922,7 @@ class PrExclusionWithFixturesAbsent(unittest.TestCase):
         # D1 floors are independent policy literals, not read back from the
         # implementation being tested. Exercise the real enforcement branch
         # without repeating an engine configure/build or scripted source guard.
-        for profile, floor in (('release', 895), ('kernel', 337)):
+        for profile, floor in (('release', 923), ('kernel', 365)):
             pinned = self.pinned_probe(1)
             cases = (
                 (floor, floor - 5, floor - 5, pinned, 'passed', ''),
@@ -4632,22 +4954,23 @@ class PrExclusionWithFixturesAbsent(unittest.TestCase):
 
     def test_green_the_d2_probe_shape_passes(self):
         # Control (a): the PR shape's own numbers. RED before the fix: exit 1,
-        # 'but ran 587; not counted: 290 skipped'.
+        # 'but ran 587; not counted: 290 skipped'. The current fixture stays
+        # above the registration floor, retaining five slow and 290 pinned rows.
         code, summary, _, build_dir = self.run_profile(
-            'debug', ctest_registered=882, ctest_labelled=5, ctest_rows=877,
+            'debug', ctest_registered=906, ctest_labelled=5, ctest_rows=901,
             ctest_skipped=self.pinned_probe(290))
         self.assertEqual(code, 0, summary['failures'])
         self.assertIn('ctest-exclusion', stage_names(summary))
-        self.assertEqual(summary['ctestRows'], 877 - 290)
+        self.assertEqual(summary['ctestRows'], 901 - 290)
         log = (build_dir / 'ci-logs' / 'ctest-exclusion.log').read_text()
-        self.assertIn('587', log)
+        self.assertIn('611', log)
         self.assertIn('290 pinned private-fixture rows skipping', log)
 
     def test_red_an_unpinned_skip_fails(self):
         # Control (b): one skipped row outside the pin is a failure even
         # though the arithmetic alone would tolerate it.
         code, summary, _, _ = self.run_profile(
-            'debug', ctest_registered=882, ctest_labelled=5, ctest_rows=877,
+            'debug', ctest_registered=906, ctest_labelled=5, ctest_rows=901,
             ctest_skipped=self.pinned_probe(290) + ['test_row_not_pinned'])
         self.assertEqual(code, 1)
         self.assertIn('ctest-exclusion', failure_stages(summary))
@@ -4660,14 +4983,14 @@ class PrExclusionWithFixturesAbsent(unittest.TestCase):
         # Control (c): one public row fewer ran than the selection holds:
         # ran + pinned skips < selected.
         code, summary, _, _ = self.run_profile(
-            'debug', ctest_registered=882, ctest_labelled=5, ctest_rows=876,
+            'debug', ctest_registered=906, ctest_labelled=5, ctest_rows=900,
             ctest_skipped=self.pinned_probe(290))
         self.assertEqual(code, 1)
         self.assertIn('ctest-exclusion', failure_stages(summary))
         error = next(item['error'] for item in summary['failures']
                      if item['stage'] == 'ctest-exclusion')
-        self.assertIn('586', error)
-        self.assertIn('selected 877', error)
+        self.assertIn('610', error)
+        self.assertIn('selected 901', error)
 
     def test_red_overlay_present_a_pinned_skip_fails_the_exclusion(self):
         # Control (d): with the overlay present every selected private-fixture
@@ -4675,7 +4998,7 @@ class PrExclusionWithFixturesAbsent(unittest.TestCase):
         # and the exclusion stage. The platform exception is not a fixture.
         with mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES': '1'}):
             code, summary, _, _ = self.run_profile(
-                'debug', ctest_registered=882, ctest_labelled=5, ctest_rows=877,
+                'debug', ctest_registered=906, ctest_labelled=5, ctest_rows=901,
                 ctest_skipped=self.pinned_probe(1))
         self.assertEqual(code, 1)
         self.assertIn('ctest-exclusion', failure_stages(summary))
@@ -4686,7 +5009,7 @@ class PrExclusionWithFixturesAbsent(unittest.TestCase):
         # overlay is present (only the exclusion stage catches it).
         with mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES': '1'}):
             code, summary, _, _ = self.run_profile(
-                'debug', ctest_registered=882, ctest_labelled=5, ctest_rows=877,
+                'debug', ctest_registered=906, ctest_labelled=5, ctest_rows=901,
                 ctest_skipped=['test_native_live_websocket'])
         self.assertEqual(code, 1)
         self.assertEqual(failure_stages(summary), ['ctest-exclusion'])
@@ -4717,8 +5040,8 @@ class PrExclusionWithFixturesAbsent(unittest.TestCase):
                 source=source, runner=default_runner, stream_output=False)
             driver = ci_verify.Driver(cfg)
             driver.enforce_test_floor(
-                Completed(0, ctest_output(877, tuple(self.pinned_probe(2))), b''),
-                registered=882, selected=877,
+                Completed(0, ctest_output(901, tuple(self.pinned_probe(2))), b''),
+                registered=906, selected=901,
                 excluded_names=frozenset(SCRIPTED_SLOW_FIXTURE_NAMES))
         self.assertEqual([stage['status'] for stage in driver.stages], ['failed'])
         self.assertIn('a truncated pin cannot clear the rows it lost',
@@ -4844,19 +5167,22 @@ class LiveProfilesWithFixturesAbsent(unittest.TestCase):
     def test_required_equivalence_skip_fails_even_when_other_rows_cover_the_floor(self):
         # Inventory membership and a healthy total cannot substitute for this
         # required driver's execution, even though its skip is a pinned one.
+        probes = driver_probes((ROOT / 'tests' / 'native_live_equivalence_e2e.py').read_text())
         for profile in ci_verify.LIVE_ONLY_PROFILES:
-            with self.subTest(profile=profile):
-                code, summary, _, _ = self.run_profile(
-                    profile, ctest_registered=LIVE_SANITIZERS_MIN_TESTS + 1,
-                    ctest_rows=LIVE_SANITIZERS_MIN_TESTS + 1,
-                    ctest_skipped=['native_live_equivalence_e2e'])
-                self.assertEqual(code, 1)
-                self.assertEqual(summary['ctestRows'], LIVE_SANITIZERS_MIN_TESTS)
-                self.assertIn('live-test-skips', failure_stages(summary))
-                error = next(item['error'] for item in summary['failures']
-                             if item['stage'] == 'live-test-skips')
-                self.assertIn('required runner e2e rows skipped', error)
-                self.assertIn('native_live_equivalence_e2e', error)
+            for probe in probes:
+                name = 'native_live_equivalence_e2e_' + probe
+                with self.subTest(profile=profile, probe=probe):
+                    code, summary, _, _ = self.run_profile(
+                        profile, ctest_registered=LIVE_SANITIZERS_MIN_TESTS + 1,
+                        ctest_rows=LIVE_SANITIZERS_MIN_TESTS + 1,
+                        ctest_skipped=[name])
+                    self.assertEqual(code, 1)
+                    self.assertEqual(summary['ctestRows'], LIVE_SANITIZERS_MIN_TESTS)
+                    self.assertIn('live-test-skips', failure_stages(summary))
+                    error = next(item['error'] for item in summary['failures']
+                                 if item['stage'] == 'live-test-skips')
+                    self.assertIn('required runner e2e rows skipped', error)
+                    self.assertIn(name, error)
 
     def test_the_native_profile_is_not_under_this_rule(self):
         # Control (e): the native profile runs runner rows too but is not a
@@ -4865,7 +5191,7 @@ class LiveProfilesWithFixturesAbsent(unittest.TestCase):
         # the floor's, which this profile declares none of).
         pinned = self.pinned_probe(1)
         code, summary, _, _ = self.run_profile(
-            'native', ctest_registered=964, ctest_rows=964,
+            'native', ctest_registered=1000, ctest_rows=1000,
             ctest_skipped=pinned)
         self.assertEqual(code, 0, summary['failures'])
         self.assertNotIn('live-test-skips', stage_names(summary))
@@ -4894,6 +5220,29 @@ class FloorDocsPointAtTheTable(unittest.TestCase):
                   'docs/pages/native-engine.md', 'docs/ci.md',
                   '.github/workflows/ci.yml')
 
+    def test_ci_documentation_pins_the_combined_profile_floors(self):
+        text = (ROOT / 'docs/ci.md').read_text()
+        table = re.findall(
+            r'^\| `(release|kernel)` \| (\d+) \| (\d+) \| (\d+) / (\d+) \|$',
+            text, re.MULTILINE)
+        self.assertEqual(table, [
+            ('release', '938', '631', '938', '938'),
+            ('kernel', '365', '334', '365', '365'),
+        ])
+        self.assertRegex(
+            text, r'Every shard reports the same \*\*undivided\*\* `minTests`: Release 938 with the\n'
+            r'overlay or 631 without it \(307 pinned placeholders\), kernel 365 with the\n'
+            r'overlay or 334 without it \(31 pinned placeholders\)\.')
+        self.assertIn('floor itself remains fixed at 631/334 absent or 938/365 present', text)
+        self.assertIn('numbers above (631\nand 334 rows absent, 938 and 365', text)
+        self.assertIn('at least 904 registered rows for `debug`, 895 for `sanitizers`', text)
+        self.assertIn('`EXCLUDED_REGISTERED_MIN` holds 904 for `debug`, 895\n'
+                      'for `sanitizers` and 1000 for `native`, and 923 for `release` and 365\n', text)
+        self.assertIn('run floors in the table above (938 and 365 with the overlay present, 631 and\n'
+                      '334 absent)', text)
+        self.assertIn('native PR registration floor is 1000: 964 + 28 public split rows + 8 probes.', text)
+        self.assertIn('live-only floors stay 21 (20 without transport.cpp)', text)
+
     def test_the_two_names_are_literals_the_table_references(self):
         # AST teeth, in the direction the tree now fixes: the right-hand sides
         # must be plain integer literals (CORE's proof kit reads each from the
@@ -4916,6 +5265,9 @@ class FloorDocsPointAtTheTable(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertIsInstance(value, ast.Constant)
                 self.assertIsInstance(value.value, int)
+                self.assertEqual(value.value, {
+                    'RELEASE_MIN_TESTS': 938, 'KERNEL_MIN_TESTS': 365,
+                }[name])
         self.assertIsInstance(table, ast.Dict)
         entries = {}
         for key, value in zip(table.keys, table.values):
@@ -5517,7 +5869,7 @@ class CTestDeadlines(unittest.TestCase):
 
 
 class NativeLiveEquivalenceCTest(unittest.TestCase):
-    """CR-223-ROW: source wiring and compiler-free adapter controls.
+    """Source wiring and compiler-free adapter controls.
 
     The tiny driver below is a fixture, never the corpus e2e or a compiler.
     The supervisor separately proves the registered row with the real driver.
@@ -5525,29 +5877,55 @@ class NativeLiveEquivalenceCTest(unittest.TestCase):
 
     def test_registered_row_has_build_tree_outputs_and_status_only_skip(self):
         cmake = (ROOT / 'runner' / 'CMakeLists.txt').read_text()
-        row = re.search(r'add_test\(NAME native_live_equivalence_e2e\s+(.*?)\)',
+        row_name = r'native_live_equivalence_e2e_\$\{_pf_equivalence_probe\}'
+        row = re.search(r'add_test\(NAME ' + row_name + r'\s+(.*?)\)',
                         cmake, re.S)
-        self.assertIsNotNone(row, 'the equivalence driver needs a permanent runner CTest row')
+        self.assertIsNotNone(row, 'each equivalence probe needs a permanent runner CTest row')
         command = row.group(1)
         self.assertIn('${Python3_EXECUTABLE} -B', command)
         self.assertIn('${PROJECT_SOURCE_DIR}/tests/native_live_equivalence_ctest.py', command)
         self.assertIn('--script ${PROJECT_SOURCE_DIR}/tests/native_live_equivalence_e2e.py', command)
+        self.assertIn('--probes ${_pf_equivalence_probe}', command)
         self.assertIn('--build-dir ${PROJECT_BINARY_DIR}', command)
+        self.assertIn('${_pf_genuine_retry_sanitizer_args}', command)
         for option in ('--libraries-dir', '--out'):
             self.assertRegex(command, re.escape(option) + r'\s+\$\{CMAKE_CURRENT_BINARY_DIR\}/')
+        self.assertIn('/${_pf_equivalence_probe}/libraries', command)
+        self.assertIn('/${_pf_equivalence_probe}/output', command)
         properties = re.search(
-            r'set_tests_properties\(native_live_equivalence_e2e\s+PROPERTIES\s+(.*?)\)',
+            r'set_tests_properties\(' + row_name + r'\s+PROPERTIES\s+(.*?)\)',
             cmake, re.S)
         self.assertIsNotNone(properties)
         self.assertRegex(properties.group(1), r'\bSKIP_RETURN_CODE\s+77\b')
         self.assertRegex(properties.group(1), r'\bLABELS\s+private_fixtures\b')
         self.assertNotRegex(properties.group(1),
                             r'\b(SKIP_REGULAR_EXPRESSION|PASS_REGULAR_EXPRESSION|WILL_FAIL|DISABLED)\b')
-        self.assertIn('native_live_equivalence_e2e', ci_verify.private_fixture_rows(ROOT))
+        probes = driver_probes((ROOT / 'tests' / 'native_live_equivalence_e2e.py').read_text())
+        pinned = ci_verify.private_fixture_rows(ROOT)
+        self.assertNotIn('native_live_equivalence_e2e', pinned)
+        for probe in probes:
+            self.assertIn('native_live_equivalence_e2e_' + probe, pinned)
         # The same runtime preload/finalization contract must reach both
         # ctypes witnesses in ASan and TSan builds.
         self.assertRegex(cmake, r'set_tests_properties\(native_live_genuine_retry_e2e\s+'
-                         r'native_live_equivalence_e2e\s+PROPERTIES ENVIRONMENT')
+                         r'\$\{_pf_equivalence_rows\}\s+PROPERTIES ENVIRONMENT')
+        self.assertIn('list(APPEND _pf_equivalence_rows '
+                      'native_live_equivalence_e2e_${_pf_equivalence_probe})', cmake)
+        cover = re.search(r'add_test\(NAME test_native_live_equivalence_split\s+(.*?)\)',
+                          cmake, re.S)
+        self.assertIsNotNone(cover)
+        self.assertEqual(cover.group(1).split(), [
+            'COMMAND', '${Python3_EXECUTABLE}', '-B',
+            '${PROJECT_SOURCE_DIR}/scripts/test_native_live_equivalence_split.py'])
+        self.assertNotIn('test_native_live_equivalence_split', pinned)
+
+    def test_each_probe_inherits_the_private_fixture_pin(self):
+        probes = driver_probes((ROOT / 'tests' / 'native_live_equivalence_e2e.py').read_text())
+        pinned = ci_verify.private_fixture_rows(ROOT)
+        self.assertNotIn('native_live_equivalence_e2e', pinned)
+        self.assertEqual(len(pinned), 376 - 1 + len(probes))
+        for probe in probes:
+            self.assertIn('native_live_equivalence_e2e_' + probe, pinned)
 
     def test_inventory_decision_and_prerequisites_are_documented(self):
         source = (ROOT / 'scripts' / 'ci_verify.py').read_text()
@@ -5556,12 +5934,12 @@ class NativeLiveEquivalenceCTest(unittest.TestCase):
         self.assertIn('corpus', function)
         self.assertIn('docs/ci.md', function)
         docs = (ROOT / 'docs' / 'ci.md').read_text()
-        self.assertIn('`native_live_equivalence_e2e`', docs)
+        self.assertIn('`native_live_equivalence_e2e_<probe>`', docs)
         self.assertIn('runner_e2e_test_names()', docs)
         self.assertNotIn('corpus equivalence driver is not a runner CTest row', docs)
 
     def test_mandatory_row_raises_live_run_floor_in_both_fixture_worlds(self):
-        # All twelve existing public rows and the equivalence row must RUN.
+        # 13 - 1 + 8 probe rows + 1 cover row = 21 required run rows.
         with tempfile.TemporaryDirectory() as temporary:
             source = Path(temporary)
             for transport_present in (False, True):
@@ -5573,7 +5951,7 @@ class NativeLiveEquivalenceCTest(unittest.TestCase):
                             mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES': overlay}):
                         for profile in ci_verify.LIVE_ONLY_PROFILES:
                             self.assertEqual(ci_verify.profile_min_tests(ci_verify.PROFILE[profile], source),
-                                             13 if transport_present else 12)
+                                             21 if transport_present else 20)
 
     def test_live_feed_materialization_follows_profile_and_is_lfs_explicit(self):
         # Exercise the prerequisite method alone: no guards, configure or
@@ -5613,6 +5991,7 @@ class NativeLiveEquivalenceCTest(unittest.TestCase):
             "parser = argparse.ArgumentParser()\n"
             "for option in ('--root', '--build-dir', '--libraries-dir', '--out'):\n"
             "    parser.add_argument(option, required=True)\n"
+            "parser.add_argument('--probes', nargs='+', choices=list(PROBES))\n"
             "args = parser.parse_args()\n"
             "Path(args.out).mkdir(parents=True, exist_ok=False)\n"
             "Path(args.libraries_dir).mkdir(parents=True, exist_ok=False)\n"
@@ -5669,6 +6048,24 @@ class NativeLiveEquivalenceCTest(unittest.TestCase):
             self.assertNotEqual(result.returncode, 77)
             self.assertIn('driver fixture failure', result.stderr)
 
+    def test_selected_probes_are_forwarded_verbatim_and_keep_failure_status(self):
+        for probes in (['probe-alpha'], ['probe-beta'], ['probe-beta', 'probe-alpha']):
+            for exit_code, exception in ((0, False), (77, False), (256, False), (0, True)):
+                with self.subTest(probes=probes, exit_code=exit_code, exception=exception), \
+                        tempfile.TemporaryDirectory() as temporary:
+                    command = self.fixture(temporary, exit_code=exit_code, exception=exception)
+                    result = self.invoke_fixture([*command, '--probes', *probes])
+                    receipt = next((line.removeprefix('DRIVER_EXECUTED ')
+                                    for line in result.stdout.splitlines()
+                                    if line.startswith('DRIVER_EXECUTED ')), None)
+                    self.assertIsNotNone(receipt, result.stdout + result.stderr)
+                    self.assertEqual(json.loads(receipt)['probes'], probes)
+                    self.assertEqual(result.returncode, 1 if exception or exit_code else 0,
+                                     result.stdout + result.stderr)
+                    self.assertNotIn('SKIP ', result.stdout)
+                    if exception:
+                        self.assertIn('driver fixture failure', result.stderr)
+
     def test_reruns_retain_distinct_outputs_and_libraries_under_build_tree(self):
         with tempfile.TemporaryDirectory() as temporary:
             command = self.fixture(temporary)
@@ -5689,5 +6086,56 @@ class NativeLiveEquivalenceCTest(unittest.TestCase):
                 self.assertTrue(Path(receipts[0][option]).is_dir())
 
 
+def collected_ci_verify_tests():
+    """Collect real unittest cases without running bodies or module fixtures."""
+    def cases(suite):
+        for item in suite:
+            if isinstance(item, unittest.TestSuite):
+                yield from cases(item)
+            else:
+                yield item
+
+    loader = unittest.TestLoader()
+    suite = loader.loadTestsFromModule(sys.modules[__name__])
+    if loader.errors:
+        raise RuntimeError('\n'.join(loader.errors))
+    tests = sorted(cases(suite), key=lambda case: case.id())
+    names = [case.id() for case in tests]
+    if not names or len(names) != len(set(names)):
+        raise ValueError('ci_verify collection must be nonempty with unique test ids')
+    return tests
+
+
+def ci_verify_test_main():
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument('--slice', metavar='INDEX/COUNT')
+    parser.add_argument('--collect-only', action='store_true')
+    options, remaining = parser.parse_known_args()
+    if options.slice is None and not options.collect_only:
+        # Preserve the existing unittest CLI for direct, unsliced invocations.
+        unittest.main(argv=[sys.argv[0], *remaining])
+    if remaining:
+        parser.error('slice execution and collection do not accept extra unittest selectors')
+    tests = collected_ci_verify_tests()
+    if options.slice is not None:
+        match = re.fullmatch(r'([1-9][0-9]*)/([1-9][0-9]*)', options.slice)
+        if match is None:
+            parser.error('--slice must be INDEX/COUNT with 1 <= INDEX <= COUNT')
+        index, count = map(int, match.groups())
+        if index > count:
+            parser.error('--slice must satisfy 1 <= INDEX <= COUNT')
+        if count > len(tests):
+            parser.error('--slice would create an empty slice')
+        # One-based row I owns sorted zero-based test indices I-1, I-1+K, ...
+        tests = tests[index - 1::count]
+    if not tests:
+        parser.error('--slice selected an empty slice')
+    if options.collect_only:
+        print(json.dumps([case.id().removeprefix(__name__ + '.') for case in tests]))
+        return 0
+    result = unittest.TextTestRunner().run(unittest.TestSuite(tests))
+    return int(not result.wasSuccessful())
+
+
 if __name__ == '__main__':
-    unittest.main()
+    raise SystemExit(ci_verify_test_main())
