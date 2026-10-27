@@ -297,7 +297,7 @@ scratch bytes  =  base  +  sum over k of ( count_k x bytes_k )
 `base` is the part that does not depend on the run's counts: the fixed
 portion of the table slab (below) and the chunk and page rounding. The counts
 are the run's own: `S` script bars, `T` closed trades, `D` distinct ids, `L`
-the longest id in bytes (at most 64 in the bounded profile: the id checks run only when the table slab exists, because `preflight_keys` at `include/pineforge/detail/id_pair_store.hpp:268-269` and `preflight_joined_single` at `include/pineforge/detail/id_pair_store.hpp:317-319` return at once without one, and the cohort table checks `bounded_cohorts()`), `Q` distinct id pairs (`D x D` at most), `R`
+the longest id in bytes (at most 64 in the bounded profile: the id checks run only when the table slab exists, because `preflight_keys` at `include/pineforge/detail/id_pair_store.hpp:271-272` and `preflight_joined_single` at `include/pineforge/detail/id_pair_store.hpp:320-322` return at once without one, and the cohort table checks `bounded_cohorts()`), `Q` distinct id pairs (`D x D` at most), `R`
 successor-root rows and `E` stored equity points. The per-store figures below
 are logical peak bytes before the arena's 1 MiB chunk rounding. They are
 derived by hand in [the arena bound](../design/arena-bound.md), which also

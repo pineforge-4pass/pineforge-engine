@@ -342,7 +342,7 @@ indexPeak(k) = 24 * slots(k)                       # k > 32
 | Position tail | (30+L)*T | `src/source/pine_position_tail.hpp:20`; footer packing at `src/source/pine_position_tail.cpp:94` |
 | Cohort AVL and five-word summary | (96+L)*D + 1[D>0] | `include/pineforge/detail/disk_id_table.hpp:109`; `include/pineforge/source/pine_adapter.hpp:1957` |
 | Entry-rank AVL | (60+L)*J + 1[J>0] | `src/source/pine_adapter.cpp:6377`; `include/pineforge/detail/disk_id_table.hpp:109` |
-| Erased minima data | (40+L)*D + (40+2*L)*Q | `erased_minima_` at `include/pineforge/source/pine_adapter.hpp:946`; 40-byte header at `include/pineforge/detail/id_pair_store.hpp:68` |
+| Erased minima data | (40+L)*D + (40+2*L)*Q | `erased_minima_` at `include/pineforge/source/pine_adapter.hpp:947`; 40-byte header at `include/pineforge/detail/id_pair_store.hpp:68` |
 | Erased minima index | indexPeak(D+Q) | 16-byte slot at `include/pineforge/detail/id_pair_store.hpp:68`; replacement at `:573` |
 | Consumed partial-cycle data | (41+2*L)*Q | `include/pineforge/source/pine_adapter.hpp:2727`; joined key at `src/source/pine_adapter.cpp:25357` |
 | Consumed partial-cycle index | indexPeak(Q) | `include/pineforge/detail/id_pair_store.hpp:573` |

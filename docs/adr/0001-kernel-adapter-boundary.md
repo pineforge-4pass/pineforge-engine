@@ -229,7 +229,7 @@ kernel and own these quirks, each at its site:
   `NativeCloseExecution::AfterCalculation` in the projected spec (`pine_adapter.cpp:3001`);
   calc cadence and language publication are `PineScheduler`'s (`pine_scheduler.hpp:26`).
 - **Batching and open-order priority.** Same-bar command batching and its deferred queues
-  (`PendingSameBarCommand` pine_adapter.hpp:2119, `pending_bracket_legs_` pine_adapter.hpp:2782); the retained parent-before-child ordering of live handles — an
+  (`PendingSameBarCommand` pine_adapter.hpp:2120, `pending_bracket_legs_` pine_adapter.hpp:2785); the retained parent-before-child ordering of live handles — an
   exactly-shaped entry and its `from_entry` exit, re-created after a named cancel, on a flat book
   under `process_orders_on_close` (`src/compat/pine/order_priority.cpp:13-59`, applied by
   `update_l4c_priority` `pine_adapter.cpp:1506-1585`). Kernel priority is acceptance/incarnation order.
