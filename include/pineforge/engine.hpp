@@ -60,6 +60,7 @@
 #define PINEFORGE_HAS_EQUITY_METRICS_FOLD_V1 1
 namespace pineforge {
 namespace metrics { struct ScratchCurveRegion; }
+namespace source { class PineStrategyHost; }
 enum class PositionSide { FLAT, LONG, SHORT };
 namespace report_sink { class ScratchCurveWriter; }
 namespace report { class SelectedReportStream; }
@@ -503,7 +504,7 @@ public:
     virtual std::uint64_t broker_state_hash_projection() const = 0;
 };
 class BacktestEngine {
-protected:
+private:
     // The consumer is the kernel's own execution authority, so this
     // friendship is also the access path for the request.security feed
     // machinery a native higher-timeframe subscription drives:
@@ -513,10 +514,12 @@ protected:
     // begin and from its accepted-input path. No member moved and no
     // behaviour changed for this.
     friend class NativeExecutionConsumer;
+    friend class ::pineforge::source::PineStrategyHost;
     friend class NativeStrategyHost;
     // The terminal range-end row source rebuilds rows through the engine's
     // non-mutating close builder and reads the live lots.
     friend class OpenReportRowSource;
+protected:
     struct NativeConsumerBindTag { explicit NativeConsumerBindTag() = default; };
     explicit BacktestEngine(NativeConsumerBindTag);
     IExecutionConsumer& execution_consumer();
@@ -1563,6 +1566,7 @@ protected:
         }
     }
 
+private:
     // Record one equity point per SCRIPT bar. ``script_bar_ts`` must be the
     // script-bar open timestamp captured BEFORE dispatch — current_bar_.timestamp
     // is overwritten by the magnifier sub-bar walk (engine_run.cpp), which would
@@ -1602,6 +1606,7 @@ protected:
         if (position_side_ != PositionSide::FLAT) ++bars_in_market_;
     }
 
+protected:
     // --- Trade history accessors (for strategy.closedtrades.*) ---
     double closed_trade_profit(int index) const {
         if (index >= 0 && index < (int)trades_.size())
@@ -2700,18 +2705,24 @@ protected:
         return scratch_table_run_.slab;
     }
 
+private:
     // The last point stays editable until its successor is recorded. Sinks
     // using the kernel recorder keep only this tail; sink OFF keeps the array.
     pf_equity_point_t* last_equity_point() noexcept;
     const pf_equity_point_t* last_equity_point() const noexcept;
+protected:
     // Sink execution prefix, excluding the editable held point. A selected
     // prefix starts with its anchor and contains only released window points.
     // The returned descriptor is borrowed; observing flushes pending writes.
     metrics::ScratchCurveRegion report_sink_equity_scratch_region() const;
+private:
     void store_equity_point(const pf_equity_point_t& point);
     bool prepare_equity_point(); // release the prior point; true for the first
+protected:
     void fold_report_equity_extreme(double equity);
+private:
     void refold_equity_tail();
+protected:
     void present_report_equity_tail(ReportC* out) const;
     // Sealed closed rows only; range-end report rows never enter these sums.
     // Each accessor continues its own sum one resident row at a time, so a
