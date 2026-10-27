@@ -175,6 +175,10 @@ public:
         const int bar = pine_bar_index();
         require(bar == out_.callbacks++, "witness callbacks are consecutive");
         capture();
+        if (scenario_ == Scenario::FillCycle && bar == 10) {
+            check_fill();
+            sweep(); // Second sweep, after a host-observed fill and before cancel/close.
+        }
         if (bar == 0) strategy_entry("S", false, kNa, kNa, 40.0);
         if (bar == 1)
             strategy_exit("X", "S", kNa, 150.0, kNa, kNa, kNa, 100.0, "Y");
@@ -191,15 +195,26 @@ public:
             strategy_close("S", "Reverse to Long");
         }
         if (scenario_ == Scenario::FillCycle) {
-            // F really fills between two retirement sweeps; X is explicitly
-            // cancelled, the origin closes, and the same source id reopens.
-            if (bar == 8)
-                strategy_exit("F", "S", 110.0, kNa, kNa, kNa, kNa, 100.0, "fill", 1.0);
+            // S sold 40 at 100 on b1. A BUY limit at 95 takes profit on one
+            // unit. Issue on b8; by b9 the real leg must be working, and
+            // that bar's low 114 leaves it resting. Then b10 opens at 117 and
+            // crosses 95 down to 94: a fill at 95, leaving -39, before any
+            // cancellation or market close.
+            if (bar == 8) {
+                require(live_position_size() == -40.0 && position_avg_price() == 100.0,
+                        "limit experiment requires the unchanged short origin");
+                strategy_exit("F", "S", 95.0, kNa, kNa, kNa, kNa, 100.0, "fill", 1.0);
+            }
             if (bar == 10) cancel_x();
             if (bar == 11) strategy_close_all();
             if (bar == 13) strategy_entry("S", false, kNa, kNa, 40.0);
         }
         capture();
+        if (scenario_ == Scenario::FillCycle && bar == 9) {
+            check_pending_fill();
+            sweep(); // First sweep, with the real F limit still working.
+            check_pending_fill();
+        }
         if (bar == kBars - 1) mutation_sweeps();
     }
 
@@ -218,8 +233,12 @@ public:
             require(out_.explicit_cancels > 0, "explicit cancellation was not observed");
         if (scenario_ == Scenario::FillCycle) {
             require(out_.cycles.size() >= 2, "close/reopen did not advance the cycle");
+            require(fill_observed_, "limit fill was not observed between the two sweeps");
             require(std::any_of(out_.trades.begin(), out_.trades.end(), [](const Trade& trade) {
-                return !trade.open_at_end && trade.exit_id == "F";
+                return !trade.open_at_end && trade.exit_id == "F"
+                    && trade.entry_id == "S" && !trade.is_long && trade.qty == 1.0
+                    && trade.entry_price == 100.0 && trade.exit_price == 95.0
+                    && trade.exit_bar_index == 10 && trade.exit_from_bracket;
             }), "the between-sweeps limit never filled");
             const auto& rows = adapter_.*access(PlacementTag{});
             require(fill_incarnation_ != 0 && !rows.contains(fill_incarnation_),
@@ -238,6 +257,41 @@ public:
     }
 
 private:
+    void check_pending_fill() const {
+        const auto& rows = adapter_.*access(PlacementTag{});
+        require(fill_incarnation_ != 0 && rows.contains(fill_incarnation_),
+                "F must have a real placement before the fill sweep");
+        const auto& row = rows.at(fill_incarnation_);
+        require(row.family == ps::PineOrderFamily::ExitLimit && row.from_entry == "S"
+                && row.exit_levels.limit == 95.0 && row.requested_qty == 1.0
+                && !row.filled_exit && !row.legs.dormant(),
+                "first sweep must retain the unfilled, active one-unit F limit");
+        bool working = false;
+        for (const auto& request : native_working_requests())
+            if (request.definition->handle.incarnation == fill_incarnation_)
+                working = true;
+        require(working && live_position_size() == -40.0,
+                "first sweep lost the working F limit or changed the origin");
+    }
+
+    void check_fill() {
+        int fills = 0;
+        for (int i = 0; i < trade_count(); ++i) {
+            const auto trade = get_trade(i);
+            if (trade.open_at_end || trade.exit_id != "F") continue;
+            require(trade.entry_id == "S" && !trade.is_long && trade.qty == 1.0
+                    && trade.entry_price == 100.0 && trade.exit_price == 95.0
+                    && trade.exit_bar_index == 10 && trade.exit_from_bracket
+                    && trade.exit_comment == "fill",
+                    "F must close one short unit at the crossed limit on b10");
+            ++fills;
+        }
+        require(fills == 1 && live_position_size() == -39.0
+                && adapter_.source_unclosed_qty_for("S") == 39.0,
+                "the between-sweeps limit must fill once and leave 39 short units");
+        fill_observed_ = true;
+    }
+
     void cancel_x() {
         const auto& rows = adapter_.*access(PlacementTag{});
         std::vector<std::uint64_t> dormant;
@@ -482,6 +536,7 @@ private:
     const Scenario scenario_;
     Result out_;
     std::uint64_t fill_incarnation_ = 0;
+    bool fill_observed_ = false;
     std::vector<std::uint64_t> cancelled_incarnations_;
 };
 
@@ -490,7 +545,8 @@ Result run(Scenario scenario, bool oracle) {
     scan_mode = oracle;
     retirement_queries = 0;
     auto bars = tape(kBars, false);
-    if (scenario == Scenario::FillCycle) bars[10].low = 109.0;
+    if (scenario == Scenario::FillCycle)
+        bars[10] = {117.0, 118.0, 94.0, 115.0, 1.0, kStart + 10 * kMinute};
     WitnessHost host(scenario);
     host.run(bars.data(), static_cast<int>(bars.size()), "1", "1",
              false, 4, MagnifierDistribution::ENDPOINTS);
