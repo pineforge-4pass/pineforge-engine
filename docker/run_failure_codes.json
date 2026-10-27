@@ -1285,6 +1285,14 @@
   },
   "scratch_capacity_exceeded": {
    "args": {
+    "limit": {
+     "kind": "integer",
+     "optional": true
+    },
+    "need": {
+     "kind": "integer",
+     "optional": true
+    },
     "resource": {
      "kind": "vocab",
      "values": [
@@ -1303,7 +1311,7 @@
     }
    },
    "class": "resource",
-   "description": "The admitted scratch-table layout or a fixed region's capacity was exceeded. The run must be admitted with sufficient finite maxima before retrying.",
+   "description": "The admitted scratch-table layout or a fixed region's capacity was exceeded. The run must be admitted with sufficient finite maxima before retrying. The optional integers limit and need give the exceeded maximum and the smallest value known at the refusal that would admit the operation, in the same units.",
    "english": [
     "scratch capacity exceeded"
    ],
