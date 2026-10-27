@@ -52,6 +52,9 @@
 #ifndef PINEFORGE_RETIREMENT_OBSERVE
 #define PINEFORGE_RETIREMENT_OBSERVE(rows, cycle, askable, roots, candidates, first) ((void)0)
 #endif
+#ifndef PINEFORGE_RETIREMENT_ASKABLE_SWEEP
+#define PINEFORGE_RETIREMENT_ASKABLE_SWEEP() ((void)0)
+#endif
 #ifndef PINEFORGE_MARGIN_REVIVAL_OBSERVE
 #define PINEFORGE_MARGIN_REVIVAL_OBSERVE(before, rows, event, context, units, cycle, selected) ((void)0)
 #endif
@@ -3872,6 +3875,7 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
 
     auto& sweep = retired_row_scratch_;
     sweep.clear();
+    PINEFORGE_RETIREMENT_ASKABLE_SWEEP();
     const auto contains = [](const std::vector<std::uint64_t>& sorted, std::uint64_t value) {
         return std::binary_search(sorted.begin(), sorted.end(), value);
     };
@@ -3880,16 +3884,23 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
             || family == PineOrderFamily::ExitTrail;
     };
     // The origins a live leg or an opened entry answers for (K1, and the
-    // consumed-leg facts pruned below).
+    // consumed-leg facts pruned below). Quiet sweeps may never ask for them.
     auto& askable_origins = sweep.askable_origins;
-    for (const auto& handle : live_handles_) askable_origins.push_back(handle.incarnation);
-    for (const auto& cohort : cohorts_by_id_.held_rows()) {
-        for (const auto& opening : cohort.second.opened)
-            askable_origins.push_back(opening.incarnation);
-    }
-    std::sort(askable_origins.begin(), askable_origins.end());
-    askable_origins.erase(std::unique(askable_origins.begin(), askable_origins.end()),
-                          askable_origins.end());
+    bool askable_origins_ready = false;
+    const auto get_askable_origins = [&]() -> const std::vector<std::uint64_t>& {
+        if (!askable_origins_ready) {
+            for (const auto& handle : live_handles_) askable_origins.push_back(handle.incarnation);
+            for (const auto& cohort : cohorts_by_id_.held_rows()) {
+                for (const auto& opening : cohort.second.opened)
+                    askable_origins.push_back(opening.incarnation);
+            }
+            std::sort(askable_origins.begin(), askable_origins.end());
+            askable_origins.erase(std::unique(askable_origins.begin(), askable_origins.end()),
+                                  askable_origins.end());
+            askable_origins_ready = true;
+        }
+        return askable_origins;
+    };
     // One dormant origin pin per (origin, exit id, from-entry, family), in oldest
     // incarnation order. Keep its lifecycle so suspension/cancellation still
     // changes the consumed-leg answer; do not replace it with a sticky bit.
@@ -3897,7 +3908,7 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
     placement_.visit_rows([&](std::uint64_t, const PlacementSnapshot& value) {
         if (!exit_family(value.family) || !value.legs.dormant()
             || value.legs.target().incarnation == 0
-            || !contains(askable_origins, value.bracket_origin.incarnation)) return false;
+            || !contains(get_askable_origins(), value.bracket_origin.incarnation)) return false;
         const bool represented = std::any_of(origin_pins.begin(), origin_pins.end(),
             [&](const PlacementSnapshot* pin) {
                 return pin->bracket_origin == value.bracket_origin && pin->family == value.family
@@ -3911,10 +3922,10 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
         // Global legs need no named exposure; an empty named cohort may reopen.
         // Exposure at this sweep cannot decide what a later margin call reads.
         // Supersession below still releases legs the revival can no longer use.
-        const bool askable = contains(askable_origins, value.bracket_origin.incarnation);
         if (value.legs.target().incarnation != 0 && !filled_limit_without_revival(value)
             && ((value.placement_cycle >= cycle && !withdrawn(value.legs))
-                || (askable && !value.legs.dormant())
+                || (!value.legs.dormant()
+                    && contains(get_askable_origins(), value.bracket_origin.incarnation))
                 || std::find(origin_pins.begin(), origin_pins.end(), &value) != origin_pins.end())) return true;
         // K4
         if (value.family == PineOrderFamily::Close && value.immediately
@@ -3933,16 +3944,22 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
         return pinned_by_itself(value) && value.placement_cycle == cycle
             && exit_family(value.family) && !value.from_entry.empty()
             && !withdrawn(value.legs)
-            && !contains(askable_origins, value.bracket_origin.incarnation);
+            && !contains(get_askable_origins(), value.bracket_origin.incarnation);
     };
     auto& held = sweep.held;
     bool unpinned = false;
     // K5 ages in script-bar space even when a chart gathers finer input;
     // only the current and previous script bars keep their retired commands.
-    auto askable_cursor = askable_origins.begin();
+    std::vector<std::uint64_t>::const_iterator askable_cursor{};
+    bool askable_cursor_ready = false;
     placement_.visit_rows([&](std::uint64_t incarnation, const PlacementSnapshot& value) {
         const bool cycle_held = held_by_cycle(value);
         if (!cycle_held && pinned_by_itself(value)) return false;
+        // Build before taking an iterator: later rows may be the first reader.
+        if (!askable_cursor_ready) {
+            askable_cursor = get_askable_origins().begin();
+            askable_cursor_ready = true;
+        }
         while (askable_cursor != askable_origins.end() && *askable_cursor < incarnation)
             ++askable_cursor;
         if (askable_cursor != askable_origins.end() && *askable_cursor == incarnation)
@@ -4150,7 +4167,8 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
     auto& candidate_names = sweep.candidate_names;
     // A partial pre-pass needs its held legs gathered alongside candidates.
     if (unpinned) held.clear();
-    auto candidate_origin_cursor = askable_origins.begin();
+    std::vector<std::uint64_t>::const_iterator candidate_origin_cursor{};
+    bool candidate_origin_cursor_ready = false;
     placement_.visit_rows([&](std::uint64_t incarnation, const PlacementSnapshot& value) {
         if (value.legs.target().incarnation == 0 || value.placement_cycle != cycle
             || !exit_family(value.family) || value.from_entry.empty()
@@ -4158,11 +4176,15 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
             return false;
         }
         if (unpinned) {
+            if (!candidate_origin_cursor_ready) {
+                candidate_origin_cursor = get_askable_origins().begin();
+                candidate_origin_cursor_ready = true;
+            }
             while (candidate_origin_cursor != askable_origins.end()
                    && *candidate_origin_cursor < incarnation) ++candidate_origin_cursor;
             const bool askable = candidate_origin_cursor != askable_origins.end()
                 && *candidate_origin_cursor == incarnation;
-            if (!askable && !contains(askable_origins, value.bracket_origin.incarnation))
+            if (!askable && !contains(get_askable_origins(), value.bracket_origin.incarnation))
                 held.push_back({incarnation, &value});
         }
         candidates.emplace_back(incarnation, &value);
@@ -4172,7 +4194,7 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
     // Only newly released askable-origin legs lose K2/K3; keep legacy certificates.
     candidates.erase(std::remove_if(candidates.begin(), candidates.end(), [&](const auto& c) {
         return !contains(roots, c.first) && contains(released, c.first)
-            && contains(askable_origins, c.second->bracket_origin.incarnation);
+            && contains(get_askable_origins(), c.second->bracket_origin.incarnation);
     }), candidates.end());
     for (const auto& c : candidates) {
         candidate_names.push_back(c.first);
@@ -4247,7 +4269,7 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
     std::sort(first_reissues.begin(), first_reissues.end());
     sweep.reissues.swap(next_reissues);
     sweep.reissue_high_water = placement_.high_water();
-    PINEFORGE_RETIREMENT_OBSERVE(placement_, cycle, askable_origins, roots,
+    PINEFORGE_RETIREMENT_OBSERVE(placement_, cycle, get_askable_origins(), roots,
                                 candidates, first_reissues);
 
     auto& doomed = sweep.doomed;
@@ -4340,7 +4362,7 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
                                : !placement_.contains(incarnation);
         });
         family.second.prune_consumed([&](std::uint64_t origin) {
-            return contains(askable_origins, origin);
+            return contains(get_askable_origins(), origin);
         });
     }
     // The existing every-row-retained reference also keeps family records
