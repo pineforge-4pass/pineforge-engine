@@ -211,7 +211,10 @@ void dense_pending_call_work() {
 int main() {
     try {
         dense_pending_call_work();
-        return 0;
+        // MEASURE-ONLY: ctest hides the output of a passing test, so this
+        // stage fails on purpose after the table is printed. Removed by the fix.
+        std::fprintf(stderr, "dense pending call work: table printed above (deliberate failure)\n");
+        return 1;
     } catch (const std::exception& error) {
         std::fprintf(stderr, "dense pending call work: %s\n", error.what());
         return 1;
