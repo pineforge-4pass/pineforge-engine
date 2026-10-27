@@ -3256,7 +3256,7 @@
     "namespace pineforge #1",
     "inline namespace engine_script_run_v19 #2",
     "class BacktestEngine #1",
-    "void record_equity_point ( int64_t script_bar_ts ) #1",
+    "private : void record_equity_point ( int64_t script_bar_ts ) #1",
     "if ( summary ) #1"
    ],
    "cls": "grow",
