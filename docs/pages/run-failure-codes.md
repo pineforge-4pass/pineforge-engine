@@ -572,3 +572,10 @@ Two live order keys whose 64-bit hashes collide are refused with
 `reason` is a closed vocabulary with only `order_key_hash_collision`;
 other invariant failures keep `{}`. The English remains
 `Pine live source key collision`.
+
+`scratch_capacity_exceeded` may include the optional integer arguments `limit`
+and `need` beside `resource`: `limit` is the exceeded maximum, and `need` is the
+smallest value known at refusal that would admit the operation, in the same
+units (counts or bytes). For `store_objects`, these are the explicit live-object
+limit and the live count after the attempted create. Refusals without meaningful
+numeric quantities, such as an invalid layout, retain only `resource`.

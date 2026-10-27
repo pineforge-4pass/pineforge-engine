@@ -503,6 +503,7 @@ private:
         }
         if (live > kMaxResidentCohorts || extra > kMaxResidentCohorts - live)
             throw ScratchCapacityError(ScratchResource::cohort,
+                kMaxResidentCohorts, static_cast<std::uint64_t>(live) + extra,
                 scratch_resident_cohort_limit_message(kMaxResidentCohorts));
     }
     void spill_before_admission(std::size_t extra) const {

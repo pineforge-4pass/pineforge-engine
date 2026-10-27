@@ -206,7 +206,8 @@ private:
     void require_id_size(std::size_t key_size) const {
         if (file_.scratch_owner() && file_.scratch_resource() == ScratchResource::cohort
             && key_size > 64)
-            throw ScratchCapacityError(ScratchResource::cohort, "id longer than 64 bytes");
+            throw ScratchCapacityError(ScratchResource::cohort, 64, key_size,
+                                       "id longer than 64 bytes");
     }
     void require_new_key(std::size_t key_size) const {
         require_id_size(key_size);
@@ -223,16 +224,34 @@ private:
         // Packed nodes have no inter-row alignment: the append cursor minus
         // the null byte and fixed headers is exactly aggregate stored key bytes.
         const auto key_bytes = end_ - 1 - header * size_;
-        if (size_ > rows || extra_rows > rows - size_)
-            throw ScratchCapacityError(resource, scratch_count_limit_message(resource, rows));
-        if (key_bytes > bytes || extra_bytes > bytes - key_bytes)
-            throw ScratchCapacityError(resource, scratch_byte_limit_message(resource, bytes));
+        if (size_ > rows || extra_rows > rows - size_) {
+            if (extra_rows > std::numeric_limits<std::uint64_t>::max() - size_)
+                throw ScratchCapacityError(resource, scratch_count_limit_message(resource, rows));
+            throw ScratchCapacityError(resource, rows, size_ + extra_rows,
+                                       scratch_count_limit_message(resource, rows));
+        }
+        if (key_bytes > bytes || extra_bytes > bytes - key_bytes) {
+            if (extra_bytes > std::numeric_limits<std::uint64_t>::max() - key_bytes)
+                throw ScratchCapacityError(resource, scratch_byte_limit_message(resource, bytes));
+            throw ScratchCapacityError(resource, bytes, key_bytes + extra_bytes,
+                                       scratch_byte_limit_message(resource, bytes));
+        }
         const auto capacity = slab->region(resource).capacity;
-        if (end_ > capacity || extra_rows > (capacity - end_) / header)
-            throw ScratchCapacityError(resource, scratch_byte_limit_message(resource, bytes));
+        if (end_ > capacity || extra_rows > (capacity - end_) / header) {
+            const auto maximum = std::numeric_limits<std::uint64_t>::max();
+            if (extra_rows > (maximum - end_) / header
+                || extra_bytes > maximum - end_ - header * extra_rows)
+                throw ScratchCapacityError(resource, scratch_byte_limit_message(resource, bytes));
+            throw ScratchCapacityError(resource, capacity, end_ + header * extra_rows + extra_bytes,
+                                       scratch_byte_limit_message(resource, bytes));
+        }
         const auto fixed_bytes = header * extra_rows;
-        if (extra_bytes > capacity - end_ - fixed_bytes)
-            throw ScratchCapacityError(resource, scratch_byte_limit_message(resource, bytes));
+        if (extra_bytes > capacity - end_ - fixed_bytes) {
+            if (extra_bytes > std::numeric_limits<std::uint64_t>::max() - end_ - fixed_bytes)
+                throw ScratchCapacityError(resource, scratch_byte_limit_message(resource, bytes));
+            throw ScratchCapacityError(resource, capacity, end_ + fixed_bytes + extra_bytes,
+                                       scratch_byte_limit_message(resource, bytes));
+        }
         slab->require_extend(resource, end_ + fixed_bytes + extra_bytes);
     }
     [[noreturn]] void io_error(int error, const char* operation) const {

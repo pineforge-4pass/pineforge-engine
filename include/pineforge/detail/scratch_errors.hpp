@@ -3,6 +3,9 @@
 #include <pineforge/run_failure.hpp>
 
 #include <cstdint>
+#include <limits>
+#include <memory>
+#include <new>
 #include <stdexcept>
 #include <string>
 #include <system_error>
@@ -134,6 +137,38 @@ public:
         : std::runtime_error(message),
           RunFailureInfo(RunFailureCode::scratch_capacity_exceeded,
                          {{"resource", scratch_resource_name(resource)}}) {}
+    ScratchCapacityError(ScratchResource resource, std::uint64_t limit,
+                         std::uint64_t need,
+                         const char* operation = "scratch capacity exceeded")
+        : std::runtime_error(operation),
+          RunFailureInfo(capacity_args(resource, limit, need)) {}
+    ScratchCapacityError(ScratchResource resource, std::uint64_t limit,
+                         std::uint64_t need, const std::string& message)
+        : std::runtime_error(message),
+          RunFailureInfo(capacity_args(resource, limit, need)) {}
+
+private:
+    static RunFailureValue capacity_args(ScratchResource resource,
+                                        std::uint64_t limit,
+                                        std::uint64_t need) noexcept {
+        try {
+            auto value = make_run_failure(RunFailureCode::scratch_capacity_exceeded,
+                {{"resource", scratch_resource_name(resource)}, {"limit", limit}, {"need", need}});
+            // The generic argument carrier stores int64_t. Registry validation
+            // checks integer kinds, not ranges; preserve the full unsigned values
+            // in canonical JSON after that validation, without a double conversion.
+            if (value.code != RunFailureCode::scratch_capacity_exceeded
+                || (limit <= static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())
+                    && need <= static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())))
+                return value;
+            value.args = std::make_shared<const std::string>(
+                "{\"limit\":" + std::to_string(limit) + ",\"need\":" + std::to_string(need)
+                + ",\"resource\":\"" + scratch_resource_name(resource) + "\"}");
+            return value;
+        } catch (const std::bad_alloc&) {
+            return {RunFailureCode::out_of_memory, nullptr};
+        }
+    }
 };
 
 // Preserve errno and the existing system_error English; only table scratch

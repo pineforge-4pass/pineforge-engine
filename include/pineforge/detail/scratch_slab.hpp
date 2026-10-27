@@ -74,7 +74,7 @@ inline bool fits(std::uint64_t bytes) noexcept {
 // is checked before the caller can allocate or publish any run ownership.
 inline Layout compute_layout(const ScratchManifest& manifest) {
     using namespace scratch_layout_detail;
-    if (manifest.V > 27) throw ScratchCapacityError(ScratchResource::layout);
+    if (manifest.V > 27) throw ScratchCapacityError(ScratchResource::layout, 27, manifest.V);
     if (manifest.K_q != 0 || manifest.B_q != 0) throw ScratchCapacityError(ScratchResource::layout);
     const std::array<std::uint64_t, kScratchRegionCount> capacities{{
         add(multiply(40, manifest.K_q), manifest.B_q),
@@ -97,7 +97,10 @@ inline Layout compute_layout(const ScratchManifest& manifest) {
     }
     layout.slab_size = std::max(kScratchPageSize, offset);
     if (!fits<std::size_t>(layout.slab_size) || !fits<off_t>(layout.slab_size))
-        throw ScratchCapacityError(ScratchResource::layout);
+        throw ScratchCapacityError(ScratchResource::layout,
+            std::min<std::uint64_t>(std::numeric_limits<std::size_t>::max(),
+                                    std::numeric_limits<off_t>::max()),
+            layout.slab_size);
     return layout;
 }
 
@@ -147,7 +150,11 @@ public:
         return can_extend(item.resource, new_extent);
     }
     void require_extend(ScratchResource resource, std::uint64_t new_extent) const {
-        if (!can_extend(resource, new_extent)) throw ScratchCapacityError(resource);
+        if (!can_extend(resource, new_extent)) {
+            const auto word = static_cast<std::uint32_t>(resource);
+            if (word < 1 || word > kScratchRegionCount) throw ScratchCapacityError(resource);
+            throw ScratchCapacityError(resource, regions_[word - 1].capacity, new_extent);
+        }
     }
     void require_extend(const Region& item, std::uint64_t new_extent) const {
         validate(item);
@@ -184,8 +191,12 @@ public:
     void write_at(ScratchResource resource, std::uint64_t offset,
                   const void* source, std::size_t length) {
         auto& item = regions_[index(resource)];
-        if (offset > item.capacity || length > item.capacity - offset)
-            throw ScratchCapacityError(resource);
+        if (offset > item.capacity || length > item.capacity - offset) {
+            if (length > std::numeric_limits<std::uint64_t>::max() - offset)
+                throw ScratchCapacityError(resource);
+            throw ScratchCapacityError(resource, item.capacity,
+                                       offset + static_cast<std::uint64_t>(length));
+        }
         if (length == 0) return;
         if (!source) throw AuxiliaryScratchIoError(EINVAL, "scratch write null source");
         std::memcpy(item.base + static_cast<std::size_t>(offset), source, length);

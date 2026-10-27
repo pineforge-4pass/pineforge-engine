@@ -522,6 +522,7 @@ Id StoreImpl::create(std::uint64_t bytes, std::uint64_t align) {
     throw std::invalid_argument("o1 store: align must be a power of two");
   if (max_live_objects_ != 0 && objects_live_ >= max_live_objects_)
     throw ScratchCapacityError(ScratchResource::store_objects,
+        max_live_objects_, objects_live_ + 1,
         scratch_object_limit_message(max_live_objects_, objects_live_ + 1));
   if (next_id_ == std::numeric_limits<Id>::max())
     throw std::overflow_error("o1 store: id space exhausted");

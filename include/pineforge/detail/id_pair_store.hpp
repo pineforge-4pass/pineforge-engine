@@ -426,22 +426,38 @@ public:
 private:
     void require_id_components(std::size_t first, std::size_t second) const {
         if (first > 64 || second > 64)
-            throw ScratchCapacityError(data_resource_, "id longer than 64 bytes");
+            throw ScratchCapacityError(data_resource_, 64, std::max(first, second),
+                                       "id longer than 64 bytes");
     }
     void preflight_new_key(std::uint64_t& keys, std::uint64_t& extent,
                            std::uint64_t first, std::uint64_t second) const {
         if (keys >= key_limit_ || keys >= slots_ / 2
             || keys >= std::numeric_limits<std::size_t>::max())
             throw ScratchCapacityError(index_resource_,
+                std::min<std::uint64_t>({key_limit_, slots_ / 2,
+                                        std::numeric_limits<std::size_t>::max()}), keys + 1,
                 scratch_count_limit_message(index_resource_, std::min(key_limit_, slots_ / 2)));
         ++keys;
+        const auto record_start = extent;
         const auto append = [&](std::uint64_t bytes) {
             const auto capacity = slab_->region(data_resource_).capacity;
-            if (extent > capacity || bytes > capacity - extent)
-                throw ScratchCapacityError(data_resource_,
+            if (extent > capacity || bytes > capacity - extent) {
+                // The ticket covers the whole record, including both strings,
+                // even when the first failing append is only its header.
+                const auto maximum = std::numeric_limits<std::uint64_t>::max();
+                if (record_start > maximum - sizeof(Header)
+                    || first > maximum - record_start - sizeof(Header)
+                    || second > maximum - record_start - sizeof(Header) - first)
+                    throw ScratchCapacityError(data_resource_,
+                        scratch_byte_limit_message(data_resource_,
+                            data_resource_ == ScratchResource::erased_data
+                                ? slab_->manifest().B_e : slab_->manifest().B_c));
+                throw ScratchCapacityError(data_resource_, capacity,
+                    record_start + sizeof(Header) + first + second,
                     scratch_byte_limit_message(data_resource_,
                         data_resource_ == ScratchResource::erased_data
                             ? slab_->manifest().B_e : slab_->manifest().B_c));
+            }
             extent += bytes;
         };
         append(sizeof(Header));
@@ -660,6 +676,7 @@ private:
         }
         if (used_ >= slots_ / 2) {
             if (slab_) throw ScratchCapacityError(index_resource_,
+                std::min(key_limit_, slots_ / 2), used_ + 1,
                 scratch_count_limit_message(index_resource_, std::min(key_limit_, slots_ / 2)));
             grow_index();
             found = locate(first, second, hash);

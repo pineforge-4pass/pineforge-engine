@@ -22,6 +22,7 @@ inline constexpr std::size_t kMaxResidentCohorts = 4096;
 inline ScratchManifest default_scratch_manifest(std::uint64_t bars) {
     if (bars > std::numeric_limits<std::uint64_t>::max() / 2)
         throw ScratchCapacityError(ScratchResource::layout,
+                                   std::numeric_limits<std::uint64_t>::max() / 2, bars,
                                    "default scratch replacement reserve overflow");
     return {
         0, 0, // K_q/B_q retained in the descriptor; the q store is removed.
