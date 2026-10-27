@@ -6909,9 +6909,9 @@ void PineExecutionAdapter::observe_terminal_receipts() {
             return;
         }
     }
-    // Accepted alone adds a working root and cannot release an old member.
-    // Every other command dirties below, including replacements and arms.
-    // Applied callbacks also dirty before any nested adapter work.
+    // Accepted only adds a working root, so the roster release pass can wait.
+    // Other commands, including replacements and arms, mark the pass due below.
+    // Applied callbacks do the same before any nested adapter work.
     const auto state = detail::run_state(host);
     const bool in_place = consumer != nullptr;
     // The terminal watermark is folded into the broker-state hash
@@ -28779,10 +28779,10 @@ void OriginRoster::retire_before(std::size_t global) {
 void PineExecutionAdapter::retire_origin_prefixes() {
     cohorts_by_id_.spill_implicitly();
     if (detail::retain_retired_rows()) return;
-    // The cached all-of is sufficient on its own: none of the later named /
-    // ownership tests can unpin a front whose own placement still exists.
-    // Erasure invalidates it; new/restore cohorts are empty, and origin
-    // appends follow remember. An uncertain certificate keeps the old walk.
+    // Skip prefix retirement while every nonempty front still has a placement;
+    // later name and ownership checks cannot release such a front. Erasure
+    // invalidates this fact; new/restored cohorts are empty and origins append
+    // after remember. Without that guarantee, run the full retirement walk.
     if (retired_row_scratch_.origin_fronts_pinned) return;
     // The front row alone can pin each retained window. Check before building
     // named, so a resting bracket/stop pair allocates no retirement scratch.
@@ -29105,9 +29105,9 @@ detail::LiveSourceHandle PineExecutionAdapter::live_source_value(
 
 namespace pineforge::source {
 
-// CR-421: maintain summaries at the live-set mutation boundary, never at a
-// policy-specific observation point. A placement cannot disappear while its
-// handle is live (erase_retired_rows roots every live handle).
+// Keep live-family counters in step with live membership at this shared
+// writer, so policy readers need no independent scans. Placement rows stay
+// present while their handles are live (erase_retired_rows roots them).
 void PineExecutionAdapter::remember_live(const native_order::RequestHandle& handle,
                                         PlacementSnapshot&& snapshot) {
     const auto previous = placement_.find(handle.incarnation);

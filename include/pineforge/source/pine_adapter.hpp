@@ -3131,10 +3131,10 @@ private:
         std::vector<std::pair<native_order::CohortHandle, std::uint64_t>> released_origins;
         native_order::RequestHandle lot_probe{};
         bool roster_pass_due = true;
-        // CR-421: derived bookkeeping only, reconstructed from placements /
-        // live handles. No independent lifecycle or hash state is added.
-        // Families are contiguous Entry..Risk; extra slots count unpriced
-        // Order rows and rows eligible for dynamic-exit / capture policy.
+        // Derived live-family counts stay in step with placements and live handles
+        // at their shared writer; they add no lifecycle or hash state. Contiguous
+        // Entry..Risk slots count families; extra slots count unpriced Order rows
+        // and rows eligible for dynamic-exit or capture policy.
         static constexpr std::size_t family_count =
             static_cast<std::size_t>(PineOrderFamily::Risk) + 1;
         static constexpr std::size_t market_order_slot = family_count;
