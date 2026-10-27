@@ -9,10 +9,10 @@
 // reference also permits a statically linked strategy executable to advertise
 // the same capability without exporting its entire symbol table.
 #if defined(__APPLE__)
-extern "C" int pf_strategy_reads_history_by_index_v1()
+extern "C" int strategy_reads_trade_history()
     __attribute__((weak_import, visibility("default")));
 #else
-extern "C" int pf_strategy_reads_history_by_index_v1()
+extern "C" int strategy_reads_trade_history()
     __attribute__((weak, visibility("default")));
 #endif
 
@@ -38,8 +38,8 @@ static bool strategy_reads_history_by_index(const BacktestEngine& engine) noexce
         } module{::dlopen(owner.dli_fname, RTLD_LAZY | RTLD_NOLOAD)};
         using Query = int (*)();
         Query query = module.handle ? reinterpret_cast<Query>(
-            ::dlsym(module.handle, "pf_strategy_reads_history_by_index_v1")) : nullptr;
-        if (!query) query = pf_strategy_reads_history_by_index_v1;
+            ::dlsym(module.handle, "strategy_reads_trade_history")) : nullptr;
+        if (!query) query = strategy_reads_trade_history;
         if (!query) return true;
         Dl_info symbol{};
         if (::dladdr(reinterpret_cast<const void*>(query), &symbol) == 0

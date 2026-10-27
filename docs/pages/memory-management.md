@@ -19,7 +19,7 @@ row.
 
 The jailed/no-sink stdout route, J0, keeps the legacy result behavior: a FULL
 result may retain `O(T)` closed-trade rows and its FULL report projection is `O(T)` heap. With a report sink and a script that never reads closed-trade history by index, closed trades below the published base are not retained in the arena or scratch file;
-otherwise full history is kept (O(T)). Retirement requires the optional compiled-module symbol `pf_strategy_reads_history_by_index_v1()` to return zero and the existing streamable policy; a missing or nonzero symbol keeps full history. A below-base read on a retiring run refuses with `engine_invariant`.
+otherwise full history is kept (O(T)). Retirement requires the optional compiled-module symbol `strategy_reads_trade_history()` to return zero and the existing streamable policy; a missing or nonzero symbol keeps full history. A below-base read on a retiring run refuses with `engine_invariant`.
 
 ## Report memory: resident buffers, disk and the jailed arena {#memory_sink}
 
