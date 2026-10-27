@@ -73,6 +73,8 @@ without a hub image, declares `1.3-parity`).
 runtime supports selected windows and `[]` otherwise; see the
 [capability table](docker/README.md#selected-window-contract-revision) and
 [report schema](docs/pages/report-schema.md).
+The [public contract for selected windows and walk-forward use](docs/pages/public-contract.md#selected_windows_walk_forward)
+defines the supported CLI and C entry points, capability detection and stability rules.
 
 ---
 
