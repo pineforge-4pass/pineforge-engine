@@ -644,18 +644,20 @@ ADR_RULED_TEXTS_MIN = 59
 # RELEASE_MIN_TESTS in each, counted the same way.
 # An excluded run must still discover at least this many rows before -LE.
 EXCLUDED_REGISTERED_MIN = {
-    'debug': 876, 'sanitizers': 867, 'native': 964,  # main's 963 plus CR-223-ROW's one native runner row.
+    # +28 rows in every engine profile: verifier 8 + preflight 8 + command-after 8 + report 4.
+    # Each is slices + cover - parent; native adds equivalence: 964 + 28 + 8 = 1000.
+    'debug': 904, 'sanitizers': 895, 'native': 1000,
     # D1, run 39221717231 of the PR TSV, historical REGISTERED counts
-    # (selected + 29 then; the current slow pin covers 41): Debug 938 - 876 = 62 and
+    # (selected + 29 then; the current slow pin covers 60): Debug 938 - 876 = 62 and
     # sanitizers 929 - 867 = 62 below their registry; Release and kernel-only
     # ran full there: 957 and 371. Release: 957 - 62 = 895. Kernel: the offset
-    # gives 309, 17 below its registry at that vintage (326), so it takes
-    # KERNEL_MIN_TESTS 337 (34 below the 371 of every sampled run). The lab's
+    # gives 309, 17 below its registry at that vintage (326), so the original bound
+    # used 337 (34 below 371); the four public splits now add 28 rows. The lab's
     # ctest -N confirms both; registration floors, not reduced run floors.
     # Basis of the offset: the existing keys count rows registered BEFORE -LE,
     # so a selected count (909, 900) is never compared with a key (876, 867).
     # See docs/ci.md, "PR tier versus MAIN/RELEASE", and COVERAGE-FLOORS.
-    'release': 895, 'kernel': 337,
+    'release': 923, 'kernel': 365,
 }
 # test_native_live_websocket exits 77 wherever the linked libcurl has no
 # WebSocket support (a system libcurl); main's kernel floor counted that skip
@@ -719,7 +721,7 @@ WEBSOCKET_SKIP_ROW = 'test_native_live_websocket'
 #     847/838/934).
 # The verifier supplies no stage or per-test deadline (owner rule,
 # 2026-10-12); the platform's job envelope is the only hang catcher.
-LIVE_SANITIZERS_MIN_TESTS = 13  # CR-223-ROW adds the required corpus equivalence row; see docs/ci.md.
+LIVE_SANITIZERS_MIN_TESTS = 21  # 13 - 1 + 8 probe rows + 1 cover row; see docs/ci.md.
 # Overlay-aware row floors. The private-fixture campaign splits the tree in
 # two: the private-fixture PR removes the private fixture data, and P1-B
 # registers each affected ctest row as a SKIP placeholder in
@@ -793,19 +795,20 @@ PRIVATE_FIXTURE_SKIP_LITERAL = 'SKIP private fixtures not present: '
 # are not keyed by this table. The bound L5 states -- never below `full` minus
 # PRIVATE_FIXTURE_ROW_COUNT -- holds by construction: `pinned` is a subset of
 # that file's names.
-# The two overlay full floors are plain module-level integer literals (CORE's
-# proof kit reads them from the tree as one line each; the table below
-# references them and never replaces them). Re-measuring for a landed row
-# means editing these two lines and the `pinned` counts in the table.
-RELEASE_MIN_TESTS = 910
-KERNEL_MIN_TESTS = 337
+# The two overlay full floors are plain module-level integer literals; the proof kit
+# reads each from one line, and the table references the names. Re-measuring a row
+# means editing these literals and the `pinned` counts in the table.
+# +28 public rows: verifier 8 + preflight 8 + command-after 8 + report 4; 910 + 28 = 938, 337 + 28 = 365.
+RELEASE_MIN_TESTS = 938
+KERNEL_MIN_TESTS = 365
 PRIVATE_FIXTURE_PROFILE_FLOORS = {
     'release': (RELEASE_MIN_TESTS, 307),
     'kernel': (KERNEL_MIN_TESTS, 31),
 }
-# CR-196 replaces one public ownership-controls row with four shards (+3
+
+# The earlier manifest-controls split replaced one public row with four shards (+3
 # registered/run rows in every engine profile, in either fixture world).
-# These pinned minimum floors (absent: release 603, kernel 306) and the PR
+# These pinned minimum floors (absent: 938 - 307 = 631, 365 - 31 = 334) and the PR
 # registration minima remain lower bounds; more rows only raise the count.
 # The receipt/private-fixture populations and runner-only floors are unchanged.
 
@@ -850,19 +853,43 @@ def overlay_aware_floor(profile: 'Profile') -> 'int | None':
     return full - min(pinned, PRIVATE_FIXTURE_ROW_COUNT)
 
 
-def private_fixture_rows(source: Path) -> 'frozenset[str]':
+def expand_equivalence_test_names(names: set[str] | frozenset[str], source: Path) -> frozenset[str]:
+    """Replace the equivalence driver's parent name with its probe rows."""
+    import ast
+
+    parent = 'native_live_equivalence_e2e'
+    if parent not in names:
+        return frozenset(names)
+    script = source / 'tests' / (parent + '.py')
+    declarations = [node for node in ast.parse(script.read_text()).body
+                    if isinstance(node, ast.Assign) and any(
+                        isinstance(target, ast.Name) and target.id == 'PROBES'
+                        for target in node.targets)]
+    if len(declarations) != 1 or not isinstance(declarations[0].value, ast.Dict):
+        raise ValueError('the equivalence driver must declare one literal PROBES dictionary')
+    probes = [ast.literal_eval(key) for key in declarations[0].value.keys]
+    if (not probes or any(not isinstance(probe, str)
+                         or not re.fullmatch(r'[a-z0-9]+(?:-[a-z0-9]+)*', probe)
+                         for probe in probes) or len(probes) != len(set(probes))):
+        raise ValueError('the equivalence driver must declare distinct probe slugs')
+    return frozenset(names - {parent}) | frozenset(parent + '_' + probe for probe in probes)
+
+
+def private_fixture_rows(source: Path, *, expand_equivalence: bool = True) -> 'frozenset[str]':
     """The ctest rows carrying LABELS private_fixtures, from the pinned list.
 
     tests/CMakeLists.txt gives the label to exactly the rows P1-B lists in
-    tests/private_fixture_rows.txt, so name-membership in that file is
-    label-membership. Comment lines start with ``//``.
+    tests/private_fixture_rows.txt. The equivalence parent pin denotes its
+    probe rows; expand_equivalence=False reads the raw pins for the unchanged
+    file-count integrity check. Comment lines start with ``//``.
     """
     names = set()
     for line in (source / PRIVATE_FIXTURE_ROWS_FILE).read_text().splitlines():
         name = line.strip()
         if name and not name.startswith('//'):
             names.add(name)
-    return frozenset(names)
+    return (expand_equivalence_test_names(names, source) if expand_equivalence
+            else frozenset(names))
 
 
 # tests/test_scratch_arena_jailed_seals.cpp returns 77 in its non-Linux
@@ -882,24 +909,33 @@ def permitted_exclusion_skips(pinned: frozenset[str], host_platform: str) -> fro
         if may_skip(host_platform))
 
 
-# Static slow-label policy at c1d10e15e3: the 29-name CMake loop plus 12
+# Static slow-label policy: the 43-name CMake loop plus 17
 # direct LABELS assignments. Never derive this bound from the run's registry.
 # Conditional registration may omit pins; every discovered slow name must
 # belong to this set. A new slow row requires an explicit policy change.
+# Each verifier and command-after split replaces one slow name with eight (+7).
+# Four report slices replace one direct name (+3); 43 loop + 17 direct = 60, covers unlabelled.
 PINNED_SLOW_TEST_ROWS = frozenset((
-    # tests/CMakeLists.txt:4605-4635, labelled by the loop at :7068.
+    # tests/CMakeLists.txt: the timing list, labelled by its slow loop.
     'test_adapter_live_state_equivalence',
     'test_adapter_live_state_scaling',
     'test_adapter_reissue_binding',
     'test_aggregate_cpp_versions',
     'test_broker_state_hash_coverage_mutations',
     'test_chart_day_memo',
-    'test_ci_verify',
+    *(f'test_ci_verify_slice_{index}' for index in range(1, 9)),
     'test_l10recon1_merge_fill_liveness',
     'test_local_time_fields',
     'test_magnifier_endpoints4',
     'test_native_bar_open_hook',
-    'test_native_command_after',
+    'test_native_command_after_slice_1',
+    'test_native_command_after_slice_2',
+    'test_native_command_after_slice_3',
+    'test_native_command_after_slice_4',
+    'test_native_command_after_slice_5',
+    'test_native_command_after_slice_6',
+    'test_native_command_after_slice_7',
+    'test_native_command_after_slice_8',
     'test_native_cpp_abi',
     'test_native_cpp_versions',
     'test_native_definition_index',
@@ -927,8 +963,11 @@ PINNED_SLOW_TEST_ROWS = frozenset((
     # tests/cr150.d/core-cr150-l22u.cmake:5,8.
     'test_arena_bound_runtime',
     'test_arena_bound_corpus',
-    # tests/cr150.d/core-cr150-o1w-tradeout.cmake:5,10,13.
-    'test_open_report_rows_flat',
+    # Public report population slices and the related report rows.
+    'test_open_report_rows_flat_slice_1',
+    'test_open_report_rows_flat_slice_2',
+    'test_open_report_rows_flat_slice_3',
+    'test_open_report_rows_flat_slice_4',
     'test_open_report_rows_retention_flat',
     'test_report_trades_summary_flat',
     # tests/cr150.d/o1w-ledger.cmake:4,7.
@@ -1017,7 +1056,9 @@ CTEST_SHARED_STAGES = frozenset(name for name, _ in SOURCE_GUARD_SCRIPTS) | froz
     'install', 'smoke-configure', 'smoke-build', 'smoke-version', 'smoke-version-check',
     'native-help', 'require-websocket',
 })
-CTEST_SHARD_PROFILES = frozenset(('release', 'debug', 'sanitizers', 'kernel'))
+CTEST_SHARD_PROFILES = frozenset((
+    'release', 'debug', 'sanitizers', 'kernel', 'native', 'live-sanitizers', 'live-tsan',
+))
 # Pinned to shards.mjs ABSENT_SKIP_STAGES, not a prefix or a moving guard list.
 CTEST_ABSENT_SKIP_STAGES = frozenset((
     'source-guard-c-abi', 'source-guard-native-source', 'source-guard-broker-hash',
@@ -1143,21 +1184,27 @@ def ctest_shared_stages(profile: str, require_websocket: bool) -> frozenset[str]
 
 
 def ctest_every_stages(profile: str) -> frozenset[str]:
-    """Required local proofs from the lab's recipes.mjs shardStages table."""
+    """Required local proofs for the profile's shard stage table."""
     names = {
         'tool-versions', 'corpus-submodule-init', 'corpus-submodule-status', 'corpus-submodule-pin',
         'configure', 'profile-options', 'build', 'stale-binaries', 'native-binary',
         'ctest-list-all', 'ctest-list-shard', 'ctest', 'ctest-floor', 'ctest-shard-accounting',
     }
-    if profile == 'kernel':
+    if profile == 'kernel' or profile in LIVE_ONLY_PROFILES:
         names.add('abi-providers-skipped')
     else:
         names.update(('abi-base', 'abi-prior', 'abi-v13', 'abi-v14',
                       'abi-v15-frozen', 'abi-v16-frozen', 'abi-v18-frozen'))
-    if profile in {'release', 'kernel'}:
+    if profile in EXAMPLES_PROFILES or PROFILE[profile].live_runner:
         names.add('examples-assert-live')
-    if profile == 'sanitizers':
+    if PROFILE[profile].sanitizers:
         names.add('sanitizer-public-flag')
+    if profile in LIVE_ONLY_PROFILES:
+        names.update(('live-test-inventory', 'live-test-inventory-required'))
+    if profile == 'live-sanitizers':
+        names.add('live-sanitizer-coverage')
+    if profile == 'live-tsan':
+        names.add('runner-thread-sanitizer-coverage')
     return frozenset(names)
 
 
@@ -1202,6 +1249,13 @@ def validate_ctest_shard_union(
     floor = first['minTests']
     entry = PRIVATE_FIXTURE_PROFILE_FLOORS.get(profile)
     minimum = None if entry is None else entry[0] - (0 if overlay else entry[1])
+    if profile in LIVE_ONLY_PROFILES:
+        if type(first['requireWebsocket']) is not bool:
+            raise ValueError('runner WebSocket requirement must be a boolean')
+        # Runner-only profiles automatically require WebSocket with transport.cpp.
+        # Validate remote evidence without following its source path.
+        minimum = LIVE_SANITIZERS_MIN_TESTS - int(
+            not first['requireWebsocket'] and WEBSOCKET_SKIP_ROW not in registry)
     if ((floor is not None and (type(floor) is not int or floor < 0 or len(registry) < floor))
             or (minimum is not None and (type(floor) is not int or floor < minimum))):
         raise ValueError('lowered the registration floor')
@@ -1256,6 +1310,8 @@ def validate_ctest_shard_union(
                 or summary['excludeLabel'] != exclude_label
                 or summary.get('ctestExcludedNames') != excluded
                 or summary['requireWebsocket'] != first['requireWebsocket']
+                or (profile in LIVE_ONLY_PROFILES
+                    and type(summary['requireWebsocket']) is not bool)
                 or type(summary['ctestPrivateFixturesOverlay']) is not bool
                 or summary['ctestPrivateFixturesOverlay'] != overlay
                 or summary['ctestRegistrySha256'] != digest
@@ -1287,10 +1343,14 @@ def validate_ctest_shard_union(
             raise ValueError('CTest shard contains not-run or disabled rows')
         union.update(names)
         counted += summary['ctestRows']
-        if not overlay and WEBSOCKET_SKIP_ROW in summary['ctestSkipped']:
+        if (profile not in LIVE_ONLY_PROFILES and not overlay
+                and WEBSOCKET_SKIP_ROW in summary['ctestSkipped']):
             counted += 1
         reported = stage_tables[id(summary)]
-        for name in sorted(every | shared):
+        required = every | shared
+        if profile in LIVE_ONLY_PROFILES and summary['ctestSkipped']:
+            required |= {'live-test-skips'}
+        for name in sorted(required):
             if name not in reported:
                 raise ValueError('did not prove required stage ' + name)
         if shard['index'] != 1:
@@ -1358,7 +1418,8 @@ def runner_e2e_test_names(source: Path) -> set[str]:
     # Require every driver, including corpus equivalence: native-live.yml
     # supplies git-lfs and ensure_corpus_submodule fetches the corpus/feed.
     # Missing prerequisites may skip in direct CTest, but fail CI (docs/ci.md).
-    return {path.stem for path in (source / 'tests').glob('native_live*_e2e.py')}
+    return set(expand_equivalence_test_names(
+        {path.stem for path in (source / 'tests').glob('native_live*_e2e.py')}, source))
 
 
 @dataclass
@@ -1652,7 +1713,8 @@ def validate_config(args: argparse.Namespace, *, source: Path = ROOT,
         raise ConfigError('--min-tests must be at least 1')
     if args.ctest_shard is not None and args.ctest_shard.count > 1:
         if args.profile not in CTEST_SHARD_PROFILES:
-            raise ConfigError('--ctest-shard with N > 1 requires release, debug, sanitizers or kernel')
+            raise ConfigError('--ctest-shard with N > 1 requires release, debug, sanitizers, kernel, '
+                              'native, live-sanitizers or live-tsan')
         if exclude_label is not None and exclude_label != PROFILE[args.profile].exclude_label:
             raise ConfigError('--ctest-shard with N > 1 only permits the declared '
                               'Debug-build-type exclusion of label slow')
@@ -2744,7 +2806,8 @@ class Driver:
                 required = {'native_live_help', 'test_live_json',
                             'test_native_live_startup', 'test_native_live_store',
                             'test_native_live_routing',
-                            'test_native_example_batch', 'test_native_example_selected'}
+                            'test_native_example_batch', 'test_native_example_selected',
+                            'test_native_live_equivalence_split'}
                 if (self.cfg.source / 'runner' / 'transport.cpp').is_file():
                     required.add('test_native_live_websocket')
                 required.update(runner_e2e_test_names(self.cfg.source))
@@ -3067,7 +3130,7 @@ class Driver:
         truncated pin cannot clear the rows it lost, so both fail closed.
         """
         try:
-            pinned = private_fixture_rows(self.cfg.source)
+            pinned = private_fixture_rows(self.cfg.source, expand_equivalence=False)
         except OSError as error:
             self.fail_stage(
                 stage,
@@ -3081,7 +3144,11 @@ class Driver:
                 f'{PRIVATE_FIXTURE_ROW_COUNT} its own header records; a truncated pin '
                 'cannot clear the rows it lost')
             return None
-        return pinned
+        try:
+            return expand_equivalence_test_names(pinned, self.cfg.source)
+        except (OSError, SyntaxError, ValueError) as error:
+            self.fail_stage(stage, f'cannot expand the equivalence private-fixture pin: {error}')
+            return None
 
     def reject_private_fixture_skips(self, rows: 'CTestRows | None') -> None:
         """With PINEFORGE_PRIVATE_FIXTURES set, refuse a placeholder that did not run.

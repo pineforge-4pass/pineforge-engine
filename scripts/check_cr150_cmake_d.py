@@ -288,12 +288,60 @@ def _property_words(path: Path, statement: Statement) -> list[str]:
     return words
 
 
-def _require_source(path: Path, line: int, name: str) -> None:
+def _slice_count(source: Path) -> int:
+    """Recognize the bounded single-digit slice parser and its dispatch."""
+    text = re.sub(
+        r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|//[^\n]*|/\*.*?\*/',
+        lambda match: ' ' if match.group(0).startswith(('//', '/*'))
+        else match.group(0), source.read_text(), flags=re.DOTALL)
+    counts = re.findall(r'\bconstexpr\s+int\s+kSliceCount\s*=\s*(\d+)\s*;', text)
+    code = re.sub(r'\s+', '', text)
+    parser = re.search(
+        r"intmain\(intargc,char\*\*argv\)\{intslice=0;"
+        r"if\(argc!=1\)\{if\((.*?)\)\{([^{}]*)\}"
+        r"slice=argv\[2\]\[0\]-'0';\}", code)
+    invalid = (
+        'argc!=3||std::strcmp(argv[1],"--slice")!=0'
+        "||std::strlen(argv[2])!=3"
+        "||argv[2][0]<'1'||argv[2][0]>'0'+kSliceCount"
+        "||argv[2][1]!='/'||argv[2][2]!='0'+kSliceCount")
+    dispatch = re.search(
+        r"for\(constauto&(\w+):\w+\)\{"
+        r"if\(slice!=0&&\1\.slice!=slice\)continue;", code)
+    if (len(counts) != 1 or not 1 <= int(counts[0]) <= 9
+            or parser is None or parser[1] != invalid
+            or 'return2;' not in parser[2] or dispatch is None):
+        raise CheckFailure(f"{source}: does not define supported --slice selection")
+    return int(counts[0])
+
+
+def _require_source(path: Path, line: int, name: str,
+                    command: list[str] | None = None) -> None:
     if not re.fullmatch(r"[A-Za-z0-9_.+-]+", name):
         raise CheckFailure(f"{path}:{line}: registered name {name!r} is not a literal")
     source = ROOT / "tests" / f"{name}.cpp"
-    if not source.is_file():
+    if source.is_file():
+        return
+    sliced = re.fullmatch(r"([A-Za-z0-9_.+-]+)_slice_(\d+)", name)
+    if sliced is None or command is None:
         raise CheckFailure(f"{path}:{line}: registered name {name!r} has no tests/{name}.cpp")
+    program, raw_index = sliced.groups()
+    source = ROOT / "tests" / f"{program}.cpp"
+    if not source.is_file():
+        raise CheckFailure(
+            f"{path}:{line}: slice program {program!r} has no tests/{program}.cpp")
+    try:
+        count = _slice_count(source)
+    except CheckFailure as error:
+        raise CheckFailure(f"{path}:{line}: {error}") from error
+    index = int(raw_index)
+    if not 1 <= index <= count:
+        raise CheckFailure(f"{path}:{line}: slice index {index} is outside 1..{count}")
+    if raw_index != str(index):
+        raise CheckFailure(f"{path}:{line}: slice index {raw_index!r} is not canonical")
+    expected = [program, "--slice", f"{index}/{count}"]
+    if command != expected:
+        raise CheckFailure(f"{path}:{line}: slice command must be {' '.join(expected)}")
 
 
 def _is_script_add_test(words: list[str]) -> bool:
@@ -344,7 +392,9 @@ def _check_lane(path: Path, owners: dict[str, dict[str, set[str]]]) -> None:
             if "COMMAND" not in (word.upper() for word in words):
                 raise CheckFailure(f"{path}:{statement.line}: add_test() needs COMMAND")
             if not _is_script_add_test(words):
-                _require_source(path, statement.line, words[1])
+                command_at = next(index for index, word in enumerate(words)
+                                  if word.upper() == "COMMAND")
+                _require_source(path, statement.line, words[1], words[command_at + 1:])
             continue
         if name == "set_tests_properties":
             words = _property_words(path, statement)
