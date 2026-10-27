@@ -68,19 +68,35 @@ inline void require_resident_cohort_sizing(const ResidentCohortSizing& sizing) {
         + " rows is below declared need " + scratch_limit_number(sizing.need));
 }
 
-// P0 is a POLICY admission tier, not a measured bound or a proof that a
-// strategy fits. Counts include historical keys and internally generated
-// successors. The finite-batch replacement reserve deliberately scales with
-// input bars; actual exhaustion must fail, never grow or fall back to disk.
-inline ScratchManifest default_scratch_manifest(std::uint64_t bars) {
+// Ratios preserve every historical P0 field at the resident floor. The
+// capped row count makes every product below representable in uint64_t.
+inline constexpr std::uint64_t kScratchErasedKeysPerCohort = 4;
+inline constexpr std::uint64_t kScratchCohortsPerConsumedKey = 2;
+inline constexpr std::uint64_t kScratchBytesPerCohortId = 64;
+inline constexpr std::uint64_t kScratchBytesPerErasedKey = 96;
+inline constexpr std::uint64_t kScratchBytesPerConsumedKey = 129;
+
+// P0 is a POLICY admission tier, not a measured workload bound. Historical
+// id regions use exactly the resident row function and its declared/default
+// refusal policy. Root admission still depends only on input bars.
+inline ScratchManifest default_scratch_manifest(
+    std::uint64_t bars, std::uint64_t fresh_per_bar = 1,
+    std::uint64_t literals = 0, std::uint64_t fixed_fresh = 0,
+    bool declared = false) {
+    const auto sizing = resident_cohort_sizing(
+        bars, fresh_per_bar, literals, fixed_fresh, declared);
+    require_resident_cohort_sizing(sizing);
     if (bars > std::numeric_limits<std::uint64_t>::max() / 2)
         throw ScratchCapacityError(ScratchResource::layout,
                                    "default scratch replacement reserve overflow");
+    const auto rows = static_cast<std::uint64_t>(sizing.limit);
+    const auto erased = kScratchErasedKeysPerCohort * rows;
+    const auto consumed = rows / kScratchCohortsPerConsumedKey;
     return {
         0, 0, // K_q/B_q retained in the descriptor; the q store is removed.
-        262144, 25165824,
-        32768, 4227072,
-        65536, 4194304,
+        erased, kScratchBytesPerErasedKey * erased,
+        consumed, kScratchBytesPerConsumedKey * consumed,
+        rows, kScratchBytesPerCohortId * rows,
         27, 6912,
         2 * bars,
     };

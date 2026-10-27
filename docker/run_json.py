@@ -2957,23 +2957,52 @@ def _bind_scratch_tables(lib) -> None:
         lib.strategy_set_scratch_tables_v1.restype = ctypes.c_int
 
 
-def default_scratch_manifest(bars: int | None) -> ScratchTablesC:
+_RESIDENT_COHORT_FLOOR = 65536
+_RESIDENT_COHORT_CAP = 1048576
+_SCRATCH_ERASED_KEYS_PER_COHORT = 4
+_SCRATCH_COHORTS_PER_CONSUMED_KEY = 2
+_SCRATCH_BYTES_PER_COHORT_ID = 64
+_SCRATCH_BYTES_PER_ERASED_KEY = 96
+_SCRATCH_BYTES_PER_CONSUMED_KEY = 129
+
+
+def default_scratch_manifest(
+        bars: int | None, fresh_per_bar: int = 1, literals: int = 0,
+        fixed_fresh: int = 0, declared: bool = False) -> ScratchTablesC:
     """Host mirror of detail/scratch_defaults.hpp's P0 POLICY, not a measured bound.
 
-    None means a stream without a declared lifetime bar count. Each call makes
-    a fresh descriptor; the setter copies it and each run owns fresh occupancy.
+    None selects the fixed stream tier. Finite batches use the same saturating
+    demand and floor/cap as resident_cohort_sizing; only declared excess refuses.
+    Each call makes a fresh descriptor; the setter copies it for this run.
     """
     if bars is None:
+        rows = _RESIDENT_COHORT_FLOOR
         roots = 65536
     else:
-        if bars < 0 or bars > ((1 << 64) - 1) // 2:
+        maximum = (1 << 64) - 1
+        if any(value < 0 or value > maximum
+               for value in (bars, fresh_per_bar, literals, fixed_fresh)):
+            raise RunFailure("default scratch sizing input outside uint64",
+                             "scratch_capacity_exceeded", {"resource": "layout"})
+        per_bar = min(maximum, bars * fresh_per_bar)
+        need = min(maximum, min(maximum, per_bar + literals) + fixed_fresh)
+        rows = max(_RESIDENT_COHORT_FLOOR, min(_RESIDENT_COHORT_CAP, need))
+        if declared and need > _RESIDENT_COHORT_CAP:
+            raise RunFailure(
+                f"resident cohort limit {rows:,} rows is below declared need {need:,}",
+                "scratch_capacity_exceeded", {"resource": "cohort"})
+        if bars > maximum // 2:
             raise RunFailure("default scratch replacement reserve overflow",
                              "scratch_capacity_exceeded", {"resource": "layout"})
         roots = 2 * bars
+    erased = _SCRATCH_ERASED_KEYS_PER_COHORT * rows
+    consumed = rows // _SCRATCH_COHORTS_PER_CONSUMED_KEY
     return ScratchTablesC(
         ctypes.sizeof(ScratchTablesC), 1, 1, 0,  # bounded_memory
         0, 0,  # q is removed; retain its ABI fields with zero capacity
-        262144, 25165824, 32768, 4227072, 65536, 4194304, 27, 6912, roots)
+        erased, _SCRATCH_BYTES_PER_ERASED_KEY * erased,
+        consumed, _SCRATCH_BYTES_PER_CONSUMED_KEY * consumed,
+        rows, _SCRATCH_BYTES_PER_COHORT_ID * rows, 27, 6912, roots)
 
 
 def apply_scratch_tables(lib, state, manifest: ScratchTablesC) -> None:
