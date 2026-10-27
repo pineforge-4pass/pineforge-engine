@@ -1035,3 +1035,30 @@ are labelled slow;arena-bound, with corpus added on the full row. The
 runtime-only row is test_arena_bound_runtime. Both runtime modes explicitly
 return skip code 77 on non-Linux hosts; unavailable corpus/proof inputs on
 Linux fail. Logs and measured receipts live under build-arena/arena-bound.
+
+### Object-store reservation
+
+The host can reserve the paged object-store records before creating the sealed
+arena with `object_store_reserve_bytes(bars, objects_per_execution,
+record_bytes)`. The `objects_per_execution` value is per script execution:
+the bar close and each `calc_on_order_fills` recalculation count as separate
+executions. The result is saturating `uint64_t` arithmetic over
+`bars * objects_per_execution * object_physical_bytes(record_bytes)`.
+
+An unbounded execution value is represented by `UINT64_MAX`. The function
+returns `UINT64_MAX` for that term so the host uses its actual arena cap and
+marks the reservation `UNCERTIFIED`; it does not turn an unbounded receipt
+into a guessed finite byte count. The function only raises an arena above its
+configured floor, so the host takes the maximum with that floor. When the run
+also owns the three scratch tables, their bytes and the object-store bytes are
+summed because they occupy separate regions.
+
+The per-object charge uses the store's 16-byte header, 16-byte key, 56-byte
+cell payload, and 1,024-byte object chunks. Each object chunk is one record
+with its own key cell, its own value blob (rounded to whole cells
+independently) and a 50-byte index entry; cells are packed 63 to a 4,096-byte
+page. A small object costs 181 bytes. For payloads of 0, 100, 1,000 and 5,000
+bytes the charges of 181, 311, 1,351 and 6,622 bytes bound the growth measured
+on a real arena, which was 180, 310, 1,350 and 6,616 bytes per object. The arena
+directory remains a separate tolerance of four bytes per claimed 1 MiB
+chunk.

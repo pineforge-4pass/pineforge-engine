@@ -7348,5 +7348,85 @@ def _discard_stdout() -> None:
         os.close(devnull)
 
 
+# Mirror of include/pineforge/detail/scratch_defaults.hpp. The object header
+# and key are 16 bytes, ScratchStore packs 63 cells of 56 payload bytes into each
+# 4096-byte page, every object chunk (default 1024 bytes) is one record with an
+# index entry of 50 bytes, and the arena directory is four bytes per claimed
+# 1 MiB chunk. Directory bytes remain separate from the per-object physical charge.
+OBJECT_HEADER_BYTES = 16
+OBJECT_KEY_BYTES = 16
+OBJECT_PAGE_BYTES = 4096
+OBJECT_CELLS_PER_PAGE = 63
+OBJECT_CELL_PAYLOAD_BYTES = 56
+OBJECT_CHUNK_BYTES = 1024
+OBJECT_INLINE_PAYLOAD_BYTES = 40
+OBJECT_INDEX_SHARE_BYTES = 50
+OBJECT_ARENA_CHUNK_BYTES = 1048576
+OBJECT_ARENA_DIRECTORY_BYTES_PER_CHUNK = 4
+OBJECT_UINT64_MAX = 2 ** 64 - 1
+
+
+def _object_saturating_add(left: int, right: int) -> int:
+    return min(OBJECT_UINT64_MAX, left + right)
+
+
+def _object_saturating_multiply(left: int, right: int) -> int:
+    if left != 0 and right > OBJECT_UINT64_MAX // left:
+        return OBJECT_UINT64_MAX
+    return left * right
+
+
+def _object_saturating_ceil_div(value: int, divisor: int) -> int:
+    quotient, remainder = divmod(value, divisor)
+    return quotient + (1 if remainder else 0)
+
+
+def object_physical_bytes(payload_bytes: int) -> int:
+    """Return the backing charge for one default-shape object."""
+    if payload_bytes > OBJECT_UINT64_MAX - OBJECT_HEADER_BYTES:
+        return OBJECT_UINT64_MAX
+    chunks = (1 if payload_bytes <= OBJECT_INLINE_PAYLOAD_BYTES
+              else 1 + (payload_bytes - 1) // OBJECT_CHUNK_BYTES)
+    first_payload = min(payload_bytes, OBJECT_CHUNK_BYTES)
+    first_value_cells = _object_saturating_ceil_div(
+        first_payload + OBJECT_HEADER_BYTES, OBJECT_CELL_PAYLOAD_BYTES)
+    remaining = payload_bytes - first_payload
+    full_following_chunks, trailing_payload = divmod(
+        remaining, OBJECT_CHUNK_BYTES)
+    following_value_cells = (
+        _object_saturating_multiply(
+            full_following_chunks,
+            _object_saturating_ceil_div(
+                OBJECT_CHUNK_BYTES, OBJECT_CELL_PAYLOAD_BYTES))
+        + _object_saturating_ceil_div(
+            trailing_payload, OBJECT_CELL_PAYLOAD_BYTES))
+    value_cells = min(OBJECT_UINT64_MAX,
+                      first_value_cells + following_value_cells)
+    cells = _object_saturating_add(chunks, value_cells)
+    page_bytes = _object_saturating_ceil_div(
+        _object_saturating_multiply(cells, OBJECT_PAGE_BYTES),
+        OBJECT_CELLS_PER_PAGE)
+    return _object_saturating_add(
+        page_bytes, _object_saturating_multiply(chunks, OBJECT_INDEX_SHARE_BYTES))
+
+
+def object_store_reserve_bytes(
+        bars: int, objects_per_execution: int, record_bytes: int) -> int:
+    """Reserve bars*k object records, saturating at the uint64 maximum.
+
+    objects_per_execution is per script execution: a bar close and each
+    calc_on_order_fills recalculation count separately. The maximum integer is
+    the unbounded sentinel, which remains UNCERTIFIED for the host.
+    """
+    if bars == 0 or objects_per_execution == 0:
+        return 0
+    if objects_per_execution == OBJECT_UINT64_MAX:
+        return OBJECT_UINT64_MAX
+    return _object_saturating_multiply(
+        _object_saturating_multiply(
+            bars, objects_per_execution),
+        object_physical_bytes(record_bytes))
+
+
 if __name__ == "__main__":
     sys.exit(main())
