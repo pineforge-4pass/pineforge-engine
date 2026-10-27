@@ -115,7 +115,7 @@ set(PINEFORGE_SOURCE_LAYER_SOURCES
 # The kernel: the independent backtest + forward-execution state machine.
 # These TUs never reach the source layer, so they also stand alone as
 # PineForge::kernel.
-set(PINEFORGE_KERNEL_SOURCES
+set(PINEFORGE_KERNEL_SOURCES src/array.cpp
     src/c_abi.cpp
     src/run_failure.cpp
     src/native_c_host.cpp
