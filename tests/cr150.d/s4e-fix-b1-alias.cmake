@@ -1,4 +1,4 @@
-# Lane s4e-fix-b1, round 7 (argon F-NEW-01): a resident winner the full scan
+# Scratch matching fixture, round 7: a resident winner the full scan
 # holds is read after observe_trails, which can promote a spilled trail into
 # the slot it names (the twin _spilled_only runs the spilled book alone: the
 # sanitizers profile's row). Source-free, so both rows also run in the

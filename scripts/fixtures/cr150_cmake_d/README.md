@@ -1,4 +1,4 @@
-# CR-150 fenced CMake controls
+# Fenced CMake controls
 
 The `lane-*.cmake` and `tail-*.cmake` files copy the real lane inputs supplied
 with the core-cr150-cmkd2 brief, based on

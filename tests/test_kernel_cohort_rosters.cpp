@@ -1,4 +1,4 @@
-// CR-150 L19l part B. The reference retains the pre-change vector of every
+// The reference retains the pre-change vector of every
 // roster. The heap witness uses only the base kernel API, without retaining
 // its own per-id data. Execute the red/green pair on the lab, not this lane.
 #define PINEFORGE_TEST_ALLOCATION_BYTES

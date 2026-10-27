@@ -224,7 +224,7 @@ public:
     void on_source_bar(const Bar& bar) override {
         const int i = pine_bar_index();
         if (workload_ == Workload::SpacedIds) {
-            // CR-347 / external PR #458 (letiep97): a fresh entry id every
+            // A fresh entry id every
             // twenty bars, closed ten bars later. Recording is off for this
             // timing row; historical hash replay is a different operation.
             const auto id = "spaced-" + std::to_string(i / 20);

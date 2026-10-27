@@ -781,12 +781,12 @@ void test_request_security_finer_tf_sparse_boundary_uses_final_caller_child() {
     std::cout << "test_request_security_finer_tf_sparse_boundary_uses_final_caller_child passed.\n";
 }
 
-// KI-33 cadence guard: on the 1m-magnifier path (input_tf="1",
+// Cadence guard: on the 1m-magnifier path (input_tf="1",
 // script_tf="15", bar_magnifier on) a COARSER fixed-minute
 // request.security — "60" (= 4 x 15m script bars) and "240" (= 16 x
 // 15m script bars) — must latch/publish its aggregated value ONLY on
 // the coarser-TF wall-clock boundary and hold it CONSTANT within the
-// period. The suspected bug (KI-33) was that the security aggregator,
+// period. The suspected bug was that the security aggregator,
 // being fed once per 1m sub-bar inside run_magnified_bar, would
 // complete at requested_tf/4 (a "60" security updating every 15m
 // instead of every 60m). The correct cadence is pure Pine-timeframe
@@ -894,7 +894,7 @@ void test_request_security_magnifier_coarser_tf_cadence() {
     }
 
     // --- Emit the observed per-script-bar table (report evidence) ---
-    std::cout << "  [KI-33 cadence] per-script-bar latched security values:\n";
+    std::cout << "  [cadence] per-script-bar latched security values:\n";
     std::cout << "  bar | script_close |   sec60(obs/exp)   |  sec240(obs/exp)\n";
     for (int k = 0; k < expected_script_bars; ++k) {
         auto fmt = [](double v) {
@@ -942,7 +942,7 @@ void test_request_security_magnifier_coarser_tf_cadence() {
     // --- Direct anti-bug checks: the value MUST NOT track the 15m close
     //     every bar, and MUST hold constant strictly within a period. ---
     // Script bar 4 sits one script bar past the first 60m completion
-    // (bar 3). Under KI-33 the "60" security would re-complete every 15m
+    // (bar 3). Under the cadence bug the "60" security would re-complete every 15m
     // and read the script-bar-4 15m close (174); the correct latch holds
     // the 60m close from bar 3 (159).
     require(!is_na(strat.sec60_per_script_bar[4]),
@@ -951,7 +951,7 @@ void test_request_security_magnifier_coarser_tf_cadence() {
             "sec60 at script bar 4 must hold the prior 60m close (159), not re-latch");
     require(std::abs(strat.sec60_per_script_bar[4]
                      - strat.script_close_per_script_bar[4]) > 1e-6,
-            "sec60 must NOT track the 15m script close every bar (KI-33 symptom)");
+            "sec60 must NOT track the 15m script close every bar (cadence symptom)");
     // Constant across the whole 60m period bars 4,5,6 (all latch 159).
     require(std::abs(strat.sec60_per_script_bar[5] - 159.0) < 1e-9
                 && std::abs(strat.sec60_per_script_bar[6] - 159.0) < 1e-9,

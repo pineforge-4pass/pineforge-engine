@@ -7,7 +7,7 @@
  */
 
 /*
- * test_pooc_position_visibility.cpp — KI-64 successor.
+ * test_pooc_position_visibility.cpp — successor.
  *
  * THE RULE (process_orders_on_close=true only): during bar i's script
  * execution, ``strategy.position_size`` (signed_position_size()) must report

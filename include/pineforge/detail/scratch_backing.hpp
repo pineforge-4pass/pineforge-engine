@@ -1,6 +1,6 @@
 #pragma once
 
-// CR150-CX L4 / CR-221 scope B: contracts, not an OS backing factory.
+// Scope-B contracts, not an OS backing factory.
 #include <cstddef>
 #include <cstdint>
 #include <cstring>

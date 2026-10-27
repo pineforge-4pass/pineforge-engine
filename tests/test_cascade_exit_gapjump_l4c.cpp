@@ -3,7 +3,7 @@
 #define signed_position_size live_position_size
 #include "oracle_fixture_config_shim.hpp"
 /*
- * KI-67 residual — strategy.exit cascade "R-cascade-gapjump" (Model S).
+ * Cascade residual — strategy.exit cascade "R-cascade-gapjump" (Model S).
  *
  * PR#95 gave calc_on_order_fills ENTRY orders cascade eligibility (fill only at
  * the remaining extreme waypoints), but that machinery never reached

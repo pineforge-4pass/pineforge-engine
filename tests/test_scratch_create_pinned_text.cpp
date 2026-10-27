@@ -31,14 +31,14 @@ struct Directory {
     std::string path, missing, unwritable;
 
     Directory() {
-        std::puts("S4E fixture parent: /var/tmp; owned mkdtemp template: "
+        std::puts("Fixture parent: /var/tmp; owned mkdtemp template: "
                   "/var/tmp/s4e-create-pinned-XXXXXX");
         char name[] = "/var/tmp/s4e-create-pinned-XXXXXX";
         require(::mkdtemp(name) != nullptr, "cannot create pinned-text directory");
         path = name;
         missing = path + "/missing";
         unwritable = path + "/mode0500";
-        std::printf("S4E owned inspection paths: %s, %s (absent), %s (mode 0500)\n",
+        std::printf("Owned inspection paths: %s, %s (absent), %s (mode 0500)\n",
                     path.c_str(), missing.c_str(), unwritable.c_str());
         std::fflush(stdout);
         std::uint64_t type = 0;

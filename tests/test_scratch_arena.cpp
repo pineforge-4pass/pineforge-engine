@@ -1,4 +1,4 @@
-// CR-150 CX-SINK-D1. Every backend replays the same vector reference model.
+// Every backend replays the same vector reference model.
 #if defined(__linux__) && !defined(_GNU_SOURCE)
 #define _GNU_SOURCE
 #endif

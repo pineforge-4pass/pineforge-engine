@@ -1,4 +1,4 @@
-// CR-150 L18 / acceptance (j). Real PineStrategyHost execution: an open
+// Real PineStrategyHost execution: an open
 // position receives additions and named 50% limit exits. The sink-off run is
 // the reference for every T/H/E record and the entire metric struct.
 // No manual ledger sealing, production-private access, or literal outcomes.

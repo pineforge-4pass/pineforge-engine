@@ -5,7 +5,7 @@
 // Until this lane every hour(time, tz) / minute() / dayofweek() / session
 // filter read in a zone other than UTC entered tz_util::ScopedTimezone: the
 // process mutex, the zone's normalization strings and, whenever the previous
-// read was in another zone, setenv + tzset (KI-35: a notifyd round trip on
+// read was in another zone, setenv + tzset (a notifyd round trip on
 // macOS). decompose_ms_local (src/session_time.cpp) now reads the thread's
 // memoised offset intervals and asks localtime_r, under that lock, only for a
 // stamp outside them.

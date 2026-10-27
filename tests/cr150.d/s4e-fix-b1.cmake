@@ -1,4 +1,4 @@
-# Lane s4e-fix-b1 (1.7.0 review: the order matcher and the spilled live book).
+# Scratch matching fixture (1.7.0 review: the order matcher and the spilled live book).
 # Every row of the lane is registered here, so tests/CMakeLists.txt keeps its
 # pinned lines. A twin row is its own executable (tests/<row>.cpp, the base
 # body with the row's flag fixed), because a lane file names every row after a

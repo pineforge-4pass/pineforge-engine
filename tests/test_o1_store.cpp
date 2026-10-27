@@ -1,4 +1,4 @@
-// CR-150 A5 — ScratchStore-backed O(1) object-layer tests.
+// ScratchStore-backed O(1) object-layer tests.
 //
 // FAIL-BEFORE. frozen2 has no pineforge/detail/o1_store.hpp, no Store target,
 // and no object layer that can split a partial write into ScratchStore chunk
