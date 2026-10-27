@@ -8,10 +8,10 @@
 
 #include <pineforge/native_host.hpp>
 #include <pineforge/native_order.hpp>
+#include <pineforge/detail/order_book_storage.hpp>
 
 #include <cstddef>
 #include <cstdint>
-#include <map>
 #include <optional>
 #include <utility>
 
@@ -303,8 +303,10 @@ struct OrderBookCancel {
 // NativeRequestField::Comment does the same for the comment) in one call,
 // walking the live book once. The trade is the usual one: the predicate
 // keeps nothing in step and reads the truth the kernel already holds; this
-// book is O(log n) to a handle and survives the request's own terminal
-// states only as the key it forgets.
+// book is O(log n) to a handle and retains bindings across terminal states
+// until cancel/forget or replacement fallback removes them. String keys use
+// scratch with a fixed record window; other ordered keys retain a map.
+// All users of this installed header must rebuild together with the engine.
 template <class Key>
 class OrderBook {
 public:
@@ -312,12 +314,15 @@ public:
 
     std::optional<native_order::RequestHandle> handle(const Key& key) const {
         const auto found = entries_.find(key);
-        if (found == entries_.end()) return std::nullopt;
-        return found->second.handle;
+        if (!found) return std::nullopt;
+        return found->handle;
     }
-    bool contains(const Key& key) const { return entries_.find(key) != entries_.end(); }
+    bool contains(const Key& key) const { return entries_.find(key).has_value(); }
     std::size_t size() const noexcept { return entries_.size(); }
-    bool empty() const noexcept { return entries_.empty(); }
+    bool empty() const noexcept { return size() == 0; }
+    // Occupied record slots, including cached tombstones, not logical bindings.
+    // Bounded to 64 for std::string; the generic map reports its node count.
+    std::size_t resident_size() const noexcept { return entries_.resident_size(); }
 
     // Replaces the key's request while it is still working, otherwise submits
     // a fresh one under that key. A replacement the host rejects leaves the
@@ -350,12 +355,12 @@ public:
             native_order::ReplaceOptions options = {}) {
         OrderBookOutcome outcome;
         const auto found = entries_.find(key);
-        if (found != entries_.end()) {
-            if (found->second.pending_until_armed || working(found->second.handle)) {
-                const auto result = host_->replace(found->second.handle, request, options);
+        if (found) {
+            if (found->pending_until_armed || working(found->handle)) {
+                const auto result = host_->replace(found->handle, request, options);
                 outcome.replace = result;
                 if (result.status == native_order::ReplaceStatus::Replaced && result.successor) {
-                    found->second = Entry{*result.successor, pending_until_armed(request)};
+                    entries_.put(key, Entry{*result.successor, pending_until_armed(request)});
                     outcome.action = OrderBookAction::Replaced;
                     return outcome;
                 }
@@ -364,7 +369,7 @@ public:
                     return outcome;
                 }
             }
-            entries_.erase(found);
+            entries_.erase(key);
         }
         const auto submitted = host_->submit(request);
         outcome.submit = submitted;
@@ -372,7 +377,7 @@ public:
             outcome.action = OrderBookAction::SubmitRejected;
             return outcome;
         }
-        entries_.emplace(key, Entry{*submitted.handle, pending_until_armed(request)});
+        entries_.put(key, Entry{*submitted.handle, pending_until_armed(request)});
         outcome.action = OrderBookAction::SubmitAccepted;
         return outcome;
     }
@@ -392,10 +397,10 @@ public:
     OrderBookCancel cancel_outcome(const Key& key) {
         OrderBookCancel outcome;
         const auto found = entries_.find(key);
-        if (found == entries_.end()) return outcome;
+        if (!found) return outcome;
         outcome.known = true;
-        const auto target = found->second;
-        entries_.erase(found);
+        const auto target = *found;
+        entries_.erase(key);
         if (!target.pending_until_armed && !working(target.handle)) return outcome;
         outcome.result = host_->cancel(target.handle);
         return outcome;
@@ -405,10 +410,7 @@ public:
     void forget(const Key& key) { entries_.erase(key); }
 
 private:
-    struct Entry {
-        native_order::RequestHandle handle;
-        bool pending_until_armed = false;
-    };
+    using Entry = detail::OrderBookEntry;
 
     static bool pending_until_armed(const native_order::Request& request) noexcept {
         const auto* wait = std::get_if<native_order::WaitForApplied>(&request.owner);
@@ -424,7 +426,7 @@ private:
     }
 
     NativeStrategyHost* host_ = nullptr;
-    std::map<Key, Entry> entries_;
+    detail::OrderBookStorage<Key> entries_;
 };
 
 }  // inline namespace native_toolkit_v1
