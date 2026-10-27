@@ -157,9 +157,7 @@ jobs:
   preflight:
     needs: [authz, changes]
     if: ${{ always() && needs.authz.result == 'success' }}
-    runs-on:
-      group: gke-runners
-      labels: gke-8cpu-16gb-amd64
+    runs-on: gke-8cpu-16gb-amd64
     env:
       PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64-16"]'
       PINEFORGE_VERIFIER_SLOW: ${{ needs.changes.result == 'success' && needs.changes.outputs.verifier_slow || 'true' }}
@@ -213,9 +211,7 @@ jobs:
   preflight-slow:
     needs: [authz, changes]
     if: ${{ always() && needs.authz.result == 'success' }}
-    runs-on:
-      group: gke-runners
-      labels: gke-8cpu-16gb-amd64
+    runs-on: gke-8cpu-16gb-amd64
     steps:
       - name: Refuse an unauthorised run before anything else
         if: ${{ needs.authz.result != 'success' }}
@@ -262,9 +258,7 @@ jobs:
         shard: [1, 2, 3, 4]
 
     # Four shards divide roughly 15,300 measured CTest row-seconds.
-    runs-on:
-      group: gke-runners
-      labels: gke-32cpu-64gb-amd64
+    runs-on: gke-32cpu-64gb-amd64
 
     steps:
       - name: Refuse an unauthorised run before anything else
@@ -365,9 +359,7 @@ jobs:
           - os: ubuntu-24.04
         build_type: [Debug]
         shard: [1, 2]
-    runs-on:
-      group: gke-runners
-      labels: gke-16cpu-32gb-amd64
+    runs-on: gke-16cpu-32gb-amd64
 
     steps:
       - name: Refuse an unauthorised run before anything else
@@ -493,9 +485,7 @@ jobs:
       fail-fast: false
       matrix:
         build_type: [Release, Debug]
-    runs-on:
-      group: gke-runners
-      labels: gke-16cpu-32gb-arm64
+    runs-on: gke-16cpu-32gb-arm64
 
     steps:
       - name: Refuse an unauthorised run before anything else
@@ -599,9 +589,7 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4]
-    runs-on:
-      group: gke-runners
-      labels: gke-32cpu-64gb-amd64
+    runs-on: gke-32cpu-64gb-amd64
     env:
       ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:abort_on_error=1
       UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
@@ -703,9 +691,7 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2]
-    runs-on:
-      group: gke-runners
-      labels: gke-16cpu-32gb-amd64
+    runs-on: gke-16cpu-32gb-amd64
     steps:
       - name: Refuse an unauthorised run before anything else
         if: ${{ needs.authz.result != 'success' }}
