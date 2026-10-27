@@ -20,6 +20,14 @@
 namespace pineforge {
 namespace ta {
 
+namespace {
+
+std::size_t ta_window_capacity(int length) {
+    return length > 0 ? static_cast<std::size_t>(length) : 0;
+}
+
+}  // namespace
+
 
 // --- RSI ---
 
@@ -389,7 +397,43 @@ double CCI::compute(double src) {
 
 // --- RCI: Spearman rank correlation (time order vs price ranks) × 100 ---
 
-RCI::RCI(int length) : length_(length) {}
+RCI::RCI(int length)
+    : length_(length),
+      prices_(ta_window_capacity(length)),
+      order_(ta_window_capacity(length)),
+      price_rank_(ta_window_capacity(length)) {}
+
+double RCI::calculate() {
+    const int n = static_cast<int>(buffer_.size());
+    std::copy(buffer_.begin(), buffer_.end(), prices_.begin());
+    for (int i = 0; i < n; i++) {
+        order_[i] = i;
+    }
+    std::sort(order_.begin(), order_.begin() + n, [&](int a, int b) {
+        return prices_[a] < prices_[b];
+    });
+
+    int i = 0;
+    while (i < n) {
+        int j = i;
+        while (j + 1 < n && prices_[order_[j + 1]] == prices_[order_[i]]) {
+            j++;
+        }
+        double avg_rank = (i + j) / 2.0;
+        for (int k = i; k <= j; k++) {
+            price_rank_[order_[k]] = avg_rank;
+        }
+        i = j + 1;
+    }
+
+    double sum_d2 = 0.0;
+    for (int t = 0; t < n; t++) {
+        double d = (double)t - price_rank_[t];
+        sum_d2 += d * d;
+    }
+    double rho = 1.0 - 6.0 * sum_d2 / (n * (n * n - 1));
+    return rho * 100.0;
+}
 
 double RCI::compute(double src) {
     if (is_na(src)) {
@@ -404,36 +448,7 @@ double RCI::compute(double src) {
         return na<double>();
     }
 
-    std::vector<double> prices(buffer_.begin(), buffer_.end());
-    std::vector<int> order(n);
-    for (int i = 0; i < n; i++) {
-        order[i] = i;
-    }
-    std::sort(order.begin(), order.end(), [&](int a, int b) {
-        return prices[a] < prices[b];
-    });
-
-    std::vector<double> price_rank(n);
-    int i = 0;
-    while (i < n) {
-        int j = i;
-        while (j + 1 < n && prices[order[j + 1]] == prices[order[i]]) {
-            j++;
-        }
-        double avg_rank = (i + j) / 2.0;
-        for (int k = i; k <= j; k++) {
-            price_rank[order[k]] = avg_rank;
-        }
-        i = j + 1;
-    }
-
-    double sum_d2 = 0.0;
-    for (int t = 0; t < n; t++) {
-        double d = (double)t - price_rank[t];
-        sum_d2 += d * d;
-    }
-    double rho = 1.0 - 6.0 * sum_d2 / (n * (n * n - 1));
-    return rho * 100.0;
+    return calculate();
 }
 
 // ============================================================================
@@ -441,12 +456,19 @@ double RCI::compute(double src) {
 // ============================================================================
 
 MFI::MFI(int length)
-    : length_(length), prev_src_(na<double>()), bar_count_(0),
+    : length_(length),
+      pos_buffer_(ta_window_capacity(length)),
+      neg_buffer_(ta_window_capacity(length)),
+      prev_src_(na<double>()),
+      bar_count_(0),
       // Mirror the initial committed state (see RMA::RMA) so a recompute()
       // before the first compute() restores a well-defined pristine state.
-      // The saved_*_buffer_ deques default-construct empty, matching the
-      // live pos_/neg_buffer_ initial empty state.
-      saved_prev_src_(na<double>()), saved_bar_count_(0) {}
+      // The saved buffers have the same fixed logical capacity as the live
+      // buffers, while their logical sizes still start empty.
+      saved_prev_src_(na<double>()),
+      saved_bar_count_(0),
+      saved_pos_buffer_(ta_window_capacity(length)),
+      saved_neg_buffer_(ta_window_capacity(length)) {}
 
 double MFI::compute(double src, double vol) {
     saved_prev_src_ = prev_src_;
@@ -463,13 +485,14 @@ double MFI::compute(double src, double vol) {
         else if (float_band_lt(src, prev_src_)) neg = mf;
     }
     prev_src_ = src;
-    pos_buffer_.push_back(pos);
-    neg_buffer_.push_back(neg);
-    if ((int)pos_buffer_.size() > length_) { pos_buffer_.pop_front(); neg_buffer_.pop_front(); }
+    pos_buffer_.push_front(pos);
+    neg_buffer_.push_front(neg);
     if (bar_count_ < length_ + 1) return na<double>();
     double pos_sum = 0, neg_sum = 0;
-    for (auto v : pos_buffer_) pos_sum += v;
-    for (auto v : neg_buffer_) neg_sum += v;
+    for (std::size_t i = pos_buffer_.size(); i > 0; --i) {
+        pos_sum += pos_buffer_[i - 1];
+        neg_sum += neg_buffer_[i - 1];
+    }
     if (neg_sum == 0) return 100.0;
     return 100.0 - 100.0 / (1.0 + pos_sum / neg_sum);
 }
@@ -479,12 +502,19 @@ double MFI::compute(double src, double vol) {
 // ============================================================================
 
 CMO::CMO(int length)
-    : length_(length), prev_src_(na<double>()), bar_count_(0),
+    : length_(length),
+      up_buffer_(ta_window_capacity(length)),
+      down_buffer_(ta_window_capacity(length)),
+      prev_src_(na<double>()),
+      bar_count_(0),
       // Mirror the initial committed state (see RMA::RMA) so a recompute()
       // before the first compute() restores a well-defined pristine state.
-      // The saved_*_buffer_ deques default-construct empty, matching the
-      // live up_/down_buffer_ initial empty state.
-      saved_prev_src_(na<double>()), saved_bar_count_(0) {}
+      // The saved buffers have the same fixed logical capacity as the live
+      // buffers, while their logical sizes still start empty.
+      saved_prev_src_(na<double>()),
+      saved_bar_count_(0),
+      saved_up_buffer_(ta_window_capacity(length)),
+      saved_down_buffer_(ta_window_capacity(length)) {}
 
 double CMO::compute(double src) {
     saved_prev_src_ = prev_src_;
@@ -499,13 +529,14 @@ double CMO::compute(double src) {
         else down = -diff;
     }
     prev_src_ = src;
-    up_buffer_.push_back(up);
-    down_buffer_.push_back(down);
-    if ((int)up_buffer_.size() > length_) { up_buffer_.pop_front(); down_buffer_.pop_front(); }
+    up_buffer_.push_front(up);
+    down_buffer_.push_front(down);
     if (bar_count_ < length_ + 1) return na<double>();
     double up_sum = 0, down_sum = 0;
-    for (auto v : up_buffer_) up_sum += v;
-    for (auto v : down_buffer_) down_sum += v;
+    for (std::size_t i = up_buffer_.size(); i > 0; --i) {
+        up_sum += up_buffer_[i - 1];
+        down_sum += down_buffer_[i - 1];
+    }
     double denom = up_sum + down_sum;
     // Degenerate window (no price movement at all): TradingView does NOT guard
     // this arm — it evaluates the published formula, so 0/0 surfaces as na.
@@ -752,30 +783,7 @@ double RCI::recompute(double src) {
     const int n = (int)buffer_.size();
     if (n < length_ || n < 2) return na<double>();
 
-    std::vector<double> prices(buffer_.begin(), buffer_.end());
-    std::vector<int> order(n);
-    for (int i = 0; i < n; i++) order[i] = i;
-    std::sort(order.begin(), order.end(), [&](int a, int b) {
-        return prices[a] < prices[b];
-    });
-
-    std::vector<double> price_rank(n);
-    int i = 0;
-    while (i < n) {
-        int j = i;
-        while (j + 1 < n && prices[order[j + 1]] == prices[order[i]]) j++;
-        double avg_rank = (i + j) / 2.0;
-        for (int k = i; k <= j; k++) price_rank[order[k]] = avg_rank;
-        i = j + 1;
-    }
-
-    double sum_d2 = 0.0;
-    for (int t = 0; t < n; t++) {
-        double d = (double)t - price_rank[t];
-        sum_d2 += d * d;
-    }
-    double rho = 1.0 - 6.0 * sum_d2 / (n * (n * n - 1));
-    return rho * 100.0;
+    return calculate();
 }
 
 // --- MFI ---

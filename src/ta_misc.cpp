@@ -171,7 +171,11 @@ double Correlation::compute(double src1, double src2) {
 // PercentileWindow
 // ============================================================================
 
-PercentileWindow::PercentileWindow(int length) : length_(length) {}
+PercentileWindow::PercentileWindow(int length) : length_(length) {
+    if (length_ > 0) {
+        ranked_.reserve(static_cast<std::size_t>(length_));
+    }
+}
 
 const std::vector<double>* PercentileWindow::push(double src) {
     if (length_ < 1) return nullptr;
