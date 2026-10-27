@@ -173,7 +173,7 @@ public:
     }
     bool working(const char* id) const {
         for (const auto& row : native_working_requests())
-            if (row.definition->label == id) return true;
+            if (row.definition->request.label == id) return true;
         return false;
     }
     std::vector<std::uint64_t> reads;
