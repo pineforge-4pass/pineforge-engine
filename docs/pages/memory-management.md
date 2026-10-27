@@ -4,10 +4,9 @@
 
 This page tells a host how much memory a run can use, which part of it is
 bounded, and which part grows with the bars, the trades or the open orders of
-the strategy it runs. Each figure is one of three kinds: a compile-time
-constant of the engine, a documented admission policy value, or a formula
-evaluated by hand from the pages it names. None is an RSS measurement unless
-the text says it was measured. A figure that was not measured says so in its
+the strategy it runs. Figures are engine constants, documented admission
+policy values, or formulas evaluated by hand from the sources named. None is
+an RSS measurement unless the text says it was measured. A figure that was not measured says so in its
 row.
 
 ## Where a run's memory lives {#memory_places}
@@ -22,20 +21,27 @@ A default run with no report sink needs a writable, disk-backed scratch
 directory even when it makes no trade. The spilled trade rows are `O(T)` on
 disk with a small resident window (see below).
 
-## Use the report sink for bounded memory {#memory_sink}
+## Report memory: resident buffers, disk and the jailed arena {#memory_sink}
 
-The default route of the C API, with no report sink, keeps the equity curve in process
-memory: 24 bytes per script bar, so `O(N)` heap. **Install a report sink to
-keep it out of memory.** With a sink the engine keeps only the editable tail
-of the curve in memory (`BacktestEngine::store_equity_point` overwrites the held
-point when the scratch curve is set, defined at
-`src/native_execution_consumer.cpp:13611`). Beginning a sink empties the in-memory vector
-(`equity_curve_` at `src/engine_report.cpp:1208`) and installs a
-`ScratchCurveWriter` (`src/engine_report.cpp:1211`) that holds at most one
-64 KiB batch of 2,730 points (class `ScratchCurveWriter`,
-`src/report_scratch.hpp:63`). This holds on the native route and on the Pine
-host's legacy FULL sink route alike. The sink file or stream grows with the
-run; its writer window is bounded.
+Default C/C++ and Python callers without a report sink keep the native equity
+curve on the heap: **24 B per script bar plus vector spare capacity**
+(`pf_equity_point_t` include/pineforge/pineforge.h:326-330;
+`equity_curve_` include/pineforge/engine.hpp:719).
+Building the default FULL report then adds an owning **24 B per script bar**
+copy (`equity_curve` src/engine_report.cpp:481-484).
+
+On the default sink route, the engine releases the resident vector and installs
+a scratch writer (`equity_curve_` src/engine_report.cpp:1205-1211), keeping an editable
+tail for reporting (`fill_report_sink_metrics_section`
+src/engine_report.cpp:1460-1467).
+The writer batches **2,730 points of 24 B**, within a **64 KiB** window
+(`kScratchWindowPoints` src/report_scratch.hpp:18-20;
+`ScratchCurveWriter::State` src/report_scratch.cpp:154-161).
+Metrics re-read scratch through bounded windows
+(`compute_report_sink_metrics` src/engine_report.cpp:1439-1450;
+`ScratchCurveWindow` src/report_scratch.cpp:270-310).
+This bounds resident equity-report buffers; the scratch backing and output
+still grow with the run.
 
 One line to install it, on an idle handle before the run (it returns 0 when
 accepted):
@@ -59,10 +65,68 @@ command-line flags; it passes `--report-sink-fd` only when `PINEFORGE_REPORT_SIN
 is set), the same choice is `--report-sink PATH` (a file) or
 `--report-sink-fd N` (an inherited FIFO or stream). With a sink the returned
 report carries `NULL` trades and equity curve and the totals in its summary;
-read the records from the sink. The release container's default (unjailed)
-profile installs a temporary path sink, so its equity curve is not the `O(N)`
-heap case above; with `PINEFORGE_REPORT_SINK_FD` set it streams to that
-inherited descriptor instead. See [Report schema](@ref report_schema).
+read the records from the sink. See [Report schema](@ref report_schema).
+
+The default **unjailed** `run_json` route, with a sink-capable module,
+installs a temporary path sink (`_new_report_sink`
+docker/run_json.py:5790-5822; `_ReportSink` docker/run_json.py:6183-6220).
+The full equity curve is **not resident**: with disk scratch and no arena
+attached, its resident equity-curve buffers are **O(1) in bars**.
+Binary curve scratch on **disk** still costs **24 B per script bar**
+(`flush` src/report_scratch.cpp:229-235):
+**6 MiB at 262,144 bars** and **48 MiB at 2,097,152 bars**, calculated payload
+sizes excluding other scratch and output.
+The sink's `E` output and the default route's JSON artifact also grow with
+the bar count: `_build_sink_report` docker/run_json.py:7102-7148 supplies lazy
+record arrays, and `_prepare_stream_report` docker/run_json.py:6983-7003
+serializes them to a temporary artifact.
+Lazy serialization bounds buffers, not output bytes.
+The test that checks the resident claim runs with a fixed minimal table
+admission (one entry per table); the default bounded-memory table manifest,
+which sizes the id tables from the bar count, is outside this claim.
+
+Whenever a scratch arena is attached (a **jailed run with `--report-sink-fd`**
+always, and any other run that inherits one), curve scratch instead consumes
+the **RAM-backed arena**, so those same **24 B per script bar are memory**.
+The fd setter attaches the arena (`attach_from_environment`
+src/engine_report.cpp:1067), and `ScratchFile::open`
+include/pineforge/detail/scratch_file.hpp:127-134 selects it.
+Linux jailed admission requires sealed memfd backing
+(`strategy_require_report_scratch_arena_v1` src/c_abi.cpp:1431-1448).
+The hosting wrapper supplies `PF_SCRATCH_ARENA_BYTES`
+src/scratch_arena.cpp:385-386.
+The engine never resizes that backing (the sizing comment above `ScratchArena`
+include/pineforge/detail/scratch_arena.hpp:71-110).
+Arena allocation rounds to **1 MiB chunks**
+(`kChunkBytes` include/pineforge/detail/scratch_arena.hpp:112;
+`grow` src/scratch_arena.cpp:297-309); metadata and other stores are additional.
+Bounded mapping windows do not remove that arena memory cost.
+Exhaustion fails closed with typed `report_sink_failed`
+(`ReportScratchIoError` include/pineforge/detail/scratch_arena.hpp:16-21),
+reason `arena_exhausted` src/scratch_arena.cpp:234-238.
+There is no RAM fallback (the comment on `ScratchFile`
+include/pineforge/detail/scratch_file.hpp:30-36).
+
+A **jailed run without `--report-sink-fd` has no sink at all**:
+`_new_report_sink` docker/run_json.py:5790-5807 returns `None`, so it retains
+the native curve and owning FULL report copy described above. It also builds
+the whole report text in memory before writing stdout, and that text is the
+largest per-bar term of this route: measured at 8,000,000 bars (kernel peak
+RSS slope, stdout byte-equal), about five bytes per stdout byte (one byte of
+text plus a four-byte-per-character buffer), for example 363 B per bar for a
+module with 63 B per bar of stdout and 767 B per bar for one with 144 B per
+bar. This is `O(output)`: it is the report the caller asked for.
+**"O(1) in bars" is not claimed for the jailed arena or the sink-off path.**
+These report bounds also exclude input mappings, strategy histories and the
+other stores listed on this page.
+
+For the plain `.bin` input route the input file is mapped, 48 B per bar of file
+payload (`_map_bar_file` docker/run_json.py:2685-2708), and the touched pages
+count toward resident size as the run reads them. A read of the source sites
+in `load_bars_bin` (docker/run_json.py:2779-2811) finds no further per-bar copy of the chart, but
+this page publishes no measured figure for the route and does not give the
+reading as a bound; the sink and arena paragraphs above govern the report
+bytes.
 
 ## What you can set {#memory_controls}
 
@@ -220,10 +284,10 @@ or bounds the row.
 
 | What | Grows with | Where it lives | Fix |
 | --- | --- | --- | --- |
-| C or C++ host with no sink, and jailed Python without `--report-sink-fd` (the default route of the C API): equity curve | `N`: 24 B per script bar | Heap (a vector, so spare capacity is extra) | Install a report sink (above); a bounded default route is planned, with no release date |
-| Same route (no sink): closed trades | `T`: 168 B plus text per trade | Scratch, with 64 descriptor rows resident and a read cache of up to 65,536 entries (312 B each, allocated as trades accumulate); the FULL report built from them is `O(T)` heap | Install a report sink; no release date for the default route |
-| Any report sink installed (native or Pine host, history streamed or not) | The heap is bounded for the equity curve (one held point and one 64 KiB batch) and for the ledger (64 descriptor rows and a 128-entry read cache). The trailing block of rows that share the last exit time stays resident only when history is streamed (`K` lots closed at one time, `O(K)`). The sink file and the scratch curve grow with the run | Heap, scratch and the sink file or stream | Not applicable |
-| Pine product host (`PineStrategyHost`) | It cannot select `STREAMED` or `SUMMARY_ONLY`. With a sink installed and the default report mode (the legacy route) its report storage is bounded as in the row above: the curve through the scratch writer (`ScratchCurveWriter` at `src/engine_report.cpp:1211`), selected by the Pine host's report policy (`KernelRecordedAtHostMarks` at `src/source/pine_adapter.cpp:3039`) and the install condition (`report_policy` at `src/engine_report.cpp:1205`); and the ledger at 64 descriptor rows (`kResidentRows` at `include/pineforge/trade_ledger.hpp:38`) with the 128-entry sink read cache. Adapter state (placement rows, settled bracket families, script containers) is separate and has its own rows below | Heap bounded for the report; adapter state as the rows below | Not applicable |
+| C/C++ or Python host with no sink, including jailed Python without `--report-sink-fd` (the default route of the C API): equity curve | `N`: 24 B per script bar plus vector spare capacity, then another 24 B per bar for the owning FULL report copy when the default FULL report is built, plus the whole report text held until written (`O(output)`, about five bytes per stdout byte on the jailed route; see [Report memory](#memory_sink)); sources in [Report memory](#memory_sink) | Heap | Install a report sink (no bounded default route exists in this release); account for disk scratch or jailed arena memory as above |
+| Same route (no sink): closed trades | `T`: 168 B plus text per trade | Scratch, with 64 descriptor rows resident and a read cache of up to 65,536 entries (312 B each, allocated as trades accumulate); the FULL report built from them is `O(T)` heap | Install a report sink |
+| Default report sink route (native or Pine host, history streamed or not) | Equity-report buffers are bounded (an editable tail and one 64 KiB writer batch, plus bounded metric-read windows); the ledger has 64 descriptor rows and a 128-entry read cache. The trailing block of rows that share the last exit time stays resident only when history is streamed (`K` lots closed at one time, `O(K)`). Binary curve scratch grows at 24 B per script bar; `E` output and the default path route's JSON artifact also grow | Disk scratch without an arena; RAM-backed scratch in the jailed arena, plus resident buffers and the sink file or stream; sources in [Report memory](#memory_sink) | Not applicable |
+| Pine product host (`PineStrategyHost`) | It cannot select `STREAMED` or `SUMMARY_ONLY`. With a sink installed and the default report mode (the legacy route) its resident equity buffers and ledger cache are bounded as in the row above: the curve through the scratch writer (`ScratchCurveWriter` at `src/engine_report.cpp:1211`), selected by the Pine host's report policy (`KernelRecordedAtHostMarks` at `src/source/pine_adapter.cpp:3039`) and the install condition (`report_policy` at `src/engine_report.cpp:1205`); and the ledger at 64 descriptor rows (`kResidentRows` at `include/pineforge/trade_ledger.hpp:38`) with the 128-entry sink read cache. Adapter state (placement rows, settled bracket families, script containers) is separate and has its own rows below | Resident equity buffers and ledger cache bounded; curve scratch grows on disk or in the jailed RAM-backed arena; adapter state as the rows below | Not applicable |
 | A touched dormant leg that is re-issued | One placement row per re-issue, until the position cycle ends or the origin closes; an untouched re-issue with the same exit id replaces its row in place | Heap | Planned, with no release date |
 | Settled bracket families | One fixed record per archived family, which grows with `T` on a bracket strategy; not measured | Heap | Not scheduled |
 | Pending-book reads | `R`: `O(R^2)` for a size or a late indexed copy, `O(P R^2)` for a full indexed walk of `P` projected rows, up to `O(R^3)` when `P = R`; this is time, and it was already so in v1.6.3 | CPU | Planned, with no release date |
