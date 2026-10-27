@@ -2,6 +2,234 @@
  "schema": "cr150-source-sites/v1",
  "sites": [
   {
+   "file": "include/pineforge/array.hpp",
+   "symbol": "load_string",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace detail :: script_array #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/array.hpp",
+   "symbol": "index",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace detail :: script_array #1",
+    "inline std :: uint64_t checked ( std :: int64_t raw , std :: uint64_t size , const char * method , bool relative , bool end = false ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "index = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/array.hpp",
+   "symbol": "value",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace detail :: script_array #1"
+   ],
+   "cls": "decl",
+   "spelling": "Index",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/array.hpp",
+   "symbol": "decode",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace detail :: script_array #1",
+    "template < > struct ElementCodec < std :: string , void > #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/array.hpp",
+   "symbol": "value",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class T > class ScriptArray #1",
+    "T remove_at ( std :: uint64_t index ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "value = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/array.hpp",
+   "symbol": "result",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class T > class ScriptArray #1",
+    "detail :: o1 :: Id clone_into ( detail :: o1 :: Store & destination ) const #1"
+   ],
+   "cls": "grow",
+   "spelling": "result . reserve ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/array.hpp",
+   "symbol": "result",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class T > class ScriptArray #1",
+    "static ScriptArray preallocated ( detail :: o1 :: Store & store , std :: uint64_t capacity ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "result . reserve ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/array.hpp",
+   "symbol": "result",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class T > class ScriptArray #1",
+    "static ScriptArray from ( detail :: o1 :: Store & store , std :: initializer_list < T > values ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "result . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/array.hpp",
+   "symbol": "index",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class T > class ScriptArray #1"
+   ],
+   "cls": "decl",
+   "spelling": "Index",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/array.hpp",
+   "symbol": "index",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class T > class ScriptArray #1"
+   ],
+   "cls": "decl",
+   "spelling": "Index",
+   "ordinal": 2
+  },
+  {
+   "file": "include/pineforge/array.hpp",
+   "symbol": "index",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class T > class ScriptArray #1"
+   ],
+   "cls": "decl",
+   "spelling": "Index",
+   "ordinal": 3
+  },
+  {
+   "file": "include/pineforge/array.hpp",
+   "symbol": "index",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class T > class ScriptArray #1"
+   ],
+   "cls": "decl",
+   "spelling": "Index",
+   "ordinal": 4
+  },
+  {
+   "file": "include/pineforge/array.hpp",
+   "symbol": "index",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class T > class ScriptArray #1"
+   ],
+   "cls": "decl",
+   "spelling": "Index",
+   "ordinal": 5
+  },
+  {
+   "file": "include/pineforge/array.hpp",
+   "symbol": "index",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class T > class ScriptArray #1"
+   ],
+   "cls": "decl",
+   "spelling": "Index",
+   "ordinal": 6
+  },
+  {
+   "file": "include/pineforge/array.hpp",
+   "symbol": "index",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class T > class ScriptArray #1"
+   ],
+   "cls": "decl",
+   "spelling": "Index",
+   "ordinal": 7
+  },
+  {
+   "file": "include/pineforge/array.hpp",
+   "symbol": "index",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class T > class ScriptArray #1"
+   ],
+   "cls": "decl",
+   "spelling": "Index",
+   "ordinal": 8
+  },
+  {
+   "file": "include/pineforge/array.hpp",
+   "symbol": "value",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class T > class ScriptArray #1",
+    "template < class Function > void mutate ( std :: int64_t index , Function && function ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "value = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/array.hpp",
+   "symbol": "store_",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class T > class ScriptArray #1",
+    "void reserve ( std :: uint64_t count ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "store_ . resize ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/array.hpp",
+   "symbol": "index",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class T > class ScriptArray #1"
+   ],
+   "cls": "decl",
+   "spelling": "Index",
+   "ordinal": 9
+  },
+  {
+   "file": "include/pineforge/array.hpp",
+   "symbol": "index",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class T > class ScriptArray #1"
+   ],
+   "cls": "decl",
+   "spelling": "Index",
+   "ordinal": 10
+  },
+  {
    "file": "include/pineforge/checked_settings.hpp",
    "symbol": "number",
    "scope": [
@@ -11958,6 +12186,161 @@
    ],
    "cls": "decl",
    "spelling": "std :: deque < double >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/array.cpp",
+   "symbol": "args",
+   "scope": [
+    "namespace pineforge :: detail :: script_array #1",
+    "namespace #1",
+    "[ [ noreturn ] ] void array_stop ( const char * reason , const char * method_or_null , const char * english ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "RunFailureArgs",
+   "ordinal": 1
+  },
+  {
+   "file": "src/array.cpp",
+   "symbol": "args",
+   "scope": [
+    "namespace pineforge :: detail :: script_array #1",
+    "namespace #1",
+    "[ [ noreturn ] ] void array_stop ( const char * reason , const char * method_or_null , const char * english ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "args . emplace_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/array.cpp",
+   "symbol": "<temp:string>",
+   "scope": [
+    "namespace pineforge :: detail :: script_array #1",
+    "void index_error ( const char * method , std :: int64_t raw , std :: uint64_t size , bool missing ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/array.cpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge :: detail :: script_array #1",
+    "void index_error ( const char * method , std :: int64_t raw , std :: uint64_t size , bool missing ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/array.cpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge :: detail :: script_array #1",
+    "void index_error ( const char * method , std :: int64_t raw , std :: uint64_t size , bool missing ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 2
+  },
+  {
+   "file": "src/array.cpp",
+   "symbol": "<temp:string>",
+   "scope": [
+    "namespace pineforge :: detail :: script_array #1",
+    "void index_error_double ( const char * method , double raw , std :: uint64_t size ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/array.cpp",
+   "symbol": "<temp:string>",
+   "scope": [
+    "namespace pineforge :: detail :: script_array #1",
+    "void index_error_double ( const char * method , double raw , std :: uint64_t size ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: string",
+   "ordinal": 2
+  },
+  {
+   "file": "src/array.cpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge :: detail :: script_array #1",
+    "void index_error_double ( const char * method , double raw , std :: uint64_t size ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/array.cpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge :: detail :: script_array #1",
+    "void index_error_double ( const char * method , double raw , std :: uint64_t size ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 2
+  },
+  {
+   "file": "src/array.cpp",
+   "symbol": "<temp:string>",
+   "scope": [
+    "namespace pineforge :: detail :: script_array #1",
+    "void empty_array_error ( const char * method ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/array.cpp",
+   "symbol": "<temp:string>",
+   "scope": [
+    "namespace pineforge :: detail :: script_array #1",
+    "void inverted_range_error ( const char * method ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/array.cpp",
+   "symbol": "load_string",
+   "scope": [
+    "namespace pineforge :: detail :: script_array #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/array.cpp",
+   "symbol": "<temp:string>",
+   "scope": [
+    "namespace pineforge :: detail :: script_array #1",
+    "std :: string load_string ( const o1 :: Store & store , o1 :: Id id ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/array.cpp",
+   "symbol": "result",
+   "scope": [
+    "namespace pineforge :: detail :: script_array #1",
+    "std :: string load_string ( const o1 :: Store & store , o1 :: Id id ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
    "ordinal": 1
   },
   {
