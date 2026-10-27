@@ -38,9 +38,53 @@ from ci_verify import (ROOT, PRIVATE_FIXTURE_SKIP_LITERAL, private_fixtures_over
 from ci_verifier_classes import verifier_class_tier
 
 ACTIONLINT_VERSION = '1.7.12'
-# The names live only in tests/CMakeLists.txt. A digest pins that measured
-# population without maintaining a second row list in this Python guard.
-PR_SLOW_ROWS_SHA256 = 'e8bddea797abc46ca0deb671d5d35db3491b67a82e1413d08278530d12f7b67b'
+# Pin the exact ordered names extracted from the CMake slow-label list.
+# Verifier and command-after slices inherit slow labels; their covers do not.
+PR_SLOW_ROWS = (
+    'test_adapter_live_state_equivalence',
+    'test_adapter_live_state_scaling',
+    'test_adapter_reissue_binding',
+    'test_aggregate_cpp_versions',
+    'test_broker_state_hash_coverage_mutations',
+    'test_chart_day_memo',
+    'test_ci_verify_slice_1',
+    'test_ci_verify_slice_2',
+    'test_ci_verify_slice_3',
+    'test_ci_verify_slice_4',
+    'test_ci_verify_slice_5',
+    'test_ci_verify_slice_6',
+    'test_ci_verify_slice_7',
+    'test_ci_verify_slice_8',
+    'test_l10recon1_merge_fill_liveness',
+    'test_local_time_fields',
+    'test_magnifier_endpoints4',
+    'test_native_bar_open_hook',
+    'test_native_command_after_slice_1',
+    'test_native_command_after_slice_2',
+    'test_native_command_after_slice_3',
+    'test_native_command_after_slice_4',
+    'test_native_command_after_slice_5',
+    'test_native_command_after_slice_6',
+    'test_native_command_after_slice_7',
+    'test_native_command_after_slice_8',
+    'test_native_cpp_abi',
+    'test_native_cpp_versions',
+    'test_native_definition_index',
+    'test_native_direct_mutation',
+    'test_native_event_retention',
+    'test_native_group_absorption',
+    'test_native_group_keep_handle',
+    'test_native_handle_stable_replace',
+    'test_native_host_reads',
+    'test_native_lookup_memos',
+    'test_native_match_band_precheck',
+    'test_native_match_row_reuse',
+    'test_native_precommit_hook',
+    'test_native_quiet_point',
+    'test_native_runtime_ambient',
+    'test_native_script_bucket_completions',
+    'test_native_settlement_carry',
+)
 PR_FAST_ROWS_SHA256 = '0509b2219786efb6878b193639344c299ff8075ba4532dbe09e80e6e97b60a9a'
 # FLEET-POST=A: Linux PR and full-event jobs use separate, literal fleet arrays.
 # Release artifacts and baseline promotion retain their isolated -main policy.
@@ -85,13 +129,31 @@ POST_BUILD_STRATEGY = ('    strategy:\n'
                        '      matrix:\n'
                        '        platform:\n'
                        '          - os: ubuntu-24.04\n'
-                       '        build_type: [Release, Debug]\n')
+                       '        build_type: [Release]\n'
+                       '        shard: [1, 2, 3, 4]\n')
+POST_DEBUG_BUILD_STRATEGY = POST_BUILD_STRATEGY.replace(
+    'build_type: [Release]', 'build_type: [Debug]'
+).replace('shard: [1, 2, 3, 4]', 'shard: [1, 2]')
 POST_ARM_BUILD_STRATEGY = ('    strategy:\n'
                           '      fail-fast: false\n'
                           '      matrix:\n'
                           '        build_type: [Release, Debug]\n')
 BUILD_NAME = 'build (${{ matrix.platform.os }}, ${{ matrix.build_type }})'
 POST_ARM_BUILD_NAME = 'build (ubuntu-24.04-arm, ${{ matrix.build_type }})'
+POST_SHARDS = {'build': 4, 'build-debug': 2, 'sanitizers': 4, 'kernel-only': 2}
+POST_LEG_GATES = {
+    'build-release-gate': ('build', 'build (ubuntu-24.04, Release)'),
+    'build-debug-gate': ('build-debug', 'build (ubuntu-24.04, Debug)'),
+    'sanitizers-gate': ('sanitizers', 'sanitizers'),
+    'kernel-only-gate': ('kernel-only', 'kernel-only'),
+}
+
+
+def post_build_name(count: int) -> str:
+    return ('build-shard (${{ matrix.platform.os }}, ${{ matrix.build_type }}, '
+            '${{ matrix.shard }}/' + str(count) + ')')
+
+
 RELEASE_STRATEGY = ('    strategy:\n'
                     '      fail-fast: false\n'
                     '      matrix:\n'
@@ -104,12 +166,74 @@ NATIVE_STRATEGY = '''    strategy:
       fail-fast: false
       matrix:
         include:
-          - profile: native
-            build_dir: build-live
           - profile: live-sanitizers
             build_dir: build-live-sanitizers
           - profile: live-tsan
             build_dir: build-live-tsan
+'''
+NATIVE_SHARD_STRATEGY = '''    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+        include:
+          - profile: native
+            build_dir: build-live
+'''
+NATIVE_SHARD_PROOF_STEP = '''      - name: Record native shard proof
+        id: shard-proof
+        shell: python
+        env:
+          SHARD_INDEX: ${{ matrix.shard }}
+        run: |
+          import json
+          import os
+          from pathlib import Path
+          source = Path("build-live/ci-summary.json")
+          print(f"Reading native shard proof: {source}", flush=True)
+          summary = json.loads(source.read_text())
+          index = int(os.environ["SHARD_INDEX"])
+          if (summary.get("profile") != "native" or summary.get("status") != "passed"
+                  or type(summary.get("exitCode")) is not int or summary["exitCode"] != 0
+                  or summary.get("failures") != []
+                  or summary.get("ctestShard") != {"index": index, "count": 4}):
+              raise SystemExit("native shard summary did not pass")
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+              output.write(f"shard_{index}=success\\n")
+'''
+NATIVE_SHARD_GATE_STEP = '''      - name: Require every native shard to have passed
+        env:
+          AUTHZ_RESULT: ${{ needs.authz.result }}
+          SHARDS_RESULT: ${{ needs.native-live-shards.result }}
+          SHARD_1_RESULT: ${{ needs.native-live-shards.outputs.shard_1 }}
+          SHARD_2_RESULT: ${{ needs.native-live-shards.outputs.shard_2 }}
+          SHARD_3_RESULT: ${{ needs.native-live-shards.outputs.shard_3 }}
+          SHARD_4_RESULT: ${{ needs.native-live-shards.outputs.shard_4 }}
+        run: |
+          printf 'native shards: %s\\n' "$SHARDS_RESULT"
+          if test "$SHARDS_RESULT" = cancelled; then
+            printf 'HANG (re-run): a native shard job was cancelled\\n'
+          fi
+          test "$AUTHZ_RESULT" = success
+          test "$SHARDS_RESULT" = success
+          test "$SHARD_1_RESULT" = success
+          test "$SHARD_2_RESULT" = success
+          test "$SHARD_3_RESULT" = success
+          test "$SHARD_4_RESULT" = success
+'''
+NATIVE_GATE_STEP = '''      - name: Require every native profile to have passed
+        env:
+          AUTHZ_RESULT: ${{ needs.authz.result }}
+          PROFILES_RESULT: ${{ needs.native-live.result }}
+          NATIVE_RESULT: ${{ needs.native-live-native.result }}
+        run: |
+          printf 'native profiles: %s\\n' "$PROFILES_RESULT"
+          printf 'native shard aggregate: %s\\n' "$NATIVE_RESULT"
+          if test "$PROFILES_RESULT" = cancelled || test "$NATIVE_RESULT" = cancelled; then
+            printf 'HANG (re-run): a native profile job was cancelled, which is how the platform stops a job at its 360-minute maximum\\n'
+          fi
+          test "$AUTHZ_RESULT" = success
+          test "$PROFILES_RESULT" = success
+          test "$NATIVE_RESULT" = success
 '''
 NATIVE_EXCLUSION = "${{ matrix.profile == 'native' && inputs.exclude_slow && '--exclude-label slow' || '' }}"
 NATIVE_CACHE_SAVE = ("${{ !cancelled() && !inputs.cold_cache && steps.verify.outcome != 'skipped' "
@@ -130,20 +254,28 @@ JOB_COMMANDS = {
                'build': None, 'build-gate': None},
     'ci-post.yml': {'authz': None, 'changes': None, 'preflight': None,
                     'preflight-slow': None, 'build': VERIFY, 'build-arm': VERIFY,
-                    'sanitizers': VERIFY, 'kernel-only': VERIFY, 'build-gate': None},
-    'native-live.yml': {'authz': None, 'native-live': VERIFY, 'native-live-gate': None},
+                    'build-debug': VERIFY, 'sanitizers': VERIFY, 'kernel-only': VERIFY,
+                    **dict.fromkeys(POST_LEG_GATES), 'build-gate': None},
+    'native-live.yml': {'authz': None, 'native-live': VERIFY, 'native-live-shards': VERIFY,
+                        'native-live-native': None, 'native-live-gate': None},
     'corpus-parity.yml': {'authz': None, 'corpus-parity': PARITY, 'corpus-parity-subset': PARITY},
     'corpus-parity-subset.yml': {'authz': None, 'corpus-parity-subset': PARITY},
     'docs.yml': {'authz': None, 'build': None},
     'docs-post.yml': {'authz': None, 'build': None},
 }
-# Exact light-job pins; arm64 tests and promotion have separate hosted pins.
+# Exact hosted pins; larger labels are allowed only at these jobs' runs-on keys.
 HOSTED_JOB_RUNNERS = {
     'ci.yml': dict.fromkeys(('authz', 'changes', 'build-gate'), 'ubuntu-24.04'),
     'ci-post.yml': {**dict.fromkeys(('authz', 'changes', 'build-gate'), 'ubuntu-24.04'),
+                    **dict.fromkeys(POST_LEG_GATES, 'ubuntu-24.04'),
+                    'build': 'pf-linux-x64-16', 'build-debug': 'pf-linux-x64-16',
+                    'sanitizers': 'pf-linux-x64-32', 'kernel-only': 'pf-linux-x64-16',
                     'build-arm': 'ubuntu-24.04-arm'},
     **{name: {'authz': 'ubuntu-24.04'} for name in (
-        'corpus-parity.yml', 'corpus-parity-subset.yml', 'docs-post.yml', 'native-live.yml')},
+        'corpus-parity.yml', 'corpus-parity-subset.yml', 'docs-post.yml')},
+    'native-live.yml': {'authz': 'ubuntu-24.04', 'native-live': 'pf-linux-x64-64',
+                        'native-live-shards': 'pf-linux-x64-16',
+                        'native-live-native': 'ubuntu-24.04', 'native-live-gate': 'ubuntu-24.04'},
     'docs.yml': {'authz': 'ubuntu-24.04', 'build': 'ubuntu-24.04'},
     'promote-baseline.yml': {'promote-guard': 'ubuntu-latest'},
 }
@@ -157,10 +289,10 @@ RELEASE_JOB_RUNNERS = {
 # Credential-bearing jobs outside the release pins and gated docs build retain
 # standard hosted labels. Existing hosted exceptions above are pinned separately.
 STANDARD_RUNNERS = ('ubuntu-24.04',)
-# Refuse paid labels and the old matrix key in every workflow, including the
-# release matrix. Scan code so nested/flow mappings count too.
+# Larger labels are allowed only as the exact runs-on of a pinned hosted job.
+# Refuse every other occurrence, including metadata and the release matrix.
 _LARGER_RUNNER_LABEL = re.compile(
-    r'(?<![\w.-])(?:pf-linux-x64-16|[\w.-]+-(?:xlarge|large))(?![\w.-])')
+    r'(?<![\w.-])(?:pf-linux-x64-(?:16|32|64)|[\w.-]+-(?:xlarge|large))(?![\w.-])')
 _LARGER_RUNNER_KEY = re.compile(r'(?<![\w.-])["\']?larger_runner["\']?[ \t]*:')
 # Retired release labels remain refused by the runner pins as well. Neither
 # spelling may grant an arbitrary workflow access to the isolated release pool.
@@ -170,7 +302,10 @@ _RELEASE_POOL_LABEL = re.compile(r'(?<![\w.-])(?:pf-ci-release|pf-gcp-main)(?![\
 # docs-only -- exactly the skip the build aggregate accepts -- so a failed or
 # unanswered classification runs it.
 PROOF_JOBS = {'build': 'BUILD_RESULT', 'build-arm': 'ARM_BUILD_RESULT',
+              'build-debug': 'DEBUG_BUILD_RESULT',
+              'build-release-gate': 'RELEASE_GATE_RESULT', 'build-debug-gate': 'DEBUG_GATE_RESULT',
               'sanitizers': 'SANITIZER_RESULT',
+              'sanitizers-gate': 'SANITIZER_GATE_RESULT', 'kernel-only-gate': 'KERNEL_GATE_RESULT',
               'kernel-only': 'KERNEL_RESULT', 'native-live': 'NATIVE_RESULT',
               'corpus-parity-subset': 'PARITY_RESULT', 'corpus-parity': 'FULL_PARITY_RESULT'}
 PR_PROOF_JOBS = {'build': 'BUILD_RESULT', 'corpus-parity-subset': 'PARITY_RESULT'}
@@ -221,6 +356,17 @@ POST_ARM_PLATFORM_STEP = POST_PLATFORM_STEP.replace(
 BUILD_CACHE_KEY = 'ccache-main-${{ runner.os }}-${{ runner.arch }}-${{ matrix.build_type }}-'
 BUILD_CACHE_SAVE = ("${{ success() && github.ref == 'refs/heads/main' "
                     "&& steps.ccache-restore.outputs.cache-hit != 'true' }}")
+SHARD_CACHE_SAVE = BUILD_CACHE_SAVE.replace(
+    "&& steps.ccache-restore", "&& matrix.shard == 1 && steps.ccache-restore")
+POST_SHARD_GATE_STEP = r'''      - name: Require every shard to have passed
+        shell: bash
+        env:
+          SHARD_RESULT: ${{ needs.SHARD_JOB.result }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "shards: $SHARD_RESULT"
+          [[ "$SHARD_RESULT" == "success" ]]
+'''
 PREFLIGHT_LINTER_RUN = ' '.join(r'''|
 set -euo pipefail
 sudo apt-get update
@@ -642,21 +788,28 @@ POST_GATE_STEP = r'''      - name: Require every verification lane to have passe
           DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
           PREFLIGHT_RESULT: ${{ needs.preflight.result }}
           BUILD_RESULT: ${{ needs.build.result }}
+          DEBUG_BUILD_RESULT: ${{ needs.build-debug.result }}
+          RELEASE_GATE_RESULT: ${{ needs.build-release-gate.result }}
+          DEBUG_GATE_RESULT: ${{ needs.build-debug-gate.result }}
           ARM_BUILD_RESULT: ${{ needs.build-arm.result }}
           SANITIZER_RESULT: ${{ needs.sanitizers.result }}
+          SANITIZER_GATE_RESULT: ${{ needs.sanitizers-gate.result }}
           NATIVE_RESULT: ${{ needs.native-live.result }}
           KERNEL_RESULT: ${{ needs.kernel-only.result }}
+          KERNEL_GATE_RESULT: ${{ needs.kernel-only-gate.result }}
           PARITY_RESULT: ${{ needs.corpus-parity-subset.result }}
           SLOW_PREFLIGHT_RESULT: ${{ needs.preflight-slow.result }}
           FULL_PARITY_RESULT: ${{ needs.corpus-parity.result }}
         run: |
           printf '%s\n' "authz: $AUTHZ_RESULT" "changes: $CHANGES_RESULT, docs only: ${DOCS_ONLY:-unanswered}" \
             "preflight: $PREFLIGHT_RESULT" "matrix: $BUILD_RESULT" \
+            "debug shards: $DEBUG_BUILD_RESULT" "release aggregate: $RELEASE_GATE_RESULT" "debug aggregate: $DEBUG_GATE_RESULT" \
             "arm64 matrix: $ARM_BUILD_RESULT" \
             "sanitizers: $SANITIZER_RESULT" "native: $NATIVE_RESULT" \
+            "sanitizers aggregate: $SANITIZER_GATE_RESULT" "kernel aggregate: $KERNEL_GATE_RESULT" \
             "kernel: $KERNEL_RESULT" "corpus parity (subset): $PARITY_RESULT" \
             "preflight (slow): $SLOW_PREFLIGHT_RESULT" "corpus parity (full): $FULL_PARITY_RESULT"
-          # All four matrix cells and every full-event proof must pass.
+          # Every shard matrix, leg aggregate and full-event proof must pass.
           # Only a classified docs-only push may skip proof jobs.
           # Both preflight tiers must pass even for a docs-only push.
           docs_only=false
@@ -664,8 +817,10 @@ POST_GATE_STEP = r'''      - name: Require every verification lane to have passe
           passed() { [[ "$1" == "success" || ( "$docs_only" == "true" && "$1" == "skipped" ) ]]; }
           [[ "$AUTHZ_RESULT" == "success" && "$CHANGES_RESULT" == "success" ]] \
             && [[ "$PREFLIGHT_RESULT" == "success" ]] && passed "$BUILD_RESULT" \
+            && passed "$DEBUG_BUILD_RESULT" && passed "$RELEASE_GATE_RESULT" && passed "$DEBUG_GATE_RESULT" \
             && passed "$ARM_BUILD_RESULT" \
             && passed "$SANITIZER_RESULT" && passed "$NATIVE_RESULT" \
+            && passed "$SANITIZER_GATE_RESULT" && passed "$KERNEL_GATE_RESULT" \
             && passed "$KERNEL_RESULT" && passed "$PARITY_RESULT" \
             && [[ "$SLOW_PREFLIGHT_RESULT" == "success" ]] && passed "$FULL_PARITY_RESULT"
 '''
@@ -683,6 +838,9 @@ _ON_KEY = re.compile(r'^(?:on|"on"|\'on\')[ \t]*:[ \t]*([^#\n]*)', re.MULTILINE)
 # call of ci_verify itself, as a script or a module.
 _JOBS_FLAG = re.compile(r'(?<![\w-])--j(?:o|ob|obs)?(?=[\s=]|$)')
 _VERIFY_CALL = re.compile(r'\bci_verify\.py\b|-m\s+ci_verify\b')
+_LITERAL_CACHE_HASH = re.compile(
+    r'''\$\{\{\s*hashFiles\(\s*(?:'[^'\n]*'|"[^"\n]*")'''
+    r'''(?:\s*,\s*(?:'[^'\n]*'|"[^"\n]*"))*\s*\)\s*\}\}-''')
 _STATUS_FUNCTION = re.compile(r'\b(?:always|cancelled|failure|success)\s*\(', re.IGNORECASE)
 
 
@@ -1237,19 +1395,36 @@ def _authz_header(workflow: str) -> str:
     return AUTHZ_JOB_HEADER
 
 
+def _unapproved_runner_code(workflow: str, fixed_hosted: dict[str, str]) -> str:
+    """Exempt only the exact job-level runner scalar, never its whole job."""
+    checked = []
+    in_jobs, job = False, None
+    for line in _code(workflow):
+        if _indent(line) == 0:
+            in_jobs, job = _key_value(line, 'jobs') == '', None
+        elif in_jobs and _indent(line) == 2:
+            header = _JOB_HEADER.fullmatch(line)
+            job = header[1] if header else None
+        if (in_jobs and job in fixed_hosted and _indent(line) == 4
+                and _job_values(line, 'runs-on') == [fixed_hosted[job]]):
+            continue
+        checked.append(re.sub(r'\s+#.*$', '', line))
+    return '\n'.join(checked)
+
+
 def runner_findings(workflows: dict[str, str]) -> list[str]:
     """Enforce event-derived fleets, isolated releases and command/core pins."""
     findings = workflow_fleet_findings(workflows)
     routes = workflow_event_routes(workflows)
     for name, workflow in workflows.items():
         code = '\n'.join(re.sub(r'\s+#.*$', '', line) for line in _code(workflow))
-        if _LARGER_RUNNER_LABEL.search(code):
-            findings.append(f'{name} must not use larger-runner labels; use the GCP fleet or hosted exceptions')
         if _LARGER_RUNNER_KEY.search(code):
             findings.append(f'{name} must not define a larger_runner key; use the GCP fleet or hosted exceptions')
         timed = JOB_COMMANDS.get(name, {})
         fixed_hosted = {job: label for job, label in HOSTED_JOB_RUNNERS.get(name, {}).items()
                         if label == 'ubuntu-24.04' or (routes[name] & POST_EVENTS and 'pull_request' not in routes[name])}
+        if _LARGER_RUNNER_LABEL.search(_unapproved_runner_code(workflow, fixed_hosted)):
+            findings.append(f'{name} must not use larger-runner labels; use the GCP fleet or hosted exceptions')
         fixed_release = RELEASE_JOB_RUNNERS.get(name, {})
         event_runner = POST_RUNNER if routes[name] & POST_EVENTS else PR_RUNNER
         pinned = {job: event_runner for job in timed}
@@ -1367,8 +1542,10 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                 findings.append(f'{name} job {job} must size its parallelism to the runner')
     for name, job, strategy, build_name, population in (
             ('ci.yml', 'build', BUILD_STRATEGY, BUILD_NAME, 'only Ubuntu Release on pull_request'),
-            ('ci-post.yml', 'build', POST_BUILD_STRATEGY, BUILD_NAME,
-             'only Ubuntu Release/Debug cells on full events'),
+            ('ci-post.yml', 'build', POST_BUILD_STRATEGY, post_build_name(4),
+             'only Ubuntu Release shards on full events'),
+            ('ci-post.yml', 'build-debug', POST_DEBUG_BUILD_STRATEGY, post_build_name(2),
+             'only Ubuntu Debug shards on full events'),
             ('ci-post.yml', 'build-arm', POST_ARM_BUILD_STRATEGY, POST_ARM_BUILD_NAME,
              'only hosted Linux arm64 Release/Debug cells on full events')):
         if name not in workflows:
@@ -1378,6 +1555,27 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
             findings.append(f'{name} {job} must select {population}')
         if _job_values(build, 'name') != [build_name]:
             findings.append(f'{name} {job} legs must keep their names: {build_name}')
+    if 'ci-post.yml' in workflows:
+        jobs = _jobs(workflows['ci-post.yml'])
+        for job, count in POST_SHARDS.items():
+            body = jobs.get(job, '')
+            strategy = (POST_BUILD_STRATEGY if job == 'build' else
+                        POST_DEBUG_BUILD_STRATEGY if job == 'build-debug' else
+                        '    strategy:\n      fail-fast: false\n      matrix:\n'
+                        '        shard: [' + ', '.join(str(i) for i in range(1, count + 1)) + ']\n')
+            if _job_block(body, 'strategy') != _code(strategy):
+                findings.append(f'ci-post.yml {job} must select shards 1..{count} '
+                                f'for --ctest-shard denominator {count}')
+            flag = '--ctest-shard ${{ matrix.shard }}/' + str(count)
+            commands = [value for step in _steps(body) for value in _verify_step_commands(step)
+                        if _VERIFY_CALL.search(value)]
+            if (len(commands) != 1 or _counted_text(body).count('--ctest-shard') != 1
+                    or not re.search(re.escape(flag) + r'(?=\s|$)', commands[0])):
+                findings.append(f'ci-post.yml {job} must pass {flag} exactly once to ci_verify')
+            if job in ('sanitizers', 'kernel-only'):
+                display = job + '-shard (${{ matrix.shard }}/' + str(count) + ')'
+                if _job_values(body, 'name') != [display]:
+                    findings.append(f'ci-post.yml {job} legs must keep their names: {display}')
     if 'release.yml' in workflows:
         prebuilt = _jobs(workflows['release.yml']).get('prebuilt', '')
         if _job_block(prebuilt, 'strategy') != _code(RELEASE_STRATEGY):
@@ -1438,6 +1636,27 @@ def _step_values(step: str, key: str) -> list[str]:
 
 def _step_block(step: str, key: str) -> list[str]:
     return _job_block(re.sub(r'^( *)- ', r'\1  ', step, count=1), key)
+
+
+def _normalized_verify_command(value: str) -> str:
+    """Compare verifier arguments after harmless YAML and shell respellings."""
+    value = re.sub(r'^[|>][+-]?(?:\s+|$)', '', value)
+    value = re.sub(r'\\\s+', ' ', value)
+    value = value.replace('--jobs=', '--jobs ').replace('--ctest-shard=', '--ctest-shard ')
+    return ' '.join(value.split())
+
+
+def _verify_step_commands(step: str) -> list[str]:
+    """Read direct commands and the existing action wrapper's command input."""
+    values = (_step_values(step, 'run')
+              + _job_values('\n'.join(_step_block(step, 'with')[1:]), 'command'))
+    return [_normalized_verify_command(value) for value in values]
+
+
+def _compiler_cache_restore_with(step: str) -> list[str]:
+    """Literal content hashes keep the same cache partition across shards."""
+    return [_LITERAL_CACHE_HASH.sub('', line) if _key_value(line, 'key') is not None else line
+            for line in _step_block(step, 'with')]
 
 
 # ci_release_gate.py's phase-1 exemption is bounded by this exact writer.
@@ -1800,19 +2019,43 @@ def native_workflow_findings(native: str, curl_action: str | None = None) -> lis
         findings.append('native-live.yml must retain only workflow_call and workflow_dispatch')
     jobs = _jobs(native)
     job, gate = jobs.get('native-live', ''), jobs.get('native-live-gate', '')
+    shards, aggregate = jobs.get('native-live-shards', ''), jobs.get('native-live-native', '')
     if (_job_block(job, 'strategy') != _code(NATIVE_STRATEGY)
             or _needs(job) != ['authz'] or _job_values(job, 'if')
+            or _job_values(job, 'continue-on-error')
             or _job_values(job, 'name') != ['native-live (${{ matrix.profile }})']):
-        findings.append('native-live must run all three independent profiles with fail-fast false, '
+        findings.append('native-live must run both independent sanitizer profiles with fail-fast false, '
                         'the platform job maximum and no per-run budget')
-    if (set(jobs) != {'authz', 'native-live', 'native-live-gate'}
-            or _needs(gate) != ['authz', 'native-live']
+    if (_job_block(shards, 'strategy') != _code(NATIVE_SHARD_STRATEGY)
+            or _needs(shards) != ['authz'] or _job_values(shards, 'if')
+            or _job_values(shards, 'continue-on-error')
+            or _job_values(shards, 'name') != ['native-live-shard (${{ matrix.profile }}, ${{ matrix.shard }}/4)']):
+        findings.append('native-live-shards must run exactly native shards 1..4 with fail-fast false')
+    aggregate_steps = _steps(aggregate)
+    if (_needs(aggregate) != ['authz', 'native-live-shards']
+            or _job_values(aggregate, 'name') != ['native-live (native)']
+            or _job_values(aggregate, 'if') != ['always()']
+            or _job_values(aggregate, 'continue-on-error')
+            or len(aggregate_steps) != 2
+            or _code(aggregate_steps[0]) != _code(AUTHZ_REFUSE_STEP)
+            or _code(aggregate_steps[-1]) != _code(NATIVE_SHARD_GATE_STEP)):
+        findings.append('native-live-native must fail unless all four native shard proofs succeed')
+    gate_steps = _steps(gate)
+    if (set(jobs) != {'authz', 'native-live', 'native-live-shards', 'native-live-native', 'native-live-gate'}
+            or _needs(gate) != ['authz', 'native-live', 'native-live-native']
             or _job_values(gate, 'if') != ['always()']
-            or '          AUTHZ_RESULT: ${{ needs.authz.result }}' not in _code(gate)
-            or '          test "$AUTHZ_RESULT" = success' not in _code(gate)
-            or '          PROFILES_RESULT: ${{ needs.native-live.result }}' not in _code(gate)
-            or '          test "$PROFILES_RESULT" = success' not in _code(gate)):
+            or _job_values(gate, 'continue-on-error')
+            or len(gate_steps) != 2
+            or _code(gate_steps[-1]) != _code(NATIVE_GATE_STEP)):
         findings.append('native-live-gate must fail unless every profile succeeds')
+    shard_steps = _steps(shards)
+    proof = _step_named(shard_steps, '        id: shard-proof')
+    outputs = ['    outputs:'] + [
+        f'      shard_{index}: ${{{{ steps.shard-proof.outputs.shard_{index} }}}}' for index in range(1, 5)]
+    if (_job_block(shards, 'outputs') != outputs
+            or _code(proof) != _code(NATIVE_SHARD_PROOF_STEP)
+            or not shard_steps or proof != shard_steps[-1]):
+        findings.append('native-live-shards must publish each successful verifier summary under its own shard output')
     for event in ('workflow_call', 'workflow_dispatch'):
         block = native.split(f'  {event}:\n', 1)[-1]
         block = re.split(r'(?m)^  [a-z_]+:|^\S', block, maxsplit=1)[0]
@@ -1828,51 +2071,8 @@ def native_workflow_findings(native: str, curl_action: str | None = None) -> lis
     if ('permissions:\n  contents: read\n' not in native
             or '  PINEFORGE_REQUIRE_RELEASE_TAGS: "1"' not in _code(native)):
         findings.append('native-live must retain read-only permissions and required release tags')
-    steps = _steps(job)
-    restore = _step_named(steps, '        id: ccache-restore')
-    verify = _step_named(steps, '        id: verify')
-    curl = _step_named(steps, '        id: curl-deps')
-    save = _step_named(steps, '      - name: Save ccache after verification')
-    collect = _step_named(steps, '      - name: Stage and summarize diagnostics')
-    upload = _step_named(steps, '      - name: Retain CI diagnostics')
-    cache_key = 'ccache-${{ runner.os }}-${{ runner.arch }}-live-v2-${{ matrix.profile }}-'
-    if (_step_values(restore, 'if') != ['${{ !inputs.cold_cache }}']
-            or _step_values(restore, 'uses') != ['actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830']
-            or f'          key: {cache_key}${{{{ github.sha }}}}' not in _code(restore)
-            or f'            {cache_key}' not in _code(restore)
-            or '      CCACHE_DIR: ${{ github.workspace }}/.ccache/${{ matrix.profile }}' not in _code(job)
-            or '          ccache --zero-stats' not in _code(job)):
-        findings.append('native-live compiler restore must be profile-isolated, cold-bypassable and reset statistics')
-    if (_step_values(curl, 'uses') != ['./.github/actions/setup-live-curl']
-            or '          cache-namespace: ${{ matrix.profile }}' not in _code(curl)
-            or '          cold-cache: ${{ inputs.cold_cache }}' not in _code(curl)):
-        findings.append('every native profile must use pinned curl with its namespace and cold-cache input')
-    command = _step_values(verify, 'run')
-    expected = ('python3 scripts/ci_verify.py ${{ matrix.profile }} '
-                '--build-dir ${{ matrix.build_dir }} ' + f'--jobs {CORES} '
-                '--generator Ninja --curl-dir "${{ steps.curl-deps.outputs.curl-dir }}" '
-                '--ccache '
-                "${{ matrix.profile == 'native' && '--require-websocket' || '' }} " + NATIVE_EXCLUSION)
-    if (len(command) != 1 or command[0].replace('--jobs=', '--jobs ') != expected
-            or _step_values(verify, 'if')
-            or _step_values(verify, 'timeout-minutes')
-            or job.count('--exclude-label') != 1 or job.count('scripts/ci_verify.py ') != 1):
-        findings.append('native-live must verify each full profile with no step deadline or timeout flag and '
-                        'native-only PR exclusion')
-    if (_step_values(save, 'if') != [NATIVE_CACHE_SAVE]
-            or _step_values(save, 'uses') != ['actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830']
-            or '          key: ${{ steps.ccache-restore.outputs.cache-primary-key }}' not in _code(save)
-            or '          path: ${{ env.CCACHE_DIR }}' not in _code(save)
-            or (save and upload and job.index(save) < job.index(upload))):
-        findings.append('native-live must explicitly save compatible compiler objects after diagnostics on normal test failure')
-    if (_step_values(collect, 'if') != ['always()']
-            or _step_values(upload, 'if') != ['always()']
-            or '--build-dir ${{ matrix.build_dir }} --profile ${{ matrix.profile }}' not in collect
-            or '          name: ci-diagnostics-native-live-${{ matrix.profile }}' not in _code(upload)
-            or '          COLD_CACHE: ${{ inputs.cold_cache }}' not in _code(collect)
-            or '          fetch-depth: 0' not in _code(job)
-            or '          persist-credentials: false' not in _code(job)):
-        findings.append('native-live must retain per-profile diagnostics on failure and preserve safe full checkout')
+    for name, sharded in (('native-live', False), ('native-live-shards', True)):
+        findings += _native_profile_job_findings(jobs.get(name, ''), name, sharded=sharded)
     if curl_action is not None:
         action_steps = _steps(curl_action, 4)
         restored = _step_named(action_steps, '      id: curl-cache')
@@ -1897,6 +2097,112 @@ def native_workflow_findings(native: str, curl_action: str | None = None) -> lis
     return findings
 
 
+def post_shard_workflow_findings(jobs: dict[str, str]) -> list[str]:
+    """Keep each leg independent, its cache single-writer and diagnostics distinct."""
+    findings = []
+    for aggregate, (job, display) in POST_LEG_GATES.items():
+        body = jobs.get(aggregate, '')
+        expected_steps = [_code(AUTHZ_REFUSE_STEP),
+                          _code(POST_SHARD_GATE_STEP.replace('SHARD_JOB', job))]
+        if (sorted(_needs(body)) != sorted(['authz', 'changes', job])
+                or _job_values(body, 'name') != [display]
+                or _job_values(body, 'if') != [DOCS_ONLY_SKIP]
+                or _job_block(body, 'strategy') or _job_values(body, 'uses')
+                or [_code(step) for step in _steps(body)] != expected_steps):
+            findings.append(f'{aggregate} must require only its own complete shard matrix '
+                            'and keep its docs-only scheduling policy')
+    for job, count in POST_SHARDS.items():
+        body = jobs.get(job, '')
+        steps = _steps(body)
+        restore = _step_named(steps, '      - name: Restore ccache')
+        save = _step_named(steps, '      - name: Save main ccache')
+        cache_key = (BUILD_CACHE_KEY if job in ('build', 'build-debug') else
+                     'ccache-${{ runner.os }}-${{ runner.arch }}-'
+                     + ('kernel' if job == 'kernel-only' else 'sanitizers') + '-')
+        if (_step_values(restore, 'id') != ['ccache-restore']
+                or _step_values(restore, 'uses') != [
+                    'actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830']
+                or _compiler_cache_restore_with(restore) != [
+                    '        with:', '          path: ${{ env.CCACHE_DIR }}',
+                    f'          key: {cache_key}${{{{ github.sha }}}}',
+                    '          restore-keys: |', f'            {cache_key}']
+                or _step_values(save, 'if') != [SHARD_CACHE_SAVE]
+                or _step_values(save, 'uses') != [
+                    'actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830']
+                or _step_block(save, 'with') != [
+                    '        with:', '          path: ${{ env.CCACHE_DIR }}',
+                    '          key: ${{ steps.ccache-restore.outputs.cache-primary-key }}']
+                or any(_step_values(step, 'uses') == [
+                    'actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830'] for step in steps)):
+            findings.append(f'{job} must restore one compiler cache per architecture/profile/SHA '
+                            'and save from shard 1 only')
+        upload = _step_named(steps, '      - name: Retain CI diagnostics')
+        diagnostic = ('${{ matrix.platform.os }}-${{ matrix.build_type }}'
+                      if job in ('build', 'build-debug') else
+                      'kernel' if job == 'kernel-only' else 'sanitizers')
+        if ('          name: ci-diagnostics-' + diagnostic
+                + '-shard-${{ matrix.shard }}-of-' + str(count) not in _code(upload)
+                or _step_values(upload, 'if') != ['always()']):
+            findings.append(f'{job} must retain separate diagnostics for every shard')
+    return findings
+
+
+def _native_profile_job_findings(job: str, name: str, *, sharded: bool) -> list[str]:
+    findings = []
+    steps = _steps(job)
+    restore = _step_named(steps, '        id: ccache-restore')
+    verify = _step_named(steps, '        id: verify')
+    curl = _step_named(steps, '        id: curl-deps')
+    save = _step_named(steps, '      - name: Save ccache after verification')
+    collect = _step_named(steps, '      - name: Stage and summarize diagnostics')
+    upload = _step_named(steps, '      - name: Retain CI diagnostics')
+    cache_key = 'ccache-${{ runner.os }}-${{ runner.arch }}-live-v2-${{ matrix.profile }}-'
+    if sharded:
+        cache_key += 'shard-${{ matrix.shard }}-'
+    if (_step_values(restore, 'if') != ['${{ !inputs.cold_cache }}']
+            or _step_values(restore, 'uses') != ['actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830']
+            or f'          key: {cache_key}${{{{ github.sha }}}}' not in _code(restore)
+            or f'            {cache_key}' not in _code(restore)
+            or '      CCACHE_DIR: ${{ github.workspace }}/.ccache/${{ matrix.profile }}' not in _code(job)
+            or '          ccache --zero-stats' not in _code(job)):
+        findings.append(f'{name} compiler restore must be profile-isolated, cold-bypassable and reset statistics')
+    if (_step_values(curl, 'uses') != ['./.github/actions/setup-live-curl']
+            or '          cache-namespace: ${{ matrix.profile }}' not in _code(curl)
+            or '          cold-cache: ${{ inputs.cold_cache }}' not in _code(curl)):
+        findings.append('every native profile must use pinned curl with its namespace and cold-cache input')
+    command = _verify_step_commands(verify)
+    expected = ('python3 scripts/ci_verify.py ${{ matrix.profile }} '
+                '--build-dir ${{ matrix.build_dir }} ' + f'--jobs {CORES} '
+                '--generator Ninja --curl-dir "${{ steps.curl-deps.outputs.curl-dir }}" '
+                '--ccache')
+    if sharded:
+        expected += ' --require-websocket ' + NATIVE_EXCLUSION + ' --ctest-shard ${{ matrix.shard }}/4'
+    if (command != [expected]
+            or _step_values(verify, 'if')
+            or _step_values(verify, 'timeout-minutes')
+            or job.count('--exclude-label') != int(sharded) or job.count('scripts/ci_verify.py ') != 1):
+        findings.append(f'{name} must verify each full profile with no step deadline or timeout flag and '
+                        'native-only PR exclusion')
+    if (_step_values(save, 'if') != [NATIVE_CACHE_SAVE]
+            or _step_values(save, 'uses') != ['actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830']
+            or '          key: ${{ steps.ccache-restore.outputs.cache-primary-key }}' not in _code(save)
+            or '          path: ${{ env.CCACHE_DIR }}' not in _code(save)
+            or (save and upload and job.index(save) < job.index(upload))):
+        findings.append(f'{name} must explicitly save compatible compiler objects after diagnostics on normal test failure')
+    artifact = 'ci-diagnostics-native-live-${{ matrix.profile }}'
+    if sharded:
+        artifact += '-${{ matrix.shard }}of4'
+    if (_step_values(collect, 'if') != ['always()']
+            or _step_values(upload, 'if') != ['always()']
+            or '--build-dir ${{ matrix.build_dir }} --profile ${{ matrix.profile }}' not in collect
+            or f'          name: {artifact}' not in _code(upload)
+            or '          COLD_CACHE: ${{ inputs.cold_cache }}' not in _code(collect)
+            or '          fetch-depth: 0' not in _code(job)
+            or '          persist-credentials: false' not in _code(job)):
+        findings.append(f'{name} must retain per-profile diagnostics on failure and preserve safe full checkout')
+    return findings
+
+
 def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[str]:
     """Pin each pipeline's actual jobs, dependencies, commands and aggregate."""
     findings = authz_workflow_findings(workflow, name, 'build-gate')
@@ -1913,7 +2219,11 @@ def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[st
     findings += [f'{name} is missing job {job}' for job in sorted(expected_jobs - jobs.keys())]
     if set(jobs) - expected_jobs:
         findings.append(f'{name} must keep only its pinned {"PR" if pr else "full-event"} jobs')
-    for job in expected_jobs - {'authz', 'build', 'build-arm', 'build-gate'}:
+    named_jobs = {'authz', 'build', 'build-arm', 'build-gate'}
+    if not pr:
+        named_jobs.update(POST_SHARDS)
+        named_jobs.update(POST_LEG_GATES)
+    for job in expected_jobs - named_jobs:
         if _job_values(jobs.get(job, ''), 'name'):
             findings.append(f'{job} must keep its default check name')
     changes = jobs.get('changes', '')
@@ -1957,7 +2267,7 @@ def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[st
                 or _step_values(verify_slow, 'run') != [
                     'python3 scripts/ci_preflight.py --output-dir build-ci-preflight-slow --tier slow']):
             findings.append('preflight-slow must run all deferred stages on full events only')
-    for job in proofs:
+    for job in proofs.keys() - (set() if pr else POST_LEG_GATES.keys()):
         body = jobs.get(job, '')
         if (sorted(_needs(body)) != ['authz', 'changes']
                 or _job_values(body, 'if') != [GITHUB_ONLY_SKIP if pr else DOCS_ONLY_SKIP]):
@@ -1989,10 +2299,15 @@ def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[st
         findings.append('build-gate must independently read the event-bound PR diff before accepting skips')
     if not gate_steps or _code(gate_steps[-1]) != _code(GATE_STEP if pr else POST_GATE_STEP):
         findings.append('build-gate must keep the exact result policy: success or a classified docs-only skip')
-    for job in (('build',) if pr else ('build', 'build-arm')):
+    if not pr:
+        findings += post_shard_workflow_findings(jobs)
+    for job in (('build',) if pr else ('build', 'build-debug', 'build-arm')):
         build = jobs.get(job, '')
         build_step = _step_named(_steps(build), '      - name: Verify (${{ matrix.build_type }})')
-        if (_step_values(build_step, 'run') != [BUILD_VERIFY_RUN if pr else POST_BUILD_VERIFY_RUN]
+        shard_flag = (' --ctest-shard ${{ matrix.shard }}/' + str(POST_SHARDS[job])
+                      if not pr and job in POST_SHARDS else '')
+        if (_step_values(build_step, 'run') != [
+                BUILD_VERIFY_RUN if pr else POST_BUILD_VERIFY_RUN + shard_flag]
                 or _step_values(build_step, 'if') != [AUTHZ_SUCCESS]
                 or _counted_text(build).count('scripts/ci_verify.py') != (0 if pr else 1)
                 or _counted_text(build).count('ctest --test-dir') != (1 if pr else 0)):
@@ -2006,7 +2321,7 @@ def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[st
                     f'          key: {BUILD_CACHE_KEY}${{{{ github.sha }}}}',
                     '          restore-keys: |', f'            {BUILD_CACHE_KEY}']
                 or _step_values(save, 'uses') != ['actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830']
-                or _step_values(save, 'if') != [BUILD_CACHE_SAVE]
+                or _step_values(save, 'if') != [SHARD_CACHE_SAVE if shard_flag else BUILD_CACHE_SAVE]
                 or _step_block(save, 'with') != [
                     '        with:', '          path: ${{ env.CCACHE_DIR }}',
                     '          key: ${{ steps.ccache-restore.outputs.cache-primary-key }}']):
@@ -2020,14 +2335,33 @@ def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[st
             if _code(platform) != _code(expected_platform):
                 findings.append(f'full {job} must refuse a runner whose OS differs from its named platform')
     if not pr:
-        expected_steps = [
-            _code(POST_ARM_PLATFORM_STEP)
-            if _step_values(step, 'name') == ['Require the requested platform']
-            else _code(step.replace('ci-diagnostics-${{ matrix.platform.os }}-',
-                                    'ci-diagnostics-ubuntu-24.04-arm-'))
-            for step in _steps(jobs.get('build', ''))]
-        if [_code(step) for step in _steps(jobs.get('build-arm', ''))] != expected_steps:
-            findings.append('build-arm must keep the same verification steps as build')
+        for job in ('build', 'build-debug'):
+            count = POST_SHARDS[job]
+            expected_steps = [
+                _code(POST_ARM_PLATFORM_STEP)
+                if _step_values(step, 'name') == ['Require the requested platform']
+                else _code(step.replace('ci-diagnostics-${{ matrix.platform.os }}-',
+                                        'ci-diagnostics-ubuntu-24.04-arm-')
+                               .replace(' --ctest-shard ${{ matrix.shard }}/' + str(count), '')
+                               .replace('-shard-${{ matrix.shard }}-of-' + str(count), '')
+                               .replace(SHARD_CACHE_SAVE, BUILD_CACHE_SAVE))
+                for step in _steps(jobs.get(job, ''))]
+            if [_code(step) for step in _steps(jobs.get('build-arm', ''))] != expected_steps:
+                findings.append(f'build-arm must keep the same verification steps as {job}')
+        for job, profile, build_dir, extra in (
+                ('sanitizers', 'sanitizers', 'build-asan', ''),
+                ('kernel-only', 'kernel', 'build-kernel',
+                 ' --curl-dir "${{ steps.curl-deps.outputs.curl-dir }}"')):
+            verify_steps = [
+                step for step in _steps(jobs.get(job, ''))
+                if any(_VERIFY_CALL.search(value) for value in _verify_step_commands(step))]
+            step = verify_steps[0] if len(verify_steps) == 1 else ''
+            command = (f'python3 scripts/ci_verify.py {profile} --build-dir {build_dir} '
+                       f'--jobs {CORES} --ccache' + extra
+                       + ' --ctest-shard ${{ matrix.shard }}/' + str(POST_SHARDS[job]))
+            if (_verify_step_commands(step) != [command]
+                    or _step_values(step, 'if') != [AUTHZ_SUCCESS]):
+                findings.append(f'{job} must run its full profile on every shard')
     for job, body in jobs.items():
         if any(flag in body for flag in ('--exclude-label', '--include-label', '--class-tier')):
             findings.append(f'{job} must keep its full population')
@@ -2257,9 +2591,8 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
     blocks = re.findall(r'^set\(PINEFORGE_PR_SLOW_TESTS\n(.*?)^\)', cmake,
                         re.MULTILINE | re.DOTALL)
     names = re.findall(r'^    (test_[A-Za-z0-9_]+)$', blocks[0], re.MULTILINE) if len(blocks) == 1 else []
-    canonical = '\n'.join(names) + '\n'
-    if (len(blocks) != 1 or len(names) != 29 or len(set(names)) != 29
-            or hashlib.sha256(canonical.encode()).hexdigest() != PR_SLOW_ROWS_SHA256
+    if (len(blocks) != 1 or len(names) != 43 or len(set(names)) != 43
+            or tuple(names) != PR_SLOW_ROWS
             or cmake.count('APPEND PROPERTY LABELS slow') != 1
             or 'set_property(TEST ${_pf_slow_test} APPEND PROPERTY LABELS slow)' not in cmake
             or 'if(PINEFORGE_BUILD_SOURCE_LAYER AND NOT TEST ${_pf_slow_test})' not in cmake):
@@ -2367,6 +2700,10 @@ def actionlint_runner_label_findings(source: Path) -> list[str]:
         for job, body in _jobs(workflow).items():
             for value in _job_values(body, 'runs-on'):
                 if not value.startswith('['):
+                    if value.startswith('pf-') and re.fullmatch(_LITERAL_RUNNER_LABEL, value):
+                        if value not in declared:
+                            findings.append(f'{path.name} job {job}: label "{value}" is not declared '
+                                            f'in {config_name}')
                     continue
                 if not re.fullmatch(r'\[\s*' + _LITERAL_RUNNER_LABEL
                                     + r'(?:\s*,\s*' + _LITERAL_RUNNER_LABEL

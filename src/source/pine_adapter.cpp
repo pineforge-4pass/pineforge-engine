@@ -5683,10 +5683,10 @@ bool PineExecutionAdapter::compute_exit_reservation(
             row->queued_exit = row->queued_exit && queued_exit;
         }
     };
-    for (const auto& handle : live_row_index().reservation_rows(from_entry, current_position_cycle_)) { ++dense_pending_work_.compute_exit_reservation_handles;
+    live_row_index().visit_reservation_candidates(from_entry, current_position_cycle_, [&](const auto& handle) { ++dense_pending_work_.compute_exit_reservation_handles;
         const auto found = placement_.find(handle.incarnation);
         if (found != placement_.end()) observe(found->second);
-    }
+    });
     for (const auto& pending : pending_bracket_legs_) { ++dense_pending_work_.compute_exit_reservation_pending_brackets; observe(pending.snapshot); }
     for (const auto& pending : pending_coof_requests_) observe(pending.snapshot);
     for (const auto& delayed : delayed_market_orders_) observe(delayed.snapshot);
@@ -6393,8 +6393,8 @@ bool PineExecutionAdapter::origin_is_pending(
 
 std::vector<std::size_t> PineExecutionAdapter::live_origin_positions(
         const CohortFacts& cohort) const {
-    std::vector<std::size_t> positions;
-    for (const auto position : live_row_index().origin_positions(cohort.handle.value, cohort.origins)) { ++dense_pending_work_.live_origin_handles; positions.push_back(position); }
+    auto positions = live_row_index().origin_positions(cohort.handle.value, cohort.origins);
+    dense_pending_work_.live_origin_handles += positions.size();
     std::sort(positions.rbegin(), positions.rend());
     positions.erase(std::unique(positions.begin(), positions.end()), positions.end());
     return positions;
@@ -11739,13 +11739,13 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         observe_staged_parent(parent.snapshot);
     const auto cohort = cohorts_by_id_.find(from_entry);
     if (!parent_filled_this_cycle && !(from_entry.empty() && physical.signed_units != 0.0 && detail::exit_binding_rule_switches().global_exit_binds_held_position)) {
-        const auto parents = live_row_index().rows(detail::LiveClass::EntryOpening, from_entry.empty() ? detail::LiveKey{} : detail::LiveKey::source(from_entry));
-        dense_pending_work_.exit_staged_parents += parents.size();
-        for (const auto& handle : parents) {
+        live_row_index().visit_candidates(detail::LiveClass::EntryOpening, [&] { return from_entry.empty() ? detail::LiveKey{} : detail::LiveKey::source(from_entry); },
+        [&](const auto& handle) {
+            ++dense_pending_work_.exit_staged_parents;
             const auto parent = placement_.find(handle.incarnation); const bool already_opened = cohort != cohorts_by_id_.end() && std::find(cohort->second.opened.begin(), cohort->second.opened.end(), handle) != cohort->second.opened.end();
             if (parent != placement_.end() && !already_opened) observe_staged_parent(parent->second);
-            // The returned rows retain forward live order and full handles.
-        } }
+            // Both paths retain the old predicate, forward order and handles.
+        }); }
     // ab9714be src/source/pine_fills.cpp:4560-4564: a pending same-id origin
     // never defers the levels once the id has filled in this cycle.
     if (cohort != cohorts_by_id_.end() && !parent_filled_this_cycle) {
@@ -12068,8 +12068,8 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         if (finite_positive(units)) pending_parent_units += units;
     };
     if (reservation_point) {
-        const auto parents = live_row_index().rows(detail::LiveClass::ReservationParent, detail::LiveKey::source_time(from_entry, reservation_point->decision.script_bar_open_ms)); dense_pending_work_.exit_reservation_parents += parents.size(); for (const auto& handle : parents) { const auto parent = placement_.find(handle.incarnation); if (parent != placement_.end()) observe_pending_parent(parent->second); }
-        // The returned positive-unit rows are added in forward live order.
+        live_row_index().visit_candidates(detail::LiveClass::ReservationParent, [&] { return detail::LiveKey::source_time(from_entry, reservation_point->decision.script_bar_open_ms); }, [&](const auto& handle) { ++dense_pending_work_.exit_reservation_parents; const auto parent = placement_.find(handle.incarnation); if (parent != placement_.end()) observe_pending_parent(parent->second); });
+        // The observer adds positive units in forward live order in both modes.
     }
     for (const auto& parent : pending_entries_) observe_pending_parent(parent.snapshot);
     // TradingView's default strategy.exit(from_entry) under FIFO closes the
@@ -13176,12 +13176,12 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                     || (drop_stop && row.family == PineOrderFamily::ExitStop));
         };
         if (drop_limit || drop_stop) {
-            std::vector<native_order::RequestHandle> withdrawn;
-            std::vector<std::pair<std::uint64_t, native_order::RequestHandle>> ordered; std::unordered_map<native_order::RequestHandle, std::size_t, detail::LiveHandleHash> occurrences;
-            const auto append = [&](const auto& rows) { for (const auto& handle : rows) { const auto orders = live_handles_.orders(handle); ordered.emplace_back(orders[occurrences[handle]++], handle); } };
-            if (drop_limit) append(live_row_index().rows(detail::LiveClass::DropLimit, detail::LiveKey::pair(exit_id, from_entry)));
-            if (drop_stop) append(live_row_index().rows(detail::LiveClass::DropStop, detail::LiveKey::pair(exit_id, from_entry)));
-            std::sort(ordered.begin(), ordered.end(), [](const auto& left, const auto& right) { return left.first < right.first; }); withdrawn.reserve(ordered.size()); for (const auto& row : ordered) withdrawn.push_back(row.second); dense_pending_work_.exit_drop_legs += withdrawn.size();
+            const auto withdrawn = live_row_index().dropped_exit_rows(
+                exit_id, from_entry, drop_limit, drop_stop,
+                &dense_pending_work_.exit_drop_legs);
+            // Inactive: the original scan, without selection temporaries.
+            // Active: merge disjoint family buckets by live occurrence order.
+            // Debug compares the complete ordered result with the old predicate.
             for (const auto& handle : withdrawn) {
                 const auto result = require_host().cancel(handle);
                 if (result.status == native_order::CancelStatus::Cancelled) retire(handle);
@@ -22363,14 +22363,14 @@ void PineExecutionAdapter::apply_reversal_gap_bracket_policy(
     const auto infinity = std::numeric_limits<double>::infinity();
     if (physical.signed_units > 0.0) {
         append_legs(index.rows_in_range(detail::LiveClass::ExitStop,
-                                        detail::LivePrice::Stop, -infinity, bar.open));
-        append_legs(index.rows_in_range(detail::LiveClass::ExitLimit,
-                                        detail::LivePrice::Limit, bar.open, infinity));
-    } else {
-        append_legs(index.rows_in_range(detail::LiveClass::ExitStop,
                                         detail::LivePrice::Stop, bar.open, infinity));
         append_legs(index.rows_in_range(detail::LiveClass::ExitLimit,
                                         detail::LivePrice::Limit, -infinity, bar.open));
+    } else {
+        append_legs(index.rows_in_range(detail::LiveClass::ExitStop,
+                                        detail::LivePrice::Stop, -infinity, bar.open));
+        append_legs(index.rows_in_range(detail::LiveClass::ExitLimit,
+                                        detail::LivePrice::Limit, bar.open, infinity));
     }
     append_legs(index.rows(detail::LiveClass::Trail));
     std::stable_sort(ordered_legs.begin(), ordered_legs.end(),
@@ -22578,14 +22578,14 @@ void PineExecutionAdapter::reaccept_gapped_bracket_behind_same_id_add(
     const auto infinity = std::numeric_limits<double>::infinity();
     if (long_position) {
         append(index.rows_in_range(detail::LiveClass::ExitStop,
-                                   detail::LivePrice::Stop, -infinity, bar.open));
-        append(index.rows_in_range(detail::LiveClass::ExitLimit,
-                                   detail::LivePrice::Limit, bar.open, infinity));
-    } else {
-        append(index.rows_in_range(detail::LiveClass::ExitStop,
                                    detail::LivePrice::Stop, bar.open, infinity));
         append(index.rows_in_range(detail::LiveClass::ExitLimit,
                                    detail::LivePrice::Limit, -infinity, bar.open));
+    } else {
+        append(index.rows_in_range(detail::LiveClass::ExitStop,
+                                   detail::LivePrice::Stop, -infinity, bar.open));
+        append(index.rows_in_range(detail::LiveClass::ExitLimit,
+                                   detail::LivePrice::Limit, bar.open, infinity));
     }
     std::stable_sort(ordered.begin(), ordered.end(),
                      [](const OrderedHandle& left, const OrderedHandle& right) {
@@ -22710,8 +22710,8 @@ void PineExecutionAdapter::order_open_marketable_limit_entries(
         || !modeled_input() || coof_recalc_active_ || context.sub_index != 0) {
         return;
     }
-    auto& index = live_row_index();
     const double open_fill = source_bar_fill_tick(bar.open, staged_.syminfo.mintick);
+    auto& index = live_row_index();
     const auto marketable = [&](const PlacementSnapshot& row) {
         return row.family == PineOrderFamily::Entry && row.opening && row.is_long
             && finite_positive(row.exit_levels.limit) && !finite_positive(row.exit_levels.stop)
@@ -23114,15 +23114,15 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
     // under process_orders_on_close, else the open).
     const double sell_fill_point = config_.process_orders_on_close ? bar.close : bar.open;
     const auto marketable_stop_entry = [&](bool is_long) {
-        ++dense_pending_work_.open_stop_gate;
-        if (is_long) {
-            const auto minimum = index.min_price(
-                detail::LiveClass::PureStopEntry, detail::LivePrice::Stop, {}, 1);
-            return minimum && sell_fill_point >= *minimum;
-        }
-        const auto maximum = index.max_price(
-            detail::LiveClass::PureStopEntry, detail::LivePrice::Stop, {}, 0);
-        return maximum && sell_fill_point <= *maximum;
+        return index.query_or_scan("open pure-stop gate", [&] {
+            const auto extreme = is_long ? index.min_price(detail::LiveClass::PureStopEntry, detail::LivePrice::Stop, {}, 1)
+                                         : index.max_price(detail::LiveClass::PureStopEntry, detail::LivePrice::Stop, {}, 0);
+            return extreme && (is_long ? sell_fill_point >= *extreme : sell_fill_point <= *extreme);
+        }, [&](bool record_work) {
+            return any_live_row(live_handles_, placement_, [&](const PlacementSnapshot& row) {
+                return row.is_long == is_long && pure_stop_entry_marketable_at(row, sell_fill_point);
+            }, record_work ? &dense_pending_work_.open_stop_gate : nullptr);
+        });
     };
     if (!skip_quiet(QuietHook::OpenMarketableSells,
             config_.calc_on_order_fills || !modeled_input()
@@ -24911,25 +24911,25 @@ void PineExecutionAdapter::on_bar_close_policy(
     const bool entry_close_fill_pass = config_.process_orders_on_close
         && modeled_input() && !coof_recalc_active_;
     const int bar_index = projection_bar_index(context);
-    const auto current_entries = [&]() {
-        return live_row_index().count(
-                   detail::LiveClass::EntryOpening,
-                   detail::LiveKey::created_bar(bar_index)) != 0;
-    };
-    const auto current_exits = [&]() {
-        return live_row_index().count(
-                   detail::LiveClass::ExitLimit,
-                   detail::LiveKey::created_bar(bar_index)) != 0
-            || live_row_index().count(
-                   detail::LiveClass::ExitStop,
-                   detail::LiveKey::created_bar(bar_index)) != 0;
-    };
     if (!skip_quiet(QuietHook::PoocLimitEntryFills, bound && (!entry_close_fill_pass
-            || !current_entries()))) {
+            || !any_live_row(live_handles_, placement_, [&](const PlacementSnapshot& row) {
+                   return row.family == PineOrderFamily::Entry && row.opening
+                       && row.projection_created_bar == bar_index;
+               }, live_row_index(), [&] {
+                   return live_row_index().count(detail::LiveClass::EntryOpening,
+                       detail::LiveKey::created_bar(bar_index)) != 0;
+               })))) {
         flush_pooc_marketable_limit_entry_fills(bar, context);
     }
     if (!skip_quiet(QuietHook::PoocExitFills, bound && (!close_fill_pass
-            || !current_exits()))) {
+            || !any_live_row(live_handles_, placement_, [&](const PlacementSnapshot& row) {
+                   return (row.family == PineOrderFamily::ExitLimit
+                           || row.family == PineOrderFamily::ExitStop)
+                       && row.projection_created_bar == bar_index;
+               }, live_row_index(), [&] {
+                   return live_row_index().count(detail::LiveClass::ExitLimit, detail::LiveKey::created_bar(bar_index)) != 0
+                       || live_row_index().count(detail::LiveClass::ExitStop, detail::LiveKey::created_bar(bar_index)) != 0;
+               })))) {
         flush_pooc_marketable_exit_fills(bar, context);
     }
     // Quiet: no sell was deferred at this bar's open.
@@ -24953,18 +24953,18 @@ void PineExecutionAdapter::on_bar_close_policy(
     // Quiet: the terminal policy is a process_orders_on_close pass at
     // pyramiding 0 outside streams over two or more explicit-quantity
     // opening entries this bar placed.
-    std::size_t explicit_entries = 0;
-    if (config_.process_orders_on_close && config_.pyramiding == 0 && modeled_input()) {
-        for (const auto& handle : live_row_index().rows(
-                 detail::LiveClass::EntryOpening,
-                 detail::LiveKey::created_bar(bar_index))) {
-            const auto found = placement_.find(handle.incarnation);
-            if (found != placement_.end()
-                && finite_positive(found->second.requested_qty)) {
-                ++explicit_entries;
+    const std::size_t explicit_entries = live_row_index().query_or_scan(
+        "terminal explicit entry count", [&] {
+            std::size_t count = 0;
+            if (config_.process_orders_on_close && config_.pyramiding == 0 && modeled_input()) {
+                for (const auto& handle : live_row_index().rows(detail::LiveClass::EntryOpening, detail::LiveKey::created_bar(bar_index))) {
+                    const auto found = placement_.find(handle.incarnation);
+                    if (found != placement_.end() && finite_positive(found->second.requested_qty))
+                        ++count;
+                }
             }
-        }
-    }
+            return count;
+        }, [&](bool) { return scan_explicit_entries_on_bar(bar_index); });
     if (!skip_quiet(QuietHook::TerminalExplicitMarket, bound && explicit_entries < 2))
         apply_terminal_explicit_market_policy(context);
     update_risk_state(bar.close);
@@ -28704,20 +28704,26 @@ bool PineExecutionAdapter::same_point_two_leg_book(
     for (const auto& prior : pending_same_bar_commands_) count(prior.snapshot);
     for (const auto& prior : pending_entries_) count(prior.snapshot);
     const auto& index = live_row_index();
-    const auto total = index.count(detail::LiveClass::EntryLikeOpening);
-    const auto same_source = index.count(
-        detail::LiveClass::EntryLikeOpening, detail::LiveKey::source(id));
-    const auto same_point = index.count(
-        detail::LiveClass::EntryLikeOpening,
-        detail::LiveKey::script_time(script_open_ms));
-    const auto same_source_point = index.count(
-        detail::LiveClass::EntryLikeOpening,
-        detail::LiveKey::source_time(id, script_open_ms));
-    const auto indexed_others = same_point - same_source_point;
-    others += indexed_others;
-    if (total - same_source != indexed_others) foreign = true;
-    dense_pending_work_.same_point_two_leg_book_handles += total;
-    return !foreign && others == 1;
+    return index.query_or_scan("same-point two-leg book", [&] {
+        const auto total = index.count(detail::LiveClass::EntryLikeOpening);
+        const auto own = index.count(
+            detail::LiveClass::EntryLikeOpening, detail::LiveKey::source(id));
+        const auto at_point = index.count(
+            detail::LiveClass::EntryLikeOpening,
+            detail::LiveKey::script_time(script_open_ms));
+        const auto own_at_point = index.count(
+            detail::LiveClass::EntryLikeOpening,
+            detail::LiveKey::source_time(id, script_open_ms));
+        const auto live_others = at_point - own_at_point;
+        return !foreign && total - own == live_others && others + live_others == 1;
+    }, [&](bool record_work) {
+        for (const auto& handle : live_handles_) {
+            if (record_work) ++dense_pending_work_.same_point_two_leg_book_handles;
+            const auto found = placement_.find(handle.incarnation);
+            if (found != placement_.end()) count(found->second);
+        }
+        return !foreign && others == 1;
+    });
 }
 
 // R5 lane W6-ENG-FILL-ORDER, family F10. TradingView fills the entries that
@@ -29372,6 +29378,25 @@ void PineExecutionAdapter::retire_small_live_source_keys(native_order::RequestHa
         at = live_by_source_key_.erase(at);
         refresh_live_source_key(key);
     }
+}
+
+std::size_t PineExecutionAdapter::scan_explicit_entries_on_bar(int bar_index) const {
+    // Quiet: the terminal policy is a process_orders_on_close pass at
+    // pyramiding 0 outside streams over two or more explicit-quantity
+    // opening entries this bar placed.
+    std::size_t explicit_entries = 0;
+    if (config_.process_orders_on_close && config_.pyramiding == 0 && modeled_input()) {
+        for (const auto& handle : live_handles_) {
+            const auto found = placement_.find(handle.incarnation);
+            if (found != placement_.end() && found->second.opening
+                && found->second.family == PineOrderFamily::Entry
+                && found->second.projection_created_bar == bar_index
+                && finite_positive(found->second.requested_qty)) {
+                ++explicit_entries;
+            }
+        }
+    }
+    return explicit_entries;
 }
 
 } // namespace pineforge::source

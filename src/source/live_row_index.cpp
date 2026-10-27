@@ -306,26 +306,29 @@ std::vector<std::size_t> scan_origin_positions(const LiveHandleSequence* sequenc
 
 void LiveHandleSequence::rebuild_positions() {
     decltype(positions_) fresh;
-    for (std::size_t i = 0; i != slots_.size(); ++i) {
-        auto& slot = slots_[i];
-        if (!slot.live) continue;
-        auto& positions = fresh[slot.handle];
-        slot.occurrence = positions.size();
+    std::vector<Slot> slots;
+    slots.reserve(snapshot_.size());
+    for (std::size_t i = 0; i != snapshot_.size(); ++i) {
+        const auto& h = snapshot_[i];
+        auto& positions = fresh[h];
+        slots.push_back({h, static_cast<std::uint64_t>(i) + 1, true, positions.size()});
         positions.push_back(i);
     }
+    slots_ = std::move(slots);
     positions_ = std::move(fresh);
     indexed_positions_ = true;
+    next_order_ = snapshot_.size();
 }
 void LiveHandleSequence::push_back(const Handle& h) {
-    if (next_order_ == std::numeric_limits<std::uint64_t>::max()) mismatch("live sequence ordinal exhausted");
     if (!indexed_positions_) {
-        slots_.push_back({h, next_order_ + 1, true, 0});
+        snapshot_.push_back(h);
         try {
-            if (live_count_ + 1 >= kIndexThreshold) rebuild_positions();
-        } catch (...) { slots_.pop_back(); throw; }
-        ++next_order_; ++live_count_; snapshot_valid_ = false;
+            if (snapshot_.size() >= kIndexThreshold) rebuild_positions();
+        } catch (...) { snapshot_.pop_back(); throw; }
+        ++live_count_;
         return;
     }
+    if (next_order_ == std::numeric_limits<std::uint64_t>::max()) mismatch("live sequence ordinal exhausted");
     auto inserted = positions_.try_emplace(h);
     auto& positions = inserted.first->second;
     try { positions.push_back(slots_.size()); }
@@ -342,14 +345,11 @@ void LiveHandleSequence::push_back(const Handle& h) {
 }
 std::size_t LiveHandleSequence::erase_handle(const Handle& h) noexcept {
     if (!indexed_positions_) {
-        // Physical slots are bounded by twice the small live population.
-        std::size_t work = 0;
-        for (auto& slot : slots_) {
-            ++work;
-            if (slot.live && slot.handle == h) { slot.live = false; --live_count_; }
-        }
-        snapshot_valid_ = false;
-        return work + compact_if_needed();
+        const Handle target = h; // remove may overwrite the operand's element.
+        const auto work = snapshot_.size();
+        snapshot_.erase(std::remove(snapshot_.begin(), snapshot_.end(), target), snapshot_.end());
+        live_count_ = snapshot_.size();
+        return work;
     }
     const auto found = positions_.find(h);
     if (found == positions_.end()) return 1;
@@ -362,6 +362,21 @@ std::size_t LiveHandleSequence::erase_handle(const Handle& h) noexcept {
 }
 std::size_t LiveHandleSequence::compact_if_needed() noexcept {
     std::size_t work = 0;
+    if (indexed_positions_ && live_count_ < kIndexThreshold / 2) {
+        // Activation kept the small vector's capacity. This is a stable,
+        // allocation-free return to the original vector representation.
+        snapshot_.clear();
+        for (const auto& slot : slots_) {
+            ++work;
+            if (slot.live) snapshot_.push_back(slot.handle);
+        }
+        decltype(slots_){}.swap(slots_);
+        decltype(positions_){}.swap(positions_);
+        indexed_positions_ = false;
+        snapshot_valid_ = true;
+        next_order_ = 0;
+        return work;
+    }
     if (live_count_ == 0) {
         slots_.clear();
     } else if (slots_.size() - live_count_ > slots_.size() / 2) {
@@ -377,30 +392,21 @@ std::size_t LiveHandleSequence::compact_if_needed() noexcept {
         }
         slots_.resize(target);
     }
-    if (indexed_positions_ && live_count_ < kIndexThreshold / 2) {
-        decltype(positions_){}.swap(positions_);
-        indexed_positions_ = false;
-    }
     return work;
 }
 void LiveHandleSequence::move_to_tail(const Handle& h) {
     const Handle target = h; // The operand may itself refer into slots_.
     if (!contains(target)) return;
-    // Append first. push_back rolls back its own allocations; no allocation
-    // follows, so an unsuccessful move leaves the original rows untouched.
     if (!indexed_positions_) {
-        if (next_order_ == std::numeric_limits<std::uint64_t>::max()) mismatch("live sequence ordinal exhausted");
-        // The transient duplicate is not a growing book: a 63-row move must
-        // not activate a position directory only because append comes first.
-        slots_.push_back({target, next_order_ + 1, true, 0});
-        ++next_order_; ++live_count_; snapshot_valid_ = false;
-        for (std::size_t i = 0; i + 1 < slots_.size(); ++i)
-            if (slots_[i].live && slots_[i].handle == target) {
-                slots_[i].live = false; --live_count_;
-            }
-        (void)compact_if_needed();
+        // At least one occurrence is removed first, so the append fits the
+        // original vector's capacity and cannot allocate or activate a map.
+        snapshot_.erase(std::remove(snapshot_.begin(), snapshot_.end(), target), snapshot_.end());
+        snapshot_.push_back(target);
+        live_count_ = snapshot_.size();
         return;
     }
+    // Active append first: push_back rolls back its own allocations. Nothing
+    // after it allocates, so a failed move leaves the old rows untouched.
     push_back(target);
     auto& positions = positions_.find(target)->second;
     for (std::size_t i = 0; i + 1 < positions.size(); ++i) {
@@ -414,22 +420,30 @@ void LiveHandleSequence::move_to_tail(const Handle& h) {
     (void)compact_if_needed();
 }
 void LiveHandleSequence::clear() noexcept {
-    slots_.clear(); decltype(positions_){}.swap(positions_); snapshot_.clear();
+    decltype(slots_){}.swap(slots_); decltype(positions_){}.swap(positions_); snapshot_.clear();
     indexed_positions_ = false;
     snapshot_valid_ = true; next_order_ = 0; live_count_ = 0;
 }
 std::vector<std::uint64_t> LiveHandleSequence::orders(const Handle& h) const {
     std::vector<std::uint64_t> result;
     if (!indexed_positions_) {
-        for (const auto& slot : slots_)
-            if (slot.live && slot.handle == h) result.push_back(slot.order);
+        for (std::size_t i = 0; i != snapshot_.size(); ++i)
+            if (snapshot_[i] == h) result.push_back(static_cast<std::uint64_t>(i) + 1);
         if (result.empty()) (void)positions_.at(h); // Same missing-member contract.
     } else for (const auto position : positions_.at(h)) result.push_back(slots_[position].order);
     return result;
 }
 void LiveHandleSequence::assign(const std::vector<Handle>& handles) {
+    if (!indexed_positions_ && handles.size() < kIndexThreshold) {
+        snapshot_ = handles;
+        live_count_ = snapshot_.size();
+        return;
+    }
     LiveHandleSequence replacement;
-    for (const auto& h : handles) replacement.push_back(h);
+    replacement.snapshot_ = handles;
+    replacement.live_count_ = handles.size();
+    if (handles.size() >= (indexed_positions_ ? kIndexThreshold / 2 : kIndexThreshold))
+        replacement.rebuild_positions();
     *this = std::move(replacement);
 }
 const std::vector<LiveHandleSequence::Handle>& LiveHandleSequence::snapshot() const {
@@ -473,6 +487,9 @@ const char* LiveRowIndex::class_name(C c) {
     if (i >= kClasses)
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {}, "invalid live-row class");
     return classes[i].name;
+}
+void LiveRowIndex::check_answer(bool matches, const char* component) {
+    if (!matches) mismatch(component);
 }
 bool LiveRowIndex::oracle_enabled() noexcept {
 #ifndef NDEBUG
@@ -879,6 +896,48 @@ std::vector<H> LiveRowIndex::rows(C c, const LiveKey& key, int side) const {
     }
     check_query(c, key, side, result);
     return result;
+}
+std::vector<H> LiveRowIndex::dropped_exit_rows(
+        const std::string& source, const std::string& from,
+        bool drop_limit, bool drop_stop, std::uint64_t* visits) const {
+    return query_or_scan("dropped exit legs", [&] {
+        const auto key = LiveKey::pair(source, from);
+        const auto* limits = drop_limit ? bucket(C::DropLimit, key) : nullptr;
+        const auto* stops = drop_stop ? bucket(C::DropStop, key) : nullptr;
+        const Ordered empty;
+        const auto& limit_rows = limits ? limits->rows : empty;
+        const auto& stop_rows = stops ? stops->rows : empty;
+        auto limit = limit_rows.begin();
+        auto stop = stop_rows.begin();
+        std::vector<H> result;
+        result.reserve(limit_rows.size() + stop_rows.size());
+        while (limit != limit_rows.end() || stop != stop_rows.end()) {
+            if (visits) ++*visits;
+            if (stop == stop_rows.end()
+                || (limit != limit_rows.end() && limit->first < stop->first)) {
+                result.push_back(limit->second);
+                ++limit;
+            } else {
+                result.push_back(stop->second);
+                ++stop;
+            }
+        }
+        return result;
+    }, [&](bool record_work) {
+        std::vector<H> result;
+        if (sequence_) for (const auto& handle : *sequence_) {
+            if (record_work && visits) ++*visits;
+            const auto found = table_->find(handle.incarnation);
+            if (found == table_->end()) continue;
+            const auto& row = found->second;
+            if (row.source_id == source && row.from_entry == from
+                && !std::isfinite(row.trail_activation_level)
+                && ((drop_limit && row.family == PineOrderFamily::ExitLimit)
+                    || (drop_stop && row.family == PineOrderFamily::ExitStop)))
+                result.push_back(handle);
+        }
+        return result;
+    });
 }
 std::optional<double> LiveRowIndex::min_price(C c, LivePrice field, const LiveKey& key, int side) const {
     side_check(side);

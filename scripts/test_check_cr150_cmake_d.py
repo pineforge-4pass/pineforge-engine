@@ -71,9 +71,90 @@ class CMakeControls(unittest.TestCase):
 
     def run_checker(self) -> subprocess.CompletedProcess:
         declared_inputs([self.checker, self.cmake, self.lane.parent / 'README.md',
-                         *sorted(self.lane.parent.glob('*.cmake'))])
+                         *sorted(self.lane.parent.glob('*.cmake')),
+                         *sorted(self.cmake.parent.glob('*.cpp'))])
         return subprocess.run([sys.executable, '-B', str(self.checker)],
                               cwd=self.root, capture_output=True, text=True)
+
+
+class SliceSourceControls(CMakeControls):
+    PROGRAM = 'test_slice_program'
+
+    def setUp(self) -> None:
+        super().setUp()
+        original = ROOT / 'tests' / 'test_open_report_rows_flat.cpp'
+        declared_inputs([original])
+        self.source = self.cmake.parent / f'{self.PROGRAM}.cpp'
+        self.source.write_text(original.read_text())
+
+    def assert_slices_pass(self) -> None:
+        self.lane.write_text(''.join(
+            f'add_test(NAME {self.PROGRAM}_slice_{index}\n'
+            f'    COMMAND {self.PROGRAM} --slice {index}/4)\n'
+            for index in range(1, 5)))
+        result = self.run_checker()
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+    def assert_registration_refused(self, row: str, command: str, reason: str) -> None:
+        self.lane.write_text(f'add_test(NAME {row} COMMAND {command})\n')
+        result = self.run_checker()
+        output = result.stdout + result.stderr
+        self.assertEqual(1, result.returncode, output)
+        self.assertIn(f'{self.lane}:1:', output)
+        self.assertIn(reason, output)
+        self.assertNotIn('Traceback', output)
+
+    def test_slice_rows_share_the_program_source(self) -> None:
+        self.assert_slices_pass()
+        self.assertEqual([self.source], sorted(self.cmake.parent.glob('*.cpp')))
+
+    def test_slice_program_must_have_a_source(self) -> None:
+        self.assert_slices_pass()
+        self.assert_registration_refused(
+            'missing_program_slice_1', 'missing_program --slice 1/4',
+            "slice program 'missing_program' has no tests/missing_program.cpp")
+
+    def test_slice_index_must_be_in_the_program_range(self) -> None:
+        self.assert_slices_pass()
+        for index in (0, 5):
+            with self.subTest(index=index):
+                self.assert_registration_refused(
+                    f'{self.PROGRAM}_slice_{index}',
+                    f'{self.PROGRAM} --slice {index}/4',
+                    f'slice index {index} is outside 1..4')
+
+    def test_plain_unknown_name_still_needs_its_own_source(self) -> None:
+        self.assert_slices_pass()
+        self.assert_registration_refused(
+            'unknown_program', f'{self.PROGRAM} --slice 1/4',
+            "registered name 'unknown_program' has no tests/unknown_program.cpp")
+
+    def test_slice_command_must_match_the_name_and_program(self) -> None:
+        self.assert_slices_pass()
+        for command in (
+                'other_program --slice 1/4',
+                f'{self.PROGRAM} --slice 2/4',
+                f'{self.PROGRAM} --slice 1/3',
+                self.PROGRAM):
+            with self.subTest(command=command):
+                self.assert_registration_refused(
+                    f'{self.PROGRAM}_slice_1', command,
+                    f'slice command must be {self.PROGRAM} --slice 1/4')
+
+    def test_program_must_parse_and_apply_the_slice(self) -> None:
+        self.assert_slices_pass()
+        original = self.source.read_text()
+        for old, new in (
+                ('"--slice"', '"--select"'),
+                ('if (slice != 0 && branch.slice != slice) continue;',
+                 'if (false) continue;'),
+                ("argv[2][2] != '0' + kSliceCount", 'false')):
+            with self.subTest(old=old):
+                self.assertIn(old, original)
+                self.source.write_text(original.replace(old, new, 1))
+                self.assert_registration_refused(
+                    f'{self.PROGRAM}_slice_1', f'{self.PROGRAM} --slice 1/4',
+                    'does not define supported --slice selection')
 
 
 class LanePropertyControls(CMakeControls):
