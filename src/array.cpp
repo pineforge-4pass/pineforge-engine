@@ -8,11 +8,23 @@
 
 namespace pineforge::detail::script_array {
 
+namespace {
+// Same coded failure as the codegen helper pine_array_stop, raised directly: a
+// kernel unit does not call the codegen-contract helpers.
+[[noreturn]] void array_stop(const char* reason, const char* method_or_null,
+                             const char* english) {
+    RunFailureArgs args{{"reason", reason}};
+    if (method_or_null) args.emplace_back("method", method_or_null);
+    throw coded<std::runtime_error>(RunFailureCode::pine_array_error, args,
+                                    english ? english : "");
+}
+} // namespace
+
 void index_error(const char* method, std::int64_t raw, std::uint64_t size, bool missing) {
     const auto text = std::string("Index ") +
         (missing ? "na" : std::to_string(raw)) +
         " is out of bounds. Array size is " + std::to_string(size);
-    pine_array_stop("index_out_of_bounds", method, text.c_str());
+    array_stop("index_out_of_bounds", method, text.c_str());
 }
 
 void index_error_double(const char* method, double raw, std::uint64_t size) {
@@ -21,7 +33,7 @@ void index_error_double(const char* method, double raw, std::uint64_t size) {
         : std::to_string(raw);
     const auto text = "Index " + spelling + " is out of bounds. Array size is " +
                       std::to_string(size);
-    pine_array_stop("index_out_of_bounds", method, text.c_str());
+    array_stop("index_out_of_bounds", method, text.c_str());
 }
 
 std::int64_t checked_index_double(double raw, std::uint64_t size, const char* method) {
@@ -39,11 +51,11 @@ std::int64_t checked_index_double(double raw, std::uint64_t size, const char* me
 
 void empty_array_error(const char* method) {
     const auto text = std::string("Cannot use ") + method + "() if array is empty.";
-    pine_array_stop("empty_array_access", method, text.c_str());
+    array_stop("empty_array_access", method, text.c_str());
 }
 
 void size_error() {
-    pine_array_stop("size_invalid", "new",
+    array_stop("size_invalid", "new",
         "cannot create std::vector larger than max_size()");
 }
 
@@ -53,7 +65,7 @@ void invariant(const char* text) {
 
 void inverted_range_error(const char* method) {
     const auto text = std::string("Index 'from' should be less than index 'to'.");
-    pine_array_stop("slice_range_inverted", method, text.c_str());
+    array_stop("slice_range_inverted", method, text.c_str());
 }
 
 o1::Id clone_bytes(const o1::Store& source, o1::Id id, o1::Store& target) {
