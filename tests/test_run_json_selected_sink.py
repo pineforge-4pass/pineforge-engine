@@ -337,7 +337,9 @@ def test_selected_named_sink_yields_the_summary_projection(
     assert directories == [str(spill)]
 
 
-def test_selected_validation_reads_only_the_first_equity_record(tmp_path, monkeypatch):
+@pytest.mark.parametrize("bulk", [False, True], ids=["strict", "bulk"])
+def test_selected_validation_reads_only_the_first_equity_record(tmp_path, monkeypatch, bulk):
+    monkeypatch.setattr(run_json, "_BULK_E_ENABLED", bulk)
     new_sink, equity_passes = run_json._new_report_sink, []
 
     def counting_sink(*args, **kwargs):
@@ -364,10 +366,17 @@ def test_selected_validation_reads_only_the_first_equity_record(tmp_path, monkey
     # Verification now folds the finite-result scan and both annualization
     # endpoint reads into its strict-reader pass, bypassing sink.records().
     # records("E") sees only the one-point anchor check and the writer's
-    # complete streaming pass, in that order.
+    # complete streaming pass, in that order. The bulk path of a concrete path
+    # sink writes the equity array from the raw sink bytes (verified and
+    # copied window by window) and never calls sink.records("E") for it, so
+    # only the anchor check remains observable there; the strict row keeps the
+    # original two passes.
     count = library.counts["E"]
-    assert equity_passes == [1, count]
-    assert equity_passes[-1] == count
+    if bulk:
+        assert equity_passes == [1]
+    else:
+        assert equity_passes == [1, count]
+        assert equity_passes[-1] == count
 
 
 @pytest.mark.parametrize("fault", [

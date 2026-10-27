@@ -5962,6 +5962,172 @@ def _disk_report_directory(directory=None):
         + "; set TMPDIR or --spill-dir to a disk-backed directory", "arguments")
 
 
+_BULK_E_ENABLED = True
+_BULK_E_WINDOW = 64 * 1024
+# A finite double's repr is at most 24 ASCII bytes. The lookahead bounds
+# rejected tokens too, avoiding unbounded regex work on a malformed line.
+_BULK_E_FLOAT = (
+    rb"(?=[-+0-9.e]{1,24}[,\]])-?(?:0|[1-9][0-9]*)"
+    rb"(?:\.[0-9]+(?:e[+-]?[0-9]+)?|e[+-]?[0-9]+)"
+)
+_BULK_E_LINE = re.compile(
+    rb'\["E",(0|-?[1-9][0-9]{0,15}),(' + _BULK_E_FLOAT
+    + rb"),(" + _BULK_E_FLOAT + rb")\]\n")
+# Lines per regex call. The engine matches a repeated group with its whole
+# backtracking state on a heap stack that is freed only when the call returns:
+# every alternation and bounded repeat of a line nests a frame, about 2 KiB per
+# canonical line. A call over a full window of 33-byte lines (about 2,000)
+# would therefore hold several MiB, and a call over a shorter file less, so the
+# transient memory would follow the window and the file instead of staying flat.
+# The bound keeps that stack, and every list built from one batch, the same for
+# any window and any file length; a window is consumed in successive batches.
+_BULK_E_BATCH = 128
+_BULK_E_RUN = re.compile(rb"(?:" + _BULK_E_LINE.pattern + (rb"){1,%d}" % _BULK_E_BATCH))
+_BULK_E_LINE_BYTES = 80
+
+
+class _BulkEquity:
+    """One accepted batch of lines, with only its two decoded endpoints retained."""
+    def __init__(self, raw, count, first, last):
+        self.raw, self.count, self.first, self.last = raw, count, first, last
+
+
+def _bulk_equity(raw):
+    """Accept a strict subset; a failed proof never supplies an error.
+
+    ``raw`` is one run of at most _BULK_E_BATCH lines; a longer one is no match.
+    """
+    if not raw or _BULK_E_RUN.fullmatch(raw) is None:
+        return None
+    times, equities, profits = zip(*_BULK_E_LINE.findall(raw))
+    timestamps = list(map(int, times))
+    if min(timestamps) < -((1 << 53) - 1) or max(timestamps) > (1 << 53) - 1:
+        return None
+    texts = list(map(bytes.decode, equities + profits))
+    numbers = list(map(float, texts))
+    if not all(map(math.isfinite, numbers)) or list(map(repr, numbers)) != texts:
+        return None
+    count = len(timestamps)
+    first = dict(time_ms=timestamps[0], equity=numbers[0], open_profit=numbers[count])
+    last = dict(time_ms=timestamps[-1], equity=numbers[count - 1], open_profit=numbers[-1])
+    return _BulkEquity(raw, count, first, last)
+
+
+class _BulkEquityFile:
+    """Look ahead within a loaded direct page; replay all other bytes strictly."""
+    def __init__(self, file):
+        self.file, self.data, self.cursor, self.eof = file, b"", 0, False
+
+    def _fill(self):
+        self.data, self.cursor = self.data[self.cursor:], 0
+        room = _BULK_E_WINDOW - len(self.data)
+        if not room or self.eof:
+            return
+        first = self.file.read(1)  # populate exactly the page readline would use
+        if not first:
+            self.eof = True
+            return
+        self.data += first
+        available = self.file.read_base + self.file.read_size - self.file.position
+        take = min(room - 1, available)
+        if take:
+            self.data += self.file.read(take)
+
+    def window(self):
+        if self.cursor == len(self.data):
+            self._fill()
+        # A canonical line can cross a page. Carry only its bounded tail;
+        # longer or malformed lines go back to the strict readline limit.
+        while (not self.eof and len(self.data) - self.cursor < _BULK_E_LINE_BYTES
+               and len(self.data) - self.cursor < _BULK_E_WINDOW
+               and self.data.find(b"\n", self.cursor) < 0):
+            self._fill()
+        return self.data, self.cursor
+
+    def readline(self, limit):
+        stop = min(len(self.data), self.cursor + limit)
+        newline = self.data.find(b"\n", self.cursor, stop)
+        if newline >= 0:
+            stop = newline + 1
+        head = self.data[self.cursor:stop]
+        self.cursor = stop
+        if newline >= 0 or len(head) == limit:
+            return head
+        return head + self.file.readline(limit - len(head))
+
+    def read(self, count):
+        stop = min(len(self.data), self.cursor + count)
+        head = self.data[self.cursor:stop]
+        self.cursor = stop
+        return head if len(head) == count else head + self.file.read(count - len(head))
+
+    def close(self):
+        self.data = b""
+        self.file.close()
+
+
+class _BulkEquityHash:
+    """Keep the strict reader's byte order, updating SHA only by window."""
+    def __init__(self, digest):
+        self.digest, self.pending = digest, bytearray()
+
+    def update(self, data):
+        view, offset = memoryview(data), 0
+        while offset < len(view):
+            take = min(_BULK_E_WINDOW - len(self.pending), len(view) - offset)
+            self.pending.extend(view[offset:offset + take])
+            offset += take
+            if len(self.pending) == _BULK_E_WINDOW:
+                self.digest.update(self.pending)
+                self.pending.clear()
+
+    def hexdigest(self):
+        if self.pending:
+            self.digest.update(self.pending)
+            self.pending.clear()
+        return self.digest.hexdigest()
+
+
+def _bulk_equity_records(reader):
+    """Advance the real strict reader only after a complete E-batch proof."""
+    import pf_sink
+    # Alternate readers retain their own iteration and refusal semantics.
+    if (not _BULK_E_ENABLED or not isinstance(reader, pf_sink.SinkReader)
+            or not isinstance(reader._file, _UncachedSinkFile)):
+        yield from reader
+        return
+    file = reader._file = _BulkEquityFile(reader._file)
+    reader._hash = _BulkEquityHash(reader._hash)
+    while not reader.complete:
+        try:
+            data, cursor = file.window()
+        except OSError as error:
+            # _readline increments only after a successful read.
+            reader._refuse(error)
+        match = _BULK_E_RUN.match(data, cursor)
+        if match is not None:
+            batch = _bulk_equity(data[cursor:match.end()])
+            if batch is None or reader._counts["E"] + batch.count > pf_sink.I53_MAX:
+                yield from reader
+                return
+            reader._counts["E"] += batch.count
+            reader._line_number += batch.count
+            reader._hash.update(batch.raw)
+            file.cursor = match.end()
+            yield batch
+            continue
+        try:
+            record = next(reader)
+        except StopIteration:
+            return
+        yield record
+        if record.tag == "E":
+            # Includes nulls, escaped tags and accepted noncanonical integers.
+            # No second failed proof is attempted later in this file.
+            yield from reader
+            return
+
+
 class _SinkReportDiagnostics:
     """Only the two E endpoints, their count and the first result refusal."""
 
@@ -5984,12 +6150,17 @@ class _SinkReportDiagnostics:
 
     def trades(self, reader):
         # The existing strict reader exhausts its trailer in this same pass;
-        # its uncached backing reads fixed 64 KiB windows, never all rows.
+        # canonical E windows need only their count and decoded endpoints.
         # O/V/K/X/H are deliberately dropped from this fold: the old trade
         # fold read only records("T"). The reader still hashes every record
         # as it iterates, supplying verify()'s digest for the entire sink.
-        for record in reader:
-            if record.tag == "E":
+        for record in _bulk_equity_records(reader):
+            if isinstance(record, _BulkEquity):
+                if not self.count_e:
+                    self.first = record.first
+                self.last = record.last
+                self.count_e += record.count
+            elif record.tag == "E":
                 point = record.as_dict()
                 if not self.count_e:
                     self.first = point
@@ -6119,9 +6290,10 @@ class _ReportSink:
     def _trade_records(self):
         yield from self._tagged_records("T")
 
-    def _tagged_records(self, tag):
+    def _tagged_records(self, tag, *, bulk=False):
         """Hash and extract one tag from the same fresh sequential raw reads."""
         import pf_sink
+        bulk = bulk and _BULK_E_ENABLED and tag == "E"
         try:
             file = _open_uncached_sink(self.path, raw=True)
             try:
@@ -6141,7 +6313,7 @@ class _ReportSink:
                 last_byte = trailer_start = None
                 done = False
                 while not done:
-                    chunk = file.read(file.window)
+                    chunk = file.read(min(file.window, _BULK_E_WINDOW) if bulk else file.window)
                     if not chunk:
                         if pending or (last_byte is not None and last_byte != 0x0A):
                             raise pf_sink.SinkFormatError("line does not end with LF")
@@ -6162,6 +6334,19 @@ class _ReportSink:
                     cursor = len(carry) if kind is not None else max(0, processed - base)
                     record_at = escaped_at = None
                     while cursor < end:
+                        if bulk and kind == "record" and not pending:
+                            match = _BULK_E_RUN.match(data, cursor)
+                            if match is not None:
+                                batch = _bulk_equity(data[cursor:match.end()])
+                                if batch is not None:
+                                    cursor = match.end()
+                                    processed = base + cursor
+                                    kind = None
+                                    count += batch.count
+                                    yield batch
+                                    del batch
+                                    continue
+                                bulk = False
                         if kind == "tag":
                             # The fallback decodes only the first string token;
                             # skipped bodies are never walked or retained.
@@ -6218,8 +6403,13 @@ class _ReportSink:
                                 pf_sink._parse(bytes(pending))
                                 record = None
                             else:
-                                record = decode(bytes(pending))
-                                count += 1
+                                record = _bulk_equity(bytes(pending)) if bulk else None
+                                if record is None:
+                                    bulk = False
+                                    record = decode(bytes(pending))
+                                    count += 1
+                                else:
+                                    count += record.count
                             pending.clear()
                             kind = None
                             processed = base + cursor
@@ -6323,6 +6513,13 @@ class _JSONRecordArray:
         return self.item(index)
 
 
+class _JSONEquityArray(_JSONRecordArray):
+    """The ordinary record interface plus an opt-in encoded path-sink scan."""
+    def __init__(self, sink):
+        super().__init__(lambda: (row.as_dict() for row in sink.records("E")), sink.counts["E"])
+        self.sink = sink
+
+
 class _JSONUTF8:
     """A borrowed event message, decoded with the existing replacement rule."""
     _strlen = ctypes.CDLL(None).strlen
@@ -6348,7 +6545,7 @@ class _BoundedJSONFile:
     no engine sink can also use tmpfs/ramfs for the unjailed JSON artifact.
     Engine sink and scratch directories are selected by _disk_report_directory.
     One aligned 64 KiB anonymous window is the I/O working set. Every write
-    window is synchronized before reuse. Jailed and fd routes use StringIO.
+    window is synchronized before reuse. Jailed and fd routes use UTF-8 memory buffers.
     """
     window = 64 * 1024
 
@@ -6421,17 +6618,23 @@ class _BoundedJSONFile:
         if self.reading:
             raise ValueError("a prepared report artifact is read-only")
         for offset in range(0, len(text), self.window):
-            data = text[offset:offset + self.window].encode("ascii")
-            position = 0
-            while position < len(data):
-                count = min(self.window - self.used, len(data) - position)
-                self.buffer[self.used:self.used + count] = data[position:position + count]
-                self.used += count
-                self.size += count
-                position += count
-                if self.used == self.window:
-                    self._sync_window()
+            self.write_ascii(text[offset:offset + self.window].encode("ascii"))
         return len(text)
+
+    def write_ascii(self, data):
+        """Append already encoded ASCII through the same aligned I/O window."""
+        if self.reading:
+            raise ValueError("a prepared report artifact is read-only")
+        position = 0
+        while position < len(data):
+            count = min(self.window - self.used, len(data) - position)
+            self.buffer[self.used:self.used + count] = data[position:position + count]
+            self.used += count
+            self.size += count
+            position += count
+            if self.used == self.window:
+                self._sync_window()
+        return len(data)
 
     def flush(self):
         self.file.flush()  # retain checked flush/close failure behavior
@@ -6636,6 +6839,51 @@ def _json_fast_value(value):
     return sum(len(item) for item in value.values() if type(item) is str) <= _STREAM_FAST_STR_LIMIT
 
 
+def _write_json_ascii(destination, data):
+    if isinstance(destination, _BoundedJSONFile):
+        destination.write_ascii(data)
+    else:
+        destination.write(data.decode("ascii"))
+
+
+def _stream_equity_array(value, destination):
+    destination.write("[")
+    pending, count, first = [], 0, True
+    # Fixed E fields, a <=17-byte integer and two <=24-byte reprs make an
+    # encoded row plus comma <=103 bytes. The ordinary 512-row boundary
+    # therefore precedes its 256 KiB byte boundary, including strict fallback.
+    try:
+        for record in value.sink._tagged_records("E", bulk=True):
+            if isinstance(record, _BulkEquity):
+                # sub and splitlines walk the entire batch in C. No Python
+                # loop, decoder or serializer visits its individual points.
+                rows = _BULK_E_LINE.sub(
+                    rb'{"time_ms":\1,"equity":\2,"open_profit":\3},' + b"\n",
+                    record.raw).splitlines()
+            else:
+                # The existing verified decoder owns all noncanonical cases.
+                rows = [json.dumps(record.as_dict(), separators=(",", ":"),
+                                   allow_nan=False).encode("ascii") + b","]
+            offset = 0
+            while offset < len(rows):
+                take = min(_STREAM_BATCH_RECORDS - count, len(rows) - offset)
+                chunk = b"".join(rows[offset:offset + take])[:-1]
+                pending.append(chunk if first else b"," + chunk)
+                first = False
+                count += take
+                offset += take
+                if count == _STREAM_BATCH_RECORDS:
+                    chunk = b"".join(pending)
+                    pending.clear()  # never retry a failed write
+                    count = 0
+                    _write_json_ascii(destination, chunk)
+    finally:
+        # Match the ordinary array writer's completed prefix on producer error.
+        if pending:
+            _write_json_ascii(destination, b"".join(pending))
+    destination.write("]")
+
+
 def _stream_json_value(value, destination):
     if isinstance(value, _JSONColumn):
         destination.write("[")
@@ -6643,6 +6891,8 @@ def _stream_json_value(value, destination):
         while chunk := value.file.read(64 * 1024):
             destination.write(chunk)
         destination.write("]")
+    elif isinstance(value, _JSONEquityArray) and _BULK_E_ENABLED:
+        _stream_equity_array(value, destination)
     elif isinstance(value, _JSONRecordArray):
         destination.write("[")
         first = True
@@ -6758,7 +7008,7 @@ def _prepare_report_json(document, resources, args, sink):
     # arrays. The fd route contains only the bounded summary. Neither may
     # create a report file, even when no sink is installed.
     if args.profile == "jailed" or getattr(sink, "fd_mode", False):
-        buffer = resources.enter_context(io.StringIO())
+        buffer = resources.enter_context(io.TextIOWrapper(io.BytesIO(), encoding="utf-8", newline="\n"))
         _stream_json(document, buffer)
         buffer.write("\n")
         buffer.seek(0)
@@ -6892,6 +7142,9 @@ def _build_sink_report(report, ohlcv_path, n_bars, first_ts, last_ts, elapsed,
         lambda: (_sink_trade(row) for row in sink.records("T")), sink.counts["T"])
     equity_curve = _JSONRecordArray(
         lambda: (row.as_dict() for row in sink.records("E")), sink.counts["E"])
+    if _BULK_E_ENABLED and type(sink) is _ReportSink:
+        # Preserve subclass-provided readers and the non-path report routes.
+        equity_curve = _JSONEquityArray(sink)
     out["equity_curve"] = equity_curve
     first_bar_trade = ({"entry_bar_index": 0},) if diagnostics.trade_at_start else ()
     out["diagnostics"].update(

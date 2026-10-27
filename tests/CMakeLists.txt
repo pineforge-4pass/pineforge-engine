@@ -7365,6 +7365,16 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
     endif()
 endif()
 
+# Report-memory bound: fresh Linux processes at N and 8N, including a FULL-handle reuse.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND PINEFORGE_BUILD_TUTORIAL
+   AND CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_BUILD_TYPE STREQUAL "Release"
+   AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
+    add_test(NAME test_report_sink_scratch_curve_resident
+        COMMAND test_report_sink_scratch_curve --resident-bound)
+    set_tests_properties(test_report_sink_scratch_curve_resident PROPERTIES
+        LABELS "slow;mem" RUN_SERIAL TRUE)
+endif()
+
 # CR-150: one file per lane in tests/cr150.d/<lane>.cmake (see tests/cr150.d/README.md).
 file(GLOB CR150_LANE_CMAKE CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/cr150.d/*.cmake")
 list(SORT CR150_LANE_CMAKE)

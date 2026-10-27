@@ -1994,8 +1994,8 @@ class RulesetsProbeTests(unittest.TestCase):
         requirements = (
             'PR build/preflight and parity subset use `["self-hosted","pf-gcp-pr"]`;\n'
             'post preflight/parity and credentialed docs use `["self-hosted","pf-gcp-post"]`.\n'
-            'Post Release/Debug/kernel and native shards use `pf-linux-x64-16`; post sanitizers\n'
-            'use `pf-linux-x64-32`; native-live sanitizers use `pf-linux-x64-64`. No job routes by event.',
+            'Post Release/Debug/kernel and native shards, post sanitizers and both native-live sanitizer\n'
+            'profiles use `["self-hosted","pf-gcp-post"]`. No job routes by event.',
             "The manual `release-ruleset-probe.yml` workflow runs `authz` on\n"
             'hosted `ubuntu-24.04` and `probe` on `["self-hosted","pf-gcp-post"]`.',
             "Release and promotion use the isolated release fleet:\n"
@@ -2322,7 +2322,7 @@ class WorkflowPinTests(unittest.TestCase):
             self.assertEqual([value.strip() for value in types[1].split(",")], [build_type])
             platforms = re.findall(r"(?m)^          - os: (\S+)$", matrix[1])
             self.assertEqual(platforms, ["ubuntu-24.04"])
-            self.assertRegex(body, r"(?m)^    runs-on: pf-linux-x64-16$")
+            self.assertRegex(body, r'(?m)^    runs-on: \["self-hosted","pf-gcp-post"\]$')
             shards = re.findall(r"(?m)^        shard: \[([0-9, ]+)\]$", matrix[1])
             self.assertEqual(len(shards), 1)
             self.assertEqual([int(value.strip()) for value in shards[0].split(",")],
