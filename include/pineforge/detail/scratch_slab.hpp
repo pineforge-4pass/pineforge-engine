@@ -11,6 +11,7 @@
 #include <cstring>
 #include <limits>
 #include <new>
+#include <string>
 #include <sys/types.h>
 
 namespace pineforge::detail {
@@ -38,27 +39,29 @@ struct Layout {
 };
 
 namespace scratch_layout_detail {
-inline std::uint64_t add(std::uint64_t left, std::uint64_t right) {
+inline std::uint64_t add(std::uint64_t left, std::uint64_t right, const char* field) {
     if (right > std::numeric_limits<std::uint64_t>::max() - left)
-        throw ScratchCapacityError(ScratchResource::layout);
+        throw ScratchCapacityError(ScratchResource::layout,
+            std::string("scratch layout ") + field + " addition overflows uint64");
     return left + right;
 }
-inline std::uint64_t multiply(std::uint64_t left, std::uint64_t right) {
+inline std::uint64_t multiply(std::uint64_t left, std::uint64_t right, const char* field) {
     if (left != 0 && right > std::numeric_limits<std::uint64_t>::max() / left)
-        throw ScratchCapacityError(ScratchResource::layout);
+        throw ScratchCapacityError(ScratchResource::layout,
+            std::string("scratch layout ") + field + " multiplication overflows uint64");
     return left * right;
 }
-inline std::uint64_t slots(std::uint64_t keys) {
+inline std::uint64_t slots(std::uint64_t keys, const char* field = "index slots") {
     if (keys == 0) return 0;
-    const auto minimum = std::max(std::uint64_t{64}, multiply(2, keys));
+    const auto minimum = std::max(std::uint64_t{64}, multiply(2, keys, field));
     std::uint64_t result = 64;
-    while (result < minimum) result = multiply(result, 2);
+    while (result < minimum) result = multiply(result, 2, field);
     return result;
 }
-inline std::uint64_t page(std::uint64_t bytes) {
+inline std::uint64_t page(std::uint64_t bytes, const char* field) {
     const auto pages = add(bytes / kScratchPageSize,
-                          bytes % kScratchPageSize == 0 ? 0 : 1);
-    return multiply(pages, kScratchPageSize);
+                          bytes % kScratchPageSize == 0 ? 0 : 1, field);
+    return multiply(pages, kScratchPageSize, field);
 }
 template<class HostSize>
 inline bool fits(std::uint64_t bytes) noexcept {
@@ -74,30 +77,34 @@ inline bool fits(std::uint64_t bytes) noexcept {
 // is checked before the caller can allocate or publish any run ownership.
 inline Layout compute_layout(const ScratchManifest& manifest) {
     using namespace scratch_layout_detail;
-    if (manifest.V > 27) throw ScratchCapacityError(ScratchResource::layout);
-    if (manifest.K_q != 0 || manifest.B_q != 0) throw ScratchCapacityError(ScratchResource::layout);
+    if (manifest.V > 27)
+        throw ScratchCapacityError(ScratchResource::layout, "scratch layout V exceeds 27");
+    if (manifest.K_q != 0 || manifest.B_q != 0)
+        throw ScratchCapacityError(ScratchResource::layout,
+            "scratch layout K_q and B_q must be zero (q region is reserved)");
     const std::array<std::uint64_t, kScratchRegionCount> capacities{{
-        add(multiply(40, manifest.K_q), manifest.B_q),
-        multiply(16, slots(manifest.K_q)),
-        add(multiply(40, manifest.K_e), manifest.B_e),
-        multiply(16, slots(manifest.K_e)),
-        add(multiply(40, manifest.K_c), manifest.B_c),
-        multiply(16, slots(manifest.K_c)),
-        manifest.U == 0 ? 0 : add(add(1, multiply(96, manifest.U)), manifest.B_U),
-        manifest.V == 0 ? 0 : add(add(1, multiply(60, manifest.V)), manifest.B_V),
-        multiply(16, manifest.R),
+        add(multiply(40, manifest.K_q, "K_q"), manifest.B_q, "K_q/B_q"),
+        multiply(16, slots(manifest.K_q, "K_q index slots"), "K_q index bytes"),
+        add(multiply(40, manifest.K_e, "K_e"), manifest.B_e, "K_e/B_e"),
+        multiply(16, slots(manifest.K_e, "K_e index slots"), "K_e index bytes"),
+        add(multiply(40, manifest.K_c, "K_c"), manifest.B_c, "K_c/B_c"),
+        multiply(16, slots(manifest.K_c, "K_c index slots"), "K_c index bytes"),
+        manifest.U == 0 ? 0 : add(add(1, multiply(96, manifest.U, "U"), "U"), manifest.B_U, "U/B_U"),
+        manifest.V == 0 ? 0 : add(add(1, multiply(60, manifest.V, "V"), "V"), manifest.B_V, "V/B_V"),
+        multiply(16, manifest.R, "R"),
     }};
     Layout layout;
     std::uint64_t offset = 0;
     for (std::size_t i = 0; i < capacities.size(); ++i) {
-        const auto span = page(capacities[i]);
+        const auto span = page(capacities[i], scratch_resource_name(static_cast<ScratchResource>(i + 1)));
         layout.regions[i] = {static_cast<ScratchResource>(i + 1), offset,
                              capacities[i], span};
-        offset = add(offset, span);
+        offset = add(offset, span, "slab_size");
     }
     layout.slab_size = std::max(kScratchPageSize, offset);
     if (!fits<std::size_t>(layout.slab_size) || !fits<off_t>(layout.slab_size))
-        throw ScratchCapacityError(ScratchResource::layout);
+        throw ScratchCapacityError(ScratchResource::layout,
+            "scratch layout slab_size exceeds size_t or off_t limit");
     return layout;
 }
 
@@ -147,7 +154,9 @@ public:
         return can_extend(item.resource, new_extent);
     }
     void require_extend(ScratchResource resource, std::uint64_t new_extent) const {
-        if (!can_extend(resource, new_extent)) throw ScratchCapacityError(resource);
+        if (!can_extend(resource, new_extent))
+            throw ScratchCapacityError(resource,
+                scratch_capacity_message(resource, region(resource).capacity, new_extent));
     }
     void require_extend(const Region& item, std::uint64_t new_extent) const {
         validate(item);
@@ -184,8 +193,17 @@ public:
     void write_at(ScratchResource resource, std::uint64_t offset,
                   const void* source, std::size_t length) {
         auto& item = regions_[index(resource)];
-        if (offset > item.capacity || length > item.capacity - offset)
-            throw ScratchCapacityError(resource);
+        if (offset > item.capacity || length > item.capacity - offset) {
+            const auto count = static_cast<std::uint64_t>(length);
+            // An invalid caller can request an unrepresentable end offset.
+            // Keep the exact need as a sum rather than wrap it to a small value.
+            if (count > std::numeric_limits<std::uint64_t>::max() - offset)
+                throw ScratchCapacityError(resource,
+                    scratch_capacity_message(resource, item.capacity, offset)
+                    + " + " + scratch_limit_number(count) + " (offset + length overflows uint64)");
+            throw ScratchCapacityError(resource,
+                scratch_capacity_message(resource, item.capacity, offset + count));
+        }
         if (length == 0) return;
         if (!source) throw AuxiliaryScratchIoError(EINVAL, "scratch write null source");
         std::memcpy(item.base + static_cast<std::size_t>(offset), source, length);
@@ -221,7 +239,8 @@ private:
     static std::size_t index(ScratchResource resource) {
         const auto word = static_cast<std::uint32_t>(resource);
         if (word < 1 || word > kScratchRegionCount)
-            throw ScratchCapacityError(ScratchResource::layout);
+            throw ScratchCapacityError(ScratchResource::layout,
+                scratch_limit_message("scratch layout region resource index ", word, " is outside 1..9"));
         return static_cast<std::size_t>(word - 1);
     }
     void validate(const Region& item) const {

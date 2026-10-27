@@ -65,6 +65,16 @@ inline std::string scratch_limit_message(const char* prefix, std::uint64_t limit
     return message;
 }
 
+inline std::string scratch_capacity_message(ScratchResource resource, std::uint64_t limit,
+                                           std::uint64_t need) {
+    std::string message(scratch_resource_name(resource));
+    message += " capacity exceeded: limit ";
+    message += scratch_limit_number(limit);
+    message += ", needed ";
+    message += scratch_limit_number(need);
+    return message;
+}
+
 inline std::string scratch_count_limit_message(ScratchResource resource, std::uint64_t limit) {
     switch (resource) {
     case ScratchResource::cohort:

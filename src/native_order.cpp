@@ -8315,7 +8315,9 @@ struct WorkingRequestCore::SuccessorRootIndex {
             const auto pending = static_cast<uint64_t>(tail_size);
             if (disk_rows > limit || pending > limit - disk_rows
                 || (adds_root && disk_rows + pending == limit)) {
-                throw detail::ScratchCapacityError(detail::ScratchResource::successor_roots);
+                throw detail::ScratchCapacityError(detail::ScratchResource::successor_roots,
+                    detail::scratch_capacity_message(detail::ScratchResource::successor_roots,
+                        limit, disk_rows + pending + (adds_root ? uint64_t{1} : uint64_t{0})));
             }
             const auto rows = disk_rows + pending + (adds_root ? uint64_t{1} : uint64_t{0});
             // compute_layout already proved 16*R representable before bind.

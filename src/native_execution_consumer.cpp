@@ -14152,7 +14152,9 @@ void BacktestEngine::prepare_scratch_table_run(const detail::ScratchTableConfig&
         next = std::make_shared<detail::ScratchSlab>(config.manifest);
         break;
     default:
-        throw detail::ScratchCapacityError(detail::ScratchResource::layout);
+        throw detail::ScratchCapacityError(detail::ScratchResource::layout,
+            detail::scratch_limit_message("scratch layout backing kind ",
+                static_cast<std::uint32_t>(config.backend), " is unsupported"));
     }
     scratch_table_run_.slab = std::move(next);
 }
