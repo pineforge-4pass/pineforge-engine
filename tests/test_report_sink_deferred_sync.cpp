@@ -62,6 +62,14 @@ void operator delete(void* value) noexcept {
     if (header->counted) allocation_probe::retained -= header->size;
     std::free(header);
 }
+// The nothrow forms must come from the same allocator: a sanitizer runtime intercepts
+// them, and then the matching replaced delete would read a header that was never made.
+void* operator new(std::size_t size, const std::nothrow_t&) noexcept {
+    try { return ::operator new(size); } catch (...) { return nullptr; }
+}
+void* operator new[](std::size_t size, const std::nothrow_t&) noexcept {
+    try { return ::operator new(size); } catch (...) { return nullptr; }
+}
 void* operator new[](std::size_t size) { return ::operator new(size); }
 void operator delete[](void* value) noexcept { ::operator delete(value); }
 void operator delete(void* value, std::size_t) noexcept { ::operator delete(value); }
