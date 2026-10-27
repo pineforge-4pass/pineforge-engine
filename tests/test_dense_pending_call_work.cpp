@@ -50,6 +50,7 @@ public:
 
     Adapter::PendingScanWork work() const { return adapter_.pending_scan_work(); }
     Adapter::DensePendingWork dense_work() const { return adapter_.dense_pending_work(); }
+    const auto& cohort_table_work() const { return adapter_.cohort_table_work(); }
     int source_bars() const { return source_bars_; }
 
     // Read the real public working-book snapshot, not a diagnostic maximum.
