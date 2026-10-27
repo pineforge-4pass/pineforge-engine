@@ -23,6 +23,7 @@ permissions:
 
 # A reusable workflow's github.workflow is its caller, so use a distinct prefix.
 # Only post-merge callers and main/manual runs use this workflow.
+# Native shards and both sanitizer profiles use the post-merge GCP fleet.
 concurrency:
   group: native-live-${{ github.workflow }}-${{ github.run_id }}
   cancel-in-progress: false
@@ -101,8 +102,8 @@ jobs:
   native-live:
     name: native-live (${{ matrix.profile }})
     needs: [authz]
-    # Each instrumented tree builds once on a dedicated 64-core hosted runner.
-    runs-on: pf-linux-x64-64
+    # Each instrumented tree builds once on the post-merge GCP fleet.
+    runs-on: ["self-hosted","pf-gcp-post"]
     strategy:
       fail-fast: false
       matrix:
@@ -199,7 +200,7 @@ jobs:
   native-live-shards:
     name: native-live-shard (${{ matrix.profile }}, ${{ matrix.shard }}/4)
     needs: [authz]
-    runs-on: pf-linux-x64-16
+    runs-on: ["self-hosted","pf-gcp-post"]
     strategy:
       fail-fast: false
       matrix:
