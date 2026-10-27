@@ -3364,7 +3364,7 @@ exit "$lookup_exit"
                     self.assertEqual(sorted(fast + slow), sorted(all_stages))
                     self.assertEqual(len({entry[0] for entry in fast + slow}), len(all_stages))
                     self.assertTrue({'doc-lint', 'doc-anchors', 'doc-reverts',
-                                     'ci-workflow-contract', 'preflight-tests'} <=
+                                     'cap-table', 'ci-workflow-contract', 'preflight-tests'} <=
                                     {entry[0] for entry in fast})
                     self.assertTrue({name for name, _ in ci_verify.source_guard_commands(ROOT)} <=
                                     {entry[0] for entry in fast})
