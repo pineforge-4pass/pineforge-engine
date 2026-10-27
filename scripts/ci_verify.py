@@ -953,7 +953,7 @@ PINNED_SLOW_TEST_ROWS = frozenset((
     'test_native_runtime_ambient',
     'test_native_script_bucket_completions',
     'test_native_settlement_carry',
-    # tests/CMakeLists.txt:7354.
+    # tests/CMakeLists.txt:7516.
     'test_run_json_selected_sink_memory_l9s',
     # tests/CMakeLists.txt:7354 (report-memory bound row).
     'test_report_sink_scratch_curve_resident',

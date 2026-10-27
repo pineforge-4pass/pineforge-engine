@@ -1,4 +1,5 @@
-// Pin the 1.6.3 create diagnostics through real opens, with explicit paths.
+// Pin the create diagnostics from src/command_scratch_production.cpp and
+// src/report_scratch.cpp through real opens, with explicit paths.
 // No TMPDIR changes or injected failures. RED at e36e585064 is predicted,
 // not observed: compile and execute this unit only on the supervisor's box.
 #include "scratch_process_fixture.hpp"
