@@ -49,6 +49,7 @@
 // Fix2 fail-before on 6f036c8ff5 (not run here): the first attempted removal
 // restores the whole engine curve, failing (e)'s size/capacity sample before
 // the status assertion; an observer also allocates a full captured array.
+#include <pineforge/detail/scratch_slab.hpp>
 #include <pineforge/execution_observer.h>
 #include <pineforge/metrics_stream.hpp>
 #include <pineforge/native_host.hpp>
@@ -81,6 +82,16 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <vector>
+
+#ifdef __linux__
+#include <malloc.h>
+#include <poll.h>
+#include <signal.h>
+#include <sys/resource.h>
+#include <sys/socket.h>
+#include <sys/wait.h>
+#include <time.h>
+#endif
 
 namespace pineforge {
 inline namespace engine_script_run_v19 {
@@ -235,6 +246,7 @@ public:
     std::int64_t probe_calculations = 0;
     std::size_t probe_peak_size = 0;
     std::size_t probe_peak_capacity = 0;
+    std::uint64_t probe_table_bytes = 0;
     mutable std::size_t probe_presentations = 0;
 
     // Run facts a bounded curve must not disturb: the four running extremes, the
@@ -249,6 +261,10 @@ public:
         probe_peak_size = 0;
         probe_peak_capacity = 0;
         probe_presentations = 0;
+        // ScratchSlab's constructor zeros its entire fixed admission, so this
+        // also witnesses equal touched table residency in the resident proof.
+        const auto& slab = scratch_tables_for_run();
+        probe_table_bytes = slab ? slab->layout().slab_size : 0;
     }
     void on_native_bar(const Bar&, const NativeDecisionContext&) override {
         const std::int64_t k = probe_calculations++;
@@ -407,11 +423,19 @@ struct AnonymousFile {
 
 std::vector<AnonymousFile> anonymous_files() {
     std::vector<AnonymousFile> files;
-    for (int descriptor = 0; descriptor < 1024; ++descriptor) {
+    DIR* directory = ::opendir("/dev/fd");
+    require(directory != nullptr, "cannot enumerate open descriptors");
+    while (const dirent* entry = ::readdir(directory)) {
+        char* end = nullptr;
+        const long number = std::strtol(entry->d_name, &end, 10);
+        if (end == entry->d_name || *end != '\0' || number < 0
+            || number > std::numeric_limits<int>::max() || number == ::dirfd(directory)) continue;
+        const int descriptor = static_cast<int>(number);
         struct stat status{};
         if (::fstat(descriptor, &status) == 0 && S_ISREG(status.st_mode)
             && status.st_nlink == 0) files.push_back({descriptor, status});
     }
+    ::closedir(directory);
     return files;
 }
 
@@ -654,6 +678,454 @@ void bounded_curve(const TestRoot& root) {
                 && on_long.capacity < static_cast<std::size_t>(short_bars),
             "equity_curve_ keeps a number of points comparable to the script bars");
 }
+
+#ifdef __linux__
+// Report-memory bound. Threshold and populations are stated on the memory
+// management page, before any measurement. These are disk-sink bounds, not
+// jailed arena bounds.
+constexpr std::int64_t resident_n = INT64_C(262144);
+constexpr std::int64_t resident_8n = 8 * resident_n;
+constexpr std::uint64_t resident_slack = 1024U * 1024U;
+// A ceiling budget, not an observed behaviour: one default ext4 group-preallocation quantum on a 4 KiB-block,
+// non-bigalloc filesystem: 512 * 4096 = 2 MiB (Linux fs/ext4/mballoc.c,
+// s_mb_group_prealloc). Open files can retain speculative EOF blocks after
+// fsync, including on XFS. This fixed allowance is not a universal bound on
+// XFS dynamic preallocation; logical growth remains exact.
+constexpr std::uint64_t scratch_allocation_growth_slack = 512U * 4096U;
+static_assert(sizeof(pf_equity_point_t) == 24, "scratch point ABI");
+static_assert(sizeof(pf_metrics_t) == 768, "compare the complete metric block");
+
+struct ScratchBytes {
+    std::uint64_t files = 0, logical = 0, allocated = 0;
+};
+
+// Include every new unlinked regular file, not just directory entries or the
+// published curve descriptor. Synchronize delayed allocation before st_blocks;
+// do not truncate/preallocate the file to manufacture the expected disk cost.
+ScratchBytes scratch_bytes(const std::vector<AnonymousFile>& external) {
+    const auto files = anonymous_files();
+    for (const auto& prior : external)
+        require(std::any_of(files.begin(), files.end(),
+                    [&](const AnonymousFile& file) { return same_file(prior, file); }),
+                "resident proof replaced an external unlinked file");
+    ScratchBytes result;
+    for (const auto& file : files) {
+        if (std::any_of(external.begin(), external.end(),
+                [&](const AnonymousFile& prior) { return same_file(prior, file); })) continue;
+        struct stat status{};
+        require(::fsync(file.descriptor) == 0 && ::fstat(file.descriptor, &status) == 0
+                    && status.st_size >= 0 && status.st_blocks >= 0,
+                "cannot census unlinked scratch allocation");
+        ++result.files;
+        result.logical += static_cast<std::uint64_t>(status.st_size);
+        // POSIX st_blocks units are 512 bytes, independent of st_blksize.
+        result.allocated += static_cast<std::uint64_t>(status.st_blocks) * 512U;
+    }
+    return result;
+}
+
+struct HeapBytes {
+    std::uint64_t live = 0, reserved = 0;
+};
+
+HeapBytes heap_bytes() {
+#ifdef __GLIBC__
+#if __GLIBC_PREREQ(2, 33)
+    const auto heap = ::mallinfo2();
+#else
+    const auto heap = ::mallinfo();
+#endif
+    return {static_cast<std::uint64_t>(heap.uordblks) + heap.hblkhd,
+            static_cast<std::uint64_t>(heap.arena) + heap.hblkhd};
+#else
+    fail_test("resident proof requires allocator accounting on the Linux build host");
+#endif
+}
+
+struct ResidentMeasurement {
+    ReportC report{};
+    pf_report_sink_diagnostics_v1 diagnostics{};
+    CurveProbe::Facts facts{};
+    Peaks curve;
+    ScratchBytes scratch;
+    HeapBytes heap_before, heap_run, heap_fill, heap_cleanup;
+    report_arrays::Counts arrays;
+    std::uint64_t input_bytes = 0, table_bytes = 0, broker_hash = 0;
+    std::uint64_t rss_before = 0, rss_peak = 0, lifetime_peak = 0;
+    double wall_seconds = 0, cpu_seconds = 0;
+};
+
+// A dedicated socket carries a ready barrier and the fixed-size result.
+// stderr stays available for child assertion failures.
+void transfer(int descriptor, void* data, std::size_t length, bool send) {
+    auto* bytes = static_cast<unsigned char*>(data);
+    while (length != 0) {
+        const ssize_t count = send ? ::send(descriptor, bytes, length, MSG_NOSIGNAL)
+                                   : ::read(descriptor, bytes, length);
+        if (count < 0 && errno == EINTR) continue;
+        require(count > 0, "resident child communication failed");
+        bytes += count;
+        length -= static_cast<std::size_t>(count);
+    }
+}
+
+double cpu_seconds(const struct rusage& usage) {
+    return static_cast<double>(usage.ru_utime.tv_sec + usage.ru_stime.tv_sec)
+        + static_cast<double>(usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) / 1e6;
+}
+
+void run_prefix(CurveProbe& host, const std::vector<Bar>& feed, std::int64_t bars) {
+    require(bars > 0 && bars <= static_cast<std::int64_t>(feed.size()),
+            "resident input does not cover the requested population");
+    host.run(feed.data(), static_cast<int>(bars));
+    require(host.last_run_status() == 0 && host.last_error().empty()
+                && host.probe_calculations == bars,
+            "resident run failed or did not consume every requested script bar");
+}
+
+void resident_child(std::int64_t bars, bool after_full, int channel) {
+    const TestRoot root;
+    scenario = "resident child, bars=" + std::to_string(bars) + ", files=" + root.path;
+    require(!pineforge::detail::ScratchArena::attached(),
+            "disk resident proof cannot use a RAM-backed scratch arena");
+    const auto external = anonymous_files();
+    // Both children allocate and initialize the SAME maximum-size input.
+    auto feed = tape(resident_8n);
+    auto host = std::make_unique<CurveProbe>();
+    host->probe_trade = false;
+    require(host->set_optional_report_mode(
+                pineforge::report_sequence::ReportMode::SummaryOnly) == 0,
+            "cannot disable optional histories");
+    // No orders/outputs/security: one root admits one zeroed page. A nonzero
+    // manifest is essential: all-zero selects bar-dependent default maxima.
+    pf_scratch_tables_v1 tables{};
+    tables.struct_size = sizeof tables;
+    tables.version = 1;
+    tables.backend = PF_SCRATCH_TABLE_BOUNDED_MEMORY;
+    tables.R = 1;
+    require(host->set_scratch_tables_v1(&tables) == 0, "fixed table admission refused");
+    if (after_full) {
+        configure(*host, 1);
+        run_prefix(*host, feed, resident_8n);
+        const Filled full(*host);
+        require(full.report.equity_curve_len == resident_8n
+                    && host->probe_size() == static_cast<std::size_t>(resident_8n),
+                "preceding FULL run did not retain its complete curve");
+    }
+    // Prime identical writer/reader/table/allocator paths at both sizes.
+    // Reuse the FULL handle when requested, then reset the kernel high-water
+    // mark AFTER its large curve/report have gone: their old peak must not
+    // hide growth during the measured run.
+    configure(*host, 2);
+    install(*host, root.out() + "/prime.ndjson", root.scratch().c_str());
+    run_prefix(*host, feed, batch + 2);
+    {
+        const Filled prime(*host);
+        require(prime.report.equity_curve == nullptr
+                    && host->probe_capacity() <= pineforge::kReportSinkHeldEquityPoints,
+                "sink priming retained the preceding FULL curve capacity");
+    }
+    configure(*host, 3);
+    const std::string path = root.out() + "/measured.ndjson";
+    install(*host, path, root.scratch().c_str());
+    ResidentMeasurement result;
+    result.input_bytes = feed.size() * sizeof(Bar);
+    const long page_size = ::sysconf(_SC_PAGESIZE);
+    require(page_size > 0, "cannot determine input page size");
+    auto* input = reinterpret_cast<volatile unsigned char*>(feed.data());
+    for (std::size_t i = 0; i < result.input_bytes; i += static_cast<std::size_t>(page_size))
+        input[i] = input[i];  // explicit pre-touch, identical allocation at N and 8N
+    result.heap_before = heap_bytes();
+    const int reset = ::open("/proc/self/clear_refs", O_WRONLY | O_CLOEXEC);
+    require(reset >= 0, "cannot reset RSS high-water mark after priming");
+    const ssize_t reset_bytes = ::write(reset, "5\n", 2);
+    ::close(reset);
+    require(reset_bytes == 2, "RSS high-water reset failed");
+    char barrier = 'R';
+    transfer(channel, &barrier, sizeof barrier, true);
+    transfer(channel, &barrier, sizeof barrier, false);
+    require(barrier == 'G', "parent did not start the resident measurement");
+    struct timespec start{}, finish{};
+    struct rusage cpu_start{}, cpu_finish{};
+    require(::clock_gettime(CLOCK_MONOTONIC, &start) == 0
+                && ::getrusage(RUSAGE_SELF, &cpu_start) == 0, "cannot start timing");
+    {
+        const report_arrays::Scope count(result.arrays);
+        run_prefix(*host, feed, bars);
+        result.table_bytes = host->probe_table_bytes;
+        require(result.table_bytes == pineforge::detail::compute_layout(
+                    host->scratch_table_config().manifest).slab_size,
+                "run changed the fixed pre-touched table admission");
+        const auto sample = [&] {
+            result.curve.size = std::max({result.curve.size, host->probe_peak_size,
+                                          host->probe_size()});
+            result.curve.capacity = std::max({result.curve.capacity, host->probe_peak_capacity,
+                                              host->probe_capacity()});
+            require(result.curve.size == pineforge::kReportSinkHeldEquityPoints
+                        && result.curve.capacity <= pineforge::kReportSinkHeldEquityPoints,
+                    "sink retained a resident curve beyond its held point");
+        };
+        sample();
+        const auto prefix = host->probe_scratch();  // flush the execution prefix
+        const auto finalized_points = bars
+            - static_cast<std::int64_t>(pineforge::kReportSinkHeldEquityPoints);
+        require(prefix.byte_offset == 0 && prefix.point_count == finalized_points && prefix.scratch,
+                "sink scratch does not cover every finalized execution point");
+        const auto before_fill = scratch_bytes(external);
+        require(before_fill.files == 1
+                    && before_fill.logical == static_cast<std::uint64_t>(finalized_points)
+                        * sizeof(pf_equity_point_t),
+                "execution scratch is not exactly one point per finalized script bar");
+        result.heap_run = heap_bytes();
+        {
+            const Filled first(*host);  // assembly and exact scratch metric replay
+            result.report = first.report;
+            const auto& report = result.report;
+            require(report.input_bars_processed == bars && report.script_bars_processed == bars
+                        && report.total_trades == 0 && report.trades_len == 0 && !report.trades
+                        && !report.equity_curve && report.equity_curve_len == 0
+                        && !report.trace && report.trace_len == 0
+                        && !report.trace_names && report.trace_names_len == 0
+                        && !report.broker_state_hash && report.broker_state_hash_len == 0
+                        && !report.security_diag && report.security_diag_len == 0,
+                    "report skipped bars or retained trades/curve/optional histories");
+            const auto done = receipt(*host);
+            require(done.complete == 1 && done.count_e == bars && done.count_t == 0,
+                    "sink did not publish exactly the consumed E population");
+            result.diagnostics.struct_size = sizeof result.diagnostics;
+            result.diagnostics.version = 1;
+            require(host->report_sink_diagnostics_v1(&result.diagnostics) == 0
+                        && result.diagnostics.complete == 1
+                        && result.diagnostics.count_e == bars
+                        && result.diagnostics.trade_at_start == 0,
+                    "sink annualization diagnostics do not describe the idle population");
+            result.scratch = scratch_bytes(external);
+            require(result.scratch.files == 1
+                        && result.scratch.logical == static_cast<std::uint64_t>(bars)
+                            * sizeof(pf_equity_point_t)
+                        && result.scratch.allocated >= result.scratch.logical
+                        && directory_empty(root.scratch()),
+                    "complete unlinked scratch is not the expected binary curve");
+            sample();
+            struct stat first_output{}, second_output{};
+            require(::stat(path.c_str(), &first_output) == 0, "cannot stat completed E output");
+            const Filled second(*host);  // repeat the full metric replay
+            require(std::memcmp(&first.report.metrics, &second.report.metrics,
+                                sizeof(pf_metrics_t)) == 0,
+                    "repeated replay changed metric bytes");
+            const auto replay_scratch = scratch_bytes(external);
+            require(replay_scratch.files == result.scratch.files
+                        && replay_scratch.logical == result.scratch.logical
+                        && replay_scratch.allocated == result.scratch.allocated
+                        && ::stat(path.c_str(), &second_output) == 0
+                        && first_output.st_size == second_output.st_size,
+                    "repeated assembly appended scratch or E output");
+            sample();
+            result.heap_fill = heap_bytes();
+        }
+        result.curve.final_size = host->probe_size();
+        result.facts = host->probe_facts();
+        result.broker_hash = host->broker_state_hash();
+        host.reset();
+        require(scratch_bytes(external).files == 0 && result.arrays.live_bytes == 0,
+                "cleanup retained unlinked scratch or report arrays");
+        std::vector<Bar>().swap(feed);
+        root.remove_all();
+    }
+    result.heap_cleanup = heap_bytes();
+    require(::clock_gettime(CLOCK_MONOTONIC, &finish) == 0
+                && ::getrusage(RUSAGE_SELF, &cpu_finish) == 0, "cannot finish timing");
+    result.wall_seconds = static_cast<double>(finish.tv_sec - start.tv_sec)
+        + static_cast<double>(finish.tv_nsec - start.tv_nsec) / 1e9;
+    result.cpu_seconds = cpu_seconds(cpu_finish) - cpu_seconds(cpu_start);
+    transfer(channel, &result, sizeof result, true);
+    // Remain alive for the parent's final RSS/HWM sample after ALL cleanup.
+    transfer(channel, &barrier, sizeof barrier, false);
+    require(barrier == 'D', "parent did not finish the resident measurement");
+    ::close(channel);
+}
+
+struct ResidentBytes { std::uint64_t live = 0, peak = 0; };
+
+ResidentBytes resident_bytes(pid_t child) {
+    const std::string path = "/proc/" + std::to_string(child) + "/status";
+    FILE* file = std::fopen(path.c_str(), "r");
+    require(file != nullptr, "cannot sample live child RSS");
+    ResidentBytes result;
+    char line[256];
+    while (std::fgets(line, sizeof line, file)) {
+        unsigned long long kib = 0;
+        if (std::sscanf(line, "VmRSS: %llu kB", &kib) == 1) result.live = kib * 1024U;
+        if (std::sscanf(line, "VmHWM: %llu kB", &kib) == 1) result.peak = kib * 1024U;
+    }
+    std::fclose(file);
+    require(result.live > 0 && result.peak > 0, "child RSS/HWM census missing");
+    result.peak = std::max(result.peak, result.live);  // child may grow between the two fields
+    return result;
+}
+
+ResidentMeasurement measure_resident(std::int64_t bars, bool after_full) {
+    int channel[2];
+    require(::socketpair(AF_UNIX, SOCK_STREAM, 0, channel) == 0, "cannot create child channel");
+    const std::string population = std::to_string(bars);
+    const std::string descriptor = std::to_string(channel[1]);
+    const pid_t child = ::fork();
+    if (child == 0) {
+        ::close(channel[0]);
+        ::execl("/proc/self/exe", "test_report_sink_scratch_curve", "--resident-child",
+                population.c_str(), after_full ? "1" : "0", descriptor.c_str(),
+                static_cast<char*>(nullptr));
+        ::_exit(127);
+    }
+    ::close(channel[1]);
+    if (child < 0) {
+        ::close(channel[0]);
+        fail_test("cannot fork resident child");
+    }
+    bool joined = false;
+    try {
+        char barrier = 0;
+        transfer(channel[0], &barrier, sizeof barrier, false);
+        require(barrier == 'R', "resident child did not reach the measurement barrier");
+        const auto before = resident_bytes(child);
+        std::uint64_t peak = before.peak;
+        barrier = 'G';
+        transfer(channel[0], &barrier, sizeof barrier, true);
+        struct pollfd ready{channel[0], POLLIN, 0};
+        for (;;) {
+            const int status = ::poll(&ready, 1, 10);
+            if (status < 0 && errno == EINTR) continue;
+            require(status >= 0, "cannot poll resident child");
+            const auto sample = resident_bytes(child);
+            peak = std::max({peak, sample.live, sample.peak});
+            if (status > 0) break;
+        }
+        ResidentMeasurement result;
+        transfer(channel[0], &result, sizeof result, false);
+        const auto cleaned = resident_bytes(child);
+        result.rss_before = before.live;
+        result.rss_peak = std::max({peak, cleaned.live, cleaned.peak});
+        barrier = 'D';
+        transfer(channel[0], &barrier, sizeof barrier, true);
+        int status = 0;
+        struct rusage lifetime{};
+        pid_t waited;
+        do { waited = ::wait4(child, &status, 0, &lifetime); } while (waited < 0 && errno == EINTR);
+        joined = waited == child;
+        require(waited == child && WIFEXITED(status) && WEXITSTATUS(status) == 0,
+                "resident child failed (see its stderr)");
+        result.lifetime_peak = static_cast<std::uint64_t>(lifetime.ru_maxrss) * 1024U;
+        ::close(channel[0]);
+        return result;
+    } catch (...) {
+        ::close(channel[0]);
+        if (!joined) {
+            ::kill(child, SIGKILL);
+            while (::waitpid(child, nullptr, 0) < 0 && errno == EINTR) {}
+        }
+        throw;
+    }
+}
+
+void print_resident(const ResidentMeasurement& m, std::int64_t bars, bool after_full) {
+    // heap_live/reserved (mallinfo2/mallinfo) are diagnostics only; RSS is the
+    // resident-bound proof.
+    std::printf("resident: bars=%lld after_full=%d input=%llu tables=%llu "
+                "curve_size/capacity=%zu/%zu rss_before/peak/lifetime=%llu/%llu/%llu "
+                "unlinked=%llu scratch_logical/allocated=%llu/%llu "
+                "heap_live/reserved(before,run,fill,cleanup)=%llu/%llu,%llu/%llu,%llu/%llu,%llu/%llu "
+                "arrays_live/peak/capacity=%zu/%zu/%zu wall_s=%.6f cpu_ns/bar=%.3f\n",
+                static_cast<long long>(bars), int(after_full),
+                static_cast<unsigned long long>(m.input_bytes),
+                static_cast<unsigned long long>(m.table_bytes), m.curve.size, m.curve.capacity,
+                static_cast<unsigned long long>(m.rss_before),
+                static_cast<unsigned long long>(m.rss_peak),
+                static_cast<unsigned long long>(m.lifetime_peak),
+                static_cast<unsigned long long>(m.scratch.files),
+                static_cast<unsigned long long>(m.scratch.logical),
+                static_cast<unsigned long long>(m.scratch.allocated),
+                static_cast<unsigned long long>(m.heap_before.live),
+                static_cast<unsigned long long>(m.heap_before.reserved),
+                static_cast<unsigned long long>(m.heap_run.live),
+                static_cast<unsigned long long>(m.heap_run.reserved),
+                static_cast<unsigned long long>(m.heap_fill.live),
+                static_cast<unsigned long long>(m.heap_fill.reserved),
+                static_cast<unsigned long long>(m.heap_cleanup.live),
+                static_cast<unsigned long long>(m.heap_cleanup.reserved),
+                m.arrays.live_bytes, m.arrays.peak_bytes, m.arrays.capacity_bytes,
+                m.wall_seconds, m.cpu_seconds * 1e9 / static_cast<double>(bars));
+}
+
+void bounded_resident_curve() {
+    scenario = "two-size resident/scratch proof";
+    ResidentMeasurement measurements[2][2];
+    const std::int64_t populations[] = {resident_n, resident_8n};
+    for (int warm = 0; warm != 2; ++warm) {
+        for (int size = 0; size != 2; ++size) {
+            measurements[warm][size] = measure_resident(populations[size], warm != 0);
+            print_resident(measurements[warm][size], populations[size], warm != 0);
+        }
+        const auto& small = measurements[warm][0];
+        const auto& large = measurements[warm][1];
+        require(small.input_bytes == large.input_bytes && small.table_bytes == large.table_bytes
+                    && small.input_bytes == static_cast<std::uint64_t>(resident_8n) * sizeof(Bar),
+                "children have unequal pre-touched input/table populations");
+        require(large.rss_before <= small.rss_before + resident_slack
+                    && small.rss_before <= large.rss_before + resident_slack,
+                "children started with unequal resident input/allocator state");
+        // Mutation witness: retaining even one double per additional bar costs
+        // (8N-N)*sizeof(double), which exceeds this memo-fixed 1 MiB allowance.
+        // The memo accepts that 1 MiB / (8N-N = 1,835,008 bars) is about
+        // 0.57 B/bar, so leaks below that per-bar rate can pass.
+        require(large.rss_peak <= small.rss_peak + resident_slack,
+                "peak RSS grew by more than 1 MiB across execution/replay/assembly/cleanup");
+        require(large.curve.capacity == small.curve.capacity
+                    && large.curve.final_size == small.curve.final_size,
+                "held curve capacity grows on the 8x population");
+        const auto expected_growth = static_cast<std::uint64_t>(resident_8n - resident_n)
+            * sizeof(pf_equity_point_t);
+        require(large.scratch.logical == small.scratch.logical + expected_growth,
+                "logical scratch growth is not exactly 24 bytes per additional script bar");
+        require(large.scratch.allocated >= small.scratch.allocated + expected_growth
+                    && large.scratch.allocated <= small.scratch.allocated + expected_growth
+                        + scratch_allocation_growth_slack,
+                "allocated scratch growth is outside logical growth plus preallocation slack");
+    }
+    // The FULL oracle lives only in the unmeasured parent, after every fresh
+    // exec child has exited. Never feed its curve into a measured replay.
+    for (int size = 0; size != 2; ++size) {
+        const Oracle oracle(populations[size], false, false);
+        const auto& want = oracle.report->report;
+        for (int warm = 0; warm != 2; ++warm) {
+            const auto& actual = measurements[warm][size];
+            require(std::memcmp(&actual.report.metrics, &want.metrics, sizeof(pf_metrics_t)) == 0,
+                    "resident child's complete metric bytes differ from FULL");
+            require(actual.report.net_profit == want.net_profit
+                        && actual.report.total_trades == want.total_trades
+                        && actual.report.input_bars_processed == want.input_bars_processed
+                        && actual.report.script_bars_processed == want.script_bars_processed
+                        && actual.report.security_feeds_total == want.security_feeds_total
+                        && actual.report.security_eval_complete_total == want.security_eval_complete_total
+                        && actual.report.security_eval_partial_total == want.security_eval_partial_total
+                        && actual.report.magnifier_sub_bars_total == want.magnifier_sub_bars_total
+                        && actual.report.magnifier_sample_ticks_total == want.magnifier_sample_ticks_total
+                        && actual.report.input_tf_seconds == want.input_tf_seconds
+                        && actual.report.script_tf_seconds == want.script_tf_seconds
+                        && actual.report.script_tf_ratio == want.script_tf_ratio
+                        && actual.report.needs_aggregation == want.needs_aggregation
+                        && actual.report.bar_magnifier_enabled == want.bar_magnifier_enabled
+                        && same_facts(actual.facts, oracle.host.probe_facts())
+                        && actual.broker_hash == oracle.host.broker_state_hash(),
+                    "resident child counters/run facts differ from FULL");
+            require(actual.diagnostics.count_e == want.equity_curve_len
+                        && same_point(actual.diagnostics.first, want.equity_curve[0])
+                        && same_point(actual.diagnostics.last,
+                                      want.equity_curve[want.equity_curve_len - 1]),
+                    "resident child diagnostic endpoint bits differ from FULL");
+        }
+    }
+}
+#endif  // __linux__
 
 // Every point of a scratch region must be the oracle's point at that index.
 // Returns the region's point count.
@@ -1152,9 +1624,24 @@ void scratch_failures(const TestRoot& root) {
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
     std::string kept;
     try {
+#ifdef __linux__
+        if (argc == 2 && std::strcmp(argv[1], "--resident-bound") == 0) {
+            bounded_resident_curve();
+            return 0;
+        }
+        if (argc == 5 && std::strcmp(argv[1], "--resident-child") == 0) {
+            const auto bars = std::stoll(argv[2]);
+            require(bars > 0 && bars <= resident_8n, "invalid resident population");
+            require(std::strcmp(argv[3], "0") == 0 || std::strcmp(argv[3], "1") == 0,
+                    "invalid FULL warm-up flag");
+            resident_child(bars, std::strcmp(argv[3], "1") == 0, std::stoi(argv[4]));
+            return 0;
+        }
+#endif
+        require(argc == 1, "unknown test arguments");
         const TestRoot root;
         kept = root.path;
         bounded_curve(root);

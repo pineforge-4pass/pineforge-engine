@@ -1,8 +1,10 @@
-"""CR-150 L9B: named-sink summaries checked against the current array producer.
+"""CR-150 L9B summaries and native temporary-sink corpus projections.
 
 Only native calls are replaced in the Python rows. The real reader, report
-assembly and JSON writer run unchanged. Native rows consume lab-built modules;
-this edit-only lane does not execute tests or build those modules.
+assembly and JSON writer run unchanged. The corpus row uses real native
+calls throughout, with a sink-off FULL oracle and an observed run_json.main.
+Native rows consume lab-built modules and are built and run by the verification
+host, not by this file.
 """
 from __future__ import annotations
 
@@ -11,8 +13,10 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import struct
 import subprocess
 import sys
+import time
 from unittest import mock
 
 import pytest
@@ -30,6 +34,11 @@ from test_run_json_sink import arena_stats, frozen  # noqa: F401 (shared pytest 
 OUTPUT_KEYS = ("schema_version", "message_format", "manifest_sha256",
                "manifest", "constants", "hlines")
 REFERENCE_KEYS = ("path", "schema", "version", "run_id", "counts", "sha256")
+
+# ScratchCurveWriter holds 2,730 pf_equity_point_t values, each one int64
+# and two doubles (24 B): one batch is 65,520 B. This allowance is fixed
+# from that layout, before any RSS observations; it never scales with bars.
+SINK_RSS_ALLOWANCE_BYTES = 2_730 * 24
 
 
 class SummaryLibrary(full.SinkLibrary):
@@ -431,16 +440,307 @@ def test_native_sink_open_failure_never_publishes_summary(tmp_path):
     assert "summary" not in json.loads(result.stdout)
 
 
-def test_native_corpus_subset_frozen_summary_bytes(tmp_path):
+CORPUS_PROJECTION_DRIVER = r'''
+import argparse, ctypes, json, pathlib, sys
+from contextlib import ExitStack
+sys.path.insert(0, sys.argv[1])
+import run_json as runner
+
+mode, observation_path, module = sys.argv[2:5]
+argv = sys.argv[5:]
+snapshots, sinks = [], []
+
+def observe(frame, event, result):
+    # Observe real return values and the report immediately before free.
+    # Do not replace a loader, native export, report builder or sink factory.
+    if event == "return" and frame.f_code is runner._new_report_sink.__code__:
+        assert result is not None and not result.named
+        sinks.append(result)
+    if event == "call" and frame.f_code is runner._free_sink_run.__code__:
+        report = frame.f_locals["report"]
+        assert ctypes.sizeof(report.metrics) == 768
+        snapshots.append({
+            "metrics": ctypes.string_at(ctypes.addressof(report.metrics), 768).hex(),
+            "counters": {name: int(getattr(report, name)) for name in (
+                "total_trades", "input_bars_processed", "script_bars_processed",
+                "security_feeds_total", "security_eval_complete_total",
+                "security_eval_partial_total", "magnifier_sub_bars_total",
+                "magnifier_sample_ticks_total", "input_tf_seconds",
+                "script_tf_seconds", "script_tf_ratio", "needs_aggregation",
+                "bar_magnifier_enabled")},
+            "arrays": [bool(report.trades), int(report.trades_len),
+                       bool(report.equity_curve), int(report.equity_curve_len)],
+            "has_sink": frame.f_locals["sink"] is not None,
+        })
+
+def full_oracle():
+    # No sink setter is called: this is the real native FULL report, using
+    # the producer's settings, array builder, diagnostics and JSON writer.
+    # Unknown options fail, so a manifest cannot silently lose configuration.
+    parser = argparse.ArgumentParser(allow_abbrev=False)
+    for name in ("ohlcv", "ohlcv-bin", "syminfo", "symbol-feeds", "generated-cpp",
+                 "spill-dir"):
+        parser.add_argument("--" + name, type=pathlib.Path)
+    for name in ("inputs", "overrides", "input-tf", "script-tf", "bar-magnifier",
+                 "chart-tz", "transpiled"):
+        parser.add_argument("--" + name, default="")
+    parser.add_argument("--magnifier-samples", type=int, default=4)
+    parser.add_argument("--magnifier-dist", default="endpoints")
+    parser.add_argument("--magnifier-volume-weighted", action="store_true")
+    parser.add_argument("--trade-start-ms", type=int)
+    parser.add_argument("--verify-bin", choices=("full", "sidecar"), default="full")
+    parser.add_argument("--outputs", action="store_true")
+    args = parser.parse_args(argv)
+    args.profile = "unjailed"
+    inputs = runner.parse_kv_json(args.inputs, "--inputs")
+    overrides = runner.parse_kv_json(args.overrides, "--overrides")
+    input_tf = runner._utf8_option(args.input_tf.strip(), "--input-tf")
+    script_tf = runner._utf8_option(args.script_tf.strip(), "--script-tf")
+    magnifier = int(runner.parse_bool(args.bar_magnifier))
+    weighted = args.magnifier_volume_weighted and magnifier == 1
+    with ExitStack() as resources:
+        runner._resolve_chart_source(args)
+        if args.ohlcv_bin is not None:
+            chart = resources.enter_context(
+                runner.load_bars_bin(args.ohlcv_bin, verify_bin=args.verify_bin))
+            feed, count = chart["bars"], chart["n"]
+            source_sha = chart["source_values_sha256"]
+        else:
+            feed, count, source_sha = runner.load_bars(args.ohlcv)
+        assert count > 0
+        first, last = feed[0].timestamp, feed[count - 1].timestamp
+        lib = runner.load_strategy(pathlib.Path(module))
+        checked = runner.uses_checked_settings(lib)
+        if args.outputs:
+            runner.require_outputs(lib)
+        symbols = runner._run_symbol_feeds(args, resources)
+        report = runner.ReportC()
+        state = runner.create_strategy(lib, checked)
+        try:
+            runner.apply_settings(lib, state, inputs, overrides, checked)
+            syminfo = {}
+            if args.syminfo:
+                syminfo = runner.apply_syminfo(lib, state, args.syminfo)
+            if symbols:
+                runner.install_symbol_feeds(lib, state, symbols)
+            if args.trade_start_ms is not None:
+                lib.strategy_set_trade_start_time(state, args.trade_start_ms)
+            if args.chart_tz:
+                lib.strategy_set_chart_timezone(state, args.chart_tz.encode("utf-8"))
+            if weighted:
+                lib.strategy_set_magnifier_volume_weighted(state, 1)
+            if args.outputs:
+                runner.enable_outputs(lib, state)
+            runner._release_copied_feeds(symbols)
+            settings_receipt = runner._release_settings_receipt(lib, state, checked)
+            lib.run_backtest_full(
+                state, feed, count, input_tf, script_tf, magnifier,
+                max(2, args.magnifier_samples), runner.parse_magnifier_dist(args.magnifier_dist),
+                ctypes.byref(report))
+            failure = runner.run_failure(lib, state)
+            if failure is not None:
+                runner.write_failure(*failure)
+                return 1
+            runtime = {
+                "input_tf": input_tf.decode(), "script_tf": script_tf.decode(),
+                "input_tf_seconds": int(report.input_tf_seconds),
+                "script_tf_seconds": int(report.script_tf_seconds),
+                "script_tf_ratio": int(report.script_tf_ratio),
+                "needs_aggregation": bool(report.needs_aggregation),
+                "bar_magnifier": bool(magnifier),
+                "magnifier_samples": max(2, args.magnifier_samples),
+                "magnifier_dist": args.magnifier_dist.strip().lower() or "endpoints",
+                "magnifier_volume_weighted": bool(weighted),
+                "trade_start_ms": args.trade_start_ms, "chart_tz": args.chart_tz,
+            }
+            if syminfo:
+                runtime["syminfo"] = syminfo
+            if symbols:
+                runtime["symbol_feeds"] = runner.symbol_feeds_record(symbols)
+            accessor = getattr(lib, "strategy_closed_trade_entry_incarnation", None)
+            document = runner.build_report_dict(
+                report, args.ohlcv, count, first, last, 0., inputs, overrides, runtime,
+                trade_entry_incarnations=(
+                    (lambda i: int(accessor(state, i))) if accessor is not None else None))
+            runner._validate_report_result(document)
+            runner._add_scratch_arena_diagnostics(lib, document["diagnostics"], args)
+            if args.outputs:
+                document["outputs"] = runner._legacy_streamed_outputs_block(
+                    lib, state, validate=True)
+                runtime["outputs"] = True
+            # Match the real producer's provenance work, including its fallback.
+            try:
+                provenance = runner.build_provenance(
+                    runner.engine_version(lib), None, runner.parse_bool(args.transpiled),
+                    inputs, overrides, runtime, source_feed_sha256=source_sha)
+                provenance["codegen"]["generated_cpp_sha256"] = (
+                    runner._sha256_file(args.generated_cpp) if args.generated_cpp else None)
+                cpp_text = ""
+                if args.generated_cpp:
+                    cpp_text = args.generated_cpp.read_text(encoding="utf-8", errors="replace")
+                provenance = runner.normalize_release_provenance(
+                    provenance, cpp_text, settings_receipt, checked)
+                document["fingerprint"] = runner.build_fingerprint(provenance)
+            except Exception:
+                document["fingerprint"] = None
+            prepared = runner._prepare_report_json(document, resources, args, None)
+        finally:
+            runner._free_sink_run(lib, state, report, None)
+        return runner._write_report(prepared)
+
+sys.setprofile(observe)
+try:
+    if mode == "full":
+        try:
+            status = full_oracle()
+        except runner.RunFailure as failure:
+            runner.write_failure(str(failure), failure.code, failure.code_args)
+            status = failure.exit_status
+    else:
+        assert mode == "temporary"
+        status = runner.main(["--so", module, *argv])
+finally:
+    sys.setprofile(None)
+assert len(snapshots) == 1, "expected exactly one native run and cleanup"
+assert len(sinks) == (0 if mode == "full" else 1), "wrong report route"
+observation = snapshots[0]
+observation["sink_calls"] = len(sinks)
+if sinks:
+    sink = sinks[0]
+    assert not sink.named and sink.closed and not pathlib.Path(sink.path).exists()
+    observation["sink_counts"] = sink.counts
+pathlib.Path(observation_path).write_text(json.dumps(observation), encoding="utf-8")
+raise SystemExit(status)
+'''
+
+
+def corpus_projection_run(directory, module, argv, mode):
+    """wait4 measures only the fresh producer; read its artifacts afterwards."""
+    assert hasattr(os, "wait4") and sys.platform in ("linux", "darwin"), "wait4 RSS required"
+    directory.mkdir()
+    document_path, stderr_path = directory / "report.json", directory / "stderr.txt"
+    observation_path = directory / "observation.json"
+    environment = dict(os.environ, PYTHONHASHSEED="0", PYTHONOPTIMIZE="0",
+                       PINEFORGE_RUN_JSON_PROFILE="unjailed")
+    for name in ("PF_SCRATCH_ARENA_FD", "PF_SCRATCH_ARENA_BYTES"):
+        environment.pop(name, None)
+    command = [
+        sys.executable, "-B", "-c", CORPUS_PROJECTION_DRIVER, str(ROOT / "docker"),
+        mode, str(observation_path), str(Path(module).resolve()), *argv,
+    ]
+    started = time.perf_counter()
+    with document_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
+        with subprocess.Popen(command, cwd=ROOT, env=environment,
+                              stdout=stdout, stderr=stderr) as child:
+            _, status, usage = os.wait4(child.pid, 0)
+            child.returncode = os.waitstatus_to_exitcode(status)
+    elapsed = time.perf_counter() - started
+    assert stderr_path.read_bytes() == b"", (mode, stderr_path.read_text())
+    assert observation_path.is_file(), (mode, child.returncode, document_path.read_text())
+    observation = json.loads(observation_path.read_text())
+    # Same per-child high-water accounting as the temporary-sink lab helper:
+    # Darwin reports bytes; Linux reports KiB. Never use RUSAGE_CHILDREN's
+    # cumulative high water, which could compare this run with an earlier one.
+    observation.update(
+        peak_rss_bytes=int(usage.ru_maxrss) * (1 if sys.platform == "darwin" else 1024),
+        wall_seconds=elapsed, cpu_seconds=usage.ru_utime + usage.ru_stime)
+    assert observation["peak_rss_bytes"] > 0, observation
+    return child.returncode, json.loads(document_path.read_text()), observation
+
+
+def assert_projection_bits(expected, actual, field):
+    """Include signed zero and every JSON double; no tolerance or rounding."""
+    assert type(actual) is type(expected), field
+    if isinstance(expected, float):
+        assert struct.pack("!d", actual) == struct.pack("!d", expected), field
+    elif isinstance(expected, dict):
+        assert actual.keys() == expected.keys(), field
+        for name in expected:
+            assert_projection_bits(expected[name], actual[name], field + "." + name)
+    elif isinstance(expected, list):
+        assert len(actual) == len(expected), field
+        for index, (left, right) in enumerate(zip(expected, actual)):
+            assert_projection_bits(left, right, f"{field}[{index}]")
+    else:
+        assert actual == expected, field
+
+
+def test_native_corpus_subset_frozen_summary_bytes(tmp_path, record_property):
+    """Consume ready corpus modules/feeds, never build or derive them.
+
+    PINEFORGE_L9B_CORPUS_CASES names a nonempty JSON list of
+    {"so": ".../corpus/validation/<probe>/strategy.so", "argv": [...],
+     "projection": "calendar" | "terminal" | "short-run" | "failure"}.
+    All four projections are required. Failure rows additionally pin
+    "code" and "args"; they must fail during real execution, after installing
+    the temporary sink. A short-run feed contains one or two script bars.
+    """
     manifest = os.environ.get("PINEFORGE_L9B_CORPUS_CASES")
     if not manifest:
         pytest.skip("SKIP corpus proof requires PINEFORGE_L9B_CORPUS_CASES from CORE-TOP")
+    assert Path(manifest).is_file(), manifest
     cases = json.loads(Path(manifest).read_text())
-    assert cases, "the corpus proof must name real probes"
+    assert isinstance(cases, list) and cases, "the corpus proof must name real probes"
+    required = {"calendar", "terminal", "short-run", "failure"}
+    assert required <= {case["projection"] for case in cases}, "incomplete corpus projections"
+    corpus = (ROOT / "corpus").resolve()
+    inventory = json.loads((corpus / "run_manifest.json").read_text())
+    assert inventory["kind"] == "pineforge-corpus-run-manifest"
+    # Validate the entire manifest before running anything. Missing modules
+    # fail; neither globbing existing modules nor filtering can shrink proof.
+    forbidden = {"--so", "--profile", "--report-sink", "--report-sink-fd", "--bench",
+                 "--report-policy", "--validate-window-only", "--capabilities-json"}
     for case in cases:
-        assert Path(case["so"]).is_file(), case
-        full.native_compare(tmp_path, case["so"], case["argv"])
-        native_summary_compare(tmp_path, case["so"], case["argv"])
+        module = Path(case["so"]).resolve()
+        assert module.is_file(), case
+        assert module.parent.relative_to(corpus).as_posix() in inventory["tapes"], case
+        for name in ("generated.cpp", "strategy.pine", "inputs.json"):
+            assert (module.parent / name).is_file(), (case, name)
+        assert case["projection"] in required, case
+        assert isinstance(case["argv"], list) and all(isinstance(v, str) for v in case["argv"])
+        assert not {v.split("=", 1)[0] for v in case["argv"]} & forbidden, case
+        if case["projection"] == "failure":
+            assert isinstance(case["code"], str) and case["code"], case
+            assert isinstance(case["args"], dict), case
+    for index, case in enumerate(cases):
+        before = corpus_projection_run(tmp_path / f"{index}-full", case["so"], case["argv"], "full")
+        after = corpus_projection_run(
+            tmp_path / f"{index}-temporary", case["so"], case["argv"], "temporary")
+        status, reference, full_observation = before
+        sink_status, document, sink_observation = after
+        label = f"{index}:{case['projection']}:{case['so']}"
+        assert status == sink_status == (1 if case["projection"] == "failure" else 0), label
+        assert not full_observation["has_sink"] and full_observation["sink_calls"] == 0, label
+        assert sink_observation["has_sink"] and sink_observation["sink_calls"] == 1, label
+        assert sink_observation["arrays"] == [False, 0, False, 0], label
+        metric_bytes = bytes.fromhex(full_observation["metrics"])
+        assert len(metric_bytes) == 768, label
+        assert bytes.fromhex(sink_observation["metrics"]) == metric_bytes, label
+        assert sink_observation["counters"] == full_observation["counters"], label
+        assert sink_observation["peak_rss_bytes"] <= (
+            full_observation["peak_rss_bytes"] + SINK_RSS_ALLOWANCE_BYTES), (label, before[2], after[2])
+        record_property(label, json.dumps({"full": full_observation, "temporary": sink_observation}))
+        if status:
+            assert_projection_bits(reference, document, label + ".failure")
+            assert document["code"] == case["code"] and document["args"] == case["args"], label
+            assert not {"summary", "metrics", "report_sink"} & document.keys(), label
+            continue
+        # elapsed_seconds is the only nondeterministic report field here.
+        # Keep every metric, diagnostic, counter, row and provenance field.
+        reference.pop("elapsed_seconds")
+        document.pop("elapsed_seconds")
+        assert_projection_bits(reference, document, label + ".report")
+        assert full_observation["arrays"][3] == len(reference["equity_curve"]) > 0, label
+        assert sink_observation["sink_counts"]["E"] == len(reference["equity_curve"]), label
+        assert sink_observation["sink_counts"]["T"] == len(reference["trades"]), label
+        if case["projection"] == "calendar":
+            curve = reference["equity_curve"]
+            assert run_json.fmt_utc(curve[0]["time_ms"])[:7] != (
+                run_json.fmt_utc(curve[-1]["time_ms"])[:7]), label
+        elif case["projection"] == "terminal":
+            assert any(trade["open_at_end"] for trade in reference["trades"]), label
+        elif case["projection"] == "short-run":
+            assert 1 <= len(reference["equity_curve"]) <= 2, label
 
 
 @pytest.mark.parametrize("flag", ["--report-sink", "--run-id", "--spill-dir"])
