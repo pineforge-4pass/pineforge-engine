@@ -111,9 +111,9 @@ change.
 
 ## The C ABI
 
-The C ABI is `<pineforge/pineforge.h>` and the native host API
-`<pineforge/native_c_api.h>` it includes: the `PF_API` functions, the `pf_*`
-structs and enumerations, and the `PF_*` constants.
+The C ABI is `<pineforge/pineforge.h>`, its additive descriptor headers and
+the native host API `<pineforge/native_c_api.h>`: the `PF_API` functions,
+`pf_*` structs and enumerations, and `PF_*` constants.
 
 - **`PF_ABI_VERSION` is 4 for every 1.x release.** It versions the layouts a
   caller allocates or strides over (`pf_report_t`, `pf_trade_t`, the metrics
@@ -122,12 +122,12 @@ structs and enumerations, and the `PF_*` constants.
   pins the value 4, and `test_run_strategy_range_end` pins the Python
   harness's `EXPECTED_PF_ABI` to it.
 - **Functions are append-only.** No `PF_API` function is removed or renamed in
-  1.x; new ones are added. `scripts/check_c_abi_runtime.py` (a source guard of
-  every `ci_verify` profile and of `ci_preflight`) pins the exact name sets
-  `EXPECTED_RUNTIME` and `EXPECTED_NATIVE_C_API` and the declaration counts, so
-  an unrecorded addition, removal or rename fails. It reads names only: a
-  signature change that keeps its name is caught only where a test calls the
-  function, the frozen v1 closure below among them.
+  1.x. #pf_report_sink_json_v1 is a **MINOR** addition with v1 descriptors in
+  `<pineforge/report_sink_json.h>`; existing report and receipt layouts stay frozen.
+  `scripts/check_c_abi_runtime.py` (in `ci_preflight` and every `ci_verify`
+  profile) pins `EXPECTED_RUNTIME`, `EXPECTED_NATIVE_C_API` and declaration counts.
+  Unrecorded name changes fail; signatures are checked only by tests that call
+  the function, including the frozen v1 closure below.
 - **Layouts are frozen.** A field of a published struct never moves, changes
   type or disappears in 1.x. A size-prefixed native struct (`struct_size`,
   `version`) grows only by an appended tail, and the runtime keeps accepting

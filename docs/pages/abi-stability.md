@@ -67,15 +67,15 @@ Three layers:
 
 ## Symbol inventory
 
-The counts below describe the current API, including recorded outputs and the report sink; recorded outputs are not part of 1.4.0.
+The counts below describe the current API, including recorded outputs and native report-sink JSON transport; recorded outputs are not part of 1.4.0.
 
-A built strategy `.so` exposes 109 compiled-strategy `PF_API` declarations
-(93 runtime implementations plus sixteen generated exports) plus 43 native-host
-declarations: 152 `PF_API` exports in total; a script that declares
-`use_bar_magnifier = true` also exports `strategy_declares_bar_magnifier`, and a
-module that records outputs its three outputs exports. `nm -gU` also reports libc++'s
-`std::piecewise_construct`; no project-internal C++ symbol is exported. The grouped table below is a guide,
-not the complete inventory:
+A newly generated strategy `.so` exposes 110 compiled-strategy `PF_API` exports
+(94 runtime implementations plus sixteen generated exports) and 43 native-host
+exports: 153 total. `strategy_declares_bar_magnifier` and three recorded-outputs
+exports are conditional, bringing the declared inventories to at most 114 and 157.
+`selected_window_plan.h` separately declares two planner exports: 159 across
+the six headers with `PF_API` declarations. `scripts/check_c_abi_runtime.py`
+pins the first two inventories; the grouped table below is not complete:
 
 | Symbol | Group |
 | --- | --- |
@@ -127,12 +127,12 @@ not the complete inventory:
 | `strategy_set_report_sink_fd_v1` | Report sink borrowed stream configuration |
 | `strategy_report_sink_receipt_v1` | Report sink counts, digest and completion |
 | `strategy_report_sink_summary_v1` | Report-only T-row folds and nonfinite validation |
+| `pf_report_sink_json_v1` | Strict sink verification, E/T JSON projection and fresh-source guards ([contract](../design/report-sink-native-json.md)) |
 
-Sixteen per-strategy exports include the five create/run/free lifecycle
-functions. The remaining 93 runtime implementations, including the
-closed-trade incarnation accessor, are force-linked into each strategy library,
-so consumers resolve the same complete ABI from the strategy `.so`. All
-additions remain covered by the minor-version append-only guarantee.
+Twenty declared per-strategy exports include five create/run/free calls; four are conditional.
+The 94 runtime implementations are force-linked into each strategy library.
+`pf_report_sink_json_v1` is a **MINOR** addition with the 1.x append-only name/signature guarantee.
+Its v1 descriptors are in `report_sink_json.h`; `PF_ABI_VERSION` 4 and existing report/receipt layouts stay frozen.
 
 You can verify this against any strategy `.so`:
 

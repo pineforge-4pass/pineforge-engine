@@ -7781,6 +7781,13 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX AND NOT PINEFORGE_ENABLE_SANITIZERS AND
 endif()
 # --- CR-150 perf-cr397-c2 end ---
 
+# --- CR-150 perfcx-cr397-refmatrix begin ---
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX AND NOT PINEFORGE_ENABLE_SANITIZERS
+   AND NOT PINEFORGE_ENABLE_COVERAGE AND TARGET cr397_generated_strategy)
+    add_test(NAME test_run_json_native_sink_refusal_matrix COMMAND ${CMAKE_COMMAND} -E env "PINEFORGE_CR397_GENERATED_SO=$<TARGET_FILE:cr397_generated_strategy>" ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider ${PROJECT_SOURCE_DIR}/tests/test_run_json_sink_refusal_matrix.py)
+endif()
+# --- CR-150 perfcx-cr397-refmatrix end ---
+
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
         message(FATAL_ERROR "PR fast row or executable is missing: ${_pf_fast_test}")

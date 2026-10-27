@@ -5,6 +5,18 @@ README's *Releases* section and on the GitHub releases page. From 1.0.0 the
 version number follows semantic versioning over the surfaces the
 [public contract](docs/pages/public-contract.md) lists.
 
+## Unreleased
+
+### Faster report handling for large runs
+
+- The host can verify and convert the per-bar report with a native routine.
+  Enable `PF_REPORT_SINK_JSON_SPIKE=1` for the eligible unnamed, unjailed path
+  sink; this remains **opt-in, not yet the default**, until measured.
+  Report and trade output bytes stay the same by contract; no output key or schema changes.
+  Byte equality, refusal, memory and timing verification remain pending; no speed-up is claimed.
+- The additive `pf_report_sink_json_v1` C export requires a **MINOR** release.
+  `PF_ABI_VERSION` stays 4; existing report and sink receipt layouts stay unchanged.
+
 ## 1.8.0 — 2026-10-27
 
 **[1.8.0](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.8.0)**,

@@ -62,7 +62,7 @@
 ## Public C ABI
 
 `<pineforge/pineforge.h>` is the **single canonical consumer header**. It has
-exactly 102 public `PF_API` declarations: 82 of the 93 runtime implementations (the other eleven are declared in `execution_observer.h`, `selected_window.h` and `report_sink.h`) and twenty
+exactly 103 public `PF_API` declarations: 83 of the 94 runtime implementations (the other eleven are declared in `execution_observer.h`, `selected_window.h` and `report_sink.h`) and twenty
 per-strategy generated exports. Every compiled PineForge strategy `.so` exports
 that public set, except that `strategy_declares_bar_magnifier` is exported only
 by a script that declares `use_bar_magnifier = true` and the three [outputs](outputs.md) exports only by a module that records outputs; older modules lack the six
@@ -102,7 +102,7 @@ module inventory; the grouped table below is a guide, not the count:
 | `pf_version_get`                         | Runtime version (struct)                                          |
 | `pf_abi_version`                         | Caller-allocated POD layout version                               |
 | `pf_version_string`                      | Runtime version (string)                                          |
-
+| `pf_report_sink_json_v1`                 | Strict sink verification, E/T JSON projection and fresh-source guards (MINOR addition) |
 
 POD types (`pf_bar_t`, `pf_trade_tick_t`, `pf_trade_t`, `pf_report_t`,
 the metrics/equity structs, `pf_security_diag_t`, `pf_trace_entry_t`,
@@ -132,7 +132,7 @@ single `.hpp`):
 
 | Module             | Header                   | Source                                                                                                                                                                                                                                   | Pine-facing role                                                                                                                                              |
 | ------------------ | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Public C ABI       | `pineforge.h`            | `c_abi.cpp` (+ layout `static_assert`s)                                                                                                                                                                                                                       | 102 public `PF_API` declarations: 82 of the 93 runtime implementations plus twenty per-strategy generated exports. `strategy_configure_native_fx_curve_v1` stages the additive native FX curve. `strategy_set_scratch_tables_v1` selects the scratch-table backend. `report_sink.h` adds the T-summary query `strategy_report_sink_summary_v1`. |
+| Public C ABI       | `pineforge.h`            | `c_abi.cpp` (+ layout `static_assert`s), `report_sink_json.cpp`                                                                                                                                                                                                | 103 public `PF_API` declarations: 83 of the 94 runtime implementations plus twenty per-strategy generated exports. `strategy_configure_native_fx_curve_v1` stages the additive native FX curve. `strategy_set_scratch_tables_v1` selects the scratch-table backend. `report_sink.h` adds the T-summary query `strategy_report_sink_summary_v1`. `pf_report_sink_json_v1` adds stateless strict sink verification, E/T JSON projection and guards; its descriptors are in `report_sink_json.h`. |
 | Engine             | `engine.hpp`             | `engine_run.cpp`, `engine_stream.cpp`, `engine_execution.cpp`, `engine_orders.cpp`, `engine_path_resolve.cpp`, `engine_trade_accessors.cpp`, `engine_security.cpp`, `engine_lower_tf.cpp`, `engine_report.cpp`, `native_execution_consumer.cpp` | One-shot and continuous lifecycle, native request matching/settlement, orders, reports, inputs / syminfo, magnifier, TF aggregation, and `request.security` plumbing.                  |
 | Engine internals   | `engine_internal.hpp`    | (private cross-TU header)                                                                                                                                                                                                                | `pineforge::internal::*` types and helpers shared between engine `.cpp` partitions; not part of the public ABI.                                               |
 | Technical analysis | `ta.hpp`                 | `ta_moving_averages.cpp`, `ta_oscillators.cpp`, `ta_volatility_trend.cpp`, `ta_extremes_volume.cpp`, `ta_misc.cpp`                                                                                                                       | Official `ta.*` functions and series variables backed by stateful runtime classes with `compute` / `recompute`, plus `pivot_point_levels(...)` free function. |
