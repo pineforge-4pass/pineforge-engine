@@ -408,6 +408,22 @@ struct PlacementSnapshot {
     bool pooc_global_full_exit_tracks_bound_adds = false;
     bool pooc_global_full_exit_bound_add = false;
     PineCancellationReceipt cancellation{};
+    // Derived table membership, never placement evidence. A copied/moved
+    // snapshot starts detached; assignment rewrites evidence in the existing
+    // node without copying another node's links. PlacementTable alone links
+    // and unlinks retained nodes, including key-changing replace().
+    struct ReissueLinks {
+        ReissueLinks() noexcept = default;
+        ReissueLinks(const ReissueLinks&) noexcept {}
+        ReissueLinks(ReissueLinks&&) noexcept {}
+        ReissueLinks& operator=(const ReissueLinks&) noexcept { return *this; }
+        ReissueLinks& operator=(ReissueLinks&&) noexcept { return *this; }
+
+        PlacementSnapshot* prev = nullptr;
+        PlacementSnapshot* next = nullptr;
+        std::uint64_t incarnation = 0;
+    };
+    ReissueLinks reissue_links{};
 };
 
 class PlacementTable;
@@ -831,7 +847,7 @@ public:
     // its command sequence under its (source_id, from_entry) and, for a
     // non-margin row, its source id. Returns false when no row is there.
     bool erase(std::uint64_t incarnation) {
-        const PlacementSnapshot* row = locate(incarnation);
+        PlacementSnapshot* row = locate(incarnation);
         if (!row) return false;
         preflight_erased_rows([&](const auto& emit) { emit(*row); });
         // Fold the admitted pair before taking the node as well: a disk I/O
@@ -957,14 +973,16 @@ private:
         bool operator()(const ReissueKey&, const ReissueKeyView&) const noexcept;
         bool operator()(const ReissueKeyView&, const ReissueKey&) const noexcept;
     };
-    struct ReissueIncarnationLess {
-        bool operator()(std::uint64_t, std::uint64_t) const noexcept;
+    struct ReissueRows {
+        PlacementSnapshot* head = nullptr;
+        PlacementSnapshot* tail = nullptr;
     };
-    using ReissueRows =
-        std::map<std::uint64_t, const PlacementSnapshot*, ReissueIncarnationLess>;
+    ReissueRows* reissue_group(const PlacementSnapshot& identity);
+    static void link_reissue(std::uint64_t incarnation, PlacementSnapshot& node,
+                             ReissueRows& group) noexcept;
     void index_reissue(std::uint64_t incarnation, const PlacementSnapshot& identity,
-                       const PlacementSnapshot* node);
-    void unindex_reissue(std::uint64_t incarnation, const PlacementSnapshot& row) noexcept;
+                       PlacementSnapshot* node);
+    void unindex_reissue(std::uint64_t incarnation, PlacementSnapshot& row) noexcept;
 
     // window_[head_ + i] holds incarnation base_ + i, or null; old_ holds the
     // rows below base_, ascending.
@@ -989,8 +1007,9 @@ private:
     // Pure retained-row index, like the retirement scratch's reissue memo:
     // no independent lifecycle state and no extra hash leaf. hash_placement
     // already folds every key/level and incarnation needed to reconstruct it.
-    // One member per retained exit row; an empty identity is removed at once.
-    // Owning keys and stable node pointers survive compact() and table moves.
+    // One map node per identity; row membership is intrusive and allocates
+    // nothing. An empty identity is removed at once. Owning keys and stable
+    // node pointers survive compact() and table moves.
     std::map<ReissueKey, ReissueRows, ReissueKeyLess> reissue_rows_;
 };
 

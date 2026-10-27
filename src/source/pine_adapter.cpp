@@ -912,66 +912,90 @@ PlacementTable::ReissueKeyView PlacementTable::reissue_key_view(
 
 bool PlacementTable::ReissueKeyLess::operator()(
         const ReissueKey& a, const ReissueKey& b) const noexcept {
-    PINEFORGE_TAIL_WORK("k3_pairs", 1);
     return reissue_key_view(a) < reissue_key_view(b);
 }
 
 bool PlacementTable::ReissueKeyLess::operator()(
         const ReissueKey& a, const ReissueKeyView& b) const noexcept {
-    PINEFORGE_TAIL_WORK("k3_pairs", 1);
     return reissue_key_view(a) < b;
 }
 
 bool PlacementTable::ReissueKeyLess::operator()(
         const ReissueKeyView& a, const ReissueKey& b) const noexcept {
-    PINEFORGE_TAIL_WORK("k3_pairs", 1);
     return a < reissue_key_view(b);
 }
 
-bool PlacementTable::ReissueIncarnationLess::operator()(
-        std::uint64_t a, std::uint64_t b) const noexcept {
-    PINEFORGE_TAIL_WORK("k3_pairs", 1);
-    return a < b;
-}
-
-void PlacementTable::index_reissue(
-        std::uint64_t incarnation, const PlacementSnapshot& identity,
-        const PlacementSnapshot* node) {
+PlacementTable::ReissueRows* PlacementTable::reissue_group(
+        const PlacementSnapshot& identity) {
     if (identity.family != PineOrderFamily::ExitLimit
         && identity.family != PineOrderFamily::ExitStop
-        && identity.family != PineOrderFamily::ExitTrail) return;
+        && identity.family != PineOrderFamily::ExitTrail) return nullptr;
     auto group = reissue_rows_.find(reissue_key(identity));
     if (group == reissue_rows_.end()) {
         group = reissue_rows_.try_emplace(ReissueKey{
             identity.placement_cycle, identity.family, identity.source_id, identity.from_entry}).first;
     }
-    try {
-        group->second.emplace(incarnation, node);
-    } catch (...) {
-        if (group->second.empty()) reissue_rows_.erase(group);
-        throw;
-    }
+    return &group->second;
+}
+
+void PlacementTable::link_reissue(
+        std::uint64_t incarnation, PlacementSnapshot& node, ReissueRows& group) noexcept {
+    auto& links = node.reissue_links;
+    assert(links.incarnation == 0 && !links.prev && !links.next);
+    // Ordinary issuance appends in constant time. Delayed adoption walks
+    // backward from the tail, without allocating a member node.
+    auto* prev = group.tail;
+    while (prev && prev->reissue_links.incarnation > incarnation)
+        prev = prev->reissue_links.prev;
+    assert(!prev || prev->reissue_links.incarnation != incarnation);
+    auto* next = prev ? prev->reissue_links.next : group.head;
+    links.prev = prev;
+    links.next = next;
+    links.incarnation = incarnation;
+    if (prev) prev->reissue_links.next = &node;
+    else group.head = &node;
+    if (next) next->reissue_links.prev = &node;
+    else group.tail = &node;
+}
+
+void PlacementTable::index_reissue(
+        std::uint64_t incarnation, const PlacementSnapshot& identity,
+        PlacementSnapshot* node) {
+    if (auto* group = reissue_group(identity)) link_reissue(incarnation, *node, *group);
 }
 
 void PlacementTable::unindex_reissue(
-        std::uint64_t incarnation, const PlacementSnapshot& row) noexcept {
+        [[maybe_unused]] std::uint64_t incarnation, PlacementSnapshot& row) noexcept {
     if (row.family != PineOrderFamily::ExitLimit && row.family != PineOrderFamily::ExitStop
         && row.family != PineOrderFamily::ExitTrail) return;
     const auto group = reissue_rows_.find(reissue_key(row));
     assert(group != reissue_rows_.end());
-    group->second.erase(incarnation);
-    if (group->second.empty()) reissue_rows_.erase(group);
+    auto& links = row.reissue_links;
+    assert(links.incarnation == incarnation);
+    if (links.prev) links.prev->reissue_links.next = links.next;
+    else group->second.head = links.next;
+    if (links.next) links.next->reissue_links.prev = links.prev;
+    else group->second.tail = links.prev;
+    links.prev = links.next = nullptr;
+    links.incarnation = 0;
+    if (!group->second.head) reissue_rows_.erase(group);
 }
 
 void PlacementTable::replace(std::uint64_t incarnation, PlacementSnapshot&& snapshot) {
     static_assert(std::is_nothrow_move_assignable_v<PlacementSnapshot>,
                   "reissue membership publication requires a nonthrowing row rewrite");
     auto& row = at(incarnation);
-    // Allocate the new membership before removing the old one. On a rewrite
-    // within the same identity, emplace simply keeps the stable node pointer.
-    index_reissue(incarnation, snapshot, &row);
-    if (reissue_key(row) != reissue_key(snapshot)) unindex_reissue(incarnation, row);
+    if (reissue_key(row) == reissue_key(snapshot)) {
+        // ReissueLinks assignment preserves this stable node's membership.
+        row = std::move(snapshot);
+        return;
+    }
+    // Only creating an identity can throw. Establish its group first, while
+    // the old evidence and membership are intact; publication below cannot.
+    auto* group = reissue_group(snapshot);
+    unindex_reissue(incarnation, row);
     row = std::move(snapshot);
+    if (group) link_reissue(incarnation, row, *group);
 }
 
 PlacementTable::ReissueBasis PlacementTable::reissue_basis(
@@ -980,13 +1004,12 @@ PlacementTable::ReissueBasis PlacementTable::reissue_basis(
     const auto group = reissue_rows_.find(
         ReissueKeyView{cycle, own.family, own.source_id, own.from_entry});
     if (group == reissue_rows_.end()) return basis;
-    PINEFORGE_TAIL_WORK("k3_pairs", 1); // The matched identity entry.
-    for (const auto& peer : group->second) {
+    for (const auto* peer = group->second.head; peer; peer = peer->reissue_links.next) {
         PINEFORGE_TAIL_WORK("k3_pairs", 1); // Each examined retained row.
         if (basis[0].second
-            && !same_double_bits(basis[0].second->exit_levels.stop, peer.second->exit_levels.stop))
+            && !same_double_bits(basis[0].second->exit_levels.stop, peer->exit_levels.stop))
             basis[1] = basis[0];
-        basis[0] = peer;
+        basis[0] = {peer->reissue_links.incarnation, peer};
     }
     return basis;
 }

@@ -378,6 +378,9 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     // no hash of a mutable placement is cached.
     // PlacementTable's reissue_rows_ is only a derived identity membership
     // index over these same nodes, rebuilt by insert/replace/erase/clear.
+    // Snapshot reissue_links carry only its intrusive storage topology:
+    // copying evidence detaches them, and neither hashing nor scratch
+    // serialization includes addresses or an additional incarnation leaf.
     // Like retired_row_scratch_'s reissue memo it adds no independent state;
     // the ordered rows below already fold its complete reconstruction input.
     PINEFORGE_BROKER_HASH_OBSERVE(placement_, bracket_families_,
@@ -385,6 +388,12 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     f.u(placement_.high_water()); f.u(placement_.erased_rows()); f.u(placement_.erased_digest());
     f.u(placement_.size());
     for (const auto& row : placement_) {
+        // The derived membership names this exact retained incarnation.
+        // Validate it without changing the placement fold's bytes.
+        assert(row.second.reissue_links.incarnation
+               == ((row.second.family == PineOrderFamily::ExitLimit
+                    || row.second.family == PineOrderFamily::ExitStop
+                    || row.second.family == PineOrderFamily::ExitTrail) ? row.first : 0));
         PINEFORGE_TAIL_WORK("hash_placements", 1);
         f.u(row.first); hash_placement(f, row.second);
     }
