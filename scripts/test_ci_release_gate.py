@@ -1993,16 +1993,16 @@ class RulesetsProbeTests(unittest.TestCase):
         docs = (ROOT / "docs/ci.md").read_text()
         requirements = (
             'PR build/preflight and parity subset use `["self-hosted","pf-gcp-pr"]`;\n'
-            'post preflight/parity use `gke-runners`; credentialed docs keep `["self-hosted","pf-gcp-post"]`.\n'
+            'post preflight/parity use `gke-runners`; credentialed docs use `gke-protected` with `gkp-8cpu-16gb-amd64`.\n'
             'Post Release/Debug/kernel and native shards, post sanitizers and both native-live sanitizer\n'
             'profiles use fixed `gke-runners` size labels directly in runner pods carrying the engine toolchain image and sudo. No job routes by event.',
             "The manual `release-ruleset-probe.yml` workflow runs `authz` on\n"
             'hosted `ubuntu-24.04` and `probe` on `gke-protected` with `gkp-2cpu-4gb-amd64`.',
-            "Release and promotion use the isolated release fleet:\n"
-            "`release`, `notify-hub`, Linux x64 `prebuilt` and baseline `promote` use\n"
-            '`["self-hosted","pf-gcp-main"]`.\n'
-            'The release ruleset probe runs secret-free `authz` on hosted `ubuntu-24.04` and\n'
-            '`probe` on `gke-protected` with `gkp-2cpu-4gb-amd64`.',
+            "Credentialed jobs use `gke-protected`, restricted to these four workflow refs:\n"
+            "`release.yml@refs/heads/main` and `promote-baseline.yml@refs/heads/main`;\n"
+            "`docs-post.yml@refs/heads/main` and `release-ruleset-probe.yml@refs/heads/main`.\n"
+            "`release`, `promote` and docs `build` use `gkp-8cpu-16gb-amd64`;\n"
+            "`notify-hub` and `probe` use `gkp-2cpu-4gb-amd64`; each label's per-run cap is 8.",
             "Dispatch **Release ruleset probe** (`release-ruleset-probe.yml`) once from\n"
             "`main` to check actual ruleset visibility with the same App token mint as\n"
             "`release.yml`. The workflow file must be on the default branch, and the run\n"
@@ -2010,7 +2010,7 @@ class RulesetsProbeTests(unittest.TestCase):
             'The credentialed probe job runs on `gke-protected` with `gkp-2cpu-4gb-amd64`, with\n'
             'secret-free `authz` on hosted `ubuntu-24.04`.',
             "`gke-protected` admits exactly the four workflow refs listed above at `refs/heads/main`,\n"
-            "and today only the read-only probe uses it.",
+            "so the probe cannot fall back to a VM pool or the general `gke-runners` group.",
             "The dispatch must run from `main`; the workflow itself refuses any other ref\n"
             "before minting the App token or checking out repository code.",
         )

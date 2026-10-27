@@ -108,6 +108,14 @@ GKE_JOB_RUNNERS = {
     for name, jobs in GKE_JOB_LABELS.items()
 }
 PROTECTED_JOB_RUNNERS = {
+    ('release.yml', 'release'):
+        'group: gke-protected labels: gkp-8cpu-16gb-amd64',
+    ('release.yml', 'notify-hub'):
+        'group: gke-protected labels: gkp-2cpu-4gb-amd64',
+    ('promote-baseline.yml', 'promote'):
+        'group: gke-protected labels: gkp-8cpu-16gb-amd64',
+    ('docs-post.yml', 'build'):
+        'group: gke-protected labels: gkp-8cpu-16gb-amd64',
     ('release-ruleset-probe.yml', 'probe'):
         'group: gke-protected labels: gkp-2cpu-4gb-amd64',
 }
@@ -290,22 +298,27 @@ HOSTED_JOB_RUNNERS = {
     'ci-post.yml': {**dict.fromkeys(('authz', 'changes', 'build-gate'), 'ubuntu-24.04'),
                     **dict.fromkeys(POST_LEG_GATES, 'ubuntu-24.04'),
                     **GKE_JOB_RUNNERS['ci-post.yml']},
-    **{name: {'authz': 'ubuntu-24.04'} for name in (
-        'corpus-parity-subset.yml', 'docs-post.yml')},
+    'corpus-parity-subset.yml': {'authz': 'ubuntu-24.04'},
+    'docs-post.yml': {
+        'authz': 'ubuntu-24.04',
+        'build': PROTECTED_JOB_RUNNERS[('docs-post.yml', 'build')]},
     'native-live.yml': {'authz': 'ubuntu-24.04', **GKE_JOB_RUNNERS['native-live.yml'],
                         'native-live-native': 'ubuntu-24.04', 'native-live-gate': 'ubuntu-24.04'},
     'corpus-parity.yml': {'authz': 'ubuntu-24.04', **GKE_JOB_RUNNERS['corpus-parity.yml']},
     'docs.yml': {'authz': 'ubuntu-24.04', 'build': 'ubuntu-24.04'},
     'promote-baseline.yml': {'promote-guard': 'ubuntu-latest'},
 }
-# Release/probe credential pins and ARM strategies remain isolated.
+# Protected credential pins and ARM strategies remain isolated.
 RELEASE_JOB_RUNNERS = {
-    'release.yml': {'release': RELEASE_RUNNER, 'prebuilt': HOSTED_MATRIX_RUNNER,
-                    'notify-hub': RELEASE_RUNNER},
+    'release.yml': {
+        'release': PROTECTED_JOB_RUNNERS[('release.yml', 'release')],
+        'prebuilt': HOSTED_MATRIX_RUNNER,
+        'notify-hub': PROTECTED_JOB_RUNNERS[('release.yml', 'notify-hub')]},
     'release-ruleset-probe.yml': {
         'authz': 'ubuntu-24.04',
         'probe': PROTECTED_JOB_RUNNERS[('release-ruleset-probe.yml', 'probe')]},
-    'promote-baseline.yml': {'promote': RELEASE_RUNNER},
+    'promote-baseline.yml': {
+        'promote': PROTECTED_JOB_RUNNERS[('promote-baseline.yml', 'promote')]},
 }
 # Credential-bearing jobs outside the release pins and gated docs build retain
 # standard hosted labels. Existing hosted exceptions above are pinned separately.

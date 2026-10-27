@@ -68,7 +68,7 @@ PRs restore the newest compatible default-branch compiler cache, and only
 successful runs on `main` save that cache namespace.
 
 Verification jobs keep literal runner pins at the workflow boundary: PR build/preflight and parity subset use `["self-hosted","pf-gcp-pr"]`;
-post preflight/parity use `gke-runners`; credentialed docs keep `["self-hosted","pf-gcp-post"]`.
+post preflight/parity use `gke-runners`; credentialed docs use `gke-protected` with `gkp-8cpu-16gb-amd64`.
 Post Release/Debug/kernel and native shards, post sanitizers and both native-live sanitizer
 profiles use fixed `gke-runners` size labels directly in runner pods carrying the engine toolchain image and sudo. No job routes by event.
 Hosted `ubuntu-24.04` runs all eight `authz` jobs, both CI `changes`/`build-gate` jobs, all post/native aggregates and `docs.yml`'s `build`.
@@ -81,7 +81,7 @@ hosted `ubuntu-24.04` and `probe` on `gke-protected` with `gkp-2cpu-4gb-amd64`.
 `docs.yml` retains the PR build name and `.github/**` exclusion.
 `docs-post.yml` builds and deploys on main pushes and manual dispatch.
 Tag pushes no longer trigger docs: the post fleet admits only engine `main`.
-Release and baseline promotion retain their separate `pf-gcp-main` policy.
+Release's Linux x64 artifact cell retains its separate `pf-gcp-main` policy; other credentialed release work uses `gke-protected`.
 
 Start with the preflight used by GitHub Actions. Install actionlint 1.7.12,
 ShellCheck and pytest, then run:
@@ -185,7 +185,7 @@ the preflight source guard rejects those includes before a build.
 CI uses Ubuntu 24.04 amd64 and arm64 cells and selects Python 3.12 explicitly.
 The amd64 post build shards and the two arm64 post cells use the `gke-runners` group with
 fixed architecture/size labels and run directly in runner pods carrying the engine toolchain image and sudo. All three build jobs refuse an OS mismatch.
-Hosted exceptions include the named light jobs and the existing release/promotion pins.
+Hosted exceptions include the named light jobs and the release arm64 artifact cell.
 CMake uses the same interpreter as the
 verification driver, so its Python checks do not switch to a different system
 Python. CTest must discover tests; an empty suite is a failure. Which runner
@@ -1647,7 +1647,7 @@ runs, and this page does not claim either target as met.
 
 ## Runners and time limits
 
-Credentialed work other than the ruleset probe retains its VM pins; secret-free post Linux jobs run directly in GKE runner pods carrying the engine toolchain image and sudo.
+All credentialed jobs use `gke-protected`; secret-free post Linux jobs run directly in GKE runner pods carrying the engine toolchain image and sudo.
 The four amd64 post legs, arm64 cells, preflight, parity and native verification use `gke-runners`; their aggregates use the light image.
 The native matrix is exactly `1..4` with `--ctest-shard I/4`; live sanitizers are unsharded. Each runner label remains a literal, checked per job:
 
@@ -1659,7 +1659,7 @@ The native matrix is exactly `1..4` with `--ctest-shard I/4`; live sanitizers ar
 | `ci-post.yml` | Push to `main`, 01:30 UTC schedule, dispatch | Light jobs and four aggregates: `ubuntu-24.04`; `gke-runners`: Release/sanitizers `gke-32cpu-64gb-amd64`, Debug/kernel `gke-16cpu-32gb-amd64`, preflight tiers `gke-8cpu-16gb-amd64`, arm64 `gke-16cpu-32gb-arm64` |
 | `corpus-parity.yml` | Schedule, dispatch, post CI callers | `authz`: hosted `ubuntu-24.04`; `gke-runners`: full parity `gke-16cpu-32gb-amd64`, subset `gke-8cpu-16gb-amd64` |
 | `native-live.yml` | Dispatch and post CI callers on `main` | `authz` and both aggregates: hosted `ubuntu-24.04`; `gke-runners`: native shards `gke-8cpu-16gb-amd64`, sanitizer profiles `gke-16cpu-32gb-amd64` |
-| `docs-post.yml` | Push to `main`, dispatch | `authz`: hosted `ubuntu-24.04`; credentialed `build`: `["self-hosted","pf-gcp-post"]` |
+| `docs-post.yml` | Push to `main`, dispatch | `authz`: hosted `ubuntu-24.04`; credentialed `build`: `gke-protected` with `gkp-8cpu-16gb-amd64` |
 
 Post CI starts on push to `main`, schedule and dispatch; its GKE routing checker
 refuses all PR events. Reusable workflows inherit their caller's event.
@@ -1667,8 +1667,8 @@ refuses all PR events. Reusable workflows inherit their caller's event.
 follow local calls to a fixed point, refuse mixed event classes and require
 literal VM arrays or exact GKE group/label mappings outside hosted pins; job conditions cannot excuse routing.
 Fork PRs on hosted runners run without our secrets, so the VM-only fork-refusal hook is not needed.
-Jobs in `gke-runners` carry no deployment secrets, id-token permissions or environment; PR-reachable workflows cannot name GKE routing. `gke-runners` jobs start only from ci-post.yml, corpus-parity.yml and native-live.yml at refs/heads/main (the runner group lists those workflow refs); a dispatch from another ref queues without a runner. The `gke-protected` group admits exactly `release.yml@refs/heads/main`, `promote-baseline.yml@refs/heads/main`, `docs-post.yml@refs/heads/main` and `release-ruleset-probe.yml@refs/heads/main`; today only the `probe` job uses it.
-Rollback may restore an earlier GCP fleet pin; paid larger-runner labels remain refused.
+Jobs in `gke-runners` carry no deployment secrets, id-token permissions or environment; PR-reachable workflows cannot name GKE routing. `gke-runners` jobs start only from ci-post.yml, corpus-parity.yml and native-live.yml at refs/heads/main (the runner group lists those workflow refs); a dispatch from another ref queues without a runner. The `gke-protected` group admits exactly `release.yml@refs/heads/main`, `promote-baseline.yml@refs/heads/main`, `docs-post.yml@refs/heads/main` and `release-ruleset-probe.yml@refs/heads/main`; all credentialed jobs use it.
+Protected jobs cannot fall back to VM pins or general GKE labels; paid larger-runner labels remain refused.
 
 The four full build checks are `build (ubuntu-24.04, Release)`,
 `build (ubuntu-24.04, Debug)`, `build (ubuntu-24.04-arm, Release)` and
@@ -1681,12 +1681,12 @@ One cache key per architecture/profile/SHA is restored by all shards; only shard
 `HOSTED_JOB_RUNNERS` pins hosted jobs and exact GKE mappings; every GKE job runs directly in a runner pod carrying the engine toolchain image and sudo. The PR build remains
 `build (ubuntu-24.04, Release)` and its aggregate remains `build`.
 
-Release and promotion use the isolated release fleet:
-`release`, `notify-hub`, Linux x64 `prebuilt` and baseline `promote` use
-`["self-hosted","pf-gcp-main"]`.
-The release ruleset probe runs secret-free `authz` on hosted `ubuntu-24.04` and
-`probe` on `gke-protected` with `gkp-2cpu-4gb-amd64`.
-Release's Linux arm64 artifact cell keeps its hosted `ubuntu-22.04-arm` pin;
+Credentialed jobs use `gke-protected`, restricted to these four workflow refs:
+`release.yml@refs/heads/main` and `promote-baseline.yml@refs/heads/main`;
+`docs-post.yml@refs/heads/main` and `release-ruleset-probe.yml@refs/heads/main`.
+`release`, `promote` and docs `build` use `gkp-8cpu-16gb-amd64`;
+`notify-hub` and `probe` use `gkp-2cpu-4gb-amd64`; each label's per-run cap is 8.
+Release's Linux x64 artifact cell retains `["self-hosted","pf-gcp-main"]`; arm64 keeps its hosted `ubuntu-22.04-arm` pin;
 1.8.0 has no macOS test or artifact cells, and
 promotion runs on a push to `main` plus manual dispatch from `main`.
 
@@ -1703,8 +1703,8 @@ default excludes `slow` from Debug and sanitizer runs on every event,
 including non-PR events; Release, kernel and native retain every row.
 PR CI keeps CR-233's Release smoke selected by CTest label `fast`.
 
-Baseline promotion uses `["self-hosted","pf-gcp-main"]` for its GitHub App
-secrets and inherited `id-token: write` permission. The release class admits
+Baseline promotion uses `gke-protected` with `gkp-8cpu-16gb-amd64` for its GitHub App
+secrets and inherited `id-token: write` permission. The protected group admits
 this allowlisted workflow at `refs/heads/main`; WIF pins its
 `job_workflow_ref` and run ref to main without restricting the event.
 The pushed SHA must resolve to exactly one merged PR before authorization,
@@ -1922,7 +1922,7 @@ must use `main`'s copy.
 The credentialed probe job runs on `gke-protected` with `gkp-2cpu-4gb-amd64`, with
 secret-free `authz` on hosted `ubuntu-24.04`.
 `gke-protected` admits exactly the four workflow refs listed above at `refs/heads/main`,
-and today only the read-only probe uses it.
+so the probe cannot fall back to a VM pool or the general `gke-runners` group.
 The dispatch must run from `main`; the workflow itself refuses any other ref
 before minting the App token or checking out repository code.
 It runs `python3 scripts/ci_release_gate.py rulesets-probe --repo OWNER/REPO`,
