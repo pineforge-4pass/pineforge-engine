@@ -193,7 +193,7 @@ can add them up; each is read from the source named in
 | Trade ledger | Descriptor window of 64 rows; read cache of 65,536 entries without a report sink, 128 with one. Chosen by the engine, not settable from the C API | 21,504 B for the window and its tail, plus up to 20,447,232 B of cache without a sink (39,936 B with one) |
 | Command journal | 2,048 resident events, 128 kept at least | Not a constant per event; plus 163,840 B of spill buffers per journal once it first spills |
 | Placement rows | No budget: the live rows plus the rows the retirement rules pin | Not measured |
-| Id tables | Cohort table: resident rows follow the spill rule above (at most twice the rows left by the last pass, plus 64, plus pinned rows), and the bounded profile admits at most 4,096 live cohorts. The ordered index is read through a 64 KiB window per scratch file | 64 KiB per file; the index itself is on disk |
+| Id tables | Cohort table: resident rows follow the spill rule above (at most twice the rows left by the last pass, plus 64, plus pinned rows), and the bounded profile admits at most its sized limit of live cohorts (65,536 at least, 1,048,576 at most). The ordered index is read through a 64 KiB window per scratch file | 64 KiB per file; the index itself is on disk |
 
 ## Getting the bound before a run {#memory_before}
 
@@ -238,7 +238,7 @@ or bounds the row.
 
 | Signal | Meaning |
 | --- | --- |
-| `scratch_capacity_exceeded`, argument `resource` | A slab region ran out, more than 4,096 cohorts are live in the bounded profile, or an id is longer than 64 bytes in the bounded profile (refused before any store change). Admit larger maxima or shorter ids before another attempt |
+| `scratch_capacity_exceeded`, argument `resource` | A slab region ran out, more cohorts are live in the bounded profile than its sized limit (65,536 at least, 1,048,576 at most), or an id is longer than 64 bytes in the bounded profile (refused before any store change). Admit larger maxima or shorter ids before another attempt |
 | `report_sink_failed`, reason `arena_exhausted` | The inherited arena filled. A host may re-place the run on a larger arena; one that makes a single attempt returns the failure |
 | `scratch_io_failed` | A scratch read, write, create or resize failed, or the command-scratch byte cap was reached |
 | `scratch_configuration_invalid` | `PINEFORGE_COMMAND_SCRATCH_MAX_BYTES` is not a positive decimal |
