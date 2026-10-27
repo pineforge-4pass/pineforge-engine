@@ -56,9 +56,9 @@ struct Result {
     std::array<Traffic, families> io{};
     std::vector<std::vector<unsigned char>> disk;
 };
-// BASE GOLDENS ONLY: supervisor must fill from frozen 6b33c47fda4e,
-// lab rj-20261027t180028-c7f037 (or a fresh frozen-base build). Never use
-// observations from the changed product. Empty values deliberately fail.
+// BASE GOLDENS ONLY: recorded from the unchanged engine (frozen base
+// 6b33c47fda4e). Never use observations from the changed product. Empty
+// values deliberately fail.
 namespace base_goldens {
 struct Table { std::uint64_t lookups, image_hash; };
 inline constexpr std::optional<Table> tree = Table{0x8b7b92445630d923ULL, 0x5f9518b3d89a682cULL};
@@ -104,7 +104,7 @@ void golden_and_fewer(const char* name, const Result& cached, const Result& dire
     require(cached.io[family].writes == direct.io[family].writes
             && cached.io[family].write_bytes == direct.io[family].write_bytes,
             "read cache leaves actual writes unchanged");
-    require(golden.has_value(), "BASE GOLDENS MISSING: supervisor must pin frozen-base hashes");
+    require(golden.has_value(), "BASE GOLDENS MISSING: the frozen-base hashes must be recorded");
     require(cached.lookups == golden->lookups && !cached.disk.empty()
             && cached.image_hash == golden->image_hash, "lookup and physical-image hashes match BASE GOLDENS");
 }

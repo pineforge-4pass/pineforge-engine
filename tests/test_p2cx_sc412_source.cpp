@@ -7,9 +7,9 @@
 #undef main
 
 namespace sc412_source {
-// BASE GOLDENS ONLY: supervisor fills this constant block from frozen
-// 6b33c47fda4e, lab rj-20261027t180028-c7f037 or a frozen-base rerun.
-// No expected hash may come from this changed product. Missing is a failure.
+// BASE GOLDENS ONLY: this constant block was recorded from the unchanged
+// engine (frozen base 6b33c47fda4e), never from the cached path.
+// No expected hash may come from the changed product. Missing is a failure.
 struct SourceGolden {
     std::uint64_t trades, equity, digests, observations, final_digest, final_leaves;
     std::uint64_t trade_count, equity_count, digest_count, observation_count;
@@ -174,7 +174,7 @@ void identity() {
                     static_cast<unsigned long long>(actual.observation_count));
         host.assert_engaged();
         sc412::require(kFrozenBasePartialFillGolden.has_value(),
-                       "BASE GOLDENS MISSING: supervisor must pin frozen-base source hashes");
+                       "BASE GOLDENS MISSING: the frozen-base source hashes must be recorded");
         const auto& expected = *kFrozenBasePartialFillGolden;
         sc412::require(actual.trades == expected.trades && actual.equity == expected.equity
             && actual.digests == expected.digests && actual.observations == expected.observations
