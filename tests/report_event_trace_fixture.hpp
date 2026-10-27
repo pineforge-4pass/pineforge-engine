@@ -51,7 +51,12 @@ inline NativeRunSpec spec(std::uint64_t generation = 1) {
 }
 
 inline void prime_identity_intern_pool() {
+    // NativeExecutionConsumer constructs its request core with this key before
+    // receiving the configured run identity. Warm only the known pool entries;
+    // all Host construction and per-run allocations must stay in the census.
+    const native_order::SessionKey initial_request_key{"unbound"};
     const auto warmup = spec();
+    (void)initial_request_key;
     (void)warmup;
 }
 

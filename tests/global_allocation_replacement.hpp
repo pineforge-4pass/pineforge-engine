@@ -32,6 +32,11 @@
 //                 marked, and on_recorded (when set) sees each size;
 //   live_bytes    what the marked blocks still hold; a block allocated outside
 //                 the window is never subtracted from it.
+// With PINEFORGE_TEST_ALLOCATION_DIAGNOSTICS as well, marked blocks form an
+// intrusive list in their headers (no separate tracking allocations):
+//   live_allocations  the number of marked blocks not yet freed;
+//   allocation_tag    a string literal naming the current measured phase;
+//   dump_live_allocations  prints sizes, phase tags and operator-new callers.
 #pragma once
 
 #include <cstddef>
@@ -39,6 +44,25 @@
 #include <cstring>
 #include <limits>
 #include <new>
+
+#if defined(PINEFORGE_TEST_ALLOCATION_DIAGNOSTICS)
+#if !defined(PINEFORGE_TEST_ALLOCATION_BYTES)
+#error "allocation diagnostics require byte accounting"
+#endif
+#include <cstdio>
+#if defined(__GNUC__) || defined(__clang__)
+// Capture level zero in each replacement form, before its helper calls.
+#define PINEFORGE_TEST_NEW_NOINLINE __attribute__((noinline))
+#define PINEFORGE_TEST_NEW_CALLER \
+    , __builtin_extract_return_addr(__builtin_return_address(0))
+#else
+#define PINEFORGE_TEST_NEW_NOINLINE
+#define PINEFORGE_TEST_NEW_CALLER , nullptr
+#endif
+#else
+#define PINEFORGE_TEST_NEW_NOINLINE
+#define PINEFORGE_TEST_NEW_CALLER
+#endif
 
 namespace global_allocation {
 
@@ -50,6 +74,11 @@ inline std::size_t refused = 0;
 inline bool recording = false;
 inline std::size_t live_bytes = 0;
 inline void (*on_recorded)(std::size_t size) = nullptr;
+#endif
+
+#if defined(PINEFORGE_TEST_ALLOCATION_DIAGNOSTICS)
+inline std::size_t live_allocations = 0;
+inline const char* allocation_tag = "unlabelled";
 #endif
 
 namespace detail {
@@ -70,13 +99,24 @@ struct Header {
     std::size_t size;
     std::size_t offset;
     bool recorded;
+#if defined(PINEFORGE_TEST_ALLOCATION_DIAGNOSTICS)
+    Header* previous;
+    Header* next;
+    const char* tag;
+    const void* caller;
+#endif
 };
 constexpr std::size_t kPrefix =
     (sizeof(Header) + kFundamental - 1) / kFundamental * kFundamental;
+#if defined(PINEFORGE_TEST_ALLOCATION_DIAGNOSTICS)
+inline Header* first_live = nullptr;
+inline Header* last_live = nullptr;
+#endif
 #endif
 
 // The one allocator: nullptr when refused or out of memory, never throws.
-inline void* allocate(std::size_t size, std::size_t align) noexcept {
+inline void* allocate(std::size_t size, std::size_t align,
+                      const void* caller = nullptr) noexcept {
     if (refusing) {
         ++refused;
         return nullptr;
@@ -88,8 +128,20 @@ inline void* allocate(std::size_t size, std::size_t align) noexcept {
     auto* base = static_cast<unsigned char*>(from_system(prefix + size, align));
     if (base == nullptr) return nullptr;
     unsigned char* block = base + prefix;
+#if defined(PINEFORGE_TEST_ALLOCATION_DIAGNOSTICS)
+    auto* header = ::new (block - sizeof(Header)) Header{
+        size, prefix, recording, recording ? last_live : nullptr, nullptr,
+        allocation_tag, caller};
+    if (recording) {
+        if (last_live != nullptr) last_live->next = header;
+        else first_live = header;
+        last_live = header;
+        ++live_allocations;
+    }
+#else
     const Header header{size, prefix, recording};
     std::memcpy(block - sizeof(Header), &header, sizeof header);
+#endif
     if (recording) {
         live_bytes += size;
         if (on_recorded != nullptr) on_recorded(size);
@@ -98,6 +150,7 @@ inline void* allocate(std::size_t size, std::size_t align) noexcept {
     void* block = from_system(size, align);
     if (block == nullptr) return nullptr;
 #endif
+    (void)caller;
     ++allocations;
     return block;
 }
@@ -109,6 +162,15 @@ inline void deallocate(void* block) noexcept {
     Header header{};
     std::memcpy(&header, bytes - sizeof(Header), sizeof header);
     if (recording && header.recorded) live_bytes -= header.size;
+#if defined(PINEFORGE_TEST_ALLOCATION_DIAGNOSTICS)
+    if (header.recorded) {
+        if (header.previous != nullptr) header.previous->next = header.next;
+        else first_live = header.next;
+        if (header.next != nullptr) header.next->previous = header.previous;
+        else last_live = header.previous;
+        --live_allocations;
+    }
+#endif
     std::free(bytes - header.offset);
 #else
     std::free(block);
@@ -117,9 +179,10 @@ inline void deallocate(void* block) noexcept {
 
 // The throwing forms: the new-handler loop of [new.delete.single], except
 // that a refusal throws at once.
-inline void* allocate_or_throw(std::size_t size, std::size_t align) {
+inline void* allocate_or_throw(std::size_t size, std::size_t align,
+                               const void* caller = nullptr) {
     for (;;) {
-        if (void* block = allocate(size, align)) return block;
+        if (void* block = allocate(size, align, caller)) return block;
         if (refusing) throw std::bad_alloc();
         const std::new_handler handler = std::get_new_handler();
         if (handler == nullptr) throw std::bad_alloc();
@@ -128,9 +191,10 @@ inline void* allocate_or_throw(std::size_t size, std::size_t align) {
 }
 
 // The nothrow forms answer what the throwing form would, or nullptr.
-inline void* allocate_nothrow(std::size_t size, std::size_t align) noexcept {
+inline void* allocate_nothrow(std::size_t size, std::size_t align,
+                              const void* caller = nullptr) noexcept {
     try {
-        return allocate_or_throw(size, align);
+        return allocate_or_throw(size, align, caller);
     } catch (...) {
         return nullptr;
     }
@@ -141,35 +205,67 @@ inline std::size_t alignment(std::align_val_t align) noexcept {
 }
 
 }  // namespace detail
+
+#if defined(PINEFORGE_TEST_ALLOCATION_DIAGNOSTICS)
+inline void dump_live_allocations() noexcept {
+    // Copy before any I/O so reporting cannot change the evidence. The list
+    // tracks every marked block; only the printed sample is bounded.
+    constexpr std::size_t limit = 16;
+    struct Block { std::size_t size; const char* tag; const void* caller; };
+    Block blocks[limit]{};
+    const auto counted_bytes = live_bytes;
+    const auto counted_allocations = live_allocations;
+    std::size_t listed_bytes = 0, listed_allocations = 0, shown = 0;
+    for (const auto* header = detail::first_live; header != nullptr; header = header->next) {
+        listed_bytes += header->size;
+        ++listed_allocations;
+        if (shown < limit) blocks[shown++] = {header->size, header->tag, header->caller};
+    }
+    std::fprintf(stderr, "allocation census: outstanding_bytes=%zu"
+                 " outstanding_allocations=%zu listed_bytes=%zu listed_allocations=%zu\n",
+                 counted_bytes, counted_allocations, listed_bytes, listed_allocations);
+    for (std::size_t index = 0; index < shown; ++index) {
+        const auto& block = blocks[index];
+        std::fprintf(stderr, "  outstanding[%zu]: size=%zu tag=%s caller=%p\n",
+                     index, block.size, block.tag, const_cast<void*>(block.caller));
+    }
+    if (listed_allocations > shown)
+        std::fprintf(stderr, "  outstanding: %zu more blocks omitted\n",
+                     listed_allocations - shown);
+}
+#endif
+
 }  // namespace global_allocation
 
-void* operator new(std::size_t size) {
-    return global_allocation::detail::allocate_or_throw(size, 0);
+PINEFORGE_TEST_NEW_NOINLINE void* operator new(std::size_t size) {
+    return global_allocation::detail::allocate_or_throw(size, 0 PINEFORGE_TEST_NEW_CALLER);
 }
-void* operator new[](std::size_t size) {
-    return global_allocation::detail::allocate_or_throw(size, 0);
+PINEFORGE_TEST_NEW_NOINLINE void* operator new[](std::size_t size) {
+    return global_allocation::detail::allocate_or_throw(size, 0 PINEFORGE_TEST_NEW_CALLER);
 }
-void* operator new(std::size_t size, std::align_val_t align) {
+PINEFORGE_TEST_NEW_NOINLINE void* operator new(std::size_t size, std::align_val_t align) {
     return global_allocation::detail::allocate_or_throw(
-        size, global_allocation::detail::alignment(align));
+        size, global_allocation::detail::alignment(align) PINEFORGE_TEST_NEW_CALLER);
 }
-void* operator new[](std::size_t size, std::align_val_t align) {
+PINEFORGE_TEST_NEW_NOINLINE void* operator new[](std::size_t size, std::align_val_t align) {
     return global_allocation::detail::allocate_or_throw(
-        size, global_allocation::detail::alignment(align));
+        size, global_allocation::detail::alignment(align) PINEFORGE_TEST_NEW_CALLER);
 }
-void* operator new(std::size_t size, const std::nothrow_t&) noexcept {
-    return global_allocation::detail::allocate_nothrow(size, 0);
+PINEFORGE_TEST_NEW_NOINLINE void* operator new(std::size_t size, const std::nothrow_t&) noexcept {
+    return global_allocation::detail::allocate_nothrow(size, 0 PINEFORGE_TEST_NEW_CALLER);
 }
-void* operator new[](std::size_t size, const std::nothrow_t&) noexcept {
-    return global_allocation::detail::allocate_nothrow(size, 0);
+PINEFORGE_TEST_NEW_NOINLINE void* operator new[](std::size_t size, const std::nothrow_t&) noexcept {
+    return global_allocation::detail::allocate_nothrow(size, 0 PINEFORGE_TEST_NEW_CALLER);
 }
-void* operator new(std::size_t size, std::align_val_t align, const std::nothrow_t&) noexcept {
+PINEFORGE_TEST_NEW_NOINLINE void* operator new(
+        std::size_t size, std::align_val_t align, const std::nothrow_t&) noexcept {
     return global_allocation::detail::allocate_nothrow(
-        size, global_allocation::detail::alignment(align));
+        size, global_allocation::detail::alignment(align) PINEFORGE_TEST_NEW_CALLER);
 }
-void* operator new[](std::size_t size, std::align_val_t align, const std::nothrow_t&) noexcept {
+PINEFORGE_TEST_NEW_NOINLINE void* operator new[](
+        std::size_t size, std::align_val_t align, const std::nothrow_t&) noexcept {
     return global_allocation::detail::allocate_nothrow(
-        size, global_allocation::detail::alignment(align));
+        size, global_allocation::detail::alignment(align) PINEFORGE_TEST_NEW_CALLER);
 }
 
 void operator delete(void* block) noexcept {
@@ -208,3 +304,6 @@ void operator delete(void* block, std::align_val_t, const std::nothrow_t&) noexc
 void operator delete[](void* block, std::align_val_t, const std::nothrow_t&) noexcept {
     global_allocation::detail::deallocate(block);
 }
+
+#undef PINEFORGE_TEST_NEW_NOINLINE
+#undef PINEFORGE_TEST_NEW_CALLER
