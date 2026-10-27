@@ -762,14 +762,14 @@ release and kernel legs exclude the label and are held to the registration
 floor instead; the full runs on push and dispatch exclude no label and are
 held to these run floors.
 
-CR-196 splits the ownership manifest controls into four CTest shards,
+Four ownership manifest control shards are registered; their cases are balanced across
 `test_selected_window_ownership_manifest_controls_shard_1of4` through
-`test_selected_window_ownership_manifest_controls_shard_4of4`, each with the
-existing 180-second timeout. This adds three public registered/run rows to
-every engine profile in both fixture worlds; it only raises the counts above
-the pinned minimum floors listed above. The private-fixture and receipt row
-populations stay the same. Preflight still runs the complete unsharded driver;
-see [the controls commands](../tests/ownership/README.md#manifest-checker-controls)
+`test_selected_window_ownership_manifest_controls_shard_4of4` using checker
+launch counts derived from helpers and literal loop lengths. Largest-first
+placement uses stable ids and lightest-shard tie breaks, without test deadlines.
+The four rows still add three public registered/run rows above pinned floors in
+every profile and fixture world; private-fixture and receipt counts stay the same.
+Preflight runs all cases; see [the controls commands](../tests/ownership/README.md#manifest-checker-controls)
 for parallel CTest and individual shard invocations.
 
 Preflight also runs the detached-comment census of the kernel compile closure
