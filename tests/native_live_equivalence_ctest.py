@@ -41,8 +41,8 @@ def run_driver(script, arguments):
     sys.path.insert(0, str(script.parent))
     try:
         try:
-            # Execute the real __main__, with its full default probe/scenario
-            # population. Its output and exceptions remain visible to CTest.
+            # Execute the real __main__, retaining its default scenarios for
+            # the selected probes. Output and exceptions stay visible to CTest.
             runpy.run_path(str(script), run_name="__main__")
         except SystemExit as result:
             if result.code is None:
@@ -73,6 +73,7 @@ def main():
     parser.add_argument("--build-dir", required=True, type=Path)
     parser.add_argument("--libraries-dir", required=True, type=Path)
     parser.add_argument("--out", required=True, type=Path)
+    parser.add_argument("--probes", nargs="+")
     parser.add_argument("--sanitizer", choices=("asan", "tsan"))
     arguments = parser.parse_args()
     root, build, script = (path.resolve() for path in (
@@ -94,9 +95,12 @@ def main():
         libraries = arguments.libraries_dir.resolve() / retained.name
         output = retained / "results"
         print(f"Equivalence output: {output}; libraries: {libraries}", flush=True)
-        return run_driver(script, [
+        driver_arguments = [
             "--root", str(root), "--build-dir", str(build),
-            "--libraries-dir", str(libraries), "--out", str(output)])
+            "--libraries-dir", str(libraries), "--out", str(output)]
+        if arguments.probes is not None:
+            driver_arguments.extend(["--probes", *arguments.probes])
+        return run_driver(script, driver_arguments)
 
     return run_with_finalizer(execute, finalize_sanitizer)
 
