@@ -20,17 +20,25 @@ inline constexpr std::size_t kMaxResidentCohorts = 4096;
 // stores blobs in 64-byte cells with 56 bytes of payload
 // (include/pineforge/detail/scratch_store_impl.hpp:69-72), and the default
 // object chunk is 1024 bytes (include/pineforge/detail/o1_store.hpp:83-90).
-// The 40-byte index share is the 32-byte handle Entry
-// (include/pineforge/detail/scratch_store_impl.hpp:102-108) plus the 8-byte
-// ordered-index handle (include/pineforge/detail/scratch_store_impl.hpp:861-866).
+// Cells are packed into 4096-byte store pages that hold 63 cells each
+// (cells_per_page_ = (usable - 16) / kCell at scratch_store_impl.hpp:187 with
+// the 16-byte page header and trailer), so one cell costs 4096 / 63 backing
+// bytes, not 64. Every object chunk is one store record with its own index
+// entry; the measured index cost is 49 to 50 bytes per record (32-byte handle
+// Entry at scratch_store_impl.hpp:102-108, the 8-byte ordered-index handle at
+// :861-866, and the amortised slots of the two trees), charged here as 50.
+// These two figures were fitted to the measured growth of Stats::bytes_backing
+// on a real arena (payloads 0, 16, 100, 1000 and 5000 bytes, 20,000 objects
+// each: 180, 180, 310, 1350 and 6616 bytes per object) and are checked by
+// tests/test_object_store_reserve.cpp as an upper bound.
 inline constexpr std::uint64_t kObjectHeaderBytes = 16;
 inline constexpr std::uint64_t kObjectKeyBytes = 16;
-inline constexpr std::uint64_t kObjectCellBytes = 64;
+inline constexpr std::uint64_t kObjectPageBytes = 4096;
+inline constexpr std::uint64_t kObjectCellsPerPage = 63;
 inline constexpr std::uint64_t kObjectCellPayloadBytes = 56;
 inline constexpr std::uint64_t kObjectChunkBytes = 1024;
 inline constexpr std::uint64_t kObjectInlinePayloadBytes = 40;
-inline constexpr std::uint64_t kObjectIndexShareBytes = 40;
-inline constexpr std::uint64_t kObjectSmallBytes = 168;
+inline constexpr std::uint64_t kObjectIndexShareBytes = 50;
 
 // ScratchArena keeps four directory bytes per claimed 1 MiB chunk
 // (include/pineforge/detail/scratch_arena.hpp:142-148 and
@@ -66,12 +74,13 @@ inline std::uint64_t saturating_ceil_div(std::uint64_t value,
 
 } // namespace scratch_object_reservation_detail
 
-// Backing bytes for one object record, excluding the arena directory. A
-// payload through 40 bytes fits the 16-byte object header and one 56-byte
-// value-cell payload, so its 64-byte key cell, 64-byte value cell and 40-byte
-// index share total 168 bytes. Larger payloads charge the value cells for each
-// independently stored object chunk, plus one 64-byte key cell per object
-// chunk and the index share. The value cells are not one ceil((header +
+// Backing bytes for one object, excluding the arena directory: the cells of
+// all its records packed 63 to a 4096-byte page, plus the index entry of each
+// record. A payload through 40 bytes fits the 16-byte object header and one
+// 56-byte value cell in a single record: two cells (key and value) and one
+// index entry, 181 bytes. Larger payloads have one record per object chunk,
+// each with one key cell, the value cells of that chunk and an index entry. The
+// value cells are not one ceil((header +
 // payload) / 56) over the whole payload: put_chunk creates a separate
 // ScratchStore value blob for every object chunk, and scratch_store_impl.hpp
 // rounds each blob independently at 493-520.
@@ -82,10 +91,12 @@ inline std::uint64_t saturating_ceil_div(std::uint64_t value,
 inline std::uint64_t object_physical_bytes(std::uint64_t payload_bytes) noexcept {
     using namespace scratch_object_reservation_detail;
     const auto maximum = std::numeric_limits<std::uint64_t>::max();
-    if (payload_bytes <= kObjectInlinePayloadBytes) return kObjectSmallBytes;
     if (payload_bytes > maximum - kObjectHeaderBytes) return maximum;
 
-    const auto chunks = 1 + (payload_bytes - 1) / kObjectChunkBytes;
+    const auto chunks =
+        payload_bytes <= kObjectInlinePayloadBytes
+            ? std::uint64_t{1}
+            : 1 + (payload_bytes - 1) / kObjectChunkBytes;
     const auto first_payload =
         payload_bytes < kObjectChunkBytes ? payload_bytes : kObjectChunkBytes;
     const auto first_value_cells = saturating_ceil_div(
@@ -99,13 +110,11 @@ inline std::uint64_t object_physical_bytes(std::uint64_t payload_bytes) noexcept
                                                 kObjectCellPayloadBytes)),
         saturating_ceil_div(trailing_payload, kObjectCellPayloadBytes));
     const auto value_cells = saturating_add(first_value_cells, following_value_cells);
-    const auto value_bytes_charged = saturating_multiply(value_cells, kObjectCellBytes);
-    const auto key_bytes_charged = saturating_multiply(chunks, kObjectCellBytes);
+    const auto cells = saturating_add(chunks, value_cells);
+    const auto page_bytes = saturating_ceil_div(
+        saturating_multiply(cells, kObjectPageBytes), kObjectCellsPerPage);
     return saturating_add(
-        saturating_add(
-            key_bytes_charged,
-            value_bytes_charged),
-        kObjectIndexShareBytes);
+        page_bytes, saturating_multiply(chunks, kObjectIndexShareBytes));
 }
 
 // Reserve object records for bars script bars and k objects per script

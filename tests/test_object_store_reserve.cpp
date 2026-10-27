@@ -49,29 +49,31 @@ void reserve_rows() {
         std::uint64_t physical_expected;
         std::uint64_t expected;
     };
-    // These values are hand-derived from the 64/56 cells, 16-byte header,
-    // 1024-byte object chunks and 40-byte index share.
+    // These values are hand-derived from the 56-byte cell payload, the 16-byte
+    // header, 1024-byte object chunks (one record each, with its own key cell
+    // and 50-byte index entry) and 63 cells per 4096-byte page:
+    // bytes = ceil(cells * 4096 / 63) + records * 50, cells = records + value cells.
     const std::array<Row, 15> rows{{
-        {0, 1, 0, 168, 0},
-        {1, 0, 0, 168, 0},
-        {1, 1, 0, 168, 168},
-        {1, 1, 40, 168, 168},
-        {1, 1, 41, 232, 232},
-        {1, 1, 96, 232, 232},
-        {1, 1, 97, 296, 296},
-        {1, 1, 1000, 1320, 1320},
-        // Five independently stored object chunks each round their value
-        // blob: chunk 0 holds the 16-byte header and 1024 payload bytes
-        // (ceil(1040 / 56) = 19 cells), chunks 1..3 hold 1024 bytes each
-        // (19 cells each), chunk 4 holds 904 bytes (ceil(904 / 56) = 17 cells):
-        // 5*64 key cells + 93*64 value cells + 40 index bytes = 6312.
-        {1, 1, 5000, 6312, 6312},
-        {1, 2, 0, 168, 336},
-        {1, 3, 0, 168, 504},
-        {200000, 1, 0, 168, 33600000},
-        {1000000, 1, 0, 168, 168000000},
-        {1, 1, 0, 168, 168},
-        {0, 1, 5000, 6312, 0},
+        {0, 1, 0, 181, 0},
+        {1, 0, 0, 181, 0},
+        {1, 1, 0, 181, 181},     // 2 cells -> 131, + 50
+        {1, 1, 40, 181, 181},
+        {1, 1, 41, 246, 246},    // 3 cells -> 196, + 50
+        {1, 1, 96, 246, 246},
+        {1, 1, 97, 311, 311},    // 4 cells -> 261, + 50
+        {1, 1, 1000, 1351, 1351},  // 20 cells -> 1301, + 50
+        // Five records, each rounding its own value blob: chunk 0 holds the
+        // 16-byte header and 1024 payload bytes (ceil(1040 / 56) = 19 cells),
+        // chunks 1..3 hold 1024 bytes each (19 cells each), chunk 4 holds 904
+        // bytes (ceil(904 / 56) = 17 cells): 5 key cells + 93 value cells =
+        // 98 cells -> ceil(98 * 4096 / 63) = 6372, + 5 * 50 index bytes = 6622.
+        {1, 1, 5000, 6622, 6622},
+        {1, 2, 0, 181, 362},
+        {1, 3, 0, 181, 543},
+        {200000, 1, 0, 181, 36200000},
+        {1000000, 1, 0, 181, 181000000},
+        {1, 1, 0, 181, 181},
+        {0, 1, 5000, 6622, 0},
     }};
     for (const auto& row : rows) {
         require(object_physical_bytes(row.record_bytes) == row.physical_expected,

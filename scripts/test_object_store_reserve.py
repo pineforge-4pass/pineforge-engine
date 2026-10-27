@@ -33,23 +33,25 @@ class ObjectStoreReserveTests(unittest.TestCase):
 
     def test_hand_derived_rows_match_the_python_mirror(self):
         # The expected values are written independently from the C++ rows:
-        # each later 1024-byte object chunk rounds its own value blob.
+        # each 1024-byte object chunk is one record that rounds its own value
+        # blob to 56-byte cells; cells (key + value) are packed 63 to a 4096-byte
+        # page (ceil(cells * 4096 / 63)); each record adds a 50-byte index entry.
         rows = [
-            (0, 1, 0, 168, 0),
-            (1, 0, 0, 168, 0),
-            (1, 1, 0, 168, 168),
-            (1, 1, 40, 168, 168),
-            (1, 1, 41, 232, 232),
-            (1, 1, 96, 232, 232),
-            (1, 1, 97, 296, 296),
-            (1, 1, 1000, 1320, 1320),
-            (1, 1, 5000, 6312, 6312),
-            (1, 2, 0, 168, 336),
-            (1, 3, 0, 168, 504),
-            (200000, 1, 0, 168, 33600000),
-            (1000000, 1, 0, 168, 168000000),
-            (1, 1, 0, 168, 168),
-            (0, 1, 5000, 6312, 0),
+            (0, 1, 0, 181, 0),
+            (1, 0, 0, 181, 0),
+            (1, 1, 0, 181, 181),      # 2 cells -> 131, + 50
+            (1, 1, 40, 181, 181),
+            (1, 1, 41, 246, 246),     # 3 cells -> 196, + 50
+            (1, 1, 96, 246, 246),
+            (1, 1, 97, 311, 311),     # 4 cells -> 261, + 50
+            (1, 1, 1000, 1351, 1351),  # 20 cells -> 1301, + 50
+            (1, 1, 5000, 6622, 6622),  # 98 cells -> 6372, + 5 * 50
+            (1, 2, 0, 181, 362),
+            (1, 3, 0, 181, 543),
+            (200000, 1, 0, 181, 36200000),
+            (1000000, 1, 0, 181, 181000000),
+            (1, 1, 0, 181, 181),
+            (0, 1, 5000, 6622, 0),
         ]
         for bars, executions, payload, physical, reserve in rows:
             self.assertEqual(
@@ -76,12 +78,12 @@ class ObjectStoreReserveTests(unittest.TestCase):
         pairs = {
             "kObjectHeaderBytes": "OBJECT_HEADER_BYTES",
             "kObjectKeyBytes": "OBJECT_KEY_BYTES",
-            "kObjectCellBytes": "OBJECT_CELL_BYTES",
+            "kObjectPageBytes": "OBJECT_PAGE_BYTES",
+            "kObjectCellsPerPage": "OBJECT_CELLS_PER_PAGE",
             "kObjectCellPayloadBytes": "OBJECT_CELL_PAYLOAD_BYTES",
             "kObjectChunkBytes": "OBJECT_CHUNK_BYTES",
             "kObjectInlinePayloadBytes": "OBJECT_INLINE_PAYLOAD_BYTES",
             "kObjectIndexShareBytes": "OBJECT_INDEX_SHARE_BYTES",
-            "kObjectSmallBytes": "OBJECT_SMALL_BYTES",
             "kObjectArenaChunkBytes": "OBJECT_ARENA_CHUNK_BYTES",
             "kObjectArenaDirectoryBytesPerChunk":
                 "OBJECT_ARENA_DIRECTORY_BYTES_PER_CHUNK",

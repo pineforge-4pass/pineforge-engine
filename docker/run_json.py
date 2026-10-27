@@ -7349,18 +7349,18 @@ def _discard_stdout() -> None:
 
 
 # Mirror of include/pineforge/detail/scratch_defaults.hpp. The object header
-# and key are 16 bytes, ScratchStore cells are 64 bytes with 56 payload bytes,
-# the default object chunk is 1024 bytes, and the arena directory is four
-# bytes per claimed 1 MiB chunk. Directory bytes remain separate from the
-# per-object physical charge.
+# and key are 16 bytes, ScratchStore packs 63 cells of 56 payload bytes into each
+# 4096-byte page, every object chunk (default 1024 bytes) is one record with an
+# index entry of 50 bytes, and the arena directory is four bytes per claimed
+# 1 MiB chunk. Directory bytes remain separate from the per-object physical charge.
 OBJECT_HEADER_BYTES = 16
 OBJECT_KEY_BYTES = 16
-OBJECT_CELL_BYTES = 64
+OBJECT_PAGE_BYTES = 4096
+OBJECT_CELLS_PER_PAGE = 63
 OBJECT_CELL_PAYLOAD_BYTES = 56
 OBJECT_CHUNK_BYTES = 1024
 OBJECT_INLINE_PAYLOAD_BYTES = 40
-OBJECT_INDEX_SHARE_BYTES = 40
-OBJECT_SMALL_BYTES = 168
+OBJECT_INDEX_SHARE_BYTES = 50
 OBJECT_ARENA_CHUNK_BYTES = 1048576
 OBJECT_ARENA_DIRECTORY_BYTES_PER_CHUNK = 4
 OBJECT_UINT64_MAX = 2 ** 64 - 1
@@ -7382,12 +7382,11 @@ def _object_saturating_ceil_div(value: int, divisor: int) -> int:
 
 
 def object_physical_bytes(payload_bytes: int) -> int:
-    """Return the backing charge for one default-shape object record."""
-    if payload_bytes <= OBJECT_INLINE_PAYLOAD_BYTES:
-        return OBJECT_SMALL_BYTES
+    """Return the backing charge for one default-shape object."""
     if payload_bytes > OBJECT_UINT64_MAX - OBJECT_HEADER_BYTES:
         return OBJECT_UINT64_MAX
-    chunks = 1 + (payload_bytes - 1) // OBJECT_CHUNK_BYTES
+    chunks = (1 if payload_bytes <= OBJECT_INLINE_PAYLOAD_BYTES
+              else 1 + (payload_bytes - 1) // OBJECT_CHUNK_BYTES)
     first_payload = min(payload_bytes, OBJECT_CHUNK_BYTES)
     first_value_cells = _object_saturating_ceil_div(
         first_payload + OBJECT_HEADER_BYTES, OBJECT_CELL_PAYLOAD_BYTES)
@@ -7403,11 +7402,12 @@ def object_physical_bytes(payload_bytes: int) -> int:
             trailing_payload, OBJECT_CELL_PAYLOAD_BYTES))
     value_cells = min(OBJECT_UINT64_MAX,
                       first_value_cells + following_value_cells)
-    value_bytes = _object_saturating_multiply(value_cells, OBJECT_CELL_BYTES)
-    key_bytes = _object_saturating_multiply(chunks, OBJECT_CELL_BYTES)
+    cells = _object_saturating_add(chunks, value_cells)
+    page_bytes = _object_saturating_ceil_div(
+        _object_saturating_multiply(cells, OBJECT_PAGE_BYTES),
+        OBJECT_CELLS_PER_PAGE)
     return _object_saturating_add(
-        _object_saturating_add(key_bytes, value_bytes),
-        OBJECT_INDEX_SHARE_BYTES)
+        page_bytes, _object_saturating_multiply(chunks, OBJECT_INDEX_SHARE_BYTES))
 
 
 def object_store_reserve_bytes(

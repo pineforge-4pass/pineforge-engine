@@ -997,8 +997,12 @@ configured floor, so the host takes the maximum with that floor. When the run
 also owns the three scratch tables, their bytes and the object-store bytes are
 summed because they occupy separate regions.
 
-The per-object charge uses the store's 16-byte header, 16-byte key, 64-byte
-cells with 56-byte payload, and 1,024-byte object chunks. Each object chunk is
-stored as its own value blob and rounds its cells independently. The arena
+The per-object charge uses the store's 16-byte header, 16-byte key, 56-byte
+cell payload, and 1,024-byte object chunks. Each object chunk is one record
+with its own key cell, its own value blob (rounded to whole cells
+independently) and a 50-byte index entry; cells are packed 63 to a 4,096-byte
+page. A small object costs 181 bytes. For payloads of 0, 100, 1,000 and 5,000
+bytes the charges of 181, 311, 1,351 and 6,622 bytes bound the growth measured
+on a real arena, which was 180, 310, 1,350 and 6,616 bytes per object. The arena
 directory remains a separate tolerance of four bytes per claimed 1 MiB
 chunk.
