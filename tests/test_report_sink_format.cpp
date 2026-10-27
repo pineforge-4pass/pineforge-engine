@@ -62875,7 +62875,7 @@ void test_writer(const std::string& directory) {
         partial.write_header({false, false, false, 0, 0});
         partial.write_e({0, 1.0, 0.0});
     }
-    require(contents(aborted).find("\"trailer\"") == std::string::npos, "destruction never invents a trailer");
+    require(!std::filesystem::exists(aborted), "destruction removes the unpublished path");
 
     const std::string unsafe = directory + "/unsafe.jsonl";
     sink::LineWriter bounded(descriptor(unsafe));
@@ -63061,9 +63061,10 @@ with pf_sink.SinkReader(sample) as partial:
     next(partial)
     assert not partial.complete and partial.trailer is None and partial.sha256 == ''
 assert not partial.complete
-refused((root / 'aborted.jsonl').read_bytes())
-refused((root / 'unsafe.jsonl').read_bytes())
-refused((root / 'oversized.jsonl').read_bytes())
+assert not any((root / name).exists() for name in ('aborted.jsonl', 'unsafe.jsonl', 'oversized.jsonl'))
+refused(compact(header))  # An independently constructed header without a trailer.
+refused(packed(header, [['E', 9007199254740992, 0.0, 0.0]]))
+refused(packed(header, [b'["T",' + b' ' * (1024 * 1024) + b']\n']))
 print('reference reader: valid writer sink, every type, truncations and refusals passed')
 )PF_PY";
 

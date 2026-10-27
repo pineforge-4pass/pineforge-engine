@@ -381,7 +381,7 @@ present in exactly this order, matching `REFERENCE_KEYS` in
 
 `E` and `T` are always enabled. `O`, `V`, `K` carry requested outputs;
 `X` and `H` carry enabled trace/hash recording. The reference counts and digest
-match the complete trailer and engine receipt.
+match the complete trailer and engine receipt. `PATH` is atomically replaced only after private writing, one final sync and checked close; failure/abandon preserves any previous file and removes the private sibling.
 
 Every member of `summary` is present:
 

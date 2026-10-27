@@ -5,9 +5,11 @@
 #include <pineforge/version.h>
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cerrno>
 #include <charconv>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <fcntl.h>
 #include <poll.h>
@@ -28,6 +30,7 @@ constexpr std::int64_t safe_integer = INT64_C(9007199254740991);
 constexpr std::size_t max_line = 1024 * 1024;
 constexpr std::size_t io_window = 64 * 1024;
 constexpr std::size_t io_alignment = 4096;
+std::atomic<std::uint64_t> private_sequence{0};
 constexpr std::array<char, 7> tags{{'E', 'T', 'O', 'V', 'K', 'X', 'H'}};
 
 [[noreturn]] void invalid(const char* message) {
@@ -297,6 +300,10 @@ std::string escaped_string(std::string_view utf8) {
 struct LineWriter::State {
     enum class Phase { configured, writing, complete, failed };
     std::string path, run_id, scratch_dir;
+    std::string private_path;
+    std::size_t private_name = 0;
+    int directory_descriptor = -1;
+    bool private_owned = false;
     int descriptor = -1;
     bool borrowed = false;
     bool socket = false;
@@ -345,19 +352,113 @@ struct LineWriter::State {
     ~State() {
         // Resource release only: abandoned buffered bytes never cause a
         // successful trailer or an unchecked destructor-time write.
-        if (!borrowed && descriptor >= 0) ::close(descriptor);
+        discard_private();
+        if (directory_descriptor >= 0) ::close(directory_descriptor);
+    }
+    void discard_private() noexcept {
+        const int saved = errno;
+        if (!borrowed && descriptor >= 0) ::close(std::exchange(descriptor, -1));
+        if (private_owned) {
+            int result;
+            do {
+                result = ::unlinkat(directory_descriptor, private_path.c_str() + private_name, 0);
+            } while (result < 0 && errno == EINTR);
+            if (result == 0 || errno == ENOENT) private_owned = false;
+        }
+        if (!private_owned && directory_descriptor >= 0)
+            ::close(std::exchange(directory_descriptor, -1));
+        errno = saved;
     }
     void require_writing() const {
         if (phase != Phase::writing)
             throw WriterError(WriterFailure::invalid_state, "report sink is not accepting records");
     }
     void fail() noexcept {
-        if (phase != Phase::complete) { phase = Phase::failed; used = 0; }
+        if (phase != Phase::complete) {
+            phase = Phase::failed; used = 0;
+            discard_private();
+        }
     }
     [[noreturn]] void io_error(const char* operation, int number) {
         fail();
         throw WriterError(WriterFailure::io, std::string("report sink ") + operation + ": "
                           + std::error_code(number, std::generic_category()).message(), number);
+    }
+
+    void open_private() {
+        // Preserve the regular-file contract without opening or truncating
+        // the requested directory entry (notably device and FIFO paths).
+        struct stat info{};
+        int result;
+        do { result = ::stat(path.c_str(), &info); } while (result < 0 && errno == EINTR);
+        if (result == 0 && S_ISDIR(info.st_mode)) io_error("open failed", EISDIR);
+        if (result == 0 && !S_ISREG(info.st_mode))
+            io_error("requires a disk-backed regular file", EINVAL);
+        if (result < 0 && errno != ENOENT) io_error("open failed", errno);
+        const bool replacing = result == 0;
+        const mode_t permissions = info.st_mode & 0777;
+
+        const auto slash = path.find_last_of('/');
+        if (slash == std::string::npos) private_path = ".";
+        else private_path.assign(path, 0, slash == 0 ? 1 : slash);
+        // Keep a directory handle for unlinkat even if the parent is renamed
+        // before publication. No directory sync is added to the data sync.
+#if defined(O_PATH)
+        constexpr int directory_flags = O_PATH;
+#elif defined(O_SEARCH)
+        constexpr int directory_flags = O_SEARCH;
+#else
+        constexpr int directory_flags = O_RDONLY;
+#endif
+        do {
+            directory_descriptor = ::open(private_path.c_str(),
+                directory_flags | O_DIRECTORY | O_CLOEXEC);
+        } while (directory_descriptor < 0 && errno == EINTR);
+        if (directory_descriptor < 0) io_error("open failed", errno);
+        if (private_path.back() != '/') private_path += '/';
+        private_name = private_path.size();
+        // Two uint64 decimal tokens and the fixed affixes fit in 80 bytes.
+        // Reserve once, independent of token length and collision retries.
+        private_path.reserve(private_name + 80);
+        for (unsigned attempt = 0; attempt < 128; ++attempt) {
+            private_path.resize(private_name);
+            private_path += ".pf-report-sink-";
+            std::array<char, 64> digits{};
+            auto end = std::to_chars(digits.data(), digits.data() + digits.size(),
+                                    static_cast<std::uint64_t>(::getpid())).ptr;
+            private_path.append(digits.data(), end);
+            private_path += '-';
+            end = std::to_chars(digits.data(), digits.data() + digits.size(),
+                private_sequence.fetch_add(1, std::memory_order_relaxed)).ptr;
+            private_path.append(digits.data(), end);
+            private_path += ".in-progress";
+            do {
+                descriptor = ::openat(directory_descriptor, private_path.c_str() + private_name,
+                    O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0666);
+            } while (descriptor < 0 && errno == EINTR);
+            if (descriptor >= 0) {
+                private_owned = true;
+                if (replacing && ::fchmod(descriptor, permissions) != 0)
+                    io_error("open failed", errno);
+                uncached();
+                return;
+            }
+            if (errno != EEXIST) io_error("open failed", errno);
+        }
+        io_error("open failed", EEXIST);
+    }
+
+    void publish_private() {
+        if (borrowed) return;
+        // close is checked once, with the fd detached before the call: on
+        // Linux even an interrupted/failed close releases its fd number.
+        if (::close(std::exchange(descriptor, -1)) != 0) io_error("close failed", errno);
+        if (::renameat(directory_descriptor, private_path.c_str() + private_name,
+                       AT_FDCWD, path.c_str()) != 0) io_error("rename failed", errno);
+        private_owned = false;
+        // Publication has succeeded. Releasing the directory lookup handle
+        // cannot turn the already-published report into a failed run.
+        ::close(std::exchange(directory_descriptor, -1));
     }
 
     void validate_stream() {
@@ -495,12 +596,7 @@ void LineWriter::write_header(const RecordSet& records) {
         if (state.borrowed) {
             state.validate_stream();
         } else {
-            int descriptor;
-            do { descriptor = ::open(state.path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0666); }
-            while (descriptor < 0 && errno == EINTR);
-            if (descriptor < 0) state.io_error("open failed", errno);
-            state.descriptor = descriptor;
-            state.uncached();
+            state.open_private();
         }
         state.records = records;
         state.phase = State::Phase::writing;
@@ -608,6 +704,7 @@ Trailer LineWriter::write_trailer() {
         }
         line.append("},\"sha256\":\""); line.append(digest); line.append("\"}");
         state.line(false); state.flush(); state.synchronize();
+        state.publish_private();
         std::memcpy(state.trailer.sha256_hex, digest.c_str(), digest.size() + 1);
         state.phase = State::Phase::complete;
         return state.trailer;

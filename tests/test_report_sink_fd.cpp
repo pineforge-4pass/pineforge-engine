@@ -622,8 +622,8 @@ void jailed(const fs::path& directory, const std::vector<Bar>& bars,
         const auto path = jail / "path-rejected.ndjson";
         install_path(rejected, path);
         execute(rejected, bars, Expect::sink_failure);
-        require(fs::is_regular_file(path) && fs::file_size(path) == 0,
-                "path sink wrote bytes inside RLIMIT_FSIZE=0");
+        require(!fs::exists(path),
+                "a failed path sink remained visible inside RLIMIT_FSIZE=0");
         require_signal(SIGXFSZ, SIG_IGN);
         require_signal(SIGPIPE, SIG_IGN);
     }

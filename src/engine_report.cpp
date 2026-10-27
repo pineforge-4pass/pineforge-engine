@@ -2195,4 +2195,16 @@ int BacktestEngine::fill_report_envelope_v1(ReportEnvelopeV1* out) const {
     }
 }
 
+BacktestEngine::ReportSinkCallScope::~ReportSinkCallScope() {
+    auto& state = engine.report_sink_state_;
+    if (stream) --state.stream_calls;
+    --state.active_calls;
+    // Callback and scratch faults need not call the writer again. Release
+    // an incomplete owned sink at the outer boundary before returning.
+    // Borrowed streams retain their existing lifetime.
+    if (state.active_calls == 0 && state.fd < 0 && !state.receipt.complete
+        && (engine.last_run_status_ != 0 || !engine.report_publication_allowed()))
+        state.writer.reset();
+}
+
 }  // namespace pineforge

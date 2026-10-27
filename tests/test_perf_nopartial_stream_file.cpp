@@ -1,6 +1,6 @@
 #include "perf_nopartial_rows.hpp"
-// RED on b7e16f560: a late callback fault leaves already-written T records
-// at the configured public path, and fill_report still publishes its summary.
+// A late callback fault must remove privately written T-bearing windows,
+// preserve the public path, and publish no report summary.
 // Batch ingress preserves the DESIGN.md path-sink property: the long trace
 // forces T-bearing stream windows to disk during the run, before the late
 // callback exception; the failed public path must still contain no prefix.

@@ -53,7 +53,9 @@ bool sink_fd(int fd) {
     const auto* file = cr257::identify_fd(fd);
     if (!file) return false;
     const auto* slash = std::strrchr(file->name.data(), '/');
-    return std::strcmp(slash ? slash + 1 : file->name.data(), "report.jsonl") == 0;
+    const auto* name = slash ? slash + 1 : file->name.data();
+    return std::strncmp(name, ".pf-report-sink-", 16) == 0
+        || std::strcmp(name, "report.jsonl") == 0;
 }
 bool inject(int fd, Operation operation) {
     if (!injection.armed || operation != injection.operation) return false;

@@ -18,11 +18,11 @@ extern "C" {
 
 /** Path sink descriptor (DESIGN 6:1283-1289, 1307-1309).
  *  struct_size is sizeof(pf_report_sink_v1), version is 1. The setter copies
- *  the strings. The engine creates or truncates path, writes the version-1
- *  header at run begin, and writes checked, buffered records (3.7:881-888).
- *  NULL run_id means ""; NULL scratch_dir means the directory of path.
- *  Scratch files are engine-private and live until the next run begins or
- *  handle destruction (3.8:902-909). */
+ *  the strings. A private sibling receives the header at begin and records;
+ *  one final sync and checked close precede atomic rename onto path. Failure
+ *  or abandon removes it, preserving any prior path. NULL run_id means "";
+ *  NULL scratch_dir means path's parent. Scratch files live until the next
+ *  run begins or handle destruction; the in-progress sibling is separate. */
 typedef struct pf_report_sink_v1 {
     uint32_t    struct_size;
     uint32_t    version;
@@ -68,7 +68,7 @@ typedef struct pf_report_sink_fd_v1 {
 /** Trailer receipt (DESIGN 6:1291-1298,1305-1306).
  *  The seven counts correspond to E, T, O, V, K, X, H in that order.
  *  sha256_hex is the trailer's lowercase SHA-256, NUL-terminated, and is ""
- *  until the trailer exists. complete becomes 1 once the trailer is written.
+ *  until completion. complete becomes 1 after checked completion/publication.
  *  trades_retained is 1 when closedtrades.* history stays script-readable.
  *  The explicit seven-byte reserved field gives a 144-byte layout with no
  *  implicit padding. PF_ABI_VERSION stays 4; no existing report/trade grows.

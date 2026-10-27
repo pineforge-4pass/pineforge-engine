@@ -49,11 +49,11 @@ int status = strategy_set_report_sink_v1(handle, &sink);   /* fd form: strategy_
 Three limits to know. The first successful attach of a sink descriptor also
 attaches the environment arena if one is configured and sets `SIGXFSZ` to
 `SIG_IGN` for the whole process (`include/pineforge/report_sink.h`, the comment
-on `strategy_set_report_sink_v1`). A path sink must be a disk-backed regular
-file: a non-regular file or, on Linux, a tmpfs or ramfs is refused with
-`EINVAL`, and the jailed `run_json.py` profile refuses `--report-sink` paths, so
-use `--report-sink-fd` there. The path setter and the fd setter are mutually
-exclusive: either one replaces the other kind.
+on `strategy_set_report_sink_v1`). Path sinks write privately to a sibling, then
+sync once, check close and atomically replace the public path on success;
+failure/abandon removes it and preserves any prior file. Disk backing is
+required (Linux tmpfs/ramfs and non-regular targets: `EINVAL`). Jailed runs use
+`--report-sink-fd`; the mutually exclusive setters replace the other kind.
 From `docker/run_json.py`, invoked directly (the release entrypoint forwards no
 command-line flags; it passes `--report-sink-fd` only when `PINEFORGE_REPORT_SINK_FD`
 is set), the same choice is `--report-sink PATH` (a file) or

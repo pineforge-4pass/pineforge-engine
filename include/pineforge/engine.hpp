@@ -2629,18 +2629,18 @@ private:
     ReportMode report_mode_ = ReportMode::FULL;
 
     class ReportSinkCallScope {
-        ReportSinkState& state;
+        const BacktestEngine& engine;
         bool stream;
     public:
-        explicit ReportSinkCallScope(const BacktestEngine& engine, bool is_stream = false)
-            : state(engine.report_sink_state_), stream(is_stream) {
-            ++state.active_calls;
-            if (stream) ++state.stream_calls;
+        explicit ReportSinkCallScope(const BacktestEngine& owner, bool is_stream = false)
+            : engine(owner), stream(is_stream) {
+            ++engine.report_sink_state_.active_calls;
+            if (stream) ++engine.report_sink_state_.stream_calls;
         }
-        ~ReportSinkCallScope() {
-            if (stream) --state.stream_calls;
-            --state.active_calls;
-        }
+        ~ReportSinkCallScope();
+        // Run-boundary cleanup also covers faults outside the writer.
+        // Definition lives beside the sink's report lifecycle.
+
         ReportSinkCallScope(const ReportSinkCallScope&) = delete;
         ReportSinkCallScope& operator=(const ReportSinkCallScope&) = delete;
     };

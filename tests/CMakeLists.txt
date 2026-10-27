@@ -7789,11 +7789,13 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_test(NAME test_report_sink_deferred_sync_abandon
         COMMAND test_report_sink_deferred_sync abandon)
     add_test(NAME test_report_sink_deferred_sync_memory COMMAND test_report_sink_deferred_sync memory)
+    add_test(NAME test_report_sink_deferred_sync_close_fault COMMAND test_report_sink_deferred_sync close_fault)
     set_tests_properties(test_report_sink_deferred_sync test_report_sink_deferred_sync_count
         test_report_sink_deferred_sync_bytes test_report_sink_deferred_sync_sync_fault
         test_report_sink_deferred_sync_write_fault test_report_sink_deferred_sync_truncate_fault
         test_report_sink_deferred_sync_engine test_report_sink_deferred_sync_engine_sync_fault
         test_report_sink_deferred_sync_abandon test_report_sink_deferred_sync_memory
+        test_report_sink_deferred_sync_close_fault
         PROPERTIES LABELS "sink_sync")
 endif()
 # --- CR-150 deferred-sink-sync end ---

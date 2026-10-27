@@ -610,7 +610,7 @@ feed/copy inventory makes the entire OHLCV term unbounded/unknown.
 The finalizer receives the sink, not the arena. Its spool bound includes
 the header, all records, trailer and LF bytes. It is not its private heap
 bound. The hard successful-line ceiling is 1,048,576 including LF:
-`src/report_sink_writer.cpp:27` and `src/report_sink_writer.cpp:29`.
+`max_line` at `src/report_sink_writer.cpp:30` and `Line::append` at `src/report_sink_writer.cpp:46`.
 The ceiling is already enforced by the writer; this calculator adds no
 new run-capacity gate.
 
@@ -631,26 +631,26 @@ nX = S*tracePerBar + traceFixed            if trace else 0
 nH = S*hashesPerBar + hashesFixed          if hashes else 0
 ```
 
-K is at most one by `src/report_sink_writer.cpp:531`. The compiler can
+K is at most one by `src/report_sink_writer.cpp:750`. The compiler can
 tighten other counts only with a proof; finite E/T does not bound event
 or trace calls made inside an unknown loop.
 
 Safe signed JSON integers use <=17 characters, hash64 is 18 quoted
 characters, and f64 conservatively uses <=64 characters: the formatter
-`f64` at `src/report_sink_writer.cpp:285` (its worker `real` at `src/report_sink_writer.cpp:71`) builds scientific output with a fixed
+`f64` at `src/report_sink_writer.cpp:288` (its worker `real` at `src/report_sink_writer.cpp:74`) builds scientific output with a fixed
 buffer then performs bounded exponent relayout. Each input string byte
 becomes at most six JSON bytes, plus two quotes; see
-`src/report_sink_writer.cpp:207`. Counting delimiters and the LF gives:
+`string` at `src/report_sink_writer.cpp:123`. Counting delimiters and the LF gives:
 
 | Tag | Maximum line bytes, before taking the hard ceiling | Builder |
 | --- | --- | --- |
-| E | 154 | `src/report_sink_writer.cpp:503` |
-| T | 675 + 12*L + 6*commentBytes | `src/report_sink_writer.cpp:398` |
-| O | 60 + 65*seriesSlots | `src/report_sink_writer.cpp:603` |
-| V | 239 + 6*messageBytes | `src/report_sink_writer.cpp:513` |
-| K | 6 + 65*constantSlots | `src/report_sink_writer.cpp:527` |
-| X | 110 + 6*traceNameBytes | `src/report_sink_writer.cpp:537` |
-| H | 25 | `src/report_sink_writer.cpp:545` |
+| E | 154 | `src/report_sink_writer.cpp:607` |
+| T | 675 + 12*L + 6*commentBytes | `src/report_sink_writer.cpp:631` |
+| O | 60 + 65*seriesSlots | `src/report_sink_writer.cpp:714` |
+| V | 239 + 6*messageBytes | `src/report_sink_writer.cpp:727` |
+| K | 6 + 65*constantSlots | `src/report_sink_writer.cpp:747` |
+| X | 110 + 6*traceNameBytes | `src/report_sink_writer.cpp:756` |
+| H | 25 | `src/report_sink_writer.cpp:767` |
 
 For variable-width rows use min(expression,1048576). Missing comment,
 message or trace-name byte proofs use the existing full-line ceiling,
