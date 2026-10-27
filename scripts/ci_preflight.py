@@ -270,7 +270,7 @@ HOSTED_JOB_RUNNERS = {
                     **dict.fromkeys(POST_LEG_GATES, 'ubuntu-24.04'),
                     'build': 'pf-linux-x64-16', 'build-debug': 'pf-linux-x64-16',
                     'sanitizers': 'pf-linux-x64-32', 'kernel-only': 'pf-linux-x64-16',
-                    'build-arm': 'ubuntu-24.04-arm'},
+                    'preflight-slow': 'pf-linux-x64-16', 'build-arm': 'ubuntu-24.04-arm'},
     **{name: {'authz': 'ubuntu-24.04'} for name in (
         'corpus-parity.yml', 'corpus-parity-subset.yml', 'docs-post.yml')},
     'native-live.yml': {'authz': 'ubuntu-24.04', 'native-live': 'pf-linux-x64-64',

@@ -70,7 +70,7 @@ successful runs on `main` save that cache namespace.
 Verification jobs keep literal runner pins at the workflow boundary: PR build/preflight and parity subset use `["self-hosted","pf-gcp-pr"]`;
 post preflight/parity and credentialed docs use `["self-hosted","pf-gcp-post"]`.
 Post Release/Debug/kernel and native shards use `pf-linux-x64-16`; post sanitizers
-use `pf-linux-x64-32`; native-live sanitizers use `pf-linux-x64-64`. No job routes by event.
+use `pf-linux-x64-32`; native-live sanitizers use `pf-linux-x64-64`. No job routes by event. The fast `preflight` is the only post preflight job on the post fleet; `preflight-slow` uses `pf-linux-x64-16`.
 Hosted `ubuntu-24.04` runs all eight `authz` jobs, both CI `changes`/`build-gate` jobs, all post/native aggregates and `docs.yml`'s `build`.
 These light, secret-free jobs need no VM-only tools, mounts or caches.
 Local reusable calls still cannot mix PR and post-merge verification fleets. One full post run needs four x64-16 and two x64-64 native runners concurrently.
@@ -185,7 +185,7 @@ the preflight source guard rejects those includes before a build.
 CI uses Ubuntu 24.04 amd64 and arm64 cells and selects Python 3.12 explicitly.
 The amd64 post build shards request hosted `pf-linux-x64-16`; the two arm64 post cells run on
 hosted `ubuntu-24.04-arm`. All three build jobs refuse an OS mismatch.
-Hosted exceptions include the named light jobs, amd64 post shards, native profiles, arm64 and the existing release/promotion pins.
+Hosted exceptions include the named light jobs, amd64 post shards, `preflight-slow`, native profiles, arm64 and the existing release/promotion pins.
 CMake uses the same interpreter as the
 verification driver, so its Python checks do not switch to a different system
 Python. CTest must discover tests; an empty suite is a failure. Which runner
@@ -1656,7 +1656,7 @@ The native matrix is exactly `1..4` with `--ctest-shard I/4`; live sanitizers ar
 | `ci.yml` | Unfiltered `pull_request` | `authz`, `changes`, `build-gate`: hosted `ubuntu-24.04`; preflight/build: `["self-hosted","pf-gcp-pr"]` |
 | `corpus-parity-subset.yml` | Reusable call from PR CI | `authz`: hosted `ubuntu-24.04`; subset: `["self-hosted","pf-gcp-pr"]` |
 | `docs.yml` | `pull_request`, except `.github/**`-only diffs | `authz` and `build`: hosted `ubuntu-24.04` |
-| `ci-post.yml` | Push to `main`, 01:30 UTC schedule, dispatch | Light jobs and four leg aggregates: `ubuntu-24.04`; Release/Debug/kernel shards: `pf-linux-x64-16`; sanitizers shards: `pf-linux-x64-32`; `build-arm`: `ubuntu-24.04-arm`; preflight tiers: `["self-hosted","pf-gcp-post"]` |
+| `ci-post.yml` | Push to `main`, 01:30 UTC schedule, dispatch | Light jobs and four leg aggregates: `ubuntu-24.04`; Release/Debug/kernel shards and `preflight-slow`: `pf-linux-x64-16`; sanitizers shards: `pf-linux-x64-32`; `build-arm`: `ubuntu-24.04-arm`; fast `preflight`: `["self-hosted","pf-gcp-post"]` |
 | `corpus-parity.yml` | Schedule, dispatch, post CI callers | `authz`: hosted `ubuntu-24.04`; both parity jobs: `["self-hosted","pf-gcp-post"]` |
 | `native-live.yml` | Dispatch and post CI callers, including branch dispatch | `authz` and both aggregates: hosted `ubuntu-24.04`; four native shards: `pf-linux-x64-16`; `live-sanitizers` and `live-tsan`: `pf-linux-x64-64` |
 | `docs-post.yml` | Push to `main`, dispatch | `authz`: hosted `ubuntu-24.04`; credentialed `build`: `["self-hosted","pf-gcp-post"]` |
@@ -1667,7 +1667,7 @@ refuses all PR events. Reusable workflows inherit their caller's event.
 follow local calls to a fixed point, refuse mixed event classes and require
 literal VM arrays outside the exact hosted pins; job conditions cannot excuse routing.
 Fork PRs on hosted runners run without our secrets, so the VM-only fork-refusal hook is not needed.
-Hosted shards also run on a branch dispatch; the remaining post fleet still requires `main`.
+Hosted shards and `preflight-slow` also run on a branch dispatch; the remaining post fleet still requires `main`.
 Rollback: relabel the affected job to its prior `pf-gcp-pr` or `pf-gcp-post` array and restore its checker/test pin.
 
 The four full build checks are `build (ubuntu-24.04, Release)`,

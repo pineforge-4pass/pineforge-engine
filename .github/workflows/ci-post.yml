@@ -34,7 +34,8 @@ env:
 # The canon authz gate admits our events before any checkout.
 # Light jobs and per-leg aggregates use hosted ubuntu-24.04; amd64 CTest shards use
 # pf-linux-x64-16 or pf-linux-x64-32, and arm64 keeps ubuntu-24.04-arm.
-# Preflight remains on the post-merge fleet. scripts/ci_preflight.py pins routing.
+# The deferred preflight tier (preflight-slow) also runs on pf-linux-x64-16; the fast
+# preflight remains on the post-merge fleet. scripts/ci_preflight.py pins routing.
 # Each verification sizes its parallelism to the runner that took it.
 # scripts/ci_preflight.py pins every runner and shard count. GitHub's platform
 # maximum remains the only job time limit; docs/ci.md records the policy.
@@ -211,7 +212,9 @@ jobs:
   preflight-slow:
     needs: [authz, changes]
     if: ${{ always() && needs.authz.result == 'success' }}
-    runs-on: ["self-hosted","pf-gcp-post"]
+    # verifier-tests runs the unit tests as one subprocess shard per core; the shared
+    # post fleet VM left them CPU-starved, so this job takes a dedicated 16-core runner.
+    runs-on: pf-linux-x64-16
     steps:
       - name: Refuse an unauthorised run before anything else
         if: ${{ needs.authz.result != 'success' }}

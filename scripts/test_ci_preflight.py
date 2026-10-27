@@ -148,9 +148,10 @@ LIGHT_JOB_IDS = {
     'native-live.yml': ('authz', 'native-live-native', 'native-live-gate'),
     'release-ruleset-probe.yml': ('authz',),
 }
-HOSTED_SHARD_JOB_LABELS = {
+HOSTED_POST_JOB_LABELS = {
     'build': 'pf-linux-x64-16', 'build-debug': 'pf-linux-x64-16',
     'sanitizers': 'pf-linux-x64-32', 'kernel-only': 'pf-linux-x64-16',
+    'preflight-slow': 'pf-linux-x64-16',
 }
 HEAVY_CI_JOBS = ('preflight-slow', 'sanitizers', 'kernel-only', 'native-live', 'corpus-parity')
 PREFLIGHT_RUN = ('python3 scripts/ci_preflight.py --output-dir build-ci-preflight --tier '
@@ -444,9 +445,9 @@ class WorkflowEventFleets(unittest.TestCase):
                     self.assertEqual(ci_preflight._job_values(body, 'runs-on'), ['ubuntu-24.04-arm'])
                     self.assertNotIn('PF_CI_LABELS', body)
                     continue
-                if name == 'ci-post.yml' and job in HOSTED_SHARD_JOB_LABELS:
+                if name == 'ci-post.yml' and job in HOSTED_POST_JOB_LABELS:
                     self.assertEqual(ci_preflight._job_values(body, 'runs-on'),
-                                     [HOSTED_SHARD_JOB_LABELS[job]])
+                                     [HOSTED_POST_JOB_LABELS[job]])
                     self.assertNotIn('PF_CI_LABELS', body)
                     continue
                 if job in LIGHT_JOB_IDS.get(name, ()):
@@ -600,6 +601,37 @@ class WorkflowEventFleets(unittest.TestCase):
                 changed = in_job(post, scope, before, after)
                 self.assertNotEqual(changed, post)
                 self.assertIn('ci-post.yml job build-arm must not set PF_CI_LABELS on a hosted job',
+                              ci_preflight.runner_findings({**workflows, 'ci-post.yml': changed}))
+
+    def test_post_slow_preflight_is_pinned_to_the_hosted_16_core_label(self):
+        workflows = self.workflows()
+        post = workflows['ci-post.yml']
+        slow = _jobs(post)['preflight-slow']
+        self.assertEqual(ci_preflight._job_values(slow, 'runs-on'), ['pf-linux-x64-16'])
+        self.assertNotIn('PF_CI_LABELS', slow)
+        self.assertEqual(ci_preflight.runner_findings(workflows), [])
+        finding = 'ci-post.yml job preflight-slow must run on pf-linux-x64-16 (hosted)'
+        before = '    runs-on: pf-linux-x64-16\n'
+        # Back on the shared post fleet, or on any other label, array, quoted
+        # array or fallback expression, the pin must refuse the job by name.
+        for runner in (POST_RUNNER, PR_RUNNER, RELEASE_RUNNER, f"'{POST_RUNNER}'",
+                       'ubuntu-24.04', 'ubuntu-latest', 'ubuntu-24.04-arm',
+                       'pf-linux-x64-32', 'pf-linux-x64-64',
+                       f"${{{{ fromJSON('{POST_RUNNER}') || 'ubuntu-24.04' }}}}"):
+            with self.subTest(runner=runner):
+                changed = in_job(post, 'preflight-slow', before, f'    runs-on: {runner}\n')
+                self.assertNotEqual(changed, post)
+                self.assertIn(finding, ci_preflight.runner_findings(
+                    {**workflows, 'ci-post.yml': changed}))
+        # The fast job's fleet metadata must not travel with the hosted job.
+        for scope, marker, replacement in (
+                (None, '\nenv:\n', f"\nenv:\n  PF_CI_LABELS: '{POST_RUNNER}'\n"),
+                ('preflight-slow', '    steps:\n',
+                 f"    env:\n      PF_CI_LABELS: '{POST_RUNNER}'\n    steps:\n")):
+            with self.subTest(metadata_scope=scope):
+                changed = in_job(post, scope, marker, replacement)
+                self.assertNotEqual(changed, post)
+                self.assertIn('ci-post.yml job preflight-slow must not set PF_CI_LABELS on a hosted job',
                               ci_preflight.runner_findings({**workflows, 'ci-post.yml': changed}))
 
     def test_post_split_preserves_all_four_matrix_check_names(self):
@@ -2021,7 +2053,7 @@ class PreflightFailures(unittest.TestCase):
                     continue
                 if (name, job) == ('ci-post.yml', 'build-arm'):
                     continue
-                if name == 'ci-post.yml' and job in HOSTED_SHARD_JOB_LABELS:
+                if name == 'ci-post.yml' and job in HOSTED_POST_JOB_LABELS:
                     continue  # Exact hosted pins have their own wrong-runner controls.
                 actual, = ci_preflight._job_values(_jobs(self.ci_sources()[index])[job],
                                                    'runs-on', unquote=False)
@@ -3707,6 +3739,7 @@ exit "$lookup_exit"
                                           'kernel-only-gate': 'ubuntu-24.04',
                                           'build': 'pf-linux-x64-16', 'build-debug': 'pf-linux-x64-16',
                                           'sanitizers': 'pf-linux-x64-32', 'kernel-only': 'pf-linux-x64-16',
+                                          'preflight-slow': 'pf-linux-x64-16',
                                           'build-gate': 'ubuntu-24.04', 'build-arm': 'ubuntu-24.04-arm'},
                           'corpus-parity.yml': {'authz': 'ubuntu-24.04'},
                           'corpus-parity-subset.yml': {'authz': 'ubuntu-24.04'},
@@ -3742,6 +3775,8 @@ exit "$lookup_exit"
             (0, 'preflight', PR_RUNNER, 'pf-linux-x64-16', f'ci.yml job preflight must run on {PR_RUNNER}'),
             (6, 'sanitizers', 'pf-linux-x64-32', 'macos-26-xlarge', 'ci-post.yml job sanitizers must run on pf-linux-x64-32 (hosted)'),
             (6, 'kernel-only', 'pf-linux-x64-16', 'ubuntu-latest', 'ci-post.yml job kernel-only must run on pf-linux-x64-16 (hosted)'),
+            (6, 'preflight-slow', '    runs-on: pf-linux-x64-16\n', f'    runs-on: {POST_RUNNER}\n',
+             'ci-post.yml job preflight-slow must run on pf-linux-x64-16 (hosted)'),
             # Target runs-on exactly, never an earlier matrix reference or name.
             (0, 'build', f'    runs-on: {PR_RUNNER}\n',
              '    runs-on: macos-26-large\n', f'ci.yml job build must run on {PR_RUNNER}'),
@@ -3766,6 +3801,9 @@ exit "$lookup_exit"
              "${{ github.event.pull_request.head.repo.full_name == github.repository "
              "&& 'pf-linux-x64-16' || 'ubuntu-24.04' }}",
              'ci-post.yml job sanitizers must run on pf-linux-x64-32 (hosted)'),
+            (6, 'preflight-slow', '    runs-on: pf-linux-x64-16\n',
+             "    runs-on: ${{ github.event_name == 'push' && 'pf-linux-x64-16' || 'ubuntu-24.04' }}\n",
+             'ci-post.yml job preflight-slow must run on pf-linux-x64-16 (hosted)'),
             (6, 'native-live', 'uses: ./.github/workflows/native-live.yml',
              'uses: someone/else/.github/workflows/native-live.yml@main',
              'ci-post.yml job native-live calls a workflow the runner contract cannot see; '
@@ -3954,9 +3992,9 @@ exit "$lookup_exit"
 
     def test_gcp_sites_reject_cross_class_routes(self):
         sites = list(self.gcp_sites())
-        # PR 2 + post preflight 2 + parity 3 + docs 1 + release 3
+        # PR 2 + post preflight 1 + parity 3 + docs 1 + release 3
         # + probe 1 + promotion 1 + dispatch canary 1.
-        self.assertEqual(len(sites), 14)
+        self.assertEqual(len(sites), 13)
         self.assertCountEqual([(name, job) for name, job, *_ in sites],
                               [(name, job) for name, jobs in FLEET_JOB_IDS.items()
                                for job in jobs if job not in LIGHT_JOB_IDS.get(name, ())
@@ -5237,6 +5275,9 @@ finally:
                  'ci-post.yml job sanitizers must run on pf-linux-x64-32 (hosted)'),
                 ('ci-post.yml', ('sanitizers', 'pf-linux-x64-32', 'pf-linux-x64-16'),
                  'ci-post.yml job sanitizers must run on pf-linux-x64-32 (hosted)'),
+                ('ci-post.yml', ('preflight-slow', '    runs-on: pf-linux-x64-16\n',
+                                f'    runs-on: {POST_RUNNER}\n'),
+                 'ci-post.yml job preflight-slow must run on pf-linux-x64-16 (hosted)'),
                 ('ci-post.yml', ('build-arm', '    runs-on: ubuntu-24.04-arm\n',
                                 '    runs-on: macos-26-xlarge\n'),
                  'ci-post.yml must not use larger-runner labels; use the GCP fleet or hosted exceptions'),
