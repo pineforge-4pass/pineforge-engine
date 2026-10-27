@@ -1,5 +1,6 @@
 #pragma once
 #include <Eigen/Dense>
+#include <pineforge/detail/matrix_store.hpp>
 #include <memory>
 #include <vector>
 #include <stdexcept>
@@ -10,10 +11,13 @@ namespace pineforge {
 class NumericMatrix {
     struct Storage {
         Eigen::MatrixXd data;
+        std::shared_ptr<detail::matrix_store::Cells> external;
 
         Storage() = default;
         explicit Storage(Eigen::MatrixXd value)
             : data(std::move(value)) {}
+        explicit Storage(std::shared_ptr<detail::matrix_store::Cells> value)
+            : external(std::move(value)) {}
     };
 
     static constexpr const char* kNaIdError =
@@ -23,11 +27,14 @@ class NumericMatrix {
 
     std::shared_ptr<Storage> storage_;
 
-    explicit NumericMatrix(Eigen::MatrixXd data)
-        : storage_(std::make_shared<Storage>(std::move(data))) {}
+    explicit NumericMatrix(Eigen::MatrixXd data);
+    explicit NumericMatrix(std::shared_ptr<detail::matrix_store::Cells> cells)
+        : storage_(std::make_shared<Storage>(std::move(cells))) {}
 
     [[nodiscard]] Storage& require_storage();
     [[nodiscard]] const Storage& require_storage() const;
+    Eigen::MatrixXd dense() const;
+    Eigen::MatrixXd& native_data() const;
 
 public:
     // A NumericMatrix is a reference handle (a source language's matrix ID):
@@ -52,10 +59,14 @@ public:
     class Snapshot {
         std::shared_ptr<Storage> identity_;
         Eigen::MatrixXd state_;
+        std::shared_ptr<detail::matrix_store::Cells> external_;
 
         Snapshot(std::shared_ptr<Storage> identity,
                  const Eigen::MatrixXd& state)
             : identity_(std::move(identity)), state_(state) {}
+        Snapshot(std::shared_ptr<Storage> identity,
+                 std::shared_ptr<detail::matrix_store::Cells> state)
+            : identity_(std::move(identity)), external_(std::move(state)) {}
 
         friend class NumericMatrix;
 
@@ -68,6 +79,13 @@ public:
 
     // Construction
     static NumericMatrix new_(int rows, int cols, double init_val = 0.0);
+
+    // Generated roots/edges persist the id in Store, rather than retaining one
+    // native shared_ptr per script-created matrix. The external owner keeps the
+    // id reachable during borrows and calls Store::release after the last edge.
+    // Transfer ownership only together with installing that durable root/edge.
+    static NumericMatrix borrow_external(detail::matrix_store::Runtime&, detail::o1::Id);
+    detail::o1::Id detach_external();
 
     // Access
     double get(int row, int col) const;
@@ -127,6 +145,17 @@ public:
     // Handle state. A default-constructed value represents ``na``; new_()
     // returns a valid handle even when its dimensions are 0x0.
     [[nodiscard]] bool is_na() const noexcept { return !storage_; }
+    [[nodiscard]] bool is_external_storage() const noexcept {
+        return storage_ && static_cast<bool>(storage_->external);
+    }
+    [[nodiscard]] detail::o1::Id external_identity() const {
+        const auto& storage = require_storage();
+        return storage.external ? storage.external->identity() : detail::o1::kNullId;
+    }
+    [[nodiscard]] std::uint64_t external_hash() const {
+        const auto& storage = require_storage();
+        return storage.external ? storage.external->hash_state() : 0;
+    }
 
     [[nodiscard]] Snapshot snapshot() const;
     void restore(const Snapshot& snapshot);
@@ -144,8 +173,10 @@ public:
     bool is_zero() const;
 
     // Access to internal data for friend operations
-    const Eigen::MatrixXd& data() const { return require_storage().data; }
-    Eigen::MatrixXd& data() { return require_storage().data; }
+    // Native-address compatibility escape. Persistent Eigen references require
+    // materialization; callers that need bounded cells use get/set instead.
+    const Eigen::MatrixXd& data() const { return native_data(); }
+    Eigen::MatrixXd& data() { return native_data(); }
 };
 
 inline bool is_na(const NumericMatrix& matrix) noexcept {
