@@ -1109,6 +1109,45 @@ class ProtectedGkeRunnerPolicy(unittest.TestCase):
         self.assertEqual(ci_preflight.RELEASE_JOB_RUNNERS['promote-baseline.yml'],
                          {'promote': RELEASE_RUNNER})
 
+    def test_real_protected_probe_has_no_runner_findings(self):
+        name = 'release-ruleset-probe.yml'
+        original = (ROOT / '.github/workflows' / name).read_text()
+        self.assertEqual(ci_preflight.runner_findings({name: original}), [])
+
+    def test_protected_probe_refuses_job_container_declarations(self):
+        name = 'release-ruleset-probe.yml'
+        original = (ROOT / '.github/workflows' / name).read_text()
+        for declaration in (
+                '    container:\n      image: ubuntu:24.04\n      options: --user root\n',
+                '    container: {image: ubuntu:24.04}\n',
+                '    container: {}\n',
+                '    container:\n',
+                '    "container": ubuntu:24.04\n',
+                "    'container': ubuntu:24.04\n"):
+            with self.subTest(declaration=declaration):
+                changed = in_job(original, 'probe', '    steps:\n',
+                                 declaration + '    steps:\n')
+                self.assertNotEqual(changed, original)
+                self.assertIn(f'{name} job probe must not declare a job container on GKE',
+                              ci_preflight.runner_findings({name: changed}))
+
+    def test_protected_probe_refuses_job_services_declarations(self):
+        name = 'release-ruleset-probe.yml'
+        original = (ROOT / '.github/workflows' / name).read_text()
+        for declaration in (
+                '    services:\n      cache:\n        image: redis:7\n',
+                '    services: {cache: {image: redis:7}}\n',
+                '    services: {}\n',
+                '    services:\n',
+                '    "services":\n      cache:\n        image: redis:7\n',
+                "    'services': {}\n"):
+            with self.subTest(declaration=declaration):
+                changed = in_job(original, 'probe', '    steps:\n',
+                                 declaration + '    steps:\n')
+                self.assertNotEqual(changed, original)
+                self.assertIn(f'{name} job probe must not declare job services on GKE',
+                              ci_preflight.runner_findings({name: changed}))
+
     def test_protected_mapping_requires_a_real_credential(self):
         checkout = ('      - name: Checkout\n'
                     '        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0\n'
