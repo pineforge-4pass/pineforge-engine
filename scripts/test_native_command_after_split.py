@@ -465,6 +465,11 @@ class CommandAfterSplitCover(unittest.TestCase):
         row = (f'        add_test(NAME {PREFIX}_slice_8\n'
                '            COMMAND ${test_name} --slice 8/8)\n')
         self.assertIn(row, cmake)
+
+        def replace_slice_8(argument):
+            return cmake.replace(
+                row, row.replace('--slice 8/8', argument, 1), 1)
+
         selector = re.search(r'^int book_slice\(int index\) \{.*?^\}',
                              cpp, re.MULTILINE | re.DOTALL)
         self.assertIsNotNone(selector)
@@ -487,7 +492,7 @@ class CommandAfterSplitCover(unittest.TestCase):
                          'books.push_back({index, config, kWindows[window]});'
                          'books.push_back({index, config, kWindows[window]});', 1),
              cmake, 'book enumeration must append every case exactly once'),
-            ('overlap two slices', cpp, cmake.replace('--slice 8/8', '--slice 7/8', 1),
+            ('overlap two slices', cpp, replace_slice_8('--slice 7/8'),
              'slice assignments overlap'),
             ('shrink the slice count', cpp.replace('kSliceCount = 8;', 'kSliceCount = 7;', 1),
              cmake, 'slice count must remain eight'),
@@ -545,7 +550,7 @@ class CommandAfterSplitCover(unittest.TestCase):
              cpp.replace('book_slice(index) == slice.index) ++count;',
                          'book_slice(index) == slice.index) count += 2;', 1), cmake,
              'slice count helper must count each selected index once'),
-            ('zero-case slice', cpp, cmake.replace('--slice 8/8', '--slice 9/8', 1),
+            ('zero-case slice', cpp, replace_slice_8('--slice 9/8'),
              'empty or out-of-range slice'),
             ('reseed after selection',
              cpp.replace('config.seed = kSeedBase + index;', 'config.seed = kSeedBase;', 1),
