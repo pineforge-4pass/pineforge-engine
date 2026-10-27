@@ -453,7 +453,7 @@ class AppTokenEnvironments(unittest.TestCase):
                 'literal, non-empty environment; review other minting methods by hand')
 
     def app_findings(self, workflows, *, checker=None):
-        # This entrypoint exists on dad2530c. Missing policy must yield a
+        # This entrypoint exists on main. Missing policy must yield a
         # missing finding, never an import/setup error for a new helper.
         sources = [(ROOT / path).read_text() for path in CI_SOURCES]
         checker = ci_workflow_findings if checker is None else checker
@@ -473,6 +473,19 @@ class AppTokenEnvironments(unittest.TestCase):
                              f'        uses: {quote}actions/create-github-app-token@{ref}'
                              f'{quote} # v1.12.0\n')
                     self.assert_refused(self.workflow(steps=steps))
+
+    def test_tibdex_mint_action_requires_environment_whatever_feeds_its_key(self):
+        for ref in (self.SHA, 'v1', 'main'):
+            for quote in ('', '"', "'"):
+                for key_source in ('vars.APP_KEY', 'inputs.key', 'secrets.RELEASE_PEM'):
+                    with self.subTest(ref=ref, quote=quote, key_source=key_source):
+                        steps = ('      - name: Obtain installation credential\n'
+                                 f'        uses: {quote}tibdex/github-app-token@{ref}{quote}\n'
+                                 '        with:\n'
+                                 f'          app_id: 1\n          key: ${{{{ {key_source} }}}}\n')
+                        self.assert_refused(self.workflow(steps=steps))
+                        self.assertEqual(self.app_findings({self.WORKFLOW: self.workflow(
+                            '    environment: release\n', steps=steps)}), [])
 
     def test_literal_names_and_mapping_names_have_removal_controls(self):
         for environment in (

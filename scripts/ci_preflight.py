@@ -1326,7 +1326,8 @@ def app_token_environment_findings(workflows: dict[str, str]) -> list[str]:
             references = (reference for _, _, reference, _ in
                           action_uses({name: body}, findings=[]))
             action_mint = any(reference.partition('@')[0].casefold()
-                              == 'actions/create-github-app-token'
+                              in {'actions/create-github-app-token',
+                                  'tibdex/github-app-token'}
                               for reference in references)
             text = inherited_env + '\n' + body
             if not (action_mint or _private_key_handoff(text)
