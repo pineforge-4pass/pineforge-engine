@@ -555,7 +555,9 @@ def test_public_record_parser_owns_record_validation(tmp_path, fault, text):
         assert str(failure.value) == text
 
 
-def test_strict_reader_and_trade_pass_share_one_parser_each(tmp_path, monkeypatch):
+@pytest.mark.parametrize("bulk", [False, True], ids=["strict", "bulk"])
+def test_strict_reader_and_trade_pass_share_one_parser_each(tmp_path, monkeypatch, bulk):
+    monkeypatch.setattr(run_json, "_BULK_E_ENABLED", bulk)
     parser_type = getattr(pf_sink, "RecordParser", None)
     assert parser_type is not None, "the trade scan requires public pf_sink.RecordParser(header)"
     original_init, original_parse = parser_type.__init__, parser_type.parse
@@ -575,7 +577,13 @@ def test_strict_reader_and_trade_pass_share_one_parser_each(tmp_path, monkeypatc
     rows = _mixed()
     with _sink(tmp_path, rows) as (sink, _, _):
         assert len(parsers) == 1
-        assert parsed == [(parsers[0], row[0]) for row in rows]
+        # The strict reader parses every record once through the shared parser.
+        # With the bulk path the canonical equity lines are verified in bulk
+        # and never reach RecordParser.parse; every other record still does,
+        # in file order, through the one parser.
+        expected = [(parsers[0], row[0]) for row in rows
+                    if not (bulk and row[0] == "E")]
+        assert parsed == expected
         parsed.clear()
         actual = list(sink.records("T"))
         assert len(parsers) == 2
