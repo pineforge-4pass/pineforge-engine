@@ -79,14 +79,15 @@ void sized_gap_refuses_before_mutation() {
             + " order ids active at once";
         const auto count = std::string("live count ")
             + pineforge::detail::scratch_limit_number(kRows + 1);
-        const auto cap = std::string("cap ")
+        const auto cap = std::string("approved maximum ")
             + pineforge::detail::scratch_limit_number(
                 pineforge::detail::kMaxResidentCohortsCap);
         require(message.find(prefix) != std::string::npos
                     && message.find(count) != std::string::npos
                     && message.find(cap) != std::string::npos
-                    && message.find("declare a higher freshPerBar") != std::string::npos,
-                "sized gap refusal must name rows, live count, cap and hint");
+                    && message.find("declare") == std::string::npos,
+                "sized gap refusal must name rows, live count and the approved maximum, "
+                "and offer no remedy that cannot be taken");
     }
 
     require(refused && table.size() == kRows && table.resident_size() == kRows,

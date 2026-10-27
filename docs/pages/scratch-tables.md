@@ -88,7 +88,8 @@ manifest before execution and charge the corresponding memory.
 The bounded profile additionally admits at most its sized limit of live,
 non-spillable resident cohorts: order IDs placed and not yet closed or
 cancelled. The limit ranges from 65,536 to 1,048,576; admission beyond it
-refuses with the limit, live count, cap and a `freshPerBar` declaration hint.
+refuses with the limit, the live count and the approved maximum; the text offers no
+declaration remedy, because the per-bar count comes from the module and the cap is the maximum.
 This is separate from `U`, which counts historical IDs too; the smaller
 remaining allowance governs admission. Live rows stay on the heap and cannot
 spill just to fit this ceiling. Closing or cancelling can release resident
