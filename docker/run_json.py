@@ -2610,6 +2610,39 @@ def _bars_unreadable(text: str, reason: str) -> ChartBarsError:
     return ChartBarsError(text, reason)
 
 
+_CSV_BAR_CHUNK_RECORDS = 4096
+_CSV_BAR_CHUNK_STRUCT = struct.Struct("<" + "5dq" * _CSV_BAR_CHUNK_RECORDS)
+
+
+def _append_csv_bar_chunk(storage, values, feed_hasher):
+    """Pack one bounded batch; storage becomes the returned array's backing."""
+    count = len(values) // 6
+    packer = (_CSV_BAR_CHUNK_STRUCT if count == _CSV_BAR_CHUNK_RECORDS else
+              struct.Struct("<" + "5dq" * count))
+    packed = packer.pack(*values)
+    feed_hasher.update(packed)
+    if sys.byteorder != "little":
+        # Hashing is always little endian; BarC has the host's native layout.
+        packed = struct.pack("@" + "5dq" * count, *values)
+    storage.extend(packed)
+    values.clear()
+
+
+def _csv_bar_incomplete_row(header, row):
+    """Retain DictReader's missing/duplicate-column conversion precedence."""
+    width = len(row)
+    fields = {name: row[index] if index < width else None
+              for index, name in enumerate(header)}
+    return (
+        float(fields["open"]),
+        float(fields["high"]),
+        float(fields["low"]),
+        float(fields["close"]),
+        float(fields["volume"]),
+        int(fields["timestamp"]),
+    )
+
+
 def load_bars(csv_path: Path) -> tuple[ctypes.Array, int, str]:
     """Load the source tape once and return bars, count, and canonical hash.
     A file it cannot read is a ChartBarsError (a ValueError),
@@ -2617,43 +2650,65 @@ def load_bars(csv_path: Path) -> tuple[ctypes.Array, int, str]:
     columns (a row lacks a column), value (a value is not a number, or the file
     is not a UTF-8 CSV). An empty tape is returned as zero bars (main refuses
     it: reason empty)."""
-    rows: list[tuple[float, float, float, float, float, int]] = []
+    storage = bytearray()
+    values = []
     feed_hasher = _new_source_feed_hasher()
     try:
-        with csv_path.open(newline="", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
+        # Keep TextIOWrapper's incremental decoding and CSV's physical-line
+        # handling, including the diagnostics for malformed UTF-8/quoted cells.
+        with csv_path.open(newline="", encoding="utf-8", buffering=256 * 1024) as f:
+            reader = csv.reader(f)
+            header = next(reader, [])
+            columns = {name: index for index, name in enumerate(header)}
+            indices = [columns.get(name, -1) for name in
+                       ("open", "high", "low", "close", "volume", "timestamp")]
+            complete_header = -1 not in indices
+            last_column = max(indices)
+            oi, hi, li, ci, vi, ti = indices
             for row in reader:
+                # DictReader skips blanks, then fieldnames refreshes line_num.
+                while row == []:
+                    row = next(reader, None)
+                    if row is None:
+                        break
+                if row is None:
+                    break
+                line_num = reader.line_num
                 try:
-                    parsed = (
-                        float(row["open"]),
-                        float(row["high"]),
-                        float(row["low"]),
-                        float(row["close"]),
-                        float(row["volume"]),
-                        int(row["timestamp"]),
-                    )
+                    if complete_header and len(row) > last_column:
+                        parsed = (
+                            float(row[oi]),
+                            float(row[hi]),
+                            float(row[li]),
+                            float(row[ci]),
+                            float(row[vi]),
+                            int(row[ti]),
+                        )
+                    else:
+                        parsed = _csv_bar_incomplete_row(header, row)
                 except KeyError as e:
                     raise _bars_unreadable(
                         f"--ohlcv: {csv_path}: no column {e.args[0]}", "columns") from None
                 except (TypeError, ValueError):
                     raise _bars_unreadable(
-                        f"--ohlcv: {csv_path} line {reader.line_num}: not a number",
+                        f"--ohlcv: {csv_path} line {line_num}: not a number",
                         "value") from None
-                _update_source_feed_hash(feed_hasher, parsed)
-                rows.append(parsed)
+                if not -(1 << 63) <= parsed[5] < (1 << 63):
+                    # Do not defer the original struct.error until a batch is
+                    # full: a later malformed row must never overtake it.
+                    _SOURCE_FEED_RECORD.pack(*parsed)
+                values.extend(parsed)
+                if len(values) == 6 * _CSV_BAR_CHUNK_RECORDS:
+                    _append_csv_bar_chunk(storage, values, feed_hasher)
     except OSError as e:
         raise _bars_unreadable(f"--ohlcv: {csv_path}: {e.strerror or e}", "io") from None
     except (UnicodeDecodeError, csv.Error) as e:
         raise _bars_unreadable(f"--ohlcv: {csv_path}: not a UTF-8 CSV ({e})", "value") from None
-    n = len(rows)
-    bars = (BarC * n)()
-    for i, (o, h, l, c, v, ts) in enumerate(rows):
-        bars[i].open      = o
-        bars[i].high      = h
-        bars[i].low       = l
-        bars[i].close     = c
-        bars[i].volume    = v
-        bars[i].timestamp = ts
+    if values:
+        _append_csv_bar_chunk(storage, values, feed_hasher)
+    n = len(storage) // _SOURCE_FEED_RECORD.size
+    # from_buffer owns a view of storage: no second full-size array copy.
+    bars = (BarC * n).from_buffer(storage) if n else (BarC * 0)()
     return bars, n, feed_hasher.hexdigest()
 
 
