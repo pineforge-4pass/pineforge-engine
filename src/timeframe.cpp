@@ -355,30 +355,30 @@ int64_t session_intraday_bucket_open_ms(int64_t ms, int64_t bucket_sec,
 
 namespace {
 
-/// The trading windows of one session day of a session that declares BREAKS
-/// (two or more windows: "0900-1130,1230-1500"), as minute offsets from the
-/// day's origin -- the first declared window's open, where the day opens here
-/// (session_open_offset_minutes) and in the native calendar alike
-/// (native_calendar.hpp) -- over the cycle [0, 1440):
-/// "0900-1130,1230-1500" -> [0, 150) and [210, 360). Windows are normalized
-/// as the native calendar normalizes them: one that wraps midnight (end <=
-/// start; equal ends are a whole day) runs into the next civil day, one that
-/// opens before the origin opens on the cycle's next civil day, the part
-/// beyond the cycle end continues at its start, and overlapping or touching
-/// windows merge. So close[count - 1] is where the session day ends, and
-/// every earlier close is a break.
+/// Session-day trading windows, as minute offsets over [0, 1440) from the
+/// first declared open (session_open_offset_minutes and native_calendar).
+/// "0900-1130,1230-1500" -> [0, 150), [210, 360). End <= start wraps a
+/// window into the next civil day; equal ends mean a whole day. Opens
+/// before the origin fall on the next civil day, and pieces beyond the
+/// cycle end continue at its start. Overlapping or touching windows merge.
+/// The last close ends the day; earlier closes are breaks. Arrays keep the
+/// base stack path; heap buffers are populated only past kMaxWindows.
 struct SessionDaySchedule {
     static constexpr int kMaxWindows = 8;
     int count = 0;
     int open[2 * kMaxWindows] = {};
     int close[2 * kMaxWindows] = {};
+    std::vector<int> heap_open, heap_close;
+    const int* opens() const { return heap_open.empty() ? open : heap_open.data(); }
+    const int* closes() const { return heap_close.empty() ? close : heap_close.data(); }
+    bool parse_many(const std::string& session);
 };
 
 /// Parse "HHMM-HHMM,HHMM-HHMM[,...][:days]". False for a session without
 /// breaks (one window, ""/"24x7"), a clock that is not HHMM (HH <= 24,
-/// MM <= 59, 2400 only as an end), more than kMaxWindows windows, or any other
-/// character: each caller keeps its first-window arithmetic for those, which
-/// is exact for a single window.
+/// MM <= 59, 2400 only as an end), or any other character. Past the inline
+/// capacity, parsing uses heap scratch; false keeps first-window arithmetic,
+/// which is exact for a single window.
 bool parse_session_breaks(const std::string& session, SessionDaySchedule& out) {
     out = SessionDaySchedule{};
     if (session.find(',') == std::string::npos) return false;
@@ -404,7 +404,7 @@ bool parse_session_breaks(const std::string& session, SessionDaySchedule& out) {
         return true;
     };
     for (;;) {
-        if (declared == kMax) return false;
+        if (declared == kMax) return at < n && out.parse_many(session);
         int start = 0;
         int end = 0;
         if (!clock(start) || start >= 1440 || at >= n || session[at] != '-') return false;
@@ -470,7 +470,7 @@ static int session_close_offset_minutes(const std::string& session) {
     if (session.empty() || session == "24x7") return -1;
     SessionDaySchedule breaks;
     if (parse_session_breaks(session, breaks)) {
-        const int close = session_open_offset_minutes(session) + breaks.close[breaks.count - 1];
+        const int close = session_open_offset_minutes(session) + breaks.closes()[breaks.count - 1];
         return close <= 1440 ? close : -1;
     }
     int values[2] = {-1, -1};
@@ -567,7 +567,7 @@ static int first_window_length_minutes(const std::string& session) {
 /// 150).
 static int session_length_minutes(const std::string& session) {
     SessionDaySchedule breaks;
-    if (parse_session_breaks(session, breaks)) return breaks.close[breaks.count - 1];
+    if (parse_session_breaks(session, breaks)) return breaks.closes()[breaks.count - 1];
     return first_window_length_minutes(session);
 }
 
@@ -977,9 +977,9 @@ static int64_t session_window_close_ms(int64_t ms, const std::string& tz,
         session_day_open_nominal_ms(session_day_index_nominal(ms, tz, session), session);
     const int64_t at = calendar_clock_ms(ms, tz) - origin;
     for (int i = 0; i + 1 < breaks.count; ++i) {
-        if (at < static_cast<int64_t>(breaks.open[i + 1]) * 60000) {
+        if (at < static_cast<int64_t>(breaks.opens()[i + 1]) * 60000) {
             return nominal_to_real_ms(
-                origin + static_cast<int64_t>(breaks.close[i]) * 60000, tz);
+                origin + static_cast<int64_t>(breaks.closes()[i]) * 60000, tz);
         }
     }
     return day_close;
@@ -1920,5 +1920,90 @@ int64_t TimeframeAggregator::bar_label_ms(int64_t ms) const {
     }
     return ms;
 }
+
+namespace {
+
+// Keep the base parser above unchanged for up to eight windows. Reparse only
+// when it reaches another window; none of these sized vectors exist otherwise.
+bool SessionDaySchedule::parse_many(const std::string& session) {
+    const auto capacity = static_cast<std::size_t>(std::count(session.begin(), session.end(), ',')) + 1;
+    std::vector<int> starts(capacity);
+    std::vector<int> ends(capacity);
+    std::size_t declared = 0;
+    std::size_t at = 0;
+    const std::size_t n = session.size();
+    const auto clock = [&](int& minutes) {
+        if (at + 4 > n) return false;
+        int value = 0;
+        for (std::size_t k = 0; k < 4; ++k) {
+            const char c = session[at + k];
+            if (c < '0' || c > '9') return false;
+            value = value * 10 + (c - '0');
+        }
+        at += 4;
+        const int hh = value / 100;
+        const int mm = value % 100;
+        if (hh > 24 || mm > 59 || (hh == 24 && mm != 0)) return false;
+        minutes = hh * 60 + mm;
+        return true;
+    };
+    for (;;) {
+        if (at == n) return false;
+        int start = 0;
+        int end = 0;
+        if (!clock(start) || start >= 1440 || at >= n || session[at] != '-') return false;
+        ++at;
+        if (!clock(end)) return false;
+        starts[declared] = start;
+        ends[declared] = end;
+        ++declared;
+        if (at == n || session[at] == ':') break;
+        if (session[at] != ',') return false;
+        ++at;
+    }
+    if (declared < 2) return false;
+    std::vector<int> opens(2 * declared);
+    std::vector<int> closes(2 * declared);
+    std::size_t pieces = 0;
+    for (std::size_t i = 0; i < declared; ++i) {
+        const int open = ((starts[i] - starts[0]) % 1440 + 1440) % 1440;
+        int length = ends[i] - starts[i];
+        if (length <= 0) length += 1440;
+        if (open + length <= 1440) {
+            opens[pieces] = open;
+            closes[pieces++] = open + length;
+        } else {
+            opens[pieces] = open;
+            closes[pieces++] = 1440;
+            opens[pieces] = 0;
+            closes[pieces++] = open + length - 1440;
+        }
+    }
+    for (std::size_t i = 1; i < pieces; ++i) {
+        const int open = opens[i];
+        const int close = closes[i];
+        std::size_t j = i;
+        for (; j > 0 && opens[j - 1] > open; --j) {
+            opens[j] = opens[j - 1];
+            closes[j] = closes[j - 1];
+        }
+        opens[j] = open;
+        closes[j] = close;
+    }
+    heap_open.resize(2 * declared);
+    heap_close.resize(2 * declared);
+    for (std::size_t i = 0; i < pieces; ++i) {
+        if (count > 0 && opens[i] <= heap_close[count - 1]) {
+            heap_close[count - 1] = std::max(heap_close[count - 1], closes[i]);
+            continue;
+        }
+        heap_open[count] = opens[i];
+        heap_close[count] = closes[i];
+        ++count;
+    }
+    return true;
+}
+
+}  // namespace
 
 } // namespace pineforge

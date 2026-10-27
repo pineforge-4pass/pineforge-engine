@@ -1,0 +1,11 @@
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
+    list(APPEND TEST_SOURCES test_dependency_scratch_failure)
+    pineforge_add_unit_test(test_dependency_scratch_failure)
+    # Script launchers register distinct rows for the same native executable.
+    add_test(NAME test_dependency_scratch_failure_write_fault COMMAND ${Python3_EXECUTABLE} -B -c "import os, sys; os.execv(sys.argv[1], sys.argv[1:])" $<TARGET_FILE:test_dependency_scratch_failure> write_fault)
+    add_test(NAME test_dependency_scratch_failure_read_fault COMMAND ${Python3_EXECUTABLE} -B -c "import os, sys; os.execv(sys.argv[1], sys.argv[1:])" $<TARGET_FILE:test_dependency_scratch_failure> read_fault)
+    add_test(NAME test_dependency_scratch_failure_growth_fault COMMAND ${Python3_EXECUTABLE} -B -c "import os, sys; os.execv(sys.argv[1], sys.argv[1:])" $<TARGET_FILE:test_dependency_scratch_failure> growth_fault)
+    add_test(NAME test_dependency_scratch_failure_byte_cap_refusal COMMAND ${Python3_EXECUTABLE} -B -c "import os, sys; os.execv(sys.argv[1], sys.argv[1:])" $<TARGET_FILE:test_dependency_scratch_failure> byte_cap_refusal)
+    add_test(NAME test_dependency_scratch_failure_carried_failure COMMAND ${Python3_EXECUTABLE} -B -c "import os, sys; os.execv(sys.argv[1], sys.argv[1:])" $<TARGET_FILE:test_dependency_scratch_failure> carried_failure)
+    add_test(NAME test_dependency_scratch_failure_exit_scratch_sibling COMMAND ${Python3_EXECUTABLE} -B -c "import os, sys; os.execv(sys.argv[1], sys.argv[1:])" $<TARGET_FILE:test_dependency_scratch_failure> exit_scratch_sibling)
+endif()

@@ -222,6 +222,26 @@ if "--request-feed-inventory" in argv:
 if "--generated-cpp" in argv:
     shutil.copyfile(argv[argv.index("--generated-cpp") + 1],
                     os.path.join(log, "run_json.generated.bin"))
+if os.environ.get("STUB_RUN_JSON_VALIDATE"):
+    sys.path.insert(0, os.path.dirname(os.environ["REAL_RUN_JSON"]))
+    import run_json
+
+    validate = run_json._validate_sink_options
+
+    def validate_without_loading_library(args):
+        validate(args)
+        raise SystemExit(0)
+
+    # Use the real parser and validator; the compiler still produces a fake library.
+    run_json._validate_sink_options = validate_without_loading_library
+    try:
+        status = run_json.main(argv)
+    except SystemExit as error:
+        status = error.code
+    with open(os.path.join(log, "run_json.status.json"), "w") as handle:
+        json.dump(status, handle)
+    if status:
+        sys.exit(status)
 print('{"engine":"pineforge","marker":"run_json_stub"}')
 '''
 
@@ -295,6 +315,7 @@ class Box:
             "TMPDIR": str(self.tmp),
             "STUB_LOG": str(self.log),
             "REAL_BIND_HELPER": str(HELPER),
+            "REAL_RUN_JSON": str(ROOT / "docker" / "run_json.py"),
             "PINEFORGE_PREFIX": str(self.prefix),
             "PINEFORGE_IN_DIR": str(self.indir),
         })
@@ -599,6 +620,101 @@ def test_off_branch_reads_no_inventory_and_keeps_the_old_argv(box, kind):
         assert box.logged("run_json.work.json") == ["strategy.so"]
     assert sentinel not in result.stderr
     assert not (box.log / "helper.argv.json").exists()
+
+
+@pytest.mark.parametrize("kind", ["pine", "cpp"])
+def test_entrypoint_report_sink_fd_unset_keeps_the_old_argv(box, kind):
+    put_pine(box) if kind == "pine" else put_cpp(box)
+    result = run_entrypoint(box)
+    argv = box.logged("run_json.argv.json")
+    observed = f"observed run_json argv: {argv!r}\n{result!r}"
+    assert "--report-sink-fd" not in argv, observed
+    assert normalized(argv) == old_argv("true" if kind == "pine" else "false"), observed
+    assert result.returncode == 0, observed
+    assert result.stdout == '{"engine":"pineforge","marker":"run_json_stub"}\n', observed
+
+
+@pytest.mark.parametrize("value", ["7", "+7", "007", " 7 "],
+                         ids=["decimal", "plus-sign", "leading-zeroes", "whitespace"])
+def test_entrypoint_forwards_report_sink_fd_verbatim(box, value):
+    put_cpp(box)
+    result = run_entrypoint(box, {"PINEFORGE_REPORT_SINK_FD": value,
+                                  "STUB_RUN_JSON_VALIDATE": "1"})
+    argv = box.logged("run_json.argv.json")
+    observed = f"observed run_json argv: {argv!r}\n{result!r}"
+    assert normalized(argv) == old_argv("false") + ["--report-sink-fd", value], observed
+    assert argv.count("--report-sink-fd") == 1, observed
+    assert box.logged("run_json.status.json") == 0, observed
+    assert result.returncode == 0, observed
+    assert result.stdout == '{"engine":"pineforge","marker":"run_json_stub"}\n', observed
+
+
+@pytest.mark.parametrize("value,error", [
+    pytest.param("", "run_json.py: error: argument --report-sink-fd: invalid int value: ''",
+                 id="empty"),
+    *[pytest.param(value,
+                   "error: --report-sink-fd must be a descriptor number from 3 through INT_MAX",
+                   id=name)
+      for value, name in [("0", "stdin"), ("1", "stdout"), ("2", "stderr"),
+                          ("-1", "negative"), (str(1 << 40), "overflow")]],
+    pytest.param("5", "error: --report-sink-fd 5 collides with PF_SCRATCH_ARENA_FD",
+                 id="scratch-arena"),
+    pytest.param("abc",
+                 "run_json.py: error: argument --report-sink-fd: invalid int value: 'abc'",
+                 id="non-numeric"),
+])
+def test_entrypoint_report_sink_fd_refusal_comes_from_run_json(box, value, error):
+    put_cpp(box)
+    result = run_entrypoint(box, {"PINEFORGE_REPORT_SINK_FD": value,
+                                  "STUB_RUN_JSON_VALIDATE": "1"})
+    argv = box.logged("run_json.argv.json")
+    observed = f"observed run_json argv: {argv!r}\n{result!r}"
+    assert normalized(argv) == old_argv("false") + ["--report-sink-fd", value], observed
+    assert argv.count("--report-sink-fd") == 1, observed
+    assert box.logged("run_json.status.json") == 2, observed
+    assert result.returncode == 4, observed
+    expected = {"engine": "pineforge", "error": error, "code": "run_request_invalid",
+                "args": {"option": "arguments"}}
+    assert result.stdout == json.dumps(expected, separators=(",", ":")) + "\n", observed
+    assert "[pineforge] backtest failed\n" in result.stderr, observed
+    direct = subprocess.run([sys.executable, str(ROOT / "docker" / "run_json.py"), *argv],
+                            env=box.env(), stdin=subprocess.DEVNULL, capture_output=True,
+                            encoding="utf-8", errors="replace", check=False)
+    observed += f"\ndirect run_json: {direct!r}"
+    assert direct.returncode == 2, observed
+    assert direct.stdout == result.stdout, observed
+    assert direct.stderr in result.stderr, observed
+
+
+def test_entrypoint_report_sink_fd_keeps_selected_and_provenance_argument_order(box):
+    put_pine(box)
+    runtime_env = {
+        "PINEFORGE_TRADE_START_MS": "60000",
+        "PINEFORGE_CHART_TZ": "UTC",
+        "PINEFORGE_MAGNIFIER_VOLUME_WEIGHTED": "true",
+        "PINEFORGE_SYMINFO": str(box.indir / "symbol metadata.json"),
+        "PINEFORGE_SYMBOL_FEEDS": str(box.indir / "symbol feeds.json"),
+    }
+    runtime_flags = [
+        "--trade-start-ms", "60000", "--chart-tz", "UTC", "--magnifier-volume-weighted",
+        "--syminfo", runtime_env["PINEFORGE_SYMINFO"],
+        "--symbol-feeds", runtime_env["PINEFORGE_SYMBOL_FEEDS"],
+    ]
+    result = run_entrypoint(box, dict(SELECTED_ENV, **runtime_env,
+                                      PINEFORGE_REPORT_SINK_FD="7",
+                                      STUB_RUN_JSON_VALIDATE="1"))
+    argv = box.logged("run_json.argv.json")
+    observed = f"observed run_json argv: {argv!r}\n{result!r}"
+    expected = (old_argv("true") + runtime_flags + ["--report-sink-fd", "7"]
+                + SELECTED_FLAGS + ["--request-feed-inventory", "<path>"])
+    assert normalized(argv) == expected, observed
+    assert argv.count("--report-sink-fd") == 1, observed
+    assert box.logged("run_json.status.json") == 0, observed
+    assert result.returncode == 0, observed
+    assert result.stdout == '{"engine":"pineforge","marker":"run_json_stub"}\n', observed
+    cpp = fake_cpp(PINE_TEXT).encode("utf-8")
+    assert (box.log / "run_json.generated.bin").read_bytes() == cpp, observed
+    assert box.logged("run_json.inventory.json") == bound_inventory(cpp, SO_BYTES, EMPTY), observed
 
 
 def test_transpile_only_keeps_the_old_output_and_reads_no_inventory(box):

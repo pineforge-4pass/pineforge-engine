@@ -31,6 +31,8 @@ def test_default_route_on_tmpfs_tmpdir(tmp_path, monkeypatch, frozen, kind, sink
         "cagr": "simple_proportional_subday",
         "calmar": "simple_proportional_subday",
     }
+    expected["diagnostics"]["run_profile"] = "unjailed"
+    expected["diagnostics"]["scratch_arena_jailed"] = False
     expected_bytes = json.dumps(expected, separators=(",", ":"), allow_nan=False) + "\n"
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
     monkeypatch.setattr(run_json.sys, "platform", "linux")
@@ -61,6 +63,7 @@ def test_default_route_on_tmpfs_tmpdir(tmp_path, monkeypatch, frozen, kind, sink
         # backed. The engine sink contract requires refusal before installation.
         assert (status, stderr) == (1, ""), stdout
         failure = json.loads(stdout)
+        ordinary.assert_no_run_profile(failure)
         assert failure["code"] == "run_request_invalid"
         assert "TMPDIR" in failure["error"] and "--spill-dir" in failure["error"]
         assert "disk-backed" in failure["error"]
@@ -68,6 +71,7 @@ def test_default_route_on_tmpfs_tmpdir(tmp_path, monkeypatch, frozen, kind, sink
         assert library.installed == []
         return
     assert (status, stderr) == (0, ""), stdout
+    ordinary.assert_run_profile(json.loads(stdout))
     assert stdout == expected_bytes
     assert library.installed == []
     # This legacy producer has no engine sink. Its unjailed JSON artifact can
