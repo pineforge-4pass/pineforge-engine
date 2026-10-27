@@ -57,7 +57,7 @@ struct Config {
     std::uint64_t from_input = 0, max_events = 0, max_attempts = 8;
     std::uint64_t status_interval = 1, max_ledger_bytes = 0, feed_idle_timeout = 15, feed_message_timeout = 15;
     long poll_ms = 1000;
-    bool check = false, allow_http = false, report_jsonl = false;
+    bool check = false, allow_http = false, report_jsonl = false, ledger_unbounded = false;
 };
 
 void help() {
@@ -79,6 +79,7 @@ void help() {
                  "         --status-file PATH --status-interval 1 (seconds, 1..300)\n"
                  "         --feed-idle-timeout 15 --feed-message-timeout 15 (seconds, 1..300)\n"
                  "         --control-dir PATH --max-ledger-bytes N (0 disables budget)\n"
+                 "         --ledger-unbounded (explicit unlimited service ledger)\n"
                  "JSONL: {\"type\":\"tick\",\"ts\":60000,\"seq\":1,\"price\":100,\"qty\":1}\n"
                  "       "
                  "{\"type\":\"bar\",\"bar\":{\"ts_open\":60000,\"o\":100,\"h\":102,\"l\":99,\"c\":"
@@ -136,6 +137,10 @@ Config args(int argc, char **argv) {
         c.explicit_flags.insert(a);
         if (a == "--report-jsonl") {
             c.report_jsonl = true;
+            continue;
+        }
+        if (a == "--ledger-unbounded") {
+            c.ledger_unbounded = true;
             continue;
         }
         if (a == "--check") {
@@ -274,6 +279,7 @@ Config args(int argc, char **argv) {
                 if (path == fs::path(ledger.string() + suffix))
                     throw std::runtime_error("ledger/sidecar overlaps an input artifact");
         }
+    validate_ledger_budget(!c.status_file.empty(), c.max_ledger_bytes, c.ledger_unbounded);
     return c;
 }
 std::string read_file(const std::string &path, std::size_t limit) {
@@ -910,7 +916,7 @@ int run(Config c) {
     if (c.native.present)
         require_native_warmup(c.native, warmup);
     ControlDirectory controls(c.control_dir);
-    Ledger ledger(c.ledger, deployment);
+    Ledger ledger(c.ledger, deployment, c.max_ledger_bytes);
     ServiceFile service(c.status_file, c.status_interval * 1000);
     ledger.bind_routing(c.routing.stored_document());
     ReportDeltas report_deltas;
@@ -1164,6 +1170,12 @@ int run(Config c) {
         }
         if (stopped || storage_stop) delivery.limit_drain();
         delivery.finish(false);
+    } catch (const LedgerBudgetExceeded& error) {
+        // The strategy may already have advanced in memory. Stop this instance;
+        // restart replays only the input transactions that were admitted.
+        storage_stop = true;
+        try { delivery.finish(true); } catch (...) {}
+        std::cerr << "pineforge-live: " << error.what() << '\n';
     } catch (const std::exception& error) {
         try { service.stop("failed"); } catch (...) {}
         delivery.limit_drain();
@@ -1330,6 +1342,9 @@ int main(int argc, char **argv) {
         if (command == "actions" || command == "status" || command == "redeliver" || command == "report")
             return ledger_command(argc, argv);
         return run(args(argc, argv));
+    } catch (const LedgerBudgetExceeded &e) {
+        std::cerr << "pineforge-live: " << e.what() << '\n';
+        return 3;
     } catch (const std::exception &e) {
         std::cerr << "pineforge-live: " << e.what() << '\n';
         return 1;

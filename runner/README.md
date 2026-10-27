@@ -177,13 +177,22 @@ pineforge-live probe --status-file status.json --max-age 3 --ready
   (plus, after a fatal error or a storage-budget stop, the delivery drain); there is no claim that arbitrary strategy code is
   interruptible. Container liveness probes can detect a stalled control loop.
 - `--max-ledger-bytes N` budgets database + WAL + SHM bytes (0 disables it;
-  default 0; integer 0..INT64_MAX). Crossing the budget removes readiness,
-  stops intake after the current whole message and exits 3 without deleting
-  inputs, actions or reports. Recovery still verifies the ledger before
-  deciding to stop. It is a stop threshold, not a quota: one atomic message
-  and the bounded delivery drain can exceed it. Reserve free space for both;
-  an actual I/O failure exits 1. No automatic pruning or report retention
-  policy is applied.
+  default 0; integer 0..INT64_MAX). With `--status-file` (service mode), an
+  omitted or zero budget is refused at startup with `run_request_invalid`
+  unless `--ledger-unbounded` explicitly opts out. Ordinary runs retain the
+  unlimited default. A positive budget remains effective even with the opt-out.
+  Before each write transaction, the runner reserves payload bytes and
+  conservative SQLite row/index, WAL, checkpoint and SHM overhead. Insufficient
+  space refuses the whole transaction before writing, carries `used`,
+  `requested` and `limit` in a typed `scratch_capacity_exceeded` failure, removes
+  readiness and exits 3. Earlier committed inputs, actions and reports stay
+  intact. Delivery is cancelled on an admission refusal; unfinished attempts
+  remain recoverable. The existing post-growth check and
+  `storage_below_budget` readiness field remain in use. An actual I/O failure
+  exits 1. Initialization and migrations also need admission space; a refusal
+  there can precede status publication. No automatic pruning or report
+  retention policy is applied. See [ledger budget accounting](../docs/live-ledger-budget.md)
+  for the reservation formula and its conservative headroom.
 
 ### Live redelivery control files
 
@@ -236,6 +245,11 @@ ledger budget. Without `--control-dir`, `redeliver` remains offline, reads only
 the selected target's secret and refuses while the runner holds the lock.
 
 The additive ledger tables/columns are migrated while holding its writer lock.
+Delivery counts and oldest-pending indexes are rebuilt once from the existing
+rows and verified in that migration transaction. Later delivery and status work
+uses the summaries and indexes; status visits targets rather than historical
+actions or attempts. Counters update in the same transaction as their source
+rows, including failed redelivery and legacy acknowledgements.
 This is a one-way runner upgrade: back up the ledger before upgrading; earlier
 runner versions cannot open the migrated database. Strategy/deployment identity
 and historical action payload bytes remain unchanged.

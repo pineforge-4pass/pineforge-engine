@@ -165,8 +165,10 @@ try:
 
         def start(name, extra=(), module=library, env=None, mode="bars"):
             ledger, health = root / (name + ".sqlite"), root / (name + ".status.json")
+            budget = [] if "--max-ledger-bytes" in extra or "--ledger-unbounded" in extra else [
+                "--max-ledger-bytes", "1073741824"]
             process = subprocess.Popen([runner] + list(map(str, base(ledger, module, mode) +
-                ["--status-file", health, "--feed", "-"] + list(extra))), stdin=subprocess.PIPE,
+                ["--status-file", health, "--feed", "-"] + budget + list(extra))), stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
             children.append(process)
             wait_for(lambda: health.exists() and status(health).get("state") == "running")
@@ -175,6 +177,27 @@ try:
 
         def export(ledger):
             return json.loads(invoke(["report", "--ledger", ledger]))
+
+        for suffix, options in (("unset", []), ("zero", ["--max-ledger-bytes", "0"])):
+            ledger = root / (suffix + ".sqlite")
+            health = root / (suffix + ".status.json")
+            result = subprocess.run([runner] + list(map(str, base(ledger) +
+                ["--feed", feed, "--status-file", health] + options)), capture_output=True, text=True)
+            assert result.returncode == 1 and "run_request_invalid" in result.stderr, result
+            assert "--ledger-unbounded" in result.stderr and not ledger.exists() and not health.exists()
+        for name, options in (("unbounded", ["--ledger-unbounded"]),
+                              ("explicit-zero", ["--max-ledger-bytes", "0", "--ledger-unbounded"])):
+            process, ledger, health = start(name, options)
+            process.stdin.write(batch)
+            process.stdin.flush()
+            wait_for(lambda: query(ledger, "SELECT count(*) FROM inputs") == [(1,)])
+            finish(process)
+            assert export(ledger)["input_cursor"] == 1
+        for suffix, options in (("default", []), ("zero", ["--max-ledger-bytes", "0"])):
+            ledger = root / ("ordinary-" + suffix + ".sqlite")
+            result = json.loads(invoke(base(ledger) + ["--feed", feed] + options))
+            assert result["inputs_committed"] == 1
+        print("PASS service budget policy, explicit unlimited opt-out and ordinary unlimited default", flush=True)
 
         baseline = root / "baseline.sqlite"
         invoke(base(baseline, gated_library) + ["--feed", feed])
@@ -188,7 +211,7 @@ try:
         assert set(status(health)["metrics"]) - {"control_errors"} == {"committed_input", "last_seq", "source_timestamp_ms",
             "source_lag_ms", "queue_bytes", "ledger_bytes", "report_cursor", "targets"}
         duplicate = subprocess.run([runner] + list(map(str, base(ledger) + ["--feed", feed,
-            "--status-file", health])), capture_output=True, text=True)
+            "--status-file", health, "--ledger-unbounded"])), capture_output=True, text=True)
         assert duplicate.returncode == 1 and status(health)["liveness"]["alive"]
         process.stdin.write("{")
         process.stdin.flush()
@@ -417,7 +440,7 @@ try:
         keepalive_health = root / "keepalive.status.json"
         keepalive_command = base(root / "keepalive.sqlite") + ["--feed-url", f"ws://{endpoint}/keepalive",
             "--allow-insecure-http", "--feed-idle-timeout", "5", "--feed-message-timeout", "1",
-            "--status-file", keepalive_health, "--max-events", "1"]
+            "--status-file", keepalive_health, "--max-events", "1", "--ledger-unbounded"]
         process = subprocess.Popen([runner] + list(map(str, keepalive_command)),
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         children.append(process)
@@ -444,14 +467,14 @@ try:
         process.stdin.write(large_batch + json.dumps({"type": "time", "ts": 301 * 180000}) + "\n")
         process.stdin.flush()
         finish(process, 3, stop=False)
-        assert query(ledger, "SELECT count(*) FROM inputs") == [(1,)]
-        assert export(ledger)["input_cursor"] == 1
+        assert query(ledger, "SELECT count(*) FROM inputs") == [(0,)]
+        assert export(ledger)["input_cursor"] == 0
         assert status(health)["state"] == "storage_budget" and not status(health)["readiness"]["storage_below_budget"]
         invoke(["probe", "--status-file", health, "--max-age", "2", "--ready"], 1)
         before = invoke(["report", "--ledger", ledger])
         invoke(base(ledger) + ["--feed", feed, "--max-ledger-bytes", "1", "--status-file", health], 3)
         assert invoke(["report", "--ledger", ledger]) == before
-        print("PASS storage budget stops after whole message without losing cursor, outbox or report", flush=True)
+        print("PASS storage budget refuses a whole message before growth and preserves the committed report", flush=True)
 finally:
     receiver_release.set()
     keepalive_release.set()

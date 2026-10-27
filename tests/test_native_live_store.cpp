@@ -11,8 +11,12 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <functional>
+#include <iterator>
 #include <limits>
+#include <map>
+#include <random>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -72,6 +76,518 @@ std::string scalar_text(const std::string& path, const char* sql) {
     sqlite3_finalize(stmt);
     sqlite3_close(db);
     return result;
+}
+
+using SqlRow = std::vector<std::optional<std::string>>;
+std::vector<SqlRow> source_rows(const std::string& path, const char* sql) {
+    sqlite3* database = nullptr;
+    if (sqlite3_open_v2(path.c_str(), &database, SQLITE_OPEN_READONLY, nullptr) != SQLITE_OK)
+        throw std::runtime_error("recount open failed");
+    sqlite3_stmt* statement = nullptr;
+    if (sqlite3_prepare_v2(database, sql, -1, &statement, nullptr) != SQLITE_OK) {
+        sqlite3_close(database);
+        throw std::runtime_error("recount prepare failed");
+    }
+    std::vector<SqlRow> rows;
+    int result;
+    while ((result = sqlite3_step(statement)) == SQLITE_ROW) {
+        SqlRow row;
+        for (int column = 0; column < sqlite3_column_count(statement); ++column) {
+            if (sqlite3_column_type(statement, column) == SQLITE_NULL) row.push_back(std::nullopt);
+            else row.emplace_back(std::string(reinterpret_cast<const char*>(sqlite3_column_text(statement, column)),
+                static_cast<std::size_t>(sqlite3_column_bytes(statement, column))));
+        }
+        rows.push_back(std::move(row));
+    }
+    sqlite3_finalize(statement);
+    sqlite3_close(database);
+    if (result != SQLITE_DONE) throw std::runtime_error("recount step failed");
+    return rows;
+}
+
+Json count_json(std::uint64_t value) { return Json::number(std::to_string(value)); }
+
+// Reconstruct the old answers from source rows in C++, without consulting any
+// summary table, partial index, or production predicate.
+void compare_delivery_recount(Ledger& ledger, const std::string& path) {
+    constexpr std::uint64_t now = 4000000000000ULL;
+    struct EventFacts {
+        std::uint64_t ordinal = 0, created = 0;
+        bool pending = false, logged = false, completed = false;
+        std::optional<std::string> target;
+        std::optional<std::uint64_t> first_attempt;
+    };
+    struct TargetFacts {
+        std::uint64_t pending = 0, unsent = 0, sent = 0, failed = 0;
+        std::optional<std::uint64_t> oldest, last_attempt, last_success;
+        Json last_error;
+        bool visible = false;
+    };
+    std::map<std::string, EventFacts> events;
+    std::map<std::string, TargetFacts> targets;
+    for (const auto& row : source_rows(path, "SELECT e.event_id,e.ordinal,e.acknowledged,e.created_at_ms,r.target_id "
+            "FROM events e JOIN event_routes r ON r.ordinal=e.ordinal")) {
+        events.emplace(*row[0], EventFacts{std::stoull(*row[1]), std::stoull(*row[3]),
+            *row[2] == "0", false, false, row[4], std::nullopt});
+    }
+    for (const auto& row : source_rows(path, "SELECT event_id,target_id,phase,started_at,ended_at,http_status,"
+            "error_category,success FROM delivery_log ORDER BY log_id")) {
+        auto& event = events.at(*row[0]);
+        auto& target = targets[*row[1]];
+        const auto started = std::stoull(*row[3]);
+        event.logged = true;
+        if (!event.first_attempt || started < *event.first_attempt) event.first_attempt = started;
+        if (!target.last_attempt || started > *target.last_attempt) target.last_attempt = started;
+        target.visible = true;
+        if (*row[2] != "completed") continue;
+        event.completed = true;
+        const auto ended = std::stoull(*row[4]);
+        if (*row[7] == "1") {
+            ++target.sent;
+            if (!target.last_success || ended > *target.last_success) target.last_success = ended;
+        } else {
+            ++target.failed;
+            target.last_error = Json::object({{"category", Json::string(*row[6])},
+                {"http_status", Json::number(*row[5])}, {"at", count_json(ended)}});
+        }
+    }
+    std::uint64_t pending = 0, unsent = 0;
+    std::optional<std::uint64_t> head;
+    std::vector<std::uint64_t> unsent_ordinals;
+    for (const auto& [id, event] : events) {
+        (void)id;
+        if (event.pending) {
+            ++pending;
+            if (!head || event.ordinal < *head) head = event.ordinal;
+        }
+        if (!event.target) continue;
+        auto& target = targets[*event.target];
+        if (!event.pending && !event.logged) { ++target.sent; target.visible = true; }
+        if (!event.pending) continue;
+        ++target.pending;
+        const auto created = event.created ? std::optional<std::uint64_t>(event.created) : event.first_attempt;
+        if (created && (!target.oldest || *created < *target.oldest)) target.oldest = created;
+        if (!event.completed) {
+            ++unsent; ++target.unsent; target.visible = true;
+            unsent_ordinals.push_back(event.ordinal);
+        }
+    }
+    CHECK(ledger.pending_count() == pending);
+    CHECK(ledger.unsent_count() == unsent);
+    const auto first = ledger.pending_event();
+    CHECK(first.has_value() == head.has_value());
+    if (first && head) CHECK(first->ordinal == *head);
+    std::sort(unsent_ordinals.begin(), unsent_ordinals.end());
+    const auto selected = ledger.unsent_events(0, events.size() + 1);
+    CHECK(selected.size() == unsent_ordinals.size());
+    for (std::size_t index = 0; index < std::min(selected.size(), unsent_ordinals.size()); ++index)
+        CHECK(selected[index].ordinal == unsent_ordinals[index]);
+    Json metrics = Json::object({}), status = Json::object({});
+    const auto nullable_number = [](const auto& value) { return value ? count_json(*value) : Json{}; };
+    for (const auto& [name, target] : targets) {
+        if (target.pending) metrics.members[name] = Json::object({
+            {"pending_count", count_json(target.pending)},
+            {"oldest_age_ms", target.oldest ? count_json(now > *target.oldest ? now - *target.oldest : 0) : Json{}}});
+        if (target.visible) status.members[name] = Json::object({
+            {"sent", count_json(target.sent)}, {"failed", count_json(target.failed)}, {"unsent", count_json(target.unsent)},
+            {"last_attempt", nullable_number(target.last_attempt)}, {"last_success", nullable_number(target.last_success)},
+            {"last_error", target.last_error}});
+    }
+    CHECK(ledger.delivery_metrics_json(now) == metrics.dump());
+    CHECK(LedgerView(path).status_json() == Json::object({{"schema_version", count_json(1)},
+        {"actions", count_json(events.size())}, {"targets", status}}).dump());
+    std::uint64_t after = 0;
+    while (const auto next = ledger.next_delivery_event(after)) {
+        CHECK(next->event.ordinal == after + 1);
+        CHECK(next->unsent == std::binary_search(unsent_ordinals.begin(), unsent_ordinals.end(), next->event.ordinal));
+        after = next->event.ordinal;
+    }
+    CHECK(after == events.size());
+}
+
+using LedgerFiles = std::vector<std::optional<std::string>>;
+LedgerFiles ledger_files(const std::string& path) {
+    LedgerFiles result;
+    for (const auto* suffix : {"", "-wal", "-shm"}) {
+        const auto file = path + suffix;
+        if (!std::filesystem::exists(file)) { result.push_back(std::nullopt); continue; }
+        std::ifstream input(file, std::ios::binary);
+        if (!input) throw std::runtime_error("cannot snapshot test ledger");
+        result.emplace_back(std::string(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()));
+    }
+    return result;
+}
+
+std::uint64_t snapshot_bytes(const LedgerFiles& files) {
+    std::uint64_t total = 0;
+    for (const auto& file : files) if (file) total += file->size();
+    return total;
+}
+
+template<class Write>
+std::uint64_t expect_budget_refusal(Ledger& ledger, const std::string& path,
+                                    std::uint64_t limit, Write&& write) {
+    ledger.set_byte_budget(limit);
+    // Establish the current WAL reader mark before also snapshotting SHM.
+    // Advancing a reader mark is bookkeeping, independent of ledger writes.
+    ledger.input_count();
+    const auto before = ledger_files(path);
+    std::uint64_t request = 0;
+    bool refused = false;
+    try { write(); }
+    catch (const LedgerBudgetExceeded& error) {
+        refused = true;
+        request = error.requested;
+        CHECK(error.used == snapshot_bytes(before));
+        CHECK(error.limit == limit);
+        CHECK(error.used > limit || error.requested > limit - error.used);
+        const auto typed = pineforge::classify_run_failure(error);
+        CHECK(typed.code == pineforge::RunFailureCode::scratch_capacity_exceeded);
+        CHECK(typed.args && *typed.args == "{\"resource\":\"layout\"}");
+        const std::string message = error.what();
+        const auto receipt = parse_json(message.substr(message.find('{')));
+        CHECK(receipt.at("used").integer<std::uint64_t>() == error.used);
+        CHECK(receipt.at("requested").integer<std::uint64_t>() == error.requested);
+        CHECK(receipt.at("limit").integer<std::uint64_t>() == limit);
+    }
+    CHECK(refused);
+    CHECK(ledger_files(path) == before);
+    ledger.set_byte_budget(0);
+    return request;
+}
+
+template<class Write>
+void exercise_writer_budget(Ledger& ledger, const std::string& path, Write&& write) {
+    const auto used = snapshot_bytes(ledger_files(path));
+    const auto request = expect_budget_refusal(ledger, path, used + 1, write);
+    CHECK(request > 1);
+    CHECK(expect_budget_refusal(ledger, path, used + request - 1, write) == request);
+    ledger.set_byte_budget(used + request + 1);
+    write();
+    CHECK(snapshot_bytes(ledger_files(path)) <= used + request + 1);
+    ledger.set_byte_budget(0);
+}
+
+void ledger_budget_admission() {
+    TempDir temp;
+    for (const auto page : {512U, 4096U, 65536U}) {
+        for (const auto length : {257U, 16385U, 800000U}) {
+            const auto path = temp.file("budget-" + std::to_string(page) + "-" + std::to_string(length) + ".sqlite");
+            execute_sql(path, ("PRAGMA page_size=" + std::to_string(page)).c_str());
+            Ledger ledger(path, "budget");
+            ledger.verify_report(0, "{}");
+            const std::string payload = "{\"bytes\":\"" + std::string(length, 'x') + "\"}";
+            const std::vector<Event> events{{"one", payload, "main", "delivery-one"}, {"two", "{}", std::nullopt, "delivery-two"}};
+            const auto commit = [&] { ledger.commit_input(0, payload, 123, events, payload); };
+            const auto used = snapshot_bytes(ledger_files(path));
+            const auto request = expect_budget_refusal(ledger, path, used + 1, commit);
+            CHECK(request > 1);
+            CHECK(expect_budget_refusal(ledger, path, used + request - 1, commit) == request);
+            CHECK(ledger.input_count() == 0 && ledger.pending_count() == 0 && ledger.unsent_count() == 0);
+            const auto before = snapshot_bytes(ledger_files(path));
+            ledger.set_byte_budget(used + request + 1);
+            commit();
+            const auto after = snapshot_bytes(ledger_files(path));
+            CHECK(after >= before && after - before <= request);
+            CHECK(after <= used + request + 1);
+            // Independent, documented slack ceiling: text amplification <=32,
+            // binary-tree height <=64, 8 pages/level, WAL plus checkpoint, and
+            // 3 WAL-index regions. This includes 56 tree writes for this row set.
+            const auto text = payload.size() * 3 + 3 + 3 + 3 + 2 + 4 + 12 + 12 + 64;
+            const std::uint64_t slack = 32ULL * text + 56ULL * 16 * 66 * (page + 24) + 3 * 32768;
+            CHECK(request >= after - before && request - (after - before) <= slack);
+            ledger.set_byte_budget(0);
+            CHECK(ledger.input(0)->canonical_json == payload && ledger.input(0)->report_json == payload);
+            CHECK(ledger.pending_count() == 2 && ledger.unsent_count() == 1);
+            if (length == 800000) {
+                exercise_writer_budget(ledger, path, [&] { ledger.begin_delivery("one"); });
+                exercise_writer_budget(ledger, path, [&] { ledger.record_delivery_failure("one", "timeout"); });
+                const auto event = ledger.input(0)->events.front();
+                std::optional<DeliveryAttempt> attempt;
+                exercise_writer_budget(ledger, path, [&] { attempt = ledger.start_attempt(event, 100); });
+                exercise_writer_budget(ledger, path, [&] { ledger.finish_attempt(*attempt, 101, 500, false, "http_status"); });
+                exercise_writer_budget(ledger, path, [&] { ledger.acknowledge("one"); });
+                compare_delivery_recount(ledger, path);
+            }
+        }
+    }
+    const auto path = temp.file("writers.sqlite");
+    Ledger ledger(path, "writers");
+    const auto refuse_then_write = [&](const auto& write) {
+        exercise_writer_budget(ledger, path, write);
+    };
+    refuse_then_write([&] { ledger.verify_report(0, "{}"); });
+    refuse_then_write([&] { ledger.bind_routing("{}"); });
+    ledger.commit_input(0, "{}", 1, {{"first", "{}"}});
+    refuse_then_write([&] { ledger.begin_delivery("first"); });
+    refuse_then_write([&] { ledger.record_delivery_failure("first", "timeout"); });
+    refuse_then_write([&] { ledger.acknowledge("first"); });
+    const auto event = ledger.input(0)->events.front();
+    std::optional<DeliveryAttempt> attempt;
+    refuse_then_write([&] { attempt = ledger.start_attempt(event, 100); });
+    refuse_then_write([&] { ledger.finish_attempt(*attempt, 101, 500, false, "http_status"); });
+    refuse_then_write([&] { ledger.request_redelivery("request-one", "default", 1, true); });
+    CHECK(ledger.pending_count() == 1 && ledger.unsent_count() == 0);
+    ledger.set_byte_budget(1);
+    // Idempotent calls are reads and remain usable without new space.
+    ledger.commit_input(0, "{}", 1, {{"first", "{}"}});
+    ledger.verify_report(0, "{}");
+    ledger.bind_routing("{}");
+    CHECK(ledger.request_redelivery("request-one", "default", 1, true) == 1);
+    CHECK(throws([&] { Ledger tiny(temp.file("tiny.sqlite"), "tiny", 1); }));
+}
+
+void ledger_terminal_budget() {
+    TempDir temp;
+    const auto path = temp.file("terminal.sqlite");
+    Ledger ledger(path, "terminal");
+    ledger.commit_input(0, "{}", 0, {});
+    const auto small_write = [&] { ledger.bind_routing("{}"); };
+    const auto large_write = [&] { ledger.commit_input(1, std::string(800000, 'x'), 1, {}); };
+    const auto used = snapshot_bytes(ledger_files(path));
+    const auto small = expect_budget_refusal(ledger, path, used + 1, small_write);
+    const auto large = expect_budget_refusal(ledger, path, used + 1, large_write);
+    CHECK(large > small + 1);
+    ledger.set_byte_budget(used + small + 1);
+    const auto before = ledger_files(path);
+    bool large_refused = false, small_refused = false;
+    try { large_write(); }
+    catch (const LedgerBudgetExceeded& error) { large_refused = true; CHECK(error.requested == large); }
+    try { small_write(); }
+    catch (const LedgerBudgetExceeded& error) { small_refused = true; CHECK(error.requested == large); }
+    CHECK(large_refused && small_refused && ledger_files(path) == before);
+
+    const auto close_path = temp.file("close.sqlite");
+    LedgerFiles before_close;
+    {
+        Ledger writer(close_path, "close");
+        writer.commit_input(0, std::string(900000, 'x'), 1, {});
+        before_close = ledger_files(close_path);
+        writer.set_byte_budget(snapshot_bytes(before_close) + 1);
+    }
+    const auto after_close = ledger_files(close_path);
+    CHECK(after_close[0] == before_close[0]);
+    CHECK(snapshot_bytes(after_close) <= snapshot_bytes(before_close));
+    Ledger recovered(close_path, "close", INT64_MAX);
+    CHECK(recovered.input_count() == 1 && recovered.input(0)->canonical_json == std::string(900000, 'x'));
+
+    const auto sidecar_path = temp.file("sidecar.sqlite");
+    execute_sql(sidecar_path, "PRAGMA page_size=512");
+    {
+        Ledger writer(sidecar_path, "sidecar");
+        const std::string payload(800000, 'x');
+        writer.commit_input(0, payload, 1, {{"large", payload}}, payload);
+        writer.set_byte_budget(snapshot_bytes(ledger_files(sidecar_path)) + 1);
+    }
+    // Rebuilding a missing WAL index is also physical growth. All owners are
+    // closed here, so removing this rebuildable sidecar simulates recovery.
+    std::filesystem::remove(sidecar_path + "-shm");
+    const auto sidecar_before = ledger_files(sidecar_path);
+    const auto sidecar_limit = snapshot_bytes(sidecar_before) + 32768;
+    bool sidecar_refused = false;
+    try { Ledger writer(sidecar_path, "sidecar", sidecar_limit); }
+    catch (const LedgerBudgetExceeded& error) {
+        sidecar_refused = true;
+        CHECK(error.requested > 32768 && error.limit == sidecar_limit);
+    }
+    CHECK(sidecar_refused && ledger_files(sidecar_path) == sidecar_before);
+}
+
+void service_ledger_policy() {
+    validate_ledger_budget(false, 0, false);
+    validate_ledger_budget(true, 1, false);
+    validate_ledger_budget(true, 0, true);
+    bool refused = false;
+    try { validate_ledger_budget(true, 0, false); }
+    catch (const std::invalid_argument& error) {
+        refused = true;
+        const auto typed = pineforge::classify_run_failure(error);
+        CHECK(typed.code == pineforge::RunFailureCode::run_request_invalid);
+        CHECK(typed.args && *typed.args == "{\"option\":\"arguments\"}");
+    }
+    CHECK(refused);
+}
+
+void seeded_delivery_recount() {
+    TempDir temp;
+    const auto path = temp.file("seeded.sqlite");
+    auto ledger = std::make_unique<Ledger>(path, "seeded");
+    std::mt19937 random(0x51a7e);
+    std::vector<DeliveryAttempt> active;
+    for (unsigned step = 0; step < 400; ++step) {
+        const auto operation = random() % 8;
+        const auto index = ledger->input_count();
+        const auto rows = LedgerView(path).actions_after(0, 10000);
+        if (operation <= 1 || rows.empty()) {
+            std::vector<Event> events;
+            const auto size = random() % 4;
+            for (unsigned position = 0; position < size; ++position) {
+                const auto name = std::to_string(index) + "-" + std::to_string(position);
+                const auto target = random() % 3;
+                events.push_back({name, "{\"input\":" + std::to_string(index) + "}",
+                    target == 2 ? std::nullopt : std::optional<std::string>(target ? "side" : "main"), "delivery-" + name});
+            }
+            ledger->commit_input(index, "{\"step\":" + std::to_string(step) + "}", step, events);
+        } else if (operation == 2) {
+            const auto& event = rows[random() % rows.size()];
+            if (event.target_id) active.push_back(ledger->start_attempt(event, 100 + random() % 5000));
+        } else if (operation == 3 && !active.empty()) {
+            const auto position = random() % active.size();
+            const auto attempt = active[position];
+            const bool success = random() % 2;
+            ledger->finish_attempt(attempt, attempt.started_at + 20, success ? 204 : 503, success, "http_status");
+            active.erase(active.begin() + position);
+        } else if (operation == 4) {
+            if (const auto head = ledger->pending_event()) {
+                if (!head->attempts || random() % 3 == 0) ledger->begin_delivery(head->id);
+                else if (random() % 2) ledger->record_delivery_failure(head->id, "timeout");
+                else ledger->acknowledge(head->id);
+            }
+        } else if (operation == 5) {
+            const auto request = "request-" + std::to_string(step);
+            const auto from = 1 + random() % (rows.size() + 5);
+            const bool failed = random() % 2;
+            const auto count = ledger->request_redelivery(request, "main", from, failed);
+            CHECK(ledger->request_redelivery(request, "main", from, failed) == count);
+            if (const auto next = ledger->next_redelivery_event(0, 0))
+                active.push_back(ledger->start_attempt(next->event, 100 + random() % 5000, next->request_id));
+        } else if (operation == 6) {
+            CHECK(throws([&] { ledger->commit_input(index, "{}", 99,
+                {{"rollback-" + std::to_string(step), "{}"}, {rows.front().id, "{}"}}); }));
+            CHECK(ledger->input_count() == index);
+        } else if (operation == 7) {
+            ledger.reset();
+            ledger = std::make_unique<Ledger>(path, "seeded");
+        }
+        compare_delivery_recount(*ledger, path);
+    }
+}
+
+void delivery_status_growth() {
+    TempDir temp;
+    const auto path = temp.file("growth.sqlite");
+    Ledger ledger(path, "growth");
+    std::vector<std::uint64_t> small;
+    std::uint64_t input = 0;
+    for (const unsigned population : {256U, 2560U}) {
+        for (; input < population; ++input) {
+            const auto id = "event-" + std::to_string(input);
+            ledger.commit_input(input, "{}", input, {{id, "{}", input % 2 ? "main" : "side", id}});
+            if (input % 3 == 0) {
+                const auto event = ledger.input(input)->events.front();
+                const auto attempt = ledger.start_attempt(event, input + 1);
+                ledger.finish_attempt(attempt, input + 2, 503, false, "http_status");
+            }
+        }
+        compare_delivery_recount(ledger, path);
+        std::vector<std::uint64_t> work(5);
+        ledger.pending_count(&work[0]);
+        ledger.unsent_count(&work[1]);
+        ledger.delivery_metrics_json(4000000000000ULL, &work[2]);
+        LedgerView(path).status_json(&work[3]);
+        CHECK(ledger.next_delivery_event(0, &work[4]).has_value());
+        for (const auto steps : work) CHECK(steps > 0 && steps < 500);
+        if (small.empty()) small = work;
+        else CHECK(work == small);
+    }
+}
+
+void delivery_summary_migration() {
+    TempDir temp;
+    const auto path = temp.file("previous.sqlite");
+    // Previous runner schema, including routed, failed, acknowledged, unknown-
+    // age and journal-only rows. No delivery summary structures exist.
+    execute_sql(path,
+        "CREATE TABLE metadata(singleton INTEGER PRIMARY KEY CHECK(singleton=1),"
+        "schema_version INTEGER NOT NULL CHECK(schema_version=1),identity TEXT NOT NULL);"
+        "CREATE TABLE inputs(input_index INTEGER PRIMARY KEY,canonical_json TEXT NOT NULL,state_hash TEXT NOT NULL);"
+        "CREATE TABLE events(ordinal INTEGER PRIMARY KEY,input_index INTEGER NOT NULL REFERENCES inputs(input_index),"
+        "input_position INTEGER NOT NULL,event_id TEXT NOT NULL UNIQUE,payload TEXT NOT NULL,"
+        "attempts INTEGER NOT NULL DEFAULT 0,acknowledged INTEGER NOT NULL DEFAULT 0,last_error TEXT NOT NULL DEFAULT '',"
+        "created_at_ms INTEGER NOT NULL DEFAULT 0,UNIQUE(input_index,input_position));"
+        "CREATE INDEX pending_events ON events(ordinal) WHERE acknowledged=0;"
+        "CREATE TABLE report_snapshots(input_cursor INTEGER PRIMARY KEY,payload TEXT NOT NULL);"
+        "CREATE TABLE report_integrity(input_cursor INTEGER PRIMARY KEY REFERENCES report_snapshots(input_cursor),digest TEXT NOT NULL);"
+        "CREATE TABLE routing_configuration(singleton INTEGER PRIMARY KEY,document TEXT NOT NULL);"
+        "CREATE TABLE event_routes(ordinal INTEGER PRIMARY KEY REFERENCES events(ordinal),target_id TEXT,delivery_id TEXT NOT NULL);"
+        "CREATE TABLE delivery_log(log_id INTEGER PRIMARY KEY,event_id TEXT NOT NULL REFERENCES events(event_id),"
+        "target_id TEXT NOT NULL,delivery_id TEXT NOT NULL,attempt INTEGER NOT NULL,phase TEXT NOT NULL,"
+        "started_at INTEGER NOT NULL,ended_at INTEGER,http_status INTEGER NOT NULL DEFAULT 0,"
+        "error_category TEXT NOT NULL DEFAULT '',success INTEGER NOT NULL DEFAULT 0,request_id TEXT NOT NULL DEFAULT '',"
+        "UNIQUE(event_id,attempt,phase));"
+        "CREATE INDEX delivery_results ON delivery_log(event_id,phase,log_id);"
+        "CREATE INDEX delivery_request_results ON delivery_log(request_id,event_id,phase);"
+        "CREATE TABLE redelivery_requests(request_order INTEGER PRIMARY KEY,request_id TEXT NOT NULL UNIQUE,"
+        "target_id TEXT NOT NULL,from_ordinal INTEGER NOT NULL,through_ordinal INTEGER NOT NULL,"
+        "failed_only INTEGER NOT NULL,snapshot_log INTEGER NOT NULL,selected INTEGER NOT NULL,accepted_at INTEGER NOT NULL);"
+        "INSERT INTO metadata VALUES(1,1,'previous');"
+        "INSERT INTO inputs VALUES(0,'{\"input\":0}','11'),(1,'{\"input\":1}','12');"
+        "INSERT INTO events VALUES(1,0,0,'legacy','{ \"keep\" : 1 }',2,1,'',0),"
+        "(2,0,1,'unknown','{}',0,0,'',0),(3,0,2,'failed','{}',1,0,'http_status',0),"
+        "(4,1,0,'success','{}',1,1,'',200),(5,1,1,'known','{}',0,0,'',300),"
+        "(6,1,2,'journal','{}',0,0,'',0);"
+        "INSERT INTO event_routes VALUES(1,'main','d1'),(2,'main','d2'),(3,'main','d3'),"
+        "(4,'side','d4'),(5,'side','d5'),(6,NULL,'d6');"
+        "INSERT INTO delivery_log VALUES(1,'failed','main','d3',1,'started',100,NULL,0,'',0,''),"
+        "(2,'failed','main','d3',1,'completed',100,110,503,'http_status',0,''),"
+        "(3,'success','side','d4',1,'started',180,NULL,0,'',0,''),"
+        "(4,'success','side','d4',1,'completed',180,190,204,'',1,'');");
+    CHECK(scalar_text(path, "SELECT COUNT(*) FROM sqlite_master WHERE type='table'") == "9");
+    const auto input_bytes = source_rows(path, "SELECT * FROM inputs ORDER BY input_index");
+    const auto action_bytes = source_rows(path, "SELECT * FROM events ORDER BY ordinal");
+    const auto log_bytes = source_rows(path, "SELECT * FROM delivery_log ORDER BY log_id");
+    const auto before = ledger_files(path);
+    bool refused = false;
+    try { Ledger limited(path, "previous", 1); }
+    catch (const LedgerBudgetExceeded& error) { refused = true; CHECK(error.limit == 1 && error.requested > 0); }
+    CHECK(refused && ledger_files(path) == before);
+    {
+        Ledger ledger(path, "previous");
+        CHECK(ledger.pending_count() == 4 && ledger.unsent_count() == 2);
+        CHECK(ledger.pending_event()->id == "unknown");
+        const auto metrics = parse_json(ledger.delivery_metrics_json(1000));
+        CHECK(metrics.at("main").at("pending_count").integer<unsigned>() == 2);
+        CHECK(metrics.at("main").at("oldest_age_ms").integer<unsigned>() == 900);
+        CHECK(metrics.at("side").at("oldest_age_ms").integer<unsigned>() == 700);
+        compare_delivery_recount(ledger, path);
+    }
+    CHECK(source_rows(path, "SELECT * FROM inputs ORDER BY input_index") == input_bytes);
+    CHECK(source_rows(path, "SELECT * FROM events ORDER BY ordinal") == action_bytes);
+    CHECK(source_rows(path, "SELECT * FROM delivery_log ORDER BY log_id") == log_bytes);
+    CHECK(scalar_text(path, "SELECT COUNT(*) FROM sqlite_master WHERE type='table'") == "12");
+    execute_sql(path, "CREATE TRIGGER reject_rebuild BEFORE INSERT ON delivery_state "
+        "BEGIN SELECT RAISE(ABORT,'summary rebuilt twice'); END;");
+    {
+        Ledger reopened(path, "previous");
+        compare_delivery_recount(reopened, path);
+        // Old rows with unknown age acquire their first known attempt time.
+        const auto event = reopened.input(0)->events[1];
+        const auto attempt = reopened.start_attempt(event, 50);
+        CHECK(parse_json(reopened.delivery_metrics_json(1000)).at("main").at("oldest_age_ms").integer<unsigned>() == 950);
+        reopened.finish_attempt(attempt, 60, 204, true, "");
+        compare_delivery_recount(reopened, path);
+    }
+    CHECK(throws([&] { refuse_legacy_ledger(path, "previous"); }));
+    refuse_legacy_ledger(path, "different identity");
+}
+
+void previous_binary_ledger(const std::string& path) {
+    if (scalar_text(path, "SELECT COUNT(*) FROM sqlite_master WHERE type='table'") != "9" ||
+        scalar_text(path, "SELECT COUNT(*) FROM sqlite_master WHERE name IN "
+            "('delivery_totals','delivery_targets','delivery_state')") != "0")
+        throw std::runtime_error("cross-version proof requires an unmigrated previous-runner ledger");
+    const auto inputs = source_rows(path, "SELECT * FROM inputs ORDER BY input_index");
+    const auto events = source_rows(path, "SELECT * FROM events ORDER BY ordinal");
+    const auto attempts = source_rows(path, "SELECT * FROM delivery_log ORDER BY log_id");
+    for (unsigned open = 0; open < 2; ++open) {
+        Ledger ledger(path, "previous-produced");
+        CHECK(ledger.input_count() == 2 && ledger.pending_count() == 4 && ledger.unsent_count() == 2);
+        compare_delivery_recount(ledger, path);
+    }
+    CHECK(scalar_text(path, "SELECT COUNT(*) FROM sqlite_master WHERE type='table'") == "12");
+    CHECK(source_rows(path, "SELECT * FROM inputs ORDER BY input_index") == inputs);
+    CHECK(source_rows(path, "SELECT * FROM events ORDER BY ordinal") == events);
+    CHECK(source_rows(path, "SELECT * FROM delivery_log ORDER BY log_id") == attempts);
 }
 
 void incremental_reports() {
@@ -260,6 +776,8 @@ void crash_recovery(const char* executable) {
     CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
     Ledger recovered(path, "crash-v1");
     CHECK(recovered.input_count() == 1);
+    CHECK(recovered.pending_count() == 1 && recovered.unsent_count() == 1);
+    compare_delivery_recount(recovered, path);
     const auto pending = recovered.pending_event();
     CHECK(pending.has_value());
     if (pending) {
@@ -427,11 +945,21 @@ int main(int argc, char** argv) {
     if (argc == 3 && std::strcmp(argv[1], "--crash-writer") == 0)
         crash_writer(argv[2]);
     try {
-        ledger_transactions();
-        cumulative_reports();
-        incremental_reports();
-        crash_recovery(argv[0]);
-        native_http();
+        if (argc == 3 && std::strcmp(argv[1], "--previous-ledger") == 0) {
+            previous_binary_ledger(argv[2]);
+        } else {
+            ledger_budget_admission();
+            ledger_terminal_budget();
+            service_ledger_policy();
+            seeded_delivery_recount();
+            delivery_status_growth();
+            delivery_summary_migration();
+            ledger_transactions();
+            cumulative_reports();
+            incremental_reports();
+            crash_recovery(argv[0]);
+            native_http();
+        }
     } catch (const std::exception& e) {
         std::fprintf(stderr, "UNEXPECTED: %s\n", e.what());
         ++failures;

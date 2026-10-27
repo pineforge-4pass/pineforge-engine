@@ -44,7 +44,7 @@ def main():
                 result = subprocess.run([runner, "run", "--strategy", library, "--warmup", str(warmup),
                     "--feed", str(feed), "--ledger", str(ledger), "--mode", mode,
                     "--script-tf", timeframe, "--symbol", "BINANCE:ETHUSDT.P",
-                    "--control-dir", str(controls), "--status-file", str(health)] + options,
+                    "--control-dir", str(controls), "--status-file", str(health), "--ledger-unbounded"] + options,
                     capture_output=True, text=True)
                 assert result.returncode == 1 and declaration in result.stderr, (name, result)
                 assert not ledger.exists() and not list(root.glob(ledger.name + "*"))
