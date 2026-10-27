@@ -232,10 +232,11 @@ The declared exclusion and summary accounting apply equally to `debug` and
 full registry minus those names, and only selection is partitioned.
 The registry hash still covers every registered name. Both profiles retain
 null default execution floors. Their default runs now enter strict exclusion
-accounting: at least 904 registered rows for `debug`, 895 for `sanitizers`,
+accounting: at least 907 registered rows for `debug`, 898 for `sanitizers`,
 a nonempty exclusion that leaves selected rows, and exact accounting of that
 selection. Verifier 8 + preflight 8 + command-after 8 + report 4 add 28 public rows;
-plain Debug-type runs enforce the increased registration floors. An explicit
+CR-319 adds three public Linux scratch-attribution cases in both fixture worlds.
+Plain Debug-type runs enforce the increased registration floors. An explicit
 valid `--exclude-label X` still wins on unsharded and 1/1 paths. For `N > 1`,
 only the profile's declared Debug-build-type `slow` exclusion is accepted;
 Release, kernel and native multi-shard exclusions remain refused.
@@ -309,9 +310,9 @@ fail the multi-shard accounting. Excluded runs use the strict skip policy
 above, including when `minTests` is null. The unsupported-WebSocket allowance
 remains confined to full runs without the overlay.
 
-Every shard reports the same **undivided** `minTests`: Release 938 with the
-overlay or 631 without it (307 pinned placeholders), kernel 365 with the
-overlay or 334 without it (31 pinned placeholders). Debug, sanitizers and native
+Every shard reports the same **undivided** `minTests`: Release 941 with the
+overlay or 634 without it (307 pinned placeholders), kernel 368 with the
+overlay or 337 without it (31 pinned placeholders). Debug, sanitizers and native
 default to JSON null; live-only floors stay 21 (20 without transport.cpp). An explicit
 floor can raise minimums; a multi-shard run refuses a lower profile floor.
 Registry capacity is checked locally against that global floor, subtracting
@@ -448,7 +449,7 @@ For `N > 1`, global floors and local accounting are separate obligations:
   registry's runnable capacity. Without the overlay, capacity is the full
   registered count minus the registered pinned private-fixture names;
   with the overlay it is the full registered count. The
-  floor itself remains fixed at 631/334 absent or 938/365 present for
+  floor itself remains fixed at 634/337 absent or 941/368 present for
   Release/kernel, or the explicit `--min-tests` value. It is never divided by
   the shard count or lowered by an observed skip.
 * Each shard requires `ran + permitted skips = its own selected count`, with
@@ -665,7 +666,7 @@ profiles reject a skip for every required probe, even a pinned row and without
 `PINEFORGE_PRIVATE_FIXTURES`; other pinned-placeholder skips keep their policy.
 Replacing one row with eight probes plus the cover adds eight rows: the live
 run floor grows from 13 to 21, or 12 to 20 without transport, in both fixture
-worlds. The native PR registration floor is 1000: 964 + 28 public split rows + 8 probes.
+worlds. The native PR registration floor is 1003: 964 + 28 public split rows + 8 probes + 3 scratch cases.
 Release, debug and sanitizers build no runner; kernel omits this source-layer registration.
 
 `runner_e2e_test_names()` expands the equivalence driver into all eight rows.
@@ -716,8 +717,15 @@ observed skips:
 
 | profile | floor, overlay present | floor, overlay absent | registered (present / absent) |
 |---|---|---|---|
-| `release` | 938 | 631 | 938 / 938 |
-| `kernel` | 365 | 334 | 365 / 365 |
+| `release` | 941 | 634 | 941 / 941 |
+| `kernel` | 368 | 337 | 368 / 368 |
+
+CR-319 keeps the scratch-attribution aggregate and extends its nine individual
+Linux cases to twelve: `(1 + 12) - (1 + 9) = 3` additional public rows in each
+fixture world. Release grows from 938 to 941 and kernel from 365 to 368.
+The pinned populations remain 307 and 31, giving absent floors
+`941 - 307 = 634` and `368 - 31 = 337`. The fast/slow label inventories and
+runner-only populations do not change.
 
 With the variable set and non-empty (the private-fixture overlay is present in
 the tree) the floor is the full population and EVERY row of it must run: a row
@@ -756,8 +764,8 @@ The PR registration floors are the keys of `EXCLUDED_REGISTERED_MIN` in
 `scripts/ci_verify.py`, one for each profile whose pull-request leg excludes
 the label; their values are in
 [PR tier versus MAIN/RELEASE](#pr-tier-versus-mainrelease-what-is-excluded-where).
-The full-run release and kernel floors are the table's own numbers above (631
-and 334 rows absent, 938 and 365 with the overlay present). A pull request's
+The full-run release and kernel floors are the table's own numbers above (634
+and 337 rows absent, 941 and 368 with the overlay present). A pull request's
 release and kernel legs exclude the label and are held to the registration
 floor instead; the full runs on push and dispatch exclude no label and are
 held to these run floors.
@@ -1455,9 +1463,10 @@ that profile's `EXCLUDED_REGISTERED_MIN` key and its overlay-aware run floor,
 the selection must remove some rows and leave some, and, with the overlay
 absent, the rows that ran plus the pinned skips must equal the selection with
 no other skip (the `--exclude-label` branch of `enforce_test_floor` in
-`scripts/ci_verify.py`). `EXCLUDED_REGISTERED_MIN` holds 904 for `debug`, 895
-for `sanitizers` and 1000 for `native`, and 923 for `release` and 365
-for `kernel`: +28 public split rows in each, plus eight native probes. The original `release` key was the
+`scripts/ci_verify.py`). `EXCLUDED_REGISTERED_MIN` holds 907 for `debug`, 898
+for `sanitizers` and 1003 for `native`, and 926 for `release` and 368
+for `kernel`: +28 public split rows in each, plus eight native probes and three
+public Linux scratch-attribution cases in every engine profile. The original `release` key was the
 registered count in the sampled public pull-request runs (957) less the 62 rows
 by which the Debug key sits below the Debug registry in the same runs (938 less
 876); that also equals its own registry at the vintage of the other keys. The
@@ -1465,8 +1474,8 @@ same offset would give 309 for `kernel`, 17 rows below the kernel registry at
 that vintage (326), so the original `kernel` key took 337: 34 below the 371
 registered in every sampled pull-request and push run. The lab job's `ctest -N`
 confirms both or moves them. The
-run floors in the table above (938 and 365 with the overlay present, 631 and
-334 absent) are not read on an excluded run; push, dispatch and every other
+run floors in the table above (941 and 368 with the overlay present, 634 and
+337 absent) are not read on an excluded run; push, dispatch and every other
 full run still enforce them.
 
 **2026-10-24 supersedes the exclusion skip wording above:** the sole named
