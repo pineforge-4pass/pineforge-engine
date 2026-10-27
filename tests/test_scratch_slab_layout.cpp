@@ -206,8 +206,13 @@ void bounds_reservations_and_reset() {
     const auto before_allocation = global_allocation::allocations;
     // Worked manifest 2 above: q empty, seven pages, De=89 live bytes.
     ScratchSlab slab({0, 0, 2, 9, 3, 11, 2, 7, 2, 5, 3});
+#if defined(MAP_ANONYMOUS) || defined(MAP_ANON)
+    require(global_allocation::allocations == before_allocation,
+            "mapped backing needs no C++ heap allocation");
+#else
     require(global_allocation::allocations == before_allocation + 1,
             "one aligned backing allocation for all nine regions");
+#endif
     const auto& erased = slab.region(ScratchResource::erased_data);
     const std::array<std::uint8_t, 4> sample{{7, 11, 19, 23}};
     std::array<std::uint8_t, 4> observed{};
