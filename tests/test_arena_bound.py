@@ -32,7 +32,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from arena_bound import (  # noqa: E402
     CHUNK_BYTES, FACTS_SCHEMA, MAX_ARENA_BYTES, MAX_U64, BoundOverflow, FactsError,
     arena_bound, combined_arena_chunks, index_peak, fold_opened_segments,
-    ordered_fold_bytes, per_user_bytes, slots,
+    object_store_reserve_bytes, ordered_fold_bytes, per_user_bytes, slots,
 )
 from arena_bound_manifest import (  # noqa: E402
     bound_probe, engine_fingerprint, plan_fingerprint,
@@ -59,9 +59,62 @@ def command_share_capacity(supplied: int, numerator: int, denominator: int) -> i
     return max(CHUNK_BYTES, supplied * numerator // denominator // CHUNK_BYTES * CHUNK_BYTES)
 
 
+def _term_facts(bars: int) -> dict:
+    source = "hand term vector"
+    return {
+        "schema": FACTS_SCHEMA,
+        "data": {"scriptBars": bars, "selected": 0, "windowBars": bars,
+                 "source": source},
+        "strategy": {
+            "controlFlow": {"status": "bounded", "source": source},
+            "fills": {"perBar": 0, "fixed": 0, "rowsPerFill": 0,
+                      "fixedRows": 0, "source": source},
+            "ids": {"literals": [], "freshPerBar": 0, "fixedFresh": 0,
+                    "maxBytes": 0, "source": source},
+            "pairKeys": {"mode": "opportunities", "perBar": 0, "fixed": 0,
+                         "source": source},
+            "successors": {"perBar": 0, "fixed": 0, "source": source},
+            "objects": {"perExecution": 0, "source": source},
+            "placementStore": {"arenaBytes": 0, "source": source},
+        },
+    }
+
+
+def object_term_facts(vector: dict) -> dict:
+    facts = _term_facts(vector["bars"])
+    facts["strategy"]["placementStore"]["arenaBytes"] = vector.get(
+        "placementBytes", 0)
+    if "perExecution" not in vector and "payloadBytes" not in vector:
+        del facts["strategy"]["objects"]
+        return facts
+    objects = {"source": "hand object term vector"}
+    if "perExecution" in vector:
+        objects["perExecution"] = vector["perExecution"]
+    if "payloadBytes" in vector:
+        objects["payloadBytes"] = vector["payloadBytes"]
+    facts["strategy"]["objects"] = objects
+    return facts
+
+
+def placement_term_facts(vector: dict) -> dict:
+    facts = _term_facts(vector["bars"])
+    if vector.get("omitObjects"):
+        del facts["strategy"]["objects"]
+    if vector.get("omit"):
+        del facts["strategy"]["placementStore"]
+    else:
+        facts["strategy"]["placementStore"] = {
+            "arenaBytes": vector["arenaBytes"],
+            "source": vector["source"],
+        }
+    return facts
+
+
 class FormulaTests(unittest.TestCase):
     def setUp(self):
-        self.vectors = json.loads(VECTORS.read_text(encoding="utf-8"))["vectors"]
+        document = json.loads(VECTORS.read_text(encoding="utf-8"))
+        self.vectors = document["vectors"]
+        self.term_vectors = document["termVectors"]
 
     def test_command_share_one_chunk_floor(self):
         for arena_chunks, store_chunks in ((4, 1), (16, 1), (17, 1), (32, 2),
@@ -144,6 +197,70 @@ class FormulaTests(unittest.TestCase):
         supplied = half - half % CHUNK_BYTES
         self.assertEqual(supplied, 22 * CHUNK_BYTES)
         self.assertLess(supplied, 25_165_824)  # Actual 24*C curve from the lab brief.
+
+    def test_object_store_term_vectors(self):
+        for vector in self.term_vectors["objectStore"]:
+            with self.subTest(vector=vector["name"]):
+                facts = object_term_facts(vector)
+                actual_reserve = object_store_reserve_bytes(
+                    vector["bars"], vector["expectedObjectsPerExecution"],
+                    vector["recordBytes"])
+                self.assertEqual(actual_reserve, vector["expectedReserveBytes"])
+                result = arena_bound(facts)
+                arena = result["terms"]["arena"]
+                self.assertFalse(arena["unbounded"])
+                self.assertEqual(arena["arenaBytes"], vector["expectedArenaBytes"])
+
+    def test_object_store_term_is_monotone_and_preserves_the_floor(self):
+        vectors = {
+            vector["name"]: vector for vector in self.term_vectors["objectStore"]
+        }
+        floor = vectors["object-store-1-bar-floor"]
+        one = vectors["object-store-100000-explicit-one"]
+        three = vectors["object-store-100000-explicit-three"]
+        million = vectors["object-store-1000000-explicit-one"]
+        maximum = vectors["object-store-100000-unbounded-platform-max"]
+        calc = vectors["object-store-100000-calc-on-order-fills-platform-max"]
+        self.assertEqual(
+            object_store_reserve_bytes(
+                floor["bars"], floor["expectedObjectsPerExecution"],
+                floor["recordBytes"]),
+            floor["expectedReserveBytes"])
+        self.assertGreaterEqual(one["expectedArenaBytes"], floor["expectedArenaBytes"])
+        self.assertGreaterEqual(million["expectedArenaBytes"], one["expectedArenaBytes"])
+        self.assertGreaterEqual(three["expectedArenaBytes"], one["expectedArenaBytes"])
+        self.assertGreaterEqual(
+            maximum["expectedArenaBytes"], three["expectedArenaBytes"])
+        self.assertEqual(
+            maximum["expectedArenaBytes"], calc["expectedArenaBytes"])
+        self.assertGreater(floor["expectedArenaBytes"], floor["expectedReserveBytes"])
+
+    def test_placement_store_term_vectors(self):
+        for vector in self.term_vectors["placementStore"]:
+            with self.subTest(vector=vector["name"]):
+                facts = placement_term_facts(vector)
+                if vector.get("expectedError") == "FactsError":
+                    with self.assertRaises(FactsError):
+                        arena_bound(facts)
+                    continue
+                result = arena_bound(facts)
+                arena = result["terms"]["arena"]
+                if vector["expectedArenaBytes"] is None:
+                    self.assertTrue(arena["unbounded"])
+                    self.assertIsNone(arena["arenaBytes"])
+                    if "expectedReasonContains" in vector:
+                        self.assertIn(vector["expectedReasonContains"], arena["reason"])
+                        self.assertIn("arena", result["unboundedTerms"])
+                    if "expectedReasonPrefix" in vector:
+                        self.assertTrue(
+                            arena["reason"].startswith(vector["expectedReasonPrefix"]))
+                    continue
+                self.assertFalse(arena["unbounded"])
+                self.assertEqual(arena["arenaBytes"], vector["expectedArenaBytes"])
+
+    def test_object_store_reserve_overflow_is_checked(self):
+        with self.assertRaises(BoundOverflow):
+            object_store_reserve_bytes(MAX_U64, 1, 2)
 
     def test_runtime_fixture_certificates_hand_derived(self):
         # Current fixture_facts, independently summed by hand. Columns are
@@ -855,6 +972,8 @@ def fixture_facts(which: int, bars: int) -> dict:
                          "source": source},
             "successors": {"perBar": 512 if which == 6 else 0, "fixed": 0,
                            "source": source},
+            "objects": {"perExecution": 0, "source": source},
+            "placementStore": {"arenaBytes": 0, "source": source},
         }
     width = 8 if which in (1, 5) else (4 if which == 4 else 1)
     # Each of three partial brackets has at most three legs per opening.
@@ -876,6 +995,8 @@ def fixture_facts(which: int, bars: int) -> dict:
         "pairKeys": {"mode": "opportunities", "perBar": 16 * width * width,
                      "fixed": 0, "source": source},
         "successors": {"perBar": 4 * fills, "fixed": 0, "source": source},
+        "objects": {"perExecution": 0, "source": source},
+        "placementStore": {"arenaBytes": 0, "source": source},
     }
 
 

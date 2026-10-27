@@ -69,6 +69,8 @@ Each derivation names the formula and the pre-start evidence supplied with
 its facts. `per_user_bytes(result["terms"]["arena"]["inputs"])` exposes ten
 storage contributions and the explicit stock-source `openings=0` exclusion
 (eleven entries), without adding a second sizing result.
+The object-store reservation and placement-store contribution are separate
+sub-terms of `terms.arena`; they do not become extra top-level verdict terms.
 
 The flag means **no certified finite value available for this term**. Reasons
 distinguish `UNBOUNDED` (a proved unbounded emitting computation),
@@ -116,6 +118,9 @@ naming its source span, compiler artifact or data-plan receipt.
 | strategy.ids.maxBytes | L: maximum UTF-8 **byte** length of every source/generated ID component in those stores. Include prefixes, suffixes, separators internal to components and bounded decimal tokens. The calculator checks literal lengths but trusts the compiler for computed strings. |
 | strategy.pairKeys.mode | `cartesian` uses D*D. `opportunities` also supplies perBar/fixed, proving K <= S*Kbar+K0 for the distinct-ever keys of **each** pair domain. Count attempts that populate consumed-cycle keys even without an accepted placement. |
 | strategy.successors.perBar, fixed | Rbar/R0: successor-root rows issued <= S*Rbar+R0. Includes replacements that never fill; kept-handle repricing issues no row. Compiler/lowering command proof, not trades or bars alone. |
+| strategy.objects.perExecution | K_obj: object records created per execution. An omitted group or field means 1. The strings `unbounded` and `calc_on_order_fills` resolve to the platform maximum of 1<<20; an integer is used as supplied. The trusted compiler/lowering receipt must bind the execution schedule. |
+| strategy.objects.payloadBytes | Optional nonnegative payload estimate added to each object's record estimate. A declared value needs the same trusted source as the object-count proof; omission means zero payload bytes. |
+| strategy.placementStore.arenaBytes | Certified physical bytes for the separate run-owned placement store, supplied by the placement-storage producer. Its nonempty `source` must prove the encoded width and geometry for the complete run. |
 
 The exact arena input formulas are:
 
@@ -128,7 +133,22 @@ Q = min(D * D, S * pairKeys.perBar + pairKeys.fixed) # opportunities mode
 R = S * successors.perBar + successors.fixed
 E = S                    if selected == 0
 E = W + 1                if selected == 1
+
+P = strategy.objects.payloadBytes if declared, otherwise 0
+recordBytes = 16 + 1024 + P
+objectReserveBytes = ceil(S * K_obj * recordBytes)
+placementChunks = ceil(strategy.placementStore.arenaBytes / C)
 ```
+
+`objectReserveBytes` is the checked byte product in the Python/C++ helper;
+the product is integral because all three receipt values are integer facts.
+The final arena rounds that reservation to whole `C`-byte chunks. The object
+record constants come from `kHeaderBytes` at
+`src/detail/o1_store.cpp:43`, `Shape::chunk_bytes` at
+`include/pineforge/detail/o1_store.hpp:63`, and their allocation geometry,
+`chunk_buffer_bytes_` at `src/detail/o1_store.cpp:263-265`. The platform maximum is the existing
+`kCoofLoopGuard` at `include/pineforge/source/pine_adapter.hpp:76`; its use
+here is per execution, not per bar.
 
 | Symbol | Unit / domain |
 | --- | --- |
@@ -458,9 +478,28 @@ B = 24*E + (30+L)*T + (96+L)*D + 1[D>0]
 
 Bcert = chunkCeil(B) + 14*C
 b = Bcert / C = B//C + 1[B%C != 0] + 14
-q = max(1, (b - 3)//13)                 # b >= 14; f = 1/16
-arenaBytes = (b + 3*q)*C
+o = ceil(strategy.placementStore.arenaBytes / C)
+m = b + o
+q = max(1, (m - 3)//13)                 # m >= 14; f = 1/16
+floorArenaBytes = (m + 3*q)*C
+arenaBytes = max(floorArenaBytes, chunkCeil(objectReserveBytes))
 ```
+
+The two additional arena sub-terms are supplied and consumed as follows:
+
+| Term | Fact and producer | Formula | UNCERTIFIED behavior | Hand vector rows |
+| --- | --- | --- | --- | --- |
+| Object-store reservation | `strategy.objects` from the trusted compiler/lowering receipt; an optional payload estimate may be included | `recordBytes=16+1024+payloadBytes`; `objectReserveBytes=ceil(S*K_obj*recordBytes)`; `arenaBytes=max(floorArenaBytes,chunkCeil(objectReserveBytes))` | An omitted object group or `perExecution` field is the specified default `K_obj=1`. The two platform tokens use 1<<20. A malformed receipt is rejected as a facts error. | `object-store-1-bar-floor`, `object-store-100000-absent-default`, `object-store-100000-explicit-one`, `object-store-100000-explicit-three`, `object-store-100000-unbounded-platform-max`, `object-store-100000-calc-on-order-fills-platform-max`, `object-store-100000-payload-estimate`, `object-store-1000000-absent-default`, `object-store-1000000-explicit-one`, `object-store-1000000-explicit-three`, `object-store-1000000-unbounded-platform-max`, `object-store-1000000-calc-on-order-fills-platform-max` |
+| Placement-store contribution | `strategy.placementStore` from the placement-storage producer; `arenaBytes` and a nonempty `source` are required | `placementChunks=ceil(arenaBytes/C)`; add `placementChunks` to `b` before solving the unchanged three command shares | A missing or unsupported placement proof returns `arenaBytes=null`, `unbounded=true`, and an `UNCERTIFIED` arena reason. An absent bound is never treated as zero. A proved zero is the empty-store constant bound. | `placement-store-empty-proof`, `placement-store-certified`, `placement-store-absent-uncertified`, `placement-store-nonnumeric-refused`, `placement-store-negative-refused`, `placement-store-overflow-boundoverflow` |
+
+The default object record estimate is about 1.1 KiB: the 16-byte object
+header and the 1024-byte data chunk are the source-defined geometry. The
+object helper is intentionally a small pure function with argument order
+`(bars, objects_per_execution, record_bytes)`; its checked byte result must
+remain equal to the matching C++ helper. The placement contribution is
+rounded into the existing non-command total, while object reservation only
+raises the already solved arena floor. `COMMAND_STORES=3` and the 1/16 share
+remain unchanged.
 
 `ROUNDING_REGIONS=14` remains the non-command rounding allowance. For these
 named non-command users with one segment per fold component there are
@@ -761,7 +800,7 @@ and 3,320,633 bytes for Small. These extra hypotheses must be facts, not
 inferred from the trade population. Private RSS/AS remains a separate
 unknown term in the absence of its proof.
 
-The eight JSON vectors were calculated by hand:
+The eight legacy JSON vectors were calculated by hand:
 
 | Vector | Hand calculation / distinguishing boundary |
 | --- | --- |
@@ -774,12 +813,16 @@ The eight JSON vectors were calculated by hand:
 | All terms | B=18146, b=15, q=1; A=18*1048576=18874368 as for Unicode. Primary one-page RSS/two-page AS; extra bar+two column+close buffers consume four pages with RSS copies=2: RSS=36864, AS=24576. Counts T/E/O/V/K/X/H=3/2/2/5/1/3/2; line maxima 717/154/190/263/71/140/25. U=2097152+2151+308+380+1315+71+420+50=2101847. Private RSS/AS are null and its own flag is true; top-level unbounded=false, unboundedTerms=[], reason="". |
 | Unbounded emitting loop | Null arena inputs except E=2; no finite guessed size. unboundedTerms=[arena,ohlcv,finalizerStream]; childPrivate remains informational. Default attempt-0 arena applies. |
 
-All eight vectors use the three-term verdict; CR150-CX's combined-arena
-arithmetic leaves the current logical B contributions unchanged. The first six have
+All eight legacy vectors use the three-term verdict and explicit zero object and
+placement proofs, so their current logical B contributions remain unchanged.
+The first six have
 `unboundedTerms=["ohlcv","finalizerStream"]`; their absent private proof
 continues to set only its own flag. In the all-terms vector, removing the
 old toy private proof isolates unknown childPrivate: the former four-term
 rule would flag that input, while the three-term verdict is bounded.
+The separate object and placement term rows are listed in the storage
+derivation table above and exercise the new defaults, reservations and
+fail-closed placement cases.
 Unavailable arena results retain their previous null values, reasons,
 inputs and legacy derivation metadata; the share derivation describes
 certified results only.
@@ -825,16 +868,29 @@ function mul(left: bigint, right: bigint): bigint {
     throw new BoundOverflow("multiplication exceeds uint64");
   return left * right;
 }
+function objectStoreReserveBytes(bars: bigint, objectsPerExecution: bigint,
+                                 recordBytes: bigint): bigint {
+  return mul(mul(bars, objectsPerExecution), recordBytes);
+}
+function chunkCeil(value: bigint): bigint {
+  const chunks = add(value / C, value % C === 0n ? 0n : 1n);
+  return mul(chunks, C);
+}
 function combinedArenaChunks(b: bigint): bigint {
   u64(b);
   const share = b >= 3n ? (b - 3n) / (16n - 3n) : 0n;
   const q = share > 1n ? share : 1n;
   return add(b, mul(3n, q));
 }
-function arenaBytes(B: bigint): bigint {
+function arenaBytes(B: bigint, placementArenaBytes: bigint,
+                    objectReserveBytes: bigint): bigint {
   u64(B);
   const b = add(B / C, B % C === 0n ? 0n : 1n, 14n);
-  const A = mul(combinedArenaChunks(b), C);
+  const placementChunks = add(placementArenaBytes / C,
+                              placementArenaBytes % C === 0n ? 0n : 1n);
+  const floor = mul(combinedArenaChunks(add(b, placementChunks)), C);
+  const A = floor > chunkCeil(objectReserveBytes)
+      ? floor : chunkCeil(objectReserveBytes);
   if (A > MAX_ARENA_BYTES)
     throw new BoundOverflow("finite bound exceeds ScratchArena uint32 chunk table");
   return A;

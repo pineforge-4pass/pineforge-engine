@@ -1,7 +1,182 @@
 {
   "schema": "pineforge-arena-bound-vectors/v1",
   "arithmetic": "unsigned 64-bit checked integers; TypeScript BigInt; JSON integers decoded losslessly",
-  "provenance": "All eight vectors are hand-derived, not harvested from execution. The current non-command inventory includes 136*Q + 2088*max(Q-1,0) + 2096*savedPath and stock-source external openings zero. CR150-CX retains Bcert=chunkCeil(B)+14*C, then reserves three command shares: b=Bcert/C, q=max(1,floor((b-3)/13)), arenaBytes=(b+3*q)*C, C=1048576, f=1/16. See docs/design/arena-bound.md for every vector's arithmetic. Unbounded arena output is unchanged, including its legacy derivation metadata. Only arena, ohlcv and finalizerStream affect the top-level verdict; childPrivate is informational.",
+  "provenance": "The eight legacy vectors and the term vectors below are hand-derived, not harvested from execution. The current non-command inventory includes 136*Q + 2088*max(Q-1,0) + 2096*savedPath and stock-source external openings zero. The legacy rows use explicit zero object and placement proofs where noted; the term rows exercise the default object multiplier and the separate placement proof. Bcert=chunkCeil(B)+14*C, then reserves three command shares: b=Bcert/C, q=max(1,floor((b-3)/13)), arenaBytes=(b+3*q)*C, C=1048576, f=1/16. See docs/design/arena-bound.md for every vector's arithmetic. Unbounded arena output is unchanged, including its legacy derivation metadata. Only arena, ohlcv and finalizerStream affect the top-level verdict; childPrivate is informational.",
+  "termVectors": {
+    "objectStore": [
+      {
+        "name": "object-store-1-bar-floor",
+        "description": "recordBytes=16+1024=1040; reserve=1*1*1040=1040; placementBytes=1 adds one chunk, so m=16 and the 19-chunk floor 19*1048576=19922944 remains above the object reservation",
+        "bars": 1,
+        "placementBytes": 1,
+        "expectedObjectsPerExecution": 1,
+        "recordBytes": 1040,
+        "expectedReserveBytes": 1040,
+        "expectedArenaBytes": 19922944
+      },
+      {
+        "name": "object-store-100000-absent-default",
+        "description": "recordBytes=16+1024=1040; absent perExecution defaults to 1; reserve=100000*1*1040=104000000; object floor=ceil(104000000/1048576)*1048576=100*1048576=104857600",
+        "bars": 100000,
+        "expectedObjectsPerExecution": 1,
+        "recordBytes": 1040,
+        "expectedReserveBytes": 104000000,
+        "expectedArenaBytes": 104857600
+      },
+      {
+        "name": "object-store-100000-explicit-one",
+        "description": "recordBytes=16+1024=1040; reserve=100000*1*1040=104000000; object floor=100*1048576=104857600",
+        "bars": 100000,
+        "perExecution": 1,
+        "expectedObjectsPerExecution": 1,
+        "recordBytes": 1040,
+        "expectedReserveBytes": 104000000,
+        "expectedArenaBytes": 104857600
+      },
+      {
+        "name": "object-store-100000-explicit-three",
+        "description": "recordBytes=16+1024=1040; reserve=100000*3*1040=312000000; object floor=ceil(312000000/1048576)*1048576=298*1048576=312475648",
+        "bars": 100000,
+        "perExecution": 3,
+        "expectedObjectsPerExecution": 3,
+        "recordBytes": 1040,
+        "expectedReserveBytes": 312000000,
+        "expectedArenaBytes": 312475648
+      },
+      {
+        "name": "object-store-100000-unbounded-platform-max",
+        "description": "recordBytes=1040; unbounded resolves to the platform maximum 1<<20; reserve=100000*1048576*1040=109051904000000",
+        "bars": 100000,
+        "perExecution": "unbounded",
+        "expectedObjectsPerExecution": 1048576,
+        "recordBytes": 1040,
+        "expectedReserveBytes": 109051904000000,
+        "expectedArenaBytes": 109051904000000
+      },
+      {
+        "name": "object-store-100000-calc-on-order-fills-platform-max",
+        "description": "recordBytes=1040; calc_on_order_fills resolves to 1<<20; reserve=100000*1048576*1040=109051904000000",
+        "bars": 100000,
+        "perExecution": "calc_on_order_fills",
+        "expectedObjectsPerExecution": 1048576,
+        "recordBytes": 1040,
+        "expectedReserveBytes": 109051904000000,
+        "expectedArenaBytes": 109051904000000
+      },
+      {
+        "name": "object-store-100000-payload-estimate",
+        "description": "recordBytes=16+1024+512=1552; reserve=100000*1*1552=155200000; object floor=ceil(155200000/1048576)*1048576=149*1048576=156237824",
+        "bars": 100000,
+        "perExecution": 1,
+        "payloadBytes": 512,
+        "expectedObjectsPerExecution": 1,
+        "recordBytes": 1552,
+        "expectedReserveBytes": 155200000,
+        "expectedArenaBytes": 156237824
+      },
+      {
+        "name": "object-store-1000000-absent-default",
+        "description": "recordBytes=16+1024=1040; absent perExecution defaults to 1; reserve=1000000*1*1040=1040000000; object floor=ceil(1040000000/1048576)*1048576=992*1048576=1040187392",
+        "bars": 1000000,
+        "expectedObjectsPerExecution": 1,
+        "recordBytes": 1040,
+        "expectedReserveBytes": 1040000000,
+        "expectedArenaBytes": 1040187392
+      },
+      {
+        "name": "object-store-1000000-explicit-one",
+        "description": "recordBytes=16+1024=1040; reserve=1000000*1*1040=1040000000; object floor=992*1048576=1040187392",
+        "bars": 1000000,
+        "perExecution": 1,
+        "expectedObjectsPerExecution": 1,
+        "recordBytes": 1040,
+        "expectedReserveBytes": 1040000000,
+        "expectedArenaBytes": 1040187392
+      },
+      {
+        "name": "object-store-1000000-explicit-three",
+        "description": "recordBytes=16+1024=1040; reserve=1000000*3*1040=3120000000; object floor=ceil(3120000000/1048576)*1048576=2976*1048576=3120562176",
+        "bars": 1000000,
+        "perExecution": 3,
+        "expectedObjectsPerExecution": 3,
+        "recordBytes": 1040,
+        "expectedReserveBytes": 3120000000,
+        "expectedArenaBytes": 3120562176
+      },
+      {
+        "name": "object-store-1000000-unbounded-platform-max",
+        "description": "recordBytes=1040; unbounded resolves to 1<<20; reserve=1000000*1048576*1040=1090519040000000",
+        "bars": 1000000,
+        "perExecution": "unbounded",
+        "expectedObjectsPerExecution": 1048576,
+        "recordBytes": 1040,
+        "expectedReserveBytes": 1090519040000000,
+        "expectedArenaBytes": 1090519040000000
+      },
+      {
+        "name": "object-store-1000000-calc-on-order-fills-platform-max",
+        "description": "recordBytes=1040; calc_on_order_fills resolves to 1<<20; reserve=1000000*1048576*1040=1090519040000000",
+        "bars": 1000000,
+        "perExecution": "calc_on_order_fills",
+        "expectedObjectsPerExecution": 1048576,
+        "recordBytes": 1040,
+        "expectedReserveBytes": 1090519040000000,
+        "expectedArenaBytes": 1090519040000000
+      }
+    ],
+    "placementStore": [
+      {
+        "name": "placement-store-empty-proof",
+        "description": "recordBytes=1040; absent object proof defaults to 1; reserve=100000*1*1040=104000000; arenaBytes=0 adds zero placement chunks, while the object floor is 100*1048576=104857600",
+        "bars": 100000,
+        "arenaBytes": 0,
+        "omitObjects": true,
+        "source": "hand empty placement proof",
+        "expectedArenaBytes": 104857600
+      },
+      {
+        "name": "placement-store-certified",
+        "description": "bars=2 gives base b=15; arenaBytes=2097153 has three 1048576-byte chunks, so m=18, q=1 and A=(18+3)*1048576=22020096",
+        "bars": 2,
+        "arenaBytes": 2097153,
+        "source": "hand placement geometry proof",
+        "expectedArenaBytes": 22020096
+      },
+      {
+        "name": "placement-store-absent-uncertified",
+        "description": "The placement owner proof is absent; the arena term is UNCERTIFIED and no zero is substituted",
+        "bars": 2,
+        "omit": true,
+        "expectedArenaBytes": null,
+        "expectedReasonContains": "strategy.placementStore"
+      },
+      {
+        "name": "placement-store-nonnumeric-refused",
+        "description": "arenaBytes='not-a-number' violates the existing nonnegative-integer fact path and raises FactsError",
+        "bars": 2,
+        "arenaBytes": "not-a-number",
+        "source": "hand malformed placement proof",
+        "expectedError": "FactsError"
+      },
+      {
+        "name": "placement-store-negative-refused",
+        "description": "arenaBytes=-1 violates the existing nonnegative-integer fact path and raises FactsError",
+        "bars": 2,
+        "arenaBytes": -1,
+        "source": "hand malformed placement proof",
+        "expectedError": "FactsError"
+      },
+      {
+        "name": "placement-store-overflow-boundoverflow",
+        "description": "arenaBytes=2^64-1 produces a checked combined-arena multiplication overflow and the existing PLATFORM_RANGE result",
+        "bars": 2,
+        "arenaBytes": 18446744073709551615,
+        "source": "hand overflow placement proof",
+        "expectedArenaBytes": null,
+        "expectedReasonPrefix": "PLATFORM_RANGE:"
+      }
+    ]
+  },
   "vectors": [
     {
       "name": "empty-run-common-empty-id",
@@ -13,7 +188,9 @@
           "fills": {"perBar": 0, "fixed": 0, "rowsPerFill": 0, "fixedRows": 0, "source": "hand"},
           "ids": {"literals": [], "freshPerBar": 0, "fixedFresh": 0, "maxBytes": 0, "source": "hand"},
           "pairKeys": {"mode": "opportunities", "perBar": 0, "fixed": 0, "source": "hand"},
-          "successors": {"perBar": 0, "fixed": 0, "source": "hand"}
+          "successors": {"perBar": 0, "fixed": 0, "source": "hand"},
+          "objects": {"perExecution": 0, "source": "hand zero-object proof"},
+          "placementStore": {"arenaBytes": 0, "source": "hand empty-placement proof"}
         }
       },
       "expected": {"terms": {"arena": {
@@ -27,7 +204,7 @@
           "E": {"value": 0, "derivation": {"formula": "selected ? windowBars + 1 : scriptBars", "sources": ["hand"]}}
         },
         "unbounded": false, "bytes": 18874368,
-        "derivation": {"formula": "b = ceil(sum(perUserBytes) / 1048576) + 14; q = max(1, floor((b - 3) / (16 - 3))); arenaBytes = (b + 3 * q) * 1048576; f = 1/16", "sources": ["docs/design/arena-bound.md storage derivation", "src/command_scratch_production.hpp kCommandScratchArenaShare", "src/command_scratch_production.cpp command_scratch_arena_capacity_bytes"]}
+        "derivation": {"formula": "b = ceil(sum(perUserBytes) / 1048576) + 14; o = ceil(strategy.placementStore.arenaBytes / 1048576); m = b + o; q = max(1, floor((m - 3) / (16 - 3))); floorArenaBytes = (m + 3 * q) * 1048576; objectReserveBytes = ceil(scriptBars * objects.perExecution * recordBytes); arenaBytes = max(floorArenaBytes, ceil(objectReserveBytes / 1048576) * 1048576); f = 1/16", "sources": ["docs/design/arena-bound.md storage derivation", "src/command_scratch_production.hpp kCommandScratchArenaShare", "src/command_scratch_production.cpp command_scratch_arena_capacity_bytes"]}
       },
         "ohlcv": {"residentBytes": null, "asBytes": null, "unbounded": true, "derivation": {"formula": "no certified pre-start value", "sources": ["missing complete pre-start feed/mapping inventory"]}},
         "finalizerStream": {"bytes": null, "unbounded": true, "derivation": {"formula": "no certified pre-start value", "sources": ["missing pre-start open-at-end and O/V/K/X/H counts"]}},
@@ -45,7 +222,9 @@
           "fills": {"perBar": 0, "fixed": 500, "rowsPerFill": 1, "fixedRows": 0, "source": "hand"},
           "ids": {"literals": [], "freshPerBar": 0, "fixedFresh": 499, "maxBytes": 64, "source": "hand"},
           "pairKeys": {"mode": "opportunities", "perBar": 0, "fixed": 500, "source": "hand"},
-          "successors": {"perBar": 1, "fixed": 0, "source": "hand"}
+          "successors": {"perBar": 1, "fixed": 0, "source": "hand"},
+          "objects": {"perExecution": 0, "source": "hand zero-object proof"},
+          "placementStore": {"arenaBytes": 0, "source": "hand empty-placement proof"}
         }
       },
       "expected": {"terms": {"arena": {
@@ -59,7 +238,7 @@
           "E": {"value": 2001, "derivation": {"formula": "selected ? windowBars + 1 : scriptBars", "sources": ["hand"]}}
         },
         "unbounded": false, "bytes": 20971520,
-        "derivation": {"formula": "b = ceil(sum(perUserBytes) / 1048576) + 14; q = max(1, floor((b - 3) / (16 - 3))); arenaBytes = (b + 3 * q) * 1048576; f = 1/16", "sources": ["docs/design/arena-bound.md storage derivation", "src/command_scratch_production.hpp kCommandScratchArenaShare", "src/command_scratch_production.cpp command_scratch_arena_capacity_bytes"]}
+        "derivation": {"formula": "b = ceil(sum(perUserBytes) / 1048576) + 14; o = ceil(strategy.placementStore.arenaBytes / 1048576); m = b + o; q = max(1, floor((m - 3) / (16 - 3))); floorArenaBytes = (m + 3 * q) * 1048576; objectReserveBytes = ceil(scriptBars * objects.perExecution * recordBytes); arenaBytes = max(floorArenaBytes, ceil(objectReserveBytes / 1048576) * 1048576); f = 1/16", "sources": ["docs/design/arena-bound.md storage derivation", "src/command_scratch_production.hpp kCommandScratchArenaShare", "src/command_scratch_production.cpp command_scratch_arena_capacity_bytes"]}
       },
         "ohlcv": {"residentBytes": null, "asBytes": null, "unbounded": true, "derivation": {"formula": "no certified pre-start value", "sources": ["missing complete pre-start feed/mapping inventory"]}},
         "finalizerStream": {"bytes": null, "unbounded": true, "derivation": {"formula": "no certified pre-start value", "sources": ["missing pre-start open-at-end and O/V/K/X/H counts"]}},
@@ -77,7 +256,9 @@
           "fills": {"perBar": 0, "fixed": 400000, "rowsPerFill": 1, "fixedRows": 0, "source": "hand"},
           "ids": {"literals": [], "freshPerBar": 0, "fixedFresh": 399999, "maxBytes": 64, "source": "hand"},
           "pairKeys": {"mode": "opportunities", "perBar": 0, "fixed": 400000, "source": "hand"},
-          "successors": {"perBar": 1, "fixed": 0, "source": "hand"}
+          "successors": {"perBar": 1, "fixed": 0, "source": "hand"},
+          "objects": {"perExecution": 0, "source": "hand zero-object proof"},
+          "placementStore": {"arenaBytes": 0, "source": "hand empty-placement proof"}
         }
       },
       "expected": {"terms": {"arena": {
@@ -91,7 +272,7 @@
           "E": {"value": 8000001, "derivation": {"formula": "selected ? windowBars + 1 : scriptBars", "sources": ["hand"]}}
         },
         "unbounded": false, "bytes": 1943011328,
-        "derivation": {"formula": "b = ceil(sum(perUserBytes) / 1048576) + 14; q = max(1, floor((b - 3) / (16 - 3))); arenaBytes = (b + 3 * q) * 1048576; f = 1/16", "sources": ["docs/design/arena-bound.md storage derivation", "src/command_scratch_production.hpp kCommandScratchArenaShare", "src/command_scratch_production.cpp command_scratch_arena_capacity_bytes"]}
+        "derivation": {"formula": "b = ceil(sum(perUserBytes) / 1048576) + 14; o = ceil(strategy.placementStore.arenaBytes / 1048576); m = b + o; q = max(1, floor((m - 3) / (16 - 3))); floorArenaBytes = (m + 3 * q) * 1048576; objectReserveBytes = ceil(scriptBars * objects.perExecution * recordBytes); arenaBytes = max(floorArenaBytes, ceil(objectReserveBytes / 1048576) * 1048576); f = 1/16", "sources": ["docs/design/arena-bound.md storage derivation", "src/command_scratch_production.hpp kCommandScratchArenaShare", "src/command_scratch_production.cpp command_scratch_arena_capacity_bytes"]}
       },
         "ohlcv": {"residentBytes": null, "asBytes": null, "unbounded": true, "derivation": {"formula": "no certified pre-start value", "sources": ["missing complete pre-start feed/mapping inventory"]}},
         "finalizerStream": {"bytes": null, "unbounded": true, "derivation": {"formula": "no certified pre-start value", "sources": ["missing pre-start open-at-end and O/V/K/X/H counts"]}},
@@ -109,7 +290,9 @@
           "fills": {"perBar": 0, "fixed": 0, "rowsPerFill": 0, "fixedRows": 0, "source": "hand"},
           "ids": {"literals": [], "freshPerBar": 0, "fixedFresh": 31, "maxBytes": 1, "source": "hand"},
           "pairKeys": {"mode": "opportunities", "perBar": 0, "fixed": 1, "source": "hand"},
-          "successors": {"perBar": 0, "fixed": 0, "source": "hand"}
+          "successors": {"perBar": 0, "fixed": 0, "source": "hand"},
+          "objects": {"perExecution": 0, "source": "hand zero-object proof"},
+          "placementStore": {"arenaBytes": 0, "source": "hand empty-placement proof"}
         }
       },
       "expected": {"terms": {"arena": {
@@ -123,7 +306,7 @@
           "E": {"value": 1, "derivation": {"formula": "selected ? windowBars + 1 : scriptBars", "sources": ["hand"]}}
         },
         "unbounded": false, "bytes": 18874368,
-        "derivation": {"formula": "b = ceil(sum(perUserBytes) / 1048576) + 14; q = max(1, floor((b - 3) / (16 - 3))); arenaBytes = (b + 3 * q) * 1048576; f = 1/16", "sources": ["docs/design/arena-bound.md storage derivation", "src/command_scratch_production.hpp kCommandScratchArenaShare", "src/command_scratch_production.cpp command_scratch_arena_capacity_bytes"]}
+        "derivation": {"formula": "b = ceil(sum(perUserBytes) / 1048576) + 14; o = ceil(strategy.placementStore.arenaBytes / 1048576); m = b + o; q = max(1, floor((m - 3) / (16 - 3))); floorArenaBytes = (m + 3 * q) * 1048576; objectReserveBytes = ceil(scriptBars * objects.perExecution * recordBytes); arenaBytes = max(floorArenaBytes, ceil(objectReserveBytes / 1048576) * 1048576); f = 1/16", "sources": ["docs/design/arena-bound.md storage derivation", "src/command_scratch_production.hpp kCommandScratchArenaShare", "src/command_scratch_production.cpp command_scratch_arena_capacity_bytes"]}
       },
         "ohlcv": {"residentBytes": null, "asBytes": null, "unbounded": true, "derivation": {"formula": "no certified pre-start value", "sources": ["missing complete pre-start feed/mapping inventory"]}},
         "finalizerStream": {"bytes": null, "unbounded": true, "derivation": {"formula": "no certified pre-start value", "sources": ["missing pre-start open-at-end and O/V/K/X/H counts"]}},
@@ -141,7 +324,9 @@
           "fills": {"perBar": 1, "fixed": 0, "rowsPerFill": 1, "fixedRows": 0, "source": "hand"},
           "ids": {"literals": ["é", "é"], "freshPerBar": 0, "fixedFresh": 0, "maxBytes": 2, "source": "hand"},
           "pairKeys": {"mode": "cartesian", "source": "hand"},
-          "successors": {"perBar": 1, "fixed": 0, "source": "hand"}
+          "successors": {"perBar": 1, "fixed": 0, "source": "hand"},
+          "objects": {"perExecution": 0, "source": "hand zero-object proof"},
+          "placementStore": {"arenaBytes": 0, "source": "hand empty-placement proof"}
         }
       },
       "expected": {"terms": {"arena": {
@@ -155,7 +340,7 @@
           "E": {"value": 2, "derivation": {"formula": "selected ? windowBars + 1 : scriptBars", "sources": ["hand"]}}
         },
         "unbounded": false, "bytes": 18874368,
-        "derivation": {"formula": "b = ceil(sum(perUserBytes) / 1048576) + 14; q = max(1, floor((b - 3) / (16 - 3))); arenaBytes = (b + 3 * q) * 1048576; f = 1/16", "sources": ["docs/design/arena-bound.md storage derivation", "src/command_scratch_production.hpp kCommandScratchArenaShare", "src/command_scratch_production.cpp command_scratch_arena_capacity_bytes"]}
+        "derivation": {"formula": "b = ceil(sum(perUserBytes) / 1048576) + 14; o = ceil(strategy.placementStore.arenaBytes / 1048576); m = b + o; q = max(1, floor((m - 3) / (16 - 3))); floorArenaBytes = (m + 3 * q) * 1048576; objectReserveBytes = ceil(scriptBars * objects.perExecution * recordBytes); arenaBytes = max(floorArenaBytes, ceil(objectReserveBytes / 1048576) * 1048576); f = 1/16", "sources": ["docs/design/arena-bound.md storage derivation", "src/command_scratch_production.hpp kCommandScratchArenaShare", "src/command_scratch_production.cpp command_scratch_arena_capacity_bytes"]}
       },
         "ohlcv": {"residentBytes": null, "asBytes": null, "unbounded": true, "derivation": {"formula": "no certified pre-start value", "sources": ["missing complete pre-start feed/mapping inventory"]}},
         "finalizerStream": {"bytes": null, "unbounded": true, "derivation": {"formula": "no certified pre-start value", "sources": ["missing pre-start open-at-end and O/V/K/X/H counts"]}},
@@ -173,7 +358,9 @@
           "fills": {"perBar": 0, "fixed": 0, "rowsPerFill": 0, "fixedRows": 0, "source": "hand"},
           "ids": {"literals": [], "freshPerBar": 0, "fixedFresh": 0, "maxBytes": 0, "source": "hand"},
           "pairKeys": {"mode": "opportunities", "perBar": 0, "fixed": 0, "source": "hand"},
-          "successors": {"perBar": 0, "fixed": 0, "source": "hand"}
+          "successors": {"perBar": 0, "fixed": 0, "source": "hand"},
+          "objects": {"perExecution": 0, "source": "hand zero-object proof"},
+          "placementStore": {"arenaBytes": 0, "source": "hand empty-placement proof"}
         }
       },
       "expected": {"terms": {"arena": {
@@ -187,7 +374,7 @@
           "E": {"value": 1048576, "derivation": {"formula": "selected ? windowBars + 1 : scriptBars", "sources": ["hand"]}}
         },
         "unbounded": false, "bytes": 47185920,
-        "derivation": {"formula": "b = ceil(sum(perUserBytes) / 1048576) + 14; q = max(1, floor((b - 3) / (16 - 3))); arenaBytes = (b + 3 * q) * 1048576; f = 1/16", "sources": ["docs/design/arena-bound.md storage derivation", "src/command_scratch_production.hpp kCommandScratchArenaShare", "src/command_scratch_production.cpp command_scratch_arena_capacity_bytes"]}
+        "derivation": {"formula": "b = ceil(sum(perUserBytes) / 1048576) + 14; o = ceil(strategy.placementStore.arenaBytes / 1048576); m = b + o; q = max(1, floor((m - 3) / (16 - 3))); floorArenaBytes = (m + 3 * q) * 1048576; objectReserveBytes = ceil(scriptBars * objects.perExecution * recordBytes); arenaBytes = max(floorArenaBytes, ceil(objectReserveBytes / 1048576) * 1048576); f = 1/16", "sources": ["docs/design/arena-bound.md storage derivation", "src/command_scratch_production.hpp kCommandScratchArenaShare", "src/command_scratch_production.cpp command_scratch_arena_capacity_bytes"]}
       },
         "ohlcv": {"residentBytes": null, "asBytes": null, "unbounded": true, "derivation": {"formula": "no certified pre-start value", "sources": ["missing complete pre-start feed/mapping inventory"]}},
         "finalizerStream": {"bytes": null, "unbounded": true, "derivation": {"formula": "no certified pre-start value", "sources": ["missing pre-start open-at-end and O/V/K/X/H counts"]}},
@@ -205,7 +392,9 @@
           "fills": {"perBar": 1, "fixed": 0, "rowsPerFill": 1, "fixedRows": 0, "source": "hand"},
           "ids": {"literals": ["é"], "freshPerBar": 0, "fixedFresh": 0, "maxBytes": 2, "source": "hand"},
           "pairKeys": {"mode": "cartesian", "source": "hand"},
-          "successors": {"perBar": 1, "fixed": 0, "source": "hand"}
+          "successors": {"perBar": 1, "fixed": 0, "source": "hand"},
+          "objects": {"perExecution": 0, "source": "hand zero-object proof"},
+          "placementStore": {"arenaBytes": 0, "source": "hand empty-placement proof"}
         },
         "ohlcv": {
           "pageBytes": 4096, "source": "hand",
@@ -235,7 +424,7 @@
           "E": {"value": 2, "derivation": {"formula": "selected ? windowBars + 1 : scriptBars", "sources": ["hand"]}}
         },
         "unbounded": false, "bytes": 18874368,
-        "derivation": {"formula": "b = ceil(sum(perUserBytes) / 1048576) + 14; q = max(1, floor((b - 3) / (16 - 3))); arenaBytes = (b + 3 * q) * 1048576; f = 1/16", "sources": ["docs/design/arena-bound.md storage derivation", "src/command_scratch_production.hpp kCommandScratchArenaShare", "src/command_scratch_production.cpp command_scratch_arena_capacity_bytes"]}
+        "derivation": {"formula": "b = ceil(sum(perUserBytes) / 1048576) + 14; o = ceil(strategy.placementStore.arenaBytes / 1048576); m = b + o; q = max(1, floor((m - 3) / (16 - 3))); floorArenaBytes = (m + 3 * q) * 1048576; objectReserveBytes = ceil(scriptBars * objects.perExecution * recordBytes); arenaBytes = max(floorArenaBytes, ceil(objectReserveBytes / 1048576) * 1048576); f = 1/16", "sources": ["docs/design/arena-bound.md storage derivation", "src/command_scratch_production.hpp kCommandScratchArenaShare", "src/command_scratch_production.cpp command_scratch_arena_capacity_bytes"]}
       },
         "ohlcv": {
           "residentBytes": 36864, "asBytes": 24576, "unbounded": false,

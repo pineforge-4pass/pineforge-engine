@@ -16,6 +16,12 @@ ROUNDING_REGIONS = 14
 COMMAND_STORES = 3
 COMMAND_SHARE_DENOMINATOR = 16  # kCommandScratchArenaShare = 1/16.
 MAX_U64 = (1 << 64) - 1
+# Shape::chunk_bytes defaults to 1024 and o1_store.cpp's object header is
+# 16 bytes.  The source cadence uses the same 1<<20 platform guard for an
+# unbounded/calc-on-order-fills per-execution receipt.
+OBJECT_HEADER_BYTES = 16
+OBJECT_CHUNK_BYTES = 1024
+OBJECTS_PER_EXECUTION_PLATFORM_MAX = 1 << 20
 # ScratchArena::Impl rejects chunks > uint32_t::max(), not >= 2**32.
 # This is a representation limit, NEVER a substitute bound for an unknown run.
 MAX_ARENA_BYTES = ((1 << 32) - 1) * CHUNK_BYTES
@@ -56,6 +62,28 @@ def _mul(left: int, right: int) -> int:
     if right != 0 and left > MAX_U64 // right:
         raise BoundOverflow("multiplication exceeds uint64")
     return left * right
+
+
+def _ceil_chunks(value: int, name: str) -> int:
+    value = _integer(value, name)
+    return _add(value // CHUNK_BYTES, int(value % CHUNK_BYTES != 0))
+
+
+def object_store_reserve_bytes(bars: int, objects_per_execution: int,
+                               record_bytes: int) -> int:
+    """Return the checked object-record byte reservation.
+
+    This is deliberately the small pure arithmetic function shared with the
+    C++ ``object_store_reserve_bytes`` helper.  All three inputs are integer
+    byte/count facts, so ``ceil(bars * k_obj * record_bytes)`` is the checked
+    product itself.  The arena consumer rounds that byte reservation to whole
+    arena chunks before taking its maximum with the existing floor.
+    """
+    bars = _integer(bars, "object-store bars")
+    objects_per_execution = _integer(
+        objects_per_execution, "objects per execution")
+    record_bytes = _integer(record_bytes, "object-store record bytes")
+    return _mul(_mul(bars, objects_per_execution), record_bytes)
 
 
 def combined_arena_chunks(non_command_chunks: int) -> int:
@@ -318,11 +346,50 @@ def _arena_term(facts: Mapping) -> dict:
             "scriptBars * successors.perBar + successors.fixed",
             data_source, successor_source, control_source)
 
+        objects_record = strategy.get("objects")
+        if objects_record is None:
+            objects_per_execution = 1
+            payload_bytes = 0
+        else:
+            objects_record = _object(objects_record, "strategy.objects")
+            _source(objects_record, "strategy.objects")
+            per_execution = objects_record.get("perExecution", 1)
+            if per_execution in ("unbounded", "calc_on_order_fills"):
+                objects_per_execution = OBJECTS_PER_EXECUTION_PLATFORM_MAX
+            elif type(per_execution) is int:
+                objects_per_execution = _integer(
+                    per_execution, "strategy.objects.perExecution")
+            else:
+                raise FactsError(
+                    "strategy.objects.perExecution must be a nonnegative integer, "
+                    "'unbounded', or 'calc_on_order_fills'")
+            payload_bytes = (
+                _number(objects_record, "payloadBytes", "strategy.objects")
+                if "payloadBytes" in objects_record else 0
+            )
+        object_record_bytes = _add(
+            OBJECT_HEADER_BYTES, OBJECT_CHUNK_BYTES, payload_bytes)
+        object_reserve = object_store_reserve_bytes(
+            script_bars, objects_per_execution, object_record_bytes)
+
+        placement = _object(
+            strategy.get("placementStore"), "strategy.placementStore")
+        _source(placement, "strategy.placementStore")
+        placement_bytes = _number(
+            placement, "arenaBytes", "strategy.placementStore")
+        placement_chunks = _ceil_chunks(
+            placement_bytes, "strategy.placementStore.arenaBytes")
         total = _add(*per_user_bytes(inputs).values())
         # Quotient/remainder avoids overflowing total + CHUNK_BYTES - 1.
-        chunks = _add(total // CHUNK_BYTES, int(total % CHUNK_BYTES != 0),
-                      ROUNDING_REGIONS)
-        arena_bytes = _mul(combined_arena_chunks(chunks), CHUNK_BYTES)
+        chunks = _add(_ceil_chunks(total, "non-command bytes"),
+                      ROUNDING_REGIONS, placement_chunks)
+        floor_arena_bytes = _mul(combined_arena_chunks(chunks), CHUNK_BYTES)
+        # The object reservation is a separate host floor.  It is rounded to
+        # allocatable arena chunks and can only raise the existing floor.
+        object_arena_bytes = _mul(
+            _ceil_chunks(object_reserve, "object-store reservation"),
+            CHUNK_BYTES)
+        arena_bytes = max(floor_arena_bytes, object_arena_bytes)
         if arena_bytes > MAX_ARENA_BYTES:
             return unavailable(
                 "PLATFORM_RANGE: finite bound exceeds ScratchArena's uint32 chunk "
@@ -511,9 +578,15 @@ def arena_bound(facts: Mapping) -> dict:
     }
     if not arena["unbounded"]:
         arena["derivation"] = {
-            "formula": ("b = ceil(sum(perUserBytes) / 1048576) + 14; "
-                        "q = max(1, floor((b - 3) / (16 - 3))); "
-                        "arenaBytes = (b + 3 * q) * 1048576; f = 1/16"),
+            "formula": (
+                "b = ceil(sum(perUserBytes) / 1048576) + 14; "
+                "o = ceil(strategy.placementStore.arenaBytes / 1048576); "
+                "m = b + o; q = max(1, floor((m - 3) / (16 - 3))); "
+                "floorArenaBytes = (m + 3 * q) * 1048576; "
+                "objectReserveBytes = ceil(scriptBars * objects.perExecution * "
+                "recordBytes); arenaBytes = max(floorArenaBytes, "
+                "ceil(objectReserveBytes / 1048576) * 1048576); f = 1/16"
+            ),
             "sources": [
                 "docs/design/arena-bound.md storage derivation",
                 "src/command_scratch_production.hpp kCommandScratchArenaShare",
