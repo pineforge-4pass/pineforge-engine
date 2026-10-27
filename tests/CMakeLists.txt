@@ -1483,15 +1483,11 @@ list(APPEND TEST_SOURCES test_native_fused_settlement_allocations)
 # Source-bound.
 list(APPEND TEST_SOURCES test_adapter_live_state_scaling)
 list(APPEND TEST_SOURCES test_adapter_live_state_equivalence)
-# Dense pending-id work table and infrastructure-only growth bounds.
+# Dense pending growth/model/retirement; R5 V19-D bracket parking compares
+# randomized streams with model members, retained tails/folds. Source-bound.
 list(APPEND TEST_SOURCES test_dense_pending_call_work)
 list(APPEND TEST_SOURCES test_live_row_index)
 list(APPEND TEST_SOURCES test_live_row_retire_work)
-# R5 lane V19-D: a bracket family's roster parks the erased members behind a
-# retained one (the v4 fold reads what is retained): randomized append /
-# erase / settle / cancel streams against a plain model -- the same members
-# in order, the retained ones as the working tail, the model's fold words,
-# the same words whenever the settles came. Source-bound.
 list(APPEND TEST_SOURCES test_bracket_roster_parking)
 # R5 lane L3: the order core's direct forms (WorkingRequestCore::apply_*)
 # against the prepare/install pairs they stand for, bit for bit after every

@@ -3224,11 +3224,13 @@ public:
 
 private:
     mutable DensePendingWork dense_pending_work_{};
+    mutable detail::LiveRowIndex live_rows_;
     detail::LiveRowIndex& live_row_index() const;
     void refresh_live_row(native_order::RequestHandle, const PlacementSnapshot* edited = nullptr);
     void refresh_live_row(std::uint64_t incarnation);
     void refresh_live_source_key(std::uint64_t key) const;
     void rebuild_live_row_index();
+    void retire_small_live_source_keys(native_order::RequestHandle);
 };
 
 namespace detail {
