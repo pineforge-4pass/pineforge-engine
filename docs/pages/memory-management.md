@@ -69,7 +69,7 @@ read the records from the sink. See [Report schema](@ref report_schema).
 
 The default **unjailed** `run_json` route, with a sink-capable module,
 installs a temporary path sink (`_new_report_sink`
-docker/run_json.py:5790-5822; `_ReportSink` docker/run_json.py:6012-6049).
+docker/run_json.py:5790-5822; `_ReportSink` docker/run_json.py:6183-6220).
 The full equity curve is **not resident**: with disk scratch and no arena
 attached, its resident equity-curve buffers are **O(1) in bars**.
 Binary curve scratch on **disk** still costs **24 B per script bar**
@@ -77,8 +77,8 @@ Binary curve scratch on **disk** still costs **24 B per script bar**
 **6 MiB at 262,144 bars** and **48 MiB at 2,097,152 bars**, calculated payload
 sizes excluding other scratch and output.
 The sink's `E` output and the default route's JSON artifact also grow with
-the bar count: `_build_sink_report` docker/run_json.py:6852-6895 supplies lazy
-record arrays, and `_prepare_stream_report` docker/run_json.py:6733-6753
+the bar count: `_build_sink_report` docker/run_json.py:7102-7148 supplies lazy
+record arrays, and `_prepare_stream_report` docker/run_json.py:6983-7003
 serializes them to a temporary artifact.
 Lazy serialization bounds buffers, not output bytes.
 The test that checks the resident claim runs with a fixed minimal table
