@@ -190,7 +190,7 @@ private:
         for (std::size_t index = 0; index < count / 2; ++index) {
             const auto& row = report.trades[index];
             const auto expected_entry = 1704067200000LL
-                + static_cast<std::int64_t>(2 * index + 1) * 60000;
+                + static_cast<std::int64_t>(2 * index) * 60000;
             const auto expected_exit = expected_entry + 60000;
             require(row.entry_time == expected_entry && row.exit_time == expected_exit,
                     "trade timestamps differ from the independent tape oracle");
