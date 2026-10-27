@@ -9,7 +9,7 @@ peak minus the largest tiny peak must be at most 1 MiB; those same extrema
 must fit the tiny baseline +2 MiB headroom, which is implied by that bound.
 Recorded macOS tiny peaks scattered by about 0.9 MiB, so growth below about
 1 MiB + that scatter can escape this coarse guard. Pure decision rows and
-a real finalizer retaining 2 MiB only for big streams check sensitivity.
+a real finalizer retaining 4 MiB only for big streams check sensitivity.
 """
 from __future__ import annotations
 
@@ -38,6 +38,10 @@ TYPED_REFUSAL_RECEIPT_KEYS = (
     *RECEIPT_KEYS, "tool", "event", "exit_code", "detail", "code", "args")
 RSS_FLATNESS_BYTES = 1024 * 1024
 RSS_BASELINE_HEADROOM_BYTES = 2 * 1024 * 1024
+# A touched 2 MiB plant showed only 1.75 MiB of peak growth (7/8).
+# Budget RSS_BASELINE_HEADROOM_BYTES (2 MiB) for tiny scatter:
+# 4 MiB * 7/8 - 2 MiB = 1.5 MiB > RSS_FLATNESS_BYTES (1 MiB).
+RSS_PLANTED_RETENTION_BYTES = 2 * RSS_BASELINE_HEADROOM_BYTES
 RSS_MEASUREMENT_PAIRS = 3
 STREAM_BYTES = 64 * 1024 * 1024
 
@@ -1208,10 +1212,30 @@ def test_rss_flatness_judges_near_bound_retention(growth, expected):
     assert f"tiny_peaks={tiny_peaks} big_peaks={big_peaks}" in measurement
 
 
+@pytest.mark.parametrize("tiny_peaks", [
+    [20185088, 20185088, 21102592],
+    [20185088, 20185088, 20185088 + RSS_BASELINE_HEADROOM_BYTES],
+], ids=["recorded_scatter", "two_mib_scatter"])
+def test_rss_planted_retention_exceeds_bound_with_tiny_scatter(tiny_peaks):
+    # The recorded 2 MiB plant raised the low-baseline peak by only 1.75 MiB.
+    observed_retention = 2 * 1024 * 1024
+    observed_growth = 22020096 - min(tiny_peaks)
+    visible_growth = (RSS_PLANTED_RETENTION_BYTES * observed_growth
+                      // observed_retention)
+    big_peaks = [min(tiny_peaks) + visible_growth] * RSS_MEASUREMENT_PAIRS
+
+    passed, measurement = rss_flatness_verdict(tiny_peaks, big_peaks)
+
+    assert passed is False, measurement
+    assert min(big_peaks) - max(tiny_peaks) > RSS_FLATNESS_BYTES, measurement
+    assert RSS_BASELINE_HEADROOM_BYTES >= observed_retention
+    assert visible_growth - RSS_BASELINE_HEADROOM_BYTES > RSS_FLATNESS_BYTES
+
+
 def retaining_finalizer_launcher(tmp_path):
     """Same runpy overhead; retain touched pages for big, nothing for none."""
     launcher = tmp_path / "retaining-finalizer.py"
-    launcher.write_text("""\
+    launcher.write_text(f"""\
 from pathlib import Path
 import resource
 import runpy
@@ -1224,7 +1248,7 @@ if sample not in ("tiny", "big", "none"):
 
 retained = bytearray()
 if sample == "big":
-    retained = bytearray(2 * 1024 * 1024)
+    retained = bytearray({RSS_PLANTED_RETENTION_BYTES})
     for offset in range(0, len(retained), resource.getpagesize()):
         retained[offset] = 1
 sys.argv[0] = str(tool)
@@ -1235,7 +1259,7 @@ runpy.run_path(str(tool), run_name="__main__")
 
 
 @pytest.mark.parametrize("stdout_mode", [False, True])
-def test_64_mib_stream_rejects_planted_2_mib_retention(
+def test_64_mib_stream_rejects_planted_retention(
         tmp_path, stdout_mode, record_property, capfd):
     launcher = retaining_finalizer_launcher(tmp_path)
 
