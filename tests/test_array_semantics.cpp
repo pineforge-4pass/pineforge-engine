@@ -215,6 +215,13 @@ void primitive_defaults_and_moves(detail::o1::Store& store) {
     require(target.id() == target_id && moved.empty(), "move assignment rebound a prepared root");
     target = ScriptArray<double>{};
     require(alias.empty() && target.id() == target_id, "empty assignment broke a bound alias");
+
+    // Moving a borrowed alias must copy and leave the aliased owner intact.
+    auto owner = ScriptArray<double>::from(store, {5.0, 6.0, 7.0});
+    auto into = ScriptArray<double>::from(store, {1.0});
+    into = owner.alias();
+    equal(into, {5.0, 6.0, 7.0});
+    equal(owner, {5.0, 6.0, 7.0});
 }
 
 void cross_store_values(detail::o1::Store& first) {

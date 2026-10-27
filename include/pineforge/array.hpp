@@ -397,7 +397,8 @@ public:
         } else {
             const bool same_root = store_ == other.store_ && id_ == other.id_;
             assign(other);
-            if (!same_root) other.clear();
+            // Only an owner is consumed by a move; a borrowed alias keeps its root.
+            if (!same_root && other.owner_) other.clear();
         }
         return *this;
     }

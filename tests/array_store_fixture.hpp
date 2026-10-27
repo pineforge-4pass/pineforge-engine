@@ -29,16 +29,15 @@ class SpillFile {
     std::uint64_t extent_ = 0;
 public:
     SpillFile() {
-        // Explicit disk backing on every platform. Leave the file for the
-        // supervisor under this worktree, never in the system temp directory.
-        std::string path = __FILE__;
-        const auto tests = path.rfind("/tests/");
-        path = tests == std::string::npos ? "scratch-s4e" : path.substr(0, tests) + "/scratch-s4e";
-        if (::mkdir(path.c_str(), 0700) != 0 && errno != EEXIST)
-            throw std::runtime_error("create array test scratch directory");
+        // Explicit disk backing on every platform: an extending file under
+        // TMPDIR (or /tmp), unlinked right after it is opened so the test
+        // leaves nothing behind and never writes into the source tree.
+        const char* directory = std::getenv("TMPDIR");
+        std::string path = (directory != nullptr && *directory != '\0') ? directory : "/tmp";
         path += "/array-test-XXXXXX";
         fd_ = ::mkstemp(path.data());
         require(fd_ >= 0, "create array test backing");
+        ::unlink(path.c_str());
         if (::fcntl(fd_, F_SETFD, FD_CLOEXEC) != 0) {
             ::close(fd_);
             fd_ = -1;
