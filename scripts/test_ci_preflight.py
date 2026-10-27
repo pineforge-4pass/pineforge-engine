@@ -718,19 +718,6 @@ PAID_RUNNER_LABELS = (
     'ubuntu-24.04-larger', 'ubuntu-24.04-xlarge', 'macos-26-large',
 )
 
-EXPECTED_CONTAINER = (
-    '    container:\n'
-    '      image: ubuntu:24.04@sha256:24737cef17f4e22b1977df7d9a05e77c4e28b7da5b8911f8d8ccda136bf3573c\n'
-    '      options: --user root\n')
-EXPECTED_PREPARE = (
-    '      - name: Prepare the job container\n'
-    '        run: |\n'
-    '          apt-get update\n'
-    '          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends '
-    'ca-certificates curl git git-lfs jq unzip zip zstd xz-utils rsync tzdata python3 '
-    'python3-venv python3-dev python3-pip build-essential cmake ninja-build pkg-config\n')
-
-
 def runner_declaration(runner):
     """Render the independently specified runner pin in workflow block style."""
     if runner.startswith('group: '):
@@ -749,11 +736,10 @@ class GkeRunnerPolicy(unittest.TestCase):
         ('environment', '    environment: release\n'),
     )
 
-    def fixture(self, *, job='preflight', runner=GKE_8, extra='', matrix='',
-                container=EXPECTED_CONTAINER, prepare=EXPECTED_PREPARE):
+    def fixture(self, *, job='preflight', runner=GKE_8, extra='', matrix=''):
         return ('on: workflow_dispatch\njobs:\n' + f'  {job}:\n'
-                + runner_declaration(runner) + container + extra + matrix
-                + '    steps:\n' + prepare + '      - run: git --version\n')
+                + runner_declaration(runner) + extra + matrix
+                + '    steps:\n      - run: git --version\n')
 
     def caller_fixture(self, extra=''):
         caller = ('on: workflow_dispatch\njobs:\n  parity:\n'
@@ -767,17 +753,52 @@ class GkeRunnerPolicy(unittest.TestCase):
         self.assertEqual(ci_preflight.workflow_fleet_findings(
             {'ci-post.yml': self.fixture()}), [])
 
-    def test_real_jobs_have_fixed_gke_routes_container_and_first_step(self):
+    def test_real_jobs_have_fixed_gke_routes_without_job_containers(self):
         for name, pins in EXPECTED_GKE_JOBS.items():
             jobs = _jobs((ROOT / '.github/workflows' / name).read_text())
             for job, runner in pins.items():
                 with self.subTest(workflow=name, job=job):
                     body = jobs[job]
                     self.assertEqual(ci_preflight._job_values(body, 'runs-on'), [runner])
-                    self.assertEqual(ci_preflight._job_block(body, 'container'),
-                                     ci_preflight._code(EXPECTED_CONTAINER))
-                    self.assertEqual(ci_preflight._code(ci_preflight._steps(body)[0]),
-                                     ci_preflight._code(EXPECTED_PREPARE))
+                    self.assertNotRegex(body, r'''(?m)^    ['"]?container['"]?\s*:''')
+                    self.assertNotIn('      - name: Prepare the job container', body)
+
+    def test_real_gke_jobs_allow_original_sudo_apt_steps(self):
+        packages = {
+            'ci-post.yml': {
+                'preflight': 'shellcheck', 'preflight-slow': None,
+                'build': 'libeigen3-dev tzdata-legacy ccache strace',
+                'build-debug': 'libeigen3-dev tzdata-legacy ccache strace',
+                'build-arm': 'libeigen3-dev tzdata-legacy ccache strace',
+                'sanitizers': 'libeigen3-dev tzdata-legacy ccache',
+                'kernel-only': 'cmake ninja-build libeigen3-dev tzdata-legacy libsqlite3-dev libssl-dev zlib1g-dev ccache',
+            },
+            'corpus-parity.yml': {
+                'corpus-parity': 'libeigen3-dev ccache git-lfs',
+                'corpus-parity-subset': 'libeigen3-dev ccache git-lfs',
+            },
+            'native-live.yml': {
+                'native-live': 'cmake ninja-build libeigen3-dev tzdata-legacy libsqlite3-dev libssl-dev zlib1g-dev ccache git-lfs strace',
+                'native-live-shards': 'cmake ninja-build libeigen3-dev tzdata-legacy libsqlite3-dev libssl-dev zlib1g-dev ccache git-lfs strace',
+            },
+        }
+        workflows = {path.name: path.read_text()
+                     for path in sorted((ROOT / '.github/workflows').iterdir())
+                     if path.suffix in ('.yml', '.yaml')}
+        self.assertEqual(set(packages), set(EXPECTED_GKE_JOBS))
+        for name, installs in packages.items():
+            self.assertEqual(set(installs), set(EXPECTED_GKE_JOBS[name]))
+            jobs = _jobs(workflows[name])
+            for job, dependencies in installs.items():
+                with self.subTest(workflow=name, job=job):
+                    commands = [line for line in jobs[job].splitlines()
+                                if re.match(r'\s+(?:sudo )?(?:DEBIAN_FRONTEND=\S+ )?apt-get\b', line)]
+                    expected = [] if dependencies is None else [
+                        '          sudo apt-get update',
+                        '          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ' + dependencies,
+                    ]
+                    self.assertEqual(commands, expected)
+        self.assertEqual(ci_preflight.runner_findings(workflows), [])
 
     def test_gke_jobs_refuse_paid_runner_reversion(self):
         for name, pins in EXPECTED_GKE_JOBS.items():
@@ -789,23 +810,24 @@ class GkeRunnerPolicy(unittest.TestCase):
                     self.assertIn(f'{name} must not use larger-runner labels; '
                                   'use the GCP fleet or hosted exceptions', findings)
 
-    def test_gke_jobs_require_pinned_root_container(self):
-        for container in ('', EXPECTED_CONTAINER.replace('--user root', '--user 1000'),
-                          EXPECTED_CONTAINER.replace('@sha256:', '@sha256:0')):
-            with self.subTest(container=container):
-                self.assertIn('ci-post.yml job preflight must use the pinned root job container',
-                              ci_preflight.runner_findings(
-                                  {'ci-post.yml': self.fixture(container=container)}))
-
-    def test_gke_jobs_require_exact_first_prepare_step(self):
-        for prepare in ('', EXPECTED_PREPARE.replace('git git-lfs', 'git'),
-                        EXPECTED_PREPARE.replace('apt-get update', 'true'),
-                        EXPECTED_PREPARE.replace('        run:', '        if: false\n        run:'),
-                        '      - run: git --version\n' + EXPECTED_PREPARE):
-            with self.subTest(prepare=prepare):
-                self.assertIn('ci-post.yml job preflight must prepare the job container as its first step',
-                              ci_preflight.runner_findings(
-                                  {'ci-post.yml': self.fixture(prepare=prepare)}))
+    def test_gke_jobs_refuse_job_container_declarations(self):
+        workflow = (ROOT / '.github/workflows/ci-post.yml').read_text()
+        body = _jobs(workflow)['preflight']
+        container = ci_preflight._job_block(body, 'container')
+        before = '\n'.join(container) + '\n' if container else '    steps:\n'
+        for declaration in (
+                '    container:\n      image: ubuntu:24.04\n      options: --user root\n',
+                '    container: ubuntu:24.04\n',
+                '    container: {image: ubuntu:24.04}\n',
+                '    container: {}\n',
+                '    container:\n',
+                '    "container": ubuntu:24.04\n'):
+            with self.subTest(declaration=declaration):
+                after = declaration if container else declaration + before
+                changed = in_job(workflow, 'preflight', before, after)
+                self.assertNotEqual(changed, workflow)
+                self.assertIn('ci-post.yml job preflight must not declare a job container on GKE',
+                              ci_preflight.runner_findings({'ci-post.yml': changed}))
 
     def test_gke_group_and_labels_are_confined_to_exact_jobs(self):
         for name, job, runner in (
@@ -936,21 +958,6 @@ class GkeRunnerPolicy(unittest.TestCase):
                     self.assertIn(f'ci-post.yml job {job} must not expose credentials on GKE',
                                   ci_preflight.runner_findings(
                                       {**workflows, 'ci-post.yml': changed}))
-
-    def test_container_jobs_refuse_sudo(self):
-        for command in ('sudo apt-get update', 'sudo DEBIAN_FRONTEND=noninteractive apt-get install -y git',
-                        'sudo chown root build'):
-            workflow = self.fixture() + f'      - run: {command}\n'
-            with self.subTest(command=command):
-                self.assertIn('ci-post.yml job preflight must not use sudo in a job container',
-                              ci_preflight.runner_findings({'ci-post.yml': workflow}))
-
-    def test_container_conditionals_accept_the_default_shell(self):
-        workflow = self.fixture() + '      - run: if [[ -f build/log ]]; then cat build/log; fi\n'
-        finding = 'ci-post.yml job preflight must select bash for Bash conditionals in its container'
-        self.assertNotIn(finding, ci_preflight.runner_findings({'ci-post.yml': workflow}))
-        explicit = workflow.replace('      - run: if [[', '      - shell: bash\n        run: if [[')
-        self.assertNotIn(finding, ci_preflight.runner_findings({'ci-post.yml': explicit}))
 
     def test_gke_cap_expands_axes_and_reusable_calls(self):
         def graph(count):
@@ -1109,7 +1116,7 @@ class PostFleetRunnerPolicy(unittest.TestCase):
         self.assertEqual(len(docs.splitlines()), 2014)
         requirements = (
             'Post Release/Debug/kernel and native shards, post sanitizers and both native-live sanitizer\n'
-            'profiles use fixed `gke-runners` size labels in pinned root containers. No job routes by event.',
+            'profiles use fixed `gke-runners` size labels directly in runner pods carrying the engine toolchain image and sudo. No job routes by event.',
             'Local reusable calls cannot mix PR and GKE jobs. A full post run schedules 24 GKE jobs: '
             "amd64 32/16/8 CPU labels carry 8/7/7 jobs and arm64 16 CPU carries 2; each label's cap is 8.",
             'The amd64 post build shards and the two arm64 post cells use the `gke-runners` group with',
@@ -1134,8 +1141,8 @@ class PostFleetRunnerPolicy(unittest.TestCase):
             'Rollback may restore an earlier GCP fleet pin; paid larger-runner labels remain refused.',
             '`build-debug` shards, and kernel two shards; sanitizers uses four, '
             'all on their fixed GKE sizes.',
-            '`HOSTED_JOB_RUNNERS` pins hosted jobs and exact GKE mappings; every GKE job first '
-            'installs the base toolchain before checkout, without sudo. The PR build remains',
+            '`HOSTED_JOB_RUNNERS` pins hosted jobs and exact GKE mappings; every GKE job runs directly '
+            'in a runner pod carrying the engine toolchain image and sudo. The PR build remains',
             'Every paid larger-runner label is refused in every workflow, including pinned jobs;',
         )
         for required in requirements:
@@ -5658,12 +5665,7 @@ finally:
                         changed = dict(workflows)
                         changed[workflow] = in_job(changed[workflow], job, before, after)
                         timeout = f'{workflow} job {job} must declare no timeout-minutes (owner #827)'
-                        # A step inserted ahead of a container job's pinned first step also
-                        # breaks the first-step pin; that is the only other finding allowed.
-                        first_step = f'{workflow} job {job} must prepare the job container as its first step'
-                        findings = ci_preflight.runner_findings(changed)
-                        self.assertEqual(findings.count(timeout), 1, findings)
-                        self.assertEqual([item for item in findings if item not in (timeout, first_step)], [])
+                        self.assertEqual(ci_preflight.runner_findings(changed), [timeout])
 
     def contract_stage(self, mutation, workflow_name='ci.yml'):
         """Run the ci-workflow-contract stage's argv in a copy of the tree."""

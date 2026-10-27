@@ -34,7 +34,7 @@ env:
 # The canon authz gate admits our events before any checkout.
 # Light jobs and per-leg aggregates use hosted ubuntu-24.04; Linux proof jobs use
 # the gke-runners group with separate amd64 and arm64 size labels.
-# Preflight and proof jobs use pinned root containers; preflight pins routing.
+# Jobs run directly in runner pods carrying the engine toolchain image and sudo.
 # Each verification sizes its parallelism to the runner that took it.
 # scripts/ci_preflight.py pins every runner and shard count. GitHub's platform
 # maximum remains the only job time limit; docs/ci.md records the policy.
@@ -160,19 +160,12 @@ jobs:
     runs-on:
       group: gke-runners
       labels: gke-8cpu-16gb-amd64
-    container:
-      image: ubuntu:24.04@sha256:24737cef17f4e22b1977df7d9a05e77c4e28b7da5b8911f8d8ccda136bf3573c
-      options: --user root
     env:
       PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64-16"]'
       PINEFORGE_VERIFIER_SLOW: ${{ needs.changes.result == 'success' && needs.changes.outputs.verifier_slow || 'true' }}
     # PRs run only source, documentation and policy checks. Build-driving
     # controls and dependency-heavy harness tests live in preflight-slow.
     steps:
-      - name: Prepare the job container
-        run: |
-          apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates curl git git-lfs jq unzip zip zstd xz-utils rsync tzdata python3 python3-venv python3-dev python3-pip build-essential cmake ninja-build pkg-config
       - name: Refuse an unauthorised run before anything else
         if: ${{ needs.authz.result != 'success' }}
         run: |
@@ -192,8 +185,8 @@ jobs:
           ACTIONLINT_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
         run: |
           set -euo pipefail
-          apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y shellcheck
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y shellcheck
           tools_dir="$RUNNER_TEMP/pineforge-actionlint"
           mkdir -p "$tools_dir"
           archive="$tools_dir/actionlint.tar.gz"
@@ -223,14 +216,7 @@ jobs:
     runs-on:
       group: gke-runners
       labels: gke-8cpu-16gb-amd64
-    container:
-      image: ubuntu:24.04@sha256:24737cef17f4e22b1977df7d9a05e77c4e28b7da5b8911f8d8ccda136bf3573c
-      options: --user root
     steps:
-      - name: Prepare the job container
-        run: |
-          apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates curl git git-lfs jq unzip zip zstd xz-utils rsync tzdata python3 python3-venv python3-dev python3-pip build-essential cmake ninja-build pkg-config
       - name: Refuse an unauthorised run before anything else
         if: ${{ needs.authz.result != 'success' }}
         run: |
@@ -279,15 +265,8 @@ jobs:
     runs-on:
       group: gke-runners
       labels: gke-32cpu-64gb-amd64
-    container:
-      image: ubuntu:24.04@sha256:24737cef17f4e22b1977df7d9a05e77c4e28b7da5b8911f8d8ccda136bf3573c
-      options: --user root
 
     steps:
-      - name: Prepare the job container
-        run: |
-          apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates curl git git-lfs jq unzip zip zstd xz-utils rsync tzdata python3 python3-venv python3-dev python3-pip build-essential cmake ninja-build pkg-config
       - name: Refuse an unauthorised run before anything else
         if: ${{ needs.authz.result != 'success' }}
         run: |
@@ -327,8 +306,8 @@ jobs:
       - name: Install dependencies (Linux)
         if: ${{ needs.authz.result == 'success' && runner.os == 'Linux' }}
         run: |
-          apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y libeigen3-dev tzdata-legacy ccache strace
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libeigen3-dev tzdata-legacy ccache strace
 
       # PRs restore the newest compatible main cache via the default-branch
       # fallback. Only main writes this namespace, never a PR merge ref.
@@ -389,15 +368,8 @@ jobs:
     runs-on:
       group: gke-runners
       labels: gke-16cpu-32gb-amd64
-    container:
-      image: ubuntu:24.04@sha256:24737cef17f4e22b1977df7d9a05e77c4e28b7da5b8911f8d8ccda136bf3573c
-      options: --user root
 
     steps:
-      - name: Prepare the job container
-        run: |
-          apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates curl git git-lfs jq unzip zip zstd xz-utils rsync tzdata python3 python3-venv python3-dev python3-pip build-essential cmake ninja-build pkg-config
       - name: Refuse an unauthorised run before anything else
         if: ${{ needs.authz.result != 'success' }}
         run: |
@@ -433,8 +405,8 @@ jobs:
       - name: Install dependencies (Linux)
         if: ${{ needs.authz.result == 'success' && runner.os == 'Linux' }}
         run: |
-          apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y libeigen3-dev tzdata-legacy ccache strace
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libeigen3-dev tzdata-legacy ccache strace
 
       # Every shard restores the same key; only shard 1 publishes it.
       - name: Restore ccache
@@ -524,15 +496,8 @@ jobs:
     runs-on:
       group: gke-runners
       labels: gke-16cpu-32gb-arm64
-    container:
-      image: ubuntu:24.04@sha256:24737cef17f4e22b1977df7d9a05e77c4e28b7da5b8911f8d8ccda136bf3573c
-      options: --user root
 
     steps:
-      - name: Prepare the job container
-        run: |
-          apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates curl git git-lfs jq unzip zip zstd xz-utils rsync tzdata python3 python3-venv python3-dev python3-pip build-essential cmake ninja-build pkg-config
       - name: Refuse an unauthorised run before anything else
         if: ${{ needs.authz.result != 'success' }}
         run: |
@@ -572,8 +537,8 @@ jobs:
       - name: Install dependencies (Linux)
         if: ${{ needs.authz.result == 'success' && runner.os == 'Linux' }}
         run: |
-          apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y libeigen3-dev tzdata-legacy ccache strace
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libeigen3-dev tzdata-legacy ccache strace
 
       # PRs restore the newest compatible main cache via the default-branch
       # fallback. Only main writes this namespace, never a PR merge ref.
@@ -637,17 +602,10 @@ jobs:
     runs-on:
       group: gke-runners
       labels: gke-32cpu-64gb-amd64
-    container:
-      image: ubuntu:24.04@sha256:24737cef17f4e22b1977df7d9a05e77c4e28b7da5b8911f8d8ccda136bf3573c
-      options: --user root
     env:
       ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:abort_on_error=1
       UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
     steps:
-      - name: Prepare the job container
-        run: |
-          apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates curl git git-lfs jq unzip zip zstd xz-utils rsync tzdata python3 python3-venv python3-dev python3-pip build-essential cmake ninja-build pkg-config
       - name: Refuse an unauthorised run before anything else
         if: ${{ needs.authz.result != 'success' }}
         run: |
@@ -676,8 +634,8 @@ jobs:
       - name: Install dependencies
         if: ${{ needs.authz.result == 'success' }}
         run: |
-          apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y libeigen3-dev tzdata-legacy ccache
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libeigen3-dev tzdata-legacy ccache
 
       - name: Restore ccache
         id: ccache-restore
@@ -748,14 +706,7 @@ jobs:
     runs-on:
       group: gke-runners
       labels: gke-16cpu-32gb-amd64
-    container:
-      image: ubuntu:24.04@sha256:24737cef17f4e22b1977df7d9a05e77c4e28b7da5b8911f8d8ccda136bf3573c
-      options: --user root
     steps:
-      - name: Prepare the job container
-        run: |
-          apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates curl git git-lfs jq unzip zip zstd xz-utils rsync tzdata python3 python3-venv python3-dev python3-pip build-essential cmake ninja-build pkg-config
       - name: Refuse an unauthorised run before anything else
         if: ${{ needs.authz.result != 'success' }}
         run: |
@@ -784,8 +735,8 @@ jobs:
       - name: Install dependencies
         if: ${{ needs.authz.result == 'success' }}
         run: |
-          apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y cmake ninja-build libeigen3-dev tzdata-legacy libsqlite3-dev libssl-dev zlib1g-dev ccache
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y cmake ninja-build libeigen3-dev tzdata-legacy libsqlite3-dev libssl-dev zlib1g-dev ccache
 
       - name: Restore ccache
         id: ccache-restore

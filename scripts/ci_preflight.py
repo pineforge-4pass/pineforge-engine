@@ -107,15 +107,6 @@ GKE_JOB_RUNNERS = {
     name: {job: f'group: gke-runners labels: {label}' for job, label in jobs.items()}
     for name, jobs in GKE_JOB_LABELS.items()
 }
-CONTAINER_PIN = '''    container:
-      image: ubuntu:24.04@sha256:24737cef17f4e22b1977df7d9a05e77c4e28b7da5b8911f8d8ccda136bf3573c
-      options: --user root
-'''
-PREPARE_CONTAINER_STEP = '''      - name: Prepare the job container
-        run: |
-          apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates curl git git-lfs jq unzip zip zstd xz-utils rsync tzdata python3 python3-venv python3-dev python3-pip build-essential cmake ninja-build pkg-config
-'''
 CI_EVENTS = '''on:
   pull_request:
     # LB-387: suite jobs skip on a draft PR (the required aggregate then fails, never passes);
@@ -1623,14 +1614,8 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
             has_gke = bool(_GKE_ROUTE.search(' '.join(runs_on)))
             if has_gke and runs_on != [gke_pin]:
                 findings.append(f'{name} job {job} may use GKE routing only at its exact pinned job and label')
-            if gke_pin:
-                if _job_block(body, 'container') != _code(CONTAINER_PIN):
-                    findings.append(f'{name} job {job} must use the pinned root job container')
-                steps = _steps(body)
-                if not steps or _code(steps[0]) != _code(PREPARE_CONTAINER_STEP):
-                    findings.append(f'{name} job {job} must prepare the job container as its first step')
-            if _job_values(body, 'container') and re.search(r'\bsudo\b', _counted_text(body)):
-                findings.append(f'{name} job {job} must not use sudo in a job container')
+            if has_gke and _job_values(body, 'container'):
+                findings.append(f'{name} job {job} must not declare a job container on GKE')
             if has_gke:
                 permissions = _job_values(workflow, 'permissions') + _job_values(body, 'permissions')
                 if (_holds_credentials(workflow, body)
@@ -2135,14 +2120,10 @@ def authz_workflow_findings(workflow: str, name: str, aggregate: str) -> list[st
         steps = _steps(body)
         status_function = job != 'authz' and any(
             _STATUS_FUNCTION.search(value) for value in _job_values(body, 'if'))
-        refusal_steps = steps
-        if (job in GKE_JOB_LABELS.get(name, {}) and steps
-                and _code(steps[0]) == _code(PREPARE_CONTAINER_STEP)):
-            refusal_steps = steps[1:]
         # Reusable workflow callers cannot declare steps; their job conditions
         # are pinned separately. Every inline job with a status function refuses first.
         if (status_function and not _job_values(body, 'uses')
-                and (not refusal_steps or _code(refusal_steps[0]) != _code(AUTHZ_REFUSE_STEP))):
+                and (not steps or _code(steps[0]) != _code(AUTHZ_REFUSE_STEP))):
             findings.append(f'{name} job {job} with a status function must refuse authz first')
         for step in steps:
             uses = _step_values(step, 'uses')
@@ -2464,12 +2445,9 @@ def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[st
             or _step_values(verify, 'if') != [AUTHZ_SUCCESS]):
         findings.append('preflight must invoke only its fast stage plan')
     linters = _step_named(steps, '      - name: Install workflow linters')
-    preflight_steps = (steps[1:] if not pr and steps
-                       and _code(steps[0]) == _code(PREPARE_CONTAINER_STEP) else steps)
-    linter_run = PREFLIGHT_LINTER_RUN if pr else PREFLIGHT_LINTER_RUN.replace('sudo ', '')
-    if (len(preflight_steps) != 5 or [_step_values(step, 'uses') for step in preflight_steps] != [
+    if (len(steps) != 5 or [_step_values(step, 'uses') for step in steps] != [
             [], ['actions/checkout@11d5960a326750d5838078e36cf38b85af677262'], [], [], ['actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02']]
-            or _step_values(linters, 'run') != [linter_run]
+            or _step_values(linters, 'run') != [PREFLIGHT_LINTER_RUN]
             or any(_step_values(step, 'run') for step in steps if _step_values(step, 'uses'))):
         findings.append('preflight must keep only checkout, linters, fast checks and diagnostics')
     if not pr:

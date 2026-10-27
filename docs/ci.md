@@ -70,7 +70,7 @@ successful runs on `main` save that cache namespace.
 Verification jobs keep literal runner pins at the workflow boundary: PR build/preflight and parity subset use `["self-hosted","pf-gcp-pr"]`;
 post preflight/parity use `gke-runners`; credentialed docs keep `["self-hosted","pf-gcp-post"]`.
 Post Release/Debug/kernel and native shards, post sanitizers and both native-live sanitizer
-profiles use fixed `gke-runners` size labels in pinned root containers. No job routes by event.
+profiles use fixed `gke-runners` size labels directly in runner pods carrying the engine toolchain image and sudo. No job routes by event.
 Hosted `ubuntu-24.04` runs all eight `authz` jobs, both CI `changes`/`build-gate` jobs, all post/native aggregates and `docs.yml`'s `build`.
 These light, secret-free jobs need no VM-only tools, mounts or caches.
 Local reusable calls cannot mix PR and GKE jobs. A full post run schedules 24 GKE jobs: amd64 32/16/8 CPU labels carry 8/7/7 jobs and arm64 16 CPU carries 2; each label's cap is 8.
@@ -184,7 +184,7 @@ the preflight source guard rejects those includes before a build.
 
 CI uses Ubuntu 24.04 amd64 and arm64 cells and selects Python 3.12 explicitly.
 The amd64 post build shards and the two arm64 post cells use the `gke-runners` group with
-fixed architecture/size labels and a pinned Ubuntu 24.04 root container. All three build jobs refuse an OS mismatch.
+fixed architecture/size labels and run directly in runner pods carrying the engine toolchain image and sudo. All three build jobs refuse an OS mismatch.
 Hosted exceptions include the named light jobs and the existing release/promotion pins.
 CMake uses the same interpreter as the
 verification driver, so its Python checks do not switch to a different system
@@ -1647,7 +1647,7 @@ runs, and this page does not claim either target as met.
 
 ## Runners and time limits
 
-Credentialed work retains its VM pins; secret-free post Linux jobs use GKE root containers.
+Credentialed work retains its VM pins; secret-free post Linux jobs run directly in GKE runner pods carrying the engine toolchain image and sudo.
 The four amd64 post legs, arm64 cells, preflight, parity and native verification use `gke-runners`; their aggregates use the light image.
 The native matrix is exactly `1..4` with `--ctest-shard I/4`; live sanitizers are unsharded. Each runner label remains a literal, checked per job:
 
@@ -1678,7 +1678,7 @@ Every shard builds the full tree and runs `--ctest-shard I/N` at the runner's co
 Each leg aggregate retains its old check name and requires its own matrix's success. The two arm64 cells share `build-arm` on `gke-16cpu-32gb-arm64`. All three build jobs use the same verification steps and profiles.
 Shard jobs and leg aggregates skip together only on classified docs-only changes.
 One cache key per architecture/profile/SHA is restored by all shards; only shard 1 saves it.
-`HOSTED_JOB_RUNNERS` pins hosted jobs and exact GKE mappings; every GKE job first installs the base toolchain before checkout, without sudo. The PR build remains
+`HOSTED_JOB_RUNNERS` pins hosted jobs and exact GKE mappings; every GKE job runs directly in a runner pod carrying the engine toolchain image and sudo. The PR build remains
 `build (ubuntu-24.04, Release)` and its aggregate remains `build`.
 
 Release and promotion use the isolated release fleet:
