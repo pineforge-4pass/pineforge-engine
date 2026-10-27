@@ -68,7 +68,7 @@ PRs restore the newest compatible default-branch compiler cache, and only
 successful runs on `main` save that cache namespace.
 
 Verification jobs keep literal runner pins at the workflow boundary: PR build/preflight and parity subset use `["self-hosted","pf-gcp-pr"]`;
-post preflight/parity use `gke-runners`; credentialed docs use `gke-protected` with `gkp-8cpu-16gb-amd64`.
+post preflight/parity use `gke-runners`; credentialed docs keep `["self-hosted","pf-gcp-post"]`.
 Post Release/Debug/kernel and native shards, post sanitizers and both native-live sanitizer
 profiles use fixed `gke-runners` size labels directly in runner pods carrying the engine toolchain image and sudo. No job routes by event.
 Hosted `ubuntu-24.04` runs all eight `authz` jobs, both CI `changes`/`build-gate` jobs, all post/native aggregates and `docs.yml`'s `build`.
@@ -1647,7 +1647,7 @@ runs, and this page does not claim either target as met.
 
 ## Runners and time limits
 
-All credentialed jobs use `gke-protected`; secret-free post Linux jobs run directly in GKE runner pods carrying the engine toolchain image and sudo.
+The `release`, `notify-hub`, `promote` and `probe` jobs use `gke-protected`; docs deployment retains its VM pin while secret-free post Linux jobs run directly in GKE runner pods carrying the engine toolchain image and sudo.
 The four amd64 post legs, arm64 cells, preflight, parity and native verification use `gke-runners`; their aggregates use the light image.
 The native matrix is exactly `1..4` with `--ctest-shard I/4`; live sanitizers are unsharded. Each runner label remains a literal, checked per job:
 
@@ -1659,7 +1659,7 @@ The native matrix is exactly `1..4` with `--ctest-shard I/4`; live sanitizers ar
 | `ci-post.yml` | Push to `main`, 01:30 UTC schedule, dispatch | Light jobs and four aggregates: `ubuntu-24.04`; `gke-runners`: Release/sanitizers `gke-32cpu-64gb-amd64`, Debug/kernel `gke-16cpu-32gb-amd64`, preflight tiers `gke-8cpu-16gb-amd64`, arm64 `gke-16cpu-32gb-arm64` |
 | `corpus-parity.yml` | Schedule, dispatch, post CI callers | `authz`: hosted `ubuntu-24.04`; `gke-runners`: full parity `gke-16cpu-32gb-amd64`, subset `gke-8cpu-16gb-amd64` |
 | `native-live.yml` | Dispatch and post CI callers on `main` | `authz` and both aggregates: hosted `ubuntu-24.04`; `gke-runners`: native shards `gke-8cpu-16gb-amd64`, sanitizer profiles `gke-16cpu-32gb-amd64` |
-| `docs-post.yml` | Push to `main`, dispatch | `authz`: hosted `ubuntu-24.04`; credentialed `build`: `gke-protected` with `gkp-8cpu-16gb-amd64` |
+| `docs-post.yml` | Push to `main`, dispatch | `authz`: hosted `ubuntu-24.04`; credentialed `build`: `["self-hosted","pf-gcp-post"]` |
 
 Post CI starts on push to `main`, schedule and dispatch; its GKE routing checker
 refuses all PR events. Reusable workflows inherit their caller's event.
@@ -1667,7 +1667,7 @@ refuses all PR events. Reusable workflows inherit their caller's event.
 follow local calls to a fixed point, refuse mixed event classes and require
 literal VM arrays or exact GKE group/label mappings outside hosted pins; job conditions cannot excuse routing.
 Fork PRs on hosted runners run without our secrets, so the VM-only fork-refusal hook is not needed.
-Jobs in `gke-runners` carry no deployment secrets, id-token permissions or environment; PR-reachable workflows cannot name GKE routing. `gke-runners` jobs start only from ci-post.yml, corpus-parity.yml and native-live.yml at refs/heads/main (the runner group lists those workflow refs); a dispatch from another ref queues without a runner. The `gke-protected` group admits exactly `release.yml@refs/heads/main`, `promote-baseline.yml@refs/heads/main`, `docs-post.yml@refs/heads/main` and `release-ruleset-probe.yml@refs/heads/main`; all credentialed jobs use it.
+Jobs in `gke-runners` carry no deployment secrets or environment; any `id-token` value except literal `none` counts as a credential, and PR-reachable workflows cannot name GKE routing. `gke-runners` jobs start only from ci-post.yml, corpus-parity.yml and native-live.yml at refs/heads/main (the runner group lists those workflow refs); a dispatch from another ref queues without a runner. The `gke-protected` group admits exactly `release.yml@refs/heads/main`, `promote-baseline.yml@refs/heads/main`, `docs-post.yml@refs/heads/main` and `release-ruleset-probe.yml@refs/heads/main`; `release`, `notify-hub`, `promote` and `probe` use it while docs `build` retains its VM pin.
 Protected jobs cannot fall back to VM pins or general GKE labels; paid larger-runner labels remain refused.
 
 The four full build checks are `build (ubuntu-24.04, Release)`,
@@ -1681,10 +1681,10 @@ One cache key per architecture/profile/SHA is restored by all shards; only shard
 `HOSTED_JOB_RUNNERS` pins hosted jobs and exact GKE mappings; every GKE job runs directly in a runner pod carrying the engine toolchain image and sudo. The PR build remains
 `build (ubuntu-24.04, Release)` and its aggregate remains `build`.
 
-Credentialed jobs use `gke-protected`, restricted to these four workflow refs:
+The `release`, `notify-hub`, `promote` and `probe` jobs use `gke-protected`, restricted to these four workflow refs:
 `release.yml@refs/heads/main` and `promote-baseline.yml@refs/heads/main`;
 `docs-post.yml@refs/heads/main` and `release-ruleset-probe.yml@refs/heads/main`.
-`release`, `promote` and docs `build` use `gkp-8cpu-16gb-amd64`;
+`release` and `promote` use `gkp-8cpu-16gb-amd64`; docs `build` keeps its VM pin until Node/npm setup is proven.
 `notify-hub` and `probe` use `gkp-2cpu-4gb-amd64`; each label's per-run cap is 8.
 Release's Linux x64 artifact cell retains `["self-hosted","pf-gcp-main"]`; arm64 keeps its hosted `ubuntu-22.04-arm` pin;
 1.8.0 has no macOS test or artifact cells, and

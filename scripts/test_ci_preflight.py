@@ -44,9 +44,28 @@ EXPECTED_GKE_JOBS = {
 EXPECTED_PROTECTED_JOBS = {
     'release.yml': {'release': PROTECTED_8, 'notify-hub': PROTECTED_2},
     'promote-baseline.yml': {'promote': PROTECTED_8},
-    'docs-post.yml': {'build': PROTECTED_8},
     'release-ruleset-probe.yml': {'probe': PROTECTED_2},
 }
+ID_TOKEN_CASES = (
+    ('${{ inputs.x }}', True),
+    ('bogus', True),
+    ('"${{ inputs.x }}"', True),
+    ("'${{ inputs.x }}'", True),
+    ('none-other', True),
+    ('none bogus', True),
+    ('NONE', True),
+    ('write', True),
+    ('read', True),
+    ('WRITE', True),
+    ('READ', True),
+    ('wRiTe', True),
+    ('rEaD', True),
+    ('"read"', True),
+    ("'write'", True),
+    ('none', False),
+    ('"none"', False),
+    ("'none'", False),
+)
 PR_SLOW_FLAG = "${{ github.event_name == 'pull_request' && '--exclude-label slow' || '' }}"
 EXPECTED_PR_SLOW_ROWS = (
     'test_adapter_live_state_equivalence',
@@ -1128,6 +1147,31 @@ class ProtectedGkeRunnerPolicy(unittest.TestCase):
                                       ci_preflight.runner_findings({**workflows, name: changed}))
         self.assertEqual(ci_preflight.runner_findings(workflows), [])
 
+    def test_docs_deployment_keeps_its_vm_pin_and_credential_exemption(self):
+        name = 'docs-post.yml'
+        workflow = (ROOT / '.github/workflows' / name).read_text()
+        body = _jobs(workflow)['build']
+        self.assertEqual(ci_preflight._job_values(body, 'runs-on', unquote=False),
+                         ['["self-hosted", "pf-gcp-post"]'])
+        self.assertTrue(ci_preflight._holds_credentials(workflow, body))
+        self.assertEqual(ci_preflight.HOSTED_JOB_RUNNERS[name], {'authz': 'ubuntu-24.04'})
+        self.assertNotIn((name, 'build'), ci_preflight.PROTECTED_JOB_RUNNERS)
+        self.assertEqual(ci_preflight.runner_findings({name: workflow}), [])
+        for wrong in (PROTECTED_8, PROTECTED_2, GKE_8, PR_RUNNER, RELEASE_RUNNER,
+                      'ubuntu-24.04'):
+            changed = in_job(workflow, 'build',
+                             '    runs-on: ["self-hosted", "pf-gcp-post"]\n',
+                             runner_declaration(wrong))
+            with self.subTest(runner=wrong):
+                self.assertNotEqual(changed, workflow)
+                self.assertIn(f'{name} job build must run on {POST_RUNNER}',
+                              ci_preflight.runner_findings({name: changed}))
+        metadata = in_job(workflow, 'build', '\n    env:\n',
+                          f"\n    env:\n      PF_CI_LABELS: '{POST_RUNNER}'\n")
+        self.assertNotEqual(metadata, workflow)
+        self.assertIn(f'{name} job build must not set PF_CI_LABELS on a gated docs job',
+                      ci_preflight.runner_findings({name: metadata}))
+
     def test_exact_protected_probe_mapping_is_accepted(self):
         workflow = self.fixture(extra=self.SECRET)
         self.assertEqual(ci_preflight.runner_findings(
@@ -1136,7 +1180,6 @@ class ProtectedGkeRunnerPolicy(unittest.TestCase):
             ('release.yml', 'release'): PROTECTED_8,
             ('release.yml', 'notify-hub'): PROTECTED_2,
             ('promote-baseline.yml', 'promote'): PROTECTED_8,
-            ('docs-post.yml', 'build'): PROTECTED_8,
             ('release-ruleset-probe.yml', 'probe'): PROTECTED_2})
         self.assertEqual(ci_preflight.RELEASE_JOB_RUNNERS['release.yml'], {
             'release': PROTECTED_8, 'prebuilt': HOSTED_MATRIX_RUNNER,
@@ -1224,6 +1267,27 @@ class ProtectedGkeRunnerPolicy(unittest.TestCase):
                 self.assertTrue(ci_preflight._holds_credentials(workflow, _jobs(workflow)['probe']))
                 self.assertEqual(ci_preflight.runner_findings(
                     {'release-ruleset-probe.yml': workflow}), [])
+
+    def test_id_token_values_except_literal_none_count_as_credentials(self):
+        for permission, credential in ID_TOKEN_CASES:
+            for scope in ('job', 'workflow'):
+                for style in ('block', 'flow'):
+                    for key in ('id-token', '"id-token"', "'id-token'", 'ID-TOKEN'):
+                        indent = '    ' if scope == 'job' else ''
+                        declaration = (
+                            f'{indent}permissions:\n{indent}  {key}: {permission}\n'
+                            f'{indent}  contents: read\n' if style == 'block' else
+                            f'{indent}permissions: {{{key}: {permission}, contents: read}}\n')
+                        workflow = self.fixture(
+                            extra=declaration if scope == 'job' else '',
+                            header=declaration if scope == 'workflow' else '')
+                        body = _jobs(workflow)['probe']
+                        with self.subTest(permission=permission, scope=scope, style=style, key=key):
+                            self.assertEqual(ci_preflight._holds_credentials(workflow, body),
+                                             credential)
+                            self.assertEqual(ci_preflight.runner_findings(
+                                {'release-ruleset-probe.yml': workflow}),
+                                [] if credential else [self.CREDENTIAL_FINDING])
 
     def test_app_mint_steps_count_with_uses_first_and_name_first(self):
         for action, inputs in (
@@ -1351,17 +1415,29 @@ class ProtectedGkeRunnerPolicy(unittest.TestCase):
 
     def test_id_token_none_stays_secret_free_on_general_gke_jobs_and_callers(self):
         policy = GkeRunnerPolicy()
-        finding = 'ci-post.yml job preflight must not expose credentials on GKE'
-        for permission in ('none', 'read', 'write', '"read"', "'write'"):
-            extra = f'    permissions:\n      id-token: {permission}\n'
-            workflow = policy.fixture(extra=extra)
-            with self.subTest(permission=permission, shape='job'):
-                self.assertEqual(finding in ci_preflight.runner_findings(
-                    {'ci-post.yml': workflow}), permission != 'none')
-            workflows = policy.caller_fixture(extra)
-            with self.subTest(permission=permission, shape='reusable call'):
-                self.assertEqual('ci-post.yml job parity must not expose credentials on GKE'
-                                 in ci_preflight.runner_findings(workflows), permission != 'none')
+        for permission, credential in ID_TOKEN_CASES:
+            for scope in ('job', 'workflow'):
+                for style in ('block', 'flow'):
+                    indent = '    ' if scope == 'job' else ''
+                    declaration = (
+                        f'{indent}permissions:\n{indent}  id-token: {permission}\n'
+                        f'{indent}  contents: read\n' if style == 'block' else
+                        f'{indent}permissions: {{contents: read, id-token: {permission}}}\n')
+                    extra = declaration if scope == 'job' else ''
+                    general = policy.fixture(extra=extra)
+                    workflows = policy.caller_fixture(extra)
+                    if scope == 'workflow':
+                        general = general.replace('jobs:\n', declaration + 'jobs:\n', 1)
+                        workflows['ci-post.yml'] = workflows['ci-post.yml'].replace(
+                            'jobs:\n', declaration + 'jobs:\n', 1)
+                    for shape, graph, job in (
+                            ('general job', {'ci-post.yml': general}, 'preflight'),
+                            ('reusable call', workflows, 'parity')):
+                        finding = f'ci-post.yml job {job} must not expose credentials on GKE'
+                        with self.subTest(permission=permission, scope=scope,
+                                          style=style, shape=shape):
+                            self.assertEqual(finding in ci_preflight.runner_findings(graph),
+                                             credential)
 
     def test_gke_and_protected_caps_count_each_label_separately_from_each_root(self):
         for general_count, protected_count in ((8, 8), (9, 8), (8, 9), (9, 9)):
@@ -1498,6 +1574,9 @@ class PostFleetRunnerPolicy(unittest.TestCase):
             "paid 16-core runners' medians over five runs were 1815, 1812, 1770, 2050",
             'The four amd64 post legs, arm64 cells, preflight, parity and native verification use `gke-runners`; '
             'their aggregates use the light image.',
+            'The `release`, `notify-hub`, `promote` and `probe` jobs use `gke-protected`; '
+            'docs deployment retains its VM pin while secret-free post Linux jobs run directly '
+            'in GKE runner pods carrying the engine toolchain image and sudo.',
             '| `ci-post.yml` | Push to `main`, 01:30 UTC schedule, dispatch | '
             'Light jobs and four aggregates: `ubuntu-24.04`; `gke-runners`: '
             'Release/sanitizers `gke-32cpu-64gb-amd64`, Debug/kernel `gke-16cpu-32gb-amd64`, '
@@ -1505,14 +1584,18 @@ class PostFleetRunnerPolicy(unittest.TestCase):
             '| `native-live.yml` | Dispatch and post CI callers on `main` | '
             '`authz` and both aggregates: hosted `ubuntu-24.04`; `gke-runners`: '
             'native shards `gke-8cpu-16gb-amd64`, sanitizer profiles `gke-16cpu-32gb-amd64` |',
-            'Jobs in `gke-runners` carry no deployment secrets, id-token permissions or environment; '
+            '| `docs-post.yml` | Push to `main`, dispatch | `authz`: hosted `ubuntu-24.04`; '
+            'credentialed `build`: `["self-hosted","pf-gcp-post"]` |',
+            'Jobs in `gke-runners` carry no deployment secrets or environment; '
+            'any `id-token` value except literal `none` counts as a credential, and '
             'PR-reachable workflows cannot name GKE routing. '
             '`gke-runners` jobs start only from ci-post.yml, corpus-parity.yml and native-live.yml '
             'at refs/heads/main (the runner group lists those workflow refs); '
             'a dispatch from another ref queues without a runner.',
             'The `gke-protected` group admits exactly `release.yml@refs/heads/main`, '
             '`promote-baseline.yml@refs/heads/main`, `docs-post.yml@refs/heads/main` and '
-            '`release-ruleset-probe.yml@refs/heads/main`; all credentialed jobs use it.',
+            '`release-ruleset-probe.yml@refs/heads/main`; `release`, `notify-hub`, '
+            '`promote` and `probe` use it while docs `build` retains its VM pin.',
             'Protected jobs cannot fall back to VM pins or general GKE labels; paid larger-runner labels remain refused.',
             '`build-debug` shards, and kernel two shards; sanitizers uses four, '
             'all on their fixed GKE sizes.',
@@ -4557,7 +4640,7 @@ exit "$lookup_exit"
                                                  **EXPECTED_GKE_JOBS['corpus-parity.yml']},
                           'corpus-parity-subset.yml': {'authz': 'ubuntu-24.04'},
                           'docs.yml': {'authz': 'ubuntu-24.04', 'build': 'ubuntu-24.04'},
-                          'docs-post.yml': {'authz': 'ubuntu-24.04', 'build': PROTECTED_8},
+                          'docs-post.yml': {'authz': 'ubuntu-24.04'},
                           'native-live.yml': {'authz': 'ubuntu-24.04',
                                               **EXPECTED_GKE_JOBS['native-live.yml'],
                                               'native-live-native': 'ubuntu-24.04',
@@ -7385,15 +7468,15 @@ class ActionlintRunnerLabels(unittest.TestCase):
         for label, sites in (
                 ('pf-gcp-pr', (('ci.yml', 'preflight'), ('ci.yml', 'build'),
                                ('corpus-parity-subset.yml', 'corpus-parity-subset'))),
-                ('pf-gcp-post', (('fleet-post-capability.yml', 'capability'),)),
+                ('pf-gcp-post', (('fleet-post-capability.yml', 'capability'),
+                                 ('docs-post.yml', 'build'))),
                 ('gke-32cpu-64gb-amd64', (('ci-post.yml', 'build'), ('ci-post.yml', 'sanitizers'))),
                 ('gke-16cpu-32gb-amd64', (('ci-post.yml', 'build-debug'), ('ci-post.yml', 'kernel-only'),
                                          ('native-live.yml', 'native-live'), ('corpus-parity.yml', 'corpus-parity'))),
                 ('gke-8cpu-16gb-amd64', (('ci-post.yml', 'preflight'), ('ci-post.yml', 'preflight-slow'),
                                         ('native-live.yml', 'native-live-shards'), ('corpus-parity.yml', 'corpus-parity-subset'))),
                 ('gke-16cpu-32gb-arm64', (('ci-post.yml', 'build-arm'),)),
-                ('gkp-8cpu-16gb-amd64', (('release.yml', 'release'), ('promote-baseline.yml', 'promote'),
-                                         ('docs-post.yml', 'build'))),
+                ('gkp-8cpu-16gb-amd64', (('release.yml', 'release'), ('promote-baseline.yml', 'promote'))),
                 ('gkp-2cpu-4gb-amd64', (('release.yml', 'notify-hub'), ('release-ruleset-probe.yml', 'probe'))),
                 ('pf-gcp-main', (('vm-main.yml', 'inspect'),))):
             with self.subTest(label=label):

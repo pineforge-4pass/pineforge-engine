@@ -88,9 +88,7 @@ jobs:
 
   build:
     needs: [authz]
-    runs-on:
-      group: gke-protected
-      labels: gkp-8cpu-16gb-amd64
+    runs-on: ["self-hosted", "pf-gcp-post"]
     env:
       CF_PROJECT: ${{ vars.CF_PAGES_PROJECT || 'pineforge-docs' }}
       DEPLOY_BRANCH: ${{ github.ref_name }}

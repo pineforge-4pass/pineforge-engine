@@ -114,8 +114,6 @@ PROTECTED_JOB_RUNNERS = {
         'group: gke-protected labels: gkp-2cpu-4gb-amd64',
     ('promote-baseline.yml', 'promote'):
         'group: gke-protected labels: gkp-8cpu-16gb-amd64',
-    ('docs-post.yml', 'build'):
-        'group: gke-protected labels: gkp-8cpu-16gb-amd64',
     ('release-ruleset-probe.yml', 'probe'):
         'group: gke-protected labels: gkp-2cpu-4gb-amd64',
 }
@@ -298,10 +296,8 @@ HOSTED_JOB_RUNNERS = {
     'ci-post.yml': {**dict.fromkeys(('authz', 'changes', 'build-gate'), 'ubuntu-24.04'),
                     **dict.fromkeys(POST_LEG_GATES, 'ubuntu-24.04'),
                     **GKE_JOB_RUNNERS['ci-post.yml']},
-    'corpus-parity-subset.yml': {'authz': 'ubuntu-24.04'},
-    'docs-post.yml': {
-        'authz': 'ubuntu-24.04',
-        'build': PROTECTED_JOB_RUNNERS[('docs-post.yml', 'build')]},
+    **{name: {'authz': 'ubuntu-24.04'} for name in (
+        'corpus-parity-subset.yml', 'docs-post.yml')},
     'native-live.yml': {'authz': 'ubuntu-24.04', **GKE_JOB_RUNNERS['native-live.yml'],
                         'native-live-native': 'ubuntu-24.04', 'native-live-gate': 'ubuntu-24.04'},
     'corpus-parity.yml': {'authz': 'ubuntu-24.04', **GKE_JOB_RUNNERS['corpus-parity.yml']},
@@ -1322,7 +1318,7 @@ def _events(workflow: str) -> set[str] | None:
 
 
 def _holds_credentials(workflow: str, body: str) -> bool:
-    """Non-GITHUB_TOKEN secrets, OIDC read/write, App minting or an environment.
+    """Non-GITHUB_TOKEN secrets, OIDC except literal none, App minting or an environment.
 
     Include inherited workflow env and permissions. Bracket/dynamic secret
     access and inherited reusable-workflow secrets must not bypass the rule.
@@ -1330,7 +1326,11 @@ def _holds_credentials(workflow: str, body: str) -> bool:
     if _job_values(body, 'environment') or _job_values(body, 'secrets') == ['inherit']:
         return True
     permissions = _job_values(workflow, 'permissions') + _job_values(body, 'permissions')
-    oidc = r'''(?<![\w-])["']?id-token["']?\s*:\s*(?:"(?:write|read)"|'(?:write|read)'|write|read)(?=$|[\s,}])'''
+    # Keep whitespace inside the exclusion so it cannot backtrack past none.
+    # Folded block mappings may put another permission key after the scalar.
+    oidc = (r'''(?<![\w-])["']?id-token["']?\s*:'''
+            r'''(?!\s*(?-i:"none"|'none'|none)'''
+            r'''(?:\s*(?:$|[,}])|\s+["']?[\w-]+["']?\s*:))''')
     if any(value == 'write-all' or re.search(oidc, value, re.IGNORECASE)
            for value in permissions):
         return True
