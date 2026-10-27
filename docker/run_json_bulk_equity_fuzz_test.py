@@ -1319,7 +1319,8 @@ def test_a_fault_around_the_direct_io_page_boundary_ends_like_the_strict_path(
     # check (or accept, for -0, and write the changed point), and the bulk side must have
     # skipped the per-line decode of the E lines before the fault, which a bulk path that
     # always falls back cannot do (not counted where the repr proof rejects the whole
-    # 64 KiB batch that holds the fault, so that the batch is replayed strictly).
+    # batch of up to _BULK_E_BATCH lines that holds the fault, so that it is replayed
+    # strictly).
     index = paged.positions[label]
     image = _Image(paged.raw)
     page_offset = PAGE - paged.starts[index] if index == paged.boundary else None
@@ -1408,8 +1409,9 @@ def test_control_b_grammar_that_accepts_integer_negative_zero_is_detected(tmp_pa
     original = rb"(0|-?[1-9][0-9]{0,15})"
     broken_line = re.compile(run_json._BULK_E_LINE.pattern.replace(
         original, rb"(-?0|-?[1-9][0-9]{0,15})", 1))
-    broken_run = re.compile(rb"(?:" + broken_line.pattern + rb")+")
-    assert run_json._BULK_E_RUN.pattern == rb"(?:" + run_json._BULK_E_LINE.pattern + rb")+"
+    bound = rb"){1,%d}" % run_json._BULK_E_BATCH
+    broken_run = re.compile(rb"(?:" + broken_line.pattern + bound)
+    assert run_json._BULK_E_RUN.pattern == rb"(?:" + run_json._BULK_E_LINE.pattern + bound
     assert broken_line.pattern != run_json._BULK_E_LINE.pattern
     assert run_json._BULK_E_LINE.fullmatch(b'["E",-0,1.0,0.0]\n') is None
     assert broken_line.fullmatch(b'["E",-0,1.0,0.0]\n') is not None

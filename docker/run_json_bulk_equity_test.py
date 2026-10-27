@@ -8,7 +8,9 @@ from contextlib import ExitStack
 import errno
 import hashlib
 from pathlib import Path
+import re
 import sys
+import tracemalloc
 
 import pytest
 
@@ -472,3 +474,109 @@ def test_encoded_artifact_write_error_retains_code(tmp_path, monkeypatch):
         assert failure.value.code_args == {"reason": "scratch_io"}
         assert str(failure.value) == "report sink write failed"
         assert len(attempted) == 1
+
+
+def test_a_run_is_consumed_in_batches_of_at_most_the_batch_size():
+    line = b'["E",1700000000000,10000.0,0.0]\n'
+    batch = run_json._BULK_E_BATCH
+    data = line * (3 * batch + 5)
+    sizes, cursor = [], 0
+    while (match := run_json._BULK_E_RUN.match(data, cursor)) is not None:
+        sizes.append((match.end() - cursor) // len(line))
+        cursor = match.end()
+    assert sizes == [batch, batch, batch, 5] and cursor == len(data)
+    # The proof takes exactly the runs the regex hands out; a longer one is no
+    # match, so no caller can pass it a whole window.
+    accepted = run_json._bulk_equity(data[:batch * len(line)])
+    assert accepted is not None and accepted.count == batch
+    assert run_json._bulk_equity(data[:(batch + 1) * len(line)]) is None
+
+
+MEMORY_COUNTS = (1_000, 20_000)
+MEMORY_LIMIT = 1024 * 1024
+MEMORY_SPREAD = 256 * 1024
+
+
+def _traced_peak(action):
+    tracemalloc.start()
+    try:
+        action()
+        return tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+
+def _pass_peaks(tmp_path, count):
+    """Traced peaks of the verify pass and of the copy pass over `count` E lines.
+
+    The fixture writer's lines are 32-33 bytes, so a 64 KiB window holds about
+    2,000 of them and 1,000 lines fill half of one. The destination keeps
+    nothing: only the memory of the passes themselves is traced.
+    """
+    rows = [_point(i) for i in range(count)]
+    with _sink(tmp_path, rows, verify=False) as (sink, library, report):
+        verify = _traced_peak(lambda: sink.verify(library, 1, report))
+        document = _document(sink, report)
+        copy = _traced_peak(lambda: run_json._stream_json(
+            document["equity_curve"], oracle._DiscardDestination()))
+    return {"verify": verify, "copy": copy}
+
+
+def _memory_problems(tmp_path, monkeypatch):
+    """What breaks the flat-memory contract of the two bulk passes; [] when nothing does.
+
+    Without a bound on the lines one regex call matches, the engine's
+    backtracking stack holds about 2 KiB for every line of the run: the
+    1,000-point sink is one run of 1,000 lines (~2 MB), the 20,000-point sink
+    has runs of a full window, ~2,000 lines (~4 MB). Both are over 1 MiB and
+    they differ by ~2 MB. With 128 lines per call every run costs a few
+    hundred KB, whatever the file.
+    """
+    original, accepted = run_json._bulk_equity, []
+
+    def counted(raw):
+        batch = original(raw)
+        if batch is not None:
+            accepted.append(batch.count)
+        return batch
+
+    problems, peaks = [], {}
+    with monkeypatch.context() as patch:
+        patch.setattr(run_json, "_bulk_equity", counted)
+        _pass_peaks(tmp_path, 200)  # first-use imports and caches stay out of the numbers
+        for count in MEMORY_COUNTS:
+            accepted.clear()
+            peaks[count] = _pass_peaks(tmp_path, count)
+            # Both passes must take every line in bulk, or a flat peak proves nothing.
+            if sum(accepted) != 2 * count:
+                problems.append(f"engaged: {sum(accepted)} of {2 * count} lines were "
+                                f"accepted in bulk for {count} points")
+    for name in ("verify", "copy"):
+        by_count = {count: peaks[count][name] for count in MEMORY_COUNTS}
+        low, high = min(by_count.values()), max(by_count.values())
+        if high >= MEMORY_LIMIT:
+            problems.append(f"limit: the {name} pass reaches {high} traced bytes, "
+                            f"not below {MEMORY_LIMIT} ({by_count})")
+        if high - low > MEMORY_SPREAD:
+            problems.append(f"spread: the {name} pass differs by {high - low} traced bytes "
+                            f"across the point counts, more than {MEMORY_SPREAD} ({by_count})")
+    return problems
+
+
+def test_bulk_passes_use_flat_python_memory(tmp_path, monkeypatch):
+    problems = _memory_problems(tmp_path, monkeypatch)
+    assert not problems, "\n".join(problems)
+
+
+def test_control_a_regex_call_over_a_whole_window_fails_the_memory_check(tmp_path, monkeypatch):
+    # The batch size raised to the whole window: one regex call may span every
+    # line of a window again, as before the bound. Each of the two bounds must
+    # see it, or the check could not fail on that bound.
+    whole_window = re.compile(
+        rb"(?:" + run_json._BULK_E_LINE.pattern + (rb"){1,%d}" % run_json._BULK_E_WINDOW))
+    assert whole_window.pattern != run_json._BULK_E_RUN.pattern
+    monkeypatch.setattr(run_json, "_BULK_E_RUN", whole_window)
+    problems = _memory_problems(tmp_path, monkeypatch)
+    assert any(problem.startswith("limit:") for problem in problems), problems
+    assert any(problem.startswith("spread:") for problem in problems), problems
+    assert not any(problem.startswith("engaged:") for problem in problems), problems

@@ -5973,18 +5973,30 @@ _BULK_E_FLOAT = (
 _BULK_E_LINE = re.compile(
     rb'\["E",(0|-?[1-9][0-9]{0,15}),(' + _BULK_E_FLOAT
     + rb"),(" + _BULK_E_FLOAT + rb")\]\n")
-_BULK_E_RUN = re.compile(rb"(?:" + _BULK_E_LINE.pattern + rb")+")
+# Lines per regex call. The engine matches a repeated group with its whole
+# backtracking state on a heap stack that is freed only when the call returns:
+# every alternation and bounded repeat of a line nests a frame, about 2 KiB per
+# canonical line. A call over a full window of 33-byte lines (about 2,000)
+# would therefore hold several MiB, and a call over a shorter file less, so the
+# transient memory would follow the window and the file instead of staying flat.
+# The bound keeps that stack, and every list built from one batch, the same for
+# any window and any file length; a window is consumed in successive batches.
+_BULK_E_BATCH = 128
+_BULK_E_RUN = re.compile(rb"(?:" + _BULK_E_LINE.pattern + (rb"){1,%d}" % _BULK_E_BATCH))
 _BULK_E_LINE_BYTES = 80
 
 
 class _BulkEquity:
-    """One accepted window, with only its two decoded endpoints retained."""
+    """One accepted batch of lines, with only its two decoded endpoints retained."""
     def __init__(self, raw, count, first, last):
         self.raw, self.count, self.first, self.last = raw, count, first, last
 
 
 def _bulk_equity(raw):
-    """Accept a strict subset; a failed proof never supplies an error."""
+    """Accept a strict subset; a failed proof never supplies an error.
+
+    ``raw`` is one run of at most _BULK_E_BATCH lines; a longer one is no match.
+    """
     if not raw or _BULK_E_RUN.fullmatch(raw) is None:
         return None
     times, equities, profits = zip(*_BULK_E_LINE.findall(raw))
@@ -6843,7 +6855,7 @@ def _stream_equity_array(value, destination):
     try:
         for record in value.sink._tagged_records("E", bulk=True):
             if isinstance(record, _BulkEquity):
-                # sub and splitlines walk the entire window in C. No Python
+                # sub and splitlines walk the entire batch in C. No Python
                 # loop, decoder or serializer visits its individual points.
                 rows = _BULK_E_LINE.sub(
                     rb'{"time_ms":\1,"equity":\2,"open_profit":\3},' + b"\n",
