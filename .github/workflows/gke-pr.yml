@@ -37,8 +37,8 @@ jobs:
         env:
           REPO: ${{ github.repository }}
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name || '' }}
-          HEAD_IS_FORK: ${{ github.event.pull_request.head.repo.fork || 'unknown' }}
-          DRAFT: ${{ github.event.pull_request.draft || 'unknown' }}
+          HEAD_IS_FORK: ${{ toJSON(github.event.pull_request.head.repo.fork) }}
+          DRAFT: ${{ toJSON(github.event.pull_request.draft) }}
           BASE_REF: ${{ github.event.pull_request.base.ref || '' }}
           BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
@@ -132,13 +132,19 @@ jobs:
               if not isinstance(rows, list):
                   raise SystemExit("compare response has no readable files list")
               for row in rows:
+                  if not isinstance(row, dict):
+                      raise SystemExit("compare response has an unreadable file row")
                   filename = row.get("filename")
-                  if not isinstance(filename, str) or "\x00" in filename:
+                  if (not isinstance(filename, str) or "\x00" in filename
+                          or any(part in ("", ".", "..") for part in filename.split("/"))):
                       raise SystemExit("compare response has an unreadable filename")
                   paths.append(filename)
+                  if row.get("status") == "renamed" and "previous_filename" not in row:
+                      raise SystemExit("compare response is missing a rename origin")
                   if "previous_filename" in row:
                       previous = row["previous_filename"]
-                      if not isinstance(previous, str) or "\x00" in previous:
+                      if (not isinstance(previous, str) or "\x00" in previous
+                              or any(part in ("", ".", "..") for part in previous.split("/"))):
                           raise SystemExit("compare response has an unreadable previous filename")
                       paths.append(previous)
               if len(paths) >= 3000:
@@ -146,6 +152,8 @@ jobs:
               if len(rows) < 100:
                   break
               page += 1
+          if not paths:
+              raise SystemExit("compare response has no changed paths")
           Path(os.environ["PATH_FILE"]).write_bytes(
               b"\0".join(path.encode("utf-8") for path in paths)
               + (b"\0" if paths else b""))
@@ -457,13 +465,19 @@ jobs:
               if not isinstance(rows, list):
                   raise SystemExit("second compare response is unreadable")
               for row in rows:
+                  if not isinstance(row, dict):
+                      raise SystemExit("second compare response has an unreadable file row")
                   filename = row.get("filename")
-                  if not isinstance(filename, str) or "\x00" in filename:
+                  if (not isinstance(filename, str) or "\x00" in filename
+                          or any(part in ("", ".", "..") for part in filename.split("/"))):
                       raise SystemExit("second compare filename is unreadable")
                   paths.append(filename)
+                  if row.get("status") == "renamed" and "previous_filename" not in row:
+                      raise SystemExit("second compare response is missing a rename origin")
                   if "previous_filename" in row:
                       previous = row["previous_filename"]
-                      if not isinstance(previous, str) or "\x00" in previous:
+                      if (not isinstance(previous, str) or "\x00" in previous
+                              or any(part in ("", ".", "..") for part in previous.split("/"))):
                           raise SystemExit("second previous filename is unreadable")
                       paths.append(previous)
               if len(paths) >= 3000:
@@ -471,6 +485,8 @@ jobs:
               if len(rows) < 100:
                   break
               page += 1
+          if not paths:
+              raise SystemExit("second compare response has no changed paths")
           Path(os.environ["PATH_FILE"]).write_bytes(
               b"\0".join(path.encode("utf-8") for path in paths)
               + (b"\0" if paths else b""))

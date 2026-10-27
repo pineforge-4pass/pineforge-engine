@@ -112,14 +112,13 @@ GKE_JOB_RUNNERS = {
 }
 CI_EVENTS = '''on:
   pull_request:
-    # LB-387: suite jobs skip on a draft PR (the required aggregate then fails, never passes);
-    # ready_for_review starts the full run when the PR is marked ready.
-    # converted_to_draft re-runs the workflow so its failing aggregate supersedes the earlier ready run.
+    # Draft transitions stay visible here; the GKE admission workflow refuses
+    # draft pull requests and ready_for_review starts a new admission run.
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
 '''
 CI_CONCURRENCY = '''concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}-${{ github.event.pull_request.draft && 'draft' || 'ready' }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
 '''
 POST_CI_EVENTS = '''on:
   push:
@@ -255,10 +254,6 @@ NATIVE_GATE_STEP = '''      - name: Require every native profile to have passed
           test "$NATIVE_RESULT" = success
 '''
 NATIVE_EXCLUSION = "${{ matrix.profile == 'native' && inputs.exclude_slow && '--exclude-label slow' || '' }}"
-NATIVE_CACHE_SAVE = ("${{ !cancelled() && !inputs.cold_cache && steps.verify.outcome != 'skipped' "
-                     "&& steps.ccache-restore.outputs.cache-hit != 'true' }}")
-CURL_CACHE_SAVE = ("${{ inputs.cold-cache != 'true' && steps.curl-build.outcome == 'success' "
-                   "&& steps.curl-cache.outputs.cache-hit != 'true' }}")
 # Build and CTest parallelism is the core count of whichever runner took the job.
 CORES = '"$(getconf _NPROCESSORS_ONLN)"'
 VERIFY, PARITY = 'ci_verify.py', 'check_corpus_parity.sh'
@@ -269,8 +264,10 @@ PARITY_COMMAND = f'JOBS={CORES} ./scripts/{PARITY}'
 # declaration on 2026-10-20.
 # GitHub's own 6 h platform maximum is the only bound; docs/ci.md says so.
 JOB_COMMANDS = {
-    'ci.yml': {'authz': None, 'changes': None, 'preflight': None,
-               'build': None, 'build-gate': None},
+    'ci.yml': {'authz': None},
+    'gke-pr.yml': {'admit': None, 'preflight': None, 'build': None,
+                   'build-debug': None, 'corpus-parity-subset': PARITY,
+                   'legs': None, 'result': None},
     'ci-post.yml': {'authz': None, 'changes': None, 'preflight': None,
                     'preflight-slow': None, 'build': VERIFY, 'build-arm': VERIFY,
                     'build-debug': VERIFY, 'sanitizers': VERIFY, 'kernel-only': VERIFY,
@@ -285,7 +282,9 @@ JOB_COMMANDS = {
 # Exact hosted pins and GKE group/size mappings, checked per job.
 # Historical name: this table also holds the exact GKE pins.
 HOSTED_JOB_RUNNERS = {
-    'ci.yml': dict.fromkeys(('authz', 'changes', 'build-gate'), 'ubuntu-24.04'),
+    'ci.yml': {'authz': 'ubuntu-24.04'},
+    'gke-pr.yml': {**dict.fromkeys(('admit', 'legs', 'result'), 'ubuntu-24.04'),
+                   **GKE_JOB_RUNNERS['gke-pr.yml']},
     'ci-post.yml': {**dict.fromkeys(('authz', 'changes', 'build-gate'), 'ubuntu-24.04'),
                     **dict.fromkeys(POST_LEG_GATES, 'ubuntu-24.04'),
                     **GKE_JOB_RUNNERS['ci-post.yml']},
@@ -325,7 +324,8 @@ PROOF_JOBS = {'build': 'BUILD_RESULT', 'build-arm': 'ARM_BUILD_RESULT',
               'sanitizers-gate': 'SANITIZER_GATE_RESULT', 'kernel-only-gate': 'KERNEL_GATE_RESULT',
               'kernel-only': 'KERNEL_RESULT', 'native-live': 'NATIVE_RESULT',
               'corpus-parity-subset': 'PARITY_RESULT', 'corpus-parity': 'FULL_PARITY_RESULT'}
-PR_PROOF_JOBS = {'build': 'BUILD_RESULT', 'corpus-parity-subset': 'PARITY_RESULT'}
+PR_PROOF_JOBS = {'build': 'BUILD_RESULT', 'build-debug': 'DEBUG_RESULT',
+                 'corpus-parity-subset': 'PARITY_RESULT'}
 HEAVY_JOBS = frozenset(('sanitizers', 'kernel-only', 'native-live', 'corpus-parity'))
 AUTHZ_SUCCESS = "${{ needs.authz.result == 'success' }}"
 AUTHZ_ALWAYS = "${{ always() && needs.authz.result == 'success' }}"
@@ -353,6 +353,90 @@ cmake --build build --target pineforge_pr_smoke --parallel "$(getconf _NPROCESSO
 ctest --test-dir build -L '^fast$' --output-on-failure --no-tests=error \
 --parallel "$(getconf _NPROCESSORS_ONLN)" --timeout 0 --output-junit build/ctest-junit.xml
 '''.splitlines())
+GKE_PROOF_IF = ("${{ needs.admit.outputs.allowed == 'true' && "
+                "needs.admit.outputs.docs_only != 'true' && "
+                "needs.admit.outputs.github_only != 'true' }}")
+GKE_PREFLIGHT_TIER = ("${{ (needs.admit.outputs.docs_only == 'true' || "
+                      "needs.admit.outputs.github_only == 'true') && 'github-only' || 'fast' }}")
+GKE_IDENTITY_RUN = ' '.join(r'''|
+set -euo pipefail
+fail() { echo "::error title=gke-pr admission::$1"; exit 1; }
+test "$HEAD_REPO" = "$REPO" || fail "head repository is not this repository"
+test "$HEAD_IS_FORK" = false || fail "pull request is a fork"
+test "$DRAFT" = false || fail "pull request is a draft"
+test "$BASE_REF" = main || fail "base is not main"
+printf '%s\n' "$BASE_SHA" "$HEAD_SHA" | grep -Eq '^[0-9a-f]{40}$' || fail "payload SHA is invalid"
+test "$PR_NUMBER" -gt 0 || fail "pull request number is invalid"
+for login in "$PR_AUTHOR" "$TRIGGERING_ACTOR" "$ACTOR"; do
+test -n "$login" || fail "an actor login is missing"
+case " $ALLOWED_BOTS " in
+*" $login "*) ;;
+*)
+permission=$(gh api "repos/$REPO/collaborators/$login/permission" --jq .permission 2>/dev/null) \
+|| fail "permission lookup failed for $login"
+case "$permission" in
+admin|maintain|write) ;;
+*) fail "$login does not have write permission" ;;
+esac
+;;
+esac
+done
+state=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .state) || fail "live pull request read failed"
+draft=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .draft) || fail "live draft read failed"
+live_head=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .head.sha) || fail "live head read failed"
+live_base=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .base.ref) || fail "live base read failed"
+live_repo=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .head.repo.full_name) || fail "live repository read failed"
+test "$state" = open || fail "pull request is not open"
+test "$draft" = false || fail "live pull request is a draft"
+test "$live_head" = "$HEAD_SHA" || fail "live head differs from the event head"
+test "$live_base" = main || fail "live base is not main"
+test "$live_repo" = "$REPO" || fail "live head repository differs from this repository"
+{
+echo "base_sha=$BASE_SHA"
+echo "head_sha=$HEAD_SHA"
+} >> "$GITHUB_OUTPUT"
+'''.splitlines())
+GKE_LEGS_STEP = '''      - name: Require every proof leg
+        env:
+          BUILD_RESULT: ${{ needs.build.result }}
+          DEBUG_RESULT: ${{ needs.build-debug.result }}
+          PARITY_RESULT: ${{ needs.corpus-parity-subset.result }}
+        run: |
+          set -euo pipefail
+          test "$BUILD_RESULT" = success
+          test "$DEBUG_RESULT" = success
+          test "$PARITY_RESULT" = success
+'''
+GKE_RESULT_STEP = '''      - name: Require an independently consistent successful result
+        if: always()
+        env:
+          ADMIT_RESULT: ${{ needs.admit.result }}
+          ALLOWED: ${{ needs.admit.outputs.allowed }}
+          PREFLIGHT_RESULT: ${{ needs.preflight.result }}
+          LEGS_RESULT: ${{ needs.legs.result }}
+          ADMIT_DOCS_ONLY: ${{ needs.admit.outputs.docs_only }}
+          ADMIT_GITHUB_ONLY: ${{ needs.admit.outputs.github_only }}
+          SECOND_DOCS_ONLY: ${{ steps.second-classify.outputs.docs_only }}
+          SECOND_GITHUB_ONLY: ${{ steps.second-classify.outputs.github_only }}
+          CODE_EXTENSION: ${{ steps.veto.outputs.code_extension }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error title=gke-pr result::$1"; exit 1; }
+          test "$ADMIT_RESULT" = success || fail "admission refused"
+          test "$ALLOWED" = true || fail "admission did not allow the head"
+          test "$PREFLIGHT_RESULT" = success || fail "preflight did not pass"
+          test "$SECOND_DOCS_ONLY" = "$ADMIT_DOCS_ONLY" || fail "docs-only classification changed"
+          test "$SECOND_GITHUB_ONLY" = "$ADMIT_GITHUB_ONLY" || fail "github-only classification changed"
+          test "$CODE_EXTENSION" != true || {
+            test "$ADMIT_DOCS_ONLY" != true || fail "code extension vetoed docs-only classification"
+            test "$ADMIT_GITHUB_ONLY" != true || fail "code extension vetoed github-only classification"
+          }
+          if test "$ADMIT_DOCS_ONLY" = true || test "$ADMIT_GITHUB_ONLY" = true; then
+            test "$LEGS_RESULT" = skipped || fail "proof legs were not skipped for a classified documentation class"
+          else
+            test "$LEGS_RESULT" = success || fail "proof legs did not pass"
+          fi
+'''
 POST_BUILD_VERIFY_RUN = ('| python3 scripts/ci_verify.py '
                          "${{ matrix.build_type == 'Release' && 'release' || 'debug' }} "
                          f'--build-dir build --jobs {CORES} --ccache')
@@ -1498,11 +1582,11 @@ def admit_shape_findings(sources: dict[str, str | bytes]) -> list[str]:
 def trusted_cache_findings(sources: dict[str, str]) -> list[str]:
     """Trusted workflows and the native curl action have no Actions cache."""
     findings = []
-    for name in TRUSTED_CACHE_FILES:
-        text = sources.get(name, '')
-        if not text:
+    for source, text in sources.items():
+        name = source.removeprefix('.github/workflows/')
+        if name not in TRUSTED_CACHE_FILES:
             continue
-        if re.search(r'(?m)^\s*uses:\s*actions/cache(?:/(?:restore|save))?@', text):
+        if re.search(r'(?m)^\s*(?:-\s+)?uses:\s*actions/cache(?:/(?:restore|save))?@', text):
             findings.append(f'{name}: trusted workflow must not restore or save an Actions cache')
         if re.search(r'(?m)^\s*cache\s*:', text):
             findings.append(f'{name}: trusted workflow must not declare a cache input')
@@ -1529,9 +1613,16 @@ def gke_admit_workflow_findings(workflow: str, name: str = 'gke-pr.yml') -> list
     if not re.search(r'(?m)^permissions:\s*\{\s*\}\s*$', workflow):
         findings.append(f'{name}: top-level permissions must be empty')
     jobs = _jobs(workflow)
-    required = {'admit', 'preflight', 'legs', 'result'}
-    if set(jobs) < required:
+    required = {'admit', 'preflight', 'build', 'build-debug',
+                'corpus-parity-subset', 'legs', 'result'}
+    if not required <= set(jobs):
         findings.append(f'{name}: required jobs are missing')
+    if set(jobs) != required:
+        findings.append(f'{name} must keep only its admitted PR jobs')
+    if _job_block(workflow, 'concurrency') != [
+            'concurrency:', '  group: gke-pr-${{ github.event.pull_request.number }}',
+            '  cancel-in-progress: true']:
+        findings.append(f'{name} must cancel superseded runs for the same PR')
     if _job_values(jobs.get('result', ''), 'if') != ['always()']:
         findings.append(f'{name} result must run always')
     if 'needs.legs.result' not in jobs.get('result', ''):
@@ -1542,16 +1633,23 @@ def gke_admit_workflow_findings(workflow: str, name: str = 'gke-pr.yml') -> list
         findings.append(f'{name}: reusable workflow calls are refused')
     if re.search(r'\b(?:secrets\.(?!GITHUB_TOKEN)|id-token\b|environment\s*:)', workflow):
         findings.append(f'{name}: secrets, id-token and environment are refused')
-    if re.search(r'actions/cache|(?m)^\s*cache\s*:', workflow):
+    if re.search(r'actions/cache|^\s*cache\s*:', workflow, re.MULTILINE):
         findings.append(f'{name}: admission legs must not use Actions cache')
     if re.search(r'(?m)^\s*(?:timeout-minutes|timeout\s+)', jobs.get('admit', '')) \
             or 'continue-on-error' in jobs.get('admit', ''):
         findings.append(f'{name} admit must not declare a timeout or continue on error')
     steps = {job: _steps(body) for job, body in jobs.items()}
     for job, body_steps in steps.items():
+        if _job_values(jobs[job], 'name'):
+            findings.append(f'{name} {job} must keep its default check name')
+        if any(flag in jobs[job] for flag in ('--exclude-label', '--include-label', '--class-tier')):
+            findings.append(f'{job} must keep its full population')
         permissions = _job_values(jobs[job], 'permissions')
         if not permissions:
             findings.append(f'{name} job {job} must declare permissions explicitly')
+        expected_permissions = ['{}'] if job in ('legs',) else ['{contents: read}']
+        if permissions != expected_permissions:
+            findings.append(f'{name} job {job} must keep its read-only permissions')
         for step in body_steps:
             run_values = _step_values(step, 'run') + _step_block(step, 'run')
             if any('github.event.' in value or 'github.head_ref' in value for value in run_values):
@@ -1571,6 +1669,98 @@ def gke_admit_workflow_findings(workflow: str, name: str = 'gke-pr.yml') -> list
     findings.extend(f'{name}: GKE label {label} expands to {count} jobs; cap is 8'
                     for label, count in counts.items() if count > 8)
     admit_steps = steps.get('admit', [])
+    admit = jobs.get('admit', '')
+    if _job_block(admit, 'outputs') != [
+            '    outputs:', '      allowed: ${{ steps.allowed.outputs.allowed }}',
+            '      base_sha: ${{ steps.identity.outputs.base_sha }}',
+            '      head_sha: ${{ steps.identity.outputs.head_sha }}',
+            '      docs_only: ${{ steps.classify.outputs.docs_only }}',
+            '      github_only: ${{ steps.classify.outputs.github_only }}']:
+        findings.append(f'{name} admit must publish only the base classifier outputs')
+    classify = _step_named(admit_steps, '        id: classify')
+    if (_step_values(classify, 'run') != [
+            'python3 scripts/ci_docs_only.py --paths "$PATH_FILE" --github-output "$GITHUB_OUTPUT"']
+            or _step_values(classify, 'if')
+            or _step_values(classify, 'continue-on-error')):
+        findings.append(f'{name} admit must classify the complete path file with the base rule')
+    for job, marker in (
+            ('admit', '      - name: Read the payload-bound compare file list'),
+            ('result', '        id: second-classify')):
+        reader = _step_named(steps.get(job, []), marker)
+        reader_lines = {line.strip() for line in _code(reader)}
+        reader_env = '\n'.join(_step_block(reader, 'env')[1:])
+        identity_output = 'steps.identity' if job == 'admit' else 'needs.admit'
+        bindings = {
+            'REPO': '${{ github.repository }}', 'GH_TOKEN': '${{ github.token }}',
+            'BASE_SHA': '${{ ' + identity_output + '.outputs.base_sha }}',
+            'HEAD_SHA': '${{ ' + identity_output + '.outputs.head_sha }}',
+        }
+        required_lines = {
+            'if not isinstance(rows, list):',
+            'if not isinstance(row, dict):',
+            'if row.get("status") == "renamed" and "previous_filename" not in row:',
+            'if "previous_filename" in row:',
+            'if len(paths) >= 3000:',
+            'if len(rows) < 100:',
+            'page += 1',
+            'if not paths:',
+        }
+        if (not reader or not required_lines <= reader_lines
+                or _step_values(reader, 'shell') != ['python3 {0}']
+                or any(_job_values(reader_env, key) != [value] for key, value in bindings.items())
+                or 'check=True' not in reader or '...{' not in reader):
+            findings.append(f'{name} {job} must read the immutable compare list independently')
+    identity = _step_named(admit_steps, '        id: identity')
+    identity_env = '\n'.join(_step_block(identity, 'env')[1:])
+    if (_step_values(identity, 'run') != [GKE_IDENTITY_RUN]
+            or _job_values(identity_env, 'DRAFT') != ['${{ toJSON(github.event.pull_request.draft) }}']
+            or _job_values(identity_env, 'HEAD_IS_FORK') != [
+                '${{ toJSON(github.event.pull_request.head.repo.fork) }}']):
+        findings.append(f'{name} admit must refuse drafts and stale or unauthorized identities')
+    for job in ('preflight', 'build', 'build-debug', 'corpus-parity-subset'):
+        body = jobs.get(job, '')
+        condition = ("${{ needs.admit.outputs.allowed == 'true' }}"
+                     if job == 'preflight' else GKE_PROOF_IF)
+        if (_needs(body) != ['admit'] or _job_values(body, 'if') != [condition]):
+            findings.append(f'{name} {job} must follow admission and keep its path policy')
+        if _job_block(body, 'strategy') or _job_values(body, 'strategy'):
+            findings.append(f'{name} {job} must remain one fixed proof job')
+    preflight = steps.get('preflight', [])
+    preflight_run = _step_named(preflight, '      - name: Run the class-specific preflight')
+    if (_step_values(preflight_run, 'run') != [
+            'python3 scripts/ci_preflight.py --output-dir build-ci-preflight --tier "$TIER"']
+            or _job_values('\n'.join(_step_block(preflight_run, 'env')[1:]), 'TIER') != [GKE_PREFLIGHT_TIER]
+            or _step_values(preflight_run, 'if')):
+        findings.append(f'{name} preflight must run the selected fast or github-only tier')
+    linters = _step_named(preflight, '      - name: Install workflow linters')
+    expected_linter = ('| set -euo pipefail ' + PREFLIGHT_LINTER_RUN.removeprefix('| ')).replace(
+        'pineforge-actionlint', 'gke-pr-actionlint')
+    if (len(preflight) != 3 or not preflight_run
+            or _step_values(linters, 'run') != [expected_linter]):
+        findings.append(f'{name} preflight must contain only checkout, linters and source checks')
+    for job, build_type in (('build', 'Release'), ('build-debug', 'Debug')):
+        body_steps = steps.get(job, [])
+        smoke = _step_named(body_steps, f'      - name: Verify {build_type}')
+        expected_smoke = BUILD_VERIFY_RUN.replace(' --timeout 0', '').replace(
+            '-DCMAKE_BUILD_TYPE=Release', f'-DCMAKE_BUILD_TYPE={build_type}')
+        if (_step_values(smoke, 'run') != [expected_smoke] or _step_values(smoke, 'if')):
+            findings.append(f'{name} {job} must run its complete fast {build_type} smoke')
+        install = _step_named(body_steps, '      - name: Install dependencies')
+        if (len(body_steps) != 4 or _step_values(install, 'run') != [
+                '| sudo apt-get update sudo DEBIAN_FRONTEND=noninteractive apt-get install -y '
+                'libeigen3-dev tzdata-legacy ccache']):
+            findings.append(f'{name} {job} must install only its smoke dependencies')
+    legs = jobs.get('legs', '')
+    legs_if = GKE_PROOF_IF.replace('${{ ', '${{ always() && ', 1)
+    if (_needs(legs) != ['admit', 'build', 'build-debug', 'corpus-parity-subset']
+            or _job_values(legs, 'if') != [legs_if]
+            or [_code(step) for step in steps.get('legs', [])] != [_code(GKE_LEGS_STEP)]):
+        findings.append(f'{name} legs must require every selected proof')
+    result_step = _step_named(steps.get('result', []),
+                              '      - name: Require an independently consistent successful result')
+    if (_job_values(jobs.get('result', ''), 'if') != ['always()']
+            or _code(result_step) != _code(GKE_RESULT_STEP)):
+        findings.append(f'{name} result must require admission, preflight and consistent proof results')
     if not admit_steps or 'id: allowed' not in admit_steps[-1] \
             or 'allowed=true' not in admit_steps[-1] \
             or any('allowed=true' in step for step in admit_steps[:-1]):
@@ -1578,10 +1768,15 @@ def gke_admit_workflow_findings(workflow: str, name: str = 'gke-pr.yml') -> list
     for job in ('admit', 'result'):
         for step in steps.get(job, []):
             if any(value.startswith('actions/checkout@') for value in _step_values(step, 'uses')):
-                if _step_values(step, 'persist-credentials') != ['false']:
+                inputs = '\n'.join(_step_block(step, 'with')[1:])
+                if _job_values(inputs, 'persist-credentials') != ['false']:
                     findings.append(f'{name} {job} checkout must disable persisted credentials')
                 if 'github.event.pull_request.head' in step or 'github.head_ref' in step:
                     findings.append(f'{name} {job} checkout must not use the PR head ref')
+                ref = '${{ github.sha }}' if job == 'admit' else '${{ needs.admit.outputs.base_sha }}'
+                if (_job_values(inputs, 'repository') != ['${{ github.repository }}']
+                        or _job_values(inputs, 'ref') != [ref]):
+                    findings.append(f'{name} {job} checkout must use the base tree')
     for job in ('preflight', 'build', 'build-debug', 'corpus-parity-subset'):
         if job not in jobs:
             continue
@@ -1592,9 +1787,10 @@ def gke_admit_workflow_findings(workflow: str, name: str = 'gke-pr.yml') -> list
             findings.append(f'{name} {job} must have one head checkout')
             continue
         step = checkout_steps[0]
-        if _step_values(step, 'repository') != ['${{ github.repository }}'] \
-                or _step_values(step, 'ref') != ['${{ needs.admit.outputs.head_sha }}'] \
-                or _step_values(step, 'persist-credentials') != ['false']:
+        inputs = '\n'.join(_step_block(step, 'with')[1:])
+        if _job_values(inputs, 'repository') != ['${{ github.repository }}'] \
+                or _job_values(inputs, 'ref') != ['${{ needs.admit.outputs.head_sha }}'] \
+                or _job_values(inputs, 'persist-credentials') != ['false']:
             findings.append(f'{name} {job} checkout must use the admitted immutable head')
     return list(dict.fromkeys(findings))
 
@@ -1656,15 +1852,8 @@ def admit_rule_findings(workflows_dir: Path, *, run_actionlint: bool = True) -> 
     action_findings = admit_yaml_findings(sources)
     action_findings += action_pin_findings(sources)
     action_findings += gke_admit_workflow_findings(workflows.get('gke-pr.yml', ''))
-    # The composite action is outside this change's edit allow-list; its cache
-    # inventory is reported for the supervisor rather than made a false
-    # positive control for the fetched workflow set.
-    action_findings += trusted_cache_findings({
-        name: text for name, text in sources.items()
-        if name != '.github/actions/setup-live-curl/action.yml'
-    })
-    action_findings += runner_findings({name: text for name, text in workflows.items()
-                                        if name != 'gke-pr.yml'})
+    action_findings += trusted_cache_findings(sources)
+    action_findings += runner_findings(workflows)
     return list(dict.fromkeys(action_findings))
 
 
@@ -2034,8 +2223,6 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
     findings = workflow_fleet_findings(workflows) + _gke_cap_findings(workflows)
     routes = workflow_event_routes(workflows)
     for name, workflow in workflows.items():
-        if name == 'gke-pr.yml':
-            continue
         code = '\n'.join(re.sub(r'\s+#.*$', '', line) for line in _code(workflow))
         if 'pull_request' in routes[name] and _GKE_ROUTE.search(code):
             findings.append(f'{name} is reachable from pull_request and must not contain GKE routing')
@@ -2043,7 +2230,8 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
             findings.append(f'{name} must not define a larger_runner key; use the GCP fleet or hosted exceptions')
         timed = JOB_COMMANDS.get(name, {})
         fixed_hosted = {job: label for job, label in HOSTED_JOB_RUNNERS.get(name, {}).items()
-                        if label == 'ubuntu-24.04' or (routes[name] & POST_EVENTS and 'pull_request' not in routes[name])}
+                        if label == 'ubuntu-24.04' or name == 'gke-pr.yml'
+                        or (routes[name] & POST_EVENTS and 'pull_request' not in routes[name])}
         if _LARGER_RUNNER_LABEL.search(code):
             findings.append(f'{name} must not use larger-runner labels; use the GCP fleet or hosted exceptions')
         fixed_release = RELEASE_JOB_RUNNERS.get(name, {})
@@ -2197,7 +2385,6 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
             if not _sized(_counted_text(body), command):
                 findings.append(f'{name} job {job} must size its parallelism to the runner')
     for name, job, strategy, build_name, population in (
-            ('ci.yml', 'build', BUILD_STRATEGY, BUILD_NAME, 'only Ubuntu Release on pull_request'),
             ('ci-post.yml', 'build', POST_BUILD_STRATEGY, post_build_name(4),
              'only Ubuntu Release shards on full events'),
             ('ci-post.yml', 'build-debug', POST_DEBUG_BUILD_STRATEGY, post_build_name(2),
@@ -2731,25 +2918,19 @@ def native_workflow_findings(native: str, curl_action: str | None = None) -> lis
         findings += _native_profile_job_findings(jobs.get(name, ''), name, sharded=sharded)
     if curl_action is not None:
         action_steps = _steps(curl_action, 4)
-        restored = _step_named(action_steps, '      id: curl-cache')
+        metadata = _step_named(action_steps, '      id: dependencies')
         built = _step_named(action_steps, '      id: curl-build')
-        saved = _step_named(action_steps, '    - name: Save pinned WebSocket-enabled libcurl')
-        if (_step_values(restored, 'if') != ["${{ inputs.cold-cache != 'true' }}"]
-                or _step_values(restored, 'uses') != ['actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830']
-                or 'key: curl-${{ inputs.cache-namespace }}-' not in restored
-                or 'restore-keys:' in restored
-                or any(token not in restored for token in (
-                    'steps.dependencies.outputs.version', 'steps.dependencies.outputs.sha256',
-                    'steps.dependencies.outputs.identity', "hashFiles('.github/actions/setup-live-curl/action.yml', 'scripts/build_live_curl.sh')"))
-                or '  cold-cache:\n' not in curl_action or "    default: 'false'" not in curl_action):
-            findings.append('pinned curl restore must include dependency identity and bypass every cold-cache restore')
-        if (_step_values(saved, 'if') != [CURL_CACHE_SAVE]
-                or _step_values(saved, 'uses') != ['actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830']
+        if 'actions/cache' in curl_action or re.search(r'(?m)^\s*cache\s*:', curl_action):
+            findings.append('pinned curl must build cold without an Actions cache')
+        if (len(action_steps) != 2 or not metadata or not built
+                or _step_values(metadata, 'if') or _step_values(built, 'if')
                 or _step_values(built, 'run') != ['bash scripts/build_live_curl.sh build-native-deps 4']
-                or '        key: ${{ steps.curl-cache.outputs.cache-primary-key }}' not in _code(saved)
-                or not built or not saved or curl_action.index(saved) < curl_action.index(built)
-                or 'uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830' in curl_action):
-            findings.append('pinned curl must save immediately after its successful build, independently of later tests')
+                or 'bash scripts/build_live_curl.sh --metadata >> "$GITHUB_OUTPUT"' not in metadata
+                or '        CURL_CACHE_HIT: "false"' not in _code(built)
+                or '    value: ${{ steps.dependencies.outputs.curl-dir }}' not in _code(curl_action)
+                or 'echo "curl-dir=${GITHUB_WORKSPACE}/build-native-deps/curl-install/lib/cmake/CURL" >> "$GITHUB_OUTPUT"' not in metadata
+                or 'steps.curl-cache' in curl_action or '  cache-hit:' in curl_action):
+            findings.append('pinned curl must always build the checksum-pinned dependency and publish curl-dir')
     return findings
 
 
@@ -2795,9 +2976,10 @@ def _native_profile_job_findings(job: str, name: str, *, sharded: bool) -> list[
             or re.search(r'(?m)^\s*cache\s*:', job)):
         findings.append(f'{name} must build cold without an Actions cache')
     if (_step_values(curl, 'uses') != ['./.github/actions/setup-live-curl']
-            or '          cache-namespace: ${{ matrix.profile }}' not in _code(curl)
-            or '          cold-cache: ${{ inputs.cold_cache }}' not in _code(curl)):
-        findings.append('every native profile must use pinned curl with its namespace and cold-cache input')
+            or _step_block(curl, 'with') or _step_values(curl, 'if')):
+        findings.append('every native profile must use pinned curl without cache inputs or conditions')
+    if 'ccache --zero-stats' not in job:
+        findings.append(f'{name} must reset compiler statistics before verification')
     command = _verify_step_commands(verify)
     expected = ('python3 scripts/ci_verify.py ${{ matrix.profile }} '
                 '--build-dir ${{ matrix.build_dir }} ' + f'--jobs {CORES} '
@@ -3053,10 +3235,7 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
         findings += admit_yaml_findings({'.github/workflows/gke-pr.yml': workflows['gke-pr.yml']})
         findings += gke_admit_workflow_findings(workflows['gke-pr.yml'])
     findings += trusted_cache_findings(workflows)
-    if set(_jobs(ci)) == {'authz'}:
-        findings += ci_authz_only_findings(ci)
-    else:
-        findings += pipeline_workflow_findings(ci, 'ci.yml', pr=True)
+    findings += ci_authz_only_findings(ci)
     findings += pipeline_workflow_findings(post, 'ci-post.yml', pr=False)
     findings += native_workflow_findings(native, curl_action)
     findings += corpus_parity_trigger_findings(parity)
@@ -3292,10 +3471,20 @@ def ci_authz_only_findings(workflow: str) -> list[str]:
     findings = []
     if _events(workflow) != {'pull_request'}:
         findings.append('ci.yml must retain only the pull_request trigger')
+    if _job_block(workflow, 'on') != _code(CI_EVENTS):
+        findings.append('ci.yml must keep its exact unfiltered PR triggers')
+        findings.append('ci.yml must run on every pull_request without event filters')
+    if _job_block(workflow, 'concurrency') != _code(CI_CONCURRENCY):
+        findings.append('ci.yml must retain its PR concurrency group and cancellation')
+    if _job_values(workflow, 'permissions') != ['contents: read']:
+        findings.append('ci.yml must retain contents: read workflow permissions')
     jobs = _jobs(workflow)
     if set(jobs) != {'authz'}:
         findings.append('ci.yml must retain only its authz job after PR legs move to gke-pr')
     authz = jobs.get('authz', '')
+    canon = _jobs(RELEASE_RULESETS_PROBE_WORKFLOW)['authz']
+    if (_unparsed(workflow) or _code(authz) != _code(canon)):
+        findings.append('ci.yml must start with the verbatim canon authz job')
     if (_job_values(authz, 'runs-on') != ['ubuntu-24.04']
             or _job_values(authz, 'permissions') != ['{}']
             or not _steps(authz)):

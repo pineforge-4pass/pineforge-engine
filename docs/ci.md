@@ -5,7 +5,7 @@ The current PR admission and post-merge trigger map is:
 | Job or matrix cell | Ordinary pull request | `.github/**`-only pull request | Push to `main`, nightly schedule, manual dispatch |
 | --- | --- | --- | --- |
 | `ci.yml authz` | Hosted authorization context | Hosted authorization context | Not triggered |
-| `gke-pr / admit` | Hosted admission and main-tree rule check | Hosted admission refuses the class | Not triggered |
+| `gke-pr / admit` | Hosted admission and main-tree rule check | Hosted admission and main-tree rule check | Not triggered |
 | `gke-pr / preflight` | GKE preflight, tiered by the main classifier | GKE github-only preflight | Not triggered |
 | `gke-pr / build`, `build-debug`, parity subset | GKE proof legs for code changes | Skipped | Not triggered |
 | `gke-pr / result` | Hosted result with a second classification read | Hosted result with a second classification read | Not triggered |
@@ -611,8 +611,8 @@ The runner's curl version floor still applies at configure time.
 checks every runner compile unit for instrumentation, and stops on a race.
 `native-live.yml` runs four `native` shards on `gke-8cpu-16gb-amd64`;
 `live-sanitizers` and `live-tsan` each build once on `gke-16cpu-32gb-amd64`.
-Both matrices keep `fail-fast: false`, pinned WebSocket curl and profile caches. A failed cell does not cancel its peers.
-Native compiler keys and diagnostic artifacts also carry the shard index.
+Both matrices keep `fail-fast: false` and build pinned WebSocket curl cold. A failed cell does not cancel its peers.
+Native diagnostic artifacts carry the shard index; compiler and curl installations have no Actions cache.
 The `native-live (native)` aggregate requires all four successful summary proofs;
 `native-live-gate` requires it and both sanitizer cells, refusing missing or skipped work; the caller's `build` aggregate still requires the reusable workflow to succeed.
 Only native shards accept the caller's existing PR-only slow-label exclusion; dispatch always runs the full set.
@@ -1625,7 +1625,7 @@ refuses all PR events. Reusable workflows inherit their caller's event.
 follow local calls to a fixed point, refuse mixed event classes and require
 literal VM arrays or exact GKE group/label mappings outside hosted pins; job conditions cannot excuse routing.
 Fork PRs on hosted runners run without our secrets, so the VM-only fork-refusal hook is not needed.
-GKE jobs carry no deployment secrets, id-token permissions or environment; PR-reachable workflows cannot name GKE routing. GKE jobs start only from ci-post.yml, corpus-parity.yml and native-live.yml at refs/heads/main (the runner group lists those workflow refs); a dispatch from another ref queues without a runner.
+GKE jobs carry no deployment secrets, id-token permissions or environment; pull_request workflows cannot name GKE routing. GKE jobs start only from gke-pr.yml, ci-post.yml, corpus-parity.yml and native-live.yml at refs/heads/main (the runner group lists those workflow refs); a dispatch from another ref queues without a runner.
 Rollback may restore an earlier GCP fleet pin; paid larger-runner labels remain refused.
 
 The four full build checks are `build (ubuntu-24.04, Release)`,
@@ -1636,8 +1636,8 @@ Every shard builds the full tree and runs `--ctest-shard I/N` at the runner's co
 Each leg aggregate retains its old check name and requires its own matrix's success. The two arm64 cells share `build-arm` on `gke-16cpu-32gb-arm64`. All three build jobs use the same verification steps and profiles.
 Shard jobs and leg aggregates skip together only on classified docs-only changes.
 Trusted post workflows and PR proof legs build cold; no trusted job restores an Actions cache.
-`HOSTED_JOB_RUNNERS` pins hosted jobs and exact GKE mappings; every GKE job runs directly in a runner pod carrying the engine toolchain image and sudo. The PR build remains
-`build (ubuntu-24.04, Release)` and its aggregate remains `build`.
+`HOSTED_JOB_RUNNERS` pins hosted jobs and exact GKE mappings; every GKE job runs directly in a runner pod carrying the engine toolchain image and sudo. PR checks are
+`build`, `build-debug`, `corpus-parity-subset`, `legs` and `result` in `gke-pr.yml`.
 
 Release and promotion use the isolated release fleet:
 `release`, `notify-hub`, Linux x64 `prebuilt` and baseline `promote` use

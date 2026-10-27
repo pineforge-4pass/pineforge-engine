@@ -144,9 +144,6 @@ jobs:
       - name: Set up pinned WebSocket-enabled libcurl
         id: curl-deps
         uses: ./.github/actions/setup-live-curl
-        with:
-          cache-namespace: ${{ matrix.profile }}
-          cold-cache: ${{ inputs.cold_cache }}
 
       - name: Record compiler cache before verification
         run: |
@@ -221,9 +218,6 @@ jobs:
       - name: Set up pinned WebSocket-enabled libcurl
         id: curl-deps
         uses: ./.github/actions/setup-live-curl
-        with:
-          cache-namespace: ${{ matrix.profile }}
-          cold-cache: ${{ inputs.cold_cache }}
 
       - name: Record compiler cache before verification
         run: |
