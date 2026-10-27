@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Source allocation-bound gate.
+"""CR-150 / C4 source allocation-bound gate.
 
 Scans the declared C++ file set (engine ``src/**``, the public inline headers
 and the generated C++ present in the tree), indexes every allocation-bearing

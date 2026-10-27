@@ -1,4 +1,4 @@
-# This row is compiled/executed only by the release verification hosts.
+# LAB-o1s2: compiled/executed only by the supervisor's LB-446 build hosts.
 if(UNIX)
     list(APPEND TEST_SOURCES test_o1s2_native_readers)
     pineforge_add_unit_test(test_o1s2_native_readers)
