@@ -23877,6 +23877,19 @@
   },
   {
    "file": "src/report_sink_writer.cpp",
+   "symbol": "value",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report_sink #1",
+    "struct LineWriter :: State #1",
+    "void configure_stall ( ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "value = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/report_sink_writer.cpp",
    "symbol": "path",
    "scope": [
     "namespace pineforge #1",
@@ -24562,6 +24575,18 @@
    "cls": "temp",
    "spelling": "RunFailureArgs",
    "ordinal": 2
+  },
+  {
+   "file": "src/report_sink_writer.hpp",
+   "symbol": "<temp:RunFailureArgs>",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report_sink #1",
+    "class WriterError final : public std :: runtime_error , public RunFailureInfo #1"
+   ],
+   "cls": "temp",
+   "spelling": "RunFailureArgs",
+   "ordinal": 3
   },
   {
    "file": "src/report_value_invalid.hpp",

@@ -1443,7 +1443,7 @@ entries:
   - {id: "U1415", file: "src/report_sink_writer.cpp", symbol: "out", ops: ["grow"], container: "unresolved by the index: out.append(...)", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 60}
   - {id: "U1416", file: "src/report_sink_writer.cpp", symbol: "path", ops: ["assign", "decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 299}
   - {id: "U1417", file: "src/report_sink_writer.cpp", symbol: "state_", ops: ["alloc"], container: "unresolved by the index: make_unique", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 477}
-  - {id: "U1418", file: "src/report_sink_writer.cpp", symbol: "value", ops: ["append", "decl", "grow"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 279}
+  - {id: "U1418", file: "src/report_sink_writer.cpp", symbol: "value", ops: ["append", "assign", "decl", "grow"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 279}
   - {id: "U1419", file: "src/report_sink_writer.hpp", symbol: "<temp:RunFailureArgs>", ops: ["temp"], container: "unresolved by the index: RunFailureArgs", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 25}
   - {id: "U1420", file: "src/report_sink_writer.hpp", symbol: "message", ops: ["decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 20}
   - {id: "U1421", file: "src/scratch_arena.cpp", symbol: "<temp:vector>", ops: ["temp"], container: "unresolved by the index: std::vector<std::uint32_t>", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 444}
