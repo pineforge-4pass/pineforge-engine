@@ -1616,6 +1616,8 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                 findings.append(f'{name} job {job} may use GKE routing only at its exact pinned job and label')
             if has_gke and _job_values(body, 'container'):
                 findings.append(f'{name} job {job} must not declare a job container on GKE')
+            if has_gke and _job_values(body, 'services'):
+                findings.append(f'{name} job {job} must not declare job services on GKE')
             if has_gke:
                 permissions = _job_values(workflow, 'permissions') + _job_values(body, 'permissions')
                 if (_holds_credentials(workflow, body)

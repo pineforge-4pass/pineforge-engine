@@ -761,7 +761,30 @@ class GkeRunnerPolicy(unittest.TestCase):
                     body = jobs[job]
                     self.assertEqual(ci_preflight._job_values(body, 'runs-on'), [runner])
                     self.assertNotRegex(body, r'''(?m)^    ['"]?container['"]?\s*:''')
+                    self.assertNotRegex(body, r'''(?m)^    ['"]?services['"]?\s*:''')
                     self.assertNotIn('      - name: Prepare the job container', body)
+
+    def assert_original_apt_steps(self, body, dependencies):
+        commands = [line for line in body.splitlines()
+                    if re.search(r'\bapt-get\b', line)]
+        expected = [] if dependencies is None else [
+            '          sudo apt-get update',
+            '          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ' + dependencies,
+        ]
+        self.assertEqual(commands, expected, 'apt-get lines must stay pinned')
+
+    def test_apt_step_pin_refuses_single_line_and_chained_installs(self):
+        workflow = (ROOT / '.github/workflows/ci-post.yml').read_text()
+        self.assert_original_apt_steps(_jobs(workflow)['preflight'], 'shellcheck')
+        for step in (
+                '      - run: sudo apt-get install -y evil\n',
+                '      - run: |\n          true && apt-get install -y evil\n'):
+            with self.subTest(step=step):
+                changed = in_job(workflow, 'preflight', '    steps:\n',
+                                 '    steps:\n' + step)
+                self.assertNotEqual(changed, workflow)
+                with self.assertRaisesRegex(AssertionError, 'apt-get lines must stay pinned'):
+                    self.assert_original_apt_steps(_jobs(changed)['preflight'], 'shellcheck')
 
     def test_real_gke_jobs_allow_original_sudo_apt_steps(self):
         packages = {
@@ -791,14 +814,18 @@ class GkeRunnerPolicy(unittest.TestCase):
             jobs = _jobs(workflows[name])
             for job, dependencies in installs.items():
                 with self.subTest(workflow=name, job=job):
-                    commands = [line for line in jobs[job].splitlines()
-                                if re.match(r'\s+(?:sudo )?(?:DEBIAN_FRONTEND=\S+ )?apt-get\b', line)]
-                    expected = [] if dependencies is None else [
-                        '          sudo apt-get update',
-                        '          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ' + dependencies,
-                    ]
-                    self.assertEqual(commands, expected)
+                    self.assert_original_apt_steps(jobs[job], dependencies)
         self.assertEqual(ci_preflight.runner_findings(workflows), [])
+
+    def test_preflight_linter_constant_matches_real_post_step(self):
+        workflow = (ROOT / '.github/workflows/ci-post.yml').read_text()
+        linters = ci_preflight._step_named(
+            ci_preflight._steps(_jobs(workflow)['preflight']),
+            '      - name: Install workflow linters')
+        self.assertTrue(linters)
+        # This commit leaves the linter step byte-identical to main.
+        self.assertEqual(ci_preflight._step_values(linters, 'run'),
+                         [ci_preflight.PREFLIGHT_LINTER_RUN])
 
     def test_gke_jobs_refuse_paid_runner_reversion(self):
         for name, pins in EXPECTED_GKE_JOBS.items():
@@ -811,23 +838,40 @@ class GkeRunnerPolicy(unittest.TestCase):
                                   'use the GCP fleet or hosted exceptions', findings)
 
     def test_gke_jobs_refuse_job_container_declarations(self):
-        workflow = (ROOT / '.github/workflows/ci-post.yml').read_text()
-        body = _jobs(workflow)['preflight']
-        container = ci_preflight._job_block(body, 'container')
-        before = '\n'.join(container) + '\n' if container else '    steps:\n'
-        for declaration in (
-                '    container:\n      image: ubuntu:24.04\n      options: --user root\n',
-                '    container: ubuntu:24.04\n',
-                '    container: {image: ubuntu:24.04}\n',
-                '    container: {}\n',
-                '    container:\n',
-                '    "container": ubuntu:24.04\n'):
-            with self.subTest(declaration=declaration):
-                after = declaration if container else declaration + before
-                changed = in_job(workflow, 'preflight', before, after)
-                self.assertNotEqual(changed, workflow)
-                self.assertIn('ci-post.yml job preflight must not declare a job container on GKE',
-                              ci_preflight.runner_findings({'ci-post.yml': changed}))
+        for name, pins in EXPECTED_GKE_JOBS.items():
+            workflow = (ROOT / '.github/workflows' / name).read_text()
+            for job in pins:
+                for declaration in (
+                        '    container:\n      image: ubuntu:24.04\n      options: --user root\n',
+                        '    container: ubuntu:24.04\n',
+                        '    container: {image: ubuntu:24.04}\n',
+                        '    container: {}\n',
+                        '    container:\n',
+                        '    "container": ubuntu:24.04\n'):
+                    with self.subTest(workflow=name, job=job, declaration=declaration):
+                        changed = in_job(workflow, job, '    steps:\n',
+                                         declaration + '    steps:\n')
+                        self.assertNotEqual(changed, workflow)
+                        self.assertIn(f'{name} job {job} must not declare a job container on GKE',
+                                      ci_preflight.runner_findings({name: changed}))
+
+    def test_gke_jobs_refuse_job_services_declarations(self):
+        for name, pins in EXPECTED_GKE_JOBS.items():
+            workflow = (ROOT / '.github/workflows' / name).read_text()
+            for job in pins:
+                for declaration in (
+                        '    services:\n      cache:\n        image: redis:7\n',
+                        '    services: {cache: {image: redis:7}}\n',
+                        '    services: {}\n',
+                        '    services:\n',
+                        '    "services":\n      cache:\n        image: redis:7\n',
+                        "    'services': {}\n"):
+                    with self.subTest(workflow=name, job=job, declaration=declaration):
+                        changed = in_job(workflow, job, '    steps:\n',
+                                         declaration + '    steps:\n')
+                        self.assertNotEqual(changed, workflow)
+                        self.assertIn(f'{name} job {job} must not declare job services on GKE',
+                                      ci_preflight.runner_findings({name: changed}))
 
     def test_gke_group_and_labels_are_confined_to_exact_jobs(self):
         for name, job, runner in (
