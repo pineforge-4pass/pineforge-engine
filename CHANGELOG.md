@@ -17,6 +17,8 @@ run-failure code catalog are unchanged (0 codes added, changed or removed
 since 1.7.0). The report keys are unchanged except for two additive
 diagnostics keys, described below.
 
+- Monthly Sharpe/Sortino month keys for timestamps beyond about 34,800 years from the epoch no longer overflow; in-range results are unchanged.
+
 ### Compatibility and migration
 
 - **Supported platforms: Linux x86_64 and arm64.** From 1.8.0 the engine is built, tested and published for Linux only: the release carries `pineforge-v1.8.0-linux-x86_64.tar.gz` and `pineforge-v1.8.0-linux-aarch64.tar.gz` (each with a `.sha256`) and no macOS archive, and CI no longer runs macOS jobs. A macOS build is neither tested nor supported.
@@ -24,7 +26,9 @@ diagnostics keys, described below.
   and relink every strategy library against the 1.8.0 headers and
   `libpineforge.a`, as for every pair change; replacing the archive alone does
   not update a statically linked strategy library.
-- No public header changed. The only new header is
+- The C++ report folds in `include/pineforge/metrics_fold.hpp` now carry
+  64-bit month keys; rebuild C++ callers with the matching headers and archive.
+  The only new header is
   `include/pineforge/detail/o1_store.hpp`, an internal building block that no
   engine path uses yet (below); its object code is part of `libpineforge.a`,
   which therefore grows slightly.

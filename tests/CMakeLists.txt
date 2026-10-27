@@ -1312,9 +1312,10 @@ list(APPEND TEST_SOURCES test_native_calendar_memo)
 # an idle run allocates on the heap within 0.25 per bar of the FeedTolerant
 # run (84 per bar before the memo). Source-free.
 list(APPEND TEST_SOURCES test_native_calendar_memo_cost)
-# R5 lane PERF-P5611 (P5): the monthly-Sharpe walk's UTC month key by integer
-# civil-from-days arithmetic, swept against gmtime_r. Source-free, so it also
-# runs in the kernel-only profile.
+# Monthly-Sharpe month keys over all int64 millisecond timestamps, against
+# independent Gregorian cycles and in-range gmtime_r; UTC/local report walks
+# and summary folds retain full-width keys. Public and source-free, including
+# the kernel-only and sanitizer profiles.
 list(APPEND TEST_SOURCES test_utc_month_key_arithmetic)
 # R5 lane D2-D: the monthly walk keeps its UTC month key with the month's
 # seconds -- the kept key against month_key_utc at every point of fixed-step,
