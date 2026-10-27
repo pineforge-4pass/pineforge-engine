@@ -32,6 +32,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 SCRIPT = Path(__file__).resolve().parent / "gen_run_failure_catalog_diff.py"
 ROOT = SCRIPT.parents[1]
@@ -48,6 +49,7 @@ GIT_ENV = {**{key: value for key, value in os.environ.items() if key != REQUIRE_
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(SCRIPT.parent))
 import gen_run_failure_catalog_diff as generator  # noqa: E402  (builds the forged diffs)
+import check_run_failure_codes as registry_guard  # noqa: E402
 GIT = ("git", "-c", "user.name=PineForge test", "-c", "user.email=test@example.invalid",
        "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false", "-c", "init.defaultBranch=main",
        "-c", "core.hooksPath=" + os.devnull)
@@ -303,9 +305,271 @@ class CatalogDiff(unittest.TestCase):
         self.assertEqual([item["code"] for item in diff["added"]], ["gamma"])
         self.assertEqual([(item["code"], [f["path"] for f in item["fields"]])
                           for item in diff["changed"]], [("beta", ["args.reason.values"])])
-        # A diff the release did not reset fails on main.
+        # Tag arrival preserves the explicit base and the checked-in bytes.
         self.repo.tag("v1.2.0")
-        self.fails(self.repo.run("--check"), 1, "newest release tag reachable from HEAD is v1.2.0")
+        self.ok(self.repo.run("--check"))
+        self.assertEqual(self.repo.diff(), diff)
+
+    def prepare_tag_arrival(self) -> bytes:
+        """S adds beta after v1.7.0; tagging S must not require a reset."""
+        self.start({"alpha": code("1.7.0")})
+        self.release("v1.7.0")
+        base = (self.repo.path / CATALOG).read_bytes()
+        self.repo.write("VERSION", b"1.8.0\n")
+        self.repo.write(CATALOG, catalog_bytes({"alpha": code("1.7.0"),
+                                               "beta": code("1.8.0")}))
+        self.ok(self.repo.run("--write"))
+        self.repo.commit("S: prepare 1.8.0 by ordinary PR")
+        self.ok(self.repo.run("--check", env={REQUIRE_TAGS: "1"}))
+        self.repo.tag("v1.8.0")
+        return base
+
+    def test_tag_arrival_preserves_s_and_unchanged_descendant(self) -> None:
+        self.prepare_tag_arrival()
+        before = (self.repo.path / DIFF).read_bytes()
+        with self.subTest(tree="S"):
+            self.ok(self.repo.run("--check", env={REQUIRE_TAGS: "1"}))
+        self.repo.write("README.md", b"D: unrelated change\n")
+        self.repo.commit("D")
+        with self.subTest(tree="D"):
+            self.ok(self.repo.run("--check", env={REQUIRE_TAGS: "1"}))
+        self.assertEqual((self.repo.path / DIFF).read_bytes(), before)
+        self.assertEqual(self.repo.diff()["from"]["tag"], "v1.7.0")
+
+    def test_tag_arrival_on_ancestor_preserves_preexisting_descendant(self) -> None:
+        self.start({"alpha": code("1.7.0")})
+        self.release("v1.7.0")
+        self.repo.write("VERSION", b"1.8.0\n")
+        source = self.repo.commit("S: prepared release")
+        self.ok(self.repo.run("--check"))
+        self.repo.write("README.md", b"D: already merged before tag arrival\n")
+        self.repo.commit("D")
+        self.ok(self.repo.run("--check"))
+        self.repo.git("tag", "-a", "v1.8.0", source, "-m", "Release 1.8.0")
+        self.ok(self.repo.run("--check", env={REQUIRE_TAGS: "1"}))
+
+    def test_tag_arrival_allows_descendant_addition_from_old_base(self) -> None:
+        base = self.prepare_tag_arrival()
+        self.repo.write(CATALOG, catalog_bytes({"alpha": code("1.7.0"),
+                                               "beta": code("1.8.0"),
+                                               "gamma": code("1.9.0")}))
+        self.repo.write_diff(self.repo.built_diff(base, "v1.7.0"))
+        self.repo.commit("D: add gamma against the explicit base")
+        self.ok(self.repo.run("--check", env={REQUIRE_TAGS: "1"}))
+        self.assertEqual([item["code"] for item in self.repo.diff()["added"]],
+                         ["beta", "gamma"])
+        self.repo.tag("v1.9.0")
+        self.ok(self.repo.run("--check", env={REQUIRE_TAGS: "1"}))
+        # Housekeeping still advances the base to the newest reachable tag.
+        self.ok(self.repo.run("--write"))
+        self.assertEqual(self.repo.diff()["from"]["tag"], "v1.9.0")
+        self.ok(self.repo.run("--check"))
+
+    def test_tag_arrival_refuses_removal_first_published_after_base(self) -> None:
+        base = self.prepare_tag_arrival()
+        self.repo.write(CATALOG, catalog_bytes({"alpha": code("1.7.0")}))
+        self.repo.write_diff(self.repo.built_diff(base, "v1.7.0"))
+        self.repo.commit("D: hide removal of beta behind old base")
+        self.assertEqual(self.repo.diff()["removed"], [])
+        self.fails(self.repo.run("--check", env={REQUIRE_TAGS: "1"}), 1,
+                   "v1.8.0: removed is not empty (codes.beta)")
+        self.fails(self.repo.run("--check"), 1,
+                   "a published code is deprecated, never removed")
+        # A nearer tag without beta must not hide the earlier publication.
+        self.repo.tag("v1.8.1")
+        self.fails(self.repo.run("--check"), 1, "v1.8.0: removed is not empty (codes.beta)")
+        self.repo.write(CATALOG, catalog_bytes({
+            "alpha": code("1.7.0"),
+            "beta": dict(code("1.8.0"), deprecated=True, replacedBy=["alpha"])}))
+        self.repo.write_diff(self.repo.built_diff(base, "v1.7.0"))
+        self.ok(self.repo.run("--check"))
+
+    def test_explicit_base_must_be_an_ancestor(self) -> None:
+        self.start({"alpha": code("1.7.0")})
+        self.release("v1.7.0")
+        base = (self.repo.path / CATALOG).read_bytes()
+        self.repo.git("checkout", "-q", "-b", "unmerged")
+        self.repo.write("README.md", b"unmerged release\n")
+        self.repo.commit("unmerged")
+        self.repo.tag("v1.7.1")
+        self.repo.git("checkout", "-q", "main")
+        self.repo.write_diff(self.repo.built_diff(base, "v1.7.1"))
+        self.fails(self.repo.run("--check"), 1,
+                   "from.tag v1.7.1 is not an ancestor of HEAD")
+
+    def test_registry_guard_keeps_every_reachable_publication(self) -> None:
+        base = self.prepare_tag_arrival()
+        self.repo.write(CATALOG, catalog_bytes({"alpha": code("1.7.0")}))
+        self.repo.write_diff(self.repo.built_diff(base, "v1.7.0"))
+        self.repo.commit("D: beta removed")
+        self.repo.tag("v1.8.1")
+        # Isolate history from the unrelated generated C++ and throw scanner.
+        # The compact fixture has the full validator's required metadata.
+        current = json.loads((self.repo.path / CATALOG).read_bytes())
+        current["classes"] = {name: "c" for name in registry_guard.CLASSES}
+        current["kinds"] = {name: "k" for name in registry_guard.KINDS}
+        self.repo.write(CATALOG, registry_guard.canonical(current).encode())
+        with patch.object(registry_guard, "check_generated", return_value=[]), \
+                patch.object(registry_guard, "uncoded_throws", return_value=[]):
+            errors, _ = registry_guard.run_checks(self.repo.path, require_tags="test")
+        self.assertTrue(any("against v1.8.0: code beta was removed" in error
+                            for error in errors), errors)
+        # Existing compatibility checks also see codes absent from the nearest tag.
+        current["codes"]["beta"] = code("1.9.0")
+        self.repo.write(CATALOG, registry_guard.canonical(current).encode())
+        with patch.object(registry_guard, "check_generated", return_value=[]), \
+                patch.object(registry_guard, "uncoded_throws", return_value=[]):
+            errors, _ = registry_guard.run_checks(self.repo.path)
+        self.assertTrue(any("against v1.8.0: code beta: since changed" in error
+                            for error in errors), errors)
+
+    def test_explicit_base_must_exist_when_other_tags_are_readable(self) -> None:
+        self.start({"alpha": code("1.7.0")})
+        self.repo.write_diff(self.repo.built_diff(None, "v1.6.0"))
+        self.fails(self.repo.run("--check"), 2, "from.tag v1.6.0 does not exist")
+
+    def test_explicit_base_hash_and_current_catalog_bytes_are_checked(self) -> None:
+        self.prepare_tag_arrival()
+        good = self.repo.diff()
+        forged = json.loads(json.dumps(good))
+        forged["from"]["catalogSha256"] = "0" * 64
+        self.repo.write_diff(forged)
+        self.fails(self.repo.run("--check"), 1, "from.catalogSha256")
+        self.repo.write_diff(good)
+        self.repo.write(CATALOG, (self.repo.path / CATALOG).read_bytes() + b"\n")
+        self.fails(self.repo.run("--check"), 1, "to.catalogSha256")
+        self.repo.write(CATALOG, (self.repo.path / CATALOG).read_bytes().rstrip() + b"\n")
+        forged = json.loads(json.dumps(good))
+        forged["added"][0]["entry"]["description"] = "forged"
+        self.repo.write_diff(forged)
+        self.fails(self.repo.run("--check"), 1, "is stale")
+
+    def test_stamp_to_sha_uses_unpublished_source_after_head_advances(self) -> None:
+        self.start({"alpha": code("1.7.0")})
+        self.release("v1.7.0")
+        self.repo.write("VERSION", b"1.8.0\n")
+        self.repo.write(CATALOG, catalog_bytes({"alpha": code("1.7.0"),
+                                               "beta": code("1.8.0")}))
+        self.ok(self.repo.run("--write"))
+        source = self.repo.commit("S: unpublished source")
+        source_diff = (self.repo.path / DIFF).read_bytes()
+        self.repo.write(CATALOG, catalog_bytes({"alpha": code("1.7.0"),
+                                               "beta": code("1.8.0"),
+                                               "gamma": code("1.9.0")}))
+        self.ok(self.repo.run("--write"))
+        self.repo.commit("D: next release")
+        asset = self.tmp / "pretag.json"
+        args = ("--stamp", "--to-sha", source, "--to-version", "1.8.0",
+                "--previous-tag", "v1.7.0", "--output", str(asset))
+        self.ok(self.repo.run(*args))
+        pretag = asset.read_bytes()
+        stamped = json.loads(pretag)
+        self.assertEqual([item["code"] for item in stamped["added"]], ["beta"])
+        self.assertEqual(stamped["to"], {
+            "version": "1.8.0", "catalogSha256": json.loads(source_diff)["to"]["catalogSha256"]})
+        self.repo.git("tag", "-a", "v1.8.0", source, "-m", "Release 1.8.0")
+        self.ok(self.repo.run("--stamp", "--to-tag", "v1.8.0", "--previous-tag", "v1.7.0",
+                              "--output", str(asset)))
+        self.assertEqual(asset.read_bytes(), pretag)
+        self.ok(self.repo.run(*args))
+        self.assertEqual(asset.read_bytes(), pretag)
+        self.fails(self.repo.run("--stamp", "--to-sha", source, "--to-version", "1.9.0",
+                                 "--previous-tag", "v1.7.0", "--output", str(asset)), 1,
+                   "VERSION at --to-sha is '1.8.0', expected '1.9.0'")
+
+    def test_stamp_to_sha_preserves_rc_chain_without_source_reset(self) -> None:
+        self.start({"alpha": code("1.7.0")})
+        self.release("v1.7.0")
+        self.repo.write("VERSION", b"1.8.0-rc.1\n")
+        self.repo.write(CATALOG, catalog_bytes({"alpha": code("1.7.0"),
+                                               "beta": code("1.8.0")}))
+        self.ok(self.repo.run("--write"))
+        candidate = self.repo.commit("candidate")
+        stable, step = self.tmp / "stable.json", self.tmp / "step.json"
+        args = ("--stamp", "--to-sha", candidate, "--to-version", "1.8.0-rc.1",
+                "--previous-tag", "v1.7.0", "--output", str(stable),
+                "--chain-output", str(step))
+        self.ok(self.repo.run(*args))
+        self.assertFalse(step.exists())
+        self.repo.tag("v1.8.0-rc.1")
+        base = self.repo.git("show", "v1.7.0:" + CATALOG).encode() + b"\n"
+        self.repo.write("VERSION", b"1.8.0\n")
+        self.repo.write(CATALOG, catalog_bytes({"alpha": code("1.7.0"),
+                                               "beta": code("1.8.0"),
+                                               "gamma": code("1.8.0")}))
+        self.repo.write_diff(self.repo.built_diff(base, "v1.7.0"))
+        source = self.repo.commit("final: explicit base remains v1.7.0")
+        args = ("--stamp", "--to-sha", source, "--to-version", "1.8.0",
+                "--previous-tag", "v1.7.0", "--output", str(stable))
+        self.fails(self.repo.run(*args), 2, "name --chain-output")
+        self.ok(self.repo.run(*args, "--chain-output", str(step)))
+        self.assertEqual([item["code"] for item in json.loads(stable.read_bytes())["added"]],
+                         ["beta", "gamma"])
+        self.assertEqual(json.loads(step.read_bytes())["from"]["tag"], "v1.8.0-rc.1")
+        self.assertEqual([item["code"] for item in json.loads(step.read_bytes())["added"]],
+                         ["gamma"])
+        before = stable.read_bytes(), step.read_bytes()
+        self.repo.tag("v1.8.0")
+        self.ok(self.repo.run(*args, "--chain-output", str(step)))
+        self.assertEqual((stable.read_bytes(), step.read_bytes()), before)
+        again = self.tmp / "again.json"
+        for start, expected in (("v1.7.0", before[0]), ("v1.8.0-rc.1", before[1])):
+            self.ok(self.repo.run("--stamp", "--to-tag", "v1.8.0", "--previous-tag", start,
+                                  "--output", str(again)))
+            self.assertEqual(again.read_bytes(), expected)
+
+    def test_stamp_to_sha_checks_source_bytes_and_ancestry(self) -> None:
+        self.start({"alpha": code("1.7.0")})
+        self.release("v1.7.0")
+        self.repo.write("VERSION", b"1.8.0\n")
+        self.repo.write(CATALOG, catalog_bytes({"alpha": code("1.7.0"),
+                                               "beta": code("1.8.0")}))
+        self.ok(self.repo.run("--write"))
+        source = self.repo.commit("S: valid source")
+        self.repo.write(CATALOG, catalog_bytes({"alpha": code("1.7.0"),
+                                               "beta": code("1.8.0"),
+                                               "gamma": code("1.8.0")}))
+        stale = self.repo.commit("stale source diff")
+        self.ok(self.repo.run("--write"))
+        self.repo.commit("D: repair diff")
+        asset = self.tmp / "asset.json"
+
+        def stamp(sha: str, previous: str = "v1.7.0", output: Path = asset):
+            return self.repo.run("--stamp", "--to-sha", sha, "--to-version", "1.8.0",
+                                 "--previous-tag", previous, "--output", str(output))
+
+        self.fails(stamp(stale), 1, "to.catalogSha256")
+        self.assertFalse(asset.exists())
+        self.fails(stamp(source[:12]), 2, "full lowercase 40-character commit SHA")
+        self.fails(stamp(source, output=self.repo.path / DIFF), 2, "checked-in diff")
+        self.repo.git("checkout", "-q", "-b", "unmerged")
+        self.repo.write("README.md", b"unmerged source\n")
+        unmerged = self.repo.commit("unmerged")
+        self.repo.tag("v1.7.1")
+        self.repo.git("checkout", "-q", "main")
+        self.fails(stamp(unmerged), 1, "--to-sha is not an ancestor of HEAD")
+        self.fails(stamp(source, "v1.7.1"), 1,
+                   "--to-sha does not reach --previous-tag v1.7.1")
+        self.assertFalse(asset.exists())
+        self.ok(stamp(source))
+
+    def test_stamp_to_sha_keeps_minor_and_since_rules(self) -> None:
+        self.start({"alpha": code("1.7.0")})
+        self.release("v1.7.0")
+        for version, since, finding in (
+                ("1.7.1", "1.7.1", "bump minor (or override 1.8.0)"),
+                ("1.8.0", "1.9.0", "which is after this release 1.8.0")):
+            with self.subTest(version=version):
+                self.repo.write("VERSION", (version + "\n").encode())
+                self.repo.write(CATALOG, catalog_bytes({"alpha": code("1.7.0"),
+                                                       "beta": code(since)}))
+                self.ok(self.repo.run("--write"))
+                source = self.repo.commit("prepared " + version)
+                asset = self.tmp / (version + ".json")
+                self.fails(self.repo.run("--stamp", "--to-sha", source,
+                                         "--to-version", version, "--previous-tag", "v1.7.0",
+                                         "--output", str(asset)), 1, finding)
+                self.assertFalse(asset.exists())
 
     def test_final_release_after_a_candidate(self) -> None:
         self.start({"alpha": code("1.1.0")})
