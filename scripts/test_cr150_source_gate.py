@@ -55,6 +55,16 @@ void on_bar(Ring& r, double x) { r.slots_.push_back(x); }
 '''
 FIXED_HPP = 'constexpr int kRingSlots = 64;\n'
 PIN_SH = f'#!/bin/sh\nCODEGEN_COMMIT="{PIN}"\n'
+DESIGN_CPP = LOOP_CPP.replace(
+    'void on_bar', 'std::vector<double> slots_;\nvoid on_bar').replace(
+        '    static std::vector<double> slots_;\n', '')
+DESIGN_TEST_CPP = '''\
+#include <cassert>
+#include "../src/loop.cpp"
+int main() {
+    for (int i = 0; i < 1000000; ++i) { on_bar(1.0); assert(slots_.size() <= kRingSlots); }
+}
+'''
 
 
 def q(value: str) -> str:
@@ -88,6 +98,9 @@ def entry(eid='E1', file='src/loop.cpp', symbol='slots_', ops=('decl', 'grow'),
         fields.update(bound='kRingSlots', bound_inputs=['kRingSlots'],
                       lifetime='run', rollback='checkpoint copies the ring',
                       hash_reader='none: not hashed', tests='test_ring')
+    elif state == 'bounded_by_design':
+        fields.update(bound='kRingSlots', test='tests/test_growth.cpp:4',
+                      reason='kRingSlots caps the retained scalar cells.')
     elif state == 'unreviewed':
         fields.update(phase='unclassified')
     fields.update(extra)
@@ -95,7 +108,7 @@ def entry(eid='E1', file='src/loop.cpp', symbol='slots_', ops=('decl', 'grow'),
 
 
 def manifest(entries, *, files=('src/**/*.cpp', 'include/pineforge/**/*.hpp'), generated=(), ceilings=(5, 5),
-             pin=PIN, fixed=True, templates=True, extra_fixed='') -> str:
+             pin=PIN, fixed=True, templates=True, extra_fixed='', by_design_ceiling=5) -> str:
     lines = ['schema: cr150-source-bounds/v1', 'codegen:', f'  pin: {q(pin)}',
              '  pin_source: scripts/regen_corpus_cpp.sh', '  tree: absent',
              '  emitter_templates:']
@@ -105,6 +118,7 @@ def manifest(entries, *, files=('src/**/*.cpp', 'include/pineforge/**/*.hpp'), g
     lines += ['  generated_files:'] + ([f'    - {q(g)}' for g in generated] or ['    []'])
     lines += ['ceilings:', f'  unreviewed: {ceilings[0]}',
               f'  pending-flat-memory: {ceilings[1]}',
+              f'  bounded_by_design: {by_design_ceiling}',
               'owners:', flow(name='engine-core', globs=['src/**', 'include/**']),
               flow(name='generated', globs=['tutorial/**'])]
     lines.append('fixed_inputs:')
@@ -253,6 +267,246 @@ class PositiveControls(Tree):
         self.build(self.clean_entries(), loop=loop)
         proc = self.gate()
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+
+
+class BoundedByDesign(Tree):
+    """Independent synthetic controls; no real entry is reclassified."""
+
+    def design_tree(self, *, registration='pineforge_add_unit_test(test_growth)\n',
+                    cmake='tests/CMakeLists.txt', **fields):
+        self.build([entry(state='bounded_by_design', **fields)], loop=DESIGN_CPP, fixed=False)
+        write_tree(self.root, {
+            'tests/test_growth.cpp': DESIGN_TEST_CPP,
+            cmake: registration})
+
+    def assert_design_finding(self, diagnostic):
+        proc = self.gate()
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertRegex(proc.stdout, rf'FINDING .*bounded_by_design entry E1:.*{diagnostic}')
+        self.assertEqual(counts(proc)['BY-DESIGN'], 0)
+        self.assertEqual(counts(proc)['PASS(bounded)'], 0)
+        self.assertEqual(counts(proc)['OPEN'], 0)
+        return proc
+
+    def test_missing_constant_is_a_finding_naming_the_entry(self):
+        self.design_tree(bound='kMissingLimit')
+        self.assert_design_finding('kMissingLimit.*definition')
+
+    def test_commented_constant_is_a_finding(self):
+        for comment in ('// ' + FIXED_HPP, '/* ' + FIXED_HPP.strip() + ' */\n'):
+            with self.subTest(comment=comment):
+                self.design_tree()
+                (self.root / 'include/pineforge/fixed.hpp').write_text(comment)
+                self.assert_design_finding('kRingSlots.*definition')
+
+    def test_value_mismatch_is_a_finding(self):
+        self.design_tree(value=65)
+        self.assert_design_finding('value 65.*64')
+
+    def test_constant_lookup_preserves_fixed_input_rules(self):
+        for definition in (
+                'int kRingSlots = 64;\n',
+                'void f() { constexpr int kRingSlots = 64; }\n',
+                'struct Limits { const int kRingSlots = 64; };\n',
+                'const char* text = "constexpr int kRingSlots = 64;";\n',
+                'constexpr int kRingSlots = 0;\n',
+                'constexpr int kRingSlots = -1;\n',
+                'constexpr int kRingSlots = 064;\n'):
+            with self.subTest(definition=definition):
+                self.design_tree()
+                (self.root / 'include/pineforge/fixed.hpp').write_text(definition)
+                self.assert_design_finding('positive.*definition')
+
+    def test_namespace_and_static_class_constants_are_admitted(self):
+        for definition in (
+                'namespace limits { const int kRingSlots = 64; }\n',
+                'struct Limits { static constexpr int kRingSlots = 64; };\n',
+                'struct Limits { inline static const int kRingSlots = 64; };\n'):
+            with self.subTest(definition=definition):
+                self.design_tree(value=64)
+                (self.root / 'include/pineforge/fixed.hpp').write_text(definition)
+                proc = self.gate()
+                self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+                self.assertEqual(counts(proc)['BY-DESIGN'], 1)
+
+    def test_constant_outside_scanned_files_is_refused(self):
+        self.design_tree()
+        (self.root / 'include/pineforge/fixed.hpp').write_text('')
+        write_tree(self.root, {'tests/limits.hpp': FIXED_HPP})
+        self.assert_design_finding('kRingSlots.*definition')
+
+    def test_duplicate_constant_definitions_are_refused(self):
+        self.design_tree()
+        path = self.root / 'src/loop.cpp'
+        path.write_text(path.read_text() + FIXED_HPP)
+        self.assert_design_finding('exactly one.*definition')
+
+    def test_bound_must_be_a_name_without_a_growth_axis(self):
+        for bound in ('64', 'kRingSlots + 1', 'kMaxBars', ''):
+            with self.subTest(bound=bound):
+                self.design_tree(bound=bound)
+                self.assert_design_finding('bound')
+
+    def test_value_must_be_a_positive_integer_when_present(self):
+        for value in (0, -1, True, '64'):
+            with self.subTest(value=value):
+                self.design_tree(value=value)
+                self.assert_design_finding('value.*positive integer')
+
+    def test_missing_test_file_is_a_finding(self):
+        self.design_tree(test='tests/test_missing.cpp:1')
+        self.assert_design_finding('test file.*not found')
+
+    def test_test_line_past_end_is_a_finding(self):
+        self.design_tree(test='tests/test_growth.cpp:99')
+        self.assert_design_finding('line 99.*outside')
+
+    def test_blank_test_line_is_a_finding(self):
+        self.design_tree(test='tests/test_growth.cpp:6')
+        path = self.root / 'tests/test_growth.cpp'
+        path.write_text(path.read_text() + '   \n')
+        self.assert_design_finding('line 6.*blank')
+
+    def test_test_reference_must_be_inside_tests_with_a_positive_line(self):
+        for reference in ('src/loop.cpp:4', '../tests/test_growth.cpp:4',
+                          'tests/../src/loop.cpp:4', 'tests/test_growth.cpp:0',
+                          'tests/test_growth.cpp', '/tests/test_growth.cpp:4'):
+            with self.subTest(reference=reference):
+                self.design_tree(test=reference)
+                self.assert_design_finding('test')
+
+    def test_existing_unregistered_test_is_a_finding(self):
+        self.design_tree(registration='# No CTest row for this file.\n')
+        self.assert_design_finding('test_growth.*not registered')
+
+    def test_both_registration_forms_in_both_locations_are_admitted(self):
+        for cmake in ('tests/CMakeLists.txt', 'tests/cr150.d/control.cmake'):
+            for registration in (
+                    'pineforge_add_unit_test(test_growth)\n',
+                    'add_test(NAME test_growth COMMAND test_growth)\n',
+                    '  PiNeFoRgE_AdD_UnIt_TeSt(\n    "test_growth"\n  )\n',
+                    'ADD_TEST(\n NAME [=[test_growth]=]\n COMMAND test_growth\n)\n'):
+                with self.subTest(cmake=cmake, registration=registration):
+                    self.design_tree(cmake=cmake, registration=registration)
+                    proc = self.gate()
+                    self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+                    self.assertEqual(counts(proc)['BY-DESIGN'], 1)
+                    # Remove all registrations before the next subtest.
+                    (self.root / cmake).unlink()
+
+    def test_comments_literals_other_arguments_and_similar_names_do_not_register(self):
+        for registration in (
+                '# pineforge_add_unit_test(test_growth)\n',
+                '#[=[\npineforge_add_unit_test(test_growth)\n]=]\n',
+                'message("pineforge_add_unit_test(test_growth)")\n',
+                'message([=[\nadd_test(NAME test_growth COMMAND test_growth)\n]=])\n',
+                'pineforge_add_unit_test(test_growth_extra)\n',
+                'pineforge_add_unit_test(other test_growth)\n',
+                'add_test(NAME other COMMAND test_growth)\n',
+                'function(unused)\n pineforge_add_unit_test(test_growth)\nendfunction()\n',
+                'macro(unused)\n add_test(NAME test_growth COMMAND test_growth)\nendmacro()\n'):
+            with self.subTest(registration=registration):
+                self.design_tree(registration=registration)
+                self.assert_design_finding('test_growth.*not registered')
+
+    def test_malformed_cmake_is_a_finding(self):
+        self.design_tree(registration='add_test(NAME test_growth\n')
+        self.assert_design_finding('registration.*unreadable')
+
+    def test_include_entry_is_admitted_but_still_checks_all_three_fields(self):
+        self.design_tree(file='include/pineforge/control.hpp')
+        source = 'struct Cells { std::vector<double> slots_; };\n'
+        write_tree(self.root, {
+            'src/loop.cpp': '',
+            'include/pineforge/control.hpp': source,
+            SITE_INVENTORY_REL: inventory_text({'include/pineforge/control.hpp': source})})
+        path = self.root / MANIFEST_REL
+        control = manifest([entry(file='include/pineforge/control.hpp', ops=['decl'],
+                                  state='bounded_by_design')], fixed=False)
+        path.write_text(control)
+        proc = self.gate()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(counts(proc)['BY-DESIGN'], 1)
+        for field, old, new, diagnostic in (
+                ('bound', 'kRingSlots', 'kMissingLimit', 'bound'),
+                ('test', 'tests/test_growth.cpp:4', 'tests/missing.cpp:1', 'test'),
+                ('reason', 'kRingSlots caps the retained scalar cells.', '', 'reason')):
+            with self.subTest(field=field):
+                path.write_text(control.replace(f'{field}: {q(old)}', f'{field}: {q(new)}'))
+                self.assert_design_finding(diagnostic)
+        path.write_text(control)
+
+    def test_empty_reason_is_a_finding(self):
+        for reason in ('', '   '):
+            with self.subTest(reason=reason):
+                self.design_tree(reason=reason)
+                self.assert_design_finding('reason')
+
+    def test_each_required_design_field_missing_is_a_finding(self):
+        for field in ('bound', 'test', 'reason'):
+            with self.subTest(field=field):
+                self.design_tree()
+                path = self.root / MANIFEST_REL
+                path.write_text(re.sub(rf', {field}: "[^"]*"', '', path.read_text()))
+                self.assert_design_finding(field)
+
+    def test_accounting_has_its_own_bucket_without_changing_open(self):
+        self.build([entry(state='unreviewed')], loop=DESIGN_CPP, fixed=False)
+        baseline = self.root / MANIFEST_REL
+        before = self.gate()
+        self.assertEqual(before.returncode, 0, before.stdout + before.stderr)
+        write_tree(self.root, {
+            'include/pineforge/control.hpp': 'struct Cells { std::vector<double> cells; };\n',
+            'tests/test_growth.cpp': DESIGN_TEST_CPP,
+            'tests/CMakeLists.txt': 'pineforge_add_unit_test(test_growth)\n'})
+        baseline.write_text(manifest([
+            entry(state='unreviewed'),
+            entry('D1', file='include/pineforge/control.hpp', symbol='cells', ops=['decl'],
+                  state='bounded_by_design')], fixed=False))
+        write_tree(self.root, {SITE_INVENTORY_REL: inventory_text({
+            'src/loop.cpp': DESIGN_CPP,
+            'include/pineforge/control.hpp': 'struct Cells { std::vector<double> cells; };\n'})})
+        after = self.gate()
+        self.assertEqual(after.returncode, 0, after.stdout + after.stderr)
+        b, a = counts(before), counts(after)
+        self.assertEqual(a['BY-DESIGN'] - b['BY-DESIGN'], 1)
+        self.assertEqual(a['OPEN'] - b['OPEN'], 0)
+        self.assertEqual(a['PASS(bounded)'] - b['PASS(bounded)'], 0)
+        self.assertRegex(after.stdout, r'result: .*BY-DESIGN.*named constant.*registered test.*'
+                         r'not a flat-memory proof')
+
+    def test_ceiling_requires_a_reviewed_bump(self):
+        self.design_tree()
+        path = self.root / MANIFEST_REL
+        path.write_text(path.read_text().replace('bounded_by_design: 5', 'bounded_by_design: 0'))
+        proc = self.gate()
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn('bounded_by_design entries 1 exceed the manifest ceiling 0', proc.stdout)
+        path.write_text(path.read_text().replace('bounded_by_design: 0', 'bounded_by_design: 1'))
+        proc = self.gate()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+
+    def test_always_registered_mutant_misses_the_unregistered_finding(self):
+        self.design_tree(registration='# No registration.\n')
+        self.assert_design_finding('test_growth.*not registered')
+        # Copy the implementation, changing only the registration predicate.
+        # The same refusal assertion above would fail against this mutant.
+        script = GATE.read_text()
+        marker = 'def test_is_registered(root: Path, name: str) -> bool:\n'
+        self.assertEqual(script.count(marker), 1)
+        mutated = script.replace(marker, marker + '    return True  # mutation control\n', 1)
+        mutant = self.root / 'scripts/mutant_gate.py'
+        mutant.write_text(mutated)
+        for helper in ('cxxlex.py', 'check_cr150_cmake_d.py'):
+            shutil.copy2(SCRIPTS / helper, mutant.parent / helper)
+        before = digest(self.root)
+        proc = subprocess.run([sys.executable, '-B', str(mutant), '--root', str(self.root)],
+                              capture_output=True, text=True)
+        self.assertEqual(before, digest(self.root))
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertNotIn('not registered', proc.stdout)
+        self.assertEqual(counts(proc)['findings'], 0)
+        self.assertEqual(counts(proc)['BY-DESIGN'], 1)
 
 
 class UnlistedSite(Tree):
@@ -1215,9 +1469,10 @@ class RealTree(unittest.TestCase):
         self.assertGreater(c['entries_matched'], 0)
         self.assertEqual(c['findings'], 0)
         self.assertEqual(c['PASS(bounded)'], 0)
+        self.assertEqual(c['BY-DESIGN'], 0)
         self.assertEqual(c['OPEN'], 1452)
-        # Every matched entry is exactly one of PASS(bounded) / OPEN.
-        self.assertEqual(c['PASS(bounded)'] + c['OPEN'], c['entries_matched'])
+        # Every matched entry is in exactly one admission/OPEN bucket.
+        self.assertEqual(c['PASS(bounded)'] + c['BY-DESIGN'] + c['OPEN'], c['entries_matched'])
         strict = run_gate(ROOT, '--strict')
         self.assertEqual(strict.returncode, 1 if c['OPEN'] else 0, strict.stdout)
 
