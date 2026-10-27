@@ -14,6 +14,10 @@
 #include <string>
 #include <sys/types.h>
 
+#if defined(__unix__) || defined(__APPLE__)
+#include <sys/mman.h>
+#endif
+
 namespace pineforge::detail {
 
 inline constexpr std::size_t kScratchRegionCount = 9;
@@ -109,7 +113,8 @@ inline Layout compute_layout(const ScratchManifest& manifest) {
 }
 
 // One 4096-aligned backing allocation, never grown, moved or replaced by an
-// operation on this object. Region metadata is outside that allocation.
+// operation on this object. Anonymous mappings start zero without touching
+// payload pages. Region and clearing metadata are outside that allocation.
 // Binders retain Region identities, not byte views: base is directory metadata
 // only. Callers must not dereference/cache base or retain a pointer into the
 // slab; all payload access copies through read_at/write_at. This also permits
@@ -118,19 +123,20 @@ class ScratchSlab {
 public:
     explicit ScratchSlab(const ScratchManifest& manifest)
         : manifest_(manifest), layout_(compute_layout(manifest)),
-          allocation_(static_cast<std::uint8_t*>(::operator new(
-              static_cast<std::size_t>(layout_.slab_size),
-              std::align_val_t{static_cast<std::size_t>(kScratchPageSize)}))) {
+          allocation_(allocate_backing(static_cast<std::size_t>(layout_.slab_size))) {
         for (std::size_t i = 0; i < regions_.size(); ++i) {
             const auto& item = layout_.regions[i];
             regions_[i] = {allocation_ + static_cast<std::size_t>(item.offset),
                            item.capacity, 0, item.resource};
         }
-        zero();
     }
     ~ScratchSlab() {
+#if defined(MAP_ANONYMOUS) || defined(MAP_ANON)
+        (void)::munmap(allocation_, static_cast<std::size_t>(layout_.slab_size));
+#else
         ::operator delete(allocation_,
             std::align_val_t{static_cast<std::size_t>(kScratchPageSize)});
+#endif
     }
     ScratchSlab(const ScratchSlab&) = delete;
     ScratchSlab& operator=(const ScratchSlab&) = delete;
@@ -192,7 +198,8 @@ public:
     }
     void write_at(ScratchResource resource, std::uint64_t offset,
                   const void* source, std::size_t length) {
-        auto& item = regions_[index(resource)];
+        const auto at = index(resource);
+        auto& item = regions_[at];
         if (offset > item.capacity || length > item.capacity - offset) {
             const auto count = static_cast<std::uint64_t>(length);
             // An invalid caller can request an unrepresentable end offset.
@@ -207,8 +214,9 @@ public:
         if (length == 0) return;
         if (!source) throw AuxiliaryScratchIoError(EINVAL, "scratch write null source");
         std::memcpy(item.base + static_cast<std::size_t>(offset), source, length);
-        item.logical_extent = std::max(item.logical_extent,
-                                      offset + static_cast<std::uint64_t>(length));
+        const auto end = offset + static_cast<std::uint64_t>(length);
+        written_extents_[at] = std::max(written_extents_[at], end);
+        item.logical_extent = std::max(item.logical_extent, end);
     }
     void write_at(const Region& item, std::uint64_t offset,
                   const void* source, std::size_t length) {
@@ -218,13 +226,13 @@ public:
 
     // zero preserves readable extents; reset reinitializes bytes AND extents.
     // Per-region reset supports clearing/refolding one store in the same run.
+    // Only write_at can dirty bytes. An extended/read-only prefix needs no
+    // clearing; unwritten holes and page padding remain zero from allocation.
     void zero() noexcept {
-        std::memset(allocation_, 0, static_cast<std::size_t>(layout_.slab_size));
+        for (std::size_t i = 0; i < regions_.size(); ++i) clear_written(i);
     }
     void zero(ScratchResource resource) {
-        auto& item = regions_[index(resource)];
-        if (item.capacity != 0)
-            std::memset(item.base, 0, static_cast<std::size_t>(item.capacity));
+        clear_written(index(resource));
     }
     void reset() noexcept {
         zero();
@@ -236,6 +244,31 @@ public:
     }
 
 private:
+    static std::uint8_t* allocate_backing(std::size_t bytes) {
+#if defined(MAP_ANONYMOUS) || defined(MAP_ANON)
+#if defined(MAP_ANONYMOUS)
+        constexpr int anonymous = MAP_ANONYMOUS;
+#else
+        constexpr int anonymous = MAP_ANON;
+#endif
+        void* memory = ::mmap(nullptr, bytes, PROT_READ | PROT_WRITE,
+                              MAP_PRIVATE | anonymous, -1, 0);
+        // Preserve the allocation failure class, not a scratch I/O refusal.
+        if (memory == MAP_FAILED) throw std::bad_alloc();
+        return static_cast<std::uint8_t*>(memory);
+#else
+        // Platforms without anonymous mmap retain aligned, zeroed storage.
+        auto* memory = static_cast<std::uint8_t*>(::operator new(
+            bytes, std::align_val_t{static_cast<std::size_t>(kScratchPageSize)}));
+        std::memset(memory, 0, bytes);
+        return memory;
+#endif
+    }
+    void clear_written(std::size_t at) noexcept {
+        if (written_extents_[at] == 0) return;
+        std::memset(regions_[at].base, 0, static_cast<std::size_t>(written_extents_[at]));
+        written_extents_[at] = 0;
+    }
     static std::size_t index(ScratchResource resource) {
         const auto word = static_cast<std::uint32_t>(resource);
         if (word < 1 || word > kScratchRegionCount)
@@ -252,6 +285,9 @@ private:
     const Layout layout_;
     std::uint8_t* const allocation_;
     std::array<Region, kScratchRegionCount> regions_{};
+    // Physical cleanup bookkeeping only: highest written end since clearing.
+    // Independent of readable extents, never logical state or hash input.
+    std::array<std::uint64_t, kScratchRegionCount> written_extents_{};
 };
 
 } // namespace pineforge::detail
