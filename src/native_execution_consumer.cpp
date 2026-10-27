@@ -1263,8 +1263,8 @@ std::shared_ptr<const native_order::LiveRequest> unowned_live(
 }  // namespace
 
 struct NativeExecutionConsumer::RunCommandScratch {
-    // Match the adapter's former trade/dependency geometry. Backing and cache
-    // placement do not enter state_digest; all command scopes roll back.
+    // Match the command-scratch geometry used by Trade, Dependency and Book.
+    // Backing and cache placement do not enter state_digest; all command scopes roll back.
     static constexpr std::size_t page_size = 512;
     std::unique_ptr<detail::ScratchBacking> backing =
         detail::make_command_scratch_backing(page_size);
@@ -1321,8 +1321,8 @@ void NativeExecutionConsumer::provision_run_command_scratch(
 }
 
 void NativeExecutionConsumer::release_run_command_scratch() noexcept {
-    for (const auto& run : run_command_scratch_)
-        if (run) run->release();
+    for (const auto& run : run_command_scratch_) if (run) run->release();
+    match_book_rebind_scratch();
 }
 
 std::optional<NativeExecutionConsumer::CommandScratchSnapshot>
@@ -3222,8 +3222,8 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     // host's and are never mistaken for the kernel's tail. This run's
     // declaration is registered after the callback (below).
     clear_timeframe_subscriptions(engine);
-    provision_run_command_scratch(CommandScratchBinding::Dependency,
-                                  dependency_scratch_order(), dependency_scratch_);
+    provision_run_command_scratch_for_run();
+    // Both command stores are run-owned before the first host callback.
     if (auto* host = native_host(engine)) {
         in_callback_ = true;
         in_run_begin_ = true;
@@ -14501,6 +14501,14 @@ bool NativeExecutionConsumer::collect_match_trails(
         for (const auto& row : live) handles.push_back(row.handle());
     }
     return true;
+}
+
+void NativeExecutionConsumer::provision_run_command_scratch_for_run() {
+    provision_run_command_scratch(CommandScratchBinding::Book,
+                                  match_book_scratch_order(), match_book_scratch_);
+    match_book_rebind_scratch();
+    provision_run_command_scratch(CommandScratchBinding::Dependency,
+                                  dependency_scratch_order(), dependency_scratch_);
 }
 
 }  // inline namespace engine_script_run_v19

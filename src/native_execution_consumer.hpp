@@ -91,16 +91,16 @@ inline constexpr bool kRetireEveryPointDefault = false;
 class NativeExecutionConsumer final : public IExecutionConsumer {
 public:
     enum class CommandScratchBinding : std::size_t {
-        Trade, Dependency, Exit, Count
+        Trade, Dependency, Book, Exit, Count
     };
     // Source services retain their borrowed bindings' owner through teardown.
-    // Trade/Dependency use the typed run workspaces below; Exit retains its
+    // Trade/Dependency/Book use the typed run workspaces below; Exit retains its
     // existing source service. These own storage, not a second broker state.
     void retain_command_scratch_owner(CommandScratchBinding,
                                       std::shared_ptr<void> owner) noexcept;
 
     // Run setup installs one production workspace in the named borrowed slot.
-    // Only Trade and Dependency are run workspaces; Exit retains its existing
+    // Only Trade, Dependency and Book are run workspaces; Exit retains its existing
     // source-owned service above. No store is created by a command or accessor.
     void provision_run_command_scratch(CommandScratchBinding, detail::ScratchKeyOrder,
                                        detail::CommandScratchStore*& borrower);
@@ -1768,7 +1768,7 @@ private:
     std::array<std::shared_ptr<void>,
                static_cast<std::size_t>(CommandScratchBinding::Count)> command_scratch_owners_;
     struct RunCommandScratch;
-    std::array<std::shared_ptr<RunCommandScratch>, 2> run_command_scratch_;
+    std::array<std::shared_ptr<RunCommandScratch>, 3> run_command_scratch_;
     void release_run_command_scratch() noexcept;
     NativeLifecycle state_{NativeUnconfigured{}};
     // native_host()'s answer for the engine the last public begin named.
@@ -2678,6 +2678,7 @@ public:
     std::uint64_t grid_active_points() const noexcept { return grid_points(); }
     std::uint64_t class_guard_failures() const noexcept { return match_book_class_guard_failures(); }
     std::uint64_t index_poisonings() const noexcept { return match_book_index_poisonings(); }
+    std::uint64_t dormant_poisonings() const noexcept { return match_book_index_poisonings(); }
     // C1 delegates to its actual class predicate, including mutation builds.
     // Tests use real recorded contexts and the independent base policy oracle.
     bool dormant_driver_permitted(const native_order::EvaluationContext&, bool limit) const noexcept;
@@ -2743,6 +2744,7 @@ private:
     void match_book_advance(std::uint64_t priority);
     // false preserves the failed/unwinding point's partially refreshed book.
     void match_book_complete(bool finish_sweep);
+    void provision_run_command_scratch_for_run();
 
     class MatchDormantPoint {
     public:

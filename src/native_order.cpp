@@ -8619,5 +8619,11 @@ void NativeExecutionConsumer::match_book_complete(bool finish_sweep) {
     if (requests_.book_spill_) requests_.book_spill_->complete(requests_, finish_sweep);
 }
 
+bool NativeExecutionConsumer::dormant_driver_permitted(
+        const native_order::EvaluationContext& context, bool limit) const noexcept {
+    return native_order::WorkingRequestCore::BookSpill::class_permitted(
+        requests_, context, limit ? 0U : 1U);
+}
+
 } // inline namespace engine_script_run_v19
 } // namespace pineforge
