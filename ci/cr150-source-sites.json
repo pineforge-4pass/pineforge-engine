@@ -3493,6 +3493,20 @@
   },
   {
    "file": "include/pineforge/engine.hpp",
+   "symbol": "fold",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v19 #2",
+    "class BacktestEngine #1",
+    "void record_equity_point ( int64_t script_bar_ts ) #1",
+    "if ( metrics_streaming_ . fold ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "fold . append ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/engine.hpp",
    "symbol": "closed_trade_entry_comment",
    "scope": [
     "namespace pineforge #1",
@@ -13851,6 +13865,64 @@
   },
   {
    "file": "src/engine_metrics.cpp",
+   "symbol": "returns",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace metrics #1",
+    "namespace #1",
+    "namespace streaming_v1 #1",
+    "struct Prefix #1",
+    "void fold ( const pf_equity_point_t & point , int month ) #1",
+    "else if ( previous_equity > 0 . 0 ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "returns . append ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/engine_metrics.cpp",
+   "symbol": "held_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace metrics #1",
+    "namespace #1",
+    "namespace streaming_v1 #1",
+    "class Fold final : public StreamingEquityRatiosV1 #1",
+    "MetricsStreamingStatusV1 append ( const pf_equity_point_t & point , int month ) override #1"
+   ],
+   "cls": "assign",
+   "spelling": "held_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/engine_metrics.cpp",
+   "symbol": "held_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace metrics #1",
+    "namespace #1",
+    "namespace streaming_v1 #1",
+    "class Fold final : public StreamingEquityRatiosV1 #1",
+    "MetricsStreamingStatusV1 amend_held ( std :: int64_t index , const pf_equity_point_t & point , int month ) override #1"
+   ],
+   "cls": "assign",
+   "spelling": "held_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/engine_metrics.cpp",
+   "symbol": "out",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace metrics #1",
+    "MetricsStreamingStatusV1 make_streaming_equity_ratios_v1 ( const MetricsStreamingConfigV1 & config , const MetricsExtentPlanV1 & plan , MetricsRatioTraceSinkV1 sink , std :: unique_ptr < StreamingEquityRatiosV1 > & out ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_unique",
+   "ordinal": 1
+  },
+  {
+   "file": "src/engine_metrics.cpp",
    "symbol": "state_",
    "scope": [
     "namespace pineforge #1",
@@ -14152,6 +14224,18 @@
   },
   {
    "file": "src/engine_report.cpp",
+   "symbol": "held",
+   "scope": [
+    "namespace pineforge #1",
+    "void BacktestEngine :: sync_metrics_streaming_held_v1 ( ) const #1",
+    "if ( s . fold && s . points > 0 ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "held = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/engine_report.cpp",
    "symbol": "trace_names_",
    "scope": [
     "namespace pineforge #1",
@@ -14226,7 +14310,7 @@
    "scope": [
     "namespace pineforge #1",
     "void BacktestEngine :: fill_metrics_section ( ReportC * out ) const #1",
-    "if ( active_equity_report_mode_ = = ReportMode :: SUMMARY_ONLY ) #1"
+    "if ( active_equity_report_mode_ = = ReportMode :: SUMMARY_ONLY || metrics_streaming_ . no_curve ) #1"
    ],
    "cls": "assign",
    "spelling": "held = . . .",
@@ -14434,7 +14518,7 @@
    "scope": [
     "namespace pineforge #3",
     "void BacktestEngine :: begin_report_sink ( ) #1",
-    "if ( active_equity_report_mode_ = = ReportMode :: SUMMARY_ONLY ) #1"
+    "if ( active_equity_report_mode_ = = ReportMode :: SUMMARY_ONLY || metrics_streaming_ . no_curve ) #1"
    ],
    "cls": "decl",
    "spelling": "std :: vector < pf_equity_point_t >",
@@ -14446,7 +14530,7 @@
    "scope": [
     "namespace pineforge #3",
     "void BacktestEngine :: begin_report_sink ( ) #1",
-    "if ( active_equity_report_mode_ = = ReportMode :: SUMMARY_ONLY ) #1"
+    "if ( active_equity_report_mode_ = = ReportMode :: SUMMARY_ONLY || metrics_streaming_ . no_curve ) #1"
    ],
    "cls": "grow",
    "spelling": "held . reserve ( . . . )",
@@ -19669,6 +19753,18 @@
     "namespace pineforge #1",
     "inline namespace engine_script_run_v19 #1",
     "bool NativeExecutionConsumer :: selected_window_admitted ( const BacktestEngine & engine , pf_selected_window_config_v1 * out ) noexcept #1"
+   ],
+   "cls": "assign",
+   "spelling": "out = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
+   "symbol": "out",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v19 #1",
+    "metrics :: MetricsStreamingStatusV1 BacktestEngine :: admit_metrics_plain_v1 ( const MetricsPlainInputsV1 & inputs , const metrics :: MetricsExtentPlanV1 & plan , metrics :: MetricsExtentReceiptV1 * out ) #1"
    ],
    "cls": "assign",
    "spelling": "out = . . .",
