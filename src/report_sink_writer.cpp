@@ -7,7 +7,10 @@
 #include <array>
 #include <cerrno>
 #include <charconv>
+#include <chrono>
+#include <climits>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
 #include <poll.h>
@@ -314,6 +317,16 @@ struct LineWriter::State {
     off_t offset = 0;
     bool has_equity_time = false;
     std::int64_t equity_time = 0;
+    std::uint64_t stall_ms = 300000;
+
+    void configure_stall() {
+        const char* value = std::getenv("PF_REPORT_SINK_STALL_MS");
+        if (!value) return;
+        const auto end = value + std::strlen(value);
+        const auto parsed = std::from_chars(value, end, stall_ms);
+        if (value == end || parsed.ec != std::errc{} || parsed.ptr != end)
+            io_error("invalid PF_REPORT_SINK_STALL_MS", EINVAL);
+    }
 
     explicit State(const pf_report_sink_v1& sink) {
         if (sink.struct_size != sizeof(pf_report_sink_v1) || sink.version != 1
@@ -336,6 +349,7 @@ struct LineWriter::State {
             invalid("invalid report sink fd descriptor");
         descriptor = sink.fd;
         borrowed = true;
+        configure_stall();
         run_id = sink.run_id ? sink.run_id : "";
         const auto address = reinterpret_cast<std::uintptr_t>(storage.data());
         buffer = reinterpret_cast<char*>((address + io_alignment - 1) & ~(io_alignment - 1));
@@ -377,14 +391,66 @@ struct LineWriter::State {
         }
     }
 
-    void wait_writable() {
+    using Clock = std::chrono::steady_clock;
+
+    [[noreturn]] void stalled() {
+        fail();
+        throw WriterError(WriterFailure::stalled, "report sink stalled");
+    }
+
+    int remaining_ms(Clock::time_point progress) {
+        if (!stall_ms) return -1; // only an explicit environment zero is unlimited
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            Clock::now() - progress).count();
+        const auto elapsed_ms = static_cast<std::uint64_t>(elapsed);
+        if (elapsed_ms >= stall_ms) stalled();
+        return static_cast<int>(std::min<std::uint64_t>(stall_ms - elapsed_ms, INT_MAX));
+    }
+
+    void wait_writable(Clock::time_point progress) {
         pollfd ready{descriptor, POLLOUT, 0};
         int result;
-        do { result = ::poll(&ready, 1, -1); } while (result < 0 && errno == EINTR);
+        for (;;) {
+            result = ::poll(&ready, 1, remaining_ms(progress));
+            if (result < 0 && errno == EINTR) continue;
+            // A large budget may need several INT_MAX-sized polls. EINTR
+            // and spurious wakeups consume the same no-progress interval.
+            if (result == 0) continue;
+            break;
+        }
         if (result < 0) io_error("poll failed", errno);
         if (ready.revents & POLLNVAL) io_error("poll invalid fd", EBADF);
         if (ready.revents & (POLLERR | POLLHUP)) io_error("stream peer closed", EPIPE);
     }
+
+    // send(MSG_DONTWAIT) bounds sockets without mutating their flags. FIFO
+    // writes need O_NONBLOCK while flushing; restore the borrowed open-file
+    // description on every exit, including an exception.
+    struct StreamFlags {
+        State& state;
+        int previous = -1;
+        explicit StreamFlags(State& owner) : state(owner) {
+            if (!state.borrowed || state.socket) return;
+            int flags;
+            do { flags = ::fcntl(state.descriptor, F_GETFL); } while (flags < 0 && errno == EINTR);
+            if (flags < 0) state.io_error("read stream flags failed", errno);
+            if (flags & O_NONBLOCK) return;
+            int result;
+            do { result = ::fcntl(state.descriptor, F_SETFL, flags | O_NONBLOCK); }
+            while (result < 0 && errno == EINTR);
+            if (result < 0) state.io_error("set stream flags failed", errno);
+            previous = flags;
+        }
+        int restore() noexcept {
+            if (previous < 0) return 0;
+            int result;
+            do { result = ::fcntl(state.descriptor, F_SETFL, previous); }
+            while (result < 0 && errno == EINTR);
+            if (result == 0) previous = -1;
+            return result;
+        }
+        ~StreamFlags() { (void)restore(); }
+    };
 
     void uncached() {
         struct stat info{};
@@ -410,24 +476,29 @@ struct LineWriter::State {
         std::memset(buffer + used, 0, aligned - used);
         std::size_t written = 0;
         const auto extent = borrowed ? used : aligned;
+        StreamFlags flags(*this);
+        auto progress = borrowed && stall_ms ? Clock::now() : Clock::time_point{};
         while (written < extent) {
+            if (borrowed) (void)remaining_ms(progress);
             const auto count = borrowed
                 ? (socket
-                    ? ::send(descriptor, buffer + written, extent - written, MSG_NOSIGNAL)
+                    ? ::send(descriptor, buffer + written, extent - written, MSG_NOSIGNAL | MSG_DONTWAIT)
                     : ::write(descriptor, buffer + written, extent - written))
                 : ::pwrite(descriptor, buffer + written, extent - written, offset + written);
             if (count < 0) {
                 const int number = errno;
                 if (number == EINTR) continue;
                 if (number == EAGAIN || number == EWOULDBLOCK) {
-                    wait_writable();
+                    wait_writable(progress);
                     continue;
                 }
                 io_error("write failed", number);
             }
             if (count == 0) io_error("write made no progress", EIO);
             written += static_cast<std::size_t>(count);
+            if (borrowed && stall_ms) progress = Clock::now();
         }
+        if (flags.restore() < 0) io_error("restore stream flags failed", errno);
         if (borrowed) {
             used = 0;
             return;

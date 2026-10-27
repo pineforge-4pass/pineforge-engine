@@ -1914,17 +1914,31 @@ void NativeExecutionConsumer::latch_abort(BacktestEngine& engine,
 bool NativeExecutionConsumer::check_sigterm_abort(BacktestEngine& engine,
                                                  bool strategy_started) {
     if (failed()) return false;
-    if (!run_sigterm_requested()) return true;
     const auto* running = std::get_if<NativeRunning>(&state_);
     const auto* finished = std::get_if<NativeCompleted>(&state_);
     if ((!running || running->phase != NativeRunPhase::Batch)
         && (!finished || finished->completion != NativeCompletion::BatchComplete)) return true;
+    const bool sigterm = run_sigterm_requested();
+    const auto budget = sigterm ? RunBudgetCheck{} : check_run_budget();
+    if (!sigterm && !budget.kind && !budget.clock_failed) return true;
     // The existing runner's bars_processed population is input bars. This
     // counter advances at the end of contribute_input, after all work that
     // this input drove, including any completed script calculation/matching.
     const std::int64_t completed = engine.diag_input_bars_processed_;
     auto& sink = engine.report_sink_state_;
     if (sink.writer) sink.writer->abandon();
+    if (!sigterm) {
+        // Use the cooperative terminal state, but retain the resource cause
+        // even for a host whose ordinary abort reporting is Quiet.
+        fail(engine, NativeFailure{NativeFailureCode::Aborted, NativeFailureOperation::Input, 0});
+        if (budget.clock_failed) {
+            render(engine, "run budget clock read failed", RunFailureCode::engine_invariant);
+        } else {
+            render(engine, "run budget exceeded", RunFailureCode::run_budget_exceeded,
+                   {{"kind", budget.kind}, {"limit", budget.limit}, {"used", budget.used}});
+        }
+        return false;
+    }
     latch_abort(engine, NativeFailureOperation::Input, 0);
     // SIGTERM is a typed invocation outcome even for a Quiet native host.
     render(engine, "native run aborted", RunFailureCode::run_aborted,
@@ -10838,7 +10852,10 @@ void NativeExecutionConsumer::pump_batch(BacktestEngine& engine, const Bar* bars
         for (int i = 0; i < n; ++i) {
             // Between inputs, even a pending aggregate is at a stable boundary:
             // its previous input has finished and no callback is in flight.
-            if (!check_sigterm_abort(engine, true)) return;
+            // The prior input's completed boundary checked the budgets.
+            // Between boundaries only re-read the cheap signal flag, so
+            // enabled clocks cost one read per axis per completed input.
+            if (run_sigterm_requested() && !check_sigterm_abort(engine, true)) return;
             if (i != 0 && !check_abort(engine, NativeFailureOperation::Input)) return;
             if (!consume_confirmed_input(engine, bars[i], i, i + 1 == n)) {
                 if (!failed()) {

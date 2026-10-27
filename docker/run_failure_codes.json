@@ -994,6 +994,7 @@
       "scratch_io",
       "sink_io",
       "sink_peer_closed",
+      "sink_stalled",
       "sink_exhausted"
      ]
     },
@@ -1023,9 +1024,10 @@
     }
    },
    "class": "engine_fault",
-   "description": "The engine could not complete the report sink, scratch storage or spill arena. Every reason, including exhaustion of the engine-certified arena bound or planned sink cap and a closed sink peer during finalization, is an engine fault. reason distinguishes arena exhaustion (arena_exhausted), arena I/O (arena_io), invalid arena backing (arena_backing), file-mode scratch I/O (scratch_io), sink open/write I/O (sink_io), a closed sink peer (sink_peer_closed) and a finalizer stream exceeding its planned cap (sink_exhausted). With arena_exhausted, high_water_bytes and arena_bytes are byte counts, claimed_bytes counts chunk bytes claimed when the failing claim was attempted, and store identifies the requesting scratch user. needed_bytes_lower_bound is the requesting report region's additional whole-chunk demand. For store command it is the arena size needed for the required store extent rounded up to chunks, divided by kCommandScratchArenaShare and rounded up to bytes (saturated at INT64_MAX). Crossing a command store's share is arena_exhausted and the hosting layer re-places the run. With sink_exhausted, the finalizer exits 8; sink_bytes is the bytes read (cap_bytes + 1) and cap_bytes is the planned cap U. APP maps that receipt to this failure and refunds the run; COMPUTE re-places it with 2x U. Other reasons carry no sizes or store identity. All arguments are optional for existing raisers; the run has no completed sink or valid trailer.",
+   "description": "The engine could not complete the report sink, scratch storage or spill arena. Every reason, including exhaustion of the engine-certified arena bound or planned sink cap and a closed sink peer during finalization, is an engine fault. reason distinguishes arena exhaustion (arena_exhausted), arena I/O (arena_io), invalid arena backing (arena_backing), file-mode scratch I/O (scratch_io), sink open/write I/O (sink_io), a closed sink peer (sink_peer_closed), a sink making no successful write for its stall budget (sink_stalled) and a finalizer stream exceeding its planned cap (sink_exhausted). With arena_exhausted, high_water_bytes and arena_bytes are byte counts, claimed_bytes counts chunk bytes claimed when the failing claim was attempted, and store identifies the requesting scratch user. needed_bytes_lower_bound is the requesting report region's additional whole-chunk demand. For store command it is the arena size needed for the required store extent rounded up to chunks, divided by kCommandScratchArenaShare and rounded up to bytes (saturated at INT64_MAX). Crossing a command store's share is arena_exhausted and the hosting layer re-places the run. With sink_exhausted, the finalizer exits 8; sink_bytes is the bytes read (cap_bytes + 1) and cap_bytes is the planned cap U. APP maps that receipt to this failure and refunds the run; COMPUTE re-places it with 2x U. Other reasons, including sink_stalled, carry no sizes, time budget or store identity. All arguments are optional for existing raisers; the run has no completed sink or valid trailer.",
    "english": [
     "report sink open failed",
+    "report sink stalled",
     "report sink write failed",
     "report sink write made no progress"
    ],
@@ -1152,6 +1154,30 @@
    ],
    "retryable": true,
    "since": "1.4.0"
+  },
+  "run_budget_exceeded": {
+   "args": {
+    "kind": {
+     "kind": "vocab",
+     "values": [
+      "wall",
+      "cpu"
+     ]
+    },
+    "limit": {
+     "kind": "integer"
+    },
+    "used": {
+     "kind": "integer"
+    }
+   },
+   "class": "resource",
+   "description": "The host-installed invocation wall or process CPU budget was reached at a completed input-bar boundary or a batch start/final publication checkpoint. kind identifies the clock; limit and used are integer milliseconds since installation. The in-flight bar completes before the run stops, and no sink trailer is published. Wall wins simultaneous breaches. A callback that never returns and compilation require a host out-of-process watchdog.",
+   "english": [
+    "run budget exceeded"
+   ],
+   "retryable": false,
+   "since": "1.8.0"
   },
   "run_mode_unsupported": {
    "args": {

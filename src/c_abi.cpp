@@ -40,7 +40,7 @@
  *     pf_report_scratch_arena_stats, strategy_require_report_scratch_arena_v1,
  *     strategy_report_sink_diagnostics_v1,
  *     pf_run_abort_install_sigterm_v1, pf_run_abort_requested_v1,
- *     pf_run_abort_restore_sigterm_v1 — the
+ *     pf_run_abort_restore_sigterm_v1, pf_run_budget_install_v1 — the
  *     authoritative list is EXPECTED_RUNTIME in scripts/check_c_abi_runtime.py (CI). Other
  *     `extern "C"` symbols listed in pineforge.h (strategy_create,
  *     run_backtest, etc.) are emitted per-compiled-strategy by the
@@ -70,6 +70,7 @@
 #include <utility>
 #include <vector>
 #include <signal.h>
+#include <time.h>
 #include "run_abort.hpp"
 namespace pineforge {
 void clear_native_c_host_refusal_error(BacktestEngine* engine) noexcept;
@@ -92,6 +93,24 @@ namespace {
 volatile sig_atomic_t run_sigterm_stop = 0;
 struct sigaction previous_sigterm {};
 bool sigterm_installed = false;
+
+struct RunBudget {
+    std::uint64_t wall_ms = 0, cpu_ms = 0;
+    timespec wall_start{}, cpu_start{};
+};
+RunBudget run_budget;
+
+std::int64_t budget_elapsed_ms(const timespec& start, const timespec& now) noexcept {
+    if (now.tv_sec < start.tv_sec
+        || (now.tv_sec == start.tv_sec && now.tv_nsec < start.tv_nsec)) return 0;
+    auto seconds = static_cast<std::uint64_t>(now.tv_sec - start.tv_sec);
+    auto nanos = now.tv_nsec - start.tv_nsec;
+    if (nanos < 0) { --seconds; nanos += 1000000000; }
+    const auto max = static_cast<std::uint64_t>(INT64_MAX);
+    const auto millis = static_cast<std::uint64_t>(nanos / 1000000);
+    if (seconds > (max - millis) / 1000) return INT64_MAX;
+    return static_cast<std::int64_t>(seconds * 1000 + millis);
+}
 
 void run_sigterm_handler(int) noexcept {
     run_sigterm_stop = 1;
@@ -354,9 +373,38 @@ namespace pineforge {
 bool run_sigterm_requested() noexcept {
     return sigterm_installed && run_sigterm_stop != 0;
 }
+
+RunBudgetCheck check_run_budget() noexcept {
+    // Wall wins a simultaneous breach. No allocation or clocks with both
+    // axes disabled; otherwise one read per enabled axis per boundary.
+    for (const bool wall : {true, false}) {
+        const auto limit = wall ? run_budget.wall_ms : run_budget.cpu_ms;
+        if (!limit) continue;
+        timespec now{};
+        if (::clock_gettime(wall ? CLOCK_MONOTONIC : CLOCK_PROCESS_CPUTIME_ID, &now) != 0)
+            return {nullptr, 0, 0, true};
+        const auto used = budget_elapsed_ms(wall ? run_budget.wall_start : run_budget.cpu_start, now);
+        if (static_cast<std::uint64_t>(used) >= limit)
+            return {wall ? "wall" : "cpu", static_cast<std::int64_t>(limit), used, false};
+    }
+    return {};
+}
 } // namespace pineforge
 
 extern "C" {
+
+PF_API int pf_run_budget_install_v1(uint64_t wall_ms, uint64_t cpu_ms) {
+    // Validate and sample before publishing, so failure preserves the old
+    // configuration. Reinstall explicitly replaces both limits and epochs.
+    if (wall_ms > INT64_MAX || cpu_ms > INT64_MAX) return -1;
+    RunBudget next;
+    next.wall_ms = wall_ms;
+    next.cpu_ms = cpu_ms;
+    if (wall_ms && ::clock_gettime(CLOCK_MONOTONIC, &next.wall_start) != 0) return -1;
+    if (cpu_ms && ::clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &next.cpu_start) != 0) return -1;
+    run_budget = next;
+    return 0;
+}
 
 PF_API int pf_run_abort_install_sigterm_v1(void) {
     // The caller blocks SIGTERM across installation. Repeated installation

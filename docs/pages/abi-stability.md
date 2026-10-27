@@ -69,9 +69,9 @@ Three layers:
 
 The counts below describe the current API, including recorded outputs and the report sink; recorded outputs are not part of 1.4.0.
 
-A built strategy `.so` exposes 109 compiled-strategy `PF_API` declarations
-(93 runtime implementations plus sixteen generated exports) plus 43 native-host
-declarations: 152 `PF_API` exports in total; a script that declares
+A built strategy `.so` exposes 110 compiled-strategy `PF_API` declarations
+(94 runtime implementations plus sixteen generated exports) plus 43 native-host
+declarations: 153 `PF_API` exports in total; a script that declares
 `use_bar_magnifier = true` also exports `strategy_declares_bar_magnifier`, and a
 module that records outputs its three outputs exports. `nm -gU` also reports libc++'s
 `std::piecewise_construct`; no project-internal C++ symbol is exported. The grouped table below is a guide,
@@ -127,9 +127,10 @@ not the complete inventory:
 | `strategy_set_report_sink_fd_v1` | Report sink borrowed stream configuration |
 | `strategy_report_sink_receipt_v1` | Report sink counts, digest and completion |
 | `strategy_report_sink_summary_v1` | Report-only T-row folds and nonfinite validation |
+| `pf_run_budget_install_v1` | Invocation wall and process CPU budgets |
 
 Sixteen per-strategy exports include the five create/run/free lifecycle
-functions. The remaining 93 runtime implementations, including the
+functions. The remaining 94 runtime implementations, including the
 closed-trade incarnation accessor, are force-linked into each strategy library,
 so consumers resolve the same complete ABI from the strategy `.so`. All
 additions remain covered by the minor-version append-only guarantee.
@@ -182,6 +183,69 @@ Sockets use `send(..., MSG_NOSIGNAL)`. A FIFO host must ignore SIGPIPE
 (Python does by default; a C host calls `signal(SIGPIPE, SIG_IGN)`) so a
 closed reader becomes `report_sink_failed`. The library does not change
 process-wide SIGPIPE handling. A successful new inherited-arena attach sets SIGXFSZ to `SIG_IGN` process-wide; detach does not restore it. Hosts relying on their SIGXFSZ handler or default termination must account for this before attaching an arena.
+
+### Host time budgets and cooperative stop
+
+FIFO and socket report sinks default to a **300000 ms stall budget**. The
+budget measures time without a successful write while flushing the sink;
+each positive write resets it, including a partial write. A large report
+that keeps draining can take longer than the budget in total. Set
+`PF_REPORT_SINK_STALL_MS` before configuring the fd sink, or use
+`run_json.py --report-sink-stall-ms MS`. The environment accepts an unsigned
+decimal `uint64_t`; malformed values fail with `report_sink_failed` and
+`reason: sink_io`. An explicit `0` waits without a limit: unlimited waiting
+is the host's choice. A stall fails through the existing typed sink path as
+`report_sink_failed` with `args: {"reason":"sink_stalled"}` and no valid
+trailer. This reason carries no size or time arguments.
+
+Finite waiting also applies to descriptors supplied in blocking mode.
+Sockets use `MSG_DONTWAIT` along with `MSG_NOSIGNAL`; FIFO flushing
+temporarily sets `O_NONBLOCK` and restores the caller's flags on exit.
+The host must exclusively own writes and flag changes on that open-file
+description, including duplicate descriptors, during a flush. The engine
+still borrows the descriptor; the host owns its close. EINTR retries retain
+the no-progress deadline, and poll errors and peer closure keep their
+existing typed outcomes.
+
+`pf_run_budget_install_v1(wall_ms, cpu_ms)` installs two independent
+invocation limits in milliseconds. `0` explicitly disables an axis;
+`(0, 0)` removes both limits. Before any installation both axes are
+disabled. Installation replaces both limits and starts new epochs; a host
+reusing the runtime should install or clear them for each invocation.
+Call from the invoking thread for one serialized invocation, without
+racing execution. The function returns `0`, or `-1` for a limit above
+`INT64_MAX` or a failed clock read, preserving the previous installation
+on failure.
+
+Wall time uses `CLOCK_MONOTONIC` since installation. CPU time uses
+`CLOCK_PROCESS_CPUTIME_ID`, including CPU spent on other process threads.
+Batch execution reads each enabled clock at completed input-bar
+boundaries, alongside the stop flag installed by
+`pf_run_abort_install_sigterm_v1`; it also checks at batch start and final
+publication checkpoints. There are no budget clock reads in order or
+operation loops. The whole in-flight input bar finishes before a breach
+stops further input, including callbacks and close matching. A pending
+SIGTERM retains its `run_aborted` outcome; otherwise simultaneous clock
+breaches report `wall` first.
+
+A budget breach sets failed run status and publishes
+`run_budget_exceeded` (class `resource`, retryable `false`) through
+`strategy_get_last_error_code` and `strategy_get_last_error_args`, with
+`kind` (`wall` or `cpu`), `limit`, and `used`. Both numeric arguments are
+integer milliseconds, with `used >= limit`. A budget-stopped run has no
+valid sink trailer, even when the native host requests quiet abort
+reporting. `run_json.py --run-wall-budget-ms MS --run-cpu-budget-ms MS`
+passes these limits to the ABI once after library loading in either
+ordinary or selected-window execution; an omitted axis is `0` when the
+other is specified. Warmups and benchmark repeats share that installation.
+The existing failure JSON forwarder preserves the code and typed args.
+
+These are cooperative controls, not a hard execution deadline. They
+cannot interrupt a user callback that never returns within one bar,
+compilation, or a blocked regular-file syscall. Run-budget checks apply
+to batch execution at the checkpoints above; the sink stall budget applies
+when writing a FIFO or socket. The host's out-of-process watchdog must
+cover work that cannot reach those checkpoints.
 
 ## Report sink summary receipt
 

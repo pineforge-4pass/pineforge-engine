@@ -2201,6 +2201,47 @@ class StrategyLibraryError(RunFailure, RuntimeError):
         super().__init__(text, "strategy_library_incompatible", code_args)
 
 
+def _validate_budget_options(args):
+    for name, maximum in (("run_wall_budget_ms", 2**63 - 1),
+                          ("run_cpu_budget_ms", 2**63 - 1),
+                          ("report_sink_stall_ms", 2**64 - 1)):
+        value = getattr(args, name, None)
+        if value is not None and not 0 <= value <= maximum:
+            label = "--" + name.replace("_", "-")
+            raise _request_invalid(f"error: {label} must be between 0 and {maximum}",
+                                   "arguments")
+
+
+def _configure_sink_stall(args, cleanup):
+    value = getattr(args, "report_sink_stall_ms", None)
+    if value is None:
+        return  # leave an inherited choice, or the engine's finite default
+    key = "PF_REPORT_SINK_STALL_MS"
+    previous = os.environ.get(key)
+    def restore():
+        if previous is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = previous
+    cleanup.callback(restore)
+    os.environ[key] = str(value)
+
+
+def _install_run_budgets(lib, args):
+    wall = getattr(args, "run_wall_budget_ms", None)
+    cpu = getattr(args, "run_cpu_budget_ms", None)
+    if wall is None and cpu is None:
+        return
+    if not hasattr(lib, "pf_run_budget_install_v1"):
+        raise StrategyLibraryError("the strategy library has no run budget API",
+                                   {"reason": "symbol_missing"})
+    install = lib.pf_run_budget_install_v1
+    install.argtypes = [ctypes.c_uint64, ctypes.c_uint64]
+    install.restype = ctypes.c_int
+    if install(wall or 0, cpu or 0) != 0:
+        raise _engine_invariant("the invocation run budget could not be installed")
+
+
 class _SigtermAbort:
     """Block startup SIGTERM until the native flag-only handler can own it.
 
@@ -4815,6 +4856,7 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
     abort = getattr(binary_inputs, "_sigterm_abort", None)
     if abort is not None:
         abort.attach(lib)
+    _install_run_budgets(lib, args)
     checked = uses_checked_settings(lib)
     if args.outputs:
         require_outputs(lib)
@@ -5223,6 +5265,13 @@ def _main(argv, binary_inputs) -> int:
     ap.add_argument("--report-sink-fd", type=int, default=None, metavar="N",
                     help="Write pf-report-sink/v1 to inherited FIFO/AF_UNIX stream fd N; "
                          "emit summary JSON without report files and close N after capture.")
+    ap.add_argument("--report-sink-stall-ms", type=int, default=None, metavar="MS",
+                    help="Maximum time without a successful sink write; default 300000 ms "
+                         "(or PF_REPORT_SINK_STALL_MS). Explicit 0 waits without a limit.")
+    ap.add_argument("--run-wall-budget-ms", type=int, default=None, metavar="MS",
+                    help="Invocation wall budget at input-bar boundaries; 0 disables the axis.")
+    ap.add_argument("--run-cpu-budget-ms", type=int, default=None, metavar="MS",
+                    help="Invocation process CPU budget at input-bar boundaries; 0 disables the axis.")
     ap.add_argument("--report-sink-format", type=int, choices=(1, 2), default=1,
                     help="Sink wire format (default 1); format 2 requires the external transcoder.")
     ap.add_argument("--run-id", default="",
@@ -5281,6 +5330,8 @@ def _main(argv, binary_inputs) -> int:
         # the legacy aggregate refusal now that --ohlcv has alternatives.
         ap.error("the following arguments are required: --so, --ohlcv")
     args = ap.parse_args(argv)
+    _validate_budget_options(args)
+    _configure_sink_stall(args, binary_inputs)
     if args.profile not in ("unjailed", "jailed"):
         raise _request_invalid("PINEFORGE_RUN_JSON_PROFILE must be unjailed or jailed", "arguments")
 
@@ -5373,6 +5424,7 @@ def _main(argv, binary_inputs) -> int:
     lib = load_strategy(args.so)
     if abort is not None:
         abort.attach(lib)
+    _install_run_budgets(lib, args)
     checked = uses_checked_settings(lib)
     if args.outputs:
         require_outputs(lib)

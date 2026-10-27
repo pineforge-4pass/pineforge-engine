@@ -757,6 +757,24 @@ PF_API int pf_run_abort_requested_v1(void);
  *  Returns 0 (also when uninstalled), or -1 on signal-setup failure. */
 PF_API int pf_run_abort_restore_sigterm_v1(void);
 
+/** Install the invocation's wall and process CPU budgets in milliseconds.
+ *  Zero explicitly disables that axis; both zero removes the budgets.
+ *  Opt-in, process-wide within the loaded runtime, for one serialized child
+ *  invocation. Installation replaces both limits and starts new epochs.
+ *  Call on the invoking thread; do not race installation with execution.
+ *  CLOCK_MONOTONIC wall and CLOCK_PROCESS_CPUTIME_ID CPU are observed only
+ *  at the batch run's completed input-bar boundaries and its start/final
+ *  publication checkpoints, independently of #strategy_request_abort.
+ *  A breach stops after the in-flight bar completes, leaves no sink trailer,
+ *  and publishes run_budget_exceeded with kind (wall or cpu), limit and used
+ *  (integer milliseconds). Wall wins simultaneous breaches; pending SIGTERM
+ *  keeps its run_aborted outcome. Read via strategy_get_last_error_code/args.
+ *  Returns 0, or -1 for a limit above INT64_MAX or clock-setup failure,
+ *  preserving the previous installation on failure. This does not interrupt
+ *  a callback that never returns or bound compilation; the host must use an
+ *  out-of-process watchdog for those cases. No ABI layout changes. */
+PF_API int pf_run_budget_install_v1(uint64_t wall_ms, uint64_t cpu_ms);
+
 /** Return the physical entry incarnation for one closed-trade row.
  *
  *  Partial-close/FIFO fragments emitted from the same physical entry share
