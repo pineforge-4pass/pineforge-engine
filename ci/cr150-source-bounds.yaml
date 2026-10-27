@@ -74,7 +74,7 @@ scan:
   generated_files:
     - "tutorial/**/generated*.cpp"
 ceilings:
-  unreviewed: 1264
+  unreviewed: 1266
   pending-flat-memory: 188
 owners:
   - {name: "generated-cpp", globs: ["tutorial/**"]}
@@ -1417,10 +1417,10 @@ entries:
   - {id: "U1370", file: "src/native_order.cpp", symbol: "<expr>", ops: ["grow"], container: "unresolved by the index: <expr>.push_back(...)", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 4406}
   - {id: "U1371", file: "src/native_order.cpp", symbol: "<temp:const_iterator>", ops: ["temp"], container: "unresolved by the index: const_iterator", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 2630}
   - {id: "U1372", file: "src/native_order.cpp", symbol: "<temp:vector>", ops: ["temp"], container: "unresolved by the index: std::vector<LiveRequest>", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 2633}
-  - {id: "U1373", file: "src/native_order.cpp", symbol: "blobs", ops: ["grow"], container: "unresolved by the index: blobs.append(...)", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 2154}
-  - {id: "U1374", file: "src/native_order.cpp", symbol: "book_key", ops: ["decl"], container: "std::string", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 1636}
+  - {id: "U1373", file: "src/native_order_book.hpp", symbol: "blobs", ops: ["grow"], container: "unresolved by the index: blobs.append(...)", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 127}
+  - {id: "U1374", file: "src/native_order_book.hpp", symbol: "book_key", ops: ["decl"], container: "std::string", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 52}
   - {id: "U1375", file: "src/native_order.cpp", symbol: "buffer_", ops: ["decl", "grow"], container: "std::vector<unsigned char>", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 1125}
-  - {id: "U1376", file: "src/native_order.cpp", symbol: "bytes", ops: ["assign", "decl"], container: "std::vector<unsigned char>", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 1124}
+  - {id: "U1376", file: "src/native_order_book.hpp", symbol: "bytes", ops: ["assign", "decl"], container: "std::vector<unsigned char>", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 146}
   - {id: "U1377", file: "src/native_order.cpp", symbol: "canonical", ops: ["assign", "decl"], container: "std::vector<RequestHandle>", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 576}
   - {id: "U1378", file: "src/native_order.cpp", symbol: "chunks", ops: ["decl", "grow"], container: "std::vector<std::unique_ptr<Chunk>>", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 1751}
   - {id: "U1379", file: "src/native_order.cpp", symbol: "codec_page", ops: ["decl", "grow"], container: "std::vector<std::byte>", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 1663}
@@ -1430,18 +1430,18 @@ entries:
   - {id: "U1383", file: "src/native_order.cpp", symbol: "external", ops: ["alloc"], container: "unresolved by the index: make_shared", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 1442}
   - {id: "U1384", file: "src/native_order.cpp", symbol: "external_openings", ops: ["alloc"], container: "unresolved by the index: make_shared", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 1382}
   - {id: "U1385", file: "src/native_order.cpp", symbol: "first", ops: ["assign", "decl"], container: "const_iterator", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 942}
-  - {id: "U1386", file: "src/native_order.cpp", symbol: "fresh_blobs", ops: ["grow"], container: "unresolved by the index: fresh_blobs.append(...)", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 2304}
-  - {id: "U1387", file: "src/native_order.cpp", symbol: "fresh_links", ops: ["grow"], container: "unresolved by the index: fresh_links.insert(...)", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 2311}
-  - {id: "U1388", file: "src/native_order.cpp", symbol: "fresh_rows", ops: ["grow"], container: "unresolved by the index: fresh_rows.insert(...)", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 2307}
+  - {id: "U1386", file: "src/native_order_book.hpp", symbol: "fresh_blobs", ops: ["grow"], container: "unresolved by the index: fresh_blobs.append(...)", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 277}
+  - {id: "U1387", file: "src/native_order_book.hpp", symbol: "fresh_links", ops: ["grow"], container: "unresolved by the index: fresh_links.insert(...)", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 284}
+  - {id: "U1388", file: "src/native_order_book.hpp", symbol: "fresh_rows", ops: ["grow"], container: "unresolved by the index: fresh_rows.insert(...)", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 280}
   - {id: "U1389", file: "src/native_order.cpp", symbol: "frozen", ops: ["alloc"], container: "unresolved by the index: make_shared", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 121}
   - {id: "U1390", file: "src/native_order.cpp", symbol: "inline_ids", ops: ["assign", "decl"], container: "std::vector<EventId>", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 3540}
   - {id: "U1391", file: "src/native_order.cpp", symbol: "instance", ops: ["alloc"], container: "unresolved by the index: make_shared", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 3801}
   - {id: "U1392", file: "src/native_order.cpp", symbol: "item", ops: ["grow"], container: "unresolved by the index: item.emplace(...)", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 1243}
   - {id: "U1393", file: "src/native_order.cpp", symbol: "items", ops: ["grow"], container: "unresolved by the index: items.resize(...)", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 1260}
   - {id: "U1394", file: "src/native_order.cpp", symbol: "journal_", ops: ["alloc"], container: "unresolved by the index: make_shared", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 3742}
-  - {id: "U1395", file: "src/native_order.cpp", symbol: "kept", ops: ["alloc"], container: "unresolved by the index: make_shared", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 2280}
-  - {id: "U1396", file: "src/native_order.cpp", symbol: "key", ops: ["assign", "decl"], container: "std::string", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 1637}
-  - {id: "U1397", file: "src/native_order.cpp", symbol: "links", ops: ["grow"], container: "unresolved by the index: links.insert(...)", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 2160}
+  - {id: "U1395", file: "src/native_order_book.hpp", symbol: "kept", ops: ["alloc"], container: "unresolved by the index: make_shared", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 253}
+  - {id: "U1396", file: "src/native_order_book.hpp", symbol: "key", ops: ["assign", "decl"], container: "std::string", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 53}
+  - {id: "U1397", file: "src/native_order_book.hpp", symbol: "links", ops: ["grow"], container: "unresolved by the index: links.insert(...)", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 133}
   - {id: "U1398", file: "src/native_order.cpp", symbol: "local", ops: ["decl", "grow"], container: "std::vector<EventId>", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 3454}
   - {id: "U1399", file: "src/native_order.cpp", symbol: "make_unique", ops: ["alloc"], container: "unresolved by the index: make_unique", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 1903}
   - {id: "U1400", file: "src/native_order.cpp", symbol: "openings", ops: ["decl"], container: "std::vector<RequestHandle>", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 1439}
@@ -1542,3 +1542,5 @@ entries:
   - {id: "U1499", file: "src/native_order.cpp", symbol: "held_", ops: ["assign"], container: "unresolved by the index: held_ = ...", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 2600}
   - {id: "U1500", file: "src/source/pine_adapter.cpp", symbol: "cohorts", ops: ["decl", "grow"], container: "std::vector<const CohortRow*>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 8761}
   - {id: "U1501", file: "src/ta_misc.cpp", symbol: "held_", ops: ["assign"], container: "unresolved by the index: held_ = ...", owner: "ta-series", phase: "unclassified", state: "unreviewed", line: 602}
+  - {id: "U1511", file: "src/native_order_book.hpp", symbol: "directory", ops: ["assign", "decl"], container: "std::string", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 82, note: "CR150-CX 10-28 (CR-391B C0): the moved block of the former entry U1382 (BookSpill moved verbatim from src/native_order.cpp into this included header); same container, same review state as the origin entry, no behaviour change"}
+  - {id: "U1512", file: "src/native_order_book.hpp", symbol: "rows", ops: ["assign", "decl", "grow"], container: "std::vector<RequestHandle>", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 136, note: "CR150-CX 10-28 (CR-391B C0): the moved block of the former entry U1401 (BookSpill moved verbatim from src/native_order.cpp into this included header); same container, same review state as the origin entry, no behaviour change"}

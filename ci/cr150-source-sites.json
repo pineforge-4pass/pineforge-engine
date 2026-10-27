@@ -12735,19 +12735,6 @@
     "StoreImpl :: StoreImpl ( const Shape & shape , ScratchBacking & backing ) : chunk_bytes_ ( shape . chunk_bytes ) #1"
    ],
    "cls": "alloc",
-   "spelling": "new std::byte",
-   "ordinal": 1
-  },
-  {
-   "file": "src/detail/o1_store.cpp",
-   "symbol": "reset",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace detail #1",
-    "namespace o1 #1",
-    "StoreImpl :: StoreImpl ( const Shape & shape , ScratchBacking & backing ) : chunk_bytes_ ( shape . chunk_bytes ) #1"
-   ],
-   "cls": "alloc",
    "spelling": "new CommandScratchStore",
    "ordinal": 1
   },
@@ -12775,19 +12762,6 @@
    ],
    "cls": "alloc",
    "spelling": "new StoreImpl",
-   "ordinal": 1
-  },
-  {
-   "file": "src/detail/o1_store.cpp",
-   "symbol": "<temp:string>",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace detail #1",
-    "namespace o1 #1",
-    "[ [ noreturn ] ] void StoreImpl :: throw_status ( const char * what , ScratchStatus status ) const #1"
-   ],
-   "cls": "temp",
-   "spelling": "std::string",
    "ordinal": 1
   },
   {
@@ -20212,20 +20186,6 @@
   },
   {
    "file": "src/native_order.cpp",
-   "symbol": "bytes",
-   "scope": [
-    "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
-    "namespace #3",
-    "class ByteWriter #1",
-    "void raw ( const void * data , std :: size_t length ) #1"
-   ],
-   "cls": "assign",
-   "spelling": "bytes = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "src/native_order.cpp",
    "symbol": "buffer_",
    "scope": [
     "namespace pineforge :: native_order #1",
@@ -20402,31 +20362,6 @@
    ],
    "cls": "alloc",
    "spelling": "make_shared",
-   "ordinal": 1
-  },
-  {
-   "file": "src/native_order.cpp",
-   "symbol": "book_key",
-   "scope": [
-    "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
-    "namespace #3"
-   ],
-   "cls": "decl",
-   "spelling": "std :: string",
-   "ordinal": 1
-  },
-  {
-   "file": "src/native_order.cpp",
-   "symbol": "key",
-   "scope": [
-    "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
-    "namespace #3",
-    "std :: string book_key ( uint64_t value ) #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: string",
    "ordinal": 1
   },
   {
@@ -20641,19 +20576,6 @@
   },
   {
    "file": "src/native_order.cpp",
-   "symbol": "bytes",
-   "scope": [
-    "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
-    "struct WorkingRequestCore :: JournalStore #1",
-    "const std :: vector < CommandEvent > & load ( uint64_t page_no , const JournalPage & page ) const #1"
-   ],
-   "cls": "assign",
-   "spelling": "bytes = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "src/native_order.cpp",
    "symbol": "events",
    "scope": [
     "namespace pineforge :: native_order #1",
@@ -20676,194 +20598,6 @@
    ],
    "cls": "assign",
    "spelling": "events = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "src/native_order.cpp",
-   "symbol": "directory",
-   "scope": [
-    "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
-    "struct WorkingRequestCore :: BookSpill #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: string",
-   "ordinal": 1
-  },
-  {
-   "file": "src/native_order.cpp",
-   "symbol": "directory",
-   "scope": [
-    "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
-    "struct WorkingRequestCore :: BookSpill #1",
-    "void set_directory ( const std :: string & value ) #1"
-   ],
-   "cls": "assign",
-   "spelling": "directory = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "src/native_order.cpp",
-   "symbol": "blobs",
-   "scope": [
-    "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
-    "struct WorkingRequestCore :: BookSpill #1",
-    "void spill ( const LiveRequest & row ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "blobs . append ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/native_order.cpp",
-   "symbol": "links",
-   "scope": [
-    "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
-    "struct WorkingRequestCore :: BookSpill #1",
-    "void spill ( const LiveRequest & row ) #1",
-    "if ( priority ! = incarnation ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "links . insert ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/native_order.cpp",
-   "symbol": "rows",
-   "scope": [
-    "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
-    "struct WorkingRequestCore :: BookSpill #1",
-    "void spill ( const LiveRequest & row ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "rows . insert ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/native_order.cpp",
-   "symbol": "bytes",
-   "scope": [
-    "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
-    "struct WorkingRequestCore :: BookSpill #1",
-    "LiveRequest read ( const WorkingRequestCore & core , const BookSlot & slot ) const #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < unsigned char >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/native_order.cpp",
-   "symbol": "blobs",
-   "scope": [
-    "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
-    "struct WorkingRequestCore :: BookSpill #1",
-    "void rewrite ( uint64_t at , BookSlot slot , const LiveRequest & row ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "blobs . append ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/native_order.cpp",
-   "symbol": "kept",
-   "scope": [
-    "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
-    "struct WorkingRequestCore :: BookSpill #1",
-    "std :: shared_ptr < LiveRequest > keep ( LiveRequest row ) const #1"
-   ],
-   "cls": "alloc",
-   "spelling": "make_shared",
-   "ordinal": 1
-  },
-  {
-   "file": "src/native_order.cpp",
-   "symbol": "bytes",
-   "scope": [
-    "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
-    "struct WorkingRequestCore :: BookSpill #1",
-    "void compact ( ) #1",
-    "at = next_alive ( at ) ) #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < unsigned char >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/native_order.cpp",
-   "symbol": "fresh_blobs",
-   "scope": [
-    "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
-    "struct WorkingRequestCore :: BookSpill #1",
-    "void compact ( ) #1",
-    "at = next_alive ( at ) ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "fresh_blobs . append ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/native_order.cpp",
-   "symbol": "key",
-   "scope": [
-    "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
-    "struct WorkingRequestCore :: BookSpill #1",
-    "void compact ( ) #1",
-    "at = next_alive ( at ) ) #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: string",
-   "ordinal": 1
-  },
-  {
-   "file": "src/native_order.cpp",
-   "symbol": "fresh_rows",
-   "scope": [
-    "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
-    "struct WorkingRequestCore :: BookSpill #1",
-    "void compact ( ) #1",
-    "at = next_alive ( at ) ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "fresh_rows . insert ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/native_order.cpp",
-   "symbol": "fresh_links",
-   "scope": [
-    "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
-    "struct WorkingRequestCore :: BookSpill #1",
-    "void compact ( ) #1",
-    "at = next_alive ( at ) ) #1",
-    "if ( priority ! = slot . incarnation ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "fresh_links . insert ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/native_order.cpp",
-   "symbol": "rows",
-   "scope": [
-    "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
-    "struct WorkingRequestCore :: BookSpill #1",
-    "void compact ( ) #1"
-   ],
-   "cls": "assign",
-   "spelling": "rows = . . .",
    "ordinal": 1
   },
   {
@@ -21398,18 +21132,6 @@
    ],
    "cls": "assign",
    "spelling": "inline_ids = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "src/native_order.cpp",
-   "symbol": "key",
-   "scope": [
-    "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
-    "GroupEffectReceipt WorkingRequestCore :: group_effect_receipt ( std :: size_t index ) const #1"
-   ],
-   "cls": "assign",
-   "spelling": "key = . . .",
    "ordinal": 1
   },
   {
@@ -22875,17 +22597,6 @@
    ],
    "cls": "grow",
    "spelling": "successor_roots_ . append ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/native_order.cpp",
-   "symbol": "bytes",
-   "scope": [
-    "namespace pineforge :: detail #1",
-    "ScratchStatus PayloadReadback :: field ( std :: uint64_t index , PayloadField & out ) const noexcept #1"
-   ],
-   "cls": "assign",
-   "spelling": "bytes = . . .",
    "ordinal": 1
   },
   {
@@ -42743,6 +42454,202 @@
    ],
    "cls": "decl",
    "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/detail/o1_store.cpp",
+   "symbol": "<temp:string>",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace detail #1",
+    "namespace o1 #1",
+    "[ [ noreturn ] ] void StoreImpl :: throw_status ( const char * what , ScratchStatus status ) const #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/detail/o1_store.cpp",
+   "symbol": "reset",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace detail #1",
+    "namespace o1 #1",
+    "StoreImpl :: StoreImpl ( const Shape & shape , ScratchBacking & backing ) : chunk_bytes_ ( shape . chunk_bytes ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "new std :: byte",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order_book.hpp",
+   "symbol": "blobs",
+   "scope": [
+    "struct WorkingRequestCore :: BookSpill #1",
+    "void rewrite ( uint64_t at , BookSlot slot , const LiveRequest & row ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "blobs . append ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order_book.hpp",
+   "symbol": "blobs",
+   "scope": [
+    "struct WorkingRequestCore :: BookSpill #1",
+    "void spill ( const LiveRequest & row ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "blobs . append ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order_book.hpp",
+   "symbol": "book_key",
+   "scope": [
+    "namespace #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order_book.hpp",
+   "symbol": "bytes",
+   "scope": [
+    "struct WorkingRequestCore :: BookSpill #1",
+    "LiveRequest read ( const WorkingRequestCore & core , const BookSlot & slot ) const #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < unsigned char >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order_book.hpp",
+   "symbol": "bytes",
+   "scope": [
+    "struct WorkingRequestCore :: BookSpill #1",
+    "void compact ( ) #1",
+    "at = next_alive ( at ) ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < unsigned char >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order_book.hpp",
+   "symbol": "directory",
+   "scope": [
+    "struct WorkingRequestCore :: BookSpill #1",
+    "void set_directory ( const std :: string & value ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "directory = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order_book.hpp",
+   "symbol": "directory",
+   "scope": [
+    "struct WorkingRequestCore :: BookSpill #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order_book.hpp",
+   "symbol": "fresh_blobs",
+   "scope": [
+    "struct WorkingRequestCore :: BookSpill #1",
+    "void compact ( ) #1",
+    "at = next_alive ( at ) ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "fresh_blobs . append ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order_book.hpp",
+   "symbol": "fresh_links",
+   "scope": [
+    "struct WorkingRequestCore :: BookSpill #1",
+    "void compact ( ) #1",
+    "at = next_alive ( at ) ) #1",
+    "if ( priority ! = slot . incarnation ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "fresh_links . insert ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order_book.hpp",
+   "symbol": "fresh_rows",
+   "scope": [
+    "struct WorkingRequestCore :: BookSpill #1",
+    "void compact ( ) #1",
+    "at = next_alive ( at ) ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "fresh_rows . insert ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order_book.hpp",
+   "symbol": "kept",
+   "scope": [
+    "struct WorkingRequestCore :: BookSpill #1",
+    "std :: shared_ptr < LiveRequest > keep ( LiveRequest row ) const #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order_book.hpp",
+   "symbol": "key",
+   "scope": [
+    "namespace #1",
+    "std :: string book_key ( uint64_t value ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order_book.hpp",
+   "symbol": "key",
+   "scope": [
+    "struct WorkingRequestCore :: BookSpill #1",
+    "void compact ( ) #1",
+    "at = next_alive ( at ) ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order_book.hpp",
+   "symbol": "links",
+   "scope": [
+    "struct WorkingRequestCore :: BookSpill #1",
+    "void spill ( const LiveRequest & row ) #1",
+    "if ( priority ! = incarnation ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "links . insert ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order_book.hpp",
+   "symbol": "rows",
+   "scope": [
+    "struct WorkingRequestCore :: BookSpill #1",
+    "void spill ( const LiveRequest & row ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "rows . insert ( . . . )",
    "ordinal": 1
   }
  ]
