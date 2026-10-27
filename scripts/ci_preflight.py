@@ -2850,6 +2850,11 @@ def check_commands(source: Path, output: Path | None = None,
          [sys.executable, str(source / 'scripts/test_check_doc_anchors.py')]),
         ('doc-anchors',
          [sys.executable, str(source / 'scripts/check_doc_anchors.py')]),
+        # Keep the generated engine cap/refusal/default table tied to the
+        # source constants and the closed ScratchResource vocabulary.
+        ('cap-table',
+         [sys.executable, str(source / 'scripts/gen_cap_table.py'), '--check',
+          '--root', str(source)]),
         ('doc-lint-tests',
          [sys.executable, str(source / 'scripts/test_check_doc_lint.py')]),
         ('doc-lint',
