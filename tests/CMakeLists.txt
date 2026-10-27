@@ -7347,6 +7347,16 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
     endif()
 endif()
 
+# Report-memory bound: fresh Linux processes at N and 8N, including a FULL-handle reuse.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND PINEFORGE_BUILD_TUTORIAL
+   AND CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_BUILD_TYPE STREQUAL "Release"
+   AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
+    add_test(NAME test_report_sink_scratch_curve_resident
+        COMMAND test_report_sink_scratch_curve --resident-bound)
+    set_tests_properties(test_report_sink_scratch_curve_resident PROPERTIES
+        LABELS "slow;mem" RUN_SERIAL TRUE)
+endif()
+
 # CR-150: one file per lane in tests/cr150.d/<lane>.cmake (see tests/cr150.d/README.md).
 file(GLOB CR150_LANE_CMAKE CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/cr150.d/*.cmake")
 list(SORT CR150_LANE_CMAKE)
@@ -7767,6 +7777,45 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND _pf_source_key_type STREQUAL "STATIC_LIBRARY
 endif()
 # --- CR-150 live-source-key end ---
 
+# --- CR-150 deferred-sink-sync begin ---
+# The plain registration is in cr150.d/deferred-sink-sync.cmake. Its no-argument
+# row runs every named row below; each named row checks one condition.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_libraries(test_report_sink_deferred_sync PRIVATE Threads::Threads)
+    target_link_options(test_report_sink_deferred_sync PRIVATE
+        "-Wl,--wrap=pwrite" "-Wl,--wrap=ftruncate"
+        "-Wl,--wrap=fdatasync" "-Wl,--wrap=fsync")
+    add_test(NAME test_report_sink_deferred_sync_count COMMAND test_report_sink_deferred_sync count)
+    add_test(NAME test_report_sink_deferred_sync_bytes COMMAND test_report_sink_deferred_sync bytes)
+    add_test(NAME test_report_sink_deferred_sync_sync_fault
+        COMMAND test_report_sink_deferred_sync sync_fault)
+    add_test(NAME test_report_sink_deferred_sync_write_fault
+        COMMAND test_report_sink_deferred_sync write_fault)
+    add_test(NAME test_report_sink_deferred_sync_truncate_fault
+        COMMAND test_report_sink_deferred_sync truncate_fault)
+    add_test(NAME test_report_sink_deferred_sync_engine COMMAND test_report_sink_deferred_sync engine)
+    add_test(NAME test_report_sink_deferred_sync_engine_sync_fault
+        COMMAND test_report_sink_deferred_sync engine_sync_fault)
+    add_test(NAME test_report_sink_deferred_sync_abandon
+        COMMAND test_report_sink_deferred_sync abandon)
+    add_test(NAME test_report_sink_deferred_sync_memory COMMAND test_report_sink_deferred_sync memory)
+    set_tests_properties(test_report_sink_deferred_sync test_report_sink_deferred_sync_count
+        test_report_sink_deferred_sync_bytes test_report_sink_deferred_sync_sync_fault
+        test_report_sink_deferred_sync_write_fault test_report_sink_deferred_sync_truncate_fault
+        test_report_sink_deferred_sync_engine test_report_sink_deferred_sync_engine_sync_fault
+        test_report_sink_deferred_sync_abandon test_report_sink_deferred_sync_memory
+        PROPERTIES LABELS "sink_sync")
+endif()
+# --- CR-150 deferred-sink-sync end ---
+
+# --- CR-150 resident-command-scratch begin ---
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 8)
+    target_link_options(test_command_scratch_spill PRIVATE
+        "-Wl,--wrap=pread" "-Wl,--wrap=pwrite"
+        "-Wl,--wrap=fdatasync" "-Wl,--wrap=fsync"
+        "-Wl,--wrap=_ZnamRKSt9nothrow_t")
+endif()
+# --- CR-150 resident-command-scratch end ---
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
         message(FATAL_ERROR "PR fast row or executable is missing: ${_pf_fast_test}")

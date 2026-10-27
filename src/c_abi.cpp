@@ -27,6 +27,7 @@
  *     strategy_closed_trade_entry_id, strategy_closed_trade_exit_id,
  *     strategy_closed_trade_exit_comment, strategy_closed_trade_close_cause,
  *     strategy_position_size, strategy_current_equity,
+ *     strategy_initial_capital,
  *     strategy_script_bars_processed),
  *     pf_version_get/pf_version_string,
  *     pf_abi_version, strategy_execution_contract,
@@ -1082,6 +1083,15 @@ PF_API int strategy_execution_contract(pf_strategy_t s) {
         return static_cast<pineforge::BacktestEngine*>(s)->execution_contract();
     } catch (...) {
         return -1;
+    }
+}
+
+PF_API double strategy_initial_capital(pf_strategy_t s) {
+    try {
+        if (!s) return std::numeric_limits<double>::quiet_NaN();
+        return static_cast<const pineforge::BacktestEngine*>(s)->initial_capital();
+    } catch (...) {
+        return std::numeric_limits<double>::quiet_NaN();
     }
 }
 

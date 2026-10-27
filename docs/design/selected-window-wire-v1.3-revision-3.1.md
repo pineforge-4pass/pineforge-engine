@@ -155,19 +155,21 @@ span is enough, since the kernel makes `cagr` null only in the existing
 domains. From one day on the writer repeats the kernel's arithmetic, `(pow(E/E0,
 1/span_years) - 1) * 100`, on the curve's own marks, with `E` the last mark, and
 names the overflow form when that value is not finite (a power that overflows
-counts, as `pow` returns infinity in C). `E0` is the first mark only where the
-run proves it is the initial capital: the selected-window anchor, which is the
-engine's initial capital by construction, or, in an ordinary run, a first mark
-with no open profit and no trade entered at it (nothing is then realized or
-marked, so the mark is the capital). Where it cannot prove the initial capital
-the writer cannot recompute the compounded form, guesses none and names nothing.
-In that case (a run of one day or more whose compounded form is not finite, with an unproven first mark)
-the reported `cagr` is still the simple proportional value that the kernel computed; only
-the `simple_proportional_overflow` flag is absent. A later release may remove the
-gap by reading the capital from the engine.
+counts, as `pow` returns infinity in C). When the library exports
+`strategy_initial_capital`, the writer calls it once for the run's handle and
+uses its finite positive result as `E0`, the engine's stored initial capital.
+That export removes the proof requirement from the selected-window anchor and
+ordinary first mark. An older library without `strategy_initial_capital`, or a
+library that returns a nonfinite or nonpositive value, keeps the proof-based
+fallback: the first mark must be the selected-window anchor or an ordinary
+mark with no open profit and no trade entered at bar 0. An unproven first mark
+therefore retains the old gap for that compatibility path: when a run of one
+day or more has a nonfinite compounded form, the reported `cagr` is still the
+simple proportional value computed by the kernel, but
+`simple_proportional_overflow` is absent.
 It adds the `calmar` key beside the `cagr` key from `metrics.equity.calmar`
 alone: the same string when that value is not null, no key when it is null.
-No kernel state, public POD member, header ABI, or runtime export is added.
+The additive export changes no public POD member or header ABI version.
 
 Revision 3 explicitly places diagnostics/timings outside the digest. The
 reason stays there; metrics, summary, trade and curve keys remain unchanged.

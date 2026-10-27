@@ -3979,7 +3979,8 @@ EQUITY_REPORT_KEYS = {"sharpe_monthly": "sharpe_tv", "sortino_monthly": "sortino
 MIN_ANNUALIZATION_SPAN_MS = 86_400_000
 
 
-def _annualization_diagnostics(curve, metrics, trades=(), window_anchor=False):
+def _annualization_diagnostics(curve, metrics, trades=(), window_anchor=False,
+                               initial_capital=None):
     """Name the simple proportional form of cagr, and of the calmar made from it.
 
     No span makes cagr, calmar, sharpe_bar or sortino_bar null, so the writer
@@ -3987,14 +3988,17 @@ def _annualization_diagnostics(curve, metrics, trades=(), window_anchor=False):
     the simple form: a finite cagr on a positive sub-day span is flagged. From
     one day on it takes the compounded form unless that is not finite, so the
     writer repeats the kernel's arithmetic on the curve's own marks: the ratio
-    of the last mark to the initial capital. The initial capital is the first
-    mark only when the rows prove it untouched: the selected-window anchor
-    (window_anchor), or no open profit and no trade entered at it. With no such
-    proof the writer makes no claim and names nothing. calmar is cagr over the
-    drawdown percent, so it carries the same flag as the cagr it was computed
-    from: its key is present exactly when the cagr key is and calmar is not
-    null (zero drawdown leaves it null: then no calmar key). The bar ratios use
-    one formula on every span and have no reason.
+    of the last mark to the engine's initial capital when the optional
+    strategy_initial_capital export supplied a finite positive value. Older
+    libraries without that export fall back to the first mark only when the
+    rows prove it untouched: the selected-window anchor (window_anchor), or no
+    open profit and no trade entered at it. An invalid exported value also uses
+    that fallback. With no such proof the writer makes no claim and names
+    nothing. calmar is cagr over the drawdown percent, so it carries the same
+    flag as the cagr it was computed from: its key is present exactly when the
+    cagr key is and calmar is not null (zero drawdown leaves it null: then no
+    calmar key). The bar ratios use one formula on every span and have no
+    reason.
     Python's integer subtraction is exact across the full int64 timestamp
     domain; convert the difference to double just as the kernel does.
     """
@@ -4008,10 +4012,18 @@ def _annualization_diagnostics(curve, metrics, trades=(), window_anchor=False):
     if span_ms < MIN_ANNUALIZATION_SPAN_MS:
         form = "simple_proportional_subday"
     else:
-        if not window_anchor and (curve[0]["open_profit"] != 0
-                                  or any(row["entry_bar_index"] <= 0 for row in trades)):
-            return {}
-        capital, final = curve[0]["equity"], curve[-1]["equity"]
+        capital = initial_capital
+        try:
+            valid_capital = (
+                capital is not None and math.isfinite(capital) and capital > 0)
+        except (TypeError, ValueError, OverflowError):
+            valid_capital = False
+        if not valid_capital:
+            if not window_anchor and (curve[0]["open_profit"] != 0
+                                      or any(row["entry_bar_index"] <= 0 for row in trades)):
+                return {}
+            capital = curve[0]["equity"]
+        final = curve[-1]["equity"]
         if not (math.isfinite(capital) and capital > 0 and math.isfinite(final) and final > 0):
             return {}
         span_years = span_ms / (365.25 * 86400.0 * 1000.0)
@@ -4027,9 +4039,11 @@ def _annualization_diagnostics(curve, metrics, trades=(), window_anchor=False):
     return {"cagr": form, "calmar": form}
 
 
-def _annualization_block(curve, metrics, trades=(), window_anchor=False) -> dict:
+def _annualization_block(curve, metrics, trades=(), window_anchor=False,
+                         initial_capital=None) -> dict:
     """The diagnostics entry for revision 3.1: present only when cagr used a simple form."""
-    reasons = _annualization_diagnostics(curve, metrics, trades, window_anchor)
+    reasons = _annualization_diagnostics(
+        curve, metrics, trades, window_anchor, initial_capital)
     return {"annualization": reasons} if reasons else {}
 
 
@@ -4055,9 +4069,10 @@ def build_report_dict(report: ReportC, ohlcv_path: Path,
                       applied_overrides: dict[str, str],
                       applied_runtime: dict[str, object] | None = None,
                       trade_entry_incarnations=None,
-                      window_anchor: bool = False) -> dict:
-    # window_anchor: the curve's first point is the selected-window anchor, the
-    # engine's own initial capital by construction (_annualization_diagnostics).
+                      window_anchor: bool = False,
+                      initial_capital=None) -> dict:
+    # window_anchor: the curve's first point is the selected-window anchor. It
+    # remains the fallback proof when the runtime lacks strategy_initial_capital.
     def trade_at(i):
         t = report.trades[i]
         return {
@@ -4165,7 +4180,8 @@ def build_report_dict(report: ReportC, ohlcv_path: Path,
             "magnifier_sub_bars_total":     int(report.magnifier_sub_bars_total),
             "magnifier_sample_ticks_total": int(report.magnifier_sample_ticks_total),
             "bar_magnifier_enabled":        bool(report.bar_magnifier_enabled),
-            **_annualization_block(equity_curve, metrics, trades, window_anchor),
+            **_annualization_block(
+                equity_curve, metrics, trades, window_anchor, initial_capital),
         },
         "trades": trades,
         "metrics": metrics,
@@ -4950,12 +4966,13 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
             # list pre-pass. These read-only values are revisited during output.
             for i in range(report.trades_len):
                 trade_entry_incarnations(i)
+        engine_initial_capital = _read_strategy_initial_capital(lib, state)
         builder = _build_sink_report if sink is not None else build_report_dict
         out = builder(
             report, args.ohlcv, fed_count, plan["fed_first_data_ms"], plan["fed_last_data_ms"],
             elapsed, inputs, overrides, applied_runtime,
             sink if sink is not None else trade_entry_incarnations,
-            window_anchor=True)
+            window_anchor=True, initial_capital=engine_initial_capital)
         if sink is None:
             _validate_report_result(out)
         _add_scratch_arena_diagnostics(lib, out["diagnostics"], args)
@@ -5544,11 +5561,13 @@ def _main(argv, binary_inputs) -> int:
         if trade_entry_incarnations is not None:
             for i in range(report.trades_len):
                 trade_entry_incarnations(i)
+        engine_initial_capital = _read_strategy_initial_capital(lib, state)
         builder = _build_sink_report if sink is not None else build_report_dict
         out = builder(
             report, args.ohlcv, n, first_ts, last_ts,
             elapsed, inputs, overrides, applied_runtime,
-            sink if sink is not None else trade_entry_incarnations)
+            sink if sink is not None else trade_entry_incarnations,
+            initial_capital=engine_initial_capital)
         if sink is None:
             _validate_report_result(out)
         _add_scratch_arena_diagnostics(lib, out["diagnostics"], args)
@@ -5962,6 +5981,172 @@ def _disk_report_directory(directory=None):
         + "; set TMPDIR or --spill-dir to a disk-backed directory", "arguments")
 
 
+_BULK_E_ENABLED = True
+_BULK_E_WINDOW = 64 * 1024
+# A finite double's repr is at most 24 ASCII bytes. The lookahead bounds
+# rejected tokens too, avoiding unbounded regex work on a malformed line.
+_BULK_E_FLOAT = (
+    rb"(?=[-+0-9.e]{1,24}[,\]])-?(?:0|[1-9][0-9]*)"
+    rb"(?:\.[0-9]+(?:e[+-]?[0-9]+)?|e[+-]?[0-9]+)"
+)
+_BULK_E_LINE = re.compile(
+    rb'\["E",(0|-?[1-9][0-9]{0,15}),(' + _BULK_E_FLOAT
+    + rb"),(" + _BULK_E_FLOAT + rb")\]\n")
+# Lines per regex call. The engine matches a repeated group with its whole
+# backtracking state on a heap stack that is freed only when the call returns:
+# every alternation and bounded repeat of a line nests a frame, about 2 KiB per
+# canonical line. A call over a full window of 33-byte lines (about 2,000)
+# would therefore hold several MiB, and a call over a shorter file less, so the
+# transient memory would follow the window and the file instead of staying flat.
+# The bound keeps that stack, and every list built from one batch, the same for
+# any window and any file length; a window is consumed in successive batches.
+_BULK_E_BATCH = 128
+_BULK_E_RUN = re.compile(rb"(?:" + _BULK_E_LINE.pattern + (rb"){1,%d}" % _BULK_E_BATCH))
+_BULK_E_LINE_BYTES = 80
+
+
+class _BulkEquity:
+    """One accepted batch of lines, with only its two decoded endpoints retained."""
+    def __init__(self, raw, count, first, last):
+        self.raw, self.count, self.first, self.last = raw, count, first, last
+
+
+def _bulk_equity(raw):
+    """Accept a strict subset; a failed proof never supplies an error.
+
+    ``raw`` is one run of at most _BULK_E_BATCH lines; a longer one is no match.
+    """
+    if not raw or _BULK_E_RUN.fullmatch(raw) is None:
+        return None
+    times, equities, profits = zip(*_BULK_E_LINE.findall(raw))
+    timestamps = list(map(int, times))
+    if min(timestamps) < -((1 << 53) - 1) or max(timestamps) > (1 << 53) - 1:
+        return None
+    texts = list(map(bytes.decode, equities + profits))
+    numbers = list(map(float, texts))
+    if not all(map(math.isfinite, numbers)) or list(map(repr, numbers)) != texts:
+        return None
+    count = len(timestamps)
+    first = dict(time_ms=timestamps[0], equity=numbers[0], open_profit=numbers[count])
+    last = dict(time_ms=timestamps[-1], equity=numbers[count - 1], open_profit=numbers[-1])
+    return _BulkEquity(raw, count, first, last)
+
+
+class _BulkEquityFile:
+    """Look ahead within a loaded direct page; replay all other bytes strictly."""
+    def __init__(self, file):
+        self.file, self.data, self.cursor, self.eof = file, b"", 0, False
+
+    def _fill(self):
+        self.data, self.cursor = self.data[self.cursor:], 0
+        room = _BULK_E_WINDOW - len(self.data)
+        if not room or self.eof:
+            return
+        first = self.file.read(1)  # populate exactly the page readline would use
+        if not first:
+            self.eof = True
+            return
+        self.data += first
+        available = self.file.read_base + self.file.read_size - self.file.position
+        take = min(room - 1, available)
+        if take:
+            self.data += self.file.read(take)
+
+    def window(self):
+        if self.cursor == len(self.data):
+            self._fill()
+        # A canonical line can cross a page. Carry only its bounded tail;
+        # longer or malformed lines go back to the strict readline limit.
+        while (not self.eof and len(self.data) - self.cursor < _BULK_E_LINE_BYTES
+               and len(self.data) - self.cursor < _BULK_E_WINDOW
+               and self.data.find(b"\n", self.cursor) < 0):
+            self._fill()
+        return self.data, self.cursor
+
+    def readline(self, limit):
+        stop = min(len(self.data), self.cursor + limit)
+        newline = self.data.find(b"\n", self.cursor, stop)
+        if newline >= 0:
+            stop = newline + 1
+        head = self.data[self.cursor:stop]
+        self.cursor = stop
+        if newline >= 0 or len(head) == limit:
+            return head
+        return head + self.file.readline(limit - len(head))
+
+    def read(self, count):
+        stop = min(len(self.data), self.cursor + count)
+        head = self.data[self.cursor:stop]
+        self.cursor = stop
+        return head if len(head) == count else head + self.file.read(count - len(head))
+
+    def close(self):
+        self.data = b""
+        self.file.close()
+
+
+class _BulkEquityHash:
+    """Keep the strict reader's byte order, updating SHA only by window."""
+    def __init__(self, digest):
+        self.digest, self.pending = digest, bytearray()
+
+    def update(self, data):
+        view, offset = memoryview(data), 0
+        while offset < len(view):
+            take = min(_BULK_E_WINDOW - len(self.pending), len(view) - offset)
+            self.pending.extend(view[offset:offset + take])
+            offset += take
+            if len(self.pending) == _BULK_E_WINDOW:
+                self.digest.update(self.pending)
+                self.pending.clear()
+
+    def hexdigest(self):
+        if self.pending:
+            self.digest.update(self.pending)
+            self.pending.clear()
+        return self.digest.hexdigest()
+
+
+def _bulk_equity_records(reader):
+    """Advance the real strict reader only after a complete E-batch proof."""
+    import pf_sink
+    # Alternate readers retain their own iteration and refusal semantics.
+    if (not _BULK_E_ENABLED or not isinstance(reader, pf_sink.SinkReader)
+            or not isinstance(reader._file, _UncachedSinkFile)):
+        yield from reader
+        return
+    file = reader._file = _BulkEquityFile(reader._file)
+    reader._hash = _BulkEquityHash(reader._hash)
+    while not reader.complete:
+        try:
+            data, cursor = file.window()
+        except OSError as error:
+            # _readline increments only after a successful read.
+            reader._refuse(error)
+        match = _BULK_E_RUN.match(data, cursor)
+        if match is not None:
+            batch = _bulk_equity(data[cursor:match.end()])
+            if batch is None or reader._counts["E"] + batch.count > pf_sink.I53_MAX:
+                yield from reader
+                return
+            reader._counts["E"] += batch.count
+            reader._line_number += batch.count
+            reader._hash.update(batch.raw)
+            file.cursor = match.end()
+            yield batch
+            continue
+        try:
+            record = next(reader)
+        except StopIteration:
+            return
+        yield record
+        if record.tag == "E":
+            # Includes nulls, escaped tags and accepted noncanonical integers.
+            # No second failed proof is attempted later in this file.
+            yield from reader
+            return
+
+
 class _SinkReportDiagnostics:
     """Only the two E endpoints, their count and the first result refusal."""
 
@@ -5984,12 +6169,17 @@ class _SinkReportDiagnostics:
 
     def trades(self, reader):
         # The existing strict reader exhausts its trailer in this same pass;
-        # its uncached backing reads fixed 64 KiB windows, never all rows.
+        # canonical E windows need only their count and decoded endpoints.
         # O/V/K/X/H are deliberately dropped from this fold: the old trade
         # fold read only records("T"). The reader still hashes every record
         # as it iterates, supplying verify()'s digest for the entire sink.
-        for record in reader:
-            if record.tag == "E":
+        for record in _bulk_equity_records(reader):
+            if isinstance(record, _BulkEquity):
+                if not self.count_e:
+                    self.first = record.first
+                self.last = record.last
+                self.count_e += record.count
+            elif record.tag == "E":
                 point = record.as_dict()
                 if not self.count_e:
                     self.first = point
@@ -6119,9 +6309,10 @@ class _ReportSink:
     def _trade_records(self):
         yield from self._tagged_records("T")
 
-    def _tagged_records(self, tag):
+    def _tagged_records(self, tag, *, bulk=False):
         """Hash and extract one tag from the same fresh sequential raw reads."""
         import pf_sink
+        bulk = bulk and _BULK_E_ENABLED and tag == "E"
         try:
             file = _open_uncached_sink(self.path, raw=True)
             try:
@@ -6141,7 +6332,7 @@ class _ReportSink:
                 last_byte = trailer_start = None
                 done = False
                 while not done:
-                    chunk = file.read(file.window)
+                    chunk = file.read(min(file.window, _BULK_E_WINDOW) if bulk else file.window)
                     if not chunk:
                         if pending or (last_byte is not None and last_byte != 0x0A):
                             raise pf_sink.SinkFormatError("line does not end with LF")
@@ -6162,6 +6353,19 @@ class _ReportSink:
                     cursor = len(carry) if kind is not None else max(0, processed - base)
                     record_at = escaped_at = None
                     while cursor < end:
+                        if bulk and kind == "record" and not pending:
+                            match = _BULK_E_RUN.match(data, cursor)
+                            if match is not None:
+                                batch = _bulk_equity(data[cursor:match.end()])
+                                if batch is not None:
+                                    cursor = match.end()
+                                    processed = base + cursor
+                                    kind = None
+                                    count += batch.count
+                                    yield batch
+                                    del batch
+                                    continue
+                                bulk = False
                         if kind == "tag":
                             # The fallback decodes only the first string token;
                             # skipped bodies are never walked or retained.
@@ -6218,8 +6422,13 @@ class _ReportSink:
                                 pf_sink._parse(bytes(pending))
                                 record = None
                             else:
-                                record = decode(bytes(pending))
-                                count += 1
+                                record = _bulk_equity(bytes(pending)) if bulk else None
+                                if record is None:
+                                    bulk = False
+                                    record = decode(bytes(pending))
+                                    count += 1
+                                else:
+                                    count += record.count
                             pending.clear()
                             kind = None
                             processed = base + cursor
@@ -6323,6 +6532,13 @@ class _JSONRecordArray:
         return self.item(index)
 
 
+class _JSONEquityArray(_JSONRecordArray):
+    """The ordinary record interface plus an opt-in encoded path-sink scan."""
+    def __init__(self, sink):
+        super().__init__(lambda: (row.as_dict() for row in sink.records("E")), sink.counts["E"])
+        self.sink = sink
+
+
 class _JSONUTF8:
     """A borrowed event message, decoded with the existing replacement rule."""
     _strlen = ctypes.CDLL(None).strlen
@@ -6348,7 +6564,7 @@ class _BoundedJSONFile:
     no engine sink can also use tmpfs/ramfs for the unjailed JSON artifact.
     Engine sink and scratch directories are selected by _disk_report_directory.
     One aligned 64 KiB anonymous window is the I/O working set. Every write
-    window is synchronized before reuse. Jailed and fd routes use StringIO.
+    window is synchronized before reuse. Jailed and fd routes use UTF-8 memory buffers.
     """
     window = 64 * 1024
 
@@ -6421,17 +6637,23 @@ class _BoundedJSONFile:
         if self.reading:
             raise ValueError("a prepared report artifact is read-only")
         for offset in range(0, len(text), self.window):
-            data = text[offset:offset + self.window].encode("ascii")
-            position = 0
-            while position < len(data):
-                count = min(self.window - self.used, len(data) - position)
-                self.buffer[self.used:self.used + count] = data[position:position + count]
-                self.used += count
-                self.size += count
-                position += count
-                if self.used == self.window:
-                    self._sync_window()
+            self.write_ascii(text[offset:offset + self.window].encode("ascii"))
         return len(text)
+
+    def write_ascii(self, data):
+        """Append already encoded ASCII through the same aligned I/O window."""
+        if self.reading:
+            raise ValueError("a prepared report artifact is read-only")
+        position = 0
+        while position < len(data):
+            count = min(self.window - self.used, len(data) - position)
+            self.buffer[self.used:self.used + count] = data[position:position + count]
+            self.used += count
+            self.size += count
+            position += count
+            if self.used == self.window:
+                self._sync_window()
+        return len(data)
 
     def flush(self):
         self.file.flush()  # retain checked flush/close failure behavior
@@ -6636,6 +6858,51 @@ def _json_fast_value(value):
     return sum(len(item) for item in value.values() if type(item) is str) <= _STREAM_FAST_STR_LIMIT
 
 
+def _write_json_ascii(destination, data):
+    if isinstance(destination, _BoundedJSONFile):
+        destination.write_ascii(data)
+    else:
+        destination.write(data.decode("ascii"))
+
+
+def _stream_equity_array(value, destination):
+    destination.write("[")
+    pending, count, first = [], 0, True
+    # Fixed E fields, a <=17-byte integer and two <=24-byte reprs make an
+    # encoded row plus comma <=103 bytes. The ordinary 512-row boundary
+    # therefore precedes its 256 KiB byte boundary, including strict fallback.
+    try:
+        for record in value.sink._tagged_records("E", bulk=True):
+            if isinstance(record, _BulkEquity):
+                # sub and splitlines walk the entire batch in C. No Python
+                # loop, decoder or serializer visits its individual points.
+                rows = _BULK_E_LINE.sub(
+                    rb'{"time_ms":\1,"equity":\2,"open_profit":\3},' + b"\n",
+                    record.raw).splitlines()
+            else:
+                # The existing verified decoder owns all noncanonical cases.
+                rows = [json.dumps(record.as_dict(), separators=(",", ":"),
+                                   allow_nan=False).encode("ascii") + b","]
+            offset = 0
+            while offset < len(rows):
+                take = min(_STREAM_BATCH_RECORDS - count, len(rows) - offset)
+                chunk = b"".join(rows[offset:offset + take])[:-1]
+                pending.append(chunk if first else b"," + chunk)
+                first = False
+                count += take
+                offset += take
+                if count == _STREAM_BATCH_RECORDS:
+                    chunk = b"".join(pending)
+                    pending.clear()  # never retry a failed write
+                    count = 0
+                    _write_json_ascii(destination, chunk)
+    finally:
+        # Match the ordinary array writer's completed prefix on producer error.
+        if pending:
+            _write_json_ascii(destination, b"".join(pending))
+    destination.write("]")
+
+
 def _stream_json_value(value, destination):
     if isinstance(value, _JSONColumn):
         destination.write("[")
@@ -6643,6 +6910,8 @@ def _stream_json_value(value, destination):
         while chunk := value.file.read(64 * 1024):
             destination.write(chunk)
         destination.write("]")
+    elif isinstance(value, _JSONEquityArray) and _BULK_E_ENABLED:
+        _stream_equity_array(value, destination)
     elif isinstance(value, _JSONRecordArray):
         destination.write("[")
         first = True
@@ -6758,7 +7027,7 @@ def _prepare_report_json(document, resources, args, sink):
     # arrays. The fd route contains only the bounded summary. Neither may
     # create a report file, even when no sink is installed.
     if args.profile == "jailed" or getattr(sink, "fd_mode", False):
-        buffer = resources.enter_context(io.StringIO())
+        buffer = resources.enter_context(io.TextIOWrapper(io.BytesIO(), encoding="utf-8", newline="\n"))
         _stream_json(document, buffer)
         buffer.write("\n")
         buffer.seek(0)
@@ -6851,14 +7120,15 @@ def _sink_summary(report, sink, *, records=None):
 
 def _build_sink_report(report, ohlcv_path, n_bars, first_ts, last_ts, elapsed,
                        applied_inputs, applied_overrides, applied_runtime, sink,
-                       window_anchor=False):
+                       window_anchor=False, initial_capital=None):
     if report.trades or report.trades_len or report.equity_curve or report.equity_curve_len:
         raise _engine_invariant("a report with a sink must contain summary scalars only")
     # Reuse the unchanged producer for its small fields and exact key order.
     # The C ABI supplied no arrays, so this cannot walk native report rows.
     out = build_report_dict(report, ohlcv_path, n_bars, first_ts, last_ts, elapsed,
                             applied_inputs, applied_overrides, applied_runtime,
-                            window_anchor=window_anchor)
+                            window_anchor=window_anchor,
+                            initial_capital=initial_capital)
     out["summary"] = _sink_summary(report, sink)
     if getattr(sink, "fd_mode", False):
         _validate_report_result(out)  # the engine's summary checked every T
@@ -6870,7 +7140,8 @@ def _build_sink_report(report, ohlcv_path, n_bars, first_ts, last_ts, elapsed,
         ] if diagnostics.count_e else ()
         first_bar_trade = ({"entry_bar_index": 0},) if diagnostics.trade_at_start else ()
         out["diagnostics"].update(
-            _annualization_block(endpoints, out["metrics"], first_bar_trade, window_anchor))
+            _annualization_block(
+                endpoints, out["metrics"], first_bar_trade, window_anchor, initial_capital))
         # stdout.json has the small report only. The wrapper/finalizer owns
         # the stream's artifact and receipt; no child-local path names it.
         out.pop("trades")
@@ -6892,10 +7163,14 @@ def _build_sink_report(report, ohlcv_path, n_bars, first_ts, last_ts, elapsed,
         lambda: (_sink_trade(row) for row in sink.records("T")), sink.counts["T"])
     equity_curve = _JSONRecordArray(
         lambda: (row.as_dict() for row in sink.records("E")), sink.counts["E"])
+    if _BULK_E_ENABLED and type(sink) is _ReportSink:
+        # Preserve subclass-provided readers and the non-path report routes.
+        equity_curve = _JSONEquityArray(sink)
     out["equity_curve"] = equity_curve
     first_bar_trade = ({"entry_bar_index": 0},) if diagnostics.trade_at_start else ()
     out["diagnostics"].update(
-        _annualization_block(diagnostics, out["metrics"], first_bar_trade, window_anchor))
+        _annualization_block(
+            diagnostics, out["metrics"], first_bar_trade, window_anchor, initial_capital))
     if sink.named:
         reference = {
             "path": sink.path,
@@ -7079,6 +7354,15 @@ def _sink_outputs_block(lib, state, sink, resources, *, summary_only=False):
         entry["values"] = column
     block["events"] = events
     return block
+
+
+def _read_strategy_initial_capital(lib, state):
+    accessor = getattr(lib, "strategy_initial_capital", None)
+    if accessor is None:
+        return None
+    accessor.argtypes = [ctypes.c_void_p]
+    accessor.restype = ctypes.c_double
+    return accessor(state)
 
 
 def _discard_stdout() -> None:
