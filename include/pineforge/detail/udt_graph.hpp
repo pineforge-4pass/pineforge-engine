@@ -19,11 +19,17 @@
 // Shape on this interface has no id-table row count/cap or transaction-pool
 // size. An adapter's admission limits must be specified and tested there.
 //
-// Maximum transaction nesting: 1 handle beyond the caller's. An outer
-// script scope plus a joined collection scope plus a graph operation need
-// 3 simultaneously live handles. Store calls within that operation do not
-// open additional handles. begin() explicitly requested by a caller counts
-// as another caller handle. Scopes flatten; joining is not a savepoint.
+// Maximum transaction nesting: caller scopes + 1 handle per public operation,
+// independent of graph depth (covered by the depth-six live-handle row). An
+// outer script scope plus a joined collection scope plus a graph operation
+// need 3 simultaneously live handles. Store calls within that operation do
+// not open additional handles. begin() explicitly requested by a caller
+// counts as another caller handle. Scopes flatten; joining is not a savepoint.
+//
+// This module has no destructor-driven release. close() and collect() are
+// ordinary begin() operations using caller handle slots; call them from
+// non-destructor code. Any future RAII wrapper whose destructor calls drop
+// or close must instead use the Store's cleanup slot (begin_cleanup()).
 //
 // After a graph call fails inside its joined scope, the only valid next
 // operation is rollback of the outer scope. copy_deep() can leave copy/work

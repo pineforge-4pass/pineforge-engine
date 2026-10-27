@@ -14,6 +14,7 @@
 #include <stdexcept>
 #include <sys/types.h>
 #include <unistd.h>
+#include <utility>
 
 namespace a5u_test {
 
@@ -42,6 +43,8 @@ inline constexpr std::uint64_t store_bound(std::uint32_t resident_pages) {
 
 // Heap a graph operation may hold beyond the Store workspace. o1_store.hpp:
 // one Tx-handle allocation per begin(), none for any other successful call.
+// CountingStore adds one fixed observer allocation per handle; the same
+// one-page charge covers both allocations.
 // The bounded graph/growth windows use at most one caller scope and one
 // graph-operation scope: two live handles, each charged one whole page.
 inline constexpr std::uint64_t kOperationHeapBound = 2 * kPageBytes;
@@ -55,18 +58,37 @@ inline pineforge::detail::o1::Shape shape(std::uint32_t resident_pages) {
 }
 
 // Observe actual calls into the merged Store. This proxy neither emulates
-// storage nor supplies resident statistics; Tx handles and Stats come from
-// the real Store unchanged. Counts diagnose accidental population scans in
-// per-bar operations independently of the runtime's own implementation.
+// storage nor supplies resident statistics. It wraps real Tx handles only to
+// count their lifetimes, forwarding commit/rollback unchanged; Stats come from
+// the real Store. Counts also diagnose accidental population scans per bar.
 class CountingStore final : public pineforge::detail::o1::Store {
     using Id = pineforge::detail::o1::Id;
     using Tx = pineforge::detail::o1::Tx;
     pineforge::detail::o1::Store& inner_;
 
+    class CountedTx final : public Tx {
+        CountingStore& store_;
+        std::unique_ptr<Tx> inner_;
+    public:
+        CountedTx(CountingStore& store, std::unique_ptr<Tx> inner)
+            : store_(store), inner_(std::move(inner)) {
+            ++store_.live_handles;
+            store_.peak_live_handles = std::max(store_.peak_live_handles, store_.live_handles);
+        }
+        ~CountedTx() override {
+            inner_.reset();
+            --store_.live_handles;
+        }
+        void commit() override { inner_->commit(); }
+        void rollback() override { inner_->rollback(); }
+    };
+
 public:
     explicit CountingStore(pineforge::detail::o1::Store& inner) : inner_(inner) {}
     mutable std::uint64_t data_calls = 0;
     std::uint64_t begin_calls = 0;
+    std::uint64_t live_handles = 0;
+    std::uint64_t peak_live_handles = 0;
     std::uint64_t mutation_calls = 0;
     // Optional fixed-state observer used to retain a real collector mark for
     // replay in the stale-mark row. No storage or transaction is emulated.
@@ -108,7 +130,7 @@ public:
     }
     std::unique_ptr<Tx> begin() override {
         ++begin_calls;
-        return inner_.begin();
+        return std::make_unique<CountedTx>(*this, inner_.begin());
     }
     pineforge::detail::o1::Stats stats() const override { return inner_.stats(); }
 };
