@@ -979,6 +979,8 @@ PINNED_SLOW_TEST_ROWS = frozenset((
     'test_o1_store',
     # tests/cr150.d/core-cr150-cohort.cmake:5,11 (Release-only timing ratio).
     'test_adapter_spaced_ids_scaling',
+    # tests/cr150.d/p2cx-a5arr.cmake:5.
+    'test_array_growth_1m',
 ))
 
 
