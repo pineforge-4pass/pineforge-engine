@@ -24,10 +24,17 @@ diagnostics keys, described below.
   and relink every strategy library against the 1.8.0 headers and
   `libpineforge.a`, as for every pair change; replacing the archive alone does
   not update a statically linked strategy library.
-- No public header changed. The only new header is
-  `include/pineforge/detail/o1_store.hpp`, an internal building block that no
-  engine path uses yet (below); its object code is part of `libpineforge.a`,
-  which therefore grows slightly.
+- **Native C++ modules require a rebuild.** The native order value namespace
+  advances from `pineforge::native_order::native_order_v7` to
+  `pineforge::native_order::native_order_v8`. The layouts of `BindOpenings`,
+  `OpeningsClose`, `TargetObservation`, `CommandContext` and
+  `WorkingRequestCore` changed with opening readbacks and scratch-backed core
+  storage. Rebuild every C++ object that includes these headers and relink
+  against the matching archive; stale v7 order symbols now fail to link or
+  load. Identity types remain in `native_order_v1`.
+- `include/pineforge/detail/o1_store.hpp` is a new internal building block
+  that no engine path uses yet (below); its object code is part of
+  `libpineforge.a`, which therefore grows slightly.
 - Hosts that read the codegen input manifest must recognize the new input type
   `color` (a packed unsigned `0xAARRGGBB` integer default). That is a codegen
   change, described in the codegen 1.8.0 notes; the engine side is unchanged:

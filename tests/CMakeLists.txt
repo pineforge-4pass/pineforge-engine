@@ -1288,7 +1288,7 @@ list(APPEND TEST_SOURCES test_native_batch_log_presize)
 # Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_state_continuation)
 list(APPEND TEST_SOURCES test_native_tick_volume)
-# R5 V19-B: the order core's journal is a window (native_order_v7) -- absolute
+# The order core's journal is a window (native_order_v8) -- absolute
 # journal positions, the chain index against a journal oracle over randomized
 # command streams, chain membership that is not a chain walk (scaling), and a
 # live deferred group-adjustment chain pinning the window. Source-free, so it
@@ -2455,6 +2455,32 @@ endif()
 
 add_test(NAME test_settlement_cpp_abi_tooling
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_settlement_cpp_abi.py)
+
+# Public order-epoch controls also run without the private host ABI fixtures.
+# Reuse the settlement caller/compiler flags and the full report-word fixture.
+if(UNIX)
+    add_test(NAME test_native_order_epoch_reject
+        COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/scripts/check_settlement_cpp_abi.py
+            --order-check reject
+            --compiler ${CMAKE_CXX_COMPILER}
+            --library $<TARGET_FILE:pineforge>
+            --include ${PROJECT_SOURCE_DIR}/include
+            --generated-include ${PROJECT_BINARY_DIR}/include
+            --receipt ${PROJECT_BINARY_DIR}/native-order-abi/reject.json
+            ${_pf_script_cpp_abi_flags})
+    add_test(NAME test_native_order_epoch_rebuild_bytes
+        COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/scripts/check_settlement_cpp_abi.py
+            --order-check rebuild
+            --compiler ${CMAKE_CXX_COMPILER}
+            --library $<TARGET_FILE:pineforge>
+            --include ${PROJECT_SOURCE_DIR}/include
+            --generated-include ${PROJECT_BINARY_DIR}/include
+            --current-build ${PROJECT_BINARY_DIR}
+            --receipt ${PROJECT_BINARY_DIR}/native-order-abi/rebuild.json
+            ${_pf_script_cpp_abi_flags})
+    set_tests_properties(test_native_order_epoch_rebuild_bytes PROPERTIES PROCESSORS 4)
+endif()
+
 # A receipt-gated row above skips (exit 77) wherever
 # PINEFORGE_REQUIRE_ABI_RECEIPTS is OFF and its providers are not prepared in
 # this build tree, and CTest counts a skipped row as passed.

@@ -291,12 +291,13 @@ generic hook. The v19 value epoch (R5 lane V19-A) advances the same three to
 `engine_script_run_v19`; the host capability macro is
 `PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V19`. Its frozen predecessor is
 `host-fc7aad6`, the last epoch-18 `main` commit, and
-`relocation-manifest-v18-v19.json` beside it is the live transition: no host
-virtual is added or removed, the request values move from `native_order_v6` <!-- verified HEAD -->
-to `native_order_v7` inside the epoch (R5 lane V19-B), and later v19 lanes change
+`relocation-manifest-v18-v19.json` beside it records that transition: no host
+virtual was added or removed, the request values moved from `native_order_v6` <!-- verified HEAD -->
+to `native_order_v7` inside the epoch, and later work changed
 layouts inside v19. L3b removes the source compatibility
 order type; the source extension hashes adapter and scheduler state instead
-(under `pineforge-source-adapter/v3`, advanced to v4 by R5 lane V19-E). <!-- verified HEAD --> Native request/core/event values are `native_order_v7`, the private
+(under `pineforge-source-adapter/v3`, advanced to v4 by R5 lane V19-E). <!-- verified HEAD -->
+Native request/core/event values are `native_order_v8`, the private
 consumer identity is
 `native-consumer/v9`, driver types are `native_driver_v5`, and run specs are
 `native_run_spec_v3` (R5 L6 adds `NativeRunSpec::subscriptions`, folded into
@@ -455,7 +456,7 @@ at once again: R5 lane PERF-P1's deferred view saved the v18 log folds, which
 v19 no longer makes, and no value moves with it. `native_run_spec_digest`
 keeps its byte-wise FNV-1a and its values. The values the tree pins were
 re-pinned once, each marked "expectation corrected".
-The journal window (R5 lane V19-B) moves the request values to
+The journal window originally moved the request values to
 `native_order_v7`: the order core's command journal is a window with
 absolute positions, `RequestDefinition::root` and the core's chain index
 replace the journal scan the cohort commands made, and a trail's arm ordinal
@@ -517,7 +518,11 @@ too. The corpus moves only where the excursion cells moved toward TradingView
 (19 probes); the values the tree pins were re-pinned once more, each marked
 "expectation corrected (H-THIN, ...)" with the value's cause.
 Stable `RunIdentity` / `RequestHandle` / `Birth` remain
-`native_order_v1`; request, core, and event values own `native_order_v7`.
+`native_order_v1`; request, core, and event values own `native_order_v8`.
+The 1.8.0 value epoch advances from `native_order_v7` to `native_order_v8`
+because opening readbacks and core storage changed their layouts. Rebuild
+native C++ modules against the matching headers and archive; stale v7 order
+symbols are refused at link or load time.
 Terms receipts, attempted terms, deferred
 remaining/allowance state, and a staged FX-curve digest contribute through the
 native continuation hash. Lifecycle definitions, generations, obligations and

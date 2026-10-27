@@ -501,7 +501,7 @@ five commands through `strategy_native_submit_v1` / `_replace_v1` /
 (`native_c_api.h:2829-2917`), under the same legality rule; see *Driving the
 kernel from C* below.
 
-`native_order::Request` values belong to `native_order_v7`
+`native_order::Request` values belong to `native_order_v8`
 (`native_order.hpp:41`); identity types stay `native_order_v1`. Label/comment
 remain inert text. The market default path still constructs from:
 
@@ -3689,7 +3689,7 @@ fraction.
 
 The Pine adapter emits `Sized` for the default-quantity entries above and no
 `ScopeFraction` (its percentage exits keep their own arithmetic);
-`native_order` values belong to `native_order_v7`.
+`native_order` values belong to `native_order_v8`.
 
 ### Source-layer boundary
 

@@ -6262,7 +6262,7 @@
    "symbol": "openings",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct BindOpenings #1"
    ],
    "cls": "decl",
@@ -6274,7 +6274,7 @@
    "symbol": "label",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct Request #1"
    ],
    "cls": "decl",
@@ -6286,7 +6286,7 @@
    "symbol": "comment",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct Request #1"
    ],
    "cls": "decl",
@@ -6298,7 +6298,7 @@
    "symbol": "label",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1"
+    "inline namespace native_order_v8 #1"
    ],
    "cls": "decl",
    "spelling": "std :: string",
@@ -6309,7 +6309,7 @@
    "symbol": "comment",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1"
+    "inline namespace native_order_v8 #1"
    ],
    "cls": "decl",
    "spelling": "std :: string",
@@ -6320,7 +6320,7 @@
    "symbol": "openings",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct OpeningsClose #1"
    ],
    "cls": "decl",
@@ -6332,7 +6332,7 @@
    "symbol": "incarnations",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct SelectedExposure #1"
    ],
    "cls": "decl",
@@ -6344,7 +6344,7 @@
    "symbol": "openings",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct TargetObservation #1"
    ],
    "cls": "decl",
@@ -6356,7 +6356,7 @@
    "symbol": "prior_adjustment_ids",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct TermsResolvedEvent #1"
    ],
    "cls": "decl",
@@ -6368,7 +6368,7 @@
    "symbol": "prior_adjustment_ids",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct QuantityBoundEvent #1"
    ],
    "cls": "decl",
@@ -6380,7 +6380,7 @@
    "symbol": "overflow_",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class InlineCommandEvents #1",
     "InlineCommandEvents ( InlineCommandEvents && other ) noexcept : size_ ( other . size_ ) #1"
    ],
@@ -6393,7 +6393,7 @@
    "symbol": "overflow_",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class InlineCommandEvents #1",
     "InlineCommandEvents & operator = ( InlineCommandEvents && other ) noexcept #1",
     "if ( this ! = & other ) #1"
@@ -6407,7 +6407,7 @@
    "symbol": "overflow_",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class InlineCommandEvents #1",
     "InlineCommandEvents ( const InlineCommandEvents & other ) : size_ ( other . size_ ) #1"
    ],
@@ -6420,7 +6420,7 @@
    "symbol": "overflow_",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class InlineCommandEvents #1",
     "InlineCommandEvents & operator = ( const InlineCommandEvents & other ) #1",
     "if ( this ! = & other ) #1"
@@ -6434,7 +6434,7 @@
    "symbol": "inline_",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class InlineCommandEvents #1",
     "void push_back ( CommandEvent event ) #1",
     "if ( overflow_ . empty ( ) && size_ < inline_ . size ( ) ) #1"
@@ -6448,7 +6448,7 @@
    "symbol": "overflow_",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class InlineCommandEvents #1",
     "void push_back ( CommandEvent event ) #1",
     "if ( overflow_ . empty ( ) ) #1"
@@ -6462,7 +6462,7 @@
    "symbol": "overflow_",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class InlineCommandEvents #1",
     "void push_back ( CommandEvent event ) #1",
     "if ( overflow_ . empty ( ) ) #1",
@@ -6477,7 +6477,7 @@
    "symbol": "overflow_",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class InlineCommandEvents #1",
     "void push_back ( CommandEvent event ) #1"
    ],
@@ -6490,7 +6490,7 @@
    "symbol": "overflow_",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class InlineCommandEvents #1"
    ],
    "cls": "decl",
@@ -6502,7 +6502,7 @@
    "symbol": "openings",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct CommandContext #1"
    ],
    "cls": "decl",
@@ -6514,7 +6514,7 @@
    "symbol": "origins",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct CohortRoster #1"
    ],
    "cls": "decl",
@@ -6526,7 +6526,7 @@
    "symbol": "group_recipients",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class WorkingRequestCore #1"
    ],
    "cls": "decl",
@@ -6538,7 +6538,7 @@
    "symbol": "waiting_children",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class WorkingRequestCore #1"
    ],
    "cls": "decl",
@@ -6550,7 +6550,7 @@
    "symbol": "bound_close_handles",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class WorkingRequestCore #1"
    ],
    "cls": "decl",
@@ -6562,7 +6562,7 @@
    "symbol": "inline_ids",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class WorkingRequestCore #1",
     "struct ChainIds #1"
    ],
@@ -6575,7 +6575,7 @@
    "symbol": "live_",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class WorkingRequestCore #1"
    ],
    "cls": "decl",
@@ -6587,7 +6587,7 @@
    "symbol": "issued_",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class WorkingRequestCore #1"
    ],
    "cls": "decl",
@@ -6599,7 +6599,7 @@
    "symbol": "repriced_",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class WorkingRequestCore #1"
    ],
    "cls": "decl",
@@ -6611,7 +6611,7 @@
    "symbol": "cohorts_",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class WorkingRequestCore #1"
    ],
    "cls": "decl",
@@ -6623,7 +6623,7 @@
    "symbol": "cohort_receipts_",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class WorkingRequestCore #1"
    ],
    "cls": "decl",
@@ -6635,7 +6635,7 @@
    "symbol": "<temp:const_iterator>",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class WorkingRequestCore :: CohortView #1"
    ],
    "cls": "temp",
@@ -6647,7 +6647,7 @@
    "symbol": "<temp:const_iterator>",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class WorkingRequestCore :: CohortView #1",
     "public : class const_iterator #1"
    ],
@@ -6660,7 +6660,7 @@
    "symbol": "previous",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class WorkingRequestCore :: CohortView #1",
     "public : class const_iterator #1",
     "const_iterator operator + + ( int ) #1"
@@ -6674,7 +6674,7 @@
    "symbol": "<temp:const_iterator>",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class WorkingRequestCore :: CohortView #1",
     "public : class const_iterator #1"
    ],
@@ -6687,7 +6687,7 @@
    "symbol": "index_",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class WorkingRequestCore :: CohortView #1",
     "public : class const_iterator #1"
    ],
@@ -6700,7 +6700,7 @@
    "symbol": "begin",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class WorkingRequestCore :: CohortView #1"
    ],
    "cls": "decl",
@@ -6712,7 +6712,7 @@
    "symbol": "<temp:const_iterator>",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class WorkingRequestCore :: CohortView #1",
     "const_iterator begin ( ) const noexcept #1"
    ],
@@ -6725,7 +6725,7 @@
    "symbol": "end",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class WorkingRequestCore :: CohortView #1"
    ],
    "cls": "decl",
@@ -6737,7 +6737,7 @@
    "symbol": "<temp:const_iterator>",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class WorkingRequestCore :: CohortView #1",
     "const_iterator end ( ) const noexcept #1"
    ],
@@ -6750,7 +6750,7 @@
    "symbol": "<temp:const_iterator>",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class WorkingRequestCore :: CohortView #1",
     "CohortRoster operator [ ] ( std :: size_t index ) const #1"
    ],
@@ -6763,7 +6763,7 @@
    "symbol": "<temp:const_iterator>",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class WorkingRequestCore :: JournalView #1"
    ],
    "cls": "temp",
@@ -6775,7 +6775,7 @@
    "symbol": "<temp:const_iterator>",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class WorkingRequestCore :: JournalView #1",
     "public : class const_iterator #1"
    ],
@@ -6788,7 +6788,7 @@
    "symbol": "previous",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class WorkingRequestCore :: JournalView #1",
     "public : class const_iterator #1",
     "const_iterator operator + + ( int ) noexcept #1"
@@ -6802,7 +6802,7 @@
    "symbol": "previous",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class WorkingRequestCore :: JournalView #1",
     "public : class const_iterator #1",
     "const_iterator operator - - ( int ) noexcept #1"
@@ -6816,7 +6816,7 @@
    "symbol": "iterator",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class WorkingRequestCore :: JournalView #1",
     "public : class const_iterator #1"
    ],
@@ -6829,7 +6829,7 @@
    "symbol": "iterator",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class WorkingRequestCore :: JournalView #1",
     "public : class const_iterator #1"
    ],
@@ -6842,7 +6842,7 @@
    "symbol": "iterator",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class WorkingRequestCore :: JournalView #1",
     "public : class const_iterator #1"
    ],
@@ -6855,7 +6855,7 @@
    "symbol": "<temp:const_iterator>",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class WorkingRequestCore :: JournalView #1",
     "public : class const_iterator #1"
    ],
@@ -6868,7 +6868,7 @@
    "symbol": "iterator",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class WorkingRequestCore :: JournalView #1"
    ],
    "cls": "assign",
@@ -6880,7 +6880,7 @@
    "symbol": "begin",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class WorkingRequestCore :: JournalView #1"
    ],
    "cls": "decl",
@@ -6892,7 +6892,7 @@
    "symbol": "<temp:const_iterator>",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class WorkingRequestCore :: JournalView #1",
     "const_iterator begin ( ) const noexcept #1"
    ],
@@ -6905,7 +6905,7 @@
    "symbol": "end",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class WorkingRequestCore :: JournalView #1"
    ],
    "cls": "decl",
@@ -6917,7 +6917,7 @@
    "symbol": "<temp:const_iterator>",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class WorkingRequestCore :: JournalView #1",
     "const_iterator end ( ) const noexcept #1"
    ],
@@ -6930,7 +6930,7 @@
    "symbol": "cbegin",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class WorkingRequestCore :: JournalView #1"
    ],
    "cls": "decl",
@@ -6942,7 +6942,7 @@
    "symbol": "cend",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class WorkingRequestCore :: JournalView #1"
    ],
    "cls": "decl",
@@ -6954,7 +6954,7 @@
    "symbol": "<temp:vector>",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class WorkingRequestCore :: JournalView #1"
    ],
    "cls": "temp",
@@ -6966,7 +6966,7 @@
    "symbol": "<temp:vector>",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class WorkingRequestCore :: JournalView #1",
     "operator std :: vector < CommandEvent > ( ) const #1"
    ],
@@ -6979,7 +6979,7 @@
    "symbol": "<temp:const_iterator>",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class WorkingRequestCore :: LiveView #1"
    ],
    "cls": "temp",
@@ -6991,7 +6991,7 @@
    "symbol": "<temp:const_iterator>",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class WorkingRequestCore :: LiveView #1",
     "public : class const_iterator #1"
    ],
@@ -7004,7 +7004,7 @@
    "symbol": "previous",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class WorkingRequestCore :: LiveView #1",
     "public : class const_iterator #1",
     "const_iterator operator + + ( int ) #1"
@@ -7018,7 +7018,7 @@
    "symbol": "<temp:const_iterator>",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class WorkingRequestCore :: LiveView #1",
     "public : class const_iterator #1"
    ],
@@ -7031,7 +7031,7 @@
    "symbol": "iterator",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class WorkingRequestCore :: LiveView #1"
    ],
    "cls": "assign",
@@ -7043,7 +7043,7 @@
    "symbol": "begin",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class WorkingRequestCore :: LiveView #1"
    ],
    "cls": "decl",
@@ -7055,7 +7055,7 @@
    "symbol": "end",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class WorkingRequestCore :: LiveView #1"
    ],
    "cls": "decl",
@@ -7067,7 +7067,7 @@
    "symbol": "cbegin",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class WorkingRequestCore :: LiveView #1"
    ],
    "cls": "decl",
@@ -7079,7 +7079,7 @@
    "symbol": "cend",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class WorkingRequestCore :: LiveView #1"
    ],
    "cls": "decl",
@@ -7091,7 +7091,7 @@
    "symbol": "<temp:vector>",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "class WorkingRequestCore :: LiveView #1"
    ],
    "cls": "temp",
@@ -20337,7 +20337,7 @@
    "symbol": "rows",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "namespace #1",
     "class DiagnosticOpenings final : public OpeningReadback #1"
    ],
@@ -20350,7 +20350,7 @@
    "symbol": "text",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "namespace #1",
     "template < bool Owning > struct Load #1",
     "template < class T > void value ( T & x ) #1",
@@ -20365,7 +20365,7 @@
    "symbol": "x",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "namespace #1",
     "template < bool Owning > struct Load #1",
     "template < class T > void value ( T & x ) #1",
@@ -20381,7 +20381,7 @@
    "symbol": "created",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "namespace #1",
     "template < bool Owning > struct Load #1",
     "template < class T > void value ( T & x ) #1",
@@ -20398,7 +20398,7 @@
    "symbol": "rows",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "namespace #1",
     "template < bool Owning > struct Load #1",
     "template < class T > void value ( T & x ) #1",
@@ -20415,7 +20415,7 @@
    "symbol": "created",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "namespace #1",
     "template < bool Owning > struct Load #1",
     "template < class T > void value ( T & x ) #1",
@@ -20431,7 +20431,7 @@
    "symbol": "x",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "namespace #1",
     "template < bool Owning > struct Load #1",
     "template < class T > void value ( T & x ) #1",
@@ -20447,7 +20447,7 @@
    "symbol": "row",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "namespace #1",
     "template < bool Owning > struct Load #1",
     "template < class T > void value ( T & x ) #1",
@@ -20464,7 +20464,7 @@
    "symbol": "frozen",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "static ReadStatus freeze_openings_in_directory ( const RunIdentity & run , const OpeningReadback & input , std :: shared_ptr < const OpeningReadback > & out , const std :: string & directory ) #1"
    ],
    "cls": "alloc",
@@ -20476,7 +20476,7 @@
    "symbol": "values",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "namespace #2",
     "template < class T > void reserve_n ( std :: vector < T > & values , std :: size_t n ) #1"
    ],
@@ -20489,7 +20489,7 @@
    "symbol": "canonical",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "namespace #2",
     "std :: optional < CoreFailure > observe_openings ( const std :: vector < RequestHandle > & cohort , int64_t cycle , Side side , const PositionIdentity & position , const std :: vector < OpeningObservation > & observations , std :: size_t * live_count , const OpeningReadback * external_cohort = nullptr , const OpeningObservationReadback * external_observations = nullptr ) noexcept #1"
    ],
@@ -20502,7 +20502,7 @@
    "symbol": "canonical",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "namespace #2",
     "std :: optional < CoreFailure > observe_openings ( const std :: vector < RequestHandle > & cohort , int64_t cycle , Side side , const PositionIdentity & position , const std :: vector < OpeningObservation > & observations , std :: size_t * live_count , const OpeningReadback * external_cohort = nullptr , const OpeningObservationReadback * external_observations = nullptr ) noexcept #1",
     "+ + i ) #1"
@@ -20516,7 +20516,7 @@
    "symbol": "operator new",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "namespace #2",
     "template < class Tag > struct PreparedImplStorage #1",
     "static void prepare ( std :: size_t size ) #1"
@@ -20530,7 +20530,7 @@
    "symbol": "operator new",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "namespace #2",
     "template < class Tag > struct PreparedImplStorage #1",
     "static void * allocate ( std :: size_t size ) #1"
@@ -20544,7 +20544,7 @@
    "symbol": "first",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "namespace #2",
     "template < bool ByPriority > inline std :: size_t book_position ( const std :: vector < LiveRequest > & live , uint64_t key ) noexcept #1"
    ],
@@ -20557,7 +20557,7 @@
    "symbol": "tail_",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "namespace #3",
     "template < class Record , std :: size_t kTail > class TailLog #1",
     "public : TailLog ( ) #1"
@@ -20571,7 +20571,7 @@
    "symbol": "tail_",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "namespace #3",
     "template < class Record , std :: size_t kTail > class TailLog #1",
     "void push ( const Record & record ) noexcept #1"
@@ -20585,7 +20585,7 @@
    "symbol": "tail_",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "namespace #3",
     "template < class Record , std :: size_t kTail > class TailLog #1"
    ],
@@ -20598,7 +20598,7 @@
    "symbol": "bytes",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "namespace #3",
     "class ByteWriter #1",
     "void raw ( const void * data , std :: size_t length ) #1"
@@ -20612,7 +20612,7 @@
    "symbol": "buffer_",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "namespace #3",
     "class ByteWriter #1",
     "void raw ( const void * data , std :: size_t length ) #1"
@@ -20626,7 +20626,7 @@
    "symbol": "buffer_",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "namespace #3",
     "class ByteWriter #1"
    ],
@@ -20639,7 +20639,7 @@
    "symbol": "text",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "namespace #3",
     "template < class Ar > void archive_string ( Ar & ar , std :: string & text ) #1",
     "else #1"
@@ -20653,7 +20653,7 @@
    "symbol": "item",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "namespace #3",
     "template < class Ar , class Item > void archive_optional ( Ar & ar , std :: optional < Item > & item ) #1",
     "else #1",
@@ -20668,7 +20668,7 @@
    "symbol": "items",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "namespace #3",
     "template < class Ar , class Item > void archive_vector ( Ar & ar , std :: vector < Item > & items ) #1",
     "if constexpr ( ! Ar :: saving ) #1"
@@ -20682,7 +20682,7 @@
    "symbol": "created",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "namespace #3",
     "template < class Ar > void archive_definition ( Ar & ar , DefinitionRef & definition ) #1",
     "else #1",
@@ -20697,7 +20697,7 @@
    "symbol": "rows",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "namespace #3",
     "class StoredOpenings final : public OpeningReadback #1"
    ],
@@ -20710,7 +20710,7 @@
    "symbol": "rows_",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "namespace #3",
     "class StoredOpenings final : public OpeningReadback #1"
    ],
@@ -20723,7 +20723,7 @@
    "symbol": "rows",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "namespace #3",
     "void snapshot_refused_openings ( Request & request ) #1"
    ],
@@ -20736,7 +20736,7 @@
    "symbol": "rows",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "namespace #3",
     "void snapshot_refused_openings ( Request & request ) #1",
     "+ + index ) #1"
@@ -20750,7 +20750,7 @@
    "symbol": "external_openings",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "namespace #3",
     "void snapshot_refused_openings ( Request & request ) #1"
    ],
@@ -20763,7 +20763,7 @@
    "symbol": "openings",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "namespace #3",
     "template < class Ar > void archive_external_openings ( Ar & ar , std :: shared_ptr < const OpeningReadback > & external ) #1",
     "else #1"
@@ -20777,7 +20777,7 @@
    "symbol": "external",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "namespace #3",
     "template < class Ar > void archive_external_openings ( Ar & ar , std :: shared_ptr < const OpeningReadback > & external ) #1",
     "else #1",
@@ -20792,7 +20792,7 @@
    "symbol": "book_key",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "namespace #3"
    ],
    "cls": "decl",
@@ -20804,7 +20804,7 @@
    "symbol": "key",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "namespace #3",
     "std :: string book_key ( uint64_t value ) #1"
    ],
@@ -20817,7 +20817,7 @@
    "symbol": "codec_page",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct WorkingRequestCore :: JournalStore #1"
    ],
    "cls": "decl",
@@ -20829,7 +20829,7 @@
    "symbol": "codec_page",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct WorkingRequestCore :: JournalStore #1",
     "void bind ( detail :: CommandScratchStore & store ) #1"
    ],
@@ -20842,7 +20842,7 @@
    "symbol": "events",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct WorkingRequestCore :: JournalStore #1",
     "struct Cached #1"
    ],
@@ -20855,7 +20855,7 @@
    "symbol": "chunks",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct WorkingRequestCore :: JournalStore #1"
    ],
    "cls": "decl",
@@ -20867,7 +20867,7 @@
    "symbol": "first",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct WorkingRequestCore :: JournalStore #1"
    ],
    "cls": "assign",
@@ -20879,7 +20879,7 @@
    "symbol": "where",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct WorkingRequestCore :: JournalStore #1"
    ],
    "cls": "decl",
@@ -20891,7 +20891,7 @@
    "symbol": "chunks",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct WorkingRequestCore :: JournalStore #1",
     "JournalStore ( ) #1"
    ],
@@ -20904,7 +20904,7 @@
    "symbol": "storage",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct WorkingRequestCore :: JournalStore #1",
     "void prepare_spill ( ) #1",
     "if ( ! spill ) #1"
@@ -20918,7 +20918,7 @@
    "symbol": "events",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct WorkingRequestCore :: JournalStore #1",
     "void prepare_spill ( ) #1",
     "if ( ! spill ) #1"
@@ -20932,7 +20932,7 @@
    "symbol": "where",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct WorkingRequestCore :: JournalStore #1",
     "void set_directory ( const std :: string & directory ) #1"
    ],
@@ -20945,7 +20945,7 @@
    "symbol": "slot",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct WorkingRequestCore :: JournalStore #1",
     "void push ( CommandEvent && event ) #1"
    ],
@@ -20958,7 +20958,7 @@
    "symbol": "first",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct WorkingRequestCore :: JournalStore #1",
     "void drop_front ( uint64_t new_first ) #1",
     "if ( codec ) #1"
@@ -20972,7 +20972,7 @@
    "symbol": "data",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct WorkingRequestCore :: JournalStore #1",
     "void spill_front_chunk ( ) #1"
    ],
@@ -20985,7 +20985,7 @@
    "symbol": "make_unique",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct WorkingRequestCore :: JournalStore #1",
     "void make_room ( std :: size_t incoming ) #1",
     "while ( have < need ) #1"
@@ -20999,7 +20999,7 @@
    "symbol": "chunks",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct WorkingRequestCore :: JournalStore #1",
     "void make_room ( std :: size_t incoming ) #1",
     "while ( have < need ) #1"
@@ -21013,7 +21013,7 @@
    "symbol": "chunks",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct WorkingRequestCore :: JournalStore #1",
     "void make_room ( std :: size_t incoming ) #1",
     "while ( have < need ) #1"
@@ -21027,7 +21027,7 @@
    "symbol": "bytes",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct WorkingRequestCore :: JournalStore #1",
     "const std :: vector < CommandEvent > & load ( uint64_t page_no , const JournalPage & page ) const #1"
    ],
@@ -21040,7 +21040,7 @@
    "symbol": "events",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct WorkingRequestCore :: JournalStore #1",
     "const std :: vector < CommandEvent > & load ( uint64_t page_no , const JournalPage & page ) const #1"
    ],
@@ -21053,7 +21053,7 @@
    "symbol": "events",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct WorkingRequestCore :: JournalStore #1",
     "uint64_t upper_bound_position ( uint64_t ordinal , uint64_t low ) const #1"
    ],
@@ -21066,7 +21066,7 @@
    "symbol": "directory",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct WorkingRequestCore :: BookSpill #1"
    ],
    "cls": "decl",
@@ -21078,7 +21078,7 @@
    "symbol": "directory",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct WorkingRequestCore :: BookSpill #1",
     "void set_directory ( const std :: string & value ) #1"
    ],
@@ -21091,7 +21091,7 @@
    "symbol": "blobs",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct WorkingRequestCore :: BookSpill #1",
     "void spill ( const LiveRequest & row ) #1"
    ],
@@ -21104,7 +21104,7 @@
    "symbol": "links",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct WorkingRequestCore :: BookSpill #1",
     "void spill ( const LiveRequest & row ) #1",
     "if ( priority ! = incarnation ) #1"
@@ -21118,7 +21118,7 @@
    "symbol": "rows",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct WorkingRequestCore :: BookSpill #1",
     "void spill ( const LiveRequest & row ) #1"
    ],
@@ -21131,7 +21131,7 @@
    "symbol": "bytes",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct WorkingRequestCore :: BookSpill #1",
     "LiveRequest read ( const WorkingRequestCore & core , const BookSlot & slot ) const #1"
    ],
@@ -21144,7 +21144,7 @@
    "symbol": "blobs",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct WorkingRequestCore :: BookSpill #1",
     "void rewrite ( uint64_t at , BookSlot slot , const LiveRequest & row ) #1"
    ],
@@ -21157,7 +21157,7 @@
    "symbol": "kept",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct WorkingRequestCore :: BookSpill #1",
     "std :: shared_ptr < LiveRequest > keep ( LiveRequest row ) const #1"
    ],
@@ -21170,7 +21170,7 @@
    "symbol": "bytes",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct WorkingRequestCore :: BookSpill #1",
     "void compact ( ) #1",
     "at = next_alive ( at ) ) #1"
@@ -21184,7 +21184,7 @@
    "symbol": "fresh_blobs",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct WorkingRequestCore :: BookSpill #1",
     "void compact ( ) #1",
     "at = next_alive ( at ) ) #1"
@@ -21198,7 +21198,7 @@
    "symbol": "key",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct WorkingRequestCore :: BookSpill #1",
     "void compact ( ) #1",
     "at = next_alive ( at ) ) #1"
@@ -21212,7 +21212,7 @@
    "symbol": "fresh_rows",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct WorkingRequestCore :: BookSpill #1",
     "void compact ( ) #1",
     "at = next_alive ( at ) ) #1"
@@ -21226,7 +21226,7 @@
    "symbol": "fresh_links",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct WorkingRequestCore :: BookSpill #1",
     "void compact ( ) #1",
     "at = next_alive ( at ) ) #1",
@@ -21241,7 +21241,7 @@
    "symbol": "rows",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct WorkingRequestCore :: BookSpill #1",
     "void compact ( ) #1"
    ],
@@ -21254,7 +21254,7 @@
    "symbol": "created",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "void WorkingRequestCore :: make_book_room ( ) #1",
     "if ( ! book_spill_ ) #1"
    ],
@@ -21267,7 +21267,7 @@
    "symbol": "directory",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "void WorkingRequestCore :: make_book_room ( ) #1",
     "if ( ! book_spill_ ) #1"
    ],
@@ -21280,7 +21280,7 @@
    "symbol": "where",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "bool WorkingRequestCore :: promote_book_row ( uint64_t incarnation , std :: size_t * index ) #1"
    ],
    "cls": "assign",
@@ -21292,7 +21292,7 @@
    "symbol": "live_",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "bool WorkingRequestCore :: promote_book_row ( uint64_t incarnation , std :: size_t * index ) #1"
    ],
    "cls": "grow",
@@ -21304,7 +21304,7 @@
    "symbol": "rows",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "WorkingRequestCore :: BookLookupReads WorkingRequestCore :: book_lookup_reads ( ) const noexcept #1",
     "if ( book_spill_ ) #1"
    ],
@@ -21317,7 +21317,7 @@
    "symbol": "held_",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "void WorkingRequestCore :: LiveView :: const_iterator :: settle ( ) #1",
     "if ( core_ -> book_next_spilled ( cursor_ ) ) #1"
    ],
@@ -21330,7 +21330,7 @@
    "symbol": "first",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "WorkingRequestCore :: LiveView :: const_iterator WorkingRequestCore :: LiveView :: begin ( ) const #1"
    ],
    "cls": "decl",
@@ -21342,7 +21342,7 @@
    "symbol": "<temp:const_iterator>",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "WorkingRequestCore :: LiveView :: const_iterator WorkingRequestCore :: LiveView :: end ( ) const #1"
    ],
    "cls": "temp",
@@ -21354,7 +21354,7 @@
    "symbol": "<temp:vector>",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1"
+    "inline namespace native_order_v8 #1"
    ],
    "cls": "temp",
    "spelling": "std :: vector < LiveRequest >",
@@ -21365,7 +21365,7 @@
    "symbol": "rows",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "WorkingRequestCore :: LiveView :: operator std :: vector < LiveRequest > ( ) const #1"
    ],
    "cls": "decl",
@@ -21377,7 +21377,7 @@
    "symbol": "rows",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "WorkingRequestCore :: LiveView :: operator std :: vector < LiveRequest > ( ) const #1"
    ],
    "cls": "grow",
@@ -21389,7 +21389,7 @@
    "symbol": "rows",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "WorkingRequestCore :: LiveView :: operator std :: vector < LiveRequest > ( ) const #1",
     "core_ -> visit_book ( [ & rows ] ( const LiveRequest & row ) #1"
    ],
@@ -21402,7 +21402,7 @@
    "symbol": "repriced_",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "void WorkingRequestCore :: note_repriced ( uint64_t incarnation , uint64_t priority ) noexcept #1"
    ],
    "cls": "grow",
@@ -21414,7 +21414,7 @@
    "symbol": "operator new",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct PreparedSubmit :: Impl #1"
    ],
    "cls": "alloc",
@@ -21426,7 +21426,7 @@
    "symbol": "operator new",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct PreparedReplace :: Impl #1"
    ],
    "cls": "alloc",
@@ -21438,7 +21438,7 @@
    "symbol": "operator new",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct PreparedCancel :: Impl #1"
    ],
    "cls": "alloc",
@@ -21450,7 +21450,7 @@
    "symbol": "operator new",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct PreparedMutation :: Impl #1"
    ],
    "cls": "alloc",
@@ -21462,7 +21462,7 @@
    "symbol": "operator new",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct PreparedExecution :: Impl #1"
    ],
    "cls": "alloc",
@@ -21474,7 +21474,7 @@
    "symbol": "live_",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "void WorkingRequestCore :: reserve ( std :: size_t expected_events ) #1"
    ],
    "cls": "grow",
@@ -21486,7 +21486,7 @@
    "symbol": "impl",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "PreparedMutation WorkingRequestCore :: finish_mutation ( MutationPlan plan ) #1"
    ],
    "cls": "alloc",
@@ -21498,7 +21498,7 @@
    "symbol": "first",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "template < class Event > Installed WorkingRequestCore :: end_direct ( std :: size_t live_index , Event && event ) #1"
    ],
    "cls": "assign",
@@ -21510,7 +21510,7 @@
    "symbol": "store",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "void WorkingRequestCore :: ensure_receipt_store ( ) #1"
    ],
    "cls": "alloc",
@@ -21522,7 +21522,7 @@
    "symbol": "directory",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "void WorkingRequestCore :: ensure_receipt_store ( ) #1"
    ],
    "cls": "assign",
@@ -21534,7 +21534,7 @@
    "symbol": "live_",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "void WorkingRequestCore :: prepare_codec_frames ( ) #1"
    ],
    "cls": "grow",
@@ -21546,7 +21546,7 @@
    "symbol": "issued_",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "void WorkingRequestCore :: prepare_codec_frames ( ) #1"
    ],
    "cls": "grow",
@@ -21558,7 +21558,7 @@
    "symbol": "segments",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "void WorkingRequestCore :: ensure_chain_segments ( ) #1"
    ],
    "cls": "alloc",
@@ -21570,7 +21570,7 @@
    "symbol": "directory",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "void WorkingRequestCore :: ensure_chain_segments ( ) #1"
    ],
    "cls": "assign",
@@ -21582,7 +21582,7 @@
    "symbol": "issued_",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "void WorkingRequestCore :: index_committed ( const CommandEvent & event ) noexcept #1",
     "else #1"
    ],
@@ -21595,7 +21595,7 @@
    "symbol": "canonical",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "void WorkingRequestCore :: cohort_add ( CohortHandle cohort , RequestHandle origin ) #1"
    ],
    "cls": "assign",
@@ -21607,7 +21607,7 @@
    "symbol": "cohorts_",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "void WorkingRequestCore :: cohort_add ( CohortHandle cohort , RequestHandle origin ) #1",
     "else if ( const auto canonical = canonical_cohort_origin ( origin ) ) #1",
     "if ( found = = cohorts_ . end ( ) ) #1"
@@ -21621,7 +21621,7 @@
    "symbol": "where",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "void WorkingRequestCore :: cohort_add ( CohortHandle cohort , RequestHandle origin ) #1",
     "else if ( const auto canonical = canonical_cohort_origin ( origin ) ) #1",
     "else #1"
@@ -21635,7 +21635,7 @@
    "symbol": "origins",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "void WorkingRequestCore :: cohort_add ( CohortHandle cohort , RequestHandle origin ) #1",
     "else if ( const auto canonical = canonical_cohort_origin ( origin ) ) #1",
     "else #1"
@@ -21649,7 +21649,7 @@
    "symbol": "cohort_receipts_",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "void WorkingRequestCore :: cohort_add ( CohortHandle cohort , RequestHandle origin ) #1"
    ],
    "cls": "grow",
@@ -21661,7 +21661,7 @@
    "symbol": "canonical",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "void WorkingRequestCore :: cohort_remove ( CohortHandle cohort , RequestHandle origin ) #1"
    ],
    "cls": "assign",
@@ -21673,7 +21673,7 @@
    "symbol": "where",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "void WorkingRequestCore :: cohort_remove ( CohortHandle cohort , RequestHandle origin ) #1",
     "else if ( const auto canonical = canonical_cohort_origin ( origin ) ) #1",
     "if ( found ! = cohorts_ . end ( ) ) #1"
@@ -21687,7 +21687,7 @@
    "symbol": "cohort_receipts_",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "void WorkingRequestCore :: cohort_remove ( CohortHandle cohort , RequestHandle origin ) #1"
    ],
    "cls": "grow",
@@ -21699,7 +21699,7 @@
    "symbol": "local",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "bool WorkingRequestCore :: collect_pending_chain ( const PendingAdjustments & pending , const RequestHandle & recipient , ChainIds * ids , double * total ) #1"
    ],
    "cls": "decl",
@@ -21711,7 +21711,7 @@
    "symbol": "local",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "bool WorkingRequestCore :: collect_pending_chain ( const PendingAdjustments & pending , const RequestHandle & recipient , ChainIds * ids , double * total ) #1",
     "else #1"
    ],
@@ -21724,7 +21724,7 @@
    "symbol": "local",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "bool WorkingRequestCore :: collect_pending_chain ( const PendingAdjustments & pending , const RequestHandle & recipient , ChainIds * ids , double * total ) #1",
     "+ + i ) #1",
     "else #1"
@@ -21738,7 +21738,7 @@
    "symbol": "inline_ids",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "bool WorkingRequestCore :: collect_pending_chain ( const PendingAdjustments & pending , const RequestHandle & recipient , ChainIds * ids , double * total ) #1"
    ],
    "cls": "assign",
@@ -21750,7 +21750,7 @@
    "symbol": "inline_ids",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "bool WorkingRequestCore :: visit_prior_adjustments ( const EventId & resolution , const std :: function < bool ( const EventId & ) > & visit ) const #1"
    ],
    "cls": "decl",
@@ -21762,7 +21762,7 @@
    "symbol": "inline_ids",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "bool WorkingRequestCore :: visit_prior_adjustments ( const EventId & resolution , const std :: function < bool ( const EventId & ) > & visit ) const #1",
     "if ( const auto * terms = std :: get_if < TermsResolvedEvent > ( event ) ) #1"
    ],
@@ -21775,7 +21775,7 @@
    "symbol": "inline_ids",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "bool WorkingRequestCore :: visit_prior_adjustments ( const EventId & resolution , const std :: function < bool ( const EventId & ) > & visit ) const #1",
     "else if ( const auto * bound = std :: get_if < QuantityBoundEvent > ( event ) ) #1"
    ],
@@ -21788,7 +21788,7 @@
    "symbol": "key",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "GroupEffectReceipt WorkingRequestCore :: group_effect_receipt ( std :: size_t index ) const #1"
    ],
    "cls": "assign",
@@ -21800,7 +21800,7 @@
    "symbol": "first",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "InstallResult WorkingRequestCore :: commit ( MutationPlan & plan ) noexcept #1"
    ],
    "cls": "assign",
@@ -21812,7 +21812,7 @@
    "symbol": "live_",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "InstallResult WorkingRequestCore :: commit ( MutationPlan & plan ) noexcept #1",
     "if ( plan . live_change = = kLivePush ) #1"
    ],
@@ -21825,7 +21825,7 @@
    "symbol": "instance_",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "WorkingRequestCore :: WorkingRequestCore ( RunIdentity identity ) #1"
    ],
    "cls": "alloc",
@@ -21837,7 +21837,7 @@
    "symbol": "journal_",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "WorkingRequestCore :: WorkingRequestCore ( RunIdentity identity ) #1"
    ],
    "cls": "alloc",
@@ -21849,7 +21849,7 @@
    "symbol": "live_",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "WorkingRequestCore & WorkingRequestCore :: operator = ( WorkingRequestCore && other ) noexcept #1"
    ],
    "cls": "assign",
@@ -21861,7 +21861,7 @@
    "symbol": "issued_",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "WorkingRequestCore & WorkingRequestCore :: operator = ( WorkingRequestCore && other ) noexcept #1"
    ],
    "cls": "assign",
@@ -21873,7 +21873,7 @@
    "symbol": "repriced_",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "WorkingRequestCore & WorkingRequestCore :: operator = ( WorkingRequestCore && other ) noexcept #1"
    ],
    "cls": "assign",
@@ -21885,7 +21885,7 @@
    "symbol": "cohorts_",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "WorkingRequestCore & WorkingRequestCore :: operator = ( WorkingRequestCore && other ) noexcept #1"
    ],
    "cls": "assign",
@@ -21897,7 +21897,7 @@
    "symbol": "cohort_receipts_",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "WorkingRequestCore & WorkingRequestCore :: operator = ( WorkingRequestCore && other ) noexcept #1"
    ],
    "cls": "assign",
@@ -21909,7 +21909,7 @@
    "symbol": "instance",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "void WorkingRequestCore :: reset ( RunIdentity identity ) #1",
     "if ( journal_ && journal_ -> codec ) #1"
    ],
@@ -21922,7 +21922,7 @@
    "symbol": "first",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "void WorkingRequestCore :: reset ( RunIdentity identity ) #1",
     "if ( journal_ && journal_ -> codec ) #1"
    ],
@@ -21935,7 +21935,7 @@
    "symbol": "canonical",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "std :: optional < RequestRejectReason > WorkingRequestCore :: validate_request ( const Request & request , const CommandContext & context , const std :: optional < RequestHandle > & replace_target ) const #1",
     "else if ( const auto * bind = std :: get_if < BindOpenings > ( & request . owner ) ) #1"
    ],
@@ -21948,7 +21948,7 @@
    "symbol": "canonical",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "std :: optional < RequestRejectReason > WorkingRequestCore :: validate_request ( const Request & request , const CommandContext & context , const std :: optional < RequestHandle > & replace_target ) const #1",
     "else if ( const auto * bind = std :: get_if < BindOpenings > ( & request . owner ) ) #1",
     "if ( ! bind -> external_openings ) #1"
@@ -21962,7 +21962,7 @@
    "symbol": "first",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "std :: optional < RequestRejectReason > WorkingRequestCore :: validate_request ( const Request & request , const CommandContext & context , const std :: optional < RequestHandle > & replace_target ) const #1",
     "else if ( const auto * bind = std :: get_if < BindOpenings > ( & request . owner ) ) #1",
     "else #1"
@@ -21976,7 +21976,7 @@
    "symbol": "first",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "LiveRequest WorkingRequestCore :: make_live ( DefinitionRef definition , const CommandContext & context , EventId accepted ) const #1",
     "else if ( const auto * bind = std :: get_if < BindOpenings > ( & request . owner ) ) #1",
     "else #1"
@@ -21990,7 +21990,7 @@
    "symbol": "handles",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "std :: vector < RequestHandle > WorkingRequestCore :: waiting_children ( const RequestHandle & parent ) const #1"
    ],
    "cls": "decl",
@@ -22002,7 +22002,7 @@
    "symbol": "<expr>",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "void WorkingRequestCore :: waiting_children ( const RequestHandle & parent , std :: vector < RequestHandle > & handles ) const #1",
     "visit_waiting_children ( parent , & handles , [ ] ( void * context , const RequestHandle & handle ) #1"
    ],
@@ -22015,7 +22015,7 @@
    "symbol": "handles",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "std :: vector < RequestHandle > WorkingRequestCore :: bound_close_handles ( ) const #1"
    ],
    "cls": "decl",
@@ -22027,7 +22027,7 @@
    "symbol": "<expr>",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "void WorkingRequestCore :: bound_close_handles ( std :: vector < RequestHandle > & handles ) const #1",
     "visit_bound_close_handles ( & handles , [ ] ( void * context , const RequestHandle & handle ) #1"
    ],
@@ -22040,7 +22040,7 @@
    "symbol": "handles",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "std :: vector < RequestHandle > WorkingRequestCore :: group_recipients ( const EventId & applied ) const #1"
    ],
    "cls": "decl",
@@ -22052,7 +22052,7 @@
    "symbol": "<expr>",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "void WorkingRequestCore :: group_recipients ( const EventId & applied , std :: vector < RequestHandle > & handles ) const #1",
     "visit_group_recipients ( applied , & handles , [ ] ( void * context , const RequestHandle & handle ) #1"
    ],
@@ -22065,7 +22065,7 @@
    "symbol": "impl",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "PreparedSubmit WorkingRequestCore :: prepare_submit ( const Request & request , const CommandContext & context , uint64_t & next_order_incarnation , uint64_t & next_timeline_ordinal , RequestOrigin origin ) #1"
    ],
    "cls": "alloc",
@@ -22077,7 +22077,7 @@
    "symbol": "events",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "PreparedSubmit WorkingRequestCore :: prepare_submit ( const Request & request , const CommandContext & context , uint64_t & next_order_incarnation , uint64_t & next_timeline_ordinal , RequestOrigin origin ) #1",
     "if ( reason ) #1"
    ],
@@ -22090,7 +22090,7 @@
    "symbol": "definition",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "PreparedSubmit WorkingRequestCore :: prepare_submit ( const Request & request , const CommandContext & context , uint64_t & next_order_incarnation , uint64_t & next_timeline_ordinal , RequestOrigin origin ) #1"
    ],
    "cls": "alloc",
@@ -22102,7 +22102,7 @@
    "symbol": "events",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "PreparedSubmit WorkingRequestCore :: prepare_submit ( const Request & request , const CommandContext & context , uint64_t & next_order_incarnation , uint64_t & next_timeline_ordinal , RequestOrigin origin ) #1"
    ],
    "cls": "grow",
@@ -22114,7 +22114,7 @@
    "symbol": "impl",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "PreparedReplace WorkingRequestCore :: prepare_replace ( const RequestHandle & target , const Request & request , const CommandContext & context , uint64_t & next_order_incarnation , uint64_t & next_timeline_ordinal , ReplaceOptions options ) #1"
    ],
    "cls": "alloc",
@@ -22126,7 +22126,7 @@
    "symbol": "events",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "PreparedReplace WorkingRequestCore :: prepare_replace ( const RequestHandle & target , const Request & request , const CommandContext & context , uint64_t & next_order_incarnation , uint64_t & next_timeline_ordinal , ReplaceOptions options ) #1",
     "if ( kind ! = TargetKind :: Live ) #1",
     "if ( kind = = TargetKind :: InvalidHandle ) #1"
@@ -22140,7 +22140,7 @@
    "symbol": "events",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "PreparedReplace WorkingRequestCore :: prepare_replace ( const RequestHandle & target , const Request & request , const CommandContext & context , uint64_t & next_order_incarnation , uint64_t & next_timeline_ordinal , ReplaceOptions options ) #1",
     "if ( kind ! = TargetKind :: Live ) #1",
     "else #1"
@@ -22154,7 +22154,7 @@
    "symbol": "events",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "PreparedReplace WorkingRequestCore :: prepare_replace ( const RequestHandle & target , const Request & request , const CommandContext & context , uint64_t & next_order_incarnation , uint64_t & next_timeline_ordinal , ReplaceOptions options ) #1",
     "if ( reason ) #1"
    ],
@@ -22167,7 +22167,7 @@
    "symbol": "definition",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "PreparedReplace WorkingRequestCore :: prepare_replace ( const RequestHandle & target , const Request & request , const CommandContext & context , uint64_t & next_order_incarnation , uint64_t & next_timeline_ordinal , ReplaceOptions options ) #1"
    ],
    "cls": "alloc",
@@ -22179,7 +22179,7 @@
    "symbol": "events",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "PreparedReplace WorkingRequestCore :: prepare_replace ( const RequestHandle & target , const Request & request , const CommandContext & context , uint64_t & next_order_incarnation , uint64_t & next_timeline_ordinal , ReplaceOptions options ) #1"
    ],
    "cls": "grow",
@@ -22191,7 +22191,7 @@
    "symbol": "impl",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "[ [ gnu :: noinline ] ] PreparedReplace WorkingRequestCore :: prepare_replace_kept ( std :: size_t live_index , const RequestHandle & staged_target , Request && staged , uint64_t ordinal , uint64_t incarnation , const CommandContext & context , ReplaceOptions options , MutationPlan && plan ) #1"
    ],
    "cls": "alloc",
@@ -22203,7 +22203,7 @@
    "symbol": "events",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "[ [ gnu :: noinline ] ] PreparedReplace WorkingRequestCore :: prepare_replace_kept ( std :: size_t live_index , const RequestHandle & staged_target , Request && staged , uint64_t ordinal , uint64_t incarnation , const CommandContext & context , ReplaceOptions options , MutationPlan && plan ) #1"
    ],
    "cls": "grow",
@@ -22215,7 +22215,7 @@
    "symbol": "definition",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "[ [ gnu :: noinline ] ] LiveRequest WorkingRequestCore :: kept_successor ( std :: size_t live_index , const RequestHandle & staged_target , Request && staged , uint64_t ordinal , uint64_t incarnation , const CommandContext & context , ReplaceOptions options ) const #1",
     "if ( options . keep_handle ) #1"
    ],
@@ -22228,7 +22228,7 @@
    "symbol": "definition",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "[ [ gnu :: noinline ] ] LiveRequest WorkingRequestCore :: kept_successor ( std :: size_t live_index , const RequestHandle & staged_target , Request && staged , uint64_t ordinal , uint64_t incarnation , const CommandContext & context , ReplaceOptions options ) const #1",
     "else #1"
    ],
@@ -22241,7 +22241,7 @@
    "symbol": "impl",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "PreparedCancel WorkingRequestCore :: prepare_cancel ( const RequestHandle & target , uint64_t & next_timeline_ordinal , CancelReason reason ) #1"
    ],
    "cls": "alloc",
@@ -22253,7 +22253,7 @@
    "symbol": "events",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "PreparedCancel WorkingRequestCore :: prepare_cancel ( const RequestHandle & target , uint64_t & next_timeline_ordinal , CancelReason reason ) #1",
     "if ( kind ! = TargetKind :: Live ) #1",
     "if ( kind = = TargetKind :: InvalidHandle ) #1"
@@ -22267,7 +22267,7 @@
    "symbol": "events",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "PreparedCancel WorkingRequestCore :: prepare_cancel ( const RequestHandle & target , uint64_t & next_timeline_ordinal , CancelReason reason ) #1",
     "if ( kind ! = TargetKind :: Live ) #1",
     "else #1"
@@ -22281,7 +22281,7 @@
    "symbol": "events",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "PreparedCancel WorkingRequestCore :: prepare_cancel ( const RequestHandle & target , uint64_t & next_timeline_ordinal , CancelReason reason ) #1"
    ],
    "cls": "grow",
@@ -22293,7 +22293,7 @@
    "symbol": "first",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "CommandInstalled < SubmitResult > WorkingRequestCore :: apply_submit ( const Request & request , const CommandContext & context , uint64_t & next_order_incarnation , uint64_t & next_timeline_ordinal , RequestOrigin origin ) #1",
     "if ( reason ) #1"
    ],
@@ -22306,7 +22306,7 @@
    "symbol": "definition",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "CommandInstalled < SubmitResult > WorkingRequestCore :: apply_submit ( const Request & request , const CommandContext & context , uint64_t & next_order_incarnation , uint64_t & next_timeline_ordinal , RequestOrigin origin ) #1"
    ],
    "cls": "alloc",
@@ -22318,7 +22318,7 @@
    "symbol": "first",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "CommandInstalled < SubmitResult > WorkingRequestCore :: apply_submit ( const Request & request , const CommandContext & context , uint64_t & next_order_incarnation , uint64_t & next_timeline_ordinal , RequestOrigin origin ) #1"
    ],
    "cls": "assign",
@@ -22330,7 +22330,7 @@
    "symbol": "live_",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "CommandInstalled < SubmitResult > WorkingRequestCore :: apply_submit ( const Request & request , const CommandContext & context , uint64_t & next_order_incarnation , uint64_t & next_timeline_ordinal , RequestOrigin origin ) #1"
    ],
    "cls": "grow",
@@ -22342,7 +22342,7 @@
    "symbol": "first",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "template < bool Kept > CommandInstalled < ReplaceResult > WorkingRequestCore :: apply_replace_as ( const RequestHandle & target , const Request & request , const CommandContext & context , uint64_t & next_order_incarnation , uint64_t & next_timeline_ordinal , ReplaceOptions options ) #1",
     "if ( kind ! = TargetKind :: Live ) #1"
    ],
@@ -22355,7 +22355,7 @@
    "symbol": "first",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "template < bool Kept > CommandInstalled < ReplaceResult > WorkingRequestCore :: apply_replace_as ( const RequestHandle & target , const Request & request , const CommandContext & context , uint64_t & next_order_incarnation , uint64_t & next_timeline_ordinal , ReplaceOptions options ) #1",
     "if ( reason ) #1"
    ],
@@ -22368,7 +22368,7 @@
    "symbol": "first",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "template < bool Kept > CommandInstalled < ReplaceResult > WorkingRequestCore :: apply_replace_as ( const RequestHandle & target , const Request & request , const CommandContext & context , uint64_t & next_order_incarnation , uint64_t & next_timeline_ordinal , ReplaceOptions options ) #1",
     "if constexpr ( Kept ) #1"
    ],
@@ -22381,7 +22381,7 @@
    "symbol": "definition",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "template < bool Kept > CommandInstalled < ReplaceResult > WorkingRequestCore :: apply_replace_as ( const RequestHandle & target , const Request & request , const CommandContext & context , uint64_t & next_order_incarnation , uint64_t & next_timeline_ordinal , ReplaceOptions options ) #1",
     "else #1"
    ],
@@ -22394,7 +22394,7 @@
    "symbol": "first",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "template < bool Kept > CommandInstalled < ReplaceResult > WorkingRequestCore :: apply_replace_as ( const RequestHandle & target , const Request & request , const CommandContext & context , uint64_t & next_order_incarnation , uint64_t & next_timeline_ordinal , ReplaceOptions options ) #1",
     "else #1"
    ],
@@ -22407,7 +22407,7 @@
    "symbol": "first",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "CommandInstalled < CancelResult > WorkingRequestCore :: apply_cancel ( const RequestHandle & target , uint64_t & next_timeline_ordinal , CancelReason reason ) #1",
     "if ( kind ! = TargetKind :: Live ) #1"
    ],
@@ -22420,7 +22420,7 @@
    "symbol": "events",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < PreparedMutation > WorkingRequestCore :: prepare_evaluation ( const RequestHandle & target , const EvaluationContext & context , const TargetObservation & observation , uint64_t & next_timeline_ordinal , bool open_activation_grant ) #1",
     "if ( std :: holds_alternative < UnboundBookClose > ( live . authority ) ) #1",
     "if ( std :: holds_alternative < PositionFlat > ( observation . current_position ) ) #1"
@@ -22434,7 +22434,7 @@
    "symbol": "events",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < PreparedMutation > WorkingRequestCore :: prepare_evaluation ( const RequestHandle & target , const EvaluationContext & context , const TargetObservation & observation , uint64_t & next_timeline_ordinal , bool open_activation_grant ) #1",
     "if ( std :: holds_alternative < UnboundBookClose > ( live . authority ) ) #1"
    ],
@@ -22447,7 +22447,7 @@
    "symbol": "events",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < PreparedMutation > WorkingRequestCore :: prepare_evaluation ( const RequestHandle & target , const EvaluationContext & context , const TargetObservation & observation , uint64_t & next_timeline_ordinal , bool open_activation_grant ) #1",
     "if ( const auto * close = std :: get_if < BookClose > ( & live . authority ) ) #1",
     "if ( ! book_close_alive ( observation , * close ) ) #1"
@@ -22461,7 +22461,7 @@
    "symbol": "events",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < PreparedMutation > WorkingRequestCore :: prepare_evaluation ( const RequestHandle & target , const EvaluationContext & context , const TargetObservation & observation , uint64_t & next_timeline_ordinal , bool open_activation_grant ) #1",
     "if ( const auto * close = std :: get_if < OpeningClose > ( & live . authority ) ) #1",
     "if ( ! opening_close_alive ( observation , * close ) ) #1"
@@ -22475,7 +22475,7 @@
    "symbol": "events",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < PreparedMutation > WorkingRequestCore :: prepare_evaluation ( const RequestHandle & target , const EvaluationContext & context , const TargetObservation & observation , uint64_t & next_timeline_ordinal , bool open_activation_grant ) #1",
     "if ( const auto * close = std :: get_if < OpeningsClose > ( & live . authority ) ) #1",
     "if ( live_count = = 0 ) #1"
@@ -22489,7 +22489,7 @@
    "symbol": "first",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < Installed > WorkingRequestCore :: apply_evaluation ( const RequestHandle & target , const EvaluationContext & context , const TargetObservation & observation , uint64_t & next_timeline_ordinal , bool open_activation_grant ) #1",
     "if ( std :: holds_alternative < UnboundBookClose > ( live . authority ) ) #1"
    ],
@@ -22502,7 +22502,7 @@
    "symbol": "first",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < Installed > WorkingRequestCore :: apply_evaluation ( const RequestHandle & target , const EvaluationContext & context , const TargetObservation & observation , uint64_t & next_timeline_ordinal , bool open_activation_grant ) #1"
    ],
    "cls": "assign",
@@ -22514,7 +22514,7 @@
    "symbol": "events",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < PreparedMutation > WorkingRequestCore :: prepare_trigger ( const RequestHandle & target , const TriggerTransition & transition , DriverEligibilityClass driver_class , uint64_t & next_timeline_ordinal , std :: optional < Side > cohort_side , const ActivationGrid & activation_grid , bool open_activation_grant ) #1",
     "auto emit_activated = [ & ] ( ActivationKind kind , TriggerState after , const MatchCursor & cursor , double price ) #1"
    ],
@@ -22527,7 +22527,7 @@
    "symbol": "first",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < Installed > WorkingRequestCore :: apply_trigger ( const RequestHandle & target , const TriggerTransition & transition , DriverEligibilityClass driver_class , uint64_t & next_timeline_ordinal , std :: optional < Side > cohort_side , const ActivationGrid & activation_grid , bool open_activation_grant ) #1",
     "auto emit_activated = [ & ] ( ActivationKind kind , TriggerState after , const MatchCursor & at , double price ) -> Preparation < Installed > #1"
    ],
@@ -22540,7 +22540,7 @@
    "symbol": "first",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < Installed > WorkingRequestCore :: apply_trigger ( const RequestHandle & target , const TriggerTransition & transition , DriverEligibilityClass driver_class , uint64_t & next_timeline_ordinal , std :: optional < Side > cohort_side , const ActivationGrid & activation_grid , bool open_activation_grant ) #1",
     "if ( const auto * extremum = std :: get_if < ObserveTrailExtremum > ( & transition ) ) #1"
    ],
@@ -22553,7 +22553,7 @@
    "symbol": "events",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < PreparedMutation > WorkingRequestCore :: prepare_no_effect ( const RequestHandle & target , const EvaluationContext & context , uint64_t & next_timeline_ordinal ) #1"
    ],
    "cls": "grow",
@@ -22565,7 +22565,7 @@
    "symbol": "events",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < PreparedMutation > WorkingRequestCore :: prepare_match_rejected ( const RequestHandle & target , const EvaluationContext & context , MatchRejectReason reason , std :: optional < ExecutionTerms > attempted_terms , uint64_t & next_timeline_ordinal ) #1"
    ],
    "cls": "grow",
@@ -22577,7 +22577,7 @@
    "symbol": "events",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < PreparedMutation > WorkingRequestCore :: prepare_margin_call ( const MarginCallEvent & event , uint64_t & next_timeline_ordinal ) #1"
    ],
    "cls": "grow",
@@ -22589,7 +22589,7 @@
    "symbol": "events",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < PreparedMutation > WorkingRequestCore :: prepare_risk_event ( const NativeRiskEvent & event , uint64_t & next_timeline_ordinal ) #1"
    ],
    "cls": "grow",
@@ -22601,7 +22601,7 @@
    "symbol": "first",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < Installed > WorkingRequestCore :: apply_margin_call ( const MarginCallEvent & event , uint64_t & next_timeline_ordinal ) #1"
    ],
    "cls": "assign",
@@ -22613,7 +22613,7 @@
    "symbol": "first",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < Installed > WorkingRequestCore :: apply_risk_event ( const NativeRiskEvent & event , uint64_t & next_timeline_ordinal ) #1"
    ],
    "cls": "assign",
@@ -22625,7 +22625,7 @@
    "symbol": "events",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < PreparedMutation > WorkingRequestCore :: prepare_terms ( const RequestHandle & target , const EvaluationContext & context , const TermsResolvedInput & input , uint64_t & next_timeline_ordinal ) #1",
     "if ( ! deferred ) #1"
    ],
@@ -22638,7 +22638,7 @@
    "symbol": "events",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < PreparedMutation > WorkingRequestCore :: prepare_terms ( const RequestHandle & target , const EvaluationContext & context , const TermsResolvedInput & input , uint64_t & next_timeline_ordinal ) #1"
    ],
    "cls": "grow",
@@ -22650,7 +22650,7 @@
    "symbol": "events",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < PreparedMutation > WorkingRequestCore :: prepare_terms ( const RequestHandle & target , const EvaluationContext & context , const TermsResolvedInput & input , uint64_t & next_timeline_ordinal ) #1",
     "if ( * input . terms . units = = 0 . 0 ) #1"
    ],
@@ -22663,7 +22663,7 @@
    "symbol": "events",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < PreparedMutation > WorkingRequestCore :: prepare_terms ( const RequestHandle & target , const EvaluationContext & context , const TermsResolvedInput & input , uint64_t & next_timeline_ordinal ) #1",
     "if ( after = = 0 . 0 && deduction > 0 . 0 ) #1"
    ],
@@ -22676,7 +22676,7 @@
    "symbol": "first",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < Installed > WorkingRequestCore :: apply_terms ( const RequestHandle & target , const EvaluationContext & context , const TermsResolvedInput & input , uint64_t & next_timeline_ordinal ) #1",
     "if ( ! deferred ) #1"
    ],
@@ -22689,7 +22689,7 @@
    "symbol": "none",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < Installed > WorkingRequestCore :: apply_terms ( const RequestHandle & target , const EvaluationContext & context , const TermsResolvedInput & input , uint64_t & next_timeline_ordinal ) #1",
     "if ( * input . terms . units = = 0 . 0 || ( after = = 0 . 0 && deduction > 0 . 0 ) ) #1",
     "if ( * input . terms . units = = 0 . 0 ) #1"
@@ -22703,7 +22703,7 @@
    "symbol": "cancelled",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < Installed > WorkingRequestCore :: apply_terms ( const RequestHandle & target , const EvaluationContext & context , const TermsResolvedInput & input , uint64_t & next_timeline_ordinal ) #1",
     "if ( * input . terms . units = = 0 . 0 || ( after = = 0 . 0 && deduction > 0 . 0 ) ) #1",
     "else #1"
@@ -22717,7 +22717,7 @@
    "symbol": "first",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < Installed > WorkingRequestCore :: apply_terms ( const RequestHandle & target , const EvaluationContext & context , const TermsResolvedInput & input , uint64_t & next_timeline_ordinal ) #1",
     "if ( * input . terms . units = = 0 . 0 || ( after = = 0 . 0 && deduction > 0 . 0 ) ) #1"
    ],
@@ -22730,7 +22730,7 @@
    "symbol": "first",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < Installed > WorkingRequestCore :: apply_terms ( const RequestHandle & target , const EvaluationContext & context , const TermsResolvedInput & input , uint64_t & next_timeline_ordinal ) #1"
    ],
    "cls": "assign",
@@ -22742,7 +22742,7 @@
    "symbol": "events",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < PreparedExecution > WorkingRequestCore :: prepare_execution ( const RequestHandle & target , const ExecutionProposal & proposal , uint64_t & next_timeline_ordinal , bool open_activation_grant ) #1"
    ],
    "cls": "grow",
@@ -22754,7 +22754,7 @@
    "symbol": "impl",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < PreparedExecution > WorkingRequestCore :: prepare_execution ( const RequestHandle & target , const ExecutionProposal & proposal , uint64_t & next_timeline_ordinal , bool open_activation_grant ) #1"
    ],
    "cls": "alloc",
@@ -22766,7 +22766,7 @@
    "symbol": "events",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "InstallResult WorkingRequestCore :: install_execution ( PreparedExecution && prepared , const CommittedExecutionFacts & facts ) noexcept #1",
     "if ( retain ) #1"
    ],
@@ -22779,7 +22779,7 @@
    "symbol": "none",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < std :: monostate > WorkingRequestCore :: check_execution ( const RequestHandle & target , const ExecutionProposal & proposal , uint64_t & next_timeline_ordinal , bool open_activation_grant ) #1"
    ],
    "cls": "assign",
@@ -22791,7 +22791,7 @@
    "symbol": "first",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "InstallResult WorkingRequestCore :: apply_execution ( const RequestHandle & target , const ExecutionProposal & proposal , const CommittedExecutionFacts & facts , uint64_t & next_timeline_ordinal , bool open_activation_grant ) #1"
    ],
    "cls": "assign",
@@ -22803,7 +22803,7 @@
    "symbol": "events",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < PreparedMutation > WorkingRequestCore :: prepare_group_effect ( const EventId & applied , const RequestHandle & recipient , uint64_t & next_timeline_ordinal ) #1",
     "if ( std :: holds_alternative < RemainingUnbound > ( live . remaining ) || std :: holds_alternative < RemainingDeferred > ( live . remaining ) || std :: holds_alternative < NoTarget > ( live . remaining ) ) #1",
     "if ( member -> effect = = GroupEffect :: Cancel ) #1"
@@ -22817,7 +22817,7 @@
    "symbol": "events",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < PreparedMutation > WorkingRequestCore :: prepare_group_effect ( const EventId & applied , const RequestHandle & recipient , uint64_t & next_timeline_ordinal ) #1",
     "if ( std :: holds_alternative < RemainingUnbound > ( live . remaining ) || std :: holds_alternative < RemainingDeferred > ( live . remaining ) || std :: holds_alternative < NoTarget > ( live . remaining ) ) #1"
    ],
@@ -22830,7 +22830,7 @@
    "symbol": "events",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < PreparedMutation > WorkingRequestCore :: prepare_group_effect ( const EventId & applied , const RequestHandle & recipient , uint64_t & next_timeline_ordinal ) #1",
     "if ( member -> effect = = GroupEffect :: Cancel || std :: holds_alternative < RemainingFlattenAll > ( live . remaining ) ) #1"
    ],
@@ -22843,7 +22843,7 @@
    "symbol": "events",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < PreparedMutation > WorkingRequestCore :: prepare_group_effect ( const EventId & applied , const RequestHandle & recipient , uint64_t & next_timeline_ordinal ) #1"
    ],
    "cls": "grow",
@@ -22855,7 +22855,7 @@
    "symbol": "events",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < PreparedMutation > WorkingRequestCore :: prepare_group_effect ( const EventId & applied , const RequestHandle & recipient , uint64_t & next_timeline_ordinal ) #1",
     "if ( exhausted ) #1"
    ],
@@ -22868,7 +22868,7 @@
    "symbol": "first",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < Installed > WorkingRequestCore :: apply_group_effect ( const EventId & applied , const RequestHandle & recipient , uint64_t & next_timeline_ordinal ) #1",
     "auto end_with_receipt = [ & ] ( auto && ending , uint64_t outcome ) -> Preparation < Installed > #1"
    ],
@@ -22881,7 +22881,7 @@
    "symbol": "first",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < Installed > WorkingRequestCore :: apply_group_effect ( const EventId & applied , const RequestHandle & recipient , uint64_t & next_timeline_ordinal ) #1",
     "if ( std :: holds_alternative < RemainingUnbound > ( live . remaining ) || std :: holds_alternative < RemainingDeferred > ( live . remaining ) || std :: holds_alternative < NoTarget > ( live . remaining ) ) #1"
    ],
@@ -22894,7 +22894,7 @@
    "symbol": "first",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < Installed > WorkingRequestCore :: apply_group_effect ( const EventId & applied , const RequestHandle & recipient , uint64_t & next_timeline_ordinal ) #1",
     "if ( exhausted ) #1"
    ],
@@ -22907,7 +22907,7 @@
    "symbol": "first",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < Installed > WorkingRequestCore :: apply_group_effect ( const EventId & applied , const RequestHandle & recipient , uint64_t & next_timeline_ordinal ) #1"
    ],
    "cls": "assign",
@@ -22919,7 +22919,7 @@
    "symbol": "events",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < PreparedMutation > WorkingRequestCore :: prepare_owner_applied ( const EventId & applied , const RequestHandle & child , const std :: optional < OpeningObservation > & observation , uint64_t & next_timeline_ordinal , const ArmContext & arm ) #1",
     "if ( closing && ! opened && payload -> terminal ) #1"
    ],
@@ -22932,7 +22932,7 @@
    "symbol": "armed_definition",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < PreparedMutation > WorkingRequestCore :: prepare_owner_applied ( const EventId & applied , const RequestHandle & child , const std :: optional < OpeningObservation > & observation , uint64_t & next_timeline_ordinal , const ArmContext & arm ) #1",
     "if ( std :: holds_alternative < FromOwnerFill > ( live . request ( ) . anchor ) ) #1"
    ],
@@ -22945,7 +22945,7 @@
    "symbol": "events",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < PreparedMutation > WorkingRequestCore :: prepare_owner_applied ( const EventId & applied , const RequestHandle & child , const std :: optional < OpeningObservation > & observation , uint64_t & next_timeline_ordinal , const ArmContext & arm ) #1",
     "if ( ! closing ) #1"
    ],
@@ -22958,7 +22958,7 @@
    "symbol": "events",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < PreparedMutation > WorkingRequestCore :: prepare_owner_applied ( const EventId & applied , const RequestHandle & child , const std :: optional < OpeningObservation > & observation , uint64_t & next_timeline_ordinal , const ArmContext & arm ) #1",
     "if ( owner_opened ) #1"
    ],
@@ -22971,7 +22971,7 @@
    "symbol": "events",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < PreparedMutation > WorkingRequestCore :: prepare_owner_applied ( const EventId & applied , const RequestHandle & child , const std :: optional < OpeningObservation > & observation , uint64_t & next_timeline_ordinal , const ArmContext & arm ) #1",
     "if ( owner_opened ) #1",
     "if ( exhausted ) #1"
@@ -22985,7 +22985,7 @@
    "symbol": "events",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < PreparedMutation > WorkingRequestCore :: prepare_owner_applied ( const EventId & applied , const RequestHandle & child , const std :: optional < OpeningObservation > & observation , uint64_t & next_timeline_ordinal , const ArmContext & arm ) #1",
     "if ( ! owner_opened ) #1"
    ],
@@ -22998,7 +22998,7 @@
    "symbol": "events",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < PreparedMutation > WorkingRequestCore :: prepare_owner_applied ( const EventId & applied , const RequestHandle & child , const std :: optional < OpeningObservation > & observation , uint64_t & next_timeline_ordinal , const ArmContext & arm ) #1",
     "else #2"
    ],
@@ -23011,7 +23011,7 @@
    "symbol": "armed_definition",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < Installed > WorkingRequestCore :: apply_owner_applied ( const EventId & applied , const RequestHandle & child , const std :: optional < OpeningObservation > & observation , uint64_t & next_timeline_ordinal , const ArmContext & arm ) #1",
     "if ( anchored ) #1"
    ],
@@ -23024,7 +23024,7 @@
    "symbol": "first",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < Installed > WorkingRequestCore :: apply_owner_applied ( const EventId & applied , const RequestHandle & child , const std :: optional < OpeningObservation > & observation , uint64_t & next_timeline_ordinal , const ArmContext & arm ) #1",
     "if ( ! closing ) #1"
    ],
@@ -23037,7 +23037,7 @@
    "symbol": "bound",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < Installed > WorkingRequestCore :: apply_owner_applied ( const EventId & applied , const RequestHandle & child , const std :: optional < OpeningObservation > & observation , uint64_t & next_timeline_ordinal , const ArmContext & arm ) #1",
     "if ( owner_opened ) #1"
    ],
@@ -23050,7 +23050,7 @@
    "symbol": "first",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < Installed > WorkingRequestCore :: apply_owner_applied ( const EventId & applied , const RequestHandle & child , const std :: optional < OpeningObservation > & observation , uint64_t & next_timeline_ordinal , const ArmContext & arm ) #1",
     "if ( owner_opened ) #1",
     "if ( exhausted ) #1"
@@ -23064,7 +23064,7 @@
    "symbol": "first",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < Installed > WorkingRequestCore :: apply_owner_applied ( const EventId & applied , const RequestHandle & child , const std :: optional < OpeningObservation > & observation , uint64_t & next_timeline_ordinal , const ArmContext & arm ) #1"
    ],
    "cls": "assign",
@@ -23076,7 +23076,7 @@
    "symbol": "events",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < PreparedMutation > WorkingRequestCore :: prepare_bound_expiry ( const EventId & physical_cause , const RequestHandle & child , const TargetObservation & observation , uint64_t & next_timeline_ordinal ) #1"
    ],
    "cls": "grow",
@@ -23088,7 +23088,7 @@
    "symbol": "none",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < PreparedMutation > WorkingRequestCore :: prepare_parent_terminal ( const EventId & terminal_or_replaced , const RequestHandle & child , uint64_t & next_timeline_ordinal ) #1"
    ],
    "cls": "assign",
@@ -23100,7 +23100,7 @@
    "symbol": "events",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < PreparedMutation > WorkingRequestCore :: prepare_parent_terminal ( const EventId & terminal_or_replaced , const RequestHandle & child , uint64_t & next_timeline_ordinal ) #1"
    ],
    "cls": "grow",
@@ -23112,7 +23112,7 @@
    "symbol": "none",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "Preparation < Installed > WorkingRequestCore :: apply_parent_terminal ( const EventId & terminal_or_replaced , const RequestHandle & child , uint64_t & next_timeline_ordinal ) #1"
    ],
    "cls": "assign",
@@ -23124,7 +23124,7 @@
    "symbol": "directory",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct WorkingRequestCore :: SuccessorRootIndex #1"
    ],
    "cls": "decl",
@@ -23136,7 +23136,7 @@
    "symbol": "directory",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct WorkingRequestCore :: SuccessorRootIndex #1",
     "void set_directory ( const std :: string & value ) #1"
    ],
@@ -23149,7 +23149,7 @@
    "symbol": "rows",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct WorkingRequestCore :: SuccessorRootIndex #1",
     "void prepare_append ( ) #1",
     "if ( slab ) #1"
@@ -23163,7 +23163,7 @@
    "symbol": "where",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct WorkingRequestCore :: SuccessorRootIndex #1",
     "std :: optional < uint64_t > find ( uint64_t successor ) const #1",
     "if ( tail_size ! = 0 && successor > = tail [ 0 ] . successor ) #1"
@@ -23177,7 +23177,7 @@
    "symbol": "first",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct WorkingRequestCore :: SuccessorRootIndex #1",
     "std :: optional < uint64_t > find ( uint64_t successor ) const #1"
    ],
@@ -23190,7 +23190,7 @@
    "symbol": "first",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "struct WorkingRequestCore :: SuccessorRootIndex #1",
     "std :: optional < uint64_t > find ( uint64_t successor ) const #1",
     "while ( first < last ) #1"
@@ -23204,7 +23204,7 @@
    "symbol": "successor_roots_",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "void WorkingRequestCore :: bind_scratch_slab ( const std :: shared_ptr < :: pineforge :: detail :: ScratchSlab > & slab ) #1",
     "if ( slab ) #1"
    ],
@@ -23217,7 +23217,7 @@
    "symbol": "successor_roots_",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "void WorkingRequestCore :: set_successor_roots_directory ( const std :: string & directory ) #1"
    ],
    "cls": "alloc",
@@ -23229,7 +23229,7 @@
    "symbol": "none",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "const std :: string & WorkingRequestCore :: scratch_directory ( ) const noexcept #1"
    ],
    "cls": "decl",
@@ -23241,7 +23241,7 @@
    "symbol": "successor_roots_",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "void WorkingRequestCore :: reserve_successor_root ( ) #1"
    ],
    "cls": "alloc",
@@ -23253,7 +23253,7 @@
    "symbol": "successor_roots_",
    "scope": [
     "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v7 #1",
+    "inline namespace native_order_v8 #1",
     "void WorkingRequestCore :: append_successor_root ( uint64_t incarnation , uint64_t root ) noexcept #1"
    ],
    "cls": "grow",
