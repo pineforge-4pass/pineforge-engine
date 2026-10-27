@@ -596,6 +596,26 @@ class CatalogDiff(unittest.TestCase):
         self.assertNotEqual(page, docs_page_with_tables(page, extra))
 
 
+class CapacityCatalog(unittest.TestCase):
+    """Read-only schema row; no temporary git repository is needed."""
+
+    def test_cr403_scratch_capacity_optional_args(self) -> None:
+        catalog = json.loads((ROOT / CATALOG).read_text(encoding="utf-8"))
+        entry = catalog["codes"]["scratch_capacity_exceeded"]
+        self.assertEqual(entry["args"], {
+            "limit": {"kind": "integer", "optional": True},
+            "need": {"kind": "integer", "optional": True},
+            "resource": {
+                "kind": "vocab",
+                "values": ["layout", "sequence_data", "sequence_index", "erased_data",
+                           "erased_index", "consumed_data", "consumed_index", "cohort",
+                           "exit_rank", "successor_roots", "store_objects"],
+            },
+        })
+        self.assertEqual(entry["class"], "resource")
+        self.assertIs(entry["retryable"], False)
+
+
 if __name__ == "__main__":
     if sys.argv[1:] == ["--write-docs-tables"]:
         catalog = json.loads((ROOT / CATALOG).read_text(encoding="utf-8"))
