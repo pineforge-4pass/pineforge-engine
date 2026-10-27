@@ -8542,6 +8542,7 @@ inline namespace engine_script_run_v19 {
 
 bool NativeExecutionConsumer::match_book_fast_path_ok(
         const native_order::EvaluationContext& context) const noexcept {
+    if (match_book_setup_failed_) return false;
     if (requests_.book_spill_) requests_.book_spill_->level_index = match_book_scratch_;
     return !requests_.book_spill_
         || requests_.book_spill_->fast_path_ok(requests_, context);
@@ -8569,7 +8570,8 @@ std::uint64_t NativeExecutionConsumer::match_book_class_guard_failures() const n
 }
 
 std::uint64_t NativeExecutionConsumer::match_book_index_poisonings() const noexcept {
-    return requests_.book_spill_ ? requests_.book_spill_->poison_events : 0;
+    return (requests_.book_spill_ ? requests_.book_spill_->poison_events : 0)
+        + static_cast<std::uint64_t>(match_book_setup_failed_);
 }
 
 detail::ScratchKeyOrder NativeExecutionConsumer::match_book_scratch_order() noexcept {
@@ -8583,32 +8585,60 @@ void NativeExecutionConsumer::match_book_rebind_scratch() noexcept {
     if (requests_.book_spill_) requests_.book_spill_->level_index = match_book_scratch_;
 }
 
+void NativeExecutionConsumer::match_book_allocation_failure() noexcept {
+    if (requests_.book_spill_) requests_.book_spill_->index_failed();
+    else match_book_setup_failed_ = true;
+}
+
+bool NativeExecutionConsumer::match_book_spill_scope(bool enabled) noexcept {
+    const bool previous = match_book_middle_spill_;
+    match_book_middle_spill_ = enabled;
+    if (requests_.book_spill_) requests_.book_spill_->middle_spill = enabled;
+    return previous;
+}
+
 bool NativeExecutionConsumer::match_book_join(
         const native_order::RequestHandle& handle,
         const native_order::EvaluationContext& context,
         double lo, double hi, double delta, DormantReach reachable) {
     using Book = native_order::WorkingRequestCore::BookSpill;
-    if (!match_book_scratch_ || !reachable) return false;
+    if (!match_book_scratch_ || !reachable || match_book_setup_failed_) return false;
     const auto* row = requests_.find_resident(handle);
     Book::DormantSpec spec;
     // Avoid constructing the dormant pimpl for ordinary active/market rows,
     // or for a row the current path can reach.
     if (!row || !Book::dormant_class(requests_, *row, spec)
         || reachable(spec.ge, spec.level, lo, hi, delta)) return false;
-    auto& book = Book::ensure(requests_);
-    book.level_index = match_book_scratch_;
-    return Book::join(requests_, handle, context, lo, hi, delta, reachable);
+    try {
+        auto& book = Book::ensure(requests_);
+        book.level_index = match_book_scratch_;
+        book.middle_spill = match_book_middle_spill_;
+        // The real empty store exists at begin; its backing/cache is opened
+        // only for an actual dormant admission. Setup failure is cache-only.
+        try { prepare_match_book_scratch(); }
+        catch (...) { book.index_failed(); return false; }
+        return Book::join(requests_, handle, context, lo, hi, delta, reachable);
+    } catch (const std::bad_alloc&) {
+        match_book_allocation_failure();
+        return false;
+    }
 }
 
 std::uint64_t NativeExecutionConsumer::match_book_wake_by_price(
         const native_order::EvaluationContext& context,
         double lo, double hi, double delta, DormantReach reachable) {
+    // Called before the first candidate/held winner of this point exists.
+    MatchBookSpillScope candidate_free(*this, true);
     return requests_.book_spill_
         ? requests_.book_spill_->wake_by_price(requests_, context, lo, hi, delta, reachable) : 0;
 }
 
 void NativeExecutionConsumer::match_book_begin(const native_order::EvaluationContext& context) {
-    if (requests_.book_spill_) requests_.book_spill_->begin(requests_, context);
+    try {
+        if (requests_.book_spill_) requests_.book_spill_->begin(requests_, context);
+    } catch (const std::bad_alloc&) {
+        match_book_allocation_failure();
+    }
 }
 
 void NativeExecutionConsumer::match_book_advance(std::uint64_t priority) {

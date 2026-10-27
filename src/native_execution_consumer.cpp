@@ -1259,22 +1259,22 @@ std::shared_ptr<const native_order::LiveRequest> unowned_live(
     return std::shared_ptr<const native_order::LiveRequest>(
             std::shared_ptr<const native_order::LiveRequest>(), &row);
 }
-
+std::unique_ptr<detail::ScratchBacking> make_book_scratch_backing(std::size_t page_size);
 }  // namespace
 
 struct NativeExecutionConsumer::RunCommandScratch {
-    // Match the command-scratch geometry used by Trade, Dependency and Book.
-    // Backing and cache placement do not enter state_digest; all command scopes roll back.
+    // Fixed command geometry; Book defers its backing/cache until admission.
     static constexpr std::size_t page_size = 512;
-    std::unique_ptr<detail::ScratchBacking> backing =
-        detail::make_command_scratch_backing(page_size);
+    std::unique_ptr<detail::ScratchBacking> backing;
     std::unique_ptr<detail::CommandScratchStore> store;
     detail::CommandScratchStore** borrower = nullptr;
     std::array<std::byte, page_size> digest_page{};
     CommandScratchSnapshot snapshot;
 
-    explicit RunCommandScratch(detail::ScratchKeyOrder order)
-        : store(std::make_unique<detail::CommandScratchStore>(
+    explicit RunCommandScratch(detail::ScratchKeyOrder order, bool book)
+        : backing(book ? make_book_scratch_backing(page_size)
+                       : detail::make_command_scratch_backing(page_size)),
+          store(std::make_unique<detail::CommandScratchStore>(
               detail::ScratchStoreConfig{2, page_size, 1, 1, order,
                                         detail::ScratchOpenMode::create_empty},
               backing.get())) {
@@ -1314,7 +1314,7 @@ void NativeExecutionConsumer::provision_run_command_scratch(
     if (borrower && borrower->transaction_active())
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                       "run command scratch borrower has an active transaction");
-    auto run = std::make_shared<RunCommandScratch>(order);
+    auto run = std::make_shared<RunCommandScratch>(order, binding == CommandScratchBinding::Book);
     run->borrower = &borrower;
     borrower = run->store.get();
     run_command_scratch_[index] = std::move(run);
@@ -6752,6 +6752,7 @@ void NativeExecutionConsumer::match_path(
     const auto grid = grid_threshold(*spec);
     const uint64_t P = point.coordinate.ordinal;
     requests_.refresh_point_allowances(P, read_position(engine));
+    MatchBookSpillScope retained_candidates(*this, false);
     MatchDormantPoint dormant(*this, engine, point, driver_class, from_price, to_price);
     double t_cursor = 0.0, cursor_price = from_price;
     native_order::MatchCursor path_cursor = make_cursor(point, t_cursor);
@@ -6763,7 +6764,6 @@ void NativeExecutionConsumer::match_path(
     using CandidateProvenance = MatchProvenance;
     auto& candidate_provenance = match_provenance_;
     candidate_provenance.clear();
-
     auto same_optional_bits = [](const std::optional<double>& left,
                                  const std::optional<double>& right) {
         return left.has_value() == right.has_value()
@@ -7615,6 +7615,13 @@ void NativeExecutionConsumer::match_path(
         consuming_request_ = false;
         if (failed()) return;
         if (!outcome) skip(skip_key(winner->priority, winner->kind));
+        // A fill never reuses this scan. Release its indices and resident
+        // aliases before callbacks may make room by spilling a middle row.
+        rows.clear();
+        winner_row.reset();
+        rescanned.reset();
+        book_row = live_requests.end();
+        live = nullptr;
         drain_applied_notifications(engine);
     }
     if (continuous && t_cursor < 1.0 && !failed()) {
@@ -8178,6 +8185,7 @@ void NativeExecutionConsumer::invoke_recalculation(
     }
     const uint64_t ordinal = callback_context_.coordinate.ordinal;
     ++recalculations_;
+    MatchBookSpillScope candidate_free(*this, true);
     try {
         const NativeDecisionContext presented = callback_context_;
         host->on_native_recalculate(bar, presented, reason, cause);
@@ -8352,6 +8360,7 @@ void NativeExecutionConsumer::invoke_applied_callback(
 
 void NativeExecutionConsumer::drain_queued_notifications(BacktestEngine& engine) {
     if (in_callback_ || consuming_request_ || draining_notifications_ || failed()) return;
+    MatchBookSpillScope candidate_free(*this, true);
     draining_notifications_ = true;
     while (notification_head_ < applied_notifications_.size() && !failed()) {
         const auto notification = applied_notifications_[notification_head_++];
@@ -8606,11 +8615,11 @@ void NativeExecutionConsumer::invoke_callback(BacktestEngine& engine, const Bar&
     in_callback_ = true;
     callback_phase_ = CallbackPhase::Bar;
     open_point_epoch();
+    MatchBookSpillScope candidate_free(*this, true);
     try {
         const NativeDecisionContext presented = callback_context_;
-        // L5: every calculation of the run is routed here. The default
-        // on_native_recalculate forwards to on_native_bar, so a host that
-        // never opted into another cadence sees exactly its own contract.
+        // L5: every calculation routes here; the default recalculation hook
+        // forwards to on_native_bar for hosts using the ordinary cadence.
         host->on_native_recalculate(bar, presented, NativeCalculationReason::BarClose,
                                     nullptr);
     } catch (const std::exception& e) {
@@ -14265,6 +14274,8 @@ void NativeExecutionConsumer::reset_match_counters() noexcept {
     quiet_points_ = 0;
     match_dormant_counts_ = MatchDormantCounts{};
     match_dormant_was_fast_ = false;
+    match_book_setup_failed_ = false;
+    match_book_middle_spill_ = false;
 }
 
 void NativeExecutionConsumer::note_match_grid() noexcept {
@@ -14358,7 +14369,8 @@ void NativeExecutionConsumer::MatchDormantPoint::start() {
         // pimpl; there is no core snapshot/rollback to restore here (P3-1).
         begun_ = true;
         consumer_.match_book_begin(evaluation_);
-        fast_ = true;
+        if (eligible()) fast_ = true;
+        else fall_back();
     } catch (const std::exception& error) {
         failure(error);
     } catch (...) {
@@ -14504,11 +14516,75 @@ bool NativeExecutionConsumer::collect_match_trails(
 }
 
 void NativeExecutionConsumer::provision_run_command_scratch_for_run() {
-    provision_run_command_scratch(CommandScratchBinding::Book,
-                                  match_book_scratch_order(), match_book_scratch_);
+    try {
+        provision_run_command_scratch(CommandScratchBinding::Book,
+                                      match_book_scratch_order(), match_book_scratch_);
+    } catch (...) {
+        // Book is derived acceleration; setup cannot add a run refusal.
+        match_book_allocation_failure();
+    }
     match_book_rebind_scratch();
     provision_run_command_scratch(CommandScratchBinding::Dependency,
                                   dependency_scratch_order(), dependency_scratch_);
+}
+
+namespace {
+
+// The empty CommandScratchStore can answer lower_bound/state_digest
+// without touching backing pages. Keep that store and its release snapshot,
+// but open the production backing/cache only when a dormant row will use it.
+// All subsequent page traffic goes to the same production implementation.
+class DormantBookScratchBacking final : public detail::ScratchBacking {
+public:
+    explicit DormantBookScratchBacking(std::size_t page_size) noexcept
+        : ScratchBacking(detail::ScratchBackingKind::disk, page_size) {}
+
+    void prepare() {
+        if (!inner_) inner_ = detail::make_command_scratch_backing(page_size());
+    }
+    std::uint64_t page_count() const noexcept override {
+        return inner_ ? inner_->page_count() : 0;
+    }
+    std::optional<std::uint64_t> arena_capacity_bytes() const noexcept override {
+        return inner_ ? inner_->arena_capacity_bytes() : std::nullopt;
+    }
+    const detail::ReportScratchIoError* carried_failure() const noexcept override {
+        return inner_ ? inner_->carried_failure() : nullptr;
+    }
+
+protected:
+    detail::ScratchStatus do_read_page(
+            detail::ScratchPageId id, detail::ScratchBuffer destination) const noexcept override {
+        return inner_ ? inner_->read_page(id, destination) : detail::ScratchStatus::not_found;
+    }
+    detail::ScratchStatus do_write_page(
+            detail::ScratchPageId id, detail::ScratchBytes source) noexcept override {
+        // Admission prepares before index_put. Reject an unprepared writer
+        // as a programming error without publishing any index entry.
+        return inner_ ? inner_->write_page(id, source) : detail::ScratchStatus::programming_error;
+    }
+    detail::ScratchStatus do_sync(detail::ScratchDurability durability) noexcept override {
+        if (inner_) return inner_->sync(durability);
+        return durability == detail::ScratchDurability::buffered
+            ? detail::ScratchStatus::ok : detail::ScratchStatus::programming_error;
+    }
+
+private:
+    std::unique_ptr<detail::ScratchBacking> inner_;
+};
+
+std::unique_ptr<detail::ScratchBacking> make_book_scratch_backing(std::size_t page_size) {
+    return std::make_unique<DormantBookScratchBacking>(page_size);
+}
+
+} // namespace
+
+void NativeExecutionConsumer::prepare_match_book_scratch() {
+    const auto& run = run_command_scratch_[static_cast<std::size_t>(CommandScratchBinding::Book)];
+    if (!run || !run->store || run->store.get() != match_book_scratch_)
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                      "native dormant scratch binding is not live");
+    static_cast<DormantBookScratchBacking&>(*run->backing).prepare();
 }
 
 }  // inline namespace engine_script_run_v19

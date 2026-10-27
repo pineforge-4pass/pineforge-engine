@@ -2730,6 +2730,22 @@ private:
     static detail::ScratchKeyOrder match_book_scratch_order() noexcept;
     void match_book_rebind_scratch() noexcept;
     detail::CommandScratchStore* match_book_scratch_ = nullptr;
+    bool match_book_setup_failed_ = false;
+    bool match_book_middle_spill_ = false;
+    void prepare_match_book_scratch();
+    void match_book_allocation_failure() noexcept;
+    bool match_book_spill_scope(bool enabled) noexcept;
+    class MatchBookSpillScope {
+    public:
+        MatchBookSpillScope(NativeExecutionConsumer& consumer, bool enabled) noexcept
+            : consumer_(consumer), previous_(consumer.match_book_spill_scope(enabled)) {}
+        ~MatchBookSpillScope() noexcept { consumer_.match_book_spill_scope(previous_); }
+        MatchBookSpillScope(const MatchBookSpillScope&) = delete;
+        MatchBookSpillScope& operator=(const MatchBookSpillScope&) = delete;
+    private:
+        NativeExecutionConsumer& consumer_;
+        bool previous_;
+    };
     bool match_book_fast_path_ok(const native_order::EvaluationContext&) const noexcept;
     MatchDormantResident match_book_resident() const noexcept;
     std::uint64_t match_book_projected_reads() const noexcept;

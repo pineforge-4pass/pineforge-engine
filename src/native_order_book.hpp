@@ -131,7 +131,9 @@ struct WorkingRequestCore::BookSpill {
     std::array<SweepRegister, 2> reg{};
     detail::CommandScratchStore* level_index = nullptr;  // borrowed run workspace
     uint64_t active_spilled = 0;
+    uint64_t spilled_book_closes = 0;
     uint64_t resident_dormant = 0;
+    bool middle_spill = false;  // only in an explicit candidate-free consumer scope
     bool ever_spilled = false;
     bool poison = false;  // permanent; class/active-spill guards are per point
     uint64_t poison_events = 0;
@@ -490,10 +492,19 @@ struct WorkingRequestCore::BookSpill {
                     wake_resident(core, at);
                 } else {
                     std::size_t promoted = 0;
-                    if (!core.promote_book_row(incarnation, &promoted)) {
+                    try {
+                        if (core.promote_book_row(incarnation, &promoted)) {
+                            ++woken;
+                            continue;
+                        }
+                    } catch (const std::bad_alloc&) {
+                        // Admission/waking is derived work. A failed decode
+                        // or reservation leaves eager matching authoritative.
                         index_failed();
                         return woken;
                     }
+                    index_failed();
+                    return woken;
                 }
                 ++woken;
             }
@@ -612,13 +623,17 @@ struct WorkingRequestCore::BookSpill {
 
     std::size_t spill_index(const WorkingRequestCore& core) const noexcept {
         assert_aligned(core);
-        // K1: a winner, candidate or in-flight caller can hold an index or a
-        // reference. Preserve pop_back's invalidation contract. A completed
-        // allowance sweep does not prove that no candidate list is alive.
+        // K1: retained winners/candidates keep the back-only contract. Middle
+        // erasure requires a consumer scope with no retained resident alias;
+        // completing an allowance sweep alone never grants that scope.
 #ifdef PINEFORGE_TEST_MUTATION_M24
-        for (std::size_t i = resident.size(); i != 0; --i)
-            if (resident[i - 1].dormant) return i - 1;
+        const bool may_erase = true;
+#else
+        const bool may_erase = middle_spill;
 #endif
+        if (may_erase)
+            for (std::size_t i = resident.size(); i != 0; --i)
+                if (resident[i - 1].dormant) return i - 1;
         return core.live_.size() - 1;
     }
     void drop_spilled(WorkingRequestCore& core, std::size_t at) noexcept {
@@ -627,13 +642,20 @@ struct WorkingRequestCore::BookSpill {
             --resident_dormant;
             ++reg[meta.cls].spilled_dormant;
         } else ++active_spilled;
+        if (std::holds_alternative<BookClose>(core.live_[at].authority))
+            ++spilled_book_closes;
 #ifdef PINEFORGE_TEST_MUTATION_M24
         core.live_.erase(core.live_.begin() + static_cast<std::ptrdiff_t>(at));
         resident.erase(resident.begin() + static_cast<std::ptrdiff_t>(at));
 #else
-        assert(at + 1 == core.live_.size());
-        core.live_.pop_back();
-        resident.pop_back();
+        if (at + 1 == core.live_.size()) {
+            core.live_.pop_back();
+            resident.pop_back();
+        } else {
+            assert(middle_spill);
+            core.live_.erase(core.live_.begin() + static_cast<std::ptrdiff_t>(at));
+            resident.erase(resident.begin() + static_cast<std::ptrdiff_t>(at));
+        }
 #endif
         ever_spilled = true;
         ++alive;
@@ -641,6 +663,7 @@ struct WorkingRequestCore::BookSpill {
     }
     void promoted(WorkingRequestCore& core, const BookSlot& slot, std::size_t at) noexcept {
         const auto& row = core.live_[at];
+        if (std::holds_alternative<BookClose>(row.authority)) --spilled_book_closes;
         if ((slot.dormancy & 1u) != 0) {
 #ifndef PINEFORGE_TEST_MUTATION_M3
             erase_index(core, row);
@@ -681,7 +704,7 @@ struct WorkingRequestCore::BookSpill {
 #ifdef PINEFORGE_TEST_MUTATION_M14
         return false;
 #else
-        return active_spilled != 0;
+        return spilled_book_closes != 0;
 #endif
     }
     bool carries_read_failure() const noexcept {
