@@ -51,10 +51,7 @@ inline int64_t month_key_local(int64_t ts_ms) {   // call ONLY under ScopedTimez
     const time_t secs = static_cast<time_t>(ts_ms / 1000);
     struct tm tb {};
     if (localtime_r(&secs, &tb) == nullptr)
-        throw coded<std::runtime_error>(
-            RunFailureCode::report_result_invalid,
-            RunFailureArgs{{"field", "equity_curve.time_ms"}, {"reason", "type_schema"}},
-            "The report timestamp cannot be represented in the chart timezone.");
+        report::throw_unrepresentable_time("equity_curve.time_ms");
     return (static_cast<int64_t>(tb.tm_year) + 1900) * 12 + tb.tm_mon;
 }
 

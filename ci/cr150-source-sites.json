@@ -24830,6 +24830,17 @@
    "ordinal": 1
   },
   {
+   "file": "src/report_value_invalid.hpp",
+   "symbol": "<temp:RunFailureArgs>",
+   "scope": [
+    "namespace pineforge :: report #1",
+    "inline void throw_unrepresentable_time ( const char * field ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "RunFailureArgs",
+   "ordinal": 1
+  },
+  {
    "file": "src/run_failure.cpp",
    "symbol": "out",
    "scope": [
