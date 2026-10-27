@@ -7767,6 +7767,16 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND _pf_source_key_type STREQUAL "STATIC_LIBRARY
 endif()
 # --- CR-150 live-source-key end ---
 
+# --- CR-150 private-writers begin ---
+add_test(NAME test_private_equity_writers
+    COMMAND ${CMAKE_COMMAND}
+        -DPF_CXX=${CMAKE_CXX_COMPILER}
+        "-DPF_INCLUDES=${PROJECT_SOURCE_DIR}/include|${PROJECT_BINARY_DIR}/include"
+        -DPF_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+        -DPF_WORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/private_writers
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/private_writers.cmake)
+# --- CR-150 private-writers end ---
+
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
         message(FATAL_ERROR "PR fast row or executable is missing: ${_pf_fast_test}")

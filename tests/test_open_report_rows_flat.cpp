@@ -18,6 +18,7 @@
 // grows with P. GREEN after: a fixed bound independent of P.
 #define PINEFORGE_TEST_ALLOCATION_BYTES
 #include "global_allocation_replacement.hpp"
+#include "equity_writer_test_access.hpp"
 
 #include <pineforge/native_host.hpp>
 #include <pineforge/native_order.hpp>
@@ -141,7 +142,8 @@ public:
         const PyramidEntry& lot = pyramid_entries_[index];
         const double mark_price = bar_fill_price(current_bar_.close);
         const std::int64_t mark_time =
-            last_equity_point() ? last_equity_point()->time_ms : current_bar_.timestamp;
+            equity_writer_test::last(*this) ? equity_writer_test::last(*this)->time_ms
+                                          : current_bar_.timestamp;
         const double fx = active_account_currency_fx();
         execution::PhysicalExecutionContext context;
         context.effective_time_ms = mark_time;

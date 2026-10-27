@@ -5,6 +5,7 @@
 #include <pineforge/report_sink.h>
 
 #include "fd_flag_diagnostics.hpp"
+#include "equity_writer_test_access.hpp"
 
 #include <array>
 #include <cerrno>
@@ -51,13 +52,9 @@ struct Pipe {
     }
 };
 
-// C callbacks cannot supply a kernel-recorded equity point. Export only the
-// inherited member pointer to the test: invoke it on the real BacktestEngine
-// base subobject returned by the C API, never cast that object to this helper.
-struct HeldPointAccess : pineforge::BacktestEngine {
-    using Member = pf_equity_point_t* (pineforge::BacktestEngine::*)() noexcept;
-    static Member member() { return &HeldPointAccess::last_equity_point; }
-};
+// C callbacks cannot supply a kernel-recorded equity point. Invoke the
+// test-only member pointer on the real BacktestEngine base subobject returned
+// by the C API, never cast that object to a derived access helper.
 
 struct Host {
     pf_strategy_t handle = nullptr;
@@ -73,7 +70,7 @@ int on_bar(void* user, const pf_bar_t*, const pf_native_decision_v1*) {
     auto& host = *static_cast<Host*>(user);
     if (++host.callbacks != 2) return 0;
     auto& engine = *static_cast<pineforge::BacktestEngine*>(host.handle);
-    auto* point = (engine.*HeldPointAccess::member())();
+    auto* point = equity_writer_test::last(engine);
     if (!point || point->time_ms != start || !std::isfinite(point->equity)
         || !std::isfinite(point->open_profit)) return 1;
     // Nearest native injection before the normal recorder releases the held

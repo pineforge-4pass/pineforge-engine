@@ -24,6 +24,7 @@
 #include "../src/selected_report_view.hpp"
 #include "equity_stats_reference.hpp"
 #include "trade_stats_reference.hpp"
+#include "equity_writer_test_access.hpp"
 
 #include <algorithm>
 #include <array>
@@ -388,7 +389,7 @@ struct Host final : NativeStrategyHost {
     }
     void on_native_bar(const Bar&, const NativeDecisionContext& context) override {
         ++calculations;
-        if (auto* held = last_equity_point()) {
+        if (auto* held = equity_writer_test::last(*this)) {
             // Edit only the still-held execution point, before its successor
             // releases it. The sink-OFF run receives the identical edit.
             if (curve_fault == CurveFault::account && context.script_bar_open_ms == kT + kMinute)
@@ -1379,10 +1380,10 @@ struct StorageHost final : NativeStrategyHost {
         return report_sink_equity_scratch_region();
     }
     void rewrite_held_equity(double equity) {
-        auto* held = last_equity_point();
+        auto* held = equity_writer_test::last(*this);
         if (!held) throw std::logic_error("L17C missing held execution point");
         held->equity = equity;
-        refold_equity_tail();
+        equity_writer_test::refold(*this);
     }
     void present_report(ReportC* report) const override {
         ++presentations;

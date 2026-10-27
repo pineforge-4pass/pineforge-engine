@@ -1,6 +1,7 @@
 #pragma once
 
 #include "report_modes_fix_fixture.hpp"
+#include "equity_writer_test_access.hpp"
 #include <pineforge/source/pine_strategy_host.hpp>
 #include "../src/native_execution_consumer.hpp"
 
@@ -67,7 +68,7 @@ public:
         return NativeExecutionConsumer::bound(*this).closed_trade_prefix().base;
     }
     pf_equity_point_t terminal_point() const {
-        const auto* point = last_equity_point();
+        const auto* point = equity_writer_test::last(*this);
         require(point != nullptr, "fixture has no terminal equity point");
         return *point;
     }

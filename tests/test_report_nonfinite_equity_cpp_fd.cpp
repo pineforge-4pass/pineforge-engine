@@ -5,6 +5,7 @@
 #include <pineforge/run_failure.hpp>
 
 #include "fd_flag_diagnostics.hpp"
+#include "equity_writer_test_access.hpp"
 
 #include <array>
 #include <cerrno>
@@ -73,7 +74,7 @@ public:
     pf_equity_point_t injected_point{};
     void on_native_bar(const pineforge::Bar&, const pineforge::NativeDecisionContext&) override {
         if (++callbacks != 2) return;
-        auto* point = last_equity_point();
+        auto* point = equity_writer_test::last(*this);
         require(point && point->time_ms == start && std::isfinite(point->equity)
                 && std::isfinite(point->open_profit), "held native point is missing/invalid");
         // Inject only the held report value. The normal kernel recorder

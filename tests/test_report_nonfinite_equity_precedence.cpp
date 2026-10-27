@@ -10,6 +10,8 @@
 #include <pineforge/report_sink.h>
 #include <pineforge/run_failure.hpp>
 
+#include "equity_writer_test_access.hpp"
+
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -54,12 +56,8 @@ struct Pipe {
     }
 };
 
-// As in cabi_fd, use an inherited member pointer on the actual engine base;
-// never downcast the C host object to this access helper.
-struct HeldPointAccess : pineforge::BacktestEngine {
-    using Member = pf_equity_point_t* (pineforge::BacktestEngine::*)() noexcept;
-    static Member member() { return &HeldPointAccess::last_equity_point; }
-};
+// As in cabi_fd, the test-only member pointer operates on the actual engine
+// base; never downcast the C host object to a derived access helper.
 
 struct Host {
     pf_strategy_t handle = nullptr;
@@ -76,7 +74,7 @@ int on_bar(void* user, const pf_bar_t*, const pf_native_decision_v1*) {
     const auto index = static_cast<std::size_t>(host.callbacks - 2);
     if (index >= host.curve->size()) return 1;
     auto& engine = *static_cast<pineforge::BacktestEngine*>(host.handle);
-    auto* held = (engine.*HeldPointAccess::member())();
+    auto* held = equity_writer_test::last(engine);
     if (!held || held->time_ms != (*host.curve)[index].time_ms
         || !std::isfinite(held->equity) || !std::isfinite(held->open_profit)) return 1;
     // The next normal recorder call releases this actual native held point.

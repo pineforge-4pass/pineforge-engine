@@ -1,5 +1,6 @@
 #pragma once
 
+#include "equity_writer_test_access.hpp"
 #include <pineforge/native_host.hpp>
 #include <pineforge/report_mode.h>
 #include <pineforge/report_sink.h>
@@ -204,7 +205,7 @@ public:
     std::size_t open_lots() const { return pyramid_entries_.size(); }
     std::size_t sealed_base() const { return trades_.base(); }
     pf_equity_point_t terminal_point() const {
-        const auto* point = last_equity_point();
+        const auto* point = equity_writer_test::last(*this);
         require(point != nullptr, "fixture has no terminal equity point");
         return *point;
     }

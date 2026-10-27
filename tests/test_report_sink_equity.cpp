@@ -17,6 +17,7 @@ struct EquitySnapshot {
 };
 
 #ifdef PINEFORGE_L6B2_MODULE
+#include "equity_writer_test_access.hpp"
 #include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/run_failure.hpp>
 #include "../src/report_scratch.hpp"
@@ -80,7 +81,7 @@ public:
         result.extremes[3] = max_runup_;
         const auto prefix = report_sink_equity_scratch_region();
         result.count = prefix.scratch != nullptr || prefix.descriptor >= 0
-            ? prefix.point_count + (last_equity_point() ? 1 : 0)
+            ? prefix.point_count + (equity_writer_test::last(*this) ? 1 : 0)
             : static_cast<std::int64_t>(equity_curve_.size());
         result.presentations = presentations;
         result.presented_length = presented_length;
@@ -102,7 +103,7 @@ public:
         if (prefix.scratch || prefix.descriptor >= 0) {
             const pineforge::report_sink::ScratchCurveWindow curve(prefix);
             for (std::int64_t i = 0; i < curve.size(); ++i) fold(curve[i]);
-            if (const auto* held = last_equity_point()) fold(*held);
+            if (const auto* held = equity_writer_test::last(*this)) fold(*held);
         } else {
             // Sink-off and selected runs retain the independent array walk.
             for (const auto& point : equity_curve_) fold(point);

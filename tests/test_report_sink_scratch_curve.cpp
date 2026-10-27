@@ -52,6 +52,7 @@
 #include <pineforge/execution_observer.h>
 #include <pineforge/metrics_stream.hpp>
 #include <pineforge/native_host.hpp>
+#include "equity_writer_test_access.hpp"
 #include <pineforge/pineforge.h>
 #include <pineforge/report_sink.h>
 #include <pineforge/report_sink_writer.hpp>
@@ -277,7 +278,7 @@ public:
     std::size_t probe_capacity() const { return equity_curve_.capacity(); }
     // The held point (last_equity_point), by value; false when none is held.
     bool probe_held(pf_equity_point_t* out) const {
-        const pf_equity_point_t* point = last_equity_point();
+        const pf_equity_point_t* point = equity_writer_test::last(*this);
         if (point == nullptr) return false;
         *out = *point;
         return true;
