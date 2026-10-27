@@ -8,7 +8,7 @@
   "to": {
     "version": null,
     "unreleased": true,
-    "catalogSha256": "5666a4261b53b7582ae4300dc43ea3b040e9008e61420b070a3cfd97c423dc15"
+    "catalogSha256": "8a58673f8f3af433cac43ed8693ac7f5f4ed423f1bb8ac94c33c048b98c80038"
   },
   "catalogSchema": {
     "before": "pineforge-run-failure-catalog/v1",
@@ -33,6 +33,84 @@
               "order_key_hash_collision"
             ]
           }
+        }
+      ]
+    },
+    {
+      "code": "report_sink_failed",
+      "collection": "codes",
+      "fields": [
+        {
+          "path": "args.store.values",
+          "beforePresent": true,
+          "afterPresent": true,
+          "before": [
+            "curve",
+            "position_tail",
+            "cohort",
+            "exit_rank",
+            "sequence_index",
+            "sequence_index_idx",
+            "erased_minima",
+            "erased_minima_idx",
+            "partial_cycles",
+            "partial_cycles_idx",
+            "successor_roots",
+            "command",
+            "unknown"
+          ],
+          "after": [
+            "curve",
+            "position_tail",
+            "cohort",
+            "exit_rank",
+            "sequence_index",
+            "sequence_index_idx",
+            "erased_minima",
+            "erased_minima_idx",
+            "partial_cycles",
+            "partial_cycles_idx",
+            "successor_roots",
+            "store_objects",
+            "command",
+            "unknown"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "scratch_capacity_exceeded",
+      "collection": "codes",
+      "fields": [
+        {
+          "path": "args.resource.values",
+          "beforePresent": true,
+          "afterPresent": true,
+          "before": [
+            "layout",
+            "sequence_data",
+            "sequence_index",
+            "erased_data",
+            "erased_index",
+            "consumed_data",
+            "consumed_index",
+            "cohort",
+            "exit_rank",
+            "successor_roots"
+          ],
+          "after": [
+            "layout",
+            "sequence_data",
+            "sequence_index",
+            "erased_data",
+            "erased_index",
+            "consumed_data",
+            "consumed_index",
+            "cohort",
+            "exit_rank",
+            "successor_roots",
+            "store_objects"
+          ]
         }
       ]
     }
