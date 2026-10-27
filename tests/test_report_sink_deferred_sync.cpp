@@ -1,14 +1,13 @@
-// MCP140-SINK-SYNC: a path sink still writes every 64 KiB window as it fills
+// Deferred sink sync: a path sink still writes every 64 KiB window as it fills
 // (pwrite of the aligned window, then ftruncate to the logical end) but makes
 // the file durable once, inside write_trailer or abandon, instead of once per
 // window. Linux --wrap accounting of the real writer and of a real native run;
 // production code has no fault hook. Expected values come from the version-1
 // wire format, the FIPS 180-2 SHA-256 vector and the 64 KiB window rule.
-// Fail-before (per-window writer, main 30e9f9a0): count, sync_fault,
-// write_fault, truncate_fault, engine, engine_sync_fault and abandon fail a
-// sync check (the fault rows after their unchanged type and text checks);
-// bytes and memory pass on both writers. Execution and the red/green evidence
-// belong to the lab.
+// Against the per-window writer, count, sync_fault, write_fault,
+// truncate_fault, engine, engine_sync_fault and abandon fail a sync check (the
+// fault rows after their unchanged type and text checks); bytes and memory pass
+// on both writers.
 #include "report_sink_failure_fixture.hpp"
 #include "../src/report_sink_writer.hpp"
 #include "../src/sha256.hpp"

@@ -1,7 +1,7 @@
-// CR-397 E1: real factory, real unlinked files, forwarding Linux syscall
-// wrappers, and the same logical ScratchIoObserver registration as CR-257.
-// No local execution/fail-before is claimed. Against 30e9f9a0 the construction
-// overload used below is absent; the supervisor records the first diagnostic.
+// Resident command scratch: real factory, real unlinked files, forwarding Linux
+// syscall wrappers, and the same logical ScratchIoObserver registration as the
+// source-exit scratch I/O test. Before the resident prefix existed, the
+// construction overload used below was absent.
 #include "../src/command_scratch_cache.hpp"
 #include "command_scratch_arena_share_fixture.hpp"
 #include "command_scratch_extent_probe.hpp"

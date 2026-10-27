@@ -697,7 +697,7 @@ The command-scratch resident/cache ledger term is fixed **K = 202,752 bytes/run*
 64-KiB buffers and their decorator/slot-key objects (`src/command_scratch_cache.hpp:76`).
 Each disk store reuses one buffer for its resident prefix, then its read cache;
 crossing 64 KiB spills once. Attached arenas retain direct mapped admission.
-Charge K alongside existing workspaces/inner backings, replacing the old read-cache allowance; K changes no arena-storage formula or certification.
+Charge K (prose ledger; scripts/arena_bound.py has no K input) alongside existing workspaces/inner backings, replacing the old read-cache allowance; K changes no arena-storage formula or certification.
 
 CORE-TOP's A5-WIDER brief reports a **44.4–46.2 MB pre-flat-port resident
 constant**, referring to Q2 at 15:43. That is a historical measurement,
