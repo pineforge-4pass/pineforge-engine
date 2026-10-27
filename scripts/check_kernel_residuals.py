@@ -12,8 +12,13 @@ What the gate judges is what a consumer LINKS, and only that:
 
   * the SYMBOL TABLE -- `nm -C` over the archive, defined and undefined,
     demangled: every name the linker can resolve or demand;
-  * the STRING LITERALS -- `strings -a` over a copy of the archive whose
-    debug information has been stripped (see STRIP_TOOLS).
+  * the DATA/STRING LITERALS -- `strings -a` over the data and string sections
+    of a copy of the archive whose debug information has been stripped (see
+    STRIP_TOOLS). Skip sections marked executable, sections with no file
+    bytes, and the explicit debug/linker-metadata deny-lists below. Scan EVERY
+    other section, including unknown names; a text-like name alone does not
+    make a section executable. Duplicate archive member names are an
+    infrastructure error, since `ar p <name>` cannot select them uniquely.
 
 The strip is what makes the verdict a property of the code instead of a
 property of the build type. A `-g` archive carries DWARF, and `strings -a` over
@@ -124,6 +129,7 @@ import json
 from pathlib import Path
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -316,6 +322,43 @@ STRIP_TOOLS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("objcopy", ("objcopy", "--strip-debug", "{input}", "{output}")),
     ("strip", ("strip", "-S", "-o", "{output}", "{input}")),
 )
+
+# Mach-O and ELF object files need no platform tool to identify their
+# data/string sections.  In particular, macOS's `strings -a` has no section
+# selector, and running it over an object file is what let instruction bytes
+# become false residuals.
+MACHO_MAGICS: dict[bytes, tuple[str, bool]] = {
+    b"\xfe\xed\xfa\xce": (">", False),
+    b"\xce\xfa\xed\xfe": ("<", False),
+    b"\xfe\xed\xfa\xcf": (">", True),
+    b"\xcf\xfa\xed\xfe": ("<", True),
+}
+FAT_MAGICS: dict[bytes, tuple[str, bool]] = {
+    b"\xca\xfe\xba\xbe": (">", False),
+    b"\xbe\xba\xfe\xca": ("<", False),
+    b"\xca\xfe\xba\xbf": (">", True),
+    b"\xbf\xba\xfe\xca": ("<", True),
+}
+ELF_EXECUTABLE = 0x4
+ELF_NOBITS = 8
+# ELF metadata is identified by type, not an allow-list of data names:
+# SHT_NULL (also the extended-count carrier), SYMTAB/STRTAB/DYNSYM and
+# SYMTAB_SHNDX describe names that nm reads independently; RELA/REL/RELR
+# contain relocation records, not literal payloads.
+ELF_METADATA_TYPES = frozenset((0, 2, 3, 4, 9, 11, 18, 19))
+# DWARF (including compressed/split variants) and debugger index/link files
+# describe the build, not a consumer's data/string literals.
+ELF_DEBUG_SECTION_NAMES = frozenset((
+    ".debug", ".zdebug", ".gdb_index", ".gnu_debuglink", ".gnu_debugaltlink",
+))
+ELF_DEBUG_SECTION_PREFIXES = (".debug_", ".zdebug_")
+MACHO_ZERO_FILL_TYPES = frozenset((1, 0xC, 0x12))
+MACHO_INSTRUCTIONS = 0x80000400  # S_ATTR_PURE_INSTRUCTIONS / S_ATTR_SOME_INSTRUCTIONS
+MACHO_DEBUG = 0x02000000  # S_ATTR_DEBUG
+# __DWARF holds debug data; __LINKEDIT holds linker tables, not literals.
+# Mach-O symbol/string tables and section relocation records are otherwise
+# outside section payloads (symoff/stroff/reloff) and are never read here.
+MACHO_METADATA_SEGMENTS = frozenset(("__DWARF", "__LINKEDIT"))
 
 
 class InfrastructureError(Exception):
@@ -902,9 +945,23 @@ def kernel_translation_units(cmake_text: str) -> list[str]:
 
 
 def archive_members(archive: Path) -> list[str]:
-    """The object members `ar t` lists; an archive's symbol index is not one."""
-    return [line.strip() for line in run_tool(["ar", "t", str(archive)]).splitlines()
-            if line.strip().endswith(".o")]
+    """The object members `ar t` lists, rejecting ambiguous duplicate names.
+
+    `ar p <name>` reads the first occurrence, so accepting duplicates would
+    silently miss later members. An archive's symbol index is not in `ar t`.
+    """
+    members: list[str] = []
+    seen: set[str] = set()
+    for line in run_tool(["ar", "t", str(archive)]).splitlines():
+        member = line.strip()
+        if not member:
+            continue
+        if member in seen:
+            raise InfrastructureError(f"duplicate archive member {member!r}: {archive}")
+        seen.add(member)
+        if member.endswith(".o"):
+            members.append(member)
+    return members
 
 
 def kernel_source_files(root: Path, cmake_text: str, members: list[str]) -> list[Path]:
@@ -991,6 +1048,248 @@ def read_source_literals(root: Path, files: list[Path], *,
     return literals, where
 
 
+def _bounded_slice(data: bytes, offset: int, size: int, label: str) -> bytes:
+    if offset < 0 or size < 0 or offset > len(data) - size:
+        raise InfrastructureError(
+            f"{label} is outside its object ({offset}+{size}, {len(data)} bytes)")
+    return data[offset:offset + size]
+
+
+def _unpack(data: bytes, format_string: str, offset: int, label: str) -> tuple:
+    try:
+        return struct.unpack_from(format_string, data, offset)
+    except struct.error as error:
+        raise InfrastructureError(f"malformed {label}: {error}") from error
+
+
+def _elf_section_header(data: bytes, endian: str, is_64: bool, offset: int,
+                        label: str) -> dict[str, int]:
+    if is_64:
+        fields = _unpack(data, endian + "IIQQQQIIQQ", offset, label)
+        return {
+            "name": fields[0], "type": fields[1], "flags": fields[2],
+            "offset": fields[4], "size": fields[5], "link": fields[6],
+        }
+    fields = _unpack(data, endian + "IIIIIIIIII", offset, label)
+    return {
+        "name": fields[0], "type": fields[1], "flags": fields[2],
+        "offset": fields[4], "size": fields[5], "link": fields[6],
+    }
+
+
+def _elf_data_section(name: str, flags: int, section_type: int) -> bool:
+    """Scan by default; deny only executable and known metadata sections."""
+    if flags & ELF_EXECUTABLE:
+        return False
+    if section_type in ELF_METADATA_TYPES:
+        return False
+    if (name in ELF_DEBUG_SECTION_NAMES
+            or name.startswith(ELF_DEBUG_SECTION_PREFIXES)):
+        return False
+    return True
+
+
+def _elf_data_sections(data: bytes, member: str) -> list[tuple[str, bytes]]:
+    if len(data) < 16 or data[:4] != b"\x7fELF":
+        raise InfrastructureError("not an ELF object: " + member)
+    elf_class = data[4]
+    if elf_class not in (1, 2):
+        raise InfrastructureError(f"unsupported ELF class in {member}: {elf_class}")
+    if data[5] == 1:
+        endian = "<"
+    elif data[5] == 2:
+        endian = ">"
+    else:
+        raise InfrastructureError(f"unsupported ELF byte order in {member}: {data[5]}")
+    is_64 = elf_class == 2
+    header_size = 64 if is_64 else 52
+    if len(data) < header_size:
+        raise InfrastructureError("truncated ELF header: " + member)
+    if is_64:
+        shoff = _unpack(data, endian + "Q", 40, member + " section offset")[0]
+        shentsize = _unpack(data, endian + "H", 58, member + " section size")[0]
+        shnum = _unpack(data, endian + "H", 60, member + " section count")[0]
+        shstrndx = _unpack(data, endian + "H", 62, member + " string table")[0]
+        minimum_shentsize = 64
+    else:
+        shoff = _unpack(data, endian + "I", 32, member + " section offset")[0]
+        shentsize = _unpack(data, endian + "H", 46, member + " section size")[0]
+        shnum = _unpack(data, endian + "H", 48, member + " section count")[0]
+        shstrndx = _unpack(data, endian + "H", 50, member + " string table")[0]
+        minimum_shentsize = 40
+    if shoff == 0 or shentsize < minimum_shentsize:
+        raise InfrastructureError("ELF section table is missing or truncated: " + member)
+    _bounded_slice(data, shoff, shentsize, member + " section zero")
+    section_zero = _elf_section_header(data, endian, is_64, shoff, member)
+    section_count = section_zero["size"] if shnum == 0 else shnum
+    string_table_index = section_zero["link"] if shstrndx == 0xFFFF else shstrndx
+    if section_count <= 0 or string_table_index >= section_count:
+        raise InfrastructureError("ELF section table has no names: " + member)
+    _bounded_slice(data, shoff, shentsize * section_count, member + " section table")
+
+    def header(index: int) -> dict[str, int]:
+        return _elf_section_header(
+            data, endian, is_64, shoff + index * shentsize, member)
+
+    string_header = header(string_table_index)
+    string_table = _bounded_slice(
+        data, string_header["offset"], string_header["size"],
+        member + " section names")
+
+    def section_name(section: dict[str, int]) -> str:
+        start = section["name"]
+        if start >= len(string_table):
+            raise InfrastructureError("ELF section name is outside its table: " + member)
+        end = string_table.find(b"\0", start)
+        if end < 0:
+            raise InfrastructureError("unterminated ELF section name: " + member)
+        return string_table[start:end].decode("ascii", "replace")
+
+    sections: list[tuple[str, bytes]] = []
+    for index in range(section_count):
+        section = header(index)
+        name = section_name(section)
+        if section["type"] == ELF_NOBITS or section["size"] == 0:
+            continue
+        if not _elf_data_section(name, section["flags"], section["type"]):
+            continue
+        sections.append((
+            name,
+            _bounded_slice(data, section["offset"], section["size"],
+                          member + " " + name),
+        ))
+    return sections
+
+
+def _macho_data_section(segment: str, flags: int) -> bool:
+    """Scan by default; deny instruction/debug flags and metadata segments."""
+    return not (flags & (MACHO_INSTRUCTIONS | MACHO_DEBUG)
+                or segment in MACHO_METADATA_SEGMENTS)
+
+
+def _macho_data_sections(data: bytes, member: str) -> list[tuple[str, bytes]]:
+    magic = data[:4]
+    if magic not in MACHO_MAGICS:
+        raise InfrastructureError("not a Mach-O object: " + member)
+    endian, is_64 = MACHO_MAGICS[magic]
+    header_size = 32 if is_64 else 28
+    if len(data) < header_size:
+        raise InfrastructureError("truncated Mach-O header: " + member)
+    ncmds = _unpack(data, endian + "I", 16, member + " load-command count")[0]
+    sizeofcmds = _unpack(data, endian + "I", 20, member + " load-command size")[0]
+    _bounded_slice(data, header_size, sizeofcmds, member + " load commands")
+    load_end = header_size + sizeofcmds
+    cursor = header_size
+    sections: list[tuple[str, bytes]] = []
+    for command_index in range(ncmds):
+        if cursor + 8 > load_end:
+            raise InfrastructureError(
+                f"Mach-O load command {command_index} is truncated: {member}")
+        command, command_size = _unpack(
+            data, endian + "II", cursor, member + " load command")[0:2]
+        if command_size < 8 or cursor + command_size > load_end:
+            raise InfrastructureError(
+                f"invalid Mach-O load command {command_index}: {member}")
+        if command == 0x19 or command == 0x1:  # LC_SEGMENT_64 / LC_SEGMENT
+            segment_size = 72 if command == 0x19 else 56
+            section_size = 80 if command == 0x19 else 68
+            if command == 0x19 and not is_64:
+                raise InfrastructureError("64-bit segment in 32-bit Mach-O: " + member)
+            if command == 0x1 and is_64:
+                raise InfrastructureError("32-bit segment in 64-bit Mach-O: " + member)
+            if command_size < segment_size:
+                raise InfrastructureError("truncated Mach-O segment: " + member)
+            nsects_offset = cursor + (64 if command == 0x19 else 48)
+            nsects = _unpack(
+                data, endian + "I", nsects_offset, member + " section count")[0]
+            section_start = cursor + segment_size
+            section_bytes = section_size * nsects
+            if section_start + section_bytes > cursor + command_size:
+                raise InfrastructureError("truncated Mach-O section table: " + member)
+            for section_index in range(nsects):
+                section_cursor = section_start + section_size * section_index
+                name_bytes = _bounded_slice(
+                    data, section_cursor, 16, member + " section name")
+                name = name_bytes.split(b"\0", 1)[0].decode("ascii", "replace")
+                segment_bytes = _bounded_slice(
+                    data, section_cursor + 16, 16, member + " section segment")
+                segment = segment_bytes.split(b"\0", 1)[0].decode("ascii", "replace")
+                if command == 0x19:
+                    size = _unpack(
+                        data, endian + "Q", section_cursor + 40,
+                        member + " section size")[0]
+                    offset = _unpack(
+                        data, endian + "I", section_cursor + 48,
+                        member + " section offset")[0]
+                    flags = _unpack(
+                        data, endian + "I", section_cursor + 64,
+                        member + " section flags")[0]
+                else:
+                    size = _unpack(
+                        data, endian + "I", section_cursor + 36,
+                        member + " section size")[0]
+                    offset = _unpack(
+                        data, endian + "I", section_cursor + 40,
+                        member + " section offset")[0]
+                    flags = _unpack(
+                        data, endian + "I", section_cursor + 56,
+                        member + " section flags")[0]
+                if (flags & 0xFF) in MACHO_ZERO_FILL_TYPES or size == 0:
+                    continue
+                if not _macho_data_section(segment, flags):
+                    continue
+                sections.append((
+                    name,
+                    _bounded_slice(data, offset, size, member + " " + name),
+                ))
+        cursor += command_size
+    return sections
+
+
+def object_data_sections(data: bytes, member: str) -> list[tuple[str, bytes]]:
+    """Return section payloads, scanning unknown non-executable data by default.
+
+    Archive members can be thin ELF objects, thin Mach-O objects, or fat
+    Mach-O objects containing multiple architecture slices. Skip executable
+    flags, empty/NOBITS/zerofill sections, ELF metadata types and debug names,
+    and Mach-O debug attributes and metadata segments (the explicit deny-lists
+    above). EVERY other section is scanned, regardless of its name. `nm -C`
+    remains the independent symbol surface.
+    """
+    magic = data[:4]
+    if magic in FAT_MAGICS:
+        endian, is_64 = FAT_MAGICS[magic]
+        if len(data) < 8:
+            raise InfrastructureError("truncated fat Mach-O header: " + member)
+        slice_count = _unpack(data, endian + "I", 4, member + " slice count")[0]
+        if slice_count == 0:
+            raise InfrastructureError("fat Mach-O has no architecture slices: " + member)
+        arch_size = 32 if is_64 else 20
+        _bounded_slice(data, 8, arch_size * slice_count, member + " architecture table")
+        sections: list[tuple[str, bytes]] = []
+        for index in range(slice_count):
+            cursor = 8 + arch_size * index
+            if is_64:
+                fields = _unpack(data, endian + "iiQQII", cursor,
+                                 member + " architecture")
+                offset, size = fields[2], fields[3]
+            else:
+                fields = _unpack(data, endian + "iiIII", cursor,
+                                 member + " architecture")
+                offset, size = fields[2], fields[3]
+            slice_data = _bounded_slice(
+                data, offset, size, f"{member} architecture {index}")
+            sections.extend(_macho_data_sections(
+                slice_data, f"{member}[slice {index}]"))
+        return sections
+    if magic == b"\x7fELF":
+        return _elf_data_sections(data, member)
+    if magic in MACHO_MAGICS:
+        return _macho_data_sections(data, member)
+    raise InfrastructureError(
+        f"unsupported object member {member} (magic {magic.hex() or 'empty'})")
+
+
 def run_tool(argv: list[str]) -> str:
     if shutil.which(argv[0]) is None:
         raise InfrastructureError(argv[0] + " is not on PATH")
@@ -1001,6 +1300,37 @@ def run_tool(argv: list[str]) -> str:
     if result.returncode:
         raise InfrastructureError(" ".join(argv) + " failed:\n" + result.stdout + result.stderr)
     return result.stdout
+
+
+def run_tool_binary(argv: list[str]) -> bytes:
+    if shutil.which(argv[0]) is None:
+        raise InfrastructureError(argv[0] + " is not on PATH")
+    try:
+        result = subprocess.run(argv, capture_output=True)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise InfrastructureError(" ".join(argv) + " could not run: " + str(error)) from error
+    if result.returncode:
+        stdout = result.stdout.decode("utf-8", "replace")
+        stderr = result.stderr.decode("utf-8", "replace")
+        raise InfrastructureError(" ".join(argv) + " failed:\n" + stdout + stderr)
+    return result.stdout
+
+
+def strings_from_object(data: bytes, member: str, workdir: Path) -> list[str]:
+    """Run the platform's `strings` only over the member's data sections."""
+    sections = object_data_sections(data, member)
+    workdir.mkdir(parents=True, exist_ok=True)
+    lines: list[str] = []
+    for index, (_, payload) in enumerate(sections):
+        if not payload:
+            continue
+        section_file = workdir / f"section-{index}.bin"
+        section_file.write_bytes(payload)
+        try:
+            lines.extend(run_tool(["strings", "-a", str(section_file)]).splitlines())
+        finally:
+            section_file.unlink(missing_ok=True)
+    return lines
 
 
 def strip_debug_info(archive: Path, destination: Path) -> str:
@@ -1030,18 +1360,30 @@ def strip_debug_info(archive: Path, destination: Path) -> str:
 
 
 def read_archive(archive: Path, workdir: Path) -> tuple[list[str], list[str], str]:
-    """`strings -a` over a debug-stripped copy, `nm -C` over the archive itself.
+    """Read `nm -C` and data/string sections from a debug-stripped archive.
 
     `nm` reads the symbol table and never the debug information, so it is
     already profile-independent and is taken from the archive a consumer
-    actually links; only the literal scan needs the stripped copy."""
+    actually links. Reject duplicate member names before stripping and again
+    before `ar p`; unpack the stripped copy member by member and apply
+    object_data_sections()'s scan-by-default policy before `strings -a`."""
     if not archive.is_file():
         raise InfrastructureError("kernel archive is missing: " + str(archive))
+    # Stripping must not get a chance to coalesce ambiguous original members.
+    archive_members(archive)
+    workdir.mkdir(parents=True, exist_ok=True)
     stripped = workdir / ("stripped-" + archive.name)
     tool = strip_debug_info(archive, stripped)
-    strings_text = run_tool(["strings", "-a", str(stripped)])
+    strings_lines: list[str] = []
+    with tempfile.TemporaryDirectory(
+            prefix="kernel-residual-sections-", dir=str(workdir)) as section_root:
+        section_root_path = Path(section_root)
+        for index, member in enumerate(archive_members(stripped)):
+            member_bytes = run_tool_binary(["ar", "p", str(stripped), member])
+            strings_lines.extend(strings_from_object(
+                member_bytes, member, section_root_path / f"member-{index}"))
     nm_text = run_tool(["nm", "-C", str(archive)])
-    return strings_text.splitlines(), nm_text.splitlines(), tool
+    return strings_lines, nm_text.splitlines(), tool
 
 
 def floor_findings(summary: dict[str, int], min_identifiers: int | None,
