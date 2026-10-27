@@ -7687,6 +7687,33 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND _pf_source_key_type STREQUAL "STATIC_LIBRARY
 endif()
 # --- CR-150 live-source-key end ---
 
+# --- CR-150 core-cr150-cr401 begin ---
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    add_executable(test_cr401_static_ta_cache_flag_on
+        test_cr401_static_ta_cache_flag.cpp
+        ../src/source/pine_scheduler_native.cpp)
+    target_link_libraries(test_cr401_static_ta_cache_flag_on PRIVATE pineforge)
+    target_include_directories(test_cr401_static_ta_cache_flag_on PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    target_compile_options(test_cr401_static_ta_cache_flag_on PRIVATE -ffp-contract=off -UNDEBUG)
+    if(PINEFORGE_ENABLE_COVERAGE)
+        target_compile_options(test_cr401_static_ta_cache_flag_on PRIVATE ${_pf_cov_test_flags})
+    endif()
+    add_test(NAME test_cr401_static_ta_cache_flag_on COMMAND test_cr401_static_ta_cache_flag_on)
+
+    add_executable(test_cr401_static_ta_cache_flag_off
+        test_cr401_static_ta_cache_flag.cpp
+        ../src/source/pine_scheduler_native.cpp)
+    target_link_libraries(test_cr401_static_ta_cache_flag_off PRIVATE pineforge)
+    target_include_directories(test_cr401_static_ta_cache_flag_off PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    target_compile_options(test_cr401_static_ta_cache_flag_off PRIVATE -ffp-contract=off -UNDEBUG)
+    target_compile_definitions(test_cr401_static_ta_cache_flag_off PRIVATE PINEFORGE_STATIC_TA_CACHE=0)
+    if(PINEFORGE_ENABLE_COVERAGE)
+        target_compile_options(test_cr401_static_ta_cache_flag_off PRIVATE ${_pf_cov_test_flags})
+    endif()
+    add_test(NAME test_cr401_static_ta_cache_flag_off COMMAND test_cr401_static_ta_cache_flag_off)
+endif()
+# --- CR-150 core-cr150-cr401 end ---
+
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
         message(FATAL_ERROR "PR fast row or executable is missing: ${_pf_fast_test}")
