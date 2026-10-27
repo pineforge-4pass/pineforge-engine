@@ -125,7 +125,7 @@ def _assert_closed(opened):
 
 def _invoke_after_equity_tamper(tmp_path, monkeypatch, mutate, *, library=None):
     """Use real output staging; alter the file when equity records are requested."""
-    original = run_json._ReportSink.records
+    original = run_json._ReportSink._tagged_records
     original_init = run_json._BoundedJSONFile.__init__
     changed, scratch = [], []
 
@@ -134,17 +134,17 @@ def _invoke_after_equity_tamper(tmp_path, monkeypatch, mutate, *, library=None):
         if not isinstance(file, run_json._UncachedSinkFile):
             scratch.append((file, file.fileno()))
 
-    def records(sink, tag=None):
+    def records(sink, tag, **kwargs):
         if tag == "E" and not changed:
             assert sink._identity == _identity(sink.path)
             assert sink.sha256 and sink.summary_failure is None  # A finished
             mutate(sink)
             changed.append(sink.path)
-        return original(sink, tag)
+        return original(sink, tag, **kwargs)
 
     with monkeypatch.context() as patch:
         patch.setattr(run_json._BoundedJSONFile, "__init__", initialize)
-        patch.setattr(run_json._ReportSink, "records", records)
+        patch.setattr(run_json._ReportSink, "_tagged_records", records)
         result = ordinary.invoke(tmp_path, patch, library=library)
     status, text, stderr, library = result
     assert len(changed) == 1
@@ -196,8 +196,9 @@ def test_equity_pass_parses_only_one_raw_header_at_two_sizes(tmp_path, monkeypat
         assert parsed == [header]
 
 
-def test_verify_still_strictly_parses_every_line(tmp_path, monkeypatch):
-    """Verification strictly parses the header, every record, and the trailer."""
+@pytest.mark.parametrize("bulk", [False, True], ids=["strict", "bulk"])
+def test_verify_still_strictly_parses_every_line(tmp_path, monkeypatch, bulk):
+    """Only canonical E may bypass strict parsing; all other lines retain it."""
     rows = [_point(0), *_mixed(), _point(1)]
     with _sink(tmp_path, rows, verify=False) as (sink, library, report):
         raw = Path(sink.path).read_bytes()
@@ -209,10 +210,14 @@ def test_verify_still_strictly_parses_every_line(tmp_path, monkeypatch):
             return original(line)
 
         with monkeypatch.context() as patch:
+            patch.setattr(run_json, "_BULK_E_ENABLED", bulk, raising=False)
             patch.setattr(pf_sink, "_parse", parse)
             sink.verify(library, 1, report)
-        assert calls == raw.splitlines(keepends=True)
-        assert len(calls) == 2 + sum(sink.counts.values()) == 2 + len(rows)
+        lines = raw.splitlines(keepends=True)
+        expected = ([line for line in lines if not line.startswith(b'["E",')]
+                    if bulk else lines)
+        assert calls == expected
+        assert len(calls) + (sink.counts["E"] if bulk else 0) == 2 + len(rows)
         assert sink.sha256 == library.sha
 
 

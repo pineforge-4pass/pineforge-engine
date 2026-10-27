@@ -37,6 +37,8 @@ Trace switched(bool enabled, bool prepared) {
 // M14 needs a bound close BEFORE the spill, and a callback before a stale
 // close can repair itself as an Evaluate winner. All entries share one limit:
 // their wake order is priority order, with the spilled entry waking last.
+// The signal fills only half its units, leaving no resident vacancy for the
+// pre-notification bound-expiry drain to promote the spilled close into.
 // Fixture sizes and behavior are layout estimates from source, not measured.
 class SpilledCloseHost final : public NativeStrategyHost {
 public:
@@ -60,9 +62,11 @@ public:
     void on_native_bar(const Bar&, const NativeDecisionContext&) override {
         if (++bar_ == 1) {
             for (std::size_t i = 0; i < resident - 1; ++i) {
-                no::Request entry{no::Transact{1},
+                no::Request entry{no::Transact{i == 0 ? 2.0 : 1.0},
                     i == 0 ? "spilled-close-signal" : "spilled-close-entry", ""};
                 entry.trigger = no::Limit{99};
+                // min(remaining 2, budget 1) fills 1 and keeps 1 live.
+                if (i == 0) entry.capacity = no::PointBudget{1};
                 entries_.push_back(put(entry));
             }
             closes_[0] = put(close_request("spilled-close-first"));
@@ -86,12 +90,19 @@ public:
         require(physical_position().signed_units == 3,
                 "T4 spilled-close signal did not add one unit to two");
         const auto& core = consumer().request_core();
+        const auto* remaining = std::get_if<no::RemainingProjectionUnits>(&e.remaining_after);
+        require(!e.terminal && remaining && remaining->q == 1
+                    && core.live_size() == resident + 1,
+                "T4 spilled-close partial signal left a resident vacancy");
         std::array<no::Allowance, 2> allowances{};
         for (std::size_t i = 0; i < closes_.size(); ++i) {
             const auto reads = core.book_lookup_reads().rows;
             const auto held = core.hold_live(closes_[i]);
             require(held && std::holds_alternative<no::BookClose>(held->authority),
                     "T4 spilled-close comparison lost a bound close");
+            const auto& bound = std::get<no::BookClose>(held->authority);
+            require(bound.cycle == e.cycle_after && bound.side == no::Side::Long,
+                    "T4 spilled-close comparison bound to wrong cycle/side");
             if (core.book_lookup_reads().rows > reads) ++spilled_book_closes;
             const auto* units = std::get_if<no::AllowanceUnits>(&held->allowance);
             // Independent arithmetic: min(remaining 1, point budget 1/4) = 1/4.
@@ -106,6 +117,8 @@ public:
         // Before any cancellation, both runs still have a spilled BookClose.
         // With M14 eager has one old point Q < P; dormant bulk-refreshed both
         // resident closes at P before the entry wake spilled its tail close.
+        // Bound-expiry checking can swap the two closes without refreshing
+        // allowances; the partial signal keeps the resident book full.
         trace.add(160, e.cursor.point.ordinal);
         trace.add(161, std::min(std::get<no::AllowanceUnits>(allowances[0]).point_ordinal,
                                 std::get<no::AllowanceUnits>(allowances[1]).point_ordinal));
@@ -114,9 +127,9 @@ public:
         trace.add(170, native_continuation_hash());
         trace.add(171, broker_state_hash());
         saw_signal = true;
-        // Observe first, then cancel the other reachable entries so the row
-        // needs only one gap fill rather than thousands of later callbacks.
-        for (std::size_t i = 1; i < entries_.size(); ++i)
+        // Observe first, then cancel every entry, including the signal's
+        // remaining unit, so this row needs only the one partial gap fill.
+        for (std::size_t i = 0; i < entries_.size(); ++i)
             require(cancel(entries_[i]).status == no::CancelStatus::Cancelled,
                     "T4 spilled-close entry cancellation refused");
     }

@@ -824,7 +824,7 @@ struct ResidentWindowTrace {
 
 class ResidentWindowHost final : public NativeStrategyHost {
 public:
-    ResidentWindowHost(bool prepared, bool enabled) {
+    ResidentWindowHost(bool prepared, bool enabled) : enabled_(enabled) {
         set_broker_state_hash_recording(true);
         consumer().set_direct_mutation(!prepared);
 #ifdef PINEFORGE_TEST_DORMANT_BOOK_PATCHED
@@ -852,7 +852,7 @@ public:
                 if (i == victim_index) victim_ = *result.handle;
             }
         } else if (bar_ == 2) {
-            for (std::size_t i = 0; i != 512; ++i) {
+            for (std::size_t i = 0; i != spill_rows; ++i) {
                 no::Request r{no::Transact{1}, "resident-window-spill", ""};
                 r.trigger = no::Limit{50.0};
                 require(submit(r).handle.has_value(), "resident-window spill refused");
@@ -897,8 +897,14 @@ public:
         require(ranked, "resident-window live view missed the victim");
         const auto& live_at_rank = core.live_at(rank);
         require(&live_at_rank == found, "resident-window live_at did not return the resident row");
-        require(live_at_rank.priority() > consumer().dormant_watermark_for_test(),
-                "resident-window victim was not beyond W");
+        std::uint64_t watermark = 0;
+#ifdef PINEFORGE_TEST_DORMANT_BOOK_PATCHED
+        if (enabled_) {
+            watermark = consumer().dormant_watermark_for_test();
+            require(live_at_rank.priority() > watermark,
+                    "resident-window victim was not beyond W");
+        }
+#endif
         const auto* units = std::get_if<no::AllowanceUnits>(&live_at_rank.allowance);
         std::fprintf(stderr,
                      "resident-window allowance: is_units=%d point_ordinal=%llu cursor_ordinal=%llu initial=%.17g left=%.17g watermark=%llu priority=%llu\n",
@@ -906,7 +912,7 @@ public:
                      units ? static_cast<unsigned long long>(units->point_ordinal) : 0ULL,
                      static_cast<unsigned long long>(e.cursor.point.ordinal),
                      units ? units->initial : -1.0, units ? units->left : -1.0,
-                     static_cast<unsigned long long>(consumer().dormant_watermark_for_test()),
+                     static_cast<unsigned long long>(watermark),
                      static_cast<unsigned long long>(live_at_rank.priority()));
         require(units != nullptr, "resident-window callback allowance was not units");
         record_allowance(callback_allowance, 150, live_at_rank.allowance);
@@ -929,8 +935,13 @@ public:
     }
 
 private:
-    static constexpr std::size_t winner_index = resident - 97;
-    static constexpr std::size_t victim_index = resident - 96;
+    // New rows are active in the bar callback: ON spills the last old
+    // dormant row each time. The surviving old prefix ends at resident -
+    // spill_rows (exclusive); keep winner < victim < that cut.
+    static constexpr std::size_t spill_rows = 512;
+    static constexpr std::size_t winner_index = resident - spill_rows - 2;
+    static constexpr std::size_t victim_index = resident - spill_rows - 1;
+    bool enabled_ = true;
     int bar_ = 0;
     no::RequestHandle victim_{};
 };
