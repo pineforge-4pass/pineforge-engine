@@ -18,6 +18,7 @@
 namespace cr398_fixture {
 struct Probe {
     bool oracle = false;
+    bool gate_seen = false;
     std::uint64_t calls = 0;
     std::string incoming;
 };
@@ -25,9 +26,18 @@ inline Probe* active = nullptr;
 
 template<class Visit> auto observe_old_walk(Visit visit) {
     return [visit = std::move(visit)](const std::string& id) mutable {
-        if (active && id != active->incoming) ++active->calls;
+        // A fixed Debug build also walks skipped ids to assert the store
+        // predicates. That verification is not a cancellation call. On the
+        // frozen base no gate runs, so this still counts its actual old loop.
+        if (active && (!active->gate_seen || active->oracle)
+            && id != active->incoming) ++active->calls;
         visit(id);
     };
+}
+inline bool use_old_loop() {
+    if (!active) return false;
+    active->gate_seen = true;
+    return active->oracle;
 }
 inline void observe_call() {
     if (active) ++active->calls;
@@ -36,8 +46,7 @@ inline void observe_call() {
 
 #define for_each_sorted_id(visit) \
     for_each_sorted_id(::cr398_fixture::observe_old_walk(visit))
-#define PINEFORGE_FULL_CLOSE_EXIT_ORACLE() \
-    (::cr398_fixture::active && ::cr398_fixture::active->oracle)
+#define PINEFORGE_FULL_CLOSE_EXIT_ORACLE() ::cr398_fixture::use_old_loop()
 #define PINEFORGE_FULL_CLOSE_EXIT_CALL() ::cr398_fixture::observe_call()
 #include "../src/source/pine_adapter.cpp"
 #undef PINEFORGE_FULL_CLOSE_EXIT_CALL
@@ -203,7 +212,7 @@ template<class H> Result run(H& host, const std::vector<Bar>& bars, bool oracle)
     } restore;
     active = &probe;
     host.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
-    require(host.last_error().empty(), host.last_error().c_str());
+    require(host.last_run_status() == 0 && host.last_error().empty(), host.last_error().c_str());
     return {report_image(host), host.reads, host.broker_state_hash_projection(),
             probe.calls, host.reversals};
 }
@@ -321,9 +330,14 @@ public:
                     which_ == OwnerCase::Empty ? std::string{} : id_for(kPrefix - 1),
                     kNa, 150.0);
             if (which_ == OwnerCase::Anchored) {
-                anchored_before = adapter_.anchored_relative_stats().anchored;
-                require(anchored_before > 0 && working("owner-exit"),
-                        "a real anchored relative child waits on the old id");
+                const auto& anchors = adapter_.anchored_relative_stats();
+                anchored_before = anchors.anchored;
+                // FromOwnerFill children are PendingUntilArmed: the public
+                // working enumeration hides this child. One parent and one
+                // loss operand produce one anchor; that parent never filled.
+                require(anchored_before == 1 && anchors.adopted == 0
+                        && anchors.withdrawn == 0 && !working("owner-exit"),
+                        "a real anchored child waits without a working projection");
             } else {
                 require(pending("owner-exit"), "a real public exit exists before the reversal");
             }
@@ -383,6 +397,8 @@ void owners() {
         const auto actual = run(candidate, bars, false);
         const auto old = run(oracle, bars, true);
         same_result(actual, old);
+        require(actual.calls > 0,
+                "a queued owner reaches the full-close canceler as well as matching its outputs");
         for (const auto* host : {&candidate, &oracle}) {
             require(host->owner_seen && host->cancelled, "the owner cancellation witness completed");
             require(which != OwnerCase::Coof || host->coof_queued,

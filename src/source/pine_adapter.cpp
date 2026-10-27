@@ -25389,20 +25389,20 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             }
         }
         std::sort(preserved_cohorts.begin(), preserved_cohorts.end());
-        // An empty, spilled cohort can still own queued exits. The old map
-        // cancelled those too, in sorted id order. Snapshot only the live
-        // exemptions, then stream every logical id without restoring facts.
+        // An empty, spilled cohort can still own queued exits. Membership uses
+        // the logical table, not residency/exposure; the helper keeps the old
+        // sorted owner order and exact successful scratch allocation.
         detail::ExitScratchRows<SourceId> closed_cohorts(*this);
-        cohorts_by_id_.for_each_sorted_id([&](const SourceId& id) {
-            if (!std::binary_search(preserved_cohorts.begin(), preserved_cohorts.end(), id)) {
-                closed_cohorts.push_back(id);
-            }
-        });
-        closed_cohorts.ordered_text(
-            [&](const detail::ExitScratchText& id) {
-                cancel_exit_orders_for_full_close(id);
-                return true;
-            });
+        cancel_reversal_exit_owners(preserved_cohorts, closed_cohorts);
+        // Selection handles are reserved before cancellation, exactly where
+        // the full text selection used to be built. Its scope remains alive
+        // through the remaining reversal cleanup below.
+        //
+        // The helper scans queued owners once. Debug checks every skipped id
+        // against the old canceler's per-store predicates; Release never
+        // walks historical ids here. Scratch failure status is propagated by
+        // the same transaction/error boundary as the old selected row puts.
+        // Empty bracket families still receive one cleanup pass per close.
         if (position_tail_summary_) position_tail_summary_->forget_origins();
         const auto held = cohorts_by_id_.held_rows();
         for (auto at = held.begin(); at != held.end();) {
@@ -29094,6 +29094,139 @@ detail::LiveSourceHandle PineExecutionAdapter::live_source_value(
     }
 #endif
     return value;
+}
+
+} // namespace pineforge::source
+
+namespace pineforge::source {
+
+#ifndef PINEFORGE_FULL_CLOSE_EXIT_ORACLE
+#define PINEFORGE_FULL_CLOSE_EXIT_ORACLE() false
+#endif
+#ifndef PINEFORGE_FULL_CLOSE_EXIT_CALL
+#define PINEFORGE_FULL_CLOSE_EXIT_CALL() ((void)0)
+#endif
+
+void PineExecutionAdapter::cancel_reversal_exit_owners(
+        const std::vector<SourceId>& preserved,
+        detail::ExitScratchRows<SourceId>& selection) {
+    const auto exempt = [&](const SourceId& id) {
+        return std::binary_search(preserved.begin(), preserved.end(), id);
+    };
+    // The public-run fixture executes the old selection on a separate run.
+    // Shipped objects have no runtime switch or additional adapter state.
+    if (PINEFORGE_FULL_CLOSE_EXIT_ORACLE()) {
+        cohorts_by_id_.for_each_sorted_id([&](const SourceId& id) {
+            if (!exempt(id)) selection.push_back(id);
+        });
+        selection.ordered_text([&](const detail::ExitScratchText& id) {
+            cancel_exit_orders_for_full_close(id);
+            return true;
+        });
+        return;
+    }
+
+    // Logical size is stored in the disk index; neither size nor these few
+    // exemption lookups walk historical ids. Repeated exemptions count once.
+    std::uint64_t count = cohorts_by_id_.size();
+    const SourceId* previous = nullptr;
+    for (const auto& id : preserved) {
+        if (previous && *previous == id) continue;
+        previous = &id;
+        if (cohorts_by_id_.find(id) != cohorts_by_id_.end()) --count;
+    }
+    if (count == 0) return;
+
+    // Snapshot only current queues: cancellation erases from these stores.
+    // Non-exit shadows, pending-bound rows and COOF-reachable legs are safe
+    // supersets; the original canceler retains their exact policy decisions.
+    std::vector<SourceId> owners;
+    for (const auto& row : pending_bracket_legs_) owners.push_back(row.snapshot.from_entry);
+    for (const auto& row : pending_coof_requests_) owners.push_back(row.snapshot.from_entry);
+    for (const auto& row : source_shadow_pending_) owners.push_back(row.snapshot.from_entry);
+    for (const auto& row : pending_relative_exits_) owners.push_back(row.from_entry);
+    for (const auto& row : anchored_relative_legs_) owners.push_back(row.from_entry);
+    for (const auto& handle : live_handles_) {
+        const auto row = placement_.find(handle.incarnation);
+        if (row == placement_.end()) continue;
+        const auto family = row->second.family;
+        if (family == PineOrderFamily::ExitLimit || family == PineOrderFamily::ExitStop
+            || family == PineOrderFamily::ExitTrail) owners.push_back(row->second.from_entry);
+    }
+    std::sort(owners.begin(), owners.end());
+    owners.erase(std::unique(owners.begin(), owners.end()), owners.end());
+    owners.erase(std::remove_if(owners.begin(), owners.end(), [&](const SourceId& id) {
+        return exempt(id) || cohorts_by_id_.find(id) == cohorts_by_id_.end();
+    }), owners.end());
+    assert(owners.size() <= count);
+
+    // Every old text append allocated an ordinal/text pair before ANY cancel.
+    // Reserve that entire prefix, including the candidates' pairs, once.
+    // Returning the status through exit_scratch_edit preserves its exact
+    // carried-I/O / rollback / ExitScratchError mapping on every failure.
+    auto& context = selection.context();
+    if (count > std::numeric_limits<std::uint64_t>::max() / 2)
+        detail::exit_scratch_failure(detail::ScratchStatus::programming_error);
+    detail::exit_scratch_edit(context, [&] {
+        return context.store.advance_handles(2 * count);
+    });
+
+    // Even a no-owner cancel erased empty families. Preserve that effect once,
+    // in the original family iteration order, independent of historical ids.
+    for (auto family = bracket_families_.begin(); family != bracket_families_.end();) {
+        if (family->second.empty()) family = bracket_families_.erase(family);
+        else ++family;
+    }
+
+#ifndef NDEBUG
+    // Independent skip oracle: recompute each actual old per-store predicate,
+    // without executing cancels, copying an adapter or trusting the owner scan.
+    const bool keep_pending_bound =
+        detail::exit_binding_rule_switches().pending_bound_exit_survives_flat;
+    cohorts_by_id_.for_each_sorted_id([&](const SourceId& id) {
+        if (exempt(id) || std::binary_search(owners.begin(), owners.end(), id)) return;
+        const auto matches = [&](const PlacementSnapshot& row) {
+            const bool exit = row.family == PineOrderFamily::ExitLimit
+                || row.family == PineOrderFamily::ExitStop
+                || row.family == PineOrderFamily::ExitTrail;
+            return exit && !(keep_pending_bound && row.pending_bound_exit)
+                && row.from_entry == id;
+        };
+        assert(std::none_of(pending_bracket_legs_.begin(), pending_bracket_legs_.end(),
+            [&](const PendingBracketLeg& row) { return matches(row.snapshot); }));
+        assert(std::none_of(pending_coof_requests_.begin(), pending_coof_requests_.end(),
+            [&](const PendingCoofRequest& row) { return matches(row.snapshot); }));
+        assert(std::none_of(source_shadow_pending_.begin(), source_shadow_pending_.end(),
+            [&](const SourceShadowPending& row) { return matches(row.snapshot); }));
+        assert(std::none_of(pending_relative_exits_.begin(), pending_relative_exits_.end(),
+            [&](const PendingRelativeExit& row) { return row.from_entry == id; }));
+        if (!id.empty())
+            assert(std::none_of(anchored_relative_legs_.begin(), anchored_relative_legs_.end(),
+                [&](const AnchoredRelativeLeg& row) { return row.from_entry == id; }));
+        for (const auto& handle : live_handles_) {
+            const auto row = placement_.find(handle.incarnation);
+            assert(row == placement_.end() || !matches(row->second)
+                || coof_leg_reaches_exit(row->second));
+        }
+        assert(std::none_of(bracket_families_.begin(), bracket_families_.end(),
+            [](const auto& family) { return family.second.empty(); }));
+    });
+#endif
+
+    for (const auto& id : owners) {
+        PINEFORGE_FULL_CLOSE_EXIT_CALL();
+        cancel_exit_orders_for_full_close(id);
+    }
+    // A skipped cancel creates empty handles/removed scopes, but no records.
+    // Their ordinals are not folded by hash_exit_scratch; preserve the final
+    // counter too, so scopes created after this helper keep their old keys.
+    // Real cancels cannot publish a hash: cancel / parent-terminal draining
+    // only retire requests, without an Applied or source callback. Their own
+    // transient rows have been erased before this counter is advanced.
+    const auto skipped = count - static_cast<std::uint64_t>(owners.size());
+    if (skipped > (std::numeric_limits<std::uint64_t>::max() - context.next_scope) / 2)
+        detail::exit_scratch_failure(detail::ScratchStatus::programming_error);
+    context.next_scope += 2 * skipped;
 }
 
 } // namespace pineforge::source
