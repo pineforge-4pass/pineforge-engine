@@ -46,7 +46,7 @@ struct Key {
 };
 template struct Access<Key, &ps::PineExecutionAdapter::key_for>;
 struct LiveHandles {
-    using type = std::vector<no::RequestHandle> ps::PineExecutionAdapter::*;
+    using type = ps::detail::LiveHandleSequence ps::PineExecutionAdapter::*;
     friend type member(LiveHandles);
 };
 template struct Access<LiveHandles, &ps::PineExecutionAdapter::live_handles_>;

@@ -88,8 +88,8 @@ void hash_exit_scratch(BrokerStateHashSink& f,
 void hash_native_handle(BrokerStateHashSink& f, const native_order::RequestHandle& handle) {
     hash_source_run_identity(f, handle.run); f.u(handle.incarnation);
 }
-void hash_native_handle_vector(BrokerStateHashSink& f,
-                               const std::vector<native_order::RequestHandle>& handles) {
+template<class Handles> void hash_native_handle_vector(BrokerStateHashSink& f,
+                               const Handles& handles) {
     f.u(handles.size());
     for (const auto& handle : handles) hash_native_handle(f, handle);
 }

@@ -58,11 +58,13 @@ template struct PrivateAccess<PlacementTag,
     &source::PineExecutionAdapter::placement_>;
 
 struct LiveHandlesTag {
-    using type = std::vector<no::RequestHandle> source::PineExecutionAdapter::*;
+    using type = source::detail::LiveHandleSequence source::PineExecutionAdapter::*;
     friend type access(LiveHandlesTag);
 };
 template struct PrivateAccess<LiveHandlesTag,
     &source::PineExecutionAdapter::live_handles_>;
+struct RebuildTag { using type = void (source::PineExecutionAdapter::*)(); friend type access(RebuildTag); };
+template struct PrivateAccess<RebuildTag, &source::PineExecutionAdapter::rebuild_live_row_index>;
 
 struct BrokerEpochTag {
     using type = std::uint64_t source::PineExecutionAdapter::*;
@@ -213,7 +215,7 @@ public:
         case QualificationCase::NonHundredMargins:
             break;
         }
-        qualified = (adapter_.*access(QualifyTag{}))(pending.plan);
+        (adapter_.*access(RebuildTag{}))(); qualified = (adapter_.*access(QualifyTag{}))(pending.plan);
     }
 
 private:

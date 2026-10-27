@@ -43,11 +43,13 @@ template struct PrivateAccess<PlacementTag,
     &source::PineExecutionAdapter::placement_>;
 
 struct LiveHandlesTag {
-    using type = std::vector<no::RequestHandle> source::PineExecutionAdapter::*;
+    using type = source::detail::LiveHandleSequence source::PineExecutionAdapter::*;
     friend type access(LiveHandlesTag);
 };
 template struct PrivateAccess<LiveHandlesTag,
     &source::PineExecutionAdapter::live_handles_>;
+struct RebuildTag { friend auto access(RebuildTag); };
+template struct AutoPrivateAccess<RebuildTag, &source::PineExecutionAdapter::rebuild_live_row_index>;
 
 struct CohortsTag {
     friend auto access(CohortsTag);
@@ -200,7 +202,7 @@ public:
             auto& snapshot = placement.at(handle.incarnation);
             if (snapshot.source_id == "B") snapshot.projection_over_pyramiding = true;
         }
-        std::reverse(live.begin(), live.end());
+        live.assign(std::vector<no::RequestHandle>(live.rbegin(), live.rend())); (adapter_.*access(RebuildTag{}))();
     }
 };
 

@@ -809,8 +809,8 @@ std::uint64_t exit_queue_rank(const PlacementTable& table,
 // True when the placement row of some live handle satisfies `row`: the
 // quiet-bar gates' scan (pine_quiet_bar.hpp). It reads and allocates nothing
 // beyond the rows it visits.
-template <class Row>
-bool any_live_row(const std::vector<native_order::RequestHandle>& live,
+template <class Handles, class Row>
+bool any_live_row(const Handles& live,
                   const PlacementTable& placement, Row&& row, std::uint64_t* visits = nullptr) {
     for (const auto& handle : live) { if (visits) ++*visits;
         const auto found = placement.find(handle.incarnation);
@@ -1283,7 +1283,7 @@ void PineExecutionAdapter::initialize_l4c_policy(PlacementSnapshot& snapshot,
     const bool trailing = finite_positive(snapshot.exit_levels.trail_points)
         || finite_positive(snapshot.exit_levels.trail_price)
         || finite_positive(snapshot.exit_levels.trail_offset);
-    snapshot.birth_reach = compat::pine::select_historical_birth_reach(snapshot.birth, trailing);
+    snapshot.birth_reach = compat::pine::select_historical_birth_reach(snapshot.birth, trailing); refresh_live_row(handle, &snapshot);
     if (coof_recalc_active_) {
         snapshot.coof_cascade_seg_i = coof_context_.coordinate.interval_index;
         snapshot.coof_cascade_inflight_fires = true;
@@ -1510,7 +1510,7 @@ void PineExecutionAdapter::initialize_l4c_policy(PlacementSnapshot& snapshot,
                 }
             }
         }
-    }
+    } refresh_live_row(handle, &snapshot);
 }
 
 void PineExecutionAdapter::update_l4c_priority() { ++dense_pending_work_.update_l4c_priority_calls;
@@ -1590,8 +1590,8 @@ void PineExecutionAdapter::update_l4c_priority() { ++dense_pending_work_.update_
         if (handle == decision->child) return 1;
         return 2;
     };
-    std::stable_sort(live_handles_.begin(), live_handles_.end(),
-                     [&](const auto& left, const auto& right) { return rank(left) < rank(right); });
+    live_handles_.stable_sort(
+                     [&](const auto& left, const auto& right) { return rank(left) < rank(right); }); rebuild_live_row_index();
 }
 
 void PineExecutionAdapter::update_l4c_lifecycle(
@@ -1683,7 +1683,7 @@ namespace {
 
 class AdapterLookupIndex final : public detail::PineRunCache {
 public:
-
+    detail::LiveRowIndex live_rows;
     // Per cohort, over its origin roster: how many roster entries are folded,
     // and whether a folded origin is an opening on each side. The roster only
     // grows (every accepted opening is appended once, after its placement row
@@ -1740,7 +1740,7 @@ public:
     std::uint64_t answered() const noexcept override { return answers; }
 
     void clear() noexcept {
-        cohort_sides.clear();
+        cohort_sides.clear(); live_rows = detail::LiveRowIndex{};
         clear_rows();
         day_lo = 1;
         day_hi = 0;
@@ -1761,7 +1761,7 @@ public:
             || family == PineOrderFamily::ExitTrail;
     }
 
-    static bool working(const std::vector<native_order::RequestHandle>& live,
+    static bool working(const detail::LiveHandleSequence& live,
                         std::uint64_t incarnation) noexcept {
         return std::any_of(live.begin(), live.end(),
             [&](const native_order::RequestHandle& handle) {
@@ -1779,7 +1779,7 @@ public:
     }
 
     void fold(std::uint64_t incarnation, const PlacementSnapshot& row,
-              const std::vector<native_order::RequestHandle>& live) {
+              const detail::LiveHandleSequence& live) {
         if (exit_leg(row.family)) {
             if (row.bracket_origin.incarnation != 0) {
                 legs_by_origin[static_cast<std::size_t>(row.family)
@@ -1796,7 +1796,7 @@ public:
     // Brings the row index up to the table. May throw std::bad_alloc; every
     // step leaves the index consistent, so a later sync resumes it.
     void sync_rows(const PlacementTable& table,
-                   const std::vector<native_order::RequestHandle>& live) {
+                   const detail::LiveHandleSequence& live) {
         if (table.erased_rows() != erased_seen || table.size() < rows_folded
             || table.high_water() < folded_high) {
             clear_rows();
@@ -3690,8 +3690,8 @@ void PineExecutionAdapter::remember(const native_order::RequestHandle& handle,
     // default-constructing a string-bearing snapshot and move-assigning it.
     const auto inserted = placement_.try_emplace(handle.incarnation, std::move(snapshot));
     if (!inserted.second) placement_.replace(handle.incarnation, std::move(snapshot));
-    if (std::find_if(live_handles_.begin(), live_handles_.end(), [&](const auto& live) { ++dense_pending_work_.remember_handles; return live == handle; }) == live_handles_.end())
-        live_handles_.push_back(handle);
+    if ((++dense_pending_work_.remember_handles, !live_handles_.contains(handle))) live_handles_.push_back(handle);
+    refresh_live_row(handle);
     // A close order is a transient key of the entry-id table while it waits
     // (global_exit_child_ranks).
     const auto family = placement_.at(handle.incarnation).family;
@@ -3703,14 +3703,14 @@ void PineExecutionAdapter::remember(const native_order::RequestHandle& handle,
     refresh_pending_view();
 }
 
-void PineExecutionAdapter::retire(native_order::RequestHandle handle) noexcept {
-    live_handles_.erase(std::remove_if(live_handles_.begin(), live_handles_.end(), [&](const auto& live) { ++dense_pending_work_.retire_handles; return live == handle; }),
-                        live_handles_.end());
-    first_open_newborns_.erase(std::remove(first_open_newborns_.begin(),
-        first_open_newborns_.end(), handle), first_open_newborns_.end());
-    for (auto it = live_by_source_key_.begin(); it != live_by_source_key_.end();) { ++dense_pending_work_.retire_keys;
-        if (it->second == handle) it = live_by_source_key_.erase(it); else ++it;
-    }
+void PineExecutionAdapter::retire(native_order::RequestHandle handle) {
+    auto& index = live_row_index();
+    dense_pending_work_.retire_handles += live_handles_.erase_handle(handle);
+    first_open_newborns_.erase_handle(handle);
+    index.erase(handle);
+    for (const auto key : index.source_keys(handle)) { ++dense_pending_work_.retire_keys; const auto found = live_by_source_key_.find(key);
+        if (found != live_by_source_key_.end() && found->second == handle) live_by_source_key_.erase(found);
+        index.refresh_source_key(key); }
     if (pending_short_seed_.ready && (handle == pending_short_seed_.plan.long_entry
         || handle == pending_short_seed_.plan.materialize_long
         || handle == pending_short_seed_.plan.final_short)) {
@@ -4328,7 +4328,7 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
                 cohort->second.erased_opening_sides |= value.is_long ? 1U : 2U;
             }
         }
-        if (!retain_rows) placement_.erase(incarnation);
+        if (!retain_rows) { placement_.erase(incarnation); refresh_live_row(incarnation); }
         if (!retain_rows) detail::rows_erased.fetch_add(1, std::memory_order_relaxed);
     }
     // Every family settles the members whose rows would be gone (or are gone),
@@ -4346,7 +4346,7 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
     // The existing every-row-retained reference also keeps family records
     // in their old table; normal runs archive only immutable prefixes.
     if (!retain_rows) archive_settled_bracket_families();
-    if (!retain_rows) placement_.compact();
+    if (!retain_rows) { placement_.compact(); live_row_index().verify(); }
 }
 
 BracketRoster& PineExecutionAdapter::bracket_family(std::uint64_t key) {
@@ -5043,7 +5043,7 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
                 if (unchanged_dynamic_exit(previous->second)
                     && !reissue_revives_declined_exit(previous->second)) {
                     if (previous->second.void_issue && !snapshot.void_issue)
-                        unvoid_exit(previous->second);
+                        unvoid_exit(previous->second, existing_handle->incarnation);
                     return existing_handle;
                 }
                 const auto family = previous->second.family;
@@ -5084,10 +5084,10 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
                             }
                         }
                         if (live->second.void_issue && !snapshot.void_issue)
-                            unvoid_exit(live->second);
+                            unvoid_exit(live->second, existing_handle->incarnation);
                         live->second.exit_levels.trail_offset = snapshot.exit_levels.trail_offset;
                         live->second.trail_activation_level = snapshot.trail_activation_level;
-                        live->second.requested_qty = snapshot.requested_qty;
+                        live->second.requested_qty = snapshot.requested_qty; refresh_live_row(*existing_handle);
                         live->second.projection_remaining_qty = snapshot.projection_remaining_qty;
                         live->second.qty_percent = snapshot.qty_percent;
                         live->second.comment = snapshot.comment;
@@ -5197,7 +5197,7 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
                 }
                 snapshot.projection_predecessor_exit = predecessor_exit;
                 snapshot.projection_predecessor_market = predecessor_market;
-                reused_key_node = live_by_source_key_.extract(key);
+                reused_key_node = live_by_source_key_.extract(key); refresh_live_source_key(key);
                 retire(*existing_handle);
                 accepted = *result.successor;
             }
@@ -5310,16 +5310,16 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
         if (reused_key_node) {
             reused_key_node.mapped() = live_source_value(*accepted, replacement_key);
             auto placed = live_by_source_key_.insert(std::move(reused_key_node));
-            if (!placed.inserted) { (void)checked_live_key(replacement_key); placed.position->second = live_source_value(*accepted, replacement_key); }
+            if (!placed.inserted) { (void)checked_live_key(replacement_key); placed.position->second = live_source_value(*accepted, replacement_key); } refresh_live_source_key(key);
         } else {
-            live_by_source_key_[checked_live_key(replacement_key)] = live_source_value(*accepted, replacement_key);
+            live_by_source_key_[checked_live_key(replacement_key)] = live_source_value(*accepted, replacement_key); refresh_live_source_key(key);
         }
     }
     if (opening) {
         const auto source = placement_.at(accepted->incarnation).source_id;
         const auto cohort = cohort_for(source);
         host.cohort_add(cohort, *accepted);
-        require_cohort(source)->second.origins.push_back(*accepted);
+        auto& roster = require_cohort(source)->second.origins; roster.push_back(*accepted); live_row_index().append_origin(cohort.value, roster.size() - 1, *accepted);
     }
     const auto& accepted_snapshot = placement_.at(accepted->incarnation);
     if (coof_recalc_active_
@@ -6382,10 +6382,10 @@ void PineExecutionAdapter::consume_closed_trade_rows(
 }
 
 bool PineExecutionAdapter::origin_is_pending(
-        const native_order::RequestHandle& origin) const noexcept {
+        const native_order::RequestHandle& origin) const {
     if (origin.incarnation == 0) return false;
     // Live first: a live handle's row is always held.
-    if (std::find_if(live_handles_.begin(), live_handles_.end(), [&](const auto& live) { ++dense_pending_work_.origin_pending_handles; return live == origin; }) == live_handles_.end())
+    if ((++dense_pending_work_.origin_pending_handles, !live_row_index().contains(origin)))
         return false;
     const auto placement = placement_.find(origin.incarnation);
     return placement != placement_.end() && placement->second.opening;
@@ -7979,7 +7979,7 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
         if (existing != placement_.end()
             && existing->second.pooc_global_full_exit_dynamic_qty) {
             existing->second.pooc_global_full_exit_dynamic_qty = false;
-            existing->second.pooc_global_full_exit_tracks_bound_adds = false;
+            existing->second.pooc_global_full_exit_tracks_bound_adds = false; refresh_live_row(handle);
         }
     }
     const bool short_seed_final_candidate = current < 0.0 && !is_long
@@ -9569,7 +9569,7 @@ void PineExecutionAdapter::submit_entry_with_policy(
                 }
                 prior.pooc_global_full_exit_dynamic_qty = false;
                 prior.pooc_global_full_exit_tracks_bound_adds = false;
-                prior.reservation_expansion.close_population(accepted->incarnation);
+                prior.reservation_expansion.close_population(accepted->incarnation); refresh_live_row(handle);
             }
         }
         if (default_sized && !priced && reverses && source_point
@@ -11274,12 +11274,12 @@ bool PineExecutionAdapter::standing_exit(const SourceId& exit_id,
 // A call made once its entry exists that leaves a void request of its pair
 // unchanged makes that request its own, as a re-issue that replaced it would
 // be: no longer void, and queued from this call (exit_queue_rank).
-void PineExecutionAdapter::unvoid_exit(PlacementSnapshot& row) {
+void PineExecutionAdapter::unvoid_exit(PlacementSnapshot& row, std::uint64_t incarnation) {
     if (source_sequence_ == std::numeric_limits<std::uint64_t>::max())
         throw coded<std::overflow_error>(RunFailureCode::engine_invariant, {},
                                          "Pine source sequence exhausted");
     row.void_issue = false;
-    row.chain_origin_sequence = ++source_sequence_;
+    row.chain_origin_sequence = ++source_sequence_; refresh_live_row(incarnation);
 }
 
 // A same-close fill of an exit leg (process_orders_on_close). A void call's
@@ -12008,7 +12008,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             if (live == live_by_source_key_.end()) continue;
             if (const auto row = placement_.find(live->second.incarnation);
                 row != placement_.end() && row->second.void_issue) {
-                unvoid_exit(row->second);
+                unvoid_exit(row->second, live->second.incarnation);
             }
         }
         return;
@@ -15231,7 +15231,7 @@ void PineExecutionAdapter::order(const SourceId& id, bool is_long, double qty,
         if (existing != placement_.end()
             && existing->second.pooc_global_full_exit_dynamic_qty) {
             existing->second.pooc_global_full_exit_dynamic_qty = false;
-            existing->second.pooc_global_full_exit_tracks_bound_adds = false;
+            existing->second.pooc_global_full_exit_tracks_bound_adds = false; refresh_live_row(handle);
         }
     }
     native_order::Request request;
@@ -15414,7 +15414,7 @@ void PineExecutionAdapter::order(const SourceId& id, bool is_long, double qty,
         }
         prior.pooc_global_full_exit_dynamic_qty = false;
         prior.pooc_global_full_exit_tracks_bound_adds = false;
-        prior.reservation_expansion.close_population(accepted->incarnation);
+        prior.reservation_expansion.close_population(accepted->incarnation); refresh_live_row(handle);
     }
 }
 
@@ -22682,7 +22682,7 @@ void PineExecutionAdapter::order_open_marketable_limit_entries(
         if (result.status != native_order::ReplaceStatus::Replaced) continue;
         if (const auto found = placement_.find(row.handle.incarnation);
             found != placement_.end()) {
-            found->second.forced_execution_price = open_fill;
+            found->second.forced_execution_price = open_fill; refresh_live_row(row.handle);
         }
     }
 }
@@ -22919,7 +22919,7 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
             plain.trigger = native_order::Stop{found->second.exit_levels.stop};
             const auto result = host.replace(definition.handle, plain, keep);
             if (result.status == native_order::ReplaceStatus::Replaced)
-                found->second.forced_execution_price = kNaN;
+                { found->second.forced_execution_price = kNaN; refresh_live_row(definition.handle); }
         }
     }
     // The preceding source broker batch is complete at this next opening.
@@ -23031,7 +23031,7 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
             const auto replaced = require_host().replace(definition.handle, request, keep);
             if (replaced.status != native_order::ReplaceStatus::Replaced) continue;
             found->second.forced_execution_price = open_tick
-                + (is_buy ? 1.0 : -1.0) * config_.slippage * staged_.syminfo.mintick;
+                + (is_buy ? 1.0 : -1.0) * config_.slippage * staged_.syminfo.mintick; refresh_live_row(definition.handle);
             (void)require_host().execute_current(
                 {definition.handle, NativeCurrentPriceRule::NearestTick});
         }
@@ -23726,7 +23726,7 @@ void PineExecutionAdapter::fill_pooc_close_entries(
             // flattened the book since.
             auto& placed = placement_.at(accepted->incarnation);
             placed.projection_position_side = row.projection_position_side;
-            placed.projection_tv_carry_qty = row.projection_tv_carry_qty;
+            placed.projection_tv_carry_qty = row.projection_tv_carry_qty; refresh_live_row(*accepted);
             (void)require_host().execute_current(
                 {*accepted, NativeCurrentPriceRule::NearestTick});
         }
@@ -24195,7 +24195,7 @@ void PineExecutionAdapter::per_entry_exits_at_entry_fill(
         for (const auto& handle : legs) {
             if (const auto row = placement_.find(handle.incarnation); row != placement_.end()) {
                 row->second.per_entry_origin = prior.origin;
-                row->second.per_entry_units = prior.units;
+                row->second.per_entry_units = prior.units; refresh_live_row(handle);
             }
         }
         per_entry_exits_.push_back(std::move(exit));
@@ -25083,7 +25083,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         adopted.requested_qty = event.closed_units;
         adopted.forced_execution_price = event.resolved_price;
         adopted.sizing = sizing_snapshot();
-        placement_.try_emplace(event.handle().incarnation, adopted);
+        placement_.try_emplace(event.handle().incarnation, adopted); refresh_live_row(event.handle().incarnation);
         placement_snapshot = adopted;
     }
     if (placement_snapshot && event.opened_units != 0.0
@@ -25550,9 +25550,9 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             const auto old_key = checked_live_key(replacement(0));
             const auto old = live_by_source_key_.find(old_key);
             if (old != live_by_source_key_.end() && old->second == handle)
-                live_by_source_key_.erase(old);
-            snapshot.bracket_origin = event.handle();
-            live_by_source_key_[checked_live_key(replacement(event.handle().incarnation))] = live_source_value(handle, replacement(event.handle().incarnation));
+                { live_by_source_key_.erase(old); refresh_live_source_key(old_key); }
+            snapshot.bracket_origin = event.handle(); refresh_live_row(handle);
+            live_by_source_key_[checked_live_key(replacement(event.handle().incarnation))] = live_source_value(handle, replacement(event.handle().incarnation)); refresh_live_source_key(checked_live_key(replacement(event.handle().incarnation)));
         }
         {
             const auto cohort = require_cohort(placement_snapshot->source_id);
@@ -25890,7 +25890,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                     candidate.pooc_global_full_exit_dynamic_qty = false;
                     candidate.pooc_global_full_exit_tracks_bound_adds = false;
                     candidate.reservation_expansion.close_population(event.handle().incarnation);
-                    candidate.pooc_global_full_exit_bound_add = bound_preexit_add;
+                    candidate.pooc_global_full_exit_bound_add = bound_preexit_add; refresh_live_row(handle);
                 }
             }
         }
@@ -27230,7 +27230,7 @@ void PineExecutionAdapter::enable_intraday_cap() noexcept { cap.attach(); }
 void PineExecutionAdapter::attach_execution_adapter() noexcept { priority.attach(); }
 
 std::vector<native_order::RequestHandle> PineExecutionAdapter::take_first_open_newborns() {
-    auto result = std::move(first_open_newborns_);
+    auto result = first_open_newborns_.take();
     first_open_newborns_.clear();
     return result;
 }
@@ -28485,7 +28485,7 @@ bool PineExecutionAdapter::fill_pooc_close_pair(
             std::move(request), std::move(immediate), true, leg->row.source_id);
         if (!accepted) return filled;
         auto& placed = placement_.at(accepted->incarnation);
-        placed.projection_position_side = leg->row.projection_position_side;
+        placed.projection_position_side = leg->row.projection_position_side; refresh_live_row(*accepted);
         (void)require_host().execute_current(
             {*accepted, NativeCurrentPriceRule::NearestTick});
         filled = true;
@@ -28641,9 +28641,9 @@ void PineExecutionAdapter::order_same_point_entries() {
         const native_order::Request request = live->request;
         const auto result = host.replace(handle, request, in_place);
         if (result.status != native_order::ReplaceStatus::Replaced) return;
-        live_handles_.erase(std::remove(live_handles_.begin(), live_handles_.end(), handle),
-                            live_handles_.end());
-        live_handles_.push_back(handle);
+        live_handles_.move_to_tail(handle);
+        refresh_live_row(handle);
+        // Survivor order and all ordered buckets follow the successful replace.
     }
 }
 
@@ -28859,7 +28859,7 @@ void PineExecutionAdapter::retire_origin_prefixes() {
             }
             ++through;
         }
-        origins.retire_before(through);
+        origins.retire_before(through); live_row_index().retire_origins_before(facts.handle.value, origins.base());
         if (origins.members().empty()) {
             if (auto* index = adapter_lookup_index(consumer, this, run_counter_, false))
                 index->cohort_sides.erase(facts.handle.value);
@@ -29094,6 +29094,52 @@ detail::LiveSourceHandle PineExecutionAdapter::live_source_value(
     }
 #endif
     return value;
+}
+
+} // namespace pineforge::source
+
+namespace pineforge::source {
+
+detail::LiveRowIndex& PineExecutionAdapter::live_row_index() const {
+    auto* cache = adapter_lookup_index(bound_consumer(), this, run_counter_);
+    // The previous optional lookup cache can fall back. This directory must
+    // never silently replace an exact query with a Release whole-book scan.
+    if (!cache) throw std::bad_alloc();
+    auto& index = cache->live_rows;
+    if (!index.bound_to(placement_, live_handles_)) {
+        index.rebuild_from(placement_, live_handles_);
+        index.bind_source_keys(live_by_source_key_);
+        for (const auto& row : cohorts_by_id_.resident_rows())
+            index.rebuild_origins(row.second.handle.value, row.second.origins);
+    }
+    return index;
+}
+
+void PineExecutionAdapter::refresh_live_row(native_order::RequestHandle handle,
+                                          const PlacementSnapshot* edited) {
+    if (edited) {
+        const auto found = static_cast<const PlacementTable&>(placement_).find(handle.incarnation);
+        // Initializers also receive unpublished local/queued snapshots. Those
+        // are classified only by remember, never by a same-incarnation alias.
+        if (found == static_cast<const PlacementTable&>(placement_).end() || &found->second != edited) return;
+    }
+    live_row_index().refresh(handle);
+}
+
+void PineExecutionAdapter::refresh_live_row(std::uint64_t incarnation) {
+    live_row_index().refresh_incarnation(incarnation);
+}
+
+void PineExecutionAdapter::refresh_live_source_key(std::uint64_t key) const {
+    live_row_index().refresh_source_key(key);
+}
+
+void PineExecutionAdapter::rebuild_live_row_index() {
+    auto& index = live_row_index();
+    index.rebuild_from(placement_, live_handles_);
+    index.clear_origins();
+    for (const auto& row : cohorts_by_id_.resident_rows())
+        index.rebuild_origins(row.second.handle.value, row.second.origins);
 }
 
 } // namespace pineforge::source

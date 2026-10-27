@@ -17,7 +17,7 @@
 #include <pineforge/detail/scratch_sequence.hpp>
 #include <pineforge/source/exit_scratch.hpp>
 #include <pineforge/source/live_source_identity.hpp>
-#include <algorithm>
+#include <pineforge/source/detail/live_row_index.hpp>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
@@ -2253,7 +2253,7 @@ private:
         native_order::Request request, PlacementSnapshot snapshot, bool opening,
         const SourceId& replacement_key = {});
     void remember(const native_order::RequestHandle&, PlacementSnapshot&&);
-    void retire(native_order::RequestHandle) noexcept;
+    void retire(native_order::RequestHandle);
     // R5 lane V19-E: erases the placement rows no reader can reach again
     // (pine_adapter.cpp explains the rule); run at every bar open.
     void erase_retired_rows(const NativeDecisionContext&);
@@ -2471,7 +2471,7 @@ private:
     void consume_cohort_units(const SourceId&, const native_order::ExecutionAppliedEvent&);
     void consume_closed_trade_rows(const native_order::ExecutionAppliedEvent&,
                                    const PlacementSnapshot*);
-    bool origin_is_pending(const native_order::RequestHandle&) const noexcept;
+    bool origin_is_pending(const native_order::RequestHandle&) const;
     // Roster positions, latest first, of the cohort's origins that are live
     // handles. origin_is_pending() accepts only live handles, so walking these
     // positions meets exactly the pending origins a reverse walk of the whole
@@ -2732,7 +2732,7 @@ private:
                           double qty_percent) const noexcept;
     bool open_lot_of(const SourceId& id) const;
     bool standing_exit(const SourceId& exit_id, const SourceId& from_entry) const;
-    void unvoid_exit(PlacementSnapshot& row);
+    void unvoid_exit(PlacementSnapshot& row, std::uint64_t incarnation);
     void execute_or_withdraw_close(native_order::RequestHandle close, bool void_issue);
     void withdraw_void_exits(const SourceId& entry_id);
     void settle_void_global_exits(bool market_entry);
@@ -2800,8 +2800,8 @@ private:
     std::vector<PerEntryExit> per_entry_exits_;
     std::vector<PendingCoofRequest> pending_coof_requests_;
     std::vector<PendingMarginRevival> pending_margin_revivals_;
-    std::vector<native_order::RequestHandle> live_handles_;
-    std::vector<native_order::RequestHandle> first_open_newborns_;
+    detail::LiveHandleSequence live_handles_; // Derived index owned by the consumer's run cache.
+    detail::LiveHandleSequence first_open_newborns_;
     // R5 lane V19-E: the dropped-close receipts were a log no decision reads;
     // v4 keeps their count and a running digest, each folded once
     // (fold_dropped_close, pine_state_hash.cpp).
@@ -3224,6 +3224,11 @@ public:
 
 private:
     mutable DensePendingWork dense_pending_work_{};
+    detail::LiveRowIndex& live_row_index() const;
+    void refresh_live_row(native_order::RequestHandle, const PlacementSnapshot* edited = nullptr);
+    void refresh_live_row(std::uint64_t incarnation);
+    void refresh_live_source_key(std::uint64_t key) const;
+    void rebuild_live_row_index();
 };
 
 namespace detail {

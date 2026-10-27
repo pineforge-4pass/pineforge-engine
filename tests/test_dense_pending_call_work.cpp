@@ -194,14 +194,20 @@ void dense_pending_call_work() {
         else
             std::printf("CR391B ratio %s %.2f\n", name.c_str(),
                         static_cast<double>(large) / static_cast<double>(small));
+        // Infrastructure only: doubling the commands permits 2.5x work.
+        // These four counts include the two retirement walks; zero/positive
+        // must fail as well. The other conversion lanes own their bounds.
+        if ((name == "remember.handles" || name == "origin_is_pending.handles"
+             || name == "retire.handles" || name == "retire.source_keys")
+            && large * 2 > small * 5)
+            throw std::runtime_error("dense counter " + name + " exceeds 2.5x");
     });
     std::fflush(stdout);
     index = 0;
     visit_counters(fixed[1], [&](const std::string& name, std::uint64_t large) {
         const auto small = fixed_small[index++];
-        // Only the fixed-id control is bounded in stage 1. Doubling the
-        // bars with the same id population permits 2.5x cumulative work:
-        // 2 * work(2N) <= 5 * work(N). No dense bound is asserted yet.
+        // Keep every fixed-id control bound. Doubling the bars with the
+        // same id population permits 2.5x cumulative work.
         if (large * 2 > small * 5)
             throw std::runtime_error("fixed-id counter " + name + " exceeds 2.5x");
     });
@@ -211,10 +217,7 @@ void dense_pending_call_work() {
 int main() {
     try {
         dense_pending_call_work();
-        // MEASURE-ONLY: ctest hides the output of a passing test, so this
-        // stage fails on purpose after the table is printed. Removed by the fix.
-        std::fprintf(stderr, "dense pending call work: table printed above (deliberate failure)\n");
-        return 1;
+        return 0;
     } catch (const std::exception& error) {
         std::fprintf(stderr, "dense pending call work: %s\n", error.what());
         return 1;
