@@ -1483,6 +1483,8 @@ list(APPEND TEST_SOURCES test_native_fused_settlement_allocations)
 # Source-bound.
 list(APPEND TEST_SOURCES test_adapter_live_state_scaling)
 list(APPEND TEST_SOURCES test_adapter_live_state_equivalence)
+# Dense pending-id work table; only the fixed-id control has growth bounds.
+list(APPEND TEST_SOURCES test_dense_pending_call_work)
 # R5 lane V19-D: a bracket family's roster parks the erased members behind a
 # retained one (the v4 fold reads what is retained): randomized append /
 # erase / settle / cancel streams against a plain model -- the same members

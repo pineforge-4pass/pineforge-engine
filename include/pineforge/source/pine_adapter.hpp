@@ -3190,6 +3190,40 @@ private:
     void fold_admission_events() const;
     std::uint64_t checked_live_key(const SourceId&) const;
     detail::LiveSourceHandle live_source_value(native_order::RequestHandle, const SourceId&) const;
+
+public:
+    // Diagnostic only. Kept after the documented header anchors; never part
+    // of continuation state, scratch codecs, hash_state or hash_host_extension.
+    struct DensePendingWork {
+        std::uint64_t remember_handles = 0, retire_handles = 0, retire_keys = 0;
+        std::uint64_t origin_pending_handles = 0, live_origin_handles = 0;
+        std::uint64_t entry_prior_closes = 0, entry_dynamic_exits = 0;
+        std::uint64_t entry_opposite_pending = 0, entry_opposite_close_pass = 0;
+        std::uint64_t entry_batch_openings = 0;
+        std::uint64_t entry_reservation_captures = 0;
+        std::uint64_t exit_staged_parents = 0, exit_reversal_parents = 0;
+        std::uint64_t exit_reservation_parents = 0, exit_live_parents = 0;
+        std::uint64_t exit_origin_handles = 0;
+        std::uint64_t exit_drop_legs = 0, exit_foreign_pending_handles = 0;
+        std::uint64_t submit_pending_brackets = 0;
+        std::uint64_t compute_exit_reservation_handles = 0;
+        std::uint64_t compute_exit_reservation_pending_brackets = 0;
+        std::uint64_t flush_pending_bracket_legs_prescript_rows = 0;
+        std::uint64_t flush_pending_bracket_legs_sort_comparisons = 0;
+        std::uint64_t flush_pending_bracket_legs_queued = 0;
+        std::uint64_t cancel_token_handles = 0, cancel_match_handles = 0;
+        std::uint64_t stash_id_bound_exits_handles = 0, retire_cancelled_exits_placements = 0;
+        std::uint64_t withdraw_waypoint_margin_calls_handles = 0, same_bar_close_alls_handles = 0;
+        std::uint64_t open_trails = 0, open_admission_gate = 0, open_admission_rows = 0;
+        std::uint64_t open_stop_gate = 0, open_gapped_gate = 0, open_limit_gate = 0;
+        std::uint64_t open_touched_stops = 0, open_reversal_gate = 0;
+        std::uint64_t same_point_two_leg_book_handles = 0, same_point_candidates = 0;
+        std::uint64_t update_l4c_priority_calls = 0, refresh_pending_view_calls = 0;
+    };
+    const DensePendingWork& dense_pending_work() const noexcept { return dense_pending_work_; }
+
+private:
+    mutable DensePendingWork dense_pending_work_{};
 };
 
 namespace detail {
