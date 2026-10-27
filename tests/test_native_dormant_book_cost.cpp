@@ -132,7 +132,7 @@ namespace {
 using namespace pineforge;
 namespace no = pineforge::native_order;
 constexpr std::size_t resident = 4096; // kBookMax, unchanged.
-constexpr std::size_t bar_count = 48; // Capacity for the attribution-only fourth run.
+constexpr std::size_t bar_count = 48; // Forty placement bars plus eight late bars.
 constexpr std::int64_t start = 1736121600000LL;
 
 void require(bool ok, const char* why) {
@@ -264,12 +264,12 @@ Costs batch(std::size_t rows, [[maybe_unused]] const char* size, std::size_t run
             "T1 remote book unexpectedly traded");
     // Late matching only; neither placement nor the terminal fold is in it.
     Costs result{};
-    result.allocations = window(h.allocations, 32, 40);
-    result.lookup_rows = window(h.lookup_rows, 32, 40);
-    result.lookup_steps = window(h.lookup_steps, 32, 40);
+    result.allocations = window(h.allocations, run_bars - 8, run_bars);
+    result.lookup_rows = window(h.lookup_rows, run_bars - 8, run_bars);
+    result.lookup_steps = window(h.lookup_steps, run_bars - 8, run_bars);
 #if defined(__linux__)
     require(dormant_io::preads > before, "T1 pread observer saw no real spill I/O");
-    result.preads = window(h.preads, 32, 40);
+    result.preads = window(h.preads, run_bars - 8, run_bars);
     dormant_io::print(size, h.attribution_bar, h.preads[h.attribution_bar], "batch");
 #endif
     return result;
@@ -358,49 +358,75 @@ int main(int argc, char** argv) {
         const Costs large = batch(resident + resident, "large");
         // 24 placement bars leave the same late [32,40) window untouched.
         const Costs largest = batch(resident + 2 * resident, "largest");
-#if defined(__linux__)
-        // Forty placement bars, then eight matching bars; costs are not asserted.
-        (void)batch(resident + 4 * resident, "fourth", bar_count);
-#endif
-        std::printf("T1 late allocations/bar small=%zu..%zu large=%zu..%zu largest=%zu..%zu\n",
+        // Forty placement bars, then eight matching bars at the fourth size.
+        const Costs fourth = batch(resident + 4 * resident, "fourth", bar_count);
+        std::printf("T1 late allocations/bar small=%zu..%zu large=%zu..%zu largest=%zu..%zu fourth=%zu..%zu\n",
                     small.allocations.low, small.allocations.high,
                     large.allocations.low, large.allocations.high,
-                    largest.allocations.low, largest.allocations.high);
+                    largest.allocations.low, largest.allocations.high,
+                    fourth.allocations.low, fourth.allocations.high);
         std::printf("T1 late lookup rows/bar small=%zu..%zu large=%zu..%zu largest=%zu..%zu "
-                    "steps/bar small=%zu..%zu large=%zu..%zu largest=%zu..%zu\n",
+                    "fourth=%zu..%zu steps/bar small=%zu..%zu large=%zu..%zu largest=%zu..%zu fourth=%zu..%zu\n",
                     small.lookup_rows.low, small.lookup_rows.high,
                     large.lookup_rows.low, large.lookup_rows.high,
                     largest.lookup_rows.low, largest.lookup_rows.high,
+                    fourth.lookup_rows.low, fourth.lookup_rows.high,
                     small.lookup_steps.low, small.lookup_steps.high,
                     large.lookup_steps.low, large.lookup_steps.high,
-                    largest.lookup_steps.low, largest.lookup_steps.high);
+                    largest.lookup_steps.low, largest.lookup_steps.high,
+                    fourth.lookup_steps.low, fourth.lookup_steps.high);
 #if defined(__linux__)
-        std::printf("T1 late preads/bar small=%zu..%zu large=%zu..%zu largest=%zu..%zu\n",
+        std::printf("T1 late preads/bar small=%zu..%zu large=%zu..%zu largest=%zu..%zu fourth=%zu..%zu\n",
                     small.preads.low, small.preads.high, large.preads.low, large.preads.high,
-                    largest.preads.low, largest.preads.high);
+                    largest.preads.low, largest.preads.high, fourth.preads.low, fourth.preads.high);
 #endif
-        // Slack is one entire measured smaller-book bar, not a chosen cap.
-        // Base decodes 4096 versus 512 spilled rows at each point; the
-        // allocation cost grows with that difference and fails this check.
+        // Require exact allocation flatness within and across all four windows.
+        // --io-only leaves the independent disk-cost oracle exposed on base.
         if (!io_only)
-            require(large.allocations.high <= small.allocations.high * 2
-                        && largest.allocations.high <= small.allocations.high * 2,
+            require(small.allocations.low == small.allocations.high
+                        && small.allocations.high == large.allocations.low
+                        && large.allocations.low == large.allocations.high
+                        && large.allocations.high == largest.allocations.low
+                        && largest.allocations.low == largest.allocations.high
+                        && largest.allocations.high == fourth.allocations.low
+                        && fourth.allocations.low == fourth.allocations.high,
                     "T1 spilled per-bar allocations grow with the spilled row count");
 #if defined(__linux__)
         // Run this before the narrower lookup checks: --io-only isolates
         // the base red even if both existing lookup counters happen flat.
-        // wake_by_price probes the four level-list heads, not every spilled
-        // row. Its B+tree paths and direct-mapped backing-cache collisions
-        // depend on physical layout, so extra rows need not cost IDENTICAL
-        // preads (the integration log has 148 then 144). Require stable late
-        // windows and no growth at either larger population, with no slack.
         require(small.preads.low == small.preads.high
                     && large.preads.low == large.preads.high
-                    && largest.preads.low == largest.preads.high,
+                    && largest.preads.low == largest.preads.high
+                    && fourth.preads.low == fourth.preads.high,
                 "T1 preads/bar are not stable within a late window");
-        require(large.preads.high <= small.preads.low
-                    && largest.preads.high <= large.preads.low,
-                "T1 late preads/bar grow with the spilled row count");
+        const std::array<std::size_t, 4> spilled_rows{512, resident, 2 * resident, 4 * resident};
+        const std::array<Window, 4> preads{small.preads, large.preads, largest.preads, fourth.preads};
+        const auto pread_slope = [](std::size_t preads_a, std::size_t preads_b,
+                                   std::size_t rows_a, std::size_t rows_b) {
+            return (static_cast<double>(preads_b) - static_cast<double>(preads_a))
+                / static_cast<double>(rows_b - rows_a);
+        };
+        // Decoding a visited spilled row needs at least one page pread.
+        // Visiting each additional row thus costs >= 1 pread/row/bar.
+        // Use one quarter of that minimum: slope <= 0.25 for every interval.
+        // The eager baseline visits spilled rows, so its O(S) term stays red.
+        // Ordered-index descents grow with tree height, approximately log S.
+        // Fixed-cache conflict misses perturb those descents, not row visits.
+        // Both terms vanish per additional row as the population grows.
+        // Convert before subtraction to allow negative cache-effect slopes.
+        for (std::size_t i = 1; i < spilled_rows.size(); ++i) {
+            const auto slope = pread_slope(preads[i - 1].high, preads[i].high,
+                                          spilled_rows[i - 1], spilled_rows[i]);
+            std::printf("T1 slope %zu->%zu = %.6f\n", spilled_rows[i - 1], spilled_rows[i], slope);
+            require(slope <= 0.25,
+                    "T1 adjacent pread slope exceeds 0.25 per additional spilled row");
+        }
+        const auto endpoint_slope = pread_slope(preads.front().high, preads.back().high,
+                                               spilled_rows.front(), spilled_rows.back());
+        std::printf("T1 first-to-last slope %zu->%zu = %.6f\n",
+                    spilled_rows.front(), spilled_rows.back(), endpoint_slope);
+        require(endpoint_slope <= 0.25,
+                "T1 first-to-last pread slope exceeds 0.25 per additional spilled row");
 #endif
         // REV-CX K3: allocation flatness alone can hide disk/CPU growth.
         // There is no lookup at all in the late, completely dormant book:
@@ -409,17 +435,31 @@ int main(int argc, char** argv) {
                     && small.lookup_rows.high == large.lookup_rows.low
                     && large.lookup_rows.low == large.lookup_rows.high
                     && large.lookup_rows.high == largest.lookup_rows.low
-                    && largest.lookup_rows.low == largest.lookup_rows.high,
+                    && largest.lookup_rows.low == largest.lookup_rows.high
+                    && largest.lookup_rows.high == fourth.lookup_rows.low
+                    && fourth.lookup_rows.low == fourth.lookup_rows.high,
                 "T1 late book lookup rows/bar depend on the spilled row count");
         require(small.lookup_steps.low == small.lookup_steps.high
                     && small.lookup_steps.high == large.lookup_steps.low
                     && large.lookup_steps.low == large.lookup_steps.high
                     && large.lookup_steps.high == largest.lookup_steps.low
-                    && largest.lookup_steps.low == largest.lookup_steps.high,
+                    && largest.lookup_steps.low == largest.lookup_steps.high
+                    && largest.lookup_steps.high == fourth.lookup_steps.low
+                    && fourth.lookup_steps.low == fourth.lookup_steps.high,
                 "T1 late book lookup steps/bar depend on the spilled row count");
 #ifdef PINEFORGE_TEST_DORMANT_BOOK_PATCHED
         const auto eager_small = stream(resident + 512, true, false, "small");
         const auto eager_large = stream(resident + resident, true, false, "large");
+#if defined(__linux__)
+        // Reuse the two existing eager runs; no extra warmup or tick work.
+        // Large-window minimum minus small-window maximum is conservative.
+        const auto eager_slope = pread_slope(eager_small.costs.preads.high, eager_large.costs.preads.low,
+                                            spilled_rows[0], spilled_rows[1]);
+        std::printf("T1 eager slope lower bound %zu->%zu = %.6f\n",
+                    spilled_rows[0], spilled_rows[1], eager_slope);
+        require(eager_slope >= 1.0,
+                "T1 eager pread control costs less than one pread per additional spilled row");
+#endif
         const auto forced_small = stream(resident + 512, false, true, "small");
         const auto forced_large = stream(resident + resident, false, true, "large");
         require(forced_small.eager_forced == 1 && forced_large.eager_forced == 1,
