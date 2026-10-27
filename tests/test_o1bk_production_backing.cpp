@@ -249,7 +249,7 @@ void sparse_extent_and_durability(std::size_t page_size) {
     for (const std::size_t multiple : {std::size_t{1}, std::size_t{3}}) {
         const auto page = page_size * multiple;
         const auto before = open_descriptors();
-        auto backing = make_command_scratch_backing(page);
+        auto backing = make_command_scratch_backing(page, 0);
         const int fd = created_descriptor(before);
         require(backing && backing->kind() == ScratchBackingKind::disk,
                 "factory must select the production disk backing");
@@ -411,7 +411,7 @@ void byte_cap_exact_extent_and_charges(std::size_t page) {
     constexpr std::uint64_t pages = 3;
     ByteCapRegistration cap(pages * page);
     const auto before = open_descriptors();
-    auto backing = make_command_scratch_backing(page);
+    auto backing = make_command_scratch_backing(page, 0);
     const int fd = created_descriptor(before);
     const auto image = pattern(page, 9), replacement = pattern(page, 10);
     std::vector<std::byte> out(page);
@@ -450,10 +450,10 @@ void byte_cap_exact_extent_and_charges(std::size_t page) {
 void byte_cap_shared_sparse_extents(std::size_t page) {
     ByteCapRegistration cap(std::uint64_t{5} * page);
     const auto before_a = open_descriptors();
-    auto a = make_command_scratch_backing(page);
+    auto a = make_command_scratch_backing(page, 0);
     const int a_fd = created_descriptor(before_a);
     const auto before_b = open_descriptors();
-    auto b = make_command_scratch_backing(2 * page);
+    auto b = make_command_scratch_backing(2 * page, 0);
     const int b_fd = created_descriptor(before_b);
     const auto first = pattern(page, 11), second = pattern(2 * page, 12);
     require_status(a->write_page(2, bytes(first)), ScratchStatus::ok,
@@ -565,7 +565,7 @@ void byte_cap_environment_default(std::size_t page) {
     const auto image = pattern(page, 16);
     auto a = make_command_scratch_backing(page);
     const auto before_b = open_descriptors();
-    auto b = make_command_scratch_backing(page);
+    auto b = make_command_scratch_backing(page, 0);
     const int b_fd = created_descriptor(before_b);
     require_status(a->write_page(1, bytes(image)), ScratchStatus::ok,
                    "environment cap permits a two-page sparse extent");
@@ -646,7 +646,7 @@ void byte_cap_failed_extension_accounting(std::size_t page) {
     ObserverRegistration observer(charges.observer());
     ByteCapRegistration cap(std::uint64_t{2} * page);
     const auto before = open_descriptors();
-    auto backing = make_command_scratch_backing(page);
+    auto backing = make_command_scratch_backing(page, 0);
     const int fd = created_descriptor(before);
     const auto image = pattern(page, 17);
     require_status(backing->write_page(0, bytes(image)), ScratchStatus::ok, "seed capped syscall fault");
@@ -731,7 +731,7 @@ void write_past_file_size_limit(std::size_t page) {
     Charges charges;
     ObserverRegistration observer(charges.observer());
     const auto before = open_descriptors();
-    auto backing = make_command_scratch_backing(page);
+    auto backing = make_command_scratch_backing(page, 0);
     const int fd = created_descriptor(before);
     const auto image = pattern(page, 18);
     require_status(backing->write_page(0, bytes(image)), ScratchStatus::ok,
@@ -784,7 +784,7 @@ void production_pwrite_faults_are_io_errors(std::size_t page) {
         Charges charges;
         ObserverRegistration observer(charges.observer());
         const auto before = open_descriptors();
-        auto backing = make_command_scratch_backing(page);
+        auto backing = make_command_scratch_backing(page, 0);
         const int fd = created_descriptor(before);
         const auto image = pattern(page, 19), replacement = pattern(page, 20);
         require_status(backing->write_page(0, bytes(image)), ScratchStatus::ok,

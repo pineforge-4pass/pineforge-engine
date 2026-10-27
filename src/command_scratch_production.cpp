@@ -5,7 +5,6 @@
 #include <pineforge/run_failure.hpp>
 
 #include <algorithm>
-#include <atomic>
 #include <cerrno>
 #include <cstdint>
 #include <cstdlib>
@@ -21,26 +20,19 @@
 
 namespace pineforge::detail {
 
-struct CommandScratchByteBudget {
-    explicit CommandScratchByteBudget(std::uint64_t bytes) noexcept : limit(bytes) {}
-
-    bool reserve(std::uint64_t bytes) noexcept {
-        if (limit == 0) return true;
-        auto used = live_bytes.load(std::memory_order_relaxed);
-        for (;;) {
-            if (bytes > limit - used) return false;
-            if (live_bytes.compare_exchange_weak(used, used + bytes, std::memory_order_relaxed))
-                return true;
-        }
+bool CommandScratchByteBudget::reserve(std::uint64_t bytes) noexcept {
+    if (limit == 0) return true;
+    auto used = live_bytes.load(std::memory_order_relaxed);
+    for (;;) {
+        if (bytes > limit - used) return false;
+        if (live_bytes.compare_exchange_weak(used, used + bytes, std::memory_order_relaxed))
+            return true;
     }
+}
 
-    void release(std::uint64_t bytes) noexcept {
-        if (limit != 0) live_bytes.fetch_sub(bytes, std::memory_order_relaxed);
-    }
-
-    const std::uint64_t limit;
-    std::atomic<std::uint64_t> live_bytes{0};
-};
+void CommandScratchByteBudget::release(std::uint64_t bytes) noexcept {
+    if (limit != 0) live_bytes.fetch_sub(bytes, std::memory_order_relaxed);
+}
 
 namespace {
 
@@ -218,8 +210,8 @@ private:
 
 class CommandScratchFile final : public ScratchBacking {
 public:
-    CommandScratchFile(std::size_t size, ScratchIoObserver observer, CommandScratchByteCap budget)
-        : ScratchBacking(ScratchBackingKind::disk, size, observer), budget_(std::move(budget)) {
+    CommandScratchFile(std::size_t size, ScratchIoObserver observer)
+        : ScratchBacking(ScratchBackingKind::disk, size, observer) {
         const char* selected = std::getenv("PINEFORGE_COMMAND_SCRATCH_DIR");
         std::string refusal;
         int directory_error = 0;
@@ -263,7 +255,6 @@ public:
         // Retrying close after EINTR could close a descriptor reused by another
         // thread on hosts where the first close already released it.
         ::close(fd_);
-        if (budget_) budget_->release(extent_ * static_cast<std::uint64_t>(page_size()));
     }
 
     std::uint64_t page_count() const noexcept override { return extent_; }
@@ -293,16 +284,12 @@ protected:
         off_t offset, end;
         if (!page_offsets(id, offset, end)) return ScratchStatus::programming_error;
         if (id >= extent_) {
-            const auto growth = static_cast<std::uint64_t>(end)
-                - extent_ * static_cast<std::uint64_t>(page_size());
-            if (budget_ && !budget_->reserve(growth)) return ScratchStatus::io_error;
             int result;
             do {
                 result = ::ftruncate(fd_, end);
             } while (result < 0 && errno == EINTR);
             if (result < 0) {
                 const int error = errno;
-                if (budget_) budget_->release(growth);
                 return command_scratch_io_status(error);
             }
             // ftruncate exposes zero-filled holes. Keep the real new extent
@@ -352,7 +339,6 @@ private:
 
     int fd_ = -1;
     std::uint64_t extent_ = 0;
-    CommandScratchByteCap budget_;
 };
 
 } // namespace
@@ -375,6 +361,11 @@ CommandScratchByteCap set_command_scratch_byte_cap(CommandScratchByteCap registr
 
 std::unique_ptr<pineforge::detail::ScratchBacking> make_command_scratch_backing(
     std::size_t page_size) {
+    return make_command_scratch_backing(page_size, CachedScratchBacking::kCacheBytes);
+}
+
+std::unique_ptr<pineforge::detail::ScratchBacking> make_command_scratch_backing(
+    std::size_t page_size, std::size_t resident_bytes) {
     if (page_size == 0)
         throw coded<std::invalid_argument>(RunFailureCode::engine_invariant, {},
                                            "command scratch page size is zero");
@@ -399,8 +390,8 @@ std::unique_ptr<pineforge::detail::ScratchBacking> make_command_scratch_backing(
                 page_size, ScratchIoObserver{}, std::move(budget), arena->stats()),
             command_scratch_observer);
     return std::make_unique<CachedScratchBacking>(
-        std::make_unique<CommandScratchFile>(page_size, ScratchIoObserver{}, std::move(budget)),
-        command_scratch_observer);
+        std::make_unique<CommandScratchFile>(page_size, ScratchIoObserver{}),
+        command_scratch_observer, resident_bytes, std::move(budget));
 }
 
 } // namespace pineforge::detail
