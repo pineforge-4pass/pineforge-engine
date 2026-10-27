@@ -20,7 +20,9 @@ produce.
 
 A second family builds one valid sink of about 76 KiB (read-only, shared by its
 rows) and puts a single fault on, beside and far from the real 64 KiB direct-I/O
-page boundary of the sink reader. Every line index is read off the file's bytes;
+page boundary of the sink reader, and at the edges between the 128-line batches in
+which the bulk path takes a run of E lines (the last line of a batch, the first two
+of the next, the first of the third). Every line index is read off the file's bytes;
 each fault must be refused by the strict reader with its named check at exactly
 that line (or be accepted, for integer -0), at the production window and at 97.
 
@@ -1076,18 +1078,38 @@ PAGE_POINTS = 1350
 PAGE_WINDOWS = (64 * 1024, 97)
 PAGE_FAULTS = ("equity-0.10", "profit-0.10", "time-minus-zero", "space", "point-deleted",
                "tag-X")
-# Inside the bulk grammar: only the repr proof refuses these two, and it refuses a whole batch.
+# Inside the bulk grammar: only the repr proof refuses these two, and it refuses a whole batch
+# of at most _BULK_E_BATCH lines, which the strict reader then replays from its first line.
 PAGE_PROOF_FAULTS = ("equity-0.10", "profit-0.10")
+# The four faults whose outcome a batch edge changes: the proof refuses the batch that holds
+# the first two (it is replayed), the grammar ends the batch before the last two.
+PAGE_EDGE_FAULTS = ("equity-0.10", "profit-0.10", "time-minus-zero", "space")
+# The bulk path takes a run of consecutive E lines in batches of at most _BULK_E_BATCH lines
+# counted from the run's first line, and a page cut starts a new batch at the line it cuts.
+# One fault `offset` lines into a run falls on the last line of the first batch (127), the
+# first two lines of the second (128, 129) and the first line of the third (256). Each entry
+# is (label, offset, which run): "first" is the first run with offset + 2 lines, "longest" the
+# longest one. The longest run is the one the 64 KiB page cuts, so its +256 lies mid-batch at
+# the production window; the "-uncut" label repeats +256 on a run that ends inside page 0.
+PAGE_RUN_LABELS = (
+    ("run-start+127", 127, "first"), ("run-start+128", 128, "first"),
+    ("run-start+129", 129, "first"), ("run-start+256", 256, "longest"),
+    ("run-start+256-uncut", 256, "first"))
+PAGE_RUN_NAMES = tuple(label for label, _, _ in PAGE_RUN_LABELS)
 PAGE_LABELS = (
     ("boundary", "before", "after", "first-1", "first-2", "first-3", "last-3", "last-2",
-     "last-1", "after-non-e") + tuple(f"random-{rank}" for rank in range(12)))
+     "last-1", "after-non-e") + tuple(f"random-{rank}" for rank in range(12))
+    + PAGE_RUN_NAMES)
 
 
 def _page_cases():
-    """The boundary line and its two neighbours take every fault; each other position one."""
+    """The boundary line and its two neighbours take every fault, each run-start offset the
+    four edge faults, and each other position one."""
     cases = []
     for rank, label in enumerate(PAGE_LABELS):
-        if rank < 3:
+        if label in PAGE_RUN_NAMES:
+            cases.extend((label, fault) for fault in PAGE_EDGE_FAULTS)
+        elif rank < 3:
             cases.extend((label, fault) for fault in PAGE_FAULTS)
         else:
             cases.append((label, PAGE_FAULTS[rank % len(PAGE_FAULTS)]))
@@ -1137,6 +1159,30 @@ def _boundary_line(lines, starts):
     return None
 
 
+def _e_runs(lines):
+    """(index of the first line, line count) of every run of consecutive canonical E lines."""
+    runs, first = [], None
+    for index in range(1, len(lines) + 1):
+        canonical = index < len(lines) and _E_SHAPE.fullmatch(lines[index]) is not None
+        if canonical and first is None:
+            first = index
+        elif not canonical and first is not None:
+            runs.append((first, index - first))
+            first = None
+    return runs
+
+
+def _run_start_position(runs, offset, which):
+    """The line `offset` lines into a run: offset lines before it and an E line after it.
+
+    So a run must hold offset + 2 lines. `which` picks the first such run or the longest."""
+    assert which in ("first", "longest"), which
+    fitting = [run for run in runs if run[1] >= offset + 2]
+    assert fitting, f"no run of E lines holds {offset + 2} lines: {runs}"
+    first, _ = fitting[0] if which == "first" else max(fitting, key=lambda run: run[1])
+    return first + offset
+
+
 def _page_positions(lines, boundary):
     """Label -> index into `lines` for every fault position, and all E line indices."""
     e_lines = [i for i in range(1, len(lines)) if lines[i].startswith(_E_PREFIX)]
@@ -1148,14 +1194,19 @@ def _page_positions(lines, boundary):
         i for i in range(2, len(lines))
         if lines[i].startswith(_E_PREFIX) and not lines[i - 1].startswith(_E_PREFIX)
         and lines[i - 2].startswith(_E_PREFIX))
+    runs = _e_runs(lines)
+    edges = {label: _run_start_position(runs, offset, which)
+             for label, offset, which in PAGE_RUN_LABELS}
     rng = _rng("pick", 0)
     pool = [i for i in e_lines if i not in named.values()]
     chosen = []
     while len(chosen) < 12:
         pick = pool[rng.randrange(len(pool))]
-        if pick not in chosen:
+        # Same draws as before the edge rows existed; only a draw on an edge line is skipped.
+        if pick not in chosen and pick not in edges.values():
             chosen.append(pick)
     named.update((f"random-{rank}", index) for rank, index in enumerate(chosen))
+    named.update(edges)
     return named, e_lines
 
 
@@ -1234,13 +1285,19 @@ def _execute_windows(tmp_path, monkeypatch, case, windows):
     return strict, outcomes
 
 
-def _assert_prefix_in_bulk(strict, actual, accepted, context):
-    """About one json.loads fewer per canonical E line that precedes the fault."""
+def _assert_prefix_in_bulk(strict, actual, accepted, context, replayed=0):
+    """About one json.loads fewer per canonical E line that precedes the fault.
+
+    `replayed` is how many of those lines the bulk side may have decoded again: the repr
+    proof refuses a whole batch and the strict reader replays it from its first line, so
+    the lines of that batch are not owed."""
     saved = strict[2]["verify"] - actual[2]["verify"]
-    assert saved >= accepted // 2, (
+    owed = (accepted - replayed) // 2
+    assert saved >= owed, (
         f"{context}: verify decoded {actual[2]['verify']} documents against "
         f"{strict[2]['verify']} for the strict reader, which read {accepted} E lines the "
-        f"bulk side should have accepted without a decode")
+        f"bulk side should have accepted without a decode, up to {replayed} of them excepted "
+        f"(saved {saved}, owed {owed})")
 
 
 def test_the_page_sink_has_the_geometry_the_fault_rows_rely_on(tmp_path, paged):
@@ -1270,6 +1327,41 @@ def test_the_page_sink_has_the_geometry_the_fault_rows_rely_on(tmp_path, paged):
         counts = reader.counts
     assert counts == {"E": PAGE_POINTS, "T": 2, "O": 1, "V": 1, "K": 1}, counts
     assert len(records) == PAGE_POINTS + paged.spec.others
+
+
+def test_the_page_sink_has_runs_long_enough_for_the_batch_edge_rows(paged):
+    # Attacks the premise of the run-start rows: that each label sits exactly `offset` lines
+    # into a run of canonical E lines with at least one more E line after it, that the
+    # offsets are the edges of the bulk path's batches, and that the run is the one the
+    # label is documented to use. The run is found by walking the sink's bytes outward from
+    # the label, not by the helper that chose it, so a fixture whose runs shrink fails here
+    # instead of dropping a row. Batches count from a run's first line unless a page cut
+    # restarts them, so every run but the longest must end inside page 0.
+    batch = run_json._BULK_E_BATCH
+    assert {offset for _, offset, _ in PAGE_RUN_LABELS} == {batch - 1, batch, batch + 1, 2 * batch}
+    lines, starts = paged.lines, paged.starts
+
+    def canonical(index):
+        return 0 < index < len(lines) and _E_SHAPE.fullmatch(lines[index]) is not None
+
+    kinds = "".join("E" if canonical(index) else "." for index in range(1, len(lines)))
+    lengths = [len(run) for run in kinds.split(".") if run]
+    for label, offset, which in PAGE_RUN_LABELS:
+        position = paged.positions[label]
+        first = last = position
+        while canonical(first - 1):
+            first -= 1
+        while canonical(last + 1):
+            last += 1
+        length = last - first + 1
+        where = f"{label}: line {position} lies in the run of lines {first}-{last} of {lengths}"
+        assert canonical(position) and position - first == offset and length >= offset + 2, where
+        if which == "longest":
+            assert length == max(lengths), where
+        else:
+            earlier = [len(run) for run in kinds[:first - 1].split(".") if run]
+            assert all(size < offset + 2 for size in earlier), where
+            assert starts[last] + len(lines[last]) + 1 <= PAGE, f"{where} reaches past page 0"
 
 
 @pytest.mark.parametrize("window", PAGE_WINDOWS, ids=("production-window", "window-97"))
@@ -1318,9 +1410,12 @@ def test_a_fault_around_the_direct_io_page_boundary_ends_like_the_strict_path(
     # one line only, the strict reader must refuse at exactly that line with the named
     # check (or accept, for -0, and write the changed point), and the bulk side must have
     # skipped the per-line decode of the E lines before the fault, which a bulk path that
-    # always falls back cannot do (not counted where the repr proof rejects the whole
-    # batch of up to _BULK_E_BATCH lines that holds the fault, so that it is replayed
-    # strictly).
+    # always falls back cannot do. Where the repr proof rejects the batch of up to
+    # _BULK_E_BATCH lines that holds the fault, the strict reader replays that batch from
+    # its first line, so up to that many of the lines before the fault are not owed. The
+    # run-start rows put the fault on and beside the edges between batches: a proof fault
+    # replays the batch that holds it (a full batch when it ends one), a grammar fault ends
+    # its batch on the last good line before it.
     index = paged.positions[label]
     image = _Image(paged.raw)
     page_offset = PAGE - paged.starts[index] if index == paged.boundary else None
@@ -1343,8 +1438,11 @@ def test_a_fault_around_the_direct_io_page_boundary_ends_like_the_strict_path(
     for window, actual in outcomes.items():
         where = f"{context} window={window}"
         _assert_same(strict, actual, where)
-        if accepted >= 20 and (fault not in PAGE_PROOF_FAULTS or window < PAGE):
-            _assert_prefix_in_bulk(strict, actual, accepted, where)
+        if accepted >= 20:
+            # At 97 bytes a window holds one line, so a refused batch costs one line.
+            proof = fault in PAGE_PROOF_FAULTS and window >= PAGE
+            _assert_prefix_in_bulk(strict, actual, accepted, where,
+                                   run_json._BULK_E_BATCH if proof else 0)
 
 
 # ------------------------------------------------------------------ controls
