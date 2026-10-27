@@ -32,9 +32,9 @@ env:
   PINEFORGE_REQUIRE_RELEASE_TAGS: "1"
 
 # The canon authz gate admits our events before any checkout.
-# Light jobs and per-leg aggregates use hosted ubuntu-24.04; amd64 CTest shards use
-# the post-merge GCP fleet, and arm64 keeps ubuntu-24.04-arm.
-# Preflight remains on the post-merge fleet. scripts/ci_preflight.py pins routing.
+# Light jobs and per-leg aggregates use hosted ubuntu-24.04; Linux proof jobs use
+# the gke-runners group with separate amd64 and arm64 size labels.
+# Jobs run directly in runner pods carrying the engine toolchain image and sudo.
 # Each verification sizes its parallelism to the runner that took it.
 # scripts/ci_preflight.py pins every runner and shard count. GitHub's platform
 # maximum remains the only job time limit; docs/ci.md records the policy.
@@ -157,7 +157,7 @@ jobs:
   preflight:
     needs: [authz, changes]
     if: ${{ always() && needs.authz.result == 'success' }}
-    runs-on: ["self-hosted","pf-gcp-post"]
+    runs-on: gke-8cpu-16gb-amd64
     env:
       PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64-16"]'
       PINEFORGE_VERIFIER_SLOW: ${{ needs.changes.result == 'success' && needs.changes.outputs.verifier_slow || 'true' }}
@@ -211,7 +211,7 @@ jobs:
   preflight-slow:
     needs: [authz, changes]
     if: ${{ always() && needs.authz.result == 'success' }}
-    runs-on: ["self-hosted","pf-gcp-post"]
+    runs-on: gke-8cpu-16gb-amd64
     steps:
       - name: Refuse an unauthorised run before anything else
         if: ${{ needs.authz.result != 'success' }}
@@ -258,7 +258,7 @@ jobs:
         shard: [1, 2, 3, 4]
 
     # Four shards divide roughly 15,300 measured CTest row-seconds.
-    runs-on: ["self-hosted","pf-gcp-post"]
+    runs-on: gke-32cpu-64gb-amd64
 
     steps:
       - name: Refuse an unauthorised run before anything else
@@ -359,7 +359,7 @@ jobs:
           - os: ubuntu-24.04
         build_type: [Debug]
         shard: [1, 2]
-    runs-on: ["self-hosted","pf-gcp-post"]
+    runs-on: gke-16cpu-32gb-amd64
 
     steps:
       - name: Refuse an unauthorised run before anything else
@@ -476,7 +476,7 @@ jobs:
           printf '%s\n' "shards: $SHARD_RESULT"
           [[ "$SHARD_RESULT" == "success" ]]
 
-  # Hosted arm64 cells run the same verification steps as the amd64 post fleet.
+  # GKE arm64 cells run the same verification steps as the amd64 post jobs.
   build-arm:
     name: build (ubuntu-24.04-arm, ${{ matrix.build_type }})
     needs: [authz, changes]
@@ -485,7 +485,7 @@ jobs:
       fail-fast: false
       matrix:
         build_type: [Release, Debug]
-    runs-on: ubuntu-24.04-arm
+    runs-on: gke-16cpu-32gb-arm64
 
     steps:
       - name: Refuse an unauthorised run before anything else
@@ -589,7 +589,7 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4]
-    runs-on: ["self-hosted","pf-gcp-post"]
+    runs-on: gke-32cpu-64gb-amd64
     env:
       ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:abort_on_error=1
       UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
@@ -691,7 +691,7 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2]
-    runs-on: ["self-hosted","pf-gcp-post"]
+    runs-on: gke-16cpu-32gb-amd64
     steps:
       - name: Refuse an unauthorised run before anything else
         if: ${{ needs.authz.result != 'success' }}
