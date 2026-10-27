@@ -74,7 +74,7 @@ scan:
   generated_files:
     - "tutorial/**/generated*.cpp"
 ceilings:
-  unreviewed: 1277
+  unreviewed: 1278
   pending-flat-memory: 188
 owners:
   - {name: "generated-cpp", globs: ["tutorial/**"]}
@@ -1287,6 +1287,7 @@ entries:
   - {id: "U1240", file: "include/pineforge/detail/id_pair_store.hpp", symbol: "memory_", ops: ["alloc", "grow"], container: "unresolved by the index: make_unique", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 361}
   - {id: "U1241", file: "include/pineforge/detail/id_pair_store.hpp", symbol: "memory_at_", ops: ["assign", "decl"], container: "const_iterator", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 134}
   - {id: "U1242", file: "include/pineforge/detail/id_pair_store.hpp", symbol: "next", ops: ["grow"], container: "unresolved by the index: next.resize(...)", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 577}
+  - {id: "U1524", file: "include/pineforge/detail/id_table_read_cache.hpp", symbol: "reset", ops: ["alloc"], container: "unresolved by the index: new ", owner: "engine-core", phase: "unclassified", state: "unreviewed", note: "CR-150 gate row for PR #577: one lazy page-buffer allocation (new (std::nothrow) unsigned char[slots_ * kPageBytes]) of the id-table read cache, made once per cache on its first cached read and kept; the size is fixed by construction (4 KiB pages, at most 16 lines per table, 64/64/32/32 KiB per adapter as P2-CX states), independent of bars, orders or ids. Entered unreviewed: this gate has no reviewed bound for the cache yet, the fixed size is the author's statement and is not proven here.", line: 99}
   - {id: "U1243", file: "include/pineforge/detail/journal_codec.hpp", symbol: "out", ops: ["grow"], container: "unresolved by the index: out.resize(...)", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 163}
   - {id: "U1244", file: "include/pineforge/detail/scratch_arena.hpp", symbol: "chunks", ops: ["decl"], container: "std::vector<std::uint32_t>", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 144}
   - {id: "U1245", file: "include/pineforge/detail/scratch_directory.hpp", symbol: "<temp:string>", ops: ["temp"], container: "unresolved by the index: std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 38}
