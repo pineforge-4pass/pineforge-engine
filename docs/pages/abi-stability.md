@@ -532,11 +532,15 @@ too. The corpus moves only where the excursion cells moved toward TradingView
 Stable `RunIdentity` / `RequestHandle` / `Birth` remain
 `native_order_v1`; request, core, and event values own `native_order_v8`.
 The 1.8.0 value epoch advances from the previous `native_order_v7` to `native_order_v8` <!-- verified HEAD -->
-because opening readbacks and core storage changed their layouts. Rebuild
+because those layouts changed between 1.6.x and 1.7.0 inside v7, and 1.7.0
+shipped without an epoch move; the new namespace separates every earlier native
+module, 1.7.0 ones included, from this release. Rebuild
 native C++ modules against the matching headers and archive; stale v7 order
 symbols are refused at link or load time. `PF_ABI_VERSION` advances from 4
-to 5, so the loader also refuses a strategy library stamped 4 with its ABI
-mismatch diagnostic before calling any strategy entry point.
+to 5 because the adapter and engine headers grew members and the C export
+`strategy_initial_capital` was added since 1.7.0, so the loader also refuses a
+strategy library stamped 4 with its ABI mismatch diagnostic before calling any
+strategy entry point.
 Terms receipts, attempted terms, deferred
 remaining/allowance state, and a staged FX-curve digest contribute through the
 native continuation hash. Lifecycle definitions, generations, obligations and

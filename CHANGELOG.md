@@ -30,11 +30,17 @@ unchanged except for two additive diagnostics keys, described below.
   advances from the previous `pineforge::native_order::native_order_v7` to <!-- verified HEAD -->
   `pineforge::native_order::native_order_v8`. The layouts of `BindOpenings`,
   `OpeningsClose`, `TargetObservation`, `CommandContext` and
-  `WorkingRequestCore` changed with opening readbacks and scratch-backed core
-  storage. Rebuild every C++ object that includes these headers and relink
+  `WorkingRequestCore` changed between 1.6.x and 1.7.0 inside the v7
+  namespace, and 1.7.0 shipped without moving it, so a module built against
+  1.6.x headers could not be told apart from one built against 1.7.0. The new
+  namespace separates them: every native C++ module built against earlier
+  headers, 1.7.0 included, is refused and must be rebuilt. Rebuild every C++
+  object that includes these headers and relink
   against the matching archive; stale v7 order symbols now fail to link or
   load. Identity types remain in `native_order_v1`. The C ABI version
-  advances from 4 to 5, so a strategy library stamped 4 is refused at load
+  advances from 4 to 5 because the adapter and engine headers grew members
+  and the C export `strategy_initial_capital` was added since 1.7.0, so a
+  strategy library stamped 4 is refused at load
   with the existing `pineforge ABI mismatch: .so reports 4, harness expects 5; rebuild.`
   typed diagnostic in the Python loader, before a strategy entry point is called.
   The caller-allocated C report and trade layouts do not grow.
