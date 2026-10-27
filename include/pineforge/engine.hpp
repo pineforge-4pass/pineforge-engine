@@ -2320,6 +2320,7 @@ public:
     // strategy.equity, which adds open profit on top of this (see the
     // sizing_equity formula and the equity-curve remark below, both
     // current_equity() + open_profit(...)).
+    double initial_capital() const;
     virtual double live_position_size() const {
         if (position_side_ == PositionSide::LONG) return position_qty_;
         if (position_side_ == PositionSide::SHORT) return -position_qty_;

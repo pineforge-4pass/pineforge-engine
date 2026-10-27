@@ -191,7 +191,8 @@ class ReportLib(selected.FakeLib):
     def __init__(self, plan, events, *, trade_field=None, bad_value=None,
                  net_profit=3.0, pnls=(10.0, -7.0), metric=None, curve_value=None,
                  curve_field=None,
-                 failure_field=None, equity_metrics=None, last_mark=None, dip=None):
+                 failure_field=None, equity_metrics=None, last_mark=None, dip=None,
+                 initial_capital_value=None):
         engine_failure = None
         if failure_field is not None:
             engine_failure = (
@@ -210,6 +211,12 @@ class ReportLib(selected.FakeLib):
         self.equity_metrics = equity_metrics
         self.last_mark = last_mark
         self.dip = dip
+        self.initial_capital_calls = 0
+        if initial_capital_value is not None:
+            def read_initial_capital(state):
+                self.initial_capital_calls += 1
+                return initial_capital_value
+            self.strategy_initial_capital = read_initial_capital
         self._trades = None
 
     def _run(self, *args):
@@ -641,6 +648,61 @@ def test_the_selected_route_gives_the_writer_the_anchor_and_the_ordinary_route_d
     plain = strict_line(harness.run("ordinary", **options).stdout)
     assert (plain["metrics"]["equity"]["calmar"] is None) == (dip is None)
     assert "annualization" not in plain["diagnostics"]
+
+
+def test_initial_capital_export_closes_the_unproven_overflow_gap(harness):
+    # The ordinary curve's first mark is not provably capital because a trade
+    # enters at bar 0. The export supplies the configured capital, so the
+    # writer can repeat the kernel's overflowing compounded calculation.
+    capital = selected.CAPITAL
+    final_equity = capital * 1e30
+    dip = capital * 0.5
+    cagr = simple_cagr(ONE_DAY_MS, capital, final_equity)
+    metrics = route_equity_metrics(cagr, final_equity, dip)
+    options = {
+        "pnls": (10.0,),
+        "net_profit": 0.0,
+        "last_mark": (selected.T + ONE_DAY_MS, final_equity),
+        "dip": dip,
+        "equity_metrics": metrics,
+    }
+
+    old = harness.run("ordinary", **options)
+    with_export = harness.run(
+        "ordinary", initial_capital_value=capital, **options)
+    old_document = strict_line(old.stdout)
+    new_document = strict_line(with_export.stdout)
+
+    assert not hasattr(old.library, "strategy_initial_capital")
+    assert old_document["metrics"]["equity"]["cagr"] == cagr
+    assert new_document["metrics"]["equity"]["cagr"] == cagr
+    assert "annualization" not in old_document["diagnostics"]
+    assert new_document["diagnostics"]["annualization"] == {
+        "cagr": OVERFLOW, "calmar": OVERFLOW}
+    assert with_export.library.initial_capital_calls == 1
+
+
+@pytest.mark.parametrize("pnls, expected", (
+    ((), {"cagr": OVERFLOW, "calmar": OVERFLOW}),
+    ((10.0,), {}),
+), ids=("provable-first-mark", "unprovable-first-mark"))
+def test_old_library_without_initial_capital_export_keeps_diagnostics(
+        harness, pnls, expected):
+    # No strategy_initial_capital attribute means the writer must retain the
+    # exact proof-based behavior used by older libraries.
+    capital = selected.CAPITAL
+    final_equity = capital * 1e30
+    dip = capital * 0.5
+    cagr = simple_cagr(ONE_DAY_MS, capital, final_equity)
+    result = harness.run(
+        "ordinary", pnls=pnls, net_profit=0.0,
+        last_mark=(selected.T + ONE_DAY_MS, final_equity), dip=dip,
+        equity_metrics=route_equity_metrics(cagr, final_equity, dip))
+    document = strict_line(result.stdout)
+
+    assert not hasattr(result.library, "strategy_initial_capital")
+    assert document["metrics"]["equity"]["cagr"] == cagr
+    assert document["diagnostics"].get("annualization", {}) == expected
 
 
 # (span_ms, capital, dip, final_equity, form, flags): the cagr form the rule gives a curve of two

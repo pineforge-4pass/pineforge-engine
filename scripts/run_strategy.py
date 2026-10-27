@@ -2394,6 +2394,9 @@ class Strategy:
         if hasattr(L, "strategy_current_equity"):
             L.strategy_current_equity.argtypes = [ctypes.c_void_p]
             L.strategy_current_equity.restype = ctypes.c_double
+        if hasattr(L, "strategy_initial_capital"):
+            L.strategy_initial_capital.argtypes = [ctypes.c_void_p]
+            L.strategy_initial_capital.restype = ctypes.c_double
         if hasattr(L, "strategy_script_bars_processed"):
             L.strategy_script_bars_processed.argtypes = [ctypes.c_void_p]
             L.strategy_script_bars_processed.restype = ctypes.c_int64

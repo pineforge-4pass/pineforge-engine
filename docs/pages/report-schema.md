@@ -649,6 +649,9 @@ same key. `calmar` is computed from that `cagr` and carries the same string
 under `diagnostics.annualization.calmar` whenever it is not null. `calmar`,
 `sharpe_bar` and `sortino_bar` are not null on account of the span, and
 `sharpe_bar` and `sortino_bar` have no reason key.
+When the library exports `strategy_initial_capital`, the writer uses its finite
+positive result as `E0`; an older library keeps the proof-based fallback
+described below.
 
 The exact public paths, native members and reason keys are, with `E` the final
 equity (the last equity-curve mark), `E0` the initial capital and
@@ -739,14 +742,16 @@ falls from 10,000 to 9,800 and rises to 10,800, so `cagr` is
 The report writer names the form from the curve it holds: under one day a finite
 `cagr` on a positive span is flagged, and from one day on it repeats the kernel's
 compounded arithmetic on the curve's marks and flags the run when that value
-is not finite. The initial capital it needs is the first mark only where the run
-proves it (the selected-window anchor; in an ordinary run a first mark with no
-open profit and no trade entered at it); with no proof it names nothing. In that
-case (a run of one day or more whose compounded form is not finite, with an
-unproven first mark) the reported `cagr` is still the simple proportional value
-the kernel computed; only the `simple_proportional_overflow` flag is absent. It adds
-the `calmar` key beside the `cagr` key from `metrics.equity.calmar` alone: the
-same string when that value is not null, no key when it is null.
+is not finite. When the library exports `strategy_initial_capital`, the writer
+calls it once for the run's handle and uses its finite positive result as the
+engine's stored `E0`; the first-mark proof is no longer needed. An older
+library without that export, or an invalid exported value, keeps the existing
+proof: the selected-window anchor or an ordinary first mark with no open profit
+and no trade entered at bar 0. On that compatibility path, a run of one day or
+more with an unproven first mark still reports the kernel's simple proportional
+`cagr` without the `simple_proportional_overflow` flag. It adds the `calmar` key
+beside the `cagr` key from `metrics.equity.calmar` alone: the same string when
+that value is not null, no key when it is null.
 
 `sharpe_bar` / `sortino_bar` use their observed-density construction on every
 span, and `sharpe_tv` / `sortino_tv` retain calendar-month
