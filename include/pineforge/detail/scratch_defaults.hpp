@@ -15,11 +15,57 @@ namespace pineforge::detail {
 // profile. This does not bound the number or heap size of pending orders.
 inline constexpr std::size_t kMaxResidentCohorts = 65536;
 
-// Compile-time hard cap and fixed fallback share the policy above. Future
-// parameter sizing supplies requested here; no formula or setting yet.
+// The floor is the compatibility default. A sized run may raise admission
+// through the separately named cap below.
+inline constexpr std::size_t kMaxResidentCohortsCap = 1048576;
+
 inline constexpr std::size_t resident_cohort_limit(
     std::size_t requested = kMaxResidentCohorts) noexcept {
-    return requested < kMaxResidentCohorts ? requested : kMaxResidentCohorts;
+    return requested < kMaxResidentCohorts
+        ? kMaxResidentCohorts
+        : requested > kMaxResidentCohortsCap ? kMaxResidentCohortsCap : requested;
+}
+
+struct ResidentCohortSizing {
+    std::size_t limit = kMaxResidentCohorts;
+    std::uint64_t need = 0;
+    bool declared_over_cap = false;
+};
+
+constexpr std::uint64_t saturating_add(std::uint64_t left,
+                                       std::uint64_t right) noexcept {
+    const auto maximum = std::numeric_limits<std::uint64_t>::max();
+    return right > maximum - left ? maximum : left + right;
+}
+
+constexpr std::uint64_t saturating_multiply(std::uint64_t left,
+                                            std::uint64_t right) noexcept {
+    if (left != 0 && right > std::numeric_limits<std::uint64_t>::max() / left)
+        return std::numeric_limits<std::uint64_t>::max();
+    return left * right;
+}
+
+// `declared` records that the caller supplied a deliberate demand estimate.
+// The default-derived estimate is still useful for choosing the cap, but it
+// must not reject a long run merely because bars * the default fresh rate is
+// above that cap.
+inline constexpr ResidentCohortSizing resident_cohort_sizing(
+    std::uint64_t bars, std::uint64_t fresh_per_bar = 1,
+    std::uint64_t literals = 0, std::uint64_t fixed_fresh = 0,
+    bool declared = false) noexcept {
+    const auto per_bar = saturating_multiply(bars, fresh_per_bar);
+    const auto need = saturating_add(saturating_add(per_bar, literals), fixed_fresh);
+    const auto cap = static_cast<std::uint64_t>(kMaxResidentCohortsCap);
+    const auto request = need > cap ? kMaxResidentCohortsCap
+                                    : static_cast<std::size_t>(need);
+    return {resident_cohort_limit(request), need, declared && need > cap};
+}
+
+inline void require_resident_cohort_sizing(const ResidentCohortSizing& sizing) {
+    if (!sizing.declared_over_cap) return;
+    throw ScratchCapacityError(ScratchResource::cohort,
+        "resident cohort limit " + scratch_limit_number(sizing.limit)
+        + " rows is below declared need " + scratch_limit_number(sizing.need));
 }
 
 // P0 is a POLICY admission tier, not a measured bound or a proof that a
