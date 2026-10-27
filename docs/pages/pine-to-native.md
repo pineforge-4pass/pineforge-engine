@@ -669,7 +669,7 @@ classifies its own rows by order family instead. Which leg closed a row is its
 | `barmerge.lookahead_off` | `NativeTimeframeSubscription::lookahead` native_run_spec.hpp:494 set false | `pf_native_subscription_v1::lookahead` = `PF_NATIVE_LOOKAHEAD_AT_COMPLETION` native_c_api.h:806 | `native_htf_strategy.cpp` | The default and the honest one: a bucket is delivered when it completes. |
 | `barmerge.lookahead_on` | `NativeTimeframeSubscription::lookahead` native_run_spec.hpp:494 set true | `pf_native_subscription_v1::lookahead` = `PF_NATIVE_LOOKAHEAD_AT_FIRST_INPUT` native_c_api.h:808 | `tests/test_native_htf_subscriptions.cpp` | Delivers a bucket's final values on the input that held its first bar. It is lookahead: use it to reproduce a chart, never to trade. |
 | `request.currency_rate()` | none — no FX data feed | `strategy_configure_native_fx_curve_v1` pineforge.h:551 | `native_fx_roll_strategy.cpp` / `tests/test_native_fx_curve.cpp` | The kernel converts with the curve you stage; it fetches nothing. |
-| `request.dividends()` | none — no fundamentals feed | — | — | For a Pine script, pineforge-codegen 1.0.0 (0.10.4 rejects the call at transpile) reads TradingView's recorded answers by request key from the source host (`strategy_set_recorded_series` pineforge.h:1672), reads `na` when the value reaches only plots and alerts, and otherwise stops the run where the value is read if nothing is recorded. A native host fetches and models it itself. |
+| `request.dividends()` | none — no fundamentals feed | — | — | For a Pine script, pineforge-codegen 1.0.0 (0.10.4 rejects the call at transpile) reads TradingView's recorded answers by request key from the source host (`strategy_set_recorded_series` pineforge.h:1679), reads `na` when the value reaches only plots and alerts, and otherwise stops the run where the value is read if nothing is recorded. A native host fetches and models it itself. |
 | `request.earnings()` | none — no fundamentals feed | — | — | Same. |
 | `request.financial()` | none — no fundamentals feed | — | — | Same. |
 | `request.splits()` | none — no corporate-actions feed | — | — | Same. |
@@ -1048,7 +1048,8 @@ pineforge.h:647, `strategy_set_override` pineforge.h:657,
 pineforge.h:598, `run_backtest_full` pineforge.h:615 and `report_free`
 pineforge.h:629. It adds **no** new C symbol: every remaining runtime export —
 `strategy_configure_native_v1` pineforge.h:515, the `strategy_stream_*` family
-c_abi.cpp:742-863, `strategy_execution_contract` pineforge.h:465 — already
+c_abi.cpp:743-864, `strategy_execution_contract` pineforge.h:465,
+`strategy_initial_capital` — already
 lives in the engine, and the generated `strategy_create` references
 `pf_abi_version()` so a static link keeps that object.
 

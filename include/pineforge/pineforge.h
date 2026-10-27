@@ -1437,6 +1437,13 @@ PF_API double strategy_position_size(pf_strategy_t s);
  *  last point of `pf_report_t::equity_curve`, which does). NaN when @p s is
  *  NULL. */
 PF_API double strategy_current_equity(pf_strategy_t s);
+/** ABI v4 live-runtime surface (1.8.0): the configured run's initial capital,
+ *  before realized or open profit. Includes staged native specs before begin,
+ *  and generated defaults or overrides once the source host configures the run.
+ *  NaN when @p s is NULL or the read raises, matching
+ *  #strategy_current_equity's invalid-handle sentinel so a failed query is
+ *  not mistaken for a capital value. */
+PF_API double strategy_initial_capital(pf_strategy_t s);
 /** Task 9: total SCRIPT bars dispatched by the most recent run() (mirrors
  *  `pf_report_t::script_bars_processed`, engine_report.cpp) -- includes a
  *  stream's warmup leg and every realtime tick-driven bar dispatched
