@@ -247,7 +247,7 @@ jobs:
           if-no-files-found: warn
 
   build:
-    name: build-shard (${{ matrix.platform.os }}, ${{ matrix.build_type }}, ${{ matrix.shard }}/4)
+    name: build-shard (${{ matrix.platform.os }}, ${{ matrix.build_type }}, ${{ matrix.shard }}/6)
     # Proof jobs follow authz and classification alongside preflight. Only a
     # successful docs-only answer skips scheduling.
     needs: [authz, changes]
@@ -258,9 +258,9 @@ jobs:
         platform:
           - os: ubuntu-24.04
         build_type: [Release]
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6]
 
-    # Four 16-core shards divide roughly 15,300 measured CTest row-seconds.
+    # Six 16-core shards balance committed cost hints after hashing unknown rows.
     runs-on: pf-linux-x64-16
 
     steps:
@@ -330,7 +330,7 @@ jobs:
           PINEFORGE_RUNTIME_BUDGET_CANDIDATE_ONLY: '0'
         if: ${{ needs.authz.result == 'success' }}
         run: |
-          python3 scripts/ci_verify.py ${{ matrix.build_type == 'Release' && 'release' || 'debug' }} --build-dir build --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache --ctest-shard ${{ matrix.shard }}/4
+          python3 scripts/ci_verify.py ${{ matrix.build_type == 'Release' && 'release' || 'debug' }} --build-dir build --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache --ctest-shard ${{ matrix.shard }}/6
 
       - name: Stage and summarize diagnostics
         if: ${{ always() && needs.authz.result == 'success' }}
@@ -340,7 +340,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: ci-diagnostics-${{ matrix.platform.os }}-${{ matrix.build_type }}-shard-${{ matrix.shard }}-of-4
+          name: ci-diagnostics-${{ matrix.platform.os }}-${{ matrix.build_type }}-shard-${{ matrix.shard }}-of-6
           path: ci-diagnostics/
           if-no-files-found: warn
 
@@ -352,7 +352,7 @@ jobs:
           key: ${{ steps.ccache-restore.outputs.cache-primary-key }}
 
   build-debug:
-    name: build-shard (${{ matrix.platform.os }}, ${{ matrix.build_type }}, ${{ matrix.shard }}/2)
+    name: build-shard (${{ matrix.platform.os }}, ${{ matrix.build_type }}, ${{ matrix.shard }}/3)
     needs: [authz, changes]
     if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
     strategy:
@@ -361,7 +361,7 @@ jobs:
         platform:
           - os: ubuntu-24.04
         build_type: [Debug]
-        shard: [1, 2]
+        shard: [1, 2, 3]
     runs-on: pf-linux-x64-16
 
     steps:
@@ -418,7 +418,7 @@ jobs:
           PINEFORGE_RUNTIME_BUDGET_CANDIDATE_ONLY: '0'
         if: ${{ needs.authz.result == 'success' }}
         run: |
-          python3 scripts/ci_verify.py ${{ matrix.build_type == 'Release' && 'release' || 'debug' }} --build-dir build --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache --ctest-shard ${{ matrix.shard }}/2
+          python3 scripts/ci_verify.py ${{ matrix.build_type == 'Release' && 'release' || 'debug' }} --build-dir build --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache --ctest-shard ${{ matrix.shard }}/3
 
       - name: Stage and summarize diagnostics
         if: ${{ always() && needs.authz.result == 'success' }}
@@ -428,7 +428,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: ci-diagnostics-${{ matrix.platform.os }}-${{ matrix.build_type }}-shard-${{ matrix.shard }}-of-2
+          name: ci-diagnostics-${{ matrix.platform.os }}-${{ matrix.build_type }}-shard-${{ matrix.shard }}-of-3
           path: ci-diagnostics/
           if-no-files-found: warn
 

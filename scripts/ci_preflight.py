@@ -130,17 +130,17 @@ POST_BUILD_STRATEGY = ('    strategy:\n'
                        '        platform:\n'
                        '          - os: ubuntu-24.04\n'
                        '        build_type: [Release]\n'
-                       '        shard: [1, 2, 3, 4]\n')
+                       '        shard: [1, 2, 3, 4, 5, 6]\n')
 POST_DEBUG_BUILD_STRATEGY = POST_BUILD_STRATEGY.replace(
     'build_type: [Release]', 'build_type: [Debug]'
-).replace('shard: [1, 2, 3, 4]', 'shard: [1, 2]')
+).replace('shard: [1, 2, 3, 4, 5, 6]', 'shard: [1, 2, 3]')
 POST_ARM_BUILD_STRATEGY = ('    strategy:\n'
                           '      fail-fast: false\n'
                           '      matrix:\n'
                           '        build_type: [Release, Debug]\n')
 BUILD_NAME = 'build (${{ matrix.platform.os }}, ${{ matrix.build_type }})'
 POST_ARM_BUILD_NAME = 'build (ubuntu-24.04-arm, ${{ matrix.build_type }})'
-POST_SHARDS = {'build': 4, 'build-debug': 2, 'sanitizers': 4, 'kernel-only': 2}
+POST_SHARDS = {'build': 6, 'build-debug': 3, 'sanitizers': 4, 'kernel-only': 2}
 POST_LEG_GATES = {
     'build-release-gate': ('build', 'build (ubuntu-24.04, Release)'),
     'build-debug-gate': ('build-debug', 'build (ubuntu-24.04, Debug)'),
@@ -174,7 +174,7 @@ NATIVE_STRATEGY = '''    strategy:
 NATIVE_SHARD_STRATEGY = '''    strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
         include:
           - profile: native
             build_dir: build-live
@@ -195,7 +195,7 @@ NATIVE_SHARD_PROOF_STEP = '''      - name: Record native shard proof
           if (summary.get("profile") != "native" or summary.get("status") != "passed"
                   or type(summary.get("exitCode")) is not int or summary["exitCode"] != 0
                   or summary.get("failures") != []
-                  or summary.get("ctestShard") != {"index": index, "count": 4}):
+                  or summary.get("ctestShard") != {"index": index, "count": 8}):
               raise SystemExit("native shard summary did not pass")
           with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
               output.write(f"shard_{index}=success\\n")
@@ -208,6 +208,10 @@ NATIVE_SHARD_GATE_STEP = '''      - name: Require every native shard to have pas
           SHARD_2_RESULT: ${{ needs.native-live-shards.outputs.shard_2 }}
           SHARD_3_RESULT: ${{ needs.native-live-shards.outputs.shard_3 }}
           SHARD_4_RESULT: ${{ needs.native-live-shards.outputs.shard_4 }}
+          SHARD_5_RESULT: ${{ needs.native-live-shards.outputs.shard_5 }}
+          SHARD_6_RESULT: ${{ needs.native-live-shards.outputs.shard_6 }}
+          SHARD_7_RESULT: ${{ needs.native-live-shards.outputs.shard_7 }}
+          SHARD_8_RESULT: ${{ needs.native-live-shards.outputs.shard_8 }}
         run: |
           printf 'native shards: %s\\n' "$SHARDS_RESULT"
           if test "$SHARDS_RESULT" = cancelled; then
@@ -219,6 +223,10 @@ NATIVE_SHARD_GATE_STEP = '''      - name: Require every native shard to have pas
           test "$SHARD_2_RESULT" = success
           test "$SHARD_3_RESULT" = success
           test "$SHARD_4_RESULT" = success
+          test "$SHARD_5_RESULT" = success
+          test "$SHARD_6_RESULT" = success
+          test "$SHARD_7_RESULT" = success
+          test "$SHARD_8_RESULT" = success
 '''
 NATIVE_GATE_STEP = '''      - name: Require every native profile to have passed
         env:
@@ -1542,9 +1550,9 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                 findings.append(f'{name} job {job} must size its parallelism to the runner')
     for name, job, strategy, build_name, population in (
             ('ci.yml', 'build', BUILD_STRATEGY, BUILD_NAME, 'only Ubuntu Release on pull_request'),
-            ('ci-post.yml', 'build', POST_BUILD_STRATEGY, post_build_name(4),
+            ('ci-post.yml', 'build', POST_BUILD_STRATEGY, post_build_name(6),
              'only Ubuntu Release shards on full events'),
-            ('ci-post.yml', 'build-debug', POST_DEBUG_BUILD_STRATEGY, post_build_name(2),
+            ('ci-post.yml', 'build-debug', POST_DEBUG_BUILD_STRATEGY, post_build_name(3),
              'only Ubuntu Debug shards on full events'),
             ('ci-post.yml', 'build-arm', POST_ARM_BUILD_STRATEGY, POST_ARM_BUILD_NAME,
              'only hosted Linux arm64 Release/Debug cells on full events')):
@@ -2029,8 +2037,8 @@ def native_workflow_findings(native: str, curl_action: str | None = None) -> lis
     if (_job_block(shards, 'strategy') != _code(NATIVE_SHARD_STRATEGY)
             or _needs(shards) != ['authz'] or _job_values(shards, 'if')
             or _job_values(shards, 'continue-on-error')
-            or _job_values(shards, 'name') != ['native-live-shard (${{ matrix.profile }}, ${{ matrix.shard }}/4)']):
-        findings.append('native-live-shards must run exactly native shards 1..4 with fail-fast false')
+            or _job_values(shards, 'name') != ['native-live-shard (${{ matrix.profile }}, ${{ matrix.shard }}/8)']):
+        findings.append('native-live-shards must run exactly native shards 1..8 with fail-fast false')
     aggregate_steps = _steps(aggregate)
     if (_needs(aggregate) != ['authz', 'native-live-shards']
             or _job_values(aggregate, 'name') != ['native-live (native)']
@@ -2039,7 +2047,7 @@ def native_workflow_findings(native: str, curl_action: str | None = None) -> lis
             or len(aggregate_steps) != 2
             or _code(aggregate_steps[0]) != _code(AUTHZ_REFUSE_STEP)
             or _code(aggregate_steps[-1]) != _code(NATIVE_SHARD_GATE_STEP)):
-        findings.append('native-live-native must fail unless all four native shard proofs succeed')
+        findings.append('native-live-native must fail unless all eight native shard proofs succeed')
     gate_steps = _steps(gate)
     if (set(jobs) != {'authz', 'native-live', 'native-live-shards', 'native-live-native', 'native-live-gate'}
             or _needs(gate) != ['authz', 'native-live', 'native-live-native']
@@ -2051,7 +2059,7 @@ def native_workflow_findings(native: str, curl_action: str | None = None) -> lis
     shard_steps = _steps(shards)
     proof = _step_named(shard_steps, '        id: shard-proof')
     outputs = ['    outputs:'] + [
-        f'      shard_{index}: ${{{{ steps.shard-proof.outputs.shard_{index} }}}}' for index in range(1, 5)]
+        f'      shard_{index}: ${{{{ steps.shard-proof.outputs.shard_{index} }}}}' for index in range(1, 9)]
     if (_job_block(shards, 'outputs') != outputs
             or _code(proof) != _code(NATIVE_SHARD_PROOF_STEP)
             or not shard_steps or proof != shard_steps[-1]):
@@ -2176,7 +2184,7 @@ def _native_profile_job_findings(job: str, name: str, *, sharded: bool) -> list[
                 '--generator Ninja --curl-dir "${{ steps.curl-deps.outputs.curl-dir }}" '
                 '--ccache')
     if sharded:
-        expected += ' --require-websocket ' + NATIVE_EXCLUSION + ' --ctest-shard ${{ matrix.shard }}/4'
+        expected += ' --require-websocket ' + NATIVE_EXCLUSION + ' --ctest-shard ${{ matrix.shard }}/8'
     if (command != [expected]
             or _step_values(verify, 'if')
             or _step_values(verify, 'timeout-minutes')
@@ -2191,7 +2199,7 @@ def _native_profile_job_findings(job: str, name: str, *, sharded: bool) -> list[
         findings.append(f'{name} must explicitly save compatible compiler objects after diagnostics on normal test failure')
     artifact = 'ci-diagnostics-native-live-${{ matrix.profile }}'
     if sharded:
-        artifact += '-${{ matrix.shard }}of4'
+        artifact += '-${{ matrix.shard }}of8'
     if (_step_values(collect, 'if') != ['always()']
             or _step_values(upload, 'if') != ['always()']
             or '--build-dir ${{ matrix.build_dir }} --profile ${{ matrix.profile }}' not in collect

@@ -1329,6 +1329,121 @@ class RowFloorConfig(unittest.TestCase):
             for index, part in enumerate(before):
                 self.assertTrue(set(part) <= set(after[index]), (count, index))
 
+    def test_ctest_cost_partition_deals_longest_rows_first(self):
+        # Hash-only gives (('c', 'd'), ('a', 'b')); ascending costs give
+        # (('b', 'd'), ('a', 'c')). LPT gives two loads of 13.
+        costs = {'a': 8, 'b': 7, 'c': 6, 'd': 5}
+        with mock.patch.object(ci_verify, 'ctest_shard_costs',
+                               return_value=costs, create=True):
+            self.assertEqual(ci_verify.ctest_partitions(tuple('dcba'), 2),
+                             (('a', 'd'), ('b', 'c')))
+
+    def test_ctest_cost_partition_breaks_cost_and_load_ties_lexically_then_by_index(self):
+        costs = {'d': 3, 'c': 3, 'b': 9, 'a': 9}
+        with mock.patch.object(ci_verify, 'ctest_shard_costs',
+                               return_value=costs, create=True):
+            for names in (tuple('dcba'), tuple('abcd')):
+                self.assertEqual(ci_verify.ctest_partitions(names, 2),
+                                 (('a', 'c'), ('b', 'd')))
+
+    def test_ctest_cost_partition_preloads_three_seconds_per_unknown_row(self):
+        # SHA-256(c/d) are even: their combined assumed load is six.
+        # a(8) therefore goes to shard 2, then b(7) to shard 1.
+        with mock.patch.object(ci_verify, 'ctest_shard_costs',
+                               return_value={'a': 8, 'b': 7}, create=True):
+            self.assertEqual(ci_verify.ctest_partitions(tuple('dcba'), 2),
+                             (('b', 'c', 'd'), ('a',)))
+
+    def test_ctest_cost_table_is_canonical_positive_integer_seconds(self):
+        path = ROOT / 'scripts/ci_shard_costs.json'
+        self.assertTrue(path.is_file(), 'the committed scheduling hints are required')
+        text = path.read_text(encoding='utf-8')
+        table = json.loads(text)
+        self.assertEqual(set(table), {'version', 'unit', 'costs'})
+        self.assertIs(type(table['version']), int)
+        self.assertEqual(table['version'], 1)
+        self.assertEqual(table['unit'], 'seconds')
+        self.assertTrue(table['costs'])
+        for name, seconds in table['costs'].items():
+            with self.subTest(name=name):
+                self.assertIsNotNone(re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.+-]*', name))
+                self.assertIs(type(seconds), int)
+                self.assertGreaterEqual(seconds, 1)
+        self.assertEqual(text, json.dumps(table, sort_keys=True, indent=2) + '\n')
+
+    def test_ctest_real_cost_table_union_and_determinism_for_two_through_eight_shards(self):
+        costs = json.loads((ROOT / 'scripts/ci_shard_costs.json').read_text())['costs']
+        names = (*costs, *(f'unknown_{index:03}' for index in range(300)))
+        for count in range(2, 9):
+            with self.subTest(count=count):
+                parts = ci_verify.ctest_partitions(names, count)
+                flat = [name for part in parts for name in part]
+                self.assertEqual(sorted(flat), sorted(names))
+                self.assertEqual(len(flat), len(set(flat)))
+                self.assertEqual(len(parts), count)
+                self.assertTrue(all(parts))
+                self.assertEqual(ci_verify.ctest_partitions(names, count), parts)
+                self.assertEqual(ci_verify.ctest_partitions(tuple(reversed(names)), count), parts)
+                for index, part in enumerate(parts):
+                    for name in part:
+                        if name not in costs:
+                            self.assertEqual(
+                                int.from_bytes(hashlib.sha256(name.encode()).digest(), 'big')
+                                % count, index)
+
+    def test_ctest_release_measured_costs_balance_at_six_shards(self):
+        costs = json.loads((ROOT / 'scripts/ci_shard_costs.json').read_text())['costs']
+        # Release rows measured at least 20 seconds in the four timing logs.
+        names = tuple('''
+            test_adapter_auxiliary_disk test_adapter_live_state_scaling
+            test_adapter_lookup_index_scaling test_broker_state_hash_coverage_mutations
+            test_chart_day_memo test_ci_preflight_slice_1 test_ci_preflight_slice_2
+            test_ci_preflight_slice_3 test_ci_preflight_slice_4 test_ci_preflight_slice_5
+            test_ci_preflight_slice_6 test_ci_preflight_slice_7 test_ci_preflight_slice_8
+            test_ci_verify_slice_1 test_ci_verify_slice_2 test_ci_verify_slice_3
+            test_ci_verify_slice_4 test_ci_verify_slice_5 test_ci_verify_slice_6
+            test_ci_verify_slice_7 test_ci_verify_slice_8 test_corpus_subset_sink_cr150
+            test_cr150_cmake_d_controls test_id_pair_ordered_fold test_kernel_residuals
+            test_ledger_history_scale_400k test_multi_day_periods_bounded
+            test_native_calendar_memo test_native_command_after_slice_1
+            test_native_command_after_slice_2 test_native_command_after_slice_3
+            test_native_command_after_slice_8 test_native_cpp_versions
+            test_native_direct_mutation test_native_lookup_memos
+            test_native_match_winner_cost_flat test_native_script_bucket_completions
+            test_o1_store test_open_report_rows_flat_slice_2 test_open_report_rows_flat_slice_4
+            test_parent_terminal_scratch test_position_tail_scale_out_100k
+            test_position_tail_summary_scale test_private_fixture_reads_controls
+            test_run_json_bounded_transport test_run_json_selected_sink_memory_l9s
+            test_selected_metrics_l17b test_selected_window_ownership_manifest_controls_shard_1of4
+            test_selected_window_ownership_manifest_controls_shard_2of4
+            test_selected_window_ownership_manifest_controls_shard_3of4
+            test_selected_window_ownership_manifest_controls_shard_4of4
+            test_sink_finalize test_sink_to_json test_two_world_registration_controls
+        '''.split())
+        self.assertTrue(set(names) <= set(costs))
+        parts = ci_verify.ctest_partitions(names, 6)
+        loads = [sum(costs[name] for name in part) for part in parts]
+        largest_row = max(costs[name] for name in names)
+        self.assertTrue(max(loads) * 6 * 100 <= sum(loads) * 115
+                        or max(loads) == largest_row, loads)
+
+    def test_ctest_stale_cost_entry_preserves_partition_and_union_proof(self):
+        names = tuple('abcd')
+        costs = {'a': 8, 'b': 7, 'c': 6, 'd': 5}
+        inventory = (*names, *(f'public_{index:04}' for index in range(1024)),
+                     *SHARD_SLOW_FIXTURE_NAMES)
+        with mock.patch.object(ci_verify, 'ctest_shard_costs',
+                               return_value=costs, create=True) as hints:
+            before = ci_verify.ctest_partitions(names, 2)
+            summaries = self.shard_summaries(2, inventory=inventory)
+            self.assertIsNone(ci_verify.validate_ctest_shard_union(summaries))
+            hints.return_value = {**costs, 'unregistered_row': 1000000}
+            self.assertEqual(ci_verify.ctest_partitions(names, 2), before)
+            changed = self.shard_summaries(2, inventory=inventory, fresh=True)
+            self.assertEqual([row['ctestRan'] for row in changed],
+                             [row['ctestRan'] for row in summaries])
+            self.assertIsNone(ci_verify.validate_ctest_shard_union(changed))
+
     def test_ctest_partition_refuses_duplicate_names_empty_rows_and_empty_shards(self):
         for names, count in ((('a', 'a'), 1), ((), 1), (('a',), 2)):
             with self.subTest(names=names, count=count):
@@ -1471,6 +1586,21 @@ class RowFloorConfig(unittest.TestCase):
     def test_native_live_shards_cover_94_rows_and_use_the_profile_test_directory(self):
         inventory = self.native_live_inventory()
         self.assertEqual(len(inventory), 94)
+        costs = json.loads((ROOT / 'scripts/ci_shard_costs.json').read_text())['costs']
+        # Independent trace: the 85 unknown rows preload [69,45,78,63].
+        # Deal costs 128,57,56,55,54,50,43,24,17 to shards 2,4,1,3,4,1,3,2,4.
+        costed = (
+            ('native_live_equivalence_e2e_bracket-trailing-activation-offset-path-01',
+             'native_live_equivalence_e2e_order-stop-entry-touch-boundary-01'),
+            ('native_live_equivalence_e2e_ta-rsi14-cross-50-01', 'native_live_routing_e2e'),
+            ('native_live_equivalence_e2e_order-entry-implicit-reversal-exit-01',
+             'native_live_equivalence_e2e_order-keystone-limit-replace-01'),
+            ('native_live_equivalence_e2e_order-harbor-stop-limit-01',
+             'native_live_equivalence_e2e_order-tranche-partial-market-close-01',
+             'native_live_service_e2e'),
+        )
+        self.assertEqual({name for part in costed for name in part},
+                         set(inventory) & set(costs))
         for profile in ('native', 'live-sanitizers', 'live-tsan'):
             with self.subTest(profile=profile):
                 extra = (('--require-websocket',) if profile == 'native'
@@ -1479,9 +1609,10 @@ class RowFloorConfig(unittest.TestCase):
                     4, profile=profile, inventory=inventory, labelled=(), extra=extra)
                 flat = []
                 for index, summary in enumerate(summaries, 1):
-                    expected = sorted(name for name in inventory if
-                                      int(hashlib.sha256(name.encode()).hexdigest(), 16) % 4
-                                      == index - 1)
+                    expected = sorted((*costed[index - 1],
+                                       *(name for name in inventory if name not in costs
+                                         and int(hashlib.sha256(name.encode()).hexdigest(), 16)
+                                         % 4 == index - 1)))
                     self.assertEqual(summary['ctestRan'], expected)
                     self.assertEqual(summary['ctestRegisteredNames'], sorted(inventory))
                     self.assertEqual(summary['ctestUnshardedSelectedNames'], sorted(inventory))

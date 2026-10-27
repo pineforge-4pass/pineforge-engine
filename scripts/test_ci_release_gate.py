@@ -2306,8 +2306,8 @@ class WorkflowPinTests(unittest.TestCase):
         self.assertNotIn("build-macos", jobs, "post-merge verification must be Linux-only")
         expanded = []
         for job_id, aggregate, build_type, count in (
-                ("build", "build-release-gate", "Release", 4),
-                ("build-debug", "build-debug-gate", "Debug", 2)):
+                ("build", "build-release-gate", "Release", 6),
+                ("build-debug", "build-debug-gate", "Debug", 3)):
             self.assertIn(aggregate, jobs, "each amd64 leg must keep its old aggregate check")
             self.assertIn(job_id, jobs, "each aggregate needs its own shard matrix")
             body = _without_comments(jobs[job_id])
@@ -2369,7 +2369,7 @@ class WorkflowPinTests(unittest.TestCase):
     def test_ci_post_required_build_jobs_reject_dropped_shard(self):
         workflow = (ROOT / ".github/workflows/ci-post.yml").read_text()
         self.ci_post_build_names(_jobs(workflow))
-        for job_id, count in (("build", 4), ("build-debug", 2)):
+        for job_id, count in (("build", 6), ("build-debug", 3)):
             with self.subTest(job=job_id):
                 jobs = _jobs(workflow)
                 before = "        shard: [" + ", ".join(str(i) for i in range(1, count + 1)) + "]"

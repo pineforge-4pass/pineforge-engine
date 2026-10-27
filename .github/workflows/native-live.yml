@@ -197,13 +197,13 @@ jobs:
           key: ${{ steps.ccache-restore.outputs.cache-primary-key }}
 
   native-live-shards:
-    name: native-live-shard (${{ matrix.profile }}, ${{ matrix.shard }}/4)
+    name: native-live-shard (${{ matrix.profile }}, ${{ matrix.shard }}/8)
     needs: [authz]
     runs-on: pf-linux-x64-16
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
         include:
           - profile: native
             build_dir: build-live
@@ -212,6 +212,10 @@ jobs:
       shard_2: ${{ steps.shard-proof.outputs.shard_2 }}
       shard_3: ${{ steps.shard-proof.outputs.shard_3 }}
       shard_4: ${{ steps.shard-proof.outputs.shard_4 }}
+      shard_5: ${{ steps.shard-proof.outputs.shard_5 }}
+      shard_6: ${{ steps.shard-proof.outputs.shard_6 }}
+      shard_7: ${{ steps.shard-proof.outputs.shard_7 }}
+      shard_8: ${{ steps.shard-proof.outputs.shard_8 }}
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache/${{ matrix.profile }}
     steps:
@@ -235,7 +239,7 @@ jobs:
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y cmake ninja-build libeigen3-dev tzdata-legacy libsqlite3-dev libssl-dev zlib1g-dev ccache git-lfs strace
 
-      # Each shard has its own save key; four cold builds cannot reserve one key.
+      # Each shard has its own save key; eight cold builds cannot reserve one key.
       - name: Restore ccache
         id: ccache-restore
         if: ${{ !inputs.cold_cache }}
@@ -259,9 +263,9 @@ jobs:
           ccache --show-stats > "${{ matrix.build_dir }}/ccache-before.log"
           ccache --zero-stats
 
-      - name: Verify (${{ matrix.profile }}, ${{ matrix.shard }}/4)
+      - name: Verify (${{ matrix.profile }}, ${{ matrix.shard }}/8)
         id: verify
-        run: python3 scripts/ci_verify.py ${{ matrix.profile }} --build-dir ${{ matrix.build_dir }} --jobs "$(getconf _NPROCESSORS_ONLN)" --generator Ninja --curl-dir "${{ steps.curl-deps.outputs.curl-dir }}" --ccache --require-websocket ${{ matrix.profile == 'native' && inputs.exclude_slow && '--exclude-label slow' || '' }} --ctest-shard ${{ matrix.shard }}/4
+        run: python3 scripts/ci_verify.py ${{ matrix.profile }} --build-dir ${{ matrix.build_dir }} --jobs "$(getconf _NPROCESSORS_ONLN)" --generator Ninja --curl-dir "${{ steps.curl-deps.outputs.curl-dir }}" --ccache --require-websocket ${{ matrix.profile == 'native' && inputs.exclude_slow && '--exclude-label slow' || '' }} --ctest-shard ${{ matrix.shard }}/8
 
       - name: Stage and summarize diagnostics
         if: always()
@@ -281,7 +285,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: ci-diagnostics-native-live-${{ matrix.profile }}-${{ matrix.shard }}of4
+          name: ci-diagnostics-native-live-${{ matrix.profile }}-${{ matrix.shard }}of8
           path: ci-diagnostics/
           if-no-files-found: warn
 
@@ -308,7 +312,7 @@ jobs:
           if (summary.get("profile") != "native" or summary.get("status") != "passed"
                   or type(summary.get("exitCode")) is not int or summary["exitCode"] != 0
                   or summary.get("failures") != []
-                  or summary.get("ctestShard") != {"index": index, "count": 4}):
+                  or summary.get("ctestShard") != {"index": index, "count": 8}):
               raise SystemExit("native shard summary did not pass")
           with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
               output.write(f"shard_{index}=success\n")
@@ -332,6 +336,10 @@ jobs:
           SHARD_2_RESULT: ${{ needs.native-live-shards.outputs.shard_2 }}
           SHARD_3_RESULT: ${{ needs.native-live-shards.outputs.shard_3 }}
           SHARD_4_RESULT: ${{ needs.native-live-shards.outputs.shard_4 }}
+          SHARD_5_RESULT: ${{ needs.native-live-shards.outputs.shard_5 }}
+          SHARD_6_RESULT: ${{ needs.native-live-shards.outputs.shard_6 }}
+          SHARD_7_RESULT: ${{ needs.native-live-shards.outputs.shard_7 }}
+          SHARD_8_RESULT: ${{ needs.native-live-shards.outputs.shard_8 }}
         run: |
           printf 'native shards: %s\n' "$SHARDS_RESULT"
           if test "$SHARDS_RESULT" = cancelled; then
@@ -343,6 +351,10 @@ jobs:
           test "$SHARD_2_RESULT" = success
           test "$SHARD_3_RESULT" = success
           test "$SHARD_4_RESULT" = success
+          test "$SHARD_5_RESULT" = success
+          test "$SHARD_6_RESULT" = success
+          test "$SHARD_7_RESULT" = success
+          test "$SHARD_8_RESULT" = success
 
   native-live-gate:
     needs: [authz, native-live, native-live-native]

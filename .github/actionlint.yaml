@@ -9,6 +9,7 @@ self-hosted-runner:
     - pf-gcp-main
     - pf-ci-x64
     - pf-ci-x64-16
+    # One full round uses 6 Release + 3 Debug + 2 kernel + 8 native + 1 slow preflight = 20 jobs.
     - pf-linux-x64-16
     - pf-linux-x64-32
     - pf-linux-x64-64

@@ -73,7 +73,7 @@ Post Release/Debug/kernel and native shards use `pf-linux-x64-16`; post sanitize
 use `pf-linux-x64-32`; native-live sanitizers use `pf-linux-x64-64`. No job routes by event. The fast `preflight` is the only post preflight job on the post fleet; `preflight-slow` uses `pf-linux-x64-16`.
 Hosted `ubuntu-24.04` runs all eight `authz` jobs, both CI `changes`/`build-gate` jobs, all post/native aggregates and `docs.yml`'s `build`.
 These light, secret-free jobs need no VM-only tools, mounts or caches.
-Local reusable calls still cannot mix PR and post-merge verification fleets. One full post run needs four x64-16 and two x64-64 native runners concurrently.
+Local reusable calls still cannot mix PR and post-merge verification fleets. One full post run needs eight x64-16 and two x64-64 native runners concurrently.
 
 The manual `release-ruleset-probe.yml` workflow runs `authz` on
 hosted `ubuntu-24.04` and `probe` on `["self-hosted","pf-gcp-post"]`.
@@ -279,7 +279,7 @@ profile and fixture mode, substituting each one-based index for `I`:
 
 ```sh
 python3 scripts/ci_verify.py debug --build-dir build-ci-debug --jobs 16 \
-  --ccache --ctest-shard I/4
+  --ccache --ctest-shard I/3
 ```
 
 Every shard performs its own configure and full build before running CTest.
@@ -293,13 +293,13 @@ With `N > 1`, the unsharded selection is the complete `ctest -N` registry
 minus `ctestExcludedNames`. `--exclude-label slow` is accepted for `debug`
 and `sanitizers`, matching their default; other explicit multi-shard label
 exclusions and profiles outside the seven listed above are refused.
-The verifier sorts the selected unique names and assigns each name to zero-based
-shard `int.from_bytes(sha256(name.encode('utf-8')).digest(), 'big') % N`.
-The emitted shard index is one-based. The partition needs no duration file
-and uses no host timings, Python hash seed or discovery order. Adding a test
-at fixed N preserves every existing name's owner. Hash assignment does not
-guarantee equal work or nonempty slices; an empty slice fails and requires
-fewer shards. No wall-time or balance improvement is established here.
+The verifier loads integer-second scheduling hints from `scripts/ci_shard_costs.json`.
+Unknown names retain zero-based `int.from_bytes(sha256(name.encode('utf-8')).digest(), 'big') % N`.
+They preload three seconds each; costed names then use decreasing cost and lexical name order.
+Each costed name goes to the least loaded shard, breaking ties by lowest index.
+Results are sorted, shard indices are one-based, and hints outside the registry are ignored.
+The table keeps measurements at least 20 seconds: Release takes precedence, otherwise native/1.5; costs round up.
+Hints are never time limits; empty slices still fail, and CI must measure the 15-minute target.
 
 An anchored, escaped CTest `-R` expression selects each slice. Before
 execution, `ctest -N -R` must reproduce the exact selected names. Actual
@@ -400,15 +400,15 @@ implementation. The current contract above governs execution.
 `--ctest-shard I/N` selects one CTest slice with integer, one-based indices
 `1 <= I <= N <= 8`. Each VM must use the same engine tree, profile, options,
 private-fixture overlay mode and committed duration table, in its own checkout
-and build directory. For example, a four-VM Release verification runs the
+and build directory. For example, a six-VM Release verification runs the
 following command once on each VM, replacing `I` with its index:
 
 ```sh
 python3 scripts/ci_verify.py release --build-dir build-ci-release --jobs 4 \
-  --ccache --ctest-shard I/4
+  --ccache --ctest-shard I/6
 ```
 
-The caller must collect all four results and judge their union before claiming
+The caller must collect all six results and judge their union before claiming
 the profile passed. A successful individual shard proves its local work only.
 Without the option the verifier keeps the existing commands, stage accounting
 and summary fields. `--ctest-shard 1/1` uses the existing CTest execution
@@ -617,11 +617,11 @@ requires the WebSocket test.
 The runner's curl version floor still applies at configure time.
 `live-tsan` runs the same inventory in a separate ThreadSanitizer build,
 checks every runner compile unit for instrumentation, and stops on a race.
-`native-live.yml` runs four `native` shards on hosted `pf-linux-x64-16`;
+`native-live.yml` runs eight `native` shards on hosted `pf-linux-x64-16`;
 `live-sanitizers` and `live-tsan` each build once on hosted `pf-linux-x64-64`.
 Both matrices keep `fail-fast: false`, pinned WebSocket curl and profile caches. A failed cell does not cancel its peers.
 Native compiler keys and diagnostic artifacts also carry the shard index.
-The `native-live (native)` aggregate requires all four successful summary proofs;
+The `native-live (native)` aggregate requires all eight successful summary proofs;
 `native-live-gate` requires it and both sanitizer cells, refusing missing or skipped work; the caller's `build` aggregate still requires the reusable workflow to succeed.
 Only native shards accept the caller's existing PR-only slow-label exclusion; dispatch always runs the full set.
 
@@ -1649,7 +1649,7 @@ runs, and this page does not claim either target as met.
 
 Credentialed work and the remaining full profiles retain their VM pins.
 The four amd64 post legs and native verification use hosted runners; their aggregates use the light image.
-The native matrix is exactly `1..4` with `--ctest-shard I/4`; live sanitizers are unsharded. Each runner label remains a literal, checked per job:
+The native matrix is exactly `1..8` with `--ctest-shard I/8`; live sanitizers are unsharded. Each runner label remains a literal, checked per job:
 
 | Workflow | Events/callers | Inline jobs' `runs-on` |
 | --- | --- | --- |
@@ -1658,7 +1658,7 @@ The native matrix is exactly `1..4` with `--ctest-shard I/4`; live sanitizers ar
 | `docs.yml` | `pull_request`, except `.github/**`-only diffs | `authz` and `build`: hosted `ubuntu-24.04` |
 | `ci-post.yml` | Push to `main`, 01:30 UTC schedule, dispatch | Light jobs and four leg aggregates: `ubuntu-24.04`; Release/Debug/kernel shards and `preflight-slow`: `pf-linux-x64-16`; sanitizers shards: `pf-linux-x64-32`; `build-arm`: `ubuntu-24.04-arm`; fast `preflight`: `["self-hosted","pf-gcp-post"]` |
 | `corpus-parity.yml` | Schedule, dispatch, post CI callers | `authz`: hosted `ubuntu-24.04`; both parity jobs: `["self-hosted","pf-gcp-post"]` |
-| `native-live.yml` | Dispatch and post CI callers, including branch dispatch | `authz` and both aggregates: hosted `ubuntu-24.04`; four native shards: `pf-linux-x64-16`; `live-sanitizers` and `live-tsan`: `pf-linux-x64-64` |
+| `native-live.yml` | Dispatch and post CI callers, including branch dispatch | `authz` and both aggregates: hosted `ubuntu-24.04`; eight native shards: `pf-linux-x64-16`; `live-sanitizers` and `live-tsan`: `pf-linux-x64-64` |
 | `docs-post.yml` | Push to `main`, dispatch | `authz`: hosted `ubuntu-24.04`; credentialed `build`: `["self-hosted","pf-gcp-post"]` |
 
 The post fleet admits only push, schedule and dispatch on engine `main` and
@@ -1672,9 +1672,9 @@ Rollback: relabel the affected job to its prior `pf-gcp-pr` or `pf-gcp-post` arr
 
 The four full build checks are `build (ubuntu-24.04, Release)`,
 `build (ubuntu-24.04, Debug)`, `build (ubuntu-24.04-arm, Release)` and
-`build (ubuntu-24.04-arm, Debug)`. Release uses four `build` shards, Debug two
+`build (ubuntu-24.04-arm, Debug)`. Release uses six `build` shards, Debug three
 `build-debug` shards, and kernel two shards on 16 cores; sanitizers uses four on 32 cores.
-Every shard builds the full tree and runs `--ctest-shard I/N` at the runner's core count. Each build refuses an OS mismatch before checkout.
+Every shard builds the full tree and runs `--ctest-shard I/N` at the runner's core count. Each build refuses an OS mismatch before checkout. The 19 shard jobs and the slow preflight fill the 20-job x64-16 cap; overlapping rounds queue.
 Each leg aggregate retains its old check name and requires its own matrix's success. The two arm64 cells share `build-arm` on hosted `ubuntu-24.04-arm`. All three build jobs use the same verification steps and profiles.
 Shard jobs and leg aggregates skip together only on classified docs-only changes.
 One cache key per architecture/profile/SHA is restored by all shards; only shard 1 saves it.

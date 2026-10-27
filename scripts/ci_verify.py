@@ -1109,23 +1109,39 @@ def ctest_registry_sha256(names: tuple[str, ...] | list[str]) -> str:
     return sha256(''.join(name + '\n' for name in sorted(names)).encode('utf-8')).hexdigest()
 
 
+def ctest_shard_costs() -> dict[str, int]:
+    """Committed scheduling hints in seconds; never execution limits."""
+    return json.loads((ROOT / 'scripts/ci_shard_costs.json').read_text(encoding='utf-8'))['costs']
+
+
 def ctest_partitions(names: tuple[str, ...] | list[str],
                      count: int) -> tuple[tuple[str, ...], ...]:
-    """Assign sorted names by SHA-256(UTF-8 name), big-endian integer modulo N.
+    """Hash unknown rows first, then greedily deal measured rows longest first.
 
-    Adding a name never moves an existing name at fixed N. No timing table,
-    Python hash seed, host state or discovery order participates.
+    Unknown rows preload three seconds each. Equal costs use lexical name
+    order; equal loads use the lowest index. Only selected registry names
+    participate, so obsolete hints are harmless. No host timings are read.
     """
     from hashlib import sha256
     CTestShard(1, count)
     ctest_registry_sha256(names)
+    costs = ctest_shard_costs()
     partitions: list[list[str]] = [[] for _ in range(count)]
+    loads = [0] * count
     for name in sorted(names):
+        if name in costs:
+            continue
         shard = int.from_bytes(sha256(name.encode('utf-8')).digest(), 'big') % count
         partitions[shard].append(name)
+        loads[shard] += 3
+    for name in sorted((name for name in names if name in costs),
+                       key=lambda name: (-costs[name], name)):
+        shard = min(range(count), key=lambda index: (loads[index], index))
+        partitions[shard].append(name)
+        loads[shard] += costs[name]
     if any(not part for part in partitions):
         raise ValueError('CTest shard would select zero rows; use fewer shards')
-    return tuple(tuple(part) for part in partitions)
+    return tuple(tuple(sorted(part)) for part in partitions)
 
 
 CTEST_NAMED_RESULT = re.compile(

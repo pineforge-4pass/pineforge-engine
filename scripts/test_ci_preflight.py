@@ -84,8 +84,8 @@ POST_BUILD_VERIFY = (
     "${{ matrix.build_type == 'Release' && 'release' || 'debug' }} "
     '--build-dir build --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache')
 SHARDED_VERIFY_RUNS = (
-    (6, 'build', POST_BUILD_VERIFY + ' --ctest-shard ${{ matrix.shard }}/4'),
-    (6, 'build-debug', POST_BUILD_VERIFY + ' --ctest-shard ${{ matrix.shard }}/2'),
+    (6, 'build', POST_BUILD_VERIFY + ' --ctest-shard ${{ matrix.shard }}/6'),
+    (6, 'build-debug', POST_BUILD_VERIFY + ' --ctest-shard ${{ matrix.shard }}/3'),
     (6, 'sanitizers', 'run: python3 scripts/ci_verify.py sanitizers --build-dir build-asan '
      '--jobs "$(getconf _NPROCESSORS_ONLN)" --ccache --ctest-shard ${{ matrix.shard }}/4'),
     (6, 'kernel-only', KERNEL_VERIFY),
@@ -93,7 +93,7 @@ SHARDED_VERIFY_RUNS = (
      'run: python3 scripts/ci_verify.py ${{ matrix.profile }} --build-dir ${{ matrix.build_dir }} '
      '--jobs "$(getconf _NPROCESSORS_ONLN)" --generator Ninja '
      '--curl-dir "${{ steps.curl-deps.outputs.curl-dir }}" --ccache --require-websocket '
-     + NATIVE_EXCLUSION + ' --ctest-shard ${{ matrix.shard }}/4'),
+     + NATIVE_EXCLUSION + ' --ctest-shard ${{ matrix.shard }}/8'),
 )
 # ci_workflow_findings' arguments, in order.
 CI_SOURCES = ('.github/workflows/ci.yml', '.github/workflows/native-live.yml',
@@ -720,9 +720,9 @@ class WorkflowEventFleets(unittest.TestCase):
 
 
 POST_SHARD_CASES = (
-    ('build', 'release', 4, 'pf-linux-x64-16', 'build-release-gate',
+    ('build', 'release', 6, 'pf-linux-x64-16', 'build-release-gate',
      'build (ubuntu-24.04, Release)'),
-    ('build-debug', 'debug', 2, 'pf-linux-x64-16', 'build-debug-gate',
+    ('build-debug', 'debug', 3, 'pf-linux-x64-16', 'build-debug-gate',
      'build (ubuntu-24.04, Debug)'),
     ('sanitizers', 'sanitizers', 4, 'pf-linux-x64-32', 'sanitizers-gate', 'sanitizers'),
     ('kernel-only', 'kernel', 2, 'pf-linux-x64-16', 'kernel-only-gate', 'kernel-only'),
@@ -731,6 +731,10 @@ POST_SHARD_CASES = (
 
 class PostCTestShardPolicy(unittest.TestCase):
     """Use explicit inputs so the new refusals can be traced on the old checker."""
+
+    def test_post_shard_count_pins_match_the_expanded_profiles(self):
+        self.assertEqual(ci_preflight.POST_SHARDS,
+                         {'build': 6, 'build-debug': 3, 'sanitizers': 4, 'kernel-only': 2})
 
     def shard_workflow(self, job, profile, count, label):
         build_type = 'Release' if profile == 'release' else 'Debug'
@@ -3465,7 +3469,7 @@ exit "$lookup_exit"
             block = f'          - profile: {profile}\n            build_dir: {build_dir}\n'
             job = 'native-live-shards' if profile == 'native' else 'native-live'
             findings = self.mutated_file_findings(1, job, block, '')
-            finding = ('native-live-shards must run exactly native shards 1..4 with fail-fast false'
+            finding = ('native-live-shards must run exactly native shards 1..8 with fail-fast false'
                        if profile == 'native' else
                        'native-live must run both independent sanitizer profiles with fail-fast false, '
                        'the platform job maximum and no per-run budget')
@@ -6642,28 +6646,28 @@ class HostedNativeProfiles(unittest.TestCase):
     def test_native_shard_matrix_matches_the_command_denominator(self):
         native = self.workflow()
         jobs = _jobs(native)
-        self.assertIn('native-live-shards', jobs, 'native needs four explicit shard cells')
+        self.assertIn('native-live-shards', jobs, 'native needs eight explicit shard cells')
         shard_job = jobs['native-live-shards']
         shards = re.search(r'(?m)^        shard: \[([0-9, ]+)\]$', shard_job)
         self.assertIsNotNone(shards, 'the native shard inventory must be readable')
         indices = [int(value.strip()) for value in shards[1].split(',')]
         denominator = re.search(r'--ctest-shard \$\{\{ matrix.shard \}\}/([0-9]+)', shard_job)
         self.assertIsNotNone(denominator, 'native must pass its matrix index to ci_verify')
-        self.assertEqual(int(denominator[1]), 4)
+        self.assertEqual(int(denominator[1]), 8)
         self.assertEqual(indices, list(range(1, int(denominator[1]) + 1)))
         self.assertNotIn('--ctest-shard', jobs['native-live'])
-        finding = 'native-live-shards must run exactly native shards 1..4 with fail-fast false'
+        finding = 'native-live-shards must run exactly native shards 1..8 with fail-fast false'
         for before, after in (
-                ('shard: [1, 2, 3, 4]', 'shard: [1, 2, 3]'),
-                ('shard: [1, 2, 3, 4]', 'shard: [1, 2, 3, 3]'),
-                ('shard: [1, 2, 3, 4]', 'shard: [1, 2, 3, 4, 5]'),
+                ('shard: [1, 2, 3, 4, 5, 6, 7, 8]', 'shard: [1, 2, 3, 4, 5, 6, 7]'),
+                ('shard: [1, 2, 3, 4, 5, 6, 7, 8]', 'shard: [1, 2, 3, 4, 5, 6, 7, 7]'),
+                ('shard: [1, 2, 3, 4, 5, 6, 7, 8]', 'shard: [1, 2, 3, 4, 5, 6, 7, 8, 9]'),
                 ('fail-fast: false', 'fail-fast: true')):
             with self.subTest(after=after):
                 changed = in_job(native, 'native-live-shards', before, after)
                 self.assertNotEqual(changed, native)
                 self.assertIn(finding, native_workflow_findings(changed))
         changed = in_job(native, 'native-live-shards',
-                         '--ctest-shard ${{ matrix.shard }}/4',
+                         '--ctest-shard ${{ matrix.shard }}/8',
                          '--ctest-shard ${{ matrix.shard }}/3')
         self.assertIn('native-live-shards must verify each full profile with no step deadline or timeout flag and '
                       'native-only PR exclusion', native_workflow_findings(changed))
@@ -6705,15 +6709,15 @@ class HostedNativeProfiles(unittest.TestCase):
         self.assertEqual(ci_preflight._job_values(aggregate, 'if'), ['always()'])
         script = job_script(native, 'native-live-native', 'Require every native shard to have passed')
         valid = {'AUTHZ_RESULT': 'success', 'SHARDS_RESULT': 'success',
-                 **{f'SHARD_{index}_RESULT': 'success' for index in range(1, 5)}}
+                 **{f'SHARD_{index}_RESULT': 'success' for index in range(1, 9)}}
         for field in valid:
             for result in ('success', 'failure', 'cancelled', 'skipped', ''):
                 with self.subTest(field=field, result=result):
                     ran = subprocess.run(['bash', '-e', '-c', script], capture_output=True,
                                          env={**os.environ, **valid, field: result})
                     self.assertEqual(ran.returncode, 0 if result == 'success' else 1, ran.stdout)
-        finding = 'native-live-native must fail unless all four native shard proofs succeed'
-        for index in range(1, 5):
+        finding = 'native-live-native must fail unless all eight native shard proofs succeed'
+        for index in range(1, 9):
             for before, after in (
                     (f'          SHARD_{index}_RESULT: ${{{{ needs.native-live-shards.outputs.shard_{index} }}}}',
                      f'          SHARD_{index}_RESULT: success'),
@@ -6738,11 +6742,12 @@ class HostedNativeProfiles(unittest.TestCase):
         self.assertIn('id: shard-proof', shard_job, 'each shard needs its own verifier proof')
         script = job_script(native, 'native-live-shards', 'Record native shard proof')
         valid = {'profile': 'native', 'status': 'passed', 'exitCode': 0, 'failures': [],
-                 'ctestShard': {'index': 1, 'count': 4}}
+                 'ctestShard': {'index': 1, 'count': 8}}
         cases = [(valid, True), ({**valid, 'status': 'failed'}, False),
                  ({**valid, 'exitCode': 1}, False), ({**valid, 'exitCode': False}, False),
                  ({**valid, 'profile': 'release'}, False), ({**valid, 'failures': ['ctest']}, False),
-                 ({**valid, 'ctestShard': {'index': 2, 'count': 4}}, False),
+                 ({**valid, 'ctestShard': {'index': 2, 'count': 8}}, False),
+                 ({**valid, 'ctestShard': {'index': 1, 'count': 4}}, False),
                  ({**valid, 'ctestShard': {'index': 1, 'count': 3}}, False),
                  ({}, False), ('deliberately malformed JSON', False), (None, False)]
         for summary, passes in cases:
@@ -6760,7 +6765,7 @@ class HostedNativeProfiles(unittest.TestCase):
                                  'shard_1=success\n' if passes else '')
         finding = ('native-live-shards must publish each successful verifier summary '
                    'under its own shard output')
-        for index in range(1, 5):
+        for index in range(1, 9):
             before = f'      shard_{index}: ${{{{ steps.shard-proof.outputs.shard_{index} }}}}\n'
             changed = in_job(native, 'native-live-shards', before, '')
             self.assertIn(finding, native_workflow_findings(changed))
@@ -6777,11 +6782,11 @@ class HostedNativeProfiles(unittest.TestCase):
         native = self.workflow()
         shard_job = _jobs(native).get('native-live-shards', '')
         self.assertIn('-live-v2-${{ matrix.profile }}-shard-${{ matrix.shard }}-', shard_job)
-        self.assertIn('name: ci-diagnostics-native-live-${{ matrix.profile }}-${{ matrix.shard }}of4', shard_job)
+        self.assertIn('name: ci-diagnostics-native-live-${{ matrix.profile }}-${{ matrix.shard }}of8', shard_job)
         for before, after, finding in (
                 ('-shard-${{ matrix.shard }}-', '-', 'native-live-shards compiler restore must be '
                  'profile-isolated, cold-bypassable and reset statistics'),
-                ('-${{ matrix.shard }}of4', '', 'native-live-shards must retain per-profile diagnostics '
+                ('-${{ matrix.shard }}of8', '', 'native-live-shards must retain per-profile diagnostics '
                  'on failure and preserve safe full checkout')):
             changed = in_job(native, 'native-live-shards', before, after)
             self.assertNotEqual(changed, native)
