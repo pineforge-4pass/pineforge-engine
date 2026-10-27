@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <fcntl.h>
+#include <initializer_list>
 #include <limits>
 #include <memory>
 #include <stdexcept>
@@ -88,13 +89,16 @@ void reserve_rows() {
             "zero bars win over unbounded sentinel");
 
     const auto base = object_store_reserve_bytes(1, 1, 0);
-    for (const auto bars : {std::uint64_t{1}, 2, 10, 200000, 1000000})
+    for (const std::uint64_t bars :
+         std::initializer_list<std::uint64_t>{1, 2, 10, 200000, 1000000})
         require(object_store_reserve_bytes(bars, 1, 0) >= base,
                 "reserve is monotone in bars");
-    for (const auto executions : {std::uint64_t{1}, 2, 3, 100})
+    for (const std::uint64_t executions :
+         std::initializer_list<std::uint64_t>{1, 2, 3, 100})
         require(object_store_reserve_bytes(1, executions, 0) >= base,
                 "reserve is monotone in executions");
-    for (const auto bytes : {std::uint64_t{0}, 40, 41, 96, 97, 1000, 5000})
+    for (const std::uint64_t bytes : std::initializer_list<std::uint64_t>{
+             0, 40, 41, 96, 97, 1000, 5000})
         require(object_store_reserve_bytes(1, 1, bytes) >= base,
                 "reserve is monotone in record bytes");
 
@@ -219,8 +223,8 @@ void slope_row(std::uint64_t payload_bytes) {
 }
 
 void backing_slopes() {
-    for (const auto payload_bytes :
-         {std::uint64_t{0}, 16, 100, 1000, 5000})
+    for (const std::uint64_t payload_bytes :
+         std::initializer_list<std::uint64_t>{0, 16, 100, 1000, 5000})
         slope_row(payload_bytes);
 }
 
