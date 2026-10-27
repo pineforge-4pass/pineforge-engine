@@ -924,6 +924,7 @@ PINNED_SLOW_TEST_ROWS = frozenset((
     'test_broker_state_hash_coverage_mutations',
     'test_chart_day_memo',
     *(f'test_ci_verify_slice_{index}' for index in range(1, 9)),
+    'test_cr421_standing_orders_wall',
     'test_l10recon1_merge_fill_liveness',
     'test_local_time_fields',
     'test_magnifier_endpoints4',
