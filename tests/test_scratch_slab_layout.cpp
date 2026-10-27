@@ -267,6 +267,9 @@ void bounds_reservations_and_reset() {
     ScratchSlab other({0, 0, 1, 3, 0, 0, 0, 0, 0, 0, 0});
     capacity_failure("layout", [&] { other.require_extend(erased, 1); });
     capacity_failure("layout", [&] { (void)slab.region(ScratchResource::layout); });
+    capacity_failure("store_objects", [] {
+        throw detail::ScratchCapacityError(ScratchResource::store_objects);
+    });
 
     slab.zero(ScratchResource::cohort);
     const auto cleared = snapshot(slab);

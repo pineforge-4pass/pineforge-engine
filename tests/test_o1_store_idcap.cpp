@@ -97,7 +97,7 @@ void require_refusal(Store& store, std::uint64_t limit, std::uint64_t bytes) {
     REQUIRE(std::strcmp(pineforge::run_failure_code_name(failure.code),
                         "scratch_capacity_exceeded") == 0);
     REQUIRE(failure.args != nullptr);
-    REQUIRE(*failure.args == "{\"resource\":\"cohort\"}");
+    REQUIRE(*failure.args == "{\"resource\":\"store_objects\"}");
     REQUIRE(std::string(error.what()) == expected_message(limit));
   }
   REQUIRE(refused);

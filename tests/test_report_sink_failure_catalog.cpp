@@ -85,7 +85,7 @@ void arena_counters() {
         "{\"arena_bytes\":4294967296,\"high_water_bytes\":4294967296,"
         "\"reason\":\"arena_exhausted\"}");
 
-    // All eleven scratch users and the default identity retain the complete
+    // All twelve scratch users and the default identity retain the complete
     // exhaustion payload through validation, JSON and exception classification.
     constexpr std::int64_t needed = INT64_C(1048576);
     const char* const stores[] = {
@@ -100,6 +100,7 @@ void arena_counters() {
         "partial_cycles",
         "partial_cycles_idx",
         "successor_roots",
+        "store_objects",
         "unknown",
     };
     for (const char* store : stores) {
