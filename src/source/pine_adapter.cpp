@@ -9622,9 +9622,7 @@ bool PineExecutionAdapter::enqueue_pooc_fifo_close(
     auto existing = close_batch_callsites_.find(token);
     const CloseCallsiteState* prior = existing == close_batch_callsites_.end()
         ? nullptr : &existing->second;
-    const auto logical = close_logical_units_.find(id);
-    const double unclosed = logical == close_logical_units_.end()
-        ? 0.0 : logical->second;
+    const double unclosed = fixture_close_logical_units(id);
 
     // A call is sized against the position less what the bar's other close
     // orders already hold; a site re-sizing its own order counts its own
@@ -9934,12 +9932,20 @@ void PineExecutionAdapter::observe_close_ledger(
 }
 
 void PineExecutionAdapter::credit_close_ledger(const SourceId& id, double units) {
-    close_logical_units_[id] += units;
+    credit_close_logical_units(id, units);
     if (config_.close_entries_rule_any) return;
     if (!close_ledger_records_.empty() && close_ledger_records_.back().id == id)
         close_ledger_records_.back().units += units;
     else
         close_ledger_records_.push_back({id, units});
+}
+
+void PineExecutionAdapter::credit_close_logical_units(const SourceId& id, double units) {
+    {
+        const auto row = close_logical_units_.emplace(id, ScalarHistory<double>{});
+        row.first->second.value += units;
+    } // Release the row pin before writing the exact scalar to scratch.
+    close_logical_units_.spill();
 }
 
 void PineExecutionAdapter::book_close_ledger(const SourceId& id, double units) {
@@ -9968,7 +9974,7 @@ void PineExecutionAdapter::book_close_ledger(const SourceId& id, double units) {
     close_ledger_records_ = std::move(kept);
     close_logical_units_.clear();
     for (const auto& record : close_ledger_records_)
-        close_logical_units_[record.id] += record.units;
+        credit_close_logical_units(record.id, record.units);
 }
 
 // The pyramiding cap (pyramiding_ledger_records): TradingView caps
@@ -10053,9 +10059,14 @@ bool PineExecutionAdapter::exit_tombstoned(const SourceId& exit_id,
         || !pinned_lot_grid()) {
         return false;
     }
-    const auto found = exit_tombstones_.find(exit_id + "\x1f" + from_entry);
-    return found != exit_tombstones_.end() && found->second != 0
-        && found->second == entry_incarnation_of(from_entry);
+    bool result = false;
+    {
+        const auto found = exit_tombstones_.find(exit_id + "\x1f" + from_entry);
+        result = found != exit_tombstones_.end() && found->second.value != 0
+            && found->second.value == entry_incarnation_of(from_entry);
+    }
+    exit_tombstones_.spill();
+    return result;
 }
 
 // Records the close-first fact entry() reads: on this script bar the script
@@ -25459,9 +25470,15 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         if (detail::margin_rule_switches().exit_child_tombstones
             && !placement_snapshot->from_entry.empty() && pinned_lot_grid()) {
             const std::uint64_t origin = entry_incarnation_of(placement_snapshot->from_entry);
-            if (origin != 0)
-                exit_tombstones_[placement_snapshot->source_id + "\x1f"
-                                 + placement_snapshot->from_entry] = origin;
+            if (origin != 0) {
+                {
+                    const auto row = exit_tombstones_.emplace(
+                        placement_snapshot->source_id + "\x1f" + placement_snapshot->from_entry,
+                        ScalarHistory<std::uint64_t>{});
+                    row.first->second.value = origin;
+                }
+                exit_tombstones_.spill();
+            }
         }
         // ab9714be pine_fills.cpp:7012-7024: other pending orders with this
         // id count as siblings; same-bracket legs are one owner order.
@@ -27134,9 +27151,14 @@ PineExecutionAdapter::fixture_pending_snapshots() const {
 }
 
 double PineExecutionAdapter::fixture_close_logical_units(
-        const SourceId& id) const noexcept {
-    const auto found = close_logical_units_.find(id);
-    return found == close_logical_units_.end() ? 0.0 : found->second;
+        const SourceId& id) const {
+    double result = 0.0;
+    {
+        const auto found = close_logical_units_.find(id);
+        if (found != close_logical_units_.end()) result = found->second.value;
+    }
+    close_logical_units_.spill();
+    return result;
 }
 
 std::vector<PineExecutionAdapter::FixtureCloseCallsite>
@@ -28928,6 +28950,8 @@ void PineExecutionAdapter::set_id_tables_directory(const std::string& directory)
     exit_rank_keys_.set_directory(directory);
     placement_.set_auxiliary_tables_directory(directory);
     consumed_partial_exit_cycles_.set_directory(directory);
+    close_logical_units_.set_directory(directory);
+    exit_tombstones_.set_directory(directory);
     if (!position_tail_summary_)
         position_tail_summary_ = std::make_shared<detail::PositionTailSummary>();
     position_tail_summary_->set_directory(directory);

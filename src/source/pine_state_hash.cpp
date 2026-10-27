@@ -596,7 +596,10 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
         }
     }
     f.u(close_logical_units_.size());
-    for (const auto& row : close_logical_units_) { f.s(row.first); f.d(row.second); }
+    for (const auto& row : close_logical_units_.all_sorted()) {
+        f.s(row.first); f.d(row.second.value);
+    }
+    close_logical_units_.spill();
     // The ledger's records fold only when there are two or more: a single
     // record is the one id close_logical_units_ holds, and none is none, so a
     // position of one id folds what it folded before the records existed.
@@ -614,14 +617,13 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
         }
     }
     // The exit tombstones, folded only while there are any.
-    if (!exit_tombstones_.empty()) {
-        std::vector<SourceId> keys;
-        keys.reserve(exit_tombstones_.size());
-        for (const auto& row : exit_tombstones_) keys.push_back(row.first);
-        std::sort(keys.begin(), keys.end());
+    if (exit_tombstones_.size() != 0) {
         f.s("pineforge-exit-tombstones/v1");
-        f.u(keys.size());
-        for (const auto& key : keys) { f.s(key); f.u(exit_tombstones_.at(key)); }
+        f.u(exit_tombstones_.size());
+        for (const auto& row : exit_tombstones_.all_sorted()) {
+            f.s(row.first); f.u(row.second.value);
+        }
+        exit_tombstones_.spill();
     }
     // The retired reservation model's two maps and two per-site maps fold as
     // the empty maps they always were outside a multi-call close site.

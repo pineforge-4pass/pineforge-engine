@@ -1870,7 +1870,7 @@ public:
         return cohort_exposure_for(id);
     }
     int source_entry_slot_count() const noexcept;
-    double fixture_close_logical_units(const SourceId&) const noexcept;
+    double fixture_close_logical_units(const SourceId&) const;
     std::size_t fixture_close_logical_count() const noexcept {
         return close_logical_units_.size();
     }
@@ -2744,6 +2744,7 @@ private:
                      double qty, const std::string& comment, const std::string& oca_name,
                      int oca_type, int qty_type);
     void credit_close_ledger(const SourceId&, double units);
+    void credit_close_logical_units(const SourceId&, double units);
     void book_close_ledger(const SourceId&, double units);
 
     // @source-state begin
@@ -2835,8 +2836,18 @@ private:
     // The close ledger: per id, the units entered under it that no close has
     // booked yet (close_logical_units_), and the same units by opening fill
     // in fill order (close_ledger_records_), which a booking beyond its id's
-    // own units spills over oldest first.
-    std::map<SourceId, double> close_logical_units_;
+    // own units spills over oldest first. ANY does not book these credits;
+    // their historical values remain until flat/reversal, including in hashes.
+    // Scalar history remains logically present until its existing clear
+    // boundary. It owns no live roster, so every unpinned row is spillable.
+    template<class Scalar> struct ScalarHistory {
+        using Record = Scalar;
+        Scalar value = 0;
+        Record retired_record() const noexcept { return value; }
+        static ScalarHistory restore_record(Record record) noexcept { return {record}; }
+        bool spillable() const noexcept { return true; }
+    };
+    pineforge::detail::DiskResidentIdTable<ScalarHistory<double>> close_logical_units_;
     std::vector<CloseLedgerRecord> close_ledger_records_;
     // The pyramiding records: one per entry fill, unmerged, with the incarnation
     // of the opening that filled it, booked as the close ledger books
@@ -2849,7 +2860,7 @@ private:
     std::vector<PyramidingRecord> pyramiding_records_;
     // The partial strategy.exit children that filled, keyed
     // exit_id "\x1f" from_entry, to the entry incarnation they filled under.
-    std::unordered_map<SourceId, std::uint64_t> exit_tombstones_;
+    pineforge::detail::DiskResidentIdTable<ScalarHistory<std::uint64_t>> exit_tombstones_;
     std::map<std::uint64_t, CloseCallsiteState> close_batch_callsites_;
     std::int32_t close_batch_bar_ = -1;
     std::uint64_t close_batch_queue_sequence_ = 0;
