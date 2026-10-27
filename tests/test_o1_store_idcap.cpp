@@ -23,7 +23,6 @@ using pineforge::detail::FixedMemoryScratchBacking;
 using pineforge::detail::ScratchBuffer;
 using pineforge::detail::ScratchCapacityError;
 using pineforge::detail::o1::Id;
-using pineforge::detail::o1::kMaxLiveObjectsCap;
 using pineforge::detail::o1::kMaxTxHandles;
 using pineforge::detail::o1::kNullId;
 using pineforge::detail::o1::Shape;
@@ -50,8 +49,8 @@ Shape small_shape() {
 }
 
 struct Fixture {
-  explicit Fixture(const Shape& shape)
-      : storage(static_cast<std::size_t>(shape.page_bytes) * 1024),
+  explicit Fixture(const Shape& shape, std::size_t backing_pages = 1024)
+      : storage(static_cast<std::size_t>(shape.page_bytes) * backing_pages),
         backing(ScratchBuffer{storage.data(), storage.size()}, shape.page_bytes),
         store(Store::open(shape, backing)) {}
 
@@ -71,8 +70,7 @@ std::string grouped(std::uint64_t value) {
 
 std::string expected_message(std::uint64_t limit) {
   return "more than " + grouped(limit) + " store objects live at once; " + grouped(limit) +
-      " is the most allowed in this store; attempted live count " + grouped(limit + 1) +
-      ", approved maximum " + grouped(kMaxLiveObjectsCap);
+      " is the most allowed in this store; attempted live count " + grouped(limit + 1);
 }
 
 Id create_admitted(Store& store, std::uint64_t bytes) {
@@ -171,44 +169,78 @@ void check_cap_and_next_id() {
   std::printf("O1STORE idcap CAP/CAP+1 and next-id preservation ok\n");
 }
 
-void check_default_and_normalization() {
+void check_default_and_explicit_limits() {
   const Shape defaults;
-  REQUIRE(defaults.max_live_objects == kMaxLiveObjectsCap);
+  REQUIRE(defaults.max_live_objects == 0);
   {
     Fixture fixture(defaults);
-    REQUIRE(fixture.store->stats().max_live_objects == kMaxLiveObjectsCap);
+    REQUIRE(fixture.store->stats().max_live_objects == 0);
     REQUIRE(fixture.store->stats().objects_live == 0);
   }
   const std::array<std::uint64_t, 3> inputs{{
-      0, kMaxLiveObjectsCap + 1, std::numeric_limits<std::uint64_t>::max()}};
+      0, UINT64_C(1048577), std::numeric_limits<std::uint64_t>::max()}};
   for (const auto input : inputs) {
     Shape shape = small_shape();
     shape.max_live_objects = input;
     Fixture fixture(shape);
-    REQUIRE(fixture.store->stats().max_live_objects == kMaxLiveObjectsCap);
+    REQUIRE(fixture.store->stats().max_live_objects == input);
     REQUIRE(fixture.store->stats().objects_live == 0);
     (void)create_admitted(*fixture.store, 0);
     REQUIRE(fixture.store->stats().objects_live == 1);
   }
-  std::printf("O1STORE idcap default, zero and above-cap normalization ok\n");
+  std::printf("O1STORE idcap default unlimited and explicit limits unchanged ok\n");
+}
+
+void check_unlimited_growth() {
+  const Shape shape;
+  constexpr std::uint64_t object_count = UINT64_C(1048578);
+  // A zero-byte object still needs two 64-byte cells (key and header), a
+  // handle-table entry and an index slot. Budget 512 backing bytes per object
+  // for page headers, split slack and internal nodes, plus 1024 journal/control
+  // pages. This test backing scales with the input; the Store workspace does not.
+  const auto backing_pages = static_cast<std::size_t>(
+      (object_count * 512 + shape.page_bytes - 1) / shape.page_bytes + 1024);
+  Fixture fixture(shape, backing_pages);
+  Store& store = *fixture.store;
+  const auto resident = store.stats().bytes_resident;
+  REQUIRE(store.stats().max_live_objects == 0);
+  {
+    auto tx = store.begin();
+    for (std::uint64_t number = 1; number <= object_count; ++number) {
+      const Id id = create_admitted(store, 0);
+      REQUIRE(id == number);
+      if (number >= UINT64_C(1048577)) {
+        REQUIRE(store.alive(id));
+        REQUIRE(store.size(id) == 0);
+        REQUIRE(store.stats().objects_live == number);
+      }
+    }
+    tx->commit();
+  }
+  REQUIRE(store.alive(UINT64_C(1048577)));
+  REQUIRE(store.alive(UINT64_C(1048578)));
+  REQUIRE(store.size(UINT64_C(1048577)) == 0);
+  REQUIRE(store.size(UINT64_C(1048578)) == 0);
+  REQUIRE(store.stats().objects_live == object_count);
+  REQUIRE(store.stats().bytes_live == 0);
+  REQUIRE(store.stats().bytes_resident == resident);
+  std::printf("O1STORE idcap default admits 1048577th and 1048578th objects ok\n");
 }
 
 void check_documented_text() {
   REQUIRE(scratch_object_limit_message(UINT64_C(65536),
-                                      UINT64_C(65537),
-                                      kMaxLiveObjectsCap) ==
+                                      UINT64_C(65537)) ==
       "more than 65,536 store objects live at once; 65,536 is the most allowed in this store; "
-      "attempted live count 65,537, approved maximum 1,048,576");
-  // The default cap, as a user sees it.
-  REQUIRE(scratch_object_limit_message(kMaxLiveObjectsCap,
-                                      kMaxLiveObjectsCap + 1,
-                                      kMaxLiveObjectsCap) ==
-      "more than 1,048,576 store objects live at once; 1,048,576 is the most allowed in this store; "
-      "attempted live count 1,048,577, approved maximum 1,048,576");
-  // An explicit smaller limit: the sentence must not claim the cap as its own limit.
-  REQUIRE(scratch_object_limit_message(UINT64_C(1000), UINT64_C(1001), kMaxLiveObjectsCap) ==
+      "attempted live count 65,537");
+  // Explicit limits can exceed the removed fixed count boundary.
+  REQUIRE(scratch_object_limit_message(UINT64_C(18446744073709551614),
+                                      UINT64_C(18446744073709551615)) ==
+      "more than 18,446,744,073,709,551,614 store objects live at once; "
+      "18,446,744,073,709,551,614 is the most allowed in this store; "
+      "attempted live count 18,446,744,073,709,551,615");
+  REQUIRE(scratch_object_limit_message(UINT64_C(1000), UINT64_C(1001)) ==
       "more than 1,000 store objects live at once; 1,000 is the most allowed in this store; "
-      "attempted live count 1,001, approved maximum 1,048,576");
+      "attempted live count 1,001");
   std::printf("O1STORE idcap exact documented text ok\n");
 }
 
@@ -396,7 +428,8 @@ void check_reuse() {
 int main() {
   try {
     check_cap_and_next_id();
-    check_default_and_normalization();
+    check_default_and_explicit_limits();
+    check_unlimited_growth();
     check_documented_text();
     check_rollback();
     check_flattened_and_abandoned_rollback();

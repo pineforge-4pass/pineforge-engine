@@ -1,2 +1,4 @@
 list(APPEND TEST_SOURCES test_o1_store_idcap)
 pineforge_add_unit_test(test_o1_store_idcap)
+list(APPEND TEST_SOURCES test_o1_store_exhaustion)
+pineforge_add_unit_test(test_o1_store_exhaustion)
