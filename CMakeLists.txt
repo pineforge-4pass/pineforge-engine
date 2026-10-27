@@ -163,7 +163,7 @@ set(PINEFORGE_KERNEL_SOURCES
     src/selected_window_plan.cpp
     src/metrics_spill_curve.cpp
     src/report_scratch.cpp
-    src/detail/o1_store.cpp
+    src/detail/o1_store.cpp src/detail/udt_graph.cpp
     src/scratch_arena.cpp
 )
 add_library(pineforge_kernel STATIC ${PINEFORGE_KERNEL_SOURCES}) # kernel-only archive: libpineforge.a's kernel objects and flags, for consumers that never speak Pine
