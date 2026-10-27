@@ -23004,8 +23004,8 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
                 ordered_trails.push_back({handle, orders[occurrence]});
         }
     };
-    append_trails(index.rows(detail::LiveClass::RestedStopForced));
-    append_trails(index.rows(detail::LiveClass::Trail));
+    append_trails(live_row_index().rows(detail::LiveClass::RestedStopForced));
+    append_trails(live_row_index().rows(detail::LiveClass::Trail));
     std::stable_sort(ordered_trails.begin(), ordered_trails.end(),
                      [](const OrderedTrail& left, const OrderedTrail& right) {
                          return left.order < right.order;
