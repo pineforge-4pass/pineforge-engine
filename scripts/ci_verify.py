@@ -940,6 +940,7 @@ PINNED_SLOW_TEST_ROWS = frozenset((
     'test_native_cpp_versions',
     'test_native_definition_index',
     'test_native_direct_mutation',
+    'test_native_dormant_book_capacity',
     'test_native_event_retention',
     'test_native_group_absorption',
     'test_native_group_keep_handle',
