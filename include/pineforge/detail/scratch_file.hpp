@@ -3,6 +3,7 @@
 #include <pineforge/detail/scratch_slab.hpp>
 #include <pineforge/detail/scratch_arena.hpp>
 #include <pineforge/detail/scratch_directory.hpp>
+#include <pineforge/detail/run_usage.hpp>
 
 #include <algorithm>
 #include <cerrno>
@@ -57,6 +58,8 @@ public:
             bounded_cache_ = other.bounded_cache_;
             clean_bytes_read_ = std::exchange(other.clean_bytes_read_, 0);
             bytes_written_since_sync_ = std::exchange(other.bytes_written_since_sync_, 0);
+            usage_opened_ = std::exchange(other.usage_opened_, false);
+            usage_bytes_ = std::exchange(other.usage_bytes_, 0);
         }
         return *this;
     }
@@ -69,7 +72,11 @@ public:
         clear();
         slab_ = slab;
         resource_ = resource;
-        if (slab_) slab_->reset(resource_);
+        if (slab_) {
+            slab_->reset(resource_);
+            usage_open();
+            usage_sync(slab_->region(resource_).logical_extent);
+        }
     }
     const std::shared_ptr<ScratchSlab>& scratch_owner() const noexcept { return slab_; }
     ScratchResource scratch_resource() const noexcept { return resource_; }
@@ -98,6 +105,7 @@ public:
         directory_ = value;
     }
     void clear() noexcept {
+        usage_close();
         if (arena_) arena_->release_region(region_);
         arena_ = nullptr;
         if (fd_ >= 0) ::close(fd_);
@@ -117,12 +125,14 @@ public:
         check_extent(bytes, 0, arena_ != nullptr, io_raiser_);
         if (arena_) {
             arena_io([&] { arena_->truncate(region_, bytes); });
+            usage_sync(bytes);
             return;
         }
         int result;
         do { result = ::ftruncate(fd_, static_cast<off_t>(bytes)); }
         while (result != 0 && errno == EINTR);
         if (result != 0) io_error(errno, "report scratch truncate");
+        usage_sync(bytes);
     }
     void open(const char* prefix) {
         if (slab_) return;
@@ -130,6 +140,7 @@ public:
         if (auto* arena = ScratchArena::attached()) {
             arena_io([&] { arena->open_region(region_); });
             arena_ = arena;
+            usage_open();
             return;
         }
         std::string refusal;
@@ -157,6 +168,7 @@ public:
             io_error(error, "scratch cloexec");
         }
         fd_ = opened;
+        usage_open();
         if (bounded_cache_) {
 #if defined(__linux__)
             struct statfs backing{};
@@ -200,6 +212,7 @@ public:
         check_extent(max_bytes, 0, true, io_raiser_);
         arena_io([&] { arena->open_region(region_, max_bytes); });
         arena_ = arena;
+        usage_open();
     }
     // Monotone, zero-filled growth, for sparse hash indexes and similar
     // ftruncate users. Does not shrink or open the file. Arena mode claims
@@ -209,22 +222,28 @@ public:
     void ensure_size(std::uint64_t bytes, std::uint64_t needed_bytes_lower_bound = 0) {
         if (slab_) {
             slab_->extend(resource_, bytes);
+            usage_sync(slab_->region(resource_).logical_extent);
             return;
         }
         check_extent(bytes, 0, arena_ != nullptr, io_raiser_);
         if (!opened()) throw std::logic_error("scratch growth before open");
         if (arena_) {
             arena_io([&] { arena_->ensure_size(region_, bytes, needed_bytes_lower_bound); });
+            usage_sync(region_.size);
             return;
         }
         struct stat status{};
         int result;
         do { result = ::fstat(fd_, &status); } while (result != 0 && errno == EINTR);
         if (result != 0) io_error(errno, "scratch size");
-        if (status.st_size >= static_cast<off_t>(bytes)) return;
+        if (status.st_size >= static_cast<off_t>(bytes)) {
+            usage_sync(static_cast<std::uint64_t>(status.st_size));
+            return;
+        }
         do { result = ::ftruncate(fd_, static_cast<off_t>(bytes)); }
         while (result != 0 && errno == EINTR);
         if (result != 0) io_error(errno, "scratch resize");
+        usage_sync(bytes);
     }
     static void check_extent(std::uint64_t offset, std::size_t length, bool arena = false,
                              IoRaiser raiser = IoRaiser::report_sink) {
@@ -248,8 +267,13 @@ public:
         const auto count = std::min(length, bounded_cache_
             ? kCacheBytes - static_cast<std::size_t>(offset % kCacheBytes)
             : static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()));
-        if (slab_) slab_->write_at(resource_, offset, data, count);
-        else if (arena_) arena_io([&] { arena_->write(region_, offset, data, count); });
+        if (slab_) {
+            slab_->write_at(resource_, offset, data, count);
+            usage_sync(slab_->region(resource_).logical_extent);
+        } else if (arena_) {
+            arena_io([&] { arena_->write(region_, offset, data, count); });
+            usage_sync(region_.size);
+        }
         else {
             prepare_write();
             const auto chunk = std::min(count, bounded_cache_
@@ -258,6 +282,9 @@ public:
             const ssize_t written = ::pwrite(fd_, data, chunk, static_cast<off_t>(offset));
             if (written > 0 && bounded_cache_)
                 bytes_written_since_sync_ += static_cast<std::size_t>(written);
+            if (written > 0)
+                usage_sync(std::max(
+                    usage_bytes_, offset + static_cast<std::uint64_t>(written)));
             return written;
         }
         return static_cast<ssize_t>(count);
@@ -288,11 +315,13 @@ public:
     void write(std::uint64_t offset, const void* data, std::size_t length) {
         if (slab_) {
             slab_->write_at(resource_, offset, data, length);
+            usage_sync(slab_->region(resource_).logical_extent);
             return;
         }
         check_extent(offset, length, arena_ != nullptr, io_raiser_);
         if (arena_) {
             arena_io([&] { arena_->write(region_, offset, data, length); });
+            usage_sync(region_.size);
             return;
         }
         const auto* bytes = static_cast<const unsigned char*>(data);
@@ -378,6 +407,24 @@ private:
 #endif
         clean_bytes_read_ = 0;
     }
+    void usage_open() noexcept {
+        if (!usage_opened_) {
+            usage_opened_ = true;
+            run_usage_scratch_open(usage_bytes_);
+        }
+    }
+    void usage_sync(std::uint64_t bytes) noexcept {
+        if (!usage_opened_) usage_open();
+        run_usage_scratch_resize(usage_bytes_, bytes);
+        usage_bytes_ = bytes;
+    }
+    void usage_close() noexcept {
+        if (usage_opened_) {
+            run_usage_scratch_close(usage_bytes_);
+            usage_opened_ = false;
+            usage_bytes_ = 0;
+        }
+    }
     void prepare_write() {
         if (!bounded_cache_ || bytes_written_since_sync_ < kCacheBytes) return;
 #if defined(__linux__)
@@ -405,5 +452,7 @@ private:
     ScratchArena::Region region_;
     mutable std::size_t clean_bytes_read_ = 0;
     std::size_t bytes_written_since_sync_ = 0;
+    bool usage_opened_ = false;
+    std::uint64_t usage_bytes_ = 0;
 };
 } // namespace pineforge::detail

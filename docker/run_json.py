@@ -113,7 +113,7 @@ runs too. Without --outputs nothing of this is read or written.
 
 A failed run prints one line instead, exit status 1 (2 for a command line
 argparse refuses):
-    {"engine":"pineforge","error":"<text>","code":"<code>","args":{...}}
+    {"engine":"pineforge","error":"<text>","code":"<code>","args":{...},"usage":{...}}
 That is the run's own error, a --syminfo the harness rejects (see
 apply_syminfo), a --symbol-feeds it cannot install (see load_symbol_feeds), a
 setting the strategy refuses, an --outputs it cannot honour (see OutputsError),
@@ -122,6 +122,9 @@ docker/run_failure_codes.json and "args" its typed arguments. The engine's code
 is read only from strategy_get_last_error_code and its args from
 strategy_get_last_error_args. For report_sink_failed, reason, high_water_bytes
 and arena_bytes are also copied from args to the top level whenever present.
+When the optional pf_run_usage_v1 export exists, usage is the final key and
+contains the engine receipt plus the Python phase timings that were measured.
+An older library omits usage without changing the preceding keys.
 For run_aborted, args.bars_count is mirrored as bars.count and the boolean
 args.strategy_started is mirrored as strategy_started. SIGTERM is observed
 after a completed input bar; fd 4 closes without a trailer before this line.
@@ -2193,6 +2196,9 @@ class RunFailure(Exception):
         self.exit_status = exit_status
 
 
+_RUN_USAGE = None
+
+
 class StrategyLibraryError(RunFailure, RuntimeError):
     """The strategy library does not match the harness (a load failure, an ABI
     or a missing export): strategy_library_incompatible."""
@@ -2296,7 +2302,7 @@ def _dump_line(doc: dict) -> str:
     return out.getvalue()
 
 
-def failure_line(text, code=None, code_args=None) -> str:
+def failure_line(text, code=None, code_args=None, usage=None) -> str:
     """The one failure line, newline included. Without a code (a run error from
     a library without strategy_get_last_error_code) it is exactly the earlier
     {"engine":"pineforge","error":"<text>"} line. When the line is over
@@ -2325,6 +2331,8 @@ def failure_line(text, code=None, code_args=None) -> str:
                 prefix, separator, name = field.rpartition(".")
                 if prefix == "metrics.equity":
                     doc["args"]["field"] = prefix + separator + EQUITY_REPORT_KEYS.get(name, name)
+    if usage is not None:
+        doc["usage"] = usage
     line = _dump_line(doc)
     if len(line) > ERROR_LINE_MAX:
         if code is not None and len(_dump_line({**doc, "error": ""})) > ERROR_LINE_MAX:
@@ -2347,8 +2355,8 @@ def failure_line(text, code=None, code_args=None) -> str:
     return line + "\n"
 
 
-def write_failure(text, code=None, code_args=None) -> None:
-    sys.stdout.write(failure_line(text, code, code_args))
+def write_failure(text, code=None, code_args=None, usage=None) -> None:
+    sys.stdout.write(failure_line(text, code, code_args, usage))
     sys.stdout.flush()
 
 
@@ -4866,11 +4874,15 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
         binding.attach()
         if abort is not None:
             abort.begin_call()
-        lib.run_backtest_full(
-            state, retained, fed_count,
-            input_tf, script_tf,
-            bar_magnifier, magnifier_samples, magnifier_dist,
-            ctypes.byref(report))
+        try:
+            lib.run_backtest_full(
+                state, retained, fed_count,
+                input_tf, script_tf,
+                bar_magnifier, magnifier_samples, magnifier_dist,
+                ctypes.byref(report))
+        finally:
+            _capture_run_usage(lib)
+        usage_assembly_started = time.monotonic_ns()
         elapsed = time.time() - started
         # The callback's retained exception comes before any report access.
         binding.raise_if_failed()
@@ -4881,7 +4893,7 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
             if getattr(sink, "fd_mode", False):
                 # Unwind through the fd owner's finally before publishing the failure.
                 raise RunFailure(*_post_boundary_engine_failure(failure, phases))
-            write_failure(*_post_boundary_engine_failure(failure, phases))
+            write_failure(*_post_boundary_engine_failure(failure, phases), usage=_RUN_USAGE)
             return 1
         _require_result_assembly(phases)
         # The engine's own counts must equal the plan's, and belong to the observed attempt.
@@ -4956,6 +4968,9 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
             elapsed, inputs, overrides, applied_runtime,
             sink if sink is not None else trade_entry_incarnations,
             window_anchor=True)
+        _record_usage_phase(_RUN_USAGE, "assembly", usage_assembly_started)
+        if _RUN_USAGE is not None:
+            out["usage"] = _RUN_USAGE
         if sink is None:
             _validate_report_result(out)
         _add_scratch_arena_diagnostics(lib, out["diagnostics"], args)
@@ -4968,6 +4983,7 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
         # (the ordinary report keeps its own): any failure below ends the run before anything is
         # serialized, as its own typed code, or, when otherwise unclassified, as
         # report_post_execution_failed of the except clause at the end of this try.
+        usage_digest_started = time.monotonic_ns()
         provenance = build_provenance(
             engine_version(lib),
             None,
@@ -4989,6 +5005,7 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
         fingerprint = build_fingerprint(provenance)
         fingerprint["version"] = swr.FINGERPRINT_VERSION
         out["fingerprint"] = fingerprint
+        _record_usage_phase(_RUN_USAGE, "digest", usage_digest_started)
         # R in all three places, the v2 fingerprint over the same bytes, and the anchor of the
         # native curve at the strategy's initial capital: all checked before serialization.
         swr.check_report_placements(out, window)
@@ -5096,6 +5113,8 @@ def main(argv=None) -> int:
     if tokens and tokens[0] == "csv2bin":
         return _csv2bin_main(tokens[1:])
     abort = _SigtermAbort()
+    global _RUN_USAGE
+    _RUN_USAGE = None
     try:
         with ExitStack() as binary_inputs:
             binary_inputs._sigterm_abort = abort
@@ -5103,20 +5122,20 @@ def main(argv=None) -> int:
     except RunFailure as failure:
         if not abort.started and abort.requested():
             failure = abort.failure()
-        write_failure(str(failure), failure.code, failure.code_args)
+        write_failure(str(failure), failure.code, failure.code_args, usage=_RUN_USAGE)
         return failure.exit_status
     except Exception as error:
         if not abort.started and abort.requested():
             failure = abort.failure()
-            write_failure(str(failure), failure.code, failure.code_args)
+            write_failure(str(failure), failure.code, failure.code_args, usage=_RUN_USAGE)
             return 1
         typed = _typed_failure(error)
         if typed is not None:
-            write_failure(str(typed), typed.code, typed.code_args)
+            write_failure(str(typed), typed.code, typed.code_args, usage=_RUN_USAGE)
             return typed.exit_status
         traceback.print_exc(file=sys.stderr)
         write_failure(f"harness internal error: {type(error).__name__}: {error}",
-                      "harness_internal_error")
+                      "harness_internal_error", usage=_RUN_USAGE)
         return 1
     finally:
         abort.close()
@@ -5428,12 +5447,15 @@ def _main(argv, binary_inputs) -> int:
     def _run(st, rep):
         if abort is not None:
             abort.begin_call()
-        lib.run_backtest_full(
-            st, chart["bars"], n,
-            input_tf, script_tf,
-            bar_magnifier, magnifier_samples, magnifier_dist,
-            ctypes.byref(rep),
-        )
+        try:
+            lib.run_backtest_full(
+                st, chart["bars"], n,
+                input_tf, script_tf,
+                bar_magnifier, magnifier_samples, magnifier_dist,
+                ctypes.byref(rep),
+            )
+        finally:
+            _capture_run_usage(lib)
 
     # --- Bench mode: warm up, then time ONLY run_backtest_full over N repeats. ---
     # Setup (create/set_input/free) is OUTSIDE the timed region so the sample
@@ -5485,6 +5507,7 @@ def _main(argv, binary_inputs) -> int:
             binding = _observer_binding(lib, state, phases.writer)
             binding.attach()
         _run(state, report)
+        usage_assembly_started = time.monotonic_ns()
         elapsed = time.time() - started
         if binding is not None:
             binding.raise_if_failed()  # the callback's exception, before any report access
@@ -5494,7 +5517,7 @@ def _main(argv, binary_inputs) -> int:
             # failure after the acknowledged boundary is report_post_execution_failed.
             if getattr(sink, "fd_mode", False):
                 raise RunFailure(*_post_boundary_engine_failure(failure, phases))
-            write_failure(*_post_boundary_engine_failure(failure, phases))
+            write_failure(*_post_boundary_engine_failure(failure, phases), usage=_RUN_USAGE)
             return 1
         if phases is not None:
             _require_result_assembly(phases)
@@ -5549,6 +5572,9 @@ def _main(argv, binary_inputs) -> int:
             report, args.ohlcv, n, first_ts, last_ts,
             elapsed, inputs, overrides, applied_runtime,
             sink if sink is not None else trade_entry_incarnations)
+        _record_usage_phase(_RUN_USAGE, "assembly", usage_assembly_started)
+        if _RUN_USAGE is not None:
+            out["usage"] = _RUN_USAGE
         if sink is None:
             _validate_report_result(out)
         _add_scratch_arena_diagnostics(lib, out["diagnostics"], args)
@@ -5560,6 +5586,7 @@ def _main(argv, binary_inputs) -> int:
         if outputs_block is not None:
             out["outputs"] = outputs_block
         try:
+            usage_digest_started = time.monotonic_ns()
             # The frozen helpers' regex readers never see the C++: the release
             # reader below owns every declared value, and only the digest of
             # the file is taken here.
@@ -5581,6 +5608,7 @@ def _main(argv, binary_inputs) -> int:
             provenance = normalize_release_provenance(
                 provenance, cpp_text, settings_receipt, checked)
             out["fingerprint"] = build_fingerprint(provenance)
+            _record_usage_phase(_RUN_USAGE, "digest", usage_digest_started)
         except Exception:
             out["fingerprint"] = None
         _advance(phases, "serialization")  # phase records only: the report gains no field
@@ -5671,6 +5699,17 @@ class ReportSinkDiagnosticsC(ctypes.Structure):
                 ("trade_at_start", ctypes.c_uint32), ("complete", ctypes.c_uint32)]
 
 
+class RunUsageC(ctypes.Structure):
+    """Exact pf_run_usage_v1; Python phase timings are appended to its JSON object."""
+    _fields_ = [("struct_size", ctypes.c_uint32), ("version", ctypes.c_uint32)] + [
+        (name, ctypes.c_uint64) for name in (
+            "cpu_user_ns", "cpu_system_ns", "peak_rss_bytes", "run_wall_ns",
+            "arena_high_water_bytes", "arena_capacity_bytes",
+            "scratch_file_bytes_peak", "scratch_file_count_peak",
+            "sink_bytes_written", "sink_rows_written", "report_bytes",
+            "bars_processed", "unmeasured_mask")]
+
+
 def _bind_report_sink(lib) -> None:
     signatures = {
         "pf_report_sink_version": (ctypes.c_uint32, []),
@@ -5687,11 +5726,37 @@ def _bind_report_sink(lib) -> None:
             ctypes.c_void_p, ctypes.POINTER(ReportSinkSummaryC)]),
         "strategy_report_sink_diagnostics_v1": (ctypes.c_int, [
             ctypes.c_void_p, ctypes.POINTER(ReportSinkDiagnosticsC)]),
+        "pf_run_usage_v1": (ctypes.c_int, [ctypes.POINTER(RunUsageC)]),
     }
     for name, (restype, argtypes) in signatures.items():
         if hasattr(lib, name):
             function = getattr(lib, name)
             function.restype, function.argtypes = restype, argtypes
+
+
+def _read_run_usage(lib):
+    getter = getattr(lib, "pf_run_usage_v1", None)
+    if getter is None:
+        return None
+    receipt = RunUsageC(ctypes.sizeof(RunUsageC), 1)
+    try:
+        if getter(ctypes.byref(receipt)) != 0:
+            return None
+    except (AttributeError, OSError, TypeError, ValueError):
+        return None
+    return {name: int(getattr(receipt, name))
+            for name, _ in RunUsageC._fields_[2:]}
+
+
+def _capture_run_usage(lib):
+    global _RUN_USAGE
+    _RUN_USAGE = _read_run_usage(lib)
+    return _RUN_USAGE
+
+
+def _record_usage_phase(usage, name, started_ns):
+    if usage is not None:
+        usage.setdefault("phases_ns", {})[name] = max(0, time.monotonic_ns() - started_ns)
 
 
 def _add_scratch_arena_diagnostics(lib, diagnostics, args=None):
@@ -7004,6 +7069,7 @@ def _prepare_stream_report(document, resources, directory, *, sink_errors=True):
 
 
 def _prepare_report_json(document, resources, args, sink):
+    serialization_started = time.monotonic_ns()
     # The jailed array route is intentionally resident, as are its native
     # arrays. The fd route contains only the bounded summary. Neither may
     # create a report file, even when no sink is installed.
@@ -7012,10 +7078,13 @@ def _prepare_report_json(document, resources, args, sink):
         _stream_json(document, buffer)
         buffer.write("\n")
         buffer.seek(0)
+        _record_usage_phase(document.get("usage"), "serialization", serialization_started)
         return buffer
-    return _prepare_stream_report(
+    buffer = _prepare_stream_report(
         document, resources, sink.directory if sink is not None else args.spill_dir,
         sink_errors=sink is not None)
+    _record_usage_phase(document.get("usage"), "serialization", serialization_started)
+    return buffer
 
 
 def _sink_trade(record):

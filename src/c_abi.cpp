@@ -41,6 +41,7 @@
  *     strategy_report_sink_diagnostics_v1,
  *     pf_run_abort_install_sigterm_v1, pf_run_abort_requested_v1,
  *     pf_run_abort_restore_sigterm_v1 — the
+ *     pf_run_usage_v1 —
  *     authoritative list is EXPECTED_RUNTIME in scripts/check_c_abi_runtime.py (CI). Other
  *     `extern "C"` symbols listed in pineforge.h (strategy_create,
  *     run_backtest, etc.) are emitted per-compiled-strategy by the
@@ -58,6 +59,7 @@
 #include <pineforge/native_host.hpp>
 #include <pineforge/run_failure.hpp>
 #include <pineforge/detail/scratch_arena.hpp>
+#include <pineforge/detail/run_usage.hpp>
 #include <pineforge/bar.hpp>
 #include <pineforge/magnifier.hpp>
 #include <cstddef>
@@ -1426,6 +1428,18 @@ PF_API int pf_report_scratch_arena_stats(uint64_t* high_water_bytes, uint64_t* a
     } catch (...) {
         return -1;
     }
+}
+
+PF_API int pf_run_usage_v1(struct pf_run_usage_v1* out) {
+    if (!out || out->struct_size != sizeof(*out) || out->version != 1) return -1;
+    struct pf_run_usage_v1 local{};
+    if (!pineforge::detail::run_usage_fill(&local)) return -1;
+    const auto* arena = pineforge::detail::ScratchArena::attached();
+    const auto stats = arena ? arena->stats() : pineforge::detail::ScratchArenaStats{};
+    local.arena_high_water_bytes = stats.high_water;
+    local.arena_capacity_bytes = stats.bytes_supplied;
+    *out = local;
+    return 0;
 }
 
 PF_API int strategy_require_report_scratch_arena_v1(pf_strategy_t s) {

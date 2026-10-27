@@ -3,6 +3,7 @@
 #include "sha256.hpp"
 
 #include <pineforge/version.h>
+#include <pineforge/detail/run_usage.hpp>
 #include <algorithm>
 #include <array>
 #include <cerrno>
@@ -455,9 +456,11 @@ struct LineWriter::State {
             if (used == io_window) flush();
         }
     }
-    void line(bool hashed = true) {
+    void line(bool hashed = true, bool row = false) {
         if (hashed) { hash.update(scratch.view()); hash.update("\n"); }
         append(scratch.view()); append("\n");
+        detail::run_usage_sink_line(
+            static_cast<std::uint64_t>(scratch.view().size() + 1), row);
     }
     std::array<std::int64_t, 7> counts() const {
         return {{trailer.count_e, trailer.count_t, trailer.count_o, trailer.count_v,
@@ -469,7 +472,7 @@ struct LineWriter::State {
             require_writing();
             if (!enabled(tag, records)) invalid("report sink record is absent from the header");
             if (count == safe_integer) invalid("report sink record count exceeds its bound");
-            scratch.clear(); build(scratch); line(); ++count;
+            scratch.clear(); build(scratch); line(true, true); ++count;
         } catch (...) { fail(); throw; }
     }
 };
@@ -515,7 +518,7 @@ void LineWriter::write_e(const pf_equity_point_t& point) {
         line.append("[\"E\","); integer(line, point.time_ms);
         line.append(','); real(line, point.equity);
         line.append(','); real(line, point.open_profit);
-        line.append(']'); state.line();
+        line.append(']'); state.line(true, true);
         if (state.trailer.count_e == 0) state.diagnostics.first = point;
         state.diagnostics.last = point;
         ++state.trailer.count_e;
@@ -548,7 +551,7 @@ void LineWriter::write_t(std::int64_t n, const pf_trade_t& trade,
         for (const auto value : {entry_id, exit_id, exit_comment}) {
             line.append(','); wire_string(line, value);
         }
-        line.append(']'); state.line(); ++state.trailer.count_t;
+        line.append(']'); state.line(true, true); ++state.trailer.count_t;
         if (trade.entry_bar_index <= 0) state.diagnostics.trade_at_start = 1;
     } catch (...) { state.fail(); throw; }
 }
