@@ -5218,7 +5218,7 @@ class FloorDocsPointAtTheTable(unittest.TestCase):
     )
     DOC_PLACES = ('CONTRIBUTING.md', 'docs/pages/contributing-llm.md',
                   'docs/pages/native-engine.md', 'docs/ci.md',
-                  '.github/workflows/ci.yml')
+                  '.github/workflows/ci-post.yml')
 
     def test_ci_documentation_pins_the_combined_profile_floors(self):
         text = (ROOT / 'docs/ci.md').read_text()
@@ -5299,7 +5299,7 @@ class FloorDocsPointAtTheTable(unittest.TestCase):
                 for stale in self.STALE_INSTRUCTIONS:
                     self.assertNotIn(stale, text)
         for rel in ('docs/pages/contributing-llm.md', 'docs/pages/native-engine.md',
-                    'CONTRIBUTING.md', '.github/workflows/ci.yml'):
+                    'CONTRIBUTING.md', '.github/workflows/ci.yml', '.github/workflows/ci-post.yml'):
             with self.subTest(place=rel):
                 text = (ROOT / rel).read_text()
                 self.assertNotIn('KERNEL_MIN_TESTS', text)
