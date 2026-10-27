@@ -122,9 +122,10 @@ inline std::string scratch_resident_cohort_limit_message(
         "close or cancel orders sooner, or reuse ids; ");
     message += "live count ";
     message += scratch_limit_number(live);
-    message += ", cap ";
+    // No remedy beyond "close, cancel or reuse" exists: the per-bar count comes from the
+    // module itself and the cap is the approved maximum, so the text names the maximum.
+    message += ", approved maximum ";
     message += scratch_limit_number(cap);
-    message += "; declare a higher freshPerBar";
     return message;
 }
 

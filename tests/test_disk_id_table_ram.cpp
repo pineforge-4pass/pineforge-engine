@@ -489,9 +489,8 @@ void resident_cap_is_active_only_and_read_only() {
     const std::string text = "more than " + detail::scratch_limit_number(limit) +
         " order ids active at once (placed and not yet closed or cancelled); "
         "close or cancel orders sooner, or reuse ids; live count " +
-        detail::scratch_limit_number(limit + 1) + ", cap " +
-        detail::scratch_limit_number(detail::kMaxResidentCohortsCap) +
-        "; declare a higher freshPerBar";
+        detail::scratch_limit_number(limit + 1) + ", approved maximum " +
+        detail::scratch_limit_number(detail::kMaxResidentCohortsCap);
     capacity_text("cohort", text, [&] { table.require_insert("one-too-many"); });
     capacity_text("cohort", text, [&] {
         table.emplace("one-too-many", LiveFacts{value(historical_count + 1), true});
