@@ -34,6 +34,7 @@ public:
 
     void on_source_bar(const pineforge::Bar&) override {
         const int bar = pine_bar_index();
+        const auto two_leg_before = adapter_.dense_pending_work().same_point_two_leg_book_handles;
         const auto suffix = std::to_string(period_ == 0 ? bar : bar % period_);
         const auto entry_id = "pending-" + suffix;
         const auto exit_id = "exit-" + suffix;
@@ -45,6 +46,16 @@ public:
         const bool is_long = bar % 2 == 0;
         strategy_entry(entry_id, is_long, is_long ? 1.0 : 1000.0, na, 1.0);
         strategy_exit(exit_id, entry_id, na, is_long ? 50.0 : 150.0);
+        // Hand arithmetic: each earlier bar left one unreachable entry.
+        // From bar 64 there are at least 64 live entries even without the
+        // exit legs, so the adaptive index is active for every command here.
+        // Count answers then visit no handles; a logical bucket cardinality
+        // must not masquerade as a physical walk.
+        if (period_ == 0 && bar >= 64) {
+            active_two_leg_visits_ += adapter_.dense_pending_work().same_point_two_leg_book_handles
+                - two_leg_before;
+            ++active_two_leg_windows_;
+        }
         ++source_bars_;
     }
 
@@ -52,6 +63,8 @@ public:
     Adapter::DensePendingWork dense_work() const { return adapter_.dense_pending_work(); }
     const auto& cohort_table_work() const { return adapter_.cohort_table_work(); }
     int source_bars() const { return source_bars_; }
+    std::uint64_t active_two_leg_visits() const { return active_two_leg_visits_; }
+    int active_two_leg_windows() const { return active_two_leg_windows_; }
 
     // Read the real public working-book snapshot, not a diagnostic maximum.
     // Exit labels use a different prefix, so they cannot inflate this count.
@@ -65,6 +78,8 @@ public:
 private:
     int period_;
     int source_bars_ = 0;
+    std::uint64_t active_two_leg_visits_ = 0;
+    int active_two_leg_windows_ = 0;
 };
 
 struct Measurement {
@@ -177,6 +192,10 @@ Measurement measure(const char* script, int period, int n) {
         // cancellation: pending entries = sum(1 for each source bar) = n.
         require(host.pending_entries() == static_cast<std::size_t>(n),
                 "dense pending entry count after the run must equal N");
+        require(host.active_two_leg_windows() == n - 64,
+                "every dense bar after activation exercises the two-leg work witness");
+        require(host.active_two_leg_visits() == 0,
+                "active same-point two-leg counts must not visit live rows");
     }
     return result;
 }

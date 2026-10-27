@@ -117,14 +117,49 @@ public:
                                       const LiveKey& = {}, int side = -1) const;
     std::size_t count_before_command(LiveClass, std::uint64_t exclusive,
                                       const LiveKey& = {}, int side = -1) const;
+    // Preserve a caller's original loop as the small-book path and the Debug
+    // oracle. Only the production fallback contributes physical visit work.
+    template<class Indexed, class Scan>
+    auto query_or_scan(const char* component, Indexed&& indexed, Scan&& scan) const {
+        if (!active_) return scan(true);
+        const auto answer = indexed();
+        if (oracle_enabled()) check_answer(answer == scan(false), component);
+        return answer;
+    }
+    // Observers retain their original row predicate. Build identity keys and
+    // owning selections only in active mode.
+    template<class MakeKey, class Observe>
+    void visit_candidates(LiveClass c, MakeKey&& make_key, Observe&& observe) const {
+        if (!active_) {
+            if (sequence_) for (const auto& h : *sequence_) observe(h);
+        } else {
+            for (const auto& h : rows(c, make_key())) observe(h);
+        }
+    }
+    std::vector<Handle> dropped_exit_rows(const std::string& source, const std::string& from,
+                                         bool drop_limit, bool drop_stop,
+                                         std::uint64_t* visits = nullptr) const;
     std::vector<Handle> reservation_rows(const std::string& exact_from,
                                          std::int64_t current_cycle) const;
+    // The observer retains the original reservation predicate. Small books
+    // use its old loop without first allocating an owning handle vector;
+    // active books supply the oracle-checked ordered reservation selection.
+    template<class Observe>
+    void visit_reservation_candidates(const std::string& exact_from,
+                                      std::int64_t current_cycle, Observe&& observe) const {
+        if (!active_) {
+            if (sequence_) for (const auto& h : *sequence_) observe(h);
+        } else {
+            for (const auto& h : reservation_rows(exact_from, current_cycle)) observe(h);
+        }
+    }
     std::size_t reservation_count(const std::string& exact_from, std::int64_t current_cycle) const;
     static const char* class_name(LiveClass);
     static bool oracle_enabled() noexcept;
     // Assertion builds only: independent whole-book comparison, never repair.
     void verify() const;
 private:
+    static void check_answer(bool matches, const char* component);
     bool update_activation();
     void release_storage();
     Record project(Handle) const;
@@ -153,6 +188,20 @@ private:
         std::unordered_set<Handle, LiveHandleHash>> incarnations_;
     std::array<std::map<LiveKey, Bucket>, kClasses> buckets_;
 };
+
+// The adapter keeps its original predicate at the gate. ADL selects this
+// overload when the index and its scalar query are supplied after it.
+template<class Handles, class Placements, class Row, class Indexed>
+bool any_live_row(const Handles& live, const Placements& placement, Row&& row,
+                  const LiveRowIndex& index, Indexed&& indexed) {
+    return index.query_or_scan("adapter live-row predicate", indexed, [&](bool) {
+        for (const auto& handle : live) {
+            const auto found = placement.find(handle.incarnation);
+            if (found != placement.end() && row(found->second)) return true;
+        }
+        return false;
+    });
+}
 
 } // namespace detail
 } // namespace pineforge::source

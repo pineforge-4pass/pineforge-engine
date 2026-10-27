@@ -971,9 +971,21 @@ public:
             strategy_cancel(exit_id);
             strategy_cancel(id);
         }
+        const auto resident_visits_before = adapter_.cohort_table_work().resident_rows_visited;
         strategy_entry(id, true, 1.0, na, 1.0); // Never fills on this chart.
         // The cap witness needs 4,096 real pending origins, not exit legs.
         if (!cap_probe_) strategy_exit(exit_id, id, na, 50.0);
+        if (!cap_probe_ && period_ == 0 && i == 31) {
+            // Hand arithmetic: 32 unreachable entries + 32 stop legs cross
+            // the 64-handle activation boundary. The derived origin index
+            // initializes once from those 32 canonical cohort rosters.
+            // These are bootstrap reads, not held-position decisions; keep
+            // them in the table's total work and check their exact count.
+            index_bootstrap_rows = adapter_.cohort_table_work().resident_rows_visited
+                - resident_visits_before;
+            require(resident_visits_before == 0 && index_bootstrap_rows == 32,
+                    "index bootstrap visits each of the 32 pending cohort rosters exactly once");
+        }
         if (i == 127) at_128 = adapter_.pending_scan_work();
         if (i == 255) at_256 = adapter_.pending_scan_work();
     }
@@ -991,6 +1003,7 @@ public:
     Adapter::PendingScanWork at_128{}, at_256{};
     const Adapter& adapter() const { return adapter_; }
     bool refused = false;
+    std::uint64_t index_bootstrap_rows = 0;
 private:
     bool cap_probe_;
     int period_;
@@ -1074,8 +1087,15 @@ void dense_operation_growth_and_instrumentation(bool jailed) {
         require(table.resident_size() == static_cast<std::size_t>(n)
                 && table.held_size() == 0 && table.held_rows_exact(),
                 "dense placed-never-filled cohorts pin residents without holding openings or units");
-        require(host.adapter().cohort_table_work().resident_rows_visited == 0
-                && host.adapter().cohort_table_work().held_rows_visited == 0,
+        const auto& cohort_work = host.adapter().cohort_table_work();
+        std::printf("CR391B dense N=%d resident_rows_visited=%llu index_bootstrap_rows=%llu "
+                    "held_rows_visited=%llu\n", n,
+                    static_cast<unsigned long long>(cohort_work.resident_rows_visited),
+                    static_cast<unsigned long long>(host.index_bootstrap_rows),
+                    static_cast<unsigned long long>(cohort_work.held_rows_visited));
+        require(host.index_bootstrap_rows == 32
+                && cohort_work.resident_rows_visited == host.index_bootstrap_rows
+                && cohort_work.held_rows_visited == 0,
                 "production decisions visit no rows when H is zero despite growing pending R");
         operations[sample] = host.cohort_operations();
         walk_operations[sample] = host.cohort_walk_operations();
@@ -1113,9 +1133,12 @@ void dense_operation_growth_and_instrumentation(bool jailed) {
             return work.priced_entry.live_handle_iterations + work.entry.live_handle_iterations
                 + work.standing_exit.live_handle_iterations;
         };
-        require(scanned(host.at_128) > 0 && scanned(host.at_256) > scanned(host.at_128)
+        // The A conversion replaced these old full-book loops with class
+        // queries. Keep their physical-loop counters at zero while proving
+        // the public dense commands still execute; cohort work is metered above.
+        require(scanned(host.at_128) == 0 && scanned(host.at_256) == 0
                 && host.at_128.entry.calls > 0 && host.at_256.entry.calls > host.at_128.entry.calls,
-                "the dense script itself exercises nonzero, growing pending scans");
+                "indexed pending decisions eliminate the former full-book scans while calls grow");
         require(host.at_256.open_lot.live_handle_iterations == 0
                 && host.at_256.open_lot.placement_find_calls == 0,
                 "open_lot_of has a native-lot walk, no live-handle or placement loop");

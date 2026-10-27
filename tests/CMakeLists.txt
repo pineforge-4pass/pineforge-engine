@@ -1483,11 +1483,11 @@ list(APPEND TEST_SOURCES test_native_fused_settlement_allocations)
 # Source-bound.
 list(APPEND TEST_SOURCES test_adapter_live_state_scaling)
 list(APPEND TEST_SOURCES test_adapter_live_state_equivalence)
-# Dense pending growth/model/retirement; R5 V19-D bracket parking compares
-# randomized streams with model members, retained tails/folds. Source-bound.
-list(APPEND TEST_SOURCES test_dense_pending_call_work)
-list(APPEND TEST_SOURCES test_live_row_index)
-list(APPEND TEST_SOURCES test_live_row_retire_work)
+# CR-391B live-row index: dense pending growth, index model, retirement work,
+# per-bar and per-call public-run witnesses. Source-bound.
+list(APPEND TEST_SOURCES test_dense_pending_call_work test_live_row_index
+    test_live_row_retire_work test_per_bar_index_witness
+    test_s4e391b_a_variants)
 list(APPEND TEST_SOURCES test_bracket_roster_parking)
 # R5 lane L3: the order core's direct forms (WorkingRequestCore::apply_*)
 # against the prepare/install pairs they stand for, bit for bit after every
@@ -7687,9 +7687,6 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND _pf_source_key_type STREQUAL "STATIC_LIBRARY
 endif()
 # --- CR-150 live-source-key end ---
 
-# S4E-391B piece B: public-run witnesses for per-bar indexed selections.
-list(APPEND TEST_SOURCES test_per_bar_index_witness)
-
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
         message(FATAL_ERROR "PR fast row or executable is missing: ${_pf_fast_test}")
@@ -7709,10 +7706,4 @@ foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
 endforeach()
 if(PINEFORGE_BUILD_SOURCE_LAYER)
     add_custom_target(pineforge_pr_smoke DEPENDS ${PINEFORGE_PR_FAST_TESTS})
-endif()
-
-# CR-391B-A: public-run variants for indexed per-call selections.
-if(PINEFORGE_BUILD_SOURCE_LAYER)
-    list(APPEND TEST_SOURCES test_s4e391b_a_variants)
-    pineforge_add_unit_test(test_s4e391b_a_variants)
 endif()

@@ -129,7 +129,9 @@ private:
     void fill_and_cancel(int bar) {
         if (bar == 0) {
             strategy_entry("fill", true, kNaN, 102.0, 1.0);
-            strategy_entry("cancel", true, kNaN, 102.0, 1.0);
+            // Bar 1 reaches 102, but its high 103 cannot reach this stop.
+            // The close callback can cancel it before bar 2's high 104.
+            strategy_entry("cancel", true, kNaN, 104.0, 1.0);
             strategy_entry("far", true, 1.0, kNaN, 1.0);
         } else if (bar == 1) {
             strategy_cancel("cancel");
@@ -209,9 +211,9 @@ void run_fill_and_cancel() {
     const auto bars = tape();
     host.run(bars.data(), static_cast<int>(bars.size()));
     require(host.last_error().empty(), "fill/cancel variant reports no error");
-    // Hand oracle: bar 1 cancels "cancel" before its 102 stop can act; the
-    // identical "fill" stop reaches on that bar, while the 1.0 limit never
-    // reaches. Exactly one unit is therefore open and "cancel" is absent.
+    // Hand oracle: bar 1's high 103 fills the 102 "fill" stop. Its close
+    // callback cancels the untouched 104 stop before bar 2 reaches 104.
+    // The 1.0 limit never reaches: exactly one unit opens, "cancel" is absent.
     require(host.position() == 1.0 && host.working_label("cancel") == 0,
             "fill and cancellation change the indexed live classes");
     require(host.working_label("far") == 1, "the untouched far row survives");

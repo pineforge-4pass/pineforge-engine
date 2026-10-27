@@ -3231,6 +3231,7 @@ private:
     void refresh_live_source_key(std::uint64_t key) const;
     void rebuild_live_row_index();
     void retire_small_live_source_keys(native_order::RequestHandle);
+    std::size_t scan_explicit_entries_on_bar(int bar_index) const;
 };
 
 namespace detail {
