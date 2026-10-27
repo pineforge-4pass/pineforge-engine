@@ -7,9 +7,8 @@
 // a run: the code (strategy_get_last_error_code), its arguments as canonical JSON
 // (strategy_get_last_error_args), the English (strategy_get_last_error) and the
 // run status (strategy_last_run_status), plus the report's trade count. The
-// English, the status and the trade count are the ones the base engine
-// (7a1f01c0, before run-failure codes existed) reported for the same run: the
-// codes ride beside the text and change nothing else.
+// English and status keep their original values. Faulted reports are empty;
+// retained execution rows independently prove the strategy made progress.
 //
 // Native hosts (no Pine source layer) then drive the kernel's own bar preflight
 // and the callback catch sites that wrote no text before. Without a run: every
@@ -104,6 +103,47 @@ std::string args_json(const RunFailureValue& value) {
     return value.args ? *value.args : std::string("{}");
 }
 
+void check_empty_report(const pineforge::ReportC& report) {
+    CHECK(report.total_trades == 0 && report.trades == nullptr && report.trades_len == 0);
+    CHECK(report.net_profit == 0);
+    CHECK(report.security_diag == nullptr && report.security_diag_len == 0);
+    CHECK(report.trace == nullptr && report.trace_len == 0);
+    CHECK(report.trace_names == nullptr && report.trace_names_len == 0);
+    CHECK(report.equity_curve == nullptr && report.equity_curve_len == 0);
+    CHECK(report.broker_state_hash == nullptr && report.broker_state_hash_len == 0);
+    CHECK(report.input_bars_processed == 0 && report.script_bars_processed == 0);
+    CHECK(report.security_feeds_total == 0 && report.security_eval_complete_total == 0
+          && report.security_eval_partial_total == 0);
+    CHECK(report.magnifier_sub_bars_total == 0 && report.magnifier_sample_ticks_total == 0);
+    CHECK(report.input_tf_seconds == 0 && report.script_tf_seconds == 0
+          && report.script_tf_ratio == 0 && report.needs_aggregation == 0
+          && report.bar_magnifier_enabled == 0);
+    const pf_trade_stats_t* blocks[]{&report.metrics.all, &report.metrics.longs,
+                                    &report.metrics.shorts};
+    for (const auto* stats : blocks) {
+        CHECK(stats->num_trades == 0 && stats->num_wins == 0 && stats->num_losses == 0
+              && stats->num_even == 0 && stats->max_consecutive_wins == 0
+              && stats->max_consecutive_losses == 0);
+        const double values[]{
+            stats->percent_profitable, stats->net_profit, stats->net_profit_pct,
+            stats->gross_profit, stats->gross_profit_pct, stats->gross_loss, stats->gross_loss_pct,
+            stats->profit_factor, stats->avg_trade, stats->avg_trade_pct, stats->avg_win,
+            stats->avg_win_pct, stats->avg_loss, stats->avg_loss_pct, stats->ratio_avg_win_avg_loss,
+            stats->largest_win, stats->largest_win_pct, stats->largest_loss, stats->largest_loss_pct,
+            stats->commission_paid, stats->expectancy, stats->avg_bars_in_trade,
+            stats->avg_bars_in_wins, stats->avg_bars_in_losses};
+        for (double value : values) CHECK(value == 0 && !std::signbit(value));
+    }
+    const auto& equity = report.metrics.equity;
+    const double values[]{
+        equity.max_equity_drawdown, equity.max_equity_drawdown_pct,
+        equity.max_equity_runup, equity.max_equity_runup_pct,
+        equity.buy_hold_return, equity.buy_hold_return_pct,
+        equity.sharpe_monthly, equity.sortino_monthly, equity.sharpe_bar, equity.sortino_bar,
+        equity.cagr, equity.calmar, equity.recovery_factor, equity.time_in_market_pct, equity.open_pl};
+    for (double value : values) CHECK(value == 0 && !std::signbit(value));
+}
+
 // ---------------------------------------------------------------------------
 // Strategy rows.
 
@@ -112,6 +152,8 @@ struct Observed {
     bool text_null = false, code_null = false, args_null = false;
     int status = -9;
     int trades = -1;
+    int retained_trades = -1;
+    std::int64_t script_bars = 0;
 };
 
 struct Expected {
@@ -122,7 +164,8 @@ struct Expected {
     // printed "" there: a silent failure).
     const char* text;
     int status;  // strategy_last_run_status, as base reported it
-    int trades;  // the report's total_trades, as base reported it (-1: no report)
+    int trades;  // the report's total_trades (-1: omit the count check)
+    int retained_trades = -1;  // diagnostic row count, independent of publication
 };
 
 Observed observe(void* s) {
@@ -158,6 +201,10 @@ struct Handle {
                           PF_MAGNIFIER_ENDPOINTS, &report);
         Observed o = observe(s);
         o.trades = report.total_trades;
+        const auto& engine = *static_cast<const pineforge::BacktestEngine*>(s);
+        o.retained_trades = engine.report_trade_count();
+        o.script_bars = engine.script_bars_processed();
+        if (o.status != 0 || !o.code.empty()) check_empty_report(report);
         strategy.report_free(&report);
         return o;
     }
@@ -175,8 +222,13 @@ void expect_row(const char* row, const Observed& got, const Expected& want) {
     CHECK_EQ(at + "run status (base 7a1f01c0)", std::to_string(got.status),
              std::to_string(want.status));
     if (want.trades >= 0) {
-        CHECK_EQ(at + "report trades (base 7a1f01c0)", std::to_string(got.trades),
+        CHECK_EQ(at + "report trades", std::to_string(got.trades),
                  std::to_string(want.trades));
+    }
+    if (want.retained_trades >= 0) {
+        CHECK_EQ(at + "retained execution rows", std::to_string(got.retained_trades),
+                 std::to_string(want.retained_trades));
+        CHECK(got.script_bars > 0);
     }
 }
 
@@ -208,7 +260,7 @@ void forged_runtime_error_rows(const std::vector<pineforge::Bar>& minute) {
         Handle h(rfc::kForged);
         h.input("Case", row.forged_case);
         expect_row(row.row, h.run(minute, "1", "1"),
-                   {"strategy_runtime_error", "{}", row.text.c_str(), 1, 1});
+                   {"strategy_runtime_error", "{}", row.text.c_str(), 1, 0, 1});
     }
 }
 
@@ -320,7 +372,7 @@ void matrix_rows(const std::vector<pineforge::Bar>& minute) {
     Handle h(rfc::kMatrix);
     expect_row("matrix_add_col_empty", h.run(minute, "1", "1"),
                {"pine_matrix_error", R"({"function":"matrix.add_col","reason":"empty_matrix"})",
-                "matrix.add_col on empty matrix: use add_row first", 1, 1});
+                "matrix.add_col on empty matrix: use add_row first", 1, 0, 1});
     try {
         auto matrix = pineforge::PineGenericMatrix<int>::new_(0, 0, 0);
         matrix.add_col(0, std::vector<int>{1});
@@ -369,7 +421,7 @@ void helper_stop_rows(const std::vector<pineforge::Bar>& minute) {
         Handle h(rfc::kHelpers);
         h.input("Case", row.stop_case);
         expect_row(row.row, h.run(minute, "1", "1"),
-                   {row.code, row.args.c_str(), row.text.c_str(), 1, 1});
+                   {row.code, row.args.c_str(), row.text.c_str(), 1, 0, 1});
     }
 }
 
@@ -487,7 +539,7 @@ void record_lifecycle_rows(const std::vector<pineforge::Bar>& minute) {
         Handle h(rfc::kForged);
         h.input("Case", "1");
         expect_row("reuse_failed_handle_first_run", h.run(minute, "1", "1"),
-                   {"strategy_runtime_error", "{}", "native x", 1, 1});
+                   {"strategy_runtime_error", "{}", "native x", 1, 0, 1});
         h.input("Case", "0");
         expect_row("reuse_failed_handle_refused", h.run(minute, "1", "1"),
                    {"engine_invariant", "{}",

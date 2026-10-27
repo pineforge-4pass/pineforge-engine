@@ -333,11 +333,13 @@ public:
     // Whether retained rows answer the latest run/stream_begin call (ledger below):
     // false after a call that never reached begin_ready's reset_run_state() or was
     // refused over a live attempt; true after begin or with no consumer bound.
-    // fill_report publishes partial rows on failure except for report_sink_failed:
-    // every later read is empty ReportC, even after finish-time sink failure following run success;
-    // status, code, arguments and message stay in the run-failure latch. The C stream seam
-    // fill_snapshot_report reads the latest reset attempt's rows through the same gate.
+    // Faults suppress publication independently of ownership. A deliberate
+    // abort retains its ordinary diagnostic report; selected fences still apply.
+    // The snapshot reader uses the latest reset attempt's ownership.
     static bool rows_are_current(const BacktestEngine& engine) noexcept;
+    static bool report_rows_publishable(const BacktestEngine& engine) noexcept;
+    static void latch_report_failure(BacktestEngine& engine,
+                                     const std::exception* error) noexcept;
     static void fill_snapshot_report(const BacktestEngine& engine, ReportC* out);
     std::vector<NativeMarketEvent> events_after(uint64_t after_ordinal) const;
     // The command rows of events_after(after_ordinal), read in place (R5 lane

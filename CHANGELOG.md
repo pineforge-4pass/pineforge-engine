@@ -212,6 +212,11 @@ diagnostics keys, described below.
 ### Run-failure catalog
 
 - `engine_invariant` may now carry `reason=order_key_hash_collision` (two order keys whose 64-bit hashes collide are refused instead of one silently replacing the other).
+## Unreleased
+
+After a fault, every public result reader returns an empty report and the original typed failure; incomplete sink artifacts are never promoted to user results. Successful report, trade and hash bytes are unchanged.
+
+Deliberate host aborts retain their existing diagnostic reports and selected-window fences.
 
 ## 1.7.0 — 2026-10-25
 

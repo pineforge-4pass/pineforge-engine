@@ -1433,9 +1433,8 @@ void row_run_failed() {
     CHECK(g_log.count("host.present_report") == 0);
     CHECK(host_events_after_observer(g_log.events) == -1);
 
-    // OFF counterpart: the same failure, the same first cause, and the failed attempt
-    // keeps its partial rows (the existing rows_current semantics), unlike the closed
-    // selected generation.
+    // OFF counterpart: the same fault keeps the same first cause and publishes
+    // the empty report, just as the closed selected generation does.
     g_log.clear();
     PresentHost off;
     off.throw_label = bad_label;
@@ -1448,7 +1447,7 @@ void row_run_failed() {
     CHECK(same_counts(off_counts, off_before));
     Report off_report;
     off.fill_report(&off_report.raw);
-    CHECK(off_report.raw.equity_curve_len > 0);
+    check_empty_report(off_report.raw);
     CHECK(off.last_error() == first_cause);
 }
 

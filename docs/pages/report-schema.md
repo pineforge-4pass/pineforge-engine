@@ -771,9 +771,9 @@ typedef struct pf_equity_point_s {
 ```
 
 On the ordinary legacy/FULL owning-array route, `equity_curve_len` equals
-`script_bars_processed` on a completed `KernelRecorded` run (an exception,
-cooperative abort or other failure mid-run can truncate the recorded prefix —
-check `strategy_get_last_error`). A
+`script_bars_processed` on a completed `KernelRecorded` run. A deliberate abort
+can expose a shorter diagnostic prefix. After a fault, every public report
+array/count/metric is empty; the original typed failure remains available. A
 bare native host using the default `HostRecorded` policy has no kernel-owned
 curve. The array is heap-allocated and freed by #report_free. Note the length
 field is `int64_t`, not `int`.

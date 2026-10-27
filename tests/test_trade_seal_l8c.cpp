@@ -394,8 +394,19 @@ void differential_checks(Directory& directory, const Options& options, int count
     }
     require(baseline.ledger().base() == 0 && retained.ledger().base() == 0,
             "sink-off or non-streamable policy retired rows");
-    require(receipt(streamed).count_t == static_cast<std::int64_t>(streamed.ledger().base()),
-            "T records were not written exactly at seal");
+    const auto sealed_base = streamed.ledger().base();
+    const std::string failure_text = baseline.last_error();
+    if (options.fail) {
+        require(sealed_base > 0 && streamed.consumer().closed_trade_prefix().base == sealed_base,
+                "faulted run lost its committed seal state");
+        require(receipt(streamed).count_t == 0, "faulted receipt published sealed trades");
+        for (const Role& role : roles)
+            require(role.host->observations.size() == 45 && !role.host->last_error().empty(),
+                    std::string(role.name) + ": callback did not reach the intended failure");
+    } else {
+        require(receipt(streamed).count_t == static_cast<std::int64_t>(sealed_base),
+                "T records were not written exactly at seal");
+    }
     require(receipt(retained).count_t == 0, "retaining path wrote provisional rows");
     require(receipt(streamed).complete == 0, "sink completed before fill");
     compare_observations(baseline, streamed);
@@ -426,6 +437,23 @@ void differential_checks(Directory& directory, const Options& options, int count
     if (options.fail || options.abort) {
         require(receipt(streamed).complete == 0, "failed/aborted sink acquired a trailer");
         require(bytes.find("\"trailer\"") == std::string::npos, "failed sink has trailer bytes");
+        if (options.fail) {
+            const auto empty = summary_bytes(ReportC{});
+            require(summary_bytes(expected.value) == empty, "faulted baseline report is not empty");
+            require(summary_bytes(actual.value) == empty, "faulted sink report is not empty");
+            require(summary_bytes(kept.value) == empty, "faulted retaining report is not empty");
+            require(summary_bytes(again.value) == empty, "repeated faulted report is not empty");
+            require(receipt(streamed).count_t == 0, "report reads republished faulted trades");
+            require(streamed.ledger().base() == sealed_base
+                    && streamed.consumer().closed_trade_prefix().base == sealed_base,
+                    "faulted report reads changed committed seal state");
+            for (const Role& role : roles)
+                require(role.host->last_run_status() == 1
+                        && std::string(run_failure_code_of(*role.host)) == "engine_unclassified_error"
+                        && std::string(run_failure_args_of(*role.host)) == "{}"
+                        && role.host->last_error() == failure_text,
+                        std::string(role.name) + ": report reads changed the callback failure");
+        }
     } else {
         require(receipt(streamed).complete == 1, "successful sink lacks trailer");
         require(receipt(streamed).count_t == expected.value.total_trades,

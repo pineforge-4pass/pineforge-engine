@@ -415,8 +415,8 @@ typedef struct pf_report_s {
      * timestamp; equity = initial_capital + net_profit + open_profit at
      * bar close. Free via #report_free or #strategy_native_report_free_v1.
      * On a completed KernelRecorded run len == script_bars_processed; a
-     * Failed or Aborted run can expose a shorter prefix (check
-     * strategy_get_last_error), and metrics describe that prefix. NOTE int64_t
+     * deliberate abort can expose a shorter diagnostic prefix. After a fault,
+     * every report array is NULL and every count/metric is zero. NOTE int64_t
      * length (ctypes: c_int64). With a report sink: NULL / 0 length.
      * The opt-in <pineforge/report_mode.h> envelope exposes logical point
      * count and capture flags separately; this field is resident length. */
@@ -428,8 +428,8 @@ typedef struct pf_report_s {
      * On a completed run, len == script_bars_processed and the last row
      * equals #strategy_broker_state_hash after the run for Pine and bare
      * native hosts alike: each point latches the continuation, and the
-     * scalar folds the last latch. A Failed or Aborted run can have a
-     * shorter recorded prefix; its last row need not equal the scalar.
+     * scalar folds the last latch. A deliberate abort can expose a shorter
+     * prefix whose last row need not equal the scalar; faults publish no rows.
      * ABI v4. With a report sink: NULL / 0 length. */
     uint64_t*           broker_state_hash;
     int64_t             broker_state_hash_len;
