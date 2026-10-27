@@ -1,10 +1,10 @@
 // Generated UDT object graphs over o1::Store.
 //
 // The layout and the compiler/runtime contract are in udt_graph.hpp. Every
-// operation that changes more than one Store record runs inside one Store
-// transaction (joined when the caller already holds one), so a failure leaves
-// the whole change or none of it. Node and edge walks keep their position in
-// Store records or in fixed stack buffers; nothing native grows with the graph.
+// operation that changes more than one Store record runs in one Store::scope(),
+// which joins the caller's open transaction without a handle (or owns one when
+// none is open), so a failure leaves the whole change or none of it. Walks keep
+// their position in Store records or fixed stack buffers; nothing native grows.
 
 #include <pineforge/detail/udt_graph.hpp>
 
@@ -112,14 +112,14 @@ UdtGraph::UdtGraph(Store& store) : store_(store) {
 }
 
 void UdtGraph::close() {
-    auto transaction = store_.begin();
+    auto transaction = store_.scope();
     for (Id at = get<Control>(control_).head; at != kNullId;) {
         const Id next = node(at).next;
         store_.release(at);
         at = next;
     }
     store_.release(control_);
-    transaction->commit();
+    transaction.commit();
 }
 
 bool UdtGraph::read_node(Id id, Node& out) const {
@@ -201,9 +201,9 @@ Id UdtGraph::make(const UdtType& type, const void* payload, const Id* children) 
     if (children != nullptr) {
         for (std::uint64_t i = 0; i < type.edge_count; ++i) validate_child(children[i]);
     }
-    auto transaction = store_.begin();
+    auto transaction = store_.scope();
     const Id id = make_node(type, payload, children, 0);
-    transaction->commit();
+    transaction.commit();
     return id;
 }
 
@@ -213,9 +213,9 @@ std::uint64_t UdtGraph::edge_count(Id id) const { return node(id).edge_count; }
 
 Id UdtGraph::root(Id value) {
     validate_child(value);
-    auto transaction = store_.begin();
+    auto transaction = store_.scope();
     const Id id = make_node(UdtType{0, 0, 1}, nullptr, &value, kRoot | kRegistered);
-    transaction->commit();
+    transaction.commit();
     return id;
 }
 
@@ -253,13 +253,13 @@ void UdtGraph::resize_edges(Id id, std::uint64_t count) {
     if ((n.flags & kRoot) != 0) fail("a UDT root has exactly one edge");
     const std::uint64_t total = object_bytes(n.payload_bytes, count);
     if (count == n.edge_count) return;
-    auto transaction = store_.begin();
+    auto transaction = store_.scope();
     // Edges are the object's tail: Store growth appends zero (na) ids and a
     // shrink drops the tail.
     if (!store_.resize(id, total)) fail("UDT edge resize failed");
     n.edge_count = count;
     put(id, n);
-    transaction->commit();
+    transaction.commit();
 }
 
 void UdtGraph::resize_payload(Id id, std::uint64_t bytes) {
@@ -270,7 +270,7 @@ void UdtGraph::resize_payload(Id id, std::uint64_t bytes) {
     const std::uint64_t from = edges_offset(n);
     const std::uint64_t to = sizeof(Node) + bytes;
     const std::uint64_t edge_part = edge_bytes(n.edge_count);
-    auto transaction = store_.begin();
+    auto transaction = store_.scope();
     if (bytes > n.payload_bytes) {
         if (!store_.resize(id, total)) fail("UDT payload resize failed");
         move_bytes(id, from, to, edge_part);
@@ -284,7 +284,7 @@ void UdtGraph::resize_payload(Id id, std::uint64_t bytes) {
     }
     n.payload_bytes = bytes;
     put(id, n);
-    transaction->commit();
+    transaction.commit();
 }
 
 void UdtGraph::read(Id id, std::uint64_t off, void* dst, std::size_t bytes) const {
@@ -345,9 +345,9 @@ Id UdtGraph::copy_shallow(Id id) {
     if (id == kNullId) return kNullId;
     const Node source = node(id);
     if ((source.flags & kRoot) != 0) fail("a UDT root is not a copyable object");
-    auto transaction = store_.begin();
+    auto transaction = store_.scope();
     const Id result = clone_node(source);
-    transaction->commit();
+    transaction.commit();
     return result;
 }
 
@@ -355,7 +355,7 @@ Id UdtGraph::copy_deep(Id id) {
     if (id == kNullId) return kNullId;
     Node first = node(id);
     if ((first.flags & kRoot) != 0) fail("a UDT root is not a copyable object");
-    auto transaction = store_.begin();
+    auto transaction = store_.scope();
     first.copy = clone_node(first);
     first.work = kNullId;
     put(id, first);
@@ -399,12 +399,12 @@ Id UdtGraph::copy_deep(Id id) {
         put(done, n);
         done = next;
     }
-    transaction->commit();
+    transaction.commit();
     return first.copy;
 }
 
 std::uint64_t UdtGraph::collect() {
-    auto transaction = store_.begin();
+    auto transaction = store_.scope();
     const Id head = get<Control>(control_).head;
     // Seed: every registered root. Marks and work links are zero at call
     // boundaries; a stale one is cleared here rather than trusted.
@@ -480,7 +480,7 @@ std::uint64_t UdtGraph::collect() {
         put(kept, kept_node);
     }
     if (new_head != head) put(control_, Control{new_head});
-    transaction->commit();
+    transaction.commit();
     return released;
 }
 

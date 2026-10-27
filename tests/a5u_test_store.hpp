@@ -7,11 +7,13 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <limits>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <sys/types.h>
 #include <unistd.h>
 #include <utility>
@@ -42,12 +44,26 @@ inline constexpr std::uint64_t store_bound(std::uint32_t resident_pages) {
 }
 
 // Heap a graph operation may hold beyond the Store workspace. o1_store.hpp:
-// one Tx-handle allocation per begin(), none for any other successful call.
-// CountingStore adds one fixed observer allocation per handle; the same
-// one-page charge covers both allocations.
-// The bounded graph/growth windows use at most one caller scope and one
-// graph-operation scope: two live handles, each charged one whole page.
-inline constexpr std::uint64_t kOperationHeapBound = 2 * kPageBytes;
+// begin() takes a handle from a pool allocated at open() and allocates
+// nothing; neither does any other successful call. CountingStore adds one
+// fixed observer allocation per begin() it forwards. A graph operation joins
+// an open caller transaction (Store::scope()) and owns a handle only when none
+// is open, so the bounded graph/growth windows hold at most one handle at a
+// time: the caller's scope or one operation's own. One whole page covers it.
+inline constexpr std::uint64_t kOperationHeapBound = kPageBytes;
+
+// Independent oracle for the Store's live-object refusal text: the digits are
+// grouped here, never by the production formatter or message builder.
+inline std::string grouped(std::uint64_t value) {
+    std::string text = std::to_string(value);
+    for (std::size_t end = text.size(); end > 3; end -= 3) text.insert(end - 3, 1, ',');
+    return text;
+}
+inline std::string object_limit_text(std::uint64_t limit) {
+    return "more than " + grouped(limit) + " store objects live at once; " + grouped(limit) +
+           " is the most allowed in this store; attempted live count " + grouped(limit + 1) +
+           ", approved maximum " + grouped(pineforge::detail::o1::kMaxLiveObjectsCap);
+}
 
 inline pineforge::detail::o1::Shape shape(std::uint32_t resident_pages) {
     pineforge::detail::o1::Shape value;
@@ -61,6 +77,8 @@ inline pineforge::detail::o1::Shape shape(std::uint32_t resident_pages) {
 // storage nor supplies resident statistics. It wraps real Tx handles only to
 // count their lifetimes, forwarding commit/rollback unchanged; Stats come from
 // the real Store. Counts also diagnose accidental population scans per bar.
+// Store::scope() calls this proxy's join/abandon hooks; each forwards to the
+// real Store and is only counted, so a joined operation is visible here.
 class CountingStore final : public pineforge::detail::o1::Store {
     using Id = pineforge::detail::o1::Id;
     using Tx = pineforge::detail::o1::Tx;
@@ -132,6 +150,24 @@ public:
         ++begin_calls;
         return std::make_unique<CountedTx>(*this, inner_.begin());
     }
+    // Scopes that joined an open transaction / were abandoned while joined.
+    std::uint64_t joined_scopes = 0;
+    std::uint64_t abandoned_scopes = 0;
+    bool join_active_tx() override {
+        const bool joined = inner_.join_active_tx();
+        if (joined) ++joined_scopes;
+        return joined;
+    }
+    void abandon_joined_tx() noexcept override {
+        ++abandoned_scopes;
+        inner_.abandon_joined_tx();
+    }
+    // Cleanup handles use the real Store's reserved slot, not a caller slot,
+    // so they are forwarded without a CountedTx observer.
+    std::unique_ptr<Tx> begin_cleanup() override { return inner_.begin_cleanup(); }
+    void note_cleanup_skipped(pineforge::detail::o1::CleanupSkip reason) noexcept override {
+        inner_.note_cleanup_skipped(reason);
+    }
     pineforge::detail::o1::Stats stats() const override { return inner_.stats(); }
 };
 
@@ -201,6 +237,8 @@ private:
 struct StoreFixture {
     explicit StoreFixture(std::uint32_t resident_pages = 8)
         : store(pineforge::detail::o1::Store::open(shape(resident_pages), backing)) {}
+    explicit StoreFixture(const pineforge::detail::o1::Shape& value)
+        : store(pineforge::detail::o1::Store::open(value, backing)) {}
     FileBacking backing;
     std::unique_ptr<pineforge::detail::o1::Store> store;
 };

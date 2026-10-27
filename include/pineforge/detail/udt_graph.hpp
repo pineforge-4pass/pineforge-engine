@@ -16,20 +16,31 @@
 // bound covers the Store workspace and transaction handles, not process RSS
 // or a cgroup's memory charge. Backing usage also includes storage metadata,
 // transactional versions and its retained high water; bytes_live is not RSS.
-// Shape on this interface has no id-table row count/cap or transaction-pool
-// size. An adapter's admission limits must be specified and tested there.
+// The Store fixes the two admission limits a graph meets: its caller handle
+// pool and its live-object limit (both below).
 //
-// Maximum transaction nesting: caller scopes + 1 handle per public operation,
-// independent of graph depth (covered by the depth-six live-handle row). An
-// outer script scope plus a joined collection scope plus a graph operation
-// need 3 simultaneously live handles. Store calls within that operation do
-// not open additional handles. begin() explicitly requested by a caller
-// counts as another caller handle. Scopes flatten; joining is not a savepoint.
+// Transaction handles: every public operation runs in one Store::scope().
+// Inside a caller's open transaction it joins without a handle; with none open
+// it owns one handle until it returns. Live handles are therefore the caller's
+// explicit begin() handles, independent of graph depth and of how many graph
+// calls a collection operation makes (covered by the depth-six live-handle
+// row), or one while a lone operation runs. Collection code holding graph
+// edges runs each of its operations in store().scope() as well. Scopes
+// flatten; joining is not a savepoint. At most Store::max_caller_handles()
+// explicit handles are live at once: one more begin() throws TxPoolExhausted
+// before it changes any transaction or graph state.
 //
 // This module has no destructor-driven release. close() and collect() are
-// ordinary begin() operations using caller handle slots; call them from
-// non-destructor code. A future RAII wrapper that releases graph state in its
-// destructor must use the Store's cleanup slot, which takes no caller handle.
+// ordinary scope() operations, taking a caller handle slot only when no
+// transaction is open; call them from non-destructor code. A future RAII
+// wrapper that releases graph state in its destructor must use the Store's
+// cleanup slot (begin_cleanup()), which takes no caller handle.
+//
+// Every node is one Store object, so a graph is admitted up to the Store's
+// live-object limit (Shape::max_live_objects, counting the control record):
+// creating one more throws ScratchCapacityError {"resource":"cohort"} before
+// any Store change. The operation that saw it ends as any failed operation
+// does: its own scope rolls back, a joined one leaves the caller rollback-only.
 //
 // After a graph call fails inside its joined scope, the only valid next
 // operation is rollback of the outer scope. copy_deep() can leave copy/work
@@ -178,6 +189,7 @@ public:
     // Both copies propagate na. Roots are bindings, not copyable objects.
     Id copy_shallow(Id);
     Id copy_deep(Id);
+    // An explicit caller handle (one pool slot); graph operations join it.
     std::unique_ptr<Tx> begin() { return store_.begin(); }
     // Returns the number of nodes released.
     std::uint64_t collect();

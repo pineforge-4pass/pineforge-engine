@@ -1,5 +1,6 @@
 // Resource accounting over the real Store and the existing arena fixture.
-// These rows measure workspace/arena bytes and actual Tx allocations, not RSS.
+// These rows measure workspace/arena bytes, transaction handles (the Store's
+// pool high-water) and actual heap allocations, not RSS.
 #define PINEFORGE_TEST_ALLOCATION_BYTES
 #include "global_allocation_replacement.hpp"
 #include "a5u_test_store.hpp"
@@ -19,7 +20,10 @@ using pineforge::detail::o1::Id;
 using pineforge::detail::o1::Store;
 using pineforge::detail::o1::UdtGraph;
 using pineforge::detail::o1::UdtType;
-constexpr std::size_t kAdditionalHandles = 1; // numeric nesting contract, udt_graph.hpp
+// udt_graph.hpp: inside an open caller transaction an operation joins it.
+constexpr std::uint64_t kJoinedOperationHandles = 0;
+// o1_store.hpp: with no transaction open, an operation owns one handle.
+constexpr std::uint64_t kLoneOperationHandles = 1;
 
 void arena_backing_accounting() {
     using namespace pineforge::detail;
@@ -85,8 +89,9 @@ void arena_backing_accounting() {
     require(arena->stats().bytes_used == 0, "destroyed backing retained arena chunks");
 }
 
-// Record all allocations until every handle is destroyed. Each begin allocates
-// the real Store's handle plus CountingStore's fixed observer; no pool knob.
+// Record all allocations until every handle is destroyed. The real Store's
+// handle comes from its pool (no heap); each begin through CountingStore
+// allocates only that proxy's fixed observer.
 std::size_t heap_base = 0, heap_peak = 0;
 void allocated(std::size_t) {
     if (global_allocation::live_bytes > heap_base)
@@ -212,21 +217,38 @@ struct DepthGraphReference {
 void depth_six_transaction_handles() {
     a5u_test::StoreFixture fixture;
     a5u_test::CountingStore store(*fixture.store);
+    const Store& pool = *fixture.store; // the real handle pool, read through no wrapper
     UdtGraph graph(store);
     DepthGraphReference expected;
     std::array<Id, kGraphDepth> original{}, cloned{};
-    require(store.live_handles == 0 && store.peak_live_handles == 0,
+    require(store.live_handles == 0 && pool.stats().max_live_handles == 0,
             "graph construction left an explicit transaction handle");
-    auto outer = graph.begin();
-    require(store.live_handles == 1 && store.peak_live_handles == 1, "outer handle was not counted");
-    auto collection = graph.begin();
-    require(store.live_handles == 2 && store.peak_live_handles == 2, "joined handle was not counted");
+    // Every explicit begin() of this row goes through caller_begin(); the
+    // expected high-water below is this count, never a number taken from a run.
+    std::uint64_t explicit_begins = 0;
+    auto caller_begin = [&] {
+        ++explicit_begins;
+        return graph.begin();
+    };
+    auto outer = caller_begin();
+    require(store.live_handles == explicit_begins && pool.stats().max_live_handles == explicit_begins,
+            "outer handle was not counted");
+    auto collection = caller_begin();
+    require(store.live_handles == explicit_begins && pool.stats().max_live_handles == explicit_begins,
+            "joined handle was not counted");
+    std::uint64_t operations = 0;
     auto operation = [&](auto&& call) {
+        const auto joined = store.joined_scopes;
         call();
-        require(store.live_handles == 2, "public operation retained a transaction handle");
-        // Two caller scopes (outer + joined collection) + one public-op
-        // handle = 3. The graph's six levels contribute zero handles.
-        require(store.peak_live_handles <= 3, "graph depth increased live transaction handles");
+        ++operations;
+        // Outer + joined collection scope are the explicit begins. A public
+        // operation joins them through Store::scope() and adds zero handles,
+        // whatever the graph's six levels: the high-water stays exactly there.
+        require(pool.stats().max_live_handles == explicit_begins,
+                "graph operation raised the live-handle high-water above the explicit begins");
+        require(store.begin_calls == explicit_begins && store.live_handles == explicit_begins,
+                "graph operation opened or retained a transaction handle");
+        require(store.joined_scopes == joined + 1, "graph operation did not join the caller transaction");
     };
     for (std::size_t level = 0; level < kGraphDepth; ++level) {
         DepthGraphReference::Node node;
@@ -292,18 +314,23 @@ void depth_six_transaction_handles() {
             "depth graph close retained the control or node bytes");
     for (std::size_t i = 0; i < expected.count; ++i)
         require(!store.alive(expected.nodes[i].id), "depth graph close retained a node");
-    require(store.peak_live_handles == 3, "public operations did not exercise the third handle");
+    require(store.joined_scopes == operations && store.abandoned_scopes == 0,
+            "a graph operation did not join or abandoned the caller transaction");
     collection->commit();
-    require(store.live_handles == 2, "commit destroyed a still-live handle");
+    require(store.live_handles == explicit_begins, "commit destroyed a still-live handle");
     collection.reset();
-    require(store.live_handles == 1, "joined handle destruction was not counted");
+    require(store.live_handles == explicit_begins - 1, "joined handle destruction was not counted");
     outer->commit();
-    require(store.live_handles == 1, "outer commit destroyed a still-live handle");
+    require(store.live_handles == explicit_begins - 1, "outer commit destroyed a still-live handle");
     outer.reset();
     require(store.live_handles == 0, "outer handle destruction was not counted");
     require(store.stats().bytes_live == 0, "committed depth graph close retained live bytes");
-    std::printf("UDT depth=%zu live_handle_peak=%llu bound=3\n", kGraphDepth,
-                static_cast<unsigned long long>(store.peak_live_handles));
+    require(pool.stats().max_live_handles == explicit_begins && store.peak_live_handles == explicit_begins,
+            "live-handle high-water differs from the explicit begins");
+    std::printf("UDT depth=%zu operations=%llu explicit_begins=%llu max_live_handles=%llu\n",
+                kGraphDepth, static_cast<unsigned long long>(operations),
+                static_cast<unsigned long long>(explicit_begins),
+                static_cast<unsigned long long>(pool.stats().max_live_handles));
 }
 
 void nested_transaction_handles() {
@@ -312,9 +339,18 @@ void nested_transaction_handles() {
         a5u_test::CountingStore store(*fixture.store);
         UdtGraph graph(store);
         const std::uint64_t field = caller_depth * UINT64_C(131);
+        // Two lone operations (make, root): no transaction is open, so each
+        // owns one handle for its duration and none joins.
+        std::uint64_t lone_operations = 0;
         const Id child = graph.make(sizeof(field));
+        ++lone_operations;
         graph.set_scalar(child, field);
         const Id root = graph.root(child);
+        ++lone_operations;
+        require(store.begin_calls == lone_operations * kLoneOperationHandles &&
+                    store.joined_scopes == 0 && store.live_handles == 0 &&
+                    fixture.store->stats().max_live_handles == kLoneOperationHandles,
+                "a lone graph operation did not own exactly one handle");
         std::array<unsigned char, 72 + sizeof(field)> before{};
         require(store.read(child, 0, before.data(), before.size()) == before.size(),
                 "read the complete original node");
@@ -323,25 +359,38 @@ void nested_transaction_handles() {
         Id aborted = 0;
         {
             HandleWindow window;
+            std::uint64_t explicit_begins = 0;
             auto outer = graph.begin();
+            ++explicit_begins;
+            // CountingStore's observer only: the real handle is pooled.
             const auto one_handle_bytes = global_allocation::live_bytes - heap_base;
             require(one_handle_bytes != 0 && one_handle_bytes <= a5u_test::kPageBytes,
                     "begin exceeded the handle's derived one-page allowance");
-            auto joined = caller_depth == 2 ? graph.begin() : nullptr;
+            std::unique_ptr<pineforge::detail::o1::Tx> joined;
+            if (caller_depth == 2) {
+                joined = graph.begin();
+                ++explicit_begins;
+            }
             const auto callers = global_allocation::live_bytes;
-            require(callers - heap_base == caller_depth * one_handle_bytes,
+            require(callers - heap_base == explicit_begins * one_handle_bytes,
                     "joined scope retained more than one handle");
-            auto operation = [&](auto&& call, std::uint64_t handles = 1) {
+            // The lone operations above already reached one live handle.
+            const auto high_water = std::max(explicit_begins, kLoneOperationHandles);
+            auto operation = [&](auto&& call) {
                 const auto calls = store.begin_calls;
+                const auto joins = store.joined_scopes;
                 const auto allocations = global_allocation::allocations;
                 call();
-                // One real Tx plus one CountingStore observer per begin.
-                require(store.begin_calls - calls == handles &&
-                            global_allocation::allocations - allocations == 2 * handles,
-                        "graph operation opened more than its one extra handle");
+                // Store::scope() joins the caller's transaction: the operation
+                // calls no begin(), takes no handle and allocates nothing.
+                require(store.begin_calls - calls == kJoinedOperationHandles &&
+                            store.joined_scopes - joins == 1 &&
+                            global_allocation::allocations == allocations,
+                        "graph operation opened a handle inside the caller transaction");
                 require(global_allocation::live_bytes == callers &&
-                            heap_peak <= (caller_depth + kAdditionalHandles) * one_handle_bytes &&
-                            heap_peak <= (caller_depth + kAdditionalHandles) * a5u_test::kPageBytes,
+                            heap_peak <= (explicit_begins + kJoinedOperationHandles) * one_handle_bytes &&
+                            heap_peak <= (explicit_begins + kJoinedOperationHandles) * a5u_test::kPageBytes &&
+                            fixture.store->stats().max_live_handles == high_water,
                         "graph operation retained a nested handle or exceeded depth");
             };
             operation([&] { aborted = graph.make(sizeof(field), 1); });
@@ -372,7 +421,7 @@ int main() {
         arena_backing_accounting();
         depth_six_transaction_handles();
         nested_transaction_handles();
-        std::puts("UDT arena accounting and one-extra-handle nesting reached");
+        std::puts("UDT arena accounting and joined-operation nesting reached");
         return 0;
     } catch (const std::exception& error) {
         std::fprintf(stderr, "UDT resources: %s\n", error.what());

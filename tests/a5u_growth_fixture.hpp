@@ -16,12 +16,22 @@
 // This is a resident-window claim. In a jailed run scratch backing is RAM;
 // retaining this entire graph grows the backing's memory charge with bars.
 //
+// LIVE-OBJECT LIMIT. Every node is one Store object and a Store admits at most
+// Shape::max_live_objects live objects (default 1,048,576, the cap). The graph
+// holds its control record, its root and three nodes per bar, so the 100,000-
+// bar row stays below the limit. The 1,000,000-bar row reaches it: the bar
+// that would create the (limit + 1)-th object stops the run with the typed
+// cohort refusal, its caller scope rolls back, and every earlier bar's
+// objects stay exact. The admitted bar count is derived from the limit below.
+//
 // FAIL-BEFORE (behavioural). Without udt_graph.hpp (base f66318a3) this file
 // compiles in its generated-container mode only: a C++ struct per object that
 // owns a std::vector<double> and a std::string, the objects retained in a
 // std::vector (the shape of tests/test_generic_matrix_udt.cpp's Pivot). It
 // reaches every bar and every late read, then fails the resident bound.
-// `--native` runs the same control on the new tree.
+// `--native` runs the same control on the new tree. (That base compile was
+// recorded before the pooled-handle Store; the Store test double included
+// here now overrides that Store's hooks, so `--native` is the RED control.)
 //
 // GREEN. The same host callback builds the graph through UdtGraph over a Store
 // of fixed Shape. Residency = the Store's fixed workspace + the heap an
@@ -41,6 +51,9 @@
 #define PF_UDT_HAS_GRAPH 0
 #endif
 
+#include <pineforge/run_failure.hpp>
+
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -166,6 +179,7 @@ public:
     void append(std::size_t bar, double close) {
         const auto calls = operations_.data_calls;
         const auto scopes = operations_.begin_calls;
+        const auto joins = operations_.joined_scopes;
         auto transaction = graph_.begin();
         const auto numbers = history(bar);
         const auto bytes = label(bar);
@@ -188,9 +202,12 @@ public:
         constexpr std::uint64_t root_rebind = 1 + 1 + 1;
         constexpr std::uint64_t append_calls =
             makes_per_bar * calls_per_make + child_validations + root_read + root_rebind;
-        constexpr std::uint64_t append_scopes = 1 + makes_per_bar; // caller + make scopes
+        // The caller's one explicit handle per bar; each make() joins it
+        // (Store::scope()) rather than opening a handle of its own.
+        constexpr std::uint64_t append_begins = 1;
         require(operations_.data_calls - calls <= append_calls &&
-                    operations_.begin_calls - scopes <= append_scopes,
+                    operations_.begin_calls - scopes == append_begins &&
+                    operations_.joined_scopes - joins == makes_per_bar,
                 "per-bar graph append exceeded its constant Store operation bound");
     }
     void verify(std::size_t count) const {
@@ -266,8 +283,10 @@ public:
     std::size_t callbacks() const { return callbacks_; }
 };
 
+// `admitted` bars complete. When it is below `count`, the next bar's callback
+// throws `refusal` and the host records that exception as the run's failure.
 template<class Family>
-void drive(Family& family, std::size_t count) {
+void drive(Family& family, std::size_t count, std::size_t admitted, const std::string& refusal) {
     std::vector<pineforge::Bar> bars(count);
     for (std::size_t i = 0; i < count; ++i) {
         const double value = price(i);
@@ -276,28 +295,55 @@ void drive(Family& family, std::size_t count) {
     }
     Host<Family> host(family);
     host.run(bars.data(), static_cast<int>(count), "1", "1");
-    require(host.last_error().empty(), host.last_error().c_str());
-    require(host.callbacks() == count, "UDT workload did not reach every synthetic bar");
+    if (admitted == count) {
+        require(host.last_error().empty(), host.last_error().c_str());
+    } else {
+        require(host.last_error() == refusal &&
+                    std::strcmp(pineforge::run_failure_code_of(host), "scratch_capacity_exceeded") == 0 &&
+                    std::strcmp(pineforge::run_failure_args_of(host), "{\"resource\":\"cohort\"}") == 0,
+                "live-object limit did not stop the run with the typed cohort refusal");
+    }
+    require(host.callbacks() == admitted, "UDT workload did not reach every admitted bar");
     OperationWindow window;
-    family.verify(count); // every old object and byte, after the last bar
+    family.verify(admitted); // every old object and byte, after the last admitted bar
 }
+
+#if PF_UDT_HAS_GRAPH
+// Store objects the graph holds: its control record and root, then three
+// nodes per bar (object, vector, string; the aliased vector is one node).
+inline constexpr std::uint64_t kFixedObjects = 2;
+inline constexpr std::uint64_t kNodesPerBar = 3;
+// Bars a Store with this live-object limit admits. The bar that would create
+// the (limit + 1)-th live object is refused and rolled back; earlier bars stay.
+inline std::size_t admitted_bars(std::size_t count, std::uint64_t limit) {
+    return static_cast<std::size_t>(
+        std::min<std::uint64_t>(count, (limit - kFixedObjects) / kNodesPerBar));
+}
+#endif
 
 inline int run(std::size_t count, int argc, char** argv) {
     try {
         require(argc == 1 || (argc == 2 && std::strcmp(argv[1], "--native") == 0),
                 "usage: test_a5u_growth [--native]");
+        const bool native = !PF_UDT_HAS_GRAPH || argc == 2;
+#if PF_UDT_HAS_GRAPH
+        // The test Shape keeps the default limit, which is the cap.
+        const std::size_t admitted =
+            native ? count : admitted_bars(count, pineforge::detail::o1::kMaxLiveObjectsCap);
+#else
+        const std::size_t admitted = count;
+#endif
         // The logical field bytes alone cross the whole resident bound eight
         // times, so a GREEN cannot pass without spilling to the backing.
-        require(count * kLogicalBytesPerBar > 8 * kResidentBound,
+        require(admitted * kLogicalBytesPerBar > 8 * kResidentBound,
                 "population cannot cross its bound");
-        const bool native = !PF_UDT_HAS_GRAPH || argc == 2;
         heap_base = global_allocation::live_bytes;
         heap_peak = 0;
         operation_peak = 0;
         global_allocation::on_recorded = &allocated;
         if (native) {
             NativeFamily family;
-            drive(family, count);
+            drive(family, count, count, std::string());
             OperationWindow window;
             family.finish();
         } else {
@@ -307,28 +353,32 @@ inline int run(std::size_t count, int argc, char** argv) {
             pineforge::detail::o1::UdtGraph graph(operations);
             const auto empty_live = fixture.store->stats().bytes_live;
             const auto initial = fixture.store->stats();
+            require(initial.max_live_objects == pineforge::detail::o1::kMaxLiveObjectsCap &&
+                        initial.objects_live == 1,
+                    "growth Store does not hold only its control record under the default limit");
             GraphFamily family(graph, operations);
-            drive(family, count);
+            drive(family, count, admitted, a5u_test::object_limit_text(initial.max_live_objects));
             const auto stats = fixture.store->stats();
-            // This HEAD's Shape has no id-table row/cap fields: these are
-            // not production-cap acceptance rows. Report that explicitly.
-            std::printf("UDT bars=%zu id_table_rows=unbounded id_table_cap=none "
+            std::printf("UDT bars=%zu admitted=%zu live_objects=%llu live_object_limit=%llu "
                         "live=%llu resident=%llu backing=%llu store_bound=%llu\n",
-                        count, static_cast<unsigned long long>(stats.bytes_live),
+                        count, admitted, static_cast<unsigned long long>(stats.objects_live),
+                        static_cast<unsigned long long>(stats.max_live_objects),
+                        static_cast<unsigned long long>(stats.bytes_live),
                         static_cast<unsigned long long>(stats.bytes_resident),
                         static_cast<unsigned long long>(stats.bytes_backing),
                         static_cast<unsigned long long>(kStoreBound));
+            require(stats.objects_live == kFixedObjects + kNodesPerBar * admitted,
+                    "live objects differ from the admitted bars");
             require(stats.bytes_resident == initial.bytes_resident &&
                         stats.bytes_resident <= kStoreBound,
                     "real store workspace grew with objects");
-            require(stats.bytes_live >= count * kLogicalBytesPerBar &&
+            require(stats.bytes_live >= admitted * kLogicalBytesPerBar &&
                         stats.bytes_backing > 8 * kResidentBound,
                     "live graph population did not spill beyond the resident window");
             {
                 OperationWindow window;
-                // Three nodes per bar (object, vector, string; the aliased
-                // vector is one node) plus the dropped root.
-                require(family.finish() == 3 * static_cast<std::uint64_t>(count) + 1,
+                // Every admitted bar's nodes plus the dropped root.
+                require(family.finish() == kNodesPerBar * admitted + 1,
                         "collection released a different node count than the graph holds");
                 require(fixture.store->stats().bytes_live == empty_live,
                         "unreachable UDT objects leaked");
@@ -343,8 +393,9 @@ inline int run(std::size_t count, int argc, char** argv) {
                     "graph residency exceeds the derived fixed bound");
 #endif
         }
-        std::printf("UDT bars=%zu retained_heap_peak=%zu operation_heap_peak=%zu bound=%llu mode=%s\n",
-                    count, heap_peak, operation_peak,
+        std::printf("UDT bars=%zu admitted=%zu retained_heap_peak=%zu operation_heap_peak=%zu "
+                    "bound=%llu mode=%s\n",
+                    count, admitted, heap_peak, operation_peak,
                     static_cast<unsigned long long>(kResidentBound),
                     native ? "native-RED" : "store-GREEN");
         require(heap_peak <= kResidentBound, "UDT owning fields retain heap proportional to bars");

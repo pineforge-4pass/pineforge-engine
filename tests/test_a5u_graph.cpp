@@ -2,8 +2,9 @@
 // once, cycles collected, dead ids never reused, roots, a UDT inside a map
 // value, resize, rollback of deletions, and failure atomicity.
 //
-// FAIL-BEFORE. Base f66318a3 has no pineforge/detail/udt_graph.hpp: the first
-// diagnostic on the previous header closure is that missing header (a feature
+// FAIL-BEFORE. Base f66318a3 has no pineforge/detail/udt_graph.hpp and none of
+// the pooled-handle Store hooks the included Store test double overrides: the
+// first diagnostic on the previous header closure is one of those (a feature
 // diagnostic). Behavioural RED evidence is test_a5u_growth_* on the native
 // path and the mutation patches. Every expected value below comes from the
 // independent in-memory Model or from deterministic generators in this file.
@@ -549,6 +550,15 @@ public:
         return inner_.write(id, off, src, bytes);
     }
     std::unique_ptr<pineforge::detail::o1::Tx> begin() override { return inner_.begin(); }
+    // Graph operations reach these through Store::scope(): forward unchanged.
+    bool join_active_tx() override { return inner_.join_active_tx(); }
+    void abandon_joined_tx() noexcept override { inner_.abandon_joined_tx(); }
+    std::unique_ptr<pineforge::detail::o1::Tx> begin_cleanup() override {
+        return inner_.begin_cleanup();
+    }
+    void note_cleanup_skipped(pineforge::detail::o1::CleanupSkip reason) noexcept override {
+        inner_.note_cleanup_skipped(reason);
+    }
     pineforge::detail::o1::Stats stats() const override { return inner_.stats(); }
 
 private:

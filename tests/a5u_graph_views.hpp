@@ -26,8 +26,10 @@ public:
         const auto at = find(key);
         return at == size() ? 0 : graph_.edge(id_, at);
     }
+    // A container operation joins the caller's open transaction (no handle);
+    // with none open it owns one, and its graph calls join that.
     void put(std::int64_t key, Id value) {
-        auto transaction = graph_.begin();
+        auto transaction = graph_.store().scope();
         const auto at = find(key);
         if (at == size()) {
             graph_.resize_payload(id_, (at + 1) * sizeof(key));
@@ -35,12 +37,12 @@ public:
             graph_.set_scalar(id_, key, at * sizeof(key));
         }
         graph_.set_edge(id_, at, value);
-        transaction->commit();
+        transaction.commit();
     }
     bool erase(std::int64_t key) {
         const auto at = find(key), count = size();
         if (at == count) return false;
-        auto transaction = graph_.begin();
+        auto transaction = graph_.store().scope();
         for (std::uint64_t i = at + 1; i < count; ++i) {
             graph_.set_scalar(id_, graph_.scalar<std::int64_t>(id_, i * sizeof(key)),
                               (i - 1) * sizeof(key));
@@ -48,7 +50,7 @@ public:
         }
         graph_.resize_payload(id_, (count - 1) * sizeof(key));
         graph_.resize_edges(id_, count - 1);
-        transaction->commit();
+        transaction.commit();
         return true;
     }
 };

@@ -10,8 +10,9 @@
 // graph: bytes, aliases, deleted nodes and map keys. Expectations come from
 // input-derived values tracked beside the graph, never from graph reads.
 //
-// FAIL-BEFORE. Base f66318a3 has no pineforge/detail/udt_graph.hpp (missing
-// header diagnostic). Behavioural RED: mutations rollback-commits and
+// FAIL-BEFORE. Base f66318a3 has no pineforge/detail/udt_graph.hpp and none of
+// the pooled-handle Store hooks the included Store test double overrides
+// (feature diagnostics). Behavioural RED: mutations rollback-commits and
 // checkpoint-copies.
 #define PINEFORGE_TEST_ALLOCATION_BYTES
 #include "global_allocation_replacement.hpp"
@@ -24,7 +25,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <limits>
 #include <memory>
 #include <vector>
 
@@ -119,7 +119,9 @@ class Host final : public pineforge::source::PineStrategyHost {
             Window window(calls, bytes);
             transaction_ = graph_.begin();
         }
-        begin_calls_min = std::min(begin_calls_min, calls);
+        ++explicit_begins;
+        ++live_explicit;
+        explicit_high_water = std::max(explicit_high_water, live_explicit);
         begin_calls_max = std::max(begin_calls_max, calls);
         begin_bytes_max = std::max(begin_bytes_max, bytes);
     }
@@ -131,6 +133,7 @@ class Host final : public pineforge::source::PineStrategyHost {
             else transaction_->rollback();
             transaction_.reset();
         }
+        --live_explicit;
         finish_calls_max = std::max(finish_calls_max, calls);
     }
     void checkpoint() {
@@ -142,8 +145,10 @@ class Host final : public pineforge::source::PineStrategyHost {
 
 public:
     int snapshots = 0, restores = 0, executions = 0, deletions = 0;
-    std::size_t begin_calls_min = std::numeric_limits<std::size_t>::max();
     std::size_t begin_calls_max = 0, begin_bytes_max = 0, finish_calls_max = 0;
+    // The host's explicit handles: every checkpoint finishes one before the
+    // next begins, so at most one is live; graph and map calls join it.
+    std::uint64_t explicit_begins = 0, live_explicit = 0, explicit_high_water = 0;
 
     explicit Host(UdtGraph& graph)
         : graph_(graph), map_(graph), holder_(graph.make(0, 2)), root_(graph.root(map_.id())) {
@@ -160,6 +165,7 @@ public:
         if (transaction_) {
             transaction_->rollback();
             transaction_.reset();
+            --live_explicit;
         }
     }
     Id root() const { return root_; }
@@ -227,17 +233,25 @@ int main() {
                         host.trade_count() > 0,
                     "real calc-on-order-fills was not reached");
             require(host.deletions == host.executions, "fill workload omitted graph deletion");
-            // o1_store.hpp: begin() makes exactly one heap allocation (its Tx
-            // handle); commit/rollback make none. A handle is a vtable pointer,
-            // a store pointer and two flags, far below 256 bytes, while one
-            // graph node record alone is 72 bytes and this graph holds a dozen:
-            // a checkpoint that copied graph state natively breaks either line.
-            require(host.begin_calls_min == 1 && host.begin_calls_max == 1 &&
+            // o1_store.hpp: begin() takes a handle from the pool allocated at
+            // open() and allocates nothing; commit/rollback allocate nothing
+            // either. One graph node record alone is 72 bytes and this graph
+            // holds a dozen: a checkpoint that copied graph state natively
+            // allocates inside one of these windows and breaks this line.
+            require(host.begin_calls_max == 0 && host.begin_bytes_max == 0 &&
                         host.finish_calls_max == 0,
-                    "checkpoint/restore allocated beyond one Tx handle");
-            require(host.begin_bytes_max <= 256, "checkpoint copied native graph state");
-            std::printf("UDT coof snapshots=%d restores=%d executions=%d handle_bytes=%zu\n",
-                        host.snapshots, host.restores, host.executions, host.begin_bytes_max);
+                    "checkpoint/restore allocated heap beside its pooled Tx handle");
+            // Graph and map calls inside a checkpoint join it (Store::scope());
+            // outside one each owns a single handle. So the Store's high-water
+            // is the host's explicit high-water, one checkpoint at a time.
+            require(host.explicit_begins > 0 && host.explicit_high_water == 1 &&
+                        fixture.store->stats().max_live_handles == host.explicit_high_water,
+                    "a graph or map call took a handle beside the checkpoint scope");
+            std::printf("UDT coof snapshots=%d restores=%d executions=%d explicit_begins=%llu "
+                        "max_live_handles=%llu\n",
+                        host.snapshots, host.restores, host.executions,
+                        static_cast<unsigned long long>(host.explicit_begins),
+                        static_cast<unsigned long long>(fixture.store->stats().max_live_handles));
             root = host.root();
         } // ~Host rolls back the scope its last checkpoint opened
         graph.drop_root(root);
