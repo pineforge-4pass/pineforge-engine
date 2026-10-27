@@ -78,6 +78,7 @@ EXPECTED_RUNTIME = frozenset({
     "strategy_closed_trade_close_cause",
     "strategy_position_size",
     "strategy_current_equity",
+    "strategy_initial_capital",
     "strategy_script_bars_processed",
     "pf_version_get",
     "pf_version_string",
@@ -139,8 +140,8 @@ RUNTIME_HEADERS = (
     "report_sink.h",
 )
 
-EXPECTED_PUBLIC_DECLARATIONS = 113
-EXPECTED_RUNTIME_IMPLEMENTATIONS = 93
+EXPECTED_PUBLIC_DECLARATIONS = 114
+EXPECTED_RUNTIME_IMPLEMENTATIONS = 94
 
 # Runtime setters whose data a stream cannot take: the source host refuses
 # stream_begin() while any of them holds data (the native daily feed since its

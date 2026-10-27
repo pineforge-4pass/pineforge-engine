@@ -189,5 +189,17 @@ bool BacktestEngine::set_recorded_series(const std::string&, const int64_t*, con
     return false;
 }
 
+double BacktestEngine::initial_capital() const {
+    // Configure stages the accepted spec; begin copies its capital into
+    // initial_capital_, which report metrics use. Read the spec even before
+    // begin, including after a completed host is configured for another run.
+    if (const auto* host = dynamic_cast<const NativeStrategyHost*>(this)) {
+        if (const auto* spec = host->native_state().spec) {
+            return spec->initial_capital;
+        }
+    }
+    return initial_capital_;
+}
+
 }  // inline namespace engine_script_run_v19
 }  // namespace pineforge
