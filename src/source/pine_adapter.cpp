@@ -21153,13 +21153,9 @@ bool PineExecutionAdapter::rest_waypoint_margin_call(
 // A path-point call rested for the book of an earlier schedule: a new
 // schedule, or the bar's end, supersedes it.
 void PineExecutionAdapter::withdraw_waypoint_margin_calls() {
-    std::vector<native_order::RequestHandle> stale;
-    for (const auto& handle : live_handles_) { ++dense_pending_work_.withdraw_waypoint_margin_calls_handles;
-        const auto found = placement_.find(handle.incarnation);
-        if (found != placement_.end() && found->second.waypoint_margin_call)
-            stale.push_back(handle);
-    }
+    auto stale = live_row_index().rows(detail::LiveClass::WaypointMargin);
     for (const auto& handle : stale) {
+        ++dense_pending_work_.withdraw_waypoint_margin_calls_handles;
         if (require_host().cancel(handle).status == native_order::CancelStatus::Cancelled)
             retire(handle);
     }
@@ -21170,7 +21166,10 @@ void PineExecutionAdapter::withdraw_waypoint_margin_calls() {
 std::vector<std::pair<native_order::RequestHandle, PlacementSnapshot>>
 PineExecutionAdapter::same_bar_close_alls(const NativeDecisionContext& context) const {
     std::vector<std::pair<native_order::RequestHandle, PlacementSnapshot>> closes;
-    for (const auto& handle : live_handles_) { ++dense_pending_work_.same_bar_close_alls_handles;
+    for (const auto& handle : live_row_index().rows(
+             detail::LiveClass::CloseAll,
+             detail::LiveKey::script_time(context.script_bar_open_ms))) {
+        ++dense_pending_work_.same_bar_close_alls_handles;
         const auto found = placement_.find(handle.incarnation);
         if (found != placement_.end() && found->second.family == PineOrderFamily::CloseAll
             && found->second.placement_script_open_ms == context.script_bar_open_ms) {
@@ -21897,12 +21896,24 @@ void PineExecutionAdapter::apply_open_market_admission(
         const NativeDecisionContext& context) {
     const bool began_flat = detail::run_position(require_host()).signed_units == 0.0;
     const int source_bar = context.coordinate.interval_index - 1;
+    auto& index = live_row_index();
     struct Candidate {
         native_order::RequestHandle handle;
         const PlacementSnapshot* snapshot = nullptr;
     };
     std::vector<Candidate> market;
-    bool foreign_live_order = false;
+    const auto created_bar = detail::LiveKey::created_bar(source_bar);
+    // The indexed admission classes are disjoint.  A missing placement row
+    // belongs to no class, exactly as the old found-row loop did.
+    for (const auto& handle : index.rows(detail::LiveClass::UnpricedEntry, created_bar)) {
+        ++dense_pending_work_.open_admission_rows;
+        const auto found = placement_.find(handle.incarnation);
+        if (found != placement_.end()) market.push_back({handle, &found->second});
+    }
+    const bool foreign_live_order =
+        index.count(detail::LiveClass::Placed)
+        - index.count(detail::LiveClass::UnpricedEntry, created_bar)
+        - index.count(detail::LiveClass::UnpricedClose, created_bar) != 0;
     // The historical placement scan is consumed only by the two-candidate
     // pair rule below; evaluate it there rather than on every broker open.
     const auto commands_on_bar = [&]() {
@@ -21930,35 +21941,6 @@ void PineExecutionAdapter::apply_open_market_admission(
         }
         return count;
     };
-    for (const auto& handle : live_handles_) { ++dense_pending_work_.open_admission_rows;
-        const auto found = placement_.find(handle.incarnation);
-        if (found == placement_.end()) continue;
-        const auto& snapshot = found->second;
-        const bool unpriced_entry = snapshot.projection_created_bar == source_bar
-            && snapshot.family == PineOrderFamily::Entry
-            && !finite_positive(snapshot.exit_levels.limit)
-            && !finite_positive(snapshot.exit_levels.stop)
-            && !finite_positive(snapshot.exit_levels.trail_points)
-            && !finite_positive(snapshot.exit_levels.trail_price)
-            && !finite_positive(snapshot.exit_levels.trail_offset)
-            && !snapshot.birth.from_fill() && !snapshot.birth.at_terminal_fill()
-            && !compat::pine::historical_cascade_reach(snapshot.birth_reach);
-        if (unpriced_entry) {
-            market.push_back({handle, &snapshot});
-            continue;
-        }
-        const bool same_bar_unpriced_close = snapshot.projection_created_bar == source_bar
-            && snapshot.family == PineOrderFamily::Close
-            && snapshot.oca_name.empty()
-            && !finite_positive(snapshot.exit_levels.limit)
-            && !finite_positive(snapshot.exit_levels.stop)
-            && !finite_positive(snapshot.exit_levels.trail_points)
-            && !finite_positive(snapshot.exit_levels.trail_price)
-            && !finite_positive(snapshot.exit_levels.trail_offset)
-            && !snapshot.birth.from_fill() && !snapshot.birth.at_terminal_fill()
-            && !compat::pine::historical_cascade_reach(snapshot.birth_reach);
-        if (!same_bar_unpriced_close) foreign_live_order = true;
-    }
     const bool family_s_command_order =
         config_.default_qty_type == static_cast<int>(QtyType::FIXED)
         && config_.pyramiding == 1 && config_.slippage == 0
@@ -22104,28 +22086,74 @@ void PineExecutionAdapter::defer_open_marketable_sells(const Bar& bar) {
     };
     std::vector<Candidate> buys;
     std::vector<Candidate> sells;
-    for (const auto& handle : live_handles_) {
-        const auto found = placement_.find(handle.incarnation);
-        if (found == placement_.end()) continue;
-        const auto& snapshot = found->second;
-        if (snapshot.family != PineOrderFamily::Entry
-            || !finite_positive(snapshot.exit_levels.stop)
-            || finite_positive(snapshot.exit_levels.limit)
-            || finite_positive(snapshot.exit_levels.trail_points)
-            || finite_positive(snapshot.exit_levels.trail_price)
-            || finite_positive(snapshot.exit_levels.trail_offset)) {
-            continue;
+    const auto& index = live_row_index();
+    const auto merge_rows = [&](const std::vector<native_order::RequestHandle>& first,
+                                const std::vector<native_order::RequestHandle>& second) {
+        struct OrderedHandle {
+            native_order::RequestHandle handle;
+            std::uint64_t order = 0;
+        };
+        std::vector<OrderedHandle> ordered;
+        const auto append = [&](const std::vector<native_order::RequestHandle>& rows) {
+            std::unordered_map<native_order::RequestHandle, std::size_t,
+                               detail::LiveHandleHash> seen;
+            for (const auto& handle : rows) {
+                const auto occurrence = seen[handle]++;
+                const auto orders = live_handles_.orders(handle);
+                if (occurrence < orders.size())
+                    ordered.push_back({handle, orders[occurrence]});
+            }
+        };
+        append(first);
+        append(second);
+        std::stable_sort(ordered.begin(), ordered.end(),
+                         [](const OrderedHandle& left, const OrderedHandle& right) {
+                             return left.order < right.order;
+                         });
+        std::vector<native_order::RequestHandle> result;
+        native_order::RequestHandle last_handle{};
+        std::uint64_t last_order = 0;
+        bool have_last = false;
+        for (const auto& row : ordered) {
+            if (!have_last || last_handle != row.handle || last_order != row.order) {
+                result.push_back(row.handle);
+                last_handle = row.handle;
+                last_order = row.order;
+                have_last = true;
+            }
         }
-        Candidate row;
-        row.handle = handle;
-        row.snapshot = &snapshot;
-        row.open_marketable = pure_stop_entry_marketable_at(snapshot, fill_point_price);
-        row.touched = internal::entry_stop_first_touch(
-            bar, high_first, snapshot.exit_levels.stop, snapshot.is_long,
-            &row.path_position);
-        if (snapshot.is_long) buys.push_back(row);
-        else sells.push_back(row);
-    }
+        return result;
+    };
+    const auto append_candidates = [&](const std::vector<native_order::RequestHandle>& handles,
+                                       std::vector<Candidate>& output) {
+        for (const auto& handle : handles) {
+            const auto found = placement_.find(handle.incarnation);
+            if (found == placement_.end()) continue;
+            const auto& snapshot = found->second;
+            Candidate row;
+            row.handle = handle;
+            row.snapshot = &snapshot;
+            row.open_marketable = pure_stop_entry_marketable_at(snapshot, fill_point_price);
+            row.touched = internal::entry_stop_first_touch(
+                bar, high_first, snapshot.exit_levels.stop, snapshot.is_long,
+                &row.path_position);
+            output.push_back(row);
+        }
+    };
+    const auto buy_touched = index.rows_in_range(
+        detail::LiveClass::PureStopEntry, detail::LivePrice::Stop,
+        -std::numeric_limits<double>::infinity(), bar.high, {}, 1);
+    const auto buy_open = index.rows_in_range(
+        detail::LiveClass::PureStopEntry, detail::LivePrice::Stop,
+        -std::numeric_limits<double>::infinity(), fill_point_price, {}, 1);
+    const auto sell_touched = index.rows_in_range(
+        detail::LiveClass::PureStopEntry, detail::LivePrice::Stop,
+        bar.low, std::numeric_limits<double>::infinity(), {}, 0);
+    const auto sell_open = index.rows_in_range(
+        detail::LiveClass::PureStopEntry, detail::LivePrice::Stop,
+        fill_point_price, std::numeric_limits<double>::infinity(), {}, 0);
+    append_candidates(merge_rows(buy_touched, buy_open), buys);
+    append_candidates(merge_rows(sell_touched, sell_open), sells);
     if (buys.empty() || sells.empty()) return;
     std::uint64_t min_open_buy_incarnation = std::numeric_limits<std::uint64_t>::max();
     bool open_buy = false;
@@ -22234,19 +22262,17 @@ void PineExecutionAdapter::apply_reversal_gap_bracket_policy(
     const auto physical = detail::run_position(require_host());
     if (physical.signed_units == 0.0) return;
     const int source_bar = context.coordinate.interval_index - 1;
+    const auto& index = live_row_index();
     bool opposite_market = false;
     bool gap_decline = false;
-    for (const auto& handle : live_handles_) {
+    const int opposite_side = physical.signed_units > 0.0 ? 0 : 1;
+    for (const auto& handle : index.rows(
+             detail::LiveClass::DefaultEntryOpeningU2,
+             detail::LiveKey::created_bar(source_bar), opposite_side)) {
         const auto found = placement_.find(handle.incarnation);
         if (found == placement_.end()) continue;
         const auto& entry = found->second;
-        const bool opposite = (physical.signed_units > 0.0) != entry.is_long;
-        if (!opposite || entry.family != PineOrderFamily::Entry || !entry.opening
-            || entry.projection_created_bar != source_bar
-            || std::isfinite(entry.requested_qty)
-            || finite_positive(entry.exit_levels.limit)
-            || finite_positive(entry.exit_levels.stop)
-            || config_.default_qty_type
+        if (config_.default_qty_type
                 != static_cast<int>(QtyType::PERCENT_OF_EQUITY)
             || config_.default_qty_value > 100.0
             || !finite_positive(entry.sizing.frozen_units)
@@ -22319,8 +22345,52 @@ void PineExecutionAdapter::apply_reversal_gap_bracket_policy(
         std::optional<PlacementSnapshot> margin_revival;
         bool release_at_open = false;
     };
+    struct OrderedLeg {
+        native_order::RequestHandle handle;
+        std::uint64_t order = 0;
+    };
+    std::vector<OrderedLeg> ordered_legs;
+    const auto append_legs = [&](const std::vector<native_order::RequestHandle>& rows) {
+        std::unordered_map<native_order::RequestHandle, std::size_t,
+                           detail::LiveHandleHash> seen;
+        for (const auto& handle : rows) {
+            const auto occurrence = seen[handle]++;
+            const auto orders = live_handles_.orders(handle);
+            if (occurrence < orders.size())
+                ordered_legs.push_back({handle, orders[occurrence]});
+        }
+    };
+    const auto infinity = std::numeric_limits<double>::infinity();
+    if (physical.signed_units > 0.0) {
+        append_legs(index.rows_in_range(detail::LiveClass::ExitStop,
+                                        detail::LivePrice::Stop, -infinity, bar.open));
+        append_legs(index.rows_in_range(detail::LiveClass::ExitLimit,
+                                        detail::LivePrice::Limit, bar.open, infinity));
+    } else {
+        append_legs(index.rows_in_range(detail::LiveClass::ExitStop,
+                                        detail::LivePrice::Stop, bar.open, infinity));
+        append_legs(index.rows_in_range(detail::LiveClass::ExitLimit,
+                                        detail::LivePrice::Limit, -infinity, bar.open));
+    }
+    append_legs(index.rows(detail::LiveClass::Trail));
+    std::stable_sort(ordered_legs.begin(), ordered_legs.end(),
+                     [](const OrderedLeg& left, const OrderedLeg& right) {
+                         return left.order < right.order;
+                     });
+    std::vector<native_order::RequestHandle> leg_handles;
+    native_order::RequestHandle last_handle{};
+    std::uint64_t last_order = 0;
+    bool have_last = false;
+    for (const auto& row : ordered_legs) {
+        if (!have_last || last_handle != row.handle || last_order != row.order) {
+            leg_handles.push_back(row.handle);
+            last_handle = row.handle;
+            last_order = row.order;
+            have_last = true;
+        }
+    }
     std::vector<RetiredLeg> retired_legs;
-    for (const auto& handle : live_handles_) {
+    for (const auto& handle : leg_handles) {
         const auto found = placement_.find(handle.incarnation);
         if (found == placement_.end()) continue;
         const auto& leg = found->second;
@@ -22484,27 +22554,57 @@ void PineExecutionAdapter::reaccept_gapped_bracket_behind_same_id_add(
     const auto physical = detail::run_position(require_host());
     if (physical.signed_units == 0.0) return;
     const bool long_position = physical.signed_units > 0.0;
+    const auto& index = live_row_index();
     // A from_entry "" exit that sizes on the position it fills against
     // (fill_time_global_exit) covers an add of ANY id the same way: TradingView
     // judges the market add first at the shared open and then closes both lots
     // with the exit, whether the script placed the exit before or after the add
     // (lab tv w4-f19a-plain cells A, B and G; lane W4-ENG-POOC-SAMEPASS).
-    const auto pure_market_add = [&](const PlacementSnapshot& add,
-                                     const SourceId& from_entry) {
-        return add.opening
-            && (add.family == PineOrderFamily::Entry
-                || add.family == PineOrderFamily::Order)
-            && (from_entry.empty() || add.source_id == from_entry)
-            && add.is_long == long_position
-            && !finite_positive(add.exit_levels.limit)
-            && !finite_positive(add.exit_levels.stop)
-            && !finite_positive(add.exit_levels.trail_points)
-            && !finite_positive(add.exit_levels.trail_price)
-            && !finite_positive(add.exit_levels.trail_offset)
-            && !add.birth.from_fill() && !add.birth.at_terminal_fill();
+    struct OrderedHandle {
+        native_order::RequestHandle handle;
+        std::uint64_t order = 0;
     };
+    std::vector<OrderedHandle> ordered;
+    const auto append = [&](const std::vector<native_order::RequestHandle>& rows) {
+        std::unordered_map<native_order::RequestHandle, std::size_t,
+                           detail::LiveHandleHash> seen;
+        for (const auto& handle : rows) {
+            const auto occurrence = seen[handle]++;
+            const auto orders = live_handles_.orders(handle);
+            if (occurrence < orders.size())
+                ordered.push_back({handle, orders[occurrence]});
+        }
+    };
+    const auto infinity = std::numeric_limits<double>::infinity();
+    if (long_position) {
+        append(index.rows_in_range(detail::LiveClass::ExitStop,
+                                   detail::LivePrice::Stop, -infinity, bar.open));
+        append(index.rows_in_range(detail::LiveClass::ExitLimit,
+                                   detail::LivePrice::Limit, bar.open, infinity));
+    } else {
+        append(index.rows_in_range(detail::LiveClass::ExitStop,
+                                   detail::LivePrice::Stop, bar.open, infinity));
+        append(index.rows_in_range(detail::LiveClass::ExitLimit,
+                                   detail::LivePrice::Limit, -infinity, bar.open));
+    }
+    std::stable_sort(ordered.begin(), ordered.end(),
+                     [](const OrderedHandle& left, const OrderedHandle& right) {
+                         return left.order < right.order;
+                     });
+    std::vector<native_order::RequestHandle> candidate_handles;
+    native_order::RequestHandle last_handle{};
+    std::uint64_t last_order = 0;
+    bool have_last = false;
+    for (const auto& row : ordered) {
+        if (!have_last || last_handle != row.handle || last_order != row.order) {
+            candidate_handles.push_back(row.handle);
+            last_handle = row.handle;
+            last_order = row.order;
+            have_last = true;
+        }
+    }
     std::vector<native_order::RequestHandle> gapped;
-    for (const auto& handle : live_handles_) {
+    for (const auto& handle : candidate_handles) {
         const auto found = placement_.find(handle.incarnation);
         if (found == placement_.end()) continue;
         const auto& leg = found->second;
@@ -22538,12 +22638,13 @@ void PineExecutionAdapter::reaccept_gapped_bracket_behind_same_id_add(
         }
         const int add_priority = long_position ? 1 : 2;
         if (exit_priority == 0 || exit_priority < add_priority) continue;
-        const bool add_waits = std::any_of(live_handles_.begin(), live_handles_.end(),
+        const auto add_rows = index.rows(
+            detail::LiveClass::PureMarketAddOpening,
+            leg.from_entry.empty() ? detail::LiveKey{} : detail::LiveKey::source(leg.from_entry),
+            long_position ? 1 : 0);
+        const bool add_waits = std::any_of(add_rows.begin(), add_rows.end(),
             [&](const native_order::RequestHandle& live) {
-                if (live.incarnation < handle.incarnation) return false;
-                const auto add = placement_.find(live.incarnation);
-                return add != placement_.end()
-                    && pure_market_add(add->second, leg.from_entry);
+                return live.incarnation >= handle.incarnation;
             });
         if (add_waits) gapped.push_back(handle);
     }
@@ -22609,6 +22710,7 @@ void PineExecutionAdapter::order_open_marketable_limit_entries(
         || !modeled_input() || coof_recalc_active_ || context.sub_index != 0) {
         return;
     }
+    auto& index = live_row_index();
     const double open_fill = source_bar_fill_tick(bar.open, staged_.syminfo.mintick);
     const auto marketable = [&](const PlacementSnapshot& row) {
         return row.family == PineOrderFamily::Entry && row.opening && row.is_long
@@ -22618,21 +22720,18 @@ void PineExecutionAdapter::order_open_marketable_limit_entries(
             && !finite_positive(row.exit_levels.trail_offset)
             && open_fill <= row.exit_levels.limit;
     };
-    if (!any_live_row(live_handles_, placement_, marketable, &dense_pending_work_.open_limit_gate)) return;
+    ++dense_pending_work_.open_limit_gate;
+    const auto maximum = index.max_price(
+        detail::LiveClass::PureBuyLimitOpening, detail::LivePrice::Limit);
+    if (!maximum || open_fill > *maximum) return;
     // A flat book holding MARKET entries of both sides is the opposite-pair
     // family, whose own route decides its open: TradingView fills that pair
     // before the limit too, and also books the pair's later call as one
     // transaction admitted at its gross (tape r1c-ra-prior-limit cells M and
     // N), which this route does not model.
-    const auto market_entry = [](const PlacementSnapshot& row, bool is_long) {
-        return row.family == PineOrderFamily::Entry && row.opening && row.is_long == is_long
-            && !finite_positive(row.exit_levels.limit) && !finite_positive(row.exit_levels.stop);
-    };
     if (detail::run_position(require_host()).signed_units == 0.0
-        && any_live_row(live_handles_, placement_,
-                        [&](const PlacementSnapshot& row) { return market_entry(row, true); })
-        && any_live_row(live_handles_, placement_,
-                        [&](const PlacementSnapshot& row) { return market_entry(row, false); })) {
+        && index.count(detail::LiveClass::EntryOpeningU2, {}, 1) != 0
+        && index.count(detail::LiveClass::EntryOpeningU2, {}, 0) != 0) {
         return;
     }
     auto& host = require_host();
@@ -22707,7 +22806,10 @@ void PineExecutionAdapter::apply_terminal_explicit_market_policy(
         std::uint64_t priority = 0;
     };
     std::vector<Candidate> candidates;
-    for (const auto& handle : live_handles_) {
+    const auto& index = live_row_index();
+    for (const auto& handle : index.rows(
+             detail::LiveClass::TerminalExplicitMarketEntry,
+             detail::LiveKey::created_bar(projection_bar_index(context)))) {
         const auto found = placement_.find(handle.incarnation);
         if (found == placement_.end()) continue;
         const auto& row = found->second;
@@ -22887,8 +22989,42 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
         open_exit_first_id_.clear();
         open_exit_first_fill_ = 0.0;
     }
+    struct OrderedTrail {
+        native_order::RequestHandle handle;
+        std::uint64_t order = 0;
+    };
+    std::vector<OrderedTrail> ordered_trails;
+    const auto append_trails = [&](const std::vector<native_order::RequestHandle>& rows) {
+        std::unordered_map<native_order::RequestHandle, std::size_t,
+                           detail::LiveHandleHash> seen;
+        for (const auto& handle : rows) {
+            const auto occurrence = seen[handle]++;
+            const auto orders = live_handles_.orders(handle);
+            if (occurrence < orders.size())
+                ordered_trails.push_back({handle, orders[occurrence]});
+        }
+    };
+    append_trails(index.rows(detail::LiveClass::RestedStopForced));
+    append_trails(index.rows(detail::LiveClass::Trail));
+    std::stable_sort(ordered_trails.begin(), ordered_trails.end(),
+                     [](const OrderedTrail& left, const OrderedTrail& right) {
+                         return left.order < right.order;
+                     });
+    std::vector<native_order::RequestHandle> trail_handles;
+    native_order::RequestHandle last_trail{};
+    std::uint64_t last_trail_order = 0;
+    bool have_last_trail = false;
+    for (const auto& row : ordered_trails) {
+        if (!have_last_trail || last_trail != row.handle
+            || last_trail_order != row.order) {
+            trail_handles.push_back(row.handle);
+            last_trail = row.handle;
+            last_trail_order = row.order;
+            have_last_trail = true;
+        }
+    }
     bool rested_entry_stop = false;
-    for (const auto& handle : live_handles_) { ++dense_pending_work_.open_trails;
+    for (const auto& handle : trail_handles) { ++dense_pending_work_.open_trails;
         const auto placement = placement_.find(handle.incarnation);
         if (placement == placement_.end()) continue;
         if (rested_stop_family(placement->second)) {
@@ -22940,6 +23076,7 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
         last_broker_open_ms_ = context.script_bar_open_ms;
         ++broker_open_epoch_;
     }
+    auto& index = live_row_index();
     // Quiet-bar gates (pine_quiet_bar.hpp): a policy hook below whose body
     // has nothing to act on at this opening is not called at all. Each
     // condition is that hook's own no-op precondition.
@@ -22966,11 +23103,10 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
     // bar placed; without one no pair or pyramiding rule applies, nothing is
     // cancelled and both reviews see no handle.
     const int source_bar = context.coordinate.interval_index - 1;
+    ++dense_pending_work_.open_admission_gate;
     if (!skip_quiet(QuietHook::OpenMarketAdmission,
-            !any_live_row(live_handles_, placement_, [&](const PlacementSnapshot& row) {
-                return row.family == PineOrderFamily::Entry
-                    && row.projection_created_bar == source_bar;
-            }, &dense_pending_work_.open_admission_gate))) {
+            index.count(detail::LiveClass::Entry,
+                        detail::LiveKey::created_bar(source_bar)) == 0)) {
         apply_open_market_admission(context);
     }
     // Quiet: a sell is deferred only when both a live pure-stop buy entry and
@@ -22978,10 +23114,15 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
     // under process_orders_on_close, else the open).
     const double sell_fill_point = config_.process_orders_on_close ? bar.close : bar.open;
     const auto marketable_stop_entry = [&](bool is_long) {
-        return any_live_row(live_handles_, placement_, [&](const PlacementSnapshot& row) {
-            return row.is_long == is_long
-                && pure_stop_entry_marketable_at(row, sell_fill_point);
-        }, &dense_pending_work_.open_stop_gate);
+        ++dense_pending_work_.open_stop_gate;
+        if (is_long) {
+            const auto minimum = index.min_price(
+                detail::LiveClass::PureStopEntry, detail::LivePrice::Stop, {}, 1);
+            return minimum && sell_fill_point >= *minimum;
+        }
+        const auto maximum = index.max_price(
+            detail::LiveClass::PureStopEntry, detail::LivePrice::Stop, {}, 0);
+        return maximum && sell_fill_point <= *maximum;
     };
     if (!skip_quiet(QuietHook::OpenMarketableSells,
             config_.calc_on_order_fills || !modeled_input()
@@ -22991,11 +23132,9 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
     // Quiet: a gapped leg is re-accepted only behind a live pure market add
     // of its own id (of any id for a from_entry "" exit), which is an
     // opening entry or order.
+    ++dense_pending_work_.open_gapped_gate;
     if (!skip_quiet(QuietHook::GappedBracketReaccept,
-            !any_live_row(live_handles_, placement_, [](const PlacementSnapshot& row) {
-                return row.opening && (row.family == PineOrderFamily::Entry
-                                       || row.family == PineOrderFamily::Order);
-            }, &dense_pending_work_.open_gapped_gate))) {
+            index.count(detail::LiveClass::EntryLikeOpening) == 0)) {
         reaccept_gapped_bracket_behind_same_id_add(bar, context);
     }
     order_open_marketable_limit_entries(bar, context);
@@ -23045,34 +23184,25 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
     last_bar_dual_entry_script_open_ms_ = context.script_bar_open_ms;
     // Quiet: a path is recorded only when this bar touches two live flat
     // stop entries, each by its own side's test.
-    const auto touched_stop_entry = [&](const PlacementSnapshot& row) {
-        return row.family == PineOrderFamily::Entry
-            && finite_positive(row.exit_levels.stop)
-            && !std::isfinite(row.exit_levels.limit)
-            && !finite_positive(row.exit_levels.trail_offset)
-            && (row.is_long ? bar.high >= row.exit_levels.stop
-                            : bar.low <= row.exit_levels.stop);
-    };
-    std::size_t touched_stop_entries = 0;
-    for (const auto& handle : live_handles_) { ++dense_pending_work_.open_touched_stops;
-        const auto found = placement_.find(handle.incarnation);
-        if (found != placement_.end() && touched_stop_entry(found->second))
-            ++touched_stop_entries;
-    }
+    const auto negative_infinity = -std::numeric_limits<double>::infinity();
+    const auto positive_infinity = std::numeric_limits<double>::infinity();
+    const std::size_t touched_stop_entries =
+        index.count_in_range(detail::LiveClass::TouchedStopEntry,
+                             detail::LivePrice::Stop, negative_infinity, bar.high, {}, 1)
+        + index.count_in_range(detail::LiveClass::TouchedStopEntry,
+                               detail::LivePrice::Stop, bar.low, positive_infinity, {}, 0);
+    dense_pending_work_.open_touched_stops += touched_stop_entries;
+    const std::size_t total_touched_stops =
+        index.count(detail::LiveClass::TouchedStopEntry);
     if (!skip_quiet(QuietHook::DualEntryPath, touched_stop_entries < 2)
         && !config_.calc_on_order_fills && detail::run_position(require_host()).signed_units == 0.0) {
         std::vector<const PlacementSnapshot*> stops;
-        for (const auto& handle : live_handles_) {
-            const auto found = placement_.find(handle.incarnation);
-            if (found == placement_.end()) continue;
-            const auto& snapshot = found->second;
-            if (snapshot.family != PineOrderFamily::Entry
-                || !finite_positive(snapshot.exit_levels.stop)
-                || std::isfinite(snapshot.exit_levels.limit)
-                || finite_positive(snapshot.exit_levels.trail_offset)) {
-                continue;
+        if (total_touched_stops == 2) {
+            for (const auto& handle :
+                 index.rows(detail::LiveClass::TouchedStopEntry)) {
+                const auto found = placement_.find(handle.incarnation);
+                if (found != placement_.end()) stops.push_back(&found->second);
             }
-            stops.push_back(&snapshot);
         }
         if (stops.size() == 2 && stops[0]->is_long != stops[1]->is_long) {
             const auto* long_stop = stops[0]->is_long ? stops[0] : stops[1];
@@ -23093,8 +23223,9 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
     const auto opening_reversal_entry = [](const PlacementSnapshot& row) {
         return row.opening && row.family == PineOrderFamily::Entry && row.reverse_to;
     };
+    ++dense_pending_work_.open_reversal_gate;
     if (!skip_quiet(QuietHook::CoofDeclinedReversal,
-            !any_live_row(live_handles_, placement_, opening_reversal_entry, &dense_pending_work_.open_reversal_gate))) {
+            index.count(detail::LiveClass::ReverseOpeningEntry) == 0)) {
         suspend_coof_declined_reversal_at_open(bar, context);
     }
     if (close_all_pending_script_bar_ != context.script_bar_open_ms)
@@ -23480,8 +23611,9 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
         // an unprotected position can take a second slice at the adverse
         // extreme on the same bar.
         // Quiet: only a live opening reversal entry can be declined.
+        ++dense_pending_work_.open_reversal_gate;
         const bool declined_reversal = !skip_quiet(QuietHook::DeclinedReversalAtOpen,
-                !any_live_row(live_handles_, placement_, opening_reversal_entry, &dense_pending_work_.open_reversal_gate))
+                index.count(detail::LiveClass::ReverseOpeningEntry) == 0)
             && declined_reversal_at_open(bar);
         // A vetoed deficit pending at the open is checked at the bar's first
         // path point before an exit touched on the way (pending_veto_point_first).
@@ -23619,10 +23751,14 @@ void PineExecutionAdapter::fill_pooc_close_entries(
         double raw_close, const NativeDecisionContext& context, bool after_close) {
     const double book_before = detail::run_position(require_host()).signed_units;
     if (!finite_positive(raw_close)) return;
+    const auto& index = live_row_index();
+    const auto current_rows = index.rows(
+        detail::LiveClass::Placed,
+        detail::LiveKey::created_bar(projection_bar_index(context)));
     // A same-bar close of the held side fills at this close after this pass:
     // the reversing stops it precedes wait for its fill.
     const bool close_follows = !after_close && std::any_of(
-        live_handles_.begin(), live_handles_.end(),
+        current_rows.begin(), current_rows.end(),
         [&](const native_order::RequestHandle& handle) {
             const auto found = placement_.find(handle.incarnation);
             return found != placement_.end()
@@ -23633,7 +23769,9 @@ void PineExecutionAdapter::fill_pooc_close_entries(
     const double tick = staged_.syminfo.mintick;
     const double close_tick = source_bar_fill_tick(raw_close, tick);
     std::vector<std::pair<native_order::RequestHandle, PlacementSnapshot>> marketable;
-    for (const auto& handle : live_handles_) {
+    for (const auto& handle : index.rows(
+             detail::LiveClass::EntryOpening,
+             detail::LiveKey::created_bar(projection_bar_index(context)))) {
         const auto found = placement_.find(handle.incarnation);
         if (found == placement_.end()) continue;
         const auto& row = found->second;
@@ -23756,7 +23894,10 @@ bool PineExecutionAdapter::pooc_close_entry_immediate_pending(
         const NativeDecisionContext& context,
         const native_order::RequestHandle* except) const {
     const int bar_index = projection_bar_index(context);
-    for (const auto& handle : live_handles_) {
+    const auto& index = live_row_index();
+    for (const auto& handle : index.rows(
+             detail::LiveClass::EntryOpening,
+             detail::LiveKey::created_bar(bar_index))) {
         if (except && handle == *except) continue;
         const auto found = placement_.find(handle.incarnation);
         if (found == placement_.end()) continue;
@@ -23776,13 +23917,20 @@ bool PineExecutionAdapter::pooc_close_market_pending(
     // A strategy.close / close_all, or a market entry or order, that this
     // calculation placed and the close point has not filled yet.
     const int bar_index = projection_bar_index(context);
-    return any_live_row(live_handles_, placement_, [&](const PlacementSnapshot& row) {
-        if (row.projection_created_bar != bar_index || row.birth.from_fill()) return false;
+    const auto& index = live_row_index();
+    for (const auto& handle : index.rows(
+             detail::LiveClass::Placed, detail::LiveKey::created_bar(bar_index))) {
+        const auto found = placement_.find(handle.incarnation);
+        if (found == placement_.end()) continue;
+        const auto& row = found->second;
+        if (row.projection_created_bar != bar_index || row.birth.from_fill()) continue;
         if (row.family == PineOrderFamily::Close || row.family == PineOrderFamily::CloseAll)
             return true;
-        return (row.family == PineOrderFamily::Entry || row.family == PineOrderFamily::Order)
-            && !std::isfinite(row.exit_levels.limit) && !std::isfinite(row.exit_levels.stop);
-    });
+        if ((row.family == PineOrderFamily::Entry || row.family == PineOrderFamily::Order)
+            && !std::isfinite(row.exit_levels.limit) && !std::isfinite(row.exit_levels.stop))
+            return true;
+    }
+    return false;
 }
 
 bool PineExecutionAdapter::fill_time_global_exit(const PlacementSnapshot& source) const {
@@ -24368,7 +24516,43 @@ void PineExecutionAdapter::fill_pooc_close_exits(
     detail::ExitScratchRows<Group> groups(*this);
     detail::ExitScratchIndex keys(groups.context());
     auto& versions = detail::exit_scratch_versions(groups.context());
-    for (const auto& handle : live_handles_) {
+    const auto& live_index = live_row_index();
+    struct OrderedExit {
+        native_order::RequestHandle handle;
+        std::uint64_t order = 0;
+    };
+    std::vector<OrderedExit> ordered_exits;
+    const auto append_exits = [&](const std::vector<native_order::RequestHandle>& rows) {
+        std::unordered_map<native_order::RequestHandle, std::size_t,
+                           detail::LiveHandleHash> seen;
+        for (const auto& handle : rows) {
+            const auto occurrence = seen[handle]++;
+            const auto orders = live_handles_.orders(handle);
+            if (occurrence < orders.size())
+                ordered_exits.push_back({handle, orders[occurrence]});
+        }
+    };
+    const auto exit_key = detail::LiveKey::created_bar(projection_bar_index(context));
+    append_exits(live_index.rows(detail::LiveClass::ExitLimit, exit_key));
+    append_exits(live_index.rows(detail::LiveClass::ExitStop, exit_key));
+    std::stable_sort(ordered_exits.begin(), ordered_exits.end(),
+                     [](const OrderedExit& left, const OrderedExit& right) {
+                         return left.order < right.order;
+                     });
+    std::vector<native_order::RequestHandle> exit_handles;
+    native_order::RequestHandle last_exit{};
+    std::uint64_t last_exit_order = 0;
+    bool have_last_exit = false;
+    for (const auto& row : ordered_exits) {
+        if (!have_last_exit || last_exit != row.handle
+            || last_exit_order != row.order) {
+            exit_handles.push_back(row.handle);
+            last_exit = row.handle;
+            last_exit_order = row.order;
+            have_last_exit = true;
+        }
+    }
+    for (const auto& handle : exit_handles) {
         const auto found = placement_.find(handle.incarnation);
         if (found == placement_.end()) continue;
         const auto& row = found->second;
@@ -24727,19 +24911,25 @@ void PineExecutionAdapter::on_bar_close_policy(
     const bool entry_close_fill_pass = config_.process_orders_on_close
         && modeled_input() && !coof_recalc_active_;
     const int bar_index = projection_bar_index(context);
+    const auto current_entries = [&]() {
+        return live_row_index().count(
+                   detail::LiveClass::EntryOpening,
+                   detail::LiveKey::created_bar(bar_index)) != 0;
+    };
+    const auto current_exits = [&]() {
+        return live_row_index().count(
+                   detail::LiveClass::ExitLimit,
+                   detail::LiveKey::created_bar(bar_index)) != 0
+            || live_row_index().count(
+                   detail::LiveClass::ExitStop,
+                   detail::LiveKey::created_bar(bar_index)) != 0;
+    };
     if (!skip_quiet(QuietHook::PoocLimitEntryFills, bound && (!entry_close_fill_pass
-            || !any_live_row(live_handles_, placement_, [&](const PlacementSnapshot& row) {
-                   return row.family == PineOrderFamily::Entry && row.opening
-                       && row.projection_created_bar == bar_index;
-               })))) {
+            || !current_entries()))) {
         flush_pooc_marketable_limit_entry_fills(bar, context);
     }
     if (!skip_quiet(QuietHook::PoocExitFills, bound && (!close_fill_pass
-            || !any_live_row(live_handles_, placement_, [&](const PlacementSnapshot& row) {
-                   return (row.family == PineOrderFamily::ExitLimit
-                           || row.family == PineOrderFamily::ExitStop)
-                       && row.projection_created_bar == bar_index;
-               })))) {
+            || !current_exits()))) {
         flush_pooc_marketable_exit_fills(bar, context);
     }
     // Quiet: no sell was deferred at this bar's open.
@@ -24765,11 +24955,11 @@ void PineExecutionAdapter::on_bar_close_policy(
     // opening entries this bar placed.
     std::size_t explicit_entries = 0;
     if (config_.process_orders_on_close && config_.pyramiding == 0 && modeled_input()) {
-        for (const auto& handle : live_handles_) {
+        for (const auto& handle : live_row_index().rows(
+                 detail::LiveClass::EntryOpening,
+                 detail::LiveKey::created_bar(bar_index))) {
             const auto found = placement_.find(handle.incarnation);
-            if (found != placement_.end() && found->second.opening
-                && found->second.family == PineOrderFamily::Entry
-                && found->second.projection_created_bar == bar_index
+            if (found != placement_.end()
                 && finite_positive(found->second.requested_qty)) {
                 ++explicit_entries;
             }
@@ -28513,10 +28703,20 @@ bool PineExecutionAdapter::same_point_two_leg_book(
     };
     for (const auto& prior : pending_same_bar_commands_) count(prior.snapshot);
     for (const auto& prior : pending_entries_) count(prior.snapshot);
-    for (const auto& handle : live_handles_) { ++dense_pending_work_.same_point_two_leg_book_handles;
-        const auto found = placement_.find(handle.incarnation);
-        if (found != placement_.end()) count(found->second);
-    }
+    const auto& index = live_row_index();
+    const auto total = index.count(detail::LiveClass::EntryLikeOpening);
+    const auto same_source = index.count(
+        detail::LiveClass::EntryLikeOpening, detail::LiveKey::source(id));
+    const auto same_point = index.count(
+        detail::LiveClass::EntryLikeOpening,
+        detail::LiveKey::script_time(script_open_ms));
+    const auto same_source_point = index.count(
+        detail::LiveClass::EntryLikeOpening,
+        detail::LiveKey::source_time(id, script_open_ms));
+    const auto indexed_others = same_point - same_source_point;
+    others += indexed_others;
+    if (total - same_source != indexed_others) foreign = true;
+    dense_pending_work_.same_point_two_leg_book_handles += total;
     return !foreign && others == 1;
 }
 
@@ -28543,6 +28743,7 @@ void PineExecutionAdapter::order_same_point_entries() {
     if (!point || !finite_positive(point->price)) return;
     const int bar = projection_bar_index(point->decision);
     const double signal = point->price;
+    const auto& index = live_row_index();
     struct Candidate {
         native_order::RequestHandle handle;
         int rank = 0;
@@ -28550,7 +28751,39 @@ void PineExecutionAdapter::order_same_point_entries() {
     };
     std::vector<Candidate> candidates;
     bool pure_stops = true;
-    for (const auto& handle : live_handles_) { ++dense_pending_work_.same_point_candidates;
+    struct OrderedHandle {
+        native_order::RequestHandle handle;
+        std::uint64_t order = 0;
+    };
+    std::vector<OrderedHandle> selected;
+    const auto key = detail::LiveKey::created_bar(bar);
+    const auto append_rows = [&](const std::vector<native_order::RequestHandle>& rows) {
+        std::unordered_map<native_order::RequestHandle, std::size_t,
+                           detail::LiveHandleHash> seen;
+        for (const auto& handle : rows) {
+            const auto occurrence = seen[handle]++;
+            const auto orders = live_handles_.orders(handle);
+            if (occurrence < orders.size())
+                selected.push_back({handle, orders[occurrence]});
+        }
+    };
+    const auto infinity = std::numeric_limits<double>::infinity();
+    append_rows(index.rows(detail::LiveClass::SamePointMarket, key));
+    append_rows(index.rows_in_range(detail::LiveClass::SamePointStop,
+                                    detail::LivePrice::Stop, -infinity, signal, key, 1));
+    append_rows(index.rows_in_range(detail::LiveClass::SamePointStop,
+                                    detail::LivePrice::Stop, signal, infinity, key, 0));
+    append_rows(index.rows_in_range(detail::LiveClass::SamePointLimit,
+                                    detail::LivePrice::Limit, signal, infinity, key, 1));
+    append_rows(index.rows_in_range(detail::LiveClass::SamePointLimit,
+                                    detail::LivePrice::Limit, -infinity, signal, key, 0));
+    std::stable_sort(selected.begin(), selected.end(),
+                     [](const OrderedHandle& left, const OrderedHandle& right) {
+                         return left.order < right.order;
+                     });
+    dense_pending_work_.same_point_candidates += selected.size();
+    for (const auto& selected_row : selected) {
+        const auto& handle = selected_row.handle;
         const auto found = placement_.find(handle.incarnation);
         if (found == placement_.end()) continue;
         const auto& row = found->second;
@@ -28593,17 +28826,8 @@ void PineExecutionAdapter::order_same_point_entries() {
         const bool both_sides = buy_count != 0
             && buy_count != static_cast<std::ptrdiff_t>(candidates.size());
         if (both_sides && candidates.size() > 2) return;
-        for (const auto& handle : live_handles_) {
-            const auto found = placement_.find(handle.incarnation);
-            if (found == placement_.end() || !found->second.opening
-                || (found->second.family != PineOrderFamily::Entry
-                    && found->second.family != PineOrderFamily::Order)) {
-                continue;
-            }
-            const bool candidate = std::any_of(candidates.begin(), candidates.end(),
-                [&](const Candidate& c) { return c.handle == handle; });
-            if (!candidate) return;
-        }
+        if (index.count(detail::LiveClass::EntryLikeOpening) != candidates.size())
+            return;
     }
     const auto working = host.native_working_requests();
     const auto definition = [&](const native_order::RequestHandle& handle) {

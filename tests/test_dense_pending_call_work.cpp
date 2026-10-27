@@ -225,13 +225,27 @@ void dense_pending_call_work() {
         else
             std::printf("CR391B ratio %s %.2f\n", name.c_str(),
                         static_cast<double>(large) / static_cast<double>(small));
-        // Doubling the commands permits 2.5x work. A converted counter is
-        // checked even when its smaller run is zero: zero/positive is a
-        // failure, not a skipped assertion.
-        if ((piece_a_counter(name)
-             || name == "remember.handles" || name == "origin_is_pending.handles"
-             || name == "retire.handles" || name == "retire.source_keys")
-            && large * 2 > small * 5)
+        // Doubling the commands permits 2.5x work. Every converted counter
+        // (infrastructure, piece A, piece B) is a red-first control: a newly
+        // nonzero 512-bar answer with a zero 256-bar answer is a failure.
+        const bool b_counter =
+            name == "withdraw_waypoint_margin_calls.handles"
+            || name == "same_bar_close_alls.handles"
+            || name == "on_bar_open.trails"
+            || name == "on_bar_open.admission_gate"
+            || name == "apply_open_market_admission.rows"
+            || name == "on_bar_open.stop_gate"
+            || name == "on_bar_open.gapped_gate"
+            || name == "order_open_marketable_limit_entries.gate"
+            || name == "on_bar_open.touched_stops"
+            || name == "on_bar_open.reversal_gate"
+            || name == "same_point_two_leg_book.handles"
+            || name == "order_same_point_entries.candidates";
+        const bool converted = b_counter || piece_a_counter(name)
+            || name == "remember.handles" || name == "origin_is_pending.handles"
+            || name == "retire.handles" || name == "retire.source_keys";
+        if (converted && ((small == 0 && large != 0)
+                          || (small != 0 && large * 2 > small * 5)))
             throw std::runtime_error("dense counter " + name + " exceeds 2.5x");
     });
     std::fflush(stdout);
