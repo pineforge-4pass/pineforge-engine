@@ -67,13 +67,13 @@ or `slow` rows. The target rebuilds those executables with their library.
 PRs restore the newest compatible default-branch compiler cache, and only
 successful runs on `main` save that cache namespace.
 
-FLEET-POST=A keeps large verification jobs split at the file boundary:
-PR build/preflight and parity subset use `["self-hosted","pf-gcp-pr"]`; post-merge
-verification uses `["self-hosted","pf-gcp-post"]`. No job routes by event.
-CI-RUNNER-SPLIT hosts `authz` in all eight split workflows, both CI `changes`
-and `build-gate` jobs, and `docs.yml`'s `build` on exactly `ubuntu-24.04`.
+Verification jobs keep literal runner pins at the workflow boundary: PR build/preflight and parity subset use `["self-hosted","pf-gcp-pr"]`;
+post preflight/parity and credentialed docs use `["self-hosted","pf-gcp-post"]`.
+Post Release/Debug/kernel and native shards use `pf-linux-x64-16`; post sanitizers
+use `pf-linux-x64-32`; native-live sanitizers use `pf-linux-x64-64`. No job routes by event.
+Hosted `ubuntu-24.04` runs all eight `authz` jobs, both CI `changes`/`build-gate` jobs, all post/native aggregates and `docs.yml`'s `build`.
 These light, secret-free jobs need no VM-only tools, mounts or caches.
-Local reusable calls still cannot mix PR and post-merge verification fleets.
+Local reusable calls still cannot mix PR and post-merge verification fleets. One full post run needs four x64-16 and two x64-64 native runners concurrently.
 
 The manual `release-ruleset-probe.yml` workflow runs `authz` on
 hosted `ubuntu-24.04` and `probe` on `["self-hosted","pf-gcp-post"]`.
@@ -183,9 +183,9 @@ source-only header trees, and compile the native public roots and examples;
 the preflight source guard rejects those includes before a build.
 
 CI uses Ubuntu 24.04 amd64 and arm64 cells and selects Python 3.12 explicitly.
-The amd64 post cells request the post fleet; the two arm64 post cells run on
-hosted `ubuntu-24.04-arm`. Both jobs refuse an OS mismatch.
-Hosted exceptions include the named light jobs, arm64 and the existing release/promotion pins.
+The amd64 post build shards request hosted `pf-linux-x64-16`; the two arm64 post cells run on
+hosted `ubuntu-24.04-arm`. All three build jobs refuse an OS mismatch.
+Hosted exceptions include the named light jobs, amd64 post shards, native profiles, arm64 and the existing release/promotion pins.
 CMake uses the same interpreter as the
 verification driver, so its Python checks do not switch to a different system
 Python. CTest must discover tests; an empty suite is a failure. Which runner
@@ -232,13 +232,13 @@ The declared exclusion and summary accounting apply equally to `debug` and
 full registry minus those names, and only selection is partitioned.
 The registry hash still covers every registered name. Both profiles retain
 null default execution floors. Their default runs now enter strict exclusion
-accounting: at least 876 registered rows for `debug`, 867 for `sanitizers`,
+accounting: at least 904 registered rows for `debug`, 895 for `sanitizers`,
 a nonempty exclusion that leaves selected rows, and exact accounting of that
-selection. These registration constants have not changed; applying them to
-plain Debug-type runs is part of the default-exclusion change. An explicit
+selection. Verifier 8 + preflight 8 + command-after 8 + report 4 add 28 public rows;
+plain Debug-type runs enforce the increased registration floors. An explicit
 valid `--exclude-label X` still wins on unsharded and 1/1 paths. For `N > 1`,
 only the profile's declared Debug-build-type `slow` exclusion is accepted;
-Release and kernel exclusions remain refused.
+Release, kernel and native multi-shard exclusions remain refused.
 
 **Skip accounting, corrected 2026-10-24:** default and explicit exclusions
 use the same rule on plain, 1/1 and multi-shard runs. Without the overlay,
@@ -265,15 +265,15 @@ registry-name or exclusion-name fields; the default exclusion still adds
 selected discovery and strict `ctest-exclusion` checks.
 
 **Slow-label bound, 2026-10-24:** `PINNED_SLOW_TEST_ROWS` in
-`scripts/ci_verify.py` pins all 41 source-labelled names: 29 from the
-`PINEFORGE_PR_SLOW_TESTS` loop and 12 direct CMake `LABELS` assignments.
+`scripts/ci_verify.py` pins all 60 source-labelled names: 43 from the
+`PINEFORGE_PR_SLOW_TESTS` loop and 17 direct CMake `LABELS` assignments; the four report slices replace one direct name (+3), and the report and command-after covers remain outside the slow set.
 Every name listed by `ctest -N -L slow` must belong to that set; conditional
 registration may omit names. An unpinned name fails `ctest-exclusion` on
 plain and 1/1 runs, or `ctest-shard-discovery` for multiple shards, with the
 offending names reported. No registration or execution floor is lowered.
 
-For `release`, `debug`, `sanitizers` and `kernel`, `--ctest-shard I/N`
-selects a deterministic slice with integer indices `1 <= I <= N <= 8`.
+For `release`, `debug`, `sanitizers`, `kernel`, `native`, `live-sanitizers` and
+`live-tsan`, `--ctest-shard I/N` selects a deterministic slice (`1 <= I <= N <= 8`).
 Run the same command on N independent VMs/checkouts of the same tree,
 profile and fixture mode, substituting each one-based index for `I`:
 
@@ -284,15 +284,15 @@ python3 scripts/ci_verify.py debug --build-dir build-ci-debug --jobs 16 \
 
 Every shard performs its own configure and full build before running CTest.
 The caller must collect all N original summaries and logs and accept only
-their complete union. The lab's `shards.mjs` and `recipes.mjs` consume the
-`ctest-shard-union/v1` contract and must agree with these profile label
-declarations, including `sanitizers: slow`. That version identifies the lab's
-union receipt; the engine summary retains `pineforge-ci-verify/v1`.
+their complete union. Live-only profiles use `build/runner`; all others use `build`.
+The lab's `shards.mjs` and `recipes.mjs` consume `ctest-shard-union/v1` and must match
+these profile label and stage declarations, including `sanitizers: slow`. That version
+identifies the lab's union receipt; the engine summary retains `pineforge-ci-verify/v1`.
 
 With `N > 1`, the unsharded selection is the complete `ctest -N` registry
 minus `ctestExcludedNames`. `--exclude-label slow` is accepted for `debug`
 and `sanitizers`, matching their default; other explicit multi-shard label
-exclusions and profiles outside the four listed above are refused.
+exclusions and profiles outside the seven listed above are refused.
 The verifier sorts the selected unique names and assigns each name to zero-based
 shard `int.from_bytes(sha256(name.encode('utf-8')).digest(), 'big') % N`.
 The emitted shard index is one-based. The partition needs no duration file
@@ -309,11 +309,11 @@ fail the multi-shard accounting. Excluded runs use the strict skip policy
 above, including when `minTests` is null. The unsupported-WebSocket allowance
 remains confined to full runs without the overlay.
 
-Every shard reports the same **undivided** `minTests`: Release 910 with the
-overlay or 603 without it (307 pinned placeholders), kernel 337 with the
-overlay or 306 without it (31 pinned placeholders). Debug and sanitizers
-default to JSON null. An explicit floor can raise these minimums; a
-multi-shard run refuses an explicit floor below the profile's minimum.
+Every shard reports the same **undivided** `minTests`: Release 938 with the
+overlay or 631 without it (307 pinned placeholders), kernel 365 with the
+overlay or 334 without it (31 pinned placeholders). Debug, sanitizers and native
+default to JSON null; live-only floors stay 21 (20 without transport.cpp). An explicit
+floor can raise minimums; a multi-shard run refuses a lower profile floor.
 Registry capacity is checked locally against that global floor, subtracting
 registered pinned placeholders in the absent world. The union must contain
 every selected name exactly once and its total executed population must
@@ -328,19 +328,19 @@ override/exclusion behaviour and `enforce_test_floor` accounting; it adds
 discovery and name evidence. A floorless 1/1 run also records an explicit
 `ctest-floor` stage explaining that no execution floor is configured.
 
-The required successful stage table for the four multi-shard profiles is:
+The required successful stage table for the seven multi-shard profiles is:
 
 | Ownership | Stage names and conditions |
 | --- | --- |
 | Every shard | `tool-versions`, `corpus-submodule-init`, `corpus-submodule-status`, `corpus-submodule-pin`, `configure`, `profile-options`, `build`, `stale-binaries`, `native-binary`, `ctest-list-all`, `ctest-list-shard`, `ctest`, `ctest-floor`, `ctest-shard-accounting`. |
-| Every source-layer shard | `abi-base`, `abi-prior`, `abi-v13`, `abi-v14`, `abi-v15-frozen`, `abi-v16-frozen`, `abi-v18-frozen`. Conditional provider fetches also remain local. |
-| Every kernel shard | `abi-providers-skipped`, with status `passed` and exit code 0. |
-| Every Release/kernel shard | `examples-assert-live`. |
-| Every sanitizers shard | `sanitizer-public-flag`. |
+| Every source-layer shard except live-only profiles | `abi-base`, `abi-prior`, `abi-v13`, `abi-v14`, `abi-v15-frozen`, `abi-v16-frozen`, `abi-v18-frozen`. Conditional provider fetches also remain local. |
+| Every kernel/live-only shard | `abi-providers-skipped`, with status `passed` and exit code 0. |
+| Every release/kernel/native/live-only shard | `examples-assert-live`. |
+| Every sanitizer shard | `sanitizer-public-flag` for `sanitizers`/`live-sanitizers`; `live-sanitizer-coverage` for `live-sanitizers`; `runner-thread-sanitizer-coverage` for `live-tsan`. Live-only shards also require `live-test-inventory`, `live-test-inventory-required`, and `live-test-skips` whenever a row skips. |
 | Shard 1 | `source-guard-c-abi`, `source-guard-native-source`, `source-guard-broker-hash`, `source-guard-pending-mirror`, `source-guard-native-versions`, `source-guard-native-c-surface`, `source-guard-aggregate-versions`, `source-guard-adapter-spec-shadowing`, `source-guard-dangling-comment-names`, `source-guard-run-failure-codes`, `source-guard-run-failure-diff`, `source-guard-selected-window-ownership`, `install`, `smoke-configure`, `smoke-build`, `smoke-version`, `smoke-version-check`. |
-| Shard 1, Release | `source-guard-twin-parity`. |
-| Shard 1, Release/kernel | `native-include-independence`. |
-| Shard 1, kernel | `kernel-residuals`, `native-help`. |
+| Shard 1, release/native | `source-guard-twin-parity`. |
+| Shard 1, release/kernel/native | `native-include-independence`. |
+| Shard 1, live runner or kernel | `native-help`; `kernel-residuals` for kernel only; `require-websocket` whenever configured (automatic for live-only profiles with transport.cpp). |
 
 Stages owned by shard 1 appear on every other shard as
 `{"status": "deferred", "ownerShard": 1, "exitCode": null}` under their
@@ -361,7 +361,7 @@ The sharded JSON evidence is:
 | `ctestRegisteredNames`, `ctestRegistered` | Full sorted unique name array and its integer length. |
 | `ctestRegistrySha256` | Lowercase SHA-256 hex over sorted UTF-8 names, each followed by LF, including the final name. |
 | `ctestUnshardedSelectedNames`, `ctestUnshardedSelected` | Sorted registry minus `ctestExcludedNames`, and its length before partitioning. |
-| `excludeLabel` | `"slow"` for `debug` and `sanitizers`; JSON null for `release` and `kernel`. Every shard must agree. |
+| `excludeLabel` | `"slow"` for `debug` and `sanitizers`; JSON null for the other five profiles. Every shard must agree. |
 | `ctestExcludedNames` | Sorted unique names discovered by `ctest -N -L <label>`; a subset of the full registry, identical on every shard; `[]` without an exclusion. |
 | `minTests` | The unchanged global execution floor, integer or JSON null. |
 | `ctestPrivateFixturesOverlay` | Boolean fixture mode; every shard must agree with the job. |
@@ -448,7 +448,7 @@ For `N > 1`, global floors and local accounting are separate obligations:
   registry's runnable capacity. Without the overlay, capacity is the full
   registered count minus the registered pinned private-fixture names;
   with the overlay it is the full registered count. The
-  floor itself remains fixed at 603/306 absent or 910/337 present for
+  floor itself remains fixed at 631/334 absent or 938/365 present for
   Release/kernel, or the explicit `--min-tests` value. It is never divided by
   the shard count or lowered by an observed skip.
 * Each shard requires `ran + permitted skips = its own selected count`, with
@@ -599,8 +599,8 @@ curl may report the existing unsupported-WebSocket skip; that is not the require
 Linux transport proof.
 
 `live-sanitizers` performs a full all-target build, then runs the complete
-`build-ci-live-sanitizers/runner` CTest inventory (at least thirteen rows while
-`runner/transport.cpp` exists, twelve after its removal), including
+`build-ci-live-sanitizers/runner` CTest inventory (at least twenty-one rows while
+`runner/transport.cpp` exists, twenty after its removal), including
 `native_live_e2e` and `native_live_startup_e2e`, and requires any additional
 runner `tests/native_live*_e2e.py` on the tree to be registered too, including the
 corpus equivalence driver described below. Its harness unit tests
@@ -617,27 +617,27 @@ requires the WebSocket test.
 The runner's curl version floor still applies at configure time.
 `live-tsan` runs the same inventory in a separate ThreadSanitizer build,
 checks every runner compile unit for instrumentation, and stops on a race.
-`native-live.yml` runs `native`, `live-sanitizers` and `live-tsan` in three
-independent matrix cells with `fail-fast: false`. Each uses the same
-checksum-pinned WebSocket-enabled curl recipe, its own compiler and dependency
-cache namespace, and its own diagnostic artifact. A failed cell does not
-cancel its peers. The `native-live-gate` job requires the matrix to succeed;
-the caller's `build` aggregate still requires the reusable workflow to succeed.
-Only the native cell accepts the caller's existing PR-only slow-label exclusion.
+`native-live.yml` runs four `native` shards on hosted `pf-linux-x64-16`;
+`live-sanitizers` and `live-tsan` each build once on hosted `pf-linux-x64-64`.
+Both matrices keep `fail-fast: false`, pinned WebSocket curl and profile caches. A failed cell does not cancel its peers.
+Native compiler keys and diagnostic artifacts also carry the shard index.
+The `native-live (native)` aggregate requires all four successful summary proofs;
+`native-live-gate` requires it and both sanitizer cells, refusing missing or skipped work; the caller's `build` aggregate still requires the reusable workflow to succeed.
+Only native shards accept the caller's existing PR-only slow-label exclusion; dispatch always runs the full set.
 
-`native_live_equivalence_e2e` is a permanent CTest row in `runner/CMakeLists.txt`,
-registered when tests, the source layer and the live runner are enabled. It runs
-`tests/native_live_equivalence_e2e.py` through a prerequisite adapter, using the
-configured live build and fresh, retained libraries/results directories under
-`<build>/runner/native_live_equivalence_e2e/`. It executes the driver's default
-eight probes and full scenario population: observer qualification, exact
-batch/stream/loopback action and report comparisons, restart, delivery retry and
-state-selected splits. It uses a loopback receiver with an ephemeral port and
-needs no external venue. The previously measured c5.2xlarge run took about 929 s
-to build and 983 s for the script (109 scenarios, zero failures). Those are
-observations from the CR-223 proof, not timings measured by this registration.
+`native_live_equivalence_e2e_<probe>` names eight rows in `runner/CMakeLists.txt`,
+registered when tests, the source layer and the live runner are enabled. They run
+`tests/native_live_equivalence_e2e.py` through the existing prerequisite adapter,
+using the configured live build and retained libraries/results directories under
+`<build>/runner/native_live_equivalence_e2e/<probe>/`, with unique `run-*` children.
+Each row qualifies its probe once and runs its full default scenario population
+at timeframes 15, 5 and 1: exact batch/stream/loopback action and report
+comparisons, restart, delivery retry and state-selected splits. Rows use loopback
+receivers with ephemeral ports and can run in parallel without an external venue.
+`test_native_live_equivalence_split` checks the CMake list against the driver's
+AST probe keys and rejects missing, duplicate or unknown probes and the old row.
 
-The row needs `bin/pineforge-live`, `compile_commands.json`, `lib/libpineforge.a`
+The rows need `bin/pineforge-live`, `compile_commands.json`, `lib/libpineforge.a`
 and the built `native_live_equivalence_observer` object in the selected live
 build; the corpus's `data/ohlcv_ETH-USDT-USDT_1m.csv` and
 `validation/<probe>/generated.cpp` for every probe the driver declares; and
@@ -654,22 +654,22 @@ or a failed sanitizer check fails the row; a driver exit of 77 after the checks
 is a failure too. ASan/TSan builds use the same runtime preload and status-bearing
 cleanup as the genuine-retry witness, including cleanup on the skip path.
 
-The row carries the existing `private_fixtures` label and is added to
-`tests/private_fixture_rows.txt`. The live profiles select the runner directory,
-so this label does not hide it from either sanitizer profile or the native
-profile's `slow` exclusion. Direct CTest records missing prerequisites as a
-skip. In `ci_verify.py`, both live sanitizer profiles reject a skip for any
-required runner e2e row, even a pinned row and even without
-`PINEFORGE_PRIVATE_FIXTURES`. Other pinned-placeholder skips keep their existing
-policy. A skip is recorded in `ctestSkipped` and contributes zero to the run
-count. The pinned list grows from 375 to 376; `LIVE_SANITIZERS_MIN_TESTS` grows
-from 12 to 13, so `profile_min_tests()` returns 13 while transport exists and
-12 after its removal, in both fixture worlds. The native PR registration floor
-grows from 963 to 964. Release/kernel row floors are unchanged, since this row
-needs the live runner and source layer together.
+Each probe row keeps the `private_fixtures` label and `SKIP_RETURN_CODE 77`.
+`tests/private_fixture_rows.txt` retains the parent pin; `ci_verify.py` expands
+it into all eight probe names after checking the unchanged 376-entry raw pin
+count, giving 383 effective labelled names. The cover row has no private label.
+Live profiles select the runner directory, so the label hides none of these
+rows from either sanitizer profile or the native profile's `slow` exclusion.
+Direct CTest records missing prerequisites as a skip. Both live sanitizer
+profiles reject a skip for every required probe, even a pinned row and without
+`PINEFORGE_PRIVATE_FIXTURES`; other pinned-placeholder skips keep their policy.
+Replacing one row with eight probes plus the cover adds eight rows: the live
+run floor grows from 13 to 21, or 12 to 20 without transport, in both fixture
+worlds. The native PR registration floor is 1000: 964 + 28 public split rows + 8 probes.
+Release, debug and sanitizers build no runner; kernel omits this source-layer registration.
 
-The `runner_e2e_test_names()` equivalence exclusion is removed. Both live
-sanitizer profiles require the row in their inventory and require it to execute;
+`runner_e2e_test_names()` expands the equivalence driver into all eight rows.
+Both live sanitizer profiles require those rows and the cover in their inventory;
 inventory membership alone is not execution proof. Although the
 `native-live.yml` checkout step does not initialize submodules, its verifier
 already calls `ensure_corpus_submodule()` before source guards and configure.
@@ -677,7 +677,7 @@ That method initializes and checks the recorded corpus gitlink. Source-layer
 live profiles now explicitly pull the LFS 1m feed, and `native-live.yml`
 installs `git-lfs`, as the corpus-parity workflow already does. A failed fetch
 stops verification before configure. With the build, corpus/feed and tracked
-receipt helper present, the row runs without a private-fixtures overlay.
+receipt helper present, the probe rows run without a private-fixtures overlay.
 
 The kernel profile also gates the CTest row count: `tests/CMakeLists.txt`
 drops every test TU whose include closure reaches `pineforge/source/` or
@@ -710,14 +710,14 @@ bound on plain and 1/1 runs; full Release/kernel runs retain their execution
 floors.
 
 The two run floors are overlay-aware, keyed on `PINEFORGE_PRIVATE_FIXTURES`.
-Both numbers are constants of the profile, measured on the campaign's
-two-world runs; they never move with the run's own `ctest -N` count or its
+Both numbers are constants of the profile, from the campaign's two-world
+counts plus registered row changes; they never move with the run's own `ctest -N` count or its
 observed skips:
 
 | profile | floor, overlay present | floor, overlay absent | registered (present / absent) |
 |---|---|---|---|
-| `release` | 910 | 603 | 910 / 910 |
-| `kernel` | 337 | 306 | 337 / 337 |
+| `release` | 938 | 631 | 938 / 938 |
+| `kernel` | 365 | 334 | 365 / 365 |
 
 With the variable set and non-empty (the private-fixture overlay is present in
 the tree) the floor is the full population and EVERY row of it must run: a row
@@ -756,8 +756,8 @@ The PR registration floors are the keys of `EXCLUDED_REGISTERED_MIN` in
 `scripts/ci_verify.py`, one for each profile whose pull-request leg excludes
 the label; their values are in
 [PR tier versus MAIN/RELEASE](#pr-tier-versus-mainrelease-what-is-excluded-where).
-The full-run release and kernel floors are the table's own numbers above (603
-and 306 rows absent, 910 and 337 with the overlay present). A pull request's
+The full-run release and kernel floors are the table's own numbers above (631
+and 334 rows absent, 938 and 365 with the overlay present). A pull request's
 release and kernel legs exclude the label and are held to the registration
 floor instead; the full runs on push and dispatch exclude no label and are
 held to these run floors.
@@ -1298,7 +1298,7 @@ use distinct concurrency groups and remain uncanceled. A PR that changes more
 than documentation runs preflight and the parity subset with its full set;
 both Release jobs, Ubuntu Debug, kernel-only, sanitizers and the native cell
 of native-live run the registered set excluding
-the 29 CTest rows labelled `slow` in `tests/CMakeLists.txt`
+the 43 CTest rows labelled `slow` in `tests/CMakeLists.txt`
 ([PR tier versus MAIN/RELEASE](#pr-tier-versus-mainrelease-what-is-excluded-where)). The first 27 were
 chosen from INT23/INT24 job logs: over 60 seconds in either sanitizer run or
 over 30 seconds in either Debug run. Preflight and the proof jobs start as soon
@@ -1412,19 +1412,19 @@ both Debug legs and `sanitizers` exclude `slow`; native runs every row.
 **2026-10-24 supersedes the other non-PR row's Debug/sanitizer cell:**
 both Debug legs and `sanitizers` exclude `slow`; native runs every row.
 
-The label `slow` is `PINEFORGE_PR_SLOW_TESTS` in `tests/CMakeLists.txt`: 29
-rows, among them `test_ci_verify`, the serial run of
-`scripts/test_ci_verify.py`, which dominates a full Release or kernel job.
-Debug, `sanitizers` and the native cell of `native-live` already excluded it on
-a pull request; D1 adds both Release jobs and `kernel-only`. A row a profile
-does not register carries no label there, and the kernel profile registers
-fewer of the 29 than Release does. `live-sanitizers`, `live-tsan` and the
-parity subset are unchanged.
+The label `slow` includes `PINEFORGE_PR_SLOW_TESTS` in `tests/CMakeLists.txt`: 43
+rows, among them `test_ci_verify_slice_1` through `test_ci_verify_slice_8`,
+and the eight command-after slices; neither collection-only cover is slow.
+Debug, `sanitizers` and the native cell of `native-live` exclude them on
+a pull request; both Release jobs and `kernel-only` also exclude them. A row
+a profile does not register carries no label there; the kernel profile registers
+fewer of the 43 than Release does. `live-sanitizers`, `live-tsan` and the
+parity subset keep their existing selections.
 
-**2026-10-24 supersedes the 29-row label inventory above:** 29 is the
-timing-list population only. Twelve additional names receive `slow` through
+**The slow-label inventory also includes rows with direct labels:**
+The timing list contains 43 names, and 17 additional names are pinned for
 direct `LABELS` assignments in `tests/CMakeLists.txt` and
-`tests/cr150.d/*.cmake`, making 41 distinct source-labelled names.
+`tests/cr150.d/*.cmake`, making 60 distinct pinned slow names.
 `PINNED_SLOW_TEST_ROWS` bounds the discovered exclusion by those names,
 independent of the registered count; each profile may register a subset.
 
@@ -1441,12 +1441,12 @@ workflows and the CI scripts among them); an unknown or unreadable diff
 runs the SLOW classes. Push to `main` and `workflow_dispatch` run every class.
 `NativeLiveEquivalenceCTest` is SLOW until its passing runtime is measured;
 it checks the row wiring, prerequisite skips, driver failures and run-directory isolation.
-The CTest row `test_ci_verify` stays in the `slow` population: the pull-request
-legs exclude it by label and every full run executes it.
+The eight `test_ci_verify_slice_*` CTest rows stay in the `slow` population:
+pull-request legs exclude them by label and full Release runs execute them.
 
 **2026-10-24 supersedes the Debug/sanitizer implication above:**
-`test_ci_verify` stays excluded from their push and dispatch CTest runs too.
-Full Release, kernel and native CTest runs execute it; preflight's all-class
+the verifier slices stay excluded from their push and dispatch CTest runs too.
+Full Release, kernel and native CTest runs execute every slice; preflight's
 push/dispatch policy remains in force independently.
 
 A pull-request leg that excludes the label is held to a registration floor in
@@ -1455,18 +1455,18 @@ that profile's `EXCLUDED_REGISTERED_MIN` key and its overlay-aware run floor,
 the selection must remove some rows and leave some, and, with the overlay
 absent, the rows that ran plus the pinned skips must equal the selection with
 no other skip (the `--exclude-label` branch of `enforce_test_floor` in
-`scripts/ci_verify.py`). `EXCLUDED_REGISTERED_MIN` holds 876 for `debug`, 867
-for `sanitizers` and 964 for `native`, and with D1 895 for `release` and 337
-for `kernel`. The two new keys are derived, not measured. `release` is the
+`scripts/ci_verify.py`). `EXCLUDED_REGISTERED_MIN` holds 904 for `debug`, 895
+for `sanitizers` and 1000 for `native`, and 923 for `release` and 365
+for `kernel`: +28 public split rows in each, plus eight native probes. The original `release` key was the
 registered count in the sampled public pull-request runs (957) less the 62 rows
 by which the Debug key sits below the Debug registry in the same runs (938 less
 876); that also equals its own registry at the vintage of the other keys. The
 same offset would give 309 for `kernel`, 17 rows below the kernel registry at
-that vintage (326), so `kernel` takes `KERNEL_MIN_TESTS` (337): 34 below the 371
+that vintage (326), so the original `kernel` key took 337: 34 below the 371
 registered in every sampled pull-request and push run. The lab job's `ctest -N`
 confirms both or moves them. The
-run floors in the table above (910 and 337 with the overlay present, 603 and
-306 absent) are not read on an excluded run; push, dispatch and every other
+run floors in the table above (938 and 365 with the overlay present, 631 and
+334 absent) are not read on an excluded run; push, dispatch and every other
 full run still enforce them.
 
 **2026-10-24 supersedes the exclusion skip wording above:** the sole named
@@ -1647,18 +1647,18 @@ runs, and this page does not claim either target as met.
 
 ## Runners and time limits
 
-CI-RUNNER-SPLIT (R309 + R312) keeps large and credentialed work on our VMs.
-Only the listed light, secret-free jobs move to the pinned hosted image;
-each runner label remains a literal, checked per job:
+Credentialed work and the remaining full profiles retain their VM pins.
+The four amd64 post legs and native verification use hosted runners; their aggregates use the light image.
+The native matrix is exactly `1..4` with `--ctest-shard I/4`; live sanitizers are unsharded. Each runner label remains a literal, checked per job:
 
 | Workflow | Events/callers | Inline jobs' `runs-on` |
 | --- | --- | --- |
 | `ci.yml` | Unfiltered `pull_request` | `authz`, `changes`, `build-gate`: hosted `ubuntu-24.04`; preflight/build: `["self-hosted","pf-gcp-pr"]` |
 | `corpus-parity-subset.yml` | Reusable call from PR CI | `authz`: hosted `ubuntu-24.04`; subset: `["self-hosted","pf-gcp-pr"]` |
 | `docs.yml` | `pull_request`, except `.github/**`-only diffs | `authz` and `build`: hosted `ubuntu-24.04` |
-| `ci-post.yml` | Push to `main`, 01:30 UTC schedule, dispatch | `authz`, `changes`, `build-gate`: hosted `ubuntu-24.04`; `build-arm`: hosted `ubuntu-24.04-arm`; other inline jobs: `["self-hosted","pf-gcp-post"]` |
+| `ci-post.yml` | Push to `main`, 01:30 UTC schedule, dispatch | Light jobs and four leg aggregates: `ubuntu-24.04`; Release/Debug/kernel shards: `pf-linux-x64-16`; sanitizers shards: `pf-linux-x64-32`; `build-arm`: `ubuntu-24.04-arm`; preflight tiers: `["self-hosted","pf-gcp-post"]` |
 | `corpus-parity.yml` | Schedule, dispatch, post CI callers | `authz`: hosted `ubuntu-24.04`; both parity jobs: `["self-hosted","pf-gcp-post"]` |
-| `native-live.yml` | Dispatch and post CI callers | `authz`: hosted `ubuntu-24.04`; all native profiles and `native-live-gate`: `["self-hosted","pf-gcp-post"]` |
+| `native-live.yml` | Dispatch and post CI callers, including branch dispatch | `authz` and both aggregates: hosted `ubuntu-24.04`; four native shards: `pf-linux-x64-16`; `live-sanitizers` and `live-tsan`: `pf-linux-x64-64` |
 | `docs-post.yml` | Push to `main`, dispatch | `authz`: hosted `ubuntu-24.04`; credentialed `build`: `["self-hosted","pf-gcp-post"]` |
 
 The post fleet admits only push, schedule and dispatch on engine `main` and
@@ -1667,18 +1667,18 @@ refuses all PR events. Reusable workflows inherit their caller's event.
 follow local calls to a fixed point, refuse mixed event classes and require
 literal VM arrays outside the exact hosted pins; job conditions cannot excuse routing.
 Fork PRs on hosted runners run without our secrets, so the VM-only fork-refusal hook is not needed.
-Hosted light jobs need no VM tools or mounts; leaving VM queues shortens PR wall time.
+Hosted shards also run on a branch dispatch; the remaining post fleet still requires `main`.
 Rollback: relabel the affected job to its prior `pf-gcp-pr` or `pf-gcp-post` array and restore its checker/test pin.
 
 The four full build checks are `build (ubuntu-24.04, Release)`,
 `build (ubuntu-24.04, Debug)`, `build (ubuntu-24.04-arm, Release)` and
-`build (ubuntu-24.04-arm, Debug)`. The two amd64 cells share `build` on the
-post fleet; the two arm64 cells share `build-arm` on hosted `ubuntu-24.04-arm`.
-Both jobs use the same verification steps and profiles. Each refuses an OS
-mismatch before checkout, and the aggregate requires both jobs.
-`HOSTED_JOB_RUNNERS` in `scripts/ci_preflight.py` pins the light jobs and the
-arm64 image; the arm64 exception excludes workflows reachable from
-`pull_request`. The PR build remains
+`build (ubuntu-24.04-arm, Debug)`. Release uses four `build` shards, Debug two
+`build-debug` shards, and kernel two shards on 16 cores; sanitizers uses four on 32 cores.
+Every shard builds the full tree and runs `--ctest-shard I/N` at the runner's core count. Each build refuses an OS mismatch before checkout.
+Each leg aggregate retains its old check name and requires its own matrix's success. The two arm64 cells share `build-arm` on hosted `ubuntu-24.04-arm`. All three build jobs use the same verification steps and profiles.
+Shard jobs and leg aggregates skip together only on classified docs-only changes.
+One cache key per architecture/profile/SHA is restored by all shards; only shard 1 saves it.
+`HOSTED_JOB_RUNNERS` pins hosted jobs; its larger/arm64 exceptions exclude PR callers. The PR build remains
 `build (ubuntu-24.04, Release)` and its aggregate remains `build`.
 
 Release and promotion use the isolated release fleet:
@@ -1729,8 +1729,8 @@ merge time, and supply readable identity fields; failures there refuse red.
 Legacy `PF_CI_LABELS` metadata does not select runners. Verification and
 parity commands use `$(getconf _NPROCESSORS_ONLN)` for parallelism.
 No job or step declares `timeout-minutes`, and no proof continues on error.
-The checker retains the bans on paid larger-runner labels and
-`larger_runner` keys. GitHub's platform maximum remains the only time bound.
+Larger labels are allowed only at their exact named jobs' `runs-on` keys;
+`larger_runner` keys stay refused. GitHub's platform maximum remains the only time bound.
 
 The read-only `promote-guard` stays hosted on `ubuntu-latest`; the credential
 job keeps main's isolated release runner. Preflight pins the complete guard
