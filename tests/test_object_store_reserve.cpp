@@ -174,7 +174,7 @@ private:
     int fd_ = -1;
 };
 
-void slope_row(std::uint64_t payload_bytes) {
+bool slope_row(std::uint64_t payload_bytes) {
     using pineforge::detail::kObjectArenaChunkBytes;
     using pineforge::detail::kObjectArenaDirectoryBytesPerChunk;
     using pineforge::detail::object_physical_bytes;
@@ -224,21 +224,35 @@ void slope_row(std::uint64_t payload_bytes) {
     // formula is the host-reliant physical bound; only the separately named
     // four-byte-per-MiB arena directory is allowed as tolerance. The lower
     // half check prevents a vacuous bound.
-    require(after.bytes_backing - before.bytes_backing
-                <= expected_total + directory_tolerance,
-            "backing slope stays below physical bound");
-    require(after.bytes_backing - before.bytes_backing >=
-                (expected_per_object / 2) * 2 * kN,
-            "backing slope is not a vacuous bound");
-    require(measured <= expected_per_object
-                + kObjectArenaDirectoryBytesPerChunk,
-            "measured per-object slope");
+    // Every payload is measured and printed before the verdict, so one failing
+    // row does not hide the numbers of the others.
+    bool within = true;
+    if (!(after.bytes_backing - before.bytes_backing
+              <= expected_total + directory_tolerance)) {
+        std::fprintf(stderr, "slope payload=%llu: backing slope stays below physical bound: FAILED\n",
+                     static_cast<unsigned long long>(payload_bytes));
+        within = false;
+    }
+    if (!(after.bytes_backing - before.bytes_backing >=
+          (expected_per_object / 2) * 2 * kN)) {
+        std::fprintf(stderr, "slope payload=%llu: backing slope is not a vacuous bound: FAILED\n",
+                     static_cast<unsigned long long>(payload_bytes));
+        within = false;
+    }
+    if (!(measured <= expected_per_object + kObjectArenaDirectoryBytesPerChunk)) {
+        std::fprintf(stderr, "slope payload=%llu: measured per-object slope: FAILED\n",
+                     static_cast<unsigned long long>(payload_bytes));
+        within = false;
+    }
+    return within;
 }
 
 void backing_slopes() {
+    bool all_within = true;
     for (const std::uint64_t payload_bytes :
          std::initializer_list<std::uint64_t>{0, 16, 100, 1000, 5000})
-        slope_row(payload_bytes);
+        all_within = slope_row(payload_bytes) && all_within;
+    require(all_within, "backing slope stays within the physical bound for every payload");
 }
 
 } // namespace
