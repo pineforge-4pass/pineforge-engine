@@ -613,9 +613,9 @@ public:
 
         Iterator() = default;
 
-        Reference operator*() const { return {key_, *row_}; }
+        Reference operator*() const { return {key_, borrow()}; }
         Reference* operator->() const {
-            reference_.emplace(key_, *row_);
+            reference_.emplace(key_, borrow());
             return &*reference_;
         }
         Iterator& operator++() {
@@ -638,11 +638,11 @@ public:
         friend class PlacementTable;
         Iterator(Owner* owner, std::uint64_t key, Snapshot* row)
             : owner_(owner), key_(key), row_(row) {}
-
-        // The row is named by its incarnation and its node, never by a
-        // position, so an iterator stays valid across every insert and every
-        // erase of another row. key_ 0 is end().
-        Owner* owner_ = nullptr;
+        Snapshot& borrow() const {
+            if constexpr (!IsConst) ++owner_->pending_observer_version_;
+            return *row_;
+        }
+        Owner* owner_ = nullptr; // Nodes stay stable; key 0 is end().
         std::uint64_t key_ = 0;
         Snapshot* row_ = nullptr;
         mutable std::optional<Reference> reference_;
@@ -674,7 +674,7 @@ public:
     void reserve(std::size_t count) {
         window_.reserve(std::min<std::size_t>(count, kWindowReserve));
     }
-    void clear() noexcept {
+    void clear() noexcept { ++pending_observer_version_;
         window_.clear();
         head_ = 0;
         base_ = 1;
@@ -760,7 +760,7 @@ public:
         return locate(incarnation) != nullptr;
     }
 
-    PlacementSnapshot& at(std::uint64_t incarnation) {
+    PlacementSnapshot& at(std::uint64_t incarnation) { ++pending_observer_version_;
         PlacementSnapshot* row = locate(incarnation);
         if (!row) throw std::out_of_range("source placement handle is absent");
         return *row;
@@ -772,7 +772,7 @@ public:
     }
 
     template<class... Args>
-    std::pair<iterator, bool> try_emplace(std::uint64_t incarnation, Args&&... args) {
+    std::pair<iterator, bool> try_emplace(std::uint64_t incarnation, Args&&... args) { ++pending_observer_version_;
         if (incarnation == 0 || incarnation == std::numeric_limits<std::uint64_t>::max()) {
             throw std::length_error("source placement incarnation is out of range");
         }
@@ -816,7 +816,7 @@ public:
     // Erases a row. The compact records keep what later logic reads of it:
     // its command sequence under its (source_id, from_entry) and, for a
     // non-margin row, its source id. Returns false when no row is there.
-    bool erase(std::uint64_t incarnation) {
+    bool erase(std::uint64_t incarnation) { ++pending_observer_version_;
         const PlacementSnapshot* row = locate(incarnation);
         if (!row) return false;
         preflight_erased_rows([&](const auto& emit) { emit(*row); });
@@ -947,9 +947,9 @@ private:
     // Up to three distinct source ids of erased non-margin rows: as many as
     // erased_non_margin_id_outside() can ever need.
     std::vector<SourceId> erased_foreign_ids_;
-    // Erased rows' nodes, for the next rows. Not state: a spare node still
-    // holds the row it was erased with, which nothing reads, until the next
-    // placement overwrites it.
+    // Spare nodes and the observer epoch are derived, outside broker state.
+    friend class PineExecutionAdapter;
+    std::uint64_t pending_observer_version_ = 0;
     std::vector<std::unique_ptr<PlacementSnapshot>> spare_;
 };
 
@@ -1595,7 +1595,7 @@ void bind_id_pair_scratch_tables(source::PineExecutionAdapter&,
 
 namespace pineforge::source {
 
-// Allocation-free view facade for Appendix C's later C projection. L2 does
+// Read-only view facade for Appendix C's later C projection. L2 does
 // not wire the C ABI; this only exposes named truthful sources to native
 // fixture tests and keeps observer reads side-effect-free.
 class PendingIntentView {
@@ -3213,6 +3213,30 @@ private:
     void fold_admission_events() const;
     std::uint64_t checked_live_key(const SourceId&) const;
     detail::LiveSourceHandle live_source_value(native_order::RequestHandle, const SourceId&) const;
+    // Diagnostic only; never folded into continuation state.
+    mutable std::uint64_t projected_raw_pending_calls_ = 0;
+    // A disposable projection of current raw positions, never row pointers.
+    // Mutable placement borrows and every queue writer invalidate its inputs.
+    std::uint64_t pending_projection_version_ = 0;
+    mutable std::uint64_t projected_pending_version_ = 0;
+    mutable std::uint64_t projected_placement_version_ = 0;
+    mutable bool projected_pending_valid_ = false;
+    mutable std::vector<int> projected_pending_indexes_;
+    mutable std::vector<int> projected_pending_next_;
+    void ensure_projected_pending_index() const;
+    int projected_pending_next(int index) const noexcept;
+    int projected_raw_pending_next(int raw) const noexcept;
+    int projected_level_resolved(const PlacementSnapshot&) const noexcept;
+    template<class Row> Row& pending_write(Row& row) noexcept {
+        refresh_pending_view();
+        return row;
+    }
+#ifndef NDEBUG
+    static int debug_projected_pending_size(const PineExecutionAdapter&) noexcept;
+    static bool debug_projected_pending_at(
+        const PineExecutionAdapter&, int index, const PlacementSnapshot*&,
+        native_order::RequestHandle&) noexcept;
+#endif
 };
 
 namespace detail {
