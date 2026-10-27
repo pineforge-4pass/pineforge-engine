@@ -105,14 +105,14 @@ naming its source span, compiler artifact or data-plan receipt.
 
 | Input group / fields | Meaning and producer |
 | --- | --- |
-| data.scriptBars | Upper bound S for all script calculations' distinct script bars, including pre-roll. Data timestamps plus timeframe/session/calendar planner. Only use input count N when grouping/passthrough proves S <= N. |
+| data.scriptBars | Upper bound S for all script calculations' distinct script bars, including pre-roll. Data timestamps plus timeframe/session/calendar planner. Only use input count N when grouping/passthrough proves S <= N. S counts bars, not script executions. |
 | data.selected, data.windowBars | Integer flag 0/1 and W, 0 <= W <= S. Selected request and pre-start script-label bucketing in its half-open window. If bucketing is unavailable, use W=S. |
 | strategy.controlFlow.status | `bounded`, `unbounded`, or `unknown`; a reason is required for the latter two. Typed compiler call graph and loop/string dataflow proof. |
 | strategy.fills.perBar, fixed | F and F0: **applied fill executions** <= S*F+F0 for the entire run. Include old resting requests, bracket fan-out, every fill recalculation, margin/risk reductions and source follow-up commands. This is not a syntactic call-site count. |
 | strategy.fills.rowsPerFill | H: maximum durable/published closed slices emitted by one execution, including source-side row expansion. A proved physical lot count suffices only when the lowering proves no extra row multiplicity. Pyramiding alone is unsafe for arbitrary Pine order calls. |
 | strategy.fills.fixedRows | Z: additional closed/report-side rows not already charged, if a source lowering can emit them. Zero requires an explicit proof. Counting range-end rows here as well is conservative, although stream sizing separately charges open-at-end rows. |
 | strategy.ids.literals | The complete literal component population, including generated source labels when fixed. The calculator unions the empty ID into it and deduplicates strings. Compiler output and adapter-generated ID closure. |
-| strategy.ids.freshPerBar, fixedFresh | I and I0: extra component values <= S*I+I0, across **all** cohort/single/pair component domains, including IDs of unfilled/erased placements. A finite array of IDs, finite loop induction and decimal bar-index strings are eligible with proofs. |
+| strategy.ids.freshPerBar, fixedFresh | I = extra component values per script **execution**, I0 fixed: <= S*I+I0 holds only with calc_on_order_fills off (one execution per bar); with it on, by the script or by a host override, executions are bar closes plus fill recalculations and the demand is unbounded (the host uses its cap). Across **all** cohort/single/pair component domains, including IDs of unfilled/erased placements. A finite array of IDs, finite loop induction and decimal bar-index strings are eligible with proofs. |
 | strategy.ids.maxBytes | L: maximum UTF-8 **byte** length of every source/generated ID component in those stores. Include prefixes, suffixes, separators internal to components and bounded decimal tokens. The calculator checks literal lengths but trusts the compiler for computed strings. |
 | strategy.pairKeys.mode | `cartesian` uses D*D. `opportunities` also supplies perBar/fixed, proving K <= S*Kbar+K0 for the distinct-ever keys of **each** pair domain. Count attempts that populate consumed-cycle keys even without an accepted placement. |
 | strategy.successors.perBar, fixed | Rbar/R0: successor-root rows issued <= S*Rbar+R0. Includes replacements that never fill; kept-handle repricing issues no row. Compiler/lowering command proof, not trades or bars alone. |
@@ -121,7 +121,7 @@ The exact arena input formulas are:
 
 ```text
 T = (S * fills.perBar + fills.fixed) * fills.rowsPerFill + fills.fixedRows
-D = |unique(ids.literals union {empty})| + S * ids.freshPerBar + ids.fixedFresh
+D = |unique(ids.literals union {empty})| + S * ids.freshPerBar + ids.fixedFresh   # S*I only with calc_on_order_fills off
 L = ids.maxBytes
 Q = D * D                                           # cartesian mode
 Q = min(D * D, S * pairKeys.perBar + pairKeys.fixed) # opportunities mode
