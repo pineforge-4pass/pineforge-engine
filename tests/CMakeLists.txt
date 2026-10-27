@@ -3753,6 +3753,9 @@ list(REMOVE_ITEM TEST_SOURCES ${_pf_private_fixture_rows})
 # Report arithmetic and C-host failure ownership, with source-free includes.
 list(APPEND TEST_SOURCES test_metrics_overflow)
 list(APPEND TEST_SOURCES test_native_c_host_report_failure)
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    list(APPEND TEST_SOURCES test_cr421_standing_orders_wall)
+endif()
 
 # CR-150: engine-free pipe flag control beside the ordinary C++ unit rows.
 if(UNIX)
