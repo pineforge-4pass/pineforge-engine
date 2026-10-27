@@ -52,9 +52,63 @@ struct Pipe {
         descriptors[0] = -1;
         require(::close(reader) == 0, "pipe reader close failed");
     }
+    void close_writer() {
+        const int writer = descriptors[1];
+        descriptors[1] = -1;
+        require(::close(writer) == 0, "pipe writer close failed");
+    }
 };
 
-void run_case(bool duplicate_writer) {
+void reject_real_descriptor_mutations(Pipe& pipe) {
+    // Plant real syscalls on the same writer that just acquired FWASWRITTEN
+    // on Darwin. These controls also run on Linux in the existing CTest row.
+    fd_flag_diagnostics::Trace reflag_trace(pipe.descriptors[1], "before planted F_SETFL");
+    require(reflag_trace.unchanged(), reflag_trace.message("cannot read mutation fixture flags"));
+    const int flags = reflag_trace.baseline().flags;
+    require(::fcntl(pipe.descriptors[1], F_SETFL, flags ^ O_NONBLOCK) == 0,
+            "cannot plant an O_NONBLOCK change");
+    const auto reflagged = reflag_trace.record("after planted F_SETFL");
+    require(reflagged.flags >= 0 && ((reflagged.flags ^ flags) & O_NONBLOCK) != 0,
+            reflag_trace.message("O_NONBLOCK plant did not change the real descriptor"));
+    require(!fd_flag_diagnostics::same_flags(reflag_trace.baseline(), reflagged)
+            && !reflag_trace.unchanged(),
+            reflag_trace.message("borrowed-fd guard accepted a real O_NONBLOCK change"));
+    require(::fcntl(pipe.descriptors[1], F_SETFL, flags) == 0, "cannot restore status flags");
+    const auto restored = reflag_trace.record("after restoring F_SETFL");
+    require(fd_flag_diagnostics::same_flags(reflag_trace.baseline(), restored)
+            && !reflag_trace.unchanged(),
+            reflag_trace.message("restoring flags hid a change at an earlier boundary"));
+
+    fd_flag_diagnostics::Trace descriptor_trace(pipe.descriptors[1], "before planted F_SETFD");
+    const int descriptor_flags = descriptor_trace.baseline().descriptor_flags;
+    require(descriptor_trace.unchanged(), descriptor_trace.message("cannot read descriptor flags"));
+    require(::fcntl(pipe.descriptors[1], F_SETFD, descriptor_flags ^ FD_CLOEXEC) == 0,
+            "cannot plant an FD_CLOEXEC change");
+    const auto reflagged_descriptor = descriptor_trace.record("after planted F_SETFD");
+    require(reflagged_descriptor.descriptor_flags >= 0
+            && ((reflagged_descriptor.descriptor_flags ^ descriptor_flags) & FD_CLOEXEC) != 0,
+            descriptor_trace.message("FD_CLOEXEC plant did not change the real descriptor"));
+    require(!fd_flag_diagnostics::same_flags(descriptor_trace.baseline(), reflagged_descriptor)
+            && !descriptor_trace.unchanged(),
+            descriptor_trace.message("borrowed-fd guard accepted a real FD_CLOEXEC change"));
+    require(::fcntl(pipe.descriptors[1], F_SETFD, descriptor_flags) == 0,
+            "cannot restore descriptor flags");
+
+    fd_flag_diagnostics::Trace close_trace(pipe.descriptors[1], "before planted close");
+    require(close_trace.unchanged(), close_trace.message("cannot read close fixture flags"));
+    pipe.close_writer(); // Clear the fixture owner too, avoiding a double close.
+    const auto closed = close_trace.record("after planted close");
+    require(closed.flags == -1 && closed.flags_errno == EBADF
+            && closed.descriptor_flags == -1 && closed.descriptor_flags_errno == EBADF,
+            close_trace.message("close plant did not invalidate both real flag queries"));
+    require(!fd_flag_diagnostics::same_flags(close_trace.baseline(), closed)
+            && !fd_flag_diagnostics::same_flags(closed, closed) && !close_trace.unchanged(),
+            close_trace.message("borrowed-fd guard accepted a real close"));
+}
+
+enum class Plant { none, nonblock, close };
+
+void run_case(bool duplicate_writer, Plant plant = Plant::none) {
     Pipe pipe;
     if (duplicate_writer) pipe.duplicate_writer();
     fd_flag_diagnostics::Trace fd_trace(pipe.descriptors[1], "before nonempty write");
@@ -98,6 +152,19 @@ void run_case(bool duplicate_writer) {
             && after_close.descriptor_flags == descriptor_flags,
             fd_trace.message("pipe writer flags changed"));
 
+    // Explicit red-first modes exercise the very same invariant. If the
+    // guard misses the plant, return normally so the external check fails.
+    if (plant == Plant::nonblock) {
+        require(::fcntl(pipe.descriptors[1], F_SETFL, after_close.flags | O_NONBLOCK) == 0,
+                "cannot plant an O_NONBLOCK change");
+        fd_trace.record("after planted F_SETFL");
+    } else if (plant == Plant::close) {
+        pipe.close_writer();
+        fd_trace.record("after planted close");
+    }
+    require(fd_trace.unchanged(), fd_trace.message("borrowed fd invariant"));
+    if (plant != Plant::none) return;
+
     // Mutate observations of the real pipe without involving an engine.
     for (const int bit : {O_NONBLOCK, O_APPEND, O_ACCMODE}) {
         auto changed = fd_trace.baseline();
@@ -118,13 +185,25 @@ void run_case(bool duplicate_writer) {
             && !fd_flag_diagnostics::same_flags(failed_query, fd_trace.baseline())
             && !fd_flag_diagnostics::same_flags(failed_query, failed_query),
             fd_trace.message("failed F_GETFL query compared equal"));
+    failed_query = fd_trace.baseline();
+    failed_query.descriptor_flags = -1;
+    require(!fd_flag_diagnostics::same_flags(fd_trace.baseline(), failed_query)
+            && !fd_flag_diagnostics::same_flags(failed_query, failed_query),
+            fd_trace.message("failed F_GETFD query compared equal"));
+
+    reject_real_descriptor_mutations(pipe);
 }
 } // namespace
 
-int main() {
+int main(int argc, char* argv[]) {
     const char* active_case = "plain writer";
     try {
-        run_case(false);
+        Plant plant = Plant::none;
+        if (argc == 2 && std::string(argv[1]) == "--plant-nonblock") plant = Plant::nonblock;
+        else if (argc == 2 && std::string(argv[1]) == "--plant-close") plant = Plant::close;
+        else require(argc == 1, "expected --plant-nonblock, --plant-close, or no arguments");
+        run_case(false, plant);
+        if (plant != Plant::none) return 0;
         active_case = "F_DUPFD_CLOEXEC writer";
         run_case(true);
         return 0;

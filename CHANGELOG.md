@@ -19,6 +19,12 @@ diagnostics keys, described below.
 
 ### Compatibility and migration
 
+- The macOS report-sink limit recorded for 1.7.0 is no longer listed. It was
+  re-examined, not re-measured: the descriptor tests now account for the
+  system's write bookkeeping and the stream memory test allows a larger bound
+  for macOS page size and allocator behaviour. macOS is not a supported
+  platform in 1.8.0 (Linux only), and no CI job exercises these macOS checks,
+  so nothing here says the report sink works on macOS.
 - **Supported platforms: Linux x86_64 and arm64.** From 1.8.0 the engine is built, tested and published for Linux only: the release carries `pineforge-v1.8.0-linux-x86_64.tar.gz` and `pineforge-v1.8.0-linux-aarch64.tar.gz` (each with a `.sha256`) and no macOS archive, and CI no longer runs macOS jobs. A macOS build is neither tested nor supported.
 - Pairs with codegen 1.8.0 exactly. Regenerate strategy C++ with codegen 1.8.0
   and relink every strategy library against the 1.8.0 headers and

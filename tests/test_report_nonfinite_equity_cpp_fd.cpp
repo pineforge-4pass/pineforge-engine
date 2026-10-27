@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <limits>
+#include <memory>
 #include <stdexcept>
 #include <string>
 
@@ -93,15 +94,15 @@ void fd_run(int field, double value, bool refuses) {
     // metric check may still fail, but cannot keep count_e at zero or stop the
     // real engine at its second callback, so each poisoned row turns red.
     Pipe pipe;
-    Fixture host(field, value);
+    auto host_owner = std::make_unique<Fixture>(field, value);
+    auto& host = *host_owner;
     const pf_report_sink_v1 replaced{sizeof replaced, 1,
         "CR-289-replaced-cpp-sink-must-not-open.ndjson", "CR-289", nullptr};
     require(strategy_set_report_sink_v1(host.handle(), &replaced) == 0, "path setup refused");
     const pf_report_sink_fd_v1 sink{sizeof sink, 1, pipe.descriptors[1], "CR-289"};
+    fd_flag_diagnostics::Trace fd_trace(pipe.descriptors[1], "before sink installation");
     require(strategy_set_report_sink_fd_v1(host.handle(), &sink) == 0, "fd replacement refused");
-    fd_flag_diagnostics::Trace fd_trace(pipe.descriptors[1], "after sink installation");
-    const int flags = fd_trace.baseline().flags;
-    const int fd_flags = fd_trace.baseline().descriptor_flags;
+    fd_trace.record("after sink installation");
     std::array<pineforge::Bar, bar_count> bars{};
     for (int i = 0; i < bar_count; ++i)
         bars[static_cast<std::size_t>(i)] =
@@ -159,11 +160,11 @@ void fd_run(int field, double value, bool refuses) {
                 && receipt.count_e == bar_count && bytes.find("{\"trailer\":") != std::string::npos,
                 "finite C++ fd stream did not complete");
     }
-    const auto final_flags = fd_trace.record("final assertion");
-    require(flags >= 0 && fd_flags >= 0
-            && fd_flag_diagnostics::comparable_status_flags(final_flags.flags)
-                == fd_flag_diagnostics::comparable_status_flags(flags)
-            && final_flags.descriptor_flags == fd_flags, fd_trace.message("borrowed fd changed"));
+    fd_trace.record("final assertion");
+    require(fd_trace.unchanged(), fd_trace.message("borrowed fd changed"));
+    host_owner.reset();
+    fd_trace.record("after host destruction");
+    require(fd_trace.unchanged(), fd_trace.message("destruction changed borrowed fd"));
 }
 } // namespace
 

@@ -3763,6 +3763,22 @@ foreach(test_name ${TEST_SOURCES})
     pineforge_add_unit_test(${test_name})
 endforeach()
 
+if(UNIX)
+    # PASS_REGULAR_EXPRESSION makes output matching replace CTest's exit-code
+    # result, while WILL_FAIL accepts every nonzero result. The driver checks
+    # the planted mode's exact exit 1 and its boundary-specific guard message.
+    add_test(NAME test_pipe_writer_fd_flags_plant_nonblock
+        COMMAND ${CMAKE_COMMAND}
+            -DPIPE_WRITER=$<TARGET_FILE:test_pipe_writer_fd_flags>
+            -DPLANT_MODE=--plant-nonblock
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/run_pipe_writer_fd_flags.cmake)
+    add_test(NAME test_pipe_writer_fd_flags_plant_close
+        COMMAND ${CMAKE_COMMAND}
+            -DPIPE_WRITER=$<TARGET_FILE:test_pipe_writer_fd_flags>
+            -DPLANT_MODE=--plant-close
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/run_pipe_writer_fd_flags.cmake)
+endif()
+
 if(PINEFORGE_BUILD_SOURCE_LAYER)
     add_executable(test_pending_observer_walk test_pending_observer_walk.cpp)
     target_link_libraries(test_pending_observer_walk PRIVATE pineforge)
