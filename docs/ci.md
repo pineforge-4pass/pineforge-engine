@@ -68,12 +68,19 @@ PRs restore the newest compatible default-branch compiler cache, and only
 successful runs on `main` save that cache namespace.
 
 Verification jobs keep literal runner pins at the workflow boundary: PR build/preflight and parity subset use `["self-hosted","pf-gcp-pr"]`;
-post preflight/parity use `gke-runners`; credentialed docs keep `["self-hosted","pf-gcp-post"]`.
+post preflight/parity use bare GKE scale-set names; credentialed docs keep `["self-hosted","pf-gcp-post"]`.
 Post Release/Debug/kernel and native shards, post sanitizers and both native-live sanitizer
+<<<<<<< HEAD
 profiles use fixed `gke-runners` size labels directly in runner pods carrying the engine toolchain image and sudo. No job routes by event.
 Hosted `ubuntu-24.04` runs PR `authz`, `changes`/`build-gate` and `docs.yml`'s `build`; secret-free post guards and aggregates use bare scalar GKE names.
 The seven `ci-post.yml` light jobs use `gke-2cpu-4gb-amd64`; called parity/native light jobs use `gke-4cpu-8gb-amd64` to satisfy the per-label cap, without a weight claim.
 Local reusable calls cannot mix PR and GKE jobs. The full post call graph expands to 36 GKE job instances: amd64 32/16/8/4/2 CPU labels carry 8/7/7/5/7 jobs and arm64 16 CPU carries 2; each label's static cap is 8.
+=======
+profiles use fixed bare GKE scale-set names directly in runner pods carrying the engine toolchain image and sudo. No job routes by event.
+Hosted `ubuntu-24.04` runs all eight `authz` jobs, both CI `changes`/`build-gate` jobs, all post/native aggregates and `docs.yml`'s `build`.
+These light, secret-free jobs need no VM-only tools, mounts or caches.
+Local reusable calls cannot mix PR and GKE jobs. A full post run schedules 24 GKE jobs: amd64 32/16/8 CPU labels carry 8/7/7 jobs and arm64 16 CPU carries 2; each label's cap is 8.
+>>>>>>> 482b000608dc01703cf5cc5906d9c47489580f78
 
 The manual `release-ruleset-probe.yml` workflow runs `authz` on
 bare scalar `gke-2cpu-4gb-amd64` and `probe` on `["self-hosted","pf-gcp-post"]`.
@@ -183,9 +190,15 @@ source-only header trees, and compile the native public roots and examples;
 the preflight source guard rejects those includes before a build.
 
 CI uses Ubuntu 24.04 amd64 and arm64 cells and selects Python 3.12 explicitly.
+<<<<<<< HEAD
 The amd64 post build shards and the two arm64 post cells use the `gke-runners` group with
 fixed architecture/size labels and run directly in runner pods carrying the engine toolchain image and sudo. All three build jobs refuse an OS mismatch.
 Hosted exceptions cover PR light jobs and the existing hosted release cells; post light jobs use bare scalar GKE names.
+=======
+The amd64 post build shards and the two arm64 post cells use bare scalar
+architecture/size scale-set names and run directly in runner pods carrying the engine toolchain image and sudo. All three build jobs refuse an OS mismatch.
+Hosted exceptions include the named light jobs and the existing release/promotion pins.
+>>>>>>> 482b000608dc01703cf5cc5906d9c47489580f78
 CMake uses the same interpreter as the
 verification driver, so its Python checks do not switch to a different system
 Python. CTest must discover tests; an empty suite is a failure. Which runner
@@ -1648,7 +1661,11 @@ runs, and this page does not claim either target as met.
 ## Runners and time limits
 
 Credentialed work retains its VM pins; secret-free post Linux jobs run directly in GKE runner pods carrying the engine toolchain image and sudo.
+<<<<<<< HEAD
 The proof jobs retain `gke-runners` mappings; light jobs use scalar names. Promotion's `promote-guard` and docs-post/probe `authz` each use one `gke-2cpu-4gb-amd64` instance in separate roots; their image must include `gh` for permission lookups.
+=======
+The four amd64 post legs, arm64 cells, preflight, parity and native verification use bare GKE scale-set names; their aggregates use the light image.
+>>>>>>> 482b000608dc01703cf5cc5906d9c47489580f78
 The native matrix is exactly `1..4` with `--ctest-shard I/4`; live sanitizers are unsharded. Each runner label remains a literal, checked per job:
 
 | Workflow | Events/callers | Inline jobs' `runs-on` |
@@ -1656,16 +1673,27 @@ The native matrix is exactly `1..4` with `--ctest-shard I/4`; live sanitizers ar
 | `ci.yml` | Unfiltered `pull_request` | `authz`, `changes`, `build-gate`: hosted `ubuntu-24.04`; preflight/build: `["self-hosted","pf-gcp-pr"]` |
 | `corpus-parity-subset.yml` | Reusable call from PR CI | `authz`: hosted `ubuntu-24.04`; subset: `["self-hosted","pf-gcp-pr"]` |
 | `docs.yml` | `pull_request`, except `.github/**`-only diffs | `authz` and `build`: hosted `ubuntu-24.04` |
+<<<<<<< HEAD
 | `ci-post.yml` | Push to `main`, 01:30 UTC schedule, dispatch | Seven light jobs: scalar `gke-2cpu-4gb-amd64`; `gke-runners`: Release/sanitizers `gke-32cpu-64gb-amd64`, Debug/kernel `gke-16cpu-32gb-amd64`, preflight tiers `gke-8cpu-16gb-amd64`, arm64 `gke-16cpu-32gb-arm64` |
 | `corpus-parity.yml` | Schedule, dispatch, post CI callers | `authz`: scalar `gke-4cpu-8gb-amd64`; `gke-runners`: full parity `gke-16cpu-32gb-amd64`, subset `gke-8cpu-16gb-amd64` |
 | `native-live.yml` | Dispatch and post CI callers on `main` | `authz` and both aggregates: scalar `gke-4cpu-8gb-amd64`; `gke-runners`: native shards `gke-8cpu-16gb-amd64`, sanitizer profiles `gke-16cpu-32gb-amd64` |
 | `docs-post.yml` | Push to `main`, dispatch | `authz`: scalar `gke-2cpu-4gb-amd64`; credentialed `build`: `["self-hosted","pf-gcp-post"]` |
+=======
+| `ci-post.yml` | Push to `main`, 01:30 UTC schedule, dispatch | Light jobs and four aggregates: `ubuntu-24.04`; bare GKE scalars: Release/sanitizers `gke-32cpu-64gb-amd64`, Debug/kernel `gke-16cpu-32gb-amd64`, preflight tiers `gke-8cpu-16gb-amd64`, arm64 `gke-16cpu-32gb-arm64` |
+| `corpus-parity.yml` | Schedule, dispatch, post CI callers | `authz`: hosted `ubuntu-24.04`; bare GKE scalars: full parity `gke-16cpu-32gb-amd64`, subset `gke-8cpu-16gb-amd64` |
+| `native-live.yml` | Dispatch and post CI callers on `main` | `authz` and both aggregates: hosted `ubuntu-24.04`; bare GKE scalars: native shards `gke-8cpu-16gb-amd64`, sanitizer profiles `gke-16cpu-32gb-amd64` |
+| `docs-post.yml` | Push to `main`, dispatch | `authz`: hosted `ubuntu-24.04`; credentialed `build`: `["self-hosted","pf-gcp-post"]` |
+>>>>>>> 482b000608dc01703cf5cc5906d9c47489580f78
 
 Post CI starts on push to `main`, schedule and dispatch; its GKE routing checker
 refuses all PR events. Reusable workflows inherit their caller's event.
 `workflow_event_routes` and `workflow_fleet_findings` in `scripts/ci_preflight.py`
 follow local calls to a fixed point, refuse mixed event classes and require
+<<<<<<< HEAD
 literal VM arrays, exact scalar GKE names for light jobs or existing proof-job group/label mappings outside hosted pins; job conditions cannot excuse routing.
+=======
+literal VM arrays or exact bare scalar GKE scale-set names outside hosted pins; job conditions cannot excuse routing.
+>>>>>>> 482b000608dc01703cf5cc5906d9c47489580f78
 Fork PRs on hosted runners run without our secrets, so the VM-only fork-refusal hook is not needed.
 GKE jobs carry no deployment secrets, effective id-token permissions or environment; PR-reachable workflows cannot name GKE routing. Runner-group workflow/ref allowlists must admit the post-only workflows at refs/heads/main before they can acquire pods.
 Rollback may restore an earlier GCP fleet pin; paid larger-runner labels remain refused.
@@ -1678,7 +1706,11 @@ Every shard builds the full tree and runs `--ctest-shard I/N` at the runner's co
 Each leg aggregate retains its old check name and requires its own matrix's success. The two arm64 cells share `build-arm` on `gke-16cpu-32gb-arm64`. All three build jobs use the same verification steps and profiles.
 Shard jobs and leg aggregates skip together only on classified docs-only changes.
 One cache key per architecture/profile/SHA is restored by all shards; only shard 1 saves it.
+<<<<<<< HEAD
 `HOSTED_JOB_RUNNERS` pins hosted jobs, exact GKE scalars and existing mappings; every GKE job runs directly in a runner pod. The proof-job image carries the engine toolchain and sudo. The PR build remains
+=======
+`HOSTED_JOB_RUNNERS` pins hosted jobs and exact bare GKE scalars; every GKE job runs directly in a runner pod carrying the engine toolchain image and sudo. The PR build remains
+>>>>>>> 482b000608dc01703cf5cc5906d9c47489580f78
 `build (ubuntu-24.04, Release)` and its aggregate remains `build`.
 
 Release and promotion use the isolated release fleet:

@@ -103,9 +103,7 @@ jobs:
     name: native-live (${{ matrix.profile }})
     needs: [authz]
     # Each instrumented tree builds once on its pinned GKE size.
-    runs-on:
-      group: gke-runners
-      labels: gke-16cpu-32gb-amd64
+    runs-on: gke-16cpu-32gb-amd64
     strategy:
       fail-fast: false
       matrix:
@@ -202,9 +200,7 @@ jobs:
   native-live-shards:
     name: native-live-shard (${{ matrix.profile }}, ${{ matrix.shard }}/4)
     needs: [authz]
-    runs-on:
-      group: gke-runners
-      labels: gke-8cpu-16gb-amd64
+    runs-on: gke-8cpu-16gb-amd64
     strategy:
       fail-fast: false
       matrix:

@@ -118,10 +118,15 @@ GKE_LIGHT_JOB_RUNNERS = {
     'promote-baseline.yml': {'promote-guard': GKE_2_LABEL},
 }
 GKE_JOB_RUNNERS = {
+<<<<<<< HEAD
     name: {**{job: f'group: gke-runners labels: {label}'
               for job, label in GKE_JOB_LABELS.get(name, {}).items()},
            **GKE_LIGHT_JOB_RUNNERS.get(name, {})}
     for name in {**GKE_JOB_LABELS, **GKE_LIGHT_JOB_RUNNERS}
+=======
+    name: dict(jobs)
+    for name, jobs in GKE_JOB_LABELS.items()
+>>>>>>> 482b000608dc01703cf5cc5906d9c47489580f78
 }
 CI_EVENTS = '''on:
   pull_request:
@@ -295,7 +300,11 @@ JOB_COMMANDS = {
     'docs.yml': {'authz': None, 'build': None},
     'docs-post.yml': {'authz': None, 'build': None},
 }
+<<<<<<< HEAD
 # Exact hosted pins, GKE scalar names and existing group/size mappings.
+=======
+# Exact hosted pins and bare GKE scale-set names, checked per job.
+>>>>>>> 482b000608dc01703cf5cc5906d9c47489580f78
 # Historical name: this table also holds the exact GKE pins.
 HOSTED_JOB_RUNNERS = {
     'ci.yml': dict.fromkeys(('authz', 'changes', 'build-gate'), 'ubuntu-24.04'),
@@ -1431,7 +1440,8 @@ def _authz_header(name: str) -> str:
     return AUTHZ_JOB_HEADER.replace('runs-on: ubuntu-24.04', f'runs-on: {runner}')
 
 
-_GKE_ROUTE = re.compile(r'(?<![\w.-])gke-[\w.-]+')
+_GKE_ROUTE = re.compile(r'(?<![\w.-])gke-[\w.-]+', re.IGNORECASE)
+_GKE_SCALE_LABEL = re.compile(r'(?<![\w.-])gke-\d+cpu-\d+gb-(?:amd64|arm64)(?![\w.-])')
 
 
 def _matrix_rows(body: str) -> list[dict[str, str]] | None:
@@ -1564,8 +1574,8 @@ def _gke_cap_findings(workflows: dict[str, str]) -> list[str]:
             if _input_condition_skips(body, inputs):
                 continue
             runners = ' '.join(_job_values(body, 'runs-on'))
-            labels = _GKE_ROUTE.findall(runners)
-            labels = [label for label in labels if label != 'gke-runners']
+            labels = [label.lower() for label in _GKE_ROUTE.findall(runners)
+                      if label.lower() != 'gke-runners']
             callees = calls[(name, job)]
             if not labels and not callees:
                 continue
@@ -1634,6 +1644,10 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
             runs_on, uses = _job_values(body, 'runs-on'), _job_values(body, 'uses')
             gke_pin = GKE_JOB_RUNNERS.get(name, {}).get(job)
             has_gke = bool(_GKE_ROUTE.search(' '.join(runs_on)))
+            raw_runners = _job_values(body, 'runs-on', unquote=False)
+            if has_gke and (len(raw_runners) != 1
+                            or not _GKE_SCALE_LABEL.fullmatch(raw_runners[0])):
+                findings.append(f'{name} job {job} must use a bare scalar GKE scale-set name')
             if has_gke and runs_on != [gke_pin]:
                 findings.append(f'{name} job {job} may use GKE routing only at its exact pinned job and label')
             if has_gke and _job_values(body, 'container'):

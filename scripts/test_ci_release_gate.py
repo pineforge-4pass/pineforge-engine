@@ -1993,9 +1993,9 @@ class RulesetsProbeTests(unittest.TestCase):
         docs = (ROOT / "docs/ci.md").read_text()
         requirements = (
             'PR build/preflight and parity subset use `["self-hosted","pf-gcp-pr"]`;\n'
-            'post preflight/parity use `gke-runners`; credentialed docs keep `["self-hosted","pf-gcp-post"]`.\n'
+            'post preflight/parity use bare GKE scale-set names; credentialed docs keep `["self-hosted","pf-gcp-post"]`.\n'
             'Post Release/Debug/kernel and native shards, post sanitizers and both native-live sanitizer\n'
-            'profiles use fixed `gke-runners` size labels directly in runner pods carrying the engine toolchain image and sudo. No job routes by event.',
+            'profiles use fixed bare GKE scale-set names directly in runner pods carrying the engine toolchain image and sudo. No job routes by event.',
             "The manual `release-ruleset-probe.yml` workflow runs `authz` on\n"
             'bare scalar `gke-2cpu-4gb-amd64` and `probe` on `["self-hosted","pf-gcp-post"]`.',
             "Release and promotion use the isolated release fleet:\n"
@@ -2302,7 +2302,7 @@ class WorkflowPinTests(unittest.TestCase):
         return (ROOT / ".github/workflows/release.yml").read_text()
 
     def assert_gke_build(self, body, label):
-        self.assertIn("    runs-on:\n      group: gke-runners\n      labels: " + label + "\n",
+        self.assertIn("    runs-on: " + label + "\n",
                       body, "required build jobs must keep GKE routing")
         self.assertNotRegex(body, r'''(?m)^    ['"]?container['"]?\s*:''',
                             "required build jobs must run directly in the runner pod")
@@ -2391,7 +2391,7 @@ class WorkflowPinTests(unittest.TestCase):
                            ("build-debug", "gke-16cpu-32gb-amd64"),
                            ("build-arm", "gke-16cpu-32gb-arm64")):
             for before, after, finding in (
-                    ("      labels: " + label, "      labels: pf-linux-x64-16",
+                    ("    runs-on: " + label, "    runs-on: pf-linux-x64-16",
                      "required build jobs must keep GKE routing"),
                     ("    steps:\n", "    container:\n      image: ubuntu:24.04\n    steps:\n",
                      "required build jobs must run directly in the runner pod")):
