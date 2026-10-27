@@ -77,7 +77,12 @@ bool exit_family(ps::PineOrderFamily family) {
 void audit(const ps::PlacementTable& rows) {
     std::size_t expected_members = 0, actual_members = 0;
     for (const auto row : rows) {
-        if (!exit_family(row.second.family)) continue;
+        if (!exit_family(row.second.family)) {
+            const auto& links = row.second.reissue_links;
+            require(!links.prev && !links.next && links.incarnation == 0,
+                    "ordinary row has exit membership");
+            continue;
+        }
         ++expected_members;
         require(rows.reissue_basis(row.second.placement_cycle, row.second)
                     == scan_basis(rows, row.second.placement_cycle, row.second),
@@ -88,18 +93,36 @@ void audit(const ps::PlacementTable& rows) {
     }
     const auto& groups = rows.*access(IndexTag{});
     for (const auto& group : groups) {
-        require(!group.second.empty(), "empty identity retained in index");
-        for (const auto& member : group.second) {
+        require(group.second.head && group.second.tail, "empty identity retained in index");
+        const ps::PlacementSnapshot* previous = nullptr;
+        std::size_t forward = 0;
+        for (const auto* member = group.second.head; member; member = member->reissue_links.next) {
+            require(++forward <= rows.size(), "identity list contains a cycle");
             ++actual_members;
-            require(rows.contains(member.first), "index outlived its placement row");
-            const auto& row = rows.at(member.first);
-            require(member.second == &row, "index does not name the live placement node");
+            const auto& links = member->reissue_links;
+            require(rows.contains(links.incarnation), "index outlived its placement row");
+            const auto& row = rows.at(links.incarnation);
+            require(member == &row, "index does not name the live placement node");
+            require(links.prev == previous, "identity predecessor link is stale");
+            require(!previous || previous->reissue_links.incarnation < links.incarnation,
+                    "identity list is not strictly incarnation ordered");
             require(std::get<0>(group.first) == row.placement_cycle
                     && std::get<1>(group.first) == row.family
                     && std::get<2>(group.first) == row.source_id
                     && std::get<3>(group.first) == row.from_entry,
                     "index membership has a stale identity");
+            previous = member;
         }
+        require(previous == group.second.tail, "identity tail is stale");
+        const ps::PlacementSnapshot* next = nullptr;
+        std::size_t backward = 0;
+        for (const auto* member = group.second.tail; member; member = member->reissue_links.prev) {
+            require(++backward <= forward, "reverse identity list contains a cycle");
+            require(member->reissue_links.next == next, "identity successor link is stale");
+            next = member;
+        }
+        require(next == group.second.head && backward == forward,
+                "forward and reverse identity memberships differ");
     }
     require(expected_members == actual_members, "index population differs from retained exits");
 }
@@ -155,6 +178,10 @@ public:
         if (bar == 0) strategy_entry("S", false, kNa, kNa, 40.0);
         if (bar == 1)
             strategy_exit("X", "S", kNa, 150.0, kNa, kNa, kNa, 100.0, "Y");
+        // Cancel an already observed dormant issue before this bar's new
+        // commands. strategy_cancel withdraws lifecycle legs; it does not
+        // stamp the separate PineCancellationReceipt::cause field.
+        if (scenario_ == Scenario::Cancel && bar == 6) cancel_x();
         const bool held_bar = bar >= 2 && bar <= 21
             && (scenario_ != Scenario::FillCycle || bar <= 7 || bar >= 15);
         if (held_bar) {
@@ -163,13 +190,12 @@ public:
             strategy_entry("L", true);
             strategy_close("S", "Reverse to Long");
         }
-        if (scenario_ == Scenario::Cancel && bar == 6) strategy_cancel("X");
         if (scenario_ == Scenario::FillCycle) {
             // F really fills between two retirement sweeps; X is explicitly
             // cancelled, the origin closes, and the same source id reopens.
             if (bar == 8)
                 strategy_exit("F", "S", 110.0, kNa, kNa, kNa, kNa, 100.0, "fill", 1.0);
-            if (bar == 10) strategy_cancel("X");
+            if (bar == 10) cancel_x();
             if (bar == 11) strategy_close_all();
             if (bar == 13) strategy_entry("S", false, kNa, kNa, 40.0);
         }
@@ -212,6 +238,34 @@ public:
     }
 
 private:
+    void cancel_x() {
+        const auto& rows = adapter_.*access(PlacementTag{});
+        std::vector<std::uint64_t> dormant;
+        for (const auto row : rows) {
+            const auto& value = row.second;
+            if (value.source_id == "X" && value.from_entry == "S"
+                && value.family == ps::PineOrderFamily::ExitStop
+                && value.bracket_origin.incarnation != 0 && value.legs.dormant()
+                && !value.legs.retired(exit_legs::Leg::Stop))
+                dormant.push_back(row.first);
+        }
+        require(!dormant.empty(), "explicit cancel requires an observed unwithdrawn dormant X");
+        strategy_cancel("X");
+        for (const auto id : dormant) {
+            require(rows.contains(id), "cancelled X disappeared before its withdrawal was observed");
+            const auto& legs = rows.at(id).legs;
+            require(legs.retired(exit_legs::Leg::Stop) && legs.retired(exit_legs::Leg::Limit)
+                    && legs.retired(exit_legs::Leg::Trail),
+                    "strategy_cancel did not withdraw the observed dormant X");
+            ++out_.explicit_cancels;
+            cancelled_incarnations_.push_back(id);
+        }
+        for (const auto& request : native_working_requests())
+            require(request.definition->request.label != "X",
+                    "explicitly cancelled X remains in the native working book");
+        capture(); // Compare the actual withdrawn lifecycle words in both runs.
+    }
+
     void capture() {
         const auto& rows = adapter_.*access(PlacementTag{});
         audit(rows);
@@ -234,8 +288,6 @@ private:
                 std::move(words.values));
             if (value.legs.dormant() && value.bracket_origin.incarnation != 0
                 && !value.legs.retired(exit_legs::Leg::Stop)) ++out_.dormant;
-            if (value.cancellation.cause == ps::PineCancellationCause::Explicit)
-                ++out_.explicit_cancels;
             if (value.source_id == "F") fill_incarnation_ = row.first;
             if (scenario_ == Scenario::FillCycle && value.source_id == "X"
                 && value.legs.retired(exit_legs::Leg::Stop)
@@ -377,8 +429,22 @@ private:
         moved.try_emplace(1, *seed);
         moved.try_emplace(2, *seed);
         auto same_identity = moved.at(1);
+        require(!same_identity.reissue_links.prev && !same_identity.reissue_links.next
+                && same_identity.reissue_links.incarnation == 0,
+                "snapshot copy inherited table membership");
         same_identity.exit_levels.stop = -0.0;
         moved.replace(1, std::move(same_identity));
+        audit(moved);
+        // Move assignment destroys a populated destination's old identity
+        // while transferring stable nodes and their links from the source.
+        ps::PlacementTable assigned;
+        assigned.fixture_use_memory_auxiliary_tables();
+        auto other_identity = *seed;
+        other_identity.source_id += "-move-destination";
+        assigned.try_emplace(7, std::move(other_identity));
+        assigned = std::move(moved);
+        audit(assigned);
+        moved = std::move(assigned);
         audit(moved);
         require(moved.erase(2), "same-key rewrite peer cleanup failed");
         auto ordinary = moved.at(1);
@@ -390,6 +456,27 @@ private:
         audit(moved);
         require(moved.erase(1), "erase last member failed");
         require((moved.*access(IndexTag{})).empty(), "last-row erase leaked its identity");
+
+        // Move a row into an existing identity, including insertion between
+        // its peers on replacement; then recycle the erased middle node.
+        moved.try_emplace(1, *seed);
+        moved.try_emplace(3, *seed);
+        auto separate = *seed;
+        separate.source_id += "-separate";
+        moved.try_emplace(2, separate);
+        moved.replace(2, ps::PlacementSnapshot(*seed));
+        audit(moved);
+        moved.replace(2, std::move(separate));
+        audit(moved);
+        moved.replace(2, ps::PlacementSnapshot(*seed));
+        audit(moved);
+        require(moved.erase(2), "intrusive middle erase failed");
+        audit(moved);
+        moved.try_emplace(2, *seed);
+        moved.compact();
+        audit(moved);
+        moved.clear();
+        audit(moved);
     }
 
     const Scenario scenario_;
@@ -422,6 +509,8 @@ int main() {
                     "indexed/scanned released legs or surviving placement rows differ");
             require(indexed.cycles == scanned.cycles && indexed.queries == scanned.queries,
                     "indexed/scanned retirement schedules differ");
+            require(indexed.explicit_cancels == scanned.explicit_cancels,
+                    "indexed/scanned explicit cancellation transitions differ");
             require(same_number(indexed.equity, scanned.equity)
                     && same_number(indexed.position, scanned.position),
                     "indexed/scanned public account differs");
