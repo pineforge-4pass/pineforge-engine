@@ -24,6 +24,9 @@ from ci_preflight import (AUTHZ_ALWAYS, AUTHZ_REFUSE_STEP, CORES,
                           PR_RUNNER, POST_RUNNER, MATRIX_LINUX_RUNNER, MATRIX_RUNNER,
                           NATIVE_EXCLUSION, NATIVE_CACHE_SAVE, CURL_CACHE_SAVE,
                           PREFLIGHT_IF, PROOF_JOBS, PR_PROOF_JOBS, RELEASE_RUNNER, _jobs, check_commands,
+                          ADMIT_MAX_DEPTH, ADMIT_MAX_FILE_BYTES, ADMIT_MAX_LINE, ADMIT_MAX_LINES,
+                          ADMIT_MAX_TOTAL_BYTES, admit_rule_findings, admit_shape_findings,
+                          admit_yaml_findings, gke_admit_workflow_findings,
                           ci_workflow_findings, gated_workflow_findings,
                           native_workflow_findings, run_checks)
 
@@ -7454,6 +7457,141 @@ class PreflightSliceLoader(unittest.TestLoader):
             raise ValueError('cannot slice a failed unittest discovery')
         selected = slice_test_ids(cases, self.spec)
         return self.suiteClass(cases[test_id] for test_id in selected)
+
+
+class GkeAdmissionRuleTests(unittest.TestCase):
+    """Red-first controls for the hosted admission and its fetched data rules."""
+
+    WORKFLOW = ROOT / '.github/workflows/gke-pr.yml'
+
+    def workflow(self) -> str:
+        return self.WORKFLOW.read_text(encoding='utf-8')
+
+    def assert_workflow_mutation(self, before: str, after: str, finding: str) -> None:
+        self.assertNotEqual(before, after)
+        self.assertIn(finding, gke_admit_workflow_findings(after))
+
+    def test_real_admission_shape_is_accepted(self) -> None:
+        self.assertEqual(gke_admit_workflow_findings(self.workflow()), [])
+
+    def test_trigger_mutation_is_red(self) -> None:
+        original = self.workflow()
+        changed = original.replace('pull_request_target:', 'pull_request:', 1)
+        self.assert_workflow_mutation(original, changed,
+                                      'trigger must be exactly pull_request_target')
+
+    def test_cache_secret_environment_and_local_workflow_mutations_are_red(self) -> None:
+        original = self.workflow()
+        mutations = (
+            ('    permissions: {contents: read}\n',
+             '    permissions: {contents: read}\n      environment: production\n',
+             'secrets, id-token and environment are refused'),
+            ('      - name: Require an independently consistent successful result\n',
+             '      - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0\n'
+             '      - name: Require an independently consistent successful result\n',
+             'admission legs must not use Actions cache'),
+            ('          with:\n            name: gke-pr-corpus-parity-subset-diagnostics\n',
+             '          with:\n            name: gke-pr-corpus-parity-subset-diagnostics\n'
+             '      - uses: ./.github/workflows/ci.yml\n',
+             'reusable workflow calls are refused'),
+        )
+        for before, after, finding in mutations:
+            with self.subTest(finding=finding):
+                self.assert_workflow_mutation(original, original.replace(before, after, 1), finding)
+
+    def test_result_and_checkout_mutations_are_red(self) -> None:
+        original = self.workflow()
+        cases = (
+            ('    if: always()\n', '    if: success()\n',
+             'result must run always'),
+            ('    needs: [admit, preflight, legs]\n',
+             '    needs: [admit, preflight]\n',
+             'result must need admit, preflight and legs'),
+            ('          ref: ${{ needs.admit.outputs.head_sha }}\n',
+             '          ref: ${{ github.event.pull_request.head.ref }}\n',
+             'checkout must use the admitted immutable head'),
+        )
+        for before, after, finding in cases:
+            with self.subTest(finding=finding):
+                self.assert_workflow_mutation(original, original.replace(before, after, 1), finding)
+
+    def test_run_shell_interpolation_and_timeout_mutations_are_red(self) -> None:
+        original = self.workflow()
+        run_mutation = original.replace(
+            '          set -euo pipefail\n',
+            '          echo "${{ github.event.pull_request.head.ref }}"\n          set -euo pipefail\n',
+            1)
+        self.assert_workflow_mutation(original, run_mutation,
+                                      'must pass PR values through env')
+        timeout_mutation = original.replace(
+            '          set -euo pipefail\n',
+            '          timeout 10 true\n          set -euo pipefail\n',
+            1)
+        self.assert_workflow_mutation(original, timeout_mutation,
+                                      'must not declare a timeout or continue on error')
+
+    def test_shape_bounds_are_real_independent_refusals(self) -> None:
+        cases = (
+            ('long-line.yml', 'x' * (ADMIT_MAX_LINE + 1) + '\n',
+             f'line length exceeds {ADMIT_MAX_LINE}'),
+            ('many-lines.yml', ('x\n' * (ADMIT_MAX_LINES + 1)),
+             f'line count exceeds {ADMIT_MAX_LINES}'),
+            ('deep.yml', ('  ' * (ADMIT_MAX_DEPTH + 1)) + 'key: value\n',
+             f'structure depth exceeds {ADMIT_MAX_DEPTH}'),
+            ('large.yml', 'x' * (ADMIT_MAX_FILE_BYTES + 1),
+             f'fetched size exceeds {ADMIT_MAX_FILE_BYTES}'),
+        )
+        for name, text, finding in cases:
+            with self.subTest(name=name):
+                self.assertIn(finding, admit_shape_findings({name: text}))
+        total_findings = admit_shape_findings({
+            f'file-{index}.yml': 'x' * (ADMIT_MAX_FILE_BYTES - 1)
+            for index in range(5)})
+        self.assertIn(f'fetched total size exceeds {ADMIT_MAX_TOTAL_BYTES}', total_findings)
+        self.assertIn('fetched file count exceeds 100',
+                      admit_shape_findings({f'count-{index}.yml': 'x\n' for index in range(101)}))
+        self.assertIn('not valid UTF-8', admit_shape_findings({'invalid.yml': b'\xff'}))
+
+    def test_parser_differential_rows_and_block_scalar_positive_control(self) -> None:
+        positive = {
+            'workflow.yml': (
+                'permissions: {contents: read}\n'
+                'runs-on: ["self-hosted", "pf-gcp-post"]\n'
+                'run: |\n'
+                '  echo "&& *.yml ${{ github.event_name }}"\n')
+        }
+        self.assertEqual(admit_yaml_findings(positive), [])
+        negative = (
+            'runs-on: [*alias]\n',
+            'permissions: {<<: *x}\n',
+            'uses: [x]\n',
+            'runs-on: {group: gke-runners, labels: [x]}\n',
+            'runs-on: ${{ fromJSON(matrix.runner) }}\n',
+            'runs-on: [linux]\nruns-on: [windows]\n',
+            '---\n',
+            '? key\n',
+            '"runs\\x2Don": linux\n',
+            '\ufeffname: x\n',
+            'run:\rvalue\n',
+            'run: \x00\n',
+            '  \tname: x\n',
+        )
+        for text in negative:
+            with self.subTest(text=repr(text)):
+                self.assertTrue(admit_yaml_findings({'negative.yml': text}))
+
+    def test_rules_only_reads_the_fetched_directory_as_data(self) -> None:
+        with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:
+            for directory in (Path(first), Path(second)):
+                (directory / '.github/workflows').mkdir(parents=True)
+                (directory / '.github/actionlint.yaml').parent.mkdir(exist_ok=True)
+                shutil.copyfile(self.WORKFLOW, directory / '.github/workflows/gke-pr.yml')
+                shutil.copyfile(ROOT / '.github/actionlint.yaml',
+                                directory / '.github/actionlint.yaml')
+            (Path(second) / 'docs').mkdir()
+            (Path(second) / 'docs/ci.md').write_text('contradictory source\n')
+            self.assertEqual(admit_rule_findings(Path(first), run_actionlint=False),
+                             admit_rule_findings(Path(second), run_actionlint=False))
 
 
 if __name__ == '__main__':

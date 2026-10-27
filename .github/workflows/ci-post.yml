@@ -309,17 +309,6 @@ jobs:
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libeigen3-dev tzdata-legacy ccache strace
 
-      # PRs restore the newest compatible main cache via the default-branch
-      # fallback. Only main writes this namespace, never a PR merge ref.
-      - name: Restore ccache
-        id: ccache-restore
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ${{ env.CCACHE_DIR }}
-          key: ccache-main-${{ runner.os }}-${{ runner.arch }}-${{ matrix.build_type }}-${{ github.sha }}
-          restore-keys: |
-            ccache-main-${{ runner.os }}-${{ runner.arch }}-${{ matrix.build_type }}-
-
       # The release profile fails below its CTest row floor (its row of the
       # PRIVATE_FIXTURE_PROFILE_FLOORS table in scripts/ci_verify.py);
       # debug registers a subset of those rows.
@@ -346,13 +335,6 @@ jobs:
           name: ci-diagnostics-${{ matrix.platform.os }}-${{ matrix.build_type }}-shard-${{ matrix.shard }}-of-4
           path: ci-diagnostics/
           if-no-files-found: warn
-
-      - name: Save main ccache
-        if: ${{ success() && github.ref == 'refs/heads/main' && matrix.shard == 1 && steps.ccache-restore.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ${{ env.CCACHE_DIR }}
-          key: ${{ steps.ccache-restore.outputs.cache-primary-key }}
 
   build-debug:
     name: build-shard (${{ matrix.platform.os }}, ${{ matrix.build_type }}, ${{ matrix.shard }}/2)
@@ -408,16 +390,6 @@ jobs:
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libeigen3-dev tzdata-legacy ccache strace
 
-      # Every shard restores the same key; only shard 1 publishes it.
-      - name: Restore ccache
-        id: ccache-restore
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ${{ env.CCACHE_DIR }}
-          key: ccache-main-${{ runner.os }}-${{ runner.arch }}-${{ matrix.build_type }}-${{ github.sha }}
-          restore-keys: |
-            ccache-main-${{ runner.os }}-${{ runner.arch }}-${{ matrix.build_type }}-
-
       - name: Verify (${{ matrix.build_type }})
         env:
           PINEFORGE_RUNTIME_BUDGET_CANDIDATE_ONLY: '0'
@@ -436,13 +408,6 @@ jobs:
           name: ci-diagnostics-${{ matrix.platform.os }}-${{ matrix.build_type }}-shard-${{ matrix.shard }}-of-2
           path: ci-diagnostics/
           if-no-files-found: warn
-
-      - name: Save main ccache
-        if: ${{ success() && github.ref == 'refs/heads/main' && matrix.shard == 1 && steps.ccache-restore.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ${{ env.CCACHE_DIR }}
-          key: ${{ steps.ccache-restore.outputs.cache-primary-key }}
 
   build-release-gate:
     name: build (ubuntu-24.04, Release)
@@ -540,17 +505,6 @@ jobs:
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libeigen3-dev tzdata-legacy ccache strace
 
-      # PRs restore the newest compatible main cache via the default-branch
-      # fallback. Only main writes this namespace, never a PR merge ref.
-      - name: Restore ccache
-        id: ccache-restore
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ${{ env.CCACHE_DIR }}
-          key: ccache-main-${{ runner.os }}-${{ runner.arch }}-${{ matrix.build_type }}-${{ github.sha }}
-          restore-keys: |
-            ccache-main-${{ runner.os }}-${{ runner.arch }}-${{ matrix.build_type }}-
-
       # The release profile fails below its CTest row floor (its row of the
       # PRIVATE_FIXTURE_PROFILE_FLOORS table in scripts/ci_verify.py);
       # debug registers a subset of those rows.
@@ -577,13 +531,6 @@ jobs:
           name: ci-diagnostics-ubuntu-24.04-arm-${{ matrix.build_type }}
           path: ci-diagnostics/
           if-no-files-found: warn
-
-      - name: Save main ccache
-        if: ${{ success() && github.ref == 'refs/heads/main' && steps.ccache-restore.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ${{ env.CCACHE_DIR }}
-          key: ${{ steps.ccache-restore.outputs.cache-primary-key }}
 
   # Dedicated AddressSanitizer + UndefinedBehaviorSanitizer lane. Without this,
   # the determinism / NaN-propagation / handle-reuse / C-ABI-lifecycle probes
@@ -637,15 +584,6 @@ jobs:
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libeigen3-dev tzdata-legacy ccache
 
-      - name: Restore ccache
-        id: ccache-restore
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ runner.os }}-${{ runner.arch }}-sanitizers-${{ github.sha }}
-          restore-keys: |
-            ccache-${{ runner.os }}-${{ runner.arch }}-sanitizers-
-
       - name: Verify (sanitizers)
         if: ${{ needs.authz.result == 'success' }}
         run: python3 scripts/ci_verify.py sanitizers --build-dir build-asan --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache --ctest-shard ${{ matrix.shard }}/4
@@ -661,13 +599,6 @@ jobs:
           name: ci-diagnostics-sanitizers-shard-${{ matrix.shard }}-of-4
           path: ci-diagnostics/
           if-no-files-found: warn
-
-      - name: Save main ccache
-        if: ${{ success() && github.ref == 'refs/heads/main' && matrix.shard == 1 && steps.ccache-restore.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ${{ env.CCACHE_DIR }}
-          key: ${{ steps.ccache-restore.outputs.cache-primary-key }}
 
   sanitizers-gate:
     name: sanitizers
@@ -738,15 +669,6 @@ jobs:
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y cmake ninja-build libeigen3-dev tzdata-legacy libsqlite3-dev libssl-dev zlib1g-dev ccache
 
-      - name: Restore ccache
-        id: ccache-restore
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ runner.os }}-${{ runner.arch }}-kernel-${{ github.sha }}
-          restore-keys: |
-            ccache-${{ runner.os }}-${{ runner.arch }}-kernel-
-
       - name: Set up pinned WebSocket-enabled libcurl
         id: curl-deps
         if: ${{ needs.authz.result == 'success' }}
@@ -767,13 +689,6 @@ jobs:
           name: ci-diagnostics-kernel-shard-${{ matrix.shard }}-of-2
           path: ci-diagnostics/
           if-no-files-found: warn
-
-      - name: Save main ccache
-        if: ${{ success() && github.ref == 'refs/heads/main' && matrix.shard == 1 && steps.ccache-restore.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ${{ env.CCACHE_DIR }}
-          key: ${{ steps.ccache-restore.outputs.cache-primary-key }}
 
   kernel-only-gate:
     name: kernel-only

@@ -1,49 +1,41 @@
 # Local verification and CI
 
-CR-233 supersedes the D1/D3 pull-request split recorded later on this page.
-Those earlier PR populations and timing estimates are historical; the current
-`ci.yml` (PR) and `ci-post.yml` (push to `main`, nightly and manual) trigger map is:
+The current PR admission and post-merge trigger map is:
 
 | Job or matrix cell | Ordinary pull request | `.github/**`-only pull request | Push to `main`, nightly schedule, manual dispatch |
 | --- | --- | --- | --- |
-| `authz`, `changes`, `build-gate` (check `build`) | Run with the existing authz and classification gates | Run; the aggregate independently reads the PR diff | Run with the same gates |
-| `preflight` | Fast documentation, source and policy stages | Workflow lint and workflow contracts only | The same fast stages |
-| `preflight-slow` | In the post workflow | In the post workflow | All remaining preflight stages |
-| `build (ubuntu-24.04, Release)` | Release smoke, CTest label `fast` | Skipped | Complete Release profile |
-| `build (ubuntu-24.04, Debug)` and both `build (ubuntu-24.04-arm, …)` cells | In the post workflow | In the post workflow | The same Debug/Release profiles on amd64 and arm64; the runner OS must match the cell |
-| `sanitizers`, `kernel-only`, all three `native-live` profiles | In the post workflow | In the post workflow | Complete profiles, without label exclusions |
-| `corpus-parity-subset` | Existing advisory subset | Skipped | Existing advisory subset |
-| `corpus-parity` caller | In the post workflow | In the post workflow | Full parity |
+| `ci.yml authz` | Hosted authorization context | Hosted authorization context | Not triggered |
+| `gke-pr / admit` | Hosted admission and main-tree rule check | Hosted admission refuses the class | Not triggered |
+| `gke-pr / preflight` | GKE preflight, tiered by the main classifier | GKE github-only preflight | Not triggered |
+| `gke-pr / build`, `build-debug`, parity subset | GKE proof legs for code changes | Skipped | Not triggered |
+| `gke-pr / result` | Hosted result with a second classification read | Hosted result with a second classification read | Not triggered |
+| `ci-post.yml` proof jobs | Not triggered | Not triggered | Complete Release, Debug, native, kernel and parity profiles |
+| `corpus-parity.yml` | Not triggered | Not triggered | Full parity and its post-merge subset |
+| `docs.yml` | Documentation build except `.github/**`-only changes | Skipped by its path filter | Documentation build on its own trigger |
 
-**2026-10-24 supersedes the table's no-label-exclusion claim for Debug and
-sanitizers:** `ci-post.yml` passes no explicit `--exclude-label` argument,
-but `debug` and `sanitizers` exclude `slow` by default on push, nightly
-schedule and manual dispatch. Release, kernel and native run every
-registered row. The current remote CTest contract below defines the
-exclusion and shard-union accounting.
+The admission workflow is defined on `main` and is selected by the protected
+GKE runner group. Its proof legs use the same fixed Release, Debug and parity
+runner sizes as the post workflow; the hosted result is red for refusal,
+failure, cancellation, disagreement or an unanswered class.
 
 The nightly CI schedule is 01:30 UTC. The existing docs-only classification
 still skips proof jobs on a documentation-only PR or main push. Both
 preflight tiers together retain the original full stage inventory; the slow
 tier still runs on a docs-only main push. Scheduled and manual runs execute
-every profile. `build-gate` refuses failed authz first, requires fast preflight
-and classification success, and accepts classified docs-only skips, independently
-verified GitHub-only PR skips. The PR aggregate needs every PR job; the post
-aggregate needs every full-event job, including both preflight tiers and both
-parity callers. Failed, cancelled or unclassified skipped jobs fail their aggregate.
+every profile. `ci.yml` retains authorization and draft event handling;
+`gke-pr` owns admission, classification, preflight and proof legs. Docs-only
+and GitHub-only changes still run preflight, while only the proof legs skip.
+Failed, cancelled or unclassified work is red in the hosted result.
 
 A GitHub-only PR changes at least one path, with every changed path under
 `.github/`, including both sides of a rename. `scripts/ci_*.py` changes,
-alone or mixed with `.github/`, follow the ordinary PR plan. `changes` reads
-the PR files API to schedule jobs; `build-gate` repeats that read inside its
-own `Read the PR diff independently` step without checkout. Only this second
-read can excuse a GitHub-only skip. Both reads bind the PR number, head and
-base to the event, check every API page against `changed_files`, and recheck
-the live snapshot after reading. Empty, missing, malformed, truncated or
-unreadable diffs, PRs that moved since the event, and diffs beyond the API's
-3,000-file limit fail closed. The two jobs receive only read access to
-contents and pull requests; the exact inline reader is the sole new token
-exception in the workflow contract.
+alone or mixed with `.github/`, follow the ordinary proof plan. `gke-pr`
+reads the SHA-bound three-dot compare API twice, writes names to a
+NUL-separated file and gives that file to the base tree's
+`scripts/ci_docs_only.py --paths` classifier. Renames contribute both names;
+empty, missing, malformed, truncated or unreadable lists are neither class.
+The classifier uses exact `.github/` and `docs/` prefixes, so lookalike
+directories and the classifier itself cannot create a skip.
 
 `--tier github-only` runs `shellcheck-version`, `actionlint-runner-labels`,
 `workflow-lint`, `ci-workflow-contract`, `docs-workflow-contract` and
@@ -64,14 +56,15 @@ The smoke configures Release, builds `pineforge_pr_smoke` and directly runs
 `PINEFORGE_PR_FAST_TESTS` in `tests/CMakeLists.txt` names its eleven real
 executables; configure refuses missing, disabled, skippable, private-fixture
 or `slow` rows. The target rebuilds those executables with their library.
-PRs restore the newest compatible default-branch compiler cache, and only
-successful runs on `main` save that cache namespace.
+PR proof legs build cold; trusted post workflows also build cold and contain
+no Actions cache restore or save.
 
-Verification jobs keep literal runner pins at the workflow boundary: PR build/preflight and parity subset use `["self-hosted","pf-gcp-pr"]`;
-post preflight/parity use `gke-runners`; credentialed docs keep `["self-hosted","pf-gcp-post"]`.
+Verification jobs keep literal runner pins at the workflow boundary: GKE PR
+admit is hosted, while PR preflight, proof legs and parity use `gke-runners`;
+credentialed post work keeps its protected fleet.
 Post Release/Debug/kernel and native shards, post sanitizers and both native-live sanitizer
 profiles use fixed `gke-runners` size labels directly in runner pods carrying the engine toolchain image and sudo. No job routes by event.
-Hosted `ubuntu-24.04` runs all eight `authz` jobs, both CI `changes`/`build-gate` jobs, all post/native aggregates and `docs.yml`'s `build`.
+Hosted `ubuntu-24.04` runs authorization, admission and result jobs, all post/native aggregates and `docs.yml`'s `build`.
 These light, secret-free jobs need no VM-only tools, mounts or caches.
 Local reusable calls cannot mix PR and GKE jobs. A full post run schedules 24 GKE jobs: amd64 32/16/8 CPU labels carry 8/7/7 jobs and arm64 16 CPU carries 2; each label's cap is 8.
 
@@ -108,7 +101,7 @@ third-party `uses:` in `.github/workflows/*.yml` (also `.yaml`) and nested
 comment on the same line; prerelease and build suffixes are allowed. Local
 `./` actions and reusable workflows, and `docker://` images, are exempt.
 The lint accepts plain block-style YAML only, with scalar flow sequences
-(for example `runs-on: ["self-hosted", "pf-gcp-pr"]` and `branches: [main]`)
+(for example `runs-on: ["self-hosted", "pf-gcp-post"]` and `branches: [main]`)
 and empty `{}` / `[]` on one line as a whole plain `key:` value as exceptions
 (ASCII spaces and tabs inside an empty collection are allowed). In flow
 sequences, quotes may start a quoted scalar only at the start of an element,
@@ -156,10 +149,9 @@ SHA and update both the SHA and version comment together.
 
 This checks the CI/native workflow syntax, expressions and shell commands,
 source ABI/hash/schema guards, and the verifier's failure-handling tests. A
-failure fails the advisory aggregate `build` job and retains logs in
-`build-ci-preflight/`. The compilation lanes start alongside preflight, as
-soon as `authz` has passed and `changes` has classified the change. A
-documentation-only change skips them
+failure makes the hosted `result` red and retains diagnostics in
+`build-ci-preflight/`. The proof legs start after `gke-pr` admission has
+classified the compare list. A documentation-only change skips them
 ([Documentation-only changes](#documentation-only-changes)).
 It does not compile the engine or replace any complete verification profile.
 
@@ -189,13 +181,13 @@ Hosted exceptions include the named light jobs and the existing release/promotio
 CMake uses the same interpreter as the
 verification driver, so its Python checks do not switch to a different system
 Python. CTest must discover tests; an empty suite is a failure. Which runner
-runs each image, and each job's time limit, is in
+runs each image, and the platform's maximum, is in
 [Runners and time limits](#runners-and-time-limits).
 
 The two source-only benchmark CTest rows run the 25 harness unit tests and
 `benchmarks/check_provenance.py`. The latter reads historical commits (including
-`933fe583`), so every checkout in the CI workflows but each `changes`
-job's fetches full Git history. A depth-1 checkout fails the provenance row
+`933fe583`), so every checkout in the CI workflows and the admission base
+checkout fetches full Git history. A depth-1 checkout fails the provenance row
 even when the current benchmark files are correct.
 
 The run-failure source guards (`source-guard-run-failure-codes` and
@@ -799,17 +791,11 @@ compiles do not count, so an edit under `src/source/` does not fail the
 only examples or tests include fails no profile. A database without the
 archive's compiles fails the stage.
 
-Pass `--ccache` when ccache is installed. It caches compiler work, not complete
-build directories or verification receipts. Compiler, source, header and flag
-checks remain in effect. The native curl cache is separately bound to its source
-checksum, workflow configuration, compiler/package environment and install path.
-Each native profile restores only its own compiler namespace and resets ccache
-statistics after restore so the retained counters describe that job. The curl
-action saves a successful pinned installation immediately after dependency
-setup. Compiler objects are saved explicitly after diagnostics on an ordinary
-test failure as well as on success; neither cache depends on a cancelled job's
-post step. Compiler and dependency caches remain separate from verification
-receipts, and saving a cache cannot turn a failed verification into success.
+Pass `--ccache` when ccache is installed; it is an empty local directory on
+the GKE proof and trusted post jobs. Actions cache restore and save steps were
+removed from those jobs, so no PR run can plant an object that a trusted job
+later restores. The native curl action remains a separate dependency path and
+is an outstanding allow-list deviation for this change.
 
 The verifier accepts no row or stage deadline options (owner rule,
 2026-10-12: no time limit may fail a run for slowness). It passes
@@ -820,14 +806,11 @@ maximum is the only bound.
 The summary records discovered and selected row counts, executed rows,
 skipped or not-run rows, and stage timings, including when a test fails.
 
-For an explicit cold proof, dispatch `native-live.yml` with `cold_cache: true`,
-or dispatch `ci-post.yml` with `cold_native_cache: true`. The reusable workflow also
-accepts `cold_cache`. Both compiler and curl cache restore **and save** are
-bypassed in every native cell. Manual runs select the full main-equivalent row
-set; there is no manual slow-exclusion input. Normal runs default these controls
-to false. A cold proof must inspect each profile's verdict and retained counts,
-not just the caller aggregate. A local Spot run is evidence about that host and
-tree; the final candidate still needs its own GitHub PR checks and explicit
+Every trusted post and PR proof job is a cold proof by construction. Manual
+runs select the full main-equivalent row set; there is no cache warm-up
+exception. A cold proof must inspect each profile's verdict and retained
+counts, not just the caller aggregate. A local Spot run is evidence about that
+host and tree; the final candidate still needs its own GitHub PR checks and explicit
 full-row cold workflow run.
 
 ## Version identity and historical ABI checks
@@ -1028,10 +1011,8 @@ do not shorten.
 So the whole population cannot be held to the ~25 min pull-request CI target,
 and it runs nightly (01:30 UTC), on `workflow_dispatch`,
 and on the full-event pipeline; a pull request's early signal is the subset
-that `ci.yml` calls. ccache
-(2 GB, keyed per commit with a prefix restore) makes a re-run at an unchanged
-pin almost entirely cache hits; the Git-LFS chart feed (~176 MB, one
-full-history 1m CSV) is pulled once per job.
+that `gke-pr` runs. Proof and trusted jobs build cold; the Git-LFS chart feed
+(~176 MB, one full-history 1m CSV) is pulled once per job.
 
 ### The advisory pull-request subset
 
@@ -1094,10 +1075,10 @@ load, when the list held its first 30 probes: derive 2 s (a no-op when the feeds
 judge <1 s — **94 s** end to end over an up-to-date build directory, against
 1792 s for the run phase alone in full mode.
 
-`ci.yml` calls `corpus-parity-subset.yml` for ordinary PRs and lists it in
-`build-gate`'s `needs`. Only a docs-only change or the aggregate's independent
-GitHub-only classification excuses a skip. `ci-post.yml` retains the subset
-through `corpus-parity.yml` (`mode: subset`) alongside its full-parity call.
+`gke-pr` inlines the corpus subset for ordinary code PRs and skips it only
+after the base classifier proves docs-only or GitHub-only. `ci-post.yml`
+retains the subset through `corpus-parity.yml` (`mode: subset`) alongside its
+full-parity call.
 The merge ruleset requires `pineforge/verify` and
 `pineforge/parity`, posted by the maintainers' `lab verify` tooling after
 full verification on the PR head's exact tree.
@@ -1109,12 +1090,9 @@ print its line, and grading the 258 untouched tapes beside them would judge the
 corpus's own older generation rather than this engine. The subset is an early
 signal alongside the full parity verdict.
 
-The subset job checks the submodule out with `GIT_LFS_SKIP_SMUDGE=1` and
-restores `corpus/data` from a cache keyed by the gitlink, so the ~176 MB feed
-is fetched at most once per pin rather than once per push; the restored bytes
-are then checked against the sha256 in the corpus's own Git-LFS pointer, so a
-stale or corrupt cache fails as "the feed is wrong" and not as "54 probes
-drifted".
+The subset job checks the submodule out with `GIT_LFS_SKIP_SMUDGE=1`, fetches
+the ~176 MB feed directly and checks every byte against the sha256 in the
+corpus's own Git-LFS pointer before running the probes.
 
 ## Documentation guards
 
@@ -1302,12 +1280,11 @@ the 43 CTest rows labelled `slow` in `tests/CMakeLists.txt`
 ([PR tier versus MAIN/RELEASE](#pr-tier-versus-mainrelease-what-is-excluded-where)). The first 27 were
 chosen from INT23/INT24 job logs: over 60 seconds in either sanitizer run or
 over 30 seconds in either Debug run. Preflight and the proof jobs start as soon
-as the few-second `changes` job has decided whether the change is
-documentation only and which verifier classes a pull request needs. The advisory `build`
-aggregate succeeds only if every job succeeds, or was skipped for a
-documentation-only change. INT25 re-measured the rows wave G enlarged or added (RATIO-HARDEN's timing
-legs, V19-FIX's scaling rows, and the new KERNEL-EDGE, K-ULP4, C-SURFACE-1 and
-DOC-TRUTH-4 rows) in a full sanitizers and Debug run on the maintainers' x86-64
+after admission has classified the compare list and chosen the verifier tier.
+The hosted `result` succeeds only if every required job succeeds, or the proof
+group was skipped for a documentation class. The registered rows remain pinned
+in `tests/CMakeLists.txt`; the post profiles execute their full population on
+the verification hosts.
 verification host (twelve parallel CTest jobs): none crosses either threshold,
 so the 27 labelled rows stand. K-ULP5's `test_native_group_absorption`,
 picked after that run, took 70.4 s under sanitizers (17.4 s Debug) in its own
@@ -1538,12 +1515,13 @@ including the sitemap. Both footer
 variants already include a visible link to <https://pineforge.dev> on every
 page rendered by the theme, including source listings.
 
-The first job of `ci.yml` is `authz`. The `changes` job needs it and decides with
-[`scripts/ci_docs_only.py`](../scripts/ci_docs_only.py). A changed path is
-documentation when it is a Markdown file (`*.md`) or lies under `docs/`,
-unless it lies under `.github/`, `benchmarks/`, `scripts/` or `tests/`, is a
-CMake file or a git control file such as `.gitattributes`, or is one of the
-five files explicitly excluded by `PROOF_READS`:
+The only job of `ci.yml` is `authz`; PR proof work lives in `gke-pr`.
+Admission checks the live PR, then reads the payload-bound compare list with
+the base tree's [`scripts/ci_docs_only.py`](../scripts/ci_docs_only.py).
+A changed path is documentation when it is a Markdown file (`*.md`) or lies
+under `docs/`, unless it lies under `.github/`, `benchmarks/`, `scripts/` or
+`tests/`, is a CMake file or a git control file such as `.gitattributes`, or is
+one of the five files explicitly excluded by `PROOF_READS`:
 `docs/pages/pine-to-native.md` and `docs/pages/native-engine.md`, whose code
 blocks `test_pine_to_native_worked` and `test_native_engine_complete_host`
 compile and run; `docs/adr/0001-kernel-adapter-boundary.md`, which
@@ -1554,39 +1532,19 @@ and whose `--self-test-seo` runs in the `docs.yml` build job before the real
 site build; and `docs/seo_postprocess.py`, which that job executes on synthetic
 pages through `bash docs/build.sh --self-test-seo`. The SEO postprocessor
 remains conservatively excluded as a documentation-build input. A change
-to one of those five runs every job. A change is documentation only when every
-path it changes, both sides of a rename, is documentation. The change is the
-checked-out commit against its first parent: for a pull request, the merge
-GitHub tests against the base it merged into; for a push, the pushed commit
-against the previous tip, which must be that parent. `changes` runs the copy of
-the script that parent holds, so a change to the rule is judged by the rule it
-changes and never by itself, and a base without the script runs every job.
-Every doubt answers no, and every proof job runs: a manual dispatch, a push
-that creates the branch, is forced or carries more than one commit, a merge
-that is not the pull request head's, a commit git cannot read, an empty change,
-and a `changes` job that fails or never answers.
+to one of those five runs every proof leg. A change is documentation only when
+every path it changes, both sides of a rename, is documentation. The compare
+list is written as NUL-separated data; an empty, malformed, truncated or
+unreadable list is neither class. The base tree's copy judges the list, so a
+PR cannot change the classifier that admits it. The result job repeats the
+read with the payload shas and refuses disagreement.
 
-Each proof job needs both `authz` and `changes`. After successful authz,
-preflight and proof jobs run alongside each other even if classification
-fails; that failure still fails the aggregate. Only a successful docs-only
-answer excuses skipped proof jobs. The job conditions use `always()` with
-an explicit authz-success guard, so cancellation is not a skip condition.
-Checkout and repository-code steps carry the same authz guard.
-
-The `build` aggregate always runs, refuses any non-success authz result in
-its first step, and requires authz, classification and preflight success.
-It accepts a skipped proof job only for a classified docs-only change;
-failure and cancellation always fail it. A skipped matrix is not expanded,
-so a documentation-only run shows one skipped `build` check under its
-unexpanded name instead of the four legs. Required-check configuration must
-retain this aggregate to enforce that exception.
-
-The aggregate reads `needs.build.result` for the selected matrix cells; D3's
-excluded cell is never created and contributes no skipped result. Every cell
-that exists must succeed: failure, cancellation or an unexpected skip still
-fails the aggregate, with no missing-leg exception on push or any other event.
-The unexpanded docs-only check represents three selected legs on a pull
-request and four on every other event.
+After successful admission, `preflight` always runs for an allowed PR. It uses
+the github-only tier for docs-only or `.github/`-only changes and the fast tier
+otherwise. The proof legs run only for a code change. The hosted `result` job
+requires admission and preflight success, accepts a skipped proof group only
+for the two classified classes, and applies a one-way code-extension veto.
+Failed, cancelled, missing or unexpected jobs remain red.
 
 A push to `main` follows the same rule, since nothing downstream needs the
 proof jobs to have run on a merged commit: `release.yml` starts only on a
@@ -1653,8 +1611,8 @@ The native matrix is exactly `1..4` with `--ctest-shard I/4`; live sanitizers ar
 
 | Workflow | Events/callers | Inline jobs' `runs-on` |
 | --- | --- | --- |
-| `ci.yml` | Unfiltered `pull_request` | `authz`, `changes`, `build-gate`: hosted `ubuntu-24.04`; preflight/build: `["self-hosted","pf-gcp-pr"]` |
-| `corpus-parity-subset.yml` | Reusable call from PR CI | `authz`: hosted `ubuntu-24.04`; subset: `["self-hosted","pf-gcp-pr"]` |
+| `ci.yml` | Unfiltered `pull_request` | `authz`: hosted `ubuntu-24.04`; no proof legs |
+| `gke-pr.yml` | `pull_request_target` to `main` | Hosted admission/result; GKE preflight and proof legs with fixed labels |
 | `docs.yml` | `pull_request`, except `.github/**`-only diffs | `authz` and `build`: hosted `ubuntu-24.04` |
 | `ci-post.yml` | Push to `main`, 01:30 UTC schedule, dispatch | Light jobs and four aggregates: `ubuntu-24.04`; `gke-runners`: Release/sanitizers `gke-32cpu-64gb-amd64`, Debug/kernel `gke-16cpu-32gb-amd64`, preflight tiers `gke-8cpu-16gb-amd64`, arm64 `gke-16cpu-32gb-arm64` |
 | `corpus-parity.yml` | Schedule, dispatch, post CI callers | `authz`: hosted `ubuntu-24.04`; `gke-runners`: full parity `gke-16cpu-32gb-amd64`, subset `gke-8cpu-16gb-amd64` |
@@ -1677,7 +1635,7 @@ The four full build checks are `build (ubuntu-24.04, Release)`,
 Every shard builds the full tree and runs `--ctest-shard I/N` at the runner's core count. Each build refuses an OS mismatch before checkout.
 Each leg aggregate retains its old check name and requires its own matrix's success. The two arm64 cells share `build-arm` on `gke-16cpu-32gb-arm64`. All three build jobs use the same verification steps and profiles.
 Shard jobs and leg aggregates skip together only on classified docs-only changes.
-One cache key per architecture/profile/SHA is restored by all shards; only shard 1 saves it.
+Trusted post workflows and PR proof legs build cold; no trusted job restores an Actions cache.
 `HOSTED_JOB_RUNNERS` pins hosted jobs and exact GKE mappings; every GKE job runs directly in a runner pod carrying the engine toolchain image and sudo. The PR build remains
 `build (ubuntu-24.04, Release)` and its aggregate remains `build`.
 
@@ -1809,17 +1767,12 @@ measurements on the new runners.
 | `corpus-parity` | 360 (was 120) | 16.3-26.2 min on the standard runner, 10.1-10.3 min on the verification hosts. |
 | `corpus-parity-subset` | 360 (was 30) | 1.8-4.7 min on the standard runner, 2.4-3.8 min on the verification hosts. |
 | `build` (aggregate) | 360 (was 5) | Seconds. |
-| `changes` | 360 (was 5) | Seconds: a two-commit checkout and one `git diff`, on the standard runner. |
+| `gke-pr / result` | Platform maximum | Seconds after the second compare read and job-result checks. |
 
-Those three cancelled main jobs and the separate ASan failure in run
-[37428280396](https://github.com/pineforge-4pass/pineforge-engine/actions/runs/37428280396)
-all restored compiler fallback keys and exact curl keys. Each corresponding
-passing PR had the same tree and restored the same keys. The logs therefore
-do not support a branch-cache restore miss as the explanation for the event
-split. Cancelled/failed jobs did skip the old compiler post-save, which reduced
-cache freshness; the new save ordering addresses that independently. The
-historical ASan startup assertion remains a separate diagnosis, and splitting
-jobs does not establish a runtime fix or dismiss a sanitizer failure.
+Post profiles build cold, so their results do not depend on objects written by
+a pull request. A failed or cancelled job remains red in its own workflow and
+in the hosted admission result. The separate lab verification statuses still
+judge the exact pull request head tree.
 
 ### Release guard phases
 
@@ -2012,3 +1965,50 @@ Declare a fixed input with `name`, `definition`, a required positive integer `va
 The normal gate exits 1 for a new/missing site identity, no matching entry, an unlisted op class, a stale entry, unsupported/unguarded bounded growth, a bound naming bars/trades/entries/decisions/history, a codegen pin differing from `scripts/regen_corpus_cpp.sh`, or an OPEN ceiling excess. Growth-axis findings include the entry ID and the specific forbidden bound diagnostic. Missing/malformed manifests or site inventories, invalid fixed-input provenance, tautological bounds, undeclared bound inputs, zero files/sites and a broken pattern set exit 2, never a pass. A site whose flat-memory implementation has not landed stays `pending-flat-memory` (with its inventory row and `grows_with`) or `unreviewed`: both are OPEN, listed and counted, never PASS, and fail `--strict`. Ceilings count entry groups; the companion identities independently prevent additional sites from inheriting those groups without a reviewed inventory change.
 
 The scan remains a regex index over lexed C++, not a general alias, type, preprocessor or call-path proof. It does not read the codegen checkout (absent from this tree; the manifest declares the emitter template list instead), and Python collectors, `StringIO`, ctypes arrays and local I/O buffers are outside it.
+
+## Pull request admission reference
+
+The admission route begins on a hosted runner from the main branch definition.
+It begins by checking the repository, draft state, base branch and three actor
+permissions before it reads any pull request workflow file.
+The hosted job then reads the live pull request and binds its head to the event.
+The compare request uses the payload base and head shas rather than a branch.
+A rename contributes both the old and new name to the classifier.
+An empty, truncated or unreadable list is neither documentation class.
+The base tree's classifier is the only code that decides the two classes.
+The tree fetch is data only and never runs a file from the pull request.
+Directory entries are skipped while blobs are checked before they are fetched.
+Blob modes, sizes, total size and file count are checked before downloads.
+File names are rebuilt from components after full component validation.
+The scanner runs actionlint before its structural text rules.
+The main branch rule table and parser grammar judge the fetched head workflows.
+A workflow change that needs a loosened rule must therefore use two changes.
+
+Rule and table changes land in two steps.
+First merge the checker or allow-table change while the existing workflows pass.
+Then merge the workflow change that uses the newly admitted rule or label.
+This order prevents one pull request from changing both sides of admission.
+The github-only class still runs the full workflow policy preflight.
+The proof legs are the only jobs skipped for the two documentation classes.
+The hosted result requires admission and preflight success in every class.
+A class disagreement is red even when the proof jobs were skipped.
+The result re-reads with the immutable payload shas to avoid branch races.
+The code-extension veto can only require proof legs, never skip them.
+
+Trusted post workflows build cold and contain no Actions cache restore or save.
+PR pods also build cold, so their runtime cache credential has no trusted reader.
+No trusted job consumes an artifact from the admission workflow.
+The runner group accepts only the main branch admission workflow definition.
+The merge gate reads the workflow run path, event and bound display title.
+These controls keep hosted authorization separate from GKE proof execution.
+This reference is kept beside the operational workflow table above.
+The same order applies when a runner label or parser rule changes.
+The compare file is never placed in a shell word list.
+Names remain opaque data through both classification reads.
+The head checkout is immutable for every GKE proof leg.
+The base checkout remains the source of admission policy.
+Result checks are based on job outcomes rather than job names alone.
+Skipped proof legs are accepted only for an agreed documentation class.
+Missing admission output is a failed result.
+The hosted result never treats an absent proof as green.
+Admission diagnostics preserve the observed class and outcome for review.

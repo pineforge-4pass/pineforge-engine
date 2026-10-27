@@ -19,7 +19,8 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from ci_docs_only import PROOF_READS, decide, is_documentation  # noqa: E402
+from ci_docs_only import (PROOF_READS, classify_paths, decide, is_documentation,
+                          read_paths_file)  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = Path(__file__).with_name('ci_docs_only.py')
@@ -314,8 +315,50 @@ class CommandLineTests(unittest.TestCase):
                     output.write_text('earlier=1\n')
                     result = self.run_script(repo.path, env, output, where)
                     self.assertEqual(result.returncode, 0, result.stderr)
-                    self.assertEqual(output.read_text(), f'earlier=1\ndocs_only={answer}\n')
+                    self.assertEqual(output.read_text(),
+                                     f'earlier=1\ndocs_only={answer}\ngithub_only=false\n')
                     self.assertIn('docs-only', result.stdout)
+
+
+class PathListTests(unittest.TestCase):
+    """The SHA-bound compare list is data, including rename and hostile names."""
+
+    def test_exact_prefixes_and_classifier_script_are_not_overbroad(self) -> None:
+        self.assertEqual(classify_paths(['.github/workflows/new.yml']), (False, True))
+        self.assertEqual(classify_paths(['.github_evil/workflows/new.yml']), (False, False))
+        self.assertEqual(classify_paths(['docs-evil/readme.md']), (False, False))
+        self.assertEqual(classify_paths(['scripts/ci_docs_only.py']), (False, False))
+        self.assertEqual(classify_paths(['docs/ci.md']), (True, False))
+        self.assertEqual(classify_paths([]), (False, False))
+
+    def test_nul_names_are_data_and_renames_supply_both_sides(self) -> None:
+        paths = ['docs/old name "quoted"\n..', '.github/workflows/new.yml']
+        self.assertEqual(classify_paths(paths), (False, False))
+        self.assertEqual(classify_paths(['.github/old', '.github/new']), (False, True))
+
+    def test_path_file_requires_a_complete_utf8_nul_list(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            complete = root / 'complete'
+            complete.write_bytes(b'.github/workflows/a.yml\0docs/ci.md\0')
+            self.assertEqual(read_paths_file(complete),
+                             (['.github/workflows/a.yml', 'docs/ci.md'],
+                              'path list contains 2 path(s)'))
+            empty = root / 'empty'
+            empty.write_bytes(b'')
+            self.assertEqual(read_paths_file(empty), ([], 'path list is empty'))
+            for name, data in (('truncated', b'.github/workflows/a.yml'),
+                               ('invalid', b'\xff\0')):
+                path = root / name
+                path.write_bytes(data)
+                paths, reason = read_paths_file(path)
+                self.assertIsNone(paths)
+                self.assertIn('path list', reason)
+
+    def test_unreadable_path_file_is_neither(self) -> None:
+        paths, reason = read_paths_file(Path('/path/that/does/not/exist'))
+        self.assertIsNone(paths)
+        self.assertIn('unreadable', reason)
 
 
 if __name__ == '__main__':

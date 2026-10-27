@@ -141,16 +141,6 @@ jobs:
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y cmake ninja-build libeigen3-dev tzdata-legacy libsqlite3-dev libssl-dev zlib1g-dev ccache git-lfs strace
 
-      - name: Restore ccache
-        id: ccache-restore
-        if: ${{ !inputs.cold_cache }}
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ runner.os }}-${{ runner.arch }}-live-v2-${{ matrix.profile }}-${{ github.sha }}
-          restore-keys: |
-            ccache-${{ runner.os }}-${{ runner.arch }}-live-v2-${{ matrix.profile }}-
-
       - name: Set up pinned WebSocket-enabled libcurl
         id: curl-deps
         uses: ./.github/actions/setup-live-curl
@@ -171,13 +161,10 @@ jobs:
       - name: Stage and summarize diagnostics
         if: always()
         env:
-          CURL_CACHE_HIT: ${{ steps.curl-deps.outputs.cache-hit }}
-          CCACHE_CACHE_HIT: ${{ steps.ccache-restore.outputs.cache-hit }}
-          CCACHE_RESTORE_KEY: ${{ steps.ccache-restore.outputs.cache-matched-key }}
           COLD_CACHE: ${{ inputs.cold_cache }}
         run: |
           python3 scripts/collect_ci_diagnostics.py --build-dir ${{ matrix.build_dir }} --profile ${{ matrix.profile }} --dependency-dir build-native-deps
-          printf 'cold_cache=%s\ncompiler_exact_hit=%s\ncompiler_restore_key=%s\n' "$COLD_CACHE" "$CCACHE_CACHE_HIT" "$CCACHE_RESTORE_KEY" > ci-diagnostics/cache-info.txt
+          printf 'cold_cache=%s\n' "$COLD_CACHE" > ci-diagnostics/cache-info.txt
           if [[ -f "${{ matrix.build_dir }}/ccache-before.log" ]]; then
             cp "${{ matrix.build_dir }}/ccache-before.log" ci-diagnostics/ccache-before.log
           fi
@@ -189,15 +176,6 @@ jobs:
           name: ci-diagnostics-native-live-${{ matrix.profile }}
           path: ci-diagnostics/
           if-no-files-found: warn
-
-      # A failing test does not invalidate compiler objects. Save explicitly
-      # after diagnostics, even on normal failure; cancellation is no cache plan.
-      - name: Save ccache after verification
-        if: ${{ !cancelled() && !inputs.cold_cache && steps.verify.outcome != 'skipped' && steps.ccache-restore.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ${{ env.CCACHE_DIR }}
-          key: ${{ steps.ccache-restore.outputs.cache-primary-key }}
 
   native-live-shards:
     name: native-live-shard (${{ matrix.profile }}, ${{ matrix.shard }}/4)
@@ -240,17 +218,6 @@ jobs:
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y cmake ninja-build libeigen3-dev tzdata-legacy libsqlite3-dev libssl-dev zlib1g-dev ccache git-lfs strace
 
-      # Each shard has its own save key; four cold builds cannot reserve one key.
-      - name: Restore ccache
-        id: ccache-restore
-        if: ${{ !inputs.cold_cache }}
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ runner.os }}-${{ runner.arch }}-live-v2-${{ matrix.profile }}-shard-${{ matrix.shard }}-${{ github.sha }}
-          restore-keys: |
-            ccache-${{ runner.os }}-${{ runner.arch }}-live-v2-${{ matrix.profile }}-shard-${{ matrix.shard }}-
-
       - name: Set up pinned WebSocket-enabled libcurl
         id: curl-deps
         uses: ./.github/actions/setup-live-curl
@@ -271,13 +238,10 @@ jobs:
       - name: Stage and summarize diagnostics
         if: always()
         env:
-          CURL_CACHE_HIT: ${{ steps.curl-deps.outputs.cache-hit }}
-          CCACHE_CACHE_HIT: ${{ steps.ccache-restore.outputs.cache-hit }}
-          CCACHE_RESTORE_KEY: ${{ steps.ccache-restore.outputs.cache-matched-key }}
           COLD_CACHE: ${{ inputs.cold_cache }}
         run: |
           python3 scripts/collect_ci_diagnostics.py --build-dir ${{ matrix.build_dir }} --profile ${{ matrix.profile }} --dependency-dir build-native-deps
-          printf 'cold_cache=%s\ncompiler_exact_hit=%s\ncompiler_restore_key=%s\n' "$COLD_CACHE" "$CCACHE_CACHE_HIT" "$CCACHE_RESTORE_KEY" > ci-diagnostics/cache-info.txt
+          printf 'cold_cache=%s\n' "$COLD_CACHE" > ci-diagnostics/cache-info.txt
           if [[ -f "${{ matrix.build_dir }}/ccache-before.log" ]]; then
             cp "${{ matrix.build_dir }}/ccache-before.log" ci-diagnostics/ccache-before.log
           fi
@@ -289,13 +253,6 @@ jobs:
           name: ci-diagnostics-native-live-${{ matrix.profile }}-${{ matrix.shard }}of4
           path: ci-diagnostics/
           if-no-files-found: warn
-
-      - name: Save ccache after verification
-        if: ${{ !cancelled() && !inputs.cold_cache && steps.verify.outcome != 'skipped' && steps.ccache-restore.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ${{ env.CCACHE_DIR }}
-          key: ${{ steps.ccache-restore.outputs.cache-primary-key }}
 
       - name: Record native shard proof
         id: shard-proof
