@@ -169,7 +169,9 @@ void old_manifest_refuses(const std::vector<pineforge::Bar>& bars) {
             "case B must close 2,048 rounds before the retired-key refusal");
     require(host.entries == 2'049 && host.exits == 2'048 && host.closes == 2'048
                 && host.entries + host.exits == 4'097,
-            "case B must refuse after 4,096 completed-round ids plus the next entry");
+            (std::string("case B must refuse after 4,096 completed-round ids plus the next entry; observed entries ")
+                + std::to_string(host.entries) + ", exits " + std::to_string(host.exits)
+                + ", closes " + std::to_string(host.closes)).c_str());
     require(host.trade_count() < 5'000, "case B must stop short of case A's trade count");
 }
 } // namespace
