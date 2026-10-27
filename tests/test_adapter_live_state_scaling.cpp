@@ -178,7 +178,7 @@ int failures = 0;
 constexpr double kNa = std::numeric_limits<double>::quiet_NaN();
 constexpr std::int64_t T = 1736121600000LL;
 
-enum class Workload { Replay, Churn, Straddle, Recancel, Constant, CancelAll, Flip };
+enum class Workload { Replay, Churn, Straddle, Recancel, Constant, CancelAll, Flip, SpacedIds };
 
 long triangle(int index, int period) {
     const int phase = index % (2 * period);
@@ -223,6 +223,15 @@ public:
 
     void on_source_bar(const Bar& bar) override {
         const int i = pine_bar_index();
+        if (workload_ == Workload::SpacedIds) {
+            // CR-347 / external PR #458 (letiep97): a fresh entry id every
+            // twenty bars, closed ten bars later. Recording is off for this
+            // timing row; historical hash replay is a different operation.
+            const auto id = "spaced-" + std::to_string(i / 20);
+            if (i % 20 == 0) strategy_entry(id, true, kNa, kNa, 1.0);
+            if (i % 20 == 10) strategy_close(id);
+            return;
+        }
         const double position = live_position_size();
         if (workload_ == Workload::Replay) {
             // tests/test_l4g_runtime_budget.cpp's replay, verbatim.
@@ -301,6 +310,10 @@ public:
 
     std::size_t retained_rows() const { return (adapter_.*access(PlacementTag{})).size(); }
     std::size_t recorded_rows() const { return broker_state_hashes_.size(); }
+    std::uint64_t held_visits() const { return adapter_.cohort_table_work().held_rows_visited; }
+    std::uint64_t resident_visits() const {
+        return adapter_.cohort_table_work().resident_rows_visited;
+    }
     // The origins the kernel's cohort rosters still hold (R5 lane V19-FIX).
     std::size_t roster_members() const {
         std::size_t members = 0;
@@ -320,6 +333,7 @@ struct Leg {
     std::size_t rows = 0;
     std::size_t recorded = 0;
     std::size_t roster = 0;
+    std::uint64_t held_visits = 0, resident_visits = 0;
 };
 
 Leg replay(Workload workload, const std::vector<Bar>& bars, bool recording = true) {
@@ -332,6 +346,8 @@ Leg replay(Workload workload, const std::vector<Bar>& bars, bool recording = tru
     leg.rows = host.retained_rows();
     leg.recorded = host.recorded_rows();
     leg.roster = host.roster_members();
+    leg.held_visits = host.held_visits();
+    leg.resident_visits = host.resident_visits();
     CHECK(host.last_error().empty());
     CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
     // Recording mode read the hash once per script bar.
@@ -396,6 +412,7 @@ void cost_and_rows_are_live(Workload workload, const char* name, bool recording 
         || lane_rows;
     const int scale = short_bars ? 4 : 1;
     int bars = (gated() ? kBars : kBars / 4) * scale;
+    if (workload == Workload::SpacedIds) bars = ((bars + 19) / 20) * 20;
     const std::int64_t step = workload == Workload::Straddle ? kDay : kMinute;
     Leg small;
     Leg large;
@@ -436,6 +453,17 @@ void cost_and_rows_are_live(Workload workload, const char* name, bool recording 
         CHECK(small.trades >= bars / 2 - 1);
         CHECK(large.trades >= 2 * bars - 1);
     }
+    if (workload == Workload::SpacedIds) {
+        std::printf("CR347 spaced held_visits=%llu/%llu resident_visits=%llu/%llu\n",
+            static_cast<unsigned long long>(small.held_visits),
+            static_cast<unsigned long long>(large.held_visits),
+            static_cast<unsigned long long>(small.resident_visits),
+            static_cast<unsigned long long>(large.resident_visits));
+        CHECK(small.trades == bars / 20);
+        CHECK(large.trades == bars * 4 / 20);
+        CHECK(small.held_visits > 0 && large.held_visits >= small.held_visits);
+        CHECK(small.resident_visits == 0 && large.resident_visits == 0);
+    }
     // Memory: what the adapter retains does not grow with the run, and
     // neither do the kernel's rosters.
     CHECK(small.rows <= kRowBound);
@@ -458,6 +486,7 @@ int single_leg(const char* workload_name, const char* bars_text, bool recording)
         : std::strcmp(workload_name, "constant") == 0                 ? Workload::Constant
         : std::strcmp(workload_name, "cancelall") == 0                ? Workload::CancelAll
         : std::strcmp(workload_name, "flip") == 0                     ? Workload::Flip
+        : std::strcmp(workload_name, "spaced") == 0                   ? Workload::SpacedIds
                                                                       : Workload::Replay;
     const int bars = std::atoi(bars_text);
     if (bars <= 0) return 2;
@@ -475,12 +504,17 @@ int single_leg(const char* workload_name, const char* bars_text, bool recording)
 } // namespace
 
 int main(int argc, char** argv) {
-    // --leg <replay|churn|straddle|recancel|constant|cancelall|flip> <bars> [--no-recording]
+    // --leg <replay|churn|straddle|recancel|constant|cancelall|flip|spaced> <bars> [--no-recording]
     if ((argc == 4 || argc == 5) && std::strcmp(argv[1], "--leg") == 0)
         return single_leg(argv[2], argv[3],
                           !(argc == 5 && std::strcmp(argv[4], "--no-recording") == 0));
     // --row <name>: only that workload's rows (a mutant is timed row by row).
     const char* only = argc == 3 && std::strcmp(argv[1], "--row") == 0 ? argv[2] : nullptr;
+    if (only && std::strcmp(only, "spaced") == 0) {
+        cost_and_rows_are_live(Workload::SpacedIds,
+            "PR #458 letiep97: fresh id every 20 bars, close 10 bars later", false);
+        return failures == 0 ? 0 : 1;
+    }
     const auto row = [&](const char* key, Workload workload, const char* name,
                          bool recording = true) {
         if (!only || std::strcmp(only, key) == 0)

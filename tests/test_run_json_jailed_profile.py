@@ -34,7 +34,7 @@ PROFILE_ENV = "PINEFORGE_RUN_JSON_PROFILE"
 SETTER = "strategy_set_scratch_tables_v1"
 FIELDS = ("K_q", "B_q", "K_e", "B_e", "K_c", "B_c", "U", "B_U", "V", "B_V", "R")
 # P0 policy, independently transcribed from the brief, after q removal.
-P0_FIXED = (0, 0, 8192, 3145728, 4096, 2101248, 4096, 1048576, 27, 6912)
+P0_FIXED = (0, 0, 262144, 25165824, 32768, 4227072, 65536, 4194304, 27, 6912)
 
 
 class Descriptor(ctypes.Structure):
@@ -163,8 +163,10 @@ class ProfileFdLibrary(ScratchRecorder, fd_sinks.FdLibrary):
 
 
 class SelectedProfileFdLibrary(ScratchRecorder, fd_sinks.SelectedFdLibrary):
-    def __init__(self, *, symbol=True, setter_status=0):
-        super().__init__(fd_sinks.selected.full_plan())
+    def __init__(self, *, symbol=True, setter_status=0, empty=False):
+        plan = (fd_sinks.selected.empty_window_plan() if empty
+                else fd_sinks.selected.full_plan())
+        super().__init__(plan, pnls=() if empty else fd_sinks.PNLS)
         self.init_scratch(symbol=symbol, setter_status=setter_status)
         native_free = self.strategy_free
 
@@ -183,16 +185,114 @@ class SelectedProfileFdLibrary(ScratchRecorder, fd_sinks.SelectedFdLibrary):
         return super()._run(state, rows, count, *args)
 
 
-def invoke_profile_sink(tmp_path, mode, library, extra):
+def invoke_profile_sink(tmp_path, mode, library, extra, *, no_files=True):
     if mode == "selected":
-        return fd_sinks.selected_invoke(tmp_path, library, extra, no_files=True)
+        return fd_sinks.selected_invoke(tmp_path, library, extra, no_files=no_files)
     source = bars.csv_file(tmp_path)
-    return fd_sinks.invoke(source, library, extra, no_files=True)
+    return fd_sinks.invoke(source, library, extra, no_files=no_files)
+
+
+def invoke_policy_report(tmp_path, mode, transport, library, extra=()):
+    with contextlib.ExitStack() as resources:
+        options = list(extra)
+        if transport == "fd":
+            stream = resources.enter_context(fd_sinks.Stream())
+            options += ["--report-sink-fd", str(stream.writer)]
+        return invoke_profile_sink(
+            tmp_path, mode, library, options, no_files=transport == "fd")
 
 
 @pytest.fixture(autouse=True)
 def clear_profile(monkeypatch):
     monkeypatch.delenv(PROFILE_ENV, raising=False)
+
+
+@pytest.mark.parametrize("profile", [None, "unjailed", "jailed"],
+                         ids=["implicit-default", "explicit-unjailed", "jailed"])
+@pytest.mark.parametrize("transport", ["array", "fd"])
+@pytest.mark.parametrize("route", ["ordinary", "selected", "selected-empty"])
+def test_executed_report_names_profile_and_admission(tmp_path, route, transport, profile):
+    mode = "ordinary" if route == "ordinary" else "selected"
+    library = (ProfileFdLibrary() if mode == "ordinary" else
+               SelectedProfileFdLibrary(empty=route == "selected-empty"))
+    extra = [] if profile is None else ["--profile", profile]
+    status, text, stderr = invoke_policy_report(tmp_path, mode, transport, library, extra)
+    assert (status, stderr) == (0, ""), text
+    document = reports.strict_line(text)
+    sinks.assert_run_profile(document, profile or "unjailed", admitted=profile == "jailed")
+    keys = list(document["diagnostics"])
+    assert keys.index("scratch_arena_jailed") == keys.index("run_profile") + 1, keys
+    if mode == "selected":
+        assert keys.index("scratch_arena_jailed") < keys.index("phase_timing"), keys
+        assert document["report_window"]["window"]["coverage"] == (
+            "empty" if route == "selected-empty" else "nonempty")
+    if profile == "jailed":
+        roots = 10 if mode == "ordinary" else 6 if route == "selected-empty" else 18
+        assert_admission(library, 1, roots, require_arena=True)
+    else:
+        assert library.arena_admissions == []
+        assert not any(row[0] == "scratch" for row in library.history)
+        assert library.released == library.created
+    assert ("trades" in document) == (transport == "array")
+    assert ("equity_curve" in document) == (transport == "array")
+
+
+@pytest.mark.parametrize("mode", ["ordinary", "selected"])
+@pytest.mark.parametrize("transport", ["array", "fd"])
+def test_arena_environment_and_sizes_do_not_select_host_profile(
+        tmp_path, monkeypatch, mode, transport):
+    monkeypatch.setenv("PF_SCRATCH_ARENA_JAILED", "1")
+    library = ProfileFdLibrary() if mode == "ordinary" else SelectedProfileFdLibrary()
+    counters = (97, 16 * 1024 * 1024)
+    sinks.configure_arena_stats(library, counters)
+    status, text, stderr = invoke_policy_report(tmp_path, mode, transport, library)
+    assert (status, stderr) == (0, ""), text
+    document = reports.strict_line(text)
+    sinks.assert_run_profile(document)
+    assert tuple(document["diagnostics"][key] for key in sinks.ARENA_DIAGNOSTICS) == counters
+    keys = list(document["diagnostics"])
+    assert keys.index("run_profile") == keys.index("scratch_arena_bytes") + 1, keys
+    assert library.arena_admissions == []
+    assert not any(row[0] == "scratch" for row in library.history)
+
+
+@pytest.mark.parametrize("mode", ["ordinary", "selected"])
+@pytest.mark.parametrize("transport", ["array", "fd"])
+def test_failed_arena_admission_has_no_profile_diagnostics(tmp_path, mode, transport):
+    library = ProfileFdLibrary() if mode == "ordinary" else SelectedProfileFdLibrary()
+    library.arena_status = -1
+    status, text, stderr = invoke_policy_report(
+        tmp_path, mode, transport, library, ["--profile", "jailed"])
+    assert (status, stderr) == (1, ""), text
+    document = reports.strict_line(text)
+    assert (document["code"], document["args"]) == (
+        "report_sink_failed", {"reason": "arena_backing"}), document
+    sinks.assert_no_run_profile(document)
+    assert "summary" not in document and "diagnostics" not in document, document
+    assert len(library.arena_admissions) == 1
+    assert not any(row[0] == "run" for row in library.history)
+    assert not library.installed and library.released == library.created
+
+
+@pytest.mark.parametrize("profile", ["unjailed", "jailed"])
+@pytest.mark.parametrize("kind", ["capabilities", "validation"])
+def test_non_execution_documents_have_no_profile_diagnostics(
+        tmp_path, monkeypatch, profile, kind):
+    if kind == "capabilities":
+        library = ProfileLibrary()
+        status, text, stderr = invoke(
+            tmp_path, monkeypatch, library, "--profile", profile, "--capabilities-json")
+    else:
+        library = SelectedProfileFdLibrary()
+        status, text, stderr = invoke_profile_sink(
+            tmp_path, "selected", library, ["--profile", profile, "--validate-window-only"])
+    assert (status, stderr) == (0, ""), text
+    document = reports.strict_line(text)
+    sinks.assert_no_run_profile(document)
+    assert "summary" not in document and "diagnostics" not in document, document
+    assert ("capabilities" in document) == (kind == "capabilities")
+    assert document.get("validation_only", False) == (kind == "validation")
+    assert library.created == [] and library.arena_admissions == []
 
 
 def forbid_spools(monkeypatch):
@@ -261,6 +361,7 @@ def test_jailed_configures_every_fresh_bench_and_body_handle_without_a_sink(tmp_
                     "--warmup", "2", "--repeats", "3", "--inputs", '{"Fast EMA":"3"}',
                     "--overrides", '{"pyramiding":"2"}')
     assert (result[0], result[2]) == (0, ""), result
+    sinks.assert_run_profile(reports.strict_line(result[1]), "jailed", admitted=True)
     assert json.loads(result[1])["summary"]["total_trades"] == 3
     assert_admission(library, 6, 10, require_arena=True)  # five input bars, including each warmup/repeat.
     assert files == [] and library.installed == [] and library.queried == 0
@@ -273,6 +374,7 @@ def test_selected_uses_retained_fed_count_before_its_native_run(tmp_path, monkey
     files = forbid_spools(monkeypatch)
     result = harness.run("selected", extra=["--profile", "jailed"])
     assert (result.status, result.stderr) == (0, ""), result.stdout
+    sinks.assert_run_profile(reports.strict_line(result.stdout), "jailed", admitted=True)
     assert_admission(result.library, 1, 18, require_arena=True)  # ten supplied rows, nine retained/fed.
     assert result.library.run_args[1] == 9
     assert result.library.window_config is None and result.library.observer_descriptor is None
@@ -290,6 +392,8 @@ def test_selected_unjailed_report_and_existing_preroll_prefix_stay_unchanged(tmp
     monkeypatch.setattr(reports.selected, "selected_argv", abbreviated)
     explicit = harness.run("selected", extra=["--profile", "unjailed"])
     assert (ordinary.status, ordinary.stderr, explicit.status, explicit.stderr) == (0, "", 0, "")
+    sinks.assert_run_profile(reports.strict_line(ordinary.stdout))
+    sinks.assert_run_profile(reports.strict_line(explicit.stdout))
     assert ordinary.stdout == explicit.stdout
     assert ordinary.library.history == explicit.library.history
     assert not any(row[0] == "scratch" for row in explicit.library.history)
@@ -357,6 +461,11 @@ def test_jailed_fd_overrides_sinks_off_after_admission(tmp_path, mode):
         assert closed.value.errno == fd_sinks.errno.EBADF
     assert stream.data == reference_stream.data
     actual, expected = json.loads(result[1]), json.loads(reference[1])
+    sinks.assert_run_profile(actual, "jailed", admitted=True)
+    sinks.assert_run_profile(expected)
+    for document in (actual, expected):
+        del document["diagnostics"]["run_profile"]
+        del document["diagnostics"]["scratch_arena_jailed"]
     assert "trades" not in actual and "equity_curve" not in actual
     if mode == "selected":
         assert "report_window" in actual and "report_shape" in actual
@@ -439,6 +548,7 @@ def test_jailed_fd_arena_refusal_preserves_caller_ownership(tmp_path, mode):
     document = reports.strict_line(text)
     assert (document["code"], document["args"]) == (
         "report_sink_failed", {"reason": "arena_backing"})
+    sinks.assert_no_run_profile(document)
     assert [row[0] for row in library.history] == ["create", "scratch", "free"]
     assert len(library.arena_admissions) == 1 and library.arena_admissions[0][0] == library.created[0]
     assert library.released == library.created and not library.installed
@@ -470,6 +580,7 @@ def test_scratch_failure_keeps_its_type_even_during_warmup(tmp_path, monkeypatch
     document = reports.strict_line(text)
     assert status == 1 and stderr == ""
     assert (document["code"], document["args"]) == (code, args)
+    sinks.assert_no_run_profile(document)
     assert "summary" not in document
     assert_admission(library, 1, 10, require_arena=True)
 
@@ -479,6 +590,8 @@ def test_unjailed_calls_and_report_bytes_are_unchanged_by_explicit_profile(tmp_p
     implicit_lib, explicit_lib = ProfileLibrary(symbol=symbol), ProfileLibrary(symbol=symbol)
     implicit = invoke(tmp_path, monkeypatch, implicit_lib)
     explicit = invoke(tmp_path, monkeypatch, explicit_lib, "--profile", "unjailed")
+    sinks.assert_run_profile(reports.strict_line(implicit[1]))
+    sinks.assert_run_profile(reports.strict_line(explicit[1]))
     assert implicit == explicit and implicit[0] == 0, (implicit, explicit)
     assert implicit_lib.calls == explicit_lib.calls
     for library in (implicit_lib, explicit_lib):
@@ -488,35 +601,61 @@ def test_unjailed_calls_and_report_bytes_are_unchanged_by_explicit_profile(tmp_p
         assert not Path(library.installed[0]).exists()
 
 
-def test_environment_profile_is_read_once_before_any_fresh_handle(tmp_path, monkeypatch):
+@pytest.mark.parametrize("profile", ["unjailed", "jailed"])
+def test_environment_profile_is_read_once_before_any_fresh_handle(tmp_path, monkeypatch, profile):
     reads, original_get = [], run_json.os.environ.get
     def get(name, *args):
         if name == PROFILE_ENV:
             reads.append(name)
         return original_get(name, *args)
-    monkeypatch.setenv(PROFILE_ENV, "jailed")
+    monkeypatch.setenv(PROFILE_ENV, profile)
     monkeypatch.setattr(run_json.os.environ, "get", get)
     library = ProfileLibrary()
     def change_profile():
         # setenv saves the old value via environ.get, which would count the
         # fixture's own read on every handle. The initial setenv owns cleanup.
-        run_json.os.environ[PROFILE_ENV] = "unjailed"
+        run_json.os.environ[PROFILE_ENV] = "unjailed" if profile == "jailed" else "jailed"
     library.on_create = change_profile
-    files = forbid_spools(monkeypatch)
+    files = forbid_spools(monkeypatch) if profile == "jailed" else []
     status, text, stderr = invoke(tmp_path, monkeypatch, library,
                                   "--bench", "--warmup", "1", "--repeats", "2")
     assert (status, stderr) == (0, ""), text
+    sinks.assert_run_profile(reports.strict_line(text), profile, admitted=profile == "jailed")
     assert reads == [PROFILE_ENV]
-    assert_admission(library, 4, 10, require_arena=True)
+    if profile == "jailed":
+        assert_admission(library, 4, 10, require_arena=True)
+    else:
+        assert len(library.created) == 4 and library.released == library.created
+        assert library.arena_admissions == []
+        assert not any(row[0] == "scratch" for row in library.history)
     assert files == []
 
 
-def test_cli_profile_overrides_the_environment(tmp_path, monkeypatch):
-    monkeypatch.setenv(PROFILE_ENV, "jailed")
-    library = ProfileLibrary(symbol=False)
-    status, text, stderr = invoke(tmp_path, monkeypatch, library, "--profile", "unjailed")
+@pytest.mark.parametrize("profile", ["unjailed", "jailed"])
+@pytest.mark.parametrize("transport", ["array", "fd"])
+def test_selected_profile_is_frozen_before_admission(tmp_path, monkeypatch, profile, transport):
+    monkeypatch.setenv(PROFILE_ENV, profile)
+    library = SelectedProfileFdLibrary()
+    library.on_create = lambda: run_json.os.environ.__setitem__(
+        PROFILE_ENV, "unjailed" if profile == "jailed" else "jailed")
+    status, text, stderr = invoke_policy_report(tmp_path, "selected", transport, library)
     assert (status, stderr) == (0, ""), text
+    sinks.assert_run_profile(reports.strict_line(text), profile, admitted=profile == "jailed")
+    assert bool(library.arena_admissions) is (profile == "jailed")
+
+
+@pytest.mark.parametrize("mode", ["ordinary", "selected"])
+@pytest.mark.parametrize("transport", ["array", "fd"])
+def test_cli_profile_overrides_the_environment(tmp_path, monkeypatch, mode, transport):
+    monkeypatch.setenv(PROFILE_ENV, "jailed")
+    library = (ProfileFdLibrary(symbol=False) if mode == "ordinary" else
+               SelectedProfileFdLibrary(symbol=False))
+    status, text, stderr = invoke_policy_report(
+        tmp_path, mode, transport, library, ["--profile", "unjailed"])
+    assert (status, stderr) == (0, ""), text
+    sinks.assert_run_profile(reports.strict_line(text))
     assert not any(row[0] == "scratch" for row in library.history)
+    assert library.arena_admissions == []
     assert len(library.installed) == 1
 
 

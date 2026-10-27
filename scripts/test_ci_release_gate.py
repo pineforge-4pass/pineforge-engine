@@ -118,12 +118,21 @@ def ci_post_run(run_id, *, sha=SHA, branch="main", state="completed", conclusion
 
 
 def ci_post_jobs():
-    # ci-post.yml's build/build-macos names expand these two matrix axes.
-    return [{"id": index, "name": f"build ({platform}, {build_type})",
+    # One required-name constant drives the gate and its shared job fixtures.
+    return [{"id": index, "name": name,
              "status": "completed", "conclusion": "success"}
-            for index, (platform, build_type) in enumerate(
-                ((platform, build_type) for platform in ("ubuntu-24.04", "macos-26")
-                 for build_type in ("Debug", "Release")), start=1)]
+            for index, name in enumerate(ci_release_gate.CI_POST_BUILD_JOBS, start=1)]
+
+
+def linux_ci_post_jobs():
+    # Keep these regression inputs Linux-only even against the previous gate.
+    # Derive arm64 rows from amd64, without copying the required-name tuple.
+    amd64 = [job for job in ci_post_jobs()
+             if job["name"].startswith("build (ubuntu-24.04, ")]
+    return amd64 + [
+        {**job, "id": job["id"] + len(amd64),
+         "name": job["name"].replace("ubuntu-24.04,", "ubuntu-24.04-arm,")}
+        for job in amd64]
 
 
 def jobs_page(rows, *, total=None):
@@ -2294,36 +2303,66 @@ class WorkflowPinTests(unittest.TestCase):
     def test_ci_post_required_build_jobs_match_workflow_matrices(self):
         """Tie the implementation's new name tuple and fixtures to both real matrices."""
         jobs = _jobs((ROOT / ".github/workflows/ci-post.yml").read_text())
+        self.assertNotIn("build-macos", jobs, "post-merge verification must be Linux-only")
         expanded = []
-        for job_id, axis in (("build", "platform.os"), ("build-macos", "os")):
+        for job_id, axis in (("build", "platform.os"), ("build-arm", None)):
             with self.subTest(job=job_id):
+                self.assertIn(job_id, jobs, "both Linux architectures must have a build job")
                 body = _without_comments(jobs[job_id])
                 matrix = re.search(
                     r"(?ms)^      matrix:\n(.*?)(?=^ {0,6}\S|\Z)", body)
                 self.assertIsNotNone(matrix, "the build matrix must be readable")
                 axes = re.findall(r"(?m)^        (\w+):", matrix[1])
-                self.assertCountEqual(axes, [axis.split(".")[0], "build_type"],
+                expected_axes = [axis.split(".")[0], "build_type"] if axis else ["build_type"]
+                self.assertCountEqual(axes, expected_axes,
                                       "new axes/include/exclude need a gate review")
                 types = re.search(r"(?m)^        build_type: \[([^\n]+)\]$", matrix[1])
                 self.assertIsNotNone(types, "the build types must be explicit")
                 build_types = [value.strip() for value in types[1].split(",")]
-                if axis == "platform.os":
+                if axis:
                     platforms = re.findall(r"(?m)^          - os: (\S+)$", matrix[1])
                 else:
-                    platforms_row = re.search(r"(?m)^        os: \[([^\n]+)\]$", matrix[1])
-                    self.assertIsNotNone(platforms_row, "the platforms must be explicit")
-                    platforms = [value.strip() for value in platforms_row[1].split(",")]
+                    runner = re.search(
+                        r"(?m)^    runs-on: (ubuntu-[0-9]{2}\.[0-9]{2}-arm)$", body)
+                    self.assertIsNotNone(runner, "arm64 must use an explicit hosted Linux runner")
+                    platforms = [runner[1]]
                 self.assertTrue(platforms)
                 name = re.search(r"(?m)^    name: (.+)$", body)
                 self.assertIsNotNone(name, "the displayed job name must be explicit")
                 for platform in platforms:
                     for build_type in build_types:
-                        displayed = name[1].replace("${{ matrix." + axis + " }}", platform)
+                        displayed = name[1]
+                        if axis:
+                            displayed = displayed.replace("${{ matrix." + axis + " }}", platform)
                         displayed = displayed.replace("${{ matrix.build_type }}", build_type)
                         self.assertNotIn("${{", displayed, "every name axis must be expanded")
+                        self.assertEqual(displayed, f"build ({platform}, {build_type})",
+                                         "the displayed platform must match its runner")
                         expanded.append(displayed)
         self.assertCountEqual(ci_release_gate.CI_POST_BUILD_JOBS, expanded)
         self.assertCountEqual([job["name"] for job in ci_post_jobs()], expanded)
+
+    def test_prebuilt_matrix_and_release_notes_publish_only_linux(self):
+        workflow = self.workflow()
+        jobs = _jobs(workflow)
+        prebuilt = jobs["prebuilt"]
+        self.assertEqual(
+            re.findall(r"(?m)^          - triple: (\S+)$", prebuilt),
+            ["linux-x86_64", "linux-aarch64"])
+        self.assertNotRegex(prebuilt, r"(?i)macos|darwin|CMAKE_OSX_ARCHITECTURES|\bbrew\b")
+        self.assertNotIn("cmake_extra", prebuilt)
+        self.assertNotIn("CMAKE_EXTRA", prebuilt)
+        pack = next(step for step in _steps(prebuilt)
+                    if step.startswith("      - name: Pack tarball + sha256\n"))
+        self.assertIn('          sha256sum "${tarball}" > "${tarball}.sha256"\n', pack)
+        self.assertNotIn("command -v sha256sum", pack)
+        self.assertNotIn("shasum -a", pack)
+        notes = next(step for step in _steps(jobs["release"])
+                     if step.startswith("      - name: Generate release notes\n"))
+        self.assertIn(
+            '            echo "Linux amd64 and arm64 static-lib + headers tarballs '
+            'are attached below (C ABI)."\n', notes)
+        self.assertNotRegex(notes, r"(?i)macos|darwin")
 
     def assert_gate_pin(self, workflow):
         steps = _steps(_jobs(workflow).get("release", ""))
@@ -2948,6 +2987,53 @@ class CiPostGateTests(unittest.TestCase):
         self.assertEqual(self.history.calls, [self.post_run["head_sha"]])
         self.git.assert_not_called()
         self.proof.assert_not_called()
+
+    def test_four_green_linux_legs_without_macos_prove_the_release(self):
+        jobs = linux_ci_post_jobs()
+        self.assertEqual(len(jobs), 4)
+        self.api.ci_post(self.post_run, jobs)
+        self.assert_green(self.post_run)
+        self.assertEqual(self.history.calls, [self.post_run["head_sha"]])
+
+    def test_each_missing_linux_leg_is_the_only_missing_job_reported(self):
+        complete = linux_ci_post_jobs()
+        self.assertEqual(len(complete), 4)
+        for original in complete:
+            with self.subTest(job=original["name"]):
+                self.reset_ci_post()
+                jobs = [job for job in complete if job["name"] != original["name"]]
+                self.assertEqual(len(jobs), 3)
+                self.api.ci_post(self.post_run, jobs)
+                stderr = self.assert_no_full_run(
+                    [self.post_run], f"missing job {original['name']}")
+                self.assertEqual(stderr, (
+                    f"::error::ci-post: no-full-run {self.post_run['head_sha']}: "
+                    f"examined 1 of 1 run(s); run {self.post_run['id']} "
+                    f"sha {self.post_run['head_sha']} event {self.post_run['event']}: "
+                    f"missing job {original['name']}\n"))
+
+    def test_red_macos_jobs_follow_only_the_aggregate_run_verdict(self):
+        for conclusion in ("success", "failure"):
+            with self.subTest(run_conclusion=conclusion):
+                self.reset_ci_post()
+                row = {**self.post_run, "conclusion": conclusion}
+                jobs = linux_ci_post_jobs()
+                macos = [
+                    {**job, "id": len(jobs) + job["id"], "conclusion": "failure",
+                     "name": job["name"].replace("ubuntu-24.04,", "macos-26,")}
+                    for job in jobs if job["name"].startswith("build (ubuntu-24.04, ")]
+                self.assertEqual(len(macos), 2)
+                self.api.ci_post(row, [*jobs, *macos])
+                if conclusion == "success":
+                    self.assert_green(row)
+                else:
+                    stderr = self.assert_refused(
+                        "not-success", row["id"], row["head_sha"], row["event"],
+                        f"conclusion {conclusion}")
+                    self.assertEqual(stderr, (
+                        f"::error::ci-post: not-success {row['id']} sha {row['head_sha']} "
+                        f"event {row['event']}: conclusion {conclusion}\n"))
+                    self.assert_post_reads(row)
 
     def test_gate_accepts_injected_history_and_returns_ci_post_evidence(self):
         """R1/R5/R6: block a CLI-only implementation or an unused history seam."""

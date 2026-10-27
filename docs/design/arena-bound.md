@@ -82,16 +82,19 @@ make both its population and byte lengths finite.
 For 1.7.0, COMPUTE starts attempt 0 with its default arena. A certified bound
 only tightens attempt 0 where the required facts exist. A true top-level
 `unbounded` means **no tightening available**: retain the named unresolved
-sizing terms and use the default attempt-0 arena and the escalation ladder.
+sizing terms and use the default attempt-0 arena.
 This applies equally to missing proofs, proved unbounded growth and finite
 bounds outside the representation range.
 
-A typed `arena_exhausted` re-places the run on the next rung of COMPUTE's
-trusted ladder, with escalation cap 2. Arena exhaustion is never charged to
-the user and raises an alert. The child's private allocations are capped by
-its `RLIMIT_AS`; exceeding that cap is the strategy's own typed
+A typed `arena_exhausted` is a failure that a hosting layer MAY answer by
+re-placing the run on a larger arena. The current development service does
+not: it makes one attempt on its fixed template arena, never retries, and
+returns the typed failure as `engine_failed`. COMPUTE's policy is that arena
+exhaustion is not charged to the user and raises an alert; the development
+service's behaviour is the one stated above. The child's private allocations
+are capped by its `RLIMIT_AS`; exceeding that cap is the strategy's own typed
 `memory_limit`, charged to the user. The calculator reports facts and
-verdicts; COMPUTE owns the default, ladder and re-placement policy.
+verdicts; COMPUTE owns the default arena and any re-placement policy.
 
 ## Facts and the producer's proof obligations
 
@@ -151,13 +154,13 @@ overrides or imported libraries, its receipt must bind those inputs too.
 ### Declaration facts do not replace compiled program facts
 
 The carried declaration fields are visible in `PineStrategyConfig` at
-`include/pineforge/source/pine_adapter.hpp:77`. Their `project` projection starts at
-`src/source/pine_adapter.cpp:2900`. The relevant rules are:
+`include/pineforge/source/pine_adapter.hpp:78`. Their `project` projection starts at
+`src/source/pine_adapter.cpp:2911`. The relevant rules are:
 
 | Declaration / native fact | Sizing consequence and evidence |
 | --- | --- |
-| pyramiding | Source entry admission policy, including pending/same-point rules. The optional generic cap is `max_open_lots` at `include/pineforge/native_run_spec.hpp:664`; the Pine projection deliberately leaves it unset (the `max_open_lots` setting spelling is at `src/source/pine_adapter.cpp:2819`). Do not assume this caps strategy.order or use it as an unconditional H. |
-| calc_on_order_fills | Extra source callbacks. The adapter passes its 1<<20 guard `kCoofLoopGuard` through the native cadence at `src/source/pine_adapter.cpp:3000`; the `kCoofLoopGuard` literal is declared at `include/pineforge/source/pine_adapter.hpp:75`. The native point budget is a callback bound, not a total fill bound. |
+| pyramiding | Source entry admission policy, including pending/same-point rules. The optional generic cap is `max_open_lots` at `include/pineforge/native_run_spec.hpp:664`; the Pine projection deliberately leaves it unset (the `max_open_lots` setting spelling is at `src/source/pine_adapter.cpp:2830`). Do not assume this caps strategy.order or use it as an unconditional H. |
+| calc_on_order_fills | Extra source callbacks. The adapter passes its 1<<20 guard `kCoofLoopGuard` through the native cadence at `src/source/pine_adapter.cpp:3011`; the `kCoofLoopGuard` literal is declared at `include/pineforge/source/pine_adapter.hpp:76`. The native point budget is a callback bound, not a total fill bound. |
 | max_recalculations_per_point | Further executions still apply after callbacks stop; see the cadence comment and `max_recalculations_per_point` declaration at `include/pineforge/native_run_spec.hpp:686-695`. The actual counter check is `src/native_execution_consumer.cpp:7770`. |
 | first-open COOF chain | A second source-side guard exists at `src/source/pine_scheduler_native.cpp:888`. Count this source path; a native budget of 8 is not Pine's bound. |
 | process_orders_on_close | Adds a matching opportunity after calculation; projection at `src/source/pine_adapter.cpp:2823`. It does not impose an order/trade count. |
@@ -339,13 +342,13 @@ indexPeak(k) = 24 * slots(k)                       # k > 32
 | Position tail | (30+L)*T | `src/source/pine_position_tail.hpp:20`; footer packing at `src/source/pine_position_tail.cpp:94` |
 | Cohort AVL and five-word summary | (96+L)*D + 1[D>0] | `include/pineforge/detail/disk_id_table.hpp:109`; `include/pineforge/source/pine_adapter.hpp:1957` |
 | Entry-rank AVL | (60+L)*J + 1[J>0] | `src/source/pine_adapter.cpp:6377`; `include/pineforge/detail/disk_id_table.hpp:109` |
-| Erased minima data | (40+L)*D + (40+2*L)*Q | `erased_minima_` at `include/pineforge/source/pine_adapter.hpp:945`; 40-byte header at `include/pineforge/detail/id_pair_store.hpp:68` |
+| Erased minima data | (40+L)*D + (40+2*L)*Q | `erased_minima_` at `include/pineforge/source/pine_adapter.hpp:946`; 40-byte header at `include/pineforge/detail/id_pair_store.hpp:68` |
 | Erased minima index | indexPeak(D+Q) | 16-byte slot at `include/pineforge/detail/id_pair_store.hpp:68`; replacement at `:573` |
 | Consumed partial-cycle data | (41+2*L)*Q | `include/pineforge/source/pine_adapter.hpp:2727`; joined key at `src/source/pine_adapter.cpp:25357` |
 | Consumed partial-cycle index | indexPeak(Q) | `include/pineforge/detail/id_pair_store.hpp:573` |
 | Ordered consumed-cycle fold | 136*leaves + 2088*branches + 2096*savedPath | `include/pineforge/detail/id_pair_ordered_fold.hpp:161`, `:165`, `:172`, size assertion for `Leaf`, `Branch` and `Snapshot` at `:183` |
 | Successor-root rows | 16*R | `src/native_order.cpp:7984`, row assertion for `Row` at `:8264`, 64-row tail bound `kTailRows` at `:8269` |
-| Frozen external openings | **0 in this certified profile** | Stock source builds owned vectors at `src/source/pine_adapter.cpp:6983`, `:6995`, `:9669`; generic external owners are excluded below |
+| Frozen external openings | **0 in this certified profile** | Stock source builds owned vectors at `src/source/pine_adapter.cpp:7032`, `:6995`, `:9669`; generic external owners are excluded below |
 
 The AVL node is seven uint64 words = 56 bytes, then its value and exact key
 bytes. CohortFacts::Record is handle, cycle, origin_count, origin_digest and
@@ -769,7 +772,7 @@ The eight JSON vectors were calculated by hand:
 | Unicode | D=2,Q=4,L=2,T=2,R=2,E=2; B=48+64+197+125+260+1024+180+1024+15192+32=18146; b=1+14=15; q=1; A=18*1048576=18874368. |
 | Million points | B=24*1048576+1222=25167046; ceil=25 MiB; b=25+14=39; q=36//13=2; A=(39+6)*1048576=47185920 (45 MiB). K=2 MiB leaves Bcert=39 MiB. Half=23592960 rounds down to 22 complete chunks=23068672, below the actual 24 MiB curve=25165824 even before any command reservation. |
 | All terms | B=18146, b=15, q=1; A=18*1048576=18874368 as for Unicode. Primary one-page RSS/two-page AS; extra bar+two column+close buffers consume four pages with RSS copies=2: RSS=36864, AS=24576. Counts T/E/O/V/K/X/H=3/2/2/5/1/3/2; line maxima 717/154/190/263/71/140/25. U=2097152+2151+308+380+1315+71+420+50=2101847. Private RSS/AS are null and its own flag is true; top-level unbounded=false, unboundedTerms=[], reason="". |
-| Unbounded emitting loop | Null arena inputs except E=2; no finite guessed size. unboundedTerms=[arena,ohlcv,finalizerStream]; childPrivate remains informational. Default attempt-0 arena and escalation apply. |
+| Unbounded emitting loop | Null arena inputs except E=2; no finite guessed size. unboundedTerms=[arena,ohlcv,finalizerStream]; childPrivate remains informational. Default attempt-0 arena applies. |
 
 All eight vectors use the three-term verdict; CR150-CX's combined-arena
 arithmetic leaves the current logical B contributions unchanged. The first six have
@@ -950,7 +953,7 @@ and cause incomplete proof coverage to fail. The
 retained: this lab harness must not pass without any certified arena to
 compare with actual usage. It is a certification failure, not a production
 admission or sizing decision. Production still uses the default attempt-0
-arena and escalation ladder without a bound. Every measured run prints actual,
+arena without a bound. Every measured run prints actual,
 bound and actual/bound; the minimum ratio identifies worst conservatism.
 No measured worst ratios exist yet. An 18 MiB allowance for a one-chunk
 curve can be 18x over actual; the fixture's deliberately loose fill/lot

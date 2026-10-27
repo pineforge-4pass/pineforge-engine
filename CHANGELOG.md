@@ -12,9 +12,10 @@ paired with [pineforge-codegen 1.8.0](https://github.com/pineforge-4pass/pinefor
 A minor release. It speeds up the `run_json` wrapper (the wrapper only, not the
 engine), adds one unused storage building block to the library, states where
 scratch files are placed, carries release-gate and CI changes, and stops
-building and publishing macOS. The C ABI
-(`PF_ABI_VERSION` 4), the report keys and the run-failure code catalog are
-unchanged (0 codes added, changed or removed since 1.7.0).
+building and publishing macOS. The C ABI (`PF_ABI_VERSION` 4) and the
+run-failure code catalog are unchanged (0 codes added, changed or removed
+since 1.7.0). The report keys are unchanged except for two additive
+diagnostics keys, described below.
 
 ### Compatibility and migration
 
@@ -34,6 +35,19 @@ unchanged (0 codes added, changed or removed since 1.7.0).
   `get_input_int64`.
 - The release harness file `docker/run_json.py` changed (below). The hub image
   for this pair carries the 1.8.0 copy.
+
+### Run profile in the report diagnostics
+
+- **Two additive success keys.** Every executed success report of
+  `run_json.py` now carries `diagnostics.run_profile` (`"jailed"` or
+  `"unjailed"`, the profile fixed when the run started) and
+  `diagnostics.scratch_arena_jailed` (a boolean, true only when the jailed
+  profile ran and the native scratch arena admission succeeded). A host that
+  needs to know the run was jailed can read them instead of inferring it from
+  the arena sizes. The marker records the checked profile and the admission; it
+  is not an independent check of operating-system confinement. Failure,
+  capability and validate-only documents, and every existing key and its order,
+  are unchanged. The replay converter keeps both keys.
 
 ### Faster `run_json` report handling
 
@@ -87,6 +101,16 @@ unchanged (0 codes added, changed or removed since 1.7.0).
   only, not the trade ledger or the report files. This is not a change of
   behaviour in 1.8.0.
 
+### Refused internal report sink
+
+- **The typed failure is reported.** When the engine refused the internal
+  report sink of the default route, because the scratch arena descriptor, size
+  or profile flag in the environment was unusable, `run_json.py` reported
+  `engine_invariant` and dropped the failure the engine had recorded. It now
+  reports that failure (`report_sink_failed` with reason `arena_backing`). If
+  the engine recorded nothing, the previous message is kept. Successful runs
+  are unchanged.
+
 ### Storage building block
 
 - **Fixed-shape O(1) store for Pine collections (#515).**
@@ -98,11 +122,30 @@ unchanged (0 codes added, changed or removed since 1.7.0).
   source allocation gate lists its new sites as unreviewed entries
   (no bound is claimed for them).
 
+### Run-failure classification
+
+- **A storage fault on the scratch that orders waiting requests is reported
+  as `scratch_io_failed`.** A read, write or resize fault on the scratch that
+  holds waiting requests used to end the run as `engine_invariant`; it now ends
+  it as `scratch_io_failed` (a non-retryable `resource` failure), as the
+  other scratch consumers already did. A typed failure the storage layer had
+  already recorded keeps its own code. The catalog is unchanged: no code is
+  added, changed or removed.
+
 ### Known limits
 
 - **Memory with never-filled pending orders.** On dense scripts,
   memory still grows with the number of pending orders that never fill, by
   about 2.5 kB each. A fix is planned for a later release.
+
+### Opt-in report descriptor in the container entrypoint
+
+- **`PINEFORGE_REPORT_SINK_FD`.** When set, the entrypoint passes
+  `--report-sink-fd <n>` to `run_json.py`, so a caller that opened a
+  descriptor for the report records can use it through the container. The
+  value is forwarded unchanged and `run_json.py` validates it (a number from 3
+  up, not 5, different from any phase descriptor); a refusal ends the run with
+  the usual entrypoint status. With the variable unset nothing changes.
 
 ### CI and release process
 
@@ -165,6 +208,10 @@ unchanged (0 codes added, changed or removed since 1.7.0).
   `test_run_json_stream_fastpath` row no longer carries the `fast` label, so the
   pull request release job's `fast` selection, which installs no pytest, does
   not run it (#522, tests only).
+
+### Run-failure catalog
+
+- `engine_invariant` may now carry `reason=order_key_hash_collision` (two order keys whose 64-bit hashes collide are refused instead of one silently replacing the other).
 
 ## 1.7.0 — 2026-10-25
 

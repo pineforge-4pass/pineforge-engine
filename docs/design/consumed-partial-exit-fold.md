@@ -95,7 +95,7 @@ old sorted live sequence. Dead rows contribute identity. The existing
 257-seed composition law therefore proves equality for every state and
 every incoming seed, including binary keys and prefixes. `fold_sorted`
 still folds the live count and applies this root in O(1)
-(`include/pineforge/detail/id_pair_store.hpp:332`).
+(`include/pineforge/detail/id_pair_store.hpp:360`).
 
 ### Fixed budget and publication
 
@@ -258,11 +258,11 @@ retains the fixture backend choice and scratch-directory configuration.
   mutated memory fixture, with a real-table sort/relookup at each completed
   phase. Iterated table contents must also equal an independent map.
 - `slab_fold_layout_fits_every_index_tier`
-  (`tests/test_id_pair_ordered_fold.cpp:481`) checks power-of-two boundaries
+  (`tests/test_id_pair_ordered_fold.cpp:485`) checks power-of-two boundaries
   through the largest admitted index tier without allocating those slabs,
   and checks actual wide-offset copies with high bits set.
 - `slab_data_refusal_preserves_fold_and_index`
-  (`tests/test_id_pair_ordered_fold.cpp:518`) checks data exhaustion with a
+  (`tests/test_id_pair_ordered_fold.cpp:522`) checks data exhaustion with a
   key slot still available. This and the 4,096-key index exhaustion check
   compare every region's admitted bytes and extent, including cached maps.
 

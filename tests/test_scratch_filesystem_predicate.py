@@ -13,7 +13,7 @@ ROOT = Path(__file__).absolute().parent.parent
 CANONICAL = ROOT / "include/pineforge/detail/scratch_directory.hpp"
 MAGIC = re.compile(
     rb"(?:\b(?:TMPFS_MAGIC|RAMFS_MAGIC|0x0*(?:1021994|858458f6|ffffffff858458f6)[ul]*"
-    rb"|(?:16914836|2240043254)[ul]*)|-2054924042[ul]*)\b",
+    rb"|(?:16914836|2240043254)[ul]*)|-(?:2054924042|0x0*7a7ba70a)[ul]*)\b",
     re.IGNORECASE,
 )
 
@@ -105,7 +105,7 @@ def self_test() -> int:
 
 def self_test_trees(parent: Path) -> int:
     canonical_bytes = b"0x01021994\n0x858458f6\n"
-
+    # Signed oracle: 2,240,043,254 - 4,294,967,296 = -2,054,924,042 = -0x7a7ba70a.
     def make_tree(name: str, spelling: bytes, in_canonical: bool = False) -> Path:
         tree = parent / name
         canonical = tree / CANONICAL.relative_to(ROOT)
@@ -118,7 +118,7 @@ def self_test_trees(parent: Path) -> int:
         source.write_bytes(b"// " + (b"clean source" if in_canonical else spelling) + b"\n")
         return tree
 
-    if scan(make_tree("clean", b"clean source")) != 0:
+    if scan(make_tree("clean", b"clean source; -2054924041; -0x7a7ba709; 0x7a7ba70a")) != 0:
         raise RuntimeError("self-test clean tree must pass")
     spellings = (
         b"TMPFS_MAGIC", b"RAMFS_MAGIC",
@@ -126,8 +126,8 @@ def self_test_trees(parent: Path) -> int:
         b"0x1021994", b"0x0000001021994", b"0x0000858458f6",
         b"0x0102'1994", b"0x8584'58f6", b"0x0'102'1994",
         b"16914836", b"2240043254", b"16914836UL", b"2240043254ULL",
-        b"16'914'836", b"2'240'043'254",
-        b"-2054924042", b"-2054924042L", b"0xffffffff858458f6",
+        b"16'914'836", b"2'240'043'254", b"-2'054'924'042",
+        b"-2054924042", b"-2054924042L", b"0xffffffff858458f6", b"-0x7a7ba70a",
     )
     for number, spelling in enumerate(spellings):
         for in_canonical in (False, True):

@@ -271,6 +271,25 @@ public:
         std::uint64_t extent = data_bytes_;
         std::size_t ordinal = 0;
         enumerate([&](KeyView key) {
+            auto first = key.first;
+            auto second = key.second;
+            if (data_resource_ == ScratchResource::consumed_data && second
+                && (first.find('\x1f') != std::string_view::npos
+                    || second->find('\x1f') != std::string_view::npos)) {
+                throw ScratchCapacityError(data_resource_,
+                    "order ids cannot contain the control character 0x1f");
+            }
+            if (data_resource_ == ScratchResource::consumed_data && !second) {
+                // Consumed singles join two ids with '\x1f'. A boundary
+                // after at most 64 bytes is safe because the source id
+                // components are rejected before this representation is made.
+                const auto separator = first.rfind('\x1f', 64);
+                if (separator != std::string_view::npos) {
+                    second = first.substr(separator + 1);
+                    first = first.substr(0, separator);
+                }
+            }
+            require_id_components(first.size(), second ? second->size() : 0);
             const auto own_ordinal = ordinal++;
             if (slots_ != 0 && locate(key.first, key.second,
                                      hash_for_key(key.first, key.second)).second.offset_plus_one != 0)
@@ -298,9 +317,18 @@ public:
     void preflight_joined_single(std::string_view first, char separator,
                                  std::string_view last) const {
         if (!slab_) return;
+        if (data_resource_ == ScratchResource::consumed_data
+            && (first.find('\x1f') != std::string_view::npos
+                || last.find('\x1f') != std::string_view::npos)) {
+            throw ScratchCapacityError(data_resource_,
+                "order ids cannot contain the control character 0x1f");
+        }
+        require_id_components(first.size(), last.size());
         constexpr auto maximum = std::numeric_limits<std::uint64_t>::max();
         if (first.size() >= maximum || last.size() > maximum - first.size() - 1)
-            throw ScratchCapacityError(data_resource_);
+            throw ScratchCapacityError(data_resource_, scratch_byte_limit_message(data_resource_,
+                data_resource_ == ScratchResource::erased_data
+                    ? slab_->manifest().B_e : slab_->manifest().B_c));
         const auto length = static_cast<std::uint64_t>(first.size()) + 1 + last.size();
         std::uint64_t hash = 1469598103934665603ULL;
         const auto byte = [&](unsigned char value) { hash ^= value; hash *= 1099511628211ULL; };
@@ -396,16 +424,24 @@ public:
     }
 
 private:
+    void require_id_components(std::size_t first, std::size_t second) const {
+        if (first > 64 || second > 64)
+            throw ScratchCapacityError(data_resource_, "id longer than 64 bytes");
+    }
     void preflight_new_key(std::uint64_t& keys, std::uint64_t& extent,
                            std::uint64_t first, std::uint64_t second) const {
         if (keys >= key_limit_ || keys >= slots_ / 2
             || keys >= std::numeric_limits<std::size_t>::max())
-            throw ScratchCapacityError(index_resource_);
+            throw ScratchCapacityError(index_resource_,
+                scratch_count_limit_message(index_resource_, std::min(key_limit_, slots_ / 2)));
         ++keys;
         const auto append = [&](std::uint64_t bytes) {
             const auto capacity = slab_->region(data_resource_).capacity;
             if (extent > capacity || bytes > capacity - extent)
-                throw ScratchCapacityError(data_resource_);
+                throw ScratchCapacityError(data_resource_,
+                    scratch_byte_limit_message(data_resource_,
+                        data_resource_ == ScratchResource::erased_data
+                            ? slab_->manifest().B_e : slab_->manifest().B_c));
             extent += bytes;
         };
         append(sizeof(Header));
@@ -623,7 +659,8 @@ private:
             return inserted;
         }
         if (used_ >= slots_ / 2) {
-            if (slab_) throw ScratchCapacityError(index_resource_);
+            if (slab_) throw ScratchCapacityError(index_resource_,
+                scratch_count_limit_message(index_resource_, std::min(key_limit_, slots_ / 2)));
             grow_index();
             found = locate(first, second, hash);
         }

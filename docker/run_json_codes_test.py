@@ -1527,6 +1527,8 @@ _CODE_PASSTHROUGHS = [
      "run_failure native arena admission tuple"),
     ("_FdReportSink.__init__", "RunFailure(*failure)", 1,
      "run_failure native fd-sink admission tuple"),
+    ("_ReportSink.__init__", "RunFailure(*failure)", 1,
+     "run_failure native path-sink admission tuple"),
     ("_check_bench_run", "RunFailure(text, code, args)", 1,
      "tuple destructured directly from run_failure for the just-completed trial"),
     ("enable_outputs",

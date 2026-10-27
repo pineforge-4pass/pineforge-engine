@@ -9,12 +9,16 @@ from __future__ import annotations
 import contextlib
 import ctypes
 import errno
+import fcntl
 import io
 import json
 import os
 from pathlib import Path
 import socket
+import stat
+import subprocess
 import sys
+import tempfile
 from unittest import mock
 
 import pytest
@@ -376,3 +380,234 @@ def test_native_closed_socket_peer_keeps_reason(tmp_path):
     assert result[4][0] == {"event": "closed"}
     assert result[4][1:] and all(
         event == {"event": "stdout", "closed": True} for event in result[4][1:])
+
+
+def unjailed_environment():
+    return {name: value for name, value in os.environ.items()
+            if not name.startswith(("PINEFORGE_", "PF_SCRATCH_"))}
+
+
+def unjailed_native_run(source, environment=None, *, arena_fd=None):
+    module = fd.native_module(False)
+    # Install the inherited slot in the child, as the fd suite does. Never
+    # replace the parent's fd 5, which may belong to pytest's capture.
+    child = """
+import errno
+import os
+import sys
+sys.path.insert(0, sys.argv.pop(1))
+inherited = int(sys.argv.pop(1))
+import run_json
+if inherited >= 0:
+    os.dup2(inherited, 5)
+    if inherited != 5:
+        os.close(inherited)
+else:
+    try:
+        os.close(5)
+    except OSError as error:
+        if error.errno != errno.EBADF:
+            raise
+run_json.time.time = lambda: 10.0
+raise SystemExit(run_json.main(sys.argv[1:]))
+"""
+    with tempfile.TemporaryDirectory(
+            prefix="pineforge-sink-admission-", dir=run_json._disk_report_directory()) as temporary:
+        clean = unjailed_environment()
+        clean.update(LANG="C", LC_ALL="C", TZ="UTC", PYTHONDONTWRITEBYTECODE="1",
+                     PYTHONPATH=str(ROOT / "docker"), TMPDIR=temporary, TMP=temporary, TEMP=temporary)
+        clean.update(environment or {})
+        result = subprocess.run(
+            [sys.executable, "-B", "-c", child, str(ROOT / "docker"),
+             str(arena_fd if arena_fd is not None else -1), "--so", module,
+             "--ohlcv", str(source), "--input-tf", "1", "--script-tf", "1"],
+            cwd=ROOT, env=clean, pass_fds=(() if arena_fd is None else (arena_fd,)),
+            capture_output=True, timeout=60)
+    return result.returncode, result.stdout.decode("utf-8"), result.stderr.decode("utf-8")
+
+
+def arena_backing_failure(result):
+    status, text, stderr = result
+    document = json.loads(text)
+    observed = (f"observed code={document.get('code')!r}, args={document.get('args')!r}; "
+                f"exit={status}, stdout={text!r}, stderr={stderr!r}")
+    assert status == 1 and stderr == "", observed
+    assert text.endswith("\n") and len(text.splitlines()) == 1, observed
+    assert (document.get("code"), document.get("args")) == (
+        "report_sink_failed", {"reason": "arena_backing"}), observed
+    assert set(document) == {"engine", "error", "code", "args", "reason"}, observed
+    assert document["engine"] == "pineforge", observed
+    assert document["reason"] == document["args"]["reason"], observed
+    assert document["error"] and document["error"] != (
+        "the fresh strategy refused its report sink"), observed
+    assert catalog.catalogued(document["code"], document["args"]), observed
+    return document
+
+
+def unjailed_success_document(result):
+    status, text, stderr = result
+    assert status == 0 and stderr == "", result
+    assert text.endswith("\n") and len(text.splitlines()) == 1, result
+    document = json.loads(text)
+    assert document["engine"] == "pineforge"
+    assert {"summary", "trades", "equity_curve"} <= document.keys(), document
+    assert not {"error", "code", "args", "report_sink"} & document.keys(), document
+    assert isinstance(document["trades"], list) and isinstance(document["equity_curve"], list)
+    return document
+
+
+@pytest.mark.parametrize("arena_fd,arena_bytes,jailed", [
+    pytest.param("4", "1048576", None, id="bad-fd-number"),
+    pytest.param("5", None, None, id="missing-bytes"),
+    pytest.param("5", "", None, id="empty-bytes"),
+    pytest.param("5", "0", None, id="zero-bytes"),
+    pytest.param("5", "-1", None, id="negative-bytes"),
+    pytest.param("5", "invalid", None, id="nondecimal-bytes"),
+    pytest.param("5", "18446744073709551616", None, id="overflow-bytes"),
+    pytest.param("5", "1048576", "invalid", id="invalid-jailed"),
+])
+def test_native_unjailed_sink_arena_environment_failure(tmp_path, arena_fd, arena_bytes, jailed):
+    environment = {"PF_SCRATCH_ARENA_FD": arena_fd}
+    if arena_bytes is not None:
+        environment["PF_SCRATCH_ARENA_BYTES"] = arena_bytes
+    if jailed is not None:
+        environment["PF_SCRATCH_ARENA_JAILED"] = jailed
+    arena_backing_failure(unjailed_native_run(fd.bars.csv_file(tmp_path), environment))
+
+
+def incompletely_sealed_arena_fd(seals):
+    flags = 1 | 2  # MFD_CLOEXEC | MFD_ALLOW_SEALING
+    if hasattr(os, "memfd_create"):
+        descriptor = os.memfd_create("pineforge-sink-arena", flags)
+    else:
+        # The lab's Python may omit the wrapper even though libc provides it.
+        libc = ctypes.CDLL(None, use_errno=True)
+        descriptor = libc.memfd_create(b"pineforge-sink-arena", flags)
+        if descriptor < 0:
+            error = ctypes.get_errno()
+            raise OSError(error, os.strerror(error), "memfd_create")
+    try:
+        os.ftruncate(descriptor, 1048576)
+        if seals:
+            fcntl.fcntl(descriptor, 1033, seals)  # F_ADD_SEALS
+        assert fcntl.fcntl(descriptor, 1034) == seals  # F_GET_SEALS
+        assert stat.S_ISREG(os.fstat(descriptor).st_mode)
+        assert os.fstat(descriptor).st_size == 1048576
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+@pytest.mark.parametrize("backing", [
+    "pipe", "closed",
+    pytest.param("unsealed-memfd", marks=pytest.mark.skipif(
+        sys.platform != "linux", reason="memfd sealing requires Linux")),
+    pytest.param("partially-sealed-memfd", marks=pytest.mark.skipif(
+        sys.platform != "linux", reason="memfd sealing requires Linux")),
+])
+def test_native_unjailed_sink_arena_backing_failure(tmp_path, backing):
+    with contextlib.ExitStack() as resources:
+        descriptor = None
+        if backing == "pipe":
+            descriptor, writer = os.pipe()
+            resources.callback(os.close, descriptor)
+            resources.callback(os.close, writer)
+            assert stat.S_ISFIFO(os.fstat(descriptor).st_mode)
+        elif backing != "closed":
+            seals = 0 if backing == "unsealed-memfd" else 0x0004  # F_SEAL_GROW only
+            descriptor = incompletely_sealed_arena_fd(seals)
+            resources.callback(os.close, descriptor)
+        result = unjailed_native_run(
+            fd.bars.csv_file(tmp_path),
+            {"PF_SCRATCH_ARENA_FD": "5", "PF_SCRATCH_ARENA_BYTES": "1048576"},
+            arena_fd=descriptor)
+    arena_backing_failure(result)
+
+
+def test_native_unjailed_sink_clean_default_success(tmp_path):
+    document = unjailed_success_document(unjailed_native_run(fd.bars.csv_file(tmp_path)))
+    assert document["summary"]["bars_processed"] == 5
+    assert all(document["diagnostics"][name] == 0 for name in ARENA_DIAGNOSTICS)
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="sealed memfd backing requires Linux")
+def test_native_unjailed_sink_sealed_arena_success(tmp_path):
+    source = fd.bars.csv_file(tmp_path)
+    reference = unjailed_success_document(unjailed_native_run(source))
+    size = 16 * 1048576
+    descriptor = fd.sealed_arena_fd(size)
+    try:
+        actual = unjailed_success_document(unjailed_native_run(
+            source, {"PF_SCRATCH_ARENA_FD": "5", "PF_SCRATCH_ARENA_BYTES": str(size)},
+            arena_fd=descriptor))
+    finally:
+        os.close(descriptor)
+    assert actual["diagnostics"]["scratch_arena_bytes"] == size
+    assert 0 <= actual["diagnostics"]["scratch_arena_high_water_bytes"] <= size
+    for name in ARENA_DIAGNOSTICS:
+        assert reference["diagnostics"].pop(name) == 0
+        actual["diagnostics"].pop(name)
+    assert actual == reference
+
+
+@pytest.mark.parametrize("record", ["no-record", "no-getter-text", "empty-getter-text"])
+def test_unjailed_sink_without_typed_record_keeps_invariant(tmp_path, record):
+    library, paths = fd.FdLibrary(), []
+
+    def refuse(state, ref):
+        paths.append(Path(os.fsdecode(ref._obj.path)))
+        assert paths[-1].is_file()
+        return -1
+
+    library.strategy_set_report_sink_v1 = refuse
+    library.strategy_get_last_error = lambda state: (
+        b"" if record == "no-record" else b"untyped native refusal")
+    library.strategy_get_last_error_code = lambda state: b""
+    library.strategy_last_run_status = lambda state: int(record == "empty-getter-text")
+    if record == "no-getter-text":
+        del library.strategy_get_last_error_code
+    with mock.patch.dict(os.environ, unjailed_environment(), clear=True):
+        result = fd.invoke(fd.bars.csv_file(tmp_path), library, ["--spill-dir", str(tmp_path)])
+    assert result == (1, '{"engine":"pineforge","error":"the fresh strategy refused its report sink",'
+                         '"code":"engine_invariant","args":{}}\n', ""), result
+    assert library.calls.count("strategy_free") == 1
+    assert "run_backtest_full" not in library.calls
+    assert len(paths) == 1 and not paths[0].exists()
+
+
+def test_unjailed_sink_failure_is_copied_before_free(tmp_path):
+    library, paths, events = fd.FdLibrary(), [], []
+    record = {"text": "native arena attachment refused", "code": "report_sink_failed",
+              "args": {"reason": "arena_backing"}}
+
+    def refuse(state, ref):
+        paths.append(Path(os.fsdecode(ref._obj.path)))
+        assert paths[-1].is_file()
+        events.append("setter")
+        return -1
+
+    def read(name):
+        assert "free" not in events, "failure getter read after strategy_free"
+        events.append(name)
+        value = record[name]
+        return (json.dumps(value) if name == "args" else value).encode()
+
+    def free(state):
+        events.append("free")
+        record.clear()
+
+    library.strategy_set_report_sink_v1 = refuse
+    library.strategy_get_last_error = lambda state: read("text")
+    library.strategy_get_last_error_code = lambda state: read("code")
+    library.strategy_get_last_error_args = lambda state: read("args")
+    library.strategy_free = library.export("strategy_free", free)
+    with mock.patch.dict(os.environ, unjailed_environment(), clear=True):
+        result = fd.invoke(fd.bars.csv_file(tmp_path), library, ["--spill-dir", str(tmp_path)])
+    document = arena_backing_failure(result)
+    assert document["error"] == "native arena attachment refused"
+    assert not record and events[0] == "setter" and events[-1] == "free"
+    assert all(name in events[:-1] for name in ("text", "code", "args"))
+    assert library.calls.count("strategy_free") == 1
+    assert "run_backtest_full" not in library.calls
+    assert len(paths) == 1 and not paths[0].exists()

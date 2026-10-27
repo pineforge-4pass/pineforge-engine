@@ -87,6 +87,15 @@
 #      into the work dir, or binding the request-feed inventory)
 #   4  backtest failure
 #   5  transpile failure (unsupported Pine construct or syntax error)
+#
+# Memory and scratch controls (environment): PINEFORGE_COMMAND_SCRATCH_MAX_BYTES
+# caps the bytes the command-store scratch may extend (one thread, in total);
+# PINEFORGE_COMMAND_SCRATCH_DIR or TMPDIR picks the disk-backed scratch directory;
+# PF_SCRATCH_ARENA_FD=5 with PF_SCRATCH_ARENA_BYTES supplies an inherited arena,
+# PF_SCRATCH_ARENA_JAILED=1 requires a sealed memfd, and PF_SCRATCH_WINDOW_BYTES
+# (default 32 MiB) caps what is mapped at once; PINEFORGE_RUN_JSON_PROFILE=jailed
+# selects the bounded-memory profile. Defaults, units and limits:
+# docs/pages/memory-management.md in the engine repository.
 set -euo pipefail
 
 PREFIX="${PINEFORGE_PREFIX:-/opt/pineforge}"
@@ -260,6 +269,7 @@ extra=()
 [[ "${PINEFORGE_MAGNIFIER_VOLUME_WEIGHTED:-}" =~ ^(1|true|yes|on)$ ]] && extra+=(--magnifier-volume-weighted)
 [[ -n "${PINEFORGE_SYMINFO:-}" ]]        && extra+=(--syminfo "${PINEFORGE_SYMINFO}")
 [[ -n "${PINEFORGE_SYMBOL_FEEDS:-}" ]]   && extra+=(--symbol-feeds "${PINEFORGE_SYMBOL_FEEDS}")
+[[ -n "${PINEFORGE_REPORT_SINK_FD+x}" ]] && extra+=(--report-sink-fd "${PINEFORGE_REPORT_SINK_FD}")  # set values incl. empty; run_json.py validates
 if [[ "${PINEFORGE_BENCH:-}" =~ ^(1|true|yes|on)$ ]]; then
     extra+=(--bench --warmup "${PINEFORGE_WARMUP:-3}" --repeats "${PINEFORGE_REPEATS:-20}")
 fi

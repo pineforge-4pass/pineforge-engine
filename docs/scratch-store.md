@@ -226,7 +226,7 @@ using the arena's 1 MiB chunks. Each store has at least one chunk of capacity.
 The complete K/chunk directory is reserved once at open; writes do not allocate
 a directory.
 Crossing K is typed `arena_exhausted` before claiming any chunks,
-at every arena size including the default and largest hosting rung.
+at every arena size including the default and the largest a host offers.
 The run byte budget is reserved before growth and released on
 failed growth or destruction. Arena mode supports `buffered` sync; `data` and
 `full` return `programming_error`.
@@ -241,9 +241,10 @@ particular, arena exhaustion remains `report_sink_failed` with reason
 `needed_bytes_lower_bound` is the ARENA size that can satisfy this store:
 ceil(chunkCeil(required store extent after the refused write) / f), using exact
 integer arithmetic and saturating at INT64_MAX, the failure-argument transport
-maximum. It is not the store's own shortfall. The hosting layer re-places a run
-on this typed failure; a need beyond its largest arena continues to raise the
-same failure until the host stops re-placement. A separate command byte-budget
+maximum. It is not the store's own shortfall. A hosting layer MAY re-place a run
+on this typed failure (the current development service does not: it makes one
+attempt on a fixed template arena); a need beyond a host's largest arena
+continues to raise the same failure until the host stops re-placement. A separate command byte-budget
 refusal retains its existing status-only `io_error`.
 
 Every attempted `read_page`, `write_page` and `sync` is reported once to the
