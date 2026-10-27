@@ -212,7 +212,7 @@ constexpr std::size_t kWindow = 64 * 1024;
 constexpr std::size_t kAlign = 4096;
 constexpr std::size_t kRows = 9000;  // E rows: more than four windows
 constexpr int kEngineBars = 16384;   // about 31 bytes of E per bar: seven windows
-constexpr char kRunId[] = "MCP140-SINK-SYNC";
+constexpr char kRunId[] = "deferred-sink-sync";
 constexpr std::string_view kTrailerStart = "{\"trailer\":\"pf-report-sink\"";
 const rs::RecordSet kRecords{false, false, false, 0, 0};
 
@@ -507,7 +507,7 @@ class QuietHost final : public pineforge::NativeStrategyHost {
 public:
     QuietHost() {
         pineforge::NativeRunSpec spec;
-        spec.identity = {"MCP140-sink-sync", 1};
+        spec.identity = {"deferred-sink-sync", 1};
         spec.input_tf = spec.script_tf = "1";
         spec.tickerid = "TEST:SINKSYNC";
         spec.timezone = "UTC";
