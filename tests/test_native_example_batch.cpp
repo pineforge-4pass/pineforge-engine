@@ -57,6 +57,7 @@ using last_error_fn = const char* (*)(pf_strategy_t);
 using last_status_fn = int (*)(pf_strategy_t);
 using position_fn = double (*)(pf_strategy_t);
 using equity_fn = double (*)(pf_strategy_t);
+using capital_fn = double (*)(pf_strategy_t);
 using bars_fn = int64_t (*)(pf_strategy_t);
 using stream_begin_fn = int (*)(pf_strategy_t, const pf_bar_t*, int, const char*, const char*);
 using stream_push_fn = int (*)(pf_strategy_t, const pf_bar_t*);
@@ -99,6 +100,7 @@ struct Abi {
     last_status_fn last_status = nullptr;
     position_fn position_size = nullptr;
     equity_fn current_equity = nullptr;
+    capital_fn initial_capital = nullptr;
     bars_fn script_bars = nullptr;
     abi_fn stream_api_version = nullptr;
     stream_begin_fn stream_begin = nullptr;
@@ -167,6 +169,7 @@ Abi load_library(const char* path) {
     abi.last_status = load<last_status_fn>(abi.handle, "strategy_last_run_status");
     abi.position_size = load<position_fn>(abi.handle, "strategy_position_size");
     abi.current_equity = load<equity_fn>(abi.handle, "strategy_current_equity");
+    abi.initial_capital = load<capital_fn>(abi.handle, "strategy_initial_capital");
     abi.script_bars = load<bars_fn>(abi.handle, "strategy_script_bars_processed");
     abi.stream_api_version = load<abi_fn>(abi.handle, "strategy_stream_api_version");
     abi.stream_begin = load<stream_begin_fn>(abi.handle, "strategy_stream_begin");
@@ -362,7 +365,7 @@ bool ready(const Abi& abi) {
     return abi.handle && abi.create && abi.free_strategy && abi.run && abi.run_full
         && abi.report_free && abi.configure && abi.contract && abi.last_error
         && abi.configure_fx_curve
-        && abi.position_size && abi.stream_begin && abi.stream_push_bar
+        && abi.position_size && abi.initial_capital && abi.stream_begin && abi.stream_push_bar
         && abi.stream_end && abi.stream_fill_report && abi.set_input
         && abi.set_override && abi.set_magnifier_vw && abi.set_trace
         && abi.set_trade_start && abi.set_chart_tz && abi.set_fx && abi.set_aux
@@ -435,6 +438,7 @@ int main(int argc, char** argv) {
         auto spec = complete_spec("native-example-batch", 1);
         CHECK(spec.struct_size == sizeof(pf_native_run_spec_v1));
         CHECK(abi.configure(s, &spec) == 0);
+        near(abi.initial_capital(s), spec.initial_capital);
         CHECK(abi.last_error(s) != nullptr && abi.last_error(s)[0] == '\0');
 
         pf_report_t report{};
