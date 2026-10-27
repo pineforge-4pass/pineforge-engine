@@ -263,18 +263,18 @@ JOB_COMMANDS = {
     'docs.yml': {'authz': None, 'build': None},
     'docs-post.yml': {'authz': None, 'build': None},
 }
-# Exact hosted pins; larger labels are allowed only at these jobs' runs-on keys.
+# Exact hosted pins and post-fleet verification arrays, checked per job.
 HOSTED_JOB_RUNNERS = {
     'ci.yml': dict.fromkeys(('authz', 'changes', 'build-gate'), 'ubuntu-24.04'),
     'ci-post.yml': {**dict.fromkeys(('authz', 'changes', 'build-gate'), 'ubuntu-24.04'),
                     **dict.fromkeys(POST_LEG_GATES, 'ubuntu-24.04'),
-                    'build': 'pf-linux-x64-16', 'build-debug': 'pf-linux-x64-16',
-                    'sanitizers': 'pf-linux-x64-32', 'kernel-only': 'pf-linux-x64-16',
+                    'build': POST_RUNNER, 'build-debug': POST_RUNNER,
+                    'sanitizers': POST_RUNNER, 'kernel-only': POST_RUNNER,
                     'build-arm': 'ubuntu-24.04-arm'},
     **{name: {'authz': 'ubuntu-24.04'} for name in (
         'corpus-parity.yml', 'corpus-parity-subset.yml', 'docs-post.yml')},
-    'native-live.yml': {'authz': 'ubuntu-24.04', 'native-live': 'pf-linux-x64-64',
-                        'native-live-shards': 'pf-linux-x64-16',
+    'native-live.yml': {'authz': 'ubuntu-24.04', 'native-live': POST_RUNNER,
+                        'native-live-shards': POST_RUNNER,
                         'native-live-native': 'ubuntu-24.04', 'native-live-gate': 'ubuntu-24.04'},
     'docs.yml': {'authz': 'ubuntu-24.04', 'build': 'ubuntu-24.04'},
     'promote-baseline.yml': {'promote-guard': 'ubuntu-latest'},
@@ -289,10 +289,9 @@ RELEASE_JOB_RUNNERS = {
 # Credential-bearing jobs outside the release pins and gated docs build retain
 # standard hosted labels. Existing hosted exceptions above are pinned separately.
 STANDARD_RUNNERS = ('ubuntu-24.04',)
-# Larger labels are allowed only as the exact runs-on of a pinned hosted job.
-# Refuse every other occurrence, including metadata and the release matrix.
+# Refuse paid labels everywhere, including pinned jobs, metadata and release matrices.
 _LARGER_RUNNER_LABEL = re.compile(
-    r'(?<![\w.-])(?:pf-linux-x64-(?:16|32|64)|[\w.-]+-(?:xlarge|large))(?![\w.-])')
+    r'(?<![\w.-])(?:pf-linux-(?:x64|arm64)-\d+|[\w.-]+-(?:larger|xlarge|large))(?![\w.-])')
 _LARGER_RUNNER_KEY = re.compile(r'(?<![\w.-])["\']?larger_runner["\']?[ \t]*:')
 # Retired release labels remain refused by the runner pins as well. Neither
 # spelling may grant an arbitrary workflow access to the isolated release pool.
@@ -1366,7 +1365,7 @@ def workflow_fleet_findings(workflows: dict[str, str]) -> list[str]:
         if not reachable:
             findings.append(f'{name} must have a reachable event for fleet routing')
         for job, body in _jobs(workflow).items():
-            # runner_findings pins this exact job's hosted label and metadata.
+            # runner_findings pins this exact job's runner and metadata.
             # A PR caller disables the arm64/promotion exceptions through calls.
             if job in fixed_hosted:
                 continue
@@ -1395,23 +1394,6 @@ def _authz_header(workflow: str) -> str:
     return AUTHZ_JOB_HEADER
 
 
-def _unapproved_runner_code(workflow: str, fixed_hosted: dict[str, str]) -> str:
-    """Exempt only the exact job-level runner scalar, never its whole job."""
-    checked = []
-    in_jobs, job = False, None
-    for line in _code(workflow):
-        if _indent(line) == 0:
-            in_jobs, job = _key_value(line, 'jobs') == '', None
-        elif in_jobs and _indent(line) == 2:
-            header = _JOB_HEADER.fullmatch(line)
-            job = header[1] if header else None
-        if (in_jobs and job in fixed_hosted and _indent(line) == 4
-                and _job_values(line, 'runs-on') == [fixed_hosted[job]]):
-            continue
-        checked.append(re.sub(r'\s+#.*$', '', line))
-    return '\n'.join(checked)
-
-
 def runner_findings(workflows: dict[str, str]) -> list[str]:
     """Enforce event-derived fleets, isolated releases and command/core pins."""
     findings = workflow_fleet_findings(workflows)
@@ -1423,7 +1405,7 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
         timed = JOB_COMMANDS.get(name, {})
         fixed_hosted = {job: label for job, label in HOSTED_JOB_RUNNERS.get(name, {}).items()
                         if label == 'ubuntu-24.04' or (routes[name] & POST_EVENTS and 'pull_request' not in routes[name])}
-        if _LARGER_RUNNER_LABEL.search(_unapproved_runner_code(workflow, fixed_hosted)):
+        if _LARGER_RUNNER_LABEL.search(code):
             findings.append(f'{name} must not use larger-runner labels; use the GCP fleet or hosted exceptions')
         fixed_release = RELEASE_JOB_RUNNERS.get(name, {})
         event_runner = POST_RUNNER if routes[name] & POST_EVENTS else PR_RUNNER
@@ -1492,6 +1474,17 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                 if any(re.search(r'\bPF_CI_LABELS["\']?\s*:', value) for value in environments):
                     findings.append(f'{name} job {job} must not set PF_CI_LABELS '
                                     'on an isolated release job')
+            elif fixed_hosted.get(job) == POST_RUNNER:
+                actual = _job_values(body, 'runs-on', unquote=False)
+                if [_runner_value(value) for value in actual] != [_runner_value(POST_RUNNER)]:
+                    findings.append(f'{name} job {job} must run on {POST_RUNNER}')
+                if credentials:
+                    findings.append(f'{name} job {job} must keep production credentials '
+                                    'on a hosted standard runner')
+                environments = _job_values(workflow, 'env') + _job_values(body, 'env')
+                if any(re.search(r'\bPF_CI_LABELS["\']?\s*:', value) for value in environments):
+                    findings.append(f'{name} job {job} must not set PF_CI_LABELS '
+                                    'on a post fleet job')
             elif (job in fixed_hosted
                   or (credentials and (name, job) != ('docs-post.yml', 'build'))
                   or (job not in pinned and hosted_platform)):
