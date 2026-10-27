@@ -18,9 +18,9 @@ row.
 | Scratch backing | The spilled part of the trade ledger, the command journals, the order book, the id tables and the report chain. Without an arena these are unlinked files in a writable, disk-backed directory (`TMPDIR`, else `/tmp`; a tmpfs is refused). In the jailed profile they live in the inherited arena (descriptor 5, a sealed memfd), which the host charges as memory | The run's own counts (bars, closed trades, distinct ids, successor rows) |
 | Input bars | The OHLCV arrays. The engine borrows them and copies nothing; they must outlive the run. `docker/run_json.py` maps a binary bars file privately, copy-on-write, so touched pages count toward its resident size | Input bars N |
 
-A default run with no report sink needs a writable, disk-backed scratch
-directory even when it makes no trade. The spilled trade rows are `O(T)` on
-disk with a small resident window (see below).
+The jailed/no-sink stdout route, J0, keeps the legacy result behavior: a FULL
+result may retain `O(T)` closed-trade rows and its FULL report projection is `O(T)` heap. A
+sink moves report rows to its path or fd stream while the ledger's external scratch still needs a writable, disk-backed backing store.
 
 ## Use the report sink for bounded memory {#memory_sink}
 
@@ -220,9 +220,9 @@ or bounds the row.
 
 | What | Grows with | Where it lives | Fix |
 | --- | --- | --- | --- |
-| C or C++ host with no sink, and jailed Python without `--report-sink-fd` (the default route of the C API): equity curve | `N`: 24 B per script bar | Heap (a vector, so spare capacity is extra) | Install a report sink (above); a bounded default route is planned, with no release date |
-| Same route (no sink): closed trades | `T`: 168 B plus text per trade | Scratch, with 64 descriptor rows resident and a read cache of up to 65,536 entries (312 B each, allocated as trades accumulate); the FULL report built from them is `O(T)` heap | Install a report sink; no release date for the default route |
-| Any report sink installed (native or Pine host, history streamed or not) | The heap is bounded for the equity curve (one held point and one 64 KiB batch) and for the ledger (64 descriptor rows and a 128-entry read cache). The trailing block of rows that share the last exit time stays resident only when history is streamed (`K` lots closed at one time, `O(K)`). The sink file and the scratch curve grow with the run | Heap, scratch and the sink file or stream | Not applicable |
+| J0 jailed/no-sink stdout route (and C or C++ host with no sink): equity curve | `N`: 24 B per script bar | Heap (a vector, so spare capacity is extra) | Install a report sink (above); the J0 result route keeps its legacy resident behavior |
+| J0 no sink: closed trades and the FULL report projection | `T`: 168 B plus text per trade, then about 104 B per FULL report row | Scratch holds the ledger rows; J0 retains the closed-trade result and FULL projection in heap, so resident memory is `O(T)` | Install a report sink; the sink route is bounded |
+| Any path or fd report sink (native FULL/STREAMED, summary folds, or Pine host) | Closed T rows are streamed incrementally; the heap keeps the 64-row descriptor window, 128-entry sink cache, fixed writer window, and any open-at-end rows. The sink file or fd stream and scratch curve grow with the run | Heap, scratch and the sink file or stream | Not applicable |
 | Pine product host (`PineStrategyHost`) | It cannot select `STREAMED` or `SUMMARY_ONLY`. With a sink installed and the default report mode (the legacy route) its report storage is bounded as in the row above: the curve through the scratch writer (`ScratchCurveWriter` at `src/engine_report.cpp:1211`), selected by the Pine host's report policy (`KernelRecordedAtHostMarks` at `src/source/pine_adapter.cpp:3039`) and the install condition (`report_policy` at `src/engine_report.cpp:1205`); and the ledger at 64 descriptor rows (`kResidentRows` at `include/pineforge/trade_ledger.hpp:38`) with the 128-entry sink read cache. Adapter state (placement rows, settled bracket families, script containers) is separate and has its own rows below | Heap bounded for the report; adapter state as the rows below | Not applicable |
 | A touched dormant leg that is re-issued | One placement row per re-issue, until the position cycle ends or the origin closes; an untouched re-issue with the same exit id replaces its row in place | Heap | Planned, with no release date |
 | Settled bracket families | One fixed record per archived family, which grows with `T` on a bracket strategy; not measured | Heap | Not scheduled |
