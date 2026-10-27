@@ -163,6 +163,52 @@ def record_reference(executable: str, directory: Path) -> None:
     (directory / "manifest.json").write_text(json.dumps(manifest, sort_keys=True) + "\n")
 
 
+# Match only the top-level engine string in the canonical v1 header. Matching
+# the preceding run_id as a JSON string prevents its contents from looking
+# like another key. Never search record bodies or reserialize a JSON object.
+JSON_STRING = rb'"(?:[^"\\\x00-\x1f]|\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4}))*"'
+HEADER_ENGINE = re.compile(
+    rb'\A\{"schema":"pf-report-sink","version":1,"run_id":' + JSON_STRING
+    + rb',"engine":(?P<engine>' + JSON_STRING + rb')(?=,"records":\[)')
+TRAILER_DIGEST = re.compile(
+    rb'\A\{"trailer":"pf-report-sink","version":1,"counts":\{[^{}\r\n]*\},'
+    rb'"sha256":"(?P<digest>[0-9a-f]{64})"\}\n\Z')
+
+
+def comparison_bytes(name: str, data: bytes) -> bytes:
+    """Normalize only the sink header's engine and its dependent checksum.
+
+    Both sides retain every other byte. Verify the original checksum before
+    recomputing it over a header with a fixed engine token; never mask a bad
+    checksum. Reference manifests always verify the unmodified frozen bytes.
+    See docs/trade-history-reference.md for the comparison contract.
+    """
+    if not name.endswith(".sink"):
+        return data
+    header_end = data.find(b"\n")
+    trailer_start = data.rfind(b"\n", 0, len(data) - 1) + 1
+    if not data.endswith(b"\n") or not 0 < header_end < trailer_start:
+        raise AssertionError(f"trade-history artifact mismatch: {name}: incomplete sink")
+    engine = HEADER_ENGINE.match(data[:header_end])
+    prefix, trailer = data[:trailer_start], data[trailer_start:]
+    digest = TRAILER_DIGEST.fullmatch(trailer)
+    if engine is None or digest is None:
+        raise AssertionError(f"trade-history artifact mismatch: {name}: invalid sink framing")
+    if digest["digest"] != hashlib.sha256(prefix).hexdigest().encode("ascii"):
+        raise AssertionError(f"trade-history artifact mismatch: {name}: sink SHA-256 mismatch")
+    prefix = (prefix[:engine.start("engine")] + b'"<engine-version>"'
+              + prefix[engine.end("engine"):])
+    trailer = (trailer[:digest.start("digest")]
+               + hashlib.sha256(prefix).hexdigest().encode("ascii")
+               + trailer[digest.end("digest"):])
+    return prefix + trailer
+
+
+def compare_artifact(name: str, expected: bytes, actual: bytes) -> None:
+    if comparison_bytes(name, expected) != comparison_bytes(name, actual):
+        raise AssertionError(f"trade-history artifact mismatch: {name}")
+
+
 def main() -> None:
     if len(sys.argv) == 4 and sys.argv[1] == "--write-reference":
         record_reference(sys.argv[2], Path(sys.argv[3]))
@@ -181,17 +227,17 @@ def main() -> None:
             subprocess.run([executable, "--artifacts", str(directory)], check=True)
             outputs.append(directory)
         for shape in SHAPES:
-            for output in outputs:
-                wire(output / f"{shape}.sink", simple=shape != "shapes")
-                rows = (output / f"{shape}.hashes").read_bytes().splitlines()
-                assert len(rows) == (600 if shape == "shapes" else 4001)
-                assert all(len(row.split()) == 2 for row in rows)
             for suffix in SUFFIXES:
                 name = f"{shape}.{suffix}"
                 expected = (reference / name).read_bytes()
                 assert expected and hashlib.sha256(expected).hexdigest() == manifest[name]
                 for output in outputs:
-                    assert (output / f"{shape}.{suffix}").read_bytes() == expected
+                    compare_artifact(name, expected, (output / name).read_bytes())
+            for output in outputs:
+                wire(output / f"{shape}.sink", simple=shape != "shapes")
+                rows = (output / f"{shape}.hashes").read_bytes().splitlines()
+                assert len(rows) == (600 if shape == "shapes" else 4001)
+                assert all(len(row.split()) == 2 for row in rows)
 
 
 if __name__ == "__main__":

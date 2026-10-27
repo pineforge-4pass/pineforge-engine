@@ -90,9 +90,9 @@ always, and any other run that inherits one), curve scratch instead consumes
 the **RAM-backed arena**, so those same **24 B per script bar are memory**.
 The fd setter attaches the arena (`attach_from_environment`
 src/engine_report.cpp:1067), and `ScratchFile::open`
-include/pineforge/detail/scratch_file.hpp:127-134 selects it.
+include/pineforge/detail/scratch_file.hpp:168-175 selects it.
 Linux jailed admission requires sealed memfd backing
-(`strategy_require_report_scratch_arena_v1` src/c_abi.cpp:1431-1448).
+(`strategy_require_report_scratch_arena_v1` src/c_abi.cpp:1457-1474).
 The hosting wrapper supplies `PF_SCRATCH_ARENA_BYTES`
 src/scratch_arena.cpp:385-386.
 The engine never resizes that backing (the sizing comment above `ScratchArena`
@@ -105,7 +105,7 @@ Exhaustion fails closed with typed `report_sink_failed`
 (`ReportScratchIoError` include/pineforge/detail/scratch_arena.hpp:16-21),
 reason `arena_exhausted` src/scratch_arena.cpp:234-238.
 There is no RAM fallback (the comment on `ScratchFile`
-include/pineforge/detail/scratch_file.hpp:30-36).
+include/pineforge/detail/scratch_file.hpp:31-37).
 
 A **jailed run without `--report-sink-fd` has no sink at all**:
 `_new_report_sink` docker/run_json.py:5809-5826 returns `None`, so it retains

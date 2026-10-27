@@ -43,6 +43,29 @@ CI does not need Git ancestry or a base checkout. Missing or empty data fails
 with the original missing-reference message; it never skips or records
 expectations from the changed executable.
 
+Comparison normalizes exactly two fields in each `.sink`, on both the
+candidate and frozen side. The top-level `engine` string in the first
+`pf-report-sink` header line becomes the fixed string `<engine-version>`.
+Engine versions change every release; a version bump alone must not require
+new frozen data. The trailer's `sha256` covers every preceding byte, including
+that header, so its original value is verified against the original stream
+first, then recomputed over the comparison bytes with the fixed engine
+string. A corrupt original digest fails; it is never repaired or ignored.
+Only these value spans change, without reserializing any JSON.
+
+Nothing else is normalized: all other header bytes (including schema
+`version`, `run_id` and record descriptors), every T/E/H record byte, trailer
+counts and framing, all `.hashes` bytes and all `.report` bytes still compare
+byte for byte. An `engine` occurrence in a record body is ordinary data.
+The `.report` files contain raw metrics and trade/profit/final-hash scalars,
+with no engine-version field. `manifest.json` and `MANIFEST.sha256` describe
+the original frozen bytes and are never normalized or compared with a
+candidate manifest; candidate producers emit only the twelve artifacts.
+The committed artifacts, both manifests and base pin stay unchanged during
+comparison. A later byte-visible engine change on main still fails and names
+the artifact. Regeneration is needed only when a byte-visible engine change
+is intended, not for a release version bump.
+
 An explicit `PINEFORGE_TRADE_HISTORY_REFERENCE` still selects a lab directory.
 It verifies every artifact before running any producer. Lab overrides can
 also use the original `--write-reference` output with only `manifest.json`
@@ -54,6 +77,16 @@ The registered `test_report_sink_trade_reference` row accepts an unmodified
 copy, flips one byte in each covered file in turn and requires rejection.
 It also checks that corrupt data stops the identity row before launching a
 producer, and that missing or empty repository data still fails.
+
+The registered `test_report_sink_trade_comparison` row accepts version-only
+candidate changes, rejects one other changed byte in each of a sink, hashes
+file and report with the filename, and preserves a second `engine` occurrence
+inside a T record. It also rejects a version edit with an unrecomputed
+original sink digest. Its producer stand-ins use copies of the independently
+frozen data to exercise the real identity entry point; they never generate
+expectations with the current library. All mutation loops assert their
+executed iteration counts.
+
 To verify a complete reference directory without starting an engine:
 
 ```sh

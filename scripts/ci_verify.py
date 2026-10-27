@@ -983,6 +983,17 @@ PINNED_SLOW_TEST_ROWS = frozenset((
     'test_adapter_spaced_ids_scaling',
     # tests/cr150.d/p2cx-a5arr.cmake:5.
     'test_array_growth_1m',
+    # tests/cr150.d/report-trade-retirement.cmake and report-trade-reference.cmake:
+    # the closed-trade retirement witnesses, the identity row against the frozen
+    # reference, the reference corruption row and the sink-consumer row.
+    'test_report_sink_trade_comparison',
+    'test_report_sink_trade_history',
+    'test_report_sink_trade_identity',
+    'test_report_sink_trade_legacy',
+    'test_report_sink_trade_reference',
+    'test_report_sink_trade_residency',
+    'test_report_sink_trade_retirement',
+    'test_sink_history_consumers',
 ))
 
 
