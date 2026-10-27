@@ -1,10 +1,12 @@
-// RED FIRST against 2561cfb464: these rows use the old fixture's public API.
-// Co-tenant creations must neither fail a negative nor satisfy a positive.
+// Co-tenant controls are RED against the pid-less fixture at 2561cfb464.
+// Further RED controls at 6b33c47fd cover exclusive open, fork descendants,
+// and path/PID diagnostics. The controls use the pre-change watch API.
 #define PINEFORGE_TEST_SCRATCH_ATTRIBUTION 1
 #include "default_scratch_tmpfs_fixture.hpp"
 
 #if defined(__linux__)
 #include <pineforge/detail/scratch_file.hpp>
+#include <sys/syscall.h>
 #include <sys/wait.h>
 
 namespace {
@@ -12,11 +14,13 @@ using namespace s4e_tmp;
 
 class PlantedFile {
 public:
-    explicit PlantedFile(std::string pattern, bool use_mkstemp = true)
+    explicit PlantedFile(std::string pattern, bool use_mkstemp = true, bool raw_open = false)
         : path_(std::move(pattern)) {
         std::fprintf(stderr, "attribution control path/template: %s\n", path_.c_str());
-        descriptor_.value = use_mkstemp ? ::mkstemp(path_.data())
-            : ::open(path_.c_str(), O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+        constexpr int flags = O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC;
+        descriptor_.value = raw_open
+            ? static_cast<int>(::syscall(SYS_openat, AT_FDCWD, path_.c_str(), flags, 0600))
+            : use_mkstemp ? ::mkstemp(path_.data()) : ::open(path_.c_str(), flags, 0600);
         require(descriptor_.value >= 0, "cannot create the attribution control file");
     }
     ~PlantedFile() {
@@ -43,10 +47,11 @@ private:
 // event. It follows no files and only accepts this row's generated name prefix.
 class SharedEvent {
 public:
-    SharedEvent() : descriptor_(::inotify_init1(IN_NONBLOCK | IN_CLOEXEC)) {
+    explicit SharedEvent(const char* directory = "/tmp")
+        : descriptor_(::inotify_init1(IN_NONBLOCK | IN_CLOEXEC)), directory_(directory) {
         require(descriptor_.value >= 0
-                    && ::inotify_add_watch(descriptor_.value, "/tmp", IN_CREATE) >= 0,
-                "cannot watch the co-tenant control's /tmp event");
+                    && ::inotify_add_watch(descriptor_.value, directory, IN_CREATE) >= 0,
+                "cannot watch the co-tenant control's event: " + directory_);
     }
     void require_creation(const std::string& prefix) {
         bool seen = false;
@@ -70,17 +75,21 @@ public:
                 offset += sizeof(*event) + event->len;
             }
         }
-        require(seen, "co-tenant control did not produce its real /tmp creation event");
+        require(seen, "co-tenant control did not produce its real creation event: " + directory_);
     }
 private:
     Fd descriptor_;
+    std::string directory_;
 };
 
-// No sleeps: the child keeps every planted file named and open until the
-// parent's release pipe closes, including when a parent assertion throws.
+// Construct co-tenants BEFORE CreationWatch: fork+exec discards all witness
+// state, and a start pipe delays their creations until the watch is armed.
+// The explicit fork-descendant control instead constructs this AFTER the watch
+// with exec_helper=false, retaining the inherited witness.
+// Every planted file stays named and open until release, even on assertion failure.
 class CoTenant {
 public:
-    explicit CoTenant(bool private_directory = false)
+    explicit CoTenant(bool private_directory = false, bool exec_helper = true)
         : token_(std::to_string(::getpid())),
           private_directory_(private_directory ? std::getenv("TMPDIR") : "") {
         std::array<int, 2> pair{};
@@ -90,6 +99,59 @@ public:
         require(::pipe(pair.data()) == 0, "cannot create the co-tenant release pipe");
         release_reader_.value = pair[0];
         release_writer_.value = pair[1];
+        child_ = ::fork();
+        require(child_ >= 0, "cannot fork the creator control");
+        if (child_ == 0) {
+            ready_reader_.close();
+            release_writer_.close();
+            if (exec_helper) {
+                if (::dup2(release_reader_.value, STDIN_FILENO) < 0
+                    || ::dup2(ready_writer_.value, STDOUT_FILENO) < 0) ::_exit(1);
+                if (release_reader_.value > STDERR_FILENO) release_reader_.close();
+                if (ready_writer_.value > STDERR_FILENO) ready_writer_.close();
+                // Positional arguments carry paths without shell interpolation.
+                // mktemp chooses new names; the trap cleans only those names.
+                constexpr const char* script = R"sh(
+set -eu
+temporary= unrelated= memory= disk= private_file=
+trap 'rm -f -- "$temporary" "$unrelated" "$memory" "$disk" "$private_file"' EXIT
+read -r start || exit 0
+[ "$start" = S ]
+if [ -n "$2" ]; then
+    candidate="$2/other-child-$1"
+    set -C
+    exec 4>"$candidate"
+    private_file="$candidate"
+else
+    temporary=$(mktemp "/tmp/$1XXXXXX")
+    unrelated=$(mktemp "/tmp/other-$1XXXXXX")
+    memory=$(mktemp "/dev/shm/$1XXXXXX")
+    disk=$(mktemp "/var/tmp/$1XXXXXX")
+    exec 4<>"$temporary" 5<>"$unrelated" 6<>"$memory" 7<>"$disk"
+fi
+printf R
+if read -r release; then exit 1; fi
+)sh";
+                const auto name_prefix = prefix();
+                ::execl("/bin/sh", "sh", "-c", script, "scratch-cotenant",
+                        name_prefix.c_str(), private_directory_.c_str(),
+                        static_cast<char*>(nullptr));
+                ::_exit(1);
+            }
+            char start = 0, newline = 0;
+            ssize_t count;
+            do { count = ::read(release_reader_.value, &start, 1); }
+                while (count < 0 && errno == EINTR);
+            if (count == 0) ::_exit(0); // Parent unwound before arming this control.
+            if (count != 1 || start != 'S') ::_exit(1);
+            do { count = ::read(release_reader_.value, &newline, 1); }
+                while (count < 0 && errno == EINTR);
+            if (count != 1 || newline != '\n') ::_exit(1);
+            const int result = child_body();
+            ::_exit(result);
+        }
+        ready_writer_.close();
+        release_reader_.close();
     }
     ~CoTenant() {
         release_writer_.close();
@@ -101,19 +163,12 @@ public:
     CoTenant(const CoTenant&) = delete;
     CoTenant& operator=(const CoTenant&) = delete;
     std::string prefix() const { return "pineforge-cotenant-" + token_ + "-"; }
+    pid_t pid() const { return child_; }
     void start() {
-        child_ = ::fork();
-        require(child_ >= 0, "cannot fork the co-tenant control");
-        if (child_ == 0) {
-            ready_reader_.close();
-            release_writer_.close();
-            const int result = child_body();
-            ::_exit(result);
-        }
-        ready_writer_.close();
-        release_reader_.close();
-        char ready = 0;
         ssize_t count;
+        do { count = ::write(release_writer_.value, "S\n", 2); } while (count < 0 && errno == EINTR);
+        require(count == 2, "cannot start the creator control");
+        char ready = 0;
         do { count = ::read(ready_reader_.value, &ready, 1); } while (count < 0 && errno == EINTR);
         require(count == 1 && ready == 'R', "co-tenant failed before its files were ready");
     }
@@ -174,20 +229,38 @@ void require_rejection(Check check, const std::string& expected) {
     require(rejected, "attribution policy accepted a planted own-process violation");
 }
 
+template<class Check>
+void require_rejection_details(Check check, const std::string& path, const std::string& identity) {
+    bool rejected = false;
+    try { check(); }
+    catch (const std::runtime_error& error) {
+        const std::string message = error.what();
+        const auto prefix = "run left a named scratch file: " + path;
+        require(message.compare(0, prefix.size(), prefix) == 0
+                    && message.size() >= identity.size()
+                    && message.compare(message.size() - identity.size(), identity.size(), identity) == 0,
+                "scratch failure lacks its offending path/creator: " + message);
+        rejected = true;
+    }
+    require(rejected, "scratch leak did not produce a diagnostic");
+}
+
 void cotenant_default() {
     require_filesystems();
     PlainEnvironment environment;
+    CoTenant child;
     CreationWatch watch;
     SharedEvent events;
-    CoTenant child;
+    SharedEvent memory_events("/dev/shm");
     child.start();
     events.require_creation(child.prefix());
+    memory_events.require_creation(child.prefix());
     Host host;
     run(host);
     require_success(host);
     Report report(host);
     watch.collect();
-    // Main lstat()s the child's still-named files here and throws.
+    // The historical machine-wide watch lstat()s the co-tenant's files and throws.
     watch.require_removed();
     require(!watch.created_in("/dev/shm") && !watch.created_in("/tmp"),
             "co-tenant files were attributed to the default run");
@@ -198,11 +271,13 @@ void cotenant_default() {
 void cotenant_jailed() {
     require_filesystems();
     PlainEnvironment environment;
+    CoTenant child;
     CreationWatch watch;
     SharedEvent events;
-    CoTenant child;
+    SharedEvent memory_events("/dev/shm");
     child.start();
     events.require_creation(child.prefix());
+    memory_events.require_creation(child.prefix());
     watch.collect();
     require(watch.empty(), "co-tenant events failed the jailed no-creation policy");
     child.finish();
@@ -211,11 +286,13 @@ void cotenant_jailed() {
 void cotenant_positive() {
     require_filesystems();
     PlainEnvironment environment;
+    CoTenant child;
     CreationWatch watch;
     SharedEvent events;
-    CoTenant child;
+    SharedEvent memory_events("/dev/shm");
     child.start();
     events.require_creation(child.prefix());
+    memory_events.require_creation(child.prefix());
     watch.collect();
     require(!watch.created_in("/var/tmp"),
             "a co-tenant supplied the default run's positive /var/tmp witness");
@@ -239,7 +316,8 @@ void own_tmp() {
         require(!watch.created_in("/dev/shm") && !watch.created_in("/tmp"), message);
     }, message);
     require_rejection([&] { watch.require_removed(); },
-                      "run left a named scratch file: " + own.path());
+                      "run left a named scratch file: " + own.path()
+                          + " pid=" + std::to_string(::getpid()));
     own.remove_and_close();
     watch.collect();
     watch.require_removed();
@@ -290,13 +368,78 @@ void own_shm() {
 void private_non_mkstemp() {
     require_filesystems();
     PlainEnvironment environment;
-    CreationWatch watch;
     CoTenant child(true);
+    CreationWatch watch;
     child.start();
     watch.collect();
     const std::string message = "jailed run created a scratch file under TMPDIR, /tmp or /var/tmp";
     require_rejection([&] { require(watch.empty(), message); }, message);
     child.finish();
+}
+
+// RED at 6b33c47fd: the old opted-in trace observes mkstemp only, and its
+// inotify descriptor watches the private TMPDIR, so this /tmp open is invisible.
+void own_open_tmp() {
+    require_filesystems();
+    PlainEnvironment environment;
+    CreationWatch watch;
+    const auto directory = std::string(std::getenv("TMPDIR"));
+    PlantedFile own("/tmp/pineforge-open-" + directory.substr(directory.find_last_of('/') + 1),
+                    false);
+    watch.collect();
+    require(watch.created_in("/tmp"), "own exclusive /tmp open escaped attribution");
+    const std::string message = "TMPDIR on tmpfs must resolve directly to /var/tmp";
+    require_rejection([&] {
+        require(!watch.created_in("/dev/shm") && !watch.created_in("/tmp"), message);
+    }, message);
+    require_rejection_details([&] { watch.require_removed(); }, own.path(),
+                              "pid=" + std::to_string(::getpid()));
+    own.remove_and_close();
+    watch.collect();
+    require(watch.created_in("/tmp"), "unlinked exclusive-open evidence was discarded");
+    watch.require_removed();
+}
+
+// RED at 6b33c47fd: owner != getpid() drops every fork-descendant mkstemp.
+// This fork is deliberately AFTER watch construction, unlike the co-tenants.
+void own_descendant_tmp() {
+    require_filesystems();
+    PlainEnvironment environment;
+    CreationWatch watch;
+    CoTenant descendant(false, false);
+    descendant.start();
+    watch.collect();
+    require(watch.created_in("/tmp") && watch.created_in("/dev/shm")
+                && watch.created_in("/var/tmp"),
+            "own fork descendant's wrong-directory creations escaped attribution");
+    require_rejection_details([&] { watch.require_removed(); }, "/tmp/" + descendant.prefix(),
+                              "pid=" + std::to_string(descendant.pid()));
+    descendant.finish();
+    watch.collect();
+    require(watch.created_in("/tmp"), "exited descendant's creation evidence was discarded");
+    watch.require_removed();
+}
+
+// RED at 6b33c47fd: cleanup errors include the path but never a creator PID.
+// A direct syscall separately exercises the inotify-only diagnostic, without
+// pretending that inotify supplied a PID or guessing one from the filename.
+void diagnostics() {
+    require_filesystems();
+    PlainEnvironment environment;
+    CreationWatch watch;
+    PlantedFile own("/tmp/pineforge-diagnostic-XXXXXX");
+    watch.collect();
+    require_rejection_details([&] { watch.require_removed(); }, own.path(),
+                              "pid=" + std::to_string(::getpid()));
+    own.remove_and_close();
+    PlantedFile opaque(std::string(std::getenv("TMPDIR")) + "/other-uninstrumented", false, true);
+    watch.collect();
+    require_rejection_details([&] { watch.require_removed(); }, opaque.path(),
+                              "pid=unattributable (inotify supplies no creator PID; "
+                              "private TMPDIR event has no interposed descriptor)");
+    opaque.remove_and_close();
+    watch.collect();
+    watch.require_removed();
 }
 
 void header_scratch() {
@@ -323,6 +466,9 @@ void rows() {
     own_shm();
     private_non_mkstemp();
     header_scratch();
+    own_open_tmp();
+    own_descendant_tmp();
+    diagnostics();
 }
 } // namespace
 
@@ -334,7 +480,8 @@ int main(int argc, char** argv) {
             {"cotenant_positive", cotenant_positive}, {"own_tmp", own_tmp},
             {"own_transient_tmp", own_transient_tmp}, {"own_other_tmp", own_other_tmp},
             {"own_shm", own_shm}, {"private_non_mkstemp", private_non_mkstemp},
-            {"header_scratch", header_scratch}
+            {"header_scratch", header_scratch}, {"own_open_tmp", own_open_tmp},
+            {"own_descendant_tmp", own_descendant_tmp}, {"diagnostics", diagnostics}
         };
         for (const auto& entry : cases)
             if (entry.first == std::string(argv[1])) return s4e_tmp::test_main(entry.first, entry.second);

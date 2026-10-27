@@ -7326,9 +7326,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     list(APPEND TEST_SOURCES test_scratch_watch_attribution)
     pineforge_add_unit_test(test_scratch_watch_attribution)
     target_link_libraries(test_scratch_watch_attribution PRIVATE ${CMAKE_DL_LIBS} Threads::Threads)
-    foreach(_pf_scratch_watch_case IN ITEMS
-            cotenant_default cotenant_jailed cotenant_positive
-            own_tmp own_transient_tmp own_other_tmp own_shm private_non_mkstemp header_scratch)
+    foreach(_pf_scratch_watch_case IN ITEMS cotenant_default cotenant_jailed cotenant_positive
+            own_tmp own_transient_tmp own_other_tmp own_shm private_non_mkstemp header_scratch
+            own_open_tmp own_descendant_tmp diagnostics)
         add_test(NAME test_scratch_watch_attribution_${_pf_scratch_watch_case}
             COMMAND test_scratch_watch_attribution ${_pf_scratch_watch_case})
     endforeach()
