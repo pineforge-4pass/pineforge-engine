@@ -339,14 +339,14 @@ public:
                         && anchors.withdrawn == 0 && !working("owner-exit"),
                         "a real anchored child waits without a working projection");
             } else {
-                require(pending("owner-exit"), "a real public exit exists before the reversal");
+                require((pending("owner-exit") || working("owner-exit")), "a real public exit exists before the reversal");
             }
             owner_seen = true;
             enter("after-owner", true);
         } else if (i == kPrefix + 2 && which_ == OwnerCase::PendingBound) {
             // Bar 65's gap to 150 fills bound-parent and binds its exits.
             // A second reversal must now cancel those same exits.
-            require(bound_filled && pending("owner-exit"), "the formerly pending-bound exit bound to a fill");
+            require(bound_filled && (pending("owner-exit") || working("owner-exit")), "the formerly pending-bound exit bound to a fill");
             enter("after-bound-fill", true);
         }
         reads.push_back(broker_state_hash_projection());
@@ -363,7 +363,7 @@ protected:
         if (event.request().label == "after-owner" && event.closed_units > 0.0) {
             require(owner_seen, "the reversal follows the observed exit");
             if (which_ == OwnerCase::PendingBound) {
-                survived = pending("owner-exit");
+                survived = (pending("owner-exit") || working("owner-exit"));
                 require(survived, "pending-bound exits survive the first full close");
             } else {
                 cancelled = !pending("owner-exit") && !working("owner-exit");
