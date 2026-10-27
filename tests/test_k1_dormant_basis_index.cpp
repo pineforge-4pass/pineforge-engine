@@ -219,6 +219,9 @@ public:
     }
 
     Result finish() {
+        // Print the host's own error: a bare "did not complete" hides which command was refused.
+        if (!last_error().empty())
+            std::fprintf(stderr, "witness host error: %s\n", last_error().c_str());
         require(last_error().empty(), "witness host completed without error");
         require(out_.callbacks == kBars && out_.dormant > 0,
                 "witness never reached real dormant askable-origin legs");
