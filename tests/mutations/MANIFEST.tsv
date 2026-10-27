@@ -1,0 +1,44 @@
+id	patch	test target	expected-red row
+M1	tests/mutations/M1.patch	test_native_dormant_book_switch	T4 eager/dormant transcript comparison
+M2	tests/mutations/M2.patch	test_native_dormant_book_switch	T4 t=0 callback spill / unswept suffix
+M3	tests/mutations/M3.patch	test_native_dormant_book_switch	I-5 index census after promotion
+M4	tests/mutations/M4.patch	test_native_dormant_book_switch	I-1 promotion metadata alignment
+M5	tests/mutations/M5.patch	test_native_dormant_book_switch	I-1 cancellation metadata alignment
+M6	tests/mutations/M6.patch	test_native_dormant_book_reachability	T8 join/wake equality or independent base envelope
+M7	tests/mutations/M7.patch	test_native_dormant_book_reachability	T8 closed envelope boundary
+M8	tests/mutations/M8.patch	test_native_dormant_book_transcript	T5 t=0 watermark / fresh read
+M9	tests/mutations/M9.patch	test_native_dormant_book_transcript	T3 complete-before-interior
+M10	tests/mutations/M10.patch	test_native_dormant_book_reachability	T8 actual eligible finite-segment predicate / classified endpoints
+M11	tests/mutations/M11.patch	test_native_dormant_book_transcript	T3 driver matrix CarriedOpen/Other
+M11_OBSERVED_PRINT_LIMIT	tests/mutations/M11_OBSERVED_PRINT_LIMIT.patch	test_native_dormant_book_transcript	T3 driver matrix OBSERVED_PRINT_LIMIT
+M11_OBSERVED_PRINT_OTHER	tests/mutations/M11_OBSERVED_PRINT_OTHER.patch	test_native_dormant_book_transcript	T3 driver matrix OBSERVED_PRINT_OTHER
+M11_CARRIED_OPEN_LIMIT	tests/mutations/M11_CARRIED_OPEN_LIMIT.patch	test_native_dormant_book_transcript	T3 driver matrix CARRIED_OPEN_LIMIT
+M11_CARRIED_OPEN_OTHER	tests/mutations/M11_CARRIED_OPEN_OTHER.patch	test_native_dormant_book_transcript	T3 driver matrix CARRIED_OPEN_OTHER
+M11_TICK_AFTER_CALCULATION_LIMIT	tests/mutations/M11_TICK_AFTER_CALCULATION_LIMIT.patch	test_native_dormant_book_transcript	T3 driver matrix TICK_AFTER_CALCULATION_LIMIT
+M11_TICK_AFTER_CALCULATION_OTHER	tests/mutations/M11_TICK_AFTER_CALCULATION_OTHER.patch	test_native_dormant_book_transcript	T3 driver matrix TICK_AFTER_CALCULATION_OTHER
+M11_CONFIRMED_OPEN_LIMIT	tests/mutations/M11_CONFIRMED_OPEN_LIMIT.patch	test_native_dormant_book_transcript	T3 driver matrix CONFIRMED_OPEN_LIMIT
+M11_CONFIRMED_OPEN_OTHER	tests/mutations/M11_CONFIRMED_OPEN_OTHER.patch	test_native_dormant_book_transcript	T3 driver matrix CONFIRMED_OPEN_OTHER
+M11_CONFIRMED_EXCURSION_LIMIT	tests/mutations/M11_CONFIRMED_EXCURSION_LIMIT.patch	test_native_dormant_book_transcript	T3 driver matrix CONFIRMED_EXCURSION_LIMIT
+M11_CONFIRMED_EXCURSION_OTHER	tests/mutations/M11_CONFIRMED_EXCURSION_OTHER.patch	test_native_dormant_book_transcript	T3 driver matrix CONFIRMED_EXCURSION_OTHER
+M11_CONFIRMED_AFTER_CALCULATION_CLOSE_LIMIT	tests/mutations/M11_CONFIRMED_AFTER_CALCULATION_CLOSE_LIMIT.patch	test_native_dormant_book_transcript	T3 driver matrix CONFIRMED_AFTER_CALCULATION_CLOSE_LIMIT
+M11_CONFIRMED_AFTER_CALCULATION_CLOSE_OTHER	tests/mutations/M11_CONFIRMED_AFTER_CALCULATION_CLOSE_OTHER.patch	test_native_dormant_book_transcript	T3 driver matrix CONFIRMED_AFTER_CALCULATION_CLOSE_OTHER
+M11_CURRENT_EXECUTION_LIMIT	tests/mutations/M11_CURRENT_EXECUTION_LIMIT.patch	test_native_dormant_book_transcript	T3 driver matrix CURRENT_EXECUTION_LIMIT
+M11_CURRENT_EXECUTION_OTHER	tests/mutations/M11_CURRENT_EXECUTION_OTHER.patch	test_native_dormant_book_transcript	T3 driver matrix CURRENT_EXECUTION_OTHER
+M12	tests/mutations/M12.patch	test_native_dormant_book_switch	I-4 command wake / cancellation
+M13	tests/mutations/M13.patch	test_native_dormant_book_switch	I-1 kept-handle reprice metadata alignment
+M14	tests/mutations/M14.patch	test_native_dormant_book_switch	T4 active-spill eager/dormant comparison
+M15	tests/mutations/M15.patch	test_native_dormant_book_read_failure	T6 carried tick failure location
+M16	tests/mutations/M16.patch	test_native_dormant_book_index_fault	T7 permanent index poison witness
+M17	tests/mutations/M17.patch	test_native_dormant_book_transcript	T5 above-watermark fresh decode
+M18	tests/mutations/M18.patch	test_native_dormant_book_core_contract	T2b resident epoch arithmetic
+M19	tests/mutations/M19.patch	test_native_dormant_book_transcript	T3 active-trail 106-2 execution
+M20	tests/mutations/M20.patch	test_native_dormant_book_transcript	T3 mid-point active-spill remaining suffix
+M21	tests/mutations/M21.patch	test_native_dormant_book_core_contract	T2b final-spilled-row epoch arithmetic / I-5
+M22	tests/mutations/M22.patch	test_native_dormant_book_reachability	T8 two-tick independent base envelope
+M23	tests/mutations/M23.patch	test_native_dormant_book_transcript	T3 complete-before-interior / no-winner completion
+M24	tests/mutations/M24.patch	test_native_dormant_book_transcript	T3 --notification-middle-spill retained promotion after callback
+M25	tests/mutations/M25.patch	test_native_dormant_book_tokens	T5 frozen held ring copies
+M26	tests/mutations/M26.patch	test_native_dormant_book_tokens	T5 keepalive lifetime before raw dereference
+M-resident-window	tests/mutations/M-resident-window.patch	test_native_dormant_book_transcript	T3 --resident-window wrong-point sweep breaks callback allowance equality with eager
+M-middle-in-match-path	tests/mutations/M-middle-in-match-path.patch	test_native_dormant_book_transcript	T3 --notification-middle-spill retained-candidate scope invariant
+M-first-ensure-throws	tests/mutations/M-first-ensure-throws.patch	test_native_dormant_book_allocation_fault	HK1 first Book ensure allocation fault must degrade to eager

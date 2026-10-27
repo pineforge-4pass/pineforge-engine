@@ -2074,15 +2074,14 @@ void WorkingRequestCore::forget_repriced(uint64_t incarnation) noexcept {
 // Room for one more resident row: spills the newest resident rows, one by one,
 // until live_ is below its bound. Every spill writes before it drops, and
 // everything that can throw comes before the row leaves live_, so a refusal
-// leaves the book as it was. A re-priced row leaves repriced_ with it; the
-// priority it stood at is filed in the spilled table's incarnation links.
+// leaves the book intact; a re-priced row's priority moves to incarnation links.
 // Rows leaving live_ shift what a prepared token indexed, so a spill raises
 // the epoch: a token prepared before it installs as stale.
 void WorkingRequestCore::make_book_room() {
     if (live_.size() < kBookMax) return;
     if (book_spill_) book_spill_->check();
     if (!book_spill_) {
-        auto created = std::make_shared<BookSpill>();
+        auto created = std::make_shared<BookSpill>(live_);
         const std::string& directory = scratch_directory();
         if (!directory.empty()) created->set_directory(directory);
         book_spill_ = std::move(created);
@@ -2090,14 +2089,15 @@ void WorkingRequestCore::make_book_room() {
     BookSpill& spill = *book_spill_;
     if (spill.worth_compacting()) spill.compact();
     while (live_.size() >= kBookMax) {
-        const LiveRequest& row = live_.back();
+        const std::size_t at = spill.spill_index(*this);
+        assert((spill.middle_spill || at + 1 == live_.size()) && "native retained candidates require back-only spills");
+        const LiveRequest& row = live_[at];
         const uint64_t incarnation = row.handle().incarnation;
-        const bool repriced = row.priority() != incarnation;
-        spill.spill(row);
-        if (repriced) forget_repriced(incarnation);
-        live_.pop_back();
-        ++spill.alive;
+        spill.spill(row, spill.resident[at]);
+        if (row.priority() != incarnation) forget_repriced(incarnation);
+        spill.drop_spilled(*this, at);
         bump_epoch();
+        spill.assert_aligned(*this);
     }
 }
 
@@ -2135,7 +2135,7 @@ bool WorkingRequestCore::promote_book_row(uint64_t incarnation, std::size_t* ind
             live_.begin(), live_.end(), priority,
             [](const LiveRequest& resident, uint64_t value) { return resident.priority() < value; });
     const std::size_t where = static_cast<std::size_t>(place - live_.begin());
-    live_.insert(place, std::move(row));
+    live_.insert(place, std::move(row)); spill.promoted(*this, slot, where);
     if (priority != incarnation) note_repriced(incarnation, priority);
     bump_epoch();
     *index = where;
@@ -2205,7 +2205,7 @@ std::shared_ptr<const LiveRequest> WorkingRequestCore::hold_scanned(
 }
 
 bool WorkingRequestCore::carry_book_read_failure(std::exception_ptr failure) const noexcept {
-    if (!book_spill_ || !failure) return false;
+    if (!book_spill_ || !book_spill_->carries_read_failure() || !failure) return false;
     if (!book_spill_->failure) book_spill_->failure = std::move(failure);
     return true;
 }
@@ -2727,7 +2727,7 @@ void WorkingRequestCore::note_chain_loss(const LiveRequest& row) noexcept {
 }
 
 void WorkingRequestCore::erase_live(std::size_t index) noexcept {
-    note_chain_loss(live_[index]);
+    note_chain_loss(live_[index]); if (book_spill_) book_spill_->erasing(index);
     live_.erase(live_.begin() + static_cast<std::ptrdiff_t>(index));
 }
 
@@ -2764,18 +2764,18 @@ WorkingRequestCore::TargetKind WorkingRequestCore::classify_resident(
     return TargetKind::Live;
 }
 
-// A request outside the heap is brought back before the command that names it
-// reads or writes its row, so prepare_*/apply_* work on live_[index] as they
-// always did. The one place the book changes outside a commit: it raises the
-// epoch (promote_book_row), so a token prepared before it cannot install
-// against the shifted indices.
+// Every targeted resident row wakes before a command reads or changes it.
+// Promotion retains its existing epoch/token invalidation contract.
 WorkingRequestCore::TargetKind WorkingRequestCore::classify(
         const RequestHandle& handle, std::size_t* live_index) {
     if (!names_run(handle, identity_)) return TargetKind::InvalidHandle;
-    const TargetKind resident = classify_resident(handle, live_index);
-    if (resident == TargetKind::Live || spilled_count() == 0) return resident;
     std::size_t index = 0;
-    if (!promote_book_row(handle.incarnation, &index)) return TargetKind::NotWorking;
+    const TargetKind resident = classify_resident(handle, &index);
+    if (resident == TargetKind::Live) {
+        if (book_spill_) book_spill_->wake_on_classify(*this, index);
+    } else if (spilled_count() != 0) {
+        if (!promote_book_row(handle.incarnation, &index)) return TargetKind::NotWorking;
+    } else return resident;
     if (live_index) *live_index = index;
     return TargetKind::Live;
 }
@@ -3413,17 +3413,17 @@ InstallResult WorkingRequestCore::commit(MutationPlan& plan) noexcept {
     }
     if (plan.live_change == kLivePush) {
         live_.push_back(std::move(plan.live_row));
+        if (book_spill_) book_spill_->pushed(*this);
     } else if (plan.live_change == kLiveErase) {
         erase_live(plan.live_index);
     } else if (plan.live_change == kLiveUpdate) {
-        if (!std::holds_alternative<PendingDeferred>(plan.live_row.pending)) {
-            note_chain_loss(live_[plan.live_index]);
-        }
+        if (!std::holds_alternative<PendingDeferred>(plan.live_row.pending)) note_chain_loss(live_[plan.live_index]);
         live_[plan.live_index] = std::move(plan.live_row);
     } else if (plan.live_change == kLiveErasePush) {
         note_chain_loss(live_[plan.live_index]);
         const uint64_t pushed_incarnation = plan.live_row.handle().incarnation;
         const uint64_t pushed_priority = plan.live_row.priority();
+        if (book_spill_) book_spill_->replacing(plan.live_index, pushed_priority);
         if (plan.live_index + 1 == live_.size()) {
             live_.back() = std::move(plan.live_row);
         } else {
@@ -4520,14 +4520,14 @@ CommandInstalled<SubmitResult> WorkingRequestCore::apply_submit(
     auto definition = std::make_shared<RequestDefinition>(
             RequestDefinition{handle, std::move(staged), birth, std::nullopt, origin});
     LiveRequest live = make_live(definition, context, EventId{identity_, ordinal});
-    AcceptedEvent accepted;
-    accepted.ordinal = ordinal;
+    AcceptedEvent accepted; accepted.ordinal = ordinal;
     accepted.definition = std::move(definition);
     accepted.surface = context.surface;
     seal_direct(1, true, false, true);
     const std::size_t first = history_end();
     append_direct(std::move(accepted), true);
     live_.push_back(std::move(live));
+    if (book_spill_) book_spill_->pushed(*this);
     last_incarnation_ = incarnation;
     return CommandInstalled<SubmitResult>{
             SubmitResult{SubmitStatus::Accepted, ordinal, std::move(handle), std::nullopt},
@@ -4624,9 +4624,9 @@ CommandInstalled<ReplaceResult> WorkingRequestCore::apply_replace_as(
         seal_direct(1, false, false, !options.keep_handle);
         const std::size_t first = history_end();
         append_direct(std::move(replaced), !options.keep_handle);
-        // commit's erase-push, as below: a re-price takes a fresh number of
-        // the request sequence too, so its row goes to the back.
+        // commit's erase-push: a fresh priority moves the successor to the back.
         note_chain_loss(live_[live_index]);
+        if (book_spill_) book_spill_->replacing(live_index, live.priority());
         for (std::size_t index = live_index; index + 1 < live_.size(); ++index) {
             live_[index] = std::move(live_[index + 1]);
         }
@@ -4663,11 +4663,11 @@ CommandInstalled<ReplaceResult> WorkingRequestCore::apply_replace_as(
         seal_direct(1, false, false, true);
         const std::size_t first = history_end();
         append_direct(std::move(replaced), true);
-        // commit's erase-push: the predecessor's row leaves, the rows after it
-        // move down one place, and the successor's is born at the back (a fresh
-        // incarnation keeps the book in order). The same book commit's rotation
-        // leaves, by one move per later row instead of a swap.
+        // commit's erase-push: later rows move down; the successor takes the
+        // back with a fresh priority, keeping the book sorted. Metadata makes
+        // the same move as commit's rotation, without changing row values.
         note_chain_loss(live_[live_index]);
+        if (book_spill_) book_spill_->replacing(live_index, live.priority());
         for (std::size_t index = live_index; index + 1 < live_.size(); ++index) {
             live_[index] = std::move(live_[index + 1]);
         }
@@ -4871,7 +4871,7 @@ void WorkingRequestCore::refresh_point_allowances(uint64_t point,
     // point being skipped.
     BookSpill& spill = *book_spill_;
     spill.check();
-    for (uint64_t at = spill.first_alive(); at != 0; at = spill.next_alive(at)) {
+    for (uint64_t at = spill.scan_spilled_closes() ? spill.first_alive() : 0; at != 0; at = spill.next_alive(at)) {
         const BookSlot slot = spill.rows.get(at);
         LiveRequest row = spill.read(*this, slot);
         if (refresh(row)) spill.rewrite(at, slot, row);
@@ -8532,5 +8532,136 @@ detail::ScratchStatus NativeStrategyHost::visit_native_open_lot_values(
     }
     return detail::ScratchStatus::ok;
 }
+} // inline namespace engine_script_run_v19
+} // namespace pineforge
+
+// C1 bridges live here, after the last pre-existing doc anchor. BookSpill's
+// archive helpers stay private to this translation unit; no include/ change.
+namespace pineforge {
+inline namespace engine_script_run_v19 {
+
+bool NativeExecutionConsumer::match_book_fast_path_ok(
+        const native_order::EvaluationContext& context) const noexcept {
+    if (match_book_setup_failed_) return false;
+    return !requests_.book_spill_
+        || requests_.book_spill_->fast_path_ok(requests_, context);
+}
+
+NativeExecutionConsumer::MatchDormantResident
+NativeExecutionConsumer::match_book_resident() const noexcept {
+    MatchDormantResident view;
+    view.active = requests_.live_.size();
+    if (const auto* book = requests_.book_spill_.get()) {
+        book->assert_aligned(requests_);
+        view.active -= static_cast<std::size_t>(book->resident_dormant);
+        view.stride = sizeof(native_order::WorkingRequestCore::BookSpill::ResidentMeta);
+        if (!book->resident.empty()) view.flags = &book->resident.front().dormant;
+    }
+    return view;
+}
+
+std::uint64_t NativeExecutionConsumer::match_book_projected_reads() const noexcept {
+    return requests_.book_spill_ ? requests_.book_spill_->projected_reads : 0;
+}
+
+std::uint64_t NativeExecutionConsumer::match_book_class_guard_failures() const noexcept {
+    return requests_.book_spill_ ? requests_.book_spill_->class_guard_failures : 0;
+}
+
+std::uint64_t NativeExecutionConsumer::dormant_watermark_for_test() const noexcept {
+    return requests_.book_spill_ ? requests_.book_spill_->watermark_for_test() : 0;
+}
+
+std::uint64_t NativeExecutionConsumer::match_book_index_poisonings() const noexcept {
+    return requests_.book_spill_ ? requests_.book_spill_->poison_events : 0;
+}
+
+void NativeExecutionConsumer::match_book_note_class_guard_failure(
+        const native_order::EvaluationContext& context) noexcept {
+    if (auto* book = requests_.book_spill_.get())
+        if (!book->class_guards_ok(requests_, context)) ++book->class_guard_failures;
+}
+
+detail::ScratchKeyOrder NativeExecutionConsumer::match_book_scratch_order() noexcept {
+    return native_order::WorkingRequestCore::BookSpill::index_order();
+}
+
+void NativeExecutionConsumer::match_book_rebind_scratch() noexcept {
+    // C3 invokes after provisioning and after release has nulled the borrowed
+    // slot. Projection needs no store after release; a later wake sees nullptr
+    // rather than the destroyed store. A moved core carries its pimpl intact.
+    if (requests_.book_spill_) requests_.book_spill_->level_index = match_book_scratch_;
+}
+
+void NativeExecutionConsumer::match_book_allocation_failure() noexcept {
+    if (requests_.book_spill_) requests_.book_spill_->index_failed();
+    else match_book_setup_failed_ = true;
+}
+
+bool NativeExecutionConsumer::match_book_spill_scope(bool enabled) noexcept {
+    const bool previous = match_book_middle_spill_;
+    match_book_middle_spill_ = enabled;
+    if (requests_.book_spill_) requests_.book_spill_->middle_spill = enabled;
+    return previous;
+}
+
+bool NativeExecutionConsumer::match_book_join(
+        const native_order::RequestHandle& handle,
+        const native_order::EvaluationContext& context,
+        double lo, double hi, double delta, DormantReach reachable) {
+    using Book = native_order::WorkingRequestCore::BookSpill;
+    if (!match_book_scratch_ || !reachable || match_book_setup_failed_) return false;
+    const auto* row = requests_.find_resident(handle);
+    Book::DormantSpec spec;
+    // Avoid constructing the dormant pimpl for ordinary active/market rows,
+    // or for a row the current path can reach.
+    if (!row || !Book::dormant_class(requests_, *row, spec)
+        || reachable(spec.ge, spec.level, lo, hi, delta)) return false;
+    try {
+        auto& book = Book::ensure(requests_);
+        book.level_index = match_book_scratch_;
+        book.middle_spill = match_book_middle_spill_;
+        // The real empty store exists at begin; its backing/cache is opened
+        // only for an actual dormant admission. Setup failure is cache-only.
+        try { prepare_match_book_scratch(); }
+        catch (...) { book.index_failed(); return false; }
+        return Book::join(requests_, handle, context, lo, hi, delta, reachable);
+    } catch (const std::bad_alloc&) {
+        match_book_allocation_failure();
+        return false;
+    }
+}
+
+std::uint64_t NativeExecutionConsumer::match_book_wake_by_price(
+        const native_order::EvaluationContext& context,
+        double lo, double hi, double delta, DormantReach reachable) {
+    // Called before the first candidate/held winner of this point exists.
+    MatchBookSpillScope candidate_free(*this, true);
+    return requests_.book_spill_
+        ? requests_.book_spill_->wake_by_price(requests_, context, lo, hi, delta, reachable) : 0;
+}
+
+void NativeExecutionConsumer::match_book_begin(const native_order::EvaluationContext& context) {
+    try {
+        if (requests_.book_spill_) requests_.book_spill_->begin(requests_, context);
+    } catch (const std::bad_alloc&) {
+        match_book_allocation_failure();
+    }
+}
+
+void NativeExecutionConsumer::match_book_advance(std::uint64_t priority) {
+    if (requests_.book_spill_) requests_.book_spill_->advance(requests_, priority);
+}
+
+void NativeExecutionConsumer::match_book_complete(bool finish_sweep) {
+    if (requests_.book_spill_) requests_.book_spill_->complete(requests_, finish_sweep);
+}
+
+bool NativeExecutionConsumer::dormant_driver_permitted(
+        const native_order::EvaluationContext& context, bool limit) const noexcept {
+    return native_order::WorkingRequestCore::BookSpill::class_permitted(
+        requests_, context, limit ? 0U : 1U);
+}
+
 } // inline namespace engine_script_run_v19
 } // namespace pineforge

@@ -1,0 +1,13 @@
+diff --git a/src/native_order.cpp b/src/native_order.cpp
+--- a/src/native_order.cpp
++++ b/src/native_order.cpp
+@@ -8623,8 +8623,7 @@
+         catch (...) { book.index_failed(); return false; }
+         return Book::join(requests_, handle, context, lo, hi, delta, reachable);
+     } catch (const std::bad_alloc&) {
+-        match_book_allocation_failure();
+-        return false;
++        throw;
+     }
+ }
+ 

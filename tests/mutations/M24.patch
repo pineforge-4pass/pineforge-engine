@@ -1,0 +1,29 @@
+diff --git a/src/native_order_book.hpp b/src/native_order_book.hpp
+--- a/src/native_order_book.hpp
++++ b/src/native_order_book.hpp
+@@ -547,7 +547,7 @@
+         // K1: retained winners/candidates keep the back-only contract. Middle
+         // erasure requires a consumer scope with no retained resident alias;
+         // completing an allowance sweep alone never grants that scope.
+-        const bool may_erase = middle_spill;
++        const bool may_erase = true;
+         if (may_erase)
+             for (std::size_t i = resident.size(); i != 0; --i)
+                 if (resident[i - 1].dormant) return i - 1;
+@@ -562,14 +562,8 @@
+         } else ++active_spilled;
+         if (std::holds_alternative<BookClose>(core.live_[at].authority))
+             ++spilled_book_closes;
+-        if (at + 1 == core.live_.size()) {
+-            core.live_.pop_back();
+-            resident.pop_back();
+-        } else {
+-            assert(middle_spill);
+-            core.live_.erase(core.live_.begin() + static_cast<std::ptrdiff_t>(at));
+-            resident.erase(resident.begin() + static_cast<std::ptrdiff_t>(at));
+-        }
++        core.live_.erase(core.live_.begin() + static_cast<std::ptrdiff_t>(at));
++        resident.erase(resident.begin() + static_cast<std::ptrdiff_t>(at));
+         ever_spilled = true;
+         ++alive;
+         assert_aligned(core);

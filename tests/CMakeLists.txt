@@ -3753,6 +3753,18 @@ list(REMOVE_ITEM TEST_SOURCES ${_pf_private_fixture_rows})
 # Report arithmetic and C-host failure ownership, with source-free includes.
 list(APPEND TEST_SOURCES test_metrics_overflow)
 list(APPEND TEST_SOURCES test_native_c_host_report_failure)
+list(APPEND TEST_SOURCES test_native_unreachable_book)
+list(APPEND TEST_SOURCES test_native_dormant_book_cost)
+list(APPEND TEST_SOURCES test_native_dormant_book_resident)
+list(APPEND TEST_SOURCES test_native_dormant_book_transcript)
+list(APPEND TEST_SOURCES test_native_dormant_book_switch)
+list(APPEND TEST_SOURCES test_native_dormant_book_tokens)
+list(APPEND TEST_SOURCES test_native_dormant_book_read_failure)
+list(APPEND TEST_SOURCES test_native_dormant_book_index_fault)
+list(APPEND TEST_SOURCES test_native_dormant_book_allocation_fault)
+list(APPEND TEST_SOURCES test_native_dormant_book_reachability)
+list(APPEND TEST_SOURCES test_native_dormant_book_core_contract)
+list(APPEND TEST_SOURCES test_native_dormant_book_capacity)
 
 # CR-150: engine-free pipe flag control beside the ordinary C++ unit rows.
 if(UNIX)
@@ -3762,6 +3774,12 @@ endif()
 foreach(test_name ${TEST_SOURCES})
     pineforge_add_unit_test(${test_name})
 endforeach()
+
+add_test(NAME test_native_dormant_book_notification_middle_spill
+    COMMAND test_native_dormant_book_transcript --notification-middle-spill)
+add_test(NAME test_native_dormant_book_resident_window
+    COMMAND test_native_dormant_book_transcript --resident-window)
+set_tests_properties(test_native_dormant_book_capacity PROPERTIES LABELS "slow")
 
 if(PINEFORGE_BUILD_SOURCE_LAYER)
     add_executable(test_pending_observer_walk test_pending_observer_walk.cpp)

@@ -1,0 +1,12 @@
+diff --git a/src/native_order_book.hpp b/src/native_order_book.hpp
+--- a/src/native_order_book.hpp
++++ b/src/native_order_book.hpp
+@@ -234,6 +234,8 @@
+                                                      context.existing_matching_bit);
+         if (context.cursor.point.provenance == NativePriceProvenance::CurrentExecution)
+             permitted = false;
++        if (context.driver_class == DriverEligibilityClass::CarriedOpen && cls == 1)
++            permitted = true;
+         return permitted;
+     }
+     bool fast_path_ok(const WorkingRequestCore& core,

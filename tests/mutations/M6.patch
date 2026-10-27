@@ -1,0 +1,14 @@
+diff --git a/src/native_execution_consumer.cpp b/src/native_execution_consumer.cpp
+--- a/src/native_execution_consumer.cpp
++++ b/src/native_execution_consumer.cpp
+@@ -14230,7 +14230,9 @@
+ }
+ 
+ NativeExecutionConsumer::DormantReach NativeExecutionConsumer::dormant_join_reach() noexcept {
+-    return &dormant_reachable;
++    return +[](bool ge, double level, double lo, double hi, double) noexcept {
++        return dormant_reachable(ge, level, lo, hi, 0.0);
++    };
+ }
+ 
+ NativeExecutionConsumer::DormantReach NativeExecutionConsumer::dormant_wake_reach() noexcept {

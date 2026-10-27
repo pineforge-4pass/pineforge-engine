@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cassert> // assert
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
@@ -1259,22 +1260,22 @@ std::shared_ptr<const native_order::LiveRequest> unowned_live(
     return std::shared_ptr<const native_order::LiveRequest>(
             std::shared_ptr<const native_order::LiveRequest>(), &row);
 }
-
+std::unique_ptr<detail::ScratchBacking> make_book_scratch_backing(std::size_t page_size);
 }  // namespace
 
 struct NativeExecutionConsumer::RunCommandScratch {
-    // Match the adapter's former trade/dependency geometry. Backing and cache
-    // placement do not enter state_digest; all command scopes roll back.
+    // Fixed command geometry; Book defers its backing/cache until admission.
     static constexpr std::size_t page_size = 512;
-    std::unique_ptr<detail::ScratchBacking> backing =
-        detail::make_command_scratch_backing(page_size);
+    std::unique_ptr<detail::ScratchBacking> backing;
     std::unique_ptr<detail::CommandScratchStore> store;
     detail::CommandScratchStore** borrower = nullptr;
     std::array<std::byte, page_size> digest_page{};
     CommandScratchSnapshot snapshot;
 
-    explicit RunCommandScratch(detail::ScratchKeyOrder order)
-        : store(std::make_unique<detail::CommandScratchStore>(
+    explicit RunCommandScratch(detail::ScratchKeyOrder order, bool book)
+        : backing(book ? make_book_scratch_backing(page_size)
+                       : detail::make_command_scratch_backing(page_size)),
+          store(std::make_unique<detail::CommandScratchStore>(
               detail::ScratchStoreConfig{2, page_size, 1, 1, order,
                                         detail::ScratchOpenMode::create_empty},
               backing.get())) {
@@ -1314,15 +1315,15 @@ void NativeExecutionConsumer::provision_run_command_scratch(
     if (borrower && borrower->transaction_active())
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                       "run command scratch borrower has an active transaction");
-    auto run = std::make_shared<RunCommandScratch>(order);
+    auto run = std::make_shared<RunCommandScratch>(order, binding == CommandScratchBinding::Book);
     run->borrower = &borrower;
     borrower = run->store.get();
     run_command_scratch_[index] = std::move(run);
 }
 
 void NativeExecutionConsumer::release_run_command_scratch() noexcept {
-    for (const auto& run : run_command_scratch_)
-        if (run) run->release();
+    for (const auto& run : run_command_scratch_) if (run) run->release();
+    match_book_rebind_scratch();
 }
 
 std::optional<NativeExecutionConsumer::CommandScratchSnapshot>
@@ -3189,7 +3190,7 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     recalc_epoch_count_ = 0;
     recalculations_ = 0;
     recalculations_skipped_ = 0;
-    quiet_points_ = 0;
+    reset_match_counters();
     ambient_installs_ = 0;
     carried_settlements_ = 0;
     callback_context_ = NativeDecisionContext{};
@@ -3222,8 +3223,8 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     // host's and are never mistaken for the kernel's tail. This run's
     // declaration is registered after the callback (below).
     clear_timeframe_subscriptions(engine);
-    provision_run_command_scratch(CommandScratchBinding::Dependency,
-                                  dependency_scratch_order(), dependency_scratch_);
+    provision_run_command_scratch_for_run();
+    // Both command stores are run-owned before the first host callback.
     if (auto* host = native_host(engine)) {
         in_callback_ = true;
         in_run_begin_ = true;
@@ -5273,14 +5274,14 @@ void NativeExecutionConsumer::observe_trails(
     const auto* spec = spec_ptr();
     if (!spec) return;
     // A path with only market/limit/stop requests has no trailing state to
-    // advance.  In particular, do not snapshot every live cohort request or
-    // resolve its target side at each waypoint merely to discover that fact.
-    const auto& live_requests = requests_.live();
-    if (std::none_of(live_requests.begin(), live_requests.end(), [](const auto& live) {
-            return std::holds_alternative<native_order::TrailTrack>(live.trigger_state);
-        })) {
+    // advance. The collector checks resident active rows when every spilled
+    // row is dormant; it otherwise makes the same eager entry snapshot.
+    const bool has_trails = collect_match_trails(point, cursor, continuous);
+    if (!has_trails) {
         return;
     }
+    // Snapshot collection precedes target/eligibility reads as in the base.
+    // Dormant rows are non-cohort, ungrouped requests with a fixed side.
     native_order::EvaluationContext evaluation;
     evaluation.cursor = cursor;
     evaluation.driver_class = classify_driver(point, continuous);
@@ -5288,9 +5289,9 @@ void NativeExecutionConsumer::observe_trails(
     // The book as it stood on entry, in the consumer's scratch: match_path is
     // the only caller, and nothing below reaches either function again.
     auto& handles = match_trail_handles_;
-    handles.clear();
-    handles.reserve(live_requests.size());
-    for (const auto& live : live_requests) handles.push_back(live.handle());
+    // The collector reuses this buffer's capacity without decoding spilled
+    // dormant rows. Active rows retain priority order and every active trail
+    // is included, so the mutation loop below is the eager loop.
     for (const auto& handle : handles) {
         if (failed()) return;
         // Held: the cohort side read below may read other spilled rows.
@@ -6728,7 +6729,7 @@ void NativeExecutionConsumer::match_path(
         bool continuous, double from_price, double to_price) {
     if (failed()) return;
     // Every matching cursor is its own recalculation budget (L5).
-    open_point_epoch();
+    open_match_point_epoch();
     if (point.coordinate.provenance == NativePriceProvenance::CurrentExecution) {
         fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Settlement,
                                    point.coordinate.ordinal});
@@ -6752,18 +6753,18 @@ void NativeExecutionConsumer::match_path(
     const auto grid = grid_threshold(*spec);
     const uint64_t P = point.coordinate.ordinal;
     requests_.refresh_point_allowances(P, read_position(engine));
-    double t_cursor = 0.0;
-    double cursor_price = from_price;
+    MatchBookSpillScope retained_candidates(*this, false);
+    MatchDormantPoint dormant(*this, engine, point, driver_class, from_price, to_price);
+    double t_cursor = 0.0, cursor_price = from_price;
     native_order::MatchCursor path_cursor = make_cursor(point, t_cursor);
+    dormant.start();
     observe_trails(engine, point, path_cursor, continuous,
                    native_matching::price_at(from_price, to_price, t_cursor));
-
     using Kind = MatchKind;
     using Candidate = MatchCandidate;
     using CandidateProvenance = MatchProvenance;
     auto& candidate_provenance = match_provenance_;
     candidate_provenance.clear();
-
     auto same_optional_bits = [](const std::optional<double>& left,
                                  const std::optional<double>& right) {
         return left.has_value() == right.has_value()
@@ -7115,7 +7116,7 @@ void NativeExecutionConsumer::match_path(
     bool rescan_after_rebuild = false;
 
     while (!failed()) {
-        const bool winner_only = rescan_winner_only;
+        const bool winner_only = dormant.scan() && rescan_winner_only;
         rescan_winner_only = false;
         const bool after_rebuild = rescan_after_rebuild;
         rescan_after_rebuild = false;
@@ -7137,15 +7138,15 @@ void NativeExecutionConsumer::match_path(
         eval.driver_class = driver_class;
         eval.existing_matching_bit = point.matching;
         std::optional<Candidate> winner;
-        // Candidate selection makes no request-core mutation; only the
-        // selected winner can replace or retire a later request afterwards.
+        assert(!match_book_middle_spill_ && "native retained candidates require back-only spills");
+        // Candidate selection is read-only; only its winner can mutate later rows.
         // The selection walks the book itself and reads each row where the
         // view's iterator stands on it: the iterator keeps that row alive. A
         // row outside the heap is a copy the book's small ring of recent reads
         // lets go a few reads later, so no row is read through a pointer saved
         // before the walk moved on. The winner's row is held past the walk.
         const auto& live_requests = requests_.live();
-        std::size_t snapshot_size = live_requests.size();
+        std::size_t snapshot_size = dormant.fast() ? requests_.live_.size() : live_requests.size();
         std::size_t winner_index = 0;
         auto book_row = live_requests.end();
         std::shared_ptr<const native_order::LiveRequest> rescanned;
@@ -7156,22 +7157,22 @@ void NativeExecutionConsumer::match_path(
             // is all resident; otherwise its handle does (the refresh brought
             // it back into the heap, so the lookup reads no spilled row).
             winner_index = rows.take_first();
-            rescanned = requests_.book_spilled() ? requests_.hold_live(rescan_handle)
-                                                 : unowned_live(live_requests[winner_index]);
-            snapshot_size = 1;
-        } else {
+            // Resolve a fast row's current resident index before its flag.
+            rescanned = dormant.rescan(winner_index, rescan_handle);
+            snapshot_size = rescanned ? 1 : 0;
+        } else if (!dormant.fast()) {
             book_row = live_requests.begin();
         }
-        const bool keep_rows = winner_only
-            || (match_row_reuse_ && live_requests.size() >= kKeepRowsFrom);
+        const bool keep_rows = winner_only || (match_row_reuse_
+            && (dormant.fast() ? dormant.active_rows() : live_requests.size()) >= kKeepRowsFrom);
         if (!winner_only) rows.clear();
-        // The spilled table's generation the walk reads the book under: a row
-        // it finds outside the heap keeps its entry with it.
         const uint64_t scan_generation = requests_.book_generation();
         for (std::size_t snapshot_index = 0; snapshot_index < snapshot_size; ++snapshot_index) {
-            if (!winner_only && snapshot_index != 0) ++book_row;
-            const auto* live = winner_only ? rescanned.get() : &*book_row;
+            if (!winner_only && dormant.skip(snapshot_index)) continue;
+            if (!winner_only && !dormant.fast() && snapshot_index != 0) ++book_row;
+            const auto* live = winner_only ? rescanned.get() : dormant.row(snapshot_index, book_row);
             if (!live) continue;
+            ++match_dormant_counts_.scanned;
             const auto& handle = live->handle();
             const bool cohort_close =
                 std::holds_alternative<native_order::CohortClose>(live->authority);
@@ -7250,7 +7251,7 @@ void NativeExecutionConsumer::match_path(
             row.handle = handle;
             row.priority = live->priority();
             if (!winner_only) {
-                row.book_at = book_row.spilled_at();
+                row.book_at = dormant.fast() ? 0 : book_row.spilled_at();
                 row.book_generation = scan_generation;
             }
             if (needs_evaluation(*live, facts)) {
@@ -7345,7 +7346,7 @@ void NativeExecutionConsumer::match_path(
             if (keep_rows) rows.keep(row);
             if (!winner || MatchRows::precedes(row, *winner)) {
                 winner = row;
-                if (!winner_only) winner_held = book_row.hold();
+                if (!winner_only) winner_held = dormant.fast() ? unowned_live(*live) : book_row.hold();
             }
         }
         if (winner_only) {
@@ -7353,7 +7354,7 @@ void NativeExecutionConsumer::match_path(
             winner.reset();
             if (const auto* first = rows.first()) winner = *first;
         }
-        if (!winner) break;
+        if (!winner) { dormant.complete(); break; }
         // A row kept from an earlier scan names the spilled-table entry that
         // scan read its request from, and the refresh it is reused after may
         // have rebuilt the table (BookSpill::compact), which leaves no entry
@@ -7367,8 +7368,8 @@ void NativeExecutionConsumer::match_path(
             rescan_after_rebuild = true;
             continue;
         }
-        const bool cursor_unmoved =
-            native_matching::double_bits(winner->t) == native_matching::double_bits(t_cursor);
+        if (!dormant.before_winner(winner->priority, winner->t)) return;
+        const bool cursor_unmoved = native_matching::double_bits(winner->t) == native_matching::double_bits(t_cursor);
         if (continuous && winner->t > t_cursor) {
             apply_excursion(engine, winner->price);
             path_cursor = make_cursor(point, winner->t);
@@ -7446,12 +7447,12 @@ void NativeExecutionConsumer::match_path(
                     }
                 } else {
                     read_target_into(engine, live, match_target_, match_target_handles_);
-                    // Handed the timeline: an unbound close carrying a
-                    // binding the book still has binds here, taking an
+                    // A kept unbound-close binding binds here, taking an
                     // ordinal (ReplaceOptions::keep_binding, R5 lane V19-D).
                     if (requests_.refresh_allowance(winner->handle, eval, match_target_,
                                                     next_timeline_ordinal_, open_grant)) {
                         catch_up_timeline();
+                        dormant.join(winner->handle);
                         rescan_winner_only = reuse_after_refresh;
                         continue;
                     }
@@ -7615,6 +7616,13 @@ void NativeExecutionConsumer::match_path(
         consuming_request_ = false;
         if (failed()) return;
         if (!outcome) skip(skip_key(winner->priority, winner->kind));
+        // A fill never reuses this scan. Release its indices and resident
+        // aliases before callbacks may make room by spilling a middle row.
+        rows.clear();
+        winner_row.reset();
+        rescanned.reset();
+        book_row = live_requests.end();
+        live = nullptr;
         drain_applied_notifications(engine);
     }
     if (continuous && t_cursor < 1.0 && !failed()) {
@@ -8178,6 +8186,7 @@ void NativeExecutionConsumer::invoke_recalculation(
     }
     const uint64_t ordinal = callback_context_.coordinate.ordinal;
     ++recalculations_;
+    MatchBookSpillScope candidate_free(*this, true);
     try {
         const NativeDecisionContext presented = callback_context_;
         host->on_native_recalculate(bar, presented, reason, cause);
@@ -8352,6 +8361,7 @@ void NativeExecutionConsumer::invoke_applied_callback(
 
 void NativeExecutionConsumer::drain_queued_notifications(BacktestEngine& engine) {
     if (in_callback_ || consuming_request_ || draining_notifications_ || failed()) return;
+    MatchBookSpillScope candidate_free(*this, true);
     draining_notifications_ = true;
     while (notification_head_ < applied_notifications_.size() && !failed()) {
         const auto notification = applied_notifications_[notification_head_++];
@@ -8606,11 +8616,11 @@ void NativeExecutionConsumer::invoke_callback(BacktestEngine& engine, const Bar&
     in_callback_ = true;
     callback_phase_ = CallbackPhase::Bar;
     open_point_epoch();
+    MatchBookSpillScope candidate_free(*this, true);
     try {
         const NativeDecisionContext presented = callback_context_;
-        // L5: every calculation of the run is routed here. The default
-        // on_native_recalculate forwards to on_native_bar, so a host that
-        // never opted into another cadence sees exactly its own contract.
+        // L5: every calculation routes here; the default recalculation hook
+        // forwards to on_native_bar for hosts using the ordinary cadence.
         host->on_native_recalculate(bar, presented, NativeCalculationReason::BarClose,
                                     nullptr);
     } catch (const std::exception& e) {
@@ -14195,3 +14205,358 @@ std::uint64_t native_run_spec_digest(const NativeRunSpec& spec, const NativeBarV
 
 } // inline namespace native_bar_views_v1
 }  // namespace pineforge
+
+// Dormant matcher helpers live after the last pinned consumer citation.
+namespace pineforge::engine_script_run_v19 {
+
+bool NativeExecutionConsumer::dormant_reachable(
+        bool ge, double level, double lo, double hi, double delta) noexcept {
+    // Unknown geometry must wake rather than suppress an eager candidate.
+    if (!std::isfinite(level) || !std::isfinite(lo) || !std::isfinite(hi)
+        || lo > hi || !std::isfinite(delta) || delta < 0.0) return true;
+    return ge ? level >= lo - delta : level <= hi + delta;
+}
+
+bool NativeExecutionConsumer::dormant_segment_finite(double from, double to) noexcept {
+    if (!std::isfinite(from) || !std::isfinite(to)) return false;
+    return true;
+}
+
+double NativeExecutionConsumer::dormant_margin(
+        double lo, double hi, double grid_tick) noexcept {
+    if (!std::isfinite(lo) || !std::isfinite(hi) || lo > hi
+        || !std::isfinite(grid_tick) || grid_tick < 0.0) {
+        return std::numeric_limits<double>::infinity();
+    }
+    // Chosen safety margins, not a derived ULP/error bound: never tighten
+    // the 2^-20 relative allowance or the two-tick allowance without T8.
+    const double scale = std::max({1.0, std::abs(lo), std::abs(hi)});
+    const double relative = std::ldexp(scale, -20);
+    return relative + 2.0 * grid_tick;
+}
+
+NativeExecutionConsumer::DormantReach NativeExecutionConsumer::dormant_join_reach() noexcept {
+    return &dormant_reachable;
+}
+
+NativeExecutionConsumer::DormantReach NativeExecutionConsumer::dormant_wake_reach() noexcept {
+    return &dormant_reachable;
+}
+
+bool NativeExecutionConsumer::dormant_join_reachable(
+        bool ge, double level, double from, double to, double grid_tick) noexcept {
+    if (!std::isfinite(from) || !std::isfinite(to)) return true;
+    const double lo = std::min(from, to), hi = std::max(from, to);
+    return dormant_join_reach()(ge, level, lo, hi, dormant_margin(lo, hi, grid_tick));
+}
+
+bool NativeExecutionConsumer::dormant_wake_reachable(
+        bool ge, double level, double from, double to, double grid_tick) noexcept {
+    if (!std::isfinite(from) || !std::isfinite(to)) return true;
+    const double lo = std::min(from, to), hi = std::max(from, to);
+    return dormant_wake_reach()(ge, level, lo, hi, dormant_margin(lo, hi, grid_tick));
+}
+
+void NativeExecutionConsumer::reset_match_counters() noexcept {
+    quiet_points_ = 0;
+    match_dormant_counts_ = MatchDormantCounts{};
+    match_dormant_was_fast_ = false;
+    match_book_setup_failed_ = false;
+    match_book_middle_spill_ = false;
+}
+
+void NativeExecutionConsumer::note_match_grid() noexcept {
+    const auto* spec = spec_ptr();
+    if (spec && price_grid_on(*spec)) ++match_dormant_counts_.grid;
+}
+
+void NativeExecutionConsumer::note_quiet_match_point() noexcept {
+    ++quiet_points_;
+    note_match_grid();
+}
+
+void NativeExecutionConsumer::open_match_point_epoch() {
+    open_point_epoch();
+    note_match_grid();
+}
+
+NativeExecutionConsumer::MatchDormantPoint::MatchDormantPoint(
+        NativeExecutionConsumer& consumer, BacktestEngine& engine,
+        const NativeDriverPoint& point, native_order::DriverEligibilityClass driver_class,
+        double from_price, double to_price) noexcept
+    : consumer_(consumer), engine_(engine), from_(from_price), to_(to_price),
+      lo_(std::min(from_price, to_price)), hi_(std::max(from_price, to_price)),
+      exceptions_(std::uncaught_exceptions()) {
+    evaluation_.cursor = consumer_.make_cursor(point, 0.0);
+    evaluation_.driver_class = driver_class;
+    evaluation_.existing_matching_bit = point.matching;
+    const auto* spec = consumer_.spec_ptr();
+    grid_ = spec && price_grid_on(*spec);
+    delta_ = dormant_margin(lo_, hi_, grid_ ? spec->price_tick : 0.0);
+}
+
+NativeExecutionConsumer::MatchDormantPoint::~MatchDormantPoint() noexcept {
+    // Every return, break, failed dispatch and callback unwind passes here.
+    // A failed/unwinding point keeps the eager partial watermark; completing
+    // its unswept suffix would itself change the failure's continuation.
+    try {
+        complete();
+    } catch (...) {
+        // Rendering an already-coded failure may itself allocate. Never
+        // replace an active callback exception or throw from this guard.
+        consumer_.fail(engine_, NativeFailure{NativeFailureCode::Allocation,
+            NativeFailureOperation::Settlement, evaluation_.cursor.point.ordinal});
+    }
+}
+
+bool NativeExecutionConsumer::MatchDormantPoint::eligible() const noexcept {
+    if (!consumer_.match_dormant_ || grid_) return false;
+    if (!dormant_segment_finite(from_, to_)) return false;
+    return consumer_.match_book_fast_path_ok(evaluation_);
+}
+
+void NativeExecutionConsumer::MatchDormantPoint::fall_back() noexcept {
+    // P2-3/K2: no rejoin/recovery pass. The eager scan can leave active rows
+    // spilled, keeping later points eager until commands remove those rows.
+    // Guards/active_spilled are per point; only C1's index poison is permanent.
+    // Count runs that ever leave fast matching, even if the book later drains.
+    if (consumer_.match_dormant_was_fast_ && consumer_.match_dormant_counts_.exits == 0)
+        ++consumer_.match_dormant_counts_.exits;
+    fast_ = false;
+}
+
+void NativeExecutionConsumer::MatchDormantPoint::failure(const std::exception& error) {
+    consumer_.fail(engine_, NativeFailure{NativeFailureCode::Allocation,
+        NativeFailureOperation::Settlement, evaluation_.cursor.point.ordinal});
+    consumer_.render_exception(engine_, error);
+}
+
+void NativeExecutionConsumer::MatchDormantPoint::unclassified_failure() {
+    consumer_.fail(engine_, NativeFailure{NativeFailureCode::Allocation,
+        NativeFailureOperation::Settlement, evaluation_.cursor.point.ordinal});
+    consumer_.render_unclassified(engine_, "native dormant matching failed");
+}
+
+void NativeExecutionConsumer::MatchDormantPoint::start() {
+    if (!eligible()) {
+        fall_back();
+        return;
+    }
+    try {
+        consumer_.match_dormant_counts_.woken += consumer_.match_book_wake_by_price(
+            evaluation_, lo_, hi_, delta_, dormant_wake_reach());
+        // A promotion can spill an active row. No sweep has begun yet.
+        if (!eligible()) {
+            fall_back();
+            return;
+        }
+        // WorkingRequestCore is move-only: stamps/registers move with its
+        // pimpl; there is no core snapshot/rollback to restore here (P3-1).
+        begun_ = true;
+        consumer_.match_book_begin(evaluation_);
+        if (eligible()) fast_ = true;
+        else fall_back();
+    } catch (const std::exception& error) {
+        failure(error);
+    } catch (...) {
+        unclassified_failure();
+    }
+}
+
+bool NativeExecutionConsumer::MatchDormantPoint::scan() {
+    const bool previous = fast_;
+    if (fast_ && !eligible()) fall_back();
+    if (fast_) {
+        // No request-core mutation occurs inside candidate selection. A
+        // callback/trigger/observe_trails may shift live_ only afterwards;
+        // the next scan borrows metadata anew. Winner-only reuse re-resolves
+        // its handle, and the base winner's epoch check re-holds after trails.
+        resident_ = consumer_.match_book_resident();
+        if (!counted_fast_) {
+            ++consumer_.match_dormant_counts_.fast;
+            consumer_.match_dormant_was_fast_ = true;
+            counted_fast_ = true;
+        }
+    } else if (!counted_eager_) {
+        consumer_.match_book_note_class_guard_failure(evaluation_);
+        ++consumer_.match_dormant_counts_.eager;
+        counted_eager_ = true;
+    }
+    return previous == fast_;
+}
+
+const native_order::LiveRequest* NativeExecutionConsumer::MatchDormantPoint::row(
+        std::size_t index,
+        const native_order::WorkingRequestCore::LiveView::const_iterator& eager) const {
+    return fast_ ? &consumer_.requests_.live_[index] : &*eager;
+}
+
+std::shared_ptr<const native_order::LiveRequest>
+NativeExecutionConsumer::MatchDormantPoint::rescan(
+        std::size_t& index, const native_order::RequestHandle& handle) const {
+    auto& requests = consumer_.requests_;
+    if (!fast_) {
+        return requests.book_spilled() ? requests.hold_live(handle)
+                                      : unowned_live(requests.live()[index]);
+    }
+    // A middle spill may shift later resident indices. Never use a kept
+    // index to read its dormant flag until the handle has named today's row.
+    // All active rows are resident here; this lookup cannot read spill data.
+    const auto* live = requests.find_resident(handle);
+    if (!live) return nullptr;
+    index = static_cast<std::size_t>(live - requests.live_.data());
+    return skip(index) ? nullptr : unowned_live(*live);
+}
+
+bool NativeExecutionConsumer::MatchDormantPoint::before_winner(
+        std::uint64_t priority, double t) {
+    if (!begun_ || closed_) return !consumer_.failed();
+    try {
+        if (native_matching::double_bits(t) == native_matching::double_bits(0.0)) {
+            consumer_.match_book_advance(priority);
+        } else {
+            complete();
+        }
+    } catch (const std::exception& error) {
+        failure(error);
+    } catch (...) {
+        unclassified_failure();
+    }
+    return !consumer_.failed();
+}
+
+void NativeExecutionConsumer::MatchDormantPoint::join(
+        const native_order::RequestHandle& handle) {
+    if (!fast_ || !eligible() || consumer_.failed()) return;
+    if (consumer_.match_book_join(
+            handle, evaluation_, lo_, hi_, delta_, dormant_join_reach())) {
+        ++consumer_.match_dormant_counts_.joined;
+    }
+}
+
+void NativeExecutionConsumer::MatchDormantPoint::complete() {
+    if (closed_) return;
+    closed_ = true;
+    if (!begun_) return;
+    const bool finish = !consumer_.failed() && std::uncaught_exceptions() == exceptions_;
+    try {
+        consumer_.match_book_complete(finish);
+    } catch (const std::exception& error) {
+        failure(error);
+    } catch (...) {
+        unclassified_failure();
+    }
+}
+
+bool NativeExecutionConsumer::collect_match_trails(
+        const NativeDriverPoint& point, const native_order::MatchCursor& cursor,
+        bool continuous) {
+    native_order::EvaluationContext evaluation;
+    evaluation.cursor = cursor;
+    evaluation.driver_class = classify_driver(point, continuous);
+    evaluation.existing_matching_bit = point.matching;
+    auto& handles = match_trail_handles_;
+    const auto* spec = spec_ptr();
+    const bool resident_only = match_dormant_ && spec
+        && !price_grid_on(*spec) && match_book_fast_path_ok(evaluation);
+    if (resident_only) {
+        const auto resident = match_book_resident();
+        bool tracking = false;
+        for (std::size_t i = 0; i != requests_.live_.size(); ++i) {
+            if (!resident.dormant(i)
+                && std::holds_alternative<native_order::TrailTrack>(
+                       requests_.live_[i].trigger_state)) {
+                tracking = true;
+                break;
+            }
+        }
+        if (!tracking) return false;
+        handles.clear();
+        handles.reserve(resident.active);
+        for (std::size_t i = 0; i != requests_.live_.size(); ++i) {
+            if (!resident.dormant(i)) handles.push_back(requests_.live_[i].handle());
+        }
+    } else {
+        const auto live = requests_.live();
+        if (std::none_of(live.begin(), live.end(), [](const auto& row) {
+                return std::holds_alternative<native_order::TrailTrack>(row.trigger_state);
+            })) return false;
+        handles.clear();
+        handles.reserve(live.size());
+        for (const auto& row : live) handles.push_back(row.handle());
+    }
+    return true;
+}
+
+void NativeExecutionConsumer::provision_run_command_scratch_for_run() {
+    try {
+        provision_run_command_scratch(CommandScratchBinding::Book,
+                                      match_book_scratch_order(), match_book_scratch_);
+    } catch (...) {
+        // Book is derived acceleration; setup cannot add a run refusal.
+        match_book_allocation_failure();
+    }
+    match_book_rebind_scratch();
+    provision_run_command_scratch(CommandScratchBinding::Dependency,
+                                  dependency_scratch_order(), dependency_scratch_);
+}
+
+// The empty CommandScratchStore can answer lower_bound/state_digest
+// without touching backing pages. Keep that store and its release snapshot,
+// but open the production backing/cache only when a dormant row will use it.
+// All subsequent page traffic goes to the same production implementation.
+DormantBookScratchBacking::DormantBookScratchBacking(std::size_t page_size) noexcept
+    : ScratchBacking(detail::ScratchBackingKind::disk, page_size) {}
+
+void DormantBookScratchBacking::prepare() {
+    if (!inner_) inner_ = detail::make_command_scratch_backing(page_size());
+}
+
+std::uint64_t DormantBookScratchBacking::page_count() const noexcept {
+    return inner_ ? inner_->page_count() : 0;
+}
+
+std::optional<std::uint64_t> DormantBookScratchBacking::arena_capacity_bytes() const noexcept {
+    return inner_ ? inner_->arena_capacity_bytes() : std::nullopt;
+}
+
+const detail::ReportScratchIoError* DormantBookScratchBacking::carried_failure() const noexcept {
+    return inner_ ? inner_->carried_failure() : nullptr;
+}
+
+detail::ScratchStatus DormantBookScratchBacking::do_read_page(
+        detail::ScratchPageId id, detail::ScratchBuffer destination) const noexcept {
+    return inner_ ? inner_->read_page(id, destination) : detail::ScratchStatus::not_found;
+}
+
+detail::ScratchStatus DormantBookScratchBacking::do_write_page(
+        detail::ScratchPageId id, detail::ScratchBytes source) noexcept {
+    // Admission prepares before index_put. Reject an unprepared writer
+    // as a programming error without publishing any index entry.
+    return inner_ ? inner_->write_page(id, source) : detail::ScratchStatus::programming_error;
+}
+
+detail::ScratchStatus DormantBookScratchBacking::do_sync(
+        detail::ScratchDurability durability) noexcept {
+    if (inner_) return inner_->sync(durability);
+    return durability == detail::ScratchDurability::buffered
+        ? detail::ScratchStatus::ok : detail::ScratchStatus::programming_error;
+}
+
+namespace {
+
+std::unique_ptr<detail::ScratchBacking> make_book_scratch_backing(std::size_t page_size) {
+    return std::make_unique<DormantBookScratchBacking>(page_size);
+}
+
+} // namespace
+
+void NativeExecutionConsumer::prepare_match_book_scratch() {
+    const auto& run = run_command_scratch_[static_cast<std::size_t>(CommandScratchBinding::Book)];
+    if (!run || !run->store || run->store.get() != match_book_scratch_)
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                      "native dormant scratch binding is not live");
+    static_cast<DormantBookScratchBacking&>(*run->backing).prepare();
+}
+
+}  // namespace pineforge::engine_script_run_v19

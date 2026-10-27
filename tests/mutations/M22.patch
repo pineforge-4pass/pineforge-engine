@@ -1,0 +1,12 @@
+diff --git a/src/native_execution_consumer.cpp b/src/native_execution_consumer.cpp
+--- a/src/native_execution_consumer.cpp
++++ b/src/native_execution_consumer.cpp
+@@ -14226,7 +14226,7 @@
+     // the 2^-20 relative allowance or the two-tick allowance without T8.
+     const double scale = std::max({1.0, std::abs(lo), std::abs(hi)});
+     const double relative = std::ldexp(scale, -20);
+-    return relative + 2.0 * grid_tick;
++    return relative + grid_tick;
+ }
+ 
+ NativeExecutionConsumer::DormantReach NativeExecutionConsumer::dormant_join_reach() noexcept {
