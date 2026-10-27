@@ -5265,7 +5265,8 @@
    "scope": [
     "namespace pineforge #1",
     "namespace detail #1",
-    "inline std :: shared_ptr < MapStoreHolder > map_current_store ( ) #1"
+    "inline std :: shared_ptr < MapStoreHolder > map_current_store ( ) #1",
+    "if ( ! holder ) #1"
    ],
    "cls": "alloc",
    "spelling": "make_shared",
@@ -5340,7 +5341,7 @@
     "namespace detail #1",
     "template < typename Elem > class MapSequence #1",
     "class const_iterator #1",
-    "const_iterator operator ++ ( int ) #1"
+    "const_iterator operator + + ( int ) #1"
    ],
    "cls": "decl",
    "spelling": "const_iterator",
