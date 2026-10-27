@@ -1,6 +1,6 @@
 # Arena/invocation corpus census
 
-Read-only census for CR-150 L22u / A6 and A5-WIDER. No certifier, test,
+Read-only census for the scratch-storage sizing work. No certifier, test,
 compiler, repository script or network operation was executed.
 
 The original census inspected engine HEAD

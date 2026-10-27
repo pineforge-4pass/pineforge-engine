@@ -11,7 +11,7 @@
 #define coof_fill_recalc_active_ l4d_coof_fill_recalc_active()
 #define coof_cursor_is_bar_close_ l4d_coof_cursor_is_bar_close()
 
-// test_chart_ema_na_warmup — pins the opt-in KI-55 chart-EMA warmup flag.
+// test_chart_ema_na_warmup — pins the opt-in chart-EMA warmup flag.
 //
 // ``chart_ema_na_warmup`` is an independent, default-off run flag carried
 // through the syminfo-metadata channel.  While chart strategy code executes,

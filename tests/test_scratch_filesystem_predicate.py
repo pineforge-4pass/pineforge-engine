@@ -53,7 +53,7 @@ def scan(root: Path) -> int:
 
     # List the entire read set before reading any file contents.
     for path in sorted(files):
-        print(f"S4E inspection path: {path}", flush=True)
+        print(f"Inspection path: {path}", flush=True)
     failures = []
     for path in sorted(files):
         refuse_unsafe_path(path)
@@ -91,7 +91,7 @@ def self_test() -> int:
     refuse_unsafe_path(parent)
     created = parent.stat()
     try:
-        print(f"S4E self-test fixture root: {parent}", flush=True)
+        print(f"Self-test fixture root: {parent}", flush=True)
         return self_test_trees(parent)
     finally:
         refuse_unsafe_path(parent)

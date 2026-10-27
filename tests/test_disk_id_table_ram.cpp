@@ -1,4 +1,4 @@
-// CR-150 TREE. Predicted first red on d91c96d47d: DiskIdTable has no
+// Full bodies. Predicted first red on d91c96d47d: DiskIdTable has no
 // bind_scratch member. The complete body must be compiled there on the lab;
 // no fail-before or passing execution is claimed by this edit-only lane.
 #include <pineforge/detail/disk_id_table.hpp>
@@ -280,7 +280,7 @@ void complete_borrowed_workset_is_one_read_only_ticket() {
             "workset deduplicates existing and repeated ids without extra rows or bytes");
 }
 
-// CR-347 red-first: the old header has neither work_counters() nor
+// Red-first: the old header has neither work_counters() nor
 // resident_rows(). With only the observation seam backported, its eager
 // spill and linear resident lookup violate the operation bounds below.
 struct LiveFacts {

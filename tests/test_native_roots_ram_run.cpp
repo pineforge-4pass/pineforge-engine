@@ -1,4 +1,4 @@
-// CR-150 root binding through a real sink-OFF native begin. Predicted red on
+// Root binding through a real sink-OFF native begin. Predicted red on
 // d91c96d47d: the RAM twin fails before on_native_run_begin with the foundation's
 // "bounded successor-root scratch binding is not installed" engine_invariant.
 #include <pineforge/pineforge.h>

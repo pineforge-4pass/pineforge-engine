@@ -1,4 +1,4 @@
-// CR-289: direct C fd sink + native C host run/capture, without a finalizer.
+// Direct C fd sink + native C host run/capture, without a finalizer.
 #include <pineforge/engine.hpp>
 #include <pineforge/native_c_api.h>
 #include <pineforge/pineforge.h>

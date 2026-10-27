@@ -1,4 +1,4 @@
-// CR-150 L17A: selected capture emits the anchor and final window E values,
+// Selected capture emits the anchor and final window E values,
 // and checks the selected invariants before a sink can acquire a trailer.
 // Uses the existing L6b-1 ABI, so the first red is a runtime feature failure:
 // on f00151f22 count_e is still zero after capture, until fill_report runs.
@@ -115,7 +115,7 @@ struct Host final : NativeStrategyHost {
             report->equity_curve[report->equity_curve_len - 1].equity = 1023.5;
             report->equity_curve[report->equity_curve_len - 1].open_profit = -0.0;
         }
-        // CR-150 L17b: relative cut (one tail point), the only shrink a sink-on
+        // Relative cut (one tail point), the only shrink a sink-on
         // hook can express over the bounded tail window; sink OFF removes the
         // same one point from the full curve, so the two runs stay comparable.
         if (shrink_presented_curve && report->equity_curve_len > 1)

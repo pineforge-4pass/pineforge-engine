@@ -289,7 +289,7 @@ full corpus parity, release and debug. In `lab remote` terminology:
 ```sh
 lab remote submit --repo engine --worktree <candidate-checkout> \
   --steps preflight,docs,parity,release,debug --host auto --keep-going \
-  --label core-cr150-o1w-slabfold
+  --label scratch-o1w-slabfold
 ```
 
 The C++ targets/CTest names to inspect explicitly are

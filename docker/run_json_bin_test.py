@@ -1,4 +1,4 @@
-"""CR-150 L2 preflight discovery entry for tests/test_run_json_bin.py.
+"""Binary preflight discovery entry for tests/test_run_json_bin.py.
 
 CTest names the implementation under tests/ so the private-fixture controls
 copy the actual driver into their source mirror. Preflight keeps its Docker

@@ -1,4 +1,4 @@
-"""Preflight entry for the CR-150 L9S selected report regression tests."""
+"""Preflight entry for selected report regression tests."""
 from pathlib import Path
 import sys
 

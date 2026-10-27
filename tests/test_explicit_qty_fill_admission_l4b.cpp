@@ -252,7 +252,7 @@ void test_greenC_headroom_big_gap_admits() {
 // GREEN-D. Commissioned all-in favorable-slip: fill below close (open 99.99),
 // commission 0.1% is NOT in the predicate so notional 9999 <= 10000 -> the
 // admission itself passes and the position OPENS. Margin call disabled here so
-// the KI-61-family entry-bar trim does not perturb the assertion under test
+// the entry-bar trim does not perturb the assertion under test
 // (the trim machinery is exercised by test_margin_call / the frozen-gap tests).
 void test_greenD_commissioned_favorable_admits() {
     std::printf("-- GREEN-D: commissioned all-in favorable-slip admits --\n");
@@ -311,15 +311,15 @@ void test_greenE_margin_variants() {
 }
 
 // GREEN-F. The EXPLICIT-QTY MARKET admission gate this file pins is stop-agnostic
-// and RAW-agnostic. F1 is now dominated by the SEPARATE KI-62 stage-3 margin gate;
+// and RAW-agnostic. F1 is now dominated by the separate stage-3 margin gate;
 // F2 (RAW) remains unaffected.
 //   F1: an explicit-qty all-in LONG STOP entry (stop 100) gapping through on an
-//       adverse open is DECLINED by the KI-62 stage-3 margin fill-time gate
+//       adverse open is DECLINED by the stage-3 margin fill-time gate
 //       (required at the fill-bar open > equity) — NOT by this file's MARKET gate.
 //   F2: a RAW strategy.order all-in adverse gap never sets the candidate flag
 //       -> fills.
 void test_greenF_priced_and_raw_unaffected() {
-    std::printf("-- GREEN-F1: priced (stop) entry adverse gap -> KI-62 margin decline --\n");
+    std::printf("-- GREEN-F1: priced (stop) entry adverse gap -> margin decline --\n");
     {
         Probe eng(/*capital=*/10000.0, /*comm=*/0.0, /*slip=*/0, /*margin=*/100.0,
                   /*pooc=*/false, /*enable_mc=*/false);
@@ -332,7 +332,7 @@ void test_greenF_priced_and_raw_unaffected() {
             mk_bar(3000, 101, 101, 101, 101),
         };
         eng.run(bars.data(), (int)bars.size());
-        // KI-62 STAGE 3: all-in stop (qty 100, cap 10000) gapping through 100 costs
+        // STAGE 3: all-in stop (qty 100, cap 10000) gapping through 100 costs
         // required = 100*open(101)*100% = 10100 > equity 10000 -> the margin
         // fill-time gate DECLINES it (side-symmetric; TV declines all-in stops on
         // an adverse gap-open). This is the stage-3 STOP gate, not the explicit-qty

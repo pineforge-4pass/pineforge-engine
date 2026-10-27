@@ -1,4 +1,4 @@
-// CR-289: the C++ fd_run consumer's native run/fill_report failure boundary.
+// The C++ fd_run consumer's native run/fill_report failure boundary.
 #include <pineforge/native_host.hpp>
 #include <pineforge/pineforge.h>
 #include <pineforge/report_sink.h>
@@ -125,7 +125,7 @@ void fd_run(int field, double value, bool refuses) {
         threw = true;
         carried = pineforge::classify_run_failure(error);
         // Same boundary as test_report_sink_fd.cpp's execute()/fd_run().
-        pineforge::note_run_failure(host, "CR-289 C++ fd_run", error);
+        pineforge::note_run_failure(host, "C++ fd_run", error);
         fd_trace.record("after note_run_failure");
     }
     require(host.injected, "native held point was never injected");

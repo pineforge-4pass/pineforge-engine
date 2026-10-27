@@ -1,4 +1,4 @@
-// CR-150 L6b-2. Build this file as a real whole-archive strategy module and
+// Build this file as a real whole-archive strategy module and
 // its dlopen driver. On f00151f223d35d7638c299a60ab401df3f36cf0d the first
 // hold-back check fails: after N points, before fill, count_e is 0, not N-1.
 #include <pineforge/pineforge.h>
