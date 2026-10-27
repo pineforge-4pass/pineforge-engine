@@ -432,7 +432,7 @@ private:
     static void require_removed_path(const ScratchCreation& creation) {
         const auto& path = creation.path;
         require(scratch_inspection_path(path), "refused scratch cleanup inspection path by name");
-        std::printf("S4E owned scratch lstat: %s\n", creation.describe().c_str());
+        std::printf("owned scratch lstat: %s\n", creation.describe().c_str());
         struct stat status{};
         errno = 0;
         require(::lstat(path.c_str(), &status) != 0 && errno == ENOENT,
