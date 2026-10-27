@@ -318,7 +318,10 @@ def _check_page(root: Path, expected: str) -> list[str]:
         return [f"{PAGE} is absent; run --write"]
     actual = path.read_text(encoding="utf-8")
     try:
-        expected_page = _replace_block(actual, expected.split(BEGIN, 1)[1].split(END, 1)[0].strip("\n"))
+        # The generated block sits between "\n\n" after BEGIN and "\n" before END
+        # (see _replace_block); hand _replace_block back exactly the block it wrote.
+        inner = expected.split(BEGIN, 1)[1].split(END, 1)[0]
+        expected_page = _replace_block(actual, inner[len("\n\n"):-len("\n")])
     except ValueError as error:
         return [str(error)]
     if actual == expected_page:
