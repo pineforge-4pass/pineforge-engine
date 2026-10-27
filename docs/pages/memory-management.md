@@ -128,6 +128,17 @@ this page publishes no measured figure for the route and does not give the
 reading as a bound; the sink and arena paragraphs above govern the report
 bytes.
 
+The sink-off jailed route buffers the whole report text before writing to
+stdout, so a serialization error publishes no partial report
+(`_prepare_report_json`, `docker/run_json.py:6756`; publication in
+`_write_report`, `docker/run_json.py:4646`). Its UTF-8 byte buffer uses about
+one byte of resident text per output byte, plus bounded encoding and
+read-back buffers, on top of the input mapping and the engine's storage:
+this is `O(output)` memory for the report the caller requested. Passing
+`--report-sink-fd` selects the fd sink before the jailed no-sink fallback
+(`_new_report_sink`, `docker/run_json.py:5790`), avoiding the full report-text
+buffer; stdout then buffers only the bounded summary.
+
 ## What you can set {#memory_controls}
 
 | Control | Kind | Default | What it does |
