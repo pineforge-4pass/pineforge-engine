@@ -199,7 +199,7 @@ NativeRunSpec spec() {
     value.identity = {"c3k-public", 1};
     value.input_tf = "5";
     value.script_tf = "5";
-    value.tickerid = "TEST:C3K";
+    value.tickerid = "TEST:UNREACHABLE";
     value.timezone = "UTC";
     value.session = "24x7";
     value.slot_label_policy = NativeSlotLabelPolicy::FeedTolerant;

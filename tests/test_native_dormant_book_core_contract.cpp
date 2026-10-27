@@ -68,7 +68,7 @@ void run(std::size_t rows, bool spill) {
     NativeRunSpec s;
     s.identity = {"c3-dormant-core-contract", 1};
     s.input_tf = "5"; s.script_tf = "5";
-    s.tickerid = "TEST:C3"; s.timezone = "UTC"; s.session = "24x7";
+    s.tickerid = "TEST:DORMANT"; s.timezone = "UTC"; s.session = "24x7";
     s.slot_label_policy = NativeSlotLabelPolicy::FeedTolerant;
     s.initial_capital = 1.0e9; s.point_value = 1; s.account_fx = 1;
     s.report_policy = NativeReportPolicy::HostRecorded;
