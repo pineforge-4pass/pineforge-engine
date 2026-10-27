@@ -31,6 +31,7 @@
 #include "../src/native_execution_consumer.hpp"
 #include "native_match_book_fixture.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <limits>
@@ -140,19 +141,32 @@ public:
         for (int draw = 0; draw < 4; ++draw) {
             cursors_.push_back(probe_rng_.next() % (high + 3));
         }
+        // The oracle reads every retained event once, not once per cursor: the
+        // retained journal is paged, and walking it from the oldest event for
+        // each cursor at each callback made this test quadratic in the journal.
+        // Each event is checked exactly once, from the newest back to the
+        // first position not yet checked, for strictly increasing ordinals
+        // (and against the last event checked before it); with that proven for
+        // the whole window, some event lies above a cursor exactly when the
+        // newest one does. It shares no code with either query.
+        const std::size_t base = consumer.request_core().history_base();
+        const std::size_t end = base + history.size();
+        const std::size_t first_new = std::max(verified_end_, base);
+        for (std::size_t position = end; position-- > first_new;) {
+            const std::uint64_t ordinal = ordinal_of(history[position - base]);
+            if (position + 1 < end) CHECK(ordinal < ordinal_of(history[position + 1 - base]));
+        }
+        if (first_new < end && first_new > base) {
+            CHECK(ordinal_of(history[first_new - 1 - base]) < ordinal_of(history[first_new - base]));
+        }
+        verified_end_ = end;
+        const bool has_newest = !history.empty();
+        const std::uint64_t newest = has_newest ? ordinal_of(history[history.size() - 1]) : 0;
         for (const std::uint64_t cursor : cursors_) {
             const bool fast = consumer.has_command_after(cursor);
             const bool searched =
                 consumer.first_command_after(cursor) != consumer.first_command_after(kTop);
-            // And a scan of the whole retained journal, which shares no code
-            // with either.
-            bool scanned = false;
-            for (const auto& event : history) {
-                if (ordinal_of(event) > cursor) {
-                    scanned = true;
-                    break;
-                }
-            }
+            const bool scanned = has_newest && newest > cursor;
             CHECK(fast == searched);
             CHECK(fast == scanned);
             ++(fast ? answered_true : answered_false);
@@ -163,6 +177,7 @@ private:
     Window window_;
     k3_book::Rng probe_rng_;
     std::vector<std::uint64_t> cursors_;
+    std::size_t verified_end_ = 0; // absolute journal position below which ordinals are checked
 };
 
 void run_one(const BookConfig& config, Window window) {
