@@ -1362,7 +1362,7 @@ private:
             || spec_ptr() == nullptr) {
             return false;
         }
-        ++quiet_points_;
+        note_quiet_match_point();
         open_point_epoch();
         if (continuous) apply_excursion(engine, to_price);
         return true;
@@ -2662,6 +2662,147 @@ public:
     // Borrowed pointers expire on replacement/detachment/destruction. A Ready
     // binding already detached is engine_invariant at admit_public_begin.
     NativeBarViews bar_views() const noexcept;
+
+    // Dormant matching computes the eager book's exact observable rows. These
+    // switches/counters are internal witnesses, never run-spec or hash input.
+    // Counters describe this run; dormant_rows counts successful new joins,
+    // not attempts, and fast/eager_points count points that actually scan.
+    void set_match_dormant(bool enabled) noexcept { match_dormant_ = enabled; }
+    std::uint64_t scanned_rows() const noexcept { return match_dormant_counts_.scanned; }
+    std::uint64_t dormant_rows() const noexcept { return match_dormant_counts_.joined; }
+    std::uint64_t fast_points() const noexcept { return match_dormant_counts_.fast; }
+    std::uint64_t eager_points() const noexcept { return match_dormant_counts_.eager; }
+    std::uint64_t projected_reads() const noexcept { return match_book_projected_reads(); }
+    std::uint64_t wakes_by_price() const noexcept { return match_dormant_counts_.woken; }
+    std::uint64_t grid_points() const noexcept { return match_dormant_counts_.grid; }
+    std::uint64_t grid_active_points() const noexcept { return grid_points(); }
+    std::uint64_t class_guard_failures() const noexcept { return match_book_class_guard_failures(); }
+    std::uint64_t index_poisonings() const noexcept { return match_book_index_poisonings(); }
+    // C1 delegates to its actual class predicate, including mutation builds.
+    // Tests use real recorded contexts and the independent base policy oracle.
+    bool dormant_driver_permitted(const native_order::EvaluationContext&, bool limit) const noexcept;
+    // A per-run witness: nonzero means this run left an established fast path.
+    std::uint64_t fast_path_exits() const noexcept { return match_dormant_counts_.exits; }
+    // T2b observes the existing epoch through public-run actions; no token or
+    // mutation is exposed by this internal read-only seam.
+    std::uint64_t dormant_core_epoch() const noexcept { return requests_.epoch_; }
+
+    using DormantReach = bool (*)(bool ge, double level, double lo,
+                                 double hi, double delta) noexcept;
+    // GE means level >= lo - delta; LE means level <= hi + delta.
+    // T8 compares false answers with the independent base geometry oracle.
+    static bool dormant_reachable(bool ge, double level, double lo,
+                                  double hi, double delta) noexcept;
+    static double dormant_margin(double lo, double hi, double grid_tick) noexcept;
+    // Both return dormant_reachable in production. Separate accessors let T8
+    // exercise the actual join/wake call sites under M6 and M7 mutations.
+    static DormantReach dormant_join_reach() noexcept;
+    static DormantReach dormant_wake_reach() noexcept;
+    static bool dormant_join_reachable(bool ge, double level, double from, double to,
+                                       double grid_tick) noexcept;
+    static bool dormant_wake_reachable(bool ge, double level, double from, double to,
+                                       double grid_tick) noexcept;
+
+private:
+    struct MatchDormantCounts {
+        std::uint64_t scanned = 0;
+        std::uint64_t joined = 0;
+        std::uint64_t fast = 0;
+        std::uint64_t eager = 0;
+        std::uint64_t woken = 0;
+        std::uint64_t grid = 0;
+        std::uint64_t exits = 0;
+    };
+    // Borrowed resident metadata, index-aligned with requests_.live_. No row
+    // is touched just to test dormancy. Refresh the view after every mutation.
+    struct MatchDormantResident {
+        const unsigned char* flags = nullptr;
+        std::size_t stride = 0;
+        std::size_t active = 0;
+        bool dormant(std::size_t index) const noexcept {
+            return flags && flags[index * stride] != 0;
+        }
+    };
+    // C1 defines these bridges beside BookSpill's implementation. Its archive
+    // helpers stay private to native_order.cpp; no public ABI header changes.
+    // C3 owns provisioning/release; null this borrow before destroying its store.
+    static detail::ScratchKeyOrder match_book_scratch_order() noexcept;
+    void match_book_rebind_scratch() noexcept;
+    detail::CommandScratchStore* match_book_scratch_ = nullptr;
+    bool match_book_fast_path_ok(const native_order::EvaluationContext&) const noexcept;
+    MatchDormantResident match_book_resident() const noexcept;
+    std::uint64_t match_book_projected_reads() const noexcept;
+    std::uint64_t match_book_class_guard_failures() const noexcept;
+    std::uint64_t match_book_index_poisonings() const noexcept;
+    bool match_book_join(const native_order::RequestHandle&,
+                         const native_order::EvaluationContext&,
+                         double lo, double hi, double delta, DormantReach);
+    std::uint64_t match_book_wake_by_price(const native_order::EvaluationContext&,
+                                          double lo, double hi, double delta, DormantReach);
+    void match_book_begin(const native_order::EvaluationContext&);
+    void match_book_advance(std::uint64_t priority);
+    // false preserves the failed/unwinding point's partially refreshed book.
+    void match_book_complete(bool finish_sweep);
+
+    class MatchDormantPoint {
+    public:
+        MatchDormantPoint(NativeExecutionConsumer&, BacktestEngine&,
+                          const NativeDriverPoint&, native_order::DriverEligibilityClass,
+                          double from_price, double to_price) noexcept;
+        ~MatchDormantPoint() noexcept;
+        MatchDormantPoint(const MatchDormantPoint&) = delete;
+        MatchDormantPoint& operator=(const MatchDormantPoint&) = delete;
+        void start();
+        // Recheck before every scan, including winner-only reuse. A mode
+        // change invalidates the kept rows and requires a complete rescan.
+        bool scan();
+        bool fast() const noexcept { return fast_; }
+        std::size_t active_rows() const noexcept { return resident_.active; }
+        bool skip(std::size_t index) const noexcept {
+            return fast_ && resident_.dormant(index);
+        }
+        const native_order::LiveRequest* row(std::size_t,
+            const native_order::WorkingRequestCore::LiveView::const_iterator&) const;
+        std::shared_ptr<const native_order::LiveRequest> rescan(
+            std::size_t& index, const native_order::RequestHandle&) const;
+        bool before_winner(std::uint64_t priority, double t);
+        void join(const native_order::RequestHandle&);
+        void complete();
+
+    private:
+        bool eligible() const noexcept;
+        void fall_back() noexcept;
+        void failure(const std::exception&);
+        void unclassified_failure();
+        NativeExecutionConsumer& consumer_;
+        BacktestEngine& engine_;
+        native_order::EvaluationContext evaluation_;
+        MatchDormantResident resident_;
+        double from_ = 0.0;
+        double to_ = 0.0;
+        double lo_ = 0.0;
+        double hi_ = 0.0;
+        double delta_ = 0.0;
+        int exceptions_ = 0;
+        bool grid_ = false;
+        bool fast_ = false;
+        bool begun_ = false;
+        bool closed_ = false;
+        bool counted_fast_ = false;
+        bool counted_eager_ = false;
+    };
+    bool collect_match_trails(const NativeDriverPoint&, const native_order::MatchCursor&,
+                              bool continuous);
+    void reset_match_counters() noexcept;
+    void open_match_point_epoch();
+    void note_quiet_match_point() noexcept;
+    void note_match_grid() noexcept;
+    bool match_dormant_ = true;
+    // P2-3/K2: no recovery scan. An eager pass that leaves active rows spilled
+    // stays eager while they remain; class guards are checked anew per point.
+    // Only BookSpill's index poison is permanent until the next run.
+    bool match_dormant_was_fast_ = false;
+    MatchDormantCounts match_dormant_counts_;
 };
 
 // Selected-sink presentation borrows only this many final points. The logical
@@ -2727,3 +2868,15 @@ void compute_selected_report_metrics(
     std::int64_t bars_in_market, std::int64_t observation_count);
 
 }  // namespace pineforge::internal
+
+// Internal T8 adapters exercise the production margin and each actual call
+// site's predicate, including the separately compiled mutation variants.
+#define PINEFORGE_TEST_DORMANT_JOIN_REACHABLE(ge, level, from, to, grid) \
+    (::pineforge::NativeExecutionConsumer::dormant_join_reachable(     \
+        (ge), (level), (from), (to), (grid).tick))
+#define PINEFORGE_TEST_DORMANT_WAKE_REACHABLE(ge, level, from, to, grid) \
+    (::pineforge::NativeExecutionConsumer::dormant_wake_reachable(     \
+        (ge), (level), (from), (to), (grid).tick))
+#define PINEFORGE_TEST_DORMANT_CORE_EPOCH(consumer) ((consumer).dormant_core_epoch())
+#define PINEFORGE_TEST_DORMANT_DRIVER_PERMITTED(consumer, context, limit) \
+    ((consumer).dormant_driver_permitted((context), (limit)))
