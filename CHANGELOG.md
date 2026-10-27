@@ -79,6 +79,22 @@ diagnostics keys, described below.
   per-record sink parse and the dense-script close path are separate work, not in
   this release.
 
+### Native live report stream
+
+- **Delta JSONL is the default.** `pineforge-live run --report-jsonl` now
+  emits one `pineforge-native-report-delta/v1` document for each committed
+  input, matching the payload stored in the ledger. This deliberately changes
+  the stream shape for existing consumers that read the old cumulative
+  document; request `--report-jsonl=full` to retain that cumulative output.
+- **Per-input report-path work is flat in the appended rows.** The runner
+  carries a closed-trade high-water mark and no longer scans the full closed
+  trade prefix for every input. Delta output and the default runner state keep
+  only scalar state and array counts, while full mode retains the cumulative
+  document. The native `fill_report` call still rebuilds the engine's trade
+  and equity/metrics report on each input; removing that remaining term needs
+  an engine-side carried report accumulator and a separate batch-byte
+  equivalence proof.
+
 ### Scratch placement (behaviour of 1.7.0 and later, restated)
 
 - **Where scratch goes and when a run is refused.** The text is in
@@ -2336,8 +2352,10 @@ release either.
   report. Each export re-verifies an append-only SHA-256 integrity chain over
   the committed inputs, stored state hashes, actions and report rows, so a
   ledger written before 1.2.0 needs one verified `run` replay to fill in its
-  reports and digests before it exports. `run --report-jsonl` mirrors each new
-  report to stdout; a closed pipe exits 1, not SIGPIPE, and loses no input.
+  reports and digests before it exports. The 1.2.0 runner mirrored each new
+  cumulative report to stdout; current 1.8.0 uses the delta stream by default
+  and `run --report-jsonl=full` retains that cumulative shape. A closed pipe
+  exits 1, not SIGPIPE, and loses no input.
   The runner keeps tracing off and refuses to export a nonempty trace. A
   confirmed-bar run's report is checked field by field against a batch
   backtest of the same bars; the one tested difference is that a batch seals a

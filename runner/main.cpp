@@ -23,6 +23,7 @@
 #include <dlfcn.h>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iomanip>
 #include <iostream>
 #include <iterator>
@@ -41,6 +42,8 @@ static_assert(std::atomic<std::sig_atomic_t>::is_always_lock_free);
 void signal_stop(int) { stopped = 1; }
 constexpr std::size_t MAX_FRAME = 1024 * 1024;
 
+enum class ReportJsonlMode { Off, Delta, Full };
+
 struct Config {
     std::string strategy, warmup, feed = "-", ledger, webhook, mode = "", input_tf, script_tf,
                                   symbol, name = "strategy";
@@ -57,7 +60,8 @@ struct Config {
     std::uint64_t from_input = 0, max_events = 0, max_attempts = 8;
     std::uint64_t status_interval = 1, max_ledger_bytes = 0, feed_idle_timeout = 15, feed_message_timeout = 15;
     long poll_ms = 1000;
-    bool check = false, allow_http = false, report_jsonl = false;
+    bool check = false, allow_http = false;
+    ReportJsonlMode report_jsonl = ReportJsonlMode::Off;
 };
 
 void help() {
@@ -75,7 +79,8 @@ void help() {
                  "         --from-input N --max-events N --max-attempts 8\n"
                  "         --native-config FILE (strict native run specification)\n"
                  "         --check (one HTTP snapshot) --poll-ms 1000\n"
-                 "         --report-jsonl (mirror committed cumulative reports to stdout)\n"
+                 "         --report-jsonl (mirror committed report deltas to stdout)\n"
+                 "         --report-jsonl=full (mirror cumulative reports to stdout)\n"
                  "         --status-file PATH --status-interval 1 (seconds, 1..300)\n"
                  "         --feed-idle-timeout 15 --feed-message-timeout 15 (seconds, 1..300)\n"
                  "         --control-dir PATH --max-ledger-bytes N (0 disables budget)\n"
@@ -131,13 +136,21 @@ Config args(int argc, char **argv) {
         std::string a = argv[i];
         if (a == "--parser" || a == "--parser-config")
             throw std::runtime_error("in-runner parsers were removed; use an external feed adapter (runner/README.md#feed-format)");
+        if (a == "--report-jsonl" || a.rfind("--report-jsonl=", 0) == 0) {
+            if (!seen.insert("--report-jsonl").second)
+                throw std::runtime_error("duplicate option: --report-jsonl");
+            c.explicit_flags.insert(a);
+            if (a == "--report-jsonl")
+                c.report_jsonl = ReportJsonlMode::Delta;
+            else if (a == "--report-jsonl=full")
+                c.report_jsonl = ReportJsonlMode::Full;
+            else
+                throw std::runtime_error("unknown option: " + a);
+            continue;
+        }
         if (a != "--input" && a != "--override" && a != "--syminfo" && !seen.insert(a).second)
             throw std::runtime_error("duplicate option: " + a);
         c.explicit_flags.insert(a);
-        if (a == "--report-jsonl") {
-            c.report_jsonl = true;
-            continue;
-        }
         if (a == "--check") {
             c.check = true;
             continue;
@@ -683,7 +696,9 @@ Json real(double value) {
     return Json::number(s.str());
 }
 std::string cumulative_report(Strategy& strategy, const std::string& deployment,
-                              std::uint64_t cursor, ReportDeltas& deltas) {
+                              std::uint64_t cursor, ReportDeltas& deltas,
+                              const std::function<void(const pf_report_t&, const std::string&,
+                                                       std::uint64_t)>& verify = {}) {
     pf_report_t report{};
     struct ReleaseReport {
         Strategy& strategy;
@@ -691,7 +706,11 @@ std::string cumulative_report(Strategy& strategy, const std::string& deployment,
         ~ReleaseReport() { strategy.free_report(&report); }
     } release{strategy, report};
     strategy.check(strategy.fill_report(strategy.state, &report));
-    return deltas.update(report, deployment, cursor, strategy.hash(strategy.state));
+    const auto state_hash = strategy.hash(strategy.state);
+    auto result = deltas.update(report, deployment, cursor, state_hash);
+    if (verify)
+        verify(report, result, state_hash);
+    return result;
 }
 std::vector<Event> actions(Strategy &s, const Config &c, const std::string &deployment) {
     std::vector<Event> out;
@@ -913,8 +932,16 @@ int run(Config c) {
     Ledger ledger(c.ledger, deployment);
     ServiceFile service(c.status_file, c.status_interval * 1000);
     ledger.bind_routing(c.routing.stored_document());
-    ReportDeltas report_deltas;
-    ledger.verify_report(0, cumulative_report(strategy, deployment, 0, report_deltas), [&] { return report_deltas.json(); });
+    ReportDeltas report_deltas(c.report_jsonl == ReportJsonlMode::Full);
+    const auto verify_report = [&](std::uint64_t cursor) {
+        cumulative_report(strategy, deployment, cursor, report_deltas,
+            [&](const pf_report_t& native, const std::string& payload, std::uint64_t state_hash) {
+                ledger.verify_report(cursor, payload, [&] {
+                    return report_deltas.full_json(native, deployment, cursor, state_hash);
+                });
+            });
+    };
+    verify_report(0);
     Cursor cursor;
     cursor.bar_timestamp = warmup.back().timestamp;
     auto recorded = ledger.input_count();
@@ -942,7 +969,7 @@ int run(Config c) {
             if (events[k].id != row->events[k].id || events[k].payload != row->events[k].payload ||
                 events[k].target_id != row->events[k].target_id || events[k].delivery_id != row->events[k].delivery_id)
                 throw std::runtime_error("native replay order-action mismatch");
-        ledger.verify_report(i + 1, cumulative_report(strategy, deployment, i + 1, report_deltas), [&] { return report_deltas.json(); });
+        verify_report(i + 1);
         strategy.clear(strategy.state);
         recovering.members["metrics"].members["report_cursor"] = num(ledger.report_cursor());
         service.publish(recovering);
@@ -1029,8 +1056,9 @@ int run(Config c) {
             strategy.clear(strategy.state);
             ++processed;
             source_timestamp = source_time(frame, source_time);
-            if (c.report_jsonl) {
-                std::cout << report_deltas.json() << '\n' << std::flush;
+            if (c.report_jsonl != ReportJsonlMode::Off) {
+                std::cout << (c.report_jsonl == ReportJsonlMode::Full ? report_deltas.json() : report)
+                          << '\n' << std::flush;
                 if (!std::cout) throw std::runtime_error("report-jsonl stdout write failed; committed input remains durable");
             }
         }

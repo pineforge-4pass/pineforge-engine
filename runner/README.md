@@ -44,10 +44,12 @@ state hashes and immutable actions, even for an earlier requested cursor.
 A missing or mismatched digest refuses export. These SHA-256 digests detect
 ledger corruption, not edits by someone able to replace both data and digests;
 only `run` recomputes engine state by replay. `run --report-jsonl` mirrors
-each newly committed report to stdout, followed by the existing operational run
-summary; replayed source-prefix messages are not mirrored again. A closed
-stdout pipe fails clearly with exit 1, never SIGPIPE; the last input and report
-are already durable, and export remains available.
+each newly committed `pineforge-native-report-delta/v1` payload to stdout,
+followed by the existing operational run summary. Use
+`run --report-jsonl=full` when a cumulative `pineforge-native-report/v1`
+document is required. Replay of source-prefix messages is not mirrored again.
+A closed stdout pipe fails clearly with exit 1, never SIGPIPE; the last input
+and report are already durable, and export remains available.
 
 The input, engine hash, actions, cumulative report and its integrity digest commit in one SQLite
 transaction. Append-only `pineforge-native-report-delta/v1` rows contain changed
@@ -57,7 +59,9 @@ canonical report JSON. Recovery verifies each input's engine hash, actions and
 exact report delta before delivery. Existing full-report rows remain immutable
 and readable; recovery verifies them against the reconstructed full report, then
 new inputs use deltas. This avoids quadratic report storage without changing the
-export schema or engine computation.
+export schema or engine computation. The default delta stream retains scalar
+state and array counts only; `--report-jsonl=full` retains the cumulative
+document needed for full JSONL output.
 Array suffix replacement assumes at most one provisional trailing element for
 equity points and broker hashes. The runner never enables tracing and refuses
 nonempty `trace`: traces can contain several records per bucket, so enabling

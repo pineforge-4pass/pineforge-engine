@@ -33,6 +33,35 @@ def equal(expected, actual, path="report"):
         assert expected == actual, (path, expected, actual)
 
 
+def merge_fields(destination, changes):
+    if not isinstance(changes, dict):
+        return changes
+    if not isinstance(destination, dict):
+        destination = {}
+    for name, value in changes.items():
+        destination[name] = merge_fields(destination.get(name), value)
+    return destination
+
+
+def apply_delta(document, delta):
+    assert delta["schema_version"] == "pineforge-native-report-delta/v1"
+    merge_fields(document, delta["fields"])
+    for name, patch in delta["arrays"].items():
+        owner = document if name == "closed_trades" else document.setdefault("report", {})
+        values = owner.setdefault(name, [])
+        offset = int(patch["offset"])
+        assert offset <= len(values), (name, offset, len(values))
+        del values[offset:]
+        values.extend(patch["items"])
+
+
+def output_reports(output, schema):
+    lines = output.splitlines()
+    reports = [json.loads(line) for line in lines[:-1]]
+    assert all(row["schema_version"] == schema for row in reports)
+    return reports, sum(len(line.encode("utf-8")) + 1 for line in lines[:-1])
+
+
 def action_key(record):
     order = record["order"]
     return [record["timestamp"], record["bar_index"], order["id"], order["action"],
@@ -78,15 +107,33 @@ def main():
                 write_csv(warmup, bars[:split])
                 feed.write_text("".join(json.dumps(dict(type="bar", bar=bar)) + "\n" for bar in bars[split:]))
                 ledger = root / f"ledger-{number}-{timeframe}.sqlite"
-                command = [runner, "run", "--strategy", library, "--warmup", str(warmup),
+                full_command = [runner, "run", "--strategy", library, "--warmup", str(warmup),
                            "--feed", str(feed), "--ledger", str(ledger), "--mode", "bars",
                            "--script-tf", str(timeframe), "--symbol", "TEST:EXAMPLE",
                            "--syminfo", "mintick=0.25", "--syminfo", "pointvalue=2.5",
                            "--syminfo", "qty_step=0.001", "--override", "commission_value=0.1",
-                           "--override", "slippage=1", "--report-jsonl"]
-                mirror_bytes = checked(command).splitlines()
-                mirror = [json.loads(line) for line in mirror_bytes]
-                assert len(mirror) == len(bars) - split + 1
+                           "--override", "slippage=1", "--report-jsonl=full"]
+                full_lines = checked(full_command).splitlines()
+                full_mirror = [json.loads(line) for line in full_lines[:-1]]
+                assert len(full_mirror) == len(bars) - split
+                assert all(row["schema_version"] == "pineforge-native-report/v1"
+                           for row in full_mirror)
+
+                delta_ledger = root / f"delta-ledger-{number}-{timeframe}.sqlite"
+                delta_command = full_command.copy()
+                delta_command[delta_command.index(str(ledger))] = str(delta_ledger)
+                delta_command[-1] = "--report-jsonl"
+                delta_lines = checked(delta_command).splitlines()
+                delta_mirror = [json.loads(line) for line in delta_lines[:-1]]
+                assert len(delta_mirror) == len(full_mirror)
+                assert all(row["schema_version"] == "pineforge-native-report-delta/v1"
+                           for row in delta_mirror)
+                reconstructed = {}
+                for cursor, delta in enumerate(delta_mirror, 1):
+                    apply_delta(reconstructed, delta)
+                    equal(full_mirror[cursor - 1], reconstructed, "delta stream")
+                assert checked([runner, "report", "--ledger", str(delta_ledger)]) == full_lines[-2] + "\n"
+                checked(full_command[:-1] + ["--report-jsonl=unsupported"], 1)
                 for cursor in (5, 20, 75, 140):
                     snapshot = root / "snapshot.csv"
                     write_csv(snapshot, bars[:split + cursor])
@@ -99,17 +146,36 @@ def main():
                     equal(batch["equity_curve"][-1]["equity"], report["equity"])
                     equal(batch["equity_curve"][-1]["open_profit"], report["open_profit"])
                     equal([trade for trade in batch["trades"] if not trade["open_at_end"]], report["closed_trades"])
-                    equal(report, mirror[cursor - 1])
+                    equal(report, full_mirror[cursor - 1])
                     with sqlite3.connect(ledger) as database:
                         live = [json.loads(row[0]) for row in database.execute(
                             "SELECT payload FROM events WHERE input_index<? ORDER BY ordinal", (cursor,))]
                         stored = database.execute("SELECT payload FROM report_snapshots WHERE input_cursor=?", (cursor,)).fetchone()[0]
                     assert json.loads(stored)["schema_version"] == "pineforge-native-report-delta/v1"
-                    assert exported == mirror_bytes[cursor - 1] + "\n"
+                    assert exported == full_lines[cursor - 1] + "\n"
                     expected = [json.loads(line) for line in batch_actions.read_text().splitlines()]
                     expected = [row for row in expected if row["origin_input_index"] >= split]
                     equal([action_key(row) for row in expected], [action_key(row) for row in live], "actions")
                     comparisons += 1
+                if number == 0 and timeframe == 1:
+                    growth_bytes = {}
+                    growth_feed = root / "growth-feed.jsonl"
+                    for count in (8, 80):
+                        growth_feed.write_text("".join(
+                            json.dumps(dict(type="bar", bar=bar)) + "\n"
+                            for bar in bars[split:split + count]))
+                        for mode, schema in (("delta", "pineforge-native-report-delta/v1"),
+                                             ("full", "pineforge-native-report/v1")):
+                            growth_ledger = root / f"growth-{mode}-{count}.sqlite"
+                            growth_command = full_command.copy()
+                            growth_command[growth_command.index(str(feed))] = str(growth_feed)
+                            growth_command[growth_command.index(str(ledger))] = str(growth_ledger)
+                            growth_command[-1] = "--report-jsonl" if mode == "delta" else "--report-jsonl=full"
+                            reports, written = output_reports(checked(growth_command), schema)
+                            assert len(reports) == count
+                            growth_bytes[(mode, count)] = written
+                    assert growth_bytes[("delta", 80)] < 12 * growth_bytes[("delta", 8)]
+                    assert growth_bytes[("full", 80)] > 12 * growth_bytes[("full", 8)]
                 if "bracket-atr-trailing-stop-state-01" in library and timeframe == 5:
                     write_csv(snapshot, bars[:split + 3])
                     partial = json.loads(checked([oracle, library, str(snapshot), "5", str(batch_actions),
@@ -121,7 +187,7 @@ def main():
                 with sqlite3.connect(ledger) as database:
                     database.execute("DROP TABLE report_integrity")
                 checked([runner, "report", "--ledger", str(ledger)], 1)
-                checked(command)
+                checked(full_command)
                 assert checked([runner, "report", "--ledger", str(ledger)]) == before
                 checked([runner, "report", "--ledger", str(ledger), "--at-input", "9999"], 1)
                 checked([runner, "report", "--ledger", str(ledger), "--deployment", "wrong"], 1)
