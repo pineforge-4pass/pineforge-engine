@@ -309,7 +309,7 @@ struct ReportC {
 // Same words/values as docs/design/o1-report-contract.md in o1w-contract.
 // The envelope lane owns the versioned provider API and its eligibility gate.
 // O1 report envelope v1. Data and method declarations do not advertise
-// runtime support; the legacy ReportC layout remains ABI 4.
+// runtime support; ReportC retains the layout introduced in ABI 4.
 enum class ReportMode : std::uint32_t {
     FULL = PF_REPORT_MODE_FULL,
     SUMMARY_ONLY = PF_REPORT_MODE_SUMMARY_ONLY,

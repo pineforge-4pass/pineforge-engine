@@ -64,7 +64,7 @@ decisions never read those output fields. New fields append:
 - Reservation presence, admitted units and basis units.
 
 All new facts and optional-presence discriminators participate in broker
-hashing and mirror output. They are not waived. C ABI version 4 and stream
-API version 1 remain unchanged, and size-limited mirror reads preserve older
-callers. The internal C++ layout changed with them, so all consumers require a
+hashing and mirror output. They are not waived. The current C ABI version is 5;
+C layouts and stream API version 1 remain unchanged, and size-limited mirror
+reads preserve older callers. The internal C++ layout changed with them, so all consumers require a
 matching rebuild.

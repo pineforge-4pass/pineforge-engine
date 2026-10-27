@@ -2575,10 +2575,10 @@ def engine_version(lib: ctypes.CDLL) -> dict:
 
 # pf_report_t is CALLER-allocated: a .so built against a different ABI
 # writes past (or short of) our ReportC buffer. Assert version up front.
-# v4 appended the live-runtime accessors and grew pf_report_t with the
-# broker_state_hash array after equity_curve_len (ReportC above already
-# carries both fields).
-EXPECTED_PF_ABI = 4
+# v4 added the live accessors and broker_state_hash after equity_curve_len.
+# The mirrors already carry those fields; v5 requires rebuilt 1.8.0 modules
+# without growing the C report/trade layouts.
+EXPECTED_PF_ABI = 5
 
 
 def check_abi(lib: ctypes.CDLL) -> None:

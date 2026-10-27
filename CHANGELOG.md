@@ -12,10 +12,12 @@ paired with [pineforge-codegen 1.8.0](https://github.com/pineforge-4pass/pinefor
 A minor release. It speeds up the `run_json` wrapper (the wrapper only, not the
 engine), adds one unused storage building block to the library, states where
 scratch files are placed, carries release-gate and CI changes, and stops
-building and publishing macOS. The C ABI (`PF_ABI_VERSION` 4) and the
-run-failure code catalog are unchanged (0 codes added, changed or removed
-since 1.7.0). The report keys are unchanged except for two additive
-diagnostics keys, described below.
+building and publishing macOS. The C ABI version is now `PF_ABI_VERSION` 5,
+requiring strategy libraries to be rebuilt for the native order layouts.
+The run-failure code catalog adds or removes no code and changes two entries
+since 1.7.0: the optional `engine_invariant` reason vocabulary and the expected
+ABI number in `strategy_library_incompatible`'s message. The report keys are
+unchanged except for two additive diagnostics keys, described below.
 
 ### Compatibility and migration
 
@@ -24,10 +26,21 @@ diagnostics keys, described below.
   and relink every strategy library against the 1.8.0 headers and
   `libpineforge.a`, as for every pair change; replacing the archive alone does
   not update a statically linked strategy library.
-- No public header changed. The only new header is
-  `include/pineforge/detail/o1_store.hpp`, an internal building block that no
-  engine path uses yet (below); its object code is part of `libpineforge.a`,
-  which therefore grows slightly.
+- **Native C++ modules require a rebuild.** The native order value namespace
+  advances from the previous `pineforge::native_order::native_order_v7` to <!-- verified HEAD -->
+  `pineforge::native_order::native_order_v8`. The layouts of `BindOpenings`,
+  `OpeningsClose`, `TargetObservation`, `CommandContext` and
+  `WorkingRequestCore` changed with opening readbacks and scratch-backed core
+  storage. Rebuild every C++ object that includes these headers and relink
+  against the matching archive; stale v7 order symbols now fail to link or
+  load. Identity types remain in `native_order_v1`. The C ABI version
+  advances from 4 to 5, so a strategy library stamped 4 is refused at load
+  with the existing `pineforge ABI mismatch: .so reports 4, harness expects 5; rebuild.`
+  typed diagnostic in the Python loader, before a strategy entry point is called.
+  The caller-allocated C report and trade layouts do not grow.
+- `include/pineforge/detail/o1_store.hpp` is a new internal building block
+  that no engine path uses yet (below); its object code is part of
+  `libpineforge.a`, which therefore grows slightly.
 - Hosts that read the codegen input manifest must recognize the new input type
   `color` (a packed unsigned `0xAARRGGBB` integer default). That is a codegen
   change, described in the codegen 1.8.0 notes; the engine side is unchanged:
@@ -129,8 +142,8 @@ diagnostics keys, described below.
   holds waiting requests used to end the run as `engine_invariant`; it now ends
   it as `scratch_io_failed` (a non-retryable `resource` failure), as the
   other scratch consumers already did. A typed failure the storage layer had
-  already recorded keeps its own code. The catalog is unchanged: no code is
-  added, changed or removed.
+  already recorded keeps its own code. This classification adds or removes
+  no code.
 
 ### Known limits
 
@@ -1117,7 +1130,7 @@ library.
   completeness claim. A build declaring `1.3-parity` cannot be promoted to a
   stable app pin; the app pins it only as a prerelease (`1.6.1-rc.N`), and
   only a completeness proof (EN-115) allows `"1.3"` again. The C layouts stay
-  at ABI 4, `PF_ABI_VERSION` stays 4, the selected-window wire version stays
+  at ABI 4, `PF_ABI_VERSION` was still 4, the selected-window wire version stays <!-- verified HEAD -->
   1, the phase version 1 and the fingerprint/schema version 2.
 - **Preflight stage timings ([#402]).** `scripts/ci_preflight.py` records `startedAt` (UTC ISO-8601) and `seconds` (monotonic duration; `null` while a stage is running) on each stage and on the top-level `preflight-summary.json` summary.
 - **API documentation (`noindex` on Doxygen source listings and report-schema wording, [#398], [#400]).**
@@ -1179,7 +1192,7 @@ linked strategy library.
   completeness claim. A build declaring `1.3-parity` cannot be promoted to a
   stable app pin; the app pins it only as a prerelease (`1.6.1-rc.N`), and
   only a completeness proof (EN-115) allows `"1.3"` again. The C layouts stay
-  at ABI 4, `PF_ABI_VERSION` stays 4, the selected-window wire version stays
+  at ABI 4, `PF_ABI_VERSION` was still 4, the selected-window wire version stays <!-- verified HEAD -->
   1, the phase version 1 and the fingerprint/schema version 2.
 - **Preflight stage timings ([#402]).** `scripts/ci_preflight.py` records `startedAt` (UTC ISO-8601) and `seconds` (monotonic duration; `null` while a stage is running) on each stage and on the top-level `preflight-summary.json` summary.
 - **API documentation (`noindex` on Doxygen source listings and report-schema wording, [#398], [#400]).**
@@ -1519,7 +1532,7 @@ does not update a statically linked strategy library.
   `docker/run_failure_codes.json`). Recording is off until a caller
   turns it on, and nothing a run computes depends on it: trades, reports,
   metrics and every hash are byte-identical, `pf_report_t` and every existing
-  symbol are unchanged, and `PF_ABI_VERSION` stays 4. The new members enter
+  symbol are unchanged, and `PF_ABI_VERSION` was still 4. The new members enter <!-- verified HEAD -->
   `engine_script_run_v19` without an epoch; a C++ object compiled against an
   earlier v19 header is rebuilt with the library.
 - **A run's report belongs to the call that began it ([#361]).** Once a call
@@ -1607,7 +1620,7 @@ strategy library.
 The C header adds `strategy_get_last_error_code` and
 `strategy_get_last_error_args`, behind `PINEFORGE_HAS_RUN_FAILURE_CODES_V1`.
 No existing C signature, struct layout or enumerator changes:
-`PF_ABI_VERSION` stays 4 and `PF_CAPABILITIES_API_VERSION` stays 1.
+`PF_ABI_VERSION` was still 4 and `PF_CAPABILITIES_API_VERSION` stays 1. <!-- verified HEAD -->
 The native C header and frozen header fixtures are unchanged. The script
 epoch stays `engine_script_run_v19`; *State hashes* below describes the
 recipe additions. *Report keys and provenance* describes the JSON changes
@@ -1733,7 +1746,7 @@ results on that population, not cross-version trade or hash identity.
   the text, so a script's `runtime.error` always reads
   `strategy_runtime_error`, whatever English it copies; an argument is never a
   value the script computed while it ran. Both getters are additive runtime
-  exports that every strategy library links, so `PF_ABI_VERSION` stays 4; a
+  exports that every strategy library links, so `PF_ABI_VERSION` was still 4; a <!-- verified HEAD -->
   harness looks them up with `dlsym` (Python: `hasattr`), and a library built
   against an earlier runtime lacks them.
   [Run-failure codes](docs/pages/run-failure-codes.md) lists every code, its
@@ -2023,8 +2036,8 @@ pineforge-codegen 1.3.0, the pair the release hub's image
 attaches the three prebuilt tarballs, `pineforge-v1.3.0-linux-x86_64.tar.gz`,
 `pineforge-v1.3.0-linux-aarch64.tar.gz` and
 `pineforge-v1.3.0-macos-universal.tar.gz`, each with a `.sha256`.
-`<pineforge/pineforge.h>` is v1.2.0's byte for byte, so `PF_ABI_VERSION` stays
-4 and `PF_CAPABILITIES_API_VERSION` stays 1; the two confirmed-bar calls are
+`<pineforge/pineforge.h>` was v1.2.0's byte for byte, so `PF_ABI_VERSION` was still 4 <!-- verified HEAD -->
+and `PF_CAPABILITIES_API_VERSION` stays 1; the two confirmed-bar calls are
 per-strategy symbols the generated module defines, not runtime exports.
 `native_c_api.h` and the native C++ host headers are unchanged, so no
 published layout moves; the frozen historical headers and archives are
@@ -2264,7 +2277,7 @@ pairs with pineforge-codegen 1.2.0, the pair the release hub's image
 attaches the three prebuilt tarballs, `pineforge-v1.2.0-linux-x86_64.tar.gz`,
 `pineforge-v1.2.0-linux-aarch64.tar.gz` and
 `pineforge-v1.2.0-macos-universal.tar.gz`, each with a `.sha256`.
-`PF_ABI_VERSION` stays 4: `pineforge.h` only gains declarations and one
+`PF_ABI_VERSION` was still 4: `pineforge.h` only gains declarations and one <!-- verified HEAD -->
 updated comment, and `native_c_api.h` and the native C++ host headers are
 unchanged, so no published layout moves; the frozen historical headers and
 archives are untouched. The script ABI epoch stays `engine_script_run_v19` and
@@ -2540,7 +2553,7 @@ lists the other symbols' feeds a script requests
 installs ([#327]). The GitHub release attaches the three prebuilt tarballs,
 `pineforge-v1.1.0-linux-x86_64.tar.gz`, `pineforge-v1.1.0-linux-aarch64.tar.gz`
 and `pineforge-v1.1.0-macos-universal.tar.gz`, each with a `.sha256`.
-`PF_ABI_VERSION` stays 4: `pineforge.h` only gains declarations, and
+`PF_ABI_VERSION` was still 4: `pineforge.h` only gains declarations, and <!-- verified HEAD -->
 `native_c_api.h` and the native C++ host headers are unchanged, so no published
 layout moves; the frozen historical headers and archives are untouched. The
 script ABI epoch stays `engine_script_run_v19` and the state hashes keep their
@@ -2848,7 +2861,7 @@ A documentation-only release that pairs with pineforge-codegen 1.0.1, the pair
 the release hub's image `ghcr.io/pineforge-4pass/pineforge-release:1.0.1`
 carries. Since v1.0.0 no file under `src/`, `include/`, `cmake/` or
 `examples/`, no CMake file and nothing under `docker/` but its README changed:
-the library, the C ABI (`PF_ABI_VERSION` 4), the native C++ API, the script ABI
+the library, the then-current C ABI (`PF_ABI_VERSION` 4, which was unchanged), the native C++ API, the script ABI <!-- verified HEAD -->
 epoch `engine_script_run_v19` and its state-hash values, and the JSON report
 keys of `docker/run_json.py` (`metrics.equity.sharpe_tv` / `sortino_tv`
 included) are v1.0.0's. The GitHub release attaches the three prebuilt
@@ -2918,7 +2931,7 @@ was never tagged.
 
 ### Breaking changes: what a 0.x user must act on
 
-- **C ABI version 4.** `PF_ABI_VERSION` is 4 (0.13.1: 3). `pf_report_t`
+- **C ABI version 4.** `PF_ABI_VERSION` was 4 in 1.0.0 (0.13.1: 3). `pf_report_t` <!-- verified HEAD -->
   appends `broker_state_hash` and `broker_state_hash_len`, and it is
   caller-allocated, so a mirror built for ABI 3 under-sizes it: update FFI
   mirrors and check `pf_abi_version() == PF_ABI_VERSION` before a run
