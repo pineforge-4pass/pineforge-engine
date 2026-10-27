@@ -1,6 +1,6 @@
 // Hand-lowered generated state, driven by the real source host's historical
 // calc-on-fill hooks and request.security_lower_tf dispatch. Compiler emission
-// is intentionally a separate lane.
+// is outside this test's scope.
 #include <pineforge/array.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
 #include "array_store_fixture.hpp"
@@ -189,10 +189,10 @@ int main() {
             require(host.last_error().empty(), host.last_error().c_str());
             host.verify(charts);
         }
-        std::puts("U01 source hooks: real fill rollback, lower-TF numeric and bool results");
+        std::puts("array source hooks: real fill rollback, lower-TF numeric and bool results");
         return 0;
     } catch (const std::exception& failure) {
-        std::fprintf(stderr, "U01 source hooks: %s\n", failure.what());
+        std::fprintf(stderr, "array source hooks: %s\n", failure.what());
         return 1;
     }
 }

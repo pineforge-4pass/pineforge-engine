@@ -115,10 +115,10 @@ int main() {
         nested(*fixture.store);
         deleted_handles(*fixture.store);
         require(fixture.store->stats().bytes_live == live, "array handle storage leaked");
-        std::puts("U01 nested arrays and deleted drawing records: exact late reads");
+        std::puts("array nested arrays and deleted drawing records: exact late reads");
         return 0;
     } catch (const std::exception& failure) {
-        std::fprintf(stderr, "U01 nested/handles: %s\n", failure.what());
+        std::fprintf(stderr, "array nested/handles: %s\n", failure.what());
         return 1;
     }
 }

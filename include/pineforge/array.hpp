@@ -15,7 +15,7 @@
 // Nested values own child ids; drawing values retain their four-byte handles,
 // including handles to deleted records. The drawing arena owns those records.
 //
-// get/set implement the lane's negative-index -> na/no-write access rule.
+// get/set implement the tolerant negative-index -> na/no-write access rule.
 // The compiler's checked v6 calls use get_i/set_i/remove_i/insert (end-relative
 // negative indices); get_raw/set_raw/remove_raw/insert_raw are checked v5
 // calls. Do not substitute the tolerant accessor for either checked path.
@@ -657,14 +657,10 @@ public:
         if (scope) scope->commit();
     }
     void rollback() {
-        if (tx_) { tx_->rollback(); tx_.reset(); }
+        auto scope = std::move(tx_);
+        if (scope) scope->rollback();
     }
     bool active() const noexcept { return static_cast<bool>(tx_); }
-    ~ScriptArrayTransaction() {
-        if (tx_) {
-            try { tx_->rollback(); } catch (...) { std::terminate(); }
-        }
-    }
 };
 
 } // namespace pineforge

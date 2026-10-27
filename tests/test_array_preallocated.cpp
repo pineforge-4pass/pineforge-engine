@@ -73,12 +73,12 @@ int main() {
         require(values.size() == beyond_window && values.first() == 0.0 &&
                 values.last() == static_cast<double>(beyond_window - 1),
                 "exceeding a prepared proof refused or truncated");
-        std::printf("U01 prepared: %lld bars x %lld cells, zero heap/lifecycle allocations; growth=%lld\n",
+        std::printf("array prepared: %lld bars x %lld cells, zero heap/lifecycle allocations; growth=%lld\n",
                     static_cast<long long>(bars), static_cast<long long>(cardinality),
                     static_cast<long long>(beyond_window));
         return 0;
     } catch (const std::exception& failure) {
-        std::fprintf(stderr, "U01 prepared: %s\n", failure.what());
+        std::fprintf(stderr, "array prepared: %s\n", failure.what());
         return 1;
     }
 }

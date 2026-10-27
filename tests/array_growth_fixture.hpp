@@ -1,4 +1,4 @@
-// U01 RED/GREEN fixture. On the frozen header closure, only the generated
+// Array growth fixture. On the frozen header closure, only the generated
 // std::vector idiom is available; its test reaches the bound and FAILS there.
 // On the new closure the same native host callback uses ScriptArray instead.
 #pragma once
@@ -102,7 +102,7 @@ class AppendHost final : public pineforge::NativeStrategyHost {
 public:
     explicit AppendHost(Container& values) : values_(values) {
         pineforge::NativeRunSpec spec;
-        spec.identity = {"u01-growth", 1};
+        spec.identity = {"array-growth", 1};
         spec.input_tf = "1";
         spec.script_tf = "1";
         spec.ticker = "ARRAY";
@@ -199,12 +199,12 @@ inline int run(std::size_t count, int argc, char** argv) {
             resident += static_cast<std::size_t>(stats.bytes_resident) + kObjectBufferBytes;
 #endif
         }
-        std::printf("U01 bars=%zu retained_family_bytes=%zu bound=%zu mode=%s\n",
+        std::printf("array bars=%zu retained_family_bytes=%zu bound=%zu mode=%s\n",
                     count, resident, kResidentBound, vector_mode ? "vector-RED" : "store-GREEN");
         require(resident <= kResidentBound, "array resident growth exceeds the derived fixed bound");
         return 0;
     } catch (const std::exception& error) {
-        std::fprintf(stderr, "U01 growth: %s\n", error.what());
+        std::fprintf(stderr, "array growth: %s\n", error.what());
         return 1;
     }
 }

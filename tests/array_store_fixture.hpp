@@ -78,10 +78,14 @@ public:
 class FileBacking final : public pineforge::detail::ScratchBacking {
     SpillFile file_;
     std::size_t page_bytes_;
+    std::uint64_t write_attempts_ = 0;
+    bool fail_next_write_ = false;
 public:
     explicit FileBacking(std::size_t page)
         : ScratchBacking(pineforge::detail::ScratchBackingKind::disk, page), page_bytes_(page) {}
     std::uint64_t page_count() const noexcept override { return file_.size() / page_bytes_; }
+    std::uint64_t write_attempts() const noexcept { return write_attempts_; }
+    void fail_next_write() noexcept { fail_next_write_ = true; }
 protected:
     pineforge::detail::ScratchStatus do_read_page(
         pineforge::detail::ScratchPageId id, pineforge::detail::ScratchBuffer target) const noexcept override {
@@ -93,6 +97,11 @@ protected:
     pineforge::detail::ScratchStatus do_write_page(
         pineforge::detail::ScratchPageId id, pineforge::detail::ScratchBytes source) noexcept override {
         using pineforge::detail::ScratchStatus;
+        ++write_attempts_;
+        if (fail_next_write_) {
+            fail_next_write_ = false;
+            return ScratchStatus::io_error;
+        }
         if (id >= static_cast<std::uint64_t>(std::numeric_limits<off_t>::max()) / page_bytes_)
             return ScratchStatus::io_error;
         const auto end = (id + 1) * page_bytes_;

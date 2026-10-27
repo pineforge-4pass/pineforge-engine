@@ -260,10 +260,10 @@ int main() {
         primitive_defaults_and_moves(*fixture.store);
         cross_store_values(*fixture.store);
         require(fixture.store->stats().bytes_live == live, "array or string subtree leaked");
-        std::puts("U01 semantics: vector differential, diagnostics, value copies, exact bytes");
+        std::puts("array semantics: vector differential, diagnostics, value copies, exact bytes");
         return 0;
     } catch (const std::exception& failure) {
-        std::fprintf(stderr, "U01 semantics: %s\n", failure.what());
+        std::fprintf(stderr, "array semantics: %s\n", failure.what());
         return 1;
     }
 }
