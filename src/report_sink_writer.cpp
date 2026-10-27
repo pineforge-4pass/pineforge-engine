@@ -434,7 +434,7 @@ struct LineWriter::State {
             private_path += ".in-progress";
             do {
                 descriptor = ::openat(directory_descriptor, private_path.c_str() + private_name,
-                    O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0666);
+                    O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, replacing ? 0600 : 0666);
             } while (descriptor < 0 && errno == EINTR);
             if (descriptor >= 0) {
                 private_owned = true;

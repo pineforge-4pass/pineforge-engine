@@ -7773,6 +7773,7 @@ endif()
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_libraries(test_report_sink_deferred_sync PRIVATE Threads::Threads)
     target_link_options(test_report_sink_deferred_sync PRIVATE
+        "-Wl,--wrap=openat" "-Wl,--wrap=fchmod"
         "-Wl,--wrap=pwrite" "-Wl,--wrap=ftruncate"
         "-Wl,--wrap=fdatasync" "-Wl,--wrap=fsync")
     add_test(NAME test_report_sink_deferred_sync_count COMMAND test_report_sink_deferred_sync count)

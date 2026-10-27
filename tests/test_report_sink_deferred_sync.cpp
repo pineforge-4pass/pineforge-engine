@@ -17,6 +17,7 @@
 
 #include <array>
 #include <cerrno>
+#include <cstdarg>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -193,15 +194,97 @@ void snapshot(int fd) {
 }
 
 } // namespace sinksync
+
+// Observe real modes at creation, around fchmod and before every data write.
+// Fixed bookkeeping stays outside the writer's allocation measurements.
+namespace sinkmode {
+struct Probe {
+    bool armed = false, stat_failed = false;
+    dev_t directory_device = 0, device = 0;
+    ino_t directory_inode = 0, inode = 0;
+    mode_t observed = 0;
+    std::size_t creations = 0, observations = 0, writes = 0, chmods = 0;
+};
+Probe probe;
+
+bool observe(int fd) {
+    if (!probe.armed || probe.creations == 0) return false;
+    const int saved = errno;
+    struct stat info{};
+    const bool ok = ::fstat(fd, &info) == 0;
+    if (!ok) probe.stat_failed = true;
+    const bool mine = ok && info.st_dev == probe.device && info.st_ino == probe.inode;
+    if (mine) {
+        probe.observed |= info.st_mode & 0777;
+        ++probe.observations;
+    }
+    errno = saved;
+    return mine;
+}
+
+void opened(int directory, int fd) {
+    if (!probe.armed || fd < 0) return;
+    const int saved = errno;
+    struct stat parent{}, file{};
+    if (::fstat(directory, &parent) != 0 || ::fstat(fd, &file) != 0) {
+        probe.stat_failed = true;
+    } else if (parent.st_dev == probe.directory_device
+               && parent.st_ino == probe.directory_inode && S_ISREG(file.st_mode)) {
+        probe.device = file.st_dev;
+        probe.inode = file.st_ino;
+        ++probe.creations;
+        observe(fd); // Before control returns to the writer's fchmod.
+    }
+    errno = saved;
+}
+
+struct Watch {
+    explicit Watch(const std::string& directory) {
+        struct stat info{};
+        cr150_w1::require(::stat(directory.c_str(), &info) == 0,
+                         "stat the permission fixture directory");
+        probe = {};
+        probe.directory_device = info.st_dev;
+        probe.directory_inode = info.st_ino;
+        probe.armed = true;
+    }
+    ~Watch() { probe.armed = false; }
+};
+} // namespace sinkmode
 } // namespace
 
+extern "C" int __real_openat(int, const char*, int, ...);
+extern "C" int __real_fchmod(int, mode_t);
 extern "C" ssize_t __real_pwrite(int, const void*, std::size_t, off_t);
 extern "C" int __real_ftruncate(int, off_t);
 extern "C" int __real_fdatasync(int);
 extern "C" int __real_fsync(int);
 
+extern "C" int __wrap_openat(int directory, const char* path, int flags, ...) {
+    mode_t mode = 0;
+    if ((flags & O_CREAT) || (flags & O_TMPFILE) == O_TMPFILE) {
+        va_list args;
+        va_start(args, flags);
+        mode = va_arg(args, int);
+        va_end(args);
+    }
+    const int result = __real_openat(directory, path, flags, mode);
+    const int saved = errno;
+    if (flags & O_CREAT) sinkmode::opened(directory, result);
+    errno = saved;
+    return result;
+}
+extern "C" int __wrap_fchmod(int fd, mode_t mode) {
+    if (sinkmode::observe(fd)) ++sinkmode::probe.chmods;
+    const int result = __real_fchmod(fd, mode);
+    const int saved = errno;
+    sinkmode::observe(fd);
+    errno = saved;
+    return result;
+}
 extern "C" ssize_t __wrap_pwrite(int fd, const void* data, std::size_t bytes, off_t offset) {
     using namespace sinksync;
+    if (sinkmode::observe(fd)) ++sinkmode::probe.writes;
     bool mine = false;
     if (enter(Op::pwrite, fd, mine)) {
         note(Op::pwrite, offset, bytes, -1, probe.error);
@@ -909,6 +992,48 @@ void row_memory(const std::string& directory) {
     require(many.peak <= 2 * 1024 * 1024, "writer heap exceeds its fixed line and window bound");
 }
 
+struct Umask {
+    mode_t previous;
+    explicit Umask(mode_t mask) : previous(::umask(mask)) {}
+    ~Umask() { ::umask(previous); }
+};
+
+void row_permissions(const std::string& directory) {
+    const auto population = make_population(kRows, Tail::inside);
+    for (const mode_t mask : {0022, 0077}) {
+        Umask mask_scope(mask);
+        for (const bool existing : {false, true}) {
+            PathSink sink(directory, "permissions.sink"); // Initially 0600.
+            if (!existing)
+                require(::unlink(sink.path.c_str()) == 0, "prepare a new publication path");
+            const mode_t expected = existing ? 0600 : (0666 & ~mask);
+            sinkmode::Watch watch(directory);
+            rs::LineWriter writer(sink.descriptor());
+            writer.write_header(kRecords);
+            write_records(writer, population);
+            require(sinkmode::probe.creations == 1 && sinkmode::probe.writes > 0,
+                    "permission observation needs a real private file and written windows");
+            const auto trailer = writer.write_trailer();
+            expect_sequence("permissions", population.prefix, population.expected.size(), 0);
+            expect_trailer(trailer, population, "permissions");
+            require(contents(sink.path) == population.expected,
+                    "permission handling changed the published bytes");
+            struct stat info{};
+            require(::stat(sink.path.c_str(), &info) == 0
+                        && (info.st_mode & 0777) == expected,
+                    "replacement/new-file permissions differ from the target/umask");
+            const auto& modes = sinkmode::probe;
+            require(!modes.stat_failed && modes.observations > 0
+                        && (modes.observed & ~expected) == 0
+                        && modes.chmods == (existing ? 1u : 0u),
+                    "an in-progress report had permissions wider than its publication mode");
+            require(std::distance(std::filesystem::directory_iterator(directory),
+                                  std::filesystem::directory_iterator{}) == 1,
+                    "permission row left an in-progress sibling");
+        }
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -923,6 +1048,7 @@ int main(int argc, char** argv) {
             {"engine", row_engine}, {"engine_sync_fault", row_engine_sync_fault},
             {"abandon", row_abandon}, {"memory", row_memory},
             {"close_fault", row_close_fault},
+            {"permissions", row_permissions},
         };
         bool matched = false;
         for (const auto& entry : rows) {

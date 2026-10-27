@@ -1,11 +1,11 @@
-// A path sink publishes only a completed report. Real windows, native callback
+// A path sink publishes only a completed report. Real windows, source callback
 // faults and filesystem rename errors exercise the production lifecycle.
 // The success oracle spells version-1 bytes independently of the writer.
 #include "report_sink_failure_fixture.hpp"
 #include "../src/report_sink_writer.hpp"
 #include "../src/sha256.hpp"
 
-#include <pineforge/native_host.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/version.h>
 
 #include <algorithm>
@@ -178,32 +178,35 @@ void expect_io(const rs::WriterError& error, int number, const char* operation) 
     expect_failure(pineforge::classify_run_failure(error), reason_args("sink_io"));
 }
 
-class FaultHost final : public pineforge::NativeStrategyHost {
+class FaultHost final : public pineforge::source::PineStrategyHost {
 public:
     const Directory& directory;
     int callbacks = 0, raises = 0;
     std::int64_t streamed_trades = 0;
     bool disk_witness = false;
     explicit FaultHost(const Directory& directory) : directory(directory) {
-        pineforge::NativeRunSpec spec;
-        spec.identity = {"report-publication", 1};
-        spec.input_tf = spec.script_tf = "1";
-        spec.tickerid = "TEST:PUBLICATION";
-        spec.timezone = "UTC";
-        spec.session = "24x7";
-        spec.initial_capital = 1000.0;
-        spec.point_value = spec.account_fx = 1.0;
-        spec.price_tick = 0.01;
-        spec.report_policy = pineforge::NativeReportPolicy::KernelRecorded;
-        require(configure_native(spec).status == pineforge::NativeSetupStatus::Applied,
-                "configure native publication host");
+        pineforge::source::PineStrategyConfig config;
+        config.initial_capital = 1000.0;
+        config.default_qty_type = static_cast<int>(pineforge::QtyType::FIXED);
+        config.default_qty_value = 1.0;
+        config.process_orders_on_close = false;
+        configure_pine_strategy(config);
+        set_syminfo_timezone("UTC");
+        set_syminfo_session("24x7");
+        set_syminfo_mintick(0.01);
         set_trade_history_streamable(true);
         set_trace_enabled(true);
         install_path(*this, directory.file(), directory.path);
     }
-    void on_native_bar(const pineforge::Bar&, const pineforge::NativeDecisionContext&) override {
+    void prepare_script_run(const pineforge::Bar*, int, bool) override {
+        trades_.set_scratch_directory(directory.path);
+    }
+    void on_source_bar(const pineforge::Bar&) override {
         const int index = callbacks++;
         if (index + 1 == kBars) {
+            // The source boundary seals prior immutable trades before this
+            // body. A bare native host retains T rows until report assembly;
+            // its final callback cannot witness streamed T records.
             pf_report_sink_receipt_v1 receipt{sizeof receipt, 1};
             require(report_sink_receipt_v1(&receipt) == 0 && !receipt.complete
                         && receipt.count_t > 0 && closed_trade_count() > 0,
@@ -222,17 +225,15 @@ public:
             ++raises;
             throw std::runtime_error(kCallbackFault);
         }
-        if (index % 4 == 0 || index % 4 == 2) {
-            pineforge::native_order::Request order;
-            order.intent = pineforge::native_order::Transact{index % 4 == 0 ? 1.0 : -1.0};
-            order.label = "roundtrip";
-            submit_market(order);
-        }
+        if (index % 4 == 0) strategy_entry("roundtrip", true);
+        if (index % 4 == 2) strategy_close("roundtrip");
     }
 };
 
-void native_fault(const Directory& directory, bool existing) {
+void callback_fault(const Directory& directory, bool existing) {
     if (existing) seed(directory.file());
+    Environment scratch("PINEFORGE_COMMAND_SCRATCH_DIR", directory.path.c_str());
+    Environment temporary("TMPDIR", directory.path.c_str());
     FaultHost host(directory);
     run(host, tape(kBars));
     require(host.callbacks == kBars && host.raises == 1 && host.streamed_trades > 0
@@ -250,8 +251,8 @@ void native_fault(const Directory& directory, bool existing) {
     unchanged(directory, existing);
 }
 
-void row_fault(const Directory& directory) { native_fault(directory, false); }
-void row_existing(const Directory& directory) { native_fault(directory, true); }
+void row_fault(const Directory& directory) { callback_fault(directory, false); }
+void row_existing(const Directory& directory) { callback_fault(directory, true); }
 
 void row_success(const Directory& directory) {
     const Expected expected;

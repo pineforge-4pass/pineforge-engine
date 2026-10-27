@@ -1,5 +1,5 @@
 # Private path-sink publication: each slice exercises one lifecycle outcome.
-if(UNIX)
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
     list(APPEND TEST_SOURCES test_report_sink_publication)
     pineforge_add_unit_test(test_report_sink_publication)
     add_test(NAME test_report_sink_publication_slice_1 COMMAND test_report_sink_publication --slice 1/8)
