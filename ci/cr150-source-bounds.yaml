@@ -74,7 +74,7 @@ scan:
   generated_files:
     - "tutorial/**/generated*.cpp"
 ceilings:
-  unreviewed: 1279
+  unreviewed: 1281
   pending-flat-memory: 185
 owners:
   - {name: "generated-cpp", globs: ["tutorial/**"]}
@@ -1511,12 +1511,14 @@ entries:
   - {id: "U1488", file: "include/pineforge/detail/disk_resident_id_table.hpp", symbol: "at_", ops: ["assign", "decl"], container: "const_iterator", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 99}
   - {id: "U1489", file: "include/pineforge/detail/disk_resident_id_table.hpp", symbol: "held_", ops: ["assign", "decl", "grow"], container: "Held", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 273}
   - {id: "U1490", file: "include/pineforge/detail/disk_resident_id_table.hpp", symbol: "resident_by_key_", ops: ["assign", "decl", "grow"], container: "ResidentKeys", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 272}
+  - {id: "U1547", file: "include/pineforge/detail/scratch_errors.hpp", symbol: "args", ops: ["alloc"], container: "unresolved by the index: make_shared", owner: "engine-core", phase: "unclassified", state: "unreviewed", note: "CR-403: one cold allocation of the canonical failure-argument JSON, made only when limit or need exceeds the signed 64-bit range; the text holds the two decimals and the resource name (at most about 70 bytes), once per refusal, and the run ends with that refusal.", line: 164}
   - {id: "U1491", file: "include/pineforge/detail/scratch_errors.hpp", symbol: "message", ops: ["append", "decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 62}
   - {id: "U1492", file: "include/pineforge/detail/scratch_errors.hpp", symbol: "scratch_byte_limit_message", ops: ["decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 88}
   - {id: "U1493", file: "include/pineforge/detail/scratch_errors.hpp", symbol: "scratch_count_limit_message", ops: ["decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 68}
   - {id: "U1494", file: "include/pineforge/detail/scratch_errors.hpp", symbol: "scratch_limit_message", ops: ["decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 60}
   - {id: "U1495", file: "include/pineforge/detail/scratch_errors.hpp", symbol: "scratch_limit_number", ops: ["decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 43}
   - {id: "U1496", file: "include/pineforge/detail/scratch_errors.hpp", symbol: "scratch_resident_cohort_limit_message", ops: ["decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 108}
+  - {id: "U1548", file: "include/pineforge/detail/scratch_errors.hpp", symbol: "std::to_string", ops: ["temp"], container: "unresolved by the index: std::to_string(...)", owner: "engine-core", phase: "unclassified", state: "unreviewed", note: "CR-403: two decimal spellings of the uint64 limit and need in the same cold failure-argument JSON as the make_shared entry above; each is at most 20 characters, once per refusal.", line: 165}
   - {id: "U1497", file: "include/pineforge/metrics_fold.hpp", symbol: "held_", ops: ["assign"], container: "unresolved by the index: held_ = ...", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 188}
   - {id: "U1498", file: "include/pineforge/ta.hpp", symbol: "held_", ops: ["assign"], container: "unresolved by the index: held_ = ...", owner: "ta-series", phase: "unclassified", state: "unreviewed", line: 1406}
   - {id: "U1499", file: "src/native_order.cpp", symbol: "held_", ops: ["assign"], container: "unresolved by the index: held_ = ...", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 2600}
