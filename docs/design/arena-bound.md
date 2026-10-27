@@ -1,6 +1,6 @@
 # Pre-start arena and invocation bounds
 
-This is the CR-150 sizing interface for COMPUTE and APP. Its implementation is
+This is the scratch-storage sizing interface for COMPUTE and APP. Its implementation is
 `scripts/arena_bound.py`; its hand-derived cross-language vectors are
 `tests/data/arena_bound_vectors.json`. All sizes are bytes, all arithmetic is
 integer arithmetic, and no completed-run count is an input.
@@ -446,7 +446,7 @@ host supplying `BindOpenings.external_openings`; such a host needs the
 membership/lifetime facts above before using this bound.
 Both descriptors of a generic freeze now use `ScratchFile`: a configured
 core directory is honored, standalone freezes use TMPDIR then the common
-fallback, and an attached arena creates no private file (CR-260).
+fallback, and an attached arena creates no private file.
 
 Summing these ten storage contributions and the explicit openings zero gives:
 
@@ -774,7 +774,7 @@ The eight JSON vectors were calculated by hand:
 | All terms | B=18146, b=15, q=1; A=18*1048576=18874368 as for Unicode. Primary one-page RSS/two-page AS; extra bar+two column+close buffers consume four pages with RSS copies=2: RSS=36864, AS=24576. Counts T/E/O/V/K/X/H=3/2/2/5/1/3/2; line maxima 717/154/190/263/71/140/25. U=2097152+2151+308+380+1315+71+420+50=2101847. Private RSS/AS are null and its own flag is true; top-level unbounded=false, unboundedTerms=[], reason="". |
 | Unbounded emitting loop | Null arena inputs except E=2; no finite guessed size. unboundedTerms=[arena,ohlcv,finalizerStream]; childPrivate remains informational. Default attempt-0 arena applies. |
 
-All eight vectors use the three-term verdict; CR150-CX's combined-arena
+All eight vectors use the three-term verdict; the combined-arena
 arithmetic leaves the current logical B contributions unchanged. The first six have
 `unboundedTerms=["ohlcv","finalizerStream"]`; their absent private proof
 continues to set only its own flag. In the all-terms vector, removing the
@@ -885,7 +885,7 @@ transcripts return over a pipe to the ordinary parent oracle. The fold
 witness also exercises all three record sizes at the 4095-byte segment
 ceiling and repeated partial-write journal recovery. The directory row
 records creation paths as well as listing /tmp before/after; immediate
-unlink cannot hide the CR-260 regression.
+unlink cannot hide the combined-arena regression.
 
 These changes are static read only on the Mac. The supervisor must execute
 set A on the old implementation (compare matches; jail/directory fail for

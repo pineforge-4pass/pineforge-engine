@@ -1,6 +1,6 @@
 #pragma once
 
-// CR-150 L19l-C. Exact string / string-pair tables with no per-key RAM
+// Exact string / string-pair tables with no per-key RAM
 // directory. Like L19a's successor-root file, scratch files are private,
 // unlinked at creation, close-on-exec, and accessed with pread/pwrite.
 #include <pineforge/detail/id_pair_ordered_fold.hpp>

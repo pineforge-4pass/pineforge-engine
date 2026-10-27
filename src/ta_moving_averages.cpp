@@ -261,7 +261,7 @@ SMA::SMA(int length)
 
 double SMA::compute(double src) {
     if (is_na(src)) {
-        // Pine ta.sma (KI-66): an na input never enters the compact last-N-
+        // Pine ta.sma: an na input never enters the compact last-N-
         // valid window. Once `length` valid values have been seen the buffer
         // mean is HELD and re-emitted on every bar including na-input bars;
         // before seeding an na input is still na. State is left untouched.
@@ -311,7 +311,7 @@ double EMA::compute(double src) {
     if (is_na(src)) {
         // An na input neither updates nor resets the recursion: the output is
         // na on this bar and the recursion resumes over the finite inputs on
-        // the next finite bar (KI-66; the same rule as RMA::compute). State is
+        // the next finite bar (the same rule as RMA::compute). State is
         // left untouched, so a SimpleAverage warm-up count is unaffected:
         // output_val is still na during warm-up, so the return is na either way.
         return na<double>();

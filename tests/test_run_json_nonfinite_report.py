@@ -1,4 +1,4 @@
-"""EN-133: exercise the real report builder, main(), writers and failure handler.
+"""Exercise the real report builder, main(), writers and failure handler.
 
 The in-process engine and planner are the existing selected-window stand-ins;
 the reports are real ReportC / TradeC allocations, and no serializer or failure
@@ -14,7 +14,7 @@ selects finite (favorable=1, adverse=0), nan or infinity (favorable only). The
 module must expose the ordinary run_json strategy exports and execution observer.
 Supply PINEFORGE_REPORT_NONFINITE_HOST_LIBRARY, or put it at the default path
 below. An absent default fixture is an explicit skip, never a fake native run;
-an explicitly configured missing fixture fails. EN-134 will require changing
+an explicitly configured missing fixture fails. The settlement safety work will require changing
 the process expectation if it guards this native seam before report assembly.
 """
 
@@ -45,7 +45,7 @@ import selected_window_report as swr  # noqa: E402
 import test_run_json_selected_window as selected  # noqa: E402
 import test_run_json_sink as sinks  # noqa: E402
 
-# Pinned from the EN-133 brief BEFORE any execution; never derived from output,
+# Pinned from the test brief BEFORE any execution; never derived from output,
 # the catalog or the implementation's validator.
 RESULT_INVALID = "report_result_invalid"
 POST_EXECUTION_FAILED = "report_post_execution_failed"
@@ -76,7 +76,7 @@ ONE_DAY_MS = 86_400_000
 YEAR_MS = 365.25 * 86400.0 * 1000.0
 SUBDAY = "simple_proportional_subday"
 OVERFLOW = "simple_proportional_overflow"
-# The frozen producer: docker/run_json.py on engine main just before EN-133 (the file is
+# The frozen producer: docker/run_json.py on engine main before the test (the file is
 # byte-identical at the commit the change was authored on, 9da4c984, and here).
 BASE_SOURCE = "7da487ab2907c428bdfc755e10452811f95beaf2:docker/run_json.py"
 

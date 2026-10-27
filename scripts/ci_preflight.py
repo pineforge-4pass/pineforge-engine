@@ -93,7 +93,7 @@ POST_RUNNER = '["self-hosted","pf-gcp-post"]'
 RELEASE_RUNNER = '["self-hosted","pf-gcp-main"]'
 CI_EVENTS = '''on:
   pull_request:
-    # LB-387: suite jobs skip on a draft PR (the required aggregate then fails, never passes);
+    # Suite jobs skip on a draft PR (the required aggregate then fails, never passes);
     # ready_for_review starts the full run when the PR is marked ready.
     # converted_to_draft re-runs the workflow so its failing aggregate supersedes the earlier ready run.
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
@@ -1732,7 +1732,7 @@ jobs:
               # events; none of them runs pull-request code.
               ;;
             workflow_run)
-              # LB-437: bind identity to the triggering run and its re-runner.
+              # Bind identity to the triggering run and its re-runner.
               # These two App bots are fixed canon policy; ALLOWED_BOTS is PR-only.
               [ -n "${WR_HEAD_REPO:-}" ] || fail "workflow_run head repository is missing"
               [ -n "${WR_ACTOR:-}" ] || fail "workflow_run triggering actor is missing"
@@ -1891,7 +1891,7 @@ def authz_workflow_findings(workflow: str, name: str, aggregate: str) -> list[st
     pr = re.search(r'(?m)^  pull_request:[^\n]*(?:\n(?:    [^\n]*|[ \t]*))*', workflow)
     if name == 'ci.yml' and (not pr or pr[0].strip() != (
             'pull_request:\n'
-            '    # LB-387: suite jobs skip on a draft PR (the required aggregate then fails, never passes);\n'
+            '    # Suite jobs skip on a draft PR (the required aggregate then fails, never passes);\n'
             '    # ready_for_review starts the full run when the PR is marked ready.\n'
             '    # converted_to_draft re-runs the workflow so its failing aggregate supersedes the earlier ready run.\n'
             '    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]')):
@@ -2759,7 +2759,7 @@ def check_commands(source: Path, output: Path | None = None,
          [sys.executable, str(source / 'scripts/check_market_admission_schema.py')]),
         ('source-guard-cancellation',
          [sys.executable, str(source / 'scripts/check_cancellation_hash_coverage.py')]),
-        # CR-150 / C4: a new growable container in the scanned engine, inline
+        # Source allocation bound: a new growable container in the scanned engine, inline
         # header or generated C++ needs a manifest entry whose bound names only
         # declared fixed inputs; the existing sites are listed OPEN, never PASS
         # (ci/cr150-source-bounds.yaml). Unconditional: a merge that adds a site
@@ -2802,7 +2802,7 @@ def check_commands(source: Path, output: Path | None = None,
         # release.yml's version arithmetic is a tested script.
         ('report-schema-key-tests',
          [sys.executable, str(source / 'scripts/test_report_schema_keys.py')]),
-        # EN-132: the checker itself comes from source_guard_commands above;
+        # The checker itself comes from source_guard_commands above;
         # its negative controls and independent D4 route need no engine.
         ('selected-window-ownership-tests',
          [sys.executable, '-I', '-B', str(source / 'tests/ownership/test_manifest_checker.py')]),

@@ -1,4 +1,4 @@
-// CR-150 O1W R12: the range-end report rows are produced one at a time.
+// The range-end report rows are produced one at a time.
 //
 // A completed run with P physical lots still open reports one report-only row
 // per lot. Before this lane the producer appended every row to

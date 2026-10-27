@@ -1,4 +1,4 @@
-// CR-150 L22C: every sink, finalizer, scratch and certified-arena failure is
+// Every sink, finalizer, scratch and certified-arena failure is
 // an engine fault. Exercise the compiled registry and exception classifier.
 
 #include <pineforge/detail/scratch_file.hpp>

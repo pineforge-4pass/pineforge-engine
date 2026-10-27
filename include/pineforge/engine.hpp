@@ -2313,7 +2313,7 @@ public:
     // ABI v4 live-runtime surface (task 9): public forwarders for the C
     // ABI, which -- being extern "C" free functions -- cannot reach the
     // protected signed_position_size() / current_equity() above.
-    // signed_position_size() is strategy.position_size (KI-64 freeze-aware:
+    // signed_position_size() is strategy.position_size (freeze-aware:
     // reads the pre-close position while a same-bar POOC close is frozen).
     // current_equity() is initial capital plus realized net profit
     // (strategy.initial_capital + strategy.netprofit). NOT Pine's
@@ -2738,7 +2738,7 @@ protected:
     // starts with this closed-row left fold, never a separately summed tail.
     double report_closed_net_profit() const;
 
-    // CR-150 o1w-seq (R14--R18): optional sequence retention. The default is
+    // Optional sequence retention. The default is
     // the historical owning-array path, byte-identical to before. SummaryOnly
     // keeps one fixed ordered witness per sequence instead, so trial memory
     // does not grow with the bar, trace, row or event population. A report

@@ -1,4 +1,4 @@
-// CR-150 O1C. Predicted first red on 6cfcff0696: the frozen closure has no
+// Predicted first red on 6cfcff0696: the frozen closure has no
 // pineforge/detail/scratch_store.hpp (fatal error: file not found). Against the
 // DRAFT v0 declarations alone (e43d7bcc7) this body compiles and the first red
 // is the link of CommandScratchStore, which that commit declares and does not define.

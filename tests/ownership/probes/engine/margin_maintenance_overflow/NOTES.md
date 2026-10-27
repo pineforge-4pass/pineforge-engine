@@ -1,6 +1,6 @@
 # margin_maintenance_overflow
 
-Pinned before execution: D6 row 10 maintenance requirement. The expectation is unchanged; the probe was rebuilt (TX-PROBES, CR-139) because its first form never reached the row.
+Pinned before execution: D6 row 10 maintenance requirement. The expectation is unchanged; the probe was rebuilt because its first form never reached the row.
 
 The entry quantity was 1e-10; the run completed with no trade and no position, so the maintenance producer (`src/native_execution_consumer.cpp:3836-3863`, which returns while the book is flat) was never reached. The quantity is now 1: the entry fills at the bar-2 open at price 1 with a finite placement requirement (1e306 against equity 1e307) and a finite kernel unit maintenance (1e306). After the price jumps to 100000 at bar 6, the kernel unit-maintenance product overflows, despite a finite position P&L, and the maintenance producer must fail with `engine_command_value_invalid` (`margin.maintenance`, `nonfinite`, stage `margin`). Fractions are finite and positive so the model is built. Why the 1e-10 entry did not fill is not established; the fix does not depend on it.
 

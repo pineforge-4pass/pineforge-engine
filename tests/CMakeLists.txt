@@ -7364,13 +7364,13 @@ foreach(cr150_lane_file IN LISTS CR150_LANE_CMAKE)
     include("${cr150_lane_file}")
 endforeach()
 
-# --- CR-150 s4e-fix-tmp begin ---
+# --- scratch-fixture block begin ---
 # CR-352: only these opted-in existing targets need the interposer's linkage.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_libraries(test_default_scratch_tmpfs_tmpdir PRIVATE ${CMAKE_DL_LIBS} Threads::Threads)
     target_link_libraries(test_jailed_scratch_tmpfs_tmpdir PRIVATE ${CMAKE_DL_LIBS} Threads::Threads)
 endif()
-# --- CR-150 s4e-fix-tmp end ---
+# --- scratch-fixture block end ---
 
 # --- CR-150 core-cr150-l6b1 begin ---
 # CR-150 L6B1: appended after every pre-existing line pin. A real source

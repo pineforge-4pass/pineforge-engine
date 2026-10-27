@@ -9,15 +9,15 @@ namespace {
 
 Count scaled(Count value, Count factor) {
     require(factor != 0 && value <= std::numeric_limits<Count>::max() / factor,
-            "CR-257 scaled class bound overflow");
+            "Scaled class bound overflow");
     return value * factor;
 }
 Count cold_window_calls(const Calls& reads) {
     if (reads.calls == 0) {
-        require(reads.bytes == 0, "CR-257 class has bytes without reads");
+        require(reads.bytes == 0, "Class has bytes without reads");
         return 0;
     }
-    require(reads.bytes >= reads.calls, "CR-257 class contains zero-sized reads");
+    require(reads.bytes >= reads.calls, "Class contains zero-sized reads");
     // mean = bytes/calls; ceil(kCacheBytes/mean), without floating rounding.
     return ceil_div(scaled(reads.calls, kCacheBytes), reads.bytes);
 }
@@ -61,7 +61,7 @@ void class_growth(FileClass file, const SourceRun& small, const SourceRun& large
                 large.context);
     require(before.calls <= std::numeric_limits<Count>::max() - window_calls
             && before.bytes <= std::numeric_limits<Count>::max() - window_bytes,
-            "CR-257 class window bound overflow");
+            "Class window bound overflow");
     // Also state the large-run total limits explicitly: scaled baseline plus
     // its one-window tolerance, separately for each class (including other).
     class_bound(file, "pread_calls_scaled", after.calls,
@@ -80,7 +80,7 @@ void source_100k() {
     source_bounds(large);
     require(small.context.n != 0 && large.context.n > small.context.n
             && large.context.n % small.context.n == 0,
-            "CR-257 class flatness needs an integral population ratio");
+            "Class flatness needs an integral population ratio");
     const Count scale = large.context.n / small.context.n;
     for (std::size_t i = 0; i < kClassNames.size(); ++i) {
         const auto file = static_cast<FileClass>(i);

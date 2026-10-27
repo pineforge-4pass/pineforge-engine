@@ -62,7 +62,7 @@ jobs:
               # events; none of them runs pull-request code.
               ;;
             workflow_run)
-              # LB-437: bind identity to the triggering run and its re-runner.
+              # Bind identity to the triggering run and its re-runner.
               # These two App bots are fixed canon policy; ALLOWED_BOTS is PR-only.
               [ -n "${WR_HEAD_REPO:-}" ] || fail "workflow_run head repository is missing"
               [ -n "${WR_ACTOR:-}" ] || fail "workflow_run triggering actor is missing"

@@ -1,5 +1,5 @@
 //@version=6
-strategy("CR-150 unique entry ids", initial_capital=1000000, pyramiding=1, process_orders_on_close=true)
+strategy("Unique entry ids", initial_capital=1000000, pyramiding=1, process_orders_on_close=true)
 // Q9: keep bars, trade count and id byte length equal in both populations.
 // No strategy.closedtrades.* or strategy.opentrades.* read is used.
 uniqueIds = input.bool(true, "unique_ids")

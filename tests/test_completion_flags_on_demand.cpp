@@ -1,4 +1,4 @@
-// CR-150 L4: completion bits have one kernel producer and no per-input store.
+// Completion bits have one kernel producer and no per-input store.
 // The first use of ScriptBucketCursor is deliberately red on the lane base:
 // that type is absent. Keep this test commit separate for the lab's red proof.
 #include <pineforge/source/pine_strategy_host.hpp>
@@ -298,6 +298,6 @@ int main() {
     cursors_match_the_stored_flags();
     scheduler_has_no_flag_arrays_and_restarts_hashes();
     subscriptions_borrow_the_forward_look();
-    std::printf("CR-150 L4: %d checks, %d failures\n", checks, failures);
+    std::printf("Completion checks: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

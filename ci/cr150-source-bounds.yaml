@@ -1,4 +1,4 @@
-# CR-150 / C4 source allocation-bound manifest (scripts/cr150_source_gate.py).
+# Source allocation-bound manifest (scripts/cr150_source_gate.py).
 #
 # Format: the restricted YAML subset the gate parses (maps, lists, flow maps).
 # Every container-bearing site in the scanned set (scan.files + generated_files)

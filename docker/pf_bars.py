@@ -1,4 +1,4 @@
-"""CR-150 pf_bar_t/v1 file contract and streaming CSV writer.
+"""pf_bar_t/v1 file contract and streaming CSV writer.
 
 No header: each record is <5dq (OHLCV, open Unix ms), 48 bytes. A feed
 also has <q closes. The canonical JSON sidecar is the commit record. Only

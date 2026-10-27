@@ -102,7 +102,7 @@ inline bool scratch_inspection_path(std::string_view path) {
 class PrivateTmpdir {
 public:
     PrivateTmpdir() : path_("/dev/shm/pineforge-tmpwatch-XXXXXX") {
-        std::printf("S4E owned TMPDIR template: %s (only this directory is cleaned)\n",
+        std::printf("Owned TMPDIR template: %s (only this directory is cleaned)\n",
                     path_.c_str());
         require(::mkdtemp(path_.data()) != nullptr, "cannot create the private tmpfs TMPDIR");
     }
@@ -211,7 +211,7 @@ inline bool memory_filesystem(std::uint64_t type) {
 }
 
 inline void require_filesystems(bool require_disk_fallback = true) {
-    std::puts("S4E inspection paths: /dev/shm, /tmp, /var/tmp, /proc/self/fd "
+    std::puts("Inspection paths: /dev/shm, /tmp, /var/tmp, /proc/self/fd "
               "(descriptor names only; no descriptor contents followed)");
     struct statfs memory{};
     require(::statfs("/dev/shm", &memory) == 0,
@@ -246,7 +246,7 @@ public:
         require(scratch_inspection_path(directory_)
                     && directory_.compare(0, prefix.size(), prefix.data()) == 0,
                 "scratch watch requires the row's private TMPDIR");
-        std::printf("S4E attributable inspection paths: %s, /tmp, /var/tmp, "
+        std::printf("Attributable inspection paths: %s, /tmp, /var/tmp, "
                     "/proc/self/fd/<returned fd> (readlink names only)\n", directory_.c_str());
         struct stat status{};
         require(::lstat(directory_.c_str(), &status) == 0 && S_ISDIR(status.st_mode)
@@ -334,7 +334,7 @@ private:
     }
     static void require_removed_path(const std::string& path) {
         require(scratch_inspection_path(path), "refused scratch cleanup inspection path by name");
-        std::printf("S4E owned scratch lstat: %s\n", path.c_str());
+        std::printf("Owned scratch lstat: %s\n", path.c_str());
         struct stat status{};
         errno = 0;
         require(::lstat(path.c_str(), &status) != 0 && errno == ENOENT,
@@ -455,7 +455,7 @@ inline void run(Host& host) {
     try {
         host.run(bars.data(), static_cast<int>(bars.size()));
     } catch (const std::exception& error) {
-        pineforge::note_run_failure(host, "S4E scratch run boundary", error);
+        pineforge::note_run_failure(host, "Scratch run boundary", error);
     }
 }
 

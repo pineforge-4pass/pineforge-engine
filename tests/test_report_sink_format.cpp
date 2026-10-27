@@ -1,4 +1,4 @@
-// CR-150 L6a, DESIGN rev 6 sections 3.7, 4.4 and acceptance (i).
+// DESIGN rev 6 sections 3.7, 4.4 and acceptance (i).
 // This unit uses the frozen P00 declarations, not a strategy/module substitute.
 #include <pineforge/report_sink_writer.hpp>
 #include <pineforge/version.h>

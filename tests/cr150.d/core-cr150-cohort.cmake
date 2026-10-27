@@ -1,4 +1,4 @@
-# CR-347 round 5: PR #458's fresh-id reproducer, credited in the test body.
+# Measurement round 5: the fresh-id reproducer, credited in the test body.
 # Only a Release library supplies a timing proof; debug exactness assertions
 # deliberately walk all residents. The existing executable keeps its old rows.
 if(PINEFORGE_BUILD_SOURCE_LAYER AND TARGET test_adapter_live_state_scaling)

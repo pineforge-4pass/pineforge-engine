@@ -1,4 +1,4 @@
-"""S4E E-03: selected-window calendar nulls survive fd-sink conversion.
+"""Selected-window calendar nulls survive fd-sink conversion.
 
 Only the native library and planner are doubles. run_json, the selected
 report producer, fd wire writer and standalone converter remain real.

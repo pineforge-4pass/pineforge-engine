@@ -4773,7 +4773,7 @@ def main(argv=None) -> int:
     command line argparse refuses. The one exception is a success report stdout
     cannot take whole (_main): exit 1 with the reason on stderr and no line after
     the part written. The csv2bin subcommand instead returns 2 on refusal and
-    writes its one failure line to stderr (CR-150's converter contract)."""
+    writes its one failure line to stderr (the converter contract)."""
     tokens = sys.argv[1:] if argv is None else argv
     if tokens and tokens[0] == "csv2bin":
         return _csv2bin_main(tokens[1:])

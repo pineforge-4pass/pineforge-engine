@@ -20,7 +20,7 @@ was to resume after the final native audit, and has landed again (#293–#298).
 | R4-A | Selected closes, current-point execution, native run specification and forward lifecycle | Complete ([PR #250](https://github.com/pineforge-4pass/pineforge-engine/pull/250)) |
 | R4-B | Host-sized terms, exact reversal, precommit view, immutable native FX curve, ABI fencing, example and docs | In implementation; no R4 acceptance claim |
 | Slice B | Source-layer cut, including the generic native FX broker-open epoch clock | Intermediate ownership boundary landed; no R4 credit |
-| Slice C | Pine compatibility adapter lowering onto the native seams | L3b deletion landing complete locally; pending the campaign-level integration gate |
+| Slice C | Pine compatibility adapter lowering onto the native seams | Compatibility deletion landing complete locally; pending the campaign-level integration gate |
 | R5 | Final requirement and compatibility audit | Open |
 | R6 | Resume the parity improvement campaign after the audit | Queued |
 
@@ -118,18 +118,18 @@ Handwritten native host
        -> BacktestEngine
 ```
 
-L3b removed the legacy compatibility consumer, default legacy construction,
+The compatibility cut removed the legacy compatibility consumer, default legacy construction,
 source pending-order book, source matching loop, lifecycle seams, and the
-legacy scheduler/stream bodies after L3a had switched every public Pine route.
+legacy scheduler/stream bodies after the preceding cut had switched every public Pine route.
 `PineStrategyHost` owns a `PineExecutionAdapter` and `PineScheduler`; the
 scheduler owns language state by value, and the adapter lowers each source
 command into the generic native request state machine. `NativeExecutionConsumer`
-is the sole execution owner. The C pending-order ABI remains v1, but its
+is the sole execution authority. The C pending-order ABI remains v1, but its
 read-only rows now come from `PendingIntentView`, not a compatibility order
 object.
 
 This records a local implementation boundary only. It is not a parity campaign
-acceptance claim: the integration owner still performs the final composite
+acceptance claim: the integration lead still performs the final composite
 measurement and gate.
 
 ## R4-C epoch baseline (historical)
@@ -161,13 +161,13 @@ in implementation as recorded above; it merged as PR #251.
 
 ## Deferred performance work
 
-The R5 performance wave stopped at the supervisor's cap ("R5 SUPERVISOR RULING
-2026-09-25 00:15 Taipei") and the owner's decision ("OWNER DECISION 2026-09-25
-00:20 Taipei"), both in the campaign ledger. The items below were measured or
-designed and then deferred, and none of them is implemented. Each figure is the
-named lane's own, on the host and with the tool given. A ratio is candidate
+The performance wave stopped at the review cap and the release decision,
+both in the campaign ledger. The items below were
+measured or designed and then deferred, and none of them is
+implemented. Each figure is the
+named slice's own, on the host and with the tool given. A ratio is candidate
 over base, so below 1 is faster, and "off / on" is the magnifier. Rulings are
-quoted by their ledger title. Lane reports, scratch trees and prototype
+quoted by their ledger title. Slice reports, scratch trees and prototype
 branches are the maintainers' unpublished evidence; the column below names
 them for the record only. "Linux aarch64" is the maintainers' Cortex-A725 host.
 
