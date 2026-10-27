@@ -33,7 +33,7 @@ env:
 
 # The canon authz gate admits our events before any checkout.
 # Light jobs and per-leg aggregates use hosted ubuntu-24.04; amd64 CTest shards use
-# pf-linux-x64-16 or pf-linux-x64-32, and arm64 keeps ubuntu-24.04-arm.
+# the post-merge GCP fleet, and arm64 keeps ubuntu-24.04-arm.
 # Preflight remains on the post-merge fleet. scripts/ci_preflight.py pins routing.
 # Each verification sizes its parallelism to the runner that took it.
 # scripts/ci_preflight.py pins every runner and shard count. GitHub's platform
@@ -257,8 +257,8 @@ jobs:
         build_type: [Release]
         shard: [1, 2, 3, 4]
 
-    # Four 16-core shards divide roughly 15,300 measured CTest row-seconds.
-    runs-on: pf-linux-x64-16
+    # Four shards divide roughly 15,300 measured CTest row-seconds.
+    runs-on: ["self-hosted","pf-gcp-post"]
 
     steps:
       - name: Refuse an unauthorised run before anything else
@@ -359,7 +359,7 @@ jobs:
           - os: ubuntu-24.04
         build_type: [Debug]
         shard: [1, 2]
-    runs-on: pf-linux-x64-16
+    runs-on: ["self-hosted","pf-gcp-post"]
 
     steps:
       - name: Refuse an unauthorised run before anything else
@@ -589,7 +589,7 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4]
-    runs-on: pf-linux-x64-32
+    runs-on: ["self-hosted","pf-gcp-post"]
     env:
       ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:abort_on_error=1
       UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
@@ -691,7 +691,7 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2]
-    runs-on: pf-linux-x64-16
+    runs-on: ["self-hosted","pf-gcp-post"]
     steps:
       - name: Refuse an unauthorised run before anything else
         if: ${{ needs.authz.result != 'success' }}

@@ -114,8 +114,8 @@ POST_CI_JOB_IDS = ('authz', 'changes', 'preflight', 'preflight-slow', 'build',
                   'sanitizers-gate', 'kernel-only-gate',
                   'build-arm', 'sanitizers', 'kernel-only', 'native-live', 'corpus-parity-subset',
                   'corpus-parity', 'build-gate')
-NATIVE_HOSTED_RUNNERS = {'authz': 'ubuntu-24.04', 'native-live': 'pf-linux-x64-64',
-                         'native-live-shards': 'pf-linux-x64-16',
+NATIVE_HOSTED_RUNNERS = {'authz': 'ubuntu-24.04', 'native-live': POST_RUNNER,
+                         'native-live-shards': POST_RUNNER,
                          'native-live-native': 'ubuntu-24.04', 'native-live-gate': 'ubuntu-24.04'}
 FLEET_JOB_IDS = {
     'ci.yml': ('authz', 'changes', 'preflight', 'build', 'build-gate'),
@@ -149,8 +149,8 @@ LIGHT_JOB_IDS = {
     'release-ruleset-probe.yml': ('authz',),
 }
 HOSTED_SHARD_JOB_LABELS = {
-    'build': 'pf-linux-x64-16', 'build-debug': 'pf-linux-x64-16',
-    'sanitizers': 'pf-linux-x64-32', 'kernel-only': 'pf-linux-x64-16',
+    'build': POST_RUNNER, 'build-debug': POST_RUNNER,
+    'sanitizers': POST_RUNNER, 'kernel-only': POST_RUNNER,
 }
 HEAVY_CI_JOBS = ('preflight-slow', 'sanitizers', 'kernel-only', 'native-live', 'corpus-parity')
 PREFLIGHT_RUN = ('python3 scripts/ci_preflight.py --output-dir build-ci-preflight --tier '
@@ -687,13 +687,148 @@ class WorkflowEventFleets(unittest.TestCase):
             {'pr.yml': caller, 'ci-post.yml': callee}))
 
 
+POST_FLEET_CASES = (
+    ('ci-post.yml', 'build', 'Release'),
+    ('ci-post.yml', 'build-debug', 'Debug'),
+    ('ci-post.yml', 'sanitizers', 'sanitizers'),
+    ('ci-post.yml', 'kernel-only', 'kernel'),
+    ('native-live.yml', 'native-live-shards', 'native'),
+    ('native-live.yml', 'native-live', 'live-sanitizers'),
+    ('native-live.yml', 'native-live', 'live-tsan'),
+)
+PAID_RUNNER_LABELS = (
+    'pf-linux-x64-16', 'pf-linux-x64-32', 'pf-linux-x64-64', 'pf-linux-x64-128',
+    'pf-linux-arm64-2', 'pf-linux-arm64-16', 'pf-linux-arm64-64', 'pf-linux-arm64-128',
+    'ubuntu-24.04-larger', 'ubuntu-24.04-xlarge', 'macos-26-large',
+)
+
+
+class PostFleetRunnerPolicy(unittest.TestCase):
+    def post_workflows(self):
+        workflows = {path.name: path.read_text()
+                     for path in sorted((ROOT / '.github/workflows').iterdir())
+                     if path.suffix in ('.yml', '.yaml')}
+        for name, job, _ in POST_FLEET_CASES:
+            workflow = workflows[name]
+            actual, = ci_preflight._job_values(_jobs(workflow)[job], 'runs-on', unquote=False)
+            workflows[name] = in_job(workflow, job, f'    runs-on: {actual}\n',
+                                     f'    runs-on: {POST_RUNNER}\n')
+        return workflows
+
+    def test_real_post_jobs_use_exact_post_fleet(self):
+        for name, job, profile in POST_FLEET_CASES:
+            with self.subTest(workflow=name, job=job, profile=profile):
+                body = _jobs((ROOT / '.github/workflows' / name).read_text())[job]
+                self.assertEqual(ci_preflight._job_values(body, 'runs-on', unquote=False),
+                                 ['["self-hosted","pf-gcp-post"]'])
+                if job == 'native-live':
+                    self.assertIn(f'          - profile: {profile}\n', body)
+
+    def test_checker_accepts_post_fleet_at_every_migrated_job(self):
+        self.assertEqual(ci_preflight.runner_findings(self.post_workflows()), [])
+
+    def test_no_workflow_contains_paid_runner_labels(self):
+        paid = re.compile(r'(?<![\w.-])(?:pf-linux-(?:x64|arm64)-\d+'
+                          r'|[\w.-]+-(?:larger|xlarge|large))(?![\w.-])')
+        paths = sorted(path for path in (ROOT / '.github/workflows').iterdir()
+                       if path.suffix in ('.yml', '.yaml'))
+        self.assertTrue(paths, 'the workflow inventory must not be empty')
+        for path in paths:
+            with self.subTest(workflow=path.name):
+                self.assertIsNone(paid.search(path.read_text()), path.name)
+
+    def test_paid_runner_labels_have_no_pinned_job_exemptions(self):
+        workflows = self.post_workflows()
+        for name, job, profile in POST_FLEET_CASES:
+            for label in PAID_RUNNER_LABELS:
+                with self.subTest(workflow=name, job=job, profile=profile, label=label):
+                    changed = in_job(workflows[name], job, f'    runs-on: {POST_RUNNER}\n',
+                                     f'    runs-on: {label}\n')
+                    self.assertNotEqual(changed, workflows[name])
+                    findings = ci_preflight.runner_findings({**workflows, name: changed})
+                    self.assertIn(f'{name} must not use larger-runner labels; '
+                                  'use the GCP fleet or hosted exceptions', findings)
+                    self.assertIn(f'{name} job {job} must run on {POST_RUNNER}', findings)
+
+    def test_paid_runner_labels_are_refused_at_arbitrary_jobs(self):
+        for label in PAID_RUNNER_LABELS:
+            with self.subTest(label=label):
+                workflow = ('on: workflow_dispatch\njobs:\n  inspect:\n'
+                            f'    runs-on: {label}\n    steps:\n      - run: "true"\n')
+                findings = ci_preflight.runner_findings({'unlisted.yml': workflow})
+                self.assertIn('unlisted.yml must not use larger-runner labels; '
+                              'use the GCP fleet or hosted exceptions', findings)
+                self.assertIn(f'unlisted.yml job inspect must run on {POST_RUNNER}', findings)
+
+    def test_post_jobs_refuse_other_fleets_scalars_and_reordered_labels(self):
+        workflows = self.post_workflows()
+        for name, job, profile in POST_FLEET_CASES:
+            for runner in (PR_RUNNER, RELEASE_RUNNER, 'pf-gcp-post',
+                           '["pf-gcp-post","self-hosted"]',
+                           '["self-hosted","pf-gcp-post","extra"]',
+                           "'" + POST_RUNNER + "'", json.dumps(POST_RUNNER)):
+                with self.subTest(workflow=name, job=job, profile=profile, runner=runner):
+                    changed = in_job(workflows[name], job, f'    runs-on: {POST_RUNNER}\n',
+                                     f'    runs-on: {runner}\n')
+                    self.assertNotEqual(changed, workflows[name])
+                    self.assertIn(f'{name} job {job} must run on {POST_RUNNER}',
+                                  ci_preflight.runner_findings({**workflows, name: changed}))
+            for declaration in ('    environment: production\n',
+                                '    env:\n      API_KEY: ${{ secrets.DEPLOY_KEY }}\n'):
+                with self.subTest(workflow=name, job=job, profile=profile, credentials=declaration):
+                    before, after = '    steps:\n', declaration + '    steps:\n'
+                    if declaration.startswith('    env:') and '    env:\n' in _jobs(workflows[name])[job]:
+                        before, after = '    env:\n', declaration
+                    changed = in_job(workflows[name], job, before, after)
+                    self.assertIn(f'{name} job {job} must keep production credentials '
+                                  'on a hosted standard runner',
+                                  ci_preflight.runner_findings({**workflows, name: changed}))
+                    changed = in_job(changed, job, f'    runs-on: {POST_RUNNER}\n',
+                                     '    runs-on: ubuntu-24.04\n')
+                    self.assertIn(f'{name} job {job} must run on {POST_RUNNER}',
+                                  ci_preflight.runner_findings({**workflows, name: changed}))
+
+    def test_post_fleet_docs_match_runner_policy(self):
+        docs = (ROOT / 'docs/ci.md').read_text()
+        self.assertEqual(len(docs.splitlines()), 2014)
+        requirements = (
+            'Post Release/Debug/kernel and native shards, post sanitizers and both native-live sanitizer\n'
+            'profiles use `["self-hosted","pf-gcp-post"]`. No job routes by event.',
+            'Local reusable calls still cannot mix PR and post-merge verification fleets. '
+            'A full post run schedules 22 post-fleet jobs; the parity calls share one concurrency group.',
+            'The amd64 post build shards use the post-merge GCP fleet; the two arm64 post cells run on',
+            'Hosted exceptions include the named light jobs, arm64 and the existing release/promotion pins.',
+            '`native-live.yml` runs four `native` shards on the post-merge GCP fleet;\n'
+            '`live-sanitizers` and `live-tsan` each build once on that same fleet.',
+            "paid 16-core runners' medians over five runs were 1815, 1812, 1770, 2050",
+            'The four amd64 post legs and native verification use the post-merge GCP fleet; '
+            'their aggregates use the light image.',
+            '| `ci-post.yml` | Push to `main`, 01:30 UTC schedule, dispatch | '
+            'Light jobs and four leg aggregates: `ubuntu-24.04`; Release/Debug/kernel and sanitizer shards '
+            'plus preflight tiers: `["self-hosted","pf-gcp-post"]`; `build-arm`: `ubuntu-24.04-arm` |',
+            '| `native-live.yml` | Dispatch and post CI callers on `main` | '
+            '`authz` and both aggregates: hosted `ubuntu-24.04`; four native shards, '
+            '`live-sanitizers` and `live-tsan`: `["self-hosted","pf-gcp-post"]` |',
+            'Post-fleet shards require `main` for dispatch; hosted arm64 keeps its fixed pin.',
+            'Rollback may restore an earlier GCP fleet pin; paid larger-runner labels remain refused.',
+            '`build-debug` shards, and kernel two shards; sanitizers uses four, '
+            'all on the post-merge GCP fleet.',
+            '`HOSTED_JOB_RUNNERS` pins hosted jobs and post-fleet verification arrays; '
+            'arm64 exceptions exclude PR callers. The PR build remains',
+            'Every paid larger-runner label is refused in every workflow, including pinned jobs;',
+        )
+        for required in requirements:
+            with self.subTest(required=required):
+                self.assertIn(required, docs)
+
+
 POST_SHARD_CASES = (
-    ('build', 'release', 4, 'pf-linux-x64-16', 'build-release-gate',
+    ('build', 'release', 4, POST_RUNNER, 'build-release-gate',
      'build (ubuntu-24.04, Release)'),
-    ('build-debug', 'debug', 2, 'pf-linux-x64-16', 'build-debug-gate',
+    ('build-debug', 'debug', 2, POST_RUNNER, 'build-debug-gate',
      'build (ubuntu-24.04, Debug)'),
-    ('sanitizers', 'sanitizers', 4, 'pf-linux-x64-32', 'sanitizers-gate', 'sanitizers'),
-    ('kernel-only', 'kernel', 2, 'pf-linux-x64-16', 'kernel-only-gate', 'kernel-only'),
+    ('sanitizers', 'sanitizers', 4, POST_RUNNER, 'sanitizers-gate', 'sanitizers'),
+    ('kernel-only', 'kernel', 2, POST_RUNNER, 'kernel-only-gate', 'kernel-only'),
 )
 
 
@@ -720,10 +855,10 @@ class PostCTestShardPolicy(unittest.TestCase):
                 pr = post.replace('on: workflow_dispatch', 'on: pull_request', 1)
                 self.assertIn(f'ci-post.yml job {job} must run on {PR_RUNNER} for pull_request',
                               ci_preflight.runner_findings({'ci-post.yml': pr}))
-                for wrong in (POST_RUNNER, 'ubuntu-24.04', 'pf-linux-x64-64',
-                              'pf-linux-x64-32' if label.endswith('-16') else 'pf-linux-x64-16'):
+                for wrong in (PR_RUNNER, RELEASE_RUNNER, 'ubuntu-24.04',
+                              'pf-linux-x64-16', 'pf-linux-x64-32', 'pf-linux-x64-64'):
                     changed = in_job(post, job, f'runs-on: {label}', f'runs-on: {wrong}')
-                    self.assertIn(f'ci-post.yml job {job} must run on {label} (hosted)',
+                    self.assertIn(f'ci-post.yml job {job} must run on {label}',
                                   ci_preflight.runner_findings({'ci-post.yml': changed}))
 
     def test_all_three_x64_labels_are_refused_outside_the_exact_jobs(self):
@@ -752,7 +887,7 @@ class PostCTestShardPolicy(unittest.TestCase):
                                f"    env:\n      PF_CI_LABELS: '{POST_RUNNER}'\n    steps:\n", 1)
                                if scope == 'job' else post.replace('jobs:\n',
                                f"env:\n  PF_CI_LABELS: '{POST_RUNNER}'\njobs:\n", 1))
-                    self.assertIn(f'ci-post.yml job {job} must not set PF_CI_LABELS on a hosted job',
+                    self.assertIn(f'ci-post.yml job {job} must not set PF_CI_LABELS on a post fleet job',
                                   ci_preflight.runner_findings({'ci-post.yml': changed}))
 
     def test_shard_matrices_refuse_missing_duplicate_or_extra_indices(self):
@@ -1957,7 +2092,7 @@ class PreflightFailures(unittest.TestCase):
             for job, body in _jobs(workflow).items():
                 if ci_preflight._job_values(body, 'uses'):
                     continue
-                if (job in ci_preflight.HOSTED_JOB_RUNNERS.get(name, {})
+                if (ci_preflight.HOSTED_JOB_RUNNERS.get(name, {}).get(job) not in (None, POST_RUNNER)
                         or ci_preflight.RELEASE_JOB_RUNNERS.get(name, {}).get(job) == 'ubuntu-24.04'):
                     continue  # Hosted jobs have independent literal pins and mutation controls.
                 # Per-job pins retain the canon PR fleet or the dispatch post fleet.
@@ -2021,14 +2156,12 @@ class PreflightFailures(unittest.TestCase):
                     continue
                 if (name, job) == ('ci-post.yml', 'build-arm'):
                     continue
-                if name == 'ci-post.yml' and job in HOSTED_SHARD_JOB_LABELS:
-                    continue  # Exact hosted pins have their own wrong-runner controls.
                 actual, = ci_preflight._job_values(_jobs(self.ci_sources()[index])[job],
                                                    'runs-on', unquote=False)
                 marker = '    runs-on: ' + actual
                 pinned_runner = NATIVE_HOSTED_RUNNERS[job] if name == 'native-live.yml' else runner
                 finding = f'{name} job {job} must run on {pinned_runner}'
-                if name == 'native-live.yml':
+                if name == 'native-live.yml' and pinned_runner != POST_RUNNER:
                     finding += ' (hosted)'
                 for replacement in ('ubuntu-24.04', 'ubuntu-latest',
                                     'pf-linux-x64-64' if actual == 'pf-linux-x64-16' else 'pf-linux-x64-16',
@@ -3705,15 +3838,15 @@ exit "$lookup_exit"
                                           'build-debug-gate': 'ubuntu-24.04',
                                           'sanitizers-gate': 'ubuntu-24.04',
                                           'kernel-only-gate': 'ubuntu-24.04',
-                                          'build': 'pf-linux-x64-16', 'build-debug': 'pf-linux-x64-16',
-                                          'sanitizers': 'pf-linux-x64-32', 'kernel-only': 'pf-linux-x64-16',
+                                          'build': POST_RUNNER, 'build-debug': POST_RUNNER,
+                                          'sanitizers': POST_RUNNER, 'kernel-only': POST_RUNNER,
                                           'build-gate': 'ubuntu-24.04', 'build-arm': 'ubuntu-24.04-arm'},
                           'corpus-parity.yml': {'authz': 'ubuntu-24.04'},
                           'corpus-parity-subset.yml': {'authz': 'ubuntu-24.04'},
                           'docs.yml': {'authz': 'ubuntu-24.04', 'build': 'ubuntu-24.04'},
                           'docs-post.yml': {'authz': 'ubuntu-24.04'},
-                          'native-live.yml': {'authz': 'ubuntu-24.04', 'native-live': 'pf-linux-x64-64',
-                                              'native-live-shards': 'pf-linux-x64-16',
+                          'native-live.yml': {'authz': 'ubuntu-24.04', 'native-live': POST_RUNNER,
+                                              'native-live-shards': POST_RUNNER,
                                               'native-live-native': 'ubuntu-24.04',
                                               'native-live-gate': 'ubuntu-24.04'},
                           'promote-baseline.yml': {'promote-guard': 'ubuntu-latest'}})
@@ -3740,15 +3873,15 @@ exit "$lookup_exit"
         mutations = (
             # Each scoped pool job must keep its canon array without a hosted fallback.
             (0, 'preflight', PR_RUNNER, 'pf-linux-x64-16', f'ci.yml job preflight must run on {PR_RUNNER}'),
-            (6, 'sanitizers', 'pf-linux-x64-32', 'macos-26-xlarge', 'ci-post.yml job sanitizers must run on pf-linux-x64-32 (hosted)'),
-            (6, 'kernel-only', 'pf-linux-x64-16', 'ubuntu-latest', 'ci-post.yml job kernel-only must run on pf-linux-x64-16 (hosted)'),
+            (6, 'sanitizers', POST_RUNNER, 'macos-26-xlarge', f'ci-post.yml job sanitizers must run on {POST_RUNNER}'),
+            (6, 'kernel-only', POST_RUNNER, 'ubuntu-latest', f'ci-post.yml job kernel-only must run on {POST_RUNNER}'),
             # Target runs-on exactly, never an earlier matrix reference or name.
             (0, 'build', f'    runs-on: {PR_RUNNER}\n',
              '    runs-on: macos-26-large\n', f'ci.yml job build must run on {PR_RUNNER}'),
             (0, 'build', f'    runs-on: {PR_RUNNER}\n',
              '    runs-on: ${{ matrix.larger_runner }}\n', f'ci.yml job build must run on {PR_RUNNER}'),
-            (1, 'native-live', 'pf-linux-x64-64', 'pf-linux-x64-16',
-             'native-live.yml job native-live must run on pf-linux-x64-64 (hosted)'),
+            (1, 'native-live', POST_RUNNER, 'pf-linux-x64-16',
+             f'native-live.yml job native-live must run on {POST_RUNNER}'),
             (4, 'corpus-parity', POST_RUNNER, 'pf-linux-x64-16', f'corpus-parity.yml job corpus-parity must run on {POST_RUNNER}'),
             (4, 'corpus-parity-subset', POST_RUNNER, 'pf-linux-x64-16',
              f'corpus-parity.yml job corpus-parity-subset must run on {POST_RUNNER}'),
@@ -3756,16 +3889,16 @@ exit "$lookup_exit"
             (0, 'preflight', PR_RUNNER,
              "${{ github.event_name == 'push' && 'pf-linux-x64-16' || 'ubuntu-24.04' }}",
              f'ci.yml job preflight must run on {PR_RUNNER}'),
-            (1, 'native-live', 'pf-linux-x64-64',
+            (1, 'native-live', POST_RUNNER,
              "${{ github.event_name == 'workflow_dispatch' && 'pf-linux-x64-16' || 'ubuntu-24.04' }}",
-             'native-live.yml job native-live must run on pf-linux-x64-64 (hosted)'),
+             f'native-live.yml job native-live must run on {POST_RUNNER}'),
             (4, 'corpus-parity', POST_RUNNER,
              "${{ github.event_name == 'schedule' && 'pf-linux-x64-16' || 'ubuntu-24.04' }}",
              f'corpus-parity.yml job corpus-parity must run on {POST_RUNNER}'),
-            (6, 'sanitizers', 'pf-linux-x64-32',
+            (6, 'sanitizers', POST_RUNNER,
              "${{ github.event.pull_request.head.repo.full_name == github.repository "
              "&& 'pf-linux-x64-16' || 'ubuntu-24.04' }}",
-             'ci-post.yml job sanitizers must run on pf-linux-x64-32 (hosted)'),
+             f'ci-post.yml job sanitizers must run on {POST_RUNNER}'),
             (6, 'native-live', 'uses: ./.github/workflows/native-live.yml',
              'uses: someone/else/.github/workflows/native-live.yml@main',
              'ci-post.yml job native-live calls a workflow the runner contract cannot see; '
@@ -3954,13 +4087,14 @@ exit "$lookup_exit"
 
     def test_gcp_sites_reject_cross_class_routes(self):
         sites = list(self.gcp_sites())
-        # PR 2 + post preflight 2 + parity 3 + docs 1 + release 3
+        # PR 2 + post preflight/shards 6 + native 2 + parity 3 + docs 1 + release 3
         # + probe 1 + promotion 1 + dispatch canary 1.
-        self.assertEqual(len(sites), 14)
+        self.assertEqual(len(sites), 20)
         self.assertCountEqual([(name, job) for name, job, *_ in sites],
                               [(name, job) for name, jobs in FLEET_JOB_IDS.items()
                                for job in jobs if job not in LIGHT_JOB_IDS.get(name, ())
-                               and job not in ci_preflight.HOSTED_JOB_RUNNERS.get(name, {})]
+                               and ci_preflight.HOSTED_JOB_RUNNERS.get(name, {}).get(job)
+                               in (None, POST_RUNNER)]
                               + [(name, job) for name, jobs in DISPATCH_ONLY_CANARY_JOB_IDS.items()
                                  for job in jobs])
         self.assertEqual(ci_preflight.runner_findings(self.workflow_sources()), [])
@@ -5233,10 +5367,10 @@ finally:
                  f'ci.yml job preflight must run on {PR_RUNNER}'),
                 ('ci.yml', ('preflight', PR_RUNNER, '["self-hosted","pf-gcp-pr","pf-gcp-main"]'),
                  f'ci.yml job preflight must run on {PR_RUNNER}'),
-                ('ci-post.yml', ('sanitizers', 'pf-linux-x64-32', '["self-hosted","pf-gcp-small"]'),
-                 'ci-post.yml job sanitizers must run on pf-linux-x64-32 (hosted)'),
-                ('ci-post.yml', ('sanitizers', 'pf-linux-x64-32', 'pf-linux-x64-16'),
-                 'ci-post.yml job sanitizers must run on pf-linux-x64-32 (hosted)'),
+                ('ci-post.yml', ('sanitizers', POST_RUNNER, '["self-hosted","pf-gcp-small"]'),
+                 f'ci-post.yml job sanitizers must run on {POST_RUNNER}'),
+                ('ci-post.yml', ('sanitizers', POST_RUNNER, 'pf-linux-x64-16'),
+                 f'ci-post.yml job sanitizers must run on {POST_RUNNER}'),
                 ('ci-post.yml', ('build-arm', '    runs-on: ubuntu-24.04-arm\n',
                                 '    runs-on: macos-26-xlarge\n'),
                  'ci-post.yml must not use larger-runner labels; use the GCP fleet or hosted exceptions'),
@@ -6465,15 +6599,17 @@ class ActionlintRunnerLabels(unittest.TestCase):
                 workflow.write_text(
                     'on: workflow_dispatch\njobs:\n  inspect:\n'
                     f'    runs-on: {label}\n    steps:\n      - run: "true"\n')
-                self.assertIn(f'    - {label}\n', original)
+                self.assertNotIn(f'    - {label}\n', original)
                 self.config.write_text(original)
-                code, output = self.runner_labels()
-                self.assertEqual(code, 0, output)
-                self.config.write_text(original.replace(f'    - {label}\n', '', 1))
                 code, output = self.runner_labels()
                 self.assertEqual(code, 1, output)
                 self.assertIn(f'larger-label.yml job inspect: label "{label}" is not declared '
                               'in .github/actionlint.yaml', output.splitlines())
+                # Config declaration still governs the linter's label inventory;
+                # runner_findings independently refuses paid labels everywhere.
+                self.config.write_text(original + f'    - {label}\n')
+                code, output = self.runner_labels()
+                self.assertEqual(code, 0, output)
         self.config.write_text(original)
 
     def test_actionlint_runner_labels_requires_config(self):
@@ -6575,13 +6711,15 @@ class HostedNativeProfiles(unittest.TestCase):
             with self.subTest(job=job):
                 self.assertEqual(ci_preflight._job_values(jobs.get(job, ''), 'runs-on'), [label])
                 self.assertNotIn('PF_CI_LABELS', jobs.get(job, ''))
-                for replacement in (POST_RUNNER, 'pf-linux-x64-32',
-                                    'pf-linux-x64-16' if label != 'pf-linux-x64-16'
-                                    else 'pf-linux-x64-64'):
+                suffix = '' if label == POST_RUNNER else ' (hosted)'
+                metadata_class = 'post fleet' if label == POST_RUNNER else 'hosted'
+                for replacement in (PR_RUNNER, RELEASE_RUNNER, 'pf-linux-x64-16',
+                                    'pf-linux-x64-32', 'pf-linux-x64-64',
+                                    'ubuntu-24.04' if label == POST_RUNNER else POST_RUNNER):
                     changed = in_job(native, job, f'    runs-on: {label}\n',
                                      f'    runs-on: {replacement}\n')
                     self.assertNotEqual(changed, native)
-                    self.assertIn(f'native-live.yml job {job} must run on {label} (hosted)',
+                    self.assertIn(f'native-live.yml job {job} must run on {label}{suffix}',
                                   ci_preflight.runner_findings({'native-live.yml': changed}))
                 for scope in (None, job):
                     before = '\nenv:\n' if scope is None else '\n    env:\n'
@@ -6595,7 +6733,8 @@ class HostedNativeProfiles(unittest.TestCase):
                         changed = in_job(native, job, '    steps:\n',
                                          f"    env:\n      PF_CI_LABELS: '{POST_RUNNER}'\n    steps:\n")
                     self.assertNotEqual(changed, native)
-                    self.assertIn(f'native-live.yml job {job} must not set PF_CI_LABELS on a hosted job',
+                    self.assertIn(f'native-live.yml job {job} must not set PF_CI_LABELS '
+                                  f'on a {metadata_class} job',
                                   ci_preflight.runner_findings({'native-live.yml': changed}))
 
     def test_native_shard_matrix_matches_the_command_denominator(self):
@@ -6636,7 +6775,7 @@ class HostedNativeProfiles(unittest.TestCase):
                 self.assertIn(finding, ci_preflight.runner_findings({'native-live.yml': changed}))
                 changed = native.replace('\nenv:\n', f'\nenv:\n  UNPINNED_RUNNER: {label}\n', 1)
                 self.assertIn(finding, ci_preflight.runner_findings({'native-live.yml': changed}))
-        swapped = in_job(native, 'native-live', '    runs-on: pf-linux-x64-64\n',
+        swapped = in_job(native, 'native-live', f'    runs-on: {POST_RUNNER}\n',
                          '    runs-on: pf-linux-x64-16\n')
         self.assertNotEqual(swapped, native)
         self.assertIn(finding, ci_preflight.runner_findings({'native-live.yml': swapped}))
@@ -6647,14 +6786,16 @@ class HostedNativeProfiles(unittest.TestCase):
             self.assertIn(finding, ci_preflight.runner_findings({'native-live.yml': changed}))
         caller = ('on: pull_request\njobs:\n  call:\n'
                   '    uses: ./.github/workflows/native-live.yml\n')
-        findings = ci_preflight.runner_findings({'caller.yml': caller, 'native-live.yml': native})
+        findings = ci_preflight.runner_findings({'caller.yml': caller, 'native-live.yml': swapped})
         self.assertIn(finding, findings)
+        self.assertIn('native-live.yml must split pull_request and post-merge events '
+                      'into separate workflows', findings)
 
     def test_actionlint_declares_all_three_larger_x64_labels(self):
         config = (ROOT / '.github/actionlint.yaml').read_text()
         for label in ('pf-linux-x64-16', 'pf-linux-x64-32', 'pf-linux-x64-64'):
             with self.subTest(label=label):
-                self.assertEqual(config.splitlines().count(f'    - {label}'), 1)
+                self.assertEqual(config.splitlines().count(f'    - {label}'), 0)
 
     def test_native_aggregate_requires_each_shard_result_and_keeps_its_check_name(self):
         native = self.workflow()
