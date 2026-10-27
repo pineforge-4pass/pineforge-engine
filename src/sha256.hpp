@@ -27,5 +27,20 @@ private:
     std::uint64_t bytes_ = 0;
 };
 
+// Internal test access only; this source header is not installed.
+namespace sha256_internal {
+
+enum class Implementation { portable, x86_sha, arm_sha2 };
+using CompressBlock = void (*)(std::uint32_t* words, const std::uint8_t* block) noexcept;
+
+// Exactly one 64-byte block, with eight native-endian chaining words.
+void compress_portable(std::uint32_t* words, const std::uint8_t* block) noexcept;
+Implementation selected_implementation() noexcept;
+// The actual hardware function, never a dispatcher or a software fallback.
+// Null unless the running CPU and platform support all instructions it uses.
+CompressBlock hardware_compressor() noexcept;
+
+} // namespace sha256_internal
+
 } // namespace report_sink
 } // namespace pineforge

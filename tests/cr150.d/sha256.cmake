@@ -1,0 +1,6 @@
+list(APPEND TEST_SOURCES test_sha256)
+pineforge_add_unit_test(test_sha256)
+list(APPEND TEST_SOURCES test_sha256_differential)
+pineforge_add_unit_test(test_sha256_differential)
+list(APPEND TEST_SOURCES test_sha256_selection)
+pineforge_add_unit_test(test_sha256_selection)
