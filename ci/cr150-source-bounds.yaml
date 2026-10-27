@@ -12,7 +12,8 @@
 # and reviewed separately; --emit-site-inventory only AUTHORS a proposed snapshot.
 # The existing entry rows need no scope fields or edits to retain their IDs.
 # The gate also fails on an unlisted/stale entry, an op class the entry does not
-# list, unsupported bounded growth, codegen pin drift or an OPEN ceiling excess.
+# list, unsupported bounded growth, invalid by-design claims, codegen pin drift
+# or a state ceiling excess.
 #
 # States
 #   bounded              bound = expression over declared fixed_inputs only (no bars,
@@ -22,18 +23,31 @@
 #                        directly guarded by its own size() < the fixed bound,
 #                        one numeric-literal push per branch, no aliases/other
 #                        uses. reserve/assign/resize alone never enforce a cap.
-#                        Unsupported forms stay OPEN. Needs lifetime, rollback,
+#                        Other forms need by-design review or stay OPEN.
+#                        Needs lifetime, rollback,
 #                        hash_reader and tests. Fixed inputs need an uncommented
 #                        namespace/class-scope const/constexpr integer definition
 #                        matching their required positive `value`; class inputs
 #                        must be static (an instance may override a const field).
+#   bounded_by_design    bound = one constant name, with exactly one uncommented
+#                        namespace/class-scope const/constexpr integer definition
+#                        in scanned source (positive; static at class scope).
+#                        Optional `value` must match. `test` = tests/file:line:
+#                        an existing nonblank line and an exact basename CTest
+#                        registration via pineforge_add_unit_test(first argument)
+#                        or add_test(NAME ...) in tests/CMakeLists.txt or
+#                        tests/cr150.d/*.cmake. `reason` = one non-empty plain
+#                        sentence explaining what the constant bounds. Allowed
+#                        under include/. Counted BY-DESIGN, never PASS(bounded)
+#                        or OPEN: constant/test existence is no flat-memory proof.
 #   pending-flat-memory  the A-section inventory row (o1inv REPORT, `inventory`)
 #                        names the growth axis (`grows_with`); the flat-memory
 #                        implementation has not landed. OPEN, never PASS.
 #   unreviewed           the scanner found the container; nobody has established
 #                        a bound. OPEN, never PASS. phase is `unclassified`.
-# `ceilings` cap the OPEN entries per state: a new OPEN entry needs a reviewed
-# ceiling increase, so regenerating a baseline cannot silently widen the list.
+# `ceilings` cap OPEN and bounded_by_design entries per state: a new entry in
+# either bucket needs a reviewed ceiling increase, so regenerating a baseline
+# cannot silently widen the list.
 # `owner` is the code area that must supply the bound (see `owners`); it is not a
 # person or lane roster.
 #
@@ -76,6 +90,7 @@ scan:
 ceilings:
   unreviewed: 1264
   pending-flat-memory: 188
+  bounded_by_design: 0
 owners:
   - {name: "generated-cpp", globs: ["tutorial/**"]}
   - {name: "c-abi", globs: ["src/c_abi.cpp", "src/native_c_host.cpp", "src/selected_window_plan_c.cpp", "include/pineforge/*.h"]}

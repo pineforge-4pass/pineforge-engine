@@ -16,6 +16,9 @@ an exit-1 finding with its entry ID.
 
 An entry is ``bounded`` only with a declared fixed input and supported
 own-size-guarded growth; metadata or reserve alone never counts as PASS(bounded).
+``bounded_by_design`` instead checks a named integer constant, a registered
+test reference and a reason; its separate BY-DESIGN count is not a flat-memory
+proof and admits header entries too.
 Concrete sites are pinned by lexical scope, operation/type and occurrence in a
 reviewed companion inventory, independently of the (file, symbol) entry groups.
 An entry whose flat-memory implementation
@@ -40,6 +43,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cxxlex  # noqa: E402
+import check_cr150_cmake_d as cmake_d  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 MANIFEST_REL = 'ci/cr150-source-bounds.yaml'
@@ -50,8 +54,9 @@ PREFIX = 'cr150_source_gate:'
 
 OP_CLASSES = ('grow', 'alloc', 'decl', 'temp', 'subscript', 'assign', 'append')
 PHASES = ('setup', 'bar', 'report', 'teardown', 'unclassified')
-STATES = ('bounded', 'pending-flat-memory', 'unreviewed')
+STATES = ('bounded', 'bounded_by_design', 'pending-flat-memory', 'unreviewed')
 OPEN_STATES = ('pending-flat-memory', 'unreviewed')
+CAPPED_STATES = (*OPEN_STATES, 'bounded_by_design')
 # A bound may not name a growth axis. Substring match, case-insensitive, on
 # every identifier of a bound expression and on every fixed-input name.
 FORBIDDEN_FRAGMENTS = ('bar', 'trade', 'entr', 'decision', 'histor', 'event', 'tick', 'candle')
@@ -457,6 +462,25 @@ def _str_list(value, who: str, field: str, *, nonempty: bool = True) -> list[str
     return value
 
 
+def integer_definitions(text: str, name: str, value: int | None = None) -> list[re.Match]:
+    """The fixed-input definition lookup, shared without relaxing its grammar.
+
+    With no expected value, collect decimal initializers for by-design checks.
+    Positivity and uniqueness are checked by the caller.
+    """
+    body, _ = Scanner._lex(text)
+    scopes = Scopes(body)
+    initializer = str(value) if value is not None else r'(?:0|[1-9][0-9]*)'
+    declarations = re.finditer(
+        r'(?<![\w:])(?P<storage>(?:(?:inline|static)\s+)*)(?:constexpr|const)\s+'
+        r'(?:std::)?(?:size_t|u?int(?:8|16|32|64)_t|'
+        r'(?:unsigned\s+|signed\s+)?(?:int|long(?:\s+long)?|short))\s+'
+        rf'(?P<name>{re.escape(name)})\s*=\s*(?P<value>{initializer})\s*;', body)
+    return [m for m in declarations if scopes.nonlocal_at(m.start())
+            and (not scopes.class_at(m.start())
+                 or 'static' in m.group('storage').split())]
+
+
 class Manifest:
     def __init__(self, data: dict, root: Path):
         if not isinstance(data, dict):
@@ -483,7 +507,7 @@ class Manifest:
         ceilings = data['ceilings']
         if not isinstance(ceilings, dict):
             raise GateError('ceilings must be a mapping')
-        _need(ceilings, ('unreviewed', 'pending-flat-memory'), 'ceilings')
+        _need(ceilings, CAPPED_STATES, 'ceilings')
         for key, value in ceilings.items():
             if not isinstance(value, int) or isinstance(value, bool) or value < 0:
                 raise GateError(f'ceilings.{key} must be a non-negative integer')
@@ -572,16 +596,7 @@ class Manifest:
             value = item['value']
             if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
                 raise GateError(f'{who}: value must be a positive integer')
-            body, _ = Scanner._lex(definition.read_text(errors='replace'))
-            scopes = Scopes(body)
-            declarations = list(re.finditer(
-                r'(?<![\w:])(?P<storage>(?:(?:inline|static)\s+)*)(?:constexpr|const)\s+'
-                r'(?:std::)?(?:size_t|u?int(?:8|16|32|64)_t|'
-                r'(?:unsigned\s+|signed\s+)?(?:int|long(?:\s+long)?|short))\s+'
-                rf'(?P<name>{re.escape(name)})\s*=\s*{value}\s*;', body))
-            declarations = [m for m in declarations if scopes.nonlocal_at(m.start())
-                            and (not scopes.class_at(m.start())
-                                 or 'static' in m.group('storage').split())]
+            declarations = integer_definitions(definition.read_text(errors='replace'), name, value)
             if len(declarations) != 1:
                 raise GateError(f'{who}: {item["definition"]} must have exactly one '
                                 f'namespace/class-scope const/constexpr integer definition '
@@ -612,6 +627,10 @@ class Manifest:
                 optional.append('inventory')
             elif state == 'pending-flat-memory':
                 required += ['grows_with', 'inventory']
+            elif state == 'bounded_by_design':
+                # Validate the three required claims as findings, including
+                # absent fields, rather than aborting manifest parsing.
+                optional += ['bound', 'test', 'reason', 'value']
             _need(entry, tuple(required), who, tuple(optional))
             if entry['id'] in ids:
                 raise GateError(f'{who}: duplicate id')
@@ -629,8 +648,9 @@ class Manifest:
             if (entry['phase'] == 'unclassified') != (state == 'unreviewed'):
                 raise GateError(f'{who}: phase "unclassified" is for state "unreviewed" only '
                                 'and every unreviewed entry carries it')
-            if state != 'bounded' and entry.get('bound') not in (None, 'none'):
-                raise GateError(f'{who}: only a bounded entry may carry a bound')
+            if state not in ('bounded', 'bounded_by_design') \
+                    and entry.get('bound') not in (None, 'none'):
+                raise GateError(f'{who}: only a bounded or bounded_by_design entry may carry a bound')
             if state == 'pending-flat-memory':
                 _str_list(entry['grows_with'], who, 'grows_with')
                 if not re.fullmatch(r'[A-Z]\d{2}', str(entry['inventory'])):
@@ -1167,6 +1187,105 @@ def bounded_issues(entry: dict, group: list[Site], sites: list[Site],
 # gate
 # --------------------------------------------------------------------------
 
+def test_is_registered(root: Path, name: str) -> bool:
+    """Find an exact literal CTest name with the neighbouring checker's parser.
+
+    This is declaration discovery, not CMake evaluation. Function/macro
+    definitions are skipped; conditions and variable expansions are not run.
+    Parse every candidate file so malformed syntax cannot hide behind a match.
+    """
+    if not cmake_d.LITERAL_NAME_RE.fullmatch(name):
+        return False
+    paths = [root / 'tests/CMakeLists.txt', *sorted((root / 'tests/cr150.d').glob('*.cmake'))]
+    registered = False
+    for path in paths:
+        if not path.is_file():
+            continue
+        if not path.resolve().is_relative_to(root.resolve() / 'tests'):
+            raise cmake_d.CheckFailure(f'{path}: registration file escapes tests/')
+        definitions = 0
+        for statement in cmake_d._statements(path, path.read_text(), mask_quotes=True):
+            command = statement.name.lower()
+            if command in ('function', 'macro'):
+                definitions += 1
+            elif command in ('endfunction', 'endmacro'):
+                definitions -= 1
+                if definitions < 0:
+                    raise cmake_d.CheckFailure(f'{path}: unmatched {command}')
+            elif not definitions and command in ('pineforge_add_unit_test', 'add_test'):
+                words = cmake_d._fence_words(statement)
+                if command == 'pineforge_add_unit_test':
+                    registered |= bool(words and words[0] == name)
+                else:
+                    registered |= (len(words) >= 4 and words[:2] == ['NAME', name]
+                                   and words[2] == 'COMMAND')
+        if definitions:
+            raise cmake_d.CheckFailure(f'{path}: unterminated function/macro definition')
+    return registered
+
+
+def bounded_by_design_issues(entry: dict, first: Site, texts: dict[str, str],
+                             root: Path) -> list[tuple[str, int, str]]:
+    """Verify each claim independently; never convert a failed claim to OPEN."""
+    issues: list[tuple[str, int, str]] = []
+
+    def finding(message: str) -> None:
+        issues.append((first.file, first.line,
+                       f'bounded_by_design entry {entry["id"]}: {message}'))
+
+    bound = entry.get('bound')
+    if not isinstance(bound, str) or not IDENT_RE.fullmatch(bound):
+        finding('bound must name one constant identifier')
+    elif axis := _forbidden(bound):
+        finding(f'bound {bound!r} names a forbidden growth axis ({axis})')
+    else:
+        definitions = [match for text in texts.values()
+                       for match in integer_definitions(text, bound)]
+        if len(definitions) != 1 or int(definitions[0].group('value')) <= 0:
+            finding(f'bound {bound!r} needs exactly one positive namespace/class-scope '
+                    'const/constexpr integer definition in scanned source '
+                    '(static at class scope; comments are not declarations)')
+        elif 'value' in entry:
+            value = entry['value']
+            actual = int(definitions[0].group('value'))
+            if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                finding('value must be a positive integer when supplied')
+            elif value != actual:
+                finding(f'bound {bound!r}: value {value} disagrees with definition value {actual}')
+
+    reference = entry.get('test')
+    match = re.fullmatch(r'(.+):([1-9][0-9]*)', reference) if isinstance(reference, str) else None
+    if not match:
+        finding('test must be a tests/ file:line reference with a positive line number')
+    else:
+        rel, raw_line = match.groups()
+        path = root / rel
+        if (Path(rel).is_absolute() or '..' in Path(rel).parts
+                or not Path(rel).parts or Path(rel).parts[0] != 'tests'
+                or not path.resolve().is_relative_to(root.resolve() / 'tests')):
+            finding(f'test path {rel!r} must stay under tests/')
+        elif not path.is_file():
+            finding(f'test file {rel!r} not found')
+        else:
+            try:
+                lines = path.read_text().splitlines()
+                line = int(raw_line)
+                if line > len(lines):
+                    finding(f'test {rel}: line {line} is outside the file ({len(lines)} lines)')
+                elif not lines[line - 1].strip():
+                    finding(f'test {rel}: line {line} is blank')
+                if not test_is_registered(root, path.stem):
+                    finding(f'test {path.stem!r} is not registered in tests/CMakeLists.txt '
+                            'or tests/cr150.d/*.cmake')
+            except (OSError, UnicodeError, cmake_d.CheckFailure) as error:
+                finding(f'test file or registration is unreadable: {error}')
+
+    reason = entry.get('reason')
+    if not isinstance(reason, str) or not reason.strip() or '\n' in reason or '\r' in reason:
+        finding('reason must be a non-empty plain sentence on one line explaining the bound')
+    return issues
+
+
 def resolve_files(root: Path, patterns: list[str]) -> list[str]:
     found: set[str] = set()
     for pattern in patterns:
@@ -1237,6 +1356,11 @@ def run(root: Path, manifest_path: Path, strict: bool, json_out: Path | None):
             findings.extend(issues)
             if issues:
                 entry_findings.add(entry['id'])
+        elif entry['state'] == 'bounded_by_design':
+            issues = bounded_by_design_issues(entry, group[0], texts, root)
+            findings.extend(issues)
+            if issues:
+                entry_findings.add(entry['id'])
     live_keys = {site.key for site in sites}
     for key, record in inventory.items():
         if key not in live_keys:
@@ -1261,14 +1385,17 @@ def run(root: Path, manifest_path: Path, strict: bool, json_out: Path | None):
                          f'{manifest.pin_source}: re-review the emitter template list and update '
                          'the manifest pin'))
     states = {s: sum(1 for e in manifest.entries if e['state'] == s) for s in STATES}
-    for state in OPEN_STATES:
+    for state in CAPPED_STATES:
         if states[state] > manifest.ceilings[state]:
+            kind = 'BY-DESIGN' if state == 'bounded_by_design' else 'OPEN'
             findings.append((str(manifest_path.relative_to(root)) if manifest_path.is_relative_to(root)
                              else str(manifest_path), 0,
                              f'{state} entries {states[state]} exceed the manifest ceiling '
-                             f'{manifest.ceilings[state]}: a new OPEN entry needs a reviewed '
+                             f'{manifest.ceilings[state]}: a new {kind} entry needs a reviewed '
                              'ceiling change'))
     passed = [e for e in matched.values() if e['state'] == 'bounded' and e['id'] not in entry_findings]
+    by_design = [e for e in matched.values()
+                 if e['state'] == 'bounded_by_design' and e['id'] not in entry_findings]
     opened = [e for e in matched.values() if e['state'] in OPEN_STATES]
     open_templates = [t for t in manifest.templates]
     out = print
@@ -1284,7 +1411,7 @@ def run(root: Path, manifest_path: Path, strict: bool, json_out: Path | None):
     for file, line, message in sorted(findings):
         out(f'{PREFIX} FINDING {file}:{line}: {message}')
     pending = sum(1 for e in opened if e['state'] == 'pending-flat-memory')
-    out(f'{PREFIX} counts PASS(bounded)={len(passed)} OPEN={len(opened)} '
+    out(f'{PREFIX} counts PASS(bounded)={len(passed)} BY-DESIGN={len(by_design)} OPEN={len(opened)} '
         f'OPEN(templates)={len(open_templates)} findings={len(findings)}')
     out(f'{PREFIX} OPEN detail pending-flat-memory={pending} '
         f'unreviewed={len(opened) - pending}: listed, never counted as PASS')
@@ -1298,7 +1425,8 @@ def run(root: Path, manifest_path: Path, strict: bool, json_out: Path | None):
     note = {'FINDINGS': 'fix every finding above',
             'OPEN-ONLY': f'{total_open} OPEN item(s): no new unbounded site entered the scanned '
                          'set, which is NOT a flat-memory proof' + ('; --strict refuses OPEN' if strict else ''),
-            'CLEAN': 'every entry bounded by a declared fixed input'}[verdict]
+            'CLEAN': 'every entry admitted by its declared bound checks'}[verdict]
+    note += '; BY-DESIGN means a named constant and a registered test exist, not a flat-memory proof'
     out(f'{PREFIX} result: {verdict} ({note})')
     if json_out:
         rows = []
