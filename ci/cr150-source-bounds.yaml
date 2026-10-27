@@ -74,7 +74,7 @@ scan:
   generated_files:
     - "tutorial/**/generated*.cpp"
 ceilings:
-  unreviewed: 1281
+  unreviewed: 1282
   pending-flat-memory: 185
 owners:
   - {name: "generated-cpp", globs: ["tutorial/**"]}
@@ -1556,3 +1556,4 @@ entries:
   - {id: "U1542", file: "src/script_string.cpp", symbol: "result", ops: ["decl", "grow"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", note: "CR150-CX 10-27 (A5T strings/maps): function-local compatibility std::string, resized to ScriptString::size then returned; fixed-page reads fill the destination but do not cap its allocation; claimed bound: no fixed materialized byte cap, verified by reading: no, src/script_string.cpp:326-336", line: 327}
   - {id: "U1543", file: "src/script_string.cpp", symbol: "store_", ops: ["grow"], container: "unresolved by the index: store_.resize(...)", owner: "engine-core", phase: "unclassified", state: "unreviewed", note: "CR150-CX 10-27 (A5T strings/maps): persistent borrowed Store pointer used to resize one string's payload object when append exceeds capacity; logical capacity may double, with data in paged backing and fixed scratch; claimed bound: resident pages/chunk buffer and live-object admission, not logical bytes; candidate for bounded_by_design: page size and the 1,048,576 object cap; verified by reading: yes, src/script_string.cpp:245-252, src/detail/o1_store.cpp:359-397,513-521,569-615, include/pineforge/detail/o1_store.hpp:55-59", line: 249}
   - {id: "U1544", file: "src/str_utils.cpp", symbol: "rendered", ops: ["grow"], container: "unresolved by the index: rendered.append(...)", owner: "engine-core", phase: "unclassified", state: "unreviewed", note: "CR150-CX 10-27 (A5T strings/maps): function-local NumberText numeric renderings; percent and volume append one suffix byte before copying into ScriptString; claimed bound: NumberText::capacity fixed array from binary64 integer digits, fifteen fraction digits, grouping and affixes, verified by reading: yes, src/str_utils.cpp:183-199,474-488", line: 476}
+  - {id: "U1547", file: "src/detail/udt_graph.cpp", symbol: "store_", ops: ["grow"], container: "unresolved by the index: store_.resize(...)", owner: "engine-core", phase: "unclassified", state: "unreviewed", note: "Three Store-backed node resizes in resize_edges and resize_payload; object_bytes checks address-space overflow, but no declared fixed input or supported own-size guard bounds the requested record size.", line: 259}
