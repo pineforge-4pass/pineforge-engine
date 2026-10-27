@@ -158,6 +158,13 @@ Measurement measure(const char* script, int period, int n) {
     require(host.last_error().empty(), host.last_error().c_str());
     require(host.source_bars() == n, "the public run must evaluate every source bar");
     const Measurement result{host.work(), host.dense_work()};
+    const auto cohort_work = host.cohort_table_work();
+    std::printf("CR391B %s N=%d cohort_table_work.rows_restored=%llu\n",
+                script, n, static_cast<unsigned long long>(cohort_work.rows_restored));
+    std::printf("CR391B %s N=%d cohort_table_work.rows_spilled=%llu\n",
+                script, n, static_cast<unsigned long long>(cohort_work.rows_spilled));
+    std::printf("CR391B %s N=%d cohort_table_work.iterated_rows=%llu\n",
+                script, n, static_cast<unsigned long long>(cohort_work.iterated_rows));
     visit_counters(result, [&](const std::string& name, std::uint64_t value) {
         std::printf("CR391B %s N=%d %s=%llu\n", script, n, name.c_str(),
                     static_cast<unsigned long long>(value));
@@ -195,11 +202,24 @@ void dense_pending_call_work() {
             std::printf("CR391B ratio %s %.2f\n", name.c_str(),
                         static_cast<double>(large) / static_cast<double>(small));
         // Infrastructure only: doubling the commands permits 2.5x work.
-        // These four counts include the two retirement walks; zero/positive
-        // must fail as well. The other conversion lanes own their bounds.
-        if ((name == "remember.handles" || name == "origin_is_pending.handles"
-             || name == "retire.handles" || name == "retire.source_keys")
-            && large * 2 > small * 5)
+        // These infrastructure counts include the two retirement walks.
+        // Every B-owned count is also a red-first control: a newly nonzero
+        // 512-bar answer with a zero 256-bar answer is a failure.
+        const bool b_counter =
+            name == "withdraw_waypoint_margin_calls.handles"
+            || name == "same_bar_close_alls.handles"
+            || name == "on_bar_open.trails"
+            || name == "on_bar_open.admission_gate"
+            || name == "apply_open_market_admission.rows"
+            || name == "on_bar_open.stop_gate"
+            || name == "on_bar_open.gapped_gate"
+            || name == "order_open_marketable_limit_entries.gate"
+            || name == "on_bar_open.touched_stops"
+            || name == "on_bar_open.reversal_gate"
+            || name == "same_point_two_leg_book.handles"
+            || name == "order_same_point_entries.candidates";
+        if (b_counter && ((small == 0 && large != 0)
+                          || (small != 0 && large * 2 > small * 5)))
             throw std::runtime_error("dense counter " + name + " exceeds 2.5x");
     });
     std::fflush(stdout);
