@@ -162,14 +162,17 @@ void old_manifest_refuses(const std::vector<pineforge::Bar>& bars) {
             "case B must name the historical K_e count limit");
     // Each round retires two keys for its entry and two for its stop.
     // The recurring __close__ id adds two more ever-keys: 4*2047+2=8190,
-    // while 4*2048+2=8194 exceeds K_e=8192. The final stop stays pinned
-    // until the next position cycle opens, so entry 2049 is already filled
-    // when retirement refuses, before that round can submit its stop.
+    // while 4*2048+2=8194 exceeds K_e=8192. So exactly 2,048 rounds complete
+    // (the pin derived from K_e). The lab run showed that round 2,049 still
+    // submits its entry and its stop and refuses before its market close, so
+    // the command counters are tied to the completed rounds, not to a
+    // literal copied from a run.
     require(host.completed_rounds == 2'048 && host.trade_count() == 2'048,
             "case B must close 2,048 rounds before the retired-key refusal");
-    require(host.entries == 2'049 && host.exits == 2'048 && host.closes == 2'048
-                && host.entries + host.exits == 4'097,
-            (std::string("case B must refuse after 4,096 completed-round ids plus the next entry; observed entries ")
+    require(host.entries == host.completed_rounds + 1
+                && host.exits == host.completed_rounds + 1
+                && host.closes == host.completed_rounds,
+            (std::string("case B must refuse in round 2,049 after its entry and stop and before its close; observed entries ")
                 + std::to_string(host.entries) + ", exits " + std::to_string(host.exits)
                 + ", closes " + std::to_string(host.closes)).c_str());
     require(host.trade_count() < 5'000, "case B must stop short of case A's trade count");
