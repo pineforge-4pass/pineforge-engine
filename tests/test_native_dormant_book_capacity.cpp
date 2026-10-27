@@ -1,7 +1,7 @@
-// REV-CX K4. Public batch run with unique ids at the requested long horizon,
-// twice on the same host (HPO reuse). No lifetime order-count cap is raised.
-// Fixture sizes and cost expectations are layout estimates from source, not
-// measured. Only the OHLCV tape scales; the observer/manifest are fixed size.
+// A long public batch run must spill unique requests at the existing resident
+// limit and preserve fast matching across reuse of the same host. Fixture sizes
+// and cost expectations are layout estimates from source, not measured.
+// Only the OHLCV tape scales; the observer and manifest remain fixed size.
 #include "../src/native_execution_consumer.hpp"
 #include "../src/command_scratch_production.hpp"
 
@@ -23,7 +23,7 @@ using namespace pineforge;
 namespace no = pineforge::native_order;
 namespace detail = pineforge::detail;
 using Binding = NativeExecutionConsumer::CommandScratchBinding;
-constexpr Binding book_binding = Binding::Book; // Intentional base diagnostic.
+constexpr Binding book_binding = Binding::Book; // Observe the dormant index separately.
 constexpr std::size_t bars_count = 200000;
 constexpr std::int64_t start = 1736121600000LL;
 
@@ -66,13 +66,13 @@ public:
     NativeExecutionConsumer& consumer() { return as_native_consumer(execution_consumer()); }
     void prepare_native_begin(const NativeBeginArgs& args) override {
         require(!args.is_stream && args.n == static_cast<int>(bars_count),
-                "K4 did not use the declared finite batch horizon");
+                "capacity run did not use the declared finite batch horizon");
         const auto& slab = scratch_tables_for_run();
-        require(static_cast<bool>(slab), "K4 bounded default manifest was not installed");
+        require(static_cast<bool>(slab), "capacity run did not install the bounded default manifest");
         manifest = manifest_words(slab->manifest());
         // Hand oracle: the existing finite-batch root reserve is 2 * bars.
         require(slab->manifest().R == 2 * bars_count,
-                "K4 finite-batch manifest did not scale with the input bars");
+                "capacity manifest root reserve did not scale with the input bars");
     }
     void on_native_run_begin() override {
         placed = 0;
@@ -82,11 +82,11 @@ public:
         if (placed > 4096) {
             require(consumer().fast_points() > 0 && consumer().eager_points() == 0
                         && consumer().fast_path_exits() == 0,
-                    "K4 unique-id run left the fast path");
+                    "capacity run with unique labels left the fast path");
             require(consumer().dormant_rows() > 0,
-                    "K4 long run did not join dormant rows");
+                    "capacity run did not join dormant rows");
             require(consumer().grid_points() == 0,
-                    "K4 unquantized long run used a price grid");
+                    "unquantized capacity run used a price grid");
             ++late_checks;
         }
         // Labels are distinct and every accepted incarnation is distinct;
@@ -99,7 +99,7 @@ public:
         const double level = buy == stop ? 200 + offset : 50 - offset;
         if (stop) r.trigger = no::Stop{level};
         else r.trigger = no::Limit{level};
-        require(submit(r).handle.has_value(), "K4 long unique-id placement refused");
+        require(submit(r).handle.has_value(), "capacity run unique request placement refused");
         ++placed;
     }
 };
@@ -114,7 +114,7 @@ int main() {
         tables.struct_size = static_cast<std::uint32_t>(sizeof(tables));
         tables.version = 1;
         tables.backend = PF_SCRATCH_TABLE_BOUNDED_MEMORY;
-        require(h.set_scratch_tables_v1(&tables) == 0, "K4 bounded policy refused");
+        require(h.set_scratch_tables_v1(&tables) == 0, "capacity run bounded scratch policy refused");
         NativeRunSpec s;
         s.identity = {"c3-dormant-capacity", 1};
         s.input_tf = "5"; s.script_tf = "5";
@@ -123,7 +123,7 @@ int main() {
         s.initial_capital = 1.0e9; s.point_value = 1; s.account_fx = 1;
         s.report_policy = NativeReportPolicy::HostRecorded;
         require(h.configure_native(s).status == NativeSetupStatus::Applied,
-                "K4 configure refused");
+                "capacity run configuration refused");
         std::vector<Bar> bars(bars_count);
         for (std::size_t i = 0; i < bars.size(); ++i)
             bars[i] = {100, 100, 100, 100, 1,
@@ -134,28 +134,28 @@ int main() {
             h.run(bars.data(), static_cast<int>(bars.size()));
             require(h.native_state().kind == NativeLifecycleKind::Completed, h.last_error().c_str());
             require(h.placed == bars.size() && h.late_checks == bars.size() - 4097,
-                    "K4 long horizon did not execute fully");
+                    "capacity run did not execute the full input horizon");
             require(h.consumer().request_core().live_size() == bars.size()
                         && h.consumer().request_core().book_spilled() && h.trade_count() == 0,
-                    "K4 never-filled long book changed membership or traded");
+                    "capacity run resting book changed membership or traded");
             require(h.consumer().eager_points() == 0 && h.consumer().fast_path_exits() == 0,
-                    "K4 final point poisoned or latched the fast path");
+                    "capacity run final point left the fast path");
             require(h.consumer().index_poisonings() == 0
                         && h.consumer().dormant_setup_failures() == 0,
-                    "K4 long Book run reported index poison or setup degradation");
+                    "capacity run reported index poison or setup degradation");
             require(io.errors == 0 && io.writes > 0,
-                    "K4 Book backing refused work or was never written");
+                    "capacity book backing refused work or was never written");
             const auto book = h.consumer().released_command_scratch(book_binding);
             require(book && book->status == detail::ScratchStatus::ok,
-                    "K4 long Book index did not release a healthy snapshot");
+                    "capacity book index did not release a healthy snapshot");
             if (trial == 0) {
                 first_manifest = h.manifest;
                 first_book = book->digest;
             } else {
                 require(h.manifest == first_manifest,
-                        "K4 same horizon produced different manifest rows across HPO trials");
+                        "repeated capacity runs produced different manifest rows");
                 require(book->digest == first_book,
-                        "K4 identical HPO trials produced different Book index contents");
+                        "repeated capacity runs produced different book index contents");
             }
         }
         return 0;

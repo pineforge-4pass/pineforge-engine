@@ -1,5 +1,5 @@
-// C3 / T1. Write before the implementation; run red/green on the lab only.
-// The resident bound is reached by real submissions, never by lowering it.
+// Late dormant matching must bound disk reads per extra spilled row and keep allocations
+// and lookups flat. Real submissions reach the resident limit without lowering it.
 #include "../src/native_execution_consumer.hpp"
 #include "global_allocation_replacement.hpp"
 
@@ -19,8 +19,8 @@
 #include <unistd.h>
 
 namespace dormant_io {
-// Same executable-local, real-syscall observer as test_p2cx_tledger_io.
-// No result/errno/data is synthesized; every request reaches the kernel.
+// Observe real pread calls within this executable using the kernel syscall.
+// Every request reaches the kernel; no result, errno, or data is synthesized.
 inline std::size_t preads = 0;
 struct Read {
     int fd = 0;
@@ -73,7 +73,7 @@ void print(const char* size, std::size_t bar, std::size_t total, const char* pha
         offset_max = std::max(offset_max, sorted[first].offset);
         first = last;
     }
-    std::fprintf(stderr, "T1 attr size=%s bar=%zu total=%zu fds=%zu by_fd=",
+    std::fprintf(stderr, "dormant read attribution size=%s bar=%zu total=%zu fds=%zu by_fd=",
                  size, bar, total, fds);
     for (std::size_t first = 0; first < recorded;) {
         auto last = first + 1;
@@ -93,7 +93,7 @@ void print(const char* size, std::size_t bar, std::size_t total, const char* pha
         first = last;
     }
     std::fprintf(stderr, " recorded=%zu dropped=%zu phase=%s\n", recorded, dropped, phase);
-    std::fprintf(stderr, "T1 attr offsets size=%s", size);
+    std::fprintf(stderr, "dormant read offsets size=%s", size);
     for (std::size_t i = 0; i < std::min(recorded, std::size_t{24}); ++i)
         std::fprintf(stderr, " (%d,%jd,%zu)", records[i].fd,
                      static_cast<std::intmax_t>(records[i].offset), records[i].bytes);
@@ -101,7 +101,7 @@ void print(const char* size, std::size_t bar, std::size_t total, const char* pha
 }
 
 void print_fdmap() {
-    std::fprintf(stderr, "T1 attr fdmap");
+    std::fprintf(stderr, "dormant read descriptor map");
     for (std::size_t i = 0; i < fd_count; ++i)
         std::fprintf(stderr, " (%d,%jd,%zu)", first_reads[i].fd,
                      static_cast<std::intmax_t>(first_reads[i].offset), first_reads[i].bytes);
@@ -116,14 +116,14 @@ extern "C" ssize_t pread(int fd, void* data, std::size_t bytes, off_t offset) {
 }
 #endif
 
-// C2's adapter is absent from the frozen base. Its presence automatically
-// arms every patched-only row, so forgetting a build flag cannot hide it.
+// Presence of the production reachability adapter enables all dormant-only
+// checks automatically, so a missing build flag cannot silently omit them.
 #if defined(PINEFORGE_TEST_DORMANT_JOIN_REACHABLE) && !defined(PINEFORGE_TEST_DORMANT_BOOK_PATCHED)
 #define PINEFORGE_TEST_DORMANT_BOOK_PATCHED 1
 #endif
 
-// C2 sets this to 1 only if it implements and documents recovery after an
-// eager point. DESIGN-s4e-c3d sections 4.6/5.4 otherwise imply a latch.
+// Enable this only when dormant matching recovers after an eager point.
+// Otherwise the checks require the default persistent eager fallback.
 #ifndef PINEFORGE_TEST_DORMANT_RECOVERS
 #define PINEFORGE_TEST_DORMANT_RECOVERS 0
 #endif
@@ -198,7 +198,7 @@ public:
 #endif
     }
     void on_native_bar(const Bar&, const NativeDecisionContext&) override {
-        require(bar_ < allocations.size(), "T1 callback count exceeded the input tape");
+        require(bar_ < allocations.size(), "dormant cost callback count exceeded the input tape");
         const auto reads = consumer().request_core().book_lookup_reads();
         allocations[bar_] = global_allocation::allocations - before_;
         lookup_rows[bar_] = reads.rows - reads_before_.rows;
@@ -222,7 +222,7 @@ public:
             const double level = buy == stop ? 200.0 + distance : 50.0 - distance;
             if (stop) r.trigger = no::Stop{level};
             else r.trigger = no::Limit{level};
-            require(submit(r).handle.has_value(), "T1 remote request refused");
+            require(submit(r).handle.has_value(), "dormant cost remote request placement refused");
         }
         next_ = end;
         placed = consumer().request_core().live_size();
@@ -255,20 +255,20 @@ Costs batch(std::size_t rows, [[maybe_unused]] const char* size, std::size_t run
     h.attribution_bar = run_bars - 1;
 #endif
     require(h.configure_native(specification()).status == NativeSetupStatus::Applied,
-            "T1 configure refused");
+            "dormant batch cost configuration refused");
     const auto bars = tape();
     h.run(bars.data(), static_cast<int>(run_bars));
     require(h.native_state().kind == NativeLifecycleKind::Completed, h.last_error().c_str());
-    require(h.placed == rows && h.spilled, "T1 did not cross the real spill boundary");
+    require(h.placed == rows && h.spilled, "dormant batch cost run did not cross the real spill boundary");
     require(h.trade_count() == 0 && h.physical_position().signed_units == 0,
-            "T1 remote book unexpectedly traded");
+            "dormant batch cost resting book unexpectedly traded");
     // Late matching only; neither placement nor the terminal fold is in it.
     Costs result{};
     result.allocations = window(h.allocations, run_bars - 8, run_bars);
     result.lookup_rows = window(h.lookup_rows, run_bars - 8, run_bars);
     result.lookup_steps = window(h.lookup_steps, run_bars - 8, run_bars);
 #if defined(__linux__)
-    require(dormant_io::preads > before, "T1 pread observer saw no real spill I/O");
+    require(dormant_io::preads > before, "dormant cost pread observer saw no real spill I/O");
     result.preads = window(h.preads, run_bars - 8, run_bars);
     dormant_io::print(size, h.attribution_bar, h.preads[h.attribution_bar], "batch");
 #endif
@@ -290,10 +290,10 @@ StreamWindow stream(std::size_t rows, bool always_eager, bool force_one,
     Host h(rows);
     h.consumer().set_match_dormant(!always_eager);
     require(h.configure_native(specification()).status == NativeSetupStatus::Applied,
-            "T1 stream configure refused");
+            "dormant stream cost configuration refused");
     const auto warmup = tape();
-    require(h.stream_begin(warmup.data(), 20, "5", "5"), "T1 stream begin failed");
-    require(h.spilled && h.placed == rows, "T1 stream warmup did not place spilled book");
+    require(h.stream_begin(warmup.data(), 20, "5", "5"), "dormant stream cost warmup failed");
+    require(h.spilled && h.placed == rows, "dormant stream cost warmup did not place the spilled book");
     StreamWindow out;
     std::array<std::size_t, 32> counts{};
     std::array<std::size_t, 32> lookup_rows{};
@@ -320,7 +320,7 @@ StreamWindow stream(std::size_t rows, bool always_eager, bool force_one,
 #endif
         require(h.stream_push_tick(TradeTick{start + 20 * 300000 + static_cast<std::int64_t>(i),
                                             i + 1, 100, 1}),
-                "T1 stream tick failed");
+                "dormant stream cost tick failed");
         counts[i] = global_allocation::allocations - before;
         const auto reads = h.consumer().request_core().book_lookup_reads();
         lookup_rows[i] = reads.rows - reads_before.rows;
@@ -340,8 +340,8 @@ StreamWindow stream(std::size_t rows, bool always_eager, bool force_one,
                       always_eager ? "stream-eager" : force_one ? "stream-forced" : "stream");
 #endif
     out.continuation = h.native_continuation_hash();
-    require(h.stream_end(false), "T1 stream end failed");
-    require(h.trade_count() == 0, "T1 stream remote book traded");
+    require(h.stream_end(false), "dormant stream cost completion failed");
+    require(h.trade_count() == 0, "dormant stream cost resting book traded");
     return out;
 }
 #endif
@@ -350,9 +350,9 @@ StreamWindow stream(std::size_t rows, bool always_eager, bool force_one,
 int main(int argc, char** argv) {
     try {
         const bool io_only = argc == 2 && std::strcmp(argv[1], "--io-only") == 0;
-        require(argc == 1 || io_only, "T1 unknown argument");
+        require(argc == 1 || io_only, "dormant cost test received an unknown argument");
 #if !defined(__linux__)
-        require(!io_only, "T1 --io-only requires the Linux real-syscall observer");
+        require(!io_only, "dormant cost --io-only requires the Linux real-syscall observer");
 #endif
         const Costs small = batch(resident + 512, "small");
         const Costs large = batch(resident + resident, "large");
@@ -360,12 +360,12 @@ int main(int argc, char** argv) {
         const Costs largest = batch(resident + 2 * resident, "largest");
         // Forty placement bars, then eight matching bars at the fourth size.
         const Costs fourth = batch(resident + 4 * resident, "fourth", bar_count);
-        std::printf("T1 late allocations/bar small=%zu..%zu large=%zu..%zu largest=%zu..%zu fourth=%zu..%zu\n",
+        std::printf("dormant late allocations/bar small=%zu..%zu large=%zu..%zu largest=%zu..%zu fourth=%zu..%zu\n",
                     small.allocations.low, small.allocations.high,
                     large.allocations.low, large.allocations.high,
                     largest.allocations.low, largest.allocations.high,
                     fourth.allocations.low, fourth.allocations.high);
-        std::printf("T1 late lookup rows/bar small=%zu..%zu large=%zu..%zu largest=%zu..%zu "
+        std::printf("dormant late lookup rows/bar small=%zu..%zu large=%zu..%zu largest=%zu..%zu "
                     "fourth=%zu..%zu steps/bar small=%zu..%zu large=%zu..%zu largest=%zu..%zu fourth=%zu..%zu\n",
                     small.lookup_rows.low, small.lookup_rows.high,
                     large.lookup_rows.low, large.lookup_rows.high,
@@ -376,12 +376,12 @@ int main(int argc, char** argv) {
                     largest.lookup_steps.low, largest.lookup_steps.high,
                     fourth.lookup_steps.low, fourth.lookup_steps.high);
 #if defined(__linux__)
-        std::printf("T1 late preads/bar small=%zu..%zu large=%zu..%zu largest=%zu..%zu fourth=%zu..%zu\n",
+        std::printf("dormant late preads/bar small=%zu..%zu large=%zu..%zu largest=%zu..%zu fourth=%zu..%zu\n",
                     small.preads.low, small.preads.high, large.preads.low, large.preads.high,
                     largest.preads.low, largest.preads.high, fourth.preads.low, fourth.preads.high);
 #endif
         // Require exact allocation flatness within and across all four windows.
-        // --io-only leaves the independent disk-cost oracle exposed on base.
+        // --io-only checks disk cost independently of allocation growth.
         if (!io_only)
             require(small.allocations.low == small.allocations.high
                         && small.allocations.high == large.allocations.low
@@ -390,15 +390,15 @@ int main(int argc, char** argv) {
                         && largest.allocations.low == largest.allocations.high
                         && largest.allocations.high == fourth.allocations.low
                         && fourth.allocations.low == fourth.allocations.high,
-                    "T1 spilled per-bar allocations grow with the spilled row count");
+                    "dormant per-bar allocations grow with the spilled row count");
 #if defined(__linux__)
-        // Run this before the narrower lookup checks: --io-only isolates
-        // the base red even if both existing lookup counters happen flat.
+        // Check disk reads before the narrower lookup counters: --io-only exposes
+        // per-row disk work even when both lookup counters happen to stay flat.
         require(small.preads.low == small.preads.high
                     && large.preads.low == large.preads.high
                     && largest.preads.low == largest.preads.high
                     && fourth.preads.low == fourth.preads.high,
-                "T1 preads/bar are not stable within a late window");
+                "dormant preads/bar are not stable within a late window");
         const std::array<std::size_t, 4> spilled_rows{512, resident, 2 * resident, 4 * resident};
         const std::array<Window, 4> preads{small.preads, large.preads, largest.preads, fourth.preads};
         const auto pread_slope = [](std::size_t preads_a, std::size_t preads_b,
@@ -409,7 +409,7 @@ int main(int argc, char** argv) {
         // Decoding a visited spilled row needs at least one page pread.
         // Visiting each additional row thus costs >= 1 pread/row/bar.
         // Use one quarter of that minimum: slope <= 0.25 for every interval.
-        // The eager baseline visits spilled rows, so its O(S) term stays red.
+        // An eager scan visits every spilled row and exceeds this read budget.
         // Ordered-index descents grow with tree height, approximately log S.
         // Fixed-cache conflict misses perturb those descents, not row visits.
         // Both terms vanish per additional row as the population grows.
@@ -417,18 +417,18 @@ int main(int argc, char** argv) {
         for (std::size_t i = 1; i < spilled_rows.size(); ++i) {
             const auto slope = pread_slope(preads[i - 1].high, preads[i].high,
                                           spilled_rows[i - 1], spilled_rows[i]);
-            std::printf("T1 slope %zu->%zu = %.6f\n", spilled_rows[i - 1], spilled_rows[i], slope);
+            std::printf("dormant adjacent read slope %zu->%zu = %.6f\n", spilled_rows[i - 1], spilled_rows[i], slope);
             require(slope <= 0.25,
-                    "T1 adjacent pread slope exceeds 0.25 per additional spilled row");
+                    "dormant adjacent pread slope exceeds 0.25 per additional spilled row");
         }
         const auto endpoint_slope = pread_slope(preads.front().high, preads.back().high,
                                                spilled_rows.front(), spilled_rows.back());
-        std::printf("T1 first-to-last slope %zu->%zu = %.6f\n",
+        std::printf("dormant first-to-last read slope %zu->%zu = %.6f\n",
                     spilled_rows.front(), spilled_rows.back(), endpoint_slope);
         require(endpoint_slope <= 0.25,
-                "T1 first-to-last pread slope exceeds 0.25 per additional spilled row");
+                "dormant first-to-last pread slope exceeds 0.25 per additional spilled row");
 #endif
-        // REV-CX K3: allocation flatness alone can hide disk/CPU growth.
+        // Allocation flatness alone can hide disk reads or CPU work that grow.
         // There is no lookup at all in the late, completely dormant book:
         // compare BOTH counters at every end of the window, without slack.
         require(small.lookup_rows.low == small.lookup_rows.high
@@ -438,7 +438,7 @@ int main(int argc, char** argv) {
                     && largest.lookup_rows.low == largest.lookup_rows.high
                     && largest.lookup_rows.high == fourth.lookup_rows.low
                     && fourth.lookup_rows.low == fourth.lookup_rows.high,
-                "T1 late book lookup rows/bar depend on the spilled row count");
+                "dormant late book lookup rows/bar depend on the spilled row count");
         require(small.lookup_steps.low == small.lookup_steps.high
                     && small.lookup_steps.high == large.lookup_steps.low
                     && large.lookup_steps.low == large.lookup_steps.high
@@ -446,7 +446,7 @@ int main(int argc, char** argv) {
                     && largest.lookup_steps.low == largest.lookup_steps.high
                     && largest.lookup_steps.high == fourth.lookup_steps.low
                     && fourth.lookup_steps.low == fourth.lookup_steps.high,
-                "T1 late book lookup steps/bar depend on the spilled row count");
+                "dormant late book lookup steps/bar depend on the spilled row count");
 #ifdef PINEFORGE_TEST_DORMANT_BOOK_PATCHED
         const auto eager_small = stream(resident + 512, true, false, "small");
         const auto eager_large = stream(resident + resident, true, false, "large");
@@ -455,33 +455,33 @@ int main(int argc, char** argv) {
         // Large-window minimum minus small-window maximum is conservative.
         const auto eager_slope = pread_slope(eager_small.costs.preads.high, eager_large.costs.preads.low,
                                             spilled_rows[0], spilled_rows[1]);
-        std::printf("T1 eager slope lower bound %zu->%zu = %.6f\n",
+        std::printf("eager read slope lower bound %zu->%zu = %.6f\n",
                     spilled_rows[0], spilled_rows[1], eager_slope);
         require(eager_slope >= 1.0,
-                "T1 eager pread control costs less than one pread per additional spilled row");
+                "eager pread control costs less than one pread per additional spilled row");
 #endif
         const auto forced_small = stream(resident + 512, false, true, "small");
         const auto forced_large = stream(resident + resident, false, true, "large");
         require(forced_small.eager_forced == 1 && forced_large.eager_forced == 1,
-                "T1 did not force exactly one eager point");
+                "dormant cost excursion did not force exactly one eager point");
         require(forced_small.fast_before > 0 && forced_large.fast_before > 0,
-                "T1 forced-eager row never entered the fast path");
+                "forced eager excursion never entered the fast path");
         require(forced_small.continuation == eager_small.continuation
                     && forced_large.continuation == eager_large.continuation,
-                "T1 eager excursion changed continuation bytes");
+                "forced eager excursion changed continuation bytes");
         if constexpr (PINEFORGE_TEST_DORMANT_RECOVERS != 0) {
             require(forced_large.costs.allocations.high <= forced_small.costs.allocations.high * 2,
-                    "T1 recovery allocations grow with the spilled book");
+                    "dormant recovery allocations grow with the spilled book");
             require(forced_large.costs.lookup_rows.high == forced_small.costs.lookup_rows.high
                         && forced_large.costs.lookup_steps.high == forced_small.costs.lookup_steps.high,
-                    "T1 recovery lookup cost grows with the spilled book");
+                    "dormant recovery lookup cost grows with the spilled book");
 #if defined(__linux__)
             require(forced_large.costs.preads.high == forced_small.costs.preads.high,
-                    "T1 recovery preads grow with the spilled book");
+                    "dormant recovery preads grow with the spilled book");
 #endif
             require(forced_small.fast_after > forced_small.fast_before
                         && forced_large.fast_after > forced_large.fast_before,
-                    "T1 recovery never re-entered the fast path");
+                    "dormant recovery never re-entered the fast path");
         } else {
             const auto equal_to_base = [](Window actual, Window reference) {
                 const auto jitter = reference.high - reference.low;
@@ -490,20 +490,20 @@ int main(int argc, char** argv) {
             };
             require(equal_to_base(forced_small.costs.allocations, eager_small.costs.allocations)
                         && equal_to_base(forced_large.costs.allocations, eager_large.costs.allocations),
-                    "T1 latch allocations differ from the eager reference");
+                    "persistent eager fallback allocations differ from the eager reference");
             require(equal_to_base(forced_small.costs.lookup_rows, eager_small.costs.lookup_rows)
                         && equal_to_base(forced_large.costs.lookup_rows, eager_large.costs.lookup_rows)
                         && equal_to_base(forced_small.costs.lookup_steps, eager_small.costs.lookup_steps)
                         && equal_to_base(forced_large.costs.lookup_steps, eager_large.costs.lookup_steps),
-                    "T1 latch lookup costs differ from the eager reference");
+                    "persistent eager fallback lookup costs differ from the eager reference");
 #if defined(__linux__)
             require(equal_to_base(forced_small.costs.preads, eager_small.costs.preads)
                         && equal_to_base(forced_large.costs.preads, eager_large.costs.preads),
-                    "T1 latch preads differ from the eager reference");
+                    "persistent eager fallback preads differ from the eager reference");
 #endif
             require(forced_small.fast_after == forced_small.fast_before
                         && forced_large.fast_after == forced_large.fast_before,
-                    "T1 default latch decision changed; C2 must select recovery explicitly");
+                    "persistent eager fallback resumed fast matching without recovery enabled");
         }
 #endif
 #if defined(__linux__)

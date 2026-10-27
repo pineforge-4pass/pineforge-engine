@@ -1,19 +1,19 @@
-// C3K / #452. RED FIRST: written against 3ea5a0d6071887b1b8509ae8458dfafef1756182.
-// No new engine interface is required to compile this test.
+// Exercise unreachable resting orders through the existing core and host APIs.
+// This test needs no new engine interface.
 //
 // The ordinary row tests the narrower, independently sound bulk-refresh gate:
 // an entry-only spilled book cannot contain a BookClose to refresh. The
 // allocation counter observes the real blob decodes, and value/receipt/token
 // checks forbid replacing the operation with an unconditional no-op.
 //
-// --matcher is a SEPARATE, still-red acceptance probe for the actual flat
-// never-filled matcher. The authority-only proposal does not fix that path.
-// --property prints deterministic state/receipt observations for two separately
-// built kernels (proposed gate enabled / PINEFORGE_C3K_DISABLE_SPILL_AUTHORITY_GATE).
-// Comparing that output is the lab's differential; no switch exists in the
-// public run specification and no expected hash is harvested from this code.
-// All sizes and behavior expectations here are layout estimates from source,
-// not measured; only the supervisor's lab may execute this unit.
+// --matcher separately checks the flat book of orders that never fill.
+// Skipping allowance refresh alone does not establish the matching bound.
+// --property prints deterministic state and receipts from separate builds
+// with the spilled-close authority gate enabled and disabled.
+// Comparing those observations checks that the gate preserves behavior;
+// no public run switch or expected hash derived from product code is used.
+// Sizes and behavior expectations are layout estimates from source,
+// not measured; execution results must come from the test itself.
 #include "global_allocation_replacement.hpp"
 #include "native_order_full_fold.hpp"
 #include "native_match_book_fixture.hpp"
@@ -42,7 +42,7 @@ int failures = 0;
 #define CHECK(condition) do {                                                    \
     if (!(condition)) {                                                         \
         ++failures;                                                             \
-        std::fprintf(stderr, "FAIL C3K %s:%d: %s\n", __FILE__, __LINE__, #condition);\
+        std::fprintf(stderr, "FAIL test_native_unreachable_book %s:%d: %s\n", __FILE__, __LINE__, #condition);\
     }                                                                           \
 } while (false)
 #define REQUIRE(condition) do {                                                  \
@@ -114,7 +114,7 @@ void empty_authority_refresh_does_no_decode() {
         run.core.refresh_point_allowances(point, long7);
     const std::size_t decodes = global_allocation::allocations - allocations_before;
     if (decodes != 0)
-        std::fprintf(stderr, "C3K bulk: entry-only refresh allocated %zu times; expected 0\n",
+        std::fprintf(stderr, "unreachable book allowance refresh: entry-only book allocated %zu times; expected 0\n",
                      decodes);
     CHECK(decodes == 0);
     CHECK(ff::core_value(run.core) == before);
@@ -291,7 +291,7 @@ void public_no_fill(bool require_matcher_gate) {
         const auto rows = host.matched.rows - host.placed.rows;
         const auto steps = host.matched.steps - host.placed.steps;
         if (rows != 0 || steps != 0)
-            std::fprintf(stderr, "C3K matcher: unreachable book needed %llu lookup rows, "
+            std::fprintf(stderr, "unreachable book matching: resting orders needed %llu lookup rows, "
                          "%llu rank steps; expected 0, 0\n",
                          static_cast<unsigned long long>(rows),
                          static_cast<unsigned long long>(steps));
@@ -346,13 +346,13 @@ void property_transcript(std::uint64_t seed) {
         }
         refresh_and_compare(run, run.ordinal + 10, step % 3 == 0
                             ? no::PositionIdentity{no::PositionFlat{}} : long7);
-        std::printf("C3K state %llu %zu %llu\n",
+        std::printf("unreachable book core state %llu %zu %llu\n",
                     static_cast<unsigned long long>(seed), step,
                     static_cast<unsigned long long>(ff::core_value(run.core)));
     }
     // Every command receipt, not just a census or a final hash.
     for (const auto& event : run.core.history())
-        std::printf("C3K receipt %llu %llu\n", static_cast<unsigned long long>(seed),
+        std::printf("unreachable book core receipt %llu %llu\n", static_cast<unsigned long long>(seed),
                     static_cast<unsigned long long>(ff::value(event)));
 }
 
@@ -416,16 +416,16 @@ void public_property_transcript(std::uint64_t seed) {
     CHECK(outcome.applied >= 2);
     CHECK(outcome.trades >= 1);
     for (std::size_t index = 0; index != host.states.size(); ++index)
-        std::printf("C3K public-state %llu %zu %llu\n",
+        std::printf("unreachable book public state %llu %zu %llu\n",
                     static_cast<unsigned long long>(seed), index,
                     static_cast<unsigned long long>(host.states[index]));
     for (const auto& event : host.native_events(0)) {
         if (event.command)
-            std::printf("C3K public-receipt %llu %llu\n",
+            std::printf("unreachable book public receipt %llu %llu\n",
                         static_cast<unsigned long long>(seed),
                         static_cast<unsigned long long>(ff::value(*event.command)));
     }
-    std::printf("C3K public-final %llu %llu %llu %llu %d %ld %ld %ld\n",
+    std::printf("unreachable book public final %llu %llu %llu %llu %d %ld %ld %ld\n",
                 static_cast<unsigned long long>(seed),
                 static_cast<unsigned long long>(ff::core_value(host.core())),
                 static_cast<unsigned long long>(outcome.continuation),
@@ -453,7 +453,7 @@ int main(int argc, char** argv) {
         }
     } catch (const std::exception& error) {
         ++failures;
-        std::fprintf(stderr, "FAIL C3K prerequisite/exception: %s\n", error.what());
+        std::fprintf(stderr, "FAIL test_native_unreachable_book prerequisite/exception: %s\n", error.what());
     }
     return failures == 0 ? 0 : 1;
 }

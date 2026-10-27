@@ -98,8 +98,8 @@ struct WorkingRequestCore::BookSpill {
     mutable uint64_t lookup_rows = 0;
     mutable uint64_t lookup_steps = 0;
 
-    // C2 supplies the one reach predicate and its delta. Its 2^-20 relative
-    // ulp margin is a chosen safety margin, not a derived bound; T8 guards it.
+    // Join and wake share one predicate and delta; the 2^-20 relative margin
+    // is chosen for safety, not derived from ulps, and checked against eager geometry.
     using Reach = bool (*)(bool, double, double, double, double) noexcept;
     struct ResidentMeta {
         uint64_t priority = 0;
@@ -554,7 +554,7 @@ struct WorkingRequestCore::BookSpill {
 
     std::size_t spill_index(const WorkingRequestCore& core) const noexcept {
         assert_aligned(core);
-        // K1: retained winners/candidates keep the back-only contract. Middle
+        // Retained winners and candidates require back-only spills. Middle
         // erasure requires a consumer scope with no retained resident alias;
         // completing an allowance sweep alone never grants that scope.
         const bool may_erase = middle_spill;

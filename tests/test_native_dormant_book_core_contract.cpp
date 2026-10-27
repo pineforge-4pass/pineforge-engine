@@ -1,8 +1,8 @@
-// C3 / T2b, REV2 P3-3: name and execute the patch-only epoch contract test.
-// All actions use public run/stream/command entry points. The sole extra
-// observation requested from C1/C2 is a read-only internal epoch seam:
-// PINEFORGE_TEST_DORMANT_CORE_EPOCH(NativeExecutionConsumer&).
-// No production state or public include needs to be added for that seam.
+// Resident dormant sweeps must advance the request epoch twice per live row.
+// Public run/stream/command calls cover an entirely resident book and removal
+// of the final spilled row. A read-only internal epoch observation through
+// PINEFORGE_TEST_DORMANT_CORE_EPOCH(NativeExecutionConsumer&) detects skipped
+// refreshes or a stale spilled-class bump without extending public headers or state.
 #include "../src/native_execution_consumer.hpp"
 #include <pineforge/native_host.hpp>
 
@@ -14,7 +14,7 @@
 #include <stdexcept>
 
 #ifndef PINEFORGE_TEST_DORMANT_CORE_EPOCH
-#error "T2b needs a test-only read of the consumer request core epoch; see REPORT-s4e-391b-CT.md"
+#error "resident epoch check requires PINEFORGE_TEST_DORMANT_CORE_EPOCH to read the request core epoch"
 #else
 namespace {
 using namespace pineforge;
@@ -36,13 +36,13 @@ public:
                 const bool wake = spill_ && i + 1 == rows_;
                 no::Request r{no::Transact{1}, wake ? "epoch-wake" : "epoch-rest", ""};
                 r.trigger = no::Limit{wake ? 99.0 : 50.0};
-                require(submit(r).handle.has_value(), "T2b submit refused");
+                require(submit(r).handle.has_value(), "resident epoch initial request placement refused");
             }
         } else if (bar_ == 2 && spill_) {
             no::Request r{no::Transact{1}, "epoch-extra", ""};
             r.trigger = no::Limit{50};
             const auto result = submit(r);
-            require(result.handle.has_value(), "T2b extra submit refused");
+            require(result.handle.has_value(), "resident epoch extra request placement refused");
             extra_ = *result.handle;
         }
     }
@@ -53,7 +53,7 @@ public:
         // so cancelling extra promotes the LAST spilled dormant row without
         // spilling another. The following point is entirely resident.
         require(cancel(extra_).status == no::CancelStatus::Cancelled,
-                "T2b last spilled row was not cancelled");
+                "resident epoch final spilled request cancellation refused");
         woke = true;
     }
 private:
@@ -72,36 +72,36 @@ void run(std::size_t rows, bool spill) {
     s.slot_label_policy = NativeSlotLabelPolicy::FeedTolerant;
     s.initial_capital = 1.0e9; s.point_value = 1; s.account_fx = 1;
     s.report_policy = NativeReportPolicy::HostRecorded;
-    require(h.configure_native(s).status == NativeSetupStatus::Applied, "T2b configure refused");
+    require(h.configure_native(s).status == NativeSetupStatus::Applied, "resident epoch run configuration refused");
     std::array<Bar, 3> warmup{};
     for (std::size_t i = 0; i < warmup.size(); ++i)
         warmup[i] = {100, 100, 100, 100, 1,
                      start + static_cast<std::int64_t>(i) * 300000};
     require(h.stream_begin(warmup.data(), static_cast<int>(warmup.size()), "5", "5"),
-            "T2b stream begin failed");
+            "resident epoch stream warmup failed");
     auto& c = h.consumer();
     std::uint64_t sequence = 1;
     if (spill) {
-        require(c.request_core().book_spilled(), "T2b last-spilled fixture never spilled");
+        require(c.request_core().book_spilled(), "final spilled row fixture never spilled");
         require(h.stream_push_tick({start + 900000, sequence++, 98, 1}),
-                "T2b wake tick failed");
+                "resident epoch wake tick failed");
         require(h.woke && !c.request_core().book_spilled(),
-                "T2b did not remove the final spilled dormant row");
-        require(c.request_core().live_size() == rows - 1, "T2b unexpected remaining book");
+                "resident epoch wake did not remove the final spilled dormant row");
+        require(c.request_core().live_size() == rows - 1, "resident epoch wake left an unexpected book size");
     }
     const auto count = c.request_core().live_size();
     require(c.dormant_rows() > 0 && c.fast_points() > 0 && c.eager_points() == 0,
-            "T2b never exercised dormant resident sweeps");
+            "resident epoch run never exercised dormant resident sweeps");
     const auto before = PINEFORGE_TEST_DORMANT_CORE_EPOCH(c);
-    require(h.stream_push_tick({start + 900001, sequence, 100, 1}), "T2b measured tick failed");
+    require(h.stream_push_tick({start + 900001, sequence, 100, 1}), "resident epoch observation tick failed");
     const auto after = PINEFORGE_TEST_DORMANT_CORE_EPOCH(c);
     // Hand arithmetic: one new point, count unchanged resident Limit rows;
-    // each eager refresh bumps exactly two, with NO spilled-class bump.
-    // M-18 gives count instead of 2*count; M-21 leaves an extra class bump
-    // after the last spilled row was promoted/cancelled.
-    require(after - before == 2 * count, "T2b resident epoch delta is not two per row");
-    require(c.request_core().live_size() == count, "T2b measured point changed membership");
-    require(h.stream_end(false), "T2b stream end failed");
+    // each eager refresh bumps exactly two, with no spilled-class bump.
+    // The delta detects both a skipped refresh and a class bump left behind
+    // after the last spilled row was promoted or cancelled.
+    require(after - before == 2 * count, "resident epoch delta is not two per live row");
+    require(c.request_core().live_size() == count, "resident epoch observation point changed membership");
+    require(h.stream_end(false), "resident epoch stream completion failed");
 }
 } // namespace
 

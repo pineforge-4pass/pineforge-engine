@@ -1,8 +1,8 @@
-// C3 / T5. Same generator and transcript as T3, all commands through the
-// existing prepare/install path. A stale token must fail the actual run.
+// Reuse the run transcript generator with every command using the existing
+// prepare/install path, so a stale token fails the actual run.
 // Held decoded copies stay frozen across a t=0 watermark advance; fresh
 // decodes project. The single-spill seed also keeps raw pointers within the
-// eight-keep window and detects an illegally cleared ring (corrected P2-6).
+// eight-copy keepalive window and detects an illegally cleared ring.
 #define PINEFORGE_DORMANT_BOOK_NO_MAIN
 #include "test_native_dormant_book_transcript.cpp"
 

@@ -1,6 +1,6 @@
-// C3 / T7. DESIGN sections 4.2/4.7/14/18: the Book binding and
-// poison-to-eager fallback. Production observer/cap signatures are in
-// src/command_scratch_production.hpp. The observer observes, never fakes I/O.
+// A dormant book index write failure must disable fast matching and preserve
+// eager output bytes. The production scratch observer records real I/O while
+// a test backing budget faults the index without changing product limits.
 #define PINEFORGE_DORMANT_BOOK_NO_MAIN
 #include "test_native_dormant_book_transcript.cpp"
 #include "../src/command_scratch_production.hpp"
@@ -9,7 +9,7 @@ namespace {
 using namespace dormant_test;
 namespace detail = pineforge::detail;
 using Binding = NativeExecutionConsumer::CommandScratchBinding;
-// Expected base first diagnostic: no member named 'Book' in the binding enum.
+// Inspect the dormant book binding independently of dependency storage.
 constexpr Binding book_binding = Binding::Book;
 
 struct Charges {
@@ -56,7 +56,7 @@ public:
             const auto first = bar_ == 1 ? 0 : resident;
             const auto last = bar_ == 1 ? resident : resident + 512;
             for (std::size_t i = first; i < last; ++i)
-                require(submit(remote(i)).handle.has_value(), "T7 placement refused");
+                require(submit(remote(i)).handle.has_value(), "index fault request placement refused");
         }
         saw_spill = saw_spill || consumer().request_core().book_spilled();
         saw_dormant = saw_dormant || consumer().dormant_rows() > 0;
@@ -82,38 +82,38 @@ Trace run(bool enabled, bool fault) {
     Registration registration(fault ? 1 : 0, charges);
     FaultHost h(enabled, charges);
     require(h.configure_native(specification()).status == NativeSetupStatus::Applied,
-            "T7 configure refused");
+            "index fault run configuration refused");
     std::array<Bar, 7> bars{};
     for (std::size_t i = 0; i < bars.size(); ++i)
         bars[i] = {100, 100, 100, 100, 1,
                    start + static_cast<std::int64_t>(i) * 300000};
     h.run(bars.data(), static_cast<int>(bars.size()));
     require(h.native_state().kind == NativeLifecycleKind::Completed, h.last_error().c_str());
-    require(h.saw_spill && h.trade_count() == 0, "T7 did not exercise a resting spilled book");
+    require(h.saw_spill && h.trade_count() == 0, "index fault run did not exercise a resting spilled book");
     const auto dependency = h.consumer().released_command_scratch(Binding::Dependency);
     require(dependency && dependency->status == detail::ScratchStatus::ok,
-            "T7 fault hit Dependency instead of Book");
+            "dependency snapshot missing or unhealthy during book index fault");
     require(h.consumer().released_command_scratch(book_binding).has_value(),
-            "T7 Book binding was never provisioned");
+            "index fault run never provisioned the book binding");
     if (fault) {
         require(h.consumer().index_poisonings() > 0,
-                "T7 index write failure did not count an index poisoning");
+                "book index write failure did not count an index poisoning");
         require(h.consumer().dormant_setup_failures() == 0,
-                "T7 index write failure was counted as a setup failure");
+                "book index write failure was counted as a setup failure");
         require(charges.errors > 0 && h.errors_at_fault > 0,
-                "T7 Book fault was not observed");
-        require(charges.errors == h.errors_at_fault, "T7 poisoned index was retried");
-        require(h.fast_at_end == h.fast_at_fault, "T7 poison did not latch fast matching off");
+                "book index write fault was not observed");
+        require(charges.errors == h.errors_at_fault, "poisoned book index was retried");
+        require(h.fast_at_end == h.fast_at_fault, "index poisoning did not keep fast matching disabled");
         require(h.consumer().eager_points() > h.eager_at_fault,
-                "T7 poison did not continue through eager points");
+                "index poisoning did not continue through eager matching points");
     } else if (enabled) {
         require(h.consumer().index_poisonings() == 0
                     && h.consumer().dormant_setup_failures() == 0,
-                "T7 healthy index reported a setup failure or poisoning");
+                "healthy book index reported a setup failure or poisoning");
         require(charges.errors == 0 && charges.writes > 0 && h.saw_dormant,
-                "T7 healthy control did not exercise the Book index");
+                "healthy index control did not exercise book writes and dormant rows");
         require(h.consumer().fast_points() > 0 && h.consumer().eager_points() == 0,
-                "T7 healthy control was vacuously eager");
+                "healthy index control did not use fast matching exclusively");
     }
     finish(h, h.trace);
     return std::move(h.trace);
@@ -125,8 +125,8 @@ int main() {
         const auto eager = run(false, false);
         const auto healthy = run(true, false);
         const auto faulted = run(true, true);
-        require(eager.words == healthy.words, "T7 healthy index changed output bytes");
-        require(eager.words == faulted.words, "T7 index fault changed eager output bytes");
+        require(eager.words == healthy.words, "healthy book index changed eager output bytes");
+        require(eager.words == faulted.words, "book index write fault changed eager output bytes");
         return 0;
     } catch (const std::exception& e) {
         std::fprintf(stderr, "test_native_dormant_book_index_fault: %s\n", e.what());

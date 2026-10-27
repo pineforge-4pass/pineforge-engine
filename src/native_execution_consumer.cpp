@@ -8619,7 +8619,7 @@ void NativeExecutionConsumer::invoke_callback(BacktestEngine& engine, const Bar&
     MatchBookSpillScope candidate_free(*this, true);
     try {
         const NativeDecisionContext presented = callback_context_;
-        // L5: every calculation routes here; the default recalculation hook
+        // Every calculation routes here; the default recalculation hook
         // forwards to on_native_bar for hosts using the ordinary cadence.
         host->on_native_recalculate(bar, presented, NativeCalculationReason::BarClose,
                                     nullptr);
@@ -14206,7 +14206,7 @@ std::uint64_t native_run_spec_digest(const NativeRunSpec& spec, const NativeBarV
 } // inline namespace native_bar_views_v1
 }  // namespace pineforge
 
-// Dormant matcher helpers live after the last pinned consumer citation.
+// Dormant matcher helpers preserve eager behavior through a derived price index.
 namespace pineforge::engine_script_run_v19 {
 
 bool NativeExecutionConsumer::dormant_reachable(
@@ -14228,8 +14228,8 @@ double NativeExecutionConsumer::dormant_margin(
         || !std::isfinite(grid_tick) || grid_tick < 0.0) {
         return std::numeric_limits<double>::infinity();
     }
-    // Chosen safety margins, not a derived ULP/error bound: never tighten
-    // the 2^-20 relative allowance or the two-tick allowance without T8.
+    // Chosen safety margins, not a derived ULP/error bound: tightening the
+    // 2^-20 relative or two-tick allowance requires checking eager geometry.
     const double scale = std::max({1.0, std::abs(lo), std::abs(hi)});
     const double relative = std::ldexp(scale, -20);
     return relative + 2.0 * grid_tick;
@@ -14316,9 +14316,9 @@ bool NativeExecutionConsumer::MatchDormantPoint::eligible() const noexcept {
 }
 
 void NativeExecutionConsumer::MatchDormantPoint::fall_back() noexcept {
-    // P2-3/K2: no rejoin/recovery pass. The eager scan can leave active rows
-    // spilled, keeping later points eager until commands remove those rows.
-    // Guards/active_spilled are per point; only C1's index poison is permanent.
+    // No rejoin or recovery pass: eager scans may leave active rows spilled,
+    // keeping later points eager until commands remove those rows.
+    // Point guards are transient; index poison disables acceleration for the run.
     // Count runs that ever leave fast matching, even if the book later drains.
     if (consumer_.match_dormant_was_fast_ && consumer_.match_dormant_counts_.exits == 0)
         ++consumer_.match_dormant_counts_.exits;
@@ -14351,7 +14351,7 @@ void NativeExecutionConsumer::MatchDormantPoint::start() {
             return;
         }
         // WorkingRequestCore is move-only: stamps/registers move with its
-        // pimpl; there is no core snapshot/rollback to restore here (P3-1).
+        // pimpl; there is no core snapshot or rollback to restore here.
         begun_ = true;
         consumer_.match_book_begin(evaluation_);
         if (eligible()) fast_ = true;

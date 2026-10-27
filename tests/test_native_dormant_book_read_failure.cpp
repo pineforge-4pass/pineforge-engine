@@ -1,11 +1,11 @@
-// C3 / T6. Reuse the real-fd truncation seam of
-// test_broker_state_hash_spilled_read_failure and
-// test_continuation_hash_spilled_read_failure. No synthetic successful read.
-// Stdout (failure point/code/text) is a base-versus-patched lab oracle.
-// Deliberate environmental difference (DESIGN section 7 / REV-CX P3-1):
-// a fast point cannot observe an I/O fault on dormant data it never reads.
-// These rows explicitly READ the damaged data and carry that real failure;
-// they do not demand base's avoided reads or invent a successful read.
+// Truncating real spill files must preserve the failure code, text, and callback
+// position through continuation hashing, broker hashing, and commands.
+// Reuse descriptor truncation from the spilled hash tests; reads always reach
+// the backing file rather than returning synthetic success.
+// Dormant fast matching cannot observe faults in data it does not read.
+// These cases explicitly read damaged data and propagate the real failure
+// through public run/stream calls or the carried-failure guard.
+// Printed failure traces allow comparison of eager and dormant runs.
 #include "../src/native_execution_consumer.hpp"
 #include <pineforge/native_host.hpp>
 #include <pineforge/run_failure.hpp>
@@ -94,12 +94,12 @@ public:
     }
 private:
     void inject_and_read() {
-        require(consumer().request_core().book_spilled(), "T6 book did not spill");
-        require(!book_files.empty(), "T6 first spill opened no observable file");
+        require(consumer().request_core().book_spilled(), "spill read fault book did not spill");
+        require(!book_files.empty(), "spill read fault first spill opened no observable file");
 #ifdef PINEFORGE_TEST_DORMANT_BOOK_PATCHED
         if (enabled_) {
-            require(consumer().dormant_rows() > 0, "T6 fault did not reach a dormant book");
-            require(consumer().fast_points() > 0, "T6 fault never followed fast matching");
+            require(consumer().dormant_rows() > 0, "spill read fault did not reach a dormant book");
+            require(consumer().fast_points() > 0, "spill read fault never followed fast matching");
         }
 #endif
         if (mode_ == Mode::Promotion) {
@@ -108,12 +108,12 @@ private:
             // increment this public lookup census.
             const auto reads = consumer().request_core().book_lookup_reads().rows;
             require(static_cast<bool>(consumer().request_core().hold_live(victim_)),
-                    "T6 promotion victim missing before fault");
+                    "spilled promotion target missing before read fault");
             require(consumer().request_core().book_lookup_reads().rows == reads + 1,
-                    "T6 promotion victim was resident instead of spilled");
+                    "promotion target was resident instead of spilled");
         }
         for (const int fd : book_files) {
-            require(::ftruncate(fd, 0) == 0, "T6 could not truncate a book file");
+            require(::ftruncate(fd, 0) == 0, "spill read fault could not truncate a book file");
             injected = true;
         }
         if (mode_ == Mode::Continuation) {
@@ -138,14 +138,14 @@ private:
             } catch (const std::exception&) {
                 carried = true;
             }
-            require(carried, "T6 noexcept fold did not carry the failed read");
+            require(carried, "noexcept continuation fold did not carry the failed spill read");
         }
     }
     void put(std::size_t i) {
         no::Request r{no::Transact{(i & 1) ? -1.0 : 1.0}, "rest", ""};
         r.trigger = no::Limit{(i & 1) ? 200.0 : 50.0};
         const auto result = submit(r);
-        require(result.handle.has_value(), "T6 placement refused");
+        require(result.handle.has_value(), "spill read fault request placement refused");
         if (i + 1 == resident) victim_ = *result.handle;
     }
     Mode mode_;
@@ -177,29 +177,29 @@ FailureTrace run(Mode mode, const char* name, bool enabled = true) {
     // The carried row injects inside on_native_tick, immediately before
     // matching. HostRecorded still rethrows carries at a script report point.
     s.report_policy = NativeReportPolicy::HostRecorded;
-    require(h.configure_native(s).status == NativeSetupStatus::Applied, "T6 configure refused");
+    require(h.configure_native(s).status == NativeSetupStatus::Applied, "spill read fault run configuration refused");
     std::array<Bar, 5> bars{};
     for (std::size_t i = 0; i < bars.size(); ++i)
         bars[i] = {100, 100, 100, 100, 1,
                    1736121600000LL + static_cast<std::int64_t>(i) * 300000};
     if (mode == Mode::Carried || mode == Mode::Promotion) {
-        require(h.stream_begin(bars.data(), 3, "5", "5"), "T6 carried warmup failed");
+        require(h.stream_begin(bars.data(), 3, "5", "5"), "spill command or carried-failure stream warmup failed");
         require(!h.stream_push_tick({1736122500000LL, 1, 100, 1}),
-                "T6 command/carried read failure did not fail the observed matching point");
+                "command or carried spill read failure did not fail the observed matching point");
     } else {
         h.run(bars.data(), static_cast<int>(bars.size()));
     }
-    require(h.injected && !h.answered, "T6 fault was absent or a cut hash was answered");
-    require(h.native_state().kind == NativeLifecycleKind::Failed, "T6 failed read completed");
+    require(h.injected && !h.answered, "spill read fault was absent or the damaged operation returned successfully");
+    require(h.native_state().kind == NativeLifecycleKind::Failed, "spill read failure did not fail the run");
     const auto failure = run_failure_value_of(h);
     require(failure.code == RunFailureCode::scratch_io_failed, h.last_error().c_str());
-    require(h.script_bars == 3, "T6 failure moved to a later script callback");
+    require(h.script_bars == 3, "spill read failure moved to a later script callback");
     if (mode == Mode::Carried || mode == Mode::Promotion) {
         require((mode == Mode::Promotion || h.carried)
                     && h.input_bars == 3 && h.tick_callbacks == 1,
-                "T6 command/carry did not surface at the first observed matching point");
+                "command or carried spill read failure missed the first observed matching point");
     } else {
-        require(h.input_bars == 3, "T6 public hash failure moved from the fault callback");
+        require(h.input_bars == 3, "public hash spill read failure moved from the fault callback");
     }
     std::printf("%s input=%zu script=%zu ticks=%zu failure=%s native=%u operation=%u text=%s\n",
                 name, h.input_bars, h.script_bars, h.tick_callbacks, run_failure_code_name(failure.code),
@@ -217,7 +217,7 @@ int main() {
         run(Mode::Carried, "carried");
         const auto eager = run(Mode::Promotion, "promotion-eager", false);
         const auto dormant = run(Mode::Promotion, "promotion-dormant", true);
-        require(eager == dormant, "T6 promotion read failure changed the base code or failure point");
+        require(eager == dormant, "spilled promotion read failure changed the eager failure code or callback");
         return 0;
     } catch (const std::exception& e) {
         std::fprintf(stderr, "test_native_dormant_book_read_failure: %s\n", e.what());

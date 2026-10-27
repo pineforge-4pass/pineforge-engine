@@ -1,7 +1,7 @@
-// C3 / T3. The lab keeps stdout on the frozen base, then byte-compares the
-// patched executable's stdout. All transcript code uses existing interfaces.
-// T4/T5/T7 include this TU with PINEFORGE_DORMANT_BOOK_NO_MAIN to share the
-// identical generator without adding a new fixture outside this lane's scope.
+// Record existing eager behaviour through public interfaces for comparison
+// with dormant matching, byte for byte, including callbacks and state hashes.
+// Other test executables define PINEFORGE_DORMANT_BOOK_NO_MAIN when including
+// this translation unit to share exactly the same transcript generator.
 #include "../src/native_execution_consumer.hpp"
 #include "native_match_book_fixture.hpp"
 #include "native_order_full_fold.hpp"
@@ -23,8 +23,8 @@
 #include <utility>
 #include <vector>
 
-// The C2-owned adapter also identifies a patched build. The frozen closure
-// has neither adapter; patched nonvacuity assertions are automatic.
+// The dormant-join capability macro marks builds with the required adapters.
+// Enable path-coverage assertions only when those interfaces are available.
 #if defined(PINEFORGE_TEST_DORMANT_JOIN_REACHABLE) && !defined(PINEFORGE_TEST_DORMANT_BOOK_PATCHED)
 #define PINEFORGE_TEST_DORMANT_BOOK_PATCHED 1
 #endif
@@ -141,9 +141,9 @@ void finish(Host& h, Trace& trace) {
     for (const auto hash : h.recorded_hashes()) trace.add(82, hash);
 #ifdef PINEFORGE_TEST_DORMANT_BOOK_PATCHED
     const auto& c = h.consumer();
-    // Side diagnostics never enter the compared stdout transcript. The
-    // class-guard counter is C2's bridge to C1's actual rejected guards.
-    std::fprintf(stderr, "T3/T5 witnesses joined=%llu scanned=%llu fast=%llu eager=%llu "
+    // Keep counters on stderr so they do not affect transcript comparisons.
+    // The class-guard count records actual trigger/driver policy rejections.
+    std::fprintf(stderr, "dormant matching counters joined=%llu scanned=%llu fast=%llu eager=%llu "
                  "projected=%llu woken=%llu grid=%llu class_guards=%llu exits=%llu\n",
                  static_cast<unsigned long long>(c.dormant_rows()),
                  static_cast<unsigned long long>(c.scanned_rows()),
@@ -243,7 +243,7 @@ public:
         } else if (bar_ == 3) {
             no::Request skip{no::Transact{1}, "skip", ""};
             skip.trigger = no::Limit{99.5};
-            put(skip); // A real t=0 MatchRejected/skip path; M-23.
+            put(skip); // A refused t=0 match must leave the sweep able to reach later winners.
             no::Request later{no::Transact{1}, "later", ""};
             later.trigger = no::Limit{97.5};
             put(later); // First nonzero-t winner completes the sweep.
@@ -253,7 +253,7 @@ public:
         } else if (bar_ == 5 && cross_boundary_) {
             for (std::size_t i = 0; i < 1024; ++i) put(remote(resident + 512 + i));
             require(consumer().request_core().book_spilled(),
-                    "T3 did not cross back above kBookMax");
+                    "resident boundary: resubmission did not spill the book");
         }
         if (bar_ >= 5 && ring_after) churn();
         observe_dormancy();
@@ -263,9 +263,9 @@ public:
                            const NativeDecisionContext&) override {
         const auto& label = e.definition->request.label;
         if (label == "ring-a") {
-            require(e.cursor.t == 0, "T5 first callback was not at t=0");
-            // Commands below and above W, then enough submissions to force
-            // a spill of a not-yet-swept dormant resident row (M-2/M-8).
+            require(e.cursor.t == 0, "spill watermark: first winner did not fill at t=0");
+            // Mutate rows on both sides of the sweep watermark, then force an
+            // unswept dormant resident row to spill so later reads must project it.
             note(cancel(original_[100]));
             auto changed = remote(4050);
             changed.trigger = no::Limit{99.25}; // A real wake/reprice into the remaining path.
@@ -279,31 +279,31 @@ public:
             victim_rank_ = rank_of(victim_);
             read_all_interfaces(victim_rank_);
             const auto held = consumer().request_core().hold_live(victim_);
-            require(static_cast<bool>(held), "T5 spilled victim disappeared");
+            require(static_cast<bool>(held), "spill watermark: first callback lost the spilled row");
             before_allowance_ = std::get<no::AllowanceUnits>(held->allowance);
             require(before_allowance_.point_ordinal != e.cursor.point.ordinal,
-                    "T5 row above W was refreshed before the first winner");
+                    "spill watermark: row beyond the sweep watermark refreshed before the first winner");
             trace.add(30, before_allowance_.point_ordinal);
             ring_before = true;
             // No fold/walk after this read until ring-b's first hold_live.
         } else if (label == "ring-b") {
-            require(ring_before && e.cursor.t == 0, "T5 second watermark callback missing");
+            require(ring_before && e.cursor.t == 0, "spill watermark: second winner callback missing or not at t=0");
             const auto& core = consumer().request_core();
             const auto lookup_before = core.book_lookup_reads().rows;
             const auto held = core.hold_live(victim_);
-            require(static_cast<bool>(held), "T5 second read lost victim");
+            require(static_cast<bool>(held), "spill watermark: second callback lost the target row");
             const auto now = std::get<no::AllowanceUnits>(held->allowance);
             // Hand oracle: victim's priority is strictly between the real
             // winners, so the eager Evaluate refresh occurred between them.
             // Neither command touched victim: its initial/left are unchanged.
             require(now.point_ordinal == e.cursor.point.ordinal,
-                    "T5 fresh decode did not project past the watermark");
+                    "spill watermark: fresh decode did not reflect the advanced sweep");
             require(now.initial == before_allowance_.initial && now.left == before_allowance_.left,
-                    "T5 projected refresh changed the row's units");
+                    "spill watermark: projected refresh changed initial or remaining units");
 #ifdef PINEFORGE_TEST_DORMANT_BOOK_PATCHED
             if (consumer().eager_points() == 0)
                 require(core.book_lookup_reads().rows > lookup_before,
-                        "T5 ring victim was not spilled at its second read");
+                        "spill watermark: second read did not decode a spilled row");
 #else
             (void)lookup_before;
 #endif
@@ -316,7 +316,7 @@ public:
             note(replace(original_[4060], remote(4060), opts));
             callback_commands += 2;
             snapshot(*this, trace, 22);
-            if (callback_failure_) throw std::runtime_error("C3 deliberate callback failure");
+            if (callback_failure_) throw std::runtime_error("deliberate failure after spill watermark callbacks");
         } else {
             snapshot(*this, trace, 24);
         }
@@ -332,13 +332,13 @@ public:
     void assert_fast_witness() {
 #ifdef PINEFORGE_TEST_DORMANT_BOOK_PATCHED
         const auto& c = consumer();
-        require(saw_dormant_, "T3/T5 vacuous: dormant_rows() never became positive");
-        require(c.fast_points() > 0, "T3/T5 vacuous: fast_points() == 0");
-        require(c.projected_reads() > 0, "T3/T5 vacuous: projected_reads() == 0");
-        require(c.wakes_by_price() > 0, "T3/T5 vacuous: wakes_by_price() == 0");
-        require(c.scanned_rows() > 0, "T3/T5 vacuous: scanned_rows() == 0");
-        require(c.eager_points() == 0, "T3/T5 fast seed took an eager point");
-        require(c.grid_points() == 0, "T3/T5 unquantized seed used a price grid");
+        require(saw_dormant_, "dormant path coverage: no row became dormant");
+        require(c.fast_points() > 0, "dormant path coverage: no fast matching point ran");
+        require(c.projected_reads() > 0, "dormant path coverage: no read projected a dormant row");
+        require(c.wakes_by_price() > 0, "dormant path coverage: no price crossing woke a row");
+        require(c.scanned_rows() > 0, "dormant path coverage: no active row was scanned");
+        require(c.eager_points() == 0, "dormant path coverage: unquantized run used eager matching");
+        require(c.grid_points() == 0, "dormant path coverage: unquantized run used a price grid");
 #endif
     }
 
@@ -349,7 +349,7 @@ private:
         f.e(answer.status); f.u(answer.event_ordinal);
         full_fold::fold_optional(f, answer.handle);
         trace.add(40, f.h);
-        require(answer.handle.has_value(), "T3 valid fixture submission refused");
+        require(answer.handle.has_value(), "spill watermark setup: valid request submission refused");
         return *answer.handle;
     }
     void note(const no::CancelResult& r) {
@@ -369,19 +369,19 @@ private:
             if (row.handle() == handle) return rank;
             ++rank;
         }
-        throw std::runtime_error("T5 victim absent from live()");
+        throw std::runtime_error("spill watermark lookup: target row absent from live view");
     }
     void read_all_interfaces(std::size_t rank) {
         const auto& core = consumer().request_core();
         full_fold::Fold f;
         const auto* found = core.find_live(victim_);
-        require(found != nullptr, "T5 find_live missed victim");
+        require(found != nullptr, "spill watermark lookup: find_live missed the target row");
         full_fold::fold(f, *found);
         const auto held = core.hold_live(victim_);
-        require(static_cast<bool>(held), "T5 hold_live missed victim");
+        require(static_cast<bool>(held), "spill watermark lookup: hold_live missed the target row");
         full_fold::fold(f, *held);
         const auto& ranked = core.live_at(rank);
-        require(ranked.handle() == victim_, "T5 live_at returned another row");
+        require(ranked.handle() == victim_, "spill watermark lookup: live_at returned another row");
         full_fold::fold(f, ranked);
         // LiveView::back is the public path through private live_back.
         full_fold::fold(f, core.live().back());
@@ -394,7 +394,7 @@ private:
         for (int choice = 0; choice < 4; ++choice) {
             const auto rank = static_cast<std::size_t>(rng_.next() % core.live_size());
             const auto held = core.hold_live(core.live_at(rank).handle());
-            require(static_cast<bool>(held), "T3 churn read failed");
+            require(static_cast<bool>(held), "replacement churn: held lookup lost the chosen row");
             auto r = held->request();
             if (auto* limit = std::get_if<no::Limit>(&r.trigger)) limit->price += 0.25;
             no::ReplaceOptions opts;
@@ -424,26 +424,26 @@ inline Trace run_fast(std::uint64_t seed, bool prepared, bool enabled = true,
                       bool fail_callback = false, bool grid = false) {
     Host h(seed, prepared, enabled, fail_callback);
     require(h.configure_native(specification(grid)).status == NativeSetupStatus::Applied,
-            "T3 configure refused");
+            "spill watermark run: native configuration refused");
     const auto bars = tape();
     h.run(bars.data(), static_cast<int>(bars.size()));
     require(h.native_state().kind == (fail_callback ? NativeLifecycleKind::Failed
                                                   : NativeLifecycleKind::Completed),
             h.last_error().c_str());
     require(h.crossed_up && h.ring_before && h.ring_after && h.callback_commands > 0,
-            "T3/T5 spill/watermark callback seed did not execute");
-    if (!fail_callback) require(h.crossed_down, "T3 did not cross below kBookMax");
+            "spill watermark run: spill, both callbacks or callback commands missing");
+    if (!fail_callback) require(h.crossed_down, "resident boundary: cancellation did not shrink below resident capacity");
     if (enabled && !grid) h.assert_fast_witness();
 #ifdef PINEFORGE_TEST_DORMANT_BOOK_PATCHED
     if (enabled && grid)
         require(h.consumer().grid_points() > 0 && h.consumer().eager_points() > 0,
-                "T3 grid fallback had no grid/eager point witness");
+                "quantized spill: expected both grid and eager matching points");
 #endif
     finish(h, h.trace);
     return std::move(h.trace);
 }
 
-// Existing xorshift generator supplies the mixed active paths: brackets,
+// Compare mixed active paths using the existing xorshift generator: brackets,
 // both OCO effects, trails, BookClose, rosters, gaps and callback submissions.
 class MixedHost final : public k3_book::BookHost {
 public:
@@ -510,38 +510,38 @@ inline Trace run_mixed(std::uint64_t seed, bool grid, bool prepared, bool enable
     MixedHost h(c, prepared, enabled);
     const auto result = k3_book::run_book(h, c);
     require(result.completed, result.error.c_str());
-    require(result.accepted > 0 && result.applied > 0, "T3 mixed seed did no work");
+    require(result.accepted > 0 && result.applied > 0, "mixed orders: expected accepted and applied requests");
 #ifdef PINEFORGE_TEST_DORMANT_BOOK_PATCHED
     require(grid ? h.consumer().grid_points() > 0 : h.consumer().grid_points() == 0,
-            "T3 mixed seed grid counter disagrees with its specification");
+            "mixed orders: grid counter disagrees with the requested price policy");
 #endif
     finish(h, h.trace);
     return std::move(h.trace);
 }
-
+// Quiet stream intervals retain limit-only carried-open matching and callback order.
 inline Trace run_carried(bool prepared, bool enabled = true) {
     Host h(0x31415926, prepared, enabled, false, false);
     require(h.configure_native(specification()).status == NativeSetupStatus::Applied,
-            "T3 carried configure refused");
+            "carried-open run: native configuration refused");
     const auto bars = tape();
-    require(h.stream_begin(bars.data(), 3, "5", "5"), "T3 carried begin failed");
-    require(h.stream_push_tick({start + 900000, 1, 100, 1}), "T3 initial stream tick failed");
-    require(h.stream_advance_time(start + 1500000), "T3 carried advance failed");
-    require(h.stream_push_tick({start + 1500001, 2, 98, 1}), "T3 gap stream tick failed");
-    require(h.stream_end(false), "T3 carried end failed");
+    require(h.stream_begin(bars.data(), 3, "5", "5"), "carried-open stream: begin failed");
+    require(h.stream_push_tick({start + 900000, 1, 100, 1}), "carried-open stream: initial tick refused");
+    require(h.stream_advance_time(start + 1500000), "carried-open stream: quiet interval advance failed");
+    require(h.stream_push_tick({start + 1500001, 2, 98, 1}), "carried-open stream: gap tick refused");
+    require(h.stream_end(false), "carried-open stream: end failed");
     std::size_t carried = 0;
     for (const auto& event : h.native_events(0))
         if (event.driver && event.driver->coordinate.provenance == NativePriceProvenance::CarriedOpen)
             ++carried;
-    require(carried > 0 && h.ring_before && h.ring_after, "T3 carried seed did not execute");
+    require(carried > 0 && h.ring_before && h.ring_after, "carried-open run: carried point or watermark callback missing");
     if (enabled) h.assert_fast_witness();
     finish(h, h.trace);
     return std::move(h.trace);
 }
 
-// A separate, deliberately eager seed: spilled BookClose rows under an open
-// position, and a spilled winner at t=0 between their priorities. It witnesses
-// the active_spilled per-scan guard (M-20) and the bulk close refresh (M-14).
+// Spilled BookClose rows under an open position force eager matching, while
+// a spilled t=0 winner lies between their priorities. Check the per-scan
+// active-spill guard and bulk close refresh without changing callback order.
 class ActiveHost final : public NativeStrategyHost {
 public:
     explicit ActiveHost(bool prepared, bool enabled) {
@@ -560,28 +560,28 @@ public:
     const std::vector<std::uint64_t>& recorded_hashes() const { return broker_state_hashes_; }
     void on_native_run_begin() override {
         require(submit(no::Request{no::Transact{2}, "open", ""}).handle.has_value(),
-                "T3 active seed opening refused");
+                "active spill setup: opening request refused");
     }
     void on_native_bar(const Bar&, const NativeDecisionContext&) override {
         snapshot(*this, trace, 50);
         if (++bar_ != 1) return;
-        require(physical_position().signed_units == 2, "T3 active seed did not open");
+        require(physical_position().signed_units == 2, "active spill setup: opening request did not establish the position");
         for (std::size_t i = 0; i < resident + 512; ++i) {
             if (i == resident + 128) {
                 no::Request signal{no::Transact{1}, "active-signal", ""};
                 signal.trigger = no::Limit{99};
-                require(submit(signal).handle.has_value(), "T3 active signal refused");
+                require(submit(signal).handle.has_value(), "active spill setup: gap signal refused");
             }
             no::Request close{no::Reduce{no::ExplicitUnits{1}}, "bound-close", ""};
             close.trigger = no::Limit{1000};
-            require(submit(close).handle.has_value(), "T3 active close refused");
+            require(submit(close).handle.has_value(), "active spill setup: bound close request refused");
         }
         spilled_closes = consumer().request_core().book_spilled();
     }
     void on_native_applied(const no::ExecutionAppliedEvent& e,
                            const NativeDecisionContext&) override {
         if (e.definition->request.label == "active-signal") {
-            require(e.cursor.t == 0, "T3 active signal did not fill at the gap");
+            require(e.cursor.t == 0, "active spill: signal did not fill at the opening gap");
             saw_signal = true;
         }
         snapshot(*this, trace, 52);
@@ -593,24 +593,24 @@ private:
 inline Trace run_active(bool prepared, bool enabled = true) {
     ActiveHost h(prepared, enabled);
     require(h.configure_native(specification()).status == NativeSetupStatus::Applied,
-            "T3 active configure refused");
+            "active spill run: native configuration refused");
     const auto bars = tape();
     h.run(bars.data(), 5);
     require(h.native_state().kind == NativeLifecycleKind::Completed, h.last_error().c_str());
-    require(h.spilled_closes && h.saw_signal, "T3 active-spill seed did not execute");
+    require(h.spilled_closes && h.saw_signal, "active spill run: spilled closes or gap signal missing");
 #ifdef PINEFORGE_TEST_DORMANT_BOOK_PATCHED
     if (enabled)
         require(h.consumer().eager_points() > 0 && h.consumer().scanned_rows() > 0,
-                "T3 active-spill seed did not exercise the eager guard");
+                "active spill run: expected eager points and scanned rows from the spill guard");
 #endif
     finish(h, h.trace);
     return std::move(h.trace);
 }
 
-// M-20 must change eligibility DURING a fast point: an initially oversized
-// eager book alone would not test the per-scan recheck. A continuous-path
-// fill callback consumes all dormant spill candidates, then spills active
-// grouped rows, including one eligible on that very point's remaining suffix.
+// Spill active rows during a fast matching point so eligibility must be
+// checked again on the next scan. A continuous-path fill callback consumes
+// all dormant spill candidates, then spills active grouped rows, including
+// one eligible on that same point's remaining suffix.
 class OverflowHost final : public NativeStrategyHost {
 public:
     OverflowHost(bool prepared, bool enabled) {
@@ -633,7 +633,7 @@ public:
         for (std::size_t i = 0; i < 512; ++i) {
             no::Request r{no::Transact{1}, i == 256 ? "overflow-parent" : "rest", ""};
             r.trigger = no::Limit{i == 256 ? 99.0 : 50.0};
-            require(submit(r).handle.has_value(), "T3 overflow parent population refused");
+            require(submit(r).handle.has_value(), "midpoint spill setup: parent population refused");
         }
     }
     void on_native_applied(const no::ExecutionAppliedEvent& e,
@@ -641,7 +641,7 @@ public:
         const auto& label = e.definition->request.label;
         if (label == "overflow-parent") {
             require(e.cursor.t > 0 && e.cursor.t < 1,
-                    "T3 overflow callback did not run inside a continuous segment");
+                    "midpoint spill: parent callback did not run inside a continuous segment");
             parent_point_ = e.cursor.point.ordinal;
             parent_t_ = e.cursor.t;
             for (std::size_t i = 0; i < resident + 512; ++i) {
@@ -651,15 +651,15 @@ public:
                 no::Member member;
                 member.group = 100000 + i;
                 r.group = member; // Never dormant, even though most cannot fill.
-                require(submit(r).handle.has_value(), "T3 overflow group submit refused");
+                require(submit(r).handle.has_value(), "midpoint spill callback: grouped request refused");
             }
             overflowed = consumer().request_core().book_spilled();
         } else if (label == "overflow-target") {
             // Hand oracle: 97.5 is on the remaining falling suffix after
             // the parent's 99 crossing, in the SAME point, later in t.
             require(e.cursor.point.ordinal == parent_point_ && e.cursor.t > parent_t_,
-                    "T3 active-spilled target missed the callback's remaining suffix");
-            require(e.resolved_price == 97.5, "T3 overflow target booked the wrong level");
+                    "midpoint spill: active target missed the parent point's remaining suffix");
+            require(e.resolved_price == 97.5, "midpoint spill: active target booked the wrong price");
             target_filled = true;
         }
         snapshot(*this, trace, 56);
@@ -673,7 +673,7 @@ private:
 inline Trace run_overflow(bool prepared, bool enabled = true) {
     OverflowHost h(prepared, enabled);
     require(h.configure_native(specification()).status == NativeSetupStatus::Applied,
-            "T3 overflow configure refused");
+            "midpoint spill run: native configuration refused");
     const std::array<Bar, 3> bars{{
         {100, 101, 100, 100, 1, start},
         {100, 101, 100, 100, 1, start + 300000},
@@ -681,23 +681,23 @@ inline Trace run_overflow(bool prepared, bool enabled = true) {
     }};
     h.run(bars.data(), static_cast<int>(bars.size()));
     require(h.native_state().kind == NativeLifecycleKind::Completed, h.last_error().c_str());
-    require(h.overflowed && h.target_filled, "T3 mid-point active-spill seed did not execute");
+    require(h.overflowed && h.target_filled, "midpoint spill run: active overflow or target fill missing");
 #ifdef PINEFORGE_TEST_DORMANT_BOOK_PATCHED
     if (enabled)
         require(h.consumer().fast_points() > 0 && h.consumer().eager_points() > 0
                     && h.consumer().fast_path_exits() > 0,
-                "T3 overflow seed never left an established fast path");
+                "midpoint spill run: expected a fast point followed by eager matching and a fast-path exit");
 #endif
     finish(h, h.trace);
     return std::move(h.trace);
 }
 
-// P2-6 keepalive control. Exactly ONE row spills. Unlike the large churn
-// seed, neither callback issues a command or walks a large spilled tier after
-// priming. Between the callbacks base does one full scan of that one row and
-// one hold_scanned before promoting it into the vacancy left by ring-first.
-// Thus fewer than kSide=8 later keeps occur. The patched fast scan decodes
-// none. A weak owner detects an illegally cleared ring BEFORE raw dereference.
+// Keep exactly one row spilled so held copies survive a sweep watermark
+// advance without callback commands or a large spilled-tier walk. Between
+// callbacks the eager path scans and holds that row, then promotes it into
+// the first winner's vacancy; the fast path decodes none. Fewer than the
+// keepalive ring's kSide=8 slots are reused, so a weak owner detects an
+// unexpected ring clear before any raw pointer is dereferenced.
 class RingWindowHost final : public NativeStrategyHost {
 public:
     RingWindowHost(bool prepared, bool enabled) {
@@ -721,42 +721,42 @@ public:
                 no::Request r{no::Transact{1}, i + 2 == resident ? "ring-first" : "ring-rest", ""};
                 r.trigger = no::Limit{i + 2 == resident ? 99.0 : 50.0};
                 const auto result = submit(r);
-                require(result.handle.has_value(), "T5 ring population refused");
+                require(result.handle.has_value(), "decoded keepalive setup: resident request refused");
                 if (i + 1 == resident) victim_ = *result.handle;
             }
         } else if (bar_ == 2) {
             no::Request r{no::Transact{1}, "ring-second", ""};
             r.trigger = no::Limit{99};
-            require(submit(r).handle.has_value(), "T5 ring second winner refused");
-            require(consumer().request_core().book_spilled(), "T5 ring victim never spilled");
+            require(submit(r).handle.has_value(), "decoded keepalive setup: second winner refused");
+            require(consumer().request_core().book_spilled(), "decoded keepalive setup: target row never spilled");
         }
     }
     void on_native_applied(const no::ExecutionAppliedEvent& e,
                            const NativeDecisionContext&) override {
         const auto& core = consumer().request_core();
         if (e.request().label == "ring-first") {
-            require(e.cursor.t == 0, "T5 ring first winner was not at t=0");
+            require(e.cursor.t == 0, "decoded keepalive: first winner did not fill at t=0");
             snapshot(*this, trace, 92); // All whole-book reads precede priming.
             std::size_t rank = 0;
             for (const auto& row : core.live()) {
                 if (row.handle() == victim_) break;
                 ++rank;
             }
-            require(rank < core.live_size(), "T5 ring victim absent");
+            require(rank < core.live_size(), "decoded keepalive: target row absent from live view");
             const auto reads = core.book_lookup_reads().rows;
             raw_find_ = core.find_live(victim_);
-            require(raw_find_ != nullptr, "T5 ring find_live missed");
+            require(raw_find_ != nullptr, "decoded keepalive: find_live missed the spilled row");
             raw_rank_ = &core.live_at(rank);
-            require(raw_rank_->handle() == victim_, "T5 ring live_at missed");
+            require(raw_rank_->handle() == victim_, "decoded keepalive: live_at returned another row");
             held_ = core.hold_live(victim_);
-            require(static_cast<bool>(held_), "T5 ring hold_live missed");
+            require(static_cast<bool>(held_), "decoded keepalive: hold_live missed the spilled row");
             // Each API MUST decode the spilled row, not accidentally read
             // an already resident row. The hand count is one read per API.
             require(core.book_lookup_reads().rows - reads == 3,
-                    "T5 ring APIs did not read a spilled victim");
+                    "decoded keepalive: expected one spilled decode per lookup interface");
             saved_ = std::get<no::AllowanceUnits>(held_->allowance);
             require(saved_.point_ordinal != e.cursor.point.ordinal,
-                    "T5 ring victim above W was already refreshed");
+                    "decoded keepalive: row beyond the watermark refreshed too early");
             {
                 const auto ring_only = core.hold_live(victim_);
                 lifetime_ = ring_only;
@@ -764,21 +764,21 @@ public:
             trace.add(94, saved_.point_ordinal);
             before = true;
         } else if (e.request().label == "ring-second") {
-            require(before && e.cursor.t == 0, "T5 ring second winner was not at t=0");
-            require(!lifetime_.expired(), "T5 watermark update cleared the decoded keepalive ring");
+            require(before && e.cursor.t == 0, "decoded keepalive: second winner missing or not at t=0");
+            require(!lifetime_.expired(), "decoded keepalive: watermark advance released the retained decode");
             for (const auto* copy : {held_.get(), raw_find_, raw_rank_}) {
                 const auto units = std::get<no::AllowanceUnits>(copy->allowance);
                 require(units.point_ordinal == saved_.point_ordinal
                             && units.initial == saved_.initial && units.left == saved_.left,
-                        "T5 watermark update re-projected an already held copy");
+                        "decoded keepalive: watermark advance changed an existing copy");
                 trace.add(95, units.point_ordinal);
             }
             const auto fresh = core.hold_live(victim_);
-            require(static_cast<bool>(fresh), "T5 ring fresh read missed");
+            require(static_cast<bool>(fresh), "decoded keepalive: fresh lookup lost the target row");
             const auto units = std::get<no::AllowanceUnits>(fresh->allowance);
             require(units.point_ordinal == e.cursor.point.ordinal
                         && units.initial == saved_.initial && units.left == saved_.left,
-                    "T5 ring fresh read did not match the eager refresh");
+                    "decoded keepalive: fresh lookup disagrees with eager allowance refresh");
             trace.add(96, units.point_ordinal);
             after = true;
             snapshot(*this, trace, 98);
@@ -797,26 +797,26 @@ private:
 inline Trace run_ring_window(bool prepared, bool enabled = true) {
     RingWindowHost h(prepared, enabled);
     require(h.configure_native(specification()).status == NativeSetupStatus::Applied,
-            "T5 ring configure refused");
+            "decoded keepalive run: native configuration refused");
     const auto bars = tape();
     h.run(bars.data(), 4);
     require(h.native_state().kind == NativeLifecycleKind::Completed, h.last_error().c_str());
-    require(h.before && h.after, "T5 ring window never advanced past the victim");
+    require(h.before && h.after, "decoded keepalive run: sweep never passed the held row between callbacks");
 #ifdef PINEFORGE_TEST_DORMANT_BOOK_PATCHED
     if (enabled)
         require(h.consumer().dormant_rows() > 0 && h.consumer().fast_points() > 0
                     && h.consumer().projected_reads() > 0 && h.consumer().wakes_by_price() > 0
                     && h.consumer().scanned_rows() > 0 && h.consumer().eager_points() == 0,
-                "T5 ring window was vacuously eager");
+                "decoded keepalive run: missing join, fast point, projection, wake or scan, or eager fallback used");
 #endif
     finish(h, h.trace);
     return std::move(h.trace);
 }
 
-// A t=0 fill drains its notification before complete. In the eager run a
-// later-priority row has not had its Evaluate turn yet, so its allowance
-// still belongs to the preceding eligible point. Compare that callback read
-// with dormant matching before a replace-by-id wakes the resident victim.
+// A t=0 fill notifies the host before the matching sweep is complete. The
+// eager run has not evaluated later-priority rows, so their allowances
+// still belong to the preceding eligible point. Compare the resident read
+// with dormant matching before a replace-by-id wakes the target row.
 struct ResidentWindowTrace {
     Trace trace;
     Trace callback_allowance;
@@ -902,7 +902,7 @@ public:
         if (enabled_) {
             watermark = consumer().dormant_watermark_for_test();
             require(live_at_rank.priority() > watermark,
-                    "resident-window victim was not beyond W");
+                    "resident-window victim was not beyond the sweep watermark");
         }
 #endif
         const auto* units = std::get_if<no::AllowanceUnits>(&live_at_rank.allowance);
@@ -935,9 +935,9 @@ public:
     }
 
 private:
-    // New rows are active in the bar callback: ON spills the last old
-    // dormant row each time. The surviving old prefix ends at resident -
-    // spill_rows (exclusive); keep winner < victim < that cut.
+    // New rows are active in the bar callback, so dormant matching spills an
+    // old dormant row per submission. The surviving prefix ends at resident -
+    // spill_rows (exclusive); keep winner < victim < that cut for resident reads.
     static constexpr std::size_t spill_rows = 512;
     static constexpr std::size_t winner_index = resident - spill_rows - 2;
     static constexpr std::size_t victim_index = resident - spill_rows - 1;
@@ -966,12 +966,12 @@ inline ResidentWindowTrace run_resident_window(bool prepared, bool enabled = tru
     return {std::move(h.trace), std::move(h.callback_allowance)};
 }
 
-// REV-CX K1/M24: the back two rows are real later candidates, hence awake
-// before the first t=0 callback. Its two submissions use the fill's vacancy,
-// then force make_book_room while the highest dormant row is in the MIDDLE.
-// The core may conservatively spill the back active row (documented fallback)
-// or spill the middle only at a safe boundary. All three original fills must
-// still identify the correct row, in order, at the same point and price.
+// The last two rows can fill later, so they are awake before the first
+// t=0 callback. Two new submissions use the vacancy and then force
+// make_book_room with the highest-priority dormant row in the middle.
+// Any safe spill choice must preserve retained candidates: the core may
+// spill an active tail row or the dormant middle row at a safe boundary.
+// All original fills must keep their identities, order, point and price.
 class MiddleSpillHost final : public NativeStrategyHost {
 public:
     MiddleSpillHost(bool prepared, bool enabled, bool force_eager)
@@ -1006,7 +1006,7 @@ public:
                 no::Member member;
                 member.group = 900000 + i;
                 r.group = member;
-                require(submit(r).handle.has_value(), "T3 middle active-tail placement refused");
+                require(submit(r).handle.has_value(), "middle spill setup: grouped tail request refused");
             }
 #ifdef PINEFORGE_TEST_DORMANT_BOOK_PATCHED
             consumer().set_match_dormant(false);
@@ -1020,7 +1020,7 @@ public:
                           winner ? "middle-winner" : "middle-rest", ""};
             r.trigger = no::Limit{winner ? 99.0 : 50.0};
             const auto result = submit(r);
-            require(result.handle.has_value(), "T3 middle-spill population refused");
+            require(result.handle.has_value(), "middle spill setup: initial request refused");
             if (winner) winners_[next_++] = *result.handle;
             if (i == resident - 3) middle_ = *result.handle;
         }
@@ -1028,41 +1028,41 @@ public:
     void on_native_applied(const no::ExecutionAppliedEvent& e,
                            const NativeDecisionContext&) override {
         require(e.request().label == "middle-winner" && filled < winners_.size(),
-                "T3 middle-spill unexpected fill");
+                "middle spill: unexpected or extra fill");
         require(e.handle() == winners_[filled] && e.cursor.t == 0 && e.resolved_price == 98,
-                "T3 middle-spill changed a later candidate's identity, cursor or price");
+                "middle spill: retained candidate changed identity, cursor or price");
         // Hand arithmetic from population: indices 4090,4094,4095 carry
         // quantities 1,5,6 respectively; derive it from each accepted request.
         require(e.opened_units == std::get<no::Transact>(e.request().intent).signed_units,
-                "T3 middle-spill read another resident row's quantity");
+                "middle spill: fill quantity belongs to another resident row");
         if (filled++ == 0) {
             point_ = e.cursor.point.ordinal;
             const auto& core = consumer().request_core();
             require(e.terminal && core.find_live(e.handle()) == nullptr,
-                    "T3 notification ran before its winner was consumed");
+                    "middle spill callback: winner had not been consumed before notification");
             const auto before = core.book_lookup_reads().rows;
             require(static_cast<bool>(core.hold_live(middle_)),
-                    "T3 notification middle row was absent before submissions");
+                    "middle spill callback: dormant middle row missing before submissions");
             require(core.book_lookup_reads().rows == before,
-                    "T3 notification middle row was already spilled");
+                    "middle spill callback: middle row was spilled before submissions");
             for (std::size_t i = 0; i < 2; ++i) {
                 no::Request r{no::Transact{1}, "middle-new", ""};
                 r.trigger = no::Limit{50};
-                require(submit(r).handle.has_value(), "T3 middle callback submit refused");
+                require(submit(r).handle.has_value(), "middle spill callback: new remote request refused");
             }
             spilled = core.book_spilled();
 #ifdef PINEFORGE_TEST_DORMANT_BOOK_PATCHED
             if (enabled_) {
                 const auto reads = core.book_lookup_reads().rows;
                 require(static_cast<bool>(core.hold_live(middle_)),
-                        "T3 notification lost the middle dormant row");
+                        "middle spill callback: submissions lost the dormant middle row");
                 require(core.book_lookup_reads().rows == reads + 1,
-                        "T3 notification did not spill the middle dormant row");
+                        "middle spill callback: submissions did not spill the dormant middle row");
                 middle_spilled = true;
             }
 #endif
         }
-        require(e.cursor.point.ordinal == point_, "T3 middle-spill deferred a later candidate");
+        require(e.cursor.point.ordinal == point_, "middle spill: later candidate moved to another matching point");
         snapshot(*this, trace, 102);
     }
 private:
@@ -1078,29 +1078,29 @@ private:
 inline Trace run_middle_spill(bool prepared, bool enabled = true, bool force_eager = false) {
     MiddleSpillHost h(prepared, enabled, force_eager);
     require(h.configure_native(specification()).status == NativeSetupStatus::Applied,
-            "T3 middle-spill configure refused");
+            "middle spill run: native configuration refused");
     const auto bars = tape();
     h.run(bars.data(), force_eager ? 5 : 4);
     require(h.native_state().kind == NativeLifecycleKind::Completed, h.last_error().c_str());
-    require(h.spilled && h.filled == 3, "T3 middle-spill callback/candidates did not execute");
+    require(h.spilled && h.filled == 3, "middle spill run: spill or one of the three expected fills missing");
 #ifdef PINEFORGE_TEST_DORMANT_BOOK_PATCHED
     if (enabled) {
-        require(h.middle_spilled, "T3 notification middle-spill witness was vacuous");
+        require(h.middle_spilled, "middle spill run: callback did not confirm a spilled middle row");
         require(h.consumer().dormant_rows() > 0 && h.consumer().fast_points() > 0
                     && h.consumer().scanned_rows() > 0,
-                "T3 middle-spill never established the fast path");
+                "middle spill run: missing dormant join, fast point or scanned row");
         if (force_eager)
             require(h.forced_eager && h.consumer().eager_points() > 0,
-                    "T3 middle-spill followup did not exercise retained-candidate promotion");
+                    "middle spill followup: eager matching did not exercise retained-candidate promotion");
     }
 #endif
     finish(h, h.trace);
     return std::move(h.trace);
 }
 
-// M9/M23: the first nonzero-t winner has the LOWEST priority. Completing
-// only to that priority leaves every higher-priority dormant allowance old.
-// Observe inside its callback, before a later point can repair the defect.
+// The first interior fill has the lowest priority, so stopping the sweep
+// there would leave later-priority dormant allowances stale. Inspect them
+// in its callback before another point can hide an incomplete refresh.
 class CompleteHost final : public NativeStrategyHost {
 public:
     CompleteHost(bool prepared, bool enabled) {
@@ -1122,13 +1122,13 @@ public:
         for (std::size_t i = 0; i < 64; ++i) {
             no::Request r{no::Transact{1}, i == 0 ? "complete-first" : "complete-rest", ""};
             r.trigger = no::Limit{i == 0 ? 99.0 : 50.0};
-            require(submit(r).handle.has_value(), "T3 complete population refused");
+            require(submit(r).handle.has_value(), "interior fill setup: request population refused");
         }
     }
     void on_native_applied(const no::ExecutionAppliedEvent& e,
                            const NativeDecisionContext&) override {
         require(e.request().label == "complete-first" && e.cursor.t > 0 && e.cursor.t < 1,
-                "T3 complete seed missed its interior winner");
+                "interior fill: expected the first request to fill inside a continuous segment");
         std::size_t inspected = 0;
         for (const auto& row : consumer().request_core().live()) {
             const auto units = std::get<no::AllowanceUnits>(row.allowance);
@@ -1136,10 +1136,10 @@ public:
             // t=0, before the first interior fill; their units stay one.
             require(units.point_ordinal == e.cursor.point.ordinal
                         && units.initial == 1 && units.left == 1,
-                    "T3 complete left the higher-priority dormant suffix unswept");
+                    "interior fill: later-priority dormant row lacks the current allowance");
             ++inspected;
         }
-        require(inspected == 63, "T3 complete seed lost a remote row");
+        require(inspected == 63, "interior fill: remote row count changed");
         checked = true;
         snapshot(*this, trace, 172);
     }
@@ -1150,7 +1150,7 @@ private:
 inline Trace run_complete(bool prepared, bool enabled = true) {
     CompleteHost h(prepared, enabled);
     require(h.configure_native(specification()).status == NativeSetupStatus::Applied,
-            "T3 complete configure refused");
+            "interior fill run: native configuration refused");
     const std::array<Bar, 3> bars{{
         {100, 101, 100, 100, 1, start},
         {100, 101, 100, 100, 1, start + 300000},
@@ -1158,18 +1158,18 @@ inline Trace run_complete(bool prepared, bool enabled = true) {
     }};
     h.run(bars.data(), static_cast<int>(bars.size()));
     require(h.native_state().kind == NativeLifecycleKind::Completed, h.last_error().c_str());
-    require(h.checked, "T3 complete callback never ran");
+    require(h.checked, "interior fill run: allowance-inspection callback never ran");
 #ifdef PINEFORGE_TEST_DORMANT_BOOK_PATCHED
     if (enabled)
         require(h.consumer().dormant_rows() > 0 && h.consumer().fast_points() > 0
                     && h.consumer().wakes_by_price() > 0 && h.consumer().eager_points() == 0,
-                "T3 complete seed was vacuously eager");
+                "interior fill run: expected dormant joins, fast points and price wakes without eager matching");
 #endif
     finish(h, h.trace);
     return std::move(h.trace);
 }
 
-// M19 has a deterministic active-trail witness in addition to mixed seeds.
+// A deterministic trailing-stop path checks observations while other rows sleep.
 // Hand oracle: sell trail arms at 100, initial stop is 100-2=98. The third
 // bar reaches 106 without touching 98, raises best to 106, then crosses
 // 106-2=104. Skipping active trail observation leaves stop 98 and misses it.
@@ -1193,35 +1193,35 @@ public:
         snapshot(*this, trace, 180);
         if (++bar_ == 1) {
             for (std::size_t i = 0; i < 8; ++i)
-                require(submit(remote(i)).handle.has_value(), "T3 trail remote placement refused");
+                require(submit(remote(i)).handle.has_value(), "trailing stop setup: remote request refused");
             no::Request r{no::Transact{-1}, "active-trail", ""};
             no::Trail trail;
             trail.offset = 2;
             trail.arm_price = 100;
             r.trigger = trail;
             const auto result = submit(r);
-            require(result.handle.has_value(), "T3 active trail placement refused");
+            require(result.handle.has_value(), "trailing stop setup: trail request refused");
             trail_ = *result.handle;
         } else if (bar_ == 2) {
             const auto row = consumer().request_core().hold_live(trail_);
-            require(static_cast<bool>(row), "T3 trail disappeared before its excursion");
+            require(static_cast<bool>(row), "trailing stop: request disappeared before the excursion");
             const auto* state = std::get_if<no::TrailTrack>(&row->trigger_state);
-            require(state && state->best == 100, "T3 trail never entered real tracking state");
+            require(state && state->best == 100, "trailing stop: initial tracking state did not retain the arm price");
             tracked = true;
         }
     }
     void on_native_applied(const no::ExecutionAppliedEvent& e,
                            const NativeDecisionContext&) override {
         require(tracked && !filled && e.handle() == trail_,
-                "T3 trail seed executed another or repeated request");
+                "trailing stop: fill preceded tracking, used another request or repeated");
         require(e.resolved_price == 104,
-                "T3 active trail did not execute its hand-derived 106-2 stop");
-        // BASE inspect_candidate keeps Transact's sign; both execution paths
+                "trailing stop: fill missed the hand-derived 106-2 stop price");
+        // inspect_candidate keeps Transact's sign; both execution paths
         // copy inspected_opened_units into the event. Flat -> sell one opens
         // -1 signed unit, while the stop remains 106-2=104.
         require(e.opened_units == std::get<no::Transact>(e.request().intent).signed_units
                     && e.closed_units == 0 && e.terminal,
-                "T3 active trail did not open its signed sell units terminally");
+                "trailing stop: sell fill changed signed units, closed units or terminal status");
         filled = true;
         snapshot(*this, trace, 182);
     }
@@ -1233,7 +1233,7 @@ private:
 inline Trace run_trail(bool prepared, bool enabled = true) {
     TrailHost h(prepared, enabled);
     require(h.configure_native(specification()).status == NativeSetupStatus::Applied,
-            "T3 trail configure refused");
+            "trailing stop run: native configuration refused");
     const std::array<Bar, 3> bars{{
         {100, 100, 100, 100, 1, start},
         {100, 100, 100, 100, 1, start + 300000},
@@ -1242,12 +1242,12 @@ inline Trace run_trail(bool prepared, bool enabled = true) {
     h.run(bars.data(), static_cast<int>(bars.size()));
     require(h.native_state().kind == NativeLifecycleKind::Completed, h.last_error().c_str());
     require(h.tracked && h.filled && h.physical_position().signed_units == -1,
-            "T3 active trail seed missed its tracked excursion/fill");
+            "trailing stop run: tracking, fill or final short position missing");
 #ifdef PINEFORGE_TEST_DORMANT_BOOK_PATCHED
     if (enabled)
         require(h.consumer().dormant_rows() > 0 && h.consumer().fast_points() > 0
                     && h.consumer().scanned_rows() > 0 && h.consumer().eager_points() == 0,
-                "T3 active trail seed was vacuously eager");
+                "trailing stop run: expected dormant joins and fast scans without eager matching");
 #endif
     finish(h, h.trace);
     return std::move(h.trace);
@@ -1255,11 +1255,11 @@ inline Trace run_trail(bool prepared, bool enabled = true) {
 
 using DriverCounts = std::array<std::array<std::uint64_t, 2>, 7>;
 
-// Independent policy oracle transcribed from BASE trigger_permits_driver,
-// engine 3ea5a0d60:4253-4281. It is a contract table, not the new class guard:
-// Limit-only on carried opens, all priced triggers on observed/tick/open/
-// excursion points, no priced trigger after a confirmed calculation or at a
-// target-only current execution. StopLimitLive remains an OTHER trigger.
+// Independent oracle for trigger_permits_driver, separate from the derived
+// dormant guard: limits only on carried opens; all priced triggers on
+// observed prints, ticks, confirmed opens and excursion points; none after
+// a confirmed calculation or at target-only current execution. StopLimitLive
+// remains an other-trigger case, even though its stop has already activated.
 inline bool base_priced_permission(no::DriverEligibilityClass driver, bool limit) {
     switch (driver) {
     case no::DriverEligibilityClass::ObservedPrint:
@@ -1273,7 +1273,7 @@ inline bool base_priced_permission(no::DriverEligibilityClass driver, bool limit
     case no::DriverEligibilityClass::CurrentExecution:
         return false;
     }
-    throw std::runtime_error("T3 unknown driver class");
+    throw std::runtime_error("driver policy oracle: unknown eligibility class");
 }
 
 inline no::DriverEligibilityClass recorded_driver_class(const NativeDriverPoint& point,
@@ -1295,7 +1295,7 @@ inline no::DriverEligibilityClass recorded_driver_class(const NativeDriverPoint&
     case NativePriceProvenance::PartialFinalized:
         return C::ConfirmedAfterCalculationClose;
     }
-    throw std::runtime_error("T3 unknown recorded price provenance");
+    throw std::runtime_error("driver classification: unknown recorded price provenance");
 }
 
 class DriverMatrixHost final : public NativeStrategyHost {
@@ -1323,7 +1323,7 @@ public:
             // this real activation yields StopLimitLive, never an execution.
             else r.trigger = no::StopLimit{90, 50};
             const auto result = submit(r);
-            require(result.handle.has_value(), "T3 driver matrix population refused");
+            require(result.handle.has_value(), "driver permissions setup: priced request refused");
             rows_[i] = *result.handle;
         }
     }
@@ -1333,25 +1333,25 @@ public:
         std::array<no::AllowanceUnits, 4> before{};
         for (std::size_t i = 0; i < rows_.size(); ++i) {
             const auto row = consumer().request_core().hold_live(rows_[i]);
-            require(static_cast<bool>(row), "T3 driver matrix priced row disappeared");
+            require(static_cast<bool>(row), "driver permissions: priced row missing before current execution");
             before[i] = std::get<no::AllowanceUnits>(row->allowance);
         }
         const auto result = submit(no::Request{no::Transact{0.125}, "matrix-current", ""});
-        require(result.handle.has_value(), "T3 current-execution target refused");
+        require(result.handle.has_value(), "driver permissions setup: current-execution target refused");
         const auto executed = execute_current(NativeCurrentExecution{*result.handle});
         const auto* applied = std::get_if<no::ExecutionAppliedEvent>(&executed);
         require(applied && applied->cursor.point.provenance == NativePriceProvenance::CurrentExecution,
-                "T3 driver matrix did not execute a real CurrentExecution point");
+                "driver permissions: target did not produce a CurrentExecution event");
         current = true;
         // Hand oracle: CurrentExecution consumes ONLY its named market target.
         // Unrelated priced rows retain all three allowance words.
         for (std::size_t i = 0; i < rows_.size(); ++i) {
             const auto row = consumer().request_core().hold_live(rows_[i]);
-            require(static_cast<bool>(row), "T3 current execution consumed an unrelated priced row");
+            require(static_cast<bool>(row), "driver permissions: current execution consumed an unrelated priced row");
             const auto now = std::get<no::AllowanceUnits>(row->allowance);
             require(now.point_ordinal == before[i].point_ordinal
                         && now.initial == before[i].initial && now.left == before[i].left,
-                    "T3 CurrentExecution refreshed an unrelated priced row");
+                    "driver permissions: current execution changed an unrelated allowance");
         }
         snapshot(*this, trace, 112);
     }
@@ -1370,10 +1370,10 @@ public:
         std::array<std::shared_ptr<const no::LiveRequest>, 4> rows;
         for (std::size_t i = 0; i < rows.size(); ++i) {
             rows[i] = core.hold_live(rows_[i]);
-            require(static_cast<bool>(rows[i]), "T3 driver matrix lost a priced witness");
+            require(static_cast<bool>(rows[i]), "driver permissions: priced witness missing during event inspection");
         }
         require(std::holds_alternative<no::StopLimitLive>(rows[3]->trigger_state),
-                "T3 driver matrix never activated its live stop-limit witness");
+                "driver permissions: stop-limit witness never entered its live state");
         for (const auto& event : native_events(0)) {
             if (!event.driver) continue;
             const auto& point = *event.driver;
@@ -1393,14 +1393,14 @@ public:
                 const auto facts = core.eligibility_facts(*row, context);
                 const bool expected = base_priced_permission(driver, limit);
                 require(facts.driver_ok == expected,
-                        "T3 real driver disagrees with the base Limit/Other permission matrix");
+                        "driver permissions: eager eligibility disagrees with the independent trigger table");
 #ifdef PINEFORGE_TEST_DORMANT_BOOK_PATCHED
                 // The base policy above is independent of the derived class
                 // guard. Check that guard on every recorded cell as well:
                 // suppressing a permitted class can otherwise hide behind
                 // successful joins in the other class.
                 require(consumer().dormant_driver_permitted(context, limit) == expected,
-                        "T3 dormant driver disagrees with the base Limit/Other permission matrix");
+                        "driver permissions: dormant eligibility disagrees with the independent trigger table");
 #endif
                 ++visits[cls][kind];
                 if (!facts.driver_ok) ++refused[cls][kind];
@@ -1411,7 +1411,7 @@ public:
         if (enabled_)
             require(consumer().dormant_rows() > 0 && consumer().fast_points() > 0
                         && consumer().scanned_rows() > 0 && consumer().eager_points() == 0,
-                    "T3 driver matrix never exercised fast dormant matching");
+                    "driver permissions: expected dormant joins and fast scans without eager matching");
 #endif
     }
 private:
@@ -1428,33 +1428,33 @@ inline Trace run_driver_matrix(bool prepared, bool enabled = true) {
         auto spec = specification();
         spec.close_execution = NativeCloseExecution::AfterCalculation;
         require(h.configure_native(spec).status == NativeSetupStatus::Applied,
-                "T3 driver matrix configure refused");
+                "driver permissions run: native configuration refused");
         const auto bars = tape();
         std::uint64_t confirmed_through = 0;
         if (forward) {
-            require(h.stream_begin(bars.data(), 3, "5", "5"), "T3 driver matrix begin failed");
+            require(h.stream_begin(bars.data(), 3, "5", "5"), "driver permissions stream: begin failed");
             for (const auto& event : h.native_events(0))
                 confirmed_through = std::max(confirmed_through, event.ordinal);
-            require(h.stream_push_tick({start + 900000, 1, 100, 1}), "T3 matrix first tick failed");
-            require(h.stream_advance_time(start + 1500000), "T3 matrix quiet carry failed");
-            require(h.stream_push_tick({start + 1500001, 2, 100, 1}), "T3 matrix later tick failed");
-            require(h.stream_end(true), "T3 driver matrix end failed");
+            require(h.stream_push_tick({start + 900000, 1, 100, 1}), "driver permissions stream: first observed tick refused");
+            require(h.stream_advance_time(start + 1500000), "driver permissions stream: quiet interval advance failed");
+            require(h.stream_push_tick({start + 1500001, 2, 100, 1}), "driver permissions stream: later observed tick refused");
+            require(h.stream_end(true), "driver permissions stream: end failed");
         } else {
             h.run(bars.data(), 4);
         }
         require(h.native_state().kind == NativeLifecycleKind::Completed, h.last_error().c_str());
-        require(h.current, "T3 matrix CurrentExecution was absent");
+        require(h.current, "driver permissions run: current-execution witness missing");
         h.inspect_drivers(forward, confirmed_through, visits, refused);
         finish(h, h.trace);
         result.words.insert(result.words.end(), h.trace.words.begin(), h.trace.words.end());
     }
     for (std::size_t c = 0; c < visits.size(); ++c) {
         for (std::size_t kind = 0; kind < 2; ++kind) {
-            require(visits[c][kind] > 0, "T3 did not visit every driver-class/trigger cell");
+            require(visits[c][kind] > 0, "driver permissions coverage: a driver-class/trigger pair was never visited");
             const bool allowed = base_priced_permission(
                 static_cast<no::DriverEligibilityClass>(c), kind == 0);
             require(allowed ? refused[c][kind] == 0 : refused[c][kind] == visits[c][kind],
-                    "T3 driver permission guard witness was vacuous");
+                    "driver permissions coverage: observed refusals disagree with the trigger table");
             result.add(140 + 2 * c + kind, visits[c][kind]);
             result.add(160 + 2 * c + kind, refused[c][kind]);
         }
@@ -1484,12 +1484,12 @@ int main(int argc, char** argv) {
                 const auto off = run_middle_spill(prepared, false, true);
                 const auto on = run_middle_spill(prepared, true, true);
                 require(off.words == on.words,
-                        "T3 notification middle-spill eager/dormant transcript bytes differ");
+                        "middle spill comparison: eager and dormant transcript bytes differ");
                 on.print(prepared ? "notification-middle-prepared" : "notification-middle-direct");
             }
             return 0;
         }
-        require(argc == 1, "T3 unknown transcript row selector");
+        require(argc == 1, "transcript selection: unknown argument or extra arguments");
         run_fast(0x12345678, false).print("fast-a");
         run_fast(0x9abcdef0, false).print("fast-b");
         run_fast(0x12345678, false, true, false, true).print("spilled-grid");

@@ -8535,8 +8535,8 @@ detail::ScratchStatus NativeStrategyHost::visit_native_open_lot_values(
 } // inline namespace engine_script_run_v19
 } // namespace pineforge
 
-// C1 bridges live here, after the last pre-existing doc anchor. BookSpill's
-// archive helpers stay private to this translation unit; no include/ change.
+// The consumer reads BookSpill through these internal bridges; its archive
+// helpers stay private to this translation unit, preserving the public ABI.
 namespace pineforge {
 inline namespace engine_script_run_v19 {
 
@@ -8587,7 +8587,7 @@ detail::ScratchKeyOrder NativeExecutionConsumer::match_book_scratch_order() noex
 }
 
 void NativeExecutionConsumer::match_book_rebind_scratch() noexcept {
-    // C3 invokes after provisioning and after release has nulled the borrowed
+    // Rebind after provisioning and after release has nulled the borrowed
     // slot. Projection needs no store after release; a later wake sees nullptr
     // rather than the destroyed store. A moved core carries its pimpl intact.
     if (requests_.book_spill_) requests_.book_spill_->level_index = match_book_scratch_;

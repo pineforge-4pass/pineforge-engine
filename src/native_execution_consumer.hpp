@@ -2679,28 +2679,28 @@ public:
     std::uint64_t class_guard_failures() const noexcept { return match_book_class_guard_failures(); }
     std::uint64_t index_poisonings() const noexcept { return match_book_index_poisonings(); }
     std::uint64_t dormant_setup_failures() const noexcept { return match_book_setup_failed_ ? 1 : 0; }
-    // C1 delegates to its actual class predicate, including mutation builds.
+    // Delegate to the production class predicate, including mutation builds.
     // Tests use real recorded contexts and the independent base policy oracle.
     bool dormant_driver_permitted(const native_order::EvaluationContext&, bool limit) const noexcept;
     // A per-run witness: nonzero means this run left an established fast path.
     std::uint64_t fast_path_exits() const noexcept { return match_dormant_counts_.exits; }
-    // T2b observes the existing epoch through public-run actions; no token or
-    // mutation is exposed by this internal read-only seam.
+    // Observe the existing epoch through public-run actions; this internal
+    // read-only seam exposes neither a token nor a mutation.
     std::uint64_t dormant_core_epoch() const noexcept { return requests_.epoch_; }
-    // C1's transcript witness reads the Limit-class resident watermark only.
+    // The transcript witness reads the Limit-class resident watermark only.
     std::uint64_t dormant_watermark_for_test() const noexcept;
 
     using DormantReach = bool (*)(bool ge, double level, double lo,
                                  double hi, double delta) noexcept;
     // GE means level >= lo - delta; LE means level <= hi + delta.
-    // T8 compares false answers with the independent base geometry oracle.
+    // Check false answers against the independent eager geometry oracle.
     static bool dormant_reachable(bool ge, double level, double lo,
                                   double hi, double delta) noexcept;
     static double dormant_margin(double lo, double hi, double grid_tick) noexcept;
-    // Shared with T8; eligible() uses this exact gate, never a test copy.
+    // Tests and eligible() share this exact finite-segment gate.
     static bool dormant_segment_finite(double from, double to) noexcept;
-    // Both return dormant_reachable in production. Separate accessors let T8
-    // exercise the actual join/wake call sites under M6 and M7 mutations.
+    // Both return dormant_reachable in production. Separate accessors test
+    // the actual join/wake call sites with altered margins and boundaries.
     static DormantReach dormant_join_reach() noexcept;
     static DormantReach dormant_wake_reach() noexcept;
     static bool dormant_join_reachable(bool ge, double level, double from, double to,
@@ -2728,9 +2728,9 @@ private:
             return flags && flags[index * stride] != 0;
         }
     };
-    // C1 defines these bridges beside BookSpill's implementation. Its archive
+    // Define these bridges beside BookSpill's implementation. Its archive
     // helpers stay private to native_order.cpp; no public ABI header changes.
-    // C3 owns provisioning/release; null this borrow before destroying its store.
+    // Provision and release the store here; null its borrow before destruction.
     static detail::ScratchKeyOrder match_book_scratch_order() noexcept;
     void match_book_rebind_scratch() noexcept;
     detail::CommandScratchStore* match_book_scratch_ = nullptr;
@@ -2821,7 +2821,7 @@ private:
     void note_quiet_match_point() noexcept;
     void note_match_grid() noexcept;
     bool match_dormant_ = true;
-    // P2-3/K2: no recovery scan. An eager pass that leaves active rows spilled
+    // No recovery scan: an eager pass that leaves active rows spilled
     // stays eager while they remain; class guards are checked anew per point.
     // Only BookSpill's index poison is permanent until the next run.
     bool match_dormant_was_fast_ = false;
@@ -2914,7 +2914,7 @@ void compute_selected_report_metrics(
 
 }  // namespace pineforge::internal
 
-// Internal T8 adapters exercise the production margin and each actual call
+// Internal test adapters exercise the production margin and each actual call
 // site's predicate, including the separately compiled mutation variants.
 #define PINEFORGE_TEST_DORMANT_JOIN_REACHABLE(ge, level, from, to, grid) \
     (::pineforge::NativeExecutionConsumer::dormant_join_reachable(     \

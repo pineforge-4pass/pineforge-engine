@@ -1,6 +1,6 @@
-// HK1 / REV2 C2 P2-2. Written before the diagnostic split in the kernel.
-// All work uses the public stream/run/command API. The allocator faults one
-// actual allocation, never a size, request literal, or synthetic I/O result.
+// Dormant setup and index allocation faults must preserve eager trades and hashes.
+// Public stream/run/command calls fault real allocations, never sizes, request
+// literals, or synthetic I/O; setup failures and index poisonings remain distinct.
 #define PINEFORGE_DORMANT_BOOK_NO_MAIN
 #include "test_native_dormant_book_transcript.cpp"
 #include "global_allocation_replacement.hpp"
@@ -28,10 +28,10 @@ public:
         if (++bar_ != 1) return;
         no::Request rest{no::Transact{1}, "allocation-rest", ""};
         rest.trigger = no::Limit{50};
-        require(submit(rest).handle.has_value(), "HK1 allocation resting placement refused");
+        require(submit(rest).handle.has_value(), "allocation fault resting placement refused");
         no::Request fill{no::Transact{2}, "allocation-fill", ""};
         fill.trigger = no::Limit{99};
-        require(submit(fill).handle.has_value(), "HK1 allocation filling placement refused");
+        require(submit(fill).handle.has_value(), "allocation fault filling placement refused");
     }
     void on_native_tick(const Bar&, const NativeTickContext&) override {
         if (armed) return;
@@ -46,11 +46,11 @@ public:
     }
     void on_native_applied(const no::ExecutionAppliedEvent& e,
                            const NativeDecisionContext&) override {
-        require(e.request().label == "allocation-fill", "HK1 allocation unexpected fill");
+        require(e.request().label == "allocation-fill", "allocation fault run filled an unexpected request");
         // Hand oracle: the second tick is 98, through a buy limit of 99.
         // It opens the request's two units; the first tick at 100 cannot fill.
         require(e.resolved_price == 98 && e.opened_units == 2,
-                "HK1 allocation fill changed the hand-derived price or units");
+                "allocation fault fill changed the hand-derived price or units");
         ++applied;
         snapshot(*this, trace, 200);
     }
@@ -96,21 +96,21 @@ void empty_book_digest() {
     detail::CommandScratchStore store(
         {2, 512, 1, 1, order, detail::ScratchOpenMode::create_empty}, &backing);
     require(store.status() == detail::ScratchStatus::ok && store.record_count() == 0,
-            "HK1 empty Book store failed to open");
+            "empty book digest store failed to open");
     std::array<std::byte, 512> page{};
     std::uint64_t unprepared = 0, prepared = 0;
     require(store.state_digest({page.data(), page.size()}, unprepared)
                 == detail::ScratchStatus::ok,
-            "HK1 unprepared Book state_digest failed");
+            "unprepared book state digest failed");
     const auto before = global_allocation::allocations;
     backing.prepare();
     require(global_allocation::allocations > before,
-            "HK1 Book digest control did not prepare its real backing");
+            "book digest control did not allocate its real backing");
     require(store.state_digest({page.data(), page.size()}, prepared)
                 == detail::ScratchStatus::ok,
-            "HK1 prepared Book state_digest failed");
+            "prepared book state digest failed");
     require(prepared == unprepared && store.record_count() == 0,
-            "HK1 prepared and unprepared Book state_digest differ");
+            "empty book preparation changed its state digest or row count");
 }
 
 Result run(bool enabled, std::size_t fault) {
@@ -118,9 +118,9 @@ Result run(bool enabled, std::size_t fault) {
     auto spec = specification();
     spec.report_policy = NativeReportPolicy::HostRecorded;
     require(h.configure_native(spec).status == NativeSetupStatus::Applied,
-            "HK1 allocation configure refused");
+            "allocation fault run configuration refused");
     const Bar warmup{100, 100, 100, 100, 1, start};
-    require(h.stream_begin(&warmup, 1, "5", "5"), "HK1 allocation warmup failed");
+    require(h.stream_begin(&warmup, 1, "5", "5"), "allocation fault stream warmup failed");
     Result result;
     bool first = false;
     try {
@@ -131,33 +131,33 @@ Result run(bool enabled, std::size_t fault) {
     // Disarm BEFORE assertions, result allocation, teardown or later ticks.
     global_allocation::fail_after = disarmed;
     require(h.armed && h.allocated_before_join,
-            "HK1 first ensure fixture was already dormant before the fault window");
+            "allocation fault window was not armed before the first dormant join");
     result.allocations = global_allocation::allocations - h.allocations_before;
     result.refusals = global_allocation::refused - h.refusals_before;
     result.setup = h.consumer().dormant_setup_failures();
     result.poison = h.consumer().index_poisonings();
     const bool degraded = result.setup != 0 || result.poison != 0;
     if (fault == disarmed)
-        require(!degraded, "HK1 healthy allocation control reported setup or index degradation");
+        require(!degraded, "healthy allocation control reported setup or index degradation");
     if (fault == disarmed || degraded) {
         require(first && !result.threw,
-                "HK1 dormant allocation failure did not complete its matching tick");
+                "dormant allocation failure did not complete its matching tick");
         require(h.stream_push_tick({start + 300001, 2, 98, 1}),
-                "HK1 degraded run failed its genuine filling tick");
-        require(h.stream_end(false), "HK1 degraded run failed to complete");
+                "allocation fault run failed its filling tick");
+        require(h.stream_end(false), "allocation fault stream failed to complete");
         require(h.native_state().kind == NativeLifecycleKind::Completed
                     && h.native_state().failure.code == NativeFailureCode::None
                     && run_failure_value_of(h).code == RunFailureCode::none,
-                "HK1 dormant allocation failure added a failure code");
+                "dormant allocation failure added a run failure code");
         require(h.applied == 1 && h.physical_position().signed_units == 2,
-                "HK1 allocation run did not execute the real two-unit fill");
+                "allocation fault run did not execute the two-unit fill");
         if (degraded) {
             require(h.consumer().eager_points() > 0,
-                    "HK1 allocation degradation never used eager matching");
+                    "allocation degradation never used eager matching");
         } else if (enabled) {
             require(h.consumer().dormant_rows() > 0 && h.consumer().fast_points() > 0
                         && h.consumer().eager_points() == 0,
-                    "HK1 healthy allocation control never used dormant matching");
+                    "healthy allocation control never used dormant matching");
         }
         finish(h, h.trace);
         result.trace = std::move(h.trace);
@@ -173,7 +173,7 @@ int main() {
         const auto eager = allocation_test::run(false, allocation_test::disarmed);
         const auto healthy = allocation_test::run(true, allocation_test::disarmed);
         dormant_test::require(eager.trace.words == healthy.trace.words,
-                             "HK1 healthy allocation control changed eager output bytes");
+                             "healthy allocation control changed eager output bytes");
         std::size_t setup_faults = 0, index_faults = 0;
         // Bound the fault-position sweep by this fixture's own healthy
         // allocation census, not an implementation size or a guessed cap.
@@ -182,21 +182,21 @@ int main() {
         for (std::size_t n = 0; n < healthy.allocations; ++n) {
             const auto faulted = allocation_test::run(true, n);
             dormant_test::require(faulted.refusals == 1,
-                                 "HK1 allocation position did not throw exactly once");
+                                 "allocation fault position did not refuse exactly one allocation");
             if (faulted.setup == 0 && faulted.poison == 0) continue;
             dormant_test::require(faulted.completed
                                      && faulted.trace.words == eager.trace.words,
-                                 "HK1 allocation degradation changed eager trades or state hashes");
+                                 "allocation degradation changed eager trades or state hashes");
             if (faulted.setup != 0) {
                 dormant_test::require(faulted.setup == 1 && faulted.poison == 0,
-                                     "HK1 first ensure setup failure was counted as index poison");
+                                     "initial dormant setup failure was counted as index poison");
                 ++setup_faults;
             } else ++index_faults;
         }
         dormant_test::require(setup_faults > 0,
-                             "HK1 first Book ensure allocation fault never degraded to eager");
+                             "initial dormant setup allocation fault never degraded to eager");
         dormant_test::require(index_faults > 0,
-                             "HK1 first Book backing allocation fault never poisoned the index");
+                             "initial book backing allocation fault never poisoned the index");
         return 0;
     } catch (const std::exception& e) {
         global_allocation::fail_after = allocation_test::disarmed;
