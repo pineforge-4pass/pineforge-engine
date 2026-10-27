@@ -2984,7 +2984,7 @@ def apply_scratch_tables(lib, state, manifest: ScratchTablesC) -> None:
             "bounded-memory execution requires strategy_set_scratch_tables_v1",
             {"reason": "setter_missing"})
     if setter(state, ctypes.byref(manifest)) != 0:
-        raise _engine_invariant("the fresh strategy refused its scratch-table manifest")
+        _raise_scratch_table_refusal(lib, state)
 
 
 def _bind_outputs(lib) -> None:
@@ -7093,6 +7093,14 @@ def _discard_stdout() -> None:
         os.dup2(devnull, fd)
     finally:
         os.close(devnull)
+
+
+def _raise_scratch_table_refusal(lib, state):
+    """Keep a typed admission refusal; only an unclassified rejection is an invariant."""
+    failure = run_failure(lib, state)
+    if failure is not None and failure[1]:
+        raise RunFailure(*failure)
+    raise _engine_invariant("the fresh strategy refused its scratch-table manifest")
 
 
 if __name__ == "__main__":

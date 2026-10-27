@@ -1416,8 +1416,8 @@ protected:
     // per call); each entry holds a ``name_id`` indexing into
     // ``trace_names_``, which is the unique-name table built by
     // ``intern_trace_name``. A first-time name pays one ``unordered_map``
-    // insert + ``string`` push_back; subsequent calls with the same name
-    // are a single map lookup.
+    // insert + ``string`` push_back; a repeated name needs one map lookup.
+    static void check_trace_profile(bool enabled, detail::ScratchTableBackend backend);
     bool trace_enabled_ = false;
 
     // Live-runtime surface (ABI v4). All default off/zero; historical runs are
@@ -2413,12 +2413,12 @@ public:
     }
 
     // --- Runtime trace API ---
-    // Default off so existing strategies pay zero cost. The validator
-    // flips this on per-strategy via ``strategy_set_trace_enabled`` (the
-    // FFI shim defined in c_abi.cpp) before running a backtest whose
-    // per-bar values it wants to cross-reference against TradingView.
+    // Debug-only and off by default. Bounded-memory runs refuse enabling.
+    // The validator enables capture through strategy_set_trace_enabled
+    // before comparing engine per-bar values against TradingView.
     void set_trace_enabled(bool on) {
         guard_native_mutation("set_trace_enabled");
+        check_trace_profile(on, scratch_table_config_.backend);
         trace_enabled_ = on;
     }
     bool trace_enabled() const { return trace_enabled_; }
@@ -2669,12 +2669,12 @@ public:
         detail::ScratchTableConfig next;
         if (descriptor) {
             next.backend = static_cast<detail::ScratchTableBackend>(descriptor->backend);
-            next.manifest = {descriptor->K_q, descriptor->B_q,
-                             descriptor->K_e, descriptor->B_e,
-                             descriptor->K_c, descriptor->B_c,
-                             descriptor->U, descriptor->B_U,
+            next.manifest = {descriptor->K_q, descriptor->B_q, descriptor->K_e, descriptor->B_e,
+                             descriptor->K_c, descriptor->B_c, descriptor->U, descriptor->B_U,
                              descriptor->V, descriptor->B_V, descriptor->R};
         }
+        // Refuse before installing production admission or opening any stores.
+        check_trace_profile(trace_enabled_, next.backend);
         scratch_table_config_ = next;
         return 0;
     }

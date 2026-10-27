@@ -510,9 +510,9 @@ PF_API int64_t strategy_script_bars_processed(pf_strategy_t s) {
  * a backtest whose per-bar values it wants to cross-reference against
  * TradingView. */
 PF_API void strategy_set_trace_enabled(pf_strategy_t s, int on) {
-    pf_cabi_void([&] {
-        if (!s) return;
-        static_cast<pineforge::BacktestEngine*>(s)->set_trace_enabled(on != 0);
+    (void)pf_cabi_int(s, [&] {
+        if (s) static_cast<pineforge::BacktestEngine*>(s)->set_trace_enabled(on != 0);
+        return 0;
     });
 }
 

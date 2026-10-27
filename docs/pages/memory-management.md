@@ -214,9 +214,9 @@ can add them up; each is read from the source named in
 
 ## What scales with what {#memory_scaling}
 
-`N` is the number of script bars, `T` the number of closed trades and `R` the
-number of live and pending orders. The last column is the version that fixes
-or bounds the row.
+`N` is the number of script bars, `T` the number of closed trades and `R` the number of live and pending orders. The last column names the fix or bound.
+Trace mode is an opt-in **debug mode**, off by default. On the default FULL route without a sink it grows `O(traces)` resident: 24 B per record plus vector capacity and a distinct-name dictionary (including name bytes) retained for the whole run; the FULL report also copies the trace records. Debug tracing is outside the “only OHLCV grows” rule.
+The jailed profile refuses trace mode before execution with `run_request_invalid`, `{"option":"arguments"}`. Paid and HPO hosts must use the same bounded-memory admission through `strategy_set_scratch_tables_v1`, which refuses enabled traces and prevents later enabling. Unjailed debug runs, including debug sinks, retain trace support; a report sink alone does not select production admission.
 
 | What | Grows with | Where it lives | Fix |
 | --- | --- | --- | --- |

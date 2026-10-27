@@ -680,10 +680,10 @@ PF_API int strategy_declares_bar_magnifier(void);
 /* ───────────────────────────────────────────────────────────────────
  * RUNTIME LIBRARY EXPORTS — implemented in libpineforge
  * ─────────────────────────────────────────────────────────────────── */
-/** Toggle per-bar trace recording. Default off (zero-cost when off).
+/** Toggle debug per-bar trace recording. Off by default; O(traces) without a sink.
  *
- *  Enables capture for `// @pf-trace name=expr` pragmas already compiled
- *  into the strategy `.so`. Trace records appear in pf_report_t::trace. */
+ *  Captures compiled `// @pf-trace name=expr` pragmas in pf_report_t::trace.
+ *  Bounded-memory runs refuse enabling with `run_request_invalid`; read the last error. */
 PF_API void strategy_set_trace_enabled(pf_strategy_t s, int on);
 
 /** Set the earliest Unix-ms timestamp at which strategy order commands

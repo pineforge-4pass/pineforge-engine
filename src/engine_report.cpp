@@ -2129,4 +2129,13 @@ int BacktestEngine::fill_report_envelope_v1(ReportEnvelopeV1* out) const {
     return PF_REPORT_MODE_ACCEPTED;
 }
 
+void BacktestEngine::check_trace_profile(bool enabled, detail::ScratchTableBackend backend) {
+    // The jailed host and HPO trials install this admission before execution.
+    // Debug tools also use sinks, so a sink alone does not select this policy.
+    if (enabled && backend == detail::ScratchTableBackend::bounded_memory)
+        throw coded<std::invalid_argument>(RunFailureCode::run_request_invalid,
+            {{"option", "arguments"}},
+            "error: bounded-memory execution refuses trace recording; use an unjailed debug run");
+}
+
 }  // namespace pineforge

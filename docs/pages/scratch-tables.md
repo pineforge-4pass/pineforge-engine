@@ -213,7 +213,7 @@ profile. In the jailed profile, an absent setter refuses before execution as
 `strategy_library_incompatible` with `{"reason":"setter_missing"}`. The
 export name is in the message; the optional `missing` argument is omitted
 because its closed catalog vocabulary does not include this name. A setter
-refusal is an `engine_invariant`. Neither condition permits disk fallback.
+refusal without a typed code is an `engine_invariant`; a trace request keeps `run_request_invalid` with `{"option":"arguments"}`. Neither condition permits disk fallback.
 The arena admission export is also required; an older library missing it is
 `strategy_library_incompatible` with `{"reason":"symbol_missing"}`.
 An invalid environment profile is `run_request_invalid` with the existing
