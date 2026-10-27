@@ -68,12 +68,12 @@ PRs restore the newest compatible default-branch compiler cache, and only
 successful runs on `main` save that cache namespace.
 
 Verification jobs keep literal runner pins at the workflow boundary: PR build/preflight and parity subset use `["self-hosted","pf-gcp-pr"]`;
-post preflight/parity and credentialed docs use `["self-hosted","pf-gcp-post"]`.
+post preflight/parity use `gke-runners`; credentialed docs keep `["self-hosted","pf-gcp-post"]`.
 Post Release/Debug/kernel and native shards, post sanitizers and both native-live sanitizer
-profiles use `["self-hosted","pf-gcp-post"]`. No job routes by event.
+profiles use fixed `gke-runners` size labels directly in runner pods carrying the engine toolchain image and sudo. No job routes by event.
 Hosted `ubuntu-24.04` runs all eight `authz` jobs, both CI `changes`/`build-gate` jobs, all post/native aggregates and `docs.yml`'s `build`.
 These light, secret-free jobs need no VM-only tools, mounts or caches.
-Local reusable calls still cannot mix PR and post-merge verification fleets. A full post run schedules 22 post-fleet jobs; the parity calls share one concurrency group.
+Local reusable calls cannot mix PR and GKE jobs. A full post run schedules 24 GKE jobs: amd64 32/16/8 CPU labels carry 8/7/7 jobs and arm64 16 CPU carries 2; each label's cap is 8.
 
 The manual `release-ruleset-probe.yml` workflow runs `authz` on
 hosted `ubuntu-24.04` and `probe` on `["self-hosted","pf-gcp-post"]`.
@@ -183,9 +183,9 @@ source-only header trees, and compile the native public roots and examples;
 the preflight source guard rejects those includes before a build.
 
 CI uses Ubuntu 24.04 amd64 and arm64 cells and selects Python 3.12 explicitly.
-The amd64 post build shards use the post-merge GCP fleet; the two arm64 post cells run on
-hosted `ubuntu-24.04-arm`. All three build jobs refuse an OS mismatch.
-Hosted exceptions include the named light jobs, arm64 and the existing release/promotion pins.
+The amd64 post build shards and the two arm64 post cells use the `gke-runners` group with
+fixed architecture/size labels and run directly in runner pods carrying the engine toolchain image and sudo. All three build jobs refuse an OS mismatch.
+Hosted exceptions include the named light jobs and the existing release/promotion pins.
 CMake uses the same interpreter as the
 verification driver, so its Python checks do not switch to a different system
 Python. CTest must discover tests; an empty suite is a failure. Which runner
@@ -265,8 +265,8 @@ registry-name or exclusion-name fields; the default exclusion still adds
 selected discovery and strict `ctest-exclusion` checks.
 
 **Slow-label bound, 2026-10-24:** `PINNED_SLOW_TEST_ROWS` in
-`scripts/ci_verify.py` pins all 60 source-labelled names: 43 from the
-`PINEFORGE_PR_SLOW_TESTS` loop and 17 direct CMake `LABELS` assignments; the four report slices replace one direct name (+3), and the report and command-after covers remain outside the slow set.
+`scripts/ci_verify.py` pins all 62 source-labelled names: 43 from the
+`PINEFORGE_PR_SLOW_TESTS` loop and 19 direct CMake `LABELS` assignments; the four report slices replace one direct name (+3), and the report and command-after covers remain outside the slow set.
 Every name listed by `ctest -N -L slow` must belong to that set; conditional
 registration may omit names. An unpinned name fails `ctest-exclusion` on
 plain and 1/1 runs, or `ctest-shard-discovery` for multiple shards, with the
@@ -617,8 +617,8 @@ requires the WebSocket test.
 The runner's curl version floor still applies at configure time.
 `live-tsan` runs the same inventory in a separate ThreadSanitizer build,
 checks every runner compile unit for instrumentation, and stops on a race.
-`native-live.yml` runs four `native` shards on the post-merge GCP fleet;
-`live-sanitizers` and `live-tsan` each build once on that same fleet.
+`native-live.yml` runs four `native` shards on `gke-8cpu-16gb-amd64`;
+`live-sanitizers` and `live-tsan` each build once on `gke-16cpu-32gb-amd64`.
 Both matrices keep `fail-fast: false`, pinned WebSocket curl and profile caches. A failed cell does not cancel its peers.
 Native compiler keys and diagnostic artifacts also carry the shard index.
 The `native-live (native)` aggregate requires all four successful summary proofs;
@@ -895,7 +895,7 @@ whose CPU accounting cannot time the replay, and that reason, with the log
 lines that show it, belongs here. In the `build (ubuntu-24.04-arm, Release)` job the
 row prints `runtime budget: candidate=…s ab9714be=…s ratio=…x limit=15.000x
 (process cpu time; wall …; load average …)` and passes at or below 15x. The
-hosted Linux arm64 runner's CPU ratio has not been recorded yet. Historical
+GKE Linux arm64 runner's CPU ratio has not been recorded yet. Historical
 macOS measurements recorded a wall-clock ratio of 12.84x best-of-five;
 Apple Silicon read 9.9-10.7x CPU from load average 80 to 532.
 
@@ -1422,9 +1422,9 @@ fewer of the 43 than Release does. `live-sanitizers`, `live-tsan` and the
 parity subset keep their existing selections.
 
 **The slow-label inventory also includes rows with direct labels:**
-The timing list contains 43 names, and 17 additional names are pinned for
+The timing list contains 43 names, and 19 additional names are pinned for
 direct `LABELS` assignments in `tests/CMakeLists.txt` and
-`tests/cr150.d/*.cmake`, making 60 distinct pinned slow names.
+`tests/cr150.d/*.cmake`, making 62 distinct pinned slow names.
 `PINNED_SLOW_TEST_ROWS` bounds the discovered exclusion by those names,
 independent of the registered count; each profile may register a subset.
 
@@ -1499,7 +1499,7 @@ result on `main` in an excluded row or class (the Release and kernel-only
 `slow` rows, or a SLOW verifier class) BLOCKS the next release cut, and the
 author or the release owner fixes or reverts the change within the hour; the
 red is not carried into a release.
-The hosted Linux arm64 Debug leg runs after merge; a red result there blocks
+The GKE Linux arm64 Debug leg runs after merge; a red result there blocks
 the next release cut under the same fix-or-revert rule.
 
 ### Documentation-only changes
@@ -1647,8 +1647,8 @@ runs, and this page does not claim either target as met.
 
 ## Runners and time limits
 
-Credentialed work and the remaining full profiles retain their VM pins.
-The four amd64 post legs and native verification use the post-merge GCP fleet; their aggregates use the light image.
+Credentialed work retains its VM pins; secret-free post Linux jobs run directly in GKE runner pods carrying the engine toolchain image and sudo.
+The four amd64 post legs, arm64 cells, preflight, parity and native verification use `gke-runners`; their aggregates use the light image.
 The native matrix is exactly `1..4` with `--ctest-shard I/4`; live sanitizers are unsharded. Each runner label remains a literal, checked per job:
 
 | Workflow | Events/callers | Inline jobs' `runs-on` |
@@ -1656,29 +1656,29 @@ The native matrix is exactly `1..4` with `--ctest-shard I/4`; live sanitizers ar
 | `ci.yml` | Unfiltered `pull_request` | `authz`, `changes`, `build-gate`: hosted `ubuntu-24.04`; preflight/build: `["self-hosted","pf-gcp-pr"]` |
 | `corpus-parity-subset.yml` | Reusable call from PR CI | `authz`: hosted `ubuntu-24.04`; subset: `["self-hosted","pf-gcp-pr"]` |
 | `docs.yml` | `pull_request`, except `.github/**`-only diffs | `authz` and `build`: hosted `ubuntu-24.04` |
-| `ci-post.yml` | Push to `main`, 01:30 UTC schedule, dispatch | Light jobs and four leg aggregates: `ubuntu-24.04`; Release/Debug/kernel and sanitizer shards plus preflight tiers: `["self-hosted","pf-gcp-post"]`; `build-arm`: `ubuntu-24.04-arm` |
-| `corpus-parity.yml` | Schedule, dispatch, post CI callers | `authz`: hosted `ubuntu-24.04`; both parity jobs: `["self-hosted","pf-gcp-post"]` |
-| `native-live.yml` | Dispatch and post CI callers on `main` | `authz` and both aggregates: hosted `ubuntu-24.04`; four native shards, `live-sanitizers` and `live-tsan`: `["self-hosted","pf-gcp-post"]` |
+| `ci-post.yml` | Push to `main`, 01:30 UTC schedule, dispatch | Light jobs and four aggregates: `ubuntu-24.04`; `gke-runners`: Release/sanitizers `gke-32cpu-64gb-amd64`, Debug/kernel `gke-16cpu-32gb-amd64`, preflight tiers `gke-8cpu-16gb-amd64`, arm64 `gke-16cpu-32gb-arm64` |
+| `corpus-parity.yml` | Schedule, dispatch, post CI callers | `authz`: hosted `ubuntu-24.04`; `gke-runners`: full parity `gke-16cpu-32gb-amd64`, subset `gke-8cpu-16gb-amd64` |
+| `native-live.yml` | Dispatch and post CI callers on `main` | `authz` and both aggregates: hosted `ubuntu-24.04`; `gke-runners`: native shards `gke-8cpu-16gb-amd64`, sanitizer profiles `gke-16cpu-32gb-amd64` |
 | `docs-post.yml` | Push to `main`, dispatch | `authz`: hosted `ubuntu-24.04`; credentialed `build`: `["self-hosted","pf-gcp-post"]` |
 
-The post fleet admits only push, schedule and dispatch on engine `main` and
+Post CI starts on push to `main`, schedule and dispatch; its GKE routing checker
 refuses all PR events. Reusable workflows inherit their caller's event.
 `workflow_event_routes` and `workflow_fleet_findings` in `scripts/ci_preflight.py`
 follow local calls to a fixed point, refuse mixed event classes and require
-literal VM arrays outside the exact hosted pins; job conditions cannot excuse routing.
+literal VM arrays or exact GKE group/label mappings outside hosted pins; job conditions cannot excuse routing.
 Fork PRs on hosted runners run without our secrets, so the VM-only fork-refusal hook is not needed.
-Post-fleet shards require `main` for dispatch; hosted arm64 keeps its fixed pin.
+GKE jobs carry no deployment secrets, id-token permissions or environment; PR-reachable workflows cannot name GKE routing. GKE jobs start only from ci-post.yml, corpus-parity.yml and native-live.yml at refs/heads/main (the runner group lists those workflow refs); a dispatch from another ref queues without a runner.
 Rollback may restore an earlier GCP fleet pin; paid larger-runner labels remain refused.
 
 The four full build checks are `build (ubuntu-24.04, Release)`,
 `build (ubuntu-24.04, Debug)`, `build (ubuntu-24.04-arm, Release)` and
 `build (ubuntu-24.04-arm, Debug)`. Release uses four `build` shards, Debug two
-`build-debug` shards, and kernel two shards; sanitizers uses four, all on the post-merge GCP fleet.
+`build-debug` shards, and kernel two shards; sanitizers uses four, all on their fixed GKE sizes.
 Every shard builds the full tree and runs `--ctest-shard I/N` at the runner's core count. Each build refuses an OS mismatch before checkout.
-Each leg aggregate retains its old check name and requires its own matrix's success. The two arm64 cells share `build-arm` on hosted `ubuntu-24.04-arm`. All three build jobs use the same verification steps and profiles.
+Each leg aggregate retains its old check name and requires its own matrix's success. The two arm64 cells share `build-arm` on `gke-16cpu-32gb-arm64`. All three build jobs use the same verification steps and profiles.
 Shard jobs and leg aggregates skip together only on classified docs-only changes.
 One cache key per architecture/profile/SHA is restored by all shards; only shard 1 saves it.
-`HOSTED_JOB_RUNNERS` pins hosted jobs and post-fleet verification arrays; arm64 exceptions exclude PR callers. The PR build remains
+`HOSTED_JOB_RUNNERS` pins hosted jobs and exact GKE mappings; every GKE job runs directly in a runner pod carrying the engine toolchain image and sudo. The PR build remains
 `build (ubuntu-24.04, Release)` and its aggregate remains `build`.
 
 Release and promotion use the isolated release fleet:
@@ -1799,7 +1799,7 @@ measurements on the new runners.
 | Job | Platform maximum (min; no declared limit) | Measured basis |
 | --- | --- | --- |
 | `preflight` | 360 (was 45) | 7.3-9.8 min on the standard runner through 1a0e7ea1; cancelled at 10.3 min at 0d76a099, 593 s into `verifier-tests`, which takes about 15 min there at that tree (above), so preflight about 16 min. 4.8-8.2 min on the verification hosts. Preflight supplies no stage deadline -- the old 2400 s stage bound is gone (owner rule, 2026-10-12), and owner #827 (2026-10-20) removed every declared job timeout; the native-live aggregate job names a stop at GitHub's own 6 h platform maximum `HANG (re-run)` in its log; the check still fails. |
-| `build`, `build-arm` | 360 (was 75) | Pull requests run the Ubuntu amd64 Release smoke; post-merge runs Ubuntu amd64 and arm64 Release/Debug. Both architectures use the same full-profile commands. The following historical measurements include retired macOS Debug cells on pull requests. Measured while Release ran its full population on every event, a fork's pull request included: 30.3 min Ubuntu and 32.0 min macOS on the standard runners at 0d76a099, where the full Debug legs took 43.5 and 37.0 min. Pull-request Debug sets then took 17.2-17.7 min. 11.1-18.4 min on the verification hosts. Hosted Linux arm64 timings await measurement. |
+| `build`, `build-arm` | 360 (was 75) | Pull requests run the Ubuntu amd64 Release smoke; post-merge runs Ubuntu amd64 and arm64 Release/Debug. Both architectures use the same full-profile commands. The following historical measurements include retired macOS Debug cells on pull requests. Measured while Release ran its full population on every event, a fork's pull request included: 30.3 min Ubuntu and 32.0 min macOS on the standard runners at 0d76a099, where the full Debug legs took 43.5 and 37.0 min. Pull-request Debug sets then took 17.2-17.7 min. 11.1-18.4 min on the verification hosts. GKE Linux arm64 timings await measurement. |
 | `sanitizers` | 360 (was 120; the verifier's CTest stage bound was 60 min full, 30 min PR) | A fork's pull-request set took 35.2 min on the standard runner, whose compile alone took 1277-1335 s (pull-request run 36139176292, and main at 0d76a099). Full runs on the standard runner took 34.0-69.4 min (at 0d76a099 30 min of build and ABI providers, then 39 min of CTest, 1768 s of it the serial `test_ci_verify` row), and 18.2-19.0 min on the verification hosts. |
 | `kernel-only` | 360 (was 60) | Push and dispatch events run the whole kernel set; a pull request's kernel-only leg excludes the `slow` rows, and that pull-request time is to be measured on real PR runs. Measured while every event ran the whole kernel set: 7.9-22.3 min on the standard runner, 6.5-9.8 min on the verification hosts. The hosted kernel-only run of 2026-10-12 lost its job to the old 1800 s stage bound (exit 124). |
 | `native-live (native)` | 360 (was 75; verification step 65) | Main runs 37398893123, 37461653250 and 37478400505 spent 35.40–40.65 min in native, including 25.32–29.53 min in full CTest. Their matching PRs took 2.39–5.67 min in native CTest with the existing slow exclusion. The longest measured `test_ci_verify` row was 1695 s there and 2178 s on a c5.4xlarge Spot host, cut off by a trial deadline. The verifier supplies no default row or stage deadline and the workflow supplies no step deadline: its old 3600 s row bound is what collided with the 2820 s stage deadline on main's push run 38217844683. These are observed GitHub and Spot timings; final-head cold proof remains required. |
