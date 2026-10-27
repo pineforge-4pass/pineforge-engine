@@ -2687,6 +2687,8 @@ public:
     // T2b observes the existing epoch through public-run actions; no token or
     // mutation is exposed by this internal read-only seam.
     std::uint64_t dormant_core_epoch() const noexcept { return requests_.epoch_; }
+    // C1's transcript witness reads the Limit-class resident watermark only.
+    std::uint64_t dormant_watermark_for_test() const noexcept;
 
     using DormantReach = bool (*)(bool ge, double level, double lo,
                                  double hi, double delta) noexcept;

@@ -50,6 +50,25 @@ struct Trace {
     }
 };
 
+inline void record_allowance(Trace& trace, std::uint64_t tag,
+                             const no::Allowance& allowance) {
+    trace.add(tag, allowance.index());
+    if (const auto* units = std::get_if<no::AllowanceUnits>(&allowance)) {
+        std::uint64_t initial = 0;
+        std::uint64_t left = 0;
+        std::memcpy(&initial, &units->initial, sizeof(initial));
+        std::memcpy(&left, &units->left, sizeof(left));
+        trace.add(tag + 1, units->point_ordinal);
+        trace.add(tag + 2, initial);
+        trace.add(tag + 3, left);
+    } else if (const auto* all = std::get_if<no::AllowanceAllScope>(&allowance)) {
+        trace.add(tag + 1, all->point_ordinal);
+    } else if (const auto* deferred =
+                   std::get_if<no::AllowanceDeferred>(&allowance)) {
+        trace.add(tag + 1, deferred->point_ordinal);
+    }
+}
+
 template <class Host>
 void snapshot(Host& h, Trace& trace, std::uint64_t tag) {
     trace.add(tag, h.native_continuation_hash());
@@ -794,6 +813,135 @@ inline Trace run_ring_window(bool prepared, bool enabled = true) {
     return std::move(h.trace);
 }
 
+// REV2 C1: a t=0 fill drains its applied notification before the point's
+// complete. The row between the winner and the resident bound is still
+// resident and beyond W, so every callback reader must see the eager point
+// allowance before a replace-by-id wakes it.
+class ResidentWindowHost final : public NativeStrategyHost {
+public:
+    ResidentWindowHost(bool prepared, bool enabled) {
+        set_broker_state_hash_recording(true);
+        consumer().set_direct_mutation(!prepared);
+#ifdef PINEFORGE_TEST_DORMANT_BOOK_PATCHED
+        consumer().set_match_dormant(enabled);
+#else
+        (void)enabled;
+#endif
+    }
+    Trace trace;
+    bool callback = false;
+    NativeExecutionConsumer& consumer() { return as_native_consumer(execution_consumer()); }
+    const std::vector<std::uint64_t>& recorded_hashes() const { return broker_state_hashes_; }
+
+    void on_native_bar(const Bar&, const NativeDecisionContext&) override {
+        snapshot(*this, trace, 145);
+        if (++bar_ == 1) {
+            for (std::size_t i = 0; i != resident; ++i) {
+                const char* label = i == winner_index ? "resident-window-winner"
+                    : (i == victim_index ? "resident-window-victim" : "resident-window-rest");
+                no::Request r{no::Transact{1}, label, ""};
+                r.trigger = no::Limit{i == winner_index ? 99.0 : 50.0};
+                const auto result = submit(r);
+                require(result.handle.has_value(), "resident-window population refused");
+                if (i == victim_index) victim_ = *result.handle;
+            }
+        } else if (bar_ == 2) {
+            for (std::size_t i = 0; i != 512; ++i) {
+                no::Request r{no::Transact{1}, "resident-window-spill", ""};
+                r.trigger = no::Limit{50.0};
+                require(submit(r).handle.has_value(), "resident-window spill refused");
+            }
+            require(consumer().request_core().book_spilled(),
+                    "resident-window fixture did not spill its suffix");
+        }
+    }
+
+    void on_native_applied(const no::ExecutionAppliedEvent& e,
+                           const NativeDecisionContext&) override {
+        if (e.definition->request.label != "resident-window-winner") return;
+        require(!callback, "resident-window callback executed twice");
+        require(e.cursor.t == 0, "resident-window winner was not consumed at t=0");
+        const auto& core = consumer().request_core();
+        require(core.book_spilled(), "resident-window callback lost the spilled suffix");
+
+        bool public_found = false;
+        for (const auto& row : native_working_requests()) {
+            if (row.definition && row.definition->handle == victim_) {
+                public_found = true;
+                break;
+            }
+        }
+        require(public_found, "resident-window public working view missed the victim");
+
+        const auto lookup_before = core.book_lookup_reads().rows;
+        const auto* found = core.find_live(victim_);
+        require(found != nullptr, "resident-window find_live missed the victim");
+        require(core.book_lookup_reads().rows == lookup_before,
+                "resident-window victim was spilled instead of resident");
+
+        std::size_t rank = 0;
+        bool ranked = false;
+        for (const auto& row : core.live()) {
+            if (row.handle() == victim_) {
+                ranked = true;
+                break;
+            }
+            ++rank;
+        }
+        require(ranked, "resident-window live view missed the victim");
+        const auto& live_at_rank = core.live_at(rank);
+        require(&live_at_rank == found, "resident-window live_at did not return the resident row");
+        require(live_at_rank.priority() > consumer().dormant_watermark_for_test(),
+                "resident-window victim was not beyond W");
+        const auto* units = std::get_if<no::AllowanceUnits>(&live_at_rank.allowance);
+        require(units && units->point_ordinal == e.cursor.point.ordinal
+                    && units->initial == 1.0 && units->left == 1.0,
+                "resident-window callback read stale allowance");
+        record_allowance(trace, 150, live_at_rank.allowance);
+
+        no::Request replacement{no::Transact{1}, "resident-window-replaced", ""};
+        replacement.trigger = no::Limit{50.0};
+        replacement.capacity = no::PointBudget{units->left};
+        const auto result = replace(victim_, replacement);
+        require(result.status == no::ReplaceStatus::Replaced && result.successor,
+                "resident-window replace-by-id failed");
+        trace.add(156, static_cast<std::uint64_t>(result.status));
+        const auto successor = consumer().request_core().hold_live(*result.successor);
+        require(static_cast<bool>(successor), "resident-window replacement disappeared");
+        require(std::holds_alternative<no::AllowanceUnset>(successor->allowance),
+                "resident-window replacement did not restart allowance");
+        record_allowance(trace, 160, successor->allowance);
+        snapshot(*this, trace, 162);
+        callback = true;
+    }
+
+private:
+    static constexpr std::size_t winner_index = resident - 97;
+    static constexpr std::size_t victim_index = resident - 96;
+    int bar_ = 0;
+    no::RequestHandle victim_{};
+};
+
+inline Trace run_resident_window(bool prepared, bool enabled = true) {
+    ResidentWindowHost h(prepared, enabled);
+    require(h.configure_native(specification()).status == NativeSetupStatus::Applied,
+            "resident-window configure refused");
+    const auto bars = tape();
+    h.run(bars.data(), 4);
+    require(h.native_state().kind == NativeLifecycleKind::Completed, h.last_error().c_str());
+    require(h.callback, "resident-window notification callback never executed");
+#ifdef PINEFORGE_TEST_DORMANT_BOOK_PATCHED
+    if (enabled) {
+        require(h.consumer().dormant_rows() > 0,
+                "resident-window fixture made no dormant rows");
+        require(h.consumer().fast_points() > 0,
+                "resident-window fixture made no fast points");
+    }
+#endif
+    finish(h, h.trace);
+    return std::move(h.trace);
+}
+
 // REV-CX K1/M24: the back two rows are real later candidates, hence awake
 // before the first t=0 callback. Its two submissions use the fill's vacancy,
 // then force make_book_room while the highest dormant row is in the MIDDLE.
@@ -1295,6 +1443,16 @@ inline Trace run_driver_matrix(bool prepared, bool enabled = true) {
 int main(int argc, char** argv) {
     try {
         using namespace dormant_test;
+        if (argc == 2 && std::strcmp(argv[1], "--resident-window") == 0) {
+            for (const bool prepared : {false, true}) {
+                const auto off = run_resident_window(prepared, false);
+                const auto on = run_resident_window(prepared, true);
+                require(off.words == on.words,
+                        "resident-window eager/dormant transcript bytes differ");
+                on.print(prepared ? "resident-window-prepared" : "resident-window-direct");
+            }
+            return 0;
+        }
         if (argc == 2 && std::strcmp(argv[1], "--notification-middle-spill") == 0) {
             for (const bool prepared : {false, true}) {
                 const auto off = run_middle_spill(prepared, false, true);

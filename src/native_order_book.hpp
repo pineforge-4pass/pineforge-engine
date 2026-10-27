@@ -256,6 +256,7 @@ struct WorkingRequestCore::BookSpill {
         }
         return true;
     }
+    std::uint64_t watermark_for_test() const noexcept { return reg[0].W; }
 
     using LevelKey = std::array<std::byte, 17>;
     using IndexValue = std::array<std::byte, 8>;
@@ -468,13 +469,17 @@ struct WorkingRequestCore::BookSpill {
             auto& r = reg[cls];
             const uint64_t point = context.cursor.point.ordinal;
             if (r.cur == point) continue;
-            if (r.seq == std::numeric_limits<uint64_t>::max())
-                throw coded<std::overflow_error>(RunFailureCode::engine_invariant, {},
-                                                  "native dormant sweep sequence exhausted");
+            // Dormant bookkeeping failure poisons only the acceleration index;
+            // the valid run stays on eager matching with no recovery pass.
+            if (r.seq == std::numeric_limits<uint64_t>::max()) {
+                index_failed();
+                return;
+            }
             if (r.spilled_dormant != 0
-                && core.epoch_ > std::numeric_limits<uint64_t>::max() - 2)
-                throw coded<std::overflow_error>(RunFailureCode::engine_invariant, {},
-                                                  "native working-request epoch exhausted");
+                && core.epoch_ > std::numeric_limits<uint64_t>::max() - 2) {
+                index_failed();
+                return;
+            }
             ++r.seq;
             r.prev = r.cur;
             r.cur = point;
@@ -518,13 +523,37 @@ struct WorkingRequestCore::BookSpill {
                                            : std::max(r.W, priority);
         }
     }
-    void advance(WorkingRequestCore& core, uint64_t priority) { sweep(core, priority, false); }
+    void refresh_resident_suffix(WorkingRequestCore& core) noexcept {
+        assert_aligned(core);
+        for (std::size_t i = 0; i != resident.size(); ++i) {
+            const auto& meta = resident[i];
+            if (!meta.dormant) continue;
+            const auto& r = reg[meta.cls];
+            if (!r.in_progress || meta.priority < r.W) continue;
+            auto& allowance = core.live_[i].allowance;
+            const auto* units = std::get_if<AllowanceUnits>(&allowance);
+            if (units && units->point_ordinal == r.cur) continue;
+            if (core.epoch_ > std::numeric_limits<uint64_t>::max() - 2) {
+                index_failed();
+                return;
+            }
+            allowance = core.evaluated_allowance(core.live_[i], r.cur);
+            core.epoch_ += 2;
+        }
+    }
+    void advance(WorkingRequestCore& core, uint64_t priority) {
+        sweep(core, priority, false);
+        refresh_resident_suffix(core);
+    }
     void complete(WorkingRequestCore& core, bool finish_sweep) {
-        // Failure/unwinding leaves the partially refreshed eager book intact,
-        // including W and in_progress: readers can still observe that prefix.
+        // A failed or unwinding point keeps partial W; no recovery is intended.
         if (!finish_sweep) return;
-        sweep(core, std::numeric_limits<uint64_t>::max(), true);
-        for (auto& r : reg) r.in_progress = false;
+        refresh_resident_suffix(core);
+        for (auto& r : reg) {
+            if (!r.in_progress) continue;
+            r.W = std::numeric_limits<uint64_t>::max();
+            r.in_progress = false;
+        }
     }
     void project(const WorkingRequestCore& core, const BookSlot& slot,
                  LiveRequest& row) const noexcept {
@@ -536,6 +565,7 @@ struct WorkingRequestCore::BookSpill {
             if (slot.stamp >= r.seq - 1) return;
             point = r.prev;
         }
+        // The base evaluated_allowance formula is the single allowance calculation.
         const Allowance eager = core.evaluated_allowance(row, point);
         const auto& expected = std::get<AllowanceUnits>(eager);
         const auto* before = std::get_if<AllowanceUnits>(&row.allowance);

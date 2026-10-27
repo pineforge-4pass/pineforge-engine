@@ -60,6 +60,11 @@ adding a product hook: rethrow instead of degrading the first pimpl
 allocation. Its fault-position sweep must fail with
 `test_native_dormant_book_allocation_fault: HK1 first Book ensure allocation fault never degraded to eager`.
 
+M-resident-window removes both resident suffix refresh calls. The transcript
+callback proves that a consumed t=0 winner leaves a resident dormant row beyond
+W, reads its allowance, and replaces it by id; the expected red is
+`test_native_dormant_book_transcript: resident-window callback read stale allowance`.
+
 | ID | Mutant | Expected-red row | Expected failure text prefix |
 |---|---|---|---|
 | M1 | Erase spilled stamp/dormancy. | T4 eager/dormant transcript comparison | `test_native_dormant_book_switch:` |
@@ -102,5 +107,6 @@ allocation. Its fault-position sweep must fail with
 | M24 | Permit middle spill without a candidate-free scope and erase unconditionally (both original hook bodies). | T3 --notification-middle-spill retained promotion after callback | `native retained candidates require back-only spills` (assertion message) |
 | M25 | Re-project held side-ring copies when the watermark advances. | T5 frozen held ring copies | `test_native_dormant_book_tokens: T5 watermark update re-projected an already held copy` |
 | M26 | Clear the side-ring keepalives when the watermark advances. | T5 keepalive lifetime before raw dereference | `test_native_dormant_book_tokens: T5 watermark update cleared the decoded keepalive ring` |
+| M-resident-window | Skip the resident suffix refresh after `advance` and `complete`. | T3 --resident-window resident callback read/replace beyond W | `test_native_dormant_book_transcript: resident-window callback read stale allowance` |
 | M-middle-in-match-path | Grant middle-spill permission throughout match_path. | T3 --notification-middle-spill scope invariant | `native retained candidates require back-only spills` (assertion message) |
 | M-first-ensure-throws | Propagate first pimpl allocation failure instead of degrading. | HK1 allocation-fault sweep | `test_native_dormant_book_allocation_fault: HK1 first Book ensure allocation fault never degraded to eager` |

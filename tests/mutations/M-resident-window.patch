@@ -1,0 +1,20 @@
+diff --git a/src/native_order_book.hpp b/src/native_order_book.hpp
+--- a/src/native_order_book.hpp
++++ b/src/native_order_book.hpp
+@@ -539,17 +539,15 @@
+             }
+             allowance = core.evaluated_allowance(core.live_[i], r.cur);
+             core.epoch_ += 2;
+         }
+     }
+     void advance(WorkingRequestCore& core, uint64_t priority) {
+         sweep(core, priority, false);
+-        refresh_resident_suffix(core);
+     }
+     void complete(WorkingRequestCore& core, bool finish_sweep) {
+         // A failed or unwinding point keeps partial W; no recovery is intended.
+         if (!finish_sweep) return;
+-        refresh_resident_suffix(core);
+         for (auto& r : reg) {
+             if (!r.in_progress) continue;
+             r.W = std::numeric_limits<uint64_t>::max();

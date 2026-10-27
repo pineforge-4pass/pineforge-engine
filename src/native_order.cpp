@@ -8568,6 +8568,10 @@ std::uint64_t NativeExecutionConsumer::match_book_class_guard_failures() const n
     return requests_.book_spill_ ? requests_.book_spill_->class_guard_failures : 0;
 }
 
+std::uint64_t NativeExecutionConsumer::dormant_watermark_for_test() const noexcept {
+    return requests_.book_spill_ ? requests_.book_spill_->watermark_for_test() : 0;
+}
+
 std::uint64_t NativeExecutionConsumer::match_book_index_poisonings() const noexcept {
     return requests_.book_spill_ ? requests_.book_spill_->poison_events : 0;
 }

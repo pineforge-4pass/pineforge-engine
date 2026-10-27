@@ -3777,6 +3777,8 @@ endforeach()
 
 add_test(NAME test_native_dormant_book_notification_middle_spill
     COMMAND test_native_dormant_book_transcript --notification-middle-spill)
+add_test(NAME test_native_dormant_book_resident_window
+    COMMAND test_native_dormant_book_transcript --resident-window)
 set_tests_properties(test_native_dormant_book_capacity PROPERTIES LABELS "slow")
 
 if(PINEFORGE_BUILD_SOURCE_LAYER)
