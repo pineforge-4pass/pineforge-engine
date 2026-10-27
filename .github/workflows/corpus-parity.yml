@@ -68,7 +68,7 @@ env:
   # pin is almost entirely cache hits.
   CCACHE_MAXSIZE: 2G
 
-# Both parity jobs follow canon authz on pf-gcp-post, with no hosted fallback.
+# Both parity jobs follow canon authz on gke-runners in pinned root containers.
 # The build uses every core of the runner.
 # scripts/ci_preflight.py pins runners and limits.
 jobs:
@@ -140,13 +140,22 @@ jobs:
   corpus-parity:
     needs: [authz]
     if: inputs.mode != 'subset' && github.event_name != 'pull_request'
-    runs-on: ["self-hosted","pf-gcp-post"]
+    runs-on:
+      group: gke-runners
+      labels: gke-16cpu-32gb-amd64
+    container:
+      image: ubuntu:24.04@sha256:24737cef17f4e22b1977df7d9a05e77c4e28b7da5b8911f8d8ccda136bf3573c
+      options: --user root
     env:
       PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64-16"]'
     # 16.3-26.2 min on the standard runner; 360 minutes is the platform maximum,
     # the only hang catcher (owner rule,
     # 2026-10-12: no bound of our own may fail a run for slowness).
     steps:
+      - name: Prepare the job container
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates curl git git-lfs jq unzip zip zstd xz-utils rsync tzdata python3 python3-venv python3-dev python3-pip build-essential cmake ninja-build pkg-config
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 1
@@ -158,8 +167,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libeigen3-dev ccache git-lfs
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y libeigen3-dev ccache git-lfs
 
       # Separate from the parity script so the gitlink and the Git-LFS chart
       # feed are visible as their own step: the corpus ships ONE full-history
@@ -219,12 +228,21 @@ jobs:
   corpus-parity-subset:
     needs: [authz]
     if: inputs.mode == 'subset'
-    runs-on: ["self-hosted","pf-gcp-post"]
+    runs-on:
+      group: gke-runners
+      labels: gke-8cpu-16gb-amd64
+    container:
+      image: ubuntu:24.04@sha256:24737cef17f4e22b1977df7d9a05e77c4e28b7da5b8911f8d8ccda136bf3573c
+      options: --user root
     env:
       PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64-16"]'
     # 1.8-4.7 min on the standard runner; 360 minutes is the platform
     # maximum, the only hang catcher (owner rule, 2026-10-12).
     steps:
+      - name: Prepare the job container
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates curl git git-lfs jq unzip zip zstd xz-utils rsync tzdata python3 python3-venv python3-dev python3-pip build-essential cmake ninja-build pkg-config
       # Credentials stay persisted, exactly as the nightly job above: the
       # submodule clone and `git lfs pull` below go out over https and the
       # nightly is the configuration that is known to work for them.
@@ -239,8 +257,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libeigen3-dev ccache git-lfs
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y libeigen3-dev ccache git-lfs
 
       - name: Resolve the recorded corpus gitlink
         id: pin

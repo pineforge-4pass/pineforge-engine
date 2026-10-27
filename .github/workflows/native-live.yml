@@ -23,7 +23,7 @@ permissions:
 
 # A reusable workflow's github.workflow is its caller, so use a distinct prefix.
 # Only post-merge callers and main/manual runs use this workflow.
-# Native shards and both sanitizer profiles use the post-merge GCP fleet.
+# Native shards and both sanitizer profiles use gke-runners in root containers.
 concurrency:
   group: native-live-${{ github.workflow }}-${{ github.run_id }}
   cancel-in-progress: false
@@ -102,8 +102,13 @@ jobs:
   native-live:
     name: native-live (${{ matrix.profile }})
     needs: [authz]
-    # Each instrumented tree builds once on the post-merge GCP fleet.
-    runs-on: ["self-hosted","pf-gcp-post"]
+    # Each instrumented tree builds once on its pinned GKE size.
+    runs-on:
+      group: gke-runners
+      labels: gke-16cpu-32gb-amd64
+    container:
+      image: ubuntu:24.04@sha256:24737cef17f4e22b1977df7d9a05e77c4e28b7da5b8911f8d8ccda136bf3573c
+      options: --user root
     strategy:
       fail-fast: false
       matrix:
@@ -116,6 +121,10 @@ jobs:
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache/${{ matrix.profile }}
     steps:
+      - name: Prepare the job container
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates curl git git-lfs jq unzip zip zstd xz-utils rsync tzdata python3 python3-venv python3-dev python3-pip build-essential cmake ninja-build pkg-config
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
@@ -136,8 +145,8 @@ jobs:
 
       - name: Install native build dependencies
         run: |
-          sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y cmake ninja-build libeigen3-dev tzdata-legacy libsqlite3-dev libssl-dev zlib1g-dev ccache git-lfs strace
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y cmake ninja-build libeigen3-dev tzdata-legacy libsqlite3-dev libssl-dev zlib1g-dev ccache git-lfs strace
 
       - name: Restore ccache
         id: ccache-restore
@@ -200,7 +209,12 @@ jobs:
   native-live-shards:
     name: native-live-shard (${{ matrix.profile }}, ${{ matrix.shard }}/4)
     needs: [authz]
-    runs-on: ["self-hosted","pf-gcp-post"]
+    runs-on:
+      group: gke-runners
+      labels: gke-8cpu-16gb-amd64
+    container:
+      image: ubuntu:24.04@sha256:24737cef17f4e22b1977df7d9a05e77c4e28b7da5b8911f8d8ccda136bf3573c
+      options: --user root
     strategy:
       fail-fast: false
       matrix:
@@ -216,6 +230,10 @@ jobs:
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache/${{ matrix.profile }}
     steps:
+      - name: Prepare the job container
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates curl git git-lfs jq unzip zip zstd xz-utils rsync tzdata python3 python3-venv python3-dev python3-pip build-essential cmake ninja-build pkg-config
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
@@ -233,8 +251,8 @@ jobs:
 
       - name: Install native build dependencies
         run: |
-          sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y cmake ninja-build libeigen3-dev tzdata-legacy libsqlite3-dev libssl-dev zlib1g-dev ccache git-lfs strace
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y cmake ninja-build libeigen3-dev tzdata-legacy libsqlite3-dev libssl-dev zlib1g-dev ccache git-lfs strace
 
       # Each shard has its own save key; four cold builds cannot reserve one key.
       - name: Restore ccache
