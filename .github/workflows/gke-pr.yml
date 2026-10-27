@@ -252,9 +252,7 @@ jobs:
   preflight:
     needs: [admit]
     if: ${{ needs.admit.outputs.allowed == 'true' }}
-    runs-on:
-      group: gke-runners
-      labels: gke-8cpu-16gb-amd64
+    runs-on: gke-8cpu-16gb-amd64
     permissions: {contents: read}
     steps:
       - name: Checkout the admitted head
@@ -291,9 +289,7 @@ jobs:
   build:
     needs: [admit]
     if: ${{ needs.admit.outputs.allowed == 'true' && needs.admit.outputs.docs_only != 'true' && needs.admit.outputs.github_only != 'true' }}
-    runs-on:
-      group: gke-runners
-      labels: gke-32cpu-64gb-amd64
+    runs-on: gke-32cpu-64gb-amd64
     permissions: {contents: read}
     steps:
       - name: Checkout the admitted head
@@ -327,9 +323,7 @@ jobs:
   build-debug:
     needs: [admit]
     if: ${{ needs.admit.outputs.allowed == 'true' && needs.admit.outputs.docs_only != 'true' && needs.admit.outputs.github_only != 'true' }}
-    runs-on:
-      group: gke-runners
-      labels: gke-16cpu-32gb-amd64
+    runs-on: gke-16cpu-32gb-amd64
     permissions: {contents: read}
     steps:
       - name: Checkout the admitted head
@@ -363,9 +357,7 @@ jobs:
   corpus-parity-subset:
     needs: [admit]
     if: ${{ needs.admit.outputs.allowed == 'true' && needs.admit.outputs.docs_only != 'true' && needs.admit.outputs.github_only != 'true' }}
-    runs-on:
-      group: gke-runners
-      labels: gke-8cpu-16gb-amd64
+    runs-on: gke-8cpu-16gb-amd64
     permissions: {contents: read}
     steps:
       - name: Checkout the admitted head
