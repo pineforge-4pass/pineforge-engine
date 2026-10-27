@@ -1,4 +1,4 @@
-// CR-150 L19h witness: a bracket family's roster parks erased members behind
+// A bracket family's roster parks erased members behind
 // a retained one, and the settled prefix keeps only its fold state.
 //
 // source::BracketRoster keeps every leg a strategy.exit family placed, in

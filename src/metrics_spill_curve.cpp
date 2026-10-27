@@ -1,4 +1,4 @@
-// CR-150 L7c: the metric point source over a fixed-size scratch read window.
+// The metric point source over a fixed-size scratch read window.
 #include <pineforge/metrics_stream.hpp>
 #include <pineforge/run_failure.hpp>
 #include <pineforge/spill_curve_reader.hpp>

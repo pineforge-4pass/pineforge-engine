@@ -1,5 +1,5 @@
 /*
- * KI-60: calc_on_order_fills historical broker scheduling.
+ * Calc-on-order-fills historical broker scheduling.
  *
  * These fixtures intentionally exercise the semantic seams that a broad
  * "run on_bar again after process_pending_orders" loop misses:
@@ -474,7 +474,7 @@ void test_stop_limit_activation_survives_segment_split() {
     }
 }
 
-// KI-67: with the fixed 4-event budget removed the broker cursor traverses the
+// With the fixed 4-event budget removed the broker cursor traverses the
 // WHOLE O->L->H->C path, so A's stop=108 IS genuinely reached on the L->H leg
 // (the bar prints 110) and A activates; its limit=95 then fills on bar index 2
 // when the low reaches 90. (The old budget stopped the cursor at 105 and A
@@ -512,7 +512,7 @@ void test_stop_limit_activation_commits_only_through_consumed_cursor() {
         CHECK(ids[1] == "M1");
         CHECK(ids[2] == "B103");
         CHECK(ids[3] == "B105");
-        CHECK(ids[4] == "A");        // KI-67: A's stop=108 is truly reached; it
+        CHECK(ids[4] == "A");        // A's stop=108 is truly reached; it
         CHECK(near(lpx[4], 95.0));   // arms and its limit fills at 95 on bar 2.
     }
 }
@@ -520,7 +520,7 @@ void test_stop_limit_activation_commits_only_through_consumed_cursor() {
 // The legacy one-priced-entry-per-bar throttle predates COOF. A priced entry
 // born in a fill recalc belongs to the new broker epoch and may itself fill,
 // recalc, and place another priced entry on the remaining same-bar segment.
-// KI-67: L1 is placed by the bar-OPEN recalc (standard: exact fill at 105);
+// L1 is placed by the bar-OPEN recalc (standard: exact fill at 105);
 // L2 is placed by the MID-BAR recalc that L1's fill triggered, so it is a
 // cascade order and GAP-fills at the next extreme waypoint (W2=110), not at its
 // interpolated 108 level on the L->H segment.
@@ -557,7 +557,7 @@ void test_fill_recalc_priced_entries_bypass_legacy_bar_throttle() {
         CHECK(ids[2] == "L2");
         CHECK(near(px[0], 100.0));
         CHECK(near(px[1], 105.0));
-        // KI-67: cascade L2 gap-fills at the extreme waypoint W2=110, not at
+        // Cascade L2 gap-fills at the extreme waypoint W2=110, not at
         // its interpolated 108 level inside the L->H segment.
         CHECK(near(px[2], 110.0));
     }
@@ -1004,14 +1004,14 @@ void test_tokenized_close_bypasses_consumed_coof_c_cursor() {
     CHECK(near(p.ledger_after_close, 1.0));
 }
 
-// A priced bracket born in an INTRABAR fill recalc is a KI-67 cascade EXIT and
+// A priced bracket born in an INTRABAR fill recalc is a cascade EXIT and
 // follows Model S ("R-cascade-gapjump"): held on its in-flight leg, then it
 // gap-fills at that leg-end waypoint if its level is in the in-flight remainder,
 // and EXACT-level fills on any subsequent leg. Entry stop L=105 fills mid-bar
 // (path tie -> O=100,L=90,H=110,C=100 => O->L->H->C), so the exit's in-flight
 // leg is L->H (90->110) and the subsequent leg is H->C (110->100).
 //   sl=102: below the rising in-flight leg, but the reversed subsequent leg
-//           110->100 crosses it — EXACT fill at 102, SAME bar (KI-67 residual
+//           110->100 crosses it — EXACT fill at 102, SAME bar (cascade residual
 //           fix; pre-fix this rolled because only the W2=110 extreme was eligible).
 //   tp=112: not in the in-flight remainder (105,110] and never reached on the
 //           down subsequent leg — it rolls to the next bar (rises to 113 there).
@@ -1047,7 +1047,7 @@ void test_pooc_intrabar_recalc_priced_order_uses_remaining_path() {
         {103.0, 113.0, 95.0,  98.0, 1000.0, 2'700'000},
     };
 
-    // Cascade sl=102 (KI-67 Model S): the subsequent leg H->C (110->100) crosses
+    // Cascade sl=102 (Model S): the subsequent leg H->C (110->100) crosses
     // it, so it EXACT-level fills at 102 on the SAME bar (bar 1), not at the
     // W2=110 extreme and not rolled to the next bar.
     PoocIntrabarBracketProbe stop(PoocIntrabarBracketProbe::Leg::STOP);
@@ -1058,7 +1058,7 @@ void test_pooc_intrabar_recalc_priced_order_uses_remaining_path() {
         CHECK(near(stop.get_trade(0).entry_price, 105.0));
         CHECK(near(stop.get_trade(0).exit_price, 102.0));
         CHECK(stop.get_trade(0).entry_bar_index == 1);
-        CHECK(stop.get_trade(0).exit_bar_index == 1);   // KI-67 residual: was 2
+    CHECK(stop.get_trade(0).exit_bar_index == 1);   // Cascade residual: was 2
     }
 
     // Cascade tp=112 is likewise unreachable at W2=110 on bar 1; it converts to
@@ -1527,7 +1527,7 @@ void test_pooc_ordinary_close_reversal_siblings_share_live_c() {
     CHECK(near(p.signed_size(), -1.0));
 }
 
-// KI-67: TradingView applies NO per-bar fill-event budget. A carried five-unit
+// TradingView applies NO per-bar fill-event budget. A carried five-unit
 // entry fills at O and each fill recalc closes one more unit immediately; with
 // the fixed 4-event cap removed, all five one-unit closes execute and the
 // position ends flat (the old budget stopped after three, leaving 2 units).
@@ -1555,7 +1555,7 @@ void test_intrabar_direct_fill_from_last_recalc_respects_event_budget() {
     p.run(bars, 2);
 
     CHECK(p.last_error().empty());
-    // KI-67: no fill-event budget — all five one-unit closes execute (was 3).
+    // No fill-event budget — all five one-unit closes execute (was 3).
     CHECK(p.trade_count() == 5);
     CHECK(near(p.signed_size(), 0.0));
 }

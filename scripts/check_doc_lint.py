@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Keep nine kinds of rot out of the published documentation.
+"""Keep ten kinds of rot out of the published documentation.
 
 Why a second script rather than a mode of ``check_doc_anchors.py``
 ------------------------------------------------------------------
@@ -12,7 +12,7 @@ Keeping them apart means the anchor gate can go binding on its own schedule
 and this one's offender list reads as a work list rather than as noise inside
 another report.
 
-The nine rules
+The ten rules
 --------------
 1. ``lane L<n>`` in a published page (``docs/pages/*.md``, ``README.md``).
    A roadmap label is a promise about the future.  Fifteen of them in
@@ -107,6 +107,14 @@ The nine rules
    file's (R5 lane H-DOCGATES).  A version framed as history (``since``,
    ``was``, a release-notes link) is not a claim about this tree.
 
+10. The public selected-window section must name every ``PF_API`` function
+    declared in ``selected_window.h`` and ``selected_window_plan.h`` and every
+    option in ``run_json.py``'s selected-window argument block. Names come from
+    the headers and the real ``add_argument`` calls, not a second inventory.
+    A missing or duplicated section, unreadable source or unrecognised
+    declaration/block is an offender too. Names elsewhere on the page, in
+    comments or in fenced examples cannot stand in for the section.
+
 Exit status
 -----------
 0 when no offender is found, 1 otherwise.  ``ci_preflight`` runs it as a
@@ -115,6 +123,7 @@ binding stage.
 from __future__ import annotations
 
 import argparse
+import ast
 import re
 import sys
 from pathlib import Path
@@ -126,6 +135,12 @@ ROOT = Path(__file__).resolve().parent.parent
 PUBLISHED_GLOBS = ('README.md', 'CONTRIBUTING.md', 'docs/pages/*.md')
 DOC_GLOBS = ('README.md', 'CONTRIBUTING.md', 'docs/*.md', 'docs/pages/*.md',
              'docs/adr/*.md', 'docs/design/*.md')
+
+SELECTED_WINDOW_PAGE = 'docs/pages/public-contract.md'
+SELECTED_WINDOW_SECTION = 'selected_windows_walk_forward'
+SELECTED_WINDOW_HEADERS = ('include/pineforge/selected_window.h',
+                           'include/pineforge/selected_window_plan.h')
+SELECTED_WINDOW_CLI = 'docker/run_json.py'
 
 VERIFIED = '<!-- verified HEAD -->'
 
@@ -561,6 +576,116 @@ def verified_live_claims(page: Path, body: str, live_ns_families: dict[str, set[
     return out
 
 
+def selected_window_header_names(text: str) -> set[str]:
+    """Read every complete PF_API function declaration from one public header."""
+    code = re.sub(r'/\*.*?\*/|//[^\n]*', '', text, flags=re.DOTALL)
+    names = re.findall(r'^[ \t]*PF_API\b[^;{}]*?\b([A-Za-z_]\w*)\s*'
+                       r'\([^;{}]*\)\s*;', code, re.MULTILINE)
+    declarations = len(re.findall(r'\bPF_API\b', code))
+    if (not declarations or len(names) != declarations
+            or len(names) != len(set(names))):
+        raise ValueError('expected complete, distinct PF_API function declarations')
+    return set(names)
+
+
+def selected_window_options(text: str) -> set[str]:
+    """Parse the real selected-window add_argument block without executing it."""
+    module = ast.parse(text)
+    mains = [node for node in module.body
+             if isinstance(node, ast.FunctionDef) and node.name == '_main']
+    if len(mains) != 1:
+        raise ValueError('expected one _main function')
+    main = mains[0]
+    lines = text.splitlines()
+    starts = [number for number, line in enumerate(lines, 1)
+              if main.lineno < number < main.end_lineno
+              and re.match(r'^\s*# Selected-window mode \(', line)]
+    stops = [node.lineno for node in main.body
+             if isinstance(node, ast.Assign)
+             and any(isinstance(target, ast.Name) and target.id == 'pre_profile_long'
+                     for target in node.targets)]
+    if len(starts) != 1 or len(stops) != 1 or starts[0] >= stops[0]:
+        raise ValueError('cannot delimit the selected-window argument block')
+
+    names: list[str] = []
+    for node in main.body:
+        if not starts[0] < node.lineno < stops[0]:
+            continue
+        if (not isinstance(node, ast.Expr) or not isinstance(node.value, ast.Call)
+                or not isinstance(node.value.func, ast.Attribute)
+                or not isinstance(node.value.func.value, ast.Name)
+                or node.value.func.value.id != 'ap'
+                or node.value.func.attr != 'add_argument'):
+            raise ValueError('expected only ap.add_argument calls in the selected-window block')
+        if (not node.value.args
+                or any(not isinstance(arg, ast.Constant) or not isinstance(arg.value, str)
+                       or re.fullmatch(r'--[A-Za-z][A-Za-z0-9-]*', arg.value) is None
+                       for arg in node.value.args)):
+            raise ValueError('expected literal long option strings in selected-window block')
+        names.extend(arg.value for arg in node.value.args)
+    if not names or len(names) != len(set(names)):
+        raise ValueError('expected nonempty, distinct selected-window options')
+    return set(names)
+
+
+def selected_window_page_section(text: str) -> tuple[str, int]:
+    """Return the anchored section with comments and fenced examples removed."""
+    body = re.sub(r'<!--.*?-->',
+                  lambda match: '\n' * match.group(0).count('\n'),
+                  masked(text), flags=re.DOTALL)
+    lines = body.splitlines()
+    anchor = re.compile(r'\{#' + re.escape(SELECTED_WINDOW_SECTION) + r'\}')
+    headings: list[tuple[int, int]] = []
+    for index, line in enumerate(lines):
+        match = re.match(r'^\s{0,3}(#{1,6})\s+', line)
+        if match and anchor.search(line):
+            headings.append((index, len(match.group(1))))
+    if len(headings) != 1:
+        raise ValueError(f'expected one {{#{SELECTED_WINDOW_SECTION}}} section')
+
+    start, level = headings[0]
+    stop = len(lines)
+    for index in range(start + 1, len(lines)):
+        match = re.match(r'^\s{0,3}(#{1,6})\s+', lines[index])
+        if match and len(match.group(1)) <= level:
+            stop = index
+            break
+    return '\n'.join(lines[start + 1:stop]), start + 1
+
+
+def selected_window_contract(root: Path) -> list[Offender]:
+    """Hold the public section to the headers and CLI, failing closed."""
+    page = root / SELECTED_WINDOW_PAGE
+    found: list[Offender] = []
+    section: str | None = None
+    first = 1
+    try:
+        section, first = selected_window_page_section(page.read_text())
+    except (OSError, UnicodeError, ValueError) as error:
+        found.append(Offender(
+            page, first, 'selected-window-contract', SELECTED_WINDOW_SECTION,
+            f'cannot read or parse the selected-window public section: {error}'))
+
+    sources = [(rel, selected_window_header_names) for rel in SELECTED_WINDOW_HEADERS]
+    sources.append((SELECTED_WINDOW_CLI, selected_window_options))
+    for rel, reader in sources:
+        try:
+            names = reader((root / rel).read_text())
+        except (OSError, UnicodeError, SyntaxError, ValueError) as error:
+            found.append(Offender(
+                page, first, 'selected-window-contract', rel,
+                f'cannot read or parse selected-window source `{rel}`: {error}'))
+            continue
+        if section is None:
+            continue
+        for name in sorted(names):
+            if re.search(r'(?<![\w-])' + re.escape(name) + r'(?![\w-])', section) is None:
+                found.append(Offender(
+                    page, first, 'selected-window-contract', name,
+                    f'section omits `{name}` declared by `{rel}`'))
+    return found
+
+
 def check(root: Path) -> list[Offender]:
     found: list[Offender] = []
     namespaces, domains = live_epochs(root)
@@ -621,6 +746,7 @@ def check(root: Path) -> list[Offender]:
         body = masked(text)
         found.extend(stale_counts(page, body, counts))
         found.extend(verified_live_claims(page, body, live_ns_families, live_domain_families))
+    found.extend(selected_window_contract(root))
     found.sort(key=lambda o: (str(o.page), o.line, o.rule))
     return found
 
@@ -672,7 +798,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if not found:
         print('\nno lane labels, stale negatives, stale epochs, dead links, dead paths, '
-              'stale counts, stale ABI numbers or releases, or markers on a stale present')
+              'stale counts, stale ABI numbers or releases, or markers on a stale present, '
+              'or selected-window contract omissions')
         return 0
     print(f'\n{len(found)} offenders:')
     for offender in found:

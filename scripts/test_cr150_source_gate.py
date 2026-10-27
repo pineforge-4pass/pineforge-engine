@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mutation self-tests for scripts/cr150_source_gate.py (CR-150 / C4).
+"""Mutation self-tests for scripts/cr150_source_gate.py (source allocation bound).
 
 Every test runs the real gate as a subprocess on a tree it has just built or
 mutated, and judges the gate by its exit code and its printed counts. Nothing
@@ -1215,7 +1215,7 @@ class RealTree(unittest.TestCase):
         self.assertGreater(c['entries_matched'], 0)
         self.assertEqual(c['findings'], 0)
         self.assertEqual(c['PASS(bounded)'], 0)
-        self.assertEqual(c['OPEN'], 1465)
+        self.assertEqual(c['OPEN'], 1466)
         # Every matched entry is exactly one of PASS(bounded) / OPEN.
         self.assertEqual(c['PASS(bounded)'] + c['OPEN'], c['entries_matched'])
         strict = run_gate(ROOT, '--strict')

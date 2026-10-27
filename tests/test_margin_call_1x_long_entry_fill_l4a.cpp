@@ -18,7 +18,7 @@
  * The deficit class this reproduces: an omitted-qty percent-of-equity=100
  * reversal is frozen against the SIGNAL close C (lot-floored, leaving a
  * sub-lot budget remainder r), then fills at a one-mintick UPTICK O=C+tick.
- * KI-54 admits while the uptick notional on the frozen lot stays inside r,
+ * The margin gate admits while the uptick notional on the frozen lot stays inside r,
  * but the opening cost q*O against POST-CLOSE equity overshoots by
  * tick*(q+s) - r — a positive, sub-lot deficit whose restore quantity floors
  * to zero and takes the one-contract fallback. A commissioned explicit-qty
@@ -44,7 +44,7 @@
  *      TradingView trims a short there too (lab tv tapes
  *      tests/fixtures/margin_open_rules exit-order/short-fee-stop-on-path
  *      and -open-at-low: E's settings and bar shape, 0.008 ETH called at
- *      the open before the stop closes 3.492; lane PX-PIN-16B).
+ *      the open before the stop closes 3.492; on the pinned tape).
  *   F. POOC: the opening check waits for the next open (lane
  *      W5-ENG-MARGIN-V6, C2).
  *   G. Emulator off -> nothing fires (full stop close).

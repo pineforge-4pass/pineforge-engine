@@ -482,7 +482,7 @@ PF_API int strategy_closed_trade_close_cause(pf_strategy_t s, int trade_index) {
 }
 
 /* ABI v4 live-runtime surface (task 9): the script-facing position size
- * (strategy.position_size -- signed, KI-64 freeze-aware) and equity after
+ * (strategy.position_size -- signed, freeze-aware) and equity after
  * the most recent run(). strategy_current_equity is initial capital plus
  * realized net profit (strategy.initial_capital + strategy.netprofit) --
  * NOT Pine's strategy.equity, which adds open profit on top of this. NaN
@@ -1418,7 +1418,7 @@ PF_API int strategy_set_symbol_feed_borrowed_v1(
 
 } /* extern "C" */
 
-// Additive CR-150 report sink ABI. P00 owns the frozen declarations.
+// Additive report sink ABI. The declarations are frozen.
 #include <pineforge/report_sink.h>
 
 extern "C" {

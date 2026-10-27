@@ -1,7 +1,7 @@
 /*
  * SPDX-License-Identifier: Apache-2.0
  *
- * CR-150 P00: report sink C ABI declarations, DESIGN.md revision 6,
+ * Report sink C ABI declarations, DESIGN.md revision 6,
  * section 3.7 lines 782-901 and section 6 lines 1278-1317.
  * No definitions or runtime feature probe are supplied by this contract.
  * Include this additive header explicitly, as for execution_observer.h.

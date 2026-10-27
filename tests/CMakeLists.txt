@@ -1312,9 +1312,10 @@ list(APPEND TEST_SOURCES test_native_calendar_memo)
 # an idle run allocates on the heap within 0.25 per bar of the FeedTolerant
 # run (84 per bar before the memo). Source-free.
 list(APPEND TEST_SOURCES test_native_calendar_memo_cost)
-# R5 lane PERF-P5611 (P5): the monthly-Sharpe walk's UTC month key by integer
-# civil-from-days arithmetic, swept against gmtime_r. Source-free, so it also
-# runs in the kernel-only profile.
+# Monthly-Sharpe month keys over all int64 millisecond timestamps, against
+# independent Gregorian cycles and in-range gmtime_r; UTC/local report walks
+# and summary folds retain full-width keys. Public and source-free, including
+# the kernel-only and sanitizer profiles.
 list(APPEND TEST_SOURCES test_utc_month_key_arithmetic)
 # R5 lane D2-D: the monthly walk keeps its UTC month key with the month's
 # seconds -- the kept key against month_key_utc at every point of fixed-step,
@@ -3789,6 +3790,22 @@ foreach(test_name ${TEST_SOURCES})
     pineforge_add_unit_test(${test_name})
 endforeach()
 
+if(UNIX)
+    # PASS_REGULAR_EXPRESSION makes output matching replace CTest's exit-code
+    # result, while WILL_FAIL accepts every nonzero result. The driver checks
+    # the planted mode's exact exit 1 and its boundary-specific guard message.
+    add_test(NAME test_pipe_writer_fd_flags_plant_nonblock
+        COMMAND ${CMAKE_COMMAND}
+            -DPIPE_WRITER=$<TARGET_FILE:test_pipe_writer_fd_flags>
+            -DPLANT_MODE=--plant-nonblock
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/run_pipe_writer_fd_flags.cmake)
+    add_test(NAME test_pipe_writer_fd_flags_plant_close
+        COMMAND ${CMAKE_COMMAND}
+            -DPIPE_WRITER=$<TARGET_FILE:test_pipe_writer_fd_flags>
+            -DPLANT_MODE=--plant-close
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/run_pipe_writer_fd_flags.cmake)
+endif()
+
 if(PINEFORGE_BUILD_SOURCE_LAYER)
     add_executable(test_pending_observer_walk test_pending_observer_walk.cpp)
     target_link_libraries(test_pending_observer_walk PRIVATE pineforge)
@@ -3892,15 +3909,15 @@ endif()
 # EN-132 M: source-only ownership proof, controls, and an independent D4 route.
 add_test(NAME test_selected_window_ownership_manifest
     COMMAND ${Python3_EXECUTABLE} -I -B ${PROJECT_SOURCE_DIR}/scripts/check_selected_window_ownership.py)
-# CR-196: lab release/debug/sanitizers/kernel took 57.0/65.9/85.5/56.9 s.
-# Loaded pool release/kernel/native-live took 125.7/126.8/132.3 s; debug and
-# sanitizers timed out at 180.02 s. Four shards keep the same 180 s budget.
-# The cases are unequal: the heaviest shard (3) holds 15 of the 39 checker
-# runs. ESTIMATE, not measured: 132.3 s x 15/39 = 50.9 s on the loaded pool in
-# Release; scaling by the lab sanitizers/release ratio (85.5/57.0 = 1.5) gives
-# about 76 s for sanitizers, i.e. 2.4x headroom against 180 s. The lab run of
-# the four shard rows is the measurement; each shard also fails closed when it
-# runs a number of tests different from the number it selected.
+# The earlier modulo split put 21 of 61 checker launches on shard 1.
+# Full checks scan the source tree; mutation loops make cases unequal.
+# The driver now derives weights from subprocess calls, following self
+# helpers and literal loop lengths, with a one-unit minimum per case.
+# Largest-first assignment to the lightest shard gives estimated structural
+# loads 17/17/16/16 instead of 22/15/14/15; these are units, not wall times.
+# Stable case ids break work-order ties; case count and index break load ties.
+# All six ownership rows have no TIMEOUT property; checker children also have
+# no deadline. Each shard must run exactly as many tests as it selected.
 set(_pf_ownership_control_shards)
 foreach(_pf_ownership_shard 1 2 3 4)
     add_test(NAME test_selected_window_ownership_manifest_controls_shard_${_pf_ownership_shard}of4
@@ -7369,9 +7386,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     list(APPEND TEST_SOURCES test_scratch_watch_attribution)
     pineforge_add_unit_test(test_scratch_watch_attribution)
     target_link_libraries(test_scratch_watch_attribution PRIVATE ${CMAKE_DL_LIBS} Threads::Threads)
-    foreach(_pf_scratch_watch_case IN ITEMS
-            cotenant_default cotenant_jailed cotenant_positive
-            own_tmp own_transient_tmp own_other_tmp own_shm private_non_mkstemp header_scratch)
+    foreach(_pf_scratch_watch_case IN ITEMS cotenant_default cotenant_jailed cotenant_positive
+            own_tmp own_transient_tmp own_other_tmp own_shm private_non_mkstemp header_scratch
+            own_open_tmp own_descendant_tmp diagnostics)
         add_test(NAME test_scratch_watch_attribution_${_pf_scratch_watch_case}
             COMMAND test_scratch_watch_attribution ${_pf_scratch_watch_case})
     endforeach()

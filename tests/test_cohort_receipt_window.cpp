@@ -1,4 +1,4 @@
-// CR-150 L19C: a cohort receipt is retained only until its continuation fold.
+// A cohort receipt is retained only until its continuation fold.
 // The first test commit uses only the base's APIs: it must fail because the
 // production Window consumer retains every folded row, not for a missing API.
 // Execute the red/green pair in the lab; nothing was compiled on the Mac.

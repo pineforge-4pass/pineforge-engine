@@ -284,12 +284,12 @@ notice:
 - The shape of internal log lines (use them for humans, not parsers).
 
 Rebuild generated and native C++ objects against matching engine headers and
-runtime. R4-D L1 advanced `BacktestEngine`, `NativeStrategyHost`, and the
-private consumer to `engine_script_run_v17`; R5 L6 advanced the same three to <!-- verified HEAD -->
+runtime. R4-D advanced `BacktestEngine`, `NativeStrategyHost`, and the
+private consumer to `engine_script_run_v17`; the higher-timeframe update advanced the same three to <!-- verified HEAD -->
 `engine_script_run_v18` for the native higher-timeframe host surface <!-- verified HEAD -->
-(`on_native_timeframe_bar`, `native_series_bar`), joined by R5 L4's margin
+(`on_native_timeframe_bar`, `native_series_bar`), joined by the margin
 surface (`resolve_margin_call_units`, `on_native_margin_call`,
-`native_liquidation_price`) R5 L5's calculation-timing surface
+`native_liquidation_price`) and the calculation-timing surface
 (`on_native_recalculate`, `on_native_sub_bar`, `current_partial_bar`) and R5
 L7b's anchored-leg hook (`resolve_anchored_level` over
 `NativeAnchoredLevelView`) and R5 N5's generic host hash extension
@@ -298,7 +298,7 @@ complete public type and `hash_source_extension` kept as the deprecated
 spelling the default forwards to). N5 landed inside v18 rather than opening an
 epoch, and moved no fingerprint: a host that overrides nothing folds the same
 `"source:none"` marker, and the source host folds the same bytes through the
-generic hook. The v19 value epoch (R5 lane V19-A) advances the same three to
+generic hook. The v19 value epoch advances the same three to
 `engine_script_run_v19`; the host capability macro is
 `PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V19`. Its frozen predecessor is
 `host-fc7aad6`, the last epoch-18 `main` commit, and
@@ -307,15 +307,15 @@ virtual was added or removed, the request values moved from `native_order_v6` <!
 to the previous `native_order_v7` inside the epoch, and later work changed <!-- verified HEAD -->
 layouts inside v19. L3b removes the source compatibility
 order type; the source extension hashes adapter and scheduler state instead
-(under `pineforge-source-adapter/v3`, advanced to v4 by R5 lane V19-E). <!-- verified HEAD -->
+(under `pineforge-source-adapter/v3`, advanced to v4). <!-- verified HEAD -->
 Native request/core/event values are `native_order_v8`, the private
 consumer identity is
 `native-consumer/v9`, driver types are `native_driver_v5`, and run specs are
-`native_run_spec_v3` (R5 L6 adds `NativeRunSpec::subscriptions`, folded into
-the continuation hash only when it is non-empty; R5 L4 adds
-`NativeRunSpec::margin`, folded only when it is set; R5 L5 adds `calculation`,
+`native_run_spec_v3` (the higher-timeframe update adds `NativeRunSpec::subscriptions`, folded into
+the continuation hash only when it is non-empty; the margin update adds
+`NativeRunSpec::margin`, folded only when it is set; the calculation update adds `calculation`,
 `max_recalculations_per_point` and `open_bar_view`, folded only once the
-trigger or the open-bar view is non-default). R5 L4 also adds
+trigger or the open-bar view is non-default). The margin update also adds
 `RequestDefinition::origin` and the `MarginCallEvent` alternative to the
 request values; `RequestOrigin::Host` — every host request — folds nothing,
 so no established continuation hash moves.

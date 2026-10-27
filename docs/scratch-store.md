@@ -113,7 +113,7 @@ Both roots coexist with the children during setup, so book spill starts
 later, at 4,095 (`4096-2+1`) children. `BookSpill::read` still reuses a
 resident event's definition after a complete value match; otherwise the
 decoded owner remains. The plateau applies until the non-owning terminal
-path (CR-262) lands.
+path (the command-scratch change) lands.
 
 The plateau derivation is
 `456*(2048 + (4096/2+2) + (32+1)) + 6720 + 524 = 1890980` bytes.

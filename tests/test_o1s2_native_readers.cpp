@@ -1,4 +1,4 @@
-// LB-446: source only. On the frozen base this TU must fail to compile at
+// Source only. On the frozen base this TU must fail to compile at
 // OpeningObservationReadback / OpeningInputCursor and the visitor members.
 #include "native_current_fixture.hpp"
 #include "global_allocation_replacement.hpp"

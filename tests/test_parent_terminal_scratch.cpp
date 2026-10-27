@@ -551,7 +551,7 @@ std::size_t exercise_beyond_cap(std::size_t population, bool direct) {
     // region (2030 children). At 2031 chunk rounding makes the late cause
     // cold before its last use, requiring 33 decoded definitions. At 4095
     // spilled book reads add owners when their birth event is no longer
-    // resident. Both paths retain the per-engine cap plateau until CR-262.
+    // resident. Both paths retain the per-engine cap plateau until the end.
     const auto bound = population <= kLastTargetedPopulation ? kDrainBytes : kDrainPlateauBytes;
     CHECK(peak_bytes <= bound);
     std::printf("X08 population=%zu shape=%d direct=%d peak=%zu bound=%zu\n",

@@ -1,4 +1,4 @@
-// CR-289 F6: completed-curve metrics and streaming refusal have distinct fields.
+// Completed-curve metrics and streaming refusal have distinct fields.
 // Documentation pin only: swapping write_e's two finite_value calls leaves
 // this earlier-equity/later-open-profit case unchanged. The existing writer
 // test's both-nonfinite point is the witness for that one-line-order mutation.
@@ -196,7 +196,7 @@ int main() {
     try {
         test_report_nonfinite_equity_precedence();
     } catch (const std::exception& error) {
-        std::fprintf(stderr, "CR-289 nonfinite precedence: %s\n", error.what());
+        std::fprintf(stderr, "Nonfinite precedence: %s\n", error.what());
         return 1;
     }
     return 0;

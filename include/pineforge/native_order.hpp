@@ -2528,7 +2528,7 @@ private:
                                                   uint64_t& next_timeline_ordinal,
                                                   bool open_activation_grant);
 
-    // CR-221 E03--E05. The journal, the group-effect keys and the long
+    // The journal, the group-effect keys and the long
     // chains' id lists keep a fixed resident part and write the rest to
     // run-owned scratch files, created on the first spill. They are defined in
     // native_order.cpp and held by shared_ptr so this header stays complete.
