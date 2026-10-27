@@ -74,7 +74,7 @@ scan:
   generated_files:
     - "tutorial/**/generated*.cpp"
 ceilings:
-  unreviewed: 1264
+  unreviewed: 1265
   pending-flat-memory: 188
 owners:
   - {name: "generated-cpp", globs: ["tutorial/**"]}
@@ -884,7 +884,6 @@ entries:
   - {id: "U0826", file: "src/source/pine_adapter.cpp", symbol: "close_batch_callsites_", ops: ["subscript"], container: "unresolved by the index: close_batch_callsites_[...]", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 9214}
   - {id: "U0827", file: "src/source/pine_adapter.cpp", symbol: "close_ledger_records_", ops: ["assign", "grow"], container: "unresolved by the index: close_ledger_records_.push_back(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 9493}
   - {id: "U0828", file: "src/source/pine_adapter.cpp", symbol: "close_logical_units_", ops: ["subscript"], container: "unresolved by the index: close_logical_units_[...]", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 9488}
-  - {id: "U0829", file: "src/source/pine_adapter.cpp", symbol: "closed_cohorts", ops: ["decl", "grow"], container: "std::vector<SourceId>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 24697}
   - {id: "U0830", file: "src/source/pine_adapter.cpp", symbol: "closes", ops: ["assign", "decl", "grow"], container: "std::vector<std::pair<native_order::RequestHandle, PlacementSnapshot>>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1885}
   - {id: "U0833", file: "src/source/pine_adapter.cpp", symbol: "cohort_sides", ops: ["decl", "subscript"], container: "std::unordered_map<const void*, CohortSides>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1551}
   - {id: "U0834", file: "src/source/pine_adapter.cpp", symbol: "cohorts_by_id_", ops: ["grow", "subscript"], container: "unresolved by the index: cohorts_by_id_.emplace(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 3020}
@@ -944,7 +943,7 @@ entries:
   - {id: "U0889", file: "src/source/pine_adapter.cpp", symbol: "market", ops: ["assign", "decl", "grow"], container: "std::vector<Candidate>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 7576}
   - {id: "U0890", file: "src/source/pine_adapter.cpp", symbol: "market_pyramid_adds_", ops: ["grow"], container: "unresolved by the index: market_pyramid_adds_.insert(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 26504}
   - {id: "U0891", file: "src/source/pine_adapter.cpp", symbol: "marketable", ops: ["assign", "decl", "grow"], container: "std::vector<std::pair<native_order::RequestHandle, PlacementSnapshot>>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 2365}
-  - {id: "U0892", file: "src/source/pine_adapter.cpp", symbol: "matches", ops: ["assign", "decl", "grow"], container: "std::vector<native_order::RequestHandle>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 6022}
+  - {id: "U0892", file: "src/source/pine_adapter.cpp", symbol: "matches", ops: ["assign", "decl", "grow"], container: "std::vector<native_order::RequestHandle>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 6407}
   - {id: "U0893", file: "src/source/pine_adapter.cpp", symbol: "memo", ops: ["grow"], container: "unresolved by the index: memo.resize(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 3770}
   - {id: "U0894", file: "src/source/pine_adapter.cpp", symbol: "named", ops: ["assign", "decl", "grow"], container: "SourceId", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 3751}
   - {id: "U0895", file: "src/source/pine_adapter.cpp", symbol: "named_entry_cancel_tokens_", ops: ["subscript"], container: "unresolved by the index: named_entry_cancel_tokens_[...]", owner: "source-layer", phase: "bar", state: "pending-flat-memory", inventory: "P25", grows_with: ["distinct-keys"], line: 14525}
@@ -1542,3 +1541,5 @@ entries:
   - {id: "U1499", file: "src/native_order.cpp", symbol: "held_", ops: ["assign"], container: "unresolved by the index: held_ = ...", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 2600}
   - {id: "U1500", file: "src/source/pine_adapter.cpp", symbol: "cohorts", ops: ["decl", "grow"], container: "std::vector<const CohortRow*>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 8761}
   - {id: "U1501", file: "src/ta_misc.cpp", symbol: "held_", ops: ["assign"], container: "unresolved by the index: held_ = ...", owner: "ta-series", phase: "unclassified", state: "unreviewed", line: 602}
+  - {id: "U1511", file: "src/source/pine_adapter.cpp", symbol: "selection", ops: ["grow"], container: "unresolved by the index: selection.push_back(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "CR150-CX 10-27 (CR-398): claimed function-local temporary in cancel_reversal_exit_owners, freed at the end of the call; claimed bound = queued exit rows at one full close (verified by reading: no, src/source/pine_adapter.cpp:29118-29126). This is a reference to the caller's ExitScratchRows scope (:25395-25399), not a helper-local owner; the fixture oracle selects all non-exempt cohort ids, including ids without queued exits. The only push is under PINEFORGE_FULL_CLOSE_EXIT_ORACLE(), defined as literal false in shipped objects (:29103-29104); the fixture alone overrides it. OPEN.", line: 29120}
+  - {id: "U1512", file: "src/source/pine_adapter.cpp", symbol: "owners", ops: ["decl", "grow"], container: "std::vector<SourceId>", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "CR150-CX 10-27 (CR-398): function-local temporary in cancel_reversal_exit_owners, freed at the end of the call; claimed bound = queued exit rows at one full close (verified by reading: yes, src/source/pine_adapter.cpp:29143-29155, for the listed current-row superset). At most one SourceId per row in each of the five queues, plus one per live exit placement; the queues include non-exit shadows, pending-bound rows and COOF-reachable legs (:29140-29142), so strictly exit-only rows would be too narrow. Sorting, deduplication and filtering only shrink it (:29156-29160); automatic lifetime ends at :29230, including unwinding. OPEN.", line: 29143}
