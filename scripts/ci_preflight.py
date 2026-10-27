@@ -1632,11 +1632,11 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
         pinned.update(fixed_protected)
         if (fixed_release and name != 'promote-baseline.yml'
                 and _events(workflow) != {'workflow_dispatch'}):
-            findings.append(f'{name} must retain workflow_dispatch only for pf-gcp-main jobs')
+            findings.append(f'{name} must retain workflow_dispatch only for release jobs')
         if (name == 'promote-baseline.yml'
                 and _events(workflow) != {'push', 'workflow_dispatch'}):
             findings.append(f'{name} must retain push and workflow_dispatch '
-                            'only for pf-gcp-main promotion')
+                            'only for baseline promotion')
         if name == 'promote-baseline.yml':
             on_body = '\n'.join(_job_block(workflow, 'on')[1:])
             if _job_values(on_body, 'push') != ['branches: [main]']:

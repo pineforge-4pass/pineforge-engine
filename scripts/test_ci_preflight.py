@@ -5751,7 +5751,7 @@ finally:
                     findings = ci_workflow_findings(
                         *original, others=dict(others, **{'release.yml': opened}))
                     self.assertIn('release.yml must retain workflow_dispatch only '
-                                  'for pf-gcp-main jobs', findings)
+                                  'for release jobs', findings)
         for spelling in ('on: >-\n  workflow_dispatch:\n',
                          'on:\n  workflow_dispatch:\non:\n  workflow_dispatch:\n',
                          'on:\n  push:\n'):
@@ -5759,7 +5759,7 @@ finally:
                 opened = release.replace('on:\n  workflow_dispatch:\n', spelling, 1)
                 findings = ci_workflow_findings(*original, others=dict(others, **{'release.yml': opened}))
                 self.assertIn('release.yml must retain workflow_dispatch only '
-                              'for pf-gcp-main jobs', findings)
+                              'for release jobs', findings)
         for job in ('release', 'notify-hub'):
             expected = EXPECTED_PROTECTED_JOBS['release.yml'][job]
             for runner in ('ubuntu-latest', 'ubuntu-24.04', PR_RUNNER, POST_RUNNER, RELEASE_RUNNER,
@@ -5808,7 +5808,7 @@ finally:
                 self.assertIn(f'promote-baseline.yml job promote must run on {PROTECTED_8} '
                               '(protected)', findings)
         event_finding = ('promote-baseline.yml must retain push and '
-                         'workflow_dispatch only for pf-gcp-main promotion')
+                         'workflow_dispatch only for baseline promotion')
         for event in ('pull_request', 'pull_request_target', 'workflow_run'):
             for key in (event, f'"{event}"', f"'{event}'", event + ' '):
                 with self.subTest(event_key=key):
