@@ -467,13 +467,20 @@ public:
         const int bar = pine_bar_index();
         if (quiet_) {
             if (bar == 0) {
-                if (live_position_size() == 0.0) strategy_entry("entry", true);
-                else strategy_exit("bracket", "", 120.0, 80.0);
+                require(live_position_size() == 0.0, "quiet entry must start flat");
+                strategy_entry("entry", true);
+            }
+            // The close fill does not recalculate bar 0. Its filled position
+            // is available to the next bar's source callback.
+            if (bar == 1) {
+                require(live_position_size() > 0.0, "quiet bracket needs a filled entry");
+                strategy_exit("bracket", "", 120.0, 80.0);
             }
             return;
         }
         if (bar == 0 || bar == 14) strategy_entry("entry", true);
-        if (bar >= 1 && bar <= 8 && live_position_size() > 0.0) {
+        if (bar >= 1 && bar <= 8) {
+            require(live_position_size() > 0.0, "named brackets need the first filled entry");
             if (bar % 2 == 0) strategy_cancel("bracket");
             strategy_exit("bracket", "entry", 120.0 + bar, 80.0 - bar,
                           kNa, kNa, kNa, 100.0, {}, 4.0);
@@ -484,8 +491,10 @@ public:
             }
         }
         if (bar == 10 || bar == 20) strategy_close_all();
-        if (bar >= 15 && bar <= 18 && live_position_size() > 0.0)
+        if (bar >= 15 && bar <= 18) {
+            require(live_position_size() > 0.0, "global brackets need the second filled entry");
             strategy_exit("global", "", 125.0 + bar, 75.0 - bar);
+        }
     }
 
     void capture() {
