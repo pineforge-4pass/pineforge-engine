@@ -258,43 +258,62 @@ int main(int argc, char** argv) {
 #endif
         const Costs small = batch(resident + 512);
         const Costs large = batch(resident + resident);
-        std::printf("T1 late allocations/bar small=%zu..%zu large=%zu..%zu\n",
+        // 24 placement bars leave the same late [32,40) window untouched.
+        const Costs largest = batch(resident + 2 * resident);
+        std::printf("T1 late allocations/bar small=%zu..%zu large=%zu..%zu largest=%zu..%zu\n",
                     small.allocations.low, small.allocations.high,
-                    large.allocations.low, large.allocations.high);
-        std::printf("T1 late lookup rows/bar small=%zu..%zu large=%zu..%zu "
-                    "steps/bar small=%zu..%zu large=%zu..%zu\n",
+                    large.allocations.low, large.allocations.high,
+                    largest.allocations.low, largest.allocations.high);
+        std::printf("T1 late lookup rows/bar small=%zu..%zu large=%zu..%zu largest=%zu..%zu "
+                    "steps/bar small=%zu..%zu large=%zu..%zu largest=%zu..%zu\n",
                     small.lookup_rows.low, small.lookup_rows.high,
                     large.lookup_rows.low, large.lookup_rows.high,
+                    largest.lookup_rows.low, largest.lookup_rows.high,
                     small.lookup_steps.low, small.lookup_steps.high,
-                    large.lookup_steps.low, large.lookup_steps.high);
+                    large.lookup_steps.low, large.lookup_steps.high,
+                    largest.lookup_steps.low, largest.lookup_steps.high);
 #if defined(__linux__)
-        std::printf("T1 late preads/bar small=%zu..%zu large=%zu..%zu\n",
-                    small.preads.low, small.preads.high, large.preads.low, large.preads.high);
+        std::printf("T1 late preads/bar small=%zu..%zu large=%zu..%zu largest=%zu..%zu\n",
+                    small.preads.low, small.preads.high, large.preads.low, large.preads.high,
+                    largest.preads.low, largest.preads.high);
 #endif
         // Slack is one entire measured smaller-book bar, not a chosen cap.
         // Base decodes 4096 versus 512 spilled rows at each point; the
         // allocation cost grows with that difference and fails this check.
         if (!io_only)
-            require(large.allocations.high <= small.allocations.high * 2,
+            require(large.allocations.high <= small.allocations.high * 2
+                        && largest.allocations.high <= small.allocations.high * 2,
                     "T1 spilled per-bar allocations grow with the spilled row count");
 #if defined(__linux__)
         // Run this before the narrower lookup checks: --io-only isolates
         // the base red even if both existing lookup counters happen flat.
+        // wake_by_price probes the four level-list heads, not every spilled
+        // row. Its B+tree paths and direct-mapped backing-cache collisions
+        // depend on physical layout, so extra rows need not cost IDENTICAL
+        // preads (the integration log has 148 then 144). Require stable late
+        // windows and no growth at either larger population, with no slack.
         require(small.preads.low == small.preads.high
-                    && small.preads.high == large.preads.low
-                    && large.preads.low == large.preads.high,
-                "T1 late preads/bar depend on the spilled row count");
+                    && large.preads.low == large.preads.high
+                    && largest.preads.low == largest.preads.high,
+                "T1 preads/bar are not stable within a late window");
+        require(large.preads.high <= small.preads.low
+                    && largest.preads.high <= large.preads.low,
+                "T1 late preads/bar grow with the spilled row count");
 #endif
         // REV-CX K3: allocation flatness alone can hide disk/CPU growth.
         // There is no lookup at all in the late, completely dormant book:
         // compare BOTH counters at every end of the window, without slack.
         require(small.lookup_rows.low == small.lookup_rows.high
                     && small.lookup_rows.high == large.lookup_rows.low
-                    && large.lookup_rows.low == large.lookup_rows.high,
+                    && large.lookup_rows.low == large.lookup_rows.high
+                    && large.lookup_rows.high == largest.lookup_rows.low
+                    && largest.lookup_rows.low == largest.lookup_rows.high,
                 "T1 late book lookup rows/bar depend on the spilled row count");
         require(small.lookup_steps.low == small.lookup_steps.high
                     && small.lookup_steps.high == large.lookup_steps.low
-                    && large.lookup_steps.low == large.lookup_steps.high,
+                    && large.lookup_steps.low == large.lookup_steps.high
+                    && large.lookup_steps.high == largest.lookup_steps.low
+                    && largest.lookup_steps.low == largest.lookup_steps.high,
                 "T1 late book lookup steps/bar depend on the spilled row count");
 #ifdef PINEFORGE_TEST_DORMANT_BOOK_PATCHED
         const auto eager_small = stream(resident + 512, true, false);

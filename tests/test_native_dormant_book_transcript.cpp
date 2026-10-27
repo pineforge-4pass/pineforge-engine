@@ -991,8 +991,14 @@ public:
                            const NativeDecisionContext&) override {
         require(tracked && !filled && e.handle() == trail_,
                 "T3 trail seed executed another or repeated request");
-        require(e.resolved_price == 104 && e.opened_units == 1 && e.terminal,
+        require(e.resolved_price == 104,
                 "T3 active trail did not execute its hand-derived 106-2 stop");
+        // BASE inspect_candidate keeps Transact's sign; both execution paths
+        // copy inspected_opened_units into the event. Flat -> sell one opens
+        // -1 signed unit, while the stop remains 106-2=104.
+        require(e.opened_units == std::get<no::Transact>(e.request().intent).signed_units
+                    && e.closed_units == 0 && e.terminal,
+                "T3 active trail did not open its signed sell units terminally");
         filled = true;
         snapshot(*this, trace, 182);
     }

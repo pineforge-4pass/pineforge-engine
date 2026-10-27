@@ -14206,8 +14206,7 @@ std::uint64_t native_run_spec_digest(const NativeRunSpec& spec, const NativeBarV
 }  // namespace pineforge
 
 // Dormant matcher helpers live after the last pinned consumer citation.
-namespace pineforge {
-inline namespace engine_script_run_v19 {
+namespace pineforge::engine_script_run_v19 {
 
 bool NativeExecutionConsumer::dormant_reachable(
         bool ge, double level, double lo, double hi, double delta) noexcept {
@@ -14587,5 +14586,4 @@ void NativeExecutionConsumer::prepare_match_book_scratch() {
     static_cast<DormantBookScratchBacking&>(*run->backing).prepare();
 }
 
-}  // inline namespace engine_script_run_v19
-}  // namespace pineforge
+}  // namespace pineforge::engine_script_run_v19
