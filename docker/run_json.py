@@ -6564,7 +6564,7 @@ class _BoundedJSONFile:
     no engine sink can also use tmpfs/ramfs for the unjailed JSON artifact.
     Engine sink and scratch directories are selected by _disk_report_directory.
     One aligned 64 KiB anonymous window is the I/O working set. Every write
-    window is synchronized before reuse. Jailed and fd routes use StringIO.
+    window is synchronized before reuse. Jailed and fd routes use UTF-8 memory buffers.
     """
     window = 64 * 1024
 
@@ -7027,7 +7027,7 @@ def _prepare_report_json(document, resources, args, sink):
     # arrays. The fd route contains only the bounded summary. Neither may
     # create a report file, even when no sink is installed.
     if args.profile == "jailed" or getattr(sink, "fd_mode", False):
-        buffer = resources.enter_context(io.StringIO())
+        buffer = resources.enter_context(io.TextIOWrapper(io.BytesIO(), encoding="utf-8", newline="\n"))
         _stream_json(document, buffer)
         buffer.write("\n")
         buffer.seek(0)
