@@ -25,6 +25,8 @@ CachedScratchBacking::CachedScratchBacking(std::unique_ptr<ScratchBacking> inner
       slot_count_(page_size() >= kMinPageBytes && page_size() <= kCacheBytes
                       ? kCacheBytes / page_size() : 0),
       resident_pages_(slot_count_ != 0 ? std::min(resident_bytes, kCacheBytes) / page_size() : 0),
+      // A null inner gives page_size() 0, so resident_pages_ is 0 and the
+      // short-circuit skips the dereference: keep this order in the list.
       resident_(resident_pages_ != 0 && inner_->page_count() == 0),
       budget_(std::move(budget)) {
     if (!inner_)
