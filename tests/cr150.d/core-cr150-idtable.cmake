@@ -1,0 +1,8 @@
+list(APPEND TEST_SOURCES test_resident_cohort_ceiling)
+pineforge_add_unit_test(test_resident_cohort_ceiling)
+set_tests_properties(test_resident_cohort_ceiling PROPERTIES LABELS slow RUN_SERIAL TRUE)
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    list(APPEND TEST_SOURCES test_source_resident_cohort_ceiling)
+    pineforge_add_unit_test(test_source_resident_cohort_ceiling)
+    set_tests_properties(test_source_resident_cohort_ceiling PROPERTIES LABELS slow RUN_SERIAL TRUE)
+endif()
