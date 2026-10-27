@@ -739,6 +739,19 @@ struct pf_report_sink_diagnostics_v1;
 PF_API int strategy_report_sink_diagnostics_v1(
     pf_strategy_t s, struct pf_report_sink_diagnostics_v1* out);
 
+struct pf_report_sink_json_request_v1;
+struct pf_report_sink_json_result_v1;
+/** Bulk sink verification / JSON projection, descriptor version 1.
+ *  Include report_sink_json.h. This stateless transport operation never runs
+ *  a strategy or mutates its failure state. Returns -1 for invalid descriptors,
+ *  buffer overlap or fd contracts, with result/buffers/files unchanged; 0
+ *  fills result, whose status must be checked (including NOT_IMPLEMENTED).
+ *  No exception crosses C. All fds/buffers are borrowed; offsets are unchanged.
+ *  No pf_report_t or existing sink receipt layout changes. */
+PF_API int pf_report_sink_json_v1(
+    const struct pf_report_sink_json_request_v1* request,
+    struct pf_report_sink_json_result_v1* result);
+
 /** Install the invocation's cooperative SIGTERM handler. The handler only
  *  stores a volatile sig_atomic_t flag; batch runs observe it at completed
  *  input-bar boundaries, independently of #strategy_request_abort.

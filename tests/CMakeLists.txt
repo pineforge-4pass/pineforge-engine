@@ -7687,6 +7687,20 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND _pf_source_key_type STREQUAL "STATIC_LIBRARY
 endif()
 # --- CR-150 live-source-key end ---
 
+# --- CR-150 perf-cr397-c2 begin ---
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
+    add_library(cr397_generated_strategy MODULE ../tutorial/macd/generated.cpp)
+    target_link_libraries(cr397_generated_strategy PRIVATE pineforge)
+    if(APPLE)
+        target_link_options(cr397_generated_strategy PRIVATE "-Wl,-force_load,$<TARGET_FILE:pineforge>")
+    else()
+        target_link_options(cr397_generated_strategy PRIVATE "-Wl,--whole-archive" "$<TARGET_FILE:pineforge>" "-Wl,--no-whole-archive")
+    endif()
+    target_compile_options(cr397_generated_strategy PRIVATE -ffp-contract=off)
+    add_test(NAME test_run_json_native_sink_json COMMAND ${CMAKE_COMMAND} -E env "PINEFORGE_CR397_GENERATED_SO=$<TARGET_FILE:cr397_generated_strategy>" ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider ${PROJECT_SOURCE_DIR}/tests/test_run_json_native_sink_json.py)
+endif()
+# --- CR-150 perf-cr397-c2 end ---
+
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
         message(FATAL_ERROR "PR fast row or executable is missing: ${_pf_fast_test}")

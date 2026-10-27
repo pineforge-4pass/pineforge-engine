@@ -38,7 +38,7 @@
  *     strategy_set_report_sink_v1, strategy_set_report_sink_fd_v1, strategy_report_sink_receipt_v1,
  *     strategy_set_scratch_tables_v1, strategy_report_sink_summary_v1,
  *     pf_report_scratch_arena_stats, strategy_require_report_scratch_arena_v1,
- *     strategy_report_sink_diagnostics_v1,
+ *     strategy_report_sink_diagnostics_v1, pf_report_sink_json_v1,
  *     pf_run_abort_install_sigterm_v1, pf_run_abort_requested_v1,
  *     pf_run_abort_restore_sigterm_v1 — the
  *     authoritative list is EXPECTED_RUNTIME in scripts/check_c_abi_runtime.py (CI). Other
@@ -71,6 +71,7 @@
 #include <vector>
 #include <signal.h>
 #include "run_abort.hpp"
+#include "report_sink_json.hpp"
 namespace pineforge {
 void clear_native_c_host_refusal_error(BacktestEngine* engine) noexcept;
 bool native_c_host_in_postrun_hook_frame(BacktestEngine* engine) noexcept;
@@ -1471,6 +1472,12 @@ PF_API int strategy_report_sink_receipt_v1(pf_strategy_t s, pf_report_sink_recei
 PF_API int strategy_report_sink_summary_v1(pf_strategy_t s, pf_report_sink_summary_v1* out) {
     if (!s) return -1;
     return static_cast<const pineforge::BacktestEngine*>(s)->report_sink_summary_v1(out);
+}
+
+PF_API int pf_report_sink_json_v1(
+        const pf_report_sink_json_request_v1* request,
+        pf_report_sink_json_result_v1* result) {
+    return pineforge::report_sink::json_v1(request, result);
 }
 
 } // extern "C"

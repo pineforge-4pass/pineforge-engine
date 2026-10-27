@@ -5671,6 +5671,47 @@ class ReportSinkDiagnosticsC(ctypes.Structure):
                 ("trade_at_start", ctypes.c_uint32), ("complete", ctypes.c_uint32)]
 
 
+class ReportSinkJSONErrorC(ctypes.Structure):
+    _fields_ = [
+        ("struct_size", ctypes.c_uint32), ("version", ctypes.c_uint32),
+        ("stage", ctypes.c_uint32), ("category", ctypes.c_uint32),
+        ("line_number", ctypes.c_uint64), ("byte_offset", ctypes.c_uint64),
+        ("field_index", ctypes.c_uint32), ("tag", ctypes.c_uint32),
+        ("os_errno", ctypes.c_int32), ("offending_bytes", ctypes.c_uint32),
+        ("message", ctypes.c_char * 192), ("offending", ctypes.c_uint8 * 256)]
+
+
+class ReportSinkJSONRequestC(ctypes.Structure):
+    _fields_ = [
+        ("struct_size", ctypes.c_uint32), ("version", ctypes.c_uint32),
+        ("operation", ctypes.c_uint32), ("flags", ctypes.c_uint32),
+        ("sink_fd", ctypes.c_int32), ("trades_fd", ctypes.c_int32),
+        ("equity_fd", ctypes.c_int32), ("guard_tag", ctypes.c_uint32),
+        ("expected_ino", ctypes.c_uint64), ("expected_size", ctypes.c_uint64),
+        ("expected_counts", ctypes.c_int64 * 7),
+        ("expected_sha256_hex", ctypes.c_char * 65), ("reserved", ctypes.c_uint8 * 7),
+        ("verified_header", ctypes.c_void_p), ("verified_header_bytes", ctypes.c_uint32),
+        ("header_capacity", ctypes.c_uint32), ("header_buffer", ctypes.c_void_p),
+        ("error_buffer", ctypes.c_void_p), ("error_capacity", ctypes.c_uint32),
+        ("reserved_word", ctypes.c_uint32)]
+
+
+class ReportSinkJSONResultC(ctypes.Structure):
+    _fields_ = [
+        ("struct_size", ctypes.c_uint32), ("version", ctypes.c_uint32),
+        ("status", ctypes.c_uint32), ("complete", ctypes.c_uint32),
+        ("counts", ctypes.c_int64 * 7), ("source_ino", ctypes.c_uint64),
+        ("source_size", ctypes.c_uint64), ("sha256_hex", ctypes.c_char * 65),
+        ("reserved", ctypes.c_uint8 * 7), ("summary", ReportSinkSummaryC),
+        ("diagnostics", ReportSinkDiagnosticsC), ("equity_json_bytes", ctypes.c_uint64),
+        ("trades_json_bytes", ctypes.c_uint64),
+        ("equity_json_sha256_hex", ctypes.c_char * 65),
+        ("trades_json_sha256_hex", ctypes.c_char * 65),
+        ("reserved_fragments", ctypes.c_uint8 * 6), ("header_bytes", ctypes.c_uint32),
+        ("error_bytes", ctypes.c_uint32), ("result_field", ctypes.c_uint32),
+        ("result_tag", ctypes.c_uint32), ("error", ReportSinkJSONErrorC)]
+
+
 def _bind_report_sink(lib) -> None:
     signatures = {
         "pf_report_sink_version": (ctypes.c_uint32, []),
@@ -5687,6 +5728,8 @@ def _bind_report_sink(lib) -> None:
             ctypes.c_void_p, ctypes.POINTER(ReportSinkSummaryC)]),
         "strategy_report_sink_diagnostics_v1": (ctypes.c_int, [
             ctypes.c_void_p, ctypes.POINTER(ReportSinkDiagnosticsC)]),
+        "pf_report_sink_json_v1": (ctypes.c_int, [
+            ctypes.POINTER(ReportSinkJSONRequestC), ctypes.POINTER(ReportSinkJSONResultC)]),
     }
     for name, (restype, argtypes) in signatures.items():
         if hasattr(lib, name):
@@ -5817,9 +5860,15 @@ def _new_report_sink(lib, state, args, *, body=True):
         raise _engine_invariant("the strategy library has an incompatible report sink ABI")
     # Only the body run may create/truncate the caller's sink. Bench states
     # use their own temporary paths, unlinked at close.
-    return _ReportSink(lib, state, directory=getattr(args, "spill_dir", None),
+    sink = _ReportSink(lib, state, directory=getattr(args, "spill_dir", None),
                        run_id=getattr(args, "run_id", ""),
                        path=getattr(args, "report_sink", None) if body else None)
+    # CR-397 complete E/T codec, opt-in until the lab's refusal/byte/timing
+    # gates are recorded. Named, selected, jailed, fd and warmup retain their routes.
+    if (os.environ.get("PF_REPORT_SINK_JSON_SPIKE") == "1" and body
+            and getattr(args, "report_sink", None) is None and not _selected_requested(args)):
+        sink._native_json_function = getattr(lib, "pf_report_sink_json_v1", None)
+    return sink
 
 
 class _InheritedSinkFd:
@@ -6028,6 +6077,7 @@ class _ReportSink:
         self.directory = _disk_report_directory(directory)
         self.header, self.counts, self.sha256 = {}, {}, ""
         self._identity = None
+        self.native_json = None
         self.summary = self.summary_failure = self.diagnostics = None
         self.named, self.run_id = path is not None, run_id
         self.keep, self.closed = False, False
@@ -6061,21 +6111,45 @@ class _ReportSink:
         diagnostics = _SinkReportDiagnostics()
         summary = summary_failure = None
         try:
-            with _open_uncached_sink(self.path) as reader:
-                trades = diagnostics.trades(reader)
+            function = getattr(self, "_native_json_function", None)
+            if function is not None:
+                # Keep ownership even for unsupported/failing attempts: close
+                # precedes stdout, and cannot replace a primary source refusal.
+                self.native_json = _NativeSinkJSON(function, self.directory)
+            if getattr(self, "native_json", None) is not None and self.native_json.prepare(self):
+                native = self.native_json.result
+                diagnostics.count_e = int(native.counts[0])
+                if diagnostics.count_e:
+                    diagnostics.first = _native_sink_point(native.diagnostics.first)
+                    diagnostics.last = _native_sink_point(native.diagnostics.last)
+                diagnostics.trade_at_start = bool(native.diagnostics.trade_at_start)
+                if native.result_tag == ord("E") and native.result_field:
+                    point = {"equity": None if native.result_field == 2 else 0.0,
+                             "open_profit": None if native.result_field == 3 else 0.0}
+                    try:
+                        _validate_report_result({"equity_curve": (point,)}, equity_only=True)
+                    except RunFailure as error:
+                        diagnostics.equity_failure = error
+                        error.__traceback__ = None
                 try:
-                    summary = _sink_summary(report, self, records=trades)
+                    # Native fold, shared host presentation: report.net_profit,
+                    # division and Python round remain exactly where they were.
+                    summary = _sink_summary(report, self, folded=native)
                 except RunFailure as error:
-                    # Format/digest/receipt refusals used to precede result
-                    # validation. Defer the first trade refusal and finish the
-                    # very same reader, even when the trade fold stopped early.
                     summary_failure = error
-                    # Drop the fold traceback so the saved exception cannot
-                    # retain the reader or per-row frames until assembly.
                     error.__traceback__ = None
-                for _ in trades:
-                    pass
-                self.header, self.counts, self.sha256 = reader.header, reader.counts, reader.sha256
+            else:
+                with _open_uncached_sink(self.path) as reader:
+                    trades = diagnostics.trades(reader)
+                    try:
+                        summary = _sink_summary(report, self, records=trades)
+                    except RunFailure as error:
+                        # Finish source verification before deferred results.
+                        summary_failure = error
+                        error.__traceback__ = None
+                    for _ in trades:
+                        pass
+                    self.header, self.counts, self.sha256 = reader.header, reader.counts, reader.sha256
         except SinkFormatError as error:
             raise _engine_invariant(f"the engine's report sink is invalid: {error}") from error
         if self.header["run_id"] != self.run_id:
@@ -6268,13 +6342,197 @@ class _ReportSink:
             raise _engine_invariant(f"the engine's report sink is invalid: {error}") from error
 
     def close(self):
-        if not self.closed:
-            if not self.named and not self.keep:
+        try:
+            if not self.closed:
+                if not self.named and not self.keep:
+                    try:
+                        os.unlink(self.path)
+                    except FileNotFoundError:
+                        pass
+                self.closed = True
+        finally:
+            native = getattr(self, "native_json", None)
+            if native is not None:
+                self.native_json = None
+                primary = sys.exc_info()[1]
                 try:
-                    os.unlink(self.path)
-                except FileNotFoundError:
-                    pass
-            self.closed = True
+                    native.close()
+                except BaseException:
+                    if primary is None:
+                        raise
+
+
+def _native_sink_point(point):
+    return {"time_ms": int(point.time_ms), "equity": float(point.equity),
+            "open_profit": float(point.open_profit)}
+
+
+def _raise_native_sink_json(result, header, offending, *, guard_tag=None):
+    """Cold witness translation using the pinned parser, never a second validator.
+
+    Offending/header bytes came from the SAME native read. No mutable-path
+    reopen is used to reconstruct syntax, UTF-8 or field-error wording.
+    """
+    import pf_sink
+    status, witness = result.status, result.error
+    message = bytes(witness.message).decode("ascii")
+    if status == 8:
+        raise MemoryError("native sink JSON allocation failed")
+    if status == 9:
+        raise RuntimeError("native sink JSON exception")
+    if status in (4, 5, 6):
+        raise _engine_invariant(message)
+    if status == 3:
+        message = str(OSError(witness.os_errno, os.strerror(witness.os_errno))
+                      if witness.os_errno else OSError(message))
+    elif status == 2 and witness.category != 4:
+        try:
+            if guard_tag is not None:
+                if witness.stage == 5:
+                    pf_sink._parse(offending)  # JSON only, not header schema
+                elif witness.stage == 6 and witness.tag == 0:
+                    try:
+                        json.loads(offending[1:].decode("utf-8"))
+                    except (UnicodeError, ValueError, RecursionError) as error:
+                        raise pf_sink.SinkFormatError(f"invalid UTF-8 or JSON: {error}") from error
+                elif witness.stage == 6:
+                    parser = pf_sink.RecordParser(pf_sink._parse(header))
+                    (parser.parse_verified if guard_tag == "E" else parser.parse)(offending)
+            elif witness.stage == 1:
+                pf_sink._header(pf_sink._parse(offending))
+            elif witness.stage == 2:
+                pf_sink.RecordParser(pf_sink._parse(header)).parse(offending)
+            elif witness.stage == 3:
+                value = pf_sink._parse(offending)
+                # Replay only the bounded trailer with the ACTUAL native
+                # prefix digest/count context, not a synthetic record history.
+                class Digest:
+                    def hexdigest(self):
+                        return bytes(result.sha256_hex).decode("ascii")
+                reader = pf_sink.SinkReader.__new__(pf_sink.SinkReader)
+                parsed_header = pf_sink._parse(header)
+                reader._counts = {
+                    item["type"]: int(result.counts["ETOVKXH".index(item["type"])])
+                    for item in parsed_header["records"]}
+                reader._hash = Digest()
+                reader._file = io.BytesIO(b"x" if message == "bytes after the trailer" else b"")
+                try:
+                    reader._finish(value)
+                finally:
+                    reader.close()
+        except pf_sink.SinkFormatError as error:
+            message = str(error)
+    if guard_tag is None:
+        message = f"line {witness.line_number}: {message}"
+    raise _engine_invariant("the engine's report sink is invalid: " + message)
+
+
+def _check_native_sink_guard_header(result, header):
+    # Identity / raw framing failures came first. Otherwise _tagged_records
+    # parses its header before selected-row/trailer/digest/count failures.
+    if result.header_bytes:
+        from pf_sink import SinkFormatError, _parse
+        try:
+            _parse(header)
+        except SinkFormatError as error:
+            raise _engine_invariant(f"the engine's report sink is invalid: {error}") from error
+
+
+class _NativeSinkJSON:
+    """Borrow native bulk operations; own private encoded E and T fragments."""
+    def __init__(self, function, directory):
+        self.function, self.directory = function, directory
+        self.resources = ExitStack()
+        self.file = self.trades_file = self.result = None
+        self.header = b""
+        self.accepted = False
+        self.staging_failure = None
+
+    def _call(self, sink, *, tag=None, fd=-1, trades_fd=-1):
+        request, result = ReportSinkJSONRequestC(), ReportSinkJSONResultC()
+        request.struct_size, request.version = ctypes.sizeof(request), 1
+        result.struct_size, result.version = ctypes.sizeof(result), 1
+        request.operation = 1 if tag is None else 2
+        request.trades_fd, request.equity_fd = trades_fd, fd
+        bad = ctypes.create_string_buffer(1048577)
+        request.error_buffer, request.error_capacity = ctypes.addressof(bad), len(bad)
+        raw_header = ctypes.create_string_buffer(1048577)
+        request.header_buffer, request.header_capacity = ctypes.addressof(raw_header), len(raw_header)
+        if tag is None:
+            # Preserve strict header/open/setup-error order. Only bounded
+            # metadata is decoded here; native prepare independently checks it.
+            source = _open_uncached_sink(sink.path)
+            file = source._file
+        else:
+            verified_header = ctypes.create_string_buffer(self.header)
+            request.verified_header, request.verified_header_bytes = (
+                ctypes.addressof(verified_header), len(self.header))
+            request.guard_tag = ord(tag)
+            request.expected_ino, request.expected_size = sink._identity
+            request.expected_sha256_hex = sink.sha256.encode("ascii")
+            request.expected_counts[:] = [sink.counts.get(item, 0) for item in "ETOVKXH"]
+            source = file = _open_uncached_sink(sink.path, raw=True)
+        try:
+            request.sink_fd = file.fileno()
+            if self.function(ctypes.byref(request), ctypes.byref(result)) != 0:
+                # Descriptor refusal is nonmutating: a module that cannot
+                # implement this descriptor must retain strict compatibility.
+                result.status = 1
+        finally:
+            source.close()
+        header = raw_header.raw[:result.header_bytes]
+        if tag is not None:
+            _check_native_sink_guard_header(result, header)
+        if result.status not in (0, 1, 7):
+            _raise_native_sink_json(result, header if tag is None else self.header,
+                                    bad.raw[:result.error_bytes], guard_tag=tag)
+        return result, header
+
+    def prepare(self, sink):
+        for name in ("file", "trades_file"):
+            try:
+                setattr(self, name, _json_temporary(self.resources, self.directory))
+            except RunFailure as error:
+                if self.staging_failure is None:
+                    self.staging_failure = error  # source/receipt/results still win
+        result, header = self._call(
+            sink, fd=self.file.fileno() if self.file is not None else -1,
+            trades_fd=self.trades_file.fileno() if self.trades_file is not None else -1)
+        if result.status == 1:
+            return False  # provisional fragment stays owned until native cleanup
+        if result.complete != 1:
+            raise _engine_invariant("the native report sink JSON verification is incomplete")
+        self.result, self.header, self.accepted = result, header, True
+        import pf_sink
+        sink.header = pf_sink._parse(header)
+        sink.counts = {item["type"]: int(result.counts["ETOVKXH".index(item["type"])])
+                       for item in sink.header["records"]}
+        sink.sha256 = bytes(result.sha256_hex).decode("ascii")
+        if result.status == 7:
+            self.staging_failure = OSError(result.error.os_errno, os.strerror(result.error.os_errno))
+        for file, length in ((self.file, result.equity_json_bytes),
+                             (self.trades_file, result.trades_json_bytes)):
+            if file is not None:
+                file.size = int(length)
+                file.reading = True  # native pwrite already finalized/synced it
+        return True
+
+    def guard(self, sink, tag):
+        try:
+            result, _ = self._call(sink, tag=tag)
+        except OSError as error:
+            raise _engine_invariant(f"the engine's report sink is invalid: {error}") from error
+        if result.status == 1:
+            # No unsupported source is accepted on the strength of a native
+            # witness. Exhaust the original scan at this checkpoint instead.
+            for _ in sink._tagged_records(tag):
+                pass
+            return
+        if result.status != 0 or result.complete != 1:
+            raise _engine_invariant("the native report sink JSON guard is incomplete")
+
+    def close(self):
+        self.resources.close()
 
 
 # The harness uses the temporary-only spelling with no caller-owned path.
@@ -6554,6 +6812,34 @@ class _JSONColumn:
         self.empty = False
 
 
+class _NativeSinkJSONColumn:
+    def __init__(self, native, sink, tag="E"):
+        self.native, self.sink, self.tag = native, sink, tag
+
+    def write(self, destination):
+        native = self.native
+        native.guard(self.sink, self.tag)  # empty arrays also exhaust a fresh guard
+        if native.staging_failure is not None:
+            raise native.staging_failure
+        equity = self.tag == "E"
+        file = native.file if equity else native.trades_file
+        expected = int(native.result.equity_json_bytes if equity else native.result.trades_json_bytes)
+        expected_digest = bytes(native.result.equity_json_sha256_hex if equity
+                                else native.result.trades_json_sha256_hex)
+        if os.fstat(file.fileno()).st_size != expected:
+            raise _engine_invariant("the native report sink JSON fragment length differs")
+        digest, copied = hashlib.sha256(), 0
+        destination.write("[")
+        file.seek(0)
+        while chunk := file.read(64 * 1024):
+            copied += len(chunk)
+            digest.update(chunk.encode("ascii"))
+            destination.write(chunk)
+        if copied != expected or digest.hexdigest().encode("ascii") != expected_digest:
+            raise _engine_invariant("the native report sink JSON fragment digest differs")
+        destination.write("]")
+
+
 def _json_temporary(resources, directory):
     try:
         # _BoundedJSONFile owns ASCII encoding and the aligned I/O window.
@@ -6637,7 +6923,9 @@ def _json_fast_value(value):
 
 
 def _stream_json_value(value, destination):
-    if isinstance(value, _JSONColumn):
+    if isinstance(value, _NativeSinkJSONColumn):
+        value.write(destination)
+    elif isinstance(value, _JSONColumn):
         destination.write("[")
         value.file.seek(0)
         while chunk := value.file.read(64 * 1024):
@@ -6774,19 +7062,27 @@ def _sink_trade(record):
     return dict(zip(record.fields[:16], record.values[:16]))
 
 
-def _sink_summary(report, sink, *, records=None):
+def _sink_summary(report, sink, *, records=None, folded=None):
     n, wins, losses = 0, 0, 0
     cum, peak, max_dd = 0.0, 0.0, 0.0
     best, worst = 0.0, 0.0
     fd_mode = getattr(sink, "fd_mode", False)
-    if not fd_mode and records is None:
+    if not fd_mode and records is None and folded is None:
         if sink.summary_failure is not None:
             raise sink.summary_failure
         if sink.summary is None:
             raise _engine_invariant("the engine's report sink summary is incomplete")
         return dict(sink.summary)
-    if fd_mode:
-        summary = sink.summary
+    if fd_mode or folded is not None:
+        if folded is not None and folded.result_tag == ord("T"):
+            if folded.result_field == 1:
+                raise _engine_invariant("the report sink trade rows are out of report order")
+            if folded.result_field == 21:
+                # Translate the native fold witness; no host row validation.
+                raise RunFailure("the report result summary.max_drawdown is not finite",
+                                 "report_result_invalid",
+                                 {"field": "summary.max_drawdown", "reason": "nonfinite"})
+        summary = sink.summary if fd_mode else folded.summary
         if summary is None or summary.complete != 1 or summary.count_t != sink.counts["T"]:
             raise _engine_invariant("the engine's report sink summary is incomplete")
         invalid = int(summary.nonfinite_t_field)
@@ -6815,7 +7111,7 @@ def _sink_summary(report, sink, *, records=None):
         n, wins, losses = int(summary.count_t), int(summary.wins), int(summary.losses)
         best, worst = float(summary.best_trade), float(summary.worst_trade)
         max_dd = float(summary.max_drawdown)
-    for record in () if fd_mode else records:
+    for record in () if fd_mode or folded is not None else records:
         trade = _sink_trade(record)
         if trade["n"] != n + 1:
             raise _engine_invariant("the report sink trade rows are out of report order")
@@ -6888,10 +7184,15 @@ def _build_sink_report(report, ohlcv_path, n_bars, first_ts, last_ts, elapsed,
     # pf_sink.py's strict reader compares trailer counts with records read
     # ("trailer count mismatch"), and verify() compares receipt counts with
     # those verified trailer counts.
-    trades = _JSONRecordArray(
-        lambda: (_sink_trade(row) for row in sink.records("T")), sink.counts["T"])
-    equity_curve = _JSONRecordArray(
-        lambda: (row.as_dict() for row in sink.records("E")), sink.counts["E"])
+    native = getattr(sink, "native_json", None)
+    if native is not None and native.accepted:
+        trades = _NativeSinkJSONColumn(native, sink, "T")
+        equity_curve = _NativeSinkJSONColumn(native, sink)
+    else:
+        trades = _JSONRecordArray(
+            lambda: (_sink_trade(row) for row in sink.records("T")), sink.counts["T"])
+        equity_curve = _JSONRecordArray(
+            lambda: (row.as_dict() for row in sink.records("E")), sink.counts["E"])
     out["equity_curve"] = equity_curve
     first_bar_trade = ({"entry_bar_index": 0},) if diagnostics.trade_at_start else ()
     out["diagnostics"].update(
