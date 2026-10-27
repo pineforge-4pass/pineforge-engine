@@ -1,0 +1,2 @@
+list(APPEND TEST_SOURCES test_cr342_scratch_refusal_text)
+pineforge_add_unit_test(test_cr342_scratch_refusal_text)
