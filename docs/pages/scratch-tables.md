@@ -235,7 +235,9 @@ and HPO drivers are in other repositories; their integration is **planned**.
 
 Capacity resources are `layout`, `sequence_data`, `sequence_index`,
 `erased_data`, `erased_index`, `consumed_data`, `consumed_index`, `cohort`,
-`exit_rank`, and `successor_roots`. q names remain in the wire vocabulary.
+`exit_rank`, `successor_roots`, and `store_objects`. q names remain in the wire
+vocabulary. The `store_objects` resource names the live-object cap of the paged
+object store, per store, with an approved maximum of 1,048,576.
 The implemented bounded-memory checks cover the entire operation's count and
 byte workset before its first semantic mutation, with no grow/rehash/fallback.
 Physical allocator failure stays `out_of_memory`; it is not relabeled as a

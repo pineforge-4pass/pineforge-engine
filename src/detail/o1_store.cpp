@@ -516,7 +516,7 @@ Id StoreImpl::create(std::uint64_t bytes, std::uint64_t align) {
   if (!is_power_of_two(alignment))
     throw std::invalid_argument("o1 store: align must be a power of two");
   if (objects_live_ >= max_live_objects_)
-    throw ScratchCapacityError(ScratchResource::cohort,
+    throw ScratchCapacityError(ScratchResource::store_objects,
         scratch_object_limit_message(max_live_objects_, objects_live_ + 1,
                                      kMaxLiveObjectsCap));
   if (next_id_ == std::numeric_limits<Id>::max())

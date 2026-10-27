@@ -1016,6 +1016,7 @@
       "partial_cycles",
       "partial_cycles_idx",
       "successor_roots",
+      "store_objects",
       "command",
       "unknown"
      ]
@@ -1296,7 +1297,8 @@
       "consumed_index",
       "cohort",
       "exit_rank",
-      "successor_roots"
+      "successor_roots",
+      "store_objects"
      ]
     }
    },
