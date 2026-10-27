@@ -31,8 +31,11 @@
 #include "../src/native_execution_consumer.hpp"
 #include "native_match_book_fixture.hpp"
 
+#include <array>
+#include <charconv>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <limits>
 #include <variant>
 #include <vector>
@@ -64,6 +67,83 @@ std::uint64_t ordinal_of(const no::CommandEvent& event) {
 }
 
 enum class Window { Full, Acknowledged, EveryPoint };
+
+constexpr int kSliceCount = 8;
+constexpr std::uint64_t kSeedBase = 44001;
+constexpr std::array<int, 4> kLiveBooks = {1, 5, 20, 60};
+constexpr std::array<Path, 3> kPaths = {Path::None, Path::Synthesized, Path::Lower};
+constexpr std::array<Window, 3> kWindows = {Window::Full, Window::Acknowledged, Window::EveryPoint};
+constexpr std::array<bool, 2> kCalculateOnFills = {false, true};
+// Measured seconds: 563, 49, 37, 36 on 2026-10-27, Release, one core.
+constexpr std::array<int, 4> kHeavyBooks = {67, 49, 61, 55};
+constexpr std::array<int, 7> kOrdinarySliceCycle = {4, 5, 6, 7, 1, 2, 3};
+
+struct BookCase {
+    int index;
+    BookConfig config;
+    Window window;
+};
+
+std::vector<BookCase> book_cases() {
+    std::vector<BookCase> books;
+    for (std::size_t live = 0; live < kLiveBooks.size(); ++live) {
+        for (std::size_t path = 0; path < kPaths.size(); ++path) {
+            for (std::size_t window = 0; window < kWindows.size(); ++window) {
+                for (std::size_t fill = 0; fill < kCalculateOnFills.size(); ++fill) {
+                    const int index = static_cast<int>(((live * kPaths.size() + path) *
+                        kWindows.size() + window) * kCalculateOnFills.size() + fill);
+                    BookConfig config;
+                    config.seed = kSeedBase + index;
+                    config.live = kLiveBooks[live];
+                    config.bars = config.live >= 20 ? 30 : 50;
+                    config.path = kPaths[path];
+                    config.calc_on_fills = kCalculateOnFills[fill];
+                    books.push_back({index, config, kWindows[window]});
+                }
+            }
+        }
+    }
+    return books;
+}
+
+struct Slice {
+    int index = 1;
+    int count = 1;
+};
+
+int book_slice(int index) {
+    // Reserve slice 8 for book 67 alone; deal the other heavy books to 1, 2, 3.
+    // Continue ordinary books at slice 4 by their rank among non-heavy indices.
+    // Final counts for slices 1..8: 11, 10, 10, 10, 10, 10, 10, 1.
+    int ordinary_rank = index;
+    for (std::size_t heavy = 0; heavy < kHeavyBooks.size(); ++heavy) {
+        if (index == kHeavyBooks[heavy]) {
+            if (heavy == 0) return kSliceCount;
+            return static_cast<int>(heavy);
+        }
+        if (kHeavyBooks[heavy] < index) --ordinary_rank;
+    }
+    return kOrdinarySliceCycle[ordinary_rank % kOrdinarySliceCycle.size()];
+}
+
+int slice_book_count(const Slice& slice) {
+    int count = 0;
+    const int books = static_cast<int>(kLiveBooks.size() * kPaths.size() *
+        kWindows.size() * kCalculateOnFills.size());
+    for (int index = 0; index < books; ++index) {
+        if (slice.count == 1 || book_slice(index) == slice.index) ++count;
+    }
+    return count;
+}
+
+bool parse_slice(const char* argument, Slice& slice) {
+    const char* end = argument + std::strlen(argument);
+    const auto index = std::from_chars(argument, end, slice.index);
+    if (index.ec != std::errc{} || index.ptr == end || *index.ptr != '/') return false;
+    const auto count = std::from_chars(index.ptr + 1, end, slice.count);
+    return count.ec == std::errc{} && count.ptr == end &&
+        slice.count == kSliceCount && slice.index >= 1 && slice.index <= slice.count;
+}
 
 const char* window_name(Window window) {
     switch (window) {
@@ -191,31 +271,36 @@ void run_one(const BookConfig& config, Window window) {
 
 }  // namespace
 
-int main() {
-    std::uint64_t seed = 44001;
-    int runs = 0;
-    for (const int live : {1, 5, 20, 60}) {
-        for (const Path path : {Path::None, Path::Synthesized, Path::Lower}) {
-            for (const Window window : {Window::Full, Window::Acknowledged, Window::EveryPoint}) {
-                for (const bool calc_on_fills : {false, true}) {
-                    BookConfig config;
-                    config.seed = seed++;
-                    config.live = live;
-                    config.bars = live >= 20 ? 30 : 50;
-                    config.path = path;
-                    config.calc_on_fills = calc_on_fills;
-                    run_one(config, window);
-                    ++runs;
-                }
-            }
-        }
+int main(int argc, char** argv) {
+    Slice slice;
+    if (argc != 1 &&
+        (argc != 3 || std::strcmp(argv[1], "--slice") != 0 || !parse_slice(argv[2], slice))) {
+        std::fprintf(stderr, "usage: test_native_command_after [--slice I/%d] (1 <= I <= %d)\n",
+                     kSliceCount, kSliceCount);
+        return 2;
     }
-    std::printf("test_native_command_after: %d runs, %ld comparisons (%ld above the cursor, "
+    const auto books = book_cases();
+    const int slice_books = slice_book_count(slice);
+    int runs = 0;
+    for (const auto& book : books) {
+        if (slice.count != 1 && book_slice(book.index) != slice.index) continue;
+        run_one(book.config, book.window);
+        ++runs;
+    }
+    std::printf("test_native_command_after: slice %d/%d, %d runs, %ld comparisons (%ld above the cursor, "
                 "%ld not), %ld probes of an empty journal\n",
-                runs, checks, answered_true, answered_false, empty_journal);
+                slice.index, slice.count, runs, checks, answered_true, answered_false, empty_journal);
+    CHECK(runs > 0);
+    CHECK(runs == slice_books);
     // Vacuity guards: both answers, and the empty journal the window leaves.
-    CHECK(answered_true > 10000);
-    CHECK(answered_false > 10000);
+    // Scale by the selected population; a direct run keeps the full thresholds.
+    if (slice.count == 1) {
+        CHECK(answered_true > 10000);
+        CHECK(answered_false > 10000);
+    } else {
+        CHECK(answered_true > 10000 * slice_books / static_cast<int>(books.size()));
+        CHECK(answered_false > 10000 * slice_books / static_cast<int>(books.size()));
+    }
     CHECK(empty_journal > 0);
     if (failures != 0) {
         std::fprintf(stderr, "test_native_command_after: %d failure(s)\n", failures);

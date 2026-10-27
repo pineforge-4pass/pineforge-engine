@@ -1,14 +1,15 @@
-"""CX-SINK-B4: pipe transport, provisional stdout, file cleanup and RSS.
+"""Pipe transport, provisional stdout, file cleanup and RSS coverage.
 
-CTest's native row supplies the existing L6B1 strategy module: the round
-trip then uses its real path sink through run_json's existing ctypes owner.
-The ordinary row reuses tests/test_run_json_sink.py's v1 fixture writer.
-No sink fixture or hash is recorded here. The RSS probe runs this file in
-a fresh stdlib-only process, before pytest/run_json are imported, so
-RUSAGE_CHILDREN describes just the finalizer rather than pytest's children
-or a large inherited pytest heap. Separate fresh probes measure a tiny
-stream and >=64 MiB generated and hashed on the fly. The large stream may
-add at most 1 MiB of peak RSS and must fit the measured tiny baseline +2 MiB.
+Native rows use the existing strategy module and run_json's ctypes owner;
+ordinary rows reuse tests/test_run_json_sink.py's fixture writer. No sink
+fixture or hash is stored here. Fresh stdlib-only probes measure one
+finalizer child before pytest/run_json imports. Three tiny streams and three
+>=64 MiB generated streams are hashed as they are sent. The smallest big
+peak minus the largest tiny peak must be at most 1 MiB; those same extrema
+must fit the tiny baseline +2 MiB headroom, which is implied by that bound.
+Recorded macOS tiny peaks scattered by about 0.9 MiB, so growth below about
+1 MiB + that scatter can escape this coarse guard. Pure decision rows and
+a real finalizer retaining 4 MiB only for big streams check sensitivity.
 """
 from __future__ import annotations
 
@@ -37,6 +38,11 @@ TYPED_REFUSAL_RECEIPT_KEYS = (
     *RECEIPT_KEYS, "tool", "event", "exit_code", "detail", "code", "args")
 RSS_FLATNESS_BYTES = 1024 * 1024
 RSS_BASELINE_HEADROOM_BYTES = 2 * 1024 * 1024
+# A touched 2 MiB plant showed only 1.75 MiB of peak growth (7/8).
+# Budget RSS_BASELINE_HEADROOM_BYTES (2 MiB) for tiny scatter:
+# 4 MiB * 7/8 - 2 MiB = 1.5 MiB > RSS_FLATNESS_BYTES (1 MiB).
+RSS_PLANTED_RETENTION_BYTES = 2 * RSS_BASELINE_HEADROOM_BYTES
+RSS_MEASUREMENT_PAIRS = 3
 STREAM_BYTES = 64 * 1024 * 1024
 
 
@@ -54,7 +60,8 @@ def write_all(fd, data):
         remaining = remaining[count:]
 
 
-def rss_probe(directory, header_path, *, stdout_mode=False, tiny=False):
+def rss_probe(directory, header_path, *, stdout_mode=False, tiny=False,
+              launcher=None, launcher_sample=None):
     """One child only; do not import pytest, run_json or the test fixtures."""
     directory = Path(directory)
     out = directory / "large.sink"
@@ -64,8 +71,15 @@ def rss_probe(directory, header_path, *, stdout_mode=False, tiny=False):
     total = 0
     in_read, in_write = os.pipe()
     receipt_read, receipt_write = os.pipe() if stdout_mode else (None, None)
-    command = [sys.executable, "-B", "-S", str(TOOL), "--in-fd", str(in_read),
-               "--out", "-" if stdout_mode else str(out)]
+    command = [sys.executable, "-B", "-S"]
+    if launcher is not None:
+        sample = "tiny" if tiny else "big"
+        if launcher_sample is not None:
+            sample = launcher_sample
+        command += [str(launcher), str(TOOL), sample]
+    else:
+        command.append(str(TOOL))
+    command += ["--in-fd", str(in_read), "--out", "-" if stdout_mode else str(out)]
     inherited = [in_read]
     if stdout_mode:
         # Allow the target-sized stream plus its last record and trailer.
@@ -136,11 +150,13 @@ def rss_probe(directory, header_path, *, stdout_mode=False, tiny=False):
     return process.returncode
 
 
-if __name__ == "__main__" and len(sys.argv) in (4, 5) and sys.argv[1] in (
+if __name__ == "__main__" and len(sys.argv) in (4, 5, 6, 7) and sys.argv[1] in (
         "--rss-probe", "--rss-stdout-probe"):
     raise SystemExit(rss_probe(sys.argv[2], sys.argv[3],
                               stdout_mode=sys.argv[1] == "--rss-stdout-probe",
-                              tiny=len(sys.argv) == 5 and sys.argv[4] == "tiny"))
+                              tiny=len(sys.argv) >= 5 and sys.argv[4] == "tiny",
+                              launcher=sys.argv[5] if len(sys.argv) >= 6 else None,
+                              launcher_sample=sys.argv[6] if len(sys.argv) == 7 else None))
 
 
 import ctypes
@@ -1080,43 +1096,267 @@ def test_fsync_then_verify_then_publish_and_short_writes(tmp_path, monkeypatch):
     assert out.read_bytes() == payload and list(spool.iterdir()) == []
 
 
+def rss_flatness_verdict(tiny_peaks, big_peaks):
+    """Judge byte-normalized independent extrema without I/O.
+
+    Measured tiny-baseline scatter was about 0.9 MiB. Growth below about
+    1 MiB + that scatter can escape this coarse stream-proportional guard.
+    """
+    samples = f"tiny_peaks={tiny_peaks} big_peaks={big_peaks}"
+    if (not tiny_peaks or not big_peaks
+            or any(peak <= 0 for peak in (*tiny_peaks, *big_peaks))):
+        return False, f"rss-measurement {samples} (empty or non-positive peaks)"
+    tiny_peak, big_peak = max(tiny_peaks), min(big_peaks)
+    delta = big_peak - tiny_peak
+    measurement = (f"rss-measurement tiny={tiny_peak} big={big_peak} "
+                   f"delta={delta} {samples}")
+    # A stream-proportional leak raises every big peak. Tiny baseline noise
+    # must be accounted for independently of which big probe ran beside it.
+    passed = (delta <= RSS_FLATNESS_BYTES
+              and big_peak <= tiny_peak + RSS_BASELINE_HEADROOM_BYTES)
+    return passed, measurement
+
+
+def test_rss_flatness_accepts_recorded_tiny_baseline_scatter():
+    # Recorded byte-normalized macOS peaks; main rejects the first pair.
+    tiny_peaks = [22298624, 22921216, 22495232]
+    big_peaks = [23478272, 23461888, 23560192]
+
+    passed, measurement = rss_flatness_verdict(tiny_peaks, big_peaks)
+
+    assert passed is True, measurement
+    assert "tiny=22921216 big=23461888 delta=540672" in measurement
+    assert f"tiny_peaks={tiny_peaks} big_peaks={big_peaks}" in measurement
+
+
+def test_rss_flatness_accepts_all_five_recorded_macos_pairs():
+    tiny_peaks = [23166976, 22298624, 22609920, 22921216, 22495232]
+    big_peaks = [23805952, 23478272, 23724032, 23461888, 23560192]
+
+    passed, measurement = rss_flatness_verdict(tiny_peaks, big_peaks)
+
+    assert passed is True, measurement
+    assert "tiny=23166976 big=23461888 delta=294912" in measurement
+    assert f"tiny_peaks={tiny_peaks} big_peaks={big_peaks}" in measurement
+
+
+def test_rss_flatness_uses_independent_extrema():
+    # Every paired delta exceeds 1 MiB; pairing must not choose the baseline.
+    mib = 1024 * 1024
+    baseline = 22 * mib
+    tiny_peaks = [baseline, baseline + mib // 4, baseline + mib // 8]
+    big_peaks = [tiny + 9 * mib // 8 for tiny in tiny_peaks]
+
+    passed, measurement = rss_flatness_verdict(tiny_peaks, big_peaks)
+
+    assert passed is True, measurement
+    assert "tiny=23330816 big=24248320 delta=917504" in measurement
+    assert f"tiny_peaks={tiny_peaks} big_peaks={big_peaks}" in measurement
+
+
+def test_rss_flatness_rejects_stream_proportional_leak():
+    # Negative control: every pair grows, including one whole-stream leak.
+    mib = 1024 * 1024
+    tiny_peaks = [22300000, 22900000, 22500000]
+    big_peaks = [tiny_peaks[0] + 4 * mib, tiny_peaks[1] + STREAM_BYTES,
+                 tiny_peaks[2] + 4 * mib]
+
+    passed, measurement = rss_flatness_verdict(tiny_peaks, big_peaks)
+
+    assert passed is False, measurement
+    assert "tiny=22900000 big=26494304 delta=3594304" in measurement
+    assert f"tiny_peaks={tiny_peaks} big_peaks={big_peaks}" in measurement
+
+
+def test_rss_flatness_rejects_consistently_over_bound_peaks():
+    # Negative control: repetition must not relax the 1 MiB bound.
+    mib = 1024 * 1024
+    tiny_peaks = [22300000, 22900000, 22500000]
+    baseline = max(tiny_peaks)
+    delta = 9 * mib // 8
+    big_peaks = [baseline + delta] * RSS_MEASUREMENT_PAIRS
+
+    passed, measurement = rss_flatness_verdict(tiny_peaks, big_peaks)
+
+    assert passed is False, measurement
+    assert f"tiny={baseline} big={baseline + delta} delta={delta}" in measurement
+    assert f"tiny_peaks={tiny_peaks} big_peaks={big_peaks}" in measurement
+
+
+@pytest.mark.parametrize("tiny_peaks,big_peaks", [
+    ([], []), ([], [1]), ([1], []),
+    ([1, 0, 1], [1, 1, 1]), ([1, -1, 1], [1, 1, 1]),
+    ([1, 1, 1], [1, 0, 1]), ([1, 1, 1], [1, -1, 1]),
+])
+def test_rss_flatness_rejects_empty_or_non_positive_peaks(tiny_peaks, big_peaks):
+    passed, measurement = rss_flatness_verdict(tiny_peaks, big_peaks)
+
+    assert passed is False, measurement
+    assert "empty or non-positive peaks" in measurement
+    assert f"tiny_peaks={tiny_peaks} big_peaks={big_peaks}" in measurement
+
+
+@pytest.mark.parametrize("growth,expected", [
+    (2 * 1024 * 1024, False),
+    (1024 * 1024 - 1024, True),
+])
+def test_rss_flatness_judges_near_bound_retention(growth, expected):
+    tiny_peaks = [22300000, 22900000, 22500000]
+    baseline = max(tiny_peaks)
+    big_peaks = [baseline + growth] * RSS_MEASUREMENT_PAIRS
+
+    passed, measurement = rss_flatness_verdict(tiny_peaks, big_peaks)
+
+    assert passed is expected, measurement
+    assert f"tiny={baseline} big={baseline + growth} delta={growth}" in measurement
+    assert f"tiny_peaks={tiny_peaks} big_peaks={big_peaks}" in measurement
+
+
+@pytest.mark.parametrize("tiny_peaks", [
+    [20185088, 20185088, 21102592],
+    [20185088, 20185088, 20185088 + RSS_BASELINE_HEADROOM_BYTES],
+], ids=["recorded_scatter", "two_mib_scatter"])
+def test_rss_planted_retention_exceeds_bound_with_tiny_scatter(tiny_peaks):
+    # The recorded 2 MiB plant raised the low-baseline peak by only 1.75 MiB.
+    observed_retention = 2 * 1024 * 1024
+    observed_growth = 22020096 - min(tiny_peaks)
+    visible_growth = (RSS_PLANTED_RETENTION_BYTES * observed_growth
+                      // observed_retention)
+    big_peaks = [min(tiny_peaks) + visible_growth] * RSS_MEASUREMENT_PAIRS
+
+    passed, measurement = rss_flatness_verdict(tiny_peaks, big_peaks)
+
+    assert passed is False, measurement
+    assert min(big_peaks) - max(tiny_peaks) > RSS_FLATNESS_BYTES, measurement
+    assert RSS_BASELINE_HEADROOM_BYTES >= observed_retention
+    assert visible_growth - RSS_BASELINE_HEADROOM_BYTES > RSS_FLATNESS_BYTES
+
+
+def retaining_finalizer_launcher(tmp_path):
+    """Same runpy overhead; retain touched pages for big, nothing for none."""
+    launcher = tmp_path / "retaining-finalizer.py"
+    launcher.write_text(f"""\
+from pathlib import Path
+import resource
+import runpy
+import sys
+
+tool = Path(sys.argv.pop(1)).expanduser()
+sample = sys.argv.pop(1)
+if sample not in ("tiny", "big", "none"):
+    raise ValueError("expected tiny, big or none RSS sample")
+
+retained = bytearray()
+if sample == "big":
+    retained = bytearray({RSS_PLANTED_RETENTION_BYTES})
+    for offset in range(0, len(retained), resource.getpagesize()):
+        retained[offset] = 1
+sys.argv[0] = str(tool)
+sys.path.insert(0, str(tool.parent))
+runpy.run_path(str(tool), run_name="__main__")
+""")
+    return launcher
+
+
 @pytest.mark.parametrize("stdout_mode", [False, True])
-def test_64_mib_stream_has_flat_peak_rss(tmp_path, stdout_mode, record_property, capfd):
+def test_64_mib_stream_rejects_planted_retention(
+        tmp_path, stdout_mode, record_property, capfd):
+    launcher = retaining_finalizer_launcher(tmp_path)
+
+    passed, measurement, tiny_peaks, big_peaks = measure_stream_rss(
+        tmp_path, stdout_mode, record_property, capfd, launcher=launcher)
+
+    assert passed is False, measurement
+    assert "empty or non-positive peaks" not in measurement, measurement
+    assert all(peak > 0 for peak in (*tiny_peaks, *big_peaks)), measurement
+    assert min(big_peaks) - max(tiny_peaks) > RSS_FLATNESS_BYTES, measurement
+
+
+def test_64_mib_stream_has_flat_peak_rss_with_retention_disabled(
+        tmp_path, record_property, capfd):
+    launcher = retaining_finalizer_launcher(tmp_path)
+
+    passed, measurement, _, _ = measure_stream_rss(
+        tmp_path, False, record_property, capfd,
+        launcher=launcher, retain_big=False)
+
+    assert passed is True, measurement
+
+
+@pytest.mark.parametrize("sample", ["tiny", "big", "none"])
+def test_rss_retention_launcher_propagates_a_crash(tmp_path, sample):
+    launcher = retaining_finalizer_launcher(tmp_path)
+    crashing_tool = tmp_path / "crashing-finalizer.py"
+    crashing_tool.write_text("raise RuntimeError('deliberate RSS launcher crash')\n")
+    result = subprocess.run(
+        [sys.executable, "-B", "-S", str(launcher), str(crashing_tool), sample],
+        stdin=subprocess.DEVNULL, capture_output=True, cwd=tmp_path)
+
+    assert result.returncode == 1, result.stderr.decode()
+    assert b"RuntimeError: deliberate RSS launcher crash" in result.stderr
+    assert str(crashing_tool).encode() in result.stderr
+
+
+@pytest.mark.parametrize("stdout_mode", [False, True])
+def test_64_mib_stream_has_flat_peak_rss_across_probes(
+        tmp_path, stdout_mode, record_property, capfd):
+    passed, measurement, _, _ = measure_stream_rss(
+        tmp_path, stdout_mode, record_property, capfd)
+
+    assert passed, measurement
+
+
+def measure_stream_rss(tmp_path, stdout_mode, record_property, capfd, *,
+                       launcher=None, retain_big=True):
     header = tmp_path / "header.json"
     header.write_bytes(encoded(fixtures.header(outputs=True)))
     probes = {}
-    for sample in ("tiny", "big"):
-        directory = tmp_path / ("rss-" + sample)
-        directory.mkdir()
-        # Each fresh stdlib-only probe owns exactly one finalizer child,
-        # keeping the two RUSAGE_CHILDREN high-water marks independent.
-        result = subprocess.run(
-            [sys.executable, "-B", "-S", str(Path(__file__).resolve()),
-             "--rss-stdout-probe" if stdout_mode else "--rss-probe",
-             str(directory), str(header), sample],
-            stdin=subprocess.DEVNULL, capture_output=True, cwd=tmp_path)
-        assert result.returncode == 0, (
-            f"rss probe '{sample}' failed (rc={result.returncode}): {result.stderr.decode()}")
-        probes[sample] = (directory, result, json.loads(result.stdout))
+    tiny_peaks, big_peaks = [], []
+    for pair_number in range(1, RSS_MEASUREMENT_PAIRS + 1):
+        for sample in ("tiny", "big"):
+            directory = tmp_path / f"rss-{pair_number}-{sample}"
+            directory.mkdir()
+            # Each fresh stdlib-only probe owns exactly one finalizer child,
+            # keeping all RUSAGE_CHILDREN high-water marks independent.
+            command = [
+                sys.executable, "-B", "-S", str(Path(__file__).resolve()),
+                "--rss-stdout-probe" if stdout_mode else "--rss-probe",
+                str(directory), str(header), sample]
+            if launcher is not None:
+                command.append(str(launcher))
+                if not retain_big:
+                    command.append("none")
+            result = subprocess.run(
+                command,
+                stdin=subprocess.DEVNULL, capture_output=True, cwd=tmp_path)
+            assert result.returncode == 0, (
+                f"rss probe '{sample}' pair={pair_number} failed "
+                f"(rc={result.returncode}): {result.stderr.decode()}")
+            probes[pair_number, sample] = (directory, result, json.loads(result.stdout))
+        tiny_peaks.append(probes[pair_number, "tiny"][2]["peak_bytes"])
+        big_peaks.append(probes[pair_number, "big"][2]["peak_bytes"])
 
-    tiny_peak = probes["tiny"][2]["peak_bytes"]
-    big_peak = probes["big"][2]["peak_bytes"]
+    passed, measurement = rss_flatness_verdict(tiny_peaks, big_peaks)
+    tiny_peak, big_peak = max(tiny_peaks), min(big_peaks)
     delta = big_peak - tiny_peak
     mode = "stdout" if stdout_mode else "file"
     python_version = " ".join(sys.version.split())
-    measurement = (f"rss-measurement mode={mode} tiny={tiny_peak} big={big_peak} "
-                   f"delta={delta} py={python_version}")
+    measurement = f"{measurement} mode={mode} py={python_version}"
     # pytest hides a passing test's captured output; the measured bytes must
     # reach the log on every run, so write them with capture suspended.
     with capfd.disabled():
         print(measurement, file=sys.stderr, flush=True)
     for name, value in (("rss_mode", mode), ("rss_tiny_bytes", tiny_peak),
                         ("rss_big_bytes", big_peak), ("rss_delta_bytes", delta),
+                        ("rss_headroom_to_bound_bytes", RSS_FLATNESS_BYTES - delta),
+                        ("rss_tiny_peaks_bytes", json.dumps(tiny_peaks)),
+                        ("rss_big_peaks_bytes", json.dumps(big_peaks)),
+                        ("rss_retention_planted", launcher is not None and retain_big),
                         ("rss_python_version", python_version)):
         record_property(name, value)
 
-    for sample, (directory, result, measured) in probes.items():
-        details = f"{measurement}\nsample={sample} measured={measured}"
+    for (pair_number, sample), (directory, result, measured) in probes.items():
+        details = f"{measurement}\npair={pair_number} sample={sample} measured={measured}"
         assert result.returncode == 0, f"{measurement}\n{result.stderr.decode()}"
         assert measured["returncode"] == 0 and measured["stderr"] == "", details
         if sample == "big":
@@ -1144,6 +1384,4 @@ def test_64_mib_stream_has_flat_peak_rss(tmp_path, stdout_mode, record_property,
             assert wire.hexdigest() == measured["expected_wire_sha256"], details
         assert list(directory.glob(".pineforge-sink-*.spool")) == [], details
 
-    assert 0 < tiny_peak and 0 < big_peak, measurement
-    assert delta <= RSS_FLATNESS_BYTES, measurement
-    assert big_peak <= tiny_peak + RSS_BASELINE_HEADROOM_BYTES, measurement
+    return passed, measurement, tiny_peaks, big_peaks

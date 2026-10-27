@@ -466,18 +466,36 @@ if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)
     if(_pf_genuine_retry_sanitizer)
         list(APPEND _pf_genuine_retry_sanitizer_args --sanitizer ${_pf_genuine_retry_sanitizer})
     endif()
-    # This corpus-backed row belongs to the same runner inventory selected by
+    # These corpus-backed rows belong to the runner inventory selected by
     # live-sanitizers/live-tsan. Missing inputs are an explicit CTest SKIP;
     # once the driver starts, its failures cannot take the skip exit code.
-    add_test(NAME native_live_equivalence_e2e COMMAND ${Python3_EXECUTABLE} -B
-        ${PROJECT_SOURCE_DIR}/tests/native_live_equivalence_ctest.py
-        --script ${PROJECT_SOURCE_DIR}/tests/native_live_equivalence_e2e.py
-        --root ${PROJECT_SOURCE_DIR} --build-dir ${PROJECT_BINARY_DIR}
-        --libraries-dir ${CMAKE_CURRENT_BINARY_DIR}/native_live_equivalence_e2e/libraries
-        --out ${CMAKE_CURRENT_BINARY_DIR}/native_live_equivalence_e2e/output
-        ${_pf_genuine_retry_sanitizer_args})
-    set_tests_properties(native_live_equivalence_e2e PROPERTIES
-        SKIP_RETURN_CODE 77 LABELS private_fixtures)
+    # The cover row checks this list against the driver's PROBES declaration.
+    set(_pf_equivalence_probes
+        ta-rsi14-cross-50-01
+        order-keystone-limit-replace-01
+        order-stop-entry-touch-boundary-01
+        order-harbor-stop-limit-01
+        bracket-trailing-activation-offset-path-01
+        pyramid-terrace-staged-entry-01
+        order-entry-implicit-reversal-exit-01
+        order-tranche-partial-market-close-01)
+    set(_pf_equivalence_rows)
+    foreach(_pf_equivalence_probe IN LISTS _pf_equivalence_probes)
+        add_test(NAME native_live_equivalence_e2e_${_pf_equivalence_probe}
+            COMMAND ${Python3_EXECUTABLE} -B
+            ${PROJECT_SOURCE_DIR}/tests/native_live_equivalence_ctest.py
+            --script ${PROJECT_SOURCE_DIR}/tests/native_live_equivalence_e2e.py
+            --probes ${_pf_equivalence_probe}
+            --root ${PROJECT_SOURCE_DIR} --build-dir ${PROJECT_BINARY_DIR}
+            --libraries-dir ${CMAKE_CURRENT_BINARY_DIR}/native_live_equivalence_e2e/${_pf_equivalence_probe}/libraries
+            --out ${CMAKE_CURRENT_BINARY_DIR}/native_live_equivalence_e2e/${_pf_equivalence_probe}/output
+            ${_pf_genuine_retry_sanitizer_args})
+        set_tests_properties(native_live_equivalence_e2e_${_pf_equivalence_probe} PROPERTIES
+            SKIP_RETURN_CODE 77 LABELS private_fixtures)
+        list(APPEND _pf_equivalence_rows native_live_equivalence_e2e_${_pf_equivalence_probe})
+    endforeach()
+    add_test(NAME test_native_live_equivalence_split COMMAND ${Python3_EXECUTABLE} -B
+        ${PROJECT_SOURCE_DIR}/scripts/test_native_live_equivalence_split.py)
     add_test(NAME native_live_genuine_retry_e2e COMMAND ${Python3_EXECUTABLE} -B
         ${PROJECT_SOURCE_DIR}/tests/native_live_genuine_retry_e2e.py
         --runner $<TARGET_FILE:pineforge-live> --library $<TARGET_FILE:native_live_example>
@@ -517,7 +535,7 @@ if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)
         else()
             list(APPEND _pf_genuine_retry_environment "TSAN_OPTIONS=halt_on_error=1:second_deadlock_stack=1")
         endif()
-        set_tests_properties(native_live_genuine_retry_e2e native_live_equivalence_e2e
+        set_tests_properties(native_live_genuine_retry_e2e ${_pf_equivalence_rows}
             PROPERTIES ENVIRONMENT "${_pf_genuine_retry_environment}")
     endif()
 endif()
