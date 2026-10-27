@@ -236,8 +236,12 @@ and HPO drivers are in other repositories; their integration is **planned**.
 Capacity resources are `layout`, `sequence_data`, `sequence_index`,
 `erased_data`, `erased_index`, `consumed_data`, `consumed_index`, `cohort`,
 `exit_rank`, `successor_roots`, and `store_objects`. q names remain in the wire
-vocabulary. The `store_objects` resource names the live-object cap of the paged
-object store, per store, with an approved maximum of 1,048,576.
+vocabulary. The `store_objects` resource is raised only when a host or test
+explicitly sets a live-object limit for a paged object store and creation would
+exceed it. The default is no count limit (`Shape::max_live_objects = 0`); nonzero
+limits are honored unchanged, with no fixed maximum. Objects occupy the run's
+scratch backing while the resident Store workspace stays fixed. Exhausting that
+backing preserves its typed arena-exhaustion or scratch-I/O failure.
 The implemented bounded-memory checks cover the entire operation's count and
 byte workset before its first semantic mutation, with no grow/rehash/fallback.
 Physical allocator failure stays `out_of_memory`; it is not relabeled as a

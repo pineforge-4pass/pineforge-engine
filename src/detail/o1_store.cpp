@@ -27,6 +27,7 @@
 
 #include <pineforge/detail/o1_store.hpp>
 
+#include <pineforge/detail/scratch_arena.hpp>
 #include <pineforge/detail/scratch_errors.hpp>
 #include <pineforge/detail/scratch_store.hpp>
 
@@ -358,9 +359,7 @@ StoreImpl::~StoreImpl() {
 
 StoreImpl::StoreImpl(const Shape& shape, ScratchBacking& backing)
     : chunk_bytes_(shape.chunk_bytes),
-      max_live_objects_(shape.max_live_objects == 0
-                            ? kMaxLiveObjectsCap
-                            : std::min(shape.max_live_objects, kMaxLiveObjectsCap)) {
+      max_live_objects_(shape.max_live_objects) {
   if (!is_power_of_two(shape.page_bytes) ||
       shape.page_bytes < scratch_min_page_size)
     throw std::invalid_argument(
@@ -467,7 +466,13 @@ StoreImpl::Header StoreImpl::header_for(Id id) const {
   // Lookup/read failures can follow successful chunk puts/erases. Poison before
   // constructing the exception too: its string allocation can itself throw.
   if (outer_active_) rollback_only_ = true;
-  throw std::runtime_error(std::string("o1 store: ") + what + ": " + status_text(status));
+  if (status == ScratchStatus::io_error)
+    rethrow_carried_scratch_failure(store_->carried_failure());
+  const std::runtime_error error(
+      std::string("o1 store: ") + what + ": " + status_text(status));
+  if (status == ScratchStatus::io_error || status == ScratchStatus::corrupt)
+    throw coded<std::runtime_error>(RunFailureCode::scratch_io_failed, {}, error);
+  throw error;
 }
 
 void StoreImpl::require_mutable() const {
@@ -515,10 +520,9 @@ Id StoreImpl::create(std::uint64_t bytes, std::uint64_t align) {
   const std::uint64_t alignment = align == 0 ? 1 : align;
   if (!is_power_of_two(alignment))
     throw std::invalid_argument("o1 store: align must be a power of two");
-  if (objects_live_ >= max_live_objects_)
+  if (max_live_objects_ != 0 && objects_live_ >= max_live_objects_)
     throw ScratchCapacityError(ScratchResource::store_objects,
-        scratch_object_limit_message(max_live_objects_, objects_live_ + 1,
-                                     kMaxLiveObjectsCap));
+        scratch_object_limit_message(max_live_objects_, objects_live_ + 1));
   if (next_id_ == std::numeric_limits<Id>::max())
     throw std::overflow_error("o1 store: id space exhausted");
   const Id id = next_id_;

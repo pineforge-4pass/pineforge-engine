@@ -229,8 +229,12 @@ in addition to its six released 1.4.0 reasons.
 
 <!-- END generated tables -->
 
-The `store_objects` resource names the live-object cap of the paged object store,
-per store, with an approved maximum of 1,048,576.
+The `store_objects` resource is raised only when creation would exceed a
+live-object limit explicitly set by a host or test for that paged object store.
+The default is no count limit (`Shape::max_live_objects = 0`); nonzero limits
+are honored unchanged, with no fixed maximum. Physical scratch exhaustion keeps
+the backing's typed arena-exhaustion or scratch-I/O failure and its existing
+arguments.
 
 A code's closed value lists and its English templates are the catalog's own
 `values` and `english` arrays. A `vocab` argument takes exactly one of its

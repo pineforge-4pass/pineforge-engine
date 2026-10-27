@@ -114,15 +114,12 @@ inline std::string scratch_resident_cohort_limit_message(std::uint64_t limit) {
 }
 
 inline std::string scratch_object_limit_message(std::uint64_t limit,
-                                               std::uint64_t live,
-                                               std::uint64_t cap) {
+                                               std::uint64_t live) {
     std::string message = scratch_limit_message("more than ", limit,
         " store objects live at once; ");
     message += scratch_limit_number(limit);
     message += " is the most allowed in this store; attempted live count ";
     message += scratch_limit_number(live);
-    message += ", approved maximum ";
-    message += scratch_limit_number(cap);
     return message;
 }
 

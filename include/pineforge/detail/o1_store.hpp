@@ -8,7 +8,8 @@
 //
 // RULES THIS CONTRACT ENCODES (owner-settled, 1.7.0):
 //  - A write or resize never fails because the resident window is full; it spills.
-//    Creation is bounded by Shape::max_live_objects, independent of lifetime ids.
+//    Creation has no count limit unless Shape::max_live_objects is nonzero,
+//    independent of lifetime ids; backing capacity still applies.
 //  - Resident bytes are bounded by the ScratchStore workspace picked at open,
 //    independent of bars B and of objects created.
 //  - Ids are stable and never recycled while reachable; a released id is dead, and
@@ -54,9 +55,6 @@ inline constexpr Id kNullId = UINT64_C(0);
 // needs CR150-CX's review.
 inline constexpr std::uint32_t kMaxChunkBytes = 64u * 1024u;
 inline constexpr std::uint32_t kMaxResidentPages = 1024u;
-// Live-object default and cap: 1,048,576. Zero selects the default; larger
-// values clamp to the cap, and smaller explicit values are kept.
-inline constexpr std::uint64_t kMaxLiveObjectsCap = UINT64_C(1024) * 1024;
 
 // Caller budget: outer script scope + joined collection + graph operation +
 // one headroom slot. Child container operations join without another handle,
@@ -93,10 +91,10 @@ struct Shape {
   // Otherwise passed through; ScratchStore's workspace sizing never reads them.
   std::uint32_t journal_slots = 8;
   std::uint32_t index_slots = 8;
-  // EXT: maximum live objects in the current transaction. Zero selects the
-  // default (kMaxLiveObjectsCap); larger values clamp to the cap at open,
-  // and smaller explicit values are kept.
-  std::uint64_t max_live_objects = kMaxLiveObjectsCap;
+  // EXT: optional maximum live objects in the current transaction. Zero means
+  // no count limit (the default); a nonzero explicit limit is kept unchanged.
+  // Objects live in the backing, so their count does not size resident memory.
+  std::uint64_t max_live_objects = 0;
 };
 
 struct Stats {
@@ -110,7 +108,7 @@ struct Stats {
   std::uint64_t cleanup_skipped_rollback_only = 0;
   std::uint64_t cleanup_failed = 0;
   std::uint64_t objects_live = 0;     // live ids as seen by the current transaction
-  std::uint64_t max_live_objects = 0; // normalized Shape limit, fixed at open
+  std::uint64_t max_live_objects = 0; // effective Shape limit; 0 = none, fixed at open
 };
 
 // Transactional root for calc-on-fill rollback. All mutations between begin() and
@@ -148,10 +146,10 @@ class Store {
   static std::unique_ptr<Store> open(const Shape&, ScratchBacking&);
 
   // Object lifecycle. `bytes` is the initial logical size; `align` is a power of two.
-  // Creating beyond max_live_objects throws ScratchCapacityError (cohort) before
-  // any mutation. For a direct store create(), an open Tx stays usable. Through
-  // a container operation, the joined scope that saw the throw poisons the outer
-  // transaction; there is no savepoint.
+  // Creating beyond a nonzero max_live_objects throws ScratchCapacityError
+  // (store_objects) before any mutation. For a direct store create(), an open
+  // Tx stays usable. Through a container operation, the joined scope that saw
+  // the throw poisons the outer transaction; there is no savepoint.
   virtual Id create(std::uint64_t bytes, std::uint64_t align) = 0;
   virtual void release(Id) = 0;                 // id becomes dead; never reused
   virtual bool alive(Id) const = 0;

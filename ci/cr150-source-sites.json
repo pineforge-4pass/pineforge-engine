@@ -1948,7 +1948,7 @@
    "symbol": "message",
    "scope": [
     "namespace pineforge :: detail #1",
-    "inline std :: string scratch_object_limit_message ( std :: uint64_t limit , std :: uint64_t live , std :: uint64_t cap ) #1"
+    "inline std :: string scratch_object_limit_message ( std :: uint64_t limit , std :: uint64_t live ) #1"
    ],
    "cls": "decl",
    "spelling": "std :: string",
@@ -1959,7 +1959,7 @@
    "symbol": "message",
    "scope": [
     "namespace pineforge :: detail #1",
-    "inline std :: string scratch_object_limit_message ( std :: uint64_t limit , std :: uint64_t live , std :: uint64_t cap ) #1"
+    "inline std :: string scratch_object_limit_message ( std :: uint64_t limit , std :: uint64_t live ) #1"
    ],
    "cls": "append",
    "spelling": "message + = . . .",
@@ -1970,7 +1970,7 @@
    "symbol": "message",
    "scope": [
     "namespace pineforge :: detail #1",
-    "inline std :: string scratch_object_limit_message ( std :: uint64_t limit , std :: uint64_t live , std :: uint64_t cap ) #1"
+    "inline std :: string scratch_object_limit_message ( std :: uint64_t limit , std :: uint64_t live ) #1"
    ],
    "cls": "append",
    "spelling": "message + = . . .",
@@ -1981,33 +1981,11 @@
    "symbol": "message",
    "scope": [
     "namespace pineforge :: detail #1",
-    "inline std :: string scratch_object_limit_message ( std :: uint64_t limit , std :: uint64_t live , std :: uint64_t cap ) #1"
+    "inline std :: string scratch_object_limit_message ( std :: uint64_t limit , std :: uint64_t live ) #1"
    ],
    "cls": "append",
    "spelling": "message + = . . .",
    "ordinal": 3
-  },
-  {
-   "file": "include/pineforge/detail/scratch_errors.hpp",
-   "symbol": "message",
-   "scope": [
-    "namespace pineforge :: detail #1",
-    "inline std :: string scratch_object_limit_message ( std :: uint64_t limit , std :: uint64_t live , std :: uint64_t cap ) #1"
-   ],
-   "cls": "append",
-   "spelling": "message + = . . .",
-   "ordinal": 4
-  },
-  {
-   "file": "include/pineforge/detail/scratch_errors.hpp",
-   "symbol": "message",
-   "scope": [
-    "namespace pineforge :: detail #1",
-    "inline std :: string scratch_object_limit_message ( std :: uint64_t limit , std :: uint64_t live , std :: uint64_t cap ) #1"
-   ],
-   "cls": "append",
-   "spelling": "message + = . . .",
-   "ordinal": 5
   },
   {
    "file": "include/pineforge/detail/scratch_file.hpp",
@@ -13257,7 +13235,7 @@
     "namespace pineforge #1",
     "namespace detail #1",
     "namespace o1 #1",
-    "StoreImpl :: StoreImpl ( const Shape & shape , ScratchBacking & backing ) : chunk_bytes_ ( shape . chunk_bytes ) , max_live_objects_ ( shape . max_live_objects = = 0 ? kMaxLiveObjectsCap : std :: min ( shape . max_live_objects , kMaxLiveObjectsCap ) ) #1"
+    "StoreImpl :: StoreImpl ( const Shape & shape , ScratchBacking & backing ) : chunk_bytes_ ( shape . chunk_bytes ) , max_live_objects_ ( shape . max_live_objects ) #1"
    ],
    "cls": "alloc",
    "spelling": "new std :: byte",
@@ -13270,7 +13248,7 @@
     "namespace pineforge #1",
     "namespace detail #1",
     "namespace o1 #1",
-    "StoreImpl :: StoreImpl ( const Shape & shape , ScratchBacking & backing ) : chunk_bytes_ ( shape . chunk_bytes ) , max_live_objects_ ( shape . max_live_objects = = 0 ? kMaxLiveObjectsCap : std :: min ( shape . max_live_objects , kMaxLiveObjectsCap ) ) #1"
+    "StoreImpl :: StoreImpl ( const Shape & shape , ScratchBacking & backing ) : chunk_bytes_ ( shape . chunk_bytes ) , max_live_objects_ ( shape . max_live_objects ) #1"
    ],
    "cls": "alloc",
    "spelling": "new TxPool",
@@ -13283,7 +13261,7 @@
     "namespace pineforge #1",
     "namespace detail #1",
     "namespace o1 #1",
-    "StoreImpl :: StoreImpl ( const Shape & shape , ScratchBacking & backing ) : chunk_bytes_ ( shape . chunk_bytes ) , max_live_objects_ ( shape . max_live_objects = = 0 ? kMaxLiveObjectsCap : std :: min ( shape . max_live_objects , kMaxLiveObjectsCap ) ) #1"
+    "StoreImpl :: StoreImpl ( const Shape & shape , ScratchBacking & backing ) : chunk_bytes_ ( shape . chunk_bytes ) , max_live_objects_ ( shape . max_live_objects ) #1"
    ],
    "cls": "alloc",
    "spelling": "new CommandScratchStore",
