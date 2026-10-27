@@ -1,0 +1,4 @@
+#define PINEFORGE_DRAWING_CHECKPOINT_SCENARIO_FN test_refused_label_cache_load_unwinds
+#define PINEFORGE_DRAWING_CHECKPOINT_SCENARIO_NAME "refused_label_cache_load_unwinds"
+#define PINEFORGE_DRAWING_CHECKPOINT_SCENARIO_SIZES "records=70 allowed=0..40"
+#include "test_drawing_checkpoint.cpp"

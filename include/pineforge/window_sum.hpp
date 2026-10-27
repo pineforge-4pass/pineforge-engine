@@ -1,6 +1,6 @@
 #pragma once
 #include "na.hpp"
-#include <deque>
+#include "window_ring.hpp"
 
 namespace pineforge {
 
@@ -22,8 +22,8 @@ namespace pineforge {
 //
 // Both users divide S by `length` themselves (ta.sma) or emit S (math.sum).
 class KahanWindowSum {
-    std::deque<double> values_;    // window sources, front = newest
-    std::deque<double> addends_;   // the compensated addends, front = newest
+    WindowRing<double> values_;    // window sources, front = newest
+    WindowRing<double> addends_;   // the compensated addends, front = newest
     int length_;
     int count_;          // valid sources pushed so far
     double sum_;         // S

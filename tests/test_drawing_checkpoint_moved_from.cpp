@@ -1,0 +1,4 @@
+#define PINEFORGE_DRAWING_CHECKPOINT_SCENARIO_FN test_moved_from_arena
+#define PINEFORGE_DRAWING_CHECKPOINT_SCENARIO_NAME "moved_from_arena"
+#define PINEFORGE_DRAWING_CHECKPOINT_SCENARIO_SIZES "records=70 cap=2"
+#include "test_drawing_checkpoint.cpp"

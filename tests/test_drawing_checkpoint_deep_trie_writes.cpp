@@ -1,0 +1,4 @@
+#define PINEFORGE_DRAWING_CHECKPOINT_SCENARIO_FN test_deep_trie_writes_after_checkpoint
+#define PINEFORGE_DRAWING_CHECKPOINT_SCENARIO_NAME "deep_trie_writes_after_checkpoint"
+#define PINEFORGE_DRAWING_CHECKPOINT_SCENARIO_SIZES "records=40000 writes=413"
+#include "test_drawing_checkpoint.cpp"

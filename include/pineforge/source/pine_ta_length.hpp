@@ -72,6 +72,13 @@ class FirstCallBound {
     std::optional<T> object_;
 
 public:
+    // Setup-only hook for a proven valid, side-effect-free construction.
+    // Do not hoist simple_ta_length() or another validating factory here:
+    // a skipped call site must retain its first-execution validation timing.
+    // Generated callers must select this preparation explicitly.
+    template <class Make>
+    T& prepare(Make&& make) { return bind(std::forward<Make>(make)); }
+
     template <class Make>
     T& bind(Make&& make) {
         if (!object_) object_.emplace(std::forward<Make>(make)());
@@ -92,12 +99,17 @@ public:
 // The history a series-length window reads: one value per bar of the
 // evaluation context, from the call site's first execution on. A bar the site
 // executes holds its source; a bar it skips holds the value of the last
-// execution before it. The last kMaxBarsBack + 1 bars are kept. Full chunks
-// are immutable and shared between copies, so copying the object (the
-// script-state checkpoint does it every bar) costs one chunk at most.
+// execution before it. Retention keeps the existing 1024-slot drop boundary,
+// including the older slots exposed by first_bar(). Prepared live/checkpoint
+// rings avoid chunk allocations/copies during legal Pine window execution.
+inline constexpr long long kSeriesWindowMaxBarsBack = ta::kMaxHistoryOffset;
 class HeldHistory {
 public:
     static constexpr std::size_t kChunk = 1024;
+    // A write can append up to keep held slots plus its current slot before
+    // dropping full chunks. Previous count < keep + kChunk, hence this bound.
+    static constexpr std::size_t kCapacity = 2 * (kSeriesWindowMaxBarsBack + 1) + kChunk;
+    HeldHistory() : values_(kCapacity) {}
 
     bool empty() const { return count_ == 0; }
     long long first_bar() const { return first_bar_; }
@@ -113,9 +125,8 @@ private:
     void push(double value);
     void drop_front_chunks(std::size_t keep);
 
-    std::vector<std::shared_ptr<const std::vector<double>>> frozen_;
-    std::vector<double> tail_;
-    long long first_bar_ = 0;   // the bar of frozen_[0][0] (or tail_[0])
+    WindowRing<double> values_;
+    long long first_bar_ = 0;
     long long count_ = 0;       // bars held
 };
 
@@ -150,7 +161,7 @@ private:
 //   (tv/edge), and 4990, 5001 and 9000-bar windows answered in full.
 class SeriesWindowExtreme {
 public:
-    static constexpr long long kMaxBarsBack = 15000;
+    static constexpr long long kMaxBarsBack = kSeriesWindowMaxBarsBack;
 
     struct Result {
         double value;     // na: warm-up, or no member

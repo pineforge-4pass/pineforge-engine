@@ -979,6 +979,14 @@ PINNED_SLOW_TEST_ROWS = frozenset((
     'test_position_tail_summary_scale',
     # tests/cr150.d/p2cx-a5s.cmake:3.
     'test_o1_store',
+    # tests/cr150.d/wincx-a5h.cmake (1M resident-growth populations).
+    'test_a5h_history_1m',
+    # tests/cr150.d/wincx-a5w.cmake (long drawing rows).
+    'test_a5h_drawings_1m',
+    'test_drawing_checkpoint_random_differential',
+    'test_drawing_checkpoint_random_differential_deep',
+    # tests/CMakeLists.txt (combined scenario runner).
+    'test_drawing_checkpoint',
     # tests/cr150.d/core-cr150-cohort.cmake:5,11 (Release-only timing ratio).
     'test_adapter_spaced_ids_scaling',
     # tests/cr150.d/strings-maps.cmake:6,11,28.

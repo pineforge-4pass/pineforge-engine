@@ -8,9 +8,12 @@
 // copy-construct it, restore copy-assigns it. A record is never forgotten --
 // delete and max_*_count eviction only tombstone it -- so while a copy cost
 // O(every record ever allocated), a run that keeps drawing was quadratic in
-// bars. The arena now holds its records in a vector until it is copied, and
-// once it has been assigned from a copy it shares its records with its copies
-// and clones only the blocks a write reaches (include/pineforge/drawing.hpp).
+// bars. The four public record kinds keep their records in an external
+// store from the first record on (every copy, the
+// first included, shares them); a record type of the test's own keeps the
+// heap store, so the rows below that count records or heap blocks a copy
+// clones (CountedRec, HeapTextRec) still measure that store, and the label
+// row measures the external store's decode of one block.
 //
 // Rows:
 //   differential  every observable of the arena (size, alive, every field of
@@ -32,7 +35,12 @@
 //   bad_alloc     an allocation refused while a write unshares blocks --
 //                 eviction's included -- or while a copy is built leaves the
 //                 arena consistent and its checkpoint untouched, including a
-//                 refusal partway through copying a block's records.
+//                 refusal partway through copying a block's records;
+//   external order  a cap above one page of ids (1024) keeps the FIFO order in
+//                 the external store too, with a decoded-block cache of its
+//                 own: after a restore no block of the destination's old
+//                 history is read, and a deletion from the middle shifts every
+//                 block it passes, for the line and the label kind.
 //
 // Under AddressSanitizer (whose fake stack makes every call dear) the random
 // rows run an eighth of their steps, the two long ones a thirty-second, and
@@ -42,13 +50,16 @@
 #include "global_allocation_replacement.hpp"
 
 #include <pineforge/drawing.hpp>
+#include "history_drawing_depth_fixture.hpp"
 
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <deque>
 #include <optional>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -165,6 +176,21 @@ struct Rng {
 
 // ---- exact comparison ------------------------------------------------------
 bool same_double(double a, double b) { return std::memcmp(&a, &b, sizeof a) == 0; }
+
+// Preserve the original heap-COW unwind assertion on the generic record
+// path. Public LabelRec now faults at its external block decode boundary.
+struct HeapTextRec {
+    int64_t x;
+    double y;
+    XLoc xloc;
+    YLoc yloc;
+    std::string text;
+    bool alive;
+};
+bool same_rec(const HeapTextRec& a, const HeapTextRec& b) {
+    return a.x == b.x && same_double(a.y, b.y) && a.xloc == b.xloc && a.yloc == b.yloc
+        && a.text == b.text && a.alive == b.alive;
+}
 
 bool same_rec(const LineRec& a, const LineRec& b) {
     return a.x1 == b.x1 && a.x2 == b.x2 && same_double(a.y1, b.y1) && same_double(a.y2, b.y2)
@@ -636,6 +662,7 @@ void run_differential(const char* kind, int cap, std::uint64_t seed, int steps, 
     Rng r{seed};
     steps /= divisor;
     full_every = full_every / divisor > 0 ? full_every / divisor : 1;
+    const auto started = std::chrono::steady_clock::now();
     for (int i = 0; i < steps; ++i) {
         d.step(r);
         if ((i + 1) % full_every == 0 && !d.all_same()) {
@@ -643,6 +670,15 @@ void run_differential(const char* kind, int cap, std::uint64_t seed, int steps, 
             std::printf("  %s cap %d seed %llu: arenas diverged by step %d\n", kind, cap,
                         (unsigned long long)seed, i + 1);
             break;
+        }
+        if ((i + 1) % 10000 == 0) {
+            const double elapsed = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - started).count();
+            std::printf("DRAWING_CHECKPOINT PROGRESS kind=%s cap=%d seed=%llu "
+                        "step=%d/%d records=%d elapsed=%.3fs rate=%.1fsteps/s\n",
+                        kind, cap, (unsigned long long)seed, i + 1, steps, d.live.size(),
+                        elapsed, elapsed > 0.0 ? (i + 1) / elapsed : 0.0);
+            std::fflush(stdout);
         }
     }
     const bool final_same = d.all_same();
@@ -1032,8 +1068,48 @@ void refuse_when_spent(std::size_t) {
     if (g_allowed > 0 && --g_allowed == 0) global_allocation::refusing = true;
 }
 
-void test_refused_block_copy_unwinds() {
-    std::printf("test_refused_block_copy_unwinds\n");
+void test_generic_refused_block_copy_unwinds() {
+    std::printf("test_generic_refused_block_copy_unwinds\n");
+    const std::string text(64, 'q');
+    int attempts = 0, refusals = 0, failures = 0;
+    for (std::size_t allowed = 0; allowed <= 40; ++allowed) {
+        DrawingArena<HeapTextRec> built(100);
+        RefArena<HeapTextRec> ref(100);
+        for (int i = 0; i < 70; ++i) {
+            HeapTextRec rec{i, 1.0 * i, XLoc::bar_index, YLoc::price,
+                            text + std::to_string(i), true};
+            ref.alloc(rec);
+            built.alloc(std::move(rec));
+        }
+        DrawingArena<HeapTextRec> a = built;
+        const DrawingArena<HeapTextRec> checkpoint = a;
+        std::string edit = text + "edited";
+        bool threw = false;
+        g_allowed = allowed;
+        global_allocation::on_recorded = refuse_when_spent;
+        global_allocation::recording = true;
+        global_allocation::refusing = allowed == 0;
+        try { a.at(5).text = std::move(edit); }
+        catch (const std::bad_alloc&) { threw = true; }
+        global_allocation::refusing = false;
+        global_allocation::recording = false;
+        global_allocation::on_recorded = nullptr;
+        ++attempts;
+        refusals += threw ? 1 : 0;
+        RefArena<HeapTextRec> want = ref;
+        if (!threw) want.at(5).text = text + "edited";
+        if (!same_arena(a, want) || !same_arena(checkpoint, ref)) ++failures;
+        a.at(6).text = "after";
+        want.at(6).text = "after";
+        if (!same_arena(a, want) || !same_arena(checkpoint, ref)) ++failures;
+    }
+    CHECK(failures == 0);
+    CHECK(refusals >= 34);   // unchanged generic node/block/32-text contract
+    CHECK(refusals < attempts);
+}
+
+void test_refused_label_cache_load_unwinds() {
+    std::printf("test_refused_label_cache_load_unwinds\n");
     const std::string text(64, 'q');
     int attempts = 0, refusals = 0, failures = 0;
     for (std::size_t allowed = 0; allowed <= 40; ++allowed) {
@@ -1072,7 +1148,9 @@ void test_refused_block_copy_unwinds() {
     std::printf("  %d writes into a shared block of 32 long labels, %d refused at each allocation "
                 "in turn, %d left an arena or its checkpoint changed\n", attempts, refusals, failures);
     CHECK(failures == 0);
-    CHECK(refusals >= 34);   // the node, the block and each of its 32 records
+    // The write decodes the block into an empty working cache: one allocation
+    // for each of its 32 long texts and nothing else, so allowed = 0 .. 31 refuse.
+    CHECK(refusals >= 32);
     CHECK(refusals < attempts);
 }
 
@@ -1151,18 +1229,195 @@ void test_checkpoint_cost_is_linear() {
     CHECK(b.heap.bytes <= 8192u * static_cast<std::size_t>(b.checkpoint_steps));
 }
 
+// ---- 5. an order in the external store ---------------------------------------
+// A declared cap above one page of ids (1024) keeps the FIFO order in the
+// external store too, and that store decodes 32-slot blocks into a cache of its
+// own, apart from the records' cache. Copy-assigning an arena installs the
+// saved order's root, and the cache that comes with it must know nothing of the
+// destination's own history: a decoded block left over from that history would
+// be read as if it were the restored one. Deleting from the middle builds the
+// shifted order aside and swaps it in, which must carry every shifted block
+// along. Both are read back through the arena's public interface alone and
+// compared with the deep-copy reference.
+constexpr int kExternalCap = 1025;   // one id more than a page of the order holds
+constexpr int kExternalLaps = 40;    // allocations past the cap: they rewrite slots 0..39
+static_assert(static_cast<std::size_t>(kExternalCap) >
+                  pineforge::detail::o1::Shape{}.page_bytes / sizeof(std::int32_t),
+              "the cap must exceed the ids one page of the order holds");
+
+// The geometry and the text depend on `generation`: two states of one id never agree.
+template <class Rec>
+Rec generation_record(int i, int generation) {
+    if constexpr (std::is_same_v<Rec, LineRec>) {
+        return LineRec{i, i + 1 + generation, i * 0.5 + generation, i * 0.25 - generation,
+                       XLoc::bar_index, generation != 0, false, true};
+    } else {
+        return LabelRec{i, i * 0.5 + generation, XLoc::bar_time, YLoc::abovebar,
+                        "label " + std::to_string(i) + " v" + std::to_string(generation), true};
+    }
+}
+
+// An in-place rewrite, as a setter does it.
+template <class Rec>
+void revise(Rec& rec, int generation) {
+    if constexpr (std::is_same_v<Rec, LineRec>) {
+        rec.x2 += 1000 * generation;
+        rec.y1 -= generation;
+    } else {
+        rec.text += " edited " + std::to_string(generation);
+        rec.y += generation;
+    }
+}
+
+// Checkpoint a full arena, run past the cap, then restore into the arena that
+// has used its order and records since: both caches are warm on blocks the
+// checkpoint holds differently.
+template <class Rec>
+void restore_into_used_arena(const char* kind) {
+    DrawingArena<Rec> arena(kExternalCap);
+    RefArena<Rec> model(kExternalCap);
+    bool ids_agree = true;
+    const auto add = [&](int i, int generation) {
+        const int32_t got = arena.alloc(generation_record<Rec>(i, generation));
+        const int32_t want = model.alloc(generation_record<Rec>(i, generation));
+        ids_agree = ids_agree && got == want;
+    };
+    for (int i = 0; i < kExternalCap; ++i) add(i, 0);
+    const DrawingArena<Rec> saved = arena;
+    const RefArena<Rec> saved_model = model;
+
+    // Each allocation past the cap evicts the oldest id: order slots 0..39 are
+    // rewritten and records 0..39 are tombstoned.
+    for (int i = 0; i < kExternalLaps; ++i) add(kExternalCap + i, 1);
+    CHECK(ids_agree);
+    // Reading the whole order leaves its cache on the blocks of slots 0..39.
+    CHECK(same_arena(arena, model));
+    // Warm the records' cache on blocks the checkpoint holds differently too.
+    revise(arena.at(5), 1);
+    revise(model.at(5), 1);
+    revise(arena.at(36), 1);
+    revise(model.at(36), 1);
+    const DrawingArena<Rec>& view = arena;
+    CHECK(same_rec(view.at(5), model.at(5)) && same_rec(view.at(36), model.at(36)));
+
+    arena = saved;
+    model = saved_model;
+    // The first reads after the restore: the order's first slot, then the
+    // records rewritten above (the label kind compares their text as well).
+    CHECK(arena.order().front() == model.order().front());
+    CHECK(view.alive(5) == model.alive(5) && same_rec(view.at(5), model.at(5)));
+    CHECK(view.alive(36) == model.alive(36) && same_rec(view.at(36), model.at(36)));
+    CHECK(same_arena(arena, model));
+    CHECK(same_arena(saved, saved_model));   // the checkpoint saw none of it
+    std::printf("  %-8s cap %d: restored after %d later allocations, %d records\n", kind,
+                kExternalCap, kExternalLaps, arena.size());
+    std::fflush(stdout);
+}
+
+// Delete from the middle of a full order, again and again.
+template <class Rec>
+void erase_from_middle(const char* kind) {
+    DrawingArena<Rec> arena(kExternalCap);
+    RefArena<Rec> model(kExternalCap);
+    for (int i = 0; i < kExternalCap; ++i) {
+        arena.alloc(generation_record<Rec>(i, 0));
+        model.alloc(generation_record<Rec>(i, 0));
+    }
+    // Reading the whole order leaves its cache on its last blocks.
+    CHECK(same_arena(arena, model));
+    int erased = 0;
+    for (const int id : {600, 17, 1003}) {
+        const auto position = static_cast<std::size_t>(
+            std::find(model.order().begin(), model.order().end(), id) - model.order().begin());
+        arena.erase(id);
+        model.erase(id);
+        ++erased;
+        // The slot the deletion shifted into is the first read afterwards.
+        CHECK(arena.order().size() == model.order().size());
+        CHECK(arena.order()[position] == model.order()[position]);
+        CHECK(same_arena(arena, model));
+    }
+    std::printf("  %-8s cap %d: %d deletions from the middle, %zu ids in the order\n", kind,
+                kExternalCap, erased, arena.order().size());
+    std::fflush(stdout);
+}
+
+void test_external_order_restore() {
+    std::printf("test_external_order_restore\n");
+    restore_into_used_arena<LineRec>("LineRec");
+    restore_into_used_arena<LabelRec>("LabelRec");
+    erase_from_middle<LineRec>("LineRec");
+    erase_from_middle<LabelRec>("LabelRec");
+}
+
 }  // namespace
 
+void test_depth_six() {
+    bool depth_succeeded = false;
+    try {
+        history_drawing_test::depth_six();
+        depth_succeeded = true;
+    } catch (const std::exception& error) {
+        std::printf("history_drawing_depth_six: %s\n", error.what());
+    }
+    CHECK(depth_succeeded);
+}
+
+template<class Scenario>
+void run_scenario(const char* name, const char* sizes, Scenario&& scenario) {
+    const int pass_before = g_pass;
+    const int fail_before = g_fail;
+    std::printf("DRAWING_CHECKPOINT BEGIN name=%s sizes=%s\n", name, sizes);
+    std::fflush(stdout);
+    try {
+        scenario();
+    } catch (const std::exception& error) {
+        std::printf("DRAWING_CHECKPOINT EXCEPTION name=%s what=%s\n", name, error.what());
+        ++g_fail;
+    } catch (...) {
+        std::printf("DRAWING_CHECKPOINT EXCEPTION name=%s what=unknown\n", name);
+        ++g_fail;
+    }
+    std::printf("DRAWING_CHECKPOINT END name=%s passed=%d failed=%d\n", name,
+                g_pass - pass_before, g_fail - fail_before);
+    std::fflush(stdout);
+}
+
+#if defined(PINEFORGE_DRAWING_CHECKPOINT_SCENARIO_FN)
+
 int main() {
-    test_random_differential();
-    test_random_differential_deep();
-    test_scheduler_sequence();
-    test_deep_trie_writes_after_checkpoint();
-    test_moved_from_arena();
-    test_unchanged_checkpoint_copies_nothing();
-    test_checkpoint_cost_is_linear();
-    test_refused_allocation_keeps_arena_consistent();
-    test_refused_block_copy_unwinds();
+    run_scenario(PINEFORGE_DRAWING_CHECKPOINT_SCENARIO_NAME,
+                 PINEFORGE_DRAWING_CHECKPOINT_SCENARIO_SIZES,
+                 PINEFORGE_DRAWING_CHECKPOINT_SCENARIO_FN);
+    std::printf("\ndrawing checkpoint scenario: %d passed, %d failed\n", g_pass, g_fail);
+    return g_fail == 0 ? 0 : 1;
+}
+
+#else
+
+int main() {
+    run_scenario("depth_six", "nodes=6 depth=6", test_depth_six);
+    run_scenario("random_differential", "cases=10", test_random_differential);
+    run_scenario("random_differential_deep", "line_steps=60000 label_steps=50000",
+                 test_random_differential_deep);
+    run_scenario("scheduler_sequence", "bars=400 reset_bar=150", test_scheduler_sequence);
+    run_scenario("deep_trie_writes_after_checkpoint", "records=40000 writes=413",
+                 test_deep_trie_writes_after_checkpoint);
+    run_scenario("moved_from_arena", "records=70 cap=2", test_moved_from_arena);
+    run_scenario("unchanged_checkpoint_copies_nothing", "records=10000,40000 bars=1000",
+                 test_unchanged_checkpoint_copies_nothing);
+    run_scenario("checkpoint_cost_is_linear", "bars=3000,6000 cap=100",
+                 test_checkpoint_cost_is_linear);
+    run_scenario("refused_allocation_keeps_arena_consistent", "n=1..140 operations=700",
+                 test_refused_allocation_keeps_arena_consistent);
+    run_scenario("generic_refused_block_copy_unwinds", "records=70 allowed=0..40",
+                 test_generic_refused_block_copy_unwinds);
+    run_scenario("refused_label_cache_load_unwinds", "records=70 allowed=0..40",
+                 test_refused_label_cache_load_unwinds);
+    run_scenario("external_order_restore", "cap=1025 records=1065 deletions=3",
+                 test_external_order_restore);
     std::printf("\ndrawing checkpoint tests: %d passed, %d failed\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;
 }
+
+#endif

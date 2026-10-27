@@ -1,0 +1,4 @@
+#define PINEFORGE_DRAWING_CHECKPOINT_SCENARIO_FN test_random_differential_deep
+#define PINEFORGE_DRAWING_CHECKPOINT_SCENARIO_NAME "random_differential_deep"
+#define PINEFORGE_DRAWING_CHECKPOINT_SCENARIO_SIZES "line_steps=60000 label_steps=50000"
+#include "test_drawing_checkpoint.cpp"

@@ -1,0 +1,4 @@
+#define PINEFORGE_DRAWING_CHECKPOINT_SCENARIO_FN test_refused_allocation_keeps_arena_consistent
+#define PINEFORGE_DRAWING_CHECKPOINT_SCENARIO_NAME "refused_allocation_keeps_arena_consistent"
+#define PINEFORGE_DRAWING_CHECKPOINT_SCENARIO_SIZES "n=1..140 operations=700"
+#include "test_drawing_checkpoint.cpp"

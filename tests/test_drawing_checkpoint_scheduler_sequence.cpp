@@ -1,0 +1,4 @@
+#define PINEFORGE_DRAWING_CHECKPOINT_SCENARIO_FN test_scheduler_sequence
+#define PINEFORGE_DRAWING_CHECKPOINT_SCENARIO_NAME "scheduler_sequence"
+#define PINEFORGE_DRAWING_CHECKPOINT_SCENARIO_SIZES "bars=400 reset_bar=150"
+#include "test_drawing_checkpoint.cpp"

@@ -1,0 +1,4 @@
+#define PINEFORGE_DRAWING_CHECKPOINT_SCENARIO_FN test_random_differential
+#define PINEFORGE_DRAWING_CHECKPOINT_SCENARIO_NAME "random_differential"
+#define PINEFORGE_DRAWING_CHECKPOINT_SCENARIO_SIZES "cases=10"
+#include "test_drawing_checkpoint.cpp"

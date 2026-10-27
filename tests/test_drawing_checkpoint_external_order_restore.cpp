@@ -1,0 +1,4 @@
+#define PINEFORGE_DRAWING_CHECKPOINT_SCENARIO_FN test_external_order_restore
+#define PINEFORGE_DRAWING_CHECKPOINT_SCENARIO_NAME "external_order_restore"
+#define PINEFORGE_DRAWING_CHECKPOINT_SCENARIO_SIZES "cap=1025 records=1065 deletions=3"
+#include "test_drawing_checkpoint.cpp"

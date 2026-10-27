@@ -2,6 +2,10 @@
 #include "na.hpp"
 #include "series.hpp"
 #include "window_sum.hpp"
+#include "window_ring.hpp"
+#include "run_failure.hpp"
+#include <array>
+#include <cstdint>
 #include <deque>
 #include <cmath>
 #include <vector>
@@ -115,6 +119,21 @@ struct BarContext {
     long long origin = 0;      // warmup reference: the context's first bar index
 };
 BarContext& bar_context();
+
+inline constexpr long long kMaxHistoryOffset = 15000;
+
+// Retain the existing runtime-limit code, catalog arguments and English.
+// The requested offset is available as typed exception context too; it is
+// script-computed, so it must not enter the catalog's closed argument set.
+class HistoryLimitError final : public coded<std::runtime_error> {
+    long long requested_;
+public:
+    explicit HistoryLimitError(long long requested);
+    long long requested_offset() const noexcept { return requested_; }
+    long long limit() const noexcept { return kMaxHistoryOffset; }
+};
+void check_history_limit(long long requested);
+#define PINEFORGE_HAS_TA_HISTORY_LIMIT 1
 
 // RAII installer: sets the thread-local BarContext for the enclosed dispatch
 // and restores the previous one on exit (also during stack unwinding), so
@@ -357,13 +376,24 @@ public:
 // --- Change ---
 
 class Change {
-    std::deque<double> history;
+    DynamicRingBuffer<double> history;
     int max_length_;
 
 public:
     explicit Change(int max_length = 1);
+    static double from_history(double src, double previous);
     double compute(double src, int length = 1);
     double recompute(double src, int length = 1);
+    std::uint64_t state_hash() const {
+        auto hash = history.state_hash();
+        auto length = static_cast<std::uint32_t>(max_length_);
+        for (unsigned byte = 0; byte < sizeof length; ++byte) {
+            hash ^= length & 255u;
+            hash *= UINT64_C(1099511628211);
+            length >>= 8;
+        }
+        return hash;
+    }
 };
 
 // --- Cross ---
@@ -430,7 +460,7 @@ public:
 class StdDev {
     int length_;
     bool biased_;
-    std::deque<double> buffer_;      // unbiased path only
+    WindowRing<double> buffer_;      // unbiased path only
     KahanWindowSum sum_x_;           // Sx  (biased path)
     KahanWindowSum sum_xx_;          // Sxx (biased path)
     int bar_count_;
@@ -571,7 +601,7 @@ public:
 
 class PivotHigh {
     int left_bars_, right_bars_;
-    std::deque<double> buffer_;
+    WindowRing<double> buffer_;
 
 public:
     PivotHigh(int left_bars, int right_bars);
@@ -583,7 +613,7 @@ public:
 
 class PivotLow {
     int left_bars_, right_bars_;
-    std::deque<double> buffer_;
+    WindowRing<double> buffer_;
 
 public:
     PivotLow(int left_bars, int right_bars);
@@ -595,7 +625,7 @@ public:
 
 class Linreg {
     int length_;
-    std::deque<double> buffer_;
+    WindowRing<double> buffer_;
 
 public:
     explicit Linreg(int length);
@@ -607,7 +637,7 @@ public:
 
 class PercentRank {
     int length_;
-    std::deque<double> buffer_;
+    WindowRing<double> buffer_;
 
 public:
     explicit PercentRank(int length);
@@ -619,8 +649,8 @@ public:
 
 class VWMA {
     int length_;
-    std::deque<double> sv_buffer_;
-    std::deque<double> v_buffer_;
+    WindowRing<double> sv_buffer_;
+    WindowRing<double> v_buffer_;
     double sv_sum_, v_sum_;
 
 public:
@@ -633,7 +663,7 @@ public:
 
 class Mom {
     int length_;
-    std::deque<double> buffer_;
+    WindowRing<double> buffer_;
 
 public:
     explicit Mom(int length);
@@ -645,7 +675,7 @@ public:
 
 class ROC {
     int length_;
-    std::deque<double> buffer_;
+    WindowRing<double> buffer_;
 
 public:
     explicit ROC(int length);
@@ -657,7 +687,7 @@ public:
 
 class Rising {
     int length_;
-    std::deque<double> buffer_;
+    WindowRing<double> buffer_;
 
 public:
     explicit Rising(int length);
@@ -669,7 +699,7 @@ public:
 
 class Falling {
     int length_;
-    std::deque<double> buffer_;
+    WindowRing<double> buffer_;
 
 public:
     explicit Falling(int length);
@@ -681,7 +711,7 @@ public:
 
 class CCI {
     int length_;
-    std::deque<double> buffer_;
+    WindowRing<double> buffer_;
 
 public:
     explicit CCI(int length);
@@ -734,7 +764,9 @@ public:
 
 class RCI {
     int length_;
-    std::deque<double> buffer_;
+    WindowRing<double> buffer_;
+    std::vector<double> prices_, price_rank_;
+    std::vector<int> order_;
 
 public:
     explicit RCI(int length);
@@ -747,7 +779,7 @@ public:
 class Variance {
     int length_;
     bool biased_;
-    std::deque<double> buffer_;
+    WindowRing<double> buffer_;
 
 public:
     explicit Variance(int length, bool biased = true);
@@ -759,7 +791,8 @@ public:
 
 class Median {
     int length_;
-    std::deque<double> buffer_;
+    WindowRing<double> buffer_;
+    std::vector<double> sorted_;
 
 public:
     explicit Median(int length);
@@ -798,7 +831,7 @@ class ALMA {
     int length_;
     double offset_, sigma_;
     bool floor_;
-    std::deque<double> buffer_;
+    WindowRing<double> buffer_;
 
 public:
     ALMA(int length, double offset = 0.85, double sigma = 6.0, bool floor = false);
@@ -812,7 +845,7 @@ public:
 // --- SWMA (Symmetrically Weighted Moving Average, period=4) ---
 
 class SWMA {
-    std::deque<double> buffer_;
+    WindowRing<double> buffer_;
 
 public:
     SWMA();
@@ -824,14 +857,14 @@ public:
 
 class MFI {
     int length_;
-    std::deque<double> pos_buffer_, neg_buffer_;
+    WindowRing<double> pos_buffer_, neg_buffer_;
     double prev_src_;
     int bar_count_;
 
     // saved state for recompute
     double saved_prev_src_;
     int saved_bar_count_;
-    std::deque<double> saved_pos_buffer_, saved_neg_buffer_;
+    WindowRing<double> saved_pos_buffer_, saved_neg_buffer_;
 
 public:
     explicit MFI(int length);
@@ -843,14 +876,14 @@ public:
 
 class CMO {
     int length_;
-    std::deque<double> up_buffer_, down_buffer_;
+    WindowRing<double> up_buffer_, down_buffer_;
     double prev_src_;
     int bar_count_;
 
     // saved state for recompute
     double saved_prev_src_;
     int saved_bar_count_;
-    std::deque<double> saved_up_buffer_, saved_down_buffer_;
+    WindowRing<double> saved_up_buffer_, saved_down_buffer_;
 
 public:
     explicit CMO(int length);
@@ -893,7 +926,7 @@ public:
 
 class COG {
     int length_;
-    std::deque<double> buffer_;
+    WindowRing<double> buffer_;
 
 public:
     explicit COG(int length);
@@ -945,10 +978,10 @@ public:
 // --- ValueWhen ---
 
 class ValueWhen {
-    std::deque<double> values_;
     int max_occurrence_;
+    WindowRing<double> values_;
 
-    std::deque<double> saved_values_;
+    WindowRing<double> saved_values_;
 
 public:
     explicit ValueWhen(int max_occurrence = 1);
@@ -960,7 +993,7 @@ public:
 
 class Correlation {
     int length_;
-    std::deque<double> x_buffer_, y_buffer_;
+    WindowRing<double> x_buffer_, y_buffer_;
 
 public:
     explicit Correlation(int length);
@@ -998,7 +1031,7 @@ public:
 // greater than it, enters last.
 class PercentileWindow {
     int length_;
-    std::deque<double> history_;
+    WindowRing<double> history_;
     std::vector<double> ranked_;
     // The last push, which a recompute of its bar undoes: where its value
     // entered, and the value that left and where it stood (-1: none left).
@@ -1283,9 +1316,14 @@ public:
 // --- Statistical ---
 class Mode {
     int length_;
-    std::deque<double> buffer_;
+    WindowRing<double> buffer_;
+    std::vector<double> keys_;
+    std::vector<int> counts_;
+    double mode();
 public:
-    explicit Mode(int length) : length_(length) {}
+    explicit Mode(int length)
+        : length_(length), buffer_(window_capacity(length)),
+          keys_(2 * window_capacity(length, 0) + 1), counts_(keys_.size()) {}
     double compute(double src);
     double recompute(double src);
 };
@@ -1301,9 +1339,9 @@ public:
 
 class Dev {
     int length_;
-    std::deque<double> buffer_;
+    WindowRing<double> buffer_;
 public:
-    explicit Dev(int length) : length_(length) {}
+    explicit Dev(int length) : length_(length), buffer_(window_capacity(length)) {}
     double compute(double src);
     double recompute(double src);
 };
@@ -1319,7 +1357,12 @@ public:
 // period's open, which DM compares with the close (it branches on the close
 // meeting the high or the low). The overload below takes both, and
 // ta::PivotPointLevels is the TradingView form.
-std::vector<double> pivot_point_levels(const std::string& method,
+struct PivotLevels : std::array<double, 11> {
+    PivotLevels() { fill(na<double>()); }
+    operator std::vector<double>() const { return {begin(), end()}; }
+};
+
+PivotLevels pivot_point_levels(const std::string& method,
                                        double high, double low, double close);
 
 // The same 11 levels from the period's open, high, low and close and the open
@@ -1330,7 +1373,7 @@ std::vector<double> pivot_point_levels(const std::string& method,
 // next_open and only DM reads open; a formula missing an input it reads leaves
 // all eleven na. The type by name: pivot_levels_type(), which throws
 // std::invalid_argument for any other.
-std::vector<double> pivot_point_levels(const std::string& method, double open, double high,
+PivotLevels pivot_point_levels(const std::string& method, double open, double high,
                                        double low, double close, double next_open);
 
 // --- Pivot point levels of an anchored period ---
@@ -1379,14 +1422,14 @@ PivotLevelsType pivot_levels_type(const std::string& name);
 class PivotPointLevels {
 public:
     PivotPointLevels() = default;
-    std::vector<double> compute(PivotLevelsType type, bool anchor, bool developing,
+    PivotLevels compute(PivotLevelsType type, bool anchor, bool developing,
                                 double open, double high, double low, double close);
-    std::vector<double> recompute(PivotLevelsType type, bool anchor, bool developing,
+    PivotLevels recompute(PivotLevelsType type, bool anchor, bool developing,
                                   double open, double high, double low, double close);
     // The type by name (pivot_levels_type()).
-    std::vector<double> compute(const std::string& type, bool anchor, bool developing,
+    PivotLevels compute(const std::string& type, bool anchor, bool developing,
                                 double open, double high, double low, double close);
-    std::vector<double> recompute(const std::string& type, bool anchor, bool developing,
+    PivotLevels recompute(const std::string& type, bool anchor, bool developing,
                                   double open, double high, double low, double close);
 
 private:

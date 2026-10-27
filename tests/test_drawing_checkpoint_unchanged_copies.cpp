@@ -1,0 +1,4 @@
+#define PINEFORGE_DRAWING_CHECKPOINT_SCENARIO_FN test_unchanged_checkpoint_copies_nothing
+#define PINEFORGE_DRAWING_CHECKPOINT_SCENARIO_NAME "unchanged_checkpoint_copies_nothing"
+#define PINEFORGE_DRAWING_CHECKPOINT_SCENARIO_SIZES "records=10000,40000 bars=1000"
+#include "test_drawing_checkpoint.cpp"

@@ -1,0 +1,4 @@
+#define PINEFORGE_DRAWING_CHECKPOINT_SCENARIO_FN test_checkpoint_cost_is_linear
+#define PINEFORGE_DRAWING_CHECKPOINT_SCENARIO_NAME "checkpoint_cost_is_linear"
+#define PINEFORGE_DRAWING_CHECKPOINT_SCENARIO_SIZES "bars=3000,6000 cap=100"
+#include "test_drawing_checkpoint.cpp"

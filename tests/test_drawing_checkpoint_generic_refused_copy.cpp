@@ -1,0 +1,4 @@
+#define PINEFORGE_DRAWING_CHECKPOINT_SCENARIO_FN test_generic_refused_block_copy_unwinds
+#define PINEFORGE_DRAWING_CHECKPOINT_SCENARIO_NAME "generic_refused_block_copy_unwinds"
+#define PINEFORGE_DRAWING_CHECKPOINT_SCENARIO_SIZES "records=70 allowed=0..40"
+#include "test_drawing_checkpoint.cpp"

@@ -121,7 +121,8 @@ double ATR::recompute(double high, double low, double close, double prev_chart_c
 // --- StdDev (Standard Deviation) ---
 
 StdDev::StdDev(int length, bool biased)
-    : length_(length), biased_(biased), sum_x_(length), sum_xx_(length), bar_count_(0) {}
+    : length_(length), biased_(biased), buffer_(window_capacity(length)),
+      sum_x_(length), sum_xx_(length), bar_count_(0) {}
 
 // The biased (default) value from the two sliding sums: TradingView's
 // sqrt(Sxx / n - m * m) with m = Sx / n (see the class note in ta.hpp). The
@@ -553,7 +554,8 @@ KCResult KC::compute(double src, double high, double low, double close) {
 
 // --- Variance ---
 
-Variance::Variance(int length, bool biased) : length_(length), biased_(biased) {}
+Variance::Variance(int length, bool biased) : length_(length), biased_(biased),
+    buffer_(window_capacity(length)) {}
 
 double Variance::compute(double src) {
     if (is_na(src)) {

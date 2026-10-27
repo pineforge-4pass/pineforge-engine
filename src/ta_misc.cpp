@@ -35,7 +35,7 @@ bool percentrank_less_equal(double lhs, double rhs) {
 
 // --- Linreg (Linear Regression) ---
 
-Linreg::Linreg(int length) : length_(length) {}
+Linreg::Linreg(int length) : length_(length), buffer_(window_capacity(length)) {}
 
 double Linreg::compute(double src, double offset) {
     // Pine parity: one slot per bar; na values stay in the window (ta.linreg includes na).
@@ -74,7 +74,7 @@ double Linreg::compute(double src, double offset) {
 
 // --- PercentRank ---
 
-PercentRank::PercentRank(int length) : length_(length) {}
+PercentRank::PercentRank(int length) : length_(length), buffer_(window_capacity(length)) {}
 
 double PercentRank::compute(double src) {
     // Pine parity: keep one slot per bar (na advances the window). Rank counts only
@@ -85,10 +85,8 @@ double PercentRank::compute(double src) {
     // mismatches TV as soon as count > 0. Once `length` values precede the bar, an
     // na current value (nothing is at most it) and an all-na lookback both count
     // none: 0, not na (tests/fixtures/percentile_window).
+    if (buffer_.size() == window_capacity(length_)) buffer_.pop_front();
     buffer_.push_back(src);
-    while ((int)buffer_.size() > length_ + 1) {
-        buffer_.pop_front();
-    }
 
     if ((int)buffer_.size() < length_ + 1) {
         return na<double>();
@@ -131,7 +129,10 @@ double BarsSince::compute(bool condition) {
 // ValueWhen
 // ============================================================================
 
-ValueWhen::ValueWhen(int max_occurrence) : max_occurrence_(std::max(1, max_occurrence + 1)) {}
+ValueWhen::ValueWhen(int max_occurrence)
+    : max_occurrence_(std::max(1, max_occurrence + 1)),
+      values_(window_capacity(max_occurrence_)),
+      saved_values_(window_capacity(max_occurrence_)) {}
 
 double ValueWhen::compute(bool condition, double source, int occurrence) {
     saved_values_ = values_;
@@ -147,7 +148,8 @@ double ValueWhen::compute(bool condition, double source, int occurrence) {
 // Correlation
 // ============================================================================
 
-Correlation::Correlation(int length) : length_(length) {}
+Correlation::Correlation(int length) : length_(length),
+    x_buffer_(window_capacity(length)), y_buffer_(window_capacity(length)) {}
 
 double Correlation::compute(double src1, double src2) {
     x_buffer_.push_back(src1);
@@ -171,7 +173,11 @@ double Correlation::compute(double src1, double src2) {
 // PercentileWindow
 // ============================================================================
 
-PercentileWindow::PercentileWindow(int length) : length_(length) {}
+PercentileWindow::PercentileWindow(int length)
+    : length_(length), history_(window_capacity(length)),
+      ranked_(window_capacity(length, 0), 0.0) {
+    ranked_.clear();
+}
 
 const std::vector<double>* PercentileWindow::push(double src) {
     if (length_ < 1) return nullptr;
@@ -352,17 +358,17 @@ void pivot_levels_of(PivotLevelsType type, double o, double h, double l, double 
                      double next_open, double* out);
 } // namespace
 
-std::vector<double> pivot_point_levels(const std::string& method,
+PivotLevels pivot_point_levels(const std::string& method,
                                        double high, double low, double close) {
     // Codegen lowers `ta.pivot_point_levels(type, anchor)` to pass the
     // PREVIOUS bar's HLC (`_s_high[1]/_s_low[1]/_s_close[1]`), so the very
     // first bar receives NaN inputs. Mirror Pine's na propagation by
     // returning a vector of 11 NaNs in that case.
     if (is_na(high) || is_na(low) || is_na(close)) {
-        return std::vector<double>(11, na<double>());
+        return PivotLevels{};
     }
     double P = (high + low + close) / 3.0;
-    std::vector<double> out(11, na<double>());
+    PivotLevels out;
     out[0] = P;
 
     if (method == "Traditional") {
@@ -451,9 +457,9 @@ std::vector<double> pivot_point_levels(const std::string& method,
     return out;
 }
 
-std::vector<double> pivot_point_levels(const std::string& method, double open, double high,
+PivotLevels pivot_point_levels(const std::string& method, double open, double high,
                                        double low, double close, double next_open) {
-    std::vector<double> out(11);
+    PivotLevels out;
     pivot_levels_of(pivot_levels_type(method), open, high, low, close, next_open, out.data());
     return out;
 }
@@ -567,7 +573,7 @@ PivotPointLevels::Levels PivotPointLevels::no_levels() {
     return levels;
 }
 
-std::vector<double> PivotPointLevels::compute(PivotLevelsType type, bool anchor, bool developing,
+PivotLevels PivotPointLevels::compute(PivotLevelsType type, bool anchor, bool developing,
                                               double open, double high, double low, double close) {
     if (developing && type == PivotLevelsType::Woodie) {
         throw coded<std::runtime_error>(
@@ -588,14 +594,17 @@ std::vector<double> PivotPointLevels::compute(PivotLevelsType type, bool anchor,
         period_ = Period{};
     }
     period_.enter(open, high, low, close);
-    if (!developing) return std::vector<double>(held_.v, held_.v + 11);
-    std::vector<double> out(11);
+    PivotLevels out;
+    if (!developing) {
+        std::copy(held_.v, held_.v + 11, out.begin());
+        return out;
+    }
     pivot_levels_of(type, period_.open, period_.high, period_.low, period_.close, na<double>(),
                     out.data());
     return out;
 }
 
-std::vector<double> PivotPointLevels::recompute(PivotLevelsType type, bool anchor, bool developing,
+PivotLevels PivotPointLevels::recompute(PivotLevelsType type, bool anchor, bool developing,
                                                 double open, double high, double low,
                                                 double close) {
     period_ = saved_period_;
@@ -603,12 +612,12 @@ std::vector<double> PivotPointLevels::recompute(PivotLevelsType type, bool ancho
     return compute(type, anchor, developing, open, high, low, close);
 }
 
-std::vector<double> PivotPointLevels::compute(const std::string& type, bool anchor, bool developing,
+PivotLevels PivotPointLevels::compute(const std::string& type, bool anchor, bool developing,
                                               double open, double high, double low, double close) {
     return compute(pivot_levels_type(type), anchor, developing, open, high, low, close);
 }
 
-std::vector<double> PivotPointLevels::recompute(const std::string& type, bool anchor,
+PivotLevels PivotPointLevels::recompute(const std::string& type, bool anchor,
                                                 bool developing, double open, double high,
                                                 double low, double close) {
     return recompute(pivot_levels_type(type), anchor, developing, open, high, low, close);

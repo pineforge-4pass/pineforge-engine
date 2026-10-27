@@ -7,7 +7,7 @@
 // This is a HEADLESS backtester: drawing objects (line/box/label/linefill) are
 // pure DATA the strategy can create, mutate and read back into trading logic.
 // There is NO rendering, NO graphics — only geometry. The header is fully
-// self-contained and header-only (every function is `inline`); codegen emits
+// self-contained (its backing owner is in drawing_storage.cpp); codegen emits
 // calls to the `pf_*` free functions below. Nothing here is exported via the C
 // ABI — these are codegen-emitted in-process calls, not `c_abi.cpp` symbols.
 //
@@ -18,13 +18,16 @@
 //
 // The arenas are also part of the generated script state that calc_on_order_fills
 // checkpoints by value -- TradingView rolls a fill recalculation's drawing edits
-// back with the script's variables -- so checkpointing is cheap: a copy of an
-// arena costs O(records) until the arena has been assigned from a copy (which
-// the scheduler's restore does from the first bar on), and from then on its
-// copies share their records and a write clones only the blocks it reaches
-// (DrawingRecordStore below). A checkpoint costs the records a script changed,
-// not every record it ever made; an arena that is never copied keeps its
-// records in a vector.
+// back with the script's variables. The four public record kinds keep every
+// record, from the first one, in an external store (detail::DrawingExternalRecords,
+// a persistent 32-way tree of 32-record blocks over o1::Store): an arena holds
+// two decoded working blocks, a copy shares the tree (O(1), the first copy
+// included) and a write after a copy copies one root-to-block path in the
+// store. Resident memory is the store's fixed workspace and those blocks,
+// whatever the number of records. The live order is a ring prepared from the
+// declared cap (external slots above one page of ids). Application-defined
+// record types keep the generic heap store below. Label text keeps its
+// std::string type; DrawingLabelCodec is the binding point for the string lane.
 //
 #include <array>
 #include <atomic>
@@ -41,6 +44,7 @@
 #include <utility>
 #include <pineforge/na.hpp>
 #include <pineforge/run_failure.hpp>
+#include <pineforge/detail/drawing_order.hpp>
 
 namespace pineforge {
 
@@ -357,6 +361,48 @@ public:
     }
 };
 
+// Keep the published LabelRec/string signatures. A backing block owns its
+// text byte objects until its last version reference disappears; delete/FIFO
+// never releases text. A future ScriptString binding replaces this codec,
+// LabelRec::text and the legacy getter together, without a second value type.
+struct DrawingLabelCodec {
+    struct Wire {
+        int64_t x = 0;
+        double y = 0;
+        XLoc xloc = XLoc::bar_index;
+        YLoc yloc = YLoc::price;
+        o1::Id text = o1::kNullId;
+        std::uint64_t text_size = 0;
+        bool alive = false;
+    };
+    static Wire encode(const LabelRec& rec, o1::Store& store) {
+        o1::Id text = o1::kNullId;
+        if (!rec.text.empty()) {
+            text = store.create(rec.text.size(), alignof(char));
+            if (store.write(text, 0, rec.text.data(), rec.text.size()) != rec.text.size())
+                pine_engine_invariant("short drawing label text write");
+        }
+        return {rec.x, rec.y, rec.xloc, rec.yloc, text, rec.text.size(), rec.alive};
+    }
+    static LabelRec decode(const Wire& wire, o1::Store& store) {
+        std::string text(static_cast<std::size_t>(wire.text_size), '\0');
+        if (!text.empty() && store.read(wire.text, 0, text.data(), text.size()) != text.size())
+            pine_engine_invariant("short drawing label text read");
+        return {wire.x, wire.y, wire.xloc, wire.yloc, std::move(text), wire.alive};
+    }
+    static void release(const Wire& wire, o1::Store& store) {
+        if (wire.text != o1::kNullId) store.release(wire.text);
+    }
+};
+
+template<class Rec> struct DrawingStoreFor { using type = DrawingRecordStore<Rec>; };
+template<> struct DrawingStoreFor<LineRec> { using type = DrawingExternalRecords<LineRec>; };
+template<> struct DrawingStoreFor<BoxRec> { using type = DrawingExternalRecords<BoxRec>; };
+template<> struct DrawingStoreFor<LabelRec> {
+    using type = DrawingExternalRecords<LabelRec, DrawingLabelCodec>;
+};
+template<> struct DrawingStoreFor<LinefillRec> { using type = DrawingExternalRecords<LinefillRec>; };
+
 } // namespace detail
 
 // A na handle (id < 0) or an out-of-range id is ALWAYS an error — there is no
@@ -369,31 +415,50 @@ public:
 // ---- arena template (spec §3.4) --------------------------------------------
 // ids are monotonic and never reused (dead slots are tombstoned, not recycled)
 // -> no ABA, reproducible across runs. Exact-cap FIFO eviction (oldest first).
-// A copy copies order_, which holds at most cap ids, and shares the records
-// once they are in blocks (detail::DrawingRecordStore): O(live), whatever the
-// arena has allocated. A copy of an arena whose records are still in a vector
-// copies them (O(records)); the arena shares with its copies once it has been
-// assigned from one.
+// A copy shares the records (public kinds: an external root; other kinds: the
+// heap store above, once in blocks) and copies the live ring, at most cap ids
+// (or retains the ring's external root above one page of ids).
 template <class Rec>
 class DrawingArena {
-    detail::DrawingRecordStore<Rec> recs_;  // index == id; dead slots retained so ids are stable & monotonic
-    std::deque<int32_t>  order_;  // live ids, oldest -> newest == the *.all order; drives FIFO eviction
+    typename detail::DrawingStoreFor<Rec>::type recs_; // stable id, including tombstones
+    detail::DrawingOrder order_; // oldest -> newest, exact declared cap
     int                  cap_;
+    static auto records_with_storage(const std::shared_ptr<detail::DrawingStorage>& storage) {
+        using Records = typename detail::DrawingStoreFor<Rec>::type;
+        if constexpr (std::is_constructible_v<Records, std::shared_ptr<detail::DrawingStorage>>)
+            return Records(storage);
+        else return Records{};
+    }
 public:
-    explicit DrawingArena(int cap = 50) : cap_(std::max(1, cap)) {}
+    explicit DrawingArena(int cap = 50)
+        : order_(static_cast<std::size_t>(std::max(1, cap))), cap_(std::max(1, cap)) {}
     DrawingArena(const DrawingArena&) = default;
-    DrawingArena& operator=(const DrawingArena&) = default;
-    // A moved-from arena is empty and keeps its cap. A self-move keeps the
-    // arena (a moved deque would empty order_ and strand the records the store
-    // kept).
-    DrawingArena(DrawingArena&& other)
-        : recs_(std::move(other.recs_)), order_(std::move(other.order_)), cap_(other.cap_) {
+    DrawingArena& operator=(const DrawingArena& other) {
+        if (this != &other) {
+            order_.prepare_assignment(other.order_);
+            auto next_records = other.recs_;
+            order_ = other.order_;
+            recs_ = std::move(next_records);
+            cap_ = other.cap_;
+        }
+        return *this;
+    }
+    DrawingArena(int cap, std::shared_ptr<detail::DrawingStorage> storage)
+        : recs_(records_with_storage(storage)),
+          order_(static_cast<std::size_t>(std::max(1, cap)), std::move(storage)),
+          cap_(std::max(1, cap)) {}
+    // Prepare the roster before moving records, leaving both values usable
+    // if preparation throws. A moved-from arena keeps its cap; self-move
+    // preserves the complete value.
+    DrawingArena(DrawingArena&& other) : order_(other.order_), cap_(other.cap_) {
+        recs_ = std::move(other.recs_);
         other.order_.clear();
     }
-    DrawingArena& operator=(DrawingArena&& other) noexcept {
+    DrawingArena& operator=(DrawingArena&& other) {
         if (this != &other) {
+            order_.prepare_assignment(other.order_);
+            order_ = other.order_;
             recs_ = std::move(other.recs_);
-            order_ = std::move(other.order_);
             other.order_.clear();
             cap_ = other.cap_;
         }
@@ -401,41 +466,64 @@ public:
     }
 
     int32_t alloc(Rec r) {
+        auto push = order_.prepare_push();
         while ((int)order_.size() >= cap_) {        // exact-cap FIFO eviction (oldest first)
             // Tombstone before leaving order_: the write may copy a shared block
             // and throw, which must leave the record live and in order_.
             recs_.write(static_cast<std::uint32_t>(order_.front())).alive = false;
             order_.pop_front();
         }
-        int32_t id = recs_.size();
+        int32_t id = static_cast<int32_t>(recs_.size());
         r.alive = true;
         recs_.push_back(std::move(r));
-        order_.push_back(id);
+        push.commit(id);
         return id;
     }
 
     void erase(int32_t id) {                         // delete(): silent no-op on na/dead
         if (!alive(id)) return;
+        if (order_.back() == id) {
+            recs_.write(static_cast<std::uint32_t>(id)).alive = false;
+            order_.pop_back();
+            return;
+        }
+        if (order_.is_external()) {
+            auto next = order_.erased(std::find(order_.begin(), order_.end(), id));
+            recs_.write(static_cast<std::uint32_t>(id)).alive = false;
+            order_.swap(next);
+            return;
+        }
         recs_.write(static_cast<std::uint32_t>(id)).alive = false;
         order_.erase(std::find(order_.begin(), order_.end(), id));
     }
 
     bool alive(int32_t id) const {
-        return id >= 0 && id < recs_.size() && recs_.read(static_cast<std::uint32_t>(id)).alive;
+        return id >= 0 && id < size() && recs_.read(static_cast<std::uint32_t>(id)).alive;
     }
 
     // Number of slots ever allocated (dead slots retained). ids in [0, size())
     // reference a real record (live OR dead); ids outside that range or < 0 are
     // na/invalid.
-    int32_t size() const { return recs_.size(); }
+    int32_t size() const { return static_cast<int32_t>(recs_.size()); }
 
-    // The mutable form writes: it unshares the record's block from every copy.
-    // A reference either form returns lasts until the arena is next copied,
-    // assigned or written.
+    template<class Records = typename detail::DrawingStoreFor<Rec>::type>
+    auto storage_stats() const -> decltype(std::declval<const Records&>().stats()) {
+        auto stats = recs_.stats();
+        const auto roster = order_.storage_stats();
+        if (recs_.storage_identity() == order_.storage_identity()) return roster;
+        stats.bytes_live += roster.bytes_live;
+        stats.bytes_resident += roster.bytes_resident;
+        stats.pages_spilled += roster.pages_spilled;
+        stats.bytes_backing += roster.bytes_backing;
+        return stats;
+    }
+
+    // Typed working views: consume before the next arena operation, including
+    // a read that may replace a working block. Script getters return values.
     Rec&       at(int32_t id)       { return recs_.write(static_cast<std::uint32_t>(id)); }
     const Rec& at(int32_t id) const { return recs_.read(static_cast<std::uint32_t>(id)); }
 
-    const std::deque<int32_t>& order() const { return order_; }  // backs line.all/box.all if ever needed
+    const detail::DrawingOrder& order() const { return order_; } // backs *.all
 };
 
 // ---- shared helpers --------------------------------------------------------
