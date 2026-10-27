@@ -1,4 +1,4 @@
-// U07 test store: the merged o1::Store over a disk backing, plus the derived
+// Graph test store: o1::Store over a disk backing, plus the derived
 // ceilings the rows assert. No constant here depends on a test population.
 #pragma once
 
@@ -67,12 +67,19 @@ public:
     explicit CountingStore(pineforge::detail::o1::Store& inner) : inner_(inner) {}
     mutable std::uint64_t data_calls = 0;
     std::uint64_t begin_calls = 0;
+    std::uint64_t mutation_calls = 0;
+    // Optional fixed-state observer used to retain a real collector mark for
+    // replay in the stale-mark row. No storage or transaction is emulated.
+    void* write_context = nullptr;
+    void (*written)(void*, Id, std::uint64_t, const void*, std::size_t) = nullptr;
     Id create(std::uint64_t bytes, std::uint64_t align) override {
         ++data_calls;
+        ++mutation_calls;
         return inner_.create(bytes, align);
     }
     void release(Id id) override {
         ++data_calls;
+        ++mutation_calls;
         inner_.release(id);
     }
     bool alive(Id id) const override {
@@ -85,6 +92,7 @@ public:
     }
     bool resize(Id id, std::uint64_t bytes) override {
         ++data_calls;
+        ++mutation_calls;
         return inner_.resize(id, bytes);
     }
     std::size_t read(Id id, std::uint64_t off, void* dst, std::size_t bytes) const override {
@@ -93,7 +101,10 @@ public:
     }
     std::size_t write(Id id, std::uint64_t off, const void* src, std::size_t bytes) override {
         ++data_calls;
-        return inner_.write(id, off, src, bytes);
+        ++mutation_calls;
+        const auto count = inner_.write(id, off, src, bytes);
+        if (written != nullptr) written(write_context, id, off, src, count);
+        return count;
     }
     std::unique_ptr<Tx> begin() override {
         ++begin_calls;
@@ -110,11 +121,11 @@ public:
     FileBacking() : ScratchBacking(pineforge::detail::ScratchBackingKind::disk, kPageBytes) {
         char path[] = "./a5u-store-XXXXXX";
         descriptor_ = ::mkstemp(path);
-        require(descriptor_ >= 0, "create the U07 disk backing in the test directory");
+        require(descriptor_ >= 0, "create the graph disk backing in the test directory");
         if (::unlink(path) != 0) {
             ::close(descriptor_);
             descriptor_ = -1;
-            require(false, "unlink the U07 disk backing");
+            require(false, "unlink the graph disk backing");
         }
     }
     ~FileBacking() override {

@@ -1,4 +1,4 @@
-// U07 rollback inside a real calc_on_order_fills run.
+// UDT graph rollback inside a real calc_on_order_fills run.
 //
 // The host maps the engine's generated-state hooks (engine.hpp
 // snapshot/restore/commit_script_state) onto ONE Store transaction: snapshot
@@ -236,7 +236,7 @@ int main() {
                         host.finish_calls_max == 0,
                     "checkpoint/restore allocated beyond one Tx handle");
             require(host.begin_bytes_max <= 256, "checkpoint copied native graph state");
-            std::printf("A5U coof snapshots=%d restores=%d executions=%d handle_bytes=%zu\n",
+            std::printf("UDT coof snapshots=%d restores=%d executions=%d handle_bytes=%zu\n",
                         host.snapshots, host.restores, host.executions, host.begin_bytes_max);
             root = host.root();
         } // ~Host rolls back the scope its last checkpoint opened
@@ -247,7 +247,7 @@ int main() {
         require(fixture.store->stats().bytes_live == 0, "calc-on-fill graph was not closed");
         return 0;
     } catch (const std::exception& error) {
-        std::fprintf(stderr, "A5U calc-on-fill: %s\n", error.what());
+        std::fprintf(stderr, "UDT calc-on-fill: %s\n", error.what());
         return 1;
     }
 }

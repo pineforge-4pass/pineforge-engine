@@ -6,7 +6,7 @@ namespace a5u_test {
 
 // Synthetic generated map of integer keys to UDT references. Keys are payload
 // bytes; values are owning graph edges. This is a codegen fixture, not a new
-// production map implementation or an edit to the A5T lane's map.
+// production map implementation.
 class IdMap {
     using Graph = pineforge::detail::o1::UdtGraph;
     using Id = pineforge::detail::o1::Id;

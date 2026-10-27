@@ -1,4 +1,4 @@
-// CR-150 U07: generated UDT object graphs over the merged o1::Store.
+// Generated UDT object graphs over o1::Store.
 //
 // Layout. A graph owns one 8-byte control record (the directory head). Every
 // node is ONE Store object: a fixed 72-byte record (its own id, the graph's
@@ -10,6 +10,30 @@
 // tracing and copying keep their work lists in node records and read edges in
 // fixed stack batches. Residency is the Store's fixed workspace; ids are the
 // Store's ids, never reused (not after release, not after a rollback).
+//
+// Resident-O(1): the live graph spills to the scratch backing, which in a
+// jailed run is RAM; flat in bars only for a bounded live graph. The fixed
+// bound covers the Store workspace and transaction handles, not process RSS
+// or a cgroup's memory charge. Backing usage also includes storage metadata,
+// transactional versions and its retained high water; bytes_live is not RSS.
+// Shape on this interface has no id-table row count/cap or transaction-pool
+// size. An adapter's admission limits must be specified and tested there.
+//
+// Maximum transaction nesting: 1 handle beyond the caller's. An outer
+// script scope plus a joined collection scope plus a graph operation need
+// 3 simultaneously live handles. Store calls within that operation do not
+// open additional handles. begin() explicitly requested by a caller counts
+// as another caller handle. Scopes flatten; joining is not a savepoint.
+//
+// Reclamation requires compiler safe points. If at most F nodes are made
+// per bar, collection is at most K bars apart, and L nodes survive each
+// collection (roots included), the directory has at most L + F*K nodes
+// before a collection. With encoded node sizes at most S, logical bytes
+// are at most 8 + S*(L + F*K). collect() walks that whole directory and
+// every reachable edge: O(directory nodes + reachable edges) Store calls
+// per invocation. It is O(live) when node fan-out is bounded; collecting
+// every bar with a large live set costs O(bars * live) Store calls.
+// No finite bound on garbage between calls exists without a bound on K.
 //
 // What the RUNTIME owns (this module):
 //  * ids: stable for every node; a released or rolled-back id is dead and a
@@ -28,9 +52,10 @@
 //    restores the exact graph, deletions included;
 //  * atomicity: an operation touching several records runs in one Store
 //    transaction (joined inside the caller's), so a failure leaves all or none;
-//  * hash_state(): every record, payload and edge byte, in directory order.
+//  * hash_state(): every record, payload and edge byte, in directory order;
+//    creation-order dependent, for deterministic replay of the same run.
 //
-// What the COMPILER must supply (codegen, A5-CGEN), nothing of which the
+// What the COMPILER must supply, nothing of which the
 // runtime can infer:
 //  * one static UdtType per UDT schema: tag, payload bytes (scalar fields at
 //    fixed offsets) and edge count (every reference field at a fixed index);
@@ -41,7 +66,9 @@
 //  * one root per var/varip variable, series history slot or live temporary
 //    that holds a UDT: root() registers it, edge(root, 0) / set_edge(root, 0, id)
 //    read and rebind it (na included), drop_root() retires it. Every native
-//    temporary holding an Id needs a root before the next collect();
+//    temporary holding an Id needs a root before the next collect(). The
+//    module cannot detect an unrooted Id held in a native temporary; keeping
+//    such a temporary alive across collect() is the compiler's contract;
 //  * the safe points where collect() runs (it walks the directory and edges);
 //  * the calc-on-fill scope: begin() at snapshot, commit at the committed
 //    checkpoint, rollback at restore (engine.hpp snapshot/restore/commit
@@ -52,7 +79,7 @@
 //  * folding hash_state() into the generated script's state hash;
 //  * close() after the run, outside any transaction, once nothing borrows ids.
 //
-// Collections (lanes A5A arrays, A5T maps, win-a5m matrices) that hold UDT
+// Collections (arrays, maps, matrices) that hold UDT
 // values store the element as an Id in an edge of a graph node (one node per
 // collection, edge index = element slot), resize with resize_edges(), and
 // keep their own payload layout in the payload bytes.
@@ -140,6 +167,7 @@ public:
     std::unique_ptr<Tx> begin() { return store_.begin(); }
     // Returns the number of nodes released.
     std::uint64_t collect();
+    // Creation-order dependent; compare replays with the same creation order.
     std::uint64_t hash_state() const;
 
 private:

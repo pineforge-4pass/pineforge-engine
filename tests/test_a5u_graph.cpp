@@ -1,4 +1,4 @@
-// U07 graph contract rows: fields, copy() vs deep copy, na, aliases counted
+// UDT graph contract rows: fields, copy() vs deep copy, na, aliases counted
 // once, cycles collected, dead ids never reused, roots, a UDT inside a map
 // value, resize, rollback of deletions, and failure atomicity.
 //
@@ -643,10 +643,10 @@ int main() {
         rollback_aliases_and_deletion();
         map_value_roots_and_schema_hash();
         operation_failure_atomicity();
-        std::puts("A5U fields/copy/na/aliases/cycles/resize/deletion/rollback/atomicity reached");
+        std::puts("UDT fields/copy/na/aliases/cycles/resize/deletion/rollback/atomicity reached");
         return 0;
     } catch (const std::exception& error) {
-        std::fprintf(stderr, "A5U graph: %s\n", error.what());
+        std::fprintf(stderr, "UDT graph: %s\n", error.what());
         return 1;
     }
 }

@@ -1,4 +1,4 @@
-// U07 growth rows (100,000 and 1,000,000 bars) through a real native host
+// UDT graph growth rows (100,000 and 1,000,000 bars) through a real native host
 // over synthetic deterministic bars.
 //
 // Script shape, one execution per bar:
@@ -13,6 +13,8 @@
 //   last := Pivot.new(bar_index, close, last, history, label, history)
 // Every object stays reachable from `last`, so the live population grows with
 // bars and nothing is released before the run ends.
+// This is a resident-window claim. In a jailed run scratch backing is RAM;
+// retaining this entire graph grows the backing's memory charge with bars.
 //
 // FAIL-BEFORE (behavioural). Without udt_graph.hpp (base f66318a3) this file
 // compiles in its generated-container mode only: a C++ struct per object that
@@ -34,9 +36,9 @@
 
 #if __has_include(<pineforge/detail/udt_graph.hpp>)
 #include <pineforge/detail/udt_graph.hpp>
-#define PF_A5U_HAS_GRAPH 1
+#define PF_UDT_HAS_GRAPH 1
 #else
-#define PF_A5U_HAS_GRAPH 0
+#define PF_UDT_HAS_GRAPH 0
 #endif
 
 #include <array>
@@ -143,7 +145,7 @@ public:
     }
 };
 
-#if PF_A5U_HAS_GRAPH
+#if PF_UDT_HAS_GRAPH
 class GraphFamily {
     using Id = pineforge::detail::o1::Id;
     using UdtType = pineforge::detail::o1::UdtType;
@@ -173,11 +175,20 @@ public:
         const std::array<Id, 4> children{{graph_.edge(root_, 0), vector, string, vector}};
         graph_.set_edge(root_, 0, graph_.make(kPivot, &fields, children.data()));
         transaction->commit();
-        // Three makes: control read, create, staged write, head write each;
-        // four child validations; root read (header + edge); rebind (child
-        // header + root header + edge write). Bar zero skips a na validation.
-        constexpr std::uint64_t append_calls = 3 * (1 + 1 + 1 + 1) + 4 + 2 + 3;
-        constexpr std::uint64_t append_scopes = 1 + 3; // caller plus three makes
+        // make_node: control read + create + staged record/body write +
+        // directory-head write. All three schemas fit its 512-byte staging
+        // buffer (72-byte record plus the declared payload/edges above).
+        constexpr std::uint64_t makes_per_bar = 3; // vector, string, Pivot
+        constexpr std::uint64_t calls_per_make = 1 + 1 + 1 + 1;
+        // validate_child: one header read per non-na Pivot child (prev,
+        // vector, string, vector). Bar zero omits the prev header read.
+        constexpr std::uint64_t child_validations = kPivot.edge_count;
+        constexpr std::uint64_t root_read = 2; // edge: root header + edge
+        // set_edge: child validation + root header + edge write.
+        constexpr std::uint64_t root_rebind = 1 + 1 + 1;
+        constexpr std::uint64_t append_calls =
+            makes_per_bar * calls_per_make + child_validations + root_read + root_rebind;
+        constexpr std::uint64_t append_scopes = 1 + makes_per_bar; // caller + make scopes
         require(operations_.data_calls - calls <= append_calls &&
                     operations_.begin_calls - scopes <= append_scopes,
                 "per-bar graph append exceeded its constant Store operation bound");
@@ -203,7 +214,10 @@ public:
             std::array<unsigned char, 32> bytes{};
             graph_.read_object(children[2], kString, bytes.data(), nullptr);
             require(bytes == label(bar), "old nested string bytes");
-            require(operations_.data_calls - calls == 3,
+            // read_object: one staged Store read each for Pivot, vector,
+            // string, with their header included rather than looked up again.
+            constexpr std::uint64_t late_read_calls = 1 + 1 + 1;
+            require(operations_.data_calls - calls == late_read_calls,
                     "late read repeated a node header lookup");
             current = children[0];
         }
@@ -224,7 +238,7 @@ class Host final : public pineforge::NativeStrategyHost {
 public:
     explicit Host(Family& family) : family_(family) {
         pineforge::NativeRunSpec spec;
-        spec.identity = {"u07-growth", 1};
+        spec.identity = {"udt-growth", 1};
         spec.input_tf = "1";
         spec.script_tf = "1";
         spec.ticker = "UDT";
@@ -276,7 +290,7 @@ inline int run(std::size_t count, int argc, char** argv) {
         // times, so a GREEN cannot pass without spilling to the backing.
         require(count * kLogicalBytesPerBar > 8 * kResidentBound,
                 "population cannot cross its bound");
-        const bool native = !PF_A5U_HAS_GRAPH || argc == 2;
+        const bool native = !PF_UDT_HAS_GRAPH || argc == 2;
         heap_base = global_allocation::live_bytes;
         heap_peak = 0;
         operation_peak = 0;
@@ -287,7 +301,7 @@ inline int run(std::size_t count, int argc, char** argv) {
             OperationWindow window;
             family.finish();
         } else {
-#if PF_A5U_HAS_GRAPH
+#if PF_UDT_HAS_GRAPH
             a5u_test::StoreFixture fixture(kResidentPages);
             a5u_test::CountingStore operations(*fixture.store);
             pineforge::detail::o1::UdtGraph graph(operations);
@@ -296,7 +310,10 @@ inline int run(std::size_t count, int argc, char** argv) {
             GraphFamily family(graph, operations);
             drive(family, count);
             const auto stats = fixture.store->stats();
-            std::printf("A5U bars=%zu live=%llu resident=%llu backing=%llu store_bound=%llu\n",
+            // This HEAD's Shape has no id-table row/cap fields: these are
+            // not production-cap acceptance rows. Report that explicitly.
+            std::printf("UDT bars=%zu id_table_rows=unbounded id_table_cap=none "
+                        "live=%llu resident=%llu backing=%llu store_bound=%llu\n",
                         count, static_cast<unsigned long long>(stats.bytes_live),
                         static_cast<unsigned long long>(stats.bytes_resident),
                         static_cast<unsigned long long>(stats.bytes_backing),
@@ -326,7 +343,7 @@ inline int run(std::size_t count, int argc, char** argv) {
                     "graph residency exceeds the derived fixed bound");
 #endif
         }
-        std::printf("A5U bars=%zu retained_heap_peak=%zu operation_heap_peak=%zu bound=%llu mode=%s\n",
+        std::printf("UDT bars=%zu retained_heap_peak=%zu operation_heap_peak=%zu bound=%llu mode=%s\n",
                     count, heap_peak, operation_peak,
                     static_cast<unsigned long long>(kResidentBound),
                     native ? "native-RED" : "store-GREEN");
@@ -335,7 +352,7 @@ inline int run(std::size_t count, int argc, char** argv) {
         return 0;
     } catch (const std::exception& error) {
         global_allocation::on_recorded = nullptr;
-        std::fprintf(stderr, "A5U growth: %s\n", error.what());
+        std::fprintf(stderr, "UDT growth: %s\n", error.what());
         return 1;
     }
 }

@@ -1,4 +1,4 @@
-// CR-150 U07: generated UDT object graphs over the merged o1::Store.
+// Generated UDT object graphs over o1::Store.
 //
 // The layout and the compiler/runtime contract are in udt_graph.hpp. Every
 // operation that changes more than one Store record runs inside one Store
@@ -484,6 +484,7 @@ std::uint64_t UdtGraph::collect() {
 }
 
 std::uint64_t UdtGraph::hash_state() const {
+    // Directory order is creation-order dependent, including the stable ids.
     std::uint64_t hash = UINT64_C(14695981039346656037);
     auto fold = [&hash](const void* data, std::size_t bytes) {
         const auto* input = static_cast<const unsigned char*>(data);

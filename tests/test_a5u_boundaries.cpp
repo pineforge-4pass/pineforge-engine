@@ -1,5 +1,5 @@
 // Independent byte-vector oracle for moving a node's payload/edge boundary.
-// This row uses only the U07 module and the merged Store, not matrix internals.
+// This row uses only the UDT graph module and the Store.
 #include "a5u_test_store.hpp"
 #include <pineforge/detail/udt_graph.hpp>
 
@@ -294,10 +294,10 @@ int main() {
         schema_checked_reads();
         overlapping_payload_and_edge_moves();
         liveness_during_backing_failure();
-        std::puts("A5U schema reads, payload/edge moves, rollback and backing-read failures reached");
+        std::puts("UDT schema reads, payload/edge moves, rollback and backing-read failures reached");
         return 0;
     } catch (const std::exception& error) {
-        std::fprintf(stderr, "A5U boundaries: %s\n", error.what());
+        std::fprintf(stderr, "UDT boundaries: %s\n", error.what());
         return 1;
     }
 }
