@@ -47,7 +47,7 @@ void BacktestEngine::trace(const std::string& name, double value) {
         fold_trace_leaf(sequence_witness_.traces, e.timestamp, e.bar_index, name, value);
         return;
     }
-    if (optional_report_mode_ == report_sequence::ReportMode::SummaryOnly) {
+    if (summarize_optional_sequences()) {
         fold_trace_leaf(sequence_witness_.traces, e.timestamp, e.bar_index, name, value);
         return;
     }
@@ -63,7 +63,7 @@ void BacktestEngine::trace(const std::string& name, double value) {
 // the rows alone cannot say which call they answer. Every batch reader shares
 // this one gate: strategy_native_run_v1, the native module wrappers and the
 // generated run_backtest / run_backtest_full, which call run() and then this.
-// Begun runs publish completed or partial rows unless report_sink_failed is latched,
+// Begun runs publish completed or partial rows unless sink publication failed,
 // even at finish after run success: every later read gives empty ReportC (all arrays NULL,
 // all counts zero), avoiding retries outside run()'s catch; status, code, arguments and
 // message stay in the run-failure latch. Refused calls overwrite unowned storage without freeing.
@@ -75,8 +75,7 @@ void BacktestEngine::fill_report(ReportC* out) const try {
     const ReportSinkCallScope sink_call(*this);
     if (NativeExecutionConsumer::refuse_report_in_dispatch(*this, out)) return;
     if (!NativeExecutionConsumer::rows_are_current(*this)
-        || (last_run_status_ != 0
-            && run_failure_value_of(*this).code == RunFailureCode::report_sink_failed)) {
+        || report_sink_publication_failed()) {
         *out = ReportC{};
         return;
     }
@@ -121,7 +120,7 @@ void BacktestEngine::fill_report(ReportC* out) const try {
         // recording was enabled via set_broker_state_hash_recording. Owns the
         // allocation; freed by free_report. SummaryOnly keeps the fixed ordered
         // witness and publishes no owning array (R14).
-        if (optional_report_mode_ == report_sequence::ReportMode::SummaryOnly) {
+        if (summarize_optional_sequences()) {
             out->broker_state_hash_len = 0;
             out->broker_state_hash = nullptr;
         } else {
@@ -531,7 +530,7 @@ void BacktestEngine::fill_security_diag_section(ReportC* out) const {
 void BacktestEngine::fill_trace_section(ReportC* out) const {
     // SummaryOnly keeps the ordered witness, not the sequence (R15). A sink
     // has already streamed every X record, so no resident array is owed.
-    if (optional_report_mode_ == report_sequence::ReportMode::SummaryOnly) {
+    if (summarize_optional_sequences()) {
         out->trace = nullptr;
         out->trace_len = 0;
         out->trace_names = nullptr;
@@ -770,8 +769,7 @@ void BacktestEngine::output_bar(int64_t open_ms, int64_t close_ms) {
     }
     // A recalculation retracts this row's provisional events: the summary
     // witness returns to its value when the row opened (O(1) rollback).
-    if (optional_report_mode_ == report_sequence::ReportMode::SummaryOnly
-        && !report_sink_state_.writer) {
+    if (summarize_optional_sequences() && !report_sink_state_.writer) {
         sequence_witness_.events = output_event_row_witness_;
         // A report read may have folded this still-open row (a live stream
         // snapshot). Its values are about to change, so retire that fold and
@@ -836,8 +834,7 @@ void BacktestEngine::record_output_event(int output, double value, const std::st
     // SummaryOnly publishes no event array (R18): the record is folded into
     // the ordered witness at once, and a same-row recalculation restores the
     // witness snapshot, so the fixed state does not grow with events.
-    if (optional_report_mode_ == report_sequence::ReportMode::SummaryOnly
-        && !report_sink_state_.writer) {
+    if (summarize_optional_sequences() && !report_sink_state_.writer) {
         fold_event_leaf(sequence_witness_.events, event);
         output_sequence_ = event.sequence;
         ++output_ordinals_[static_cast<size_t>(output)];
@@ -904,8 +901,7 @@ void BacktestEngine::output_events_clear() {
     if (output_events_.empty()) {
         // SummaryOnly has no queue: the folded witness already holds the
         // cleared events, exactly as the sink published them before clearing.
-        if (optional_report_mode_ == report_sequence::ReportMode::SummaryOnly
-            && !report_sink_state_.writer) {
+        if (summarize_optional_sequences() && !report_sink_state_.writer) {
             output_cleared_sequence_ = std::max(output_cleared_sequence_, output_sequence_);
         }
         return;
@@ -1018,6 +1014,8 @@ int BacktestEngine::set_report_sink_v1(const pf_report_sink_v1* descriptor) {
     // an installed sink, its receipt or its copied strings.
     ReportSinkState next;
     next.trade_history_streamable = report_sink_state_.trade_history_streamable;
+    next.optional_sequences_summary = report_sink_state_.optional_sequences_summary;
+    next.publication_failed = report_sink_state_.publication_failed;
     if (descriptor) {
         next.enabled = true;
         next.path = descriptor->path;
@@ -1055,6 +1053,8 @@ int BacktestEngine::set_report_sink_fd_v1(const pf_report_sink_fd_v1* descriptor
     if (!descriptor && (report_sink_state_.equity_scratch || trades_.base() > 0)) return -3;
     ReportSinkState next;
     next.trade_history_streamable = report_sink_state_.trade_history_streamable;
+    next.optional_sequences_summary = report_sink_state_.optional_sequences_summary;
+    next.publication_failed = report_sink_state_.publication_failed;
     if (descriptor) {
         next.enabled = true;
         next.fd = descriptor->fd;
@@ -1148,7 +1148,23 @@ void BacktestEngine::begin_report_sink() {
 #endif
     sink.receipt = {};
     sink.summary = {};
+    sink.publication_failed = false;
     sink.output_base = 0;
+    sink.optional_sequences_summary = report_mode_ == ReportMode::SUMMARY_ONLY
+        || optional_report_mode_ == report_sequence::ReportMode::SummaryOnly;
+    if (sink.enabled || sink.optional_sequences_summary) {
+        // Retiring a vector's elements does not retire its old capacity or
+        // the name map's bucket array. A bounded generation must also release
+        // those allocations after a preceding owning FULL generation.
+        std::vector<uint64_t>().swap(broker_state_hashes_);
+        std::vector<TraceEntryC>().swap(trace_buffer_);
+        std::vector<std::string>().swap(trace_names_);
+        std::unordered_map<std::string, int32_t>().swap(trace_name_index_);
+        std::vector<double>().swap(output_series_);
+        std::vector<int64_t>().swap(output_open_ms_);
+        std::vector<int64_t>().swap(output_close_ms_);
+        std::vector<OutputEvent>().swap(output_events_);
+    }
     // Run preparation, before callbacks/bar zero, also when no sink is set.
     active_equity_report_mode_ = pending_equity_report_mode_;
     summary_equity_fold_ = {};
@@ -1169,14 +1185,6 @@ void BacktestEngine::begin_report_sink() {
         return; // No curve writer, region, file, or sink publication.
     }
     if (!sink.enabled) return;
-    // The new run owns these histories. Drop capacity left by a previous
-    // sink-off run before callbacks, even if outputs are disabled this time.
-    std::vector<uint64_t>().swap(broker_state_hashes_);
-    std::vector<TraceEntryC>().swap(trace_buffer_);
-    std::vector<double>().swap(output_series_);
-    std::vector<int64_t>().swap(output_open_ms_);
-    std::vector<int64_t>().swap(output_close_ms_);
-    std::vector<OutputEvent>().swap(output_events_);
     sink.receipt.trades_retained = sink.trade_history_streamable ? 0u : 1u;
     try {
         if (sink.fd >= 0) {
@@ -1216,6 +1224,7 @@ void BacktestEngine::begin_report_sink() {
             }
         }
     } catch (const report_sink::WriterError& error) {
+        sink.publication_failed = true;
         sink.writer.reset();
         throw coded<std::runtime_error>(error.run_failure(), error.what());
     }
@@ -1312,6 +1321,7 @@ void BacktestEngine::finish_report_sink(ReportC* out) const {
             }
         }
     } catch (const report_sink::WriterError& error) {
+        sink.publication_failed = true;
         sink.writer.reset();
         free_report(out);
         *out = {};
@@ -1321,6 +1331,7 @@ void BacktestEngine::finish_report_sink(ReportC* out) const {
         note_run_failure(engine, failure.what(), classify_run_failure(failure));
         throw failure;
     } catch (const std::exception& error) {
+        sink.publication_failed = true;
         sink.writer.reset();
         free_report(out);
         *out = {};
@@ -1329,6 +1340,7 @@ void BacktestEngine::finish_report_sink(ReportC* out) const {
         note_run_failure(engine, error.what(), classify_run_failure(error));
         throw;
     } catch (...) {
+        sink.publication_failed = true;
         sink.writer.reset();
         free_report(out);
         *out = {};
@@ -1428,6 +1440,7 @@ void BacktestEngine::stage_report_sink_equity_tail(const ReportC* out) const {
         stage_report_sink_equity_point(out->equity_curve[0]);
         sink.equity_scratch->flush();
     } catch (const std::exception& error) {
+        sink.publication_failed = true;
         sink.writer.reset();
         auto& engine = const_cast<BacktestEngine&>(*this);
         engine.last_run_status_ = 1;
@@ -1449,6 +1462,7 @@ void BacktestEngine::compute_report_sink_metrics(ReportC* out,
             curve, equity_count, initial_capital_, chart_timezone_, first_bar_open_,
             current_bar_.close, bars_in_market_, out->net_profit);
     } catch (const std::exception& error) {
+        report_sink_state_.publication_failed = true;
         report_sink_state_.writer.reset();
         auto& engine = const_cast<BacktestEngine&>(*this);
         engine.last_run_status_ = 1;
@@ -1479,12 +1493,19 @@ void BacktestEngine::report_sink_record(Write write) const {
     try {
         write();
     } catch (const report_sink::WriterError& error) {
+        report_sink_state_.publication_failed = true;
         const auto failure = coded<std::runtime_error>(error.run_failure(), error.what());
         auto& engine = const_cast<BacktestEngine&>(*this);
         engine.last_run_status_ = 1;
         note_run_failure(engine, failure.what(), classify_run_failure(failure));
         throw failure;
     }
+}
+
+bool BacktestEngine::report_sink_publication_failed() const {
+    return report_sink_state_.publication_failed
+        || (last_run_status_ != 0
+            && run_failure_value_of(*this).code == RunFailureCode::report_sink_failed);
 }
 
 bool BacktestEngine::stream_report_sink_trace(const std::string& name,
@@ -1593,7 +1614,7 @@ void BacktestEngine::retire_report_sink_hashes() {
         sequence_hash_folded_leaf_ = 0;
         return;
     }
-    if (!sink.writer && optional_report_mode_ == report_sequence::ReportMode::SummaryOnly) {
+    if (!sink.writer && summarize_optional_sequences()) {
         // No stream requested: fold the finalized leaf into the ordered
         // witness and retire it, so the recorded vector stays one leaf deep.
         fold_pending_hashes_into_witness();
@@ -1740,8 +1761,8 @@ void BacktestEngine::fold_pending_hashes_into_witness() const {
 }
 
 void BacktestEngine::fold_current_output_row_witness() const {
-    if (optional_report_mode_ != report_sequence::ReportMode::SummaryOnly
-        || report_sink_state_.writer || output_open_ms_.empty() || sequence_row_folded_) {
+    if (!summarize_optional_sequences() || report_sink_state_.writer
+        || output_open_ms_.empty() || sequence_row_folded_) {
         return;
     }
     fold_row_leaf(sequence_witness_.rows,
@@ -1753,8 +1774,7 @@ void BacktestEngine::fold_current_output_row_witness() const {
 }
 
 void BacktestEngine::finalize_summary_output_row() {
-    if (optional_report_mode_ != report_sequence::ReportMode::SummaryOnly
-        || report_sink_state_.writer) {
+    if (!summarize_optional_sequences() || report_sink_state_.writer) {
         return;
     }
     fold_current_output_row_witness();
@@ -1769,14 +1789,15 @@ void BacktestEngine::finalize_summary_output_row() {
 
 int BacktestEngine::set_optional_report_mode(report_sequence::ReportMode mode) {
     // A mode is run configuration: it cannot change under a live run, stream
-    // or sink generation, and it starts a fresh witness.
+    // or sink generation. Begin starts the fresh witness: an idle setter
+    // must not erase the current generation's already folded records.
     if (report_sink_setter_status() != 0) return -1;
     optional_report_mode_ = mode;
-    reset_optional_sequence_witness();
     return 0;
 }
 
 report_sequence::OptionalSequenceSummary BacktestEngine::optional_sequence_summary() const {
+    if (report_sink_publication_failed()) return {};
     fold_pending_hashes_into_witness();
     fold_current_output_row_witness();
     return sequence_witness_;
@@ -2068,7 +2089,8 @@ int BacktestEngine::fill_report_envelope_v1(ReportEnvelopeV1* out) const {
 
     const bool streamed = report_mode_ == ReportMode::STREAMED;
     const bool summary = report_mode_ == ReportMode::SUMMARY_ONLY;
-    const bool current = NativeExecutionConsumer::rows_are_current(*this);
+    const bool current = NativeExecutionConsumer::rows_are_current(*this)
+        && !report_sink_publication_failed();
     const auto sequence = [current, summary, streamed](std::int64_t count, bool enabled,
                                                       bool omitted = false) {
         return report_sequence_v1(current ? count : 0, enabled, summary || omitted, streamed);
@@ -2084,8 +2106,7 @@ int BacktestEngine::fill_report_envelope_v1(ReportEnvelopeV1* out) const {
         : sink.equity_scratch ? sink.equity_scratch->size() : equity_logical_point_count();
     if (local.report.equity_curve_len > equity_count)
         equity_count = local.report.equity_curve_len;
-    const bool optional_summary =
-        optional_report_mode_ == report_sequence::ReportMode::SummaryOnly;
+    const bool optional_summary = summarize_optional_sequences();
     const auto witness = current && optional_summary ? optional_sequence_summary()
         : report_sequence::OptionalSequenceSummary{};
     const std::int64_t trace_count = optional_summary

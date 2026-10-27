@@ -108,7 +108,7 @@ through an explicitly negotiated provider bridge.
 | Mode | Metrics and summary scalars | Resident sequences | External sequences |
 | --- | --- | --- | --- |
 | FULL (`0`) | Existing values/bits | Existing owning arrays unless a recording control omits that sequence | None through the explicit FULL envelope |
-| SUMMARY_ONLY (`1`) | Exact metrics require an eligible presentation/replay provider. The resident-curve fold matches all four FULL metric blocks on hosts without presentation overrides and without an execution observer, configured or admitted selection window, or observed phase | No arrays in the returned report; execution retention uses the controls below | None |
+| SUMMARY_ONLY (`1`) | Exact metrics require an eligible presentation/replay provider. The resident-curve fold matches all four FULL metric blocks on hosts without presentation overrides and without an execution observer, configured or admitted selection window, or observed phase | No returned arrays; optional histories are folded during execution, and equity retention uses the control below | None |
 | STREAMED (`2`) | Same values/bits subject to the presentation gap below | None in envelope | Complete enabled sequences, in existing report order, through a sink written in bounded windows (the sink file grows with the run) |
 
 The existing sink-v1 route remains supported. Explicit FULL conflicts with an
@@ -117,21 +117,24 @@ capture. FULL is an owning-array
 compatibility action and makes no fixed-memory claim. SUMMARY_ONLY must not
 allocate full arrays and delete them after reporting.
 
-`set_report_mode_v1(SUMMARY_ONLY)` selects the returned report shape. By
-itself it retains the ordinary equity history and does not disable trace,
-hash or output recording. It makes no fixed-memory guarantee for execution.
-Bounded summary recording also requires both independent controls before
-the next run:
+`set_report_mode_v1(SUMMARY_ONLY)` selects the returned report shape and
+folds enabled optional sequences from the next begin. Traces, their names,
+broker hashes and output rows/events retain fixed witnesses instead of
+growing histories. The recording choice is latched for that generation.
+Ordinary equity history still stays resident unless its independent
+recording control is selected before the next run:
 
 - `set_equity_report_mode(ReportMode::SUMMARY_ONLY)` keeps the held equity
   point and fixed metric folds instead of the curve or a private curve tape.
   It cannot be combined with an execution observer; the setter refusals are
   described below.
 - `set_optional_report_mode(report_sequence::ReportMode::SummaryOnly)`
-  omits the resident trace/name, broker-hash and output row/event histories.
+  independently omits the same optional histories when the returned report
+  mode is FULL.
 
-Check every setter's status. These recording controls are necessary for
-bounded summary storage; they do not supply the exact presentation adapter
+Check every setter's status. The equity recording control is necessary for
+bounded summary storage; the optional control also supports FULL readers.
+Neither supplies the exact presentation adapter
 or second replay required by the O1 contract. A provider must establish those
 capabilities before certifying a complete exact summary. Script-readable
 historical trade storage is separate from report capture.
@@ -558,9 +561,12 @@ Populated only when:
 
 In the explicit envelope, FULL returns the resident records unless the
 optional-sequence control omits them with `captured=0, external=0` and unchanged
-logical counts. SUMMARY_ONLY omits them, and STREAMED publishes them externally
+logical counts. SUMMARY_ONLY folds enabled traces during execution without a
+resident trace or name dictionary, and STREAMED publishes them externally
 with `captured=1, external=1`. The trace/name logical
 counts and capture flags remain explicit in metadata.
+Both routes release capacity left by a preceding FULL run at the next begin.
+FULL continues to intern names in first-seen order and retain its trace array.
 
 | Field | Meaning |
 | --- | --- |

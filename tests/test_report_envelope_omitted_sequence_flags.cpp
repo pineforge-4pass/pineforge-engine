@@ -158,7 +158,7 @@ void unchanged_mode(ReportMode mode, bool optional_summary = false) {
         require_flags(metadata.trades, captured, external, "control trades");
         require_flags(metadata.equity_curve, captured, external, "control equity");
         require_optional_flags(metadata, captured, external);
-        require_counts(metadata, 12, streamed ? 0 : 1);
+        require_counts(metadata, 12, mode == ReportMode::FULL ? 1 : 0);
         if (mode == ReportMode::FULL) {
             require(report.equity_curve != nullptr && report.equity_curve_len == 12
                         && report.trace != nullptr && report.trace_len == 12

@@ -37,6 +37,14 @@ read returns an independently owned report payload, freed exactly once with
 On ordinary (unobserved, unselected) paths, every FULL read presents and every STREAMED read presents the held tail; the first STREAMED read after a completed run writes remaining E/T/O/K/H records and the trailer.
 An envelope must not already own an unfreed payload when filled.
 
+A failed sink publication retains its original failure code and arguments.
+Subsequent batch, stream-snapshot and envelope reads return an empty report;
+envelope logical counts and public optional witnesses are zero. This includes
+wire-limit failures classified as `engine_invariant`, as well as
+`report_sink_failed` I/O failures. An incomplete receipt never certifies a
+valid sink, and changing next-run sink configuration does not repair that
+failed generation.
+
 The C-compatible structs do not themselves add a C export. The initial native
 host integration can link the C++ methods. A C/ctypes loader must negotiate a
 provider implementing this contract before selecting SUMMARY_ONLY; ABI 4,
@@ -90,15 +98,18 @@ but no implementation must not be reported as supporting any new mode.
 * **SUMMARY_ONLY (1):** the HPO trial. Return every metric block and summary
   scalar with the same bits as FULL on the same completed execution, once
   exact presentation/replay eligibility is established. The current
-  `set_report_mode_v1` selects the returned shape: it omits owning report
-  arrays, but does not change execution-time equity or optional-sequence
-  retention. That setter alone does not establish fixed-memory recording.
+  `set_report_mode_v1` omits owning report arrays and, from the next begin,
+  folds optional sequences without retaining trace/name, hash or output
+  row/event histories. The recording decision is latched at begin; changing
+  next-run configuration while idle does not discard an existing generation.
+  That setter alone does not establish fixed-memory equity recording.
   A bounded summary provider must also select
-  `set_equity_report_mode(ReportMode::SUMMARY_ONLY)` and
+  `set_equity_report_mode(ReportMode::SUMMARY_ONLY)`
+  before begin and supply the exact replay described below. The equity
+  control keeps a held point and fixed folds. The separate
   `set_optional_report_mode(report_sequence::ReportMode::SummaryOnly)`
-  before begin, and supply the exact replay described below. The equity
-  control keeps a held point and fixed folds; the optional-sequence control
-  omits trace/name, hash and output row/event histories. The legacy equity
+  control continues to omit optional histories when the returned mode is
+  FULL. The legacy equity
   control refuses SUMMARY_ONLY with `PF_REPORT_MODE_REPLAY_UNAVAILABLE`
   (`-5`) while an execution observer is registered. Registering an observer
   while legacy SUMMARY_ONLY is pending returns `-2`; switching the pending
@@ -114,8 +125,8 @@ but no implementation must not be reported as supporting any new mode.
   Exact internal historical trade reads required by a script remain the
   ledger lane's responsibility; they are not report capture. A configured
   sequence sink conflicts with this mode. Recording/trace switches remain
-  independent of the returned report shape; configure their retention
-  explicitly rather than inferring it from an empty returned array.
+  independent of capture: disabled sources still produce zero logical
+  records, and enabled optional sources retain their logical counts.
 * **STREAMED (2):** return the same metrics/scalars while emitting complete
   requested sequences to an external, bounded-buffer sink. Require an
   installed `pf_report_sink_v1`; do not silently fall back to owning arrays.
@@ -181,7 +192,7 @@ Each of `trades`, `equity_curve`, `broker_state_hash`, `trace`, `trace_names`,
 
 | Field | Meaning |
 | --- | --- |
-| `logical_count` (`int64_t`) | Number of final logical records produced by the authoritative pass, independent of capture and resident length. Disabled optional sources produce zero. The one exception is `trace_names`: its `logical_count` is the number of names RETAINED in the name table (a name dictionary would grow with distinct dynamic names, against the bounded-memory rule), so it is 0 when the sequence is not captured (the optional summary control and STREAMED) and N in FULL. |
+| `logical_count` (`int64_t`) | Number of final logical records produced by the authoritative pass, independent of capture and resident length. Disabled optional sources produce zero. The one exception is `trace_names`: its `logical_count` is the number of names RETAINED in the name table (a name dictionary would grow with distinct dynamic names, against the bounded-memory rule), so it is 0 when the sequence is not captured (SUMMARY_ONLY, the optional summary control and STREAMED) and N in FULL. |
 | `captured` (`uint32_t`) | Explicit 0/1 flag: the sequence was captured as requested output. A successfully captured empty sequence has 1; a deliberately omitted sequence has 0. |
 | `external` (`uint32_t`) | Explicit 0/1 flag: captured output belongs to the external sink. Implies `captured == 1`. It does not transfer sink ownership to the report. |
 

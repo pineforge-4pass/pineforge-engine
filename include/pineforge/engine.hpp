@@ -1417,7 +1417,9 @@ protected:
     // ``trace_names_``, which is the unique-name table built by
     // ``intern_trace_name``. A first-time name pays one ``unordered_map``
     // insert + ``string`` push_back; subsequent calls with the same name
-    // are a single map lookup.
+    // are a single map lookup. Only FULL retains these arrays. Summary
+    // recording folds the supplied name and value; a sink embeds the name
+    // in each X record without a resident dictionary.
     bool trace_enabled_ = false;
 
     // Live-runtime surface (ABI v4). All default off/zero; historical runs are
@@ -2594,6 +2596,14 @@ private:
         // Report cursor only, covered by report_sink_state_'s existing
         // broker-hash waiver. No execution decision reads it; copies reset it.
         std::int64_t output_base = 0;
+        // Begin-latched optional recording policy, under the same report-only
+        // waiver as the cursor/witnesses. Idle next-run setters cannot change
+        // which sequences the current generation retained.
+        bool optional_sequences_summary = false;
+        // Publication failure is independent of its typed cause: a malformed
+        // sink record is engine_invariant, while failed I/O is report_sink_failed.
+        // Neither generation may subsequently publish a partial report.
+        bool publication_failed = false;
         // Selected report validation only, under report_sink_state_'s output
         // waiver. Released FINAL points are latched here, never broker inputs.
         std::unique_ptr<report::SelectedReportStream> selected_equity_stream;
@@ -2748,6 +2758,10 @@ public:
     report_sequence::OptionalSequenceSummary optional_sequence_summary() const;
 
 private:
+    bool summarize_optional_sequences() const noexcept {
+        return report_sink_state_.optional_sequences_summary;
+    }
+    bool report_sink_publication_failed() const;
     void reset_optional_sequence_witness();
     void fold_pending_hashes_into_witness() const;
     void fold_current_output_row_witness() const;
