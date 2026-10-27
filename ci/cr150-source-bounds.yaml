@@ -74,7 +74,7 @@ scan:
   generated_files:
     - "tutorial/**/generated*.cpp"
 ceilings:
-  unreviewed: 1264
+  unreviewed: 1266
   pending-flat-memory: 188
 owners:
   - {name: "generated-cpp", globs: ["tutorial/**"]}
@@ -1309,7 +1309,7 @@ entries:
   - {id: "U1262", file: "include/pineforge/detail/scratch_sequence.hpp", symbol: "index_", ops: ["assign"], container: "unresolved by the index: index_ = ...", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 47}
   - {id: "U1263", file: "include/pineforge/detail/scratch_sequence.hpp", symbol: "last", ops: ["decl"], container: "const_iterator", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 93}
   - {id: "U1264", file: "include/pineforge/detail/scratch_sequence.hpp", symbol: "scratch", ops: ["grow"], container: "unresolved by the index: scratch.push_back(...)", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 113}
-  - {id: "U1265", file: "include/pineforge/detail/scratch_slab.hpp", symbol: "operator new", ops: ["alloc"], container: "unresolved by the index: operator new", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 114}
+  - {id: "U1265", file: "include/pineforge/detail/scratch_slab.hpp", symbol: "operator new", ops: ["alloc"], container: "unresolved by the index: operator new", owner: "engine-core", phase: "unclassified", state: "unreviewed", note: "CR150-CX 10-27 (lazy slab): allocation moved to a private static helper; the slab is one allocation per run sized by the admitted manifest", line: 261}
   - {id: "U1266", file: "include/pineforge/detail/scratch_store.hpp", symbol: "state_", ops: ["assign"], container: "unresolved by the index: state_ = ...", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 208}
   - {id: "U1267", file: "include/pineforge/detail/scratch_store_impl.hpp", symbol: "operator new", ops: ["alloc"], container: "unresolved by the index: operator new", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 1755}
   - {id: "U1268", file: "include/pineforge/detail/scratch_store_impl.hpp", symbol: "order_", ops: ["assign"], container: "unresolved by the index: order_ = ...", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 178}
@@ -1542,3 +1542,5 @@ entries:
   - {id: "U1499", file: "src/native_order.cpp", symbol: "held_", ops: ["assign"], container: "unresolved by the index: held_ = ...", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 2600}
   - {id: "U1500", file: "src/source/pine_adapter.cpp", symbol: "cohorts", ops: ["decl", "grow"], container: "std::vector<const CohortRow*>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 8761}
   - {id: "U1501", file: "src/ta_misc.cpp", symbol: "held_", ops: ["assign"], container: "unresolved by the index: held_ = ...", owner: "ta-series", phase: "unclassified", state: "unreviewed", line: 602}
+  - {id: "U1511", file: "include/pineforge/detail/scratch_errors.hpp", symbol: "scratch_capacity_message", ops: ["decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", note: "CR150-CX 10-27 (CR-400 family): capacity refusal message builder; function-local string temporaries, bounded by the message length, freed at the end of the call", line: 68}
+  - {id: "U1512", file: "include/pineforge/detail/scratch_slab.hpp", symbol: "<temp:string>", ops: ["temp"], container: "unresolved by the index: std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", note: "CR150-CX 10-27 (CR-400 family): layout addition and multiplication overflow messages at lines 49 and 55; function-local string temporaries, bounded by the message length, freed at the end of the call", line: 49}
