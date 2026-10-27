@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -56,6 +57,96 @@ def wire(path: Path, *, simple: bool) -> None:
 
 SHAPES = ("reversal", "shapes", "wide", "indexed")
 SUFFIXES = ("sink", "hashes", "report")
+ARTIFACT_NAMES = {f"{shape}.{suffix}" for shape in SHAPES for suffix in SUFFIXES}
+COMMITTED_REFERENCE = Path(__file__).resolve().parent / "data/trade_history_reference"
+MAX_REFERENCE_BYTES = 5_000_000
+MISSING_REFERENCE = (
+    "PINEFORGE_TRADE_HISTORY_REFERENCE must name artifacts made with "
+    "--write-reference and the unchanged-engine legacy executable")
+
+
+class ReferenceError(ValueError):
+    """A frozen reference is absent, incomplete, or changed."""
+
+
+def unique_manifest(pairs: list[tuple[str, str]]) -> dict[str, str]:
+    result = {}
+    for name, value in pairs:
+        if name in result:
+            raise ReferenceError(f"duplicate reference manifest entry: {name}")
+        result[name] = value
+    return result
+
+
+def verify_reference(directory: Path, *, committed: bool = True) -> dict[str, str]:
+    """Check every expected byte before starting any producer.
+
+    Repository data requires the complete SHA-256 manifest, including the base
+    pin and JSON manifest. Explicit lab overrides also accept the original
+    --write-reference format (twelve artifacts and manifest.json only).
+    """
+    try:
+        if directory.is_symlink() or not directory.is_dir():
+            raise ReferenceError(f"reference directory is absent: {directory}")
+        paths = {path.name: path for path in directory.iterdir()}
+        full_manifest = "MANIFEST.sha256" in paths
+        expected = ARTIFACT_NAMES | {"manifest.json"}
+        if committed or full_manifest:
+            expected |= {"BASE_COMMIT", "MANIFEST.sha256"}
+        if set(paths) != expected:
+            raise ReferenceError(
+                f"reference inventory mismatch: missing {sorted(expected - paths.keys())}, "
+                f"unexpected {sorted(paths.keys() - expected)}")
+        if any(path.is_symlink() or not path.is_file() for path in paths.values()):
+            raise ReferenceError("reference files must be regular files, not symlinks")
+        if committed:
+            total = sum(path.stat().st_size for path in paths.values())
+            if total > MAX_REFERENCE_BYTES:
+                raise ReferenceError(f"committed reference exceeds {MAX_REFERENCE_BYTES} bytes")
+
+        if full_manifest:
+            checksums = {}
+            for line in paths["MANIFEST.sha256"].read_bytes().splitlines(keepends=True):
+                match = re.fullmatch(rb"([0-9a-f]{64})  ([A-Za-z0-9_.-]+)\n", line)
+                if match is None:
+                    raise ReferenceError("malformed MANIFEST.sha256 entry")
+                digest, name = (part.decode("ascii") for part in match.groups())
+                if name in checksums:
+                    raise ReferenceError(f"duplicate MANIFEST.sha256 entry: {name}")
+                checksums[name] = digest
+            if set(checksums) != expected - {"MANIFEST.sha256"}:
+                raise ReferenceError("MANIFEST.sha256 must cover every other reference file")
+            for name, digest in checksums.items():
+                if hashlib.sha256(paths[name].read_bytes()).hexdigest() != digest:
+                    raise ReferenceError(f"reference SHA-256 mismatch: {name}")
+            if not re.fullmatch(rb"[0-9a-f]{40}\n", paths["BASE_COMMIT"].read_bytes()):
+                raise ReferenceError("BASE_COMMIT must contain one full lowercase commit and LF")
+
+        manifest = json.loads(paths["manifest.json"].read_text(encoding="utf-8"),
+                              object_pairs_hook=unique_manifest)
+        if not isinstance(manifest, dict) or set(manifest) != ARTIFACT_NAMES:
+            raise ReferenceError("manifest.json must cover exactly the twelve artifacts")
+        for name, digest in manifest.items():
+            if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+                raise ReferenceError(f"invalid reference SHA-256: {name}")
+            data = paths[name].read_bytes()
+            if not data:
+                raise ReferenceError(f"empty reference artifact: {name}")
+            if hashlib.sha256(data).hexdigest() != digest:
+                raise ReferenceError(f"reference SHA-256 mismatch: {name}")
+        return manifest
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise ReferenceError(f"unreadable reference: {directory}: {error}") from error
+
+
+def load_reference() -> tuple[Path, dict[str, str]]:
+    override = os.environ.get("PINEFORGE_TRADE_HISTORY_REFERENCE")
+    if override:
+        directory = Path(override)
+        return directory, verify_reference(directory, committed=False)
+    if not (COMMITTED_REFERENCE / "MANIFEST.sha256").is_file():
+        raise ReferenceError(MISSING_REFERENCE)
+    return COMMITTED_REFERENCE, verify_reference(COMMITTED_REFERENCE)
 
 
 def record_reference(executable: str, directory: Path) -> None:
@@ -76,14 +167,11 @@ def main() -> None:
     if len(sys.argv) == 4 and sys.argv[1] == "--write-reference":
         record_reference(sys.argv[2], Path(sys.argv[3]))
         return
+    if len(sys.argv) == 3 and sys.argv[1] == "--verify-reference":
+        verify_reference(Path(sys.argv[2]))
+        return
     assert len(sys.argv) == 4
-    reference = os.environ.get("PINEFORGE_TRADE_HISTORY_REFERENCE")
-    assert reference, (
-        "PINEFORGE_TRADE_HISTORY_REFERENCE must name artifacts made with "
-        "--write-reference and the unchanged-engine legacy executable")
-    reference = Path(reference)
-    manifest = json.loads((reference / "manifest.json").read_text())
-    assert set(manifest) == {f"{shape}.{suffix}" for shape in SHAPES for suffix in SUFFIXES}
+    reference, manifest = load_reference()
     with tempfile.TemporaryDirectory(prefix="pineforge-trade-identity-") as name:
         root = Path(name)
         outputs = []
