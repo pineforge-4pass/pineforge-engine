@@ -98,17 +98,17 @@ void schema_checked_reads() {
 }
 
 template<class F>
-void invariant_error(const char* reason, F&& operation) {
+void invariant_error(const char* reason, const char* diagnostic, F&& operation) {
     bool threw = false;
     try {
         operation();
     } catch (const pineforge::coded<std::logic_error>& error) {
         require(error.run_failure_code() == pineforge::RunFailureCode::engine_invariant &&
                     std::strcmp(error.what(), reason) == 0,
-                "schema read reported the wrong typed failure");
+                diagnostic);
         threw = true;
     }
-    require(threw, "invalid schema read did not stop");
+    require(threw, "schema: invalid read did not stop");
 }
 
 void schema_failure_diagnostics() {
@@ -130,7 +130,10 @@ void schema_failure_diagnostics() {
             const UdtType stored_type{requested.tag + 1, stored_size, children.size()};
             const Id object = graph.make(stored_type, stored_bytes.data(), children.data());
             const auto before = graph.hash_state();
-            invariant_error("UDT schema mismatch", [&] {
+            const char* diagnostic = stored_size < size
+                ? "schema: smaller object reported the wrong typed failure"
+                : "schema: larger object reported the wrong typed failure";
+            invariant_error("UDT schema mismatch", diagnostic, [&] {
                 graph.read_object(object, requested, actual.data(), actual_children.data());
             });
             require(actual == unchanged_bytes && actual_children == unchanged_children &&
@@ -144,7 +147,8 @@ void schema_failure_diagnostics() {
         // This is genuinely short for its own schema, unlike the ids above.
         constexpr std::size_t record_bytes = 9 * sizeof(std::uint64_t);
         require(fixture.store->resize(truncated, record_bytes), "truncate the declared object body");
-        invariant_error("UDT short record read", [&] {
+        invariant_error("UDT short record read",
+                        "schema: truncated own-schema object reported the wrong typed failure", [&] {
             graph.read_object(truncated, requested, actual.data(), actual_children.data());
         });
         require(actual == unchanged_bytes && actual_children == unchanged_children,

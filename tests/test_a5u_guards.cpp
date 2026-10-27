@@ -8,6 +8,8 @@
 #include <cstdio>
 #include <cstring>
 #include <limits>
+#include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -47,6 +49,18 @@ public:
     }
     void verify(const UdtGraph& graph) const {
         require(graph.store().stats().bytes_live == live_, "refusal changed live bytes");
+        verify_versions(graph);
+    }
+    // The snapshot's byte count covers the whole Store. Another graph may
+    // deliberately add objects while this graph's versions must stay exact.
+    void verify_after_growth(const UdtGraph& graph, std::uint64_t added_bytes) const {
+        require(graph.store().stats().bytes_live == live_ + added_bytes,
+                "caller commit live bytes differ from expected object and binding growth");
+        verify_versions(graph);
+    }
+
+private:
+    void verify_versions(const UdtGraph& graph) const {
         for (const auto& object : objects_) {
             require(graph.store().size(object.id) == object.bytes.size(), "refusal resized a version");
             std::vector<unsigned char> bytes(object.bytes.size());
@@ -294,7 +308,7 @@ void make_rejects_dead_and_foreign_children_before_writes() {
     require(store.stats().bytes_live == 0, "invalid-child rows retained graph state");
 }
 
-void invalid_children_leave_caller_scope_usable() {
+void invalid_children_leave_caller_scope_usable(bool make_root) {
     a5u_test::StoreFixture fixture;
     a5u_test::CountingStore store(*fixture.store);
     UdtGraph graph(store), other(store);
@@ -304,52 +318,70 @@ void invalid_children_leave_caller_scope_usable() {
     require(graph.collect() == 1 && !graph.alive(dead), "scope test did not delete its dead child");
     const Id foreign = other.make(0);
     std::uint64_t seed = 0;
-    for (const bool make_root : {false, true}) {
-        for (const Id invalid : {root, foreign, dead}) {
-            ++seed;
-            const std::array<std::uint64_t, 2> fields{{seed, seed * UINT64_C(137)}};
-            std::array<Id, 3> children{{local, 0, invalid}};
-            const UdtType type{fields.back(), sizeof(fields), children.size()};
-            auto outer = store.begin();
-            const Versions before(graph), before_other(other);
-            const auto mutations = store.mutation_calls;
-            bool threw = false;
-            try {
-                if (make_root) (void)graph.root(invalid);
-                else (void)graph.make(type, fields.data(), children.data());
-            } catch (const pineforge::coded<std::logic_error>& error) {
-                require(invalid != dead &&
-                            error.run_failure_code() == pineforge::RunFailureCode::engine_invariant,
-                        "root or foreign-child validation lost its typed error");
-                threw = true;
-            } catch (const std::invalid_argument&) {
-                require(invalid == dead, "live child was rejected as a dead Store id");
-                threw = true;
-            }
-            require(threw, "invalid child was accepted inside the caller scope");
-            require(store.mutation_calls == mutations, "child validation changed Store state");
-            before.verify(graph);
-            before_other.verify(other);
-
-            // The rejected argument must not make the caller rollback-only:
-            // a valid object and binding can still be created and committed.
-            children.back() = local;
-            const Id valid = graph.make(type, fields.data(), children.data());
-            const Id binding = graph.root(valid);
-            outer->commit();
-            std::array<std::uint64_t, 2> actual{};
-            std::array<Id, 3> actual_children{};
-            graph.read_object(valid, type, actual.data(), actual_children.data());
-            require(graph.alive(valid) && graph.edge(binding, 0) == valid &&
-                        actual == fields && actual_children == children,
-                    "caller commit lost the valid object after a rejected child");
-            require(graph.edge(root, 0) == local, "child validation changed an earlier binding");
-            before_other.verify(other);
+    for (const Id invalid : {root, foreign, dead}) {
+        ++seed;
+        const std::array<std::uint64_t, 2> fields{{seed, seed * UINT64_C(137)}};
+        std::array<Id, 3> children{{local, 0, invalid}};
+        const UdtType type{fields.back(), sizeof(fields), children.size()};
+        auto outer = store.begin();
+        const Versions before(graph), before_other(other);
+        const auto mutations = store.mutation_calls;
+        bool threw = false;
+        try {
+            if (make_root) (void)graph.root(invalid);
+            else (void)graph.make(type, fields.data(), children.data());
+        } catch (const pineforge::coded<std::logic_error>& error) {
+            require(invalid != dead &&
+                        error.run_failure_code() == pineforge::RunFailureCode::engine_invariant,
+                    "root or foreign-child validation lost its typed error");
+            threw = true;
+        } catch (const std::invalid_argument&) {
+            require(invalid == dead, "live child was rejected as a dead Store id");
+            threw = true;
         }
+        require(threw, "invalid child was accepted inside the caller scope");
+        require(store.mutation_calls == mutations, "child validation changed Store state");
+        before.verify(graph);
+        before_other.verify(other);
+
+        // The rejected argument must not make the caller rollback-only:
+        // a valid object and binding can still be created and committed.
+        children.back() = local;
+        const Id valid = graph.make(type, fields.data(), children.data());
+        const Id binding = graph.root(valid);
+        outer->commit();
+        std::array<std::uint64_t, 2> actual{};
+        std::array<Id, 3> actual_children{};
+        graph.read_object(valid, type, actual.data(), actual_children.data());
+        require(graph.alive(valid) && graph.edge(binding, 0) == valid &&
+                    actual == fields && actual_children == children,
+                "caller commit lost the valid object after a rejected child");
+        require(graph.edge(root, 0) == local, "child validation changed an earlier binding");
+        // Derive the legitimate Store-wide growth from the input layout:
+        // one record + fields + child ids, then one record + a binding edge.
+        const auto added_bytes = kRecordBytes + sizeof(fields) + children.size() * sizeof(Id) +
+                                 kRecordBytes + sizeof(Id);
+        before_other.verify_after_growth(other, added_bytes);
     }
     other.close();
     graph.close();
     require(store.stats().bytes_live == 0, "caller-scope child rows retained graph state");
+}
+
+void invalid_make_children_leave_caller_scope_usable() {
+    try {
+        invalid_children_leave_caller_scope_usable(false);
+    } catch (const std::exception& error) {
+        throw std::runtime_error(std::string("make: ") + error.what());
+    }
+}
+
+void invalid_root_children_leave_caller_scope_usable() {
+    try {
+        invalid_children_leave_caller_scope_usable(true);
+    } catch (const std::exception& error) {
+        throw std::runtime_error(std::string("root: ") + error.what());
+    }
 }
 } // namespace
 
@@ -362,7 +394,8 @@ int main() {
         stale_mark_from_previous_collection();
         resize_drops_tail_reachability();
         make_rejects_dead_and_foreign_children_before_writes();
-        invalid_children_leave_caller_scope_usable();
+        invalid_make_children_leave_caller_scope_usable();
+        invalid_root_children_leave_caller_scope_usable();
         std::puts("UDT overflow, write ordering, batch seams, marks, tails and caller-scope child refusals reached");
         return 0;
     } catch (const std::exception& error) {
