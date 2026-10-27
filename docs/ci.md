@@ -198,15 +198,38 @@ The two source-only benchmark CTest rows run the 25 harness unit tests and
 job's fetches full Git history. A depth-1 checkout fails the provenance row
 even when the current benchmark files are correct.
 
-The run-failure source guards (`source-guard-run-failure-codes` and
-`source-guard-run-failure-diff`) read the newest release tag as well.
+The run-failure diff guard (`source-guard-run-failure-diff`) validates the
+checked-in diff against its explicit `from.tag`: the tag must exist, be an
+ancestor of HEAD, and carry catalog bytes hashing to `from.catalogSha256`.
+The guard recomputes the diff from that catalog to this tree's catalog and
+requires byte equality, including the current catalog hash and `since` rules.
+Independently, it refuses removal of any code published by **any** reachable
+release tag; `source-guard-run-failure-codes` also checks compatibility against
+every reachable published catalog. Published codes may be deprecated, never
+removed. An older explicit base remains valid when newer tags arrive on HEAD
+or an ancestor, including a base two releases behind. Tag creation requires
+no reset commit. `--write` still chooses the newest reachable release tag;
+an ordinary catalog PR can use it to advance the base.
+
 `ci.yml`, `ci-post.yml`, `native-live.yml` and `release.yml` set
 `PINEFORGE_REQUIRE_RELEASE_TAGS=1` (any value but `0` or empty requires the
-tags), so in their jobs a checkout without that tag fails both guards. Without
+tags), so in their jobs a checkout without the required tags fails the guards.
+A recorded base missing from a clone with readable release tags fails the diff
+guard; fetch the missing tag. Without
 the variable -- a local clone without tags, a remote verifier's checkout --
 they hold the diff's `from` to the release `VERSION` names and rebuild the
 catalog that release published from the checked-in diff and its SHA-256
 instead ([Run-failure codes](pages/run-failure-codes.md)).
+
+For preparation before publication, `gen_run_failure_catalog_diff.py --stamp
+--to-sha <full-commit-sha> --to-version <version> --previous-tag <tag> --output
+<asset>` reads the selected ancestor's committed VERSION, catalog and diff,
+validates that source with tags required, and stamps the explicit predecessor
+to the source SHA. VERSION must equal the requested version. Removal,
+`since`, and minor-or-major release rules still apply. For an RC chain, pass
+`--chain-output <asset>` as well: preparation retains both the stable
+predecessor diff and the step from the highest reachable candidate of this
+release. After publication, `--stamp --to-tag` reconstructs those assets.
 
 ## Current remote CTest contract: `ctest-shard-union/v1`
 

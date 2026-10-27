@@ -5,7 +5,7 @@ docker/run_failure_codes.json (schema pineforge-run-failure-catalog/v1) is the
 run-failure vocabulary every release publishes beside its tarballs. Its diff,
 docker/run_failure_codes_diff.json (schema
 pineforge-run-failure-catalog-diff/v1), states exactly what the catalog
-changed against the catalog of the previous release tag, so a consumer that
+changed against the catalog of an explicit release tag, so a consumer that
 pins or localizes the codes reads one release's changes instead of
 re-deriving them. The structure is the codegen diagnostics catalog diff's
 (pineforge-diagnostics-catalog-diff/v1), and nothing below is specific to the
@@ -23,10 +23,12 @@ flags (--catalog, --catalog-path-in-git, --diff, --schema, --diff-schema,
      "removed": [{"code", "collection", "entry"}...],
      "deprecated": [{"code", "replacedBy"}...]}
 
-  * `from` is the newest release tag reachable from HEAD (`git describe
-    --tags --abbrev=0 --match 'v[0-9]*'`) and the SHA-256 of the raw bytes of
-    the catalog at that tag: null when that tag published no catalog, and
-    then every entry is `added`. `to` hashes the raw bytes of this tree's
+  * `from` records an immutable release tag ancestral to HEAD and the SHA-256
+    of the raw bytes of the catalog at that tag: null when that tag published
+    no catalog, and then every entry is `added`. --write chooses the newest
+    reachable release tag (`git describe --tags --abbrev=0 --match 'v[0-9]*'`);
+    --check verifies the recorded base even after newer tags arrive.
+    `to` hashes the raw bytes of this tree's
     catalog; the checked-in diff is always `unreleased` (version null), and
     a release stamps a copy with its version (`--stamp`).
   * A <change> is {"path", "beforePresent", "afterPresent", "before",
@@ -67,10 +69,16 @@ Modes:
             newest release tag (`to` unreleased).
   --check   the CI source guard: recompute and compare byte for byte.
             `to.catalogSha256` must hash this tree's catalog, `from.tag` must
-            be the newest release tag reachable from HEAD and
-            `from.catalogSha256` the catalog at that tag, `removed` must be
-            empty, and every added entry that states a `since` must state a
-            release after `from.version`. In a clone without tags (or when git
+            exist and be an ancestor of HEAD, and `from.catalogSha256` must
+            hash the catalog at that explicit tag. Recompute from that base
+            and require byte equality. Independently, no code from ANY
+            reachable release catalog may be removed (deprecate it instead).
+            A newer reachable tag, including one just created on HEAD or an
+            ancestor, does not require resetting or advancing the diff base.
+            `removed` must be empty, and every added entry that states a
+            `since` must state a release after `from.version`. A missing base
+            when other release tags are readable is an input error. In a
+            clone without tags (or when git
             cannot read the tag) git cannot name the release:
               - with PINEFORGE_REQUIRE_RELEASE_TAGS set to any value but 0
                 (or empty) -- every workflow that runs the guards sets it to
@@ -100,8 +108,9 @@ Modes:
                 catalog the previous tag published (read from git) to this
                 tree's, and --chain-output gets the chain step, the
                 checked-in diff stamped;
-              - anything else is refused: the notes would start at a release
-                HEAD does not reach.
+              - anything else is refused: advance the diff with --write for
+                a reachable newer predecessor; fetch/merge missing history
+                for a predecessor HEAD does not reach.
             Each diff must remove nothing; a release that adds or changes
             entries must be a minor or major release over the diff's start
             (after a candidate of its own X.Y.Z: an X.Y.0); and every added
@@ -115,6 +124,19 @@ Modes:
             published, with the same checks, byte for byte the asset the
             release attached. A release whose assets were lost after its tag
             was pushed rebuilds them so, from any checkout with the tags.
+  --stamp --to-sha SHA --to-version X.Y.Z[-rc.N]
+          --previous-tag vA.B.C[-rc.N] --output PATH [--chain-output PATH]
+            prepare a release before its tag exists, from a full lowercase
+            40-character commit SHA ancestral to HEAD. Read VERSION, catalog
+            and checked-in diff from that commit alone; VERSION must equal
+            --to-version. Run --check on those source bytes with tags required,
+            then rebuild the asset from the explicit ancestral predecessor to
+            that SHA, keeping the removal, minor/major and since rules.
+            If a candidate of this release after --previous-tag is reachable
+            from the source, --chain-output is required for its chain step
+            (the highest candidate's catalog to the source). Stable and chain
+            assets rebuild byte for byte with --to-tag after publication.
+            No source reset or commit is needed at tag creation.
   --reset --tag vX.Y.Z [--output PATH]
             the state main is in right after a release: `from` is that tag
             and this tree's catalog, nothing added. The release workflow
@@ -204,10 +226,11 @@ class Outcome:
 
 
 class Git:
-    """The repository's newest release tag and a file's bytes at a tag."""
+    """Release tags reachable from a revision and files at immutable refs."""
 
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, revision: str = "HEAD"):
         self.root = root
+        self.revision = revision
 
     def _run(self, *argv: str, text: bool = True):
         try:
@@ -217,7 +240,8 @@ class Git:
             return None
 
     def newest_tag(self) -> str | None:
-        result = self._run("describe", "--tags", "--abbrev=0", "--match", TAG_MATCH, "HEAD")
+        result = self._run("describe", "--tags", "--abbrev=0", "--match", TAG_MATCH,
+                           self.revision)
         if result is None or result.returncode != 0:
             return None
         return result.stdout.strip() or None
@@ -226,8 +250,22 @@ class Git:
         result = self._run("rev-parse", "--verify", "--quiet", "refs/tags/" + tag)
         return result is not None and result.returncode == 0
 
+    def is_ancestor(self, ref: str) -> bool:
+        result = self._run("merge-base", "--is-ancestor", ref, self.revision)
+        if result is None or result.returncode not in (0, 1):
+            raise Unreadable(f"git cannot check whether {ref} is an ancestor of {self.revision}")
+        return result.returncode == 0
+
+    def reachable_tags(self) -> list[str]:
+        result = self._run("tag", "--list", TAG_MATCH, "--merged", self.revision)
+        if result is None or result.returncode != 0:
+            raise Unreadable(f"git cannot list release tags reachable from {self.revision}")
+        return sorted(result.stdout.splitlines())
+
     def file_at(self, tag: str, path: str) -> bytes | None:
-        """`path`'s bytes at `tag`; None when the tag's tree has no such file."""
+        """Bytes at a tag or SHA; None when its tree has no such file."""
+        if is_tag(tag):
+            tag = "refs/tags/" + tag
         tree = self._run("rev-parse", "--verify", "--quiet", tag + "^{tree}")
         if tree is None or tree.returncode != 0:
             raise Unreadable(f"git cannot read the tree of {tag}")
@@ -434,8 +472,8 @@ def write_text(path: Path, text: str) -> None:
 
 def removal_error(diff: dict) -> str:
     names = ", ".join(f"{item['collection']}.{item['code']}" for item in diff["removed"])
-    return (f"removed is not empty ({names}): a published entry is never removed or "
-            "renamed; keep it and mark it deprecated with replacedBy")
+    return (f"removed is not empty ({names}): a published code is deprecated, never removed "
+            "or renamed; keep it and mark it deprecated with replacedBy")
 
 
 def default_config(root: Path) -> Config:
@@ -650,6 +688,16 @@ def do_write(cfg: Config, git) -> Outcome:
     return outcome
 
 
+def published_removal_findings(cfg: Config, git, new_bytes: bytes) -> list:
+    """Non-removal against every reachable publication, independent of the diff base."""
+    errors = []
+    for tag in git.reachable_tags():
+        published = build_diff(git.file_at(tag, cfg.catalog_in_git), new_bytes, tag, cfg)
+        if published["removed"]:
+            errors.append(f"against {tag}: {removal_error(published)}")
+    return errors
+
+
 def do_check(cfg: Config, git, require_tags: str | None = None) -> Outcome:
     """--check. `require_tags`, what requires the release tags (see
     tags_requirement), turns a missing or unreadable tag into exit 2 instead
@@ -686,19 +734,27 @@ def do_check(cfg: Config, git, require_tags: str | None = None) -> Outcome:
                       "asset, never a source file)")
     recorded_tag = recorded_from.get("tag")
     recorded_sha = recorded_from.get("catalogSha256")
-    tag = git.newest_tag()
+    if not is_tag(recorded_tag):
+        errors.append(f"from.tag {recorded_tag!r} is not a release tag vX.Y.Z[-rc.N]")
+        return outcome
+    tag = recorded_tag
     old_bytes = None
     reason = "git names no release tag v* reachable from HEAD (a clone without tags)"
-    if tag is not None:
-        if recorded_tag != tag:
-            errors.append(f"from.tag is {recorded_tag!r}, but the newest release tag reachable "
-                          f"from HEAD is {tag}: run --write (a release's --reset moves it to "
-                          "the new tag)")
+    if git.has_tag(tag):
         try:
+            if not git.is_ancestor("refs/tags/" + tag):
+                errors.append(f"from.tag {tag} is not an ancestor of HEAD")
+                return outcome
             old_bytes = git.file_at(tag, cfg.catalog_in_git)
         except Unreadable as error:
             reason = f"{error} (a clone without its history)"
             tag = None
+    elif git.newest_tag() is not None:
+        raise InputError(f"from.tag {tag} does not exist: fetch the tags (git fetch --tags)")
+    else:
+        tag = None
+    if tag is not None:
+        errors.extend(published_removal_findings(cfg, git, new_bytes))
     if tag is None:
         if require_tags:
             outcome.status = 2
@@ -782,7 +838,7 @@ def do_stamp(cfg: Config, git, to_version: str, previous_tag: str, output: Path,
         diff = json.loads(cfg.diff.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return outcome
-    # --check held the start to the newest release tag HEAD reaches.
+    # --check verified the explicit base, its ancestry and all published codes.
     base = diff["from"]["tag"]
     if version_key(tag_version(previous_tag)) >= version_key(to_version):
         errors.append(f"--previous-tag {previous_tag} does not sort below the release "
@@ -800,11 +856,11 @@ def do_stamp(cfg: Config, git, to_version: str, previous_tag: str, output: Path,
         stamps = [(fresh, False, output), (diff, True, chain_output)]
     else:
         errors.append(
-            f"the checked-in diff starts at {base}, the newest release tag HEAD reaches, but "
+            f"the checked-in diff starts at {base}, but "
             f"--previous-tag is {previous_tag}: a release's diff starts at the release its "
             "notes start at (scripts/release_version.py's previous), or at a release candidate "
-            f"after it. A previous tag above {base} is a release HEAD does not reach (made on "
-            "another branch): merge it first")
+            "after it. A previous tag HEAD does not reach (made on another branch) cannot "
+            "be used; for a reachable newer predecessor, run --write first")
         return outcome
     errors.extend(dict.fromkeys(stamp_findings([(stamp, exact) for stamp, exact, _ in stamps],
                                                to_version)))
@@ -850,6 +906,92 @@ def do_stamp_tags(cfg: Config, git, to_tag: str, previous_tag: str, output: Path
     return outcome
 
 
+def do_stamp_sha(cfg: Config, git, to_sha: str, to_version: str, previous_tag: str,
+                 output: Path, chain_output: Path | None = None) -> Outcome:
+    """Prepare assets from a pinned ancestor before its release tag exists."""
+    if not re.fullmatch(r"[0-9a-f]{40}", to_sha):
+        raise InputError("--to-sha must be a full lowercase 40-character commit SHA")
+    if not VERSION.fullmatch(to_version):
+        raise InputError(f"--to-version {to_version!r} is not X.Y.Z or X.Y.Z-rc.N")
+    if not is_tag(previous_tag):
+        raise InputError(f"--previous-tag {previous_tag!r} is not vX.Y.Z or vX.Y.Z-rc.N")
+    for path, flag in ((output, "--output"), (chain_output, "--chain-output")):
+        if path is not None and path.resolve() == cfg.diff.resolve():
+            raise InputError(f"{flag} is the checked-in diff: a stamped diff is a release "
+                             "asset, written beside it, never over it")
+    if chain_output is not None and chain_output.resolve() == output.resolve():
+        raise InputError("--chain-output is --output: the chain step is an asset of its own")
+    outcome = Outcome()
+    if not git.is_ancestor(to_sha):
+        outcome.errors.append("--to-sha is not an ancestor of HEAD")
+        return outcome
+    source_git = Git(cfg.root, to_sha)
+    if not source_git.has_tag(previous_tag):
+        raise InputError(f"--previous-tag {previous_tag} does not exist: fetch the tags")
+    if not source_git.is_ancestor("refs/tags/" + previous_tag):
+        outcome.errors.append(f"--to-sha does not reach --previous-tag {previous_tag}")
+        return outcome
+    if version_key(tag_version(previous_tag)) >= version_key(to_version):
+        outcome.errors.append(f"--previous-tag {previous_tag} does not sort below {to_version}")
+        return outcome
+    version_bytes = source_git.file_at(to_sha, "VERSION")
+    if version_bytes is None:
+        raise InputError("VERSION is not in --to-sha")
+    try:
+        source_version = version_bytes.decode("utf-8").strip()
+    except UnicodeDecodeError as error:
+        raise InputError("VERSION at --to-sha is not UTF-8") from error
+    if source_version != to_version:
+        outcome.errors.append(f"VERSION at --to-sha is {source_version!r}, "
+                              f"expected {to_version!r}")
+        return outcome
+    try:
+        diff_in_git = cfg.diff.resolve().relative_to(cfg.root.resolve()).as_posix()
+    except ValueError as error:
+        raise InputError("--to-sha needs --diff inside --root") from error
+    new_bytes = source_git.file_at(to_sha, cfg.catalog_in_git)
+    diff_bytes = source_git.file_at(to_sha, diff_in_git)
+    if new_bytes is None or diff_bytes is None:
+        raise InputError("--to-sha must carry both the catalog and its checked-in diff")
+    # Validate S's committed bytes, not the controller checkout or newer HEAD.
+    with tempfile.TemporaryDirectory(prefix="pf-catalog-source-") as temporary:
+        root = Path(temporary)
+        source_cfg = Config(root, root / CATALOG, cfg.catalog_in_git, root / DIFF,
+                            cfg.schema, cfg.diff_schema, cfg.collections)
+        source_cfg.catalog.parent.mkdir(parents=True)
+        source_cfg.catalog.write_bytes(new_bytes)
+        source_cfg.diff.write_bytes(diff_bytes)
+        outcome = do_check(source_cfg, source_git, require_tags="--stamp --to-sha")
+    if outcome.code():
+        return outcome
+    outcome.notes = []
+    fresh = build_diff(source_git.file_at(previous_tag, cfg.catalog_in_git), new_bytes,
+                       previous_tag, cfg)
+    stamps = [(fresh, False, output)]
+    candidates = [tag for tag in source_git.reachable_tags()
+                  if is_candidate(tag)
+                  and release_of(tag_version(tag)) == release_of(to_version)
+                  and version_key(tag_version(previous_tag)) < version_key(tag_version(tag))
+                  < version_key(to_version)]
+    if candidates:
+        candidate = max(candidates, key=lambda tag: version_key(tag_version(tag)))
+        if chain_output is None:
+            raise InputError(f"--to-sha reaches release candidate {candidate}: "
+                             "name --chain-output for that chain step")
+        step = build_diff(source_git.file_at(candidate, cfg.catalog_in_git), new_bytes,
+                          candidate, cfg)
+        stamps.append((step, True, chain_output))
+    outcome.errors.extend(dict.fromkeys(stamp_findings(
+        [(stamp, exact) for stamp, exact, _ in stamps], to_version)))
+    if outcome.errors:
+        return outcome
+    for stamp, _, path in stamps:
+        write_text(path, render(stamped_copy(stamp, to_version)))
+        outcome.notes.append(f"wrote {cfg.show(path)}: {stamp['from']['tag']} -> {to_version}, "
+                             f"from --to-sha {to_sha}: {summary(stamp)}")
+    return outcome
+
+
 def do_reset(cfg: Config, git, tag: str, output: Path | None = None) -> Outcome:
     if not is_tag(tag):
         raise InputError(f"--tag {tag!r} is not vX.Y.Z or vX.Y.Z-rc.N")
@@ -892,6 +1034,12 @@ class FakeGit:
 
     def has_tag(self, tag: str) -> bool:
         return tag in self.files or tag in self.unreadable
+
+    def is_ancestor(self, ref: str) -> bool:
+        return self.has_tag(ref.removeprefix("refs/tags/"))
+
+    def reachable_tags(self) -> list[str]:
+        return sorted(self.files)
 
     def file_at(self, tag: str, path: str) -> bytes | None:
         if tag in self.unreadable or tag not in self.files:
@@ -1151,11 +1299,11 @@ def self_test() -> int:
                "a diff missing an addition passed: " + joined(checked))
         cfg.diff.write_text(good, encoding="utf-8")
 
-        # The wrong from tag: a release happened and the diff was not reset.
+        # A new release tag does not invalidate an older explicit base.
         later = FakeGit("v1.3.0", {"v1.2.0": None, "v1.3.0": base})
         checked = do_check(cfg, later)
-        expect(checked.code() == 1 and "from.tag" in joined(checked),
-               "a diff from an old tag passed: " + joined(checked))
+        expect(checked.code() == 0,
+               "a diff from an old explicit base failed: " + joined(checked))
 
         # Offline: no tag reachable. A null from of a release older than the
         # first catalog release recomputes; tags required fail; a null from of
@@ -1449,6 +1597,9 @@ def main(argv: list | None = None) -> int:
     parser.add_argument("--to-tag",
                         help="--stamp: instead of --to-version, rebuild the stamped diff of this "
                              "published release from git alone")
+    parser.add_argument("--to-sha",
+                        help="--stamp --to-version: prepare assets from this full commit SHA "
+                             "instead of this tree; its VERSION must equal --to-version")
     parser.add_argument("--previous-tag",
                         help="--stamp: the release tag the release's diff starts at, where its "
                              "notes start (scripts/release_version.py's previous)")
@@ -1465,6 +1616,8 @@ def main(argv: list | None = None) -> int:
                        or not (args.previous_tag and args.output)):
         parser.error("--stamp needs --previous-tag, --output and one of --to-version or "
                      "--to-tag")
+    if args.to_sha and not (args.stamp and args.to_version and not args.to_tag):
+        parser.error("--to-sha goes with --stamp --to-version")
     if args.chain_output is not None and not (args.stamp and args.to_version):
         parser.error("--chain-output goes with --stamp --to-version")
     if args.reset and not args.tag:
@@ -1489,6 +1642,9 @@ def main(argv: list | None = None) -> int:
         elif args.stamp and args.to_tag:
             outcome = do_stamp_tags(cfg, git, args.to_tag, args.previous_tag,
                                     absolute(args.output))
+        elif args.stamp and args.to_sha:
+            outcome = do_stamp_sha(cfg, git, args.to_sha, args.to_version, args.previous_tag,
+                                   absolute(args.output), absolute(args.chain_output))
         elif args.stamp:
             outcome = do_stamp(cfg, git, args.to_version, args.previous_tag,
                                absolute(args.output), absolute(args.chain_output))

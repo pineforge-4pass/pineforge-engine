@@ -21,7 +21,7 @@ This guard fails closed when:
      take none);
   2. a generated file differs from what the catalog generates (run
      `--write-registry` and commit both);
-  3. against the catalog of the newest release tag (`git show`), a code was
+  3. against any reachable release tag's catalog (`git show`), a code was
      removed or renamed, or its `since` changed (never allowed, deprecated or
      not), or an existing code's class, retryable flag, an arg's kind, or
      its value list lost a value -- unless the old code is marked
@@ -440,24 +440,29 @@ def catalog_at(root: Path, tag: str) -> str | None:
     return result.stdout.decode("utf-8")
 
 
-def published_catalog(root: Path, *,
-                      require_tags: str | None = None) -> tuple[str | None, str, str | None]:
-    """The newest release's catalog (None: that release has none), its label,
-    and a note when it was not read from git.
+def published_catalogs(root: Path, *,
+                       require_tags: str | None = None) -> list[tuple[str | None, str, str | None]]:
+    """Every reachable published catalog, or the unchanged offline fallback.
 
-    The newest `v*` tag reachable from HEAD decides. A clone without tags (a
-    remote verifier's ref-less checkout), or one that cannot read the tag,
-    takes the release the checked-in diff names as its `from`
-    (published_without_git).
+    The checked-in diff's explicit base never limits published-code safety.
+    Retain the nearest-tag probe only to select the existing offline path
+    when tags/history cannot be read; it imposes no constraint on from.tag.
     """
     tag = newest_release_tag(root)
     reason = "no release tag v* is reachable from HEAD (a clone without tags)"
     if tag is not None:
         try:
-            return catalog_at(root, tag), tag, None
+            nearest = catalog_at(root, tag)
         except InputError as error:
             reason = str(error)
-    return published_without_git(root, reason, require_tags=require_tags)
+        else:
+            try:
+                tags = catalog_diff.Git(root).reachable_tags()
+                return [(nearest if release == tag else catalog_at(root, release), release, None)
+                        for release in tags]
+            except catalog_diff.InputError as error:
+                raise InputError(str(error)) from error
+    return [published_without_git(root, reason, require_tags=require_tags)]
 
 
 def published_without_git(root: Path, reason: str, *,
@@ -698,14 +703,15 @@ def run_checks(root: Path, *, history: bool = True,
     notes = []
     if history:
         try:
-            published, label, note = published_catalog(root, require_tags=require_tags)
+            publications = published_catalogs(root, require_tags=require_tags)
         except CheckError as error:
             errors.append(str(error))
         else:
-            notes += [note] if note else []
-            if published is not None:
-                errors += [f"against {label}: {e}"
-                           for e in compatibility(json.loads(published), catalog)]
+            for published, label, note in publications:
+                notes += [note] if note else []
+                if published is not None:
+                    errors += [f"against {label}: {e}"
+                               for e in compatibility(json.loads(published), catalog)]
     errors += uncoded_throws(root)
     return errors, notes
 
@@ -923,7 +929,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="regenerate the C++ files from the catalog")
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--no-history", action="store_true",
-                        help="skip the comparison with the newest release tag's catalog")
+                        help="skip comparisons with reachable release tags' catalogs")
     args = parser.parse_args(argv)
     notes: list[str] = []
     if args.self_test:
