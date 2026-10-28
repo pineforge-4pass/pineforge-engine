@@ -634,4 +634,13 @@ if(PINEFORGE_BUILD_TESTS)
             ${PROJECT_SOURCE_DIR}/tests/native_live_ratio_interval_e2e.py $<TARGET_FILE:pineforge-live>
             $<TARGET_FILE:native_live_report_oracle> $<TARGET_FILE:native_live_example>)
     endif()
+    add_test(NAME test_live_report_accumulator_commit_retry
+        COMMAND test_live_report_accumulator commit-retry)
+    add_test(NAME test_native_live_report_storage_stop_first_input COMMAND test_native_live_report_cli
+        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_live_report_example> storage-stop-first-input)
+    add_test(NAME test_native_live_report_ratio_body_replay COMMAND test_native_live_report_cli
+        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_market_example> ratio-body-replay)
+    set_tests_properties(test_live_report_accumulator_commit_retry
+        test_native_live_report_storage_stop_first_input test_native_live_report_ratio_body_replay
+        PROPERTIES TIMEOUT 180)
 endif()

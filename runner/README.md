@@ -93,8 +93,9 @@ native test host that records one equity point per bar: peak RSS 22,880 KiB at
 input. These are the runner's own `VmHWM` readings for one fixture, including
 the accumulator curve, retained cumulative document and engine arrays. The
 native market example, which records no equity points, read 22,472 KiB and
-29,828 KiB (about 0.82 KiB per additional input), so the per-bar equity series
-accounts for the difference. The row omitted 100,000 inputs because its
+29,828 KiB (about 0.82 KiB per additional input), consistent with the per-bar
+equity series being the difference (the two hosts differ in other ways too).
+The row omitted 100,000 inputs because its
 cumulative-stream projection assumes output volume quadratic in the input
 count, exceeding the 180 s timeout. These two points do not establish a flat
 memory bound.
@@ -146,7 +147,7 @@ payload length supplies the extra-payload reservation. After the input commits,
 the checkpoint is inserted in its own admitted transaction while retaining the
 writer mutex, with a byte ceiling no greater than the input's reservation.
 Charging that payload to the boundary input is intended
-(`Ledger::commit_input`, `runner/store.cpp:1084`): the boundary input can hit a
+(`Ledger::commit_input`, `runner/store.cpp:1090`): the boundary input can hit a
 storage stop when the input alone would fit, up to the cumulative payload's
 reservation earlier than strictly necessary. This cost buys the guarantee that
 no input commits with a checkpoint admitted without room in its reservation.
@@ -199,8 +200,8 @@ document memory. Ledgers that first need reports or integrity digests populated
 retry after startup replay, before new inputs. Later opens add no startup copy
 when a checkpoint already exists.
 Startup and post-replay checkpoints intentionally have no input reservation
-behind them (`Ledger::checkpoint_recovered_report`, `runner/store.cpp:1210`;
-the post-replay call is `checkpoint_recovered_report`, `runner/main.cpp:1039`).
+behind them (`Ledger::checkpoint_recovered_report`, `runner/store.cpp:1216`;
+the post-replay call is `checkpoint_recovered_report`, `runner/main.cpp:1053`).
 With a large budget, either can spend most of the remaining headroom on an
 O(T) payload before the first live input. The run can stop sooner, never over
 budget; this is the intended cost of preparing the report shortcut at startup.
@@ -213,6 +214,9 @@ prefix. At the checkpoint boundary, restart compares the checkpoint payload
 with the same carried cumulative document that live stdout used, including
 interval-mode freshness metadata and in delta and no-stream modes. The stored
 freshness marker reproduces known non-periodic final boundaries during replay.
+Recovery saves a separate full marker parse only for canonical deltas whose
+report equality is checked (at or after the verified checkpoint, or all rows
+without one); rows below the checkpoint keep the full syntax parse.
 Existing full-report rows remain immutable and readable; when recovery verifies
 one, it compares it with the recomputed cumulative document. New inputs use
 deltas. Strategy-state recovery remains full replay work.

@@ -838,6 +838,66 @@ void storage_stop_refresh(Fixture& fixture) {
     }
 }
 
+void storage_stop_first_input(Fixture& fixture) {
+    // Also cover the helper before any warmup report is retained. The real
+    // runner initializes cursor 0 before intake, so its document is not empty.
+    ReportDeltas empty(true);
+    require(empty.final_ratio_refresh().empty() && empty.json() == "{}",
+            "empty retained document must not produce a terminal report");
+    constexpr std::uint64_t page = 65536;
+    interval_clock(fixture);
+    const auto ledger = fixture.temporary.path / "first-input-storage.sqlite";
+    const auto status = fixture.temporary.path / "first-input-storage.status";
+    {
+        auto database = open_database(ledger, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+        execute(database.get(), "PRAGMA page_size=65536; PRAGMA auto_vacuum=FULL; VACUUM;");
+    }
+    auto command = fixture.command(ledger, status, "--report-jsonl", 0);
+    command.insert(command.end(), {"--ratio-interval", "3"});
+    std::uint64_t limit = 0;
+    Database keeper(nullptr, sqlite3_close);
+    {
+        Runner seed(command, fixture.temporary.path / "first-input-seed.stderr");
+        wait_ready(status, 0, seed);
+        seed.quiet();
+        // Pin the sidecars through both the seed's crash and the refusal.
+        keeper = open_database(ledger, SQLITE_OPEN_READONLY);
+        execute(keeper.get(), "BEGIN; SELECT COUNT(*) FROM inputs;");
+        const auto pages = scalar_u64(keeper.get(), "PRAGMA page_count");
+        require(scalar_u64(keeper.get(), "PRAGMA page_size") == page &&
+                scalar_u64(keeper.get(), "PRAGMA auto_vacuum") == 1 &&
+                scalar_u64(keeper.get(), "PRAGMA freelist_count") == 0, "wrong first-input layout");
+        const auto files = ledger_files(ledger);
+        // FULL auto-vacuum charges all logical pages. The first insert cannot
+        // shrink this fresh, free-page-less ledger, so D >= C0. One byte below
+        // that contract request refuses input 1 without using a refusal receipt.
+        limit = snapshot_bytes(files) + checkpoint_contract_request(files, page, pages, pages) - 1;
+        seed.crash();
+    }
+    fs::remove(status);
+    command.insert(command.end(), {"--max-ledger-bytes", std::to_string(limit)});
+    Runner child(command, fixture.temporary.path / "first-input-storage.stderr");
+    wait_ready(status, 0, child);
+    child.quiet();
+    const auto pages = scalar_u64(keeper.get(), "PRAGMA page_count");
+    const auto before = ledger_files(ledger);
+    const auto warmup = stored_delta(ledger, 0);
+    require(snapshot_bytes(before) <= limit &&
+            limit < snapshot_bytes(before) + checkpoint_contract_request(before, page, pages, pages),
+            "first-input budget must fit startup and refuse the first insert");
+    child.send(fixture.inputs.front() + "\n");
+    // Exactly one summary, with no cumulative report or terminal refresh line.
+    check_summary(child.finish(3), 0, 0);
+    require(child.errors().find("native ledger byte budget refused before write:") != std::string::npos &&
+            child.errors().find("\"code\":\"scratch_capacity_exceeded\"") != std::string::npos,
+            "first input did not cause a typed storage stop: " + child.errors());
+    require(ledger_files(ledger) == before, "first-input refusal or refresh changed ledger files");
+    require(stored_delta(ledger, 0) == warmup && scalar_u64(keeper.get(), "SELECT COUNT(*) FROM inputs") == 0,
+            "first-input refusal changed the committed prefix");
+    require(parse_json(read_file(status)).at("state").text() == "storage_budget",
+            "wrong first-input storage stop service state");
+}
+
 void historical_ratio_export(Fixture& fixture) {
     constexpr std::uint64_t count = 10, target = 8, interval = 3;
     interval_clock(fixture);
@@ -915,11 +975,14 @@ void ratio_marker_replay(Fixture& fixture) {
             return value ? "value=" + std::to_string(*value) : std::string("missing");
         } catch (const std::exception& error) { return std::string("error=") + error.what(); }
     };
+    const auto fast_cursor = [](const std::string& bytes) {
+        return stored_report_ratio_cursor(bytes, true);
+    };
     for (const auto* token : {"0", "8", "18446744073709551615", "18446744073709551616",
                              "-1", "-0", "8.0", "8e0", "\"8\"", "null", "true", "{}", "[]", "08"}) {
         const auto bytes = std::string("{\"arrays\":{},\"fields\":{},\"ratios_as_of_input\":") + token +
             ",\"schema_version\":\"pineforge-native-report-delta/v1\"}";
-        require(outcome(old_cursor, bytes) == outcome(stored_report_ratio_cursor, bytes),
+        require(outcome(old_cursor, bytes) == outcome(fast_cursor, bytes),
                 "ratio marker accessor changed token semantics: " + bytes);
     }
     for (const std::string bytes : {
@@ -930,7 +993,7 @@ void ratio_marker_replay(Fixture& fixture) {
             "{\"ratios_as_of_input\":8,\"ratios_as_of_input\":8,\"schema_version\":\"pineforge-native-report-delta/v1\"}",
             "{\"\\u0072atios_as_of_input\":8,\"ratios_as_of_input\":8,\"schema_version\":\"pineforge-native-report-delta/v1\"}",
             "[]"}) {
-        require(outcome(old_cursor, bytes) == outcome(stored_report_ratio_cursor, bytes),
+        require(outcome(old_cursor, bytes) == outcome(fast_cursor, bytes),
                 "ratio marker accessor changed envelope semantics: " + bytes);
     }
     constexpr std::uint64_t count = 8, interval = 3;
@@ -986,6 +1049,77 @@ void ratio_marker_replay(Fixture& fixture) {
             const auto expected = fault == "missing" ? "native replay report mismatch"
                 : fault == "string" ? "expected integer" : "invalid or overflowing integer";
             require(error.find(expected) != std::string::npos, "changed marker refusal: " + error);
+        }
+    }
+}
+
+void ratio_body_replay(Fixture& fixture) {
+    constexpr std::uint64_t count = 10, interval = 3, checkpoint = 8;
+    interval_clock(fixture);
+    const auto batches = batch_documents(fixture, interval, count);
+    for (const auto* fault : {"garbage-body", "damaged-arrays"}) {
+        for (const std::uint64_t at : {std::uint64_t{1}, checkpoint, checkpoint + 1}) {
+            const auto name = std::string(fault) + "-" + std::to_string(at);
+            const auto ledger = fixture.temporary.path / (name + ".sqlite");
+            const auto status = fixture.temporary.path / (name + ".status");
+            auto command = fixture.command(ledger, status, "--report-jsonl", 0);
+            command.insert(command.end(), {"--ratio-interval", "3", "--checkpoint-interval", "2"});
+            auto seed_command = command;
+            seed_command.insert(seed_command.end(), {"--max-events", std::to_string(count)});
+            Runner child(seed_command, fixture.temporary.path / (name + "-seed.stderr"));
+            wait_ready(status, 0, child);
+            for (std::uint64_t cursor = 1; cursor <= count; ++cursor) {
+                child.send(fixture.inputs[cursor - 1] + "\n");
+                require(child.line() == interval_document(batches, cursor, interval, cursor == count).dump(),
+                        "body-corruption seed differs from independent batch prefix");
+            }
+            check_summary(child.finish(), count, count);
+            require(stored_delta(ledger, checkpoint, true) ==
+                    interval_document(batches, checkpoint, interval).dump(), "missing verified checkpoint fixture");
+            auto payload = stored_delta(ledger, at);
+            const auto marker = interval_document(batches, at, interval)
+                .at("ratios_as_of_input").integer<std::uint64_t>();
+            if (std::string(fault) == "garbage-body") {
+                payload = "{\"arrays\":{garbage,\"ratios_as_of_input\":" + std::to_string(marker) +
+                    ",\"schema_version\":\"pineforge-native-report-delta/v1\"}";
+            } else {
+                const std::string arrays = "\"arrays\":{";
+                const auto start = payload.find(arrays);
+                require(start != std::string::npos, "missing arrays member in corruption fixture");
+                payload.insert(start + arrays.size(), "\"damaged\":,");
+            }
+            std::string expected_error;
+            try { (void)parse_json(payload); }
+            catch (const std::runtime_error& error) { expected_error = error.what(); }
+            require(expected_error.rfind("invalid JSON at byte ", 0) == 0, "fixture body is not malformed JSON");
+            // Both bodies keep the canonical marker tail. Only equality-checked
+            // rows may inspect it without parsing; the replay below must still
+            // fail at startup on either side of the verified checkpoint.
+            require(stored_report_ratio_cursor(payload, true) == marker, "fixture missed the marker fast path");
+            std::string below_checkpoint_error;
+            try { (void)stored_report_ratio_cursor(payload, false); }
+            catch (const std::runtime_error& error) { below_checkpoint_error = error.what(); }
+            require(below_checkpoint_error == expected_error, "full marker read changed the parser refusal");
+            {
+                auto database = open_database(ledger, SQLITE_OPEN_READWRITE);
+                execute(database.get(), "DROP TRIGGER report_no_update;");
+                sqlite3_stmt* raw = nullptr;
+                require(sqlite3_prepare_v2(database.get(),
+                    "UPDATE report_snapshots SET payload=? WHERE input_cursor=?", -1, &raw, nullptr) == SQLITE_OK,
+                    "cannot prepare report-body corruption");
+                std::unique_ptr<sqlite3_stmt, decltype(&sqlite3_finalize)> statement(raw, sqlite3_finalize);
+                require(sqlite3_bind_text(raw, 1, payload.c_str(), -1, SQLITE_TRANSIENT) == SQLITE_OK &&
+                        sqlite3_bind_int64(raw, 2, static_cast<sqlite3_int64>(at)) == SQLITE_OK &&
+                        sqlite3_step(raw) == SQLITE_DONE && sqlite3_changes(database.get()) == 1,
+                        "cannot corrupt stored report body");
+            }
+            const auto from = std::find(command.begin(), command.end(), "--from-input");
+            require(from != command.end(), "fixture source cursor is missing");
+            *(from + 1) = std::to_string(count);
+            Runner replay(command, fixture.temporary.path / (name + "-replay.stderr"));
+            require(replay.finish(1).empty(), "malformed report body replay printed a document");
+            require(replay.errors().find("pineforge-live: " + expected_error + "\n") != std::string::npos,
+                    "stored report body changed its replay refusal: " + replay.errors());
         }
     }
 }
@@ -1085,10 +1219,14 @@ int main(int argc, char** argv) {
             ratio_stream_survives_kill(fixture, 3);
         } else if (test_case == "storage-stop-refresh") {
             storage_stop_refresh(fixture);
+        } else if (test_case == "storage-stop-first-input") {
+            storage_stop_first_input(fixture);
         } else if (test_case == "historical-ratio-export") {
             historical_ratio_export(fixture);
         } else if (test_case == "ratio-marker-replay") {
             ratio_marker_replay(fixture);
+        } else if (test_case == "ratio-body-replay") {
+            ratio_body_replay(fixture);
         } else if (test_case == "memory") {
             report_memory(fixture);
         } else {

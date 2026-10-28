@@ -144,7 +144,8 @@ records one equity point per bar: peak RSS 22,880 KiB at 1,000 inputs and
 runner's own `VmHWM` readings for one fixture, including the accumulator curve,
 retained cumulative document and engine arrays. The native market example,
 which records no equity points, read 22,472 KiB and 29,828 KiB (about 0.82 KiB
-per additional input), so the per-bar equity series accounts for the difference.
+per additional input), consistent with the per-bar equity series being the
+difference (the two hosts differ in other ways too).
 The row omitted 100,000 inputs because its cumulative-stream projection assumes
 output volume quadratic in the input count, exceeding the 180 s timeout. These
 two points do not establish a flat memory bound.

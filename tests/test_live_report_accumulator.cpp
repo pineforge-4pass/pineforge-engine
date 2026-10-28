@@ -121,7 +121,7 @@ struct ExportLedger {
 };
 
 Result exercise(int inputs, std::uint64_t interval, const std::string& zone,
-                bool final_in_update, bool exporting = false) {
+                bool final_in_update, bool exporting = false, bool reject_commits = false) {
     auto bars = tape(inputs + 3);
     auto config = l2_fixture::report_spec("live-report-fold");
     config.input_tf = "1D"; config.script_tf = "1D";
@@ -166,8 +166,28 @@ Result exercise(int inputs, std::uint64_t interval, const std::string& zone,
         assert(std::memcmp(&work, &carried.work(), sizeof(work)) == 0);
         batch_rows += batch.value.trades_len + batch.value.equity_curve_len;
         const auto hash = actual.stream_state_hash();
+        if (reject_commits) {
+            const auto document_before = deltas.json();
+            const auto visits_before = deltas.closed_trade_visits();
+            bool attempted = false, refused = false;
+            try {
+                deltas.update(patch, "seeded", i, hash, [&](const std::string&) {
+                    assert(!attempted);
+                    attempted = true;
+                    throw LedgerBudgetExceeded(0, 2, 1);
+                });
+            } catch (const LedgerBudgetExceeded& error) {
+                refused = error.used == 0 && error.requested == 2 && error.limit == 1;
+            }
+            assert(attempted && refused);
+            assert(deltas.json() == document_before);
+            assert(deltas.closed_trade_visits() == visits_before);
+            // Retry the same patch without re-advancing the accumulator. The
+            // batch checks below detect changed offsets or scalar bookkeeping.
+        }
         const auto bytes = deltas.update(patch, "seeded", i, hash);
         const auto expected_delta = batch_deltas.update(batch.c(), "seeded", i, hash);
+        assert(deltas.closed_trade_visits() == batch_deltas.closed_trade_visits());
         auto expected = native_report_document(batch.c(), "seeded", i, hash);
         if (stored.ledger) {
             if (!i) stored.ledger->verify_report(0, bytes);
@@ -357,6 +377,10 @@ void growth() {
 int main(int argc, char** argv) {
     assert(argc == 2);
     if (std::string(argv[1]) == "equivalence") { exactness(); replacement_tails(); }
+    else if (std::string(argv[1]) == "commit-retry") {
+        exercise(32, 1, "UTC", true, false, true);
+        exercise(32, 3, "UTC", true, false, true);
+    }
     else if (std::string(argv[1]) == "export") {
         exercise(131, 7, "America/New_York", false, true);
         exercise(31, 1, "UTC", true, true);

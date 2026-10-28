@@ -153,8 +153,10 @@ stored checkpoints.
   at 1,000 inputs and 40,024 KiB at 10,000 inputs, about 1.9 KiB per additional
   input, for a native test host that records one equity point per bar (22,472
   KiB and 29,828 KiB, about 0.82 KiB per additional input, for the native market
-  example that records none); the process measurement includes the accumulator
-  curve, retained cumulative document and engine arrays; the row omitted
+  example that records none), consistent with the per-bar equity series being
+  the difference (the two hosts differ in other ways too); the process
+  measurement includes the accumulator curve, retained cumulative document
+  and engine arrays; the row omitted
   100,000 inputs because its
   cumulative-stream projection assumes output volume quadratic in the input
   count, exceeding the 180 s timeout. These two points do not establish a flat
@@ -172,8 +174,10 @@ stored checkpoints.
   `ratios_as_of_input`. An additive `ratio_context.chart_timezone` preserves
   the month clock for export. A pipe/socket whose EOF is discovered after its
   last commit emits a final refresh at the same cursor; stored deltas remain
-  immutable. Exact ratio recomputation remains O(series), at every input for
-  K = 1 and at the scheduled boundaries for K > 1. Other ordinary-live
+  immutable. Replay saves a separate full marker parse only for canonical
+  deltas whose report equality is checked; rows below a verified checkpoint
+  keep the full syntax parse. Exact ratio recomputation remains O(series), at
+  every input for K = 1 and at the scheduled boundaries for K > 1. Other ordinary-live
   per-input report work is O(new/replaced rows), including current open lots
   and diagnostics; full JSONL still writes the whole cumulative document.
 - **Delta JSONL is opt-in; the default stream is unchanged.**

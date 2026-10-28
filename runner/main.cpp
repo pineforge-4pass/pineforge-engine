@@ -980,13 +980,14 @@ int run(Config c) {
         // A finite feed can have forced a non-periodic final boundary. Its
         // immutable freshness marker supplies that same boundary on replay.
         bool final_input = false;
+        const bool compare_report = !checkpoint || report_cursor >= *checkpoint;
         if (c.ratio_interval > 1 && !stored.empty()) {
-            if (const auto as_of = stored_report_ratio_cursor(stored))
+            if (const auto as_of = stored_report_ratio_cursor(stored, compare_report))
                 final_input = *as_of == report_cursor;
         }
         cumulative_report(strategy, deployment, report_cursor, report_deltas, report_accumulator,
             [&](const std::string& payload) {
-                if (!checkpoint || report_cursor >= *checkpoint) {
+                if (compare_report) {
                     ledger.verify_report(report_cursor, payload, [&] {
                         return report_deltas.full_json();
                     });
@@ -1314,7 +1315,14 @@ int run(Config c) {
         storage_stop = true;
         try { delivery.finish(true); } catch (...) {}
         std::cerr << "pineforge-live: " << error.what() << '\n';
-        refresh_final_report();
+        // A terminal refresh failure must preserve the typed storage stop.
+        try { refresh_final_report(); }
+        catch (const std::exception& refresh_error) {
+            std::cerr << "pineforge-live: final report refresh failed after storage stop: "
+                      << refresh_error.what() << '\n';
+        } catch (...) {
+            std::cerr << "pineforge-live: final report refresh failed after storage stop: unknown exception\n";
+        }
     } catch (const std::exception& error) {
         try { service.stop("failed"); } catch (...) {}
         delivery.limit_drain();

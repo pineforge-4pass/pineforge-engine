@@ -5,7 +5,7 @@ namespace {
 
 // The runner's v1 configuration selects HostRecorded. Record real marked
 // equity here so interval/export tests exercise finite ratios, not an empty
-// curve's four null values. The memory row keeps its original module.
+// curve's four null values. The memory row also uses this recording host.
 class NativeLiveReportExample : public pineforge::NativeStrategyHost {
     void on_native_bar(const pineforge::Bar& bar,
                        const pineforge::NativeDecisionContext&) override {

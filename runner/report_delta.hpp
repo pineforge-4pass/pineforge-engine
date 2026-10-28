@@ -53,14 +53,17 @@ inline void apply_report_delta(Json& document, const Json& delta) {
     }
 }
 
-inline std::optional<std::uint64_t> stored_report_ratio_cursor(std::string_view stored) {
+inline std::optional<std::uint64_t> stored_report_ratio_cursor(
+        std::string_view stored, bool report_equality_checked) {
     // Canonical deltas end with these two envelope members (Json::dump sorts
-    // keys). Inspect at most 20 decimal digits beside that exact suffix, never
-    // a similarly named field in an array row or a quoted string.
+    // keys). Only equality-checked rows may skip the full syntax parse here:
+    // below a verified checkpoint that parse is their only syntax check.
+    // Inspect at most 20 decimal digits beside that exact suffix, never a
+    // similarly named field in an array row or a quoted string.
     constexpr std::string_view tail =
         ",\"schema_version\":\"pineforge-native-report-delta/v1\"}";
     constexpr std::string_view key = ",\"ratios_as_of_input\":";
-    if (stored.size() <= 1024 * 1024 && stored.size() >= tail.size() &&
+    if (report_equality_checked && stored.size() <= 1024 * 1024 && stored.size() >= tail.size() &&
         stored.substr(stored.size() - tail.size()) == tail) {
         const auto end = stored.size() - tail.size();
         auto begin = end;
@@ -79,7 +82,7 @@ inline std::optional<std::uint64_t> stored_report_ratio_cursor(std::string_view 
     }
     // Legacy full documents, noncanonical JSON, missing markers and malformed
     // tokens keep the previous parser/accessor semantics, including its errors
-    // and frame limit. The ordinary canonical replay path builds no Json tree.
+    // and frame limit. Rows below a verified checkpoint always take this path.
     const auto payload = parse_json(stored);
     if (const auto* as_of = payload.find("ratios_as_of_input"))
         return as_of->integer<std::uint64_t>();

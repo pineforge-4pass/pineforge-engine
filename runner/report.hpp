@@ -303,22 +303,22 @@ public:
             throw std::runtime_error("cumulative carried report prefix or length regressed");
         auto fields = native_report_json(patch);
         Json arrays = Json::object({});
-        const auto put = [&](const char* name, std::size_t offset, std::size_t length) {
+        const auto put = [&](const char* name, std::size_t offset) {
             arrays.members[name] = Json::object({
                 {"offset", report_number(offset)}, {"items", std::move(fields.members[name])}});
             fields.members.erase(name);
-            array_sizes_[name] = length;
         };
-        put("trades", patch.trades.offset, patch.trades.logical_length);
-        put("equity_curve", patch.equity.offset, patch.equity.logical_length);
-        put("security_diag", patch.security.offset, patch.security.logical_length);
-        put("broker_state_hash", patch.hashes.offset, patch.hashes.logical_length);
-        put("trace", 0, 0);
-        put("trace_names", patch.trace_names.offset, patch.trace_names.logical_length);
+        put("trades", patch.trades.offset);
+        put("equity_curve", patch.equity.offset);
+        put("security_diag", patch.security.offset);
+        put("broker_state_hash", patch.hashes.offset);
+        put("trace", 0);
+        put("trace_names", patch.trace_names.offset);
         Json closed;
         closed.kind = Json::Kind::Array;
+        std::size_t closed_trade_visits = 0;
         for (std::size_t i = 0; i < patch.trades.rows.size(); ++i) {
-            ++closed_trade_visits_;
+            ++closed_trade_visits;
             const auto absolute = patch.trades.offset + i;
             if (absolute >= patch.closed_trades) {
                 if (!patch.trades.rows[i].open_at_end)
@@ -329,7 +329,6 @@ public:
                 throw std::runtime_error("cumulative report closed-trade prefix regressed");
             closed.items.push_back(report_trade(patch.trades.rows[i]));
         }
-        closed_trade_high_water_ = patch.closed_trades;
         arrays.members["closed_trades"] = Json::object({
             {"offset", report_number(std::min(patch.trades.offset, patch.closed_trades))},
             {"items", std::move(closed)}});
@@ -349,9 +348,17 @@ public:
                 {"chart_timezone", Json::string(patch.chart_timezone)}});
         }
         auto payload = delta.dump();
-        // A refused input may already have advanced the engine and suffix
-        // bookkeeping. Keep the retained document at the last durable cursor.
+        // The engine may have advanced a refused input. Publish every report
+        // member only after the callback makes its payload durable.
         if (commit) commit(payload);
+        array_sizes_["trades"] = patch.trades.logical_length;
+        array_sizes_["equity_curve"] = patch.equity.logical_length;
+        array_sizes_["security_diag"] = patch.security.logical_length;
+        array_sizes_["broker_state_hash"] = patch.hashes.logical_length;
+        array_sizes_["trace"] = 0;
+        array_sizes_["trace_names"] = patch.trace_names.logical_length;
+        closed_trade_high_water_ = patch.closed_trades;
+        closed_trade_visits_ += closed_trade_visits;
         scalars_ = std::move(next);
         if (document_) apply_report_delta(*document_, delta);
         return payload;
@@ -360,8 +367,9 @@ public:
         if (!document_)
             throw std::runtime_error("cumulative report document was not retained");
         const auto* as_of = document_->find("ratios_as_of_input");
+        if (!as_of) return {};
         const auto cursor = document_->at("input_cursor").integer<std::uint64_t>();
-        if (!as_of || as_of->integer<std::uint64_t>() == cursor) return {};
+        if (as_of->integer<std::uint64_t>() == cursor) return {};
         // Terminal only: the engine may include a refused input. Refresh the
         // committed curve in the one retained document, as read-only export
         // does, and emit a ratio-only patch. No later update may follow this.
