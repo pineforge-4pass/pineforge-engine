@@ -58,7 +58,7 @@ _Static_assert(offsetof(pf_report_sink_summary_v1, complete) == 60, "summary com
 _Static_assert(_Generic(&strategy_report_sink_summary_v1,
     int (*)(pf_strategy_t, pf_report_sink_summary_v1*): 1, default: 0),
     "summary query signature changed");
-_Static_assert(PF_ABI_VERSION == 4, "existing C ABI version changed");
+_Static_assert(PF_ABI_VERSION == 5, "strategy module ABI version changed");
 
 _Static_assert(sizeof(pf_equity_point_t) == 24, "scratch point size changed");
 _Static_assert(offsetof(pf_equity_point_t, time_ms) == 0, "point timestamp moved");

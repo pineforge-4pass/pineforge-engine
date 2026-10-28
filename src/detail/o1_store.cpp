@@ -12,27 +12,33 @@
 //
 // Residency. The layer owns no per-object directory: every lookup is a lower_bound
 // over the ScratchStore index, and the only heap storage is the fixed ScratchStore
-// workspace plus one chunk buffer and the comparison buffers, all sized at open.
+// workspace, one chunk buffer and a fixed Tx-handle pool, all sized at open.
+// Comparison buffers are inline. Finished handles can retain the pool after the
+// store is destroyed; no handle can cause it to grow.
 // ScratchStore spills to the backing and never refuses for lack of a cache slot.
 //
 // Transactions. There is one outer transaction, mapped onto the ScratchStore
 // transaction, and joined scopes that flatten into it. The layer keeps only the
-// scalar rollback baseline of the logical byte count; ScratchStore owns the undo
-// journal and restores every record byte-exactly. A mutation made outside any
-// transaction is wrapped in its own one-call transaction, because ScratchStore
-// requires one. Nested scopes never open a second ScratchStore transaction and
-// no savepoint is provided.
+// scalar rollback baselines of the logical byte and live-object counts;
+// ScratchStore owns the undo journal and restores every record byte-exactly.
+// A mutation made outside any transaction is wrapped in its own one-call
+// transaction, because ScratchStore requires one. Nested scopes never open a
+// second ScratchStore transaction and no savepoint is provided.
 
 #include <pineforge/detail/o1_store.hpp>
 
+#include <pineforge/detail/scratch_errors.hpp>
 #include <pineforge/detail/scratch_store.hpp>
 
 #include <algorithm>
+#include <cstddef>
 #include <cstring>
 #include <limits>
 #include <memory>
+#include <new>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 
 namespace pineforge {
@@ -116,7 +122,7 @@ ScratchStatus compare_keys(void* context, const ScratchByteSource& left,
 class StoreImpl final : public Store {
  public:
   StoreImpl(const Shape& shape, ScratchBacking& backing);
-  ~StoreImpl() override = default;
+  ~StoreImpl() override;
 
   StoreImpl(const StoreImpl&) = delete;
   StoreImpl& operator=(const StoreImpl&) = delete;
@@ -129,6 +135,16 @@ class StoreImpl final : public Store {
   std::size_t read(Id id, std::uint64_t off, void* dst, std::size_t n) const override;
   std::size_t write(Id id, std::uint64_t off, const void* src, std::size_t n) override;
   std::unique_ptr<Tx> begin() override;
+  bool join_active_tx() override {
+    require_mutable();
+    return outer_active_;
+  }
+  void abandon_joined_tx() noexcept override { mark_rollback_only(); }
+  std::unique_ptr<Tx> begin_cleanup() override;
+  void note_cleanup_skipped(CleanupSkip reason) noexcept override {
+    if (reason == CleanupSkip::rollback_only) ++cleanup_skipped_rollback_only_;
+    else ++cleanup_failed_;
+  }
   Stats stats() const override;
 
  private:
@@ -138,6 +154,7 @@ class StoreImpl final : public Store {
   };
 
   class StoreTx;
+  class TxPool;
   class ImplicitTx;
 
   std::uint64_t chunk_count(std::uint64_t bytes) const noexcept;
@@ -154,6 +171,7 @@ class StoreImpl final : public Store {
                  std::size_t length);
   void erase_chunk(Id id, std::uint64_t chunk);
 
+  std::unique_ptr<Tx> begin_tx(bool cleanup);
   void commit_outer_tx();
   void rollback_outer_tx();
   void abandon_outer_tx() noexcept;
@@ -165,9 +183,15 @@ class StoreImpl final : public Store {
   mutable CompareContext compare_;
   std::unique_ptr<CommandScratchStore> store_;
   std::unique_ptr<std::byte[]> chunk_buffer_;
+  std::unique_ptr<TxPool> tx_pool_;
   Id next_id_ = 1;
+  const std::uint64_t max_live_objects_;
   std::uint64_t bytes_live_ = 0;
   std::uint64_t baseline_bytes_live_ = 0;
+  std::uint64_t objects_live_ = 0;
+  std::uint64_t baseline_objects_live_ = 0;
+  std::uint64_t cleanup_skipped_rollback_only_ = 0;
+  std::uint64_t cleanup_failed_ = 0;
   bool outer_active_ = false;
   mutable bool rollback_only_ = false;
   mutable std::byte key_buffer_[kKeyBytes] = {};
@@ -197,7 +221,10 @@ class StoreImpl::ImplicitTx {
 
 class StoreImpl::StoreTx final : public Tx {
  public:
-  StoreTx(StoreImpl* store, bool outer) : store_(store), outer_(outer) {}
+  StoreTx(StoreImpl* store, bool outer) noexcept : store_(store), outer_(outer) {}
+  static void* operator new(std::size_t, TxPool& pool, bool cleanup);
+  static void operator delete(void* address) noexcept;
+  static void operator delete(void* address, TxPool&, bool) noexcept;
   StoreTx(const StoreTx&) = delete;
   StoreTx& operator=(const StoreTx&) = delete;
   ~StoreTx() override {
@@ -239,8 +266,101 @@ class StoreImpl::StoreTx final : public Tx {
   bool finished_ = false;
 };
 
+class StoreImpl::TxPool {
+ public:
+  TxPool() {
+    for (Slot& slot : slots_) {
+      slot.pool = this;
+      slot.next = free_;
+      free_ = &slot;
+    }
+    cleanup_slot_.pool = this;
+    cleanup_free_ = &cleanup_slot_;
+  }
+  TxPool(const TxPool&) = delete;
+  TxPool& operator=(const TxPool&) = delete;
+
+  void* acquire(bool cleanup) {
+    Slot*& available = cleanup ? cleanup_free_ : free_;
+    if (available == nullptr) throw exhausted_;
+    Slot* slot = available;
+    available = slot->next;
+    ++references_;
+    if (!cleanup) {
+      ++live_handles_;
+      max_live_handles_ = std::max(max_live_handles_, live_handles_);
+    }
+    return slot->storage;
+  }
+
+  std::uint64_t max_live_handles() const noexcept { return max_live_handles_; }
+
+  static void recycle(void* address) noexcept {
+    // storage is the first member of a standard-layout Slot. Its address is
+    // the slot's address; the pool/next metadata survives StoreTx destruction.
+    auto* slot = static_cast<Slot*>(address);
+    TxPool* pool = slot->pool;
+    Slot*& available = slot == &pool->cleanup_slot_
+                           ? pool->cleanup_free_ : pool->free_;
+    slot->next = available;
+    available = slot;
+    if (slot != &pool->cleanup_slot_) --pool->live_handles_;
+    pool->release();
+  }
+
+  void release() noexcept {
+    if (--references_ == 0) delete this;
+  }
+
+ private:
+  struct Slot {
+    alignas(StoreTx) unsigned char storage[sizeof(StoreTx)];
+    TxPool* pool = nullptr;
+    Slot* next = nullptr;
+  };
+  static_assert(std::is_standard_layout<Slot>::value,
+                "Tx slots must be standard-layout");
+  static_assert(offsetof(Slot, storage) == 0,
+                "Tx storage must start at the slot address");
+
+  Slot slots_[kMaxTxHandles];
+  Slot cleanup_slot_;
+  Slot* free_ = nullptr;
+  Slot* cleanup_free_ = nullptr;
+  // One store reference and one per caller/cleanup handle; at most K + 2.
+  std::size_t references_ = 1;
+  std::uint64_t live_handles_ = 0;
+  std::uint64_t max_live_handles_ = 0;
+  // Construct the message at open(); copying runtime_error on exhaustion is
+  // noexcept and never asks the replaceable allocator for message storage.
+  const TxPoolExhausted exhausted_;
+};
+
+void* StoreImpl::StoreTx::operator new(std::size_t, TxPool& pool, bool cleanup) {
+  return pool.acquire(cleanup);
+}
+
+void StoreImpl::StoreTx::operator delete(void* address) noexcept {
+  // Tx's virtual destructor selects this deallocation function even through
+  // std::unique_ptr<Tx>'s default deleter (C++17 [expr.delete], [class.free]).
+  TxPool::recycle(address);
+}
+
+void StoreImpl::StoreTx::operator delete(void* address, TxPool&, bool) noexcept {
+  TxPool::recycle(address);
+}
+
+StoreImpl::~StoreImpl() {
+  // During failed construction unique_ptr owns the pool normally. On success,
+  // outstanding finished handles keep it alive after the store owner goes away.
+  tx_pool_.release()->release();
+}
+
 StoreImpl::StoreImpl(const Shape& shape, ScratchBacking& backing)
-    : chunk_bytes_(shape.chunk_bytes) {
+    : chunk_bytes_(shape.chunk_bytes),
+      max_live_objects_(shape.max_live_objects == 0
+                            ? kMaxLiveObjectsCap
+                            : std::min(shape.max_live_objects, kMaxLiveObjectsCap)) {
   if (!is_power_of_two(shape.page_bytes) ||
       shape.page_bytes < scratch_min_page_size)
     throw std::invalid_argument(
@@ -263,6 +383,7 @@ StoreImpl::StoreImpl(const Shape& shape, ScratchBacking& backing)
   chunk_buffer_bytes_ =
       static_cast<std::size_t>(kHeaderBytes) + shape.chunk_bytes;
   chunk_buffer_.reset(new std::byte[chunk_buffer_bytes_]);
+  tx_pool_.reset(new TxPool);
 
   ScratchStoreConfig config;
   config.page_count = shape.resident_pages;
@@ -351,7 +472,7 @@ StoreImpl::Header StoreImpl::header_for(Id id) const {
 
 void StoreImpl::require_mutable() const {
   if (outer_active_ && rollback_only_)
-    throw std::logic_error("o1 store: transaction is rollback-only");
+    throw RollbackOnly();
 }
 
 void StoreImpl::take(ScratchStatus status, const char* what) {
@@ -394,6 +515,10 @@ Id StoreImpl::create(std::uint64_t bytes, std::uint64_t align) {
   const std::uint64_t alignment = align == 0 ? 1 : align;
   if (!is_power_of_two(alignment))
     throw std::invalid_argument("o1 store: align must be a power of two");
+  if (objects_live_ >= max_live_objects_)
+    throw ScratchCapacityError(ScratchResource::cohort,
+        scratch_object_limit_message(max_live_objects_, objects_live_ + 1,
+                                     kMaxLiveObjectsCap));
   if (next_id_ == std::numeric_limits<Id>::max())
     throw std::overflow_error("o1 store: id space exhausted");
   const Id id = next_id_;
@@ -413,6 +538,7 @@ Id StoreImpl::create(std::uint64_t bytes, std::uint64_t align) {
   }
   transaction.commit();
   bytes_live_ += bytes;
+  ++objects_live_;
   return id;
 }
 
@@ -425,12 +551,17 @@ void StoreImpl::release(Id id) {
   erase_chunk(id, 0);
   transaction.commit();
   bytes_live_ -= header.size;
+  --objects_live_;
 }
 
 bool StoreImpl::alive(Id id) const {
   if (id == kNullId) return false;
   ScratchHandle handle = scratch_no_handle;
-  return lookup(id, 0, handle) == ScratchStatus::ok;
+  const ScratchStatus status = lookup(id, 0, handle);
+  if (status == ScratchStatus::ok) return true;
+  if (status == ScratchStatus::end || status == ScratchStatus::not_found)
+    return false;
+  throw_status("alive lookup", status);
 }
 
 std::uint64_t StoreImpl::size(Id id) const { return header_for(id).size; }
@@ -542,16 +673,25 @@ std::size_t StoreImpl::write(Id id, std::uint64_t off, const void* src,
 }
 
 std::unique_ptr<Tx> StoreImpl::begin() {
+  return begin_tx(false);
+}
+
+std::unique_ptr<Tx> StoreImpl::begin_cleanup() {
+  return begin_tx(true);
+}
+
+std::unique_ptr<Tx> StoreImpl::begin_tx(bool cleanup) {
   require_mutable();
-  // Allocate before opening an outer transaction: bad_alloc must not leave an
-  // active transaction whose caller never received a handle.
+  // Reserve a pool slot before opening an outer transaction: exhaustion must
+  // not leave an active transaction whose caller never received a handle.
   const bool outer = !outer_active_;
-  std::unique_ptr<Tx> transaction(new StoreTx(this, outer));
+  std::unique_ptr<Tx> transaction(new (*tx_pool_, cleanup) StoreTx(this, outer));
   if (!outer) return transaction;
   take(store_->begin(), "begin");
   outer_active_ = true;
   rollback_only_ = false;
   baseline_bytes_live_ = bytes_live_;
+  baseline_objects_live_ = objects_live_;
   return transaction;
 }
 
@@ -562,6 +702,11 @@ Stats StoreImpl::stats() const {
   out.bytes_resident = scratch.resident_bytes;
   out.pages_spilled = scratch.backing_pages;
   out.bytes_backing = scratch.backing_bytes;
+  out.max_live_handles = tx_pool_->max_live_handles();
+  out.cleanup_skipped_rollback_only = cleanup_skipped_rollback_only_;
+  out.cleanup_failed = cleanup_failed_;
+  out.objects_live = objects_live_;
+  out.max_live_objects = max_live_objects_;
   return out;
 }
 
@@ -572,7 +717,7 @@ void StoreImpl::commit_outer_tx() {
     const ScratchStatus status = store_->rollback();
     if (status != ScratchStatus::ok) throw_status("rollback", status);
     finish_outer(false);
-    throw std::logic_error("o1 store: transaction is rollback-only");
+    throw RollbackOnly();
   }
   const ScratchStatus status = store_->commit(ScratchDurability::buffered);
   if (status != ScratchStatus::ok) {
@@ -606,7 +751,39 @@ void StoreImpl::mark_rollback_only() noexcept {
 void StoreImpl::finish_outer(bool committed) noexcept {
   outer_active_ = false;
   rollback_only_ = false;
-  if (!committed) bytes_live_ = baseline_bytes_live_;
+  if (!committed) {
+    bytes_live_ = baseline_bytes_live_;
+    objects_live_ = baseline_objects_live_;
+  }
+}
+
+TxScope Store::scope() { return TxScope(*this); }
+
+TxScope::TxScope(Store& store) : store_(&store) {
+  if (!store.join_active_tx()) owned_ = store.begin();
+}
+
+TxScope::~TxScope() {
+  if (!finished_ && !owned_) store_->abandon_joined_tx();
+  // An unfinished owned handle performs its usual outer rollback.
+}
+
+void TxScope::require_open() const {
+  if (finished_)
+    throw std::logic_error("o1 store: transaction already finished");
+}
+
+void TxScope::commit() {
+  require_open();
+  if (owned_) owned_->commit();
+  finished_ = true;
+}
+
+void TxScope::rollback() {
+  require_open();
+  if (owned_) owned_->rollback();
+  else store_->abandon_joined_tx();
+  finished_ = true;
 }
 
 Tx::~Tx() = default;

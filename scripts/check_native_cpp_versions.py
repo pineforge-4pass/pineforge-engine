@@ -621,7 +621,7 @@ def check_texts(files):
     identity = versioned(files[FILES[11]], "pineforge::native_order", "native_order_v1")
     require(identity, ("RunIdentity", "RequestHandle", "Birth"),
             "native_order_v1", r'\b(?:class|struct)\s+NAME\s*\{')
-    order = versioned(files[FILES[0]], "pineforge::native_order", "native_order_v7")
+    order = versioned(files[FILES[0]], "pineforge::native_order", "native_order_v8")
     require(order, ("WorkingRequestCore", "Request", "SubmitResult",
                     "AcceptedEvent", "NoEffectEvent", "MatchRejectedEvent",
                     "ExecutionAppliedEvent", "HostSized", "HostSizedKind", "ReverseTo",
@@ -634,7 +634,7 @@ def check_texts(files):
                     "ScopeClaim", "ScopeBasis", "ScopeFraction",
                     "NativeAnchorRounding", "FromOwnerFill", "ArmContext",
                     "NativeArmVisibility", "WaitForApplied", "ActivationGrid"),
-            "native_order_v7", r'\b(?:enum\s+class|class|struct)\s+NAME\s*(?::[^;{]+)?\{')
+            "native_order_v8", r'\b(?:enum\s+class|class|struct)\s+NAME\s*(?::[^;{]+)?\{')
     # R5 L8b: the activation grid is a host-free value the consumer hands to
     # prepare_trigger; a default-constructed one (no ladder) is the raw rule,
     # so the members keep their inactive defaults and the parameter its default.
@@ -650,38 +650,38 @@ def check_texts(files):
         raise ValueError(
             'prepare_trigger and apply_trigger must each take a defaulted ActivationGrid last')
     require(order, ("RequestOrigin", "MarginCallEvent", "RiskLimitKind", "NativeRiskEvent"),
-            "native_order_v7", r'\b(?:enum\s+class|class|struct)\s+NAME\s*(?::[^;{]+)?\{')
+            "native_order_v8", r'\b(?:enum\s+class|class|struct)\s+NAME\s*(?::[^;{]+)?\{')
     require(order, ("CommandEvent", "ExecutionPlan", "OrderIntent", "Remaining",
                     "RemainingProjection", "Allowance", "ReductionSize", "SizeBasis"),
-            "native_order_v7", r'\busing\s+NAME\s*=')
+            "native_order_v8", r'\busing\s+NAME\s*=')
     for token in ('operator==(CohortHandle', 'operator<(CohortHandle',
                   'struct hash<pineforge::native_order::CohortHandle>'):
         if token not in files[FILES[0]]:
             raise ValueError('CohortHandle requires C++17 equality/order/hash support')
     require_exact_alias(
         order, "OrderIntent", "std::variant<Flatten,Reduce,Transact,ReverseTo,HostSized,Sized>",
-        "native_order_v7")
+        "native_order_v8")
     require_exact_alias(
         order, "ReductionSize", "std::variant<ExplicitUnits,OwnerOpenedUnits,ScopeFraction>",
-        "native_order_v7")
+        "native_order_v8")
     require_exact_alias(
-        order, "SizeBasis", "std::variant<CashValue,EquityFraction>", "native_order_v7")
+        order, "SizeBasis", "std::variant<CashValue,EquityFraction>", "native_order_v8")
     require_exact_alias(
         order, "Remaining",
         "std::variant<RemainingUnbound,RemainingFlattenAll,RemainingUnits,RemainingDeferred,NoTarget>",
-        "native_order_v7")
+        "native_order_v8")
     require_exact_alias(
         order, "RemainingProjection",
         "std::variant<RemainingProjectionUnbound,RemainingProjectionFlattenAll,"
-        "RemainingProjectionUnits,RemainingProjectionDeferred,RemainingProjectionNoTarget>", "native_order_v7")
+        "RemainingProjectionUnits,RemainingProjectionDeferred,RemainingProjectionNoTarget>", "native_order_v8")
     require_exact_alias(
         order, "Allowance",
         "std::variant<AllowanceUnset,AllowanceUnits,AllowanceAllScope,AllowanceDeferred>",
-        "native_order_v7")
+        "native_order_v8")
     require_exact_alias(
         order, "ExecutionPlan",
         "std::variant<execution::Flatten,order_action::Reduce,order_action::Transact,"
-        "execution::ReverseTo>", "native_order_v7")
+        "execution::ReverseTo>", "native_order_v8")
     execution_terms = body(order, r'struct\s+ExecutionTerms\s*\{', 'execution terms')
     if ('ExecutionGridPolicygrid_policy=ExecutionGridPolicy::SnapToGrid;'
             not in re.sub(r'\s+', '', execution_terms)):
@@ -735,7 +735,7 @@ def check_texts(files):
         raise ValueError('ArmContext must carry exactly the price tick and the level resolver')
     if not re.search(r'\busing\s+AnchoredLevelResolver\s*=\s*std::function\s*<\s*std::optional\s*<'
                      r'\s*double\s*>\s*\(', order):
-        raise ValueError('AnchoredLevelResolver must be a native_order_v7 optional<double> callable')
+        raise ValueError('AnchoredLevelResolver must be a native_order_v8 optional<double> callable')
     fraction = re.sub(r'\s+', '', body(order, r'struct\s+ScopeFraction\s*\{', 'scope fraction'))
     for pinned in ('ScopeClaimclaim=ScopeClaim::Gross;',
                    'ScopeBasisbasis=ScopeBasis::AtMatch;'):
@@ -778,7 +778,7 @@ def check_texts(files):
                    'boolsizing_admissible=true;'):
         if pinned not in context:
             raise ValueError('CommandContext omits a placement-time sizing member: ' + pinned)
-    require_namespace_functions(order, ("to_execution_plan",), "native_order_v7")
+    require_namespace_functions(order, ("to_execution_plan",), "native_order_v8")
     required_order_members = (
         (r'\bPreparation<PreparedMutation>\s+prepare_terms\s*\(', "prepare_terms"),
         (r'\bstatic\s+Allowance\s+evaluated_allowance\s*\(', "evaluated_allowance"),
@@ -789,17 +789,17 @@ def check_texts(files):
     )
     for pattern, name in required_order_members:
         if len(re.findall(pattern, order)) != 1:
-            raise ValueError(name + " must be a native_order_v7 WorkingRequestCore member")
+            raise ValueError(name + " must be a native_order_v8 WorkingRequestCore member")
     if re.search(r'\b(?:class|struct)\s+RunIdentity\s*\{', order):
-        raise ValueError("RunIdentity must remain in native_order_v1, not native_order_v7")
-    order_src = versioned(files[FILES[1]], "pineforge::native_order", "native_order_v7")
+        raise ValueError("RunIdentity must remain in native_order_v1, not native_order_v8")
+    order_src = versioned(files[FILES[1]], "pineforge::native_order", "native_order_v8")
     require(order_src, ("WorkingRequestCore::reset", "WorkingRequestCore::find_live",
                         "WorkingRequestCore::prepare_terms",
                         "WorkingRequestCore::evaluated_allowance",
                         "WorkingRequestCore::effective_host_units",
                         "WorkingRequestCore::cohort_open", "WorkingRequestCore::cohort_add",
                         "WorkingRequestCore::cohort_remove"),
-            "native_order_v7", r'\bNAME\s*\(')
+            "native_order_v8", r'\bNAME\s*\(')
 
     calendar = versioned(files[FILES[2]], "pineforge::native_calendar", "native_calendar_v2")
     require(calendar, ("Timeframe", "SessionCalendar", "NativeInterval",
@@ -1481,5 +1481,5 @@ if __name__ == "__main__":
               'manifests cannot be authenticated without that input')
         raise SystemExit(77)
     check()
-    print("native_order identity v1 / values v7, native_calendar_v2, native_run_spec_v3, "
+    print("native_order identity v1 / values v8, native_calendar_v2, native_run_spec_v3, "
           "native_driver_v5, native_fx_curve_v1 and host engine_script_run_v19 ownership verified")

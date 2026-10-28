@@ -46,12 +46,13 @@ inline bool match(const TradeC& t, TradeFilter f) {
 // ScopedTimezone guard around the whole walk — per-point guards are a
 // process-global setenv/tzset round trip each (see timezone.hpp). The UTC
 // key is detail::month_key_utc below.
-inline int month_key_local(int64_t ts_ms) {   // call ONLY under ScopedTimezone
-    // ts >= 0 assumed (pre-epoch truncation shifts month for negative ts)
-    time_t secs = (time_t)(ts_ms / 1000);
+inline int64_t month_key_local(int64_t ts_ms) {   // call ONLY under ScopedTimezone
+    // Preserve the report's whole-second truncation, including before 1970.
+    const time_t secs = static_cast<time_t>(ts_ms / 1000);
     struct tm tb {};
-    localtime_r(&secs, &tb);
-    return (tb.tm_year + 1900) * 12 + tb.tm_mon;
+    if (localtime_r(&secs, &tb) == nullptr)
+        report::throw_unrepresentable_time("equity_curve.time_ms");
+    return (static_cast<int64_t>(tb.tm_year) + 1900) * 12 + tb.tm_mon;
 }
 
 // Sharpe/Sortino over a generated simple-returns series. The generator is
@@ -106,14 +107,14 @@ void for_each_month_return(const PointSource& curve, std::int64_t n,
     if (n <= 0) return;
 
     const pf_equity_point_t first = curve[0];
-    int current_key = key_fn(first.time_ms);
+    std::int64_t current_key = key_fn(first.time_ms);
     double current_month_end = first.equity;
     double previous_month_end = 0.0;
     bool have_previous_month = false;
 
     for (std::int64_t i = 1; i < n; ++i) {
         const pf_equity_point_t point = curve[i];
-        const int key = key_fn(point.time_ms);
+        const std::int64_t key = key_fn(point.time_ms);
         if (key != current_key) {
             if (have_previous_month && previous_month_end > 0.0)
                 emit(current_month_end / previous_month_end - 1.0);
@@ -145,36 +146,27 @@ void for_each_bar_return(const PointSource& curve, std::int64_t n, Emit emit) {
 
 namespace detail {
 
-// month_key_local's UTC twin: gmtime_r's (tm_year + 1900) * 12 + tm_mon for
-// the point's whole seconds, by Howard Hinnant's civil_from_days on the
-// floor day instead of one libc call per point. Exact for every second
-// within +/-2^40 of the epoch (about 34,800 years each way); gmtime_r keeps
-// the rest. External linkage only so tests/test_utc_month_key_arithmetic.cpp
-// can sweep it against libc; not part of the installed API.
-int month_key_utc(int64_t ts_ms) {
-    // ts >= 0 assumed (pre-epoch truncation shifts month for negative ts)
-    time_t secs = (time_t)(ts_ms / 1000);
-    constexpr int64_t kCivilSpan = int64_t{1} << 40;
-    if (secs > -kCivilSpan && secs < kCivilSpan) {
-        const int64_t days = secs / 86400 - (secs % 86400 < 0 ? 1 : 0);
-        const native_calendar::NativeCivilDate date = native_calendar::native_civil_date(days);
-        return static_cast<int>(date.year * 12 + date.month - 1);
-    }
-    struct tm tb {};
-    gmtime_r(&secs, &tb);
-    return (tb.tm_year + 1900) * 12 + tb.tm_mon;
+// UTC civil-month key for the point's whole seconds, truncated toward zero.
+// Every int64 millisecond stamp has a floor day within +/-106751991168:
+// native_civil_date's intermediate arithmetic and year * 12 fit int64 here.
+// External linkage lets the arithmetic test reach this internal helper.
+int64_t month_key_utc(int64_t ts_ms) {
+    const int64_t secs = ts_ms / 1000;
+    const int64_t days = secs / 86400 - (secs % 86400 < 0 ? 1 : 0);
+    const native_calendar::NativeCivilDate date = native_calendar::native_civil_date(days);
+    return date.year * 12 + date.month - 1;
 }
 
-// R5 lane D2-D: the walk below keys every equity point, and consecutive points
+// The walk below keys every equity point, and consecutive points
 // share their month for weeks of bars, so the key is kept with the seconds of
-// its month. The range is the arithmetic's own civil month of the second's
-// floor day, clamped to the arithmetic's span; it is kept only once both of its
+// its month. The range is the civil month of the second's floor day,
+// clamped to the cache span; it is kept only once both of its
 // ends answer the key, and the key never decreases as the second increases (it
 // is the civil order), so every second between the ends answers it too. A
-// second outside the span is gmtime_r's and is never kept.
-int keep_utc_month(UtcMonthMemo& memo, int64_t ts_ms) {
-    const int64_t secs = static_cast<int64_t>(static_cast<time_t>(ts_ms / 1000));
-    const int key = month_key_utc(ts_ms);
+// second outside the cache span is computed directly and is never kept.
+int64_t keep_utc_month(UtcMonthMemo& memo, int64_t ts_ms) {
+    const int64_t secs = ts_ms / 1000;
+    const int64_t key = month_key_utc(ts_ms);
     constexpr int64_t kCivilSpan = int64_t{1} << 40;
     if (secs > -kCivilSpan && secs < kCivilSpan) {
         const int64_t days = secs / 86400 - (secs % 86400 < 0 ? 1 : 0);
@@ -186,6 +178,7 @@ int keep_utc_month(UtcMonthMemo& memo, int64_t ts_ms) {
             : native_calendar::native_civil_days(date.year + 1, 1, 1);
         const int64_t lo = std::max(first * 86400, -kCivilSpan + 1);
         const int64_t hi = std::min(next * 86400, kCivilSpan);
+        // Both probes are strictly inside +/-2^40 seconds, so * 1000 is safe.
         if (month_key_utc(lo * 1000) == key && month_key_utc((hi - 1) * 1000) == key) {
             memo.lo = lo;
             memo.hi = hi;
@@ -197,7 +190,7 @@ int keep_utc_month(UtcMonthMemo& memo, int64_t ts_ms) {
 
 }  // namespace detail
 
-int equity_month_key(std::int64_t time_ms, const std::string& chart_timezone) {
+std::int64_t equity_month_key(std::int64_t time_ms, const std::string& chart_timezone) {
     if (chart_timezone.empty() || chart_timezone == "UTC" || chart_timezone == "Etc/UTC")
         return detail::month_key_utc(time_ms);
     // This scope contains only the civil-month lookup, never engine dispatch.

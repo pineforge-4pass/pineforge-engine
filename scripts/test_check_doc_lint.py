@@ -605,7 +605,7 @@ class MustNotFire(unittest.TestCase):
 # R5 lane H-DOCGATES: a tree that declares the ABI numbers, the release and
 # the kernel's `native-*` hash domains the new families read.
 H_FILES = {
-    'include__pineforge__pineforge.h': '#pragma once\n#define PF_ABI_VERSION 4\n',
+    'include__pineforge__pineforge.h': '#pragma once\n#define PF_ABI_VERSION 5\n',
     'include__pineforge__native_c_api.h': '#pragma once\n#define PF_NATIVE_API_VERSION 1\n',
     'include__pineforge__market_driver.hpp':
         '#pragma once\nconstexpr const char* kDriver = "native-driver/v5";\n'
@@ -641,7 +641,7 @@ class MustFailH(unittest.TestCase):
         self.assert_offends('The driver domain is `native-driver/v4`.\n', 'stale-epoch')
 
     def test_p31_a_stale_abi_number(self) -> None:
-        self.assert_offends('`PF_ABI_VERSION` is 3.\n', 'stale-abi')
+        self.assert_offends('`PF_ABI_VERSION` is 4.\n', 'stale-abi')
         self.assert_offends('The C API reports PF_NATIVE_API_VERSION == 0 here.\n', 'stale-abi')
 
     def test_p32_a_stale_release(self) -> None:
@@ -652,7 +652,7 @@ class MustFailH(unittest.TestCase):
                             '<!-- verified HEAD -->\n', 'verified-stale-epoch')
 
     def test_a_forward_abi_number_stated_as_current(self) -> None:
-        self.assert_offends('The current `PF_ABI_VERSION` is now 5.\n', 'stale-abi')
+        self.assert_offends('The current `PF_ABI_VERSION` is now 6.\n', 'stale-abi')
 
 
 class MustNotFireH(unittest.TestCase):
@@ -662,14 +662,14 @@ class MustNotFireH(unittest.TestCase):
             self.assertEqual(code, 0, out)
 
     def test_live_numbers_domains_and_paths(self) -> None:
-        self.assert_clean('`PF_ABI_VERSION` is 4 and `PF_NATIVE_API_VERSION` is 1; the '
+        self.assert_clean('`PF_ABI_VERSION` is 5 and `PF_NATIVE_API_VERSION` is 1; the '
                           'continuation domain is `native-consumer/v9` and the driver\'s '
                           '`native-driver/v5`. Install PineForge 0.14.0, the current release. '
                           'The header is `include/pineforge/pineforge.h`.\n')
 
     def test_forward_and_historical_numbers(self) -> None:
-        self.assert_clean('The alias is removed at `PF_ABI_VERSION` 5. The layout was frozen '
-                          'at `PF_ABI_VERSION` 3 until the append. <!-- verified HEAD -->\n'
+        self.assert_clean('The alias is removed at `PF_ABI_VERSION` 6. The previous module ABI was '
+                          'at `PF_ABI_VERSION` 4 until the rebuild. <!-- verified HEAD -->\n'
                           'The codegen tracks it since v0.6.4.\n')
 
     def test_git_object_paths_generated_files_and_foreign_crates(self) -> None:

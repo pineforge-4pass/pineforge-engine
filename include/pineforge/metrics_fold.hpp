@@ -18,8 +18,10 @@ namespace metrics {
 // Same whole-second truncation and civil-month convention as the array path.
 // Non-UTC calls take and release the timezone lock within this call; callers
 // must not already hold that lock. The pure folds below also accept keys from
-// an independently verified calendar provider.
-int equity_month_key(std::int64_t time_ms, const std::string& chart_timezone);
+// an independently verified calendar provider. Keys are year * 12 + month0
+// in int64 so every int64 millisecond timestamp's UTC month is representable.
+// An unrepresentable local civil time raises report_result_invalid.
+std::int64_t equity_month_key(std::int64_t time_ms, const std::string& chart_timezone);
 
 struct EquityReturnSummary {
     std::size_t count = 0;
@@ -88,12 +90,12 @@ inline double defer_nonfinite(double value, const char* field, const char*& firs
 struct ReturnSequence {
     bool have_point = false;
     bool have_previous_month = false;
-    int current_key = 0;
+    std::int64_t current_key = 0;
     double previous_equity = 0.0;
     double current_month_end = 0.0, previous_month_end = 0.0;
 
     template<class BarEmit, class MonthEmit>
-    void fold(const pf_equity_point_t& point, int key, BarEmit bar, MonthEmit month) {
+    void fold(const pf_equity_point_t& point, std::int64_t key, BarEmit bar, MonthEmit month) {
         if (!have_point) {
             have_point = true;
             current_key = key;
@@ -134,7 +136,7 @@ struct FirstPrefix {
     ReturnSequence returns;
     double peak = 0.0, trough = 0.0;
 
-    void fold(const pf_equity_point_t& point, int key, bool observation, bool exposed) {
+    void fold(const pf_equity_point_t& point, std::int64_t key, bool observation, bool exposed) {
         auto& s = values;
         if (s.point_count == 0) {
             s.first = point;
@@ -181,7 +183,7 @@ struct FirstPrefix {
 // first_pass() closes the held month in a value copy and is repeatable.
 class EquityMetricsFold {
 public:
-    void fold(const pf_equity_point_t& point, int month_key,
+    void fold(const pf_equity_point_t& point, std::int64_t month_key,
               bool observation = true, bool exposed = false) {
         if (have_held_)
             prefix_.fold(held_, held_key_, held_observation_, held_exposed_);
@@ -192,14 +194,14 @@ public:
         have_held_ = true;
     }
     // Returns false on an empty fold; it never invents an observation.
-    bool replace_last(const pf_equity_point_t& point, int month_key) {
+    bool replace_last(const pf_equity_point_t& point, std::int64_t month_key) {
         if (!have_held_) return false;
         held_ = point;
         held_key_ = month_key;
         return true;
     }
     const pf_equity_point_t* held_point() const { return have_held_ ? &held_ : nullptr; }
-    int held_month_key() const { return held_key_; }
+    std::int64_t held_month_key() const { return held_key_; }
     bool held_observation() const { return held_observation_; }
     bool held_exposed() const { return held_exposed_; }
     EquityFoldSnapshot first_pass() const {
@@ -214,7 +216,7 @@ public:
 private:
     fold_detail::FirstPrefix prefix_;
     pf_equity_point_t held_{};
-    int held_key_ = 0;
+    std::int64_t held_key_ = 0;
     bool held_observation_ = false, held_exposed_ = false, have_held_ = false;
 };
 
@@ -284,7 +286,7 @@ struct ReturnVariance {
 struct SecondPrefix {
     ReturnSequence returns;
     ReturnVariance bars, months;
-    void fold(const pf_equity_point_t& point, int key) {
+    void fold(const pf_equity_point_t& point, std::int64_t key) {
         returns.fold(point, key, [&](double r) { bars.fold(r); },
                      [&](double r) { months.fold(r); });
     }
@@ -309,13 +311,13 @@ public:
                                  "metrics.equity.sharpe_bar", "metrics.equity.sortino_bar");
         }
     }
-    void fold(const pf_equity_point_t& point, int month_key,
+    void fold(const pf_equity_point_t& point, std::int64_t month_key,
               bool observation = true, bool exposed = false) {
         if (const auto* held = replay_.held_point())
             prefix_.fold(*held, replay_.held_month_key());
         replay_.fold(point, month_key, observation, exposed);
     }
-    bool replace_last(const pf_equity_point_t& point, int month_key) {
+    bool replace_last(const pf_equity_point_t& point, std::int64_t month_key) {
         return replay_.replace_last(point, month_key);
     }
     EquityRatioResult finish() const {

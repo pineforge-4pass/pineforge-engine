@@ -1288,7 +1288,7 @@ list(APPEND TEST_SOURCES test_native_batch_log_presize)
 # Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_state_continuation)
 list(APPEND TEST_SOURCES test_native_tick_volume)
-# R5 V19-B: the order core's journal is a window (native_order_v7) -- absolute
+# The order core's journal is a window (native_order_v8) -- absolute
 # journal positions, the chain index against a journal oracle over randomized
 # command streams, chain membership that is not a chain walk (scaling), and a
 # live deferred group-adjustment chain pinning the window. Source-free, so it
@@ -1312,9 +1312,10 @@ list(APPEND TEST_SOURCES test_native_calendar_memo)
 # an idle run allocates on the heap within 0.25 per bar of the FeedTolerant
 # run (84 per bar before the memo). Source-free.
 list(APPEND TEST_SOURCES test_native_calendar_memo_cost)
-# R5 lane PERF-P5611 (P5): the monthly-Sharpe walk's UTC month key by integer
-# civil-from-days arithmetic, swept against gmtime_r. Source-free, so it also
-# runs in the kernel-only profile.
+# Monthly-Sharpe month keys over all int64 millisecond timestamps, against
+# independent Gregorian cycles and in-range gmtime_r; UTC/local report walks
+# and summary folds retain full-width keys. Public and source-free, including
+# the kernel-only and sanitizer profiles.
 list(APPEND TEST_SOURCES test_utc_month_key_arithmetic)
 # R5 lane D2-D: the monthly walk keeps its UTC month key with the month's
 # seconds -- the kept key against month_key_utc at every point of fixed-step,
@@ -2455,6 +2456,32 @@ endif()
 
 add_test(NAME test_settlement_cpp_abi_tooling
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_settlement_cpp_abi.py)
+
+# Public order-epoch controls also run without the private host ABI fixtures.
+# Reuse the settlement caller/compiler flags and the full report-word fixture.
+if(UNIX)
+    add_test(NAME test_native_order_epoch_reject
+        COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/scripts/check_settlement_cpp_abi.py
+            --order-check reject
+            --compiler ${CMAKE_CXX_COMPILER}
+            --library $<TARGET_FILE:pineforge>
+            --include ${PROJECT_SOURCE_DIR}/include
+            --generated-include ${PROJECT_BINARY_DIR}/include
+            --receipt ${PROJECT_BINARY_DIR}/native-order-abi/reject.json
+            ${_pf_script_cpp_abi_flags})
+    add_test(NAME test_native_order_epoch_rebuild_bytes
+        COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/scripts/check_settlement_cpp_abi.py
+            --order-check rebuild
+            --compiler ${CMAKE_CXX_COMPILER}
+            --library $<TARGET_FILE:pineforge>
+            --include ${PROJECT_SOURCE_DIR}/include
+            --generated-include ${PROJECT_BINARY_DIR}/include
+            --current-build ${PROJECT_BINARY_DIR}
+            --receipt ${PROJECT_BINARY_DIR}/native-order-abi/rebuild.json
+            ${_pf_script_cpp_abi_flags})
+    set_tests_properties(test_native_order_epoch_rebuild_bytes PROPERTIES PROCESSORS 4)
+endif()
+
 # A receipt-gated row above skips (exit 77) wherever
 # PINEFORGE_REQUIRE_ABI_RECEIPTS is OFF and its providers are not prepared in
 # this build tree, and CTest counts a skipped row as passed.
@@ -3763,6 +3790,22 @@ foreach(test_name ${TEST_SOURCES})
     pineforge_add_unit_test(${test_name})
 endforeach()
 
+if(UNIX)
+    # PASS_REGULAR_EXPRESSION makes output matching replace CTest's exit-code
+    # result, while WILL_FAIL accepts every nonzero result. The driver checks
+    # the planted mode's exact exit 1 and its boundary-specific guard message.
+    add_test(NAME test_pipe_writer_fd_flags_plant_nonblock
+        COMMAND ${CMAKE_COMMAND}
+            -DPIPE_WRITER=$<TARGET_FILE:test_pipe_writer_fd_flags>
+            -DPLANT_MODE=--plant-nonblock
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/run_pipe_writer_fd_flags.cmake)
+    add_test(NAME test_pipe_writer_fd_flags_plant_close
+        COMMAND ${CMAKE_COMMAND}
+            -DPIPE_WRITER=$<TARGET_FILE:test_pipe_writer_fd_flags>
+            -DPLANT_MODE=--plant-close
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/run_pipe_writer_fd_flags.cmake)
+endif()
+
 if(PINEFORGE_BUILD_SOURCE_LAYER)
     add_executable(test_pending_observer_walk test_pending_observer_walk.cpp)
     target_link_libraries(test_pending_observer_walk PRIVATE pineforge)
@@ -4253,6 +4296,23 @@ if(PINEFORGE_ENABLE_COVERAGE)
     target_compile_options(test_c_abi PRIVATE ${_pf_cov_test_flags})
 endif()
 pineforge_add_twin_test(test_c_abi test_c_abi)
+
+# Public ABI-stamp probes reuse the runner contract modules and the real
+# run_json loader. They need neither private fixtures nor the live runner.
+if(UNIX)
+    foreach(_pf_abi_probe previous current)
+        add_library(strategy_abi_${_pf_abi_probe} MODULE test_live_contract_plugins.cpp)
+        target_include_directories(strategy_abi_${_pf_abi_probe} PRIVATE
+            ${PROJECT_SOURCE_DIR}/include ${PROJECT_BINARY_DIR}/include)
+        target_compile_options(strategy_abi_${_pf_abi_probe} PRIVATE -fvisibility=hidden)
+        set_target_properties(strategy_abi_${_pf_abi_probe} PROPERTIES PREFIX "")
+    endforeach()
+    target_compile_definitions(strategy_abi_previous PRIVATE PF_LIVE_ABI_STAMP=4)
+    target_compile_definitions(strategy_abi_current PRIVATE PF_LIVE_ABI_STAMP=PF_ABI_VERSION)
+    add_test(NAME test_strategy_module_abi_epoch
+        COMMAND ${Python3_EXECUTABLE} -E -B ${PROJECT_SOURCE_DIR}/tests/test_run_json_bin.py
+            --abi-epoch $<TARGET_FILE:strategy_abi_previous> $<TARGET_FILE:strategy_abi_current>)
+endif()
 
 # Lane REL10: the four spellings ADR-0001 "Deprecated public spellings"
 # scheduled for removal -- pf_equity_stats_t::sharpe_tv / sortino_tv and

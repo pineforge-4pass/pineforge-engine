@@ -482,3 +482,59 @@ def test_native_csv_binary_report_bytes(tmp_path):
         assert document["outputs"]["bars"]  # engine execution produced the body
         documents.append(mask_report(document))
     assert json.dumps(documents[0], separators=(",", ":")) == json.dumps(documents[1], separators=(",", ":"))
+
+
+def check_strategy_module_abi_epoch(previous_path, current_path):
+    """Refuse the previous release's stamp through the real typed loader."""
+    import re
+
+    paths = [previous_path, current_path]
+    header = (ROOT / "include/pineforge/pineforge.h").read_text()
+    match = re.search(r"^#define PF_ABI_VERSION (\d+)\s*$", header, re.M)
+    assert match, "the runtime header must declare its module ABI"
+    expected = int(match.group(1))
+    assert run_json.EXPECTED_PF_ABI == expected
+    previous = 4  # Previous 1.x release stamp, independent of the live header.
+
+    probes = []
+    for path in paths:
+        assert Path(path).is_file(), path
+        probe = ctypes.CDLL(path, mode=ctypes.RTLD_LOCAL)
+        for name in ("pf_test_abi_calls", "pf_test_strategy_calls"):
+            query = getattr(probe, name)
+            query.argtypes, query.restype = [], ctypes.c_int
+            assert query() == 0
+        probes.append(probe)
+
+    # On the previous runtime this library is accepted, so this exact check
+    # fails with "DID NOT RAISE"; an unrelated load/symbol error cannot pass.
+    with pytest.raises(run_json.StrategyLibraryError) as refusal:
+        run_json.load_strategy(Path(paths[0]))
+    error = refusal.value
+    assert error.code == "strategy_library_incompatible"
+    assert error.code_args == {"reason": "abi_mismatch", "abi": previous}
+    assert str(error) == (
+        f"pineforge ABI mismatch: .so reports {previous}, harness expects "
+        f"{expected}; rebuild.")
+    assert probes[0].pf_test_abi_calls() == 1
+    assert probes[0].pf_test_strategy_calls() == 0
+
+    current = run_json.load_strategy(Path(paths[1]))
+    assert probes[1].pf_test_abi_calls() == 1
+    assert probes[1].pf_test_strategy_calls() == 0
+    current.pf_abi_version.restype = ctypes.c_int
+    assert current.pf_abi_version() == expected
+    # A successful create/free cycle proves the counter is live, rather than
+    # an instrumentation stub that always reports zero.
+    state = current.strategy_create(None)
+    assert state
+    assert probes[1].pf_test_strategy_calls() == 1
+    current.strategy_free(state)
+    assert probes[1].pf_test_strategy_calls() == 2
+
+
+if __name__ == "__main__":
+    if len(sys.argv) != 4 or sys.argv[1] != "--abi-epoch":
+        raise SystemExit("usage: test_run_json_bin.py --abi-epoch PREVIOUS_MODULE CURRENT_MODULE")
+    check_strategy_module_abi_epoch(sys.argv[2], sys.argv[3])
+    print("strategy module ABI epoch: previous stamp refused; current stamp accepted")

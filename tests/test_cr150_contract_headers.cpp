@@ -74,7 +74,7 @@ static_assert(offsetof(pf_report_sink_summary_v1, nonfinite_t_field) == 56);
 static_assert(offsetof(pf_report_sink_summary_v1, complete) == 60);
 static_assert(std::is_same_v<decltype(&strategy_report_sink_summary_v1),
     int (*)(pf_strategy_t, pf_report_sink_summary_v1*)>);
-static_assert(PF_ABI_VERSION == 4);
+static_assert(PF_ABI_VERSION == 5);
 
 // DESIGN 3.7:825,833-837,858-879: formatting and writer declarations are
 // type-checked without taking an evaluated address of an undefined symbol.

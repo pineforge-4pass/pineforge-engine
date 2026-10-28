@@ -40,11 +40,14 @@ The workflow runs the copy of this script that the first parent holds, with
 it changes and never by itself; a base without the script runs everything.
 
     python3 ci_docs_only.py [--root DIR] [--github-output FILE]
+    python3 ci_docs_only.py --paths FILE [--github-output FILE]
 
 reads GITHUB_EVENT_NAME, and PR_HEAD_SHA (pull request) or PUSH_BEFORE and
 PUSH_FORCED (push), from the environment. It prints its reasons, appends
-``docs_only=true`` or ``docs_only=false`` to FILE, and exits 0 whatever it
-decides. scripts/test_ci_docs_only.py (a ci_preflight stage) holds the rule.
+``docs_only=true|false`` and ``github_only=true|false`` to FILE, and exits 0
+whatever it decides. ``--paths`` reads a complete NUL-separated list as data;
+an unreadable or unterminated list is neither class. The classifier is held by
+scripts/test_ci_docs_only.py (a ci_preflight stage).
 """
 from __future__ import annotations
 
@@ -93,6 +96,40 @@ def is_documentation(path: str) -> bool:
     return path.startswith('docs/') or name.endswith('.md')
 
 
+def classify_paths(paths: list[str], *, pull_request: bool = True) -> tuple[bool, bool]:
+    """Return ``(docs_only, github_only)`` for already collected path data.
+
+    The caller supplies both sides of a rename. No path is normalized: names
+    containing newlines, quotes or ``..`` are still names, and only the exact
+    directory prefixes below classify them.
+    """
+    if not paths:
+        return False, False
+    docs_only = all(is_documentation(path) for path in paths)
+    github_only = pull_request and all(path.startswith('.github/') for path in paths)
+    return docs_only, github_only
+
+
+def read_paths_file(path: Path) -> tuple[list[str] | None, str]:
+    """Read one complete NUL-separated path file without treating names as code."""
+    try:
+        data = path.read_bytes()
+    except OSError as error:
+        return None, f'path list is unreadable: {error}'
+    if not data:
+        return [], 'path list is empty'
+    if not data.endswith(b'\0'):
+        return None, 'path list is truncated (missing its final NUL)'
+    try:
+        values = data[:-1].split(b'\0')
+        paths = [value.decode('utf-8') for value in values]
+    except (UnicodeDecodeError, ValueError) as error:
+        return None, f'path list is unreadable: {error}'
+    if any(not value for value in paths):
+        return None, 'path list contains an empty path'
+    return paths, f'path list contains {len(paths)} path(s)'
+
+
 def git(root: Path, *args: str) -> str:
     try:
         result = subprocess.run(['git', '-C', str(root), *args], capture_output=True, text=True)
@@ -135,25 +172,38 @@ def changed_paths(root: Path, base: str, head: str) -> list[str]:
     return [path for path in listed.split('\0') if path]
 
 
-def decide(env: dict[str, str], root: Path = ROOT) -> tuple[bool, list[str]]:
-    """(docs_only, the reasons printed for it)."""
+def classify(env: dict[str, str], root: Path = ROOT) -> tuple[bool, bool, list[str]]:
+    """(docs_only, github_only, reasons printed for them)."""
     try:
         base, head, what = compared(env, root)
         paths = changed_paths(root, base, head)
     except Doubt as doubt:
-        return False, [f'not docs-only: {doubt}']
+        return False, False, [f'not docs-only: {doubt}']
     lines = [f'{what}: {base}..{head}, {len(paths)} changed path(s)']
+    docs_only, github_only = classify_paths(
+        paths, pull_request=env.get('GITHUB_EVENT_NAME') == 'pull_request')
     if not paths:
-        return False, lines + ['not docs-only: the change is empty']
+        return False, False, lines + ['not docs-only: the change is empty']
     other = [path for path in paths if not is_documentation(path)]
     if other:
         lines.append(f'not docs-only: {len(other)} changed path(s) are not documentation')
         lines += [f'  {path}' + (f' ({PROOF_READS[path]})' if path in PROOF_READS else '')
                   for path in other[:SHOWN]]
-        return False, lines + ([f'  ... and {len(other) - SHOWN} more'] if len(other) > SHOWN else [])
-    lines.append('docs-only: every changed path is documentation')
-    lines += [f'  {path}' for path in paths[:SHOWN]]
-    return True, lines + ([f'  ... and {len(paths) - SHOWN} more'] if len(paths) > SHOWN else [])
+        lines += ([f'  ... and {len(other) - SHOWN} more'] if len(other) > SHOWN else [])
+    else:
+        lines.append('docs-only: every changed path is documentation')
+        lines += [f'  {path}' for path in paths[:SHOWN]]
+        lines += ([f'  ... and {len(paths) - SHOWN} more']
+                  if len(paths) > SHOWN else [])
+    if github_only:
+        lines.append('github-only: every changed path is under .github/')
+    return docs_only, github_only, lines
+
+
+def decide(env: dict[str, str], root: Path = ROOT) -> tuple[bool, list[str]]:
+    """(docs_only, the reasons printed for it), preserving the old API."""
+    docs_only, _, lines = classify(env, root)
+    return docs_only, lines
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -161,15 +211,31 @@ def main(argv: list[str] | None = None) -> int:
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--root', type=Path, default=ROOT,
                         help='the checkout to judge (default: the one holding this script)')
+    parser.add_argument('--paths', type=Path,
+                        help='read a complete NUL-separated compare-file list')
     parser.add_argument('--github-output', type=Path,
-                        help='append docs_only=true|false to this file')
+                        help='append docs_only=true|false and github_only=true|false to this file')
     args = parser.parse_args(argv)
-    docs_only, lines = decide(dict(os.environ), args.root)
+    if args.paths is not None:
+        paths, reason = read_paths_file(args.paths)
+        if paths is None:
+            docs_only, github_only = False, False
+            lines = [f'not docs-only/github-only: {reason}']
+        else:
+            docs_only, github_only = classify_paths(paths)
+            lines = [reason]
+            lines.append('docs-only: every changed path is documentation'
+                         if docs_only else 'not docs-only: a changed path is not documentation')
+            lines.append('github-only: every changed path is under .github/'
+                         if github_only else 'not github-only: a changed path is outside .github/')
+    else:
+        docs_only, github_only, lines = classify(dict(os.environ), args.root)
     for line in lines:
         print(line)
     if args.github_output is not None:
         with args.github_output.open('a', encoding='utf-8') as output:
             output.write(f'docs_only={"true" if docs_only else "false"}\n')
+            output.write(f'github_only={"true" if github_only else "false"}\n')
     return 0
 
 

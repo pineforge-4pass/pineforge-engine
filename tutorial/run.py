@@ -117,10 +117,10 @@ class ReportC(ctypes.Structure):
 
 # pf_report_t is caller-allocated, so a stale mirror means the runtime
 # writes past our buffer. Assert the .so's ABI version before any run.
-# v4 appended the live-runtime accessors and grew pf_report_t with the
-# broker_state_hash array after equity_curve_len (ReportC above already
-# carries both fields).
-EXPECTED_PF_ABI = 4
+# v4 added the live accessors and broker_state_hash after equity_curve_len.
+# The mirrors already carry those fields; v5 requires rebuilt 1.8.0 modules
+# without growing the C report/trade layouts.
+EXPECTED_PF_ABI = 5
 
 def check_abi(lib: ctypes.CDLL) -> None:
     try:

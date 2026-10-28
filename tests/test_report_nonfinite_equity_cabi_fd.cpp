@@ -125,10 +125,9 @@ void run_case(int field, double value, bool refuses) {
     require(strategy_configure_native_ext_v1(host.handle, &spec, &ext) == PF_NATIVE_OK,
             "C host configuration failed");
     const pf_report_sink_fd_v1 sink{sizeof sink, 1, pipe.descriptors[1], "CR-289"};
+    fd_flag_diagnostics::Trace fd_trace(pipe.descriptors[1], "before sink installation");
     require(strategy_set_report_sink_fd_v1(host.handle, &sink) == 0, "C fd setter refused");
-    fd_flag_diagnostics::Trace fd_trace(pipe.descriptors[1], "after sink installation");
-    const int flags = fd_trace.baseline().flags;
-    const int fd_flags = fd_trace.baseline().descriptor_flags;
+    fd_trace.record("after sink installation");
     std::array<pf_bar_t, bar_count> bars{};
     for (int i = 0; i < bar_count; ++i)
         bars[static_cast<std::size_t>(i)] =
@@ -178,11 +177,12 @@ void run_case(int field, double value, bool refuses) {
                 && receipt.count_e == bar_count && bytes.find("{\"trailer\":") != std::string::npos,
                 "finite C fd stream did not complete");
     }
-    const auto final_flags = fd_trace.record("final assertion");
-    require(flags >= 0 && fd_flags >= 0
-            && fd_flag_diagnostics::comparable_status_flags(final_flags.flags)
-                == fd_flag_diagnostics::comparable_status_flags(flags)
-            && final_flags.descriptor_flags == fd_flags, fd_trace.message("borrowed fd changed"));
+    fd_trace.record("final assertion");
+    require(fd_trace.unchanged(), fd_trace.message("borrowed fd changed"));
+    strategy_native_host_free(host.handle);
+    host.handle = nullptr;
+    fd_trace.record("after host destruction");
+    require(fd_trace.unchanged(), fd_trace.message("destruction changed borrowed fd"));
 }
 } // namespace
 
