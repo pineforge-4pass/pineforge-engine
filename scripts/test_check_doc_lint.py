@@ -14,6 +14,10 @@ count the tree derives stated wrong (each of the three families), and a
 ``<!-- verified HEAD -->`` marker on a sentence that states a non-live epoch as
 today's.
 
+The selected-window holding rule has six isolated cases: a good public section,
+the section missing, one function missing, one option missing, an unparseable
+header declaration and a missing CLI delimiter.
+
 The must-not-fire half is what keeps the guard usable: a *live* epoch of a
 family whose other members moved on, a ``lane L…`` mention in a design
 document that is a roadmap on purpose, a link to a directory, a fenced code
@@ -48,6 +52,59 @@ SOURCE = """#include <pineforge/engine.hpp>
 const char* domain() { return "pineforge-broker-state/v18"; }
 """
 
+SELECTED_WINDOW_HEADER = """#pragma once
+PF_API uint32_t pf_selected_window_version(void);
+PF_API int strategy_set_selected_window_v1(
+    pf_strategy_t, const pf_selected_window_config_v1 *);
+PF_API int strategy_selected_window_counts_v1(
+    pf_strategy_t, pf_selected_window_counts_v1 *);
+"""
+
+SELECTED_WINDOW_PLAN_HEADER = """#pragma once
+PF_API uint32_t pf_selected_plan_version(void);
+PF_API int pf_plan_selected_primary_v1(
+    const pf_selected_plan_request_v1 *, const pf_bar_t *rows,
+    uint64_t count, pf_selected_plan_result_v1 *);
+"""
+
+SELECTED_WINDOW_CLI = """def _main():
+    ap = parser
+    # Selected-window mode (selected-window/v1; fixture)
+    ap.add_argument("--report-policy")
+    ap.add_argument("--window-start-ms")
+    ap.add_argument("--window-end-ms")
+    ap.add_argument("--preroll-bars")
+    ap.add_argument("--fed-start-ms")
+    ap.add_argument("--capabilities-json")
+    ap.add_argument("--validate-window-only")
+    ap.add_argument("--run-phase-fd")
+    ap.add_argument("--request-feed-inventory")
+    ap.add_argument("--report-shape")
+    ap.add_argument("--curve-point-budget")
+    ap.add_argument("--results-digest")
+    pre_profile_long = tuple(s for s in ap._option_string_actions if s.startswith("--"))
+"""
+
+SELECTED_WINDOW_PAGE = """## Selected windows {#selected_windows_walk_forward}
+--report-policy
+--window-start-ms
+--window-end-ms
+--preroll-bars
+--fed-start-ms
+--capabilities-json
+--validate-window-only
+--run-phase-fd
+--request-feed-inventory
+--report-shape
+--curve-point-budget
+--results-digest
+pf_selected_window_version
+strategy_set_selected_window_v1
+strategy_selected_window_counts_v1
+pf_selected_plan_version
+pf_plan_selected_primary_v1
+"""
+
 
 class Tree:
     """A throwaway repository: one header, one source, and pages under docs/."""
@@ -61,6 +118,16 @@ class Tree:
         (self.root / 'docs/design').mkdir(parents=True)
         (self.root / 'include/pineforge/engine.hpp').write_text(HEADER)
         (self.root / 'src/engine_state_hash.cpp').write_text(SOURCE)
+        selected = {
+            'include__pineforge__selected_window.h': SELECTED_WINDOW_HEADER,
+            'include__pineforge__selected_window_plan.h': SELECTED_WINDOW_PLAN_HEADER,
+            'docker__run_json.py': SELECTED_WINDOW_CLI,
+            'docs__pages__public-contract.md': SELECTED_WINDOW_PAGE,
+        }
+        for name, body in selected.items():
+            path = self.root / name.replace('__', '/')
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(body)
         for name, body in files.items():
             path = self.root / name.replace('__', '/')
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -87,6 +154,59 @@ def tree(**files: str):
 
 PAGE = 'docs__pages__native-engine.md'
 DESIGN = 'docs__design__native-feature-parity.md'
+SELECTED_PAGE = 'docs__pages__public-contract.md'
+SELECTED_HEADER = 'include__pineforge__selected_window.h'
+SELECTED_PLAN_HEADER = 'include__pineforge__selected_window_plan.h'
+SELECTED_CLI = 'docker__run_json.py'
+
+
+def selected_surface(**overrides: str) -> dict[str, str]:
+    files = {
+        SELECTED_PAGE: SELECTED_WINDOW_PAGE,
+        SELECTED_HEADER: SELECTED_WINDOW_HEADER,
+        SELECTED_PLAN_HEADER: SELECTED_WINDOW_PLAN_HEADER,
+        SELECTED_CLI: SELECTED_WINDOW_CLI,
+    }
+    files.update(overrides)
+    return files
+
+
+class SelectedWindowContract(unittest.TestCase):
+    def assert_offends(self, files: dict[str, str], *needles: str) -> None:
+        with tree(**selected_surface(**files)) as t:
+            code, out = t.run()
+        self.assertEqual(code, 1, out)
+        self.assertIn('[selected-window-contract]', out)
+        for needle in needles:
+            self.assertIn(needle, out)
+
+    def test_good_selected_window_contract(self) -> None:
+        with tree(**selected_surface()) as t:
+            code, out = t.run()
+        self.assertEqual(code, 0, out)
+
+    def test_missing_selected_window_section(self) -> None:
+        self.assert_offends({SELECTED_PAGE: '# Other section\n'},
+                            'expected one {#selected_windows_walk_forward} section')
+
+    def test_function_missing_from_selected_window_section(self) -> None:
+        page = SELECTED_WINDOW_PAGE.replace('pf_plan_selected_primary_v1\n', '')
+        self.assert_offends({SELECTED_PAGE: page}, 'pf_plan_selected_primary_v1')
+
+    def test_option_missing_from_selected_window_section(self) -> None:
+        page = SELECTED_WINDOW_PAGE.replace('--results-digest\n', '')
+        self.assert_offends({SELECTED_PAGE: page}, '--results-digest')
+
+    def test_unparseable_selected_window_header(self) -> None:
+        header = SELECTED_WINDOW_HEADER + 'PF_API int broken(\n'
+        self.assert_offends({SELECTED_HEADER: header},
+                            'cannot read or parse', 'selected_window.h')
+
+    def test_selected_window_cli_delimiter_missing(self) -> None:
+        cli = SELECTED_WINDOW_CLI.replace(
+            'pre_profile_long = tuple', 'profile_long = tuple')
+        self.assert_offends({SELECTED_CLI: cli},
+                            'cannot read or parse', 'run_json.py')
 
 # The count sources of rule 6, each small enough to count by eye: three
 # native_c_api.h declarations, two pineforge.h ones, one runtime name, floors
@@ -485,7 +605,7 @@ class MustNotFire(unittest.TestCase):
 # R5 lane H-DOCGATES: a tree that declares the ABI numbers, the release and
 # the kernel's `native-*` hash domains the new families read.
 H_FILES = {
-    'include__pineforge__pineforge.h': '#pragma once\n#define PF_ABI_VERSION 4\n',
+    'include__pineforge__pineforge.h': '#pragma once\n#define PF_ABI_VERSION 5\n',
     'include__pineforge__native_c_api.h': '#pragma once\n#define PF_NATIVE_API_VERSION 1\n',
     'include__pineforge__market_driver.hpp':
         '#pragma once\nconstexpr const char* kDriver = "native-driver/v5";\n'
@@ -521,7 +641,7 @@ class MustFailH(unittest.TestCase):
         self.assert_offends('The driver domain is `native-driver/v4`.\n', 'stale-epoch')
 
     def test_p31_a_stale_abi_number(self) -> None:
-        self.assert_offends('`PF_ABI_VERSION` is 3.\n', 'stale-abi')
+        self.assert_offends('`PF_ABI_VERSION` is 4.\n', 'stale-abi')
         self.assert_offends('The C API reports PF_NATIVE_API_VERSION == 0 here.\n', 'stale-abi')
 
     def test_p32_a_stale_release(self) -> None:
@@ -532,7 +652,7 @@ class MustFailH(unittest.TestCase):
                             '<!-- verified HEAD -->\n', 'verified-stale-epoch')
 
     def test_a_forward_abi_number_stated_as_current(self) -> None:
-        self.assert_offends('The current `PF_ABI_VERSION` is now 5.\n', 'stale-abi')
+        self.assert_offends('The current `PF_ABI_VERSION` is now 6.\n', 'stale-abi')
 
 
 class MustNotFireH(unittest.TestCase):
@@ -542,14 +662,14 @@ class MustNotFireH(unittest.TestCase):
             self.assertEqual(code, 0, out)
 
     def test_live_numbers_domains_and_paths(self) -> None:
-        self.assert_clean('`PF_ABI_VERSION` is 4 and `PF_NATIVE_API_VERSION` is 1; the '
+        self.assert_clean('`PF_ABI_VERSION` is 5 and `PF_NATIVE_API_VERSION` is 1; the '
                           'continuation domain is `native-consumer/v9` and the driver\'s '
                           '`native-driver/v5`. Install PineForge 0.14.0, the current release. '
                           'The header is `include/pineforge/pineforge.h`.\n')
 
     def test_forward_and_historical_numbers(self) -> None:
-        self.assert_clean('The alias is removed at `PF_ABI_VERSION` 5. The layout was frozen '
-                          'at `PF_ABI_VERSION` 3 until the append. <!-- verified HEAD -->\n'
+        self.assert_clean('The alias is removed at `PF_ABI_VERSION` 6. The previous module ABI was '
+                          'at `PF_ABI_VERSION` 4 until the rebuild. <!-- verified HEAD -->\n'
                           'The codegen tracks it since v0.6.4.\n')
 
     def test_git_object_paths_generated_files_and_foreign_crates(self) -> None:

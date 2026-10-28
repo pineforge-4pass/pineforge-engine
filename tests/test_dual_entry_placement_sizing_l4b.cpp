@@ -1,9 +1,9 @@
 /*
- * test_dual_entry_placement_sizing.cpp — KI-65: dual same-bar opposite
+ * test_dual_entry_placement_sizing.cpp — dual same-bar opposite
  * strategy.entry from FLAT with placement-time sizing + pending-market
  * awareness.
  *
- * PIN (data/progress/probe-matrix-adjudication-20260711.md §KI-65, probe
+ * PIN (data/progress/probe-matrix-adjudication-20260711.md, probe
  * data/probes/pf-probe-ki65-dual-entry-precedence, 7,429 TV trades):
  * from flat, pyramiding=0, POOC=false, explicit fixed qty — TV runs NO
  * arbitration on two opposite same-bar strategy.entry calls; BOTH execute.
@@ -22,7 +22,7 @@
  * (reverses_same_bar_market_from_flat) so the fill takes the ordinary
  * full-reversal path (flip_market_position_to, close_only=false).
  *
- * R1/R2/R3 are the priced-second-leg KI-65 cases. G1/G3 pin the STOP-first and
+ * R1/R2/R3 are the priced-second-leg cases. G1/G3 pin the STOP-first and
  * placement-rejected controls. The MARKET/MARKET follow-up cases below pin the
  * remaining broker contract: gross placement admission, buy-before-sell fill
  * priority, and transaction-net execution for an admitted pair.
@@ -101,7 +101,7 @@ struct DualProbeBase : public pineforge::source::PineStrategyHost {
 };
 
 // The new MARKET/MARKET oracle was exported with pyramiding=2. Keep the legacy
-// KI-65 cells above on their pinned pyramiding=0 fixture and use this subclass
+// The cells above use their pinned pyramiding=0 fixture and this subclass
 // only for the follow-up cases.
 struct PendingMarketProbeBase : public DualProbeBase {
     explicit PendingMarketProbeBase(double capital = 1000.0)

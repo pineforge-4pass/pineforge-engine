@@ -45,7 +45,7 @@
 // intervals and civil dates, and is not thread-safe: one owner, one thread,
 // like the calendar value it serves.
 //
-// What it owns does not depend on what it was asked (CR-150 lane L19n). The
+// What it owns does not depend on what it was asked. The
 // day slots are direct-mapped by the open date's day number: a day asked after
 // kDayCapacity others replaces the one in its slot and is resolved again if it
 // is asked again. That moves no answer. A lookup reads a day by address and

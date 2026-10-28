@@ -1,4 +1,4 @@
-// EN-132 D6 rows 17/19 through the public native C ABI. Written before the
+// D6 rows 17/19 through the public native C ABI. Written before the
 // producers. Main skips non-finite marked equity and derived risk limits;
 // the three G witnesses below must therefore fail their exact code pins.
 // Row 17 is already engine_invariant and is preserved by the brief's explicit

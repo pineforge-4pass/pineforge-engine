@@ -528,7 +528,7 @@ class ModuleProfileControls(CMakeControls):
 
 
 class TimeoutControls(CMakeControls):
-    """H2-8: newly registered rows cannot declare a deadline, even zero."""
+    """H2-8: registered rows cannot declare a deadline, even zero."""
 
     ROW = ('add_test(NAME test_deadline COMMAND ${Python3_EXECUTABLE} '
            'fixture.py)\n')
@@ -580,22 +580,24 @@ class TimeoutControls(CMakeControls):
             with self.subTest(statement=statement):
                 self.assert_deadline_refused(statement, 'main')
 
-    def test_inherited_main_ownership_deadline_is_not_extended_to_new_rows(self) -> None:
+    def test_main_ownership_deadline_is_refused_even_without_new_rows(self) -> None:
         legacy = (
             'set_tests_properties(test_selected_window_ownership_manifest\n'
             '    ${_pf_ownership_control_shards} test_selected_window_ownership_d4\n'
             '    PROPERTIES WORKING_DIRECTORY ${PROJECT_SOURCE_DIR} TIMEOUT 180)\n')
         self.lane.write_text(REGISTRATION)
-        self.cmake.write_text(legacy + INCLUDE_LOOP)
+        self.cmake.write_text(legacy.replace(' TIMEOUT 180', '') + INCLUDE_LOOP)
         result = self.run_checker()
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-        self.cmake.write_text(
-            legacy.replace('test_selected_window_ownership_d4',
-                           'test_selected_window_ownership_d4 test_new_row')
-            + INCLUDE_LOOP)
-        result = self.run_checker()
-        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
-        self.assertIn('TIMEOUT is forbidden (owner #827)', result.stderr)
+        for statement in (
+                legacy,
+                legacy.replace('test_selected_window_ownership_d4',
+                               'test_selected_window_ownership_d4 test_new_row')):
+            with self.subTest(statement=statement):
+                self.cmake.write_text(statement + INCLUDE_LOOP)
+                result = self.run_checker()
+                self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+                self.assertIn('TIMEOUT is forbidden (owner #827)', result.stderr)
 
 
 class FenceControls(CMakeControls):

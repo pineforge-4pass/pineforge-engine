@@ -201,7 +201,7 @@ private:
         std::numeric_limits<double>::quiet_NaN();
 };
 
-// Exact quantities exported by the clean-room Pine v6 KI-56 holding and
+// Exact quantities exported by the clean-room Pine v6 holding and
 // adverse-margin discriminators on ETHUSDT.P, 15m, 2025-04-02.
 class Ki56TvOracleProbe : public pineforge::source::PineStrategyHost {
 public:

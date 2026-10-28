@@ -1,6 +1,6 @@
 #pragma once
 
-// CR150-CX L4 / CR-221 scope B. The shared substrate contract the A3/A4 lanes
+// Scope-B shared substrate contract. The shared substrate contract the A3/A4 lanes
 // code against; no engine/source policy, D3.7 sink fields or report schema
 // changes. docs/scratch-store.md states the same rules in prose and names the
 // fixtures that hold them. A header-only definition of the class is included at

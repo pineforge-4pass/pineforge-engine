@@ -35,9 +35,9 @@ Three layers, two of them meant to be optional:
    forty-five members of `PINEFORGE_KERNEL_SOURCES` (`CMakeLists.txt:118`) — the `engine_*`,
    `native_*`, `ta_*`, `market_driver`, `magnifier`, `math`, `matrix`, `session_time`,
    `timeframe`, `timezone`, `str_utils`, `c_abi`, `native_c_host`, `reservation_expansion`
-   (`CMakeLists.txt:129`) and `pending_order_mirror` (`CMakeLists.txt:135`) units — plus the
+   (`CMakeLists.txt:130`) and `pending_order_mirror` (`CMakeLists.txt:136`) units — plus the
    headers directly under `include/pineforge/`. That list is what `add_library`
-   (`CMakeLists.txt:169`) compiles into `pineforge_kernel` / `PineForge::kernel`, and it and
+   (`CMakeLists.txt:170`) compiles into `pineforge_kernel` / `PineForge::kernel`, and it and
    `PINEFORGE_SOURCE_LAYER_SOURCES` are disjoint: no file is in both, and none is outside both.
    **Two stems exist twice; the kernel copy is the generic half** —
    `ReservationExpansion` (`src/reservation_expansion.cpp:10`) and
@@ -86,7 +86,7 @@ summary of it.
   `NativeCoordinate::interval_index` (`market_driver.hpp:74`) is the sequential
   SCRIPT-bar index even when `input_tf` is finer than `script_tf`. The same
   script coordinate books `PyramidEntry::entry_bar_index`, trade-row indices and
-  the inclusive bar metrics (`entry_bar_index` / `exit_bar_index` `engine_orders.cpp:127-128`, `bars` `engine_metrics.cpp:277`).
+  the inclusive bar metrics (`entry_bar_index` / `exit_bar_index` `engine_orders.cpp:127-128`, `bars` `engine_metrics.cpp:270`).
   `NativeCoordinate::input_interval_index` (`market_driver.hpp:79`) names the
   input slot that supplied the point for a host that needs input cadence. Both
   coordinate values are folded by `hash_coordinate`
@@ -181,7 +181,7 @@ summary of it.
   `KernelRecordedAtHostMarks` records the same series at the host's own marks.
   `report_open_position_at_end` books the still-open position as a mark-to-market row under
   `KernelRecorded`. Under `HostRecorded` an unrecorded curve still degenerates —
-  `compute_equity_stats` answers its defined empty-curve metrics with no error (`src/engine_metrics.cpp:449`,
+  `compute_equity_stats` answers its defined empty-curve metrics with no error (`src/engine_metrics.cpp:442`,
   consumed by `fill_metrics_section`, `src/engine_report.cpp:393`) — which is why the policy exists.
 - **Reproducibility.** Two digests, one wrapping the other. `native_continuation_hash()`
   (`native_host.hpp:1406`) returns the consumer's event/continuation hash. **A digest names
@@ -370,7 +370,7 @@ citations, 264 are in `src/source/` and its headers; 6 sit in kernel files
 ## Current state vs. target (read before relying on "without Pine")
 
 - **The kernel is a separately linkable artifact.** `add_library`
-  (`CMakeLists.txt:169`) builds `pineforge_kernel` / `PineForge::kernel` from
+  (`CMakeLists.txt:170`) builds `pineforge_kernel` / `PineForge::kernel` from
   `PINEFORGE_KERNEL_SOURCES` alone, with the same flags `pineforge` uses, in **both**
   configurations. `libpineforge.a` still carries the adapter beside the kernel by default;
   `-DPINEFORGE_BUILD_SOURCE_LAYER=OFF` (`CMakeLists.txt:43`) compiles no source-layer
@@ -448,7 +448,7 @@ citations, 264 are in `src/source/` and its headers; 6 sit in kernel files
   `native_selected_strategy.cpp`), both of which include `native_host.hpp`. Each C host includes
   `<pineforge/pineforge.h>`, which includes `native_c_api.h`. Every one links `PineForge::kernel`
   and checks its own numbers before it prints its summary line. `PINEFORGE_BUILD_EXAMPLES`
-  (`CMakeLists.txt:37`, default OFF) builds them (`add_subdirectory` `CMakeLists.txt:398`) and
+  (`CMakeLists.txt:37`, default OFF) builds them (`add_subdirectory` `CMakeLists.txt:399`) and
   registers each as a CTest row that runs through `examples/native/run_example.cmake`, which
   fails on a nonzero exit, a signal **or** a missing summary line — so a row asserts
   both, which a bare `PASS_REGULAR_EXPRESSION` cannot. `scripts/test_example_runner.py` proves
@@ -647,8 +647,9 @@ the next epoch of the ABI that carries it: the next `PF_ABI_VERSION`, and the na
 Lane REL10 removes the four aliases for 1.0.0, before the 1.0 compatibility promise begins, and
 without those epochs: an alias shares its storage or its value with the primary spelling, so
 removing it moves no offset, size, value, hash fold or mangled name, and neither epoch would have
-anything to version. `PF_ABI_VERSION` stays 4 and `lifecycle_v1` stays `lifecycle_v1`. A consumer
-that still names an old spelling renames it and recompiles. The generic names are rule 2's: the
+anything to version. `PF_ABI_VERSION` was still 4 in 1.0.0 and `lifecycle_v1` stayed `lifecycle_v1`. <!-- verified HEAD -->
+A consumer that still names an old spelling renames it and recompiles.
+The generic names are rule 2's: the
 fields are named for their resampling period, the domains for the fill-recalculation pass, and
 neither for a Pine or TradingView setting.
 
@@ -659,7 +660,7 @@ to rule: the row that pointed here from the residual section left with them.
 
 | removed spelling | 1.0 spelling | ABI that carries it | what holds it |
 |---|---|---|---|
-| `pf_equity_stats_t::sharpe_tv` | `sharpe_monthly` | public C ABI (`include/pineforge/pineforge.h`, `PF_ABI_VERSION` 4) | Month-end-resampled equity simple returns (chart timezone, open-time bucketing), risk-free 2 %/yr, annualized ×√12, sample (N−1) stddev. A plain `double` again, at offset 48; `sizeof(pf_equity_stats_t)` 120 and `offsetof(pf_metrics_t, equity)` 648 are unmoved, pinned by `static_assert` in `src/c_abi.cpp` and checked from C by `tests/test_c_abi.c`. `test_removed_public_spellings` fails unless naming the old spelling fails to compile. |
+| `pf_equity_stats_t::sharpe_tv` | `sharpe_monthly` | public C ABI (`include/pineforge/pineforge.h`, `PF_ABI_VERSION` 5) | Month-end-resampled equity simple returns (chart timezone, open-time bucketing), risk-free 2 %/yr, annualized ×√12, sample (N−1) stddev. A plain `double` again, at offset 48; `sizeof(pf_equity_stats_t)` 120 and `offsetof(pf_metrics_t, equity)` 648 are unmoved, pinned by `static_assert` in `src/c_abi.cpp` and checked from C by `tests/test_c_abi.c`. `test_removed_public_spellings` fails unless naming the old spelling fails to compile. |
 | `pf_equity_stats_t::sortino_tv` | `sortino_monthly` | public C ABI (as above) | Same resampling, population downside deviation vs the monthly risk-free; offset 56. Held on the same terms. |
 | `exit_legs::Domain::Coof` | `FillRecalc` | standalone C++ ABI `pineforge::exit_legs::lifecycle_v1` (`include/pineforge/exit_leg_lifecycle.hpp`) | The fill-recalculation re-entry pass: the host re-runs its script after a fill and observes the rest of the same bar (`coof` abbreviated `calc_on_order_fills`, the Pine adapter's name for it). `FillRecalc == 1`, the underlying type stays `uint8_t` and `RawTicks` stays 4. `test_removed_public_spellings` fails unless `Domain::Coof` fails to compile. |
 | `exit_legs::Domain::MagnifierCoof` | `MagnifierFillRecalc` | standalone C++ ABI `lifecycle_v1` (as above) | The same pass on a magnified sub-bar; `MagnifierFillRecalc == 3`. Held on the same terms. |
@@ -770,7 +771,7 @@ number names its symbol on this tree.
 | `on_native_timeframe_bar` (`native_host.hpp:905`) and `NativeTimeframeBarContext::interval` (`native_host.hpp:829`) | **query routed** | The callback signature stays frozen. `strategy_native_timeframe_bar_interval_v1` is valid only during that callback and copies the kernel calendar interval without deriving it from the delivered bar or delivery timestamp. |
 | `magnifier_sub_bars_total` / `magnifier_sample_ticks_total` (`engine_report.cpp:106-107`) | **kernel-owned report facts** | The generic intrabar driver already increments `NativeDriverStatistics::sub_bars_processed` / `sample_ticks_processed` for every retained path (`native_execution_consumer.cpp:9202-9214`); the kernel now publishes those same counters for bare hosts. They are report fields, not new durable state: the existing `native_continuation_hash` fold of `NativeDriverStatistics` (`native_execution_consumer.cpp:1127-1132`) sees the same values, so no hash contract moves. |
 | `pf_native_lot_excursion_v1` (`native_c_api.h:1918`) | **additive fee tail** | `entry_commission` carries the C++ `ClosedLotExcursionFacts::entry_commission` in account currency. The callback table publishes a trailing layout marker so F4 callers still receive the base facts length; current callers receive the fee tail without changing `PF_NATIVE_API_VERSION`. |
-| `strategy_outputs_set_enabled` and the eight `strategy_outputs_*` readers (`pineforge.h`, group `pf_outputs`) | **additive runtime exports** | Recording is off by default, and nothing a run computes reads the record. The event copy is size-prefixed like `strategy_pending_order_get`, and `PF_ABI_VERSION` stays 4. The writers are C++ only in this version (the BASE-CLASS SEAMS rows of `native_c_api.h`): a C host declares no outputs, so its handle answers every reader as empty. |
+| `strategy_outputs_set_enabled` and the eight `strategy_outputs_*` readers (`pineforge.h`, group `pf_outputs`) | **additive runtime exports** | Recording is off by default, and nothing a run computes reads the record. The event copy is size-prefixed like `strategy_pending_order_get`, and the current `PF_ABI_VERSION` is 5. The writers are C++ only in this version (the BASE-CLASS SEAMS rows of `native_c_api.h`): a C host declares no outputs, so its handle answers every reader as empty. |
 
 ## TradingView-calibrated kernel mechanisms (rule 2's own account)
 
@@ -919,7 +920,7 @@ no new kernel policy.
 
 | Kernel capability | Generic mechanism | Why no platform knob is added | Executed witness |
 |---|---|---|---|
-| One civil-date helper: `native_calendar::native_civil_date` and `native_civil_days` (`include/pineforge/native_calendar.hpp`) | Proleptic-Gregorian day arithmetic (Hinnant's `civil_from_days` / `days_from_civil`) in integers. The calendar, the time-of-day fields, the timeframe helpers, the report's month keys and the Pine adapter's chart-day key read it, where each kept its own copy. | A pure function of its arguments: a calendar has no venue variant and nothing to choose. | `tests/test_chart_day_key_arithmetic.cpp` and `tests/test_utc_month_key_arithmetic.cpp` against `gmtime_r`; `tests/test_native_calendar_hash_witness.cpp` unmoved |
+| One civil-date helper: `native_calendar::native_civil_date` and `native_civil_days` (`include/pineforge/native_calendar.hpp`) | Proleptic-Gregorian day arithmetic (Hinnant's `civil_from_days` / `days_from_civil`) in integers. The calendar, the time-of-day fields, the timeframe helpers, the report's month keys and the Pine adapter's chart-day key read it, where each kept its own copy. The report's UTC month key covers every `int64_t` millisecond timestamp and is carried as `int64_t` through the report folds; its memo caches only seconds strictly inside +/-2^40. | A pure function of its arguments: a calendar has no venue variant and nothing to choose. | `tests/test_chart_day_key_arithmetic.cpp` and `tests/test_utc_month_key_arithmetic.cpp` against `gmtime_r` in range, the month keys also against independent Gregorian cycles at timestamp extremes; `tests/test_native_calendar_hash_witness.cpp` unmoved |
 | The aggregation predicate: `native_calendar::pairing_aggregates` and `NativeStrategyHost::native_aggregates_input_bars()` (`include/pineforge/native_host.hpp`) | Whether the pairing the kernel resolved for a run's input and script timeframes makes its script bars buckets gathered from the input (a same-unit or fixed multiple, a fixed or calendar input under a calendar script bar) rather than the input bars themselves. | A query of the pairing the run already resolved: it reads the spec and decides nothing. The Pine adapter's copy read the two literals and parted from the kernel on one-bucket and monthly pairings. | `tests/test_aggregates_input_bars_literals.cpp` |
 
 ### Wave XSYM-D: rule 2 ruling

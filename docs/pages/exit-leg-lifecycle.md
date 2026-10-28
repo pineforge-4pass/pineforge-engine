@@ -2,8 +2,9 @@
 
 This model changes the internal C++ object layout. Consumers must rebuild against
 the matching engine headers and archive; objects built against an earlier epoch are incompatible.
-Public C ABI 4 and stream API 1 stay unchanged. The full 155-field pending-mirror
-prefix is preserved; 163 canonical lifecycle fields follow it, with admission
+The current C ABI version is 5; the C layouts and stream API 1 stay unchanged.
+The full 155-field pending-mirror prefix is preserved; 163 canonical lifecycle
+fields follow it, with admission
 facts in a separate append segment.
 See [reflection and completion](exit-leg-lifecycle-reflection.md).
 

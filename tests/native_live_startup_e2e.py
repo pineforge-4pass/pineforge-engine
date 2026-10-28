@@ -201,7 +201,7 @@ with tempfile.TemporaryDirectory(prefix='pineforge-native-startup-') as raw:
     assert 'identity' in p.stderr
     assert identity_of(ledger) == first_identity
 
-    # Query-absent old ABI4 library stays legacy (no native identity schema).
+    # A query-absent library with the current ABI stays legacy (no native identity schema).
     legacy_ledger = root / 'legacy.sqlite3'
     invoke(base_cmd(absent, warmup1m, legacy_ledger))
     assert ledger_bound(legacy_ledger)

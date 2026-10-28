@@ -1,24 +1,24 @@
-# CR-150 P00 declaration contracts
+# Report-sink declaration contracts
 
-DESIGN coordinate basis: `core-cr150-design/work/DESIGN.md`, revision 6 text
-identified by the P00-7 gating read's SHA-256:
+DESIGN coordinate basis: the revision 6 design text
+identified by the gating read's SHA-256:
 `68bda6e37931c096522a348603623c7f3cba2b1371a9c0a442edbf53d25ab0ad`.
 DESIGN line citations below use that pinned text; the amendments below take
-precedence. Dispatch is the external design lane's `PARALLEL-PLAN.md`,
+precedence. Dispatch follows the external design plan;
 lines 27–30 and 63. C++ declarations spell
 the operations described by DESIGN; OPEN items below preserve its unspecified
 policies.
 
-CORE-TOP's rev 6 amendment (10-18 16:04) in the external design lane's
-`core-cr150-design/work/REVISION.md`, lines 342–348, resolves S1 and T1.
+The rev 6 amendment (10-18 16:04) in the external design notes resolves S1 and
+T1.
 References to amendment S1 or T1 below name that ruling, which binds L6b-1
 and L8a respectively.
 
-CORE-TOP's rev 6 amendment recorded at 10-18 19:24 in the same external
-`core-cr150-design/work/REVISION.md`, lines 351–358, resolves V1 and V2. It
-adopts `core-cr150-l15a/PROPOSAL-V1-V2.md`, SHA-256
+The rev 6 amendment recorded at 10-18 19:24 in the same external design notes
+resolves V1 and V2. It adopts the V1/V2 proposal,
+SHA-256
 `b17ff9f2dab20d876df2e3148ca1c2aba2b5d78f7ccf8c4f026643cfdb14674e`,
-with required changes 1–9 of `core-cr150-read-v1v2/REVIEW.md`. That ruling
+with the required review changes 1–9. That ruling
 also approves eager provider/feed component digests at configure, superseding
 the lazy timing in DESIGN 5:1243-1246. The review notes that the later 19:11
 converter amendment shifts live DESIGN coordinates at/after 1173 by +3;

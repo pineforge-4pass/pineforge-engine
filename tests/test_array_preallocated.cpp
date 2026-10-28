@@ -36,6 +36,12 @@ public:
         return inner_.write(id, offset, p, n);
     }
     std::unique_ptr<detail::o1::Tx> begin() override { return inner_.begin(); }
+    bool join_active_tx() override { return inner_.join_active_tx(); }
+    void abandon_joined_tx() noexcept override { inner_.abandon_joined_tx(); }
+    std::unique_ptr<detail::o1::Tx> begin_cleanup() override { return inner_.begin_cleanup(); }
+    void note_cleanup_skipped(detail::o1::CleanupSkip reason) noexcept override {
+        inner_.note_cleanup_skipped(reason);
+    }
     detail::o1::Stats stats() const override { return inner_.stats(); }
 };
 } // namespace

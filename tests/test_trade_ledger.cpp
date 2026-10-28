@@ -1,4 +1,4 @@
-// CR-150 L8a: exercise the frozen ledger contract and its retaining native path.
+// Exercise the frozen ledger contract and its retaining native path.
 #include <pineforge/trade_ledger.hpp>
 #include <pineforge/run_failure.hpp>
 #include <pineforge/detail/scratch_sequence.hpp>

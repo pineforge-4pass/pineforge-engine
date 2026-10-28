@@ -1,4 +1,4 @@
-// CR-150 L7A: isolated trade half of L0's test_report_sink_metrics.cpp.
+// Isolated trade half of the report-sink metrics test.
 // Reuses L0's fixed rows, deterministic 20,000-row generator and verbatim
 // trade_stats_reference.hpp. No sink, scratch file or module is required.
 //

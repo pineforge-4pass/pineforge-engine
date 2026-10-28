@@ -28,7 +28,7 @@ std::uint64_t command_scratch_arena_capacity_bytes(std::uint64_t arena_bytes) no
 // results outside the signed failure-argument transport saturate to INT64_MAX.
 std::uint64_t command_scratch_arena_needed_bytes(std::uint64_t store_extent) noexcept;
 
-// CR-257 compact-record commit ceiling (inert acceptance geometry, not a
+// Compact-record commit ceiling (inert acceptance geometry, not a
 // bound on arbitrary-width blobs). The layout has at most kMaxHeight handle
 // pages and kMaxDepth ordered-index pages on a path, plus key/value/free-cell
 // pages. Charge an undo image and a data write for each, then the journal-tail

@@ -300,7 +300,7 @@ static int test_ema_ignores_na_inputs() {
         fails++;
     }
 
-    // KI-66: ta.ema RETURNS NA on the na-input bar. The na neither updates nor
+    // ta.ema RETURNS NA on the na-input bar. The na neither updates nor
     // resets the recursion — the prior value survives as STATE (not as this
     // bar's output), which `c` below confirms by resuming the recursion from 10.
     double b = ema.compute(na<double>());

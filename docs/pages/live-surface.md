@@ -2,11 +2,13 @@
 
 @tableofcontents
 
-**ABI v4** (`PF_ABI_VERSION == 4`) appends 25 exports and two `pf_report_t`
+**ABI v4** was the version that appended 25 exports and two `pf_report_t`
 fields for a host that runs a strategy live by recomputing `run_backtest_full`
 over its accumulated bars. They were written for the earlier Python `pineforge-live`
 runtime, which is retired; the native runner in `runner/` replaces it.
-ABI v4 ships in v1.0.0; v0.13.1, the last 0.x release, has ABI 3. Every one
+ABI v4 shipped in v1.0.0; v0.13.1, the last 0.x release, had ABI 3.
+The current `PF_ABI_VERSION` is 5 from 1.8.0, requiring rebuilt strategy
+libraries while preserving this surface and its C layouts. Every one
 of the 25 symbols is
 **default off / read-only** and **never changes a historical run**: the
 four configuration setters below default to the pre-v4 behavior, and every

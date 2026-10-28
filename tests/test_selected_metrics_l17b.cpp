@@ -1,4 +1,4 @@
-// CR-150 L17B: selected metric reads over P00 sources, and real selected
+// Selected metric reads over report sources, and real selected
 // sink-on/off fixtures. RED on b3c39238e: the selected source overloads are
 // undeclared; with declarations only, they and SpillCurve fail at link.
 // No fixture pin is harvested. All metric bytes come from the existing array

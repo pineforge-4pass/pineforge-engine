@@ -1,6 +1,6 @@
 /*
  * test_margin_stop_admission.cpp — margin admission of STOP-ENTRY fills
- * (KI-62 stage 3, pf-probe-ki62-margin-deferral; re-based in round 7 on
+ * (stage 3, margin-deferral; re-based in round 7 on
  * the 22 lab tv pins of ledger note log-20260905t053924z-15615295, see
  * test_stop_entry_admission.cpp for the tapes).
  *
@@ -9,12 +9,12 @@
  * margin% <= strategy.equity, a rejected call is dropped and never rests —
  * and at the FILL — the same qty * tick(fill price) <= realized equity,
  * where the fill price is the LEVEL on an intrabar touch and the rounded
- * OPEN on a gap-through (KI-62's original "costs the bar open on a touch"
+ * OPEN on a gap-through (the original "costs the bar open on a touch"
  * premise was refuted by fresh-touch-once: TV fills 890 x 11.23 with the
  * open at 11.29). A declined fill is CANCELLED (not parked) — an arm-once
  * entry silently dies; a Pine-level reissue re-posts and fills at the first
  * admissible bar. Under-margined ADMITTED fills are margin-called at bar end
- * by the existing KI-31 cascade (unchanged). margin=0 is byte-identical.
+ * by the existing cascade (unchanged). margin=0 is byte-identical.
  *
  * The scenarios below keep their original final-state assertions; the
  * per-bar mechanics noted in each case are the round-7 rule's.
@@ -65,7 +65,7 @@ namespace {
 // All-in stop-entry probe. Places a stop entry at a fixed level with EXPLICIT
 // qty (mirrors the probe's `qty = equity/lvl`), reissued every bar from bar 0
 // unless arm_once (place once at bar 0). margin_call OFF so admission is
-// isolated from the KI-31 entry-bar nibble.
+// isolated from the entry-bar nibble.
 class StopProbe : public pineforge::source::PineStrategyHost {
 public:
     StopProbe(double capital, double ml, double ms, bool mc) {
@@ -156,7 +156,7 @@ void test_marginal_long_stop_gap_declined_then_level_fill() {
 }
 
 // C1. CONTROL — margin=0: NO fill-time gate. The intrabar touch fills at the
-// level exactly as baseline (KI-34 safety: margin-sim-off paths byte-identical).
+// level exactly as baseline (margin-sim-off paths byte-identical).
 void test_margin_zero_fills_at_level() {
     std::printf("-- C1: margin=0 stop fills intrabar at level (control) --\n");
     StopProbe eng(10000.0, /*ml*/0.0, /*ms*/0.0, /*mc*/false);
@@ -191,7 +191,7 @@ void test_well_funded_stop_admitted_at_level() {
 }  // namespace
 
 int main() {
-    std::printf("--- margin_stop_admission (KI-62 stage 3, round-7 basis) ---\n");
+    std::printf("--- margin_stop_admission (stage 3, round-7 basis) ---\n");
     test_marginal_short_stop_declined_then_gap_fill();
     test_arm_once_declined_stop_nofill();
     test_marginal_long_stop_gap_declined_then_level_fill();

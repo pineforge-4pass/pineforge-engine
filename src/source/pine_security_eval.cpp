@@ -561,7 +561,7 @@ bool source::PineStrategyHost::aux_security_traded_between(int64_t from_ms,
 void source::PineStrategyHost::pine_feed_security_eval_state(
         SecurityEvalState& state, const Bar& input_bar,
         bool calling_bar_complete) {
-    // Opt-in KI-55 HTF warmup parity (security_range_start_na_warmup run flag):
+    // Opt-in HTF warmup parity (security_range_start_na_warmup run flag):
     //   (a) start every request.security aggregation at range_start_ms, not the
     //       feed start — drop every input bar whose HTF bucket opened before
     //       the range start (security_input_precedes_range_start) so the

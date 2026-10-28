@@ -261,7 +261,7 @@ void refused_cursors_are_not_read_after_the_call(bool poison) {
 
 int main(int argc, char** argv) {
     // The twin row _poisoned is its own executable, built from this body with
-    // PINEFORGE_B1_TWIN_FLAG (tests/cr150.d/s4e-fix-b1.cmake).
+    // PINEFORGE_B1_TWIN_FLAG (the dedicated scratch matching fixture).
 #ifdef PINEFORGE_B1_TWIN_FLAG
     const char* const flag = PINEFORGE_B1_TWIN_FLAG;
     (void) argc;

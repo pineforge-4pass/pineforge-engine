@@ -1,4 +1,4 @@
-// CR-150 L19G / F2, G1: preserve the retained engine's closed-origin leg
+// Preserve the retained engine's closed-origin leg
 // revival through a sibling or exposure returning in one cycle.
 // Compare public results with every placement row retained. Keep the path
 // controls: a missing fill, suspension, cohort pin or margin call is a failure.
