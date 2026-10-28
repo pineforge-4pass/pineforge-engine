@@ -99,6 +99,9 @@ inline pineforge::detail::o1::Shape shape() {
 // This arithmetic does not inspect a measured resident value or population.
 inline constexpr std::uint64_t kStoreBound = (8 + 6 + 1 + 2) * UINT64_C(4096) + 1024 + 16;
 inline constexpr std::uint64_t kOperationBound = (2 + 1) * UINT64_C(4096);
+// A run's own Runtime adds its resident tier: a fixed arena of 16 slots of one
+// 4 KiB transfer buffer each, allocated once when the Runtime opens.
+inline constexpr std::uint64_t kTierBound = 16 * UINT64_C(4096);
 
 // A Store seen through a handle counter. begin() hands out a wrapper around the
 // real Tx: its constructor raises the LIVE count and the peaks, its destructor

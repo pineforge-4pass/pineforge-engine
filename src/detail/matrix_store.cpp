@@ -5,11 +5,15 @@
 #include <cstring>
 #include <limits>
 #include <stdexcept>
+#include <string>
+#include <typeinfo>
 #include <utility>
 
 namespace pineforge::detail::matrix_store {
 static_assert(kPrefixBytes >= sizeof(Cells::Shape) && kPrefixBytes <= kTransferBytes,
               "a get prefix holds the descriptor and fits one transfer buffer");
+static_assert(kResidentSlots > 0 && kResidentBytes == kResidentSlots * kTransferBytes,
+              "the tier is a fixed number of slots of one transfer buffer each");
 namespace {
 // The calling thread's matrix Runtime source (current_runtime): a
 // ScopedRuntime's explicit choice while one is in force, else the run whose
@@ -27,6 +31,23 @@ thread_local RunRuntime* active_run = nullptr;
                                      {{"limit", "matrix_elements"}},
                                      "matrix address space exhausted");
 }
+
+// What the Store raises for a released id: an object made in the tier and
+// dropped with its failed call reads as its rolled-back Store object would.
+[[noreturn]] void dead_object() { throw std::invalid_argument("o1 store: dead id"); }
+
+// The bytes of an object a descriptor describes, when it fits one slot: a
+// record width, nothing reserved, and no overflow. Never throws, so a
+// descriptor that cannot be stored is refused where it was before.
+bool fits_slot(const Cells::Shape& h, std::uint64_t& bytes) noexcept {
+    constexpr std::uint64_t room = kTransferBytes - sizeof(Cells::Shape);
+    if (!h.width || h.reserved || h.width > room) return false;
+    if (h.rows && h.columns > room / h.rows) return false;
+    const auto count = h.rows * h.columns;
+    if (count > room / h.width) return false;
+    bytes = sizeof(Cells::Shape) + count * h.width;
+    return true;
+}
 }
 
 Runtime::Runtime(std::unique_ptr<ScratchBacking> backing, const o1::Shape& shape)
@@ -34,6 +55,119 @@ Runtime::Runtime(std::unique_ptr<ScratchBacking> backing, const o1::Shape& shape
     if (!backing_) invariant("matrix runtime without a backing");
     owned_ = o1::Store::open(shape, *backing_);
     store_ = owned_.get();
+    reserve_arena(); // with the Store's own workspace, before any call
+}
+
+void Runtime::reserve_arena() {
+    if (arena_) return;
+    // Default-initialised: a page of it is touched only when a slot on it is.
+    arena_.reset(new unsigned char[kResidentBytes]);
+    for (std::size_t i = 0; i < kResidentSlots; ++i)
+        slots_[i].bytes = arena_.get() + i * kTransferBytes;
+}
+
+void Runtime::open_tier() {
+    reserve_arena();
+    tier_open_ = true;
+}
+
+void Runtime::flush_tier() {
+    // In slot order: the Store objects made here take their ids in that order.
+    for (Slot& slot : slots_)
+        if (slot.used) write_back(slot);
+    drop_tier();
+}
+
+void Runtime::drop_tier() noexcept {
+    for (Slot& slot : slots_)
+        if (slot.used) vacate(slot);
+    tier_open_ = false;
+}
+
+bool Runtime::tier_changed() const noexcept {
+    for (const Slot& slot : slots_)
+        if (slot.used && (slot.dirty || slot.id == o1::kNullId)) return true;
+    return false;
+}
+
+Runtime::TierStats Runtime::tier_stats() const noexcept {
+    TierStats stats = counts_;
+    stats.objects = stats.bytes = 0;
+    for (const Slot& slot : slots_)
+        if (slot.used) {
+            ++stats.objects;
+            stats.bytes += slot.size;
+        }
+    return stats;
+}
+
+Runtime::Slot* Runtime::find(Id id) noexcept {
+    if (!tier_open_ || id == o1::kNullId) return nullptr;
+    for (Slot& slot : slots_)
+        if (slot.used && slot.id == id) return &slot;
+    return nullptr;
+}
+
+Runtime::Slot* Runtime::acquire() {
+    if (!tier_open_) return nullptr;
+    for (Slot& slot : slots_)
+        if (!slot.used) return &slot;
+    // Full: the clock clears each referenced slot it passes and empties the
+    // first unreferenced one the Store takes back. Two passes reach every slot.
+    for (std::size_t step = 0; step < 2 * kResidentSlots; ++step) {
+        Slot& slot = slots_[hand_];
+        hand_ = (hand_ + 1) % kResidentSlots;
+        if (slot.referenced) {
+            slot.referenced = false;
+            continue;
+        }
+        if (evict(slot)) return &slot;
+    }
+    return nullptr;
+}
+
+void Runtime::write_back(Slot& slot) {
+    if (slot.id == o1::kNullId) {
+        // Made in the tier: its Store object now, then its bytes.
+        const Id id = store_->create(slot.size, alignof(Cells::Shape));
+        slot.id = id;
+        slot.stored = slot.size;
+        slot.dirty = true;
+        slot.maker->id_ = id;
+        slot.maker = nullptr;
+        ++counts_.stored;
+    }
+    if (!slot.dirty) return;
+    if (slot.stored != slot.size) {
+        if (!store_->resize(slot.id, slot.size)) invariant("matrix resize failed");
+        slot.stored = slot.size;
+    }
+    const auto size = static_cast<std::size_t>(slot.size);
+    if (store_->write(slot.id, 0, slot.bytes, size) != size)
+        invariant("short matrix object write");
+    slot.dirty = false;
+    ++counts_.written;
+}
+
+bool Runtime::evict(Slot& slot) {
+    try {
+        write_back(slot);
+    } catch (const o1::RollbackOnly&) {
+        // Refused before any change: the slot stays, and rolls back with its
+        // transaction; the caller reads or makes its object in the Store.
+        return false;
+    }
+    vacate(slot);
+    ++counts_.evicted;
+    return true;
+}
+
+void Runtime::vacate(Slot& slot) noexcept {
+    slot.used = slot.dirty = slot.referenced = false;
+    slot.id = o1::kNullId;
+    slot.maker = nullptr;
+    slot.size = slot.stored = 0;
+    ++slot.epoch;
 }
 
 Runtime* current_runtime() {
@@ -52,14 +186,76 @@ ScopedRuntime::~ScopedRuntime() {
 
 Runtime& RunRuntime::runtime() {
     if (!runtime_) {
-        runtime_ = std::make_shared<Runtime>(make_script_scratch_backing());
+        auto backing = next_backing_ ? std::move(next_backing_) : make_script_scratch_backing();
+        runtime_ = std::make_shared<Runtime>(std::move(backing));
         if (calls_) begin_call();
     }
     return *runtime_;
 }
-void RunRuntime::begin_call() { call_ = runtime_->store().begin(); }
+void RunRuntime::begin_call() {
+    call_ = runtime_->store().begin();
+    runtime_->open_tier();
+}
+namespace {
+// In a handler: the exception it handles, with the Store's failed backing
+// read, write or commit (a plain runtime_error) raised as the calling call's
+// typed scratch failure. Coded refusals and every other kind stay as raised.
+[[noreturn]] void raise_flush_failure() {
+    try {
+        throw;
+    } catch (const RunFailureInfo&) {
+        throw;
+    } catch (const std::runtime_error& error) {
+        if (typeid(error) != typeid(std::runtime_error)) throw;
+        throw coded<std::runtime_error>(RunFailureCode::scratch_io_failed, {},
+                                        std::string("matrix store flush: ") + error.what());
+    }
+}
+}
+
+void RunRuntime::flush() {
+    if (!call_ || calls_ != 1) return;
+    Runtime& runtime = *runtime_;
+    try {
+        (void)runtime.store().join_active_tx();
+    } catch (const o1::RollbackOnly&) {
+        // Refused already, where it failed: nothing of the call is kept, and
+        // finish_call() rolls it back.
+        runtime.drop_tier();
+        return;
+    }
+    try {
+        runtime.flush_tier();
+        call_->commit();
+    } catch (...) {
+        // Nothing of the call is kept: its tier is dropped and it rolls back
+        // now, so no later call commits a part of it.
+        runtime.drop_tier();
+        roll_back_call(o1::CleanupSkip::failed);
+        raise_flush_failure();
+    }
+    call_.reset();
+}
+void RunRuntime::roll_back_call(o1::CleanupSkip reason) noexcept {
+    try {
+        call_->rollback();
+    } catch (...) {
+        reason = o1::CleanupSkip::failed;
+    }
+    runtime_->store().note_cleanup_skipped(reason);
+    call_.reset();
+}
 void RunRuntime::finish_call() noexcept {
     if (!call_) return;
+    // A call ending without its flush (an exception left the call) keeps none
+    // of the tier's changes: they are dropped, and the call rolls back rather
+    // than commit a part of its changes.
+    const bool unflushed = runtime_->tier_changed();
+    runtime_->drop_tier();
+    if (unflushed) {
+        roll_back_call(o1::CleanupSkip::rollback_only);
+        return;
+    }
     try {
         call_->commit();
     } catch (const o1::RollbackOnly&) {
@@ -115,8 +311,10 @@ Cells::Cells(Runtime& runtime, std::uint64_t rows, std::uint64_t columns,
     const Header h{rows, columns, width, 0};
     const auto bytes = byte_size(h); // a shape that cannot be stored is refused before any Store call
     Scope transaction(runtime_);
-    id_ = runtime_.store().create(bytes, alignof(Header));
-    set_header(h);
+    if (!place(h, nullptr)) {
+        id_ = runtime_.store().create(bytes, alignof(Header));
+        set_header(h);
+    }
     transaction.commit();
     owning_ = true;
 }
@@ -130,15 +328,27 @@ Cells::Cells(Runtime& runtime, std::uint64_t rows, std::uint64_t columns,
     if (bytes > kTransferBytes) invariant("matrix image larger than its transfer buffer");
     std::memcpy(image, &h, sizeof h);
     Scope transaction(runtime_);
-    id_ = runtime_.store().create(bytes, alignof(Header));
-    exact_write(0, image, static_cast<std::size_t>(bytes));
+    if (!place(h, image)) {
+        id_ = runtime_.store().create(bytes, alignof(Header));
+        exact_write(0, image, static_cast<std::size_t>(bytes));
+    }
     transaction.commit();
     owning_ = true;
 }
 
 Cells::Cells(Runtime& runtime, Id id)
     : runtime_(runtime), id_(id), owner_(runtime.weak_from_this().lock()) {
-    const auto h = header();
+    // Held resident, the object is checked against its slot, which may be
+    // newer than the Store; else against the Store, without loading it.
+    if (const auto* slot = resident()) {
+        Header h{};
+        std::memcpy(&h, slot->bytes, sizeof h);
+        if (!h.width || h.reserved || slot->size != byte_size(h))
+            invariant("invalid borrowed matrix descriptor");
+        return;
+    }
+    Header h{};
+    exact_read(0, &h, sizeof h);
     if (!h.width || h.reserved || runtime_.store().size(id_) != byte_size(h))
         invariant("invalid borrowed matrix descriptor");
 }
@@ -154,21 +364,167 @@ Cells::~Cells() noexcept {
 }
 
 void Cells::close() {
-    if (owning_ && runtime_.store().alive(id_)) runtime_.store().release(id_);
+    if (owning_) {
+        auto* slot = resident();
+        if (slot && slot->id == o1::kNullId) {
+            runtime_.vacate(*slot); // made in the tier: no Store object to release
+        } else if (runtime_.store().alive(id_)) {
+            runtime_.store().release(id_);
+            if (slot) runtime_.vacate(*slot);
+        }
+    }
     owning_ = false;
 }
 
+Id Cells::identity() const {
+    if (id_ == o1::kNullId && made_resident_)
+        if (auto* slot = resident()) runtime_.write_back(*slot);
+    return id_;
+}
+
+Id Cells::detach() {
+    const Id id = identity();
+    if (auto* slot = resident()) {
+        runtime_.write_back(*slot);
+        runtime_.vacate(*slot);
+    }
+    owning_ = false;
+    return id;
+}
+
+Runtime::Slot* Cells::find_resident() const noexcept {
+    slot_ = runtime_.find(id_);
+    if (slot_) {
+        epoch_ = slot_->epoch;
+        slot_->referenced = true;
+    }
+    return slot_;
+}
+
+// Only an owning Cells loads its object: a borrowed or detached id's owner may
+// release it with Store::release, which the tier never sees.
+Runtime::Slot* Cells::admit(const unsigned char* head, std::size_t have, const Header& h) const {
+    std::uint64_t bytes = 0;
+    if (!owning_ || !runtime_.tier_open() || id_ == o1::kNullId || !fits_slot(h, bytes))
+        return nullptr;
+    auto* slot = runtime_.acquire();
+    if (!slot) return nullptr;
+    const auto held = static_cast<std::size_t>(std::min<std::uint64_t>(have, bytes));
+    std::memcpy(slot->bytes, head, held);
+    const auto rest = static_cast<std::size_t>(bytes) - held;
+    if (rest && runtime_.store().read(id_, held, slot->bytes + held, rest) != rest)
+        invariant("short matrix object read");
+    slot->used = slot->referenced = true;
+    slot->dirty = false;
+    slot->id = id_;
+    slot->maker = nullptr;
+    slot->size = slot->stored = bytes;
+    ++runtime_.counts_.loaded;
+    slot_ = slot;
+    epoch_ = slot->epoch;
+    return slot;
+}
+
+bool Cells::place(const Header& h, const unsigned char* image) {
+    std::uint64_t bytes = 0;
+    if (!runtime_.tier_open() || !fits_slot(h, bytes)) return false;
+    auto* slot = runtime_.acquire();
+    if (!slot) return false;
+    const auto size = static_cast<std::size_t>(bytes);
+    if (image) {
+        std::memcpy(slot->bytes, image, size);
+    } else {
+        std::memset(slot->bytes, 0, size);
+        std::memcpy(slot->bytes, &h, sizeof h);
+    }
+    slot->used = slot->referenced = slot->dirty = true;
+    slot->id = o1::kNullId;
+    slot->maker = this;
+    slot->size = bytes;
+    slot->stored = 0;
+    ++runtime_.counts_.made;
+    made_resident_ = true;
+    slot_ = slot;
+    epoch_ = slot->epoch;
+    return true;
+}
+
+void Cells::require_live() const {
+    if (id_ == o1::kNullId && made_resident_) dead_object();
+}
+
+std::size_t Cells::read_head(void* bytes, std::size_t size) const {
+    if (const auto* slot = resident()) {
+        const auto n = static_cast<std::size_t>(std::min<std::uint64_t>(size, slot->size));
+        std::memcpy(bytes, slot->bytes, n);
+        return n;
+    }
+    require_live();
+    return runtime_.store().read(id_, 0, bytes, size);
+}
+
+bool Cells::resize_object(std::uint64_t bytes) {
+    if (auto* slot = resident()) {
+        (void)runtime_.store().join_active_tx(); // refused where Store::resize would be
+        if (bytes <= kTransferBytes) {
+            // Store::resize's contract: kept up to the smaller size, zero beyond.
+            if (bytes > slot->size)
+                std::memset(slot->bytes + slot->size, 0,
+                            static_cast<std::size_t>(bytes - slot->size));
+            if (bytes != slot->size) {
+                slot->size = bytes;
+                slot->dirty = true;
+            }
+            return true;
+        }
+        // Larger than a slot: the object leaves the tier, then grows in the Store.
+        runtime_.write_back(*slot);
+        runtime_.vacate(*slot);
+    }
+    require_live();
+    return runtime_.store().resize(id_, bytes);
+}
+
+// The Store's checks, made on the slot: a request past the object's end is
+// short (a zero-length one never is), and a write first joins the Store's
+// transaction, which refuses it when the transaction is rollback-only.
 void Cells::exact_read(std::uint64_t offset, void* bytes, std::size_t size) const {
+    if (const auto* slot = resident()) {
+        if (size && (offset >= slot->size || size > slot->size - offset))
+            invariant("short matrix object read");
+        if (size) std::memcpy(bytes, slot->bytes + offset, size);
+        return;
+    }
+    require_live();
     if (runtime_.store().read(id_, offset, bytes, size) != size)
         invariant("short matrix object read");
 }
 void Cells::exact_write(std::uint64_t offset, const void* bytes, std::size_t size) {
+    if (auto* slot = resident()) {
+        (void)runtime_.store().join_active_tx();
+        if (size && (offset >= slot->size || size > slot->size - offset))
+            invariant("short matrix object write");
+        if (size) {
+            std::memcpy(slot->bytes + offset, bytes, size);
+            slot->dirty = true;
+        }
+        return;
+    }
+    require_live();
     if (runtime_.store().write(id_, offset, bytes, size) != size)
         invariant("short matrix object write");
 }
 Cells::Header Cells::header() const {
     Header h{};
-    exact_read(0, &h, sizeof h);
+    if (const auto* slot = resident()) {
+        std::memcpy(&h, slot->bytes, sizeof h);
+        return h;
+    }
+    require_live();
+    if (runtime_.store().read(id_, 0, &h, sizeof h) != sizeof h)
+        invariant("short matrix object read");
+    // A small object read now stays resident for the rest of its call.
+    (void)admit(reinterpret_cast<const unsigned char*>(&h), sizeof h, h);
     return h;
 }
 void Cells::set_header(const Header& h) { exact_write(0, &h, sizeof h); }
@@ -205,28 +561,34 @@ void Cells::write(std::uint64_t cell, const void* record, std::size_t bytes) {
 }
 
 // The Store returns the bytes up to the object's end: a short count here is
-// an object smaller than the prefix, not an error.
-Cells::Prefix::Prefix(const Cells& cells) : cells_(cells) {
+// an object smaller than the prefix, not an error. An object that fits a slot
+// is loaded into the tier (one more read when it is past the prefix) and read
+// in place from then on.
+void Cells::Prefix::fetch() {
+    cells_.require_live();
     loaded_ = cells_.runtime_.store().read(cells_.id_, 0, bytes_.data(), bytes_.size());
     if (loaded_ < sizeof(Header)) invariant("short matrix object read");
     std::memcpy(&shape_, bytes_.data(), sizeof shape_);
-}
-void Cells::Prefix::read(std::uint64_t cell, void* record, std::size_t bytes) const {
-    if (bytes != shape_.width || cell >= product(shape_.rows, shape_.columns))
-        invariant("matrix record read outside its schema");
-    const auto offset = sizeof(Header) + cell * shape_.width;
-    if (offset <= loaded_ && bytes <= loaded_ - offset)
-        std::memcpy(record, bytes_.data() + offset, bytes);
-    else
-        cells_.exact_read(offset, record, bytes);
+    data_ = bytes_.data();
+    if (const auto* slot = cells_.admit(bytes_.data(), loaded_, shape_)) {
+        data_ = slot->bytes;
+        loaded_ = static_cast<std::size_t>(slot->size);
+    }
 }
 
 // The prefix first, and the rest of the object only when all of it fits the
-// buffer: a larger object costs one prefix read, as a descriptor read does.
+// buffer: a larger object costs one prefix read, as a descriptor read does. A
+// resident object is copied from its slot; one loaded whole stays resident.
 Cells::Shape Cells::load(std::array<unsigned char, kTransferBytes>& buffer, bool& whole) const {
-    auto loaded = runtime_.store().read(id_, 0, buffer.data(), kPrefixBytes);
-    if (loaded < sizeof(Header)) invariant("short matrix object read");
     Header h{};
+    if (const auto* slot = resident()) {
+        std::memcpy(buffer.data(), slot->bytes, static_cast<std::size_t>(slot->size));
+        std::memcpy(&h, buffer.data(), sizeof h);
+        whole = true;
+        return h;
+    }
+    auto loaded = read_head(buffer.data(), kPrefixBytes);
+    if (loaded < sizeof(Header)) invariant("short matrix object read");
     std::memcpy(&h, buffer.data(), sizeof h);
     const auto bytes = byte_size(h);
     if (bytes > loaded && bytes <= buffer.size()) {
@@ -234,6 +596,7 @@ Cells::Shape Cells::load(std::array<unsigned char, kTransferBytes>& buffer, bool
         loaded = static_cast<std::size_t>(bytes);
     }
     whole = bytes <= loaded;
+    if (whole) (void)admit(buffer.data(), loaded, h);
     return h;
 }
 
@@ -310,7 +673,7 @@ void Cells::swap_records(const Header& h, std::uint64_t first, std::uint64_t sec
 }
 
 void Cells::replace(const Header& h, const unsigned char* image, std::size_t written) {
-    if (!runtime_.store().resize(id_, byte_size(h))) invariant("matrix resize failed");
+    if (!resize_object(byte_size(h))) invariant("matrix resize failed");
     exact_write(0, image, written);
 }
 
@@ -346,7 +709,7 @@ void Cells::resize(std::uint64_t rows, std::uint64_t columns) {
     h.rows = rows;
     h.columns = columns;
     Scope transaction(runtime_);
-    if (!runtime_.store().resize(id_, byte_size(h))) invariant("matrix resize failed");
+    if (!resize_object(byte_size(h))) invariant("matrix resize failed");
     set_header(h);
     transaction.commit();
 }
@@ -381,7 +744,7 @@ void Cells::insert_row(std::uint64_t index, std::uint64_t columns) {
         replace(grown, image.data(),
                 length ? static_cast<std::size_t>(bytes) : sizeof(Header));
     } else {
-        if (!runtime_.store().resize(id_, bytes)) invariant("matrix resize failed");
+        if (!resize_object(bytes)) invariant("matrix resize failed");
         set_header(grown);
         move_bytes(from, to, length);
     }
@@ -415,7 +778,7 @@ void Cells::insert_column(std::uint64_t index) {
         std::memcpy(image.data(), &grown, sizeof grown);
         replace(grown, image.data(), static_cast<std::size_t>(bytes));
     } else {
-        if (!runtime_.store().resize(id_, bytes)) invariant("matrix resize failed");
+        if (!resize_object(bytes)) invariant("matrix resize failed");
         set_header(grown);
         for (auto r = h.rows; r > 0; --r) {
             const auto from = sizeof(Header) + (r - 1) * h.columns * w;
@@ -448,7 +811,7 @@ void Cells::remove_row(std::uint64_t index) {
                 length ? static_cast<std::size_t>(byte_size(shrunk)) : sizeof(Header));
     } else {
         move_bytes(from, to, length);
-        if (!runtime_.store().resize(id_, byte_size(shrunk))) invariant("matrix resize failed");
+        if (!resize_object(byte_size(shrunk))) invariant("matrix resize failed");
         set_header(shrunk);
     }
     transaction.commit();
@@ -483,7 +846,7 @@ void Cells::remove_column(std::uint64_t index) {
             move_bytes(from, to, index * w);
             move_bytes(from + (index + 1) * w, to + index * w, (shrunk.columns - index) * w);
         }
-        if (!runtime_.store().resize(id_, byte_size(shrunk))) invariant("matrix resize failed");
+        if (!resize_object(byte_size(shrunk))) invariant("matrix resize failed");
         set_header(shrunk);
     }
     transaction.commit();
@@ -825,7 +1188,8 @@ std::uint64_t Cells::hash_state() const {
     const auto fold = [&hash](unsigned char byte) {
         hash = (hash ^ byte) * UINT64_C(1099511628211);
     };
-    for (unsigned int i = 0; i < 8; ++i) fold(static_cast<unsigned char>(id_ >> (8 * i)));
+    const Id id = identity(); // an object made in the tier folds its real Store id
+    for (unsigned int i = 0; i < 8; ++i) fold(static_cast<unsigned char>(id >> (8 * i)));
     std::array<unsigned char, kTransferBytes> buffer{};
     const auto end = byte_size(header());
     for (std::uint64_t offset = 0; offset < end;) {

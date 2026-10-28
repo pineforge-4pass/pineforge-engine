@@ -6,7 +6,8 @@
 //  - growth: 8192 bars each append a row to three growing matrices. Every
 //    matrix is in the run's own Store, the Store holds the population, and the
 //    heap the matrix work retains after the warmup stays under the fixed bound
-//    the A5M growth rows use. The same script under an explicit native choice
+//    the A5M growth rows use, with the run's fixed resident tier counted in it.
+//    The same script under an explicit native choice
 //    is the control: its heap crosses that bound (the measurement can see
 //    growth), and its cells and trades are the same bytes.
 //  - calc-on-fill: a calc_on_order_fills run's checkpoints and restores (the
@@ -38,10 +39,13 @@ using a5m_test::require;
 namespace ms = pineforge::detail::matrix_store;
 
 constexpr int kGrowthBars = 8192;
+static_assert(a5m_test::kTierBound == ms::kResidentBytes,
+              "the growth bound counts the run's resident tier at its fixed size");
 
 void growth() {
     const auto bars = a5m_run::tape(kGrowthBars);
-    const auto bound = a5m_test::kStoreBound + a5m_test::kOperationBound;
+    // The run's Store, one operation's buffers and the run's resident tier.
+    const auto bound = a5m_test::kStoreBound + a5m_test::kOperationBound + a5m_test::kTierBound;
     require(static_cast<std::uint64_t>(kGrowthBars) * a5m_run::kRowBytes > bound,
             "growth population cannot exceed the claimed bound");
     Options options;
