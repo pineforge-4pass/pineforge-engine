@@ -123,46 +123,11 @@ def _assert_closed(opened):
         os.fstat(fd)
 
 
-def _invoke_after_equity_tamper(tmp_path, monkeypatch, mutate, *, library=None):
-    """Use real output staging; alter the file when equity records are requested."""
-    original = run_json._ReportSink._tagged_records
-    original_init = run_json._BoundedJSONFile.__init__
-    changed, scratch = [], []
-
-    def initialize(file, stream):
-        original_init(file, stream)
-        if not isinstance(file, run_json._UncachedSinkFile):
-            scratch.append((file, file.fileno()))
-
-    def records(sink, tag, **kwargs):
-        if tag == "E" and not changed:
-            assert sink._identity == _identity(sink.path)
-            assert sink.sha256 and sink.summary_failure is None  # A finished
-            mutate(sink)
-            changed.append(sink.path)
-        return original(sink, tag, **kwargs)
-
-    with monkeypatch.context() as patch:
-        patch.setattr(run_json._BoundedJSONFile, "__init__", initialize)
-        patch.setattr(run_json._ReportSink, "_tagged_records", records)
-        result = ordinary.invoke(tmp_path, patch, library=library)
-    status, text, stderr, library = result
-    assert len(changed) == 1
-    assert status == 1 and stderr == ""
-    assert "Traceback" not in text + stderr
-    assert library.freed == library.installed == changed
-    assert all(not Path(path).exists() for path in changed)
-    assert scratch, "the real private report staging file must have been opened"
-    for file, fd in scratch:
-        assert file.closed and file.buffer is None
-        with pytest.raises(OSError):
-            os.fstat(fd)
-    # One error document, without any provisional report prefix/suffix.
-    document = ordinary.json.loads(text)
-    assert tuple(document) == ("engine", "error", "code", "args")
-    assert document["engine"] == "pineforge"
-    assert document["code"] == "engine_invariant" and document["args"] == {}
-    return text, document["error"]
+def _invoke_before_equity_read(tmp_path, monkeypatch, mutate, **kwargs):
+    """Use the shared file-open injection and complete frozen failure oracle."""
+    from run_json_trade_scan_test import _invoke_before_sink_read_refusal
+    return _invoke_before_sink_read_refusal(
+        tmp_path, monkeypatch, mutate, **kwargs)
 
 
 def test_equity_pass_parses_only_one_raw_header_at_two_sizes(tmp_path, monkeypatch):
@@ -338,9 +303,9 @@ def _replace_line(raw, old, new):
 
 
 @pytest.mark.parametrize("space", [b" ", b"\t", b"\r"], ids=["space", "tab", "control-CR"])
-def test_a_refuses_whitespace_but_c_proves_the_same_changed_bytes_by_digest(
+def test_equity_whitespace_before_fused_read_keeps_frozen_refusal(
         tmp_path, monkeypatch, space):
-    """Verification rejects whitespace; later edits fail the raw digest."""
+    """The same whitespace corruption is refused before publication."""
     point = ["E", ordinary.bars.T0, 10000.0, -0.0]
     line = ordinary.encoded(point)
     position = line.index(b",") + 1
@@ -363,9 +328,9 @@ def test_a_refuses_whitespace_but_c_proves_the_same_changed_bytes_by_digest(
         _write_same_identity(sink.path, _replace_once(
             Path(sink.path).read_bytes(), line, changed_line))
 
-    text, error = _invoke_after_equity_tamper(tmp_path, monkeypatch, mutate)
-    assert error == DIGEST_DIFFERS
-    assert text == run_json.failure_line(DIGEST_DIFFERS, "engine_invariant", {})
+    text, error = _invoke_before_equity_read(tmp_path, monkeypatch, mutate)
+    assert error == INVALID + "line 2: whitespace or control byte outside a JSON string"
+    assert text == run_json.failure_line(error, "engine_invariant", {})
 
 
 @pytest.mark.parametrize("where", ["equity", "non-E"])
@@ -467,15 +432,16 @@ def test_equity_same_inode_valid_new_receipt_still_differs_from_a(tmp_path):
         assert len(observed) == sink.counts["E"]
 
 
-def test_equity_digest_refusal_discards_provisional_report_bytes(tmp_path, monkeypatch):
+def test_equity_digest_before_fused_read_discards_provisional_report_bytes(
+        tmp_path, monkeypatch):
     """A digest refusal discards provisional report bytes before publication."""
     def mutate(sink):
         changed, _ = _equity_flip(Path(sink.path).read_bytes())
         _write_same_identity(sink.path, changed)
 
-    text, error = _invoke_after_equity_tamper(tmp_path, monkeypatch, mutate)
-    assert error == DIGEST_DIFFERS
-    assert text == run_json.failure_line(DIGEST_DIFFERS, "engine_invariant", {})
+    text, error = _invoke_before_equity_read(tmp_path, monkeypatch, mutate)
+    assert error == INVALID + "line 10: trailer SHA-256 mismatch"
+    assert text == run_json.failure_line(error, "engine_invariant", {})
 
 
 @pytest.mark.parametrize("fault,line,detail", [
@@ -515,18 +481,63 @@ def _decoder_fault_line(fault):
     "recursion", "invalid-UTF8", "malformed-JSON",
     "wrong-arity", "nested-time", "nested-equity", "nested-open-profit",
 ])
-def test_equity_decoder_exceptions_after_a_are_typed_and_never_published(
+def test_equity_decoder_faults_before_fused_read_are_typed_and_never_published(
         tmp_path, monkeypatch, fault):
-    """Malformed equity reaches the verified decoder before any digest verdict."""
+    """Preserve the old decoder input and exercise strict decoding in fusion."""
+    from run_json_fused_test_support import failure_envelope, load_frozen_copy
+
     payload = _decoder_fault_line(fault)
-    # Reserve a valid event before verification. Its later replacement is the
-    # decoder's exact input at the same inode and size, before digest comparison.
+    # Preserve the exact padded corruption from the former scanner injection.
+    # For the short payloads the padded file now ends in the whitespace
+    # refusal (the same text for each), so those padded runs add no decoder
+    # coverage; the unpadded runs and the direct decoder comparison carry it.
     size = max(len(payload), len(ordinary.encoded(_event(""))) + 32)
     reserve = _event("p" * (size - len(ordinary.encoded(_event("")))))
     reserve_line = ordinary.encoded(reserve)
     assert len(reserve_line) == size
     damaged = payload[:-1].ljust(size - 1, b" ") + b"\n"
     assert len(damaged) == size
+    reference = load_frozen_copy("equity_decoder_frozen")
+    decoder_failures = []
+    verified_loads, verified_fields, verified_recursion = [], [], []
+    original_loads, original_field = pf_sink.json.loads, pf_sink._field
+
+    def verified_load(value, *args, **kwargs):
+        verified_loads.append(value)
+        try:
+            return original_loads(value, *args, **kwargs)
+        except RecursionError:
+            verified_recursion.append(True)
+            raise
+
+    def verified_field(value, kind):
+        verified_fields.append((value, kind))
+        return original_field(value, kind)
+
+    for runner in (reference, run_json):
+        reader = reference.pf_sink if runner is reference else pf_sink
+        parser = reader.RecordParser(ordinary.header(outputs=True))
+        with monkeypatch.context() as patch:
+            if runner is run_json:
+                patch.setattr(pf_sink.json, "loads", verified_load)
+                patch.setattr(pf_sink, "_field", verified_field)
+            with pytest.raises(reader.SinkFormatError) as decoded:
+                _verified_decoder(parser)(damaged)
+        decoder_failures.append(failure_envelope(runner, decoded.value))
+    assert decoder_failures[1] == decoder_failures[0]
+    decoder_error = decoder_failures[0][2]
+    assert len(verified_loads) == (0 if fault == "invalid-UTF8" else 1)
+    if fault == "recursion":
+        assert verified_recursion == [True]
+    if fault.startswith("nested-"):
+        assert verified_fields, "the verified decoder must look up the module-global _field"
+        if fault == "nested-time":
+            assert any(type(value) is list and kind == "i64"
+                       for value, kind in verified_fields)
+        else:
+            assert any(type(value) in (dict, list) and kind == "f64?"
+                       for value, kind in verified_fields)
+
     original_write = ordinary.write_sink
     written = []
     tail = _event("tail" + "x" * (2 * WINDOW))
@@ -536,80 +547,111 @@ def test_equity_decoder_exceptions_after_a_are_typed_and_never_published(
         return original_write(path, [*rows, reserve, tail], **kwargs)
 
     monkeypatch.setattr(ordinary, "write_sink", write)
-    library = ordinary.SinkLibrary(outputs=True)
-    seen, loads_seen, recursive, fields, scanned = [], [], [], [], []
-    active = False
+    # Strict verification rejects the old padding before JSON decoding. Keep
+    # that exact-file case, and also inject the unpadded payload so each real
+    # decoder/field exception is reached by the fused reader, before EOF.
+    for wire in dict.fromkeys((damaged, payload)):
+        written.clear()
+        seen, loads_seen, recursive, fields, scanned, line_numbers = [], [], [], [], [], []
+        active = False
 
-    def mutate(sink):
-        raw = Path(sink.path).read_bytes()
-        assert sink.counts["V"] >= 1
-        _write_same_identity(sink.path, _replace_once(raw, reserve_line, damaged))
-        original_decode = _verified_decoder(pf_sink.RecordParser(sink.header)).__func__
-        original_loads, original_field = pf_sink.json.loads, pf_sink._field
-        original_read = run_json._UncachedSinkFile.read
+        def mutate(sink):
+            path = Path(sink.path)
+            raw, identity = path.read_bytes(), _identity(path)
+            assert ordinary.json.loads(raw[_trailer_start(raw):])["counts"]["V"] >= 1
+            start = raw.index(b"\n" + reserve_line) + 1
+            line_numbers.append(raw[:start].count(b"\n") + 1)
+            if wire == damaged:
+                _write_same_identity(path, _replace_once(raw, reserve_line, wire))
+            else:
+                path.write_bytes(_replace_line(raw, reserve_line, wire))
+                assert _identity(path)[0] == identity[0]
 
-        def read(file, count=-1):
-            chunk = original_read(file, count)
-            scanned.append((file.position, file.size))
-            return chunk
+        def observe(sink, patch):
+            original_parse = pf_sink._parse
+            original_record = pf_sink.RecordParser.parse
+            original_loads, original_field = pf_sink.json.loads, pf_sink._field
+            original_read = run_json._UncachedSinkFile.read
 
-        def decode(parser, line):
-            nonlocal active
-            target = line == damaged
-            if target:
-                # A two-window tail follows the reserved line. At least a
-                # window is still unread: this failure precedes EOF and
-                # hashing the whole verified prefix.
-                assert scanned and scanned[-1][0] + WINDOW < scanned[-1][1]
-                seen.append(line)
-                active = True
-            try:
-                return original_decode(parser, line)
-            finally:
+            def read(file, count=-1):
+                chunk = original_read(file, count)
+                scanned.append((file.position, file.size))
+                return chunk
+
+            def parse(line):
+                nonlocal active
+                target = line == wire
                 if target:
-                    active = False
+                    assert scanned and scanned[-1][0] + WINDOW < scanned[-1][1]
+                    seen.append(line)
+                previous, active = active, target
+                try:
+                    return original_parse(line)
+                finally:
+                    active = previous
 
-        def loads(value, *args, **kwargs):
-            if active:
-                loads_seen.append(value)
-            try:
-                result = original_loads(value, *args, **kwargs)
-            except RecursionError:
+            def record(parser, line, **kwargs):
+                nonlocal active
+                previous, active = active, line == wire
+                try:
+                    return original_record(parser, line, **kwargs)
+                finally:
+                    active = previous
+
+            def loads(value, *args, **kwargs):
                 if active:
-                    recursive.append(True)
-                raise
-            return result
+                    loads_seen.append(value)
+                try:
+                    return original_loads(value, *args, **kwargs)
+                except RecursionError:
+                    if active:
+                        recursive.append(True)
+                    raise
 
-        def field(value, kind):
-            if active:
-                fields.append((value, kind))
-            return original_field(value, kind)
+            def field(value, kind):
+                if active:
+                    fields.append((value, kind))
+                return original_field(value, kind)
 
-        monkeypatch.setattr(pf_sink.RecordParser, "parse_verified", decode)
-        monkeypatch.setattr(pf_sink.json, "loads", loads)
-        monkeypatch.setattr(pf_sink, "_field", field)
-        monkeypatch.setattr(run_json._UncachedSinkFile, "read", read)
+            patch.setattr(pf_sink, "_parse", parse)
+            patch.setattr(pf_sink.RecordParser, "parse", record)
+            patch.setattr(pf_sink.json, "loads", loads)
+            patch.setattr(pf_sink, "_field", field)
+            patch.setattr(run_json._UncachedSinkFile, "read", read)
 
-    _, error = _invoke_after_equity_tamper(tmp_path, monkeypatch, mutate, library=library)
-    assert len(written) == 1
-    assert seen == [damaged]
+        _, error = _invoke_before_equity_read(
+            tmp_path, monkeypatch, mutate,
+            library_factory=lambda: ordinary.SinkLibrary(outputs=True),
+            observe=observe)
+        # Exactly one native write and one corruption per frozen/product run.
+        assert len(written) == len(line_numbers) == 2
+        assert len(set(written)) == 2 and line_numbers[0] == line_numbers[1]
+        assert seen == [wire]
+        if wire != payload:
+            assert error == (
+                INVALID + f"line {line_numbers[0]}: "
+                "whitespace or control byte outside a JSON string")
+        else:
+            assert error == INVALID + f"line {line_numbers[0]}: " + decoder_error
+
+    # The last file case is the unpadded payload, with the same decoder fault.
     # UTF-8 decoding fails before json.loads can be called.
     assert len(loads_seen) == (0 if fault == "invalid-UTF8" else 1)
     if fault.startswith("nested-"):
-        assert fields, "the verified decoder must look up the module-global _field"
+        assert fields, "the decoder must look up the module-global _field"
     assert error.startswith(INVALID)
     if fault in ("recursion", "invalid-UTF8", "malformed-JSON"):
-        assert error.startswith(INVALID + "invalid UTF-8 or JSON: ")
+        assert decoder_error.startswith("invalid UTF-8 or JSON: ")
         if fault == "recursion":
             assert recursive == [True]
             assert "recursion" in error
     elif fault == "wrong-arity":
-        assert error == INVALID + "record field count differs from its descriptor"
+        assert decoder_error == "record field count differs from its descriptor"
     elif fault == "nested-time":
-        assert error == INVALID + "invalid i64 column"
+        assert decoder_error == "invalid i64 column"
         assert any(type(value) is list and kind == "i64" for value, kind in fields)
     else:
-        assert error == INVALID + "f64 column is not the Python repr of its double"
+        assert decoder_error == "f64 column is not the Python repr of its double"
         assert any(type(value) in (dict, list) and kind == "f64?"
                    for value, kind in fields)
 
@@ -618,7 +660,7 @@ def test_equity_decoder_exceptions_after_a_are_typed_and_never_published(
     ("no-LF", "line does not end with LF"),
     ("zero-byte-body", "blank line"),
 ], ids=["line-without-LF", "zero-byte-body"])
-def test_equity_framing_exceptions_after_a_are_typed_and_never_published(
+def test_equity_framing_before_fused_read_is_typed_and_never_published(
         tmp_path, monkeypatch, fault, detail):
     """Malformed equity framing gives typed errors and prevents publication."""
     with _sink(tmp_path, [_point(0)]) as (sink, _, _):
@@ -644,8 +686,8 @@ def test_equity_framing_exceptions_after_a_are_typed_and_never_published(
             _verified_decoder(parser)(damaged)
         assert str(decoded.value) == detail
 
-    # Preserve inode/size for the pipeline check. No LF is a framing error;
-    # blank lines have no E needle, so their changed bytes fail the digest.
+    # Preserve the former pipeline corruption's inode, size and exact bytes.
+    # Strict verification now sees blank lines as well as unterminated lines.
     def mutate(sink):
         raw = Path(sink.path).read_bytes()
         if fault == "no-LF":
@@ -658,13 +700,11 @@ def test_equity_framing_exceptions_after_a_are_typed_and_never_published(
             changed = raw[:start] + b"\n" * (end - start) + raw[end:]
         _write_same_identity(sink.path, changed)
 
-    text, error = _invoke_after_equity_tamper(tmp_path, monkeypatch, mutate)
-    if fault == "no-LF":
-        assert error.startswith(INVALID) and error.endswith(detail)
-        assert "changed after verification" not in error
-    else:
-        assert error == DIGEST_DIFFERS
-        assert text == run_json.failure_line(DIGEST_DIFFERS, "engine_invariant", {})
+    text, error = _invoke_before_equity_read(tmp_path, monkeypatch, mutate)
+    line_number = 10 if fault == "no-LF" else 2
+    assert error == INVALID + f"line {line_number}: " + detail
+    assert "changed after verification" not in error
+    assert text == run_json.failure_line(error, "engine_invariant", {})
 
 
 @pytest.mark.parametrize("fault", ["header", "equity", "trailer-LF", "after-trailer"])
