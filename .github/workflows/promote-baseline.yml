@@ -18,7 +18,7 @@
 # Otherwise it exits green without promoting.
 #
 # It runs on a push to main, using MAIN's own copy at refs/heads/main. The
-# pf-gcp-main class admits this allowlisted workflow at that ref. The
+# gke-protected group admits this allowlisted workflow at that ref. The
 # promotion identity's WIF condition pins job_workflow_ref to
 # `<repo>/.github/workflows/promote-baseline.yml@refs/heads/main` and the run
 # ref to refs/heads/main, with no event restriction
@@ -310,7 +310,8 @@ jobs:
   promote:
     needs: [promote-guard]
     if: ${{ needs.promote-guard.result == 'success' && needs.promote-guard.outputs.ok == 'true' }}
-    runs-on: ["self-hosted","pf-gcp-main"]
+    runs-on: gkp-2cpu-4gb-amd64
+    environment: release-bot
     steps:
       - name: Determine repo axis
         id: axis

@@ -87,7 +87,7 @@ PR_SLOW_ROWS = (
 )
 PR_FAST_ROWS_SHA256 = '0509b2219786efb6878b193639344c299ff8075ba4532dbe09e80e6e97b60a9a'
 # Linux PR jobs retain their fleet; secret-free post jobs use fixed GKE sizes.
-# Release artifacts and baseline promotion retain their isolated -main policy.
+# Release artifacts retain their isolated -main policy; promotion uses protected GKE.
 PR_RUNNER = '["self-hosted","pf-gcp-pr"]'
 POST_RUNNER = '["self-hosted","pf-gcp-post"]'
 RELEASE_RUNNER = '["self-hosted","pf-gcp-main"]'
@@ -97,6 +97,12 @@ GKE_8_LABEL = 'gke-8cpu-16gb-amd64'
 GKE_ARM_LABEL = 'gke-16cpu-32gb-arm64'
 GKE_2_LABEL = 'gke-2cpu-4gb-amd64'
 GKE_4_LABEL = 'gke-4cpu-8gb-amd64'
+PROTECTED_JOB_RUNNERS = {
+    ('promote-baseline.yml', 'promote'): 'gkp-2cpu-4gb-amd64',
+}
+PROTECTED_JOB_ENVIRONMENTS = {
+    ('promote-baseline.yml', 'promote'): 'release-bot',
+}
 GKE_JOB_LABELS = {
     'ci-post.yml': {'preflight': GKE_8_LABEL, 'preflight-slow': GKE_8_LABEL,
                     'build': GKE_32_LABEL, 'build-debug': GKE_16_LABEL,
@@ -312,7 +318,8 @@ RELEASE_JOB_RUNNERS = {
     'release.yml': {'release': RELEASE_RUNNER, 'prebuilt': HOSTED_MATRIX_RUNNER,
                     'notify-hub': RELEASE_RUNNER},
     'release-ruleset-probe.yml': {'probe': POST_RUNNER},
-    'promote-baseline.yml': {'promote': RELEASE_RUNNER},
+    'promote-baseline.yml': {
+        'promote': PROTECTED_JOB_RUNNERS[('promote-baseline.yml', 'promote')]},
 }
 # Credential-bearing jobs outside the release pins and gated docs build retain
 # standard hosted labels. Existing hosted exceptions above are pinned separately.
@@ -1321,7 +1328,7 @@ def _effective_permissions(workflow: str, body: str) -> list[str]:
 
 
 def _holds_credentials(workflow: str, body: str, *, effective_permissions: bool = False) -> bool:
-    """L6: non-GITHUB_TOKEN secrets, OIDC writes or a deployment environment.
+    """Non-GITHUB_TOKEN secrets, OIDC except literal none, or an environment.
 
     Existing VM checks conservatively include workflow permissions. GKE checks
     use the job's effective scopes. Bracket/dynamic secret access and inherited
@@ -1331,8 +1338,12 @@ def _holds_credentials(workflow: str, body: str, *, effective_permissions: bool 
         return True
     permissions = (_effective_permissions(workflow, body) if effective_permissions else
                    _job_values(workflow, 'permissions') + _job_values(body, 'permissions'))
-    oidc_write = r'''(?<![\w-])["']?id-token["']?\s*:\s*(?:"write"|'write'|write)(?=$|[\s,}])'''
-    if any(value == 'write-all' or re.search(oidc_write, value, re.IGNORECASE)
+    # Only the literal lowercase none disables OIDC. Keep whitespace inside
+    # the exclusion, including a following key in a folded block mapping.
+    oidc = (r'''(?<![\w-])["']?id-token["']?\s*:'''
+            r'''(?!\s*(?-i:"none"|'none'|none)'''
+            r'''(?:\s*(?:$|[,}])|\s+["']?[\w-]+["']?\s*:))''')
+    if any(value == 'write-all' or re.search(oidc, value, re.IGNORECASE)
            for value in permissions):
         return True
     text = '\n'.join(re.sub(r'\s+#.*$', '', line) for line in _code(body))
@@ -1432,6 +1443,9 @@ def _authz_header(name: str) -> str:
 
 _GKE_ROUTE = re.compile(r'(?<![\w.-])gke-[\w.-]+', re.IGNORECASE)
 _GKE_SCALE_LABEL = re.compile(r'(?<![\w.-])gke-\d+cpu-\d+gb-(?:amd64|arm64)(?![\w.-])')
+_PROTECTED_ROUTE = re.compile(r'(?<![\w.-])(?:gkp-[\w.-]+|gke-protected)(?![\w.-])',
+                              re.IGNORECASE)
+_PROTECTED_SCALE_LABEL = re.compile(r'gkp-\d+cpu-\d+gb-(?:amd64|arm64)')
 
 
 def _matrix_rows(body: str) -> list[dict[str, str]] | None:
@@ -1530,7 +1544,7 @@ def _input_condition_skips(body: str, inputs: dict[str, str]) -> bool:
 
 
 def _gke_cap_findings(workflows: dict[str, str]) -> list[str]:
-    """Refuse credentials through GKE calls and count one post CI run's instances."""
+    """Refuse credentials through general GKE calls; cap post and protected roots."""
     findings = []
     counts: dict[str, int] = {}
     workflow_jobs = {name: _jobs(workflow) for name, workflow in workflows.items()}
@@ -1564,8 +1578,9 @@ def _gke_cap_findings(workflows: dict[str, str]) -> list[str]:
             if _input_condition_skips(body, inputs):
                 continue
             runners = ' '.join(_job_values(body, 'runs-on'))
-            labels = [label.lower() for label in _GKE_ROUTE.findall(runners)
-                      if label.lower() != 'gke-runners']
+            labels = [label.lower() for label in
+                      _GKE_ROUTE.findall(runners) + _PROTECTED_ROUTE.findall(runners)
+                      if label.lower() not in ('gke-runners', 'gke-protected')]
             callees = calls[(name, job)]
             if not labels and not callees:
                 continue
@@ -1584,10 +1599,13 @@ def _gke_cap_findings(workflows: dict[str, str]) -> list[str]:
             for callee in callees:
                 visit(callee, passed, instances, (*stack, name))
 
-    if 'ci-post.yml' in workflows:
-        visit('ci-post.yml', {}, 1, ())
-    findings.extend(f'ci-post.yml GKE label {label} expands to {count} jobs; cap is 8'
-                    for label, count in sorted(counts.items()) if count > 8)
+    for root in sorted({'ci-post.yml'} | {name for name, _ in PROTECTED_JOB_RUNNERS}):
+        if root not in workflows:
+            continue
+        counts.clear()
+        visit(root, {}, 1, ())
+        findings.extend(f'{root} GKE label {label} expands to {count} jobs; cap is 8'
+                        for label, count in sorted(counts.items()) if count > 8)
     return findings
 
 
@@ -1597,8 +1615,14 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
     routes = workflow_event_routes(workflows)
     for name, workflow in workflows.items():
         code = '\n'.join(re.sub(r'\s+#.*$', '', line) for line in _code(workflow))
-        if 'pull_request' in routes[name] and _GKE_ROUTE.search(code):
+        fixed_protected = {job: runner for (path, job), runner in PROTECTED_JOB_RUNNERS.items()
+                           if path == name}
+        if 'pull_request' in routes[name] and (_GKE_ROUTE.search(code) or _PROTECTED_ROUTE.search(code)):
             findings.append(f'{name} is reachable from pull_request and must not contain GKE routing')
+        if fixed_protected and 'pull_request' in routes[name]:
+            findings.append(f'{name} must not be reachable from pull_request on the protected GKE workflows')
+        if fixed_protected and 'workflow_call' in (_events(workflow) or set()):
+            findings.append(f'{name} must not declare workflow_call for protected GKE jobs')
         if _LARGER_RUNNER_KEY.search(code):
             findings.append(f'{name} must not define a larger_runner key; use the GCP fleet or hosted exceptions')
         timed = JOB_COMMANDS.get(name, {})
@@ -1611,13 +1635,14 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
         pinned = {job: event_runner for job in timed}
         pinned.update(fixed_hosted)
         pinned.update(fixed_release)
+        pinned.update(fixed_protected)
         if (fixed_release and name != 'promote-baseline.yml'
                 and _events(workflow) != {'workflow_dispatch'}):
             findings.append(f'{name} must retain workflow_dispatch only for pf-gcp-main jobs')
         if (name == 'promote-baseline.yml'
                 and _events(workflow) != {'push', 'workflow_dispatch'}):
             findings.append(f'{name} must retain push and workflow_dispatch '
-                            'only for pf-gcp-main promotion')
+                            'only for baseline promotion')
         if name == 'promote-baseline.yml':
             on_body = '\n'.join(_job_block(workflow, 'on')[1:])
             if _job_values(on_body, 'push') != ['branches: [main]']:
@@ -1629,20 +1654,38 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
         if _unparsed(workflow):
             findings.append(f'{name} has jobs lines the runner contract cannot read')
         jobs = _jobs(workflow)
+        protected_code = code
         findings += [f'{name} is missing job {job}' for job in pinned if job not in jobs]
         for job, body in jobs.items():
             runs_on, uses = _job_values(body, 'runs-on'), _job_values(body, 'uses')
+            raw_runners = _job_values(body, 'runs-on', unquote=False)
+            protected_pin = fixed_protected.get(job)
+            has_protected = bool(_PROTECTED_ROUTE.search(' '.join(runs_on)))
+            body_lines = [re.sub(r'\s+#.*$', '', line) for line in _code(body)]
+            inline_runners = [line for line in body_lines
+                              if _indent(line) == 4 and _key_value(line, 'runs-on') in raw_runners]
+            bare_protected = bool(len(raw_runners) == 1 and inline_runners
+                                  and _PROTECTED_SCALE_LABEL.fullmatch(raw_runners[0]))
+            protected_ok = bool(protected_pin and bare_protected and raw_runners == [protected_pin])
+            if has_protected and not bare_protected:
+                findings.append(f'{name} job {job} must use a bare scalar protected GKE scale-set name')
+            if has_protected and not protected_ok:
+                findings.append(f'{name} job {job} may use protected GKE routing only '
+                                'at its exact pinned job and label')
+            if protected_ok:
+                body_code = '\n'.join(body_lines)
+                protected_code = protected_code.replace(
+                    body_code, body_code.replace(inline_runners[0], '', 1), 1)
             gke_pin = GKE_JOB_RUNNERS.get(name, {}).get(job)
             has_gke = bool(_GKE_ROUTE.search(' '.join(runs_on)))
-            raw_runners = _job_values(body, 'runs-on', unquote=False)
             if has_gke and (len(raw_runners) != 1
                             or not _GKE_SCALE_LABEL.fullmatch(raw_runners[0])):
                 findings.append(f'{name} job {job} must use a bare scalar GKE scale-set name')
             if has_gke and runs_on != [gke_pin]:
                 findings.append(f'{name} job {job} may use GKE routing only at its exact pinned job and label')
-            if has_gke and _job_values(body, 'container'):
+            if (has_gke or has_protected) and _job_values(body, 'container'):
                 findings.append(f'{name} job {job} must not declare a job container on GKE')
-            if has_gke and _job_values(body, 'services'):
+            if (has_gke or has_protected) and _job_values(body, 'services'):
                 findings.append(f'{name} job {job} must not declare job services on GKE')
             if has_gke:
                 permissions = _effective_permissions(workflow, body)
@@ -1658,7 +1701,7 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
             if any(not value.startswith('./.github/workflows/') for value in uses):
                 findings.append(f'{name} job {job} calls a workflow the runner contract '
                                 'cannot see; call one under ./.github/workflows/')
-            credentials = _holds_credentials(workflow, body, effective_permissions=has_gke)
+            credentials = _holds_credentials(workflow, body, effective_permissions=has_gke or has_protected)
             if job not in pinned:
                 if pinned and runs_on:
                     findings.append(f'{name} job {job} needs a pinned runner and time limit')
@@ -1673,7 +1716,17 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                     continue
             hosted_platform = (len(runs_on) == 1 and
                                bool(re.fullmatch(r'ubuntu-(?:\d{2}\.\d{2}|latest)-arm', runs_on[0])))
-            if job in fixed_release:
+            if protected_pin:
+                if not protected_ok:
+                    findings.append(f'{name} job {job} must run on {protected_pin} (protected)')
+                environment = PROTECTED_JOB_ENVIRONMENTS[(name, job)]
+                if _job_values(body, 'environment') != [environment]:
+                    findings.append(f'{name} job {job} must use environment: {environment}')
+                environments = _job_values(workflow, 'env') + _job_values(body, 'env')
+                if any(re.search(r'\bPF_CI_LABELS["\']?\s*:', value) for value in environments):
+                    findings.append(f'{name} job {job} must not set PF_CI_LABELS '
+                                    'on an isolated release job')
+            elif job in fixed_release:
                 # A quoted JSON scalar does not select a YAML label array.
                 actual = _job_values(body, 'runs-on', unquote=False)
                 expected = [fixed_release[job]]
@@ -1762,6 +1815,8 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
             # Keep parallelism tied to the runner's available cores.
             if not _sized(_counted_text(body), command):
                 findings.append(f'{name} job {job} must size its parallelism to the runner')
+        if _PROTECTED_ROUTE.search(protected_code):
+            findings.append(f'{name} may name protected GKE routing only in pinned bare runs-on scalars')
     for name, job, strategy, build_name, population in (
             ('ci.yml', 'build', BUILD_STRATEGY, BUILD_NAME, 'only Ubuntu Release on pull_request'),
             ('ci-post.yml', 'build', POST_BUILD_STRATEGY, post_build_name(4),
@@ -2924,7 +2979,7 @@ def actionlint_runner_label_findings(source: Path) -> list[str]:
             values = _job_values(mapping, 'labels') if mapping else _job_values(body, 'runs-on')
             for value in values:
                 if not value.startswith('['):
-                    if value.startswith(('pf-', 'gke-')) and re.fullmatch(_LITERAL_RUNNER_LABEL, value):
+                    if value.startswith(('pf-', 'gke-', 'gkp-')) and re.fullmatch(_LITERAL_RUNNER_LABEL, value):
                         if value not in declared:
                             findings.append(f'{path.name} job {job}: label "{value}" is not declared '
                                             f'in {config_name}')

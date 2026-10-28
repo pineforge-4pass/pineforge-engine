@@ -81,7 +81,7 @@ bare scalar `gke-2cpu-4gb-amd64` and `probe` on `["self-hosted","pf-gcp-post"]`.
 `docs.yml` retains the PR build name and `.github/**` exclusion.
 `docs-post.yml` builds and deploys on main pushes and manual dispatch.
 Tag pushes no longer trigger docs: the post fleet admits only engine `main`.
-Release and baseline promotion retain their separate `pf-gcp-main` policy.
+Release retains its separate `pf-gcp-main` policy; baseline promotion uses bare scalar `gkp-2cpu-4gb-amd64` under `environment: release-bot`.
 
 Start with the preflight used by GitHub Actions. Install actionlint 1.7.12,
 ShellCheck and pytest, then run:
@@ -1647,7 +1647,7 @@ runs, and this page does not claim either target as met.
 
 ## Runners and time limits
 
-Credentialed work retains its VM pins; secret-free post Linux jobs run directly in GKE runner pods carrying the engine toolchain image and sudo.
+Baseline promotion uses protected GKE; other credentialed work retains its VM pins. Secret-free post Linux jobs run directly in GKE runner pods carrying the engine toolchain image and sudo.
 The four amd64 post legs, arm64 cells, preflight, parity and native verification use bare GKE scale-set names; their aggregates use the light image. Promotion's `promote-guard` and docs-post/probe `authz` each use one `gke-2cpu-4gb-amd64` instance in separate roots; their image must include `gh` for permission lookups.
 The native matrix is exactly `1..4` with `--ctest-shard I/4`; live sanitizers are unsharded. Each runner label remains a literal, checked per job:
 
@@ -1667,7 +1667,7 @@ refuses all PR events. Reusable workflows inherit their caller's event.
 follow local calls to a fixed point, refuse mixed event classes and require
 literal VM arrays or exact bare scalar GKE scale-set names outside hosted pins; job conditions cannot excuse routing.
 Fork PRs on hosted runners run without our secrets, so the VM-only fork-refusal hook is not needed.
-GKE jobs carry no deployment secrets, effective id-token permissions or environment; PR-reachable workflows cannot name GKE routing. Runner-group workflow/ref allowlists must admit the post-only workflows at refs/heads/main before they can acquire pods.
+Unprotected `gke-` jobs carry no deployment secrets, effective id-token permissions or environment; PR-reachable workflows cannot name GKE routing. Runner-group workflow/ref allowlists must admit the post-only workflows at refs/heads/main before they can acquire pods.
 Rollback may restore an earlier GCP fleet pin; paid larger-runner labels remain refused.
 
 The four full build checks are `build (ubuntu-24.04, Release)`,
@@ -1681,8 +1681,8 @@ One cache key per architecture/profile/SHA is restored by all shards; only shard
 `HOSTED_JOB_RUNNERS` pins hosted jobs and exact bare GKE scalars; every GKE job runs directly in a runner pod carrying the engine toolchain image and sudo. The PR build remains
 `build (ubuntu-24.04, Release)` and its aggregate remains `build`.
 
-Release and promotion use the isolated release fleet:
-`release`, `notify-hub`, Linux x64 `prebuilt` and baseline `promote` use
+Release jobs retain the isolated release fleet:
+`release`, `notify-hub` and Linux x64 `prebuilt` use
 `["self-hosted","pf-gcp-main"]`.
 The release ruleset probe runs secret-free `authz` on bare scalar `gke-2cpu-4gb-amd64` and
 `probe` on `["self-hosted","pf-gcp-post"]`.
@@ -1703,8 +1703,8 @@ default excludes `slow` from Debug and sanitizer runs on every event,
 including non-PR events; Release, kernel and native retain every row.
 PR CI keeps CR-233's Release smoke selected by CTest label `fast`.
 
-Baseline promotion uses `["self-hosted","pf-gcp-main"]` for its GitHub App
-secrets and inherited `id-token: write` permission. The release class admits
+Baseline promotion uses bare scalar `gkp-2cpu-4gb-amd64` under `environment: release-bot` for its GitHub App
+secrets and inherited `id-token: write` permission. The `gke-protected` group admits
 this allowlisted workflow at `refs/heads/main`; WIF pins its
 `job_workflow_ref` and run ref to main without restricting the event.
 The pushed SHA must resolve to exactly one merged PR before authorization,
@@ -1733,7 +1733,7 @@ Every paid larger-runner label is refused in every workflow, including pinned jo
 `larger_runner` keys stay refused. GitHub's platform maximum remains the only time bound.
 
 The read-only `promote-guard` uses bare scalar `gke-2cpu-4gb-amd64`; the credential
-job keeps main's isolated release runner. Preflight pins the complete guard
+job uses bare scalar `gkp-2cpu-4gb-amd64` and `environment: release-bot`. Preflight pins the complete guard
 block, including its sole `pull-requests: read` scope, API resolution, identity bindings,
 refusal script, authorization output and separator. It also pins the
 credential job's dependency and successful-authorization condition.

@@ -1998,8 +1998,8 @@ class RulesetsProbeTests(unittest.TestCase):
             'profiles use fixed bare GKE scale-set names directly in runner pods carrying the engine toolchain image and sudo. No job routes by event.',
             "The manual `release-ruleset-probe.yml` workflow runs `authz` on\n"
             'bare scalar `gke-2cpu-4gb-amd64` and `probe` on `["self-hosted","pf-gcp-post"]`.',
-            "Release and promotion use the isolated release fleet:\n"
-            "`release`, `notify-hub`, Linux x64 `prebuilt` and baseline `promote` use\n"
+            "Release jobs retain the isolated release fleet:\n"
+            "`release`, `notify-hub` and Linux x64 `prebuilt` use\n"
             '`["self-hosted","pf-gcp-main"]`.\n'
             'The release ruleset probe runs secret-free `authz` on bare scalar `gke-2cpu-4gb-amd64` and\n'
             '`probe` on `["self-hosted","pf-gcp-post"]`.',

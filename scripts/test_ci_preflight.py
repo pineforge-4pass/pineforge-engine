@@ -34,6 +34,7 @@ GKE_8 = 'gke-8cpu-16gb-amd64'
 GKE_ARM = 'gke-16cpu-32gb-arm64'
 GKE_2 = 'gke-2cpu-4gb-amd64'
 GKE_4 = 'gke-4cpu-8gb-amd64'
+PROMOTE_RUNNER = 'gkp-2cpu-4gb-amd64'
 EXPECTED_LIGHT_GKE_JOBS = {
     'ci-post.yml': dict.fromkeys(
         ('authz', 'changes', 'build-release-gate', 'build-debug-gate',
@@ -340,6 +341,8 @@ def routed_line(before, value):
 def site_runner(name, job, fleet):
     if fleet == 'gke':
         return EXPECTED_GKE_JOBS[name][job]
+    if fleet == 'protected':
+        return PROMOTE_RUNNER
     return {'pr': PR_RUNNER, 'post': POST_RUNNER, 'main': RELEASE_RUNNER}[fleet]
 
 
@@ -732,6 +735,180 @@ def runner_declaration(runner):
         group, label = runner.removeprefix('group: ').split(' labels: ')
         return f'    runs-on:\n      group: {group}\n      labels: {label}\n'
     return f'    runs-on: {runner}\n'
+
+
+class PromotionProtectedRunnerPolicy(unittest.TestCase):
+    NAME = 'promote-baseline.yml'
+    PIN = f'{NAME} job promote must run on {PROMOTE_RUNNER} (protected)'
+    ENVIRONMENT = f'{NAME} job promote must use environment: release-bot'
+    RESERVED = 'may name protected GKE routing only in pinned bare runs-on scalars'
+
+    def fixture(self, *, runner=PROMOTE_RUNNER, environment='release-bot',
+                extra='', header=''):
+        environment_line = (f'    environment: {environment}\n'
+                            if environment is not None else '')
+        return ('on:\n  push:\n    branches: [main]\n  workflow_dispatch:\n'
+                + header + 'jobs:\n  promote-guard:\n'
+                + runner_declaration(GKE_2)
+                + '    permissions:\n      pull-requests: read\n'
+                + '    steps:\n      - run: git --version\n'
+                + '  promote:\n    needs: [promote-guard]\n'
+                + runner_declaration(runner) + environment_line + extra
+                + '    steps:\n      - run: git --version\n')
+
+    def test_exact_protected_promotion_scalar_is_accepted(self):
+        self.assertEqual(ci_preflight.runner_findings({self.NAME: self.fixture()}), [])
+
+    def test_old_vm_and_other_runners_are_refused_by_the_new_pin(self):
+        for runner in (RELEASE_RUNNER, POST_RUNNER, PR_RUNNER, 'ubuntu-24.04',
+                       GKE_2, 'gkp-4cpu-8gb-amd64', 'gkp-2cpu-4gb-arm64',
+                       'GKP-2CPU-4GB-AMD64'):
+            with self.subTest(runner=runner):
+                self.assertIn(self.PIN, ci_preflight.runner_findings(
+                    {self.NAME: self.fixture(runner=runner)}))
+
+    def test_protected_promotion_refuses_nonliteral_runner_shapes(self):
+        for runner in (f'[{PROMOTE_RUNNER}]', f'["{PROMOTE_RUNNER}"]',
+                       f'["self-hosted","{PROMOTE_RUNNER}"]',
+                       f"'{PROMOTE_RUNNER}'", f'"{PROMOTE_RUNNER}"',
+                       "${{ vars.PROMOTE_RUNNER }}",
+                       "${{ 'gkp-2cpu-4gb-amd64' }}",
+                       "${{ inputs.runner || 'gkp-2cpu-4gb-amd64' }}",
+                       'group: gke-protected labels: ' + PROMOTE_RUNNER,
+                       '{group: gke-protected, labels: ' + PROMOTE_RUNNER + '}',
+                       '\n      ' + PROMOTE_RUNNER,
+                       '\n      labels: ' + PROMOTE_RUNNER):
+            with self.subTest(runner=runner):
+                findings = ci_preflight.runner_findings(
+                    {self.NAME: self.fixture(runner=runner)})
+                self.assertIn(self.PIN, findings)
+                if 'gkp-' in runner:
+                    self.assertIn(f'{self.NAME} job promote must use a bare scalar '
+                                  'protected GKE scale-set name', findings)
+
+    def test_protected_promotion_requires_release_bot_even_with_oidc_and_secrets(self):
+        for environment in (None, 'release', '${{ vars.ENVIRONMENT }}', '""'):
+            with self.subTest(environment=environment):
+                workflow = self.fixture(
+                    environment=environment,
+                    header='permissions:\n  id-token: write\n',
+                    extra='    env:\n      KEY: ${{ secrets.DEPLOY_KEY }}\n')
+                self.assertIn(self.ENVIRONMENT, ci_preflight.runner_findings(
+                    {self.NAME: workflow}))
+
+    def test_protected_promotion_refuses_job_containers_and_services(self):
+        for key, value, finding in (
+                ('container', '{}', 'a job container'),
+                ('container', 'ubuntu:24.04', 'a job container'),
+                ('services', '{}', 'job services'),
+                ('services', '\n      cache:\n        image: redis:7', 'job services')):
+            with self.subTest(key=key, value=value):
+                workflow = self.fixture(extra=f'    {key}: {value}\n')
+                self.assertIn(f'{self.NAME} job promote must not declare {finding} on GKE',
+                              ci_preflight.runner_findings({self.NAME: workflow}))
+
+    def test_protected_routes_are_confined_to_the_exact_job_and_label(self):
+        for name, job, runner in (
+                ('extra.yml', 'promote', PROMOTE_RUNNER),
+                (self.NAME, 'unexpected', PROMOTE_RUNNER),
+                (self.NAME, 'promote', 'gkp-4cpu-8gb-amd64')):
+            workflow = self.fixture(runner=runner).replace(
+                '  promote:\n', f'  {job}:\n', 1)
+            with self.subTest(name=name, job=job, runner=runner):
+                self.assertIn(f'{name} job {job} may use protected GKE routing only '
+                              'at its exact pinned job and label',
+                              ci_preflight.runner_findings({name: workflow}))
+
+    def test_protected_names_cannot_hide_in_metadata_or_commands(self):
+        for token in ('gke-protected', PROMOTE_RUNNER, 'GKP-2CPU-4GB-AMD64'):
+            for header, extra, command in (
+                    (f'env:\n  ROUTE: {token}\n', '', 'git --version'),
+                    ('', f'    env:\n      ROUTE: {token}\n', 'git --version'),
+                    ('', '    strategy:\n      matrix:\n'
+                     f'        route: [{token}]\n', 'git --version'),
+                    ('', '', f'echo {token}')):
+                workflow = self.fixture(header=header, extra=extra)
+                workflow = in_job(workflow, 'promote', 'git --version', command)
+                with self.subTest(token=token, header=header, extra=extra, command=command):
+                    self.assertIn(f'{self.NAME} {self.RESERVED}',
+                                  ci_preflight.runner_findings({self.NAME: workflow}))
+
+    def test_protected_workflow_refuses_direct_and_nested_pr_routes_after_runner_reversion(self):
+        finding = (f'{self.NAME} must not be reachable from pull_request '
+                   'on the protected GKE workflows')
+        for runner in (PROMOTE_RUNNER, RELEASE_RUNNER):
+            leaf = self.fixture(runner=runner)
+            direct = leaf.replace('  workflow_dispatch:\n', '  pull_request:\n', 1)
+            nested = leaf.replace('  workflow_dispatch:\n', '  workflow_call:\n', 1)
+            graphs = (
+                {self.NAME: direct},
+                {'pr.yml': 'on: pull_request\njobs:\n  call:\n'
+                 '    uses: ./.github/workflows/relay.yml\n',
+                 'relay.yml': 'on: workflow_call\njobs:\n  call:\n'
+                 '    uses: ./.github/workflows/promote-baseline.yml\n',
+                 self.NAME: nested},
+            )
+            for graph in graphs:
+                with self.subTest(runner=runner, graph=tuple(graph)):
+                    self.assertIn(finding, ci_preflight.runner_findings(graph))
+            self.assertIn(f'{self.NAME} must not declare workflow_call for protected GKE jobs',
+                          ci_preflight.runner_findings({self.NAME: nested}))
+
+    def test_id_token_values_except_literal_lowercase_none_are_credentials(self):
+        values = ('${{ inputs.scope }}', '"${{ inputs.scope }}"', "'${{ inputs.scope }}'",
+                  'bogus', 'none-other', 'none bogus', 'NONE', 'None',
+                  'read', '"read"', "'read'", 'write', '"write"', "'write'",
+                  'WRITE', '"WRITE"', "'WRITE'", 'none', '"none"', "'none'")
+        for value in values:
+            credential = value not in ('none', '"none"', "'none'")
+            for scope in ('job', 'workflow'):
+                for style in ('block', 'flow-first', 'flow-last'):
+                    for key in ('id-token', '"id-token"', "'id-token'", 'ID-TOKEN'):
+                        indent = '    ' if scope == 'job' else ''
+                        if style == 'block':
+                            declaration = (f'{indent}permissions:\n{indent}  {key}: {value}\n'
+                                           f'{indent}  contents: read\n')
+                        elif style == 'flow-first':
+                            declaration = (f'{indent}permissions: '
+                                           f'{{{key}: {value}, contents: read}}\n')
+                        else:
+                            declaration = (f'{indent}permissions: '
+                                           f'{{contents: read, {key}: {value}}}\n')
+                        workflow = self.fixture(
+                            environment=None,
+                            extra=declaration if scope == 'job' else '',
+                            header=declaration if scope == 'workflow' else '')
+                        with self.subTest(value=value, scope=scope, style=style, key=key):
+                            self.assertEqual(ci_preflight._holds_credentials(
+                                workflow, _jobs(workflow)['promote'],
+                                effective_permissions=True), credential)
+
+    def test_protected_promotion_matrix_is_capped_at_eight(self):
+        for count in (8, 9):
+            extra = ('    strategy:\n      matrix:\n        shard: ['
+                     + ', '.join(str(index) for index in range(1, count + 1)) + ']\n')
+            findings = ci_preflight.runner_findings(
+                {self.NAME: self.fixture(extra=extra)})
+            finding = f'{self.NAME} GKE label {PROMOTE_RUNNER} expands to 9 jobs; cap is 8'
+            with self.subTest(count=count):
+                if count == 9:
+                    self.assertIn(finding, findings)
+                else:
+                    self.assertNotIn(finding, findings)
+
+    def test_real_promotion_pin_environment_and_vm_reversion(self):
+        workflow = (ROOT / '.github/workflows' / self.NAME).read_text()
+        body = _jobs(workflow)['promote']
+        self.assertEqual(ci_preflight._job_values(body, 'runs-on', unquote=False),
+                         [PROMOTE_RUNNER])
+        self.assertEqual(ci_preflight._job_values(body, 'environment'), ['release-bot'])
+        self.assertEqual(ci_preflight.runner_findings({self.NAME: workflow}), [])
+        for before, after, finding in (
+                (runner_declaration(PROMOTE_RUNNER), runner_declaration(RELEASE_RUNNER), self.PIN),
+                ('    environment: release-bot\n', '', self.ENVIRONMENT)):
+            changed = in_job(workflow, 'promote', before, after)
+            self.assertNotEqual(changed, workflow)
+            self.assertIn(finding, ci_preflight.runner_findings({self.NAME: changed}))
 
 
 class LightGkeRunnerPolicy(unittest.TestCase):
@@ -1435,7 +1612,7 @@ class PostFleetRunnerPolicy(unittest.TestCase):
             '| `native-live.yml` | Dispatch and post CI callers on `main` | '
             '`authz` and both aggregates: scalar `gke-4cpu-8gb-amd64`; bare GKE scalars: '
             'native shards `gke-8cpu-16gb-amd64`, sanitizer profiles `gke-16cpu-32gb-amd64` |',
-            'GKE jobs carry no deployment secrets, effective id-token permissions or environment; '
+            'Unprotected `gke-` jobs carry no deployment secrets, effective id-token permissions or environment; '
             'PR-reachable workflows cannot name GKE routing. '
             'Runner-group workflow/ref allowlists must admit the post-only workflows '
             'at refs/heads/main before they can acquire pods.',
@@ -1445,6 +1622,13 @@ class PostFleetRunnerPolicy(unittest.TestCase):
             '`HOSTED_JOB_RUNNERS` pins hosted jobs and exact bare GKE scalars; every GKE job runs directly '
             'in a runner pod carrying the engine toolchain image and sudo. The PR build remains',
             'Every paid larger-runner label is refused in every workflow, including pinned jobs;',
+            'Release retains its separate `pf-gcp-main` policy; baseline promotion uses '
+            'bare scalar `gkp-2cpu-4gb-amd64` under `environment: release-bot`.',
+            'Baseline promotion uses bare scalar `gkp-2cpu-4gb-amd64` under '
+            '`environment: release-bot` for its GitHub App\n'
+            'secrets and inherited `id-token: write` permission. The `gke-protected` group admits',
+            'job uses bare scalar `gkp-2cpu-4gb-amd64` and `environment: release-bot`. '
+            'Preflight pins the complete guard',
         )
         for required in requirements:
             with self.subTest(required=required):
@@ -2733,14 +2917,17 @@ class PreflightFailures(unittest.TestCase):
                     continue  # Hosted jobs have independent literal pins and mutation controls.
                 # Per-job pins retain the canon PR fleet or the dispatch post fleet.
                 fixed_runner = ci_preflight.RELEASE_JOB_RUNNERS.get(name, {}).get(job)
-                fleet = 'gke' if gke else {PR_RUNNER: 'pr', POST_RUNNER: 'post'}.get(fixed_runner, workflow_fleet)
+                fleet = ('protected' if (name, job) == ('promote-baseline.yml', 'promote') else
+                         'gke' if gke else {PR_RUNNER: 'pr', POST_RUNNER: 'post'}.get(fixed_runner, workflow_fleet))
                 runner = site_runner(name, job, fleet)
                 if (name, job) == ('release.yml', 'prebuilt'):
                     yield name, job, fleet, f'            runner: {RELEASE_RUNNER}\n', RELEASE_MATRIX_FINDING
                     continue
                 value, = ci_preflight._job_values(body, 'runs-on', unquote=False)
                 finding = f'{name} job {job} must run on {runner}'
-                if fixed_runner == POST_RUNNER:
+                if fleet == 'protected':
+                    finding += ' (protected)'
+                elif fixed_runner == POST_RUNNER:
                     finding += ' (post fleet)'
                 elif fixed_runner is not None and fixed_runner != PR_RUNNER:
                     finding += ' (isolated release)'
@@ -4511,7 +4698,7 @@ exit "$lookup_exit"
             'release-ruleset-probe.yml': {
                 'probe': '["self-hosted","pf-gcp-post"]'},
             'promote-baseline.yml': {
-                'promote': '["self-hosted","pf-gcp-main"]'},
+                'promote': PROMOTE_RUNNER},
         })
         self.assertEqual(ci_workflow_findings(*original, others=others), [])
         mutations = (
@@ -4565,8 +4752,8 @@ exit "$lookup_exit"
             (5, 'build', '    runs-on: ubuntu-24.04\n',
              '    runs-on:\n      group: pineforge-ci-large\n',
              'docs.yml job build must run on ubuntu-24.04'),
-            (2, 'promote', f'    runs-on: {RELEASE_RUNNER}\n', '    runs-on:\n      - macos-26-xlarge\n',
-             f'promote-baseline.yml job promote must run on {RELEASE_RUNNER} (isolated release)'),
+            (2, 'promote', f'    runs-on: {PROMOTE_RUNNER}\n', '    runs-on:\n      - macos-26-xlarge\n',
+             f'promote-baseline.yml job promote must run on {PROMOTE_RUNNER} (protected)'),
             (0, None, '  build-gate:\n', '  extra:\n    runs-on:\n      group: pineforge-ci-large\n'
              '    steps:\n      - run: "true"\n\n  build-gate:\n', 'ci.yml job extra needs a pinned runner and time limit'),
             (0, None, '  build-gate:\n', '  extra:\n    "runs-on": pf-linux-x64-16\n'
@@ -4575,8 +4762,8 @@ exit "$lookup_exit"
              'docs.yml job build must run on ubuntu-24.04'),
             (5, 'build', '    runs-on: ubuntu-24.04\n', '    runs-on : macos-26-xlarge\n',
              'docs.yml job build must run on ubuntu-24.04'),
-            (2, 'promote', f'    runs-on: {RELEASE_RUNNER}\n', "    'runs-on': macos-26-xlarge\n",
-             f'promote-baseline.yml job promote must run on {RELEASE_RUNNER} (isolated release)'),
+            (2, 'promote', f'    runs-on: {PROMOTE_RUNNER}\n', "    'runs-on': macos-26-xlarge\n",
+             f'promote-baseline.yml job promote must run on {PROMOTE_RUNNER} (protected)'),
             (5, 'build', '    runs-on: ubuntu-24.04\n', '',
              'docs.yml job build must run on ubuntu-24.04'),
             (5, None, '\njobs:\n', '\njobs:\n  pre_build:\n    runs-on: macos-26-xlarge\n    steps:\n'
@@ -4590,8 +4777,8 @@ exit "$lookup_exit"
              'ci.yml job build-gate must run on ubuntu-24.04 (hosted)'),
             (5, 'build', '    runs-on: ubuntu-24.04\n', '    runs-on: pf-linux-x64-16\n',
              'docs.yml job build must run on ubuntu-24.04'),
-            (2, 'promote', f'    runs-on: {RELEASE_RUNNER}\n', '    runs-on: macos-26-xlarge\n',
-             f'promote-baseline.yml job promote must run on {RELEASE_RUNNER} (isolated release)'),
+            (2, 'promote', f'    runs-on: {PROMOTE_RUNNER}\n', '    runs-on: macos-26-xlarge\n',
+             f'promote-baseline.yml job promote must run on {PROMOTE_RUNNER} (protected)'),
             (0, None, '  build-gate:\n', '  extra:\n    runs-on: ubuntu-24.04\n    steps:\n'
              '      - run: "true"\n\n  build-gate:\n', 'ci.yml job extra needs a pinned runner and time limit'),
             # No job or step may declare timeout-minutes (owner #827,
@@ -4778,7 +4965,7 @@ exit "$lookup_exit"
                           'pf-gcp-engine-pr', 'pf-gcp-engine-main', 'pf-gcp-small'):
                 # Refuse the wrong class alone and extra labels on a valid class.
                 extra = (f'["{runner}","{label}"]'
-                         if fleet == 'gke' else runner[:-1] + f',"{label}"]')
+                         if fleet in ('gke', 'protected') else runner[:-1] + f',"{label}"]')
                 for value in (f'["self-hosted","{label}"]', extra):
                     with self.subTest(workflow=name, job=job, runner=value):
                         findings = self.routed_file_findings(name, job, before, routed_line(before, value))
@@ -5535,8 +5722,8 @@ finally:
                  f'kernel --build-dir build-kernel --jobs {CORES} --ccache '
                  '--curl-dir "${{ steps.curl-deps.outputs.curl-dir }}" '
                  '--ctest-shard ${{ matrix.shard }}/2'),
-                (2, 'promote', f'    runs-on: {RELEASE_RUNNER}\n',
-                 f'    runs-on: {RELEASE_RUNNER}  # isolated release\n'),
+                (2, 'promote', f'    runs-on: {PROMOTE_RUNNER}\n',
+                 f'    runs-on: {PROMOTE_RUNNER}  # protected promotion\n'),
                 (0, None, '\n  preflight:\n', '\n  preflight:  # the fast gate\n'))
         # Each edit alone, then every one that composes (a line one edit
         # rewrites is left to the edit that came first).
@@ -5636,22 +5823,22 @@ finally:
                 findings = ci_workflow_findings(*original, others=dict(others, **{'release.yml': changed}))
                 self.assertIn(RELEASE_MATRIX_FINDING, findings)
 
-    def test_baseline_promotion_requires_isolation_and_push_dispatch_only(self):
+    def test_baseline_promotion_requires_protected_runner_and_push_dispatch_only(self):
         original, others = self.ci_sources(), self.other_sources()
         promote = original[2]
         self.assertEqual(ci_workflow_findings(*original, others=others), [])
-        for runner in ('ubuntu-latest', 'ubuntu-24.04', PR_RUNNER,
+        for runner in ('ubuntu-latest', 'ubuntu-24.04', PR_RUNNER, POST_RUNNER, RELEASE_RUNNER,
                        '["self-hosted","pf-ci","pf-ci-release"]',
                        f"${{{{ fromJSON('{RELEASE_RUNNER}') || 'ubuntu-latest' }}}}"):
             with self.subTest(runner=runner):
                 changed = original.copy()
-                changed[2] = in_job(promote, 'promote', f'    runs-on: {RELEASE_RUNNER}\n',
+                changed[2] = in_job(promote, 'promote', f'    runs-on: {PROMOTE_RUNNER}\n',
                                     f'    runs-on: {runner}\n')
                 findings = ci_workflow_findings(*changed, others=others)
-                self.assertIn(f'promote-baseline.yml job promote must run on {RELEASE_RUNNER} '
-                              '(isolated release)', findings)
+                self.assertIn(f'promote-baseline.yml job promote must run on {PROMOTE_RUNNER} '
+                              '(protected)', findings)
         event_finding = ('promote-baseline.yml must retain push and '
-                         'workflow_dispatch only for pf-gcp-main promotion')
+                         'workflow_dispatch only for baseline promotion')
         for event in ('pull_request', 'pull_request_target', 'workflow_run'):
             for key in (event, f'"{event}"', f"'{event}'", event + ' '):
                 with self.subTest(event_key=key):
@@ -5885,6 +6072,7 @@ finally:
             for job in jobs:
                 before = (HOSTED_MATRIX_RUNNER if job == 'prebuilt' else
                           GKE_2 if job == 'promote-guard' else
+                          PROMOTE_RUNNER if name == 'promote-baseline.yml' else
                           'ubuntu-24.04' if name == 'docs.yml' else RELEASE_RUNNER)
                 after = 'ubuntu-latest' if name == 'docs.yml' else PR_RUNNER
                 pool = in_job(workflows[name], job, f'    runs-on: {before}\n',
@@ -5893,6 +6081,7 @@ finally:
                     {'ci.yml': original[0], **workflows}, **{name: pool}))
                 finding = (f'{name} job {job} must run on ubuntu-24.04 (hosted)' if name == 'docs.yml' else
                            f'{name} job {job} must run on {GKE_2}' if job == 'promote-guard' else
+                           f'{name} job {job} must run on {PROMOTE_RUNNER} (protected)' if name == 'promote-baseline.yml' else
                            f'{name} job {job} must run on {before} (isolated release)')
                 self.assertIn(finding, findings)
                 marker = f"      PF_CI_LABELS: '{PR_RUNNER}'\n"
@@ -7207,6 +7396,26 @@ class CanonAuthz(unittest.TestCase):
 
 
 class ActionlintRunnerLabels(unittest.TestCase):
+    def test_protected_promotion_label_is_declared_and_required(self):
+        workflow = self.tree / '.github/workflows/protected-label.yml'
+        workflow.write_text(
+            'on: workflow_dispatch\njobs:\n  promote:\n'
+            + runner_declaration(PROMOTE_RUNNER)
+            + '    environment: release-bot\n    steps:\n      - run: git --version\n')
+        original = self.config.read_text()
+        declaration = f'    - {PROMOTE_RUNNER}\n'
+        declared = original if declaration in original else original + declaration
+        self.config.write_text(declared)
+        code, output = self.runner_labels()
+        self.assertEqual(code, 0, output)
+        changed = declared.replace(declaration, '', 1)
+        self.assertNotEqual(changed, declared)
+        self.config.write_text(changed)
+        code, output = self.runner_labels()
+        self.assertEqual(code, 1, output)
+        self.assertIn(f'protected-label.yml job promote: label "{PROMOTE_RUNNER}" '
+                      'is not declared in .github/actionlint.yaml', output.splitlines())
+
     def test_actionlint_runner_labels_reads_gke_scalar_label(self):
         workflow = self.tree / '.github/workflows/gke-label.yml'
         workflow.write_text(
@@ -7315,7 +7524,8 @@ class ActionlintRunnerLabels(unittest.TestCase):
                 ('gke-8cpu-16gb-amd64', (('ci-post.yml', 'preflight'), ('ci-post.yml', 'preflight-slow'),
                                         ('native-live.yml', 'native-live-shards'), ('corpus-parity.yml', 'corpus-parity-subset'))),
                 ('gke-16cpu-32gb-arm64', (('ci-post.yml', 'build-arm'),)),
-                ('pf-gcp-main', (('release.yml', 'release'), ('promote-baseline.yml', 'promote')))):
+                ('pf-gcp-main', (('release.yml', 'release'), ('release.yml', 'notify-hub'))),
+                ('gkp-2cpu-4gb-amd64', (('promote-baseline.yml', 'promote'),))):
             with self.subTest(label=label):
                 changed = original.replace(f'    - {label}\n', '', 1)
                 self.assertNotEqual(changed, original)
