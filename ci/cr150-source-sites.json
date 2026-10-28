@@ -1666,6 +1666,32 @@
    "ordinal": 1
   },
   {
+   "file": "include/pineforge/detail/matrix_store.hpp",
+   "symbol": "cells",
+   "scope": [
+    "namespace pineforge :: detail :: matrix_store #1",
+    "template < class T > inline std :: shared_ptr < Cells > make_cells ( Runtime & runtime , std :: uint64_t rows , std :: uint64_t columns , const T & initial ) #1",
+    "if constexpr ( codec < T > :: mapped ) #1",
+    "if constexpr ( bytewise_codec < T > :: value ) #1",
+    "if ( Cells :: layout_bytes ( rows , columns , width ) < = kTransferBytes ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/matrix_store.hpp",
+   "symbol": "cells",
+   "scope": [
+    "namespace pineforge :: detail :: matrix_store #1",
+    "template < class T > inline std :: shared_ptr < Cells > make_cells ( Runtime & runtime , std :: uint64_t rows , std :: uint64_t columns , const T & initial ) #1",
+    "if constexpr ( codec < T > :: mapped ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
    "file": "include/pineforge/detail/scratch_arena.hpp",
    "symbol": "chunks",
    "scope": [
@@ -4289,6 +4315,99 @@
   },
   {
    "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "storage_",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename T > class GenericMatrix #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 2
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "materialized",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename T > class GenericMatrix #1",
+    "Data & native_data ( ) const #1",
+    "if ( storage_ -> external ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "Data",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "materialized",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename T > class GenericMatrix #1",
+    "Data & native_data ( ) const #1",
+    "if ( storage_ -> external ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "materialized . reserve ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "row",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename T > class GenericMatrix #1",
+    "Data & native_data ( ) const #1",
+    "if ( storage_ -> external ) #1",
+    "+ + r ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < T >",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "row",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename T > class GenericMatrix #1",
+    "Data & native_data ( ) const #1",
+    "if ( storage_ -> external ) #1",
+    "+ + r ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "row . reserve ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "row",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename T > class GenericMatrix #1",
+    "Data & native_data ( ) const #1",
+    "if ( storage_ -> external ) #1",
+    "+ + r ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "row . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "materialized",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename T > class GenericMatrix #1",
+    "Data & native_data ( ) const #1",
+    "if ( storage_ -> external ) #1",
+    "+ + r ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "materialized . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
    "symbol": "<temp:GenericMatrix>",
    "scope": [
     "namespace pineforge #1",
@@ -4330,6 +4449,17 @@
    ],
    "cls": "temp",
    "spelling": "GenericMatrix",
+   "ordinal": 6
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "<temp:GenericMatrix>",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename T > class GenericMatrix #1"
+   ],
+   "cls": "temp",
+   "spelling": "GenericMatrix",
    "ordinal": 5
   },
   {
@@ -4340,6 +4470,19 @@
     "template < typename T > class GenericMatrix #1"
    ],
    "cls": "decl",
+   "spelling": "GenericMatrix",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "<temp:GenericMatrix>",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename T > class GenericMatrix #1",
+    "[ [ nodiscard ] ] static GenericMatrix new_ ( int rows , int cols , T init ) #1",
+    "if constexpr ( detail :: matrix_store :: codec < T > :: mapped ) #1"
+   ],
+   "cls": "temp",
    "spelling": "GenericMatrix",
    "ordinal": 1
   },
@@ -4392,6 +4535,19 @@
   },
   {
    "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "<temp:GenericMatrix>",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename T > class GenericMatrix #1",
+    "[ [ nodiscard ] ] static GenericMatrix new_ ( int rows , int cols ) #1",
+    "if constexpr ( detail :: matrix_store :: codec < T > :: mapped ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "GenericMatrix",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
    "symbol": "data",
    "scope": [
     "namespace pineforge #1",
@@ -4428,6 +4584,41 @@
   },
   {
    "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "borrow_external",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename T > class GenericMatrix #1"
+   ],
+   "cls": "decl",
+   "spelling": "GenericMatrix",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "cells",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename T > class GenericMatrix #1",
+    "[ [ nodiscard ] ] static GenericMatrix borrow_external ( detail :: matrix_store :: Runtime & runtime , detail :: o1 :: Id id ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "<temp:GenericMatrix>",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename T > class GenericMatrix #1",
+    "[ [ nodiscard ] ] static GenericMatrix borrow_external ( detail :: matrix_store :: Runtime & runtime , detail :: o1 :: Id id ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "GenericMatrix",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
    "symbol": "row",
    "scope": [
     "namespace pineforge #1",
@@ -4435,6 +4626,45 @@
    ],
    "cls": "decl",
    "spelling": "std :: vector < T >",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "out",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename T > class GenericMatrix #1",
+    "std :: vector < T > row ( int idx ) const #1",
+    "if ( require_storage ( ) . external ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < T >",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "out",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename T > class GenericMatrix #1",
+    "std :: vector < T > row ( int idx ) const #1",
+    "if ( require_storage ( ) . external ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "out . reserve ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "out",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename T > class GenericMatrix #1",
+    "std :: vector < T > row ( int idx ) const #1",
+    "if ( require_storage ( ) . external ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "out . push_back ( . . . )",
    "ordinal": 1
   },
   {
@@ -4596,12 +4826,50 @@
   },
   {
    "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "<temp:GenericMatrix>",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename T > class GenericMatrix #1",
+    "[ [ nodiscard ] ] GenericMatrix copy ( ) const #1"
+   ],
+   "cls": "temp",
+   "spelling": "GenericMatrix",
+   "ordinal": 2
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
    "symbol": "submatrix",
    "scope": [
     "namespace pineforge #1",
     "template < typename T > class GenericMatrix #1"
    ],
    "cls": "decl",
+   "spelling": "GenericMatrix",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "out",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename T > class GenericMatrix #1",
+    "[ [ nodiscard ] ] GenericMatrix submatrix ( int from_row , int to_row , int from_col , int to_col ) const #1",
+    "if ( const auto & cells = require_storage ( ) . external ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "out = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "<temp:GenericMatrix>",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename T > class GenericMatrix #1",
+    "[ [ nodiscard ] ] GenericMatrix submatrix ( int from_row , int to_row , int from_col , int to_col ) const #1",
+    "if ( const auto & cells = require_storage ( ) . external ) #1"
+   ],
+   "cls": "temp",
    "spelling": "GenericMatrix",
    "ordinal": 1
   },
@@ -4630,6 +4898,32 @@
   },
   {
    "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "out",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename T > class GenericMatrix #1",
+    "[ [ nodiscard ] ] GenericMatrix transpose ( ) const #1",
+    "if ( const auto & cells = require_storage ( ) . external ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "out = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "<temp:GenericMatrix>",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename T > class GenericMatrix #1",
+    "[ [ nodiscard ] ] GenericMatrix transpose ( ) const #1",
+    "if ( const auto & cells = require_storage ( ) . external ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "GenericMatrix",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
    "symbol": "<temp:GenericMatrix>",
    "scope": [
     "namespace pineforge #1",
@@ -4653,6 +4947,89 @@
   },
   {
    "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "out",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename T > class GenericMatrix #1",
+    "[ [ nodiscard ] ] GenericMatrix concat ( const GenericMatrix & other , bool horizontal ) const #1",
+    "if ( const auto & cells = own ? own : rhs ) #1",
+    "if constexpr ( detail :: matrix_store :: bytewise_codec < T > :: value ) #1",
+    "if ( own && rhs ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "out = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "<temp:GenericMatrix>",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename T > class GenericMatrix #1",
+    "[ [ nodiscard ] ] GenericMatrix concat ( const GenericMatrix & other , bool horizontal ) const #1",
+    "if ( const auto & cells = own ? own : rhs ) #1",
+    "if constexpr ( detail :: matrix_store :: bytewise_codec < T > :: value ) #1",
+    "if ( own && rhs ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "GenericMatrix",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "out",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename T > class GenericMatrix #1",
+    "[ [ nodiscard ] ] GenericMatrix concat ( const GenericMatrix & other , bool horizontal ) const #1",
+    "if ( const auto & cells = own ? own : rhs ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "out = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "out",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename T > class GenericMatrix #1",
+    "[ [ nodiscard ] ] GenericMatrix concat ( const GenericMatrix & other , bool horizontal ) const #1",
+    "if ( const auto & cells = own ? own : rhs ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "value",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename T > class GenericMatrix #1",
+    "[ [ nodiscard ] ] GenericMatrix concat ( const GenericMatrix & other , bool horizontal ) const #1",
+    "if ( const auto & cells = own ? own : rhs ) #1",
+    "+ + c ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "value = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "<temp:GenericMatrix>",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename T > class GenericMatrix #1",
+    "[ [ nodiscard ] ] GenericMatrix concat ( const GenericMatrix & other , bool horizontal ) const #1",
+    "if ( const auto & cells = own ? own : rhs ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "GenericMatrix",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
    "symbol": "m",
    "scope": [
     "namespace pineforge #1",
@@ -4661,6 +5038,107 @@
    ],
    "cls": "decl",
    "spelling": "GenericMatrix",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "cells",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename T > class GenericMatrix #1",
+    "void reshape ( int new_rows , int new_cols ) #1",
+    "if ( auto & cells = require_storage ( ) . external ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "cells . resize ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "replacement",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename T > class GenericMatrix #1",
+    "void restore ( const Snapshot & snapshot ) #1",
+    "if ( snapshot . external_ ) #1",
+    "else #1"
+   ],
+   "cls": "decl",
+   "spelling": "Data",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "replacement",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename T > class GenericMatrix #1",
+    "void restore ( const Snapshot & snapshot ) #1",
+    "if ( snapshot . external_ ) #1",
+    "else #1"
+   ],
+   "cls": "grow",
+   "spelling": "replacement . reserve ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "row",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename T > class GenericMatrix #1",
+    "void restore ( const Snapshot & snapshot ) #1",
+    "if ( snapshot . external_ ) #1",
+    "else #1",
+    "+ + r ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < T >",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "row",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename T > class GenericMatrix #1",
+    "void restore ( const Snapshot & snapshot ) #1",
+    "if ( snapshot . external_ ) #1",
+    "else #1",
+    "+ + r ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "row . reserve ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "row",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename T > class GenericMatrix #1",
+    "void restore ( const Snapshot & snapshot ) #1",
+    "if ( snapshot . external_ ) #1",
+    "else #1",
+    "+ + r ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "row . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "replacement",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename T > class GenericMatrix #1",
+    "void restore ( const Snapshot & snapshot ) #1",
+    "if ( snapshot . external_ ) #1",
+    "else #1",
+    "+ + r ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "replacement . push_back ( . . . )",
    "ordinal": 1
   },
   {
@@ -4755,6 +5233,17 @@
   },
   {
    "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "storage_",
+   "scope": [
+    "namespace pineforge #1",
+    "template < > class GenericMatrix < bool > #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 2
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
    "symbol": "<temp:GenericMatrix>",
    "scope": [
     "namespace pineforge #1",
@@ -4774,6 +5263,17 @@
    "cls": "temp",
    "spelling": "GenericMatrix",
    "ordinal": 4
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "<temp:GenericMatrix>",
+   "scope": [
+    "namespace pineforge #1",
+    "template < > class GenericMatrix < bool > #1"
+   ],
+   "cls": "temp",
+   "spelling": "GenericMatrix",
+   "ordinal": 5
   },
   {
    "file": "include/pineforge/generic_matrix.hpp",
@@ -4832,6 +5332,18 @@
    ],
    "cls": "temp",
    "spelling": "GenericMatrix",
+   "ordinal": 2
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "<temp:GenericMatrix>",
+   "scope": [
+    "namespace pineforge #1",
+    "template < > class GenericMatrix < bool > #1",
+    "[ [ nodiscard ] ] static GenericMatrix new_ ( int rows , int cols , bool init ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "GenericMatrix",
    "ordinal": 1
   },
   {
@@ -4844,6 +5356,41 @@
    "cls": "decl",
    "spelling": "GenericMatrix",
    "ordinal": 2
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "borrow_external",
+   "scope": [
+    "namespace pineforge #1",
+    "template < > class GenericMatrix < bool > #1"
+   ],
+   "cls": "decl",
+   "spelling": "GenericMatrix",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "cells",
+   "scope": [
+    "namespace pineforge #1",
+    "template < > class GenericMatrix < bool > #1",
+    "[ [ nodiscard ] ] static GenericMatrix borrow_external ( detail :: matrix_store :: Runtime & runtime , detail :: o1 :: Id id ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "<temp:GenericMatrix>",
+   "scope": [
+    "namespace pineforge #1",
+    "template < > class GenericMatrix < bool > #1",
+    "[ [ nodiscard ] ] static GenericMatrix borrow_external ( detail :: matrix_store :: Runtime & runtime , detail :: o1 :: Id id ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "GenericMatrix",
+   "ordinal": 1
   },
   {
    "file": "include/pineforge/generic_matrix.hpp",
@@ -5087,12 +5634,50 @@
   },
   {
    "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "<temp:GenericMatrix>",
+   "scope": [
+    "namespace pineforge #1",
+    "template < > class GenericMatrix < bool > #1",
+    "[ [ nodiscard ] ] GenericMatrix copy ( ) const #1"
+   ],
+   "cls": "temp",
+   "spelling": "GenericMatrix",
+   "ordinal": 2
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
    "symbol": "submatrix",
    "scope": [
     "namespace pineforge #1",
     "template < > class GenericMatrix < bool > #1"
    ],
    "cls": "decl",
+   "spelling": "GenericMatrix",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "out",
+   "scope": [
+    "namespace pineforge #1",
+    "template < > class GenericMatrix < bool > #1",
+    "[ [ nodiscard ] ] GenericMatrix submatrix ( int from_row , int to_row , int from_col , int to_col ) const #1",
+    "if ( const auto & cells = require_storage ( ) . external ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "out = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "<temp:GenericMatrix>",
+   "scope": [
+    "namespace pineforge #1",
+    "template < > class GenericMatrix < bool > #1",
+    "[ [ nodiscard ] ] GenericMatrix submatrix ( int from_row , int to_row , int from_col , int to_col ) const #1",
+    "if ( const auto & cells = require_storage ( ) . external ) #1"
+   ],
+   "cls": "temp",
    "spelling": "GenericMatrix",
    "ordinal": 1
   },
@@ -5110,12 +5695,51 @@
   },
   {
    "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "cells",
+   "scope": [
+    "namespace pineforge #1",
+    "template < > class GenericMatrix < bool > #1",
+    "void reshape ( int new_rows , int new_cols ) #1",
+    "if ( auto & cells = require_storage ( ) . external ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "cells . resize ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
    "symbol": "transpose",
    "scope": [
     "namespace pineforge #1",
     "template < > class GenericMatrix < bool > #1"
    ],
    "cls": "decl",
+   "spelling": "GenericMatrix",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "out",
+   "scope": [
+    "namespace pineforge #1",
+    "template < > class GenericMatrix < bool > #1",
+    "[ [ nodiscard ] ] GenericMatrix transpose ( ) const #1",
+    "if ( const auto & cells = require_storage ( ) . external ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "out = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "<temp:GenericMatrix>",
+   "scope": [
+    "namespace pineforge #1",
+    "template < > class GenericMatrix < bool > #1",
+    "[ [ nodiscard ] ] GenericMatrix transpose ( ) const #1",
+    "if ( const auto & cells = require_storage ( ) . external ) #1"
+   ],
+   "cls": "temp",
    "spelling": "GenericMatrix",
    "ordinal": 1
   },
@@ -5139,6 +5763,59 @@
     "template < > class GenericMatrix < bool > #1"
    ],
    "cls": "decl",
+   "spelling": "GenericMatrix",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "out",
+   "scope": [
+    "namespace pineforge #1",
+    "template < > class GenericMatrix < bool > #1",
+    "[ [ nodiscard ] ] GenericMatrix concat ( const GenericMatrix & other , bool horizontal ) const #1",
+    "if ( const auto & cells = own ? own : rhs ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "out = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "out",
+   "scope": [
+    "namespace pineforge #1",
+    "template < > class GenericMatrix < bool > #1",
+    "[ [ nodiscard ] ] GenericMatrix concat ( const GenericMatrix & other , bool horizontal ) const #1",
+    "if ( const auto & cells = own ? own : rhs ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "value",
+   "scope": [
+    "namespace pineforge #1",
+    "template < > class GenericMatrix < bool > #1",
+    "[ [ nodiscard ] ] GenericMatrix concat ( const GenericMatrix & other , bool horizontal ) const #1",
+    "if ( const auto & cells = own ? own : rhs ) #1",
+    "+ + c ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "value = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/generic_matrix.hpp",
+   "symbol": "<temp:GenericMatrix>",
+   "scope": [
+    "namespace pineforge #1",
+    "template < > class GenericMatrix < bool > #1",
+    "[ [ nodiscard ] ] GenericMatrix concat ( const GenericMatrix & other , bool horizontal ) const #1",
+    "if ( const auto & cells = own ? own : rhs ) #1"
+   ],
+   "cls": "temp",
    "spelling": "GenericMatrix",
    "ordinal": 1
   },
@@ -5742,7 +6419,29 @@
   },
   {
    "file": "include/pineforge/matrix.hpp",
+   "symbol": "<temp:NumericMatrix>",
+   "scope": [
+    "namespace pineforge #1",
+    "class NumericMatrix #1"
+   ],
+   "cls": "temp",
+   "spelling": "NumericMatrix",
+   "ordinal": 5
+  },
+  {
+   "file": "include/pineforge/matrix.hpp",
    "symbol": "new_",
+   "scope": [
+    "namespace pineforge #1",
+    "class NumericMatrix #1"
+   ],
+   "cls": "decl",
+   "spelling": "NumericMatrix",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/matrix.hpp",
+   "symbol": "borrow_external",
    "scope": [
     "namespace pineforge #1",
     "class NumericMatrix #1"
@@ -13293,6 +13992,148 @@
    "ordinal": 1
   },
   {
+   "file": "src/detail/matrix_store.cpp",
+   "symbol": "reset",
+   "scope": [
+    "namespace pineforge :: detail :: matrix_store #1",
+    "void Runtime :: reserve_arena ( ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "new unsigned",
+   "ordinal": 1
+  },
+  {
+   "file": "src/detail/matrix_store.cpp",
+   "symbol": "store_",
+   "scope": [
+    "namespace pineforge :: detail :: matrix_store #1",
+    "void Runtime :: write_back ( Slot & slot ) #1",
+    "if ( slot . stored ! = slot . size ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "store_ . resize ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/detail/matrix_store.cpp",
+   "symbol": "runtime_",
+   "scope": [
+    "namespace pineforge :: detail :: matrix_store #1",
+    "Runtime & RunRuntime :: runtime ( ) #1",
+    "if ( ! runtime_ ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "src/detail/matrix_store.cpp",
+   "symbol": "<temp:string>",
+   "scope": [
+    "namespace pineforge :: detail :: matrix_store #1",
+    "namespace #2",
+    "[ [ noreturn ] ] void raise_flush_failure ( ) #1",
+    "catch ( const std :: runtime_error & error ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/detail/matrix_store.cpp",
+   "symbol": "store",
+   "scope": [
+    "namespace pineforge :: detail :: matrix_store #1",
+    "bool Cells :: resize_object ( std :: uint64_t bytes ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "store . resize ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/detail/matrix_store.cpp",
+   "symbol": "out",
+   "scope": [
+    "namespace pineforge :: detail :: matrix_store #1",
+    "std :: shared_ptr < Cells > Cells :: transpose ( bool collapse_empty ) const #1",
+    "if ( whole ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "src/detail/matrix_store.cpp",
+   "symbol": "out",
+   "scope": [
+    "namespace pineforge :: detail :: matrix_store #1",
+    "std :: shared_ptr < Cells > Cells :: transpose ( bool collapse_empty ) const #1",
+    "else #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "src/detail/matrix_store.cpp",
+   "symbol": "out",
+   "scope": [
+    "namespace pineforge :: detail :: matrix_store #1",
+    "std :: shared_ptr < Cells > Cells :: block ( std :: uint64_t row , std :: uint64_t column , std :: uint64_t rows , std :: uint64_t columns ) const #1",
+    "if ( layout_bytes ( rows , columns , w ) < = kTransferBytes ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "src/detail/matrix_store.cpp",
+   "symbol": "out",
+   "scope": [
+    "namespace pineforge :: detail :: matrix_store #1",
+    "std :: shared_ptr < Cells > Cells :: block ( std :: uint64_t row , std :: uint64_t column , std :: uint64_t rows , std :: uint64_t columns ) const #1",
+    "else #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "src/detail/matrix_store.cpp",
+   "symbol": "out",
+   "scope": [
+    "namespace pineforge :: detail :: matrix_store #1",
+    "std :: shared_ptr < Cells > Cells :: concat ( const Cells & other , bool horizontal , bool collapse_empty ) const #1",
+    "if ( layout_bytes ( rows , columns , w ) < = kTransferBytes && left_whole && right_whole ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "src/detail/matrix_store.cpp",
+   "symbol": "out",
+   "scope": [
+    "namespace pineforge :: detail :: matrix_store #1",
+    "std :: shared_ptr < Cells > Cells :: concat ( const Cells & other , bool horizontal , bool collapse_empty ) const #1",
+    "else #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "src/detail/matrix_store.cpp",
+   "symbol": "frozen",
+   "scope": [
+    "namespace pineforge :: detail :: matrix_store #1",
+    "std :: shared_ptr < Cells > Cells :: clone ( ) const #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
    "file": "src/detail/o1_store.cpp",
    "symbol": "operator new",
    "scope": [
@@ -15322,10 +16163,116 @@
    "symbol": "<temp:NumericMatrix>",
    "scope": [
     "namespace pineforge #1",
+    "NumericMatrix NumericMatrix :: new_ ( int rows , int cols , double init_val ) #1",
+    "if ( auto * runtime = ms :: current_runtime ( ) ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "NumericMatrix",
+   "ordinal": 1
+  },
+  {
+   "file": "src/matrix.cpp",
+   "symbol": "<temp:NumericMatrix>",
+   "scope": [
+    "namespace pineforge #1",
     "NumericMatrix NumericMatrix :: new_ ( int rows , int cols , double init_val ) #1"
    ],
    "cls": "temp",
    "spelling": "NumericMatrix",
+   "ordinal": 1
+  },
+  {
+   "file": "src/matrix.cpp",
+   "symbol": "cells",
+   "scope": [
+    "namespace pineforge #1",
+    "NumericMatrix NumericMatrix :: borrow_external ( ms :: Runtime & runtime , detail :: o1 :: Id id ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "src/matrix.cpp",
+   "symbol": "<temp:NumericMatrix>",
+   "scope": [
+    "namespace pineforge #1",
+    "NumericMatrix NumericMatrix :: borrow_external ( ms :: Runtime & runtime , detail :: o1 :: Id id ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "NumericMatrix",
+   "ordinal": 1
+  },
+  {
+   "file": "src/matrix.cpp",
+   "symbol": "<temp:NumericMatrix>",
+   "scope": [
+    "namespace pineforge #1"
+   ],
+   "cls": "temp",
+   "spelling": "NumericMatrix :: NumericMatrix",
+   "ordinal": 1
+  },
+  {
+   "file": "src/matrix.cpp",
+   "symbol": "cells",
+   "scope": [
+    "namespace pineforge #1",
+    "NumericMatrix :: NumericMatrix ( Eigen :: MatrixXd value ) #1",
+    "if ( auto * runtime = ms :: current_runtime ( ) ) #1",
+    "if ( ms :: Cells :: layout_bytes ( rows , columns , sizeof ( double ) ) < = ms :: kTransferBytes ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "src/matrix.cpp",
+   "symbol": "cells",
+   "scope": [
+    "namespace pineforge #1",
+    "NumericMatrix :: NumericMatrix ( Eigen :: MatrixXd value ) #1",
+    "if ( auto * runtime = ms :: current_runtime ( ) ) #1",
+    "else #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "src/matrix.cpp",
+   "symbol": "storage_",
+   "scope": [
+    "namespace pineforge #1",
+    "NumericMatrix :: NumericMatrix ( Eigen :: MatrixXd value ) #1",
+    "if ( auto * runtime = ms :: current_runtime ( ) ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "src/matrix.cpp",
+   "symbol": "storage_",
+   "scope": [
+    "namespace pineforge #1",
+    "NumericMatrix :: NumericMatrix ( Eigen :: MatrixXd value ) #1",
+    "else #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "src/matrix.cpp",
+   "symbol": "result",
+   "scope": [
+    "namespace pineforge #1",
+    "std :: vector < double > NumericMatrix :: row ( int idx ) const #1",
+    "if ( require_storage ( ) . external ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < double >",
    "ordinal": 1
   },
   {
@@ -15336,6 +16283,18 @@
     "std :: vector < double > NumericMatrix :: row ( int idx ) const #1"
    ],
    "cls": "temp",
+   "spelling": "std :: vector < double >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/matrix.cpp",
+   "symbol": "result",
+   "scope": [
+    "namespace pineforge #1",
+    "std :: vector < double > NumericMatrix :: col ( int idx ) const #1",
+    "if ( require_storage ( ) . external ) #1"
+   ],
+   "cls": "decl",
    "spelling": "std :: vector < double >",
    "ordinal": 1
   },
@@ -15366,10 +16325,69 @@
    "symbol": "<temp:NumericMatrix>",
    "scope": [
     "namespace pineforge #1",
+    "NumericMatrix NumericMatrix :: copy ( ) const #1"
+   ],
+   "cls": "temp",
+   "spelling": "NumericMatrix",
+   "ordinal": 2
+  },
+  {
+   "file": "src/matrix.cpp",
+   "symbol": "result",
+   "scope": [
+    "namespace pineforge #1",
+    "NumericMatrix NumericMatrix :: submatrix ( int from_row , int to_row , int from_col , int to_col ) const #1",
+    "if ( const auto & cells = require_storage ( ) . external ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "result = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/matrix.cpp",
+   "symbol": "result",
+   "scope": [
+    "namespace pineforge #1",
+    "NumericMatrix NumericMatrix :: submatrix ( int from_row , int to_row , int from_col , int to_col ) const #1",
+    "if ( const auto & cells = require_storage ( ) . external ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "src/matrix.cpp",
+   "symbol": "<temp:NumericMatrix>",
+   "scope": [
+    "namespace pineforge #1",
+    "NumericMatrix NumericMatrix :: submatrix ( int from_row , int to_row , int from_col , int to_col ) const #1",
+    "if ( const auto & cells = require_storage ( ) . external ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "NumericMatrix",
+   "ordinal": 1
+  },
+  {
+   "file": "src/matrix.cpp",
+   "symbol": "<temp:NumericMatrix>",
+   "scope": [
+    "namespace pineforge #1",
     "NumericMatrix NumericMatrix :: submatrix ( int from_row , int to_row , int from_col , int to_col ) const #1"
    ],
    "cls": "temp",
    "spelling": "NumericMatrix",
+   "ordinal": 1
+  },
+  {
+   "file": "src/matrix.cpp",
+   "symbol": "cells",
+   "scope": [
+    "namespace pineforge #1",
+    "void NumericMatrix :: reshape ( int r , int c ) #1",
+    "if ( auto & cells = require_storage ( ) . external ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "cells . resize ( . . . )",
    "ordinal": 1
   },
   {
@@ -15418,6 +16436,30 @@
   },
   {
    "file": "src/matrix.cpp",
+   "symbol": "result",
+   "scope": [
+    "namespace pineforge #1",
+    "NumericMatrix NumericMatrix :: transpose ( ) const #1",
+    "if ( const auto & cells = require_storage ( ) . external ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "result = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/matrix.cpp",
+   "symbol": "<temp:NumericMatrix>",
+   "scope": [
+    "namespace pineforge #1",
+    "NumericMatrix NumericMatrix :: transpose ( ) const #1",
+    "if ( const auto & cells = require_storage ( ) . external ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "NumericMatrix",
+   "ordinal": 1
+  },
+  {
+   "file": "src/matrix.cpp",
    "symbol": "<temp:NumericMatrix>",
    "scope": [
     "namespace pineforge #1",
@@ -15436,6 +16478,68 @@
    ],
    "cls": "decl",
    "spelling": "std :: vector < int >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/matrix.cpp",
+   "symbol": "result",
+   "scope": [
+    "namespace pineforge #1",
+    "NumericMatrix NumericMatrix :: concat ( const NumericMatrix & other , bool horizontal ) const #1",
+    "if ( const auto & cells = own ? own : rhs ) #1",
+    "if ( own && rhs && ( horizontal ? r = = other . rows ( ) : c = = other . columns ( ) ) ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "result = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/matrix.cpp",
+   "symbol": "<temp:NumericMatrix>",
+   "scope": [
+    "namespace pineforge #1",
+    "NumericMatrix NumericMatrix :: concat ( const NumericMatrix & other , bool horizontal ) const #1",
+    "if ( const auto & cells = own ? own : rhs ) #1",
+    "if ( own && rhs && ( horizontal ? r = = other . rows ( ) : c = = other . columns ( ) ) ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "NumericMatrix",
+   "ordinal": 1
+  },
+  {
+   "file": "src/matrix.cpp",
+   "symbol": "result",
+   "scope": [
+    "namespace pineforge #1",
+    "NumericMatrix NumericMatrix :: concat ( const NumericMatrix & other , bool horizontal ) const #1",
+    "if ( const auto & cells = own ? own : rhs ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "result = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/matrix.cpp",
+   "symbol": "result",
+   "scope": [
+    "namespace pineforge #1",
+    "NumericMatrix NumericMatrix :: concat ( const NumericMatrix & other , bool horizontal ) const #1",
+    "if ( const auto & cells = own ? own : rhs ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "src/matrix.cpp",
+   "symbol": "<temp:NumericMatrix>",
+   "scope": [
+    "namespace pineforge #1",
+    "NumericMatrix NumericMatrix :: concat ( const NumericMatrix & other , bool horizontal ) const #1",
+    "if ( const auto & cells = own ? own : rhs ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "NumericMatrix",
    "ordinal": 1
   },
   {
@@ -15521,6 +16625,42 @@
   },
   {
    "file": "src/matrix.cpp",
+   "symbol": "result",
+   "scope": [
+    "namespace pineforge #1",
+    "NumericMatrix NumericMatrix :: diff ( const NumericMatrix & other ) const #1",
+    "if ( const auto & cells = own ? own : rhs ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "result = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/matrix.cpp",
+   "symbol": "result",
+   "scope": [
+    "namespace pineforge #1",
+    "NumericMatrix NumericMatrix :: diff ( const NumericMatrix & other ) const #1",
+    "if ( const auto & cells = own ? own : rhs ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "src/matrix.cpp",
+   "symbol": "<temp:NumericMatrix>",
+   "scope": [
+    "namespace pineforge #1",
+    "NumericMatrix NumericMatrix :: diff ( const NumericMatrix & other ) const #1",
+    "if ( const auto & cells = own ? own : rhs ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "NumericMatrix",
+   "ordinal": 1
+  },
+  {
+   "file": "src/matrix.cpp",
    "symbol": "<temp:NumericMatrix>",
    "scope": [
     "namespace pineforge #1",
@@ -15543,6 +16683,53 @@
   },
   {
    "file": "src/matrix.cpp",
+   "symbol": "<temp:NumericMatrix>",
+   "scope": [
+    "namespace pineforge #1",
+    "NumericMatrix NumericMatrix :: mult ( const NumericMatrix & other ) const #1"
+   ],
+   "cls": "temp",
+   "spelling": "NumericMatrix",
+   "ordinal": 2
+  },
+  {
+   "file": "src/matrix.cpp",
+   "symbol": "result",
+   "scope": [
+    "namespace pineforge #1",
+    "NumericMatrix NumericMatrix :: pow ( int n ) const #1",
+    "if ( is_external_storage ( ) ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "result = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/matrix.cpp",
+   "symbol": "result",
+   "scope": [
+    "namespace pineforge #1",
+    "NumericMatrix NumericMatrix :: pow ( int n ) const #1",
+    "if ( is_external_storage ( ) ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "result = . . .",
+   "ordinal": 2
+  },
+  {
+   "file": "src/matrix.cpp",
+   "symbol": "<temp:NumericMatrix>",
+   "scope": [
+    "namespace pineforge #1",
+    "NumericMatrix NumericMatrix :: pow ( int n ) const #1",
+    "if ( is_external_storage ( ) ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "NumericMatrix",
+   "ordinal": 1
+  },
+  {
+   "file": "src/matrix.cpp",
    "symbol": "result",
    "scope": [
     "namespace pineforge #1",
@@ -15557,7 +16744,31 @@
    "symbol": "<temp:NumericMatrix>",
    "scope": [
     "namespace pineforge #1",
+    "NumericMatrix NumericMatrix :: inv ( ) const #1",
+    "if ( is_external_storage ( ) ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "NumericMatrix",
+   "ordinal": 1
+  },
+  {
+   "file": "src/matrix.cpp",
+   "symbol": "<temp:NumericMatrix>",
+   "scope": [
+    "namespace pineforge #1",
     "NumericMatrix NumericMatrix :: inv ( ) const #1"
+   ],
+   "cls": "temp",
+   "spelling": "NumericMatrix",
+   "ordinal": 1
+  },
+  {
+   "file": "src/matrix.cpp",
+   "symbol": "<temp:NumericMatrix>",
+   "scope": [
+    "namespace pineforge #1",
+    "NumericMatrix NumericMatrix :: pinv ( ) const #1",
+    "if ( is_external_storage ( ) ) #1"
    ],
    "cls": "temp",
    "spelling": "NumericMatrix",
@@ -15580,7 +16791,7 @@
    "scope": [
     "namespace pineforge #1",
     "std :: vector < double > NumericMatrix :: eigenvalues ( ) const #1",
-    "if ( is_symmetric ( ) ) #1"
+    "if ( operand . isApprox ( operand . transpose ( ) , EPS ) ) #1"
    ],
    "cls": "decl",
    "spelling": "std :: vector < double >",
@@ -15603,7 +16814,7 @@
    "scope": [
     "namespace pineforge #1",
     "NumericMatrix NumericMatrix :: eigenvectors ( ) const #1",
-    "if ( is_symmetric ( ) ) #1"
+    "if ( operand . isApprox ( operand . transpose ( ) , EPS ) ) #1"
    ],
    "cls": "temp",
    "spelling": "NumericMatrix",
@@ -15615,6 +16826,42 @@
    "scope": [
     "namespace pineforge #1",
     "NumericMatrix NumericMatrix :: eigenvectors ( ) const #1"
+   ],
+   "cls": "temp",
+   "spelling": "NumericMatrix",
+   "ordinal": 1
+  },
+  {
+   "file": "src/matrix.cpp",
+   "symbol": "result",
+   "scope": [
+    "namespace pineforge #1",
+    "NumericMatrix NumericMatrix :: kron ( const NumericMatrix & other ) const #1",
+    "if ( const auto & cells = own ? own : rhs ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "result = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/matrix.cpp",
+   "symbol": "result",
+   "scope": [
+    "namespace pineforge #1",
+    "NumericMatrix NumericMatrix :: kron ( const NumericMatrix & other ) const #1",
+    "if ( const auto & cells = own ? own : rhs ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "src/matrix.cpp",
+   "symbol": "<temp:NumericMatrix>",
+   "scope": [
+    "namespace pineforge #1",
+    "NumericMatrix NumericMatrix :: kron ( const NumericMatrix & other ) const #1",
+    "if ( const auto & cells = own ? own : rhs ) #1"
    ],
    "cls": "temp",
    "spelling": "NumericMatrix",

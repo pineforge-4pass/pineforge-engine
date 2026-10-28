@@ -8,7 +8,7 @@
   "to": {
     "version": null,
     "unreleased": true,
-    "catalogSha256": "97fe2b5206c1167f859b6d0cf065443a2511ffef739d0f02aa227cc35cc4c75f"
+    "catalogSha256": "c65eacc4aa4ca566a854a21aa8e38c3955076ce290e8f696fdd93a652eb1ce41"
   },
   "catalogSchema": {
     "before": "pineforge-run-failure-catalog/v1",
@@ -33,6 +33,146 @@
               "order_key_hash_collision"
             ]
           }
+        }
+      ]
+    },
+    {
+      "code": "pine_matrix_error",
+      "collection": "codes",
+      "fields": [
+        {
+          "path": "args.function.values",
+          "beforePresent": true,
+          "afterPresent": true,
+          "before": [
+            "matrix.new",
+            "matrix.get",
+            "matrix.set",
+            "matrix.row",
+            "matrix.col",
+            "matrix.add_row",
+            "matrix.add_col",
+            "matrix.remove_row",
+            "matrix.remove_col",
+            "matrix.swap_rows",
+            "matrix.swap_columns",
+            "matrix.submatrix",
+            "matrix.concat",
+            "matrix.reshape",
+            "matrix.restore"
+          ],
+          "after": [
+            "matrix.new",
+            "matrix.get",
+            "matrix.set",
+            "matrix.row",
+            "matrix.col",
+            "matrix.add_row",
+            "matrix.add_col",
+            "matrix.remove_row",
+            "matrix.remove_col",
+            "matrix.swap_rows",
+            "matrix.swap_columns",
+            "matrix.submatrix",
+            "matrix.concat",
+            "matrix.reshape",
+            "matrix.restore",
+            "matrix.diff"
+          ]
+        },
+        {
+          "path": "args.reason.values",
+          "beforePresent": true,
+          "afterPresent": true,
+          "before": [
+            "row_index_out_of_range",
+            "column_index_out_of_range",
+            "negative_dimensions",
+            "values_size_mismatch",
+            "empty_matrix",
+            "from_row_after_to_row",
+            "from_col_after_to_col",
+            "row_count_mismatch",
+            "column_count_mismatch",
+            "element_count_mismatch"
+          ],
+          "after": [
+            "row_index_out_of_range",
+            "column_index_out_of_range",
+            "negative_dimensions",
+            "values_size_mismatch",
+            "empty_matrix",
+            "from_row_after_to_row",
+            "from_col_after_to_col",
+            "row_count_mismatch",
+            "column_count_mismatch",
+            "element_count_mismatch",
+            "dimension_mismatch"
+          ]
+        },
+        {
+          "path": "english",
+          "beforePresent": true,
+          "afterPresent": true,
+          "before": [
+            "GenericMatrix::reshape: negative dimension",
+            "add_col: values size mismatch",
+            "add_row: values size mismatch",
+            "matrix.add_col on empty matrix: use add_row first",
+            "matrix.add_col: column index out of range",
+            "matrix.add_col: values size must equal rows()",
+            "matrix.add_row: row index out of range",
+            "matrix.add_row: values size must equal columns()",
+            "matrix.col: column index out of range",
+            "matrix.concat: column count mismatch",
+            "matrix.concat: row count mismatch",
+            "matrix.get: column index out of range",
+            "matrix.get: row index out of range",
+            "matrix.new: negative dimensions",
+            "matrix.remove_col: column index out of range",
+            "matrix.remove_row: row index out of range",
+            "matrix.row: row index out of range",
+            "matrix.row_ref: row index out of range",
+            "matrix.set: column index out of range",
+            "matrix.set: row index out of range",
+            "matrix.submatrix: column index out of range",
+            "matrix.submatrix: from_col must be <= to_col",
+            "matrix.submatrix: from_row must be <= to_row",
+            "matrix.submatrix: row index out of range",
+            "matrix.swap_columns: column index out of range",
+            "matrix.swap_rows: row index out of range",
+            "reshape: total element count must match"
+          ],
+          "after": [
+            "GenericMatrix::reshape: negative dimension",
+            "add_col: values size mismatch",
+            "add_row: values size mismatch",
+            "matrix.add_col on empty matrix: use add_row first",
+            "matrix.add_col: column index out of range",
+            "matrix.add_col: values size must equal rows()",
+            "matrix.add_row: row index out of range",
+            "matrix.add_row: values size must equal columns()",
+            "matrix.col: column index out of range",
+            "matrix.concat: column count mismatch",
+            "matrix.concat: row count mismatch",
+            "matrix.diff: dimension mismatch",
+            "matrix.get: column index out of range",
+            "matrix.get: row index out of range",
+            "matrix.new: negative dimensions",
+            "matrix.remove_col: column index out of range",
+            "matrix.remove_row: row index out of range",
+            "matrix.row: row index out of range",
+            "matrix.row_ref: row index out of range",
+            "matrix.set: column index out of range",
+            "matrix.set: row index out of range",
+            "matrix.submatrix: column index out of range",
+            "matrix.submatrix: from_col must be <= to_col",
+            "matrix.submatrix: from_row must be <= to_row",
+            "matrix.submatrix: row index out of range",
+            "matrix.swap_columns: column index out of range",
+            "matrix.swap_rows: row index out of range",
+            "reshape: total element count must match"
+          ]
         }
       ]
     },
