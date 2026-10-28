@@ -181,6 +181,13 @@ unchanged except for two additive diagnostics keys, described below.
   up, not 5, different from any phase descriptor); a refusal ends the run with
   the usual entrypoint status. With the variable unset nothing changes.
 
+- **`PINEFORGE_RUN_ID`.** When set, the entrypoint passes
+  `--run-id <value>` to `run_json.py` for the report sink header. The value is
+  forwarded unchanged, including an empty value, and `run_json.py` validates
+  UTF-8 text without NUL; the entrypoint adds no other limit, so a caller that
+  needs an id must refuse an empty one itself. Unset, the run id keeps its
+  empty default.
+
 ### CI and release process
 
 - **Light jobs on a pinned hosted image.** The light, secret-free CI jobs run
