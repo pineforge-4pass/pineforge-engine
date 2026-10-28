@@ -87,7 +87,7 @@ actually read and any counts folded by the reader before refusal. Usage
 errors have no receipt. The exit-8 receipt sets reason="sink_exhausted",
 sink_bytes=B+1 and cap_bytes=B. The wrapper maps
 exit 8 plus this receipt to report_sink_failed, reason=sink_exhausted,
-class engine_fault: refunded; COMPUTE re-places with 2x U.
+class engine_fault: the run is refunded and the caller may retry with a larger sink cap.
 Typed exit-3 refusals append tool, event, exit_code, detail, code and args
 only when M=2 reserves stderr exclusively for the receipt and cleanup has
 not replaced the typed exit status. With M other than 2, the receipt uses

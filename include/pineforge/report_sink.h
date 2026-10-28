@@ -1,8 +1,8 @@
 /*
  * SPDX-License-Identifier: Apache-2.0
  *
- * Report sink C ABI declarations, DESIGN.md revision 6,
- * section 3.7 lines 782-901 and section 6 lines 1278-1317.
+ * Report sink C ABI declarations for path and borrowed stream sinks,
+ * receipt queries and report-only summaries.
  * No definitions or runtime feature probe are supplied by this contract.
  * Include this additive header explicitly, as for execution_observer.h.
  */
@@ -16,13 +16,13 @@
 extern "C" {
 #endif
 
-/** Path sink descriptor (DESIGN 6:1283-1289, 1307-1309).
+/** Path sink descriptor.
  *  struct_size is sizeof(pf_report_sink_v1), version is 1. The setter copies
  *  the strings. The engine creates or truncates path, writes the version-1
- *  header at run begin, and writes checked, buffered records (3.7:881-888).
+ *  header at run begin, and writes checked, buffered records.
  *  NULL run_id means ""; NULL scratch_dir means the directory of path.
  *  Scratch files are engine-private and live until the next run begins or
- *  handle destruction (3.8:902-909). */
+ *  handle destruction. */
 typedef struct pf_report_sink_v1 {
     uint32_t    struct_size;
     uint32_t    version;
@@ -31,7 +31,7 @@ typedef struct pf_report_sink_v1 {
     const char* scratch_dir;
 } pf_report_sink_v1;
 
-/** Borrowed sequential stream sink descriptor (CX-SINK-B1/B2).
+/** Borrowed sequential stream sink descriptor.
  *  struct_size is sizeof(pf_report_sink_fd_v1), version is 1. fd is the
  *  caller-selected write end of a FIFO or AF_UNIX SOCK_STREAM socket; there
  *  is no library default fd number. NULL run_id means ""; it is copied.
@@ -65,15 +65,15 @@ typedef struct pf_report_sink_fd_v1 {
     const char* run_id;
 } pf_report_sink_fd_v1;
 
-/** Trailer receipt (DESIGN 6:1291-1298,1305-1306).
+/** Trailer receipt.
  *  The seven counts correspond to E, T, O, V, K, X, H in that order.
  *  sha256_hex is the trailer's lowercase SHA-256, NUL-terminated, and is ""
  *  until the trailer exists. complete becomes 1 once the trailer is written.
  *  trades_retained is 1 when closedtrades.* history stays script-readable.
  *  The explicit seven-byte reserved field gives a 144-byte layout with no
  *  implicit padding. PF_ABI_VERSION is 5; no existing report/trade grows.
- *  RESOLVED S1: receipt query initialization and outcomes follow the
- *  CORE-TOP rev 6 amendment (10-18 16:04); see the query declaration below. */
+ *  The caller initializes struct_size and version before querying a receipt;
+ *  the query returns 0 with a receipt or -1 for invalid arguments, as below. */
 typedef struct pf_report_sink_receipt_v1 {
     uint32_t struct_size, version;
     int64_t  count_e, count_t, count_o, count_v, count_k, count_x, count_h;
@@ -90,7 +90,7 @@ PF_STATIC_ASSERT(offsetof(pf_report_sink_receipt_v1, reserved) == 129);
 PF_STATIC_ASSERT(offsetof(pf_report_sink_receipt_v1, complete) == 136);
 PF_STATIC_ASSERT(offsetof(pf_report_sink_receipt_v1, trades_retained) == 140);
 
-/** Report-only T-row summary (CX-SINK-B5a), independent of the 144-byte
+/** Report-only T-row summary, independent of the 144-byte
  *  trailer receipt above. Size 64, alignment 8, with no implicit padding:
  *  struct_size 0, version 4, count_t 8, wins 16, losses 24, best_trade 32,
  *  worst_trade 40, max_drawdown 48, nonfinite_t_field 56, complete 60.
@@ -171,10 +171,10 @@ PF_STATIC_ASSERT(offsetof(pf_report_sink_diagnostics_v1, last) == 40);
 PF_STATIC_ASSERT(offsetof(pf_report_sink_diagnostics_v1, trade_at_start) == 64);
 PF_STATIC_ASSERT(offsetof(pf_report_sink_diagnostics_v1, complete) == 68);
 
-/** Returns report sink ABI version 1 (DESIGN 6:1300). */
+/** Returns report sink ABI version 1. */
 PF_API uint32_t pf_report_sink_version(void);
 
-/** Install, replace or remove (NULL descriptor) the sink (6:1301, 1307-1309).
+/** Install, replace or remove (NULL descriptor) the sink.
  *  Returns 0 accepted; -1 bad struct_size, version, path or handle, or invalid environment arena;
  *  -2 stream running/beginning; -3 run in progress or removal while an
  *  ordinary run's scratch curve is live. Strings are copied.
@@ -188,12 +188,12 @@ PF_API uint32_t pf_report_sink_version(void);
  *  Completed fd generations allow NULL through either setter to detach the
  *  next-run sink while preserving their receipt, summary and borrowed fd.
  *  The sink composes with the execution observer and selected window. Write errors
- *  fail the run with the sink I/O code planned for docker/run_failure_codes.json
- *  (DESIGN 3.7:881-888; 6:1330-1332). With a sink, pf_report_t contains summary
+ *  fail the run with the sink I/O code in docker/run_failure_codes.json.
+ *  With a sink, pf_report_t contains summary
  *  scalars, total_trades and metrics; trades, equity_curve, broker_state_hash and
  *  trace are NULL with length 0. Thus total_trades need not equal trades_len, and
- *  equity/hash lengths need not equal script_bars_processed (6:1312-1317). Counts and SHA-256 come from the receipt.
- *  Without a sink the existing entry points and report behavior stay unchanged (6:1352-1354).
+ *  equity/hash lengths need not equal script_bars_processed. Counts and SHA-256 come from the receipt.
+ *  Without a sink the existing entry points and report behavior stay unchanged.
  *  A non-NULL descriptor attaches the environment arena if configured: PF_SCRATCH_ARENA_FD=5 and positive PF_SCRATCH_ARENA_BYTES, with validation passing.
  *  The first successful attach sets SIGXFSZ to SIG_IGN process-wide; the prior disposition is not restored. Same fd/size reattaches are no-ops.
  *  Hosts relying on their SIGXFSZ handler or default termination must account for this before attaching. */
@@ -220,17 +220,17 @@ PF_API int strategy_set_report_sink_v1(pf_strategy_t, const pf_report_sink_v1*);
  *  Hosts relying on their SIGXFSZ handler or default termination must account for this before attaching. */
 PF_API int strategy_set_report_sink_fd_v1(pf_strategy_t, const pf_report_sink_fd_v1*);
 
-/** Query the sink receipt (DESIGN 6:1302; RESOLVED S1).
- *  CORE-TOP's rev 6 amendment (10-18 16:04) uses the observation query
- *  strategy_execution_observation_v1 in execution_observer.h as its model.
- *  The caller first sets out->struct_size and out->version.
+/** Query the sink receipt.
+ *  The caller initializes the query structure before use, as for
+ *  strategy_execution_observation_v1 in execution_observer.h.
+ *  Set out->struct_size to sizeof(*out) and out->version to 1.
  *
  *  Returns 0 with the receipt filled; -1 with *out unchanged for a bad
  *  handle, struct_size or version. With no sink installed, returns 0 with
  *  all counts 0, sha256_hex "", complete 0.
  *
- *  Failed, refused, aborted or truncated runs have no valid trailer
- *  (3.7:791-793); a receipt without completion is not a valid sink. */
+ *  Failed, refused, aborted or truncated runs have no valid trailer;
+ *  a receipt without completion is not a valid sink. */
 PF_API int strategy_report_sink_receipt_v1(pf_strategy_t, pf_report_sink_receipt_v1*);
 
 /** Query the T-row summary for either the path or fd sink.
