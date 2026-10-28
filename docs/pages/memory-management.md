@@ -269,6 +269,7 @@ store; the part that spills grows in the scratch backing.
 | Store | Resident bound | Bytes per entry | Spills to scratch |
 | --- | --- | --- | --- |
 | Trade ledger (`TradeLedger`), descriptor window | 64 rows (`kResidentRows`, `include/pineforge/trade_ledger.hpp:38`), and a fixed payload tail of the same size | 168 B per row descriptor (`kRecordBytes`), so 10,752 B for the rows and 10,752 B for the tail; the four strings of a row are variable | Older rows and all string payloads: 168 B plus text per closed trade |
+| Trade ledger, numeric scan window | 64 descriptors, independent of the trade count; numeric admission keeps the older key when cache slots collide | 10,752 B of descriptors plus two 8 B keys = 10,768 B on 64-bit targets, included in `sizeof(State)`. No payload bytes or separate allocation | Reads only the descriptor file for scalar numeric misses; later keys stream through this window without evicting the cached prefix |
 | Trade ledger, read cache | Up to 65,536 entries with or without a report sink (`kSinkCacheRows = kDefaultCacheRows`; the ceiling `kMaxCacheRows` is 1,048,576). Direct-mapped, allocated at the first read at the smaller of the cap and the next power of two that is at least the larger of 64 and the trade count (the comment on `TradeLedger::cache_resident_bytes`, `include/pineforge/trade_ledger.hpp`), so a run with few trades holds few entries. Chosen by the engine when the run begins, through `TradeLedger::set_cache_rows` (`src/native_execution_consumer.cpp`); the C API has no setter for it in this release | 312 B per entry (`kLedgerEntryBytes`: 168 B record, 16 B key and generation, 128 inline string bytes). The declared bound is `resident_cache_bytes(kSinkCacheRows)`: 65,536 x 312 = 20,447,232 B (19.5 MiB) plus `sizeof(TradeLedger)+sizeof(State)`, with or without a sink; the cap is independent of the trade and bar counts | Not applicable (a cache over the spilled rows) |
 | Command journal | 2,048 events (`kMaxResident`, `src/native_order.cpp:1705`), in 32-event chunks (`kChunk`), with a floor of 128 events kept (`kKeepResident`) | Not a constant: an event is a variant with variable payload and `sizeof` of a resident slot is not stated in the source and was not compiled. Plus one lazy 163,840 B spill buffer per journal: a 32,768 B write buffer and four 32,768 B reload buffers (`SpillStorage`) | Older events, in pages of 32,768 B (`kSpillPageBytes`, `:1726`) read back through four decoded page slots. An event whose serialized form exceeds one page is refused with `EFBIG` (about 1,360 external openings) and stays resident |
 | Order book | 4,096 rows | See the drain plateau below | Older rows |
@@ -341,7 +342,7 @@ successor rows:
 
 The equity curve is not in this sum: with no sink it stays on the heap, at
 `24 x 100,000 = 2,400,000` bytes plus the vector's spare capacity. The trade
-ledger window adds a fixed `10,752 + 10,752 = 21,504` bytes of heap, and the
+ledger windows add a fixed `10,752 + 10,752 + 10,768 = 32,272` bytes of heap, and the
 spilled rows add `168 x 1,000 = 168,000` bytes of scratch plus their text.
 These are hand-derived logical peaks, not an allocation or RSS measurement,
 and they exclude the engine's own objects, the strategy's containers and the
@@ -371,7 +372,7 @@ can add them up; each is read from the source named in
 
 | Kind of store | Default budget | Resident memory at that budget |
 | --- | --- | --- |
-| Trade ledger | Descriptor window of 64 rows; read cache of up to 65,536 entries with or without a report sink. Chosen by the engine, not settable from the C API; cache allocation grows lazily up to the declared constant cap | 21,504 B for the window and its tail, plus up to 20,447,232 B of cache entries; `resident_cache_bytes(kSinkCacheRows)` accounts for the entries plus `sizeof(TradeLedger)+sizeof(State)` (including the window and its tail) |
+| Trade ledger | Descriptor window of 64 rows, a separate 64-row numeric scan window, and a read cache of up to 65,536 entries with or without a report sink. Chosen by the engine, not settable from the C API; cache allocation grows lazily up to the declared constant cap | 32,272 B for the windows, tail and numeric-window keys, plus up to 20,447,232 B of cache entries; `resident_cache_bytes(kSinkCacheRows)` accounts for the entries plus `sizeof(TradeLedger)+sizeof(State)` (including both windows and the tail) |
 | Command journal | 2,048 resident events, 128 kept at least | Not a constant per event; plus 163,840 B of spill buffers per journal once it first spills |
 | Placement rows | No budget: the live rows plus the rows the retirement rules pin | Not measured |
 | Id tables | Cohort table: resident rows follow the spill rule above (at most twice the rows left by the last pass, plus 64, plus pinned rows), and the bounded profile admits at most 4,096 live cohorts. The ordered index is read through a 64 KiB window per scratch file | 64 KiB per file; the index itself is on disk |
@@ -410,10 +411,29 @@ or bounds the row.
 | Pending-book reads | `R`: `O(R^2)` for a size or a late indexed copy, `O(P R^2)` for a full indexed walk of `P` projected rows, up to `O(R^3)` when `P = R`; this is time, and it was already so in v1.6.3 | CPU | Planned, with no release date |
 | Cohort lookups | A cohort lookup was `O(1)` before 1.7.0 and was `O(resident rows + log of the id population x key length)` per call in 1.7.0. Since 1.8.0 a lookup of a resident cohort is `O(log r)` in the number `r` of resident rows, without allocation or disk | CPU, plus scratch reads | Partly fixed in 1.8.0: a full close on N owners seeks the scratch index 2N+1 times (it was N(N+1)/2), and the walks that need only the cohorts holding an opening or live units no longer visit every pending-only cohort. Not fixed: the per-bar retire pass is still proportional to the resident rows, and a close event is still quadratic in N in in-memory work, so in the release's own measurement a dense script (many pending orders) did not finish within 600 s at 10,000 bars and above, and a script with many orders and few ids was only 12.5 to 16 percent faster at 30,000 to 100,000 bars; no release date for the rest |
 | Pending orders that never fill | `R`: about 2.5 kB each on dense scripts (the release notes' known limit) | Heap | Planned for a later release, with no date |
-| Closed-trade reads from a script | A script reading all `T` closed trades on every bar, with the sink-run read cache at its declared cap, pays one scratch read per row only on the first pass for rows up to the cap; beyond the cap a miss reads a 64-row block (one index read and one coalesced payload read per block) | CPU and scratch I/O | Bounded by the declared read-cache cap and 64-row block reads |
+| Closed-trade reads from a script | An ascending scalar numeric scan of all `T` closed trades takes O(T) work, O(1) amortised per access, including above the cache cap. Numeric misses read only 64-row descriptor blocks, retaining the cached prefix and streaming overflow through a fixed window. String/full-row misses retain the existing block payload path; first string reads of numeric-only cache entries pack up to 128 bytes per row | CPU and scratch I/O | Fixed cache cap plus a 64-row numeric window; the numeric bound below counts actual preads, including 64 KiB transfer splits |
 | The strategy's own containers (arrays, strings, maps, matrices, user-defined types, series and indicator history, drawing objects) | What the script stores | Heap, unchanged from v1.6.3 | Planned, with no release date |
 | Distinct ids, pairs and successor rows | `D`, `Q`, `R`, by the formulas above | Scratch, or the slab | Bounded by the admitted maxima |
 | Input bars | `N` bars of OHLCV | The host | Not applicable |
+
+For an ascending scalar numeric scan with no intervening mutation or string
+reads, let `D = max(0, T - 64)` on the first pass. Once the prefix is cached,
+`D = max(0, T - C - 64)`, where `C` is the allocated cache capacity. The scan
+reads at most `168 * D` descriptor bytes and zero payload bytes, using at most
+`ceil(D / 64) + ceil(168 * D / 65536)` actual preads. The second term covers
+transfers split by the scratch file's 64 KiB read budget. Dividing by `T`
+gives at most `1/64 + 168/65536 + 2/T` preads per access, independent of
+`T - C`. `test_ledger_cyclic_scan` checks the byte count, this bound and every
+returned value at 85,536 and 90,000 rows over a cold pass and eight following
+passes. This is an operation-count bound, not a wall-time measurement or a
+claim about arbitrary mixtures of string reads, replacements and traversal
+orders.
+
+The numeric window adds a fixed 10,768 bytes to `State` on 64-bit targets.
+Numeric refills use this storage without allocating a block workspace;
+string/full-row block misses retain the existing 35,392-byte fixed array
+workspace. Cache entries remain 312 bytes, the default cap remains 65,536
+rows, and the maximum remains 1,048,576 rows.
 
 ## When a bound is exceeded {#memory_failures}
 

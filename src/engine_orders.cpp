@@ -383,7 +383,8 @@ struct TradeLedger::State {
         size_type global = 0, generation = 0;
         std::array<char, kCacheStringBytes> strings{};
         // The generation is even; its low bit records whether all four
-        // packed strings fit. This flag adds no padding to the 312-byte entry.
+        // packed strings are ready. Numeric reads leave them lazy. This flag
+        // adds no padding to the 312-byte entry.
         bool strings_valid() const { return (generation & size_type{1}) != 0; }
     };
     static_assert(sizeof(CacheEntry) == kLedgerEntryBytes);
@@ -396,6 +397,18 @@ struct TradeLedger::State {
     // later rows replace its direct-mapped slot.
     mutable CacheEntry block_result{};
     static constexpr size_type kBlockPayloadBytes = kResidentRows * kCacheStringBytes;
+
+    // Numeric overflow scans retain descriptors independently of cache-slot
+    // admission. A later key cannot evict an older key just by scanning past
+    // it. This fixed window adds 10,768 bytes on 64-bit targets, including its
+    // two keys; it neither allocates nor retains payload bytes.
+    struct NumericWindow {
+        std::array<Record, kResidentRows> records{};
+        size_type first = 0, count = 0;
+    };
+    static_assert(sizeof(NumericWindow)
+                  == kResidentRows * sizeof(Record) + 2 * sizeof(size_type));
+    mutable NumericWindow numeric_window{};
 
     struct BlockExtent {
         std::uint64_t offset = 0;
@@ -423,12 +436,15 @@ struct TradeLedger::State {
     bool current(const CacheEntry& entry) const {
         return (entry.generation & ~size_type{1}) == cache_generation;
     }
-    const CacheEntry* cached(size_type global) const {
+    CacheEntry* cached(size_type global) const {
         if (!cache) return nullptr;
-        const auto& entry = cache[cache_slot(global)];
+        auto& entry = cache[cache_slot(global)];
         return current(entry) && entry.global == global ? &entry : nullptr;
     }
     void invalidate(size_type global) {
+        if (global >= numeric_window.first
+            && global - numeric_window.first < numeric_window.count)
+            numeric_window.count = 0;
         if (cached(global)) {
             cache[cache_slot(global)].generation = 0;
             --cache_count;
@@ -436,6 +452,7 @@ struct TradeLedger::State {
     }
     void invalidate_cache() const {
         cache_count = 0;
+        numeric_window.count = 0;
         // Generations make publication/rewind/move invalidation O(1).
         // Even the wraparound fallback touches at most the configured budget.
         if (cache_generation == std::numeric_limits<size_type>::max() - 1) {
@@ -459,6 +476,23 @@ struct TradeLedger::State {
         cache = std::make_unique<CacheEntry[]>(capacity);
         cache_capacity = capacity;
     }
+    void pack_strings(CacheEntry& entry) const {
+        if (entry.strings_valid()) return;
+        const auto& record = entry.record;
+        const std::array<StringExtent, 4> texts{{
+            record.entry_id, record.entry_comment, record.exit_comment, record.exit_id}};
+        size_type bytes = 0;
+        for (const auto text : texts) {
+            if (text.length > kCacheStringBytes - bytes) return;
+            bytes += static_cast<size_type>(text.length);
+        }
+        size_type offset = 0;
+        for (const auto text : texts) {
+            read_string(text, entry.strings.data() + offset);
+            offset += static_cast<size_type>(text.length);
+        }
+        entry.generation |= size_type{1};
+    }
     const CacheEntry& remember(size_type global, const Record& record) const {
         ensure_cache(end);
         auto& entry = cache[cache_slot(global)];
@@ -466,32 +500,56 @@ struct TradeLedger::State {
         entry.generation = 0;
         entry.record = record;
         entry.global = global;
-        const std::array<StringExtent, 4> texts{{
-            record.entry_id, record.entry_comment, record.exit_comment, record.exit_id}};
-        size_type bytes = 0;
-        bool strings_valid = true;
-        for (const auto text : texts) {
-            if (text.length > kCacheStringBytes - bytes) {
-                strings_valid = false;
-                break;
-            }
-            bytes += static_cast<size_type>(text.length);
-        }
-        if (strings_valid) {
-            size_type offset = 0;
-            for (const auto text : texts) {
-                read_string(text, entry.strings.data() + offset);
-                offset += static_cast<size_type>(text.length);
-            }
-        }
-        entry.generation = cache_generation | static_cast<size_type>(strings_valid);
+        pack_strings(entry);
+        entry.generation |= cache_generation;
         ++cache_count;
         return entry;
     }
     const CacheEntry& load(size_type global) const {
-        if (const auto* entry = cached(global)) return *entry;
+        if (auto* entry = cached(global)) {
+            pack_strings(*entry);
+            return *entry;
+        }
         if (global < resident_first) return load_block(global);
         return remember(global, descriptor(global));
+    }
+    void admit_numeric(size_type global, const Record& record) const {
+        auto& entry = cache[cache_slot(global)];
+        // Keep the older member of a collision during numeric scans. The
+        // overflow window serves later members without displacing the prefix.
+        if (current(entry)) {
+            if (entry.global <= global) return;
+            --cache_count;
+        }
+        entry.generation = 0;
+        entry.record = record;
+        entry.global = global;
+        entry.generation = cache_generation; // Strings have not been read.
+        ++cache_count;
+    }
+    const Record& numeric_record(size_type global) const {
+        if (const auto* entry = cached(global)) return entry->record;
+        ensure_cache(end);
+        if (global >= resident_first) {
+            const auto& record = rows[slot(global)];
+            admit_numeric(global, record);
+            return record;
+        }
+        if (global >= numeric_window.first
+            && global - numeric_window.first < numeric_window.count)
+            return numeric_window.records[global - numeric_window.first];
+
+        const auto count = std::min(kResidentRows, resident_first - global);
+        // Clear validity before I/O so a failed transfer cannot expose any
+        // mixture of the preceding window and the new descriptors.
+        numeric_window.count = 0;
+        index.read(record_offset(global), numeric_window.records.data(),
+                   count * sizeof(Record));
+        numeric_window.first = global;
+        numeric_window.count = count;
+        for (size_type row = 0; row < count; ++row)
+            admit_numeric(global + row, numeric_window.records[row]);
+        return numeric_window.records[0];
     }
     const CacheEntry& load_block(size_type global) const {
         // These five fixed arrays total 35,392 bytes on the 64-bit build:
@@ -610,7 +668,7 @@ struct TradeLedger::State {
     template<auto Member>
     auto numeric_field(size_type global) const {
         check(global, true);
-        return load(global).record.*Member;
+        return numeric_record(global).*Member;
     }
     template<StringExtent Record::*Member>
     std::string string_field(size_type global) const {
