@@ -4476,7 +4476,7 @@ class PrivateFixtureFloors(unittest.TestCase):
             {name for name in ci_verify.PINNED_SLOW_TEST_ROWS
              if name.startswith('test_native_command_after')},
             {f'test_native_command_after_slice_{index}' for index in range(1, 9)})
-        self.assertEqual(len(ci_verify.PINNED_SLOW_TEST_ROWS), 75)
+        self.assertEqual(len(ci_verify.PINNED_SLOW_TEST_ROWS), 76)
         self.assertEqual(LIVE_SANITIZERS_MIN_TESTS, 21)
         for name, (full, pinned) in ci_verify.PRIVATE_FIXTURE_PROFILE_FLOORS.items():
             with self.subTest(profile=name):
