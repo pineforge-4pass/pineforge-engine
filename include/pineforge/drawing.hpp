@@ -384,13 +384,13 @@ struct DrawingLabelCodec {
                             std::uint64_t offset) {
         if (!rec.text.empty() &&
             store.write(block, offset, rec.text.data(), rec.text.size()) != rec.text.size())
-            pine_engine_invariant("short drawing label text write");
+            drawing_invariant("short drawing label text write");
     }
     static LabelRec decode(const Wire& wire, o1::Store& store, o1::Id block,
                            std::uint64_t offset) {
         std::string text(static_cast<std::size_t>(wire.text_size), '\0');
         if (!text.empty() && store.read(block, offset, text.data(), text.size()) != text.size())
-            pine_engine_invariant("short drawing label text read");
+            drawing_invariant("short drawing label text read");
         return {wire.x, wire.y, wire.xloc, wire.yloc, std::move(text), wire.alive};
     }
 };

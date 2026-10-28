@@ -10,6 +10,7 @@
 #include <exception>
 #include <memory>
 #include <mutex>
+#include <stdexcept>
 #include <type_traits>
 #include <utility>
 
@@ -25,6 +26,14 @@ struct DrawingStorage {
 };
 
 std::shared_ptr<DrawingStorage> open_drawing_storage();
+
+// Same coded failure as the codegen helper pine_engine_invariant, raised
+// directly: kernel units compile these records (the history ring of
+// series.hpp), and a kernel unit does not call the codegen-contract helpers.
+[[noreturn]] inline void drawing_invariant(const char* english) {
+    throw coded<std::runtime_error>(RunFailureCode::engine_invariant, {},
+                                    english ? english : "");
+}
 
 // One public drawing or history operation, a thin user of Store::scope().
 // Inside an open transaction (the caller's, an enclosing operation's, or the
@@ -105,7 +114,7 @@ class DrawingExternalRecords {
     template<class T> T get(Id id) const {
         T value{};
         if (id != o1::kNullId && storage_->store->read(id, 0, &value, sizeof value) != sizeof value)
-            pine_engine_invariant("short drawing record read");
+            drawing_invariant("short drawing record read");
         return value;
     }
     template<class T> std::pair<Id, bool> put(Id id, T value) const {
@@ -116,7 +125,7 @@ class DrawingExternalRecords {
         }
         value.epoch = epoch_;
         if (storage_->store->write(id, 0, &value, sizeof value) != sizeof value)
-            pine_engine_invariant("short drawing record write");
+            drawing_invariant("short drawing record write");
         return {id, created};
     }
     // A block whose records carry bytes: the object is the block, then those
@@ -129,11 +138,11 @@ class DrawingExternalRecords {
             id = storage_->store->create(bytes, alignof(Block));
             value.references = 1;
         } else if (!storage_->store->resize(id, bytes)) {
-            pine_engine_invariant("drawing record block resize refused");
+            drawing_invariant("drawing record block resize refused");
         }
         value.epoch = epoch_;
         if (storage_->store->write(id, 0, &value, sizeof value) != sizeof value)
-            pine_engine_invariant("short drawing record write");
+            drawing_invariant("short drawing record write");
         return {id, created};
     }
     // Node and Block both begin with these two words, so a reference count is
@@ -147,12 +156,12 @@ class DrawingExternalRecords {
     std::uint64_t references(Id id) const {
         Header value{};
         if (storage_->store->read(id, 0, &value, sizeof value) != sizeof value)
-            pine_engine_invariant("short drawing reference read");
+            drawing_invariant("short drawing reference read");
         return value.references;
     }
     void set_references(Id id, std::uint64_t count) const {
         if (storage_->store->write(id, references_offset, &count, sizeof count) != sizeof count)
-            pine_engine_invariant("short drawing reference write");
+            drawing_invariant("short drawing reference write");
     }
     void retain(Id id, unsigned) const {
         if (id == o1::kNullId) return;
