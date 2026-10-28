@@ -87,7 +87,8 @@ diagnostics keys, described below.
   bytes and field order. `--report-jsonl=full` is an explicit alias with
   identical output. The new `--report-jsonl=delta` emits the ledger's
   `pineforge-native-report-delta/v1` patch with an additional top-level integer
-  `input_cursor`, beginning at the same commit point as the cumulative stream.
+  `input_cursor` as the first key of the line (the stored ledger row has no
+  such key), beginning at the same commit point as the cumulative stream.
 - **The runner no longer rescans the closed-trade prefix per input; delta
   output is linear in the appended rows.** The native `fill_report` call still
   rebuilds the engine's trade and equity/metrics report on each input; removing

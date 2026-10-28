@@ -48,7 +48,9 @@ mirror one cumulative `pineforge-native-report/v1` document per newly committed
 input, with unchanged bytes and field order. `run --report-jsonl=full` is an
 explicit alias with identical output. The new opt-in `run --report-jsonl=delta`
 mirrors the ledger's `pineforge-native-report-delta/v1` patch with an additional
-top-level integer `input_cursor`. Other option values are refused.
+top-level integer `input_cursor` as the FIRST key of the line (the stored ledger
+row has no such key and begins with `schema_version`). Other option values are
+refused.
 Both streams begin after startup reads, warmup, recovery and the first new
 input's commit; the first committed input has cursor 1. Neither warmup nor
 replay of source-prefix messages is mirrored. To apply delta output, start with
