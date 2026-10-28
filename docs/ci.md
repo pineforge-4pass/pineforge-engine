@@ -615,8 +615,8 @@ checks every runner compile unit for instrumentation, and stops on a race.
 `live-sanitizers` and `live-tsan` each build once on `gke-16cpu-32gb-amd64`.
 Both matrices keep `fail-fast: false` and build pinned WebSocket curl cold. A failed cell does not cancel its peers.
 Native diagnostic artifacts carry the shard index; compiler and curl installations have no Actions cache.
-The `native-live (native)` aggregate requires all four successful summary proofs;
-`native-live-gate` requires it and both sanitizer cells, refusing missing or skipped work; the caller's `build` aggregate still requires the reusable workflow to succeed.
+The `native-live (native)` summary requires all four successful shard proofs; it runs after shard failure with an authz-guarded `!cancelled()` override and is declared non-required to the policy checker with `--not-required native-live-native`.
+`native-live-gate` is the only job with job-level `always()` and directly requires `authz`, both sanitizer cells, the shard matrix and its summary; it refuses every failed, cancelled, missing or skipped result, and the caller's `build` aggregate still requires the reusable workflow to succeed.
 Only native shards accept the caller's existing PR-only slow-label exclusion; dispatch always runs the full set.
 
 `native_live_equivalence_e2e_<probe>` names eight rows in `runner/CMakeLists.txt`,

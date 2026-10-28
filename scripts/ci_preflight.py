@@ -242,6 +242,7 @@ NATIVE_SHARD_PROOF_STEP = '''      - name: Record native shard proof
               output.write(f"shard_{index}=success\\n")
 '''
 NATIVE_SHARD_GATE_STEP = '''      - name: Require every native shard to have passed
+        if: ${{ needs.authz.result == 'success' }}
         env:
           AUTHZ_RESULT: ${{ needs.authz.result }}
           SHARDS_RESULT: ${{ needs.native-live-shards.result }}
@@ -261,20 +262,38 @@ NATIVE_SHARD_GATE_STEP = '''      - name: Require every native shard to have pas
           test "$SHARD_3_RESULT" = success
           test "$SHARD_4_RESULT" = success
 '''
+NATIVE_ALL_NEEDS_STEP = r'''      - name: Every needed job succeeded
+        env:
+          RESULTS: ${{ toJSON(needs.*.result) }}
+        run: |
+          echo "$RESULTS"
+          [ "$(echo "$RESULTS" | tr -d '[] \n"' | tr ',' '\n' | grep -vc '^success$')" = "0" ] || { echo "::error::a needed job did not succeed"; exit 1; }
+'''
 NATIVE_GATE_STEP = '''      - name: Require every native profile to have passed
+        if: ${{ always() && needs.authz.result == 'success' }}
         env:
           AUTHZ_RESULT: ${{ needs.authz.result }}
           PROFILES_RESULT: ${{ needs.native-live.result }}
+          SHARDS_RESULT: ${{ needs.native-live-shards.result }}
           NATIVE_RESULT: ${{ needs.native-live-native.result }}
         run: |
           printf 'native profiles: %s\\n' "$PROFILES_RESULT"
+          printf 'native shard matrix: %s\\n' "$SHARDS_RESULT"
           printf 'native shard aggregate: %s\\n' "$NATIVE_RESULT"
-          if test "$PROFILES_RESULT" = cancelled || test "$NATIVE_RESULT" = cancelled; then
+          if test "$PROFILES_RESULT" = cancelled || test "$SHARDS_RESULT" = cancelled || test "$NATIVE_RESULT" = cancelled; then
             printf 'HANG (re-run): a native profile job was cancelled, which is how the platform stops a job at its 360-minute maximum\\n'
           fi
           test "$AUTHZ_RESULT" = success
           test "$PROFILES_RESULT" = success
+          test "$SHARDS_RESULT" = success
           test "$NATIVE_RESULT" = success
+'''
+NATIVE_PROOF_ENV = '''    env:
+      CCACHE_COMPILERCHECK: content
+      CCACHE_COMPRESS: "1"
+      CCACHE_MAXSIZE: 500M
+      PINEFORGE_REQUIRE_RELEASE_TAGS: "1"
+      CCACHE_DIR: ${{ github.workspace }}/.ccache/${{ matrix.profile }}
 '''
 NATIVE_EXCLUSION = "${{ matrix.profile == 'native' && inputs.exclude_slow && '--exclude-label slow' || '' }}"
 # Build and CTest parallelism is the core count of whichever runner took the job.
@@ -1937,6 +1956,23 @@ def _job_block(body: str, key: str) -> list[str]:
     return []
 
 
+def _job_keys(body: str) -> list[str]:
+    """The mapping keys at a job's own depth, excluding nested values."""
+    code = _code(body)
+    depth = _indent(code[0]) if code else 0
+    keys = []
+    for line in code:
+        if _indent(line) != depth:
+            continue
+        match = re.match(
+            r'(?:"([A-Za-z_][A-Za-z0-9_-]*)"|\'([A-Za-z_][A-Za-z0-9_-]*)\'|'
+            r'([A-Za-z_][A-Za-z0-9_-]*))[ \t]*:',
+            line.strip())
+        if match:
+            keys.append(next(group for group in match.groups() if group is not None))
+    return keys
+
+
 _PRIVATE_KEY_WORD = re.compile(r'private[-_]?key', re.IGNORECASE)
 _SECRET_REFERENCE = re.compile(
     r'\bsecrets\s*(?:\.\s*([A-Za-z_]\w*)|\[([^\]]+)\])', re.IGNORECASE)
@@ -3134,9 +3170,10 @@ def authz_workflow_findings(workflow: str, name: str, aggregate: str) -> list[st
     gate = jobs.get(aggregate, '')
     gate_steps = _steps(gate)
     if (_job_values(gate, 'if') not in (['always()'], ['${{ always() }}'])
-            or len(gate_steps) != (3 if name == 'ci.yml' else 2)
+            or len(gate_steps) != (3 if name in ('ci.yml', 'native-live.yml') else 2)
             or _code(gate_steps[0]) != _code(AUTHZ_REFUSE_STEP)
-            or _step_values(gate_steps[-1], 'if')):
+            or _step_values(gate_steps[-1], 'if') != (
+                [AUTHZ_ALWAYS] if name == 'native-live.yml' else [])):
         findings.append(f'{name} {aggregate} must always run and refuse authz first')
     return findings
 
@@ -3200,6 +3237,11 @@ def native_workflow_findings(native: str, curl_action: str | None = None) -> lis
     if _events(native) != {'workflow_call', 'workflow_dispatch'}:
         findings.append('native-live.yml must retain only workflow_call and workflow_dispatch')
     jobs = _jobs(native)
+    always_jobs = [name for name, body in jobs.items()
+                   if any(re.search(r'\balways\s*\(', value, re.IGNORECASE)
+                          for value in _job_values(body, 'if'))]
+    if always_jobs != ['native-live-gate']:
+        findings.append('native-live.yml must reserve job-level always() for native-live-gate')
     job, gate = jobs.get('native-live', ''), jobs.get('native-live-gate', '')
     shards, aggregate = jobs.get('native-live-shards', ''), jobs.get('native-live-native', '')
     if (_job_block(job, 'strategy') != _code(NATIVE_STRATEGY)
@@ -3216,18 +3258,38 @@ def native_workflow_findings(native: str, curl_action: str | None = None) -> lis
     aggregate_steps = _steps(aggregate)
     if (_needs(aggregate) != ['authz', 'native-live-shards']
             or _job_values(aggregate, 'name') != ['native-live (native)']
-            or _job_values(aggregate, 'if') != ['always()']
+            or _job_values(aggregate, 'if') != ["${{ !cancelled() && needs.authz.result == 'success' }}"]
             or _job_values(aggregate, 'continue-on-error')
             or len(aggregate_steps) != 2
             or _code(aggregate_steps[0]) != _code(AUTHZ_REFUSE_STEP)
             or _code(aggregate_steps[-1]) != _code(NATIVE_SHARD_GATE_STEP)):
         findings.append('native-live-native must fail unless all four native shard proofs succeed')
-    gate_steps = _steps(gate)
+    expected_gate = ('''    needs: [authz, native-live, native-live-shards, native-live-native]
+    if: always()
+    runs-on: gke-4cpu-8gb-amd64
+    steps:
+''' + AUTHZ_REFUSE_STEP + NATIVE_ALL_NEEDS_STEP + NATIVE_GATE_STEP)
+    gate_step_block = _job_block(gate, 'steps')
+    expected_gate_step_block = _job_block(expected_gate, 'steps')
+    gate_steps = _steps('\n'.join(gate_step_block))
+    expected_gate_steps = _steps('\n'.join(expected_gate_step_block))
+    # timeout-minutes has its own runner contract; it must not masquerade as
+    # a change to the gate's keyed fields or its canonical steps.
+    gate_shape_keys = [key for key in _job_keys(gate) if key != 'timeout-minutes']
     if (set(jobs) != {'authz', 'native-live', 'native-live-shards', 'native-live-native', 'native-live-gate'}
-            or _needs(gate) != ['authz', 'native-live', 'native-live-native']
+            or _needs(gate) != ['authz', 'native-live', 'native-live-shards', 'native-live-native']
+            or _job_values(gate, 'needs', unquote=False) != _job_values(
+                expected_gate, 'needs', unquote=False)
             or _job_values(gate, 'if') != ['always()']
+            or _job_values(gate, 'if', unquote=False) != _job_values(
+                expected_gate, 'if', unquote=False)
+            or _job_values(gate, 'runs-on', unquote=False) != _job_values(
+                expected_gate, 'runs-on', unquote=False)
             or _job_values(gate, 'continue-on-error')
-            or len(gate_steps) != 2
+            or _job_values(native, 'defaults')
+            or sorted(gate_shape_keys) != sorted(_job_keys(expected_gate))
+            or len(gate_steps) != 3
+            or [_code(step) for step in gate_steps] != [_code(step) for step in expected_gate_steps]
             or _code(gate_steps[-1]) != _code(NATIVE_GATE_STEP)):
         findings.append('native-live-gate must fail unless every profile succeeds')
     shard_steps = _steps(shards)
@@ -3250,8 +3312,12 @@ def native_workflow_findings(native: str, curl_action: str | None = None) -> lis
     if (not exclusion_input or '        type: boolean' not in _code(exclusion_input[1])
             or '        default: false' not in _code(exclusion_input[1])):
         findings.append('native-live exclude_slow must default to the full row set')
+    if (_job_values(native, 'env')
+            or any(_job_block(body, 'env') != _code(NATIVE_PROOF_ENV) for body in (job, shards))):
+        findings.append('native-live.yml must isolate build settings in each native proof job')
     if ('permissions:\n  contents: read\n' not in native
-            or '  PINEFORGE_REQUIRE_RELEASE_TAGS: "1"' not in _code(native)):
+            or any('      PINEFORGE_REQUIRE_RELEASE_TAGS: "1"' not in _code(body)
+                   for body in (job, shards))):
         findings.append('native-live must retain read-only permissions and required release tags')
     for name, sharded in (('native-live', False), ('native-live-shards', True)):
         findings += _native_profile_job_findings(jobs.get(name, ''), name, sharded=sharded)
