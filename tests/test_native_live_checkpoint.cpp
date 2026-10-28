@@ -608,6 +608,7 @@ void checkpoint_write_failure_is_optional() {
             CHECK_OP(static_cast<int>(diagnostic->code), ==,
                      static_cast<int>(CheckpointFailureCode::write_failed));
             CHECK_OP(diagnostic->cursor, ==, 2u);
+            CHECK_OP(diagnostic->count, ==, 1u);
         }
         CHECK_OP(LedgerView(path).report_json(2), ==, expected_report(2));
         ledger.commit_input(2, "{}", 3, {}, report_delta(3));

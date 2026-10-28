@@ -74,11 +74,16 @@ A closed stdout pipe fails clearly with exit 1, never SIGPIPE; the last input
 and report are already durable, and export remains available.
 
 The input, engine hash, actions, report delta and its integrity digest commit in
-one SQLite transaction. After that commit, an optional checkpoint is prepared
-through a separate read connection, outside the ledger writer's mutex, and
-inserted in its own write transaction. A checkpoint build or write failure
-records `write_failed` and continues with the input already durable. Checkpoint
-preparation still constructs and serializes an O(T) cumulative document at a
+one SQLite transaction. At a checkpoint boundary, the cumulative checkpoint is
+prepared from that transaction's report state before admission. Its serialized
+payload length supplies the extra-payload reservation. After the input commits,
+the checkpoint is inserted in its own admitted transaction while retaining the
+writer mutex, with a byte ceiling no greater than the input's reservation.
+A checkpoint build or write failure records `write_failed` and continues with
+the input durable. If the separate transaction's actual page admission needs
+more room than reserved, only the checkpoint rolls back; the diagnostic count
+increases without latching a storage stop. Preparation still constructs and
+serializes an O(T) cumulative document at a
 boundary, where T is the full report size; it can delay the input loop and does
 not provide constant memory or constant export time.
 
@@ -232,6 +237,8 @@ pineforge-live probe --status-file status.json --max-age 3 --ready
   and optional checkpoint build/write failures are also logged on stderr.
   The field persists through recovery, running and stopped status, including
   after a later successful checkpoint; it does not itself remove readiness.
+  Its `count` field counts optional checkpoint preparation/write failures this
+  run (zero for a checkpoint verification failure).
 - `probe --status-file PATH --max-age S [--ready]` exits 0 only for a valid,
   alive control-loop heartbeat no older than S seconds (integer 1..86400).
   Add `--ready` to also require readiness. Missing, malformed, future-dated,
@@ -264,23 +271,59 @@ pineforge-live probe --status-file status.json --max-age 3 --ready
   abandoned attempt.
 - Run/offline-redelivery exits: **0** normal completion or graceful signal
   stop; **1** fatal initialization, input, storage-I/O or internal failure;
-  **2** offline redelivery with selected failed/pending actions; **3** run
-  stopped at its storage budget. `actions --follow` retains exit 130 on a
-  signal. A supervisor's grace period must allow message computation/commit
+  **2** offline redelivery with selected failed/pending actions; **3** run or
+  offline redelivery stopped at its storage budget. `actions --follow` retains
+  exit 130 on a signal. A supervisor's grace period must allow message computation/commit
   (plus, after a fatal error or a storage-budget stop, the delivery drain); there is no claim that arbitrary strategy code is
   interruptible. Container liveness probes can detect a stalled control loop.
 - `--max-ledger-bytes N` budgets database + WAL + SHM bytes (0 disables it;
-  default 0; integer 0..INT64_MAX). Crossing the budget removes readiness,
-  stops intake after the current whole message and exits 3 without deleting
-  inputs, actions or reports. Recovery still verifies the ledger before
-  deciding to stop. It is a stop threshold, not a quota: one atomic message
-  and the bounded delivery drain can exceed it. Reserve free space for both;
-  an actual I/O failure exits 1. No automatic pruning or report retention
-  policy is applied.
+  default 0; integer 0..INT64_MAX). Service mode (`--status-file`) also retains
+  the unlimited default in this release: it does not require a budget.
+  Requiring one remains a pending policy decision, controlled by
+  `service_requires_ledger_budget`. The `--ledger-unbounded` opt-out is
+  implemented for that policy; a positive budget still applies with the opt-out.
+  With a finite budget, SQL changes stay in SQLite's page cache until admission
+  immediately before COMMIT. The runner reserves each accounted page once,
+  plus WAL, checkpoint and SHM overhead. It releases unreferenced clean pages
+  before counting this ledger's resident pages, so cache history and unrelated
+  SQLite allocations do not change a repeated write's reservation.
+  Insufficient space rolls back the whole transaction before database/WAL
+  growth, carries `used`,
+  `requested` and `limit` in a typed `scratch_capacity_exceeded` failure
+  (`resource: layout` names the ledger budget here), removes
+  readiness and exits 3. Earlier committed inputs, actions and reports stay
+  intact. Delivery is cancelled on an admission refusal; unfinished attempts
+  remain recoverable. The existing post-growth check and
+  `storage_below_budget` readiness field remain in use. An actual I/O failure
+  exits 1. Initialization and migrations also need admission space; a refusal
+  there can precede status publication. No automatic pruning or report
+  retention policy is applied.
 - `--checkpoint-interval K` writes cumulative report checkpoints at K, 2K, 4K,
   ... committed inputs. K is the first/base interval, must be positive and
   defaults to 1024. Checkpoints are report recovery aids; they do not serialize
-  or restore strategy state.
+  or restore strategy state. Startup and recovery checkpoint writes use the
+  same admission; opening files already over a finite budget refuses before
+  any checkpoint is attempted.
+
+Headroom is approximately twice the accounted SQLite page bytes, plus any
+earlier WAL pages still owed to the main file, at most one sector of frame
+padding per WAL/checkpoint allowance, and SHM region rounding. For a 32-page
+bound, no earlier checkpoint debt, a WAL-index bound of 64 KiB and an existing
+32 KiB SHM file, the next write needs **428,320 bytes at 4 KiB pages** or
+**4,359,760 bytes at 64 KiB pages**, beyond current usage. A 2 MiB resident-page
+bound needs **4,383,520 / 4,359,760 bytes**, respectively, under the same
+conditions. These numbers come from the
+[reservation formula](../docs/live-ledger-budget.md). The exact minimum budget
+for a write is `used + requested`; re-evaluating admission against unchanged
+ledger files retains that reservation and the exact limit admits the write.
+Physical growth can be less than the reservation. The minimum varies with the
+transaction and checkpoint debt. **64 MB (64,000,000 bytes)** is a workable
+fresh-ledger budget for short ordinary inputs at both page sizes; the test
+covers initialization and 1/10/100-action inputs. Large payloads and history
+need additional space.
+Auto-vacuum or unavailable cache observation uses the whole logical page
+count as the bound; the accounting guide states the larger headroom and the
+finite-budget migration rule.
 
 ### Live redelivery control files
 
@@ -331,8 +374,22 @@ retained; the oldest are removed during polling. Durable audit stays in SQLite,
 not the acknowledgment files. The control directory is outside the
 ledger budget. Without `--control-dir`, `redeliver` remains offline, reads only
 the selected target's secret and refuses while the runner holds the lock.
+Offline redelivery accepts `--max-ledger-bytes N` (default 0, unlimited);
+attempts and results use the same admission as `run`. Live submissions use the
+running owner's budget.
 
 The additive ledger tables/columns are migrated while holding its writer lock.
+Delivery counts and oldest-pending indexes are rebuilt once from the existing
+rows and verified in that migration transaction. Later delivery and status work
+uses the summaries and indexes; status visits targets rather than historical
+actions or attempts. Counters update in the same transaction as their source
+rows, including failed redelivery and legacy acknowledgements.
+Permanent summary storage adds one `delivery_state` row per action and up to
+three partial-index entries for pending, unsent and oldest-pending lookup.
+The row and oldest index copy the target name. `delivery_targets` adds one
+row, a primary-key index entry and an eligible pending-index entry per distinct
+target, shared by its actions. These grow alongside the original action and
+attempt history; there is no pruning.
 This is a one-way runner upgrade: back up the ledger before upgrading; earlier
 runner versions cannot open the migrated database. Strategy/deployment identity
 and historical action payload bytes remain unchanged.

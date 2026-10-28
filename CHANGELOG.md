@@ -36,6 +36,21 @@ diagnostics keys, described below.
 - The release harness file `docker/run_json.py` changed (below). The hub image
   for this pair carries the 1.8.0 copy.
 
+### Live ledger resource control
+
+- Ledger writes now reserve payload and SQLite overhead before growth and
+  refuse a whole transaction with a typed storage-budget failure. Service and
+  ordinary runs keep their unlimited default in this release; requiring a
+  service budget remains a pending policy decision. The `--ledger-unbounded`
+  opt-out is available for that policy. Offline redelivery accepts the same
+  `--max-ledger-bytes` budget.
+- Delivery status uses transactional counters and oldest-pending indexes,
+  keeping status work independent of action and attempt history. Existing
+  ledgers acquire verified summaries in an automatic, one-way migration;
+  earlier runners cannot open the migrated database. The summaries add one
+  row and up to three partial-index entries per action, plus per-target rows
+  and indexes.
+
 ### Run profile in the report diagnostics
 
 - **Two additive success keys.** Every executed success report of
@@ -89,9 +104,11 @@ verified checkpoint P, reading its witness snapshot and C-P tail deltas for
 cursor C; the tail approaches half the history just before the next doubling.
 The runner README gives the exact report-row and stored-payload bounds.
 
-Checkpoint preparation and its separate insert transaction run after the input
-commit. A failed checkpoint records a typed diagnostic and leaves that input
-durable so the service can continue. An old ledger gets its first checkpoint
+Checkpoint preparation precedes input admission, which reserves its serialized
+cumulative payload. Its separate insert transaction runs after the input
+commit and admits its pages within that reservation. A failed checkpoint records
+a typed diagnostic and counter and leaves that input durable so the service can
+continue. An old ledger gets its first checkpoint
 during open/startup recovery, before new inputs; this initial reconstruction
 reads the full history. Each boundary still builds an O(T) document for a
 report of size T.

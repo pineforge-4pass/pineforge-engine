@@ -173,6 +173,7 @@ def main():
                 "checkpoint write diagnostic")
             status = json.loads(health.read_text())
             equal(status["checkpoint_diagnostic"]["code"], "write_failed")
+            equal(status["checkpoint_diagnostic"]["count"], 1)
             equal(status["state"], "running")
             equal(status["ready"], True)
             equal(query(ledger, "SELECT COUNT(*) FROM inputs"), 2)
@@ -192,6 +193,7 @@ def main():
             equal(summary["inputs_processed"], 4)
             equal([(item["code"], item["cursor"]) for item in diagnostic_lines(errors)],
                   [("write_failed", 2)])
+            equal([item["count"] for item in diagnostic_lines(errors)], [1])
             print("PASS a failed checkpoint leaves its input durable and the service running", flush=True)
 
             ledger = root / "upgrade.sqlite"
