@@ -2,11 +2,13 @@
 
 #include "json.hpp"
 #include "report_delta.hpp"
+#include "ratio_report.hpp"
 #include "../src/report_value_invalid.hpp"
 #include "../src/live_report_patch.hpp"
 #include <pineforge/pineforge.h>
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <iomanip>
 #include <locale>
 #include <memory>
@@ -275,7 +277,8 @@ public:
     }
     std::string update(const pineforge::report::LiveReportPatch& patch,
                        const std::string& deployment, std::uint64_t cursor,
-                       std::uint64_t state_hash) {
+                       std::uint64_t state_hash,
+                       const std::function<void(const std::string&)>& commit = {}) {
         const auto expected_start = [&](const char* name) {
             const auto found = array_sizes_.find(name);
             return found == array_sizes_.end() || !found->second ? 0 : found->second - 1;
@@ -345,9 +348,39 @@ public:
             delta.members["ratio_context"] = Json::object({
                 {"chart_timezone", Json::string(patch.chart_timezone)}});
         }
+        auto payload = delta.dump();
+        // A refused input may already have advanced the engine and suffix
+        // bookkeeping. Keep the retained document at the last durable cursor.
+        if (commit) commit(payload);
         scalars_ = std::move(next);
         if (document_) apply_report_delta(*document_, delta);
-        return delta.dump();
+        return payload;
+    }
+    std::string final_ratio_refresh() {
+        if (!document_)
+            throw std::runtime_error("cumulative report document was not retained");
+        const auto* as_of = document_->find("ratios_as_of_input");
+        const auto cursor = document_->at("input_cursor").integer<std::uint64_t>();
+        if (!as_of || as_of->integer<std::uint64_t>() == cursor) return {};
+        // Terminal only: the engine may include a refused input. Refresh the
+        // committed curve in the one retained document, as read-only export
+        // does, and emit a ratio-only patch. No later update may follow this.
+        refresh_report_ratios(*document_,
+            document_->at("ratio_context").at("chart_timezone").text());
+        document_->members["ratios_as_of_input"] = report_number(cursor);
+        Json ratios = Json::object({});
+        const auto& equity = document_->at("report").at("metrics").at("equity");
+        for (const auto* name : {"sharpe_monthly", "sharpe_bar", "sortino_bar", "sortino_monthly"})
+            ratios.members[name] = equity.at(name);
+        auto fields = Json::object({});
+        fields.members["report"] = Json::object({
+            {"metrics", Json::object({{"equity", std::move(ratios)}})}});
+        return Json::object({
+            {"schema_version", Json::string("pineforge-native-report-delta/v1")},
+            {"fields", std::move(fields)},
+            {"arrays", Json::object({})},
+            {"ratios_as_of_input", report_number(cursor)},
+            {"ratio_context", document_->at("ratio_context")}}).dump();
     }
     std::string json() const {
         if (!document_)

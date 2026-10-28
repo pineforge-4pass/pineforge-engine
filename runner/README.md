@@ -79,10 +79,14 @@ contain changed scalar fields and appended/replaced array suffixes, not
 historical full-report copies. With the default ratio interval, export folds
 these rows through the selected cursor into byte-identical canonical report JSON.
 The runner-owned accumulator carries trade-stat folds and the equity series
-needed for exact ratios. All stream modes retain one cumulative document by
-applying the same suffix patches used in the ledger. Cumulative stdout, legacy
-report verification and checkpoint equality serialize that fold; they never
-rebuild a separate native report.
+needed for exact ratios. Every mode, including the default and runs without
+JSONL output, keeps the cumulative JSON document, the accumulator's raw curve
+and ratio workspace, and the engine's own arrays resident. Memory grows with
+equity points and trades: O(report), the cost of one builder of the cumulative
+document. Cumulative stdout, legacy report verification and checkpoint equality
+serialize that same fold of the ledger's suffix patches. Peak RSS numbers come
+from `test_native_live_report_memory`; it prints `mem n=<N> peak_rss_kib=<K>`
+for each completed size on Linux and prints a skip reason on macOS.
 
 `--ratio-interval K` takes a positive integer and defaults to 1. **K = 1 (the
 default) is unchanged behaviour:** every input's cumulative report and delta
@@ -109,6 +113,9 @@ Finite files, `--check` snapshots and `--max-events` refresh a known final input
 before it commits. When EOF or shutdown reveals the end of a pipe/socket after
 its last commit, JSONL emits one extra ratio-refresh delta (or full document) at
 that same cursor before the operational summary. It adds no input or action.
+A storage-budget refusal also refreshes at the last committed cursor, using
+the retained committed curve; the rejected input contributes no report fields.
+This terminal refresh writes no ledger data.
 Export, including `--at-input`, refreshes the four ratios against the selected
 cursor's cumulative curve after verifying its immutable ledger rows, and sets
 the exported freshness marker to that cursor. It leaves stored deltas and
@@ -192,8 +199,13 @@ The batch `fill_report` and C exports are unchanged. Delta output costs
 O(new/replaced rows) per input and avoids quadratic output as history grows.
 Plain `--report-jsonl` and `--report-jsonl=full` keep the
 O(cumulative document) output cost per input, which can be quadratic over a
-growing run. All modes retain the cumulative JSON arrays and the accumulator's
-equity history; this is O(history) memory, not a flat-memory claim.
+growing run. The O(report) resident retention described above applies to every
+mode; the memory measurement row covers the default cumulative stream with
+the default ratio interval. It measures 1,000 and 10,000 inputs, adding 100,000
+when the measured smaller run projects within its 180 s timeout, and prints
+the reason when that largest size is omitted. Its deliberate sanity ceilings
+are a peak below 2 GiB and growth below 4 KiB per additional input between the
+two largest completed sizes; these are ceilings, not measured baselines.
 Array suffix replacement assumes at most one provisional trailing element for
 equity points and broker hashes. The runner never enables tracing and refuses
 nonempty `trace`: traces can contain several records per bucket, so enabling

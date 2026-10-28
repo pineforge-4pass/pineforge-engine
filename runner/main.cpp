@@ -731,11 +731,12 @@ std::string cumulative_report(Strategy& strategy, const std::string& deployment,
                               std::uint64_t cursor, ReportDeltas& deltas,
                               pineforge::LiveReportAccumulator& accumulator,
                               const std::function<void(const std::string&)>& verify = {},
-                              bool final_input = false) {
+                              bool final_input = false,
+                              const std::function<void(const std::string&)>& commit = {}) {
     const auto patch = accumulator.update(
         *static_cast<const pineforge::BacktestEngine*>(strategy.state), cursor, final_input);
     const auto state_hash = strategy.hash(strategy.state);
-    auto result = deltas.update(patch, deployment, cursor, state_hash);
+    auto result = deltas.update(patch, deployment, cursor, state_hash, commit);
     if (verify) verify(result);
     return result;
 }
@@ -976,9 +977,8 @@ int run(Config c) {
         // immutable freshness marker supplies that same boundary on replay.
         bool final_input = false;
         if (c.ratio_interval > 1 && !stored.empty()) {
-            const auto payload = parse_json(stored);
-            if (const auto* as_of = payload.find("ratios_as_of_input"))
-                final_input = as_of->integer<std::uint64_t>() == report_cursor;
+            if (const auto as_of = stored_report_ratio_cursor(stored))
+                final_input = *as_of == report_cursor;
         }
         cumulative_report(strategy, deployment, report_cursor, report_deltas, report_accumulator,
             [&](const std::string& payload) {
@@ -1127,8 +1127,9 @@ int run(Config c) {
             auto events = actions(strategy, c, deployment);
             const bool last = final_input || (c.max_events && processed + 1 >= c.max_events);
             auto report = cumulative_report(strategy, deployment, index + 1, report_deltas,
-                                            report_accumulator, {}, last);
-            ledger.commit_input(index, canonical, strategy.hash(strategy.state), events, report);
+                report_accumulator, {}, last, [&](const std::string& payload) {
+                    ledger.commit_input(index, canonical, strategy.hash(strategy.state), events, payload);
+                });
             strategy.clear(strategy.state);
             ++processed;
             source_timestamp = source_time(frame, source_time);
@@ -1169,6 +1170,26 @@ int run(Config c) {
         if (full_snapshot && !stopped && !storage_stop && !(c.max_events && processed >= c.max_events) &&
             index < recorded)
             throw std::runtime_error("input snapshot omits committed prefix");
+    };
+    const auto refresh_final_report = [&] {
+        // EOF, stop and budget refusal can reveal the final cursor after its
+        // commit. Refresh last, without a ledger write. A refused input has
+        // advanced the engine, so only its committed document is usable.
+        const auto final_cursor = ledger.input_count();
+        if (c.ratio_interval <= 1) return;
+        const auto final_report = storage_stop ? report_deltas.final_ratio_refresh()
+            : report_accumulator.ratios_as_of_input() != final_cursor
+                ? cumulative_report(strategy, deployment, final_cursor,
+                    report_deltas, report_accumulator, {}, true) : std::string{};
+        if (!final_report.empty() && c.report_jsonl != ReportJsonlMode::Off) {
+            if (c.report_jsonl == ReportJsonlMode::Full)
+                std::cout << report_deltas.full_json();
+            else
+                std::cout << "{\"input_cursor\":" << num(final_cursor).dump() << ','
+                          << std::string_view(final_report).substr(1);
+            std::cout << '\n' << std::flush;
+            if (!std::cout) throw std::runtime_error("report-jsonl stdout write failed; committed input remains durable");
+        }
     };
     try {
         if (c.feed_url.empty()) {
@@ -1280,23 +1301,7 @@ int run(Config c) {
                 }
             } while (!stopped && !storage_stop);
         }
-        // A pipe/socket can reveal its final cursor only after that input
-        // committed. Publish a final refresh at the same cursor; immutable
-        // ledger rows remain the originally committed interval deltas.
-        const auto final_cursor = ledger.input_count();
-        if (c.ratio_interval > 1 && report_accumulator.ratios_as_of_input() != final_cursor) {
-            const auto final_report = cumulative_report(strategy, deployment, final_cursor,
-                report_deltas, report_accumulator, {}, true);
-            if (c.report_jsonl != ReportJsonlMode::Off) {
-                if (c.report_jsonl == ReportJsonlMode::Full)
-                    std::cout << report_deltas.full_json();
-                else
-                    std::cout << "{\"input_cursor\":" << num(final_cursor).dump() << ','
-                              << std::string_view(final_report).substr(1);
-                std::cout << '\n' << std::flush;
-                if (!std::cout) throw std::runtime_error("report-jsonl stdout write failed; committed input remains durable");
-            }
-        }
+        refresh_final_report();
         if (stopped || storage_stop) delivery.limit_drain();
         delivery.finish(false);
     } catch (const LedgerBudgetExceeded& error) {
@@ -1305,6 +1310,7 @@ int run(Config c) {
         storage_stop = true;
         try { delivery.finish(true); } catch (...) {}
         std::cerr << "pineforge-live: " << error.what() << '\n';
+        refresh_final_report();
     } catch (const std::exception& error) {
         try { service.stop("failed"); } catch (...) {}
         delivery.limit_drain();

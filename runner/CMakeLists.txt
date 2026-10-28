@@ -611,6 +611,18 @@ if(PINEFORGE_BUILD_TESTS)
         $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_market_example> interval-ratio-recovery)
     set_tests_properties(test_native_live_report_exact_ratio_recovery
         test_native_live_report_interval_ratio_recovery PROPERTIES TIMEOUT 180)
+    add_test(NAME test_native_live_report_memory COMMAND test_native_live_report_cli
+        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_market_example> memory)
+    add_test(NAME test_native_live_report_storage_stop_refresh COMMAND test_native_live_report_cli
+        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_market_example> storage-stop-refresh)
+    add_test(NAME test_native_live_report_ratio_marker_replay COMMAND test_native_live_report_cli
+        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_market_example> ratio-marker-replay)
+    add_test(NAME test_native_live_report_historical_ratio_export COMMAND test_native_live_report_cli
+        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_market_example> historical-ratio-export)
+    set_tests_properties(test_native_live_report_memory test_native_live_report_storage_stop_refresh
+        test_native_live_report_ratio_marker_replay test_native_live_report_historical_ratio_export
+        PROPERTIES TIMEOUT 180)
+    set_tests_properties(test_native_live_report_memory PROPERTIES SKIP_RETURN_CODE 77)
     if(PINEFORGE_BUILD_SOURCE_LAYER)
         add_test(NAME native_live_ratio_interval_e2e COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/tests/native_live_ratio_interval_e2e.py $<TARGET_FILE:pineforge-live>

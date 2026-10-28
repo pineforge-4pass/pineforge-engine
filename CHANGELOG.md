@@ -144,7 +144,10 @@ stored checkpoints.
   carries a closed-trade high-water mark and no longer scans the full closed
   trade prefix for every input. Delta serialization keeps scalar state and
   array counts; the report accumulator carries the equity series for ratios,
-  and full mode also retains the cumulative document.
+  while every mode keeps the cumulative JSON document, accumulator curve and
+  ratio workspace, and engine arrays resident with O(report) growth in equity
+  points and trades as the cost of one cumulative-document builder, measured
+  by `test_native_live_report_memory`.
   The ordinary live path now uses an engine-side carried report
   accumulator for trade materialization, trade statistics, equity high-water,
   drawdown/run-up and the other non-ratio scalars, updating only appended rows

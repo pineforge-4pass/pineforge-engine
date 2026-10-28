@@ -123,6 +123,23 @@ byte-equal): 191.0 B per bar for a module with 63 B per bar of stdout and
 These report bounds also exclude input mappings, strategy histories and the
 other stores listed on this page.
 
+The native live runner keeps the cumulative JSON document, the accumulator's
+raw equity curve and ratio workspace, and the engine's own arrays resident in
+every mode, including the default stream and runs without JSONL output.
+This is O(report) memory that grows with equity points and trades, the cost of
+one builder of the cumulative document. The numbers come from
+`test_native_live_report_memory`: it drives the real runner's default cumulative
+stream and default ratio interval on seeded inputs and always prints
+`mem n=<N> peak_rss_kib=<K>` for each completed size. On Linux it reads the
+runner's `/proc/<pid>/status` `VmHWM` at the final committed input before
+releasing stdin EOF, then includes any later peak from `wait4` for that exact
+child at exit; macOS skips with a printed reason. The row measures 1,000 and
+10,000 inputs and adds 100,000 only when the smaller run's measured time projects
+within the 180 s timeout, printing the omission reason otherwise. A peak below
+2 GiB and growth below 4 KiB per additional input between the two largest sizes
+are deliberate sanity ceilings, not measured baselines. No retained-document
+RSS figure is published here before the lab runs that row.
+
 For the plain `.bin` input route the input file is mapped, 48 B per bar of file
 payload (`_map_bar_file` docker/run_json.py:2685-2708), and the touched pages
 count toward resident size as the run reads them. A read of the source sites

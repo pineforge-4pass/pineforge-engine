@@ -8,6 +8,7 @@
 
 #include <sqlite3.h>
 
+#include <array>
 #include <cerrno>
 #include <chrono>
 #include <csignal>
@@ -21,8 +22,10 @@
 #include <iterator>
 #include <memory>
 #include <poll.h>
+#include <sstream>
 #include <stdexcept>
 #include <string>
+#include <sys/resource.h>
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
@@ -139,8 +142,8 @@ public:
         do { result = poll(&descriptor, 1, 50); } while (result < 0 && errno == EINTR);
         require(result == 0, "stdout before a committed input: " + errors());
     }
-    std::string line() {
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    std::string line(std::chrono::steady_clock::time_point deadline =
+                         std::chrono::steady_clock::now() + std::chrono::seconds(30)) {
         for (;;) {
             const auto end = pending_.find('\n');
             if (end != std::string::npos) {
@@ -152,6 +155,20 @@ public:
                     "missing committed stdout line: " + errors());
             pull();
         }
+    }
+    std::uint64_t resident_high_water_kib() const {
+        std::istringstream status(read_file("/proc/" + std::to_string(pid_) + "/status"));
+        std::string row;
+        while (std::getline(status, row)) {
+            if (row.rfind("VmHWM:", 0) != 0) continue;
+            std::istringstream field(row.substr(6));
+            std::uint64_t size = 0;
+            std::string unit;
+            require(static_cast<bool>(field >> size >> unit) && unit == "kB" && size > 0,
+                    "invalid runner VmHWM: " + row);
+            return size;
+        }
+        throw std::runtime_error("runner /proc status has no VmHWM");
     }
     void crash() {
         require(kill(pid_, SIGKILL) == 0, "cannot kill runner: " + errors());
@@ -165,7 +182,7 @@ public:
         require(WIFSIGNALED(status) && WTERMSIG(status) == SIGKILL,
                 "expected SIGKILL, actual wait status=" + std::to_string(status) + ": " + errors());
     }
-    std::string finish(int expected = 0) {
+    std::string finish(int expected = 0, std::uint64_t* exit_peak_kib = nullptr) {
         close(input_);
         input_ = -1;
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
@@ -173,9 +190,11 @@ public:
         require(eof_, "runner did not exit: " + errors());
         int status = 0;
         pid_t waited;
-        do { waited = waitpid(pid_, &status, 0); } while (waited < 0 && errno == EINTR);
+        rusage usage{};
+        do { waited = wait4(pid_, &status, 0, &usage); } while (waited < 0 && errno == EINTR);
         require(waited == pid_, "waitpid failed");
         pid_ = -1;
+        if (exit_peak_kib) *exit_peak_kib = static_cast<std::uint64_t>(usage.ru_maxrss);
         require(WIFEXITED(status) && WEXITSTATUS(status) == expected,
                 "runner exit status " + std::to_string(status) + ": " + errors());
         return pending_;
@@ -233,6 +252,8 @@ void apply_delta(Json& document, const std::string& payload) {
     const auto delta = parse_json(payload);
     require(delta.at("schema_version").text() == "pineforge-native-report-delta/v1", "wrong ledger schema");
     merge_fields(document, delta.at("fields"));
+    for (const auto* name : {"ratios_as_of_input", "ratio_context"})
+        if (const auto* value = delta.find(name)) document.members[name] = *value;
     for (const auto& [name, patch] : delta.at("arrays").members) {
         auto& owner = name == "closed_trades" ? document : document.members["report"];
         auto& values = owner.members[name];
@@ -243,6 +264,13 @@ void apply_delta(Json& document, const std::string& payload) {
         values.items.resize(offset);
         for (const auto& item : patch.at("items").items) values.items.push_back(item);
     }
+}
+
+std::string seeded_input(std::uint64_t index, std::uint32_t& seed) {
+    seed = seed * 1664525u + 1013904223u;
+    const auto close = 100 + seed % 7;
+    return "{\"type\":\"bar\",\"bar\":{\"ts_open\":" + std::to_string(index * 60000) +
+        ",\"o\":100,\"h\":108,\"l\":99,\"c\":" + std::to_string(close) + ",\"v\":4}}";
 }
 
 struct Fixture {
@@ -266,12 +294,8 @@ struct Fixture {
                          "allowed_open_directions":3,"initial_margin_fraction":null}
         })");
         std::uint32_t seed = 12345;
-        for (std::uint64_t index = 1; index <= 17; ++index) {
-            seed = seed * 1664525u + 1013904223u;
-            const auto close = 100 + seed % 7;
-            inputs.push_back("{\"type\":\"bar\",\"bar\":{\"ts_open\":" + std::to_string(index * 60000) +
-                ",\"o\":100,\"h\":108,\"l\":99,\"c\":" + std::to_string(close) + ",\"v\":4}}");
-        }
+        for (std::uint64_t index = 1; index <= 17; ++index)
+            inputs.push_back(seeded_input(index, seed));
     }
     std::vector<std::string> command(const fs::path& ledger, const fs::path& status,
                                      const std::string& option, std::uint64_t from) const {
@@ -628,6 +652,302 @@ void ratio_stream_survives_kill(Fixture& fixture, std::uint64_t interval) {
     }
 }
 
+void interval_clock(Fixture& fixture) {
+    auto config = parse_json(read_file(fixture.config));
+    config.members["clock"].members["chart_timezone"] = Json::string("UTC");
+    write_file(fixture.config, config.dump());
+}
+
+Json interval_document(const std::vector<Json>& batches, std::uint64_t cursor,
+                       std::uint64_t interval, bool fresh = false) {
+    auto document = batches[cursor];
+    const auto as_of = fresh ? cursor : cursor / interval * interval;
+    auto& equity = document.members["report"].members["metrics"].members["equity"];
+    const auto& previous = batches[as_of].at("report").at("metrics").at("equity");
+    for (const auto* name : {"sharpe_monthly", "sharpe_bar", "sortino_bar", "sortino_monthly"})
+        equity.members[name] = previous.at(name);
+    document.members["ratios_as_of_input"] = report_number(as_of);
+    document.members["ratio_context"] = Json::object({{"chart_timezone", Json::string("UTC")}});
+    return document;
+}
+
+using Database = std::unique_ptr<sqlite3, decltype(&sqlite3_close)>;
+
+Database open_database(const fs::path& path, int flags) {
+    sqlite3* raw = nullptr;
+    const auto result = sqlite3_open_v2(path.c_str(), &raw, flags, nullptr);
+    Database database(raw, sqlite3_close);
+    require(result == SQLITE_OK, "cannot open test ledger");
+    return database;
+}
+
+void execute(sqlite3* database, const char* sql) {
+    require(sqlite3_exec(database, sql, nullptr, nullptr, nullptr) == SQLITE_OK,
+            std::string("test SQL failed: ") + sqlite3_errmsg(database));
+}
+
+std::array<std::string, 3> ledger_files(const fs::path& path) {
+    for (const auto* suffix : {"", "-wal", "-shm"})
+        require(fs::exists(path.string() + suffix), "missing ledger file before byte comparison");
+    return {read_file(path), read_file(path.string() + "-wal"), read_file(path.string() + "-shm")};
+}
+
+void storage_stop_refresh(Fixture& fixture) {
+    constexpr std::uint64_t count = 7, interval = 3, limit = 1024 * 1024;
+    interval_clock(fixture);
+    const auto batches = batch_documents(fixture, interval, count);
+    for (const auto& option : {"--report-jsonl", "--report-jsonl=delta"}) {
+        const auto name = option == std::string("--report-jsonl") ? "storage-full" : "storage-delta";
+        const auto ledger = fixture.temporary.path / (std::string(name) + ".sqlite");
+        const auto status = fixture.temporary.path / (std::string(name) + ".status");
+        auto command = fixture.command(ledger, status, option, 0);
+        command.insert(command.end(), {"--ratio-interval", "3", "--checkpoint-interval", "2",
+                                       "--max-ledger-bytes", std::to_string(limit)});
+        Runner child(command, fixture.temporary.path / (std::string(name) + ".stderr"));
+        wait_ready(status, 0, child);
+        Json committed;
+        apply_delta(committed, stored_delta(ledger, 0));
+        for (std::uint64_t cursor = 1; cursor <= count; ++cursor) {
+            child.send(fixture.inputs[cursor - 1] + "\n");
+            const auto line = child.line();
+            apply_delta(committed, stored_delta(ledger, cursor));
+            require(committed.dump() == interval_document(batches, cursor, interval).dump(),
+                    "committed interval report differs from batch");
+            if (option == std::string("--report-jsonl"))
+                require(line == committed.dump(), "default stream differs before storage stop");
+        }
+        require(committed.at("ratios_as_of_input").integer<std::uint64_t>() == 6,
+                "storage stop fixture needs stale ratios");
+        const auto last_delta = stored_delta(ledger, count);
+        // Keep a read transaction open across child exit, so SQLite cannot
+        // remove WAL/SHM sidecars and obscure the no-write assertion.
+        auto keeper = open_database(ledger, SQLITE_OPEN_READONLY);
+        execute(keeper.get(), "BEGIN; SELECT COUNT(*) FROM inputs;");
+        const auto before = ledger_files(ledger);
+        // One later input uses the maximum legal batch, on checkpoint boundary
+        // 8. Its cumulative-payload reservation exceeds the finite budget.
+        // It advances the engine before its SQL rollback.
+        std::uint32_t seed = 12345;
+        std::string refused = "{\"type\":\"batch\",\"events\":[";
+        for (std::uint64_t index = count + 1; index <= count + 1024; ++index) {
+            if (index != count + 1) refused += ',';
+            refused += seeded_input(index, seed);
+        }
+        refused += "]}";
+        require(refused.size() < 1024 * 1024, "storage fixture exceeds the feed frame limit");
+        child.send(refused + "\n");
+        const auto refresh = child.line();
+        check_summary(child.finish(3), count, count);
+        require(child.errors().find("native ledger byte budget refused before write:") != std::string::npos &&
+                child.errors().find("\"code\":\"scratch_capacity_exceeded\"") != std::string::npos,
+                "later input did not cause the expected storage stop: " + child.errors());
+        require(ledger_files(ledger) == before, "storage stop refresh changed database, WAL or SHM bytes");
+        require(stored_delta(ledger, count) == last_delta, "refresh rewrote the committed delta");
+        if (option == std::string("--report-jsonl=delta")) {
+            apply_delta(committed, refresh);
+            require(committed.dump() == interval_document(batches, count, interval, true).dump(),
+                    "storage stop delta refreshed a refused input");
+        } else {
+            require(refresh == interval_document(batches, count, interval, true).dump(),
+                    "storage stop document is not the refreshed committed batch prefix");
+        }
+        const auto final_status = parse_json(read_file(status));
+        require(final_status.at("state").text() == "storage_budget", "wrong storage stop service state");
+    }
+}
+
+void historical_ratio_export(Fixture& fixture) {
+    constexpr std::uint64_t count = 8, target = 7, interval = 3;
+    interval_clock(fixture);
+    const auto batches = batch_documents(fixture, interval, count);
+    const auto ledger = fixture.temporary.path / "historical-ratios.sqlite";
+    const auto status = fixture.temporary.path / "historical-ratios.status";
+    auto command = fixture.command(ledger, status, "--report-jsonl", 0);
+    command.insert(command.end(), {"--ratio-interval", "3"});
+    Runner child(command, fixture.temporary.path / "historical-ratios.stderr");
+    wait_ready(status, 0, child);
+    Json committed;
+    apply_delta(committed, stored_delta(ledger, 0));
+    for (std::uint64_t cursor = 1; cursor <= count; ++cursor) {
+        child.send(fixture.inputs[cursor - 1] + "\n");
+        const auto line = child.line();
+        if (cursor <= target) apply_delta(committed, stored_delta(ledger, cursor));
+        require(line == interval_document(batches, cursor, interval).dump(), "interval stream differs from batch");
+    }
+    require(committed.dump() == interval_document(batches, target, interval).dump(),
+            "historical committed row differs from independent expectation");
+    Runner reader({fixture.runner, "report", "--ledger", ledger.string(), "--at-input", std::to_string(target)},
+                  fixture.temporary.path / "historical-export.stderr");
+    const auto exported = parse_json(reader.finish());
+    require(exported.dump() == interval_document(batches, target, interval, true).dump(),
+            "historical export differs from exact batch prefix");
+    require(exported.at("ratios_as_of_input").integer<std::uint64_t>() == target &&
+            committed.at("ratios_as_of_input").integer<std::uint64_t>() == 6,
+            "historical export did not refresh its marker");
+    bool different = false;
+    auto stripped_export = exported, stripped_commit = committed;
+    for (const auto* name : {"sharpe_monthly", "sharpe_bar", "sortino_bar", "sortino_monthly"}) {
+        auto& exact = stripped_export.members["report"].members["metrics"].members["equity"];
+        auto& interval_value = stripped_commit.members["report"].members["metrics"].members["equity"];
+        different = different || exact.at(name).dump() != interval_value.at(name).dump();
+        exact.members.erase(name);
+        interval_value.members.erase(name);
+    }
+    require(different, "historical export fixture did not change any ratio word");
+    stripped_export.members.erase("ratios_as_of_input");
+    stripped_commit.members.erase("ratios_as_of_input");
+    require(stripped_export.dump() == stripped_commit.dump(),
+            "historical export changed a field other than the four ratios and marker");
+    const auto ending = child.finish();
+    const auto newline = ending.find('\n');
+    require(newline != std::string::npos &&
+            ending.substr(0, newline) == interval_document(batches, count, interval, true).dump(),
+            "final stream refresh differs from batch");
+    check_summary(ending.substr(newline + 1), count, count);
+}
+
+void ratio_marker_replay(Fixture& fixture) {
+    // The old full parse + integer accessor is the independent semantic oracle
+    // for canonical/noncanonical envelopes, absent keys and malformed tokens.
+    const auto old_cursor = [](const std::string& bytes) -> std::optional<std::uint64_t> {
+        const auto parsed = parse_json(bytes);
+        if (const auto* marker = parsed.find("ratios_as_of_input"))
+            return marker->integer<std::uint64_t>();
+        return std::nullopt;
+    };
+    const auto outcome = [](const auto& read, const std::string& bytes) {
+        try {
+            const auto value = read(bytes);
+            return value ? "value=" + std::to_string(*value) : std::string("missing");
+        } catch (const std::exception& error) { return std::string("error=") + error.what(); }
+    };
+    for (const auto* token : {"0", "8", "18446744073709551615", "18446744073709551616",
+                             "-1", "-0", "8.0", "8e0", "\"8\"", "null", "true", "{}", "[]", "08"}) {
+        const auto bytes = std::string("{\"arrays\":{},\"fields\":{},\"ratios_as_of_input\":") + token +
+            ",\"schema_version\":\"pineforge-native-report-delta/v1\"}";
+        require(outcome(old_cursor, bytes) == outcome(stored_report_ratio_cursor, bytes),
+                "ratio marker accessor changed token semantics: " + bytes);
+    }
+    for (const std::string bytes : {
+            "{\"fields\":{\"ratios_as_of_input\":8},\"schema_version\":\"pineforge-native-report-delta/v1\"}",
+            "{\"ratios_as_of_input\":8,\"schema_version\":\"pineforge-native-report/v1\"}",
+            "{ \"ratios_as_of_input\" : 8 }", "{}",
+            "{\"ratios_as_of_input\":8,\"ratios_as_of_input\":8}",
+            "{\"ratios_as_of_input\":8,\"ratios_as_of_input\":8,\"schema_version\":\"pineforge-native-report-delta/v1\"}",
+            "{\"\\u0072atios_as_of_input\":8,\"ratios_as_of_input\":8,\"schema_version\":\"pineforge-native-report-delta/v1\"}",
+            "[]"}) {
+        require(outcome(old_cursor, bytes) == outcome(stored_report_ratio_cursor, bytes),
+                "ratio marker accessor changed envelope semantics: " + bytes);
+    }
+    constexpr std::uint64_t count = 8, interval = 3;
+    interval_clock(fixture);
+    const auto batches = batch_documents(fixture, interval, count);
+    for (const std::string fault : {"none", "missing", "string", "fraction", "overflow", "negative"}) {
+        const auto ledger = fixture.temporary.path / (fault + "-marker.sqlite");
+        const auto status = fixture.temporary.path / (fault + "-marker.status");
+        auto command = fixture.command(ledger, status, "--report-jsonl", 0);
+        command.insert(command.end(), {"--ratio-interval", "3", "--checkpoint-interval", "2"});
+        auto seed_command = command;
+        seed_command.insert(seed_command.end(), {"--max-events", "8"});
+        Runner child(seed_command, fixture.temporary.path / (fault + "-seed.stderr"));
+        wait_ready(status, 0, child);
+        for (std::uint64_t cursor = 1; cursor <= count; ++cursor) {
+            child.send(fixture.inputs[cursor - 1] + "\n");
+            require(child.line() == interval_document(batches, cursor, interval, cursor == count).dump(),
+                    "forced non-periodic final boundary differs from batch");
+        }
+        check_summary(child.finish(), count, count);
+        if (fault != "none") {
+            // Malformed markers below checkpoint 8 must still be rejected on
+            // engine replay even though their report equality check is skipped.
+            const auto at = fault == "missing" ? count : 1;
+            auto delta = parse_json(stored_delta(ledger, at));
+            if (fault == "missing") delta.members.erase("ratios_as_of_input");
+            else delta.members["ratios_as_of_input"] = fault == "string" ? Json::string("8")
+                : Json::number(fault == "fraction" ? "8.5" : fault == "overflow" ? "18446744073709551616" : "-1");
+            const auto payload = delta.dump();
+            auto database = open_database(ledger, SQLITE_OPEN_READWRITE);
+            execute(database.get(), "DROP TRIGGER report_no_update;");
+            sqlite3_stmt* raw = nullptr;
+            require(sqlite3_prepare_v2(database.get(),
+                "UPDATE report_snapshots SET payload=? WHERE input_cursor=?", -1, &raw, nullptr) == SQLITE_OK,
+                "cannot prepare marker corruption");
+            std::unique_ptr<sqlite3_stmt, decltype(&sqlite3_finalize)> statement(raw, sqlite3_finalize);
+            require(sqlite3_bind_text(raw, 1, payload.c_str(), -1, SQLITE_TRANSIENT) == SQLITE_OK &&
+                    sqlite3_bind_int64(raw, 2, static_cast<sqlite3_int64>(at)) == SQLITE_OK &&
+                    sqlite3_step(raw) == SQLITE_DONE && sqlite3_changes(database.get()) == 1,
+                    "cannot corrupt marker fixture");
+        }
+        // Replace the existing source cursor instead of supplying a duplicate.
+        const auto from = std::find(command.begin(), command.end(), "--from-input");
+        require(from != command.end(), "fixture source cursor is missing");
+        *(from + 1) = std::to_string(count);
+        Runner replay(command, fixture.temporary.path / (fault + "-replay.stderr"));
+        if (fault == "none") {
+            wait_ready(status, count, replay);
+            check_summary(replay.finish(), count, 0);
+        } else {
+            require(replay.finish(1).empty(), "malformed or missing marker replay printed a report");
+            const auto error = replay.errors();
+            const auto expected = fault == "missing" ? "native replay report mismatch"
+                : fault == "string" ? "expected integer" : "invalid or overflowing integer";
+            require(error.find(expected) != std::string::npos, "changed marker refusal: " + error);
+        }
+    }
+}
+
+void report_memory(Fixture& fixture) {
+    using Clock = std::chrono::steady_clock;
+    const auto deadline = Clock::now() + std::chrono::seconds(160);
+    std::uint64_t previous_n = 0, previous_peak = 0, largest_n = 0, largest_peak = 0;
+    double last_seconds = 0;
+    for (const std::uint64_t count : {1000, 10000, 100000}) {
+        // Cumulative stdout and default exact ratios both have quadratic total
+        // work. Use the measured 10k time to keep this row within its 180s
+        // timeout; two completed sizes still test resident growth.
+        const auto remaining = std::chrono::duration<double>(deadline - Clock::now()).count();
+        if (count == 100000 && last_seconds * 100 > remaining) {
+            std::cout << "memory: 100000 inputs omitted; projected cumulative-stream time exceeds "
+                         "the 180 s row timeout; using 1000 and 10000\n" << std::flush;
+            break;
+        }
+        const auto name = "memory-" + std::to_string(count);
+        const auto status = fixture.temporary.path / (name + ".status");
+        const auto started = Clock::now();
+        Runner child(fixture.command(fixture.temporary.path / (name + ".sqlite"), status, "--report-jsonl", 0),
+                     fixture.temporary.path / (name + ".stderr"));
+        wait_ready(status, 0, child);
+        std::uint32_t seed = 12345;
+        for (std::uint64_t cursor = 1; cursor <= count; ++cursor) {
+            child.send(seeded_input(cursor, seed) + "\n");
+            // Drain each cumulative line without retaining reports in the
+            // witness. The runner is held on stdin at the terminal cursor.
+            const auto line = child.line(deadline);
+            require(line.find("\"input_cursor\":" + std::to_string(cursor) + ",") != std::string::npos &&
+                    line.find("\"schema_version\":\"pineforge-native-report/v1\"") != std::string::npos,
+                    "memory witness did not run the default cumulative stream");
+        }
+        const auto terminal_hwm = child.resident_high_water_kib();
+        std::uint64_t exit_hwm = 0;
+        check_summary(child.finish(0, &exit_hwm), count, count);
+        // VmHWM disappears with the process's mm at exit. Read it at the
+        // held-open-stdin exit barrier, and include any later peak from wait4
+        // for this exact child, never the parent's cumulative child usage.
+        const auto peak = std::max(terminal_hwm, exit_hwm);
+        std::cout << "mem n=" << count << " peak_rss_kib=" << peak << '\n' << std::flush;
+        previous_n = largest_n; previous_peak = largest_peak;
+        largest_n = count; largest_peak = peak;
+        last_seconds = std::chrono::duration<double>(Clock::now() - started).count();
+    }
+    require(previous_n && largest_n > previous_n, "memory row needs at least two measured sizes");
+    require(largest_peak < 2ULL * 1024 * 1024, "runner peak RSS exceeds the 2 GiB sanity ceiling");
+    const auto growth = largest_peak > previous_peak ? largest_peak - previous_peak : 0;
+    // A deliberate generous ceiling, not a measured baseline: a retained full
+    // document per input (quadratic storage) must fail, ordinary O(report) may
+    // grow. Both quantities are KiB, so 4 means 4 KiB per additional input.
+    require(growth < 4 * (largest_n - previous_n), "runner RSS growth exceeds 4 KiB per input");
+}
+
 void options_are_strict(Fixture& fixture) {
     for (const std::string option : {"--report-jsonl=unsupported", "--report-jsonl=", "--report-jsonl=DELTA"}) {
         Runner child({fixture.runner, "run", option}, fixture.temporary.path / "invalid.stderr");
@@ -646,8 +966,14 @@ int main(int argc, char** argv) {
     try {
         require(argc == 4, "expected runner, native module and test case");
         std::signal(SIGPIPE, SIG_IGN);
-        Fixture fixture(argv[1], argv[2]);
         const std::string test_case = argv[3];
+#if !defined(__linux__)
+        if (test_case == "memory") {
+            std::cout << "SKIP report memory: runner VmHWM requires Linux /proc/<pid>/status\n";
+            return 77;
+        }
+#endif
+        Fixture fixture(argv[1], argv[2]);
         if (test_case == "first-commit") {
             const auto plain = exercise(fixture, "plain", "--report-jsonl");
             const auto full = exercise(fixture, "full", "--report-jsonl=full");
@@ -663,6 +989,14 @@ int main(int argc, char** argv) {
             ratio_stream_survives_kill(fixture, 1);
         } else if (test_case == "interval-ratio-recovery") {
             ratio_stream_survives_kill(fixture, 3);
+        } else if (test_case == "storage-stop-refresh") {
+            storage_stop_refresh(fixture);
+        } else if (test_case == "historical-ratio-export") {
+            historical_ratio_export(fixture);
+        } else if (test_case == "ratio-marker-replay") {
+            ratio_marker_replay(fixture);
+        } else if (test_case == "memory") {
+            report_memory(fixture);
         } else {
             throw std::runtime_error("unknown test case");
         }
