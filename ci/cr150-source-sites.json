@@ -5885,7 +5885,7 @@
     "namespace pineforge #1",
     "namespace metrics #1",
     "class EquityMetricsFold #1",
-    "public : void fold ( const pf_equity_point_t & point , int month_key , bool observation = true , bool exposed = false ) #1"
+    "public : void fold ( const pf_equity_point_t & point , std :: int64_t month_key , bool observation = true , bool exposed = false ) #1"
    ],
    "cls": "assign",
    "spelling": "held_ = . . .",
@@ -5898,7 +5898,7 @@
     "namespace pineforge #1",
     "namespace metrics #1",
     "class EquityMetricsFold #1",
-    "bool replace_last ( const pf_equity_point_t & point , int month_key ) #1"
+    "bool replace_last ( const pf_equity_point_t & point , std :: int64_t month_key ) #1"
    ],
    "cls": "assign",
    "spelling": "held_ = . . .",
@@ -24586,6 +24586,17 @@
     "namespace pineforge :: report #1",
     "inline double finite_value ( double value , const char * field , const char * prefix = nullptr ) #1",
     "if ( ! std :: isfinite ( value ) ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "RunFailureArgs",
+   "ordinal": 1
+  },
+  {
+   "file": "src/report_value_invalid.hpp",
+   "symbol": "<temp:RunFailureArgs>",
+   "scope": [
+    "namespace pineforge :: report #1",
+    "inline void throw_unrepresentable_time ( const char * field ) #1"
    ],
    "cls": "temp",
    "spelling": "RunFailureArgs",

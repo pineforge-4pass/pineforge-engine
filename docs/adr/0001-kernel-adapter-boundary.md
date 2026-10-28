@@ -86,7 +86,7 @@ summary of it.
   `NativeCoordinate::interval_index` (`market_driver.hpp:74`) is the sequential
   SCRIPT-bar index even when `input_tf` is finer than `script_tf`. The same
   script coordinate books `PyramidEntry::entry_bar_index`, trade-row indices and
-  the inclusive bar metrics (`entry_bar_index` / `exit_bar_index` `engine_orders.cpp:127-128`, `bars` `engine_metrics.cpp:277`).
+  the inclusive bar metrics (`entry_bar_index` / `exit_bar_index` `engine_orders.cpp:127-128`, `bars` `engine_metrics.cpp:270`).
   `NativeCoordinate::input_interval_index` (`market_driver.hpp:79`) names the
   input slot that supplied the point for a host that needs input cadence. Both
   coordinate values are folded by `hash_coordinate`
@@ -181,7 +181,7 @@ summary of it.
   `KernelRecordedAtHostMarks` records the same series at the host's own marks.
   `report_open_position_at_end` books the still-open position as a mark-to-market row under
   `KernelRecorded`. Under `HostRecorded` an unrecorded curve still degenerates —
-  `compute_equity_stats` answers its defined empty-curve metrics with no error (`src/engine_metrics.cpp:449`,
+  `compute_equity_stats` answers its defined empty-curve metrics with no error (`src/engine_metrics.cpp:442`,
   consumed by `fill_metrics_section`, `src/engine_report.cpp:393`) — which is why the policy exists.
 - **Reproducibility.** Two digests, one wrapping the other. `native_continuation_hash()`
   (`native_host.hpp:1406`) returns the consumer's event/continuation hash. **A digest names
@@ -919,7 +919,7 @@ no new kernel policy.
 
 | Kernel capability | Generic mechanism | Why no platform knob is added | Executed witness |
 |---|---|---|---|
-| One civil-date helper: `native_calendar::native_civil_date` and `native_civil_days` (`include/pineforge/native_calendar.hpp`) | Proleptic-Gregorian day arithmetic (Hinnant's `civil_from_days` / `days_from_civil`) in integers. The calendar, the time-of-day fields, the timeframe helpers, the report's month keys and the Pine adapter's chart-day key read it, where each kept its own copy. | A pure function of its arguments: a calendar has no venue variant and nothing to choose. | `tests/test_chart_day_key_arithmetic.cpp` and `tests/test_utc_month_key_arithmetic.cpp` against `gmtime_r`; `tests/test_native_calendar_hash_witness.cpp` unmoved |
+| One civil-date helper: `native_calendar::native_civil_date` and `native_civil_days` (`include/pineforge/native_calendar.hpp`) | Proleptic-Gregorian day arithmetic (Hinnant's `civil_from_days` / `days_from_civil`) in integers. The calendar, the time-of-day fields, the timeframe helpers, the report's month keys and the Pine adapter's chart-day key read it, where each kept its own copy. The report's UTC month key covers every `int64_t` millisecond timestamp and is carried as `int64_t` through the report folds; its memo caches only seconds strictly inside +/-2^40. | A pure function of its arguments: a calendar has no venue variant and nothing to choose. | `tests/test_chart_day_key_arithmetic.cpp` and `tests/test_utc_month_key_arithmetic.cpp` against `gmtime_r` in range, the month keys also against independent Gregorian cycles at timestamp extremes; `tests/test_native_calendar_hash_witness.cpp` unmoved |
 | The aggregation predicate: `native_calendar::pairing_aggregates` and `NativeStrategyHost::native_aggregates_input_bars()` (`include/pineforge/native_host.hpp`) | Whether the pairing the kernel resolved for a run's input and script timeframes makes its script bars buckets gathered from the input (a same-unit or fixed multiple, a fixed or calendar input under a calendar script bar) rather than the input bars themselves. | A query of the pairing the run already resolved: it reads the spec and decides nothing. The Pine adapter's copy read the two literals and parted from the kernel on one-bucket and monthly pairings. | `tests/test_aggregates_input_bars_literals.cpp` |
 
 ### Wave XSYM-D: rule 2 ruling
