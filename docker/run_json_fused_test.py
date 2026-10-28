@@ -11,6 +11,7 @@ import errno
 import fcntl
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -186,6 +187,44 @@ def test_fused_report_bytes_synthetic(tmp_path, frozen, name):
             run_json, sink, library, report, outputs=outputs,
             window_anchor=window_anchor, configure=configure)
         support.assert_same(actual, expected)
+
+
+@pytest.mark.parametrize("fused", (False, True), ids=("non-fused", "fused"))
+@pytest.mark.parametrize("drawdown, expected", (
+    (False, {"cagr": "simple_proportional_overflow"}),
+    (True, {"cagr": "simple_proportional_overflow",
+            "calmar": "simple_proportional_overflow"}),
+), ids=("calmar-null", "calmar-finite"))
+def test_sink_annualization_overflow_uses_initial_capital(
+        tmp_path, fused, drawdown, expected):
+    capital = 10_000.0
+    first_ts = ordinary.bars.T0
+    span_ms = 86_400_000
+    final_equity = capital * 1e30
+    # Open profit makes the first mark unsuitable as a fallback for capital.
+    rows = [["E", first_ts, 11_000.0, 1_000.0]]
+    if drawdown:
+        rows.append(["E", first_ts + span_ms // 2, 5_500.0, -4_500.0])
+    rows.append(["E", first_ts + span_ms, final_equity, final_equity - capital])
+    span_years = span_ms / (365.25 * 86400.0 * 1000.0)
+    with pytest.raises(OverflowError):
+        math.pow(final_equity / capital, 1.0 / span_years)
+    cagr = (final_equity / capital - 1.0) * (1.0 / span_years) * 100.0
+    calmar = cagr / 50.0 if drawdown else float("nan")
+
+    with _sink_case(tmp_path, rows) as (sink, library, report):
+        sink._fused_pass = fused
+        report.metrics.equity.cagr = cagr
+        report.metrics.equity.calmar = calmar
+        sink.verify(library, 1, report)
+        out = run_json._build_sink_report(
+            report, Path("annualization.csv"), len(rows), first_ts,
+            first_ts + span_ms, 0.0, {}, {}, {}, sink,
+            window_anchor=False, initial_capital=capital)
+
+        assert out["metrics"]["equity"]["cagr"] == cagr
+        assert out["metrics"]["equity"]["calmar"] == (calmar if drawdown else None)
+        assert out["diagnostics"]["annualization"] == expected
 
 
 @pytest.mark.parametrize("kind", ("canonical", "fallback", "zero-trades", "trailer-window"))
