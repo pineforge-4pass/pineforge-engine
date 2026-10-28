@@ -922,7 +922,7 @@ double BacktestEngine::output_constant_value(int index) const {
 
 }  // namespace pineforge
 
-// CR-150 L6B1/L22A: sink runtime. Kept after the existing report/output code
+// Sink runtime. Kept after the existing report/output code
 // so the line-pinned documentation above retains its source coordinates.
 #include <pineforge/detail/scratch_arena.hpp>
 #include "report_sink_writer.hpp"
@@ -1604,7 +1604,7 @@ void BacktestEngine::retire_report_sink_hashes() {
 }
 
 // ---------------------------------------------------------------------------
-// CR-150 o1w-seq (R14--R18): the fixed ordered witnesses.
+// Fixed ordered witnesses.
 //
 // Every fold below is over the record's semantic fields, in record order, on
 // an explicit little-endian byte spelling. Nothing here reads the report mode
@@ -1784,7 +1784,7 @@ report_sequence::OptionalSequenceSummary BacktestEngine::optional_sequence_summa
 
 } // namespace pineforge
 
-// CR-150 L17B: selected report reads share these folds for the array and
+// Selected report reads share these folds for the array and
 // scratch sources. Formulae, return generation and floating-point order live
 // in metrics::compute_equity_stats; this boundary supplies the selected facts.
 namespace pineforge::internal {
@@ -1847,7 +1847,7 @@ void compute_selected_report_metrics(
 
 
 // ---------------------------------------------------------------------------
-// CR-150 O1W R12/R13: the terminal range-end row source and the versioned
+// The terminal range-end row source and the versioned
 // report envelope. Appended at the end of the file, after every function the
 // file held before.
 namespace pineforge {

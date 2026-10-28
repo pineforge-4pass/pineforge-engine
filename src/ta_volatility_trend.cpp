@@ -150,7 +150,7 @@ double StdDev::held_stdev() const {
 double StdDev::compute(double src) {
     if (biased_) {
         if (is_na(src)) {
-            // na never enters (KI-66); the seeded value is held (see below).
+            // na never enters; the seeded value is held (see below).
             sum_x_.note_no_push();
             sum_xx_.note_no_push();
             if (bar_count_ >= length_) return biased_value();
@@ -163,7 +163,7 @@ double StdDev::compute(double src) {
         return biased_value();
     }
     if (is_na(src)) {
-        // Pine ta.stdev, like ta.sma (KI-66): an na input never enters the
+        // Pine ta.stdev, like ta.sma: an na input never enters the
         // compact last-N-valid window; once `length` valid values have been
         // seen the window's population stdev is HELD and re-emitted on the
         // na-input bar; before seeding it is still na. State untouched.

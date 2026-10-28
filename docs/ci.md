@@ -1,6 +1,6 @@
 # Local verification and CI
 
-CR-233 supersedes the D1/D3 pull-request split recorded later on this page.
+The current CI policy supersedes the D1/D3 pull-request split recorded later on this page.
 Those earlier PR populations and timing estimates are historical; the current
 `ci.yml` (PR) and `ci-post.yml` (push to `main`, nightly and manual) trigger map is:
 
@@ -210,7 +210,7 @@ instead ([Run-failure codes](pages/run-failure-codes.md)).
 
 ## Current remote CTest contract: `ctest-shard-union/v1`
 
-**L6 rule, 2026-10-24 02:12 (supersedes the earlier 01:48 Debug-only ruling):**
+**Deferred-row rule, 2026-10-24 02:12 (supersedes the earlier 01:48 Debug-only ruling):**
 the default `slow` exclusion follows the declared CMake **Debug build type**.
 It covers `debug` and `sanitizers`, with or without `--ctest-shard`, and a
 future Debug profile inherits it whenever it uses the full test registry.
@@ -1493,7 +1493,7 @@ visible only in those profiles, such as an ASan-only defect in a `slow` row,
 is not seen by any run under this policy. Release is the only gate for those
 rows and cannot detect a defect that occurs only with sanitizer instrumentation.
 
-**Rule for the deferred rows (L6 condition, 10-20).** Every row and class this
+**Rule for the deferred rows (deferred-row condition, 10-20).** Every row and class this
 section excludes from a pull request still runs on the merge commit. A red
 result on `main` in an excluded row or class (the Release and kernel-only
 `slow` rows, or a SLOW verifier class) BLOCKS the next release cut, and the
@@ -1701,7 +1701,7 @@ HTTPS submodule clone retain their existing credential handling behind authz.
 carry no explicit `--exclude-label` arguments. The verifier's Debug-type
 default excludes `slow` from Debug and sanitizer runs on every event,
 including non-PR events; Release, kernel and native retain every row.
-PR CI keeps CR-233's Release smoke selected by CTest label `fast`.
+PR CI keeps the Release smoke selected by CTest label `fast`.
 
 Baseline promotion uses `["self-hosted","pf-gcp-main"]` for its GitHub App
 secrets and inherited `id-token: write` permission. The release class admits
@@ -1997,7 +1997,7 @@ identity refuse, even when an older row from an allowed creator succeeded.
 
 Adding a creator is a code change reviewed like any other.
 
-## Source allocation-bound gate (CR-150 / C4)
+## Source allocation-bound gate (C4)
 
 `scripts/cr150_source_gate.py` is the preflight stage `source-guard-cr150-source-bounds`, and its mutation controls, `scripts/test_cr150_source_gate.py`, run as `cr150-source-gate-tests`. Both stages run in the `fast` and default `all` tiers regardless of whether a scanned file changed; the `github-only` and `slow` tiers exclude them. The gate indexes growable-container constructs in the engine (`src/**`, `include/pineforge/**`) and the generated C++ present in the tree (`tutorial/**/generated*.cpp`): growth calls, `new`/`malloc`, by-value containers and temporaries, map subscripts, container assignment and string append.
 

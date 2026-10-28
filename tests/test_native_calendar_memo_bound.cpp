@@ -1,4 +1,4 @@
-// CR-150 lane L19n: the session-day memo owns a fixed heap, and owning it moves
+// The session-day memo owns a fixed heap, and owning it moves
 // no answer.
 //
 // The L0b heap census (4,000 against 16,000 one-minute UTC bars) found a

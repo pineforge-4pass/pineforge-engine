@@ -1,4 +1,4 @@
-// CR-150 L19l. The reference owns the old in-memory ordering/fold; no pins.
+// The reference owns the old in-memory ordering/fold; no pins.
 #define PINEFORGE_TEST_ALLOCATION_BYTES
 #include "global_allocation_replacement.hpp"
 

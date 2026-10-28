@@ -67,7 +67,7 @@ def test_array_transport_is_the_frozen_bytes(tmp_path, frozen, count):
     report, trades, curve = population(count)
     incarnations = tuple(range(1, count + 1))
     reference = build(frozen, report, incarnations)
-    # CR-202 / revision 3.1 (34f9b3a39f) added the two named forms after
+    # Revision 3.1 (34f9b3a39f) added the two named forms after
     # this oracle froze. Every population here has a positive sub-day span
     # and finite cagr/calmar; preserve every other byte of the frozen report.
     assert 0 < curve[-1].time_ms - curve[0].time_ms < 86_400_000

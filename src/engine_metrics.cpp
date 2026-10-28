@@ -645,7 +645,7 @@ void BacktestEngine::reset_trade_percent_prefix() {
 
 }  // namespace pineforge
 
-// CR-150 L6b-4 read-side binding. Keep the existing metric implementation and
+// Read-side binding. Keep the existing metric implementation and
 // its array instantiations above unchanged; L7c owns the public SpillCurve
 // instantiations. The internal window can exercise the real scratch reader
 // before that downstream adapter is merged.

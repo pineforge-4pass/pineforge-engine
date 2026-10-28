@@ -1039,7 +1039,7 @@ void source::PineStrategyHost::on_native_applied(
             || (std::isfinite(p->second.exit_levels.limit) && p->second.exit_levels.limit > 0.0));
     if (event.opened_units != 0.0) {
         // ab9714be pine_orders.cpp:750-753 and pine_fills.cpp:7189-7193
-        // (KI-62): a MARKET entry that adds to a live same-side position is
+        // A MARKET entry that adds to a live same-side position is
         // flagged so a same-bar from_entry bracket exit covers it.
         const bool market_add = !pine_priced && event.closed_units == 0.0
             && p != adapter_.placement_.end()
@@ -2021,7 +2021,7 @@ bool source::PineStrategyHost::same_symbol_sites_routable(
     // sites from realtime prints (the kernel takes confirmed bars only); an
     // aggregated chart or the bar magnifier can hold an input back until the
     // calling bar's callback has run (PineScheduler::input's deferrals); the
-    // auxiliary slice is fed per chart bar; the KI-55 range-start cut, the
+    // auxiliary slice is fed per chart bar; the range-start cut, the
     // historical lookahead projection and the OTC-daily pins veto or
     // re-shape inputs before the aggregator sees them.
     if (stream_warmup_mode_ || scheduler_.bar_magnifier_enabled()) return false;
@@ -2819,7 +2819,7 @@ void source::PineStrategyHost::scheduler_publish_source_bar(
         if (const auto moved = sort_same_bar_exit_trades(trades_, adapter_))
             native_closed_rows_amended(*moved);
     }
-    // CR-150 L8c: publish only the immutable prefix, once at this script-bar
+    // Publish only the immutable prefix, once at this script-bar
     // boundary. Keep the last exit-time block AND its predecessor: sorting
     // and global-child re-cutting both inspect that predecessor.
     auto& consumer = detail::run_consumer(*this);

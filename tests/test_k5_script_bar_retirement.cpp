@@ -1,4 +1,4 @@
-// CR-150 L19F (F0b): K5 must age Entry/Order rows in script-bar space.
+// K5 must age Entry/Order rows in script-bar space.
 // This TU uses the real Pine host and the existing retention reference switch.
 // On d61e68b9e, the first split run retains a cancelled row beyond the previous
 // script bar because K5 compares its input-slot projection with a script index.

@@ -1,4 +1,4 @@
-// CR-150 O1W R13: SUMMARY_ONLY keeps the logical trade total and the exact
+// SUMMARY_ONLY keeps the logical trade total and the exact
 // folds and materializes no TradeC array.
 //
 // A run with T closed trades used to fill `new TradeC[T]` inside

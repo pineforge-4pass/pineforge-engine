@@ -2,7 +2,7 @@
  * Pending-aware gross admission for a default-sized MARKET/MARKET pair queued
  * while a LIVE position is held.
  *
- * The KI-65 pending-MARKET oracle pins TradingView's rule as: the later of two
+ * The pending-MARKET oracle pins TradingView's rule as: the later of two
  * opposite same-source-bar entries is costed as its OWN requested position plus
  * the movement the earlier pending opposite call will make. At
  * percent_of_equity=100 / margin=100 that gross movement is ~200% of equity and
