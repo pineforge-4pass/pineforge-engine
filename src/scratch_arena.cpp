@@ -51,15 +51,21 @@ void mapped_read_bus(int signal, siginfo_t* information, void* context) {
 
     // Preserve an embedder's handler (including sanitizer handlers) for faults
     // outside the guarded source span. Default faults retain signal semantics.
-    if (previous_bus_action.sa_handler == SIG_IGN) return;
-    if (previous_bus_action.sa_handler != SIG_DFL) {
+    // Ignored user signals stay ignored. A synchronous foreign fault must
+    // take the default disposition instead of retrying its faulting instruction.
+    if (previous_bus_action.sa_handler == SIG_IGN && information->si_code <= 0) return;
+    if (previous_bus_action.sa_handler != SIG_DFL
+        && previous_bus_action.sa_handler != SIG_IGN) {
         if (previous_bus_action.sa_flags & SA_SIGINFO)
             previous_bus_action.sa_sigaction(signal, information, context);
         else
             previous_bus_action.sa_handler(signal);
         return;
     }
-    (void)::sigaction(signal, &previous_bus_action, nullptr);
+    struct sigaction action{};
+    action.sa_handler = SIG_DFL;
+    sigemptyset(&action.sa_mask);
+    (void)::sigaction(signal, &action, nullptr);
     (void)::raise(signal);
 }
 

@@ -126,6 +126,7 @@ void signal_chaining_controls() {
         const auto child = ::fork();
         REQUIRE(child >= 0);
         if (child == 0) {
+            ::alarm(5);
             struct sigaction action{};
             sigemptyset(&action.sa_mask);
             if (information) {
@@ -150,6 +151,47 @@ void signal_chaining_controls() {
         REQUIRE(waited == child);
         REQUIRE(WIFEXITED(status));
         CHECK(WEXITSTATUS(status) == 0);
+    }
+}
+
+void signal_ignored_controls() {
+    for (const bool kernel_fault : {false, true}) {
+        const auto child = ::fork();
+        REQUIRE(child >= 0);
+        if (child == 0) {
+            ::alarm(5);
+            struct sigaction action{};
+            sigemptyset(&action.sa_mask);
+            action.sa_handler = SIG_IGN;
+            if (::sigaction(SIGBUS, &action, nullptr) != 0) ::_exit(1);
+            detail::prepare_scratch_mapped_read();
+            // User-raised SIGBUS must stay ignored, as before installation.
+            if (::raise(SIGBUS) != 0) ::_exit(2);
+            if (!kernel_fault) ::_exit(0);
+            // Only a kernel-generated fault outside the guarded source span
+            // changes: it must terminate with SIGBUS rather than livelock.
+            // The alarm bounds the old handler's repeated fault delivery.
+            const int fd = static_cast<int>(
+                ::syscall(SYS_memfd_create, "foreign-bus", MFD_CLOEXEC));
+            if (fd < 0 || ::ftruncate(fd, mapped_io::page_bytes) != 0) ::_exit(3);
+            void* mapping = ::mmap(nullptr, mapped_io::page_bytes, PROT_READ,
+                                   MAP_SHARED, fd, 0);
+            if (mapping == MAP_FAILED || ::ftruncate(fd, 0) != 0) ::_exit(4);
+            const auto byte = *static_cast<volatile const unsigned char*>(mapping);
+            (void)byte;
+            ::_exit(5);
+        }
+        int status = 0;
+        pid_t waited;
+        do { waited = ::waitpid(child, &status, 0); } while (waited < 0 && errno == EINTR);
+        REQUIRE(waited == child);
+        if (kernel_fault) {
+            REQUIRE(WIFSIGNALED(status));
+            CHECK(WTERMSIG(status) == SIGBUS);
+        } else {
+            REQUIRE(WIFEXITED(status));
+            CHECK(WEXITSTATUS(status) == 0);
+        }
     }
 }
 
@@ -512,6 +554,7 @@ int main() {
     REQUIRE(page > 0);
     mapped_io::page_bytes = static_cast<std::size_t>(page);
     test_mappings("unrelated SIGBUS chains to both prior handler forms", signal_chaining_controls);
+    test_mappings("ignored SIGBUS preserves user signals and terminates foreign faults", signal_ignored_controls);
     test_mappings("bounded disk windows, crossing reads and mutation invalidation", disk_bounds_and_mutations);
     test_mappings("live disk truncation and two fstat-to-load races", live_disk_shrink_and_race);
     test_mappings("whole-file discard policy and forwarding controls", discard_contract_and_forwarding_control);

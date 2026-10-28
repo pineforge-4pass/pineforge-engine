@@ -1333,6 +1333,7 @@ void TradeLedger::seal(size_type global_end) {
     // Drop the read-only index window before retirement can erase or release
     // the bytes it maps.
     state_->index.unmap(state_->index_view);
+    state_->numeric_window.count = 0;
     // The consumer has already emitted T and folded all logical identities.
     // Only an explicitly admitted sink run drops its physical history.
     state_->retire(global_end);

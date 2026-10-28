@@ -62,9 +62,11 @@ void forwarding_control() {
         struct stat status{};
         REQUIRE(::fstat(file.descriptor(), &status) == 0);
         CHECK(status.st_size == sizeof expected);
+        REQUIRE(::posix_fadvise(file.descriptor(), 0, 0, POSIX_FADV_DONTNEED) == 0);
         const auto io = measure.finish();
         CHECK(io.maps == 1 && io.unmaps == 1 && io.stats == 1);
         CHECK(io.bad_maps == 0);
+        CHECK(io.discards == 1);
     }
 }
 
@@ -81,6 +83,18 @@ void mapped_pass(const ledger_cyclic_io::Counts& io, Size population,
     CHECK(io.maps + io.unmaps <= 2 * windows + 2 * probes);
     CHECK(io.bad_maps == 0);
     CHECK(io.stats == io.maps); // Reused mappings need no size syscall.
+}
+
+void mapped_refill_discard_cadence(const ledger_cyclic_io::Counts& io,
+                                   Size descriptor_rows) {
+    // D descriptors charge D * sizeof(Record), exposed as kRecordBytes.
+    // One discard consumes kCacheBytes. Allow one either way because the
+    // partial byte budget and numeric window can straddle a pass boundary.
+    const Size expected_discards = descriptor_rows * TradeLedger::kRecordBytes
+        / detail::ScratchFile::kCacheBytes;
+    REQUIRE(expected_discards > 1); // Zero advice must fail the lower bound.
+    CHECK(io.discards + 1 >= expected_discards);
+    CHECK(io.discards <= expected_discards + 1);
 }
 
 Trade scan_row(Size index) {
@@ -123,6 +137,7 @@ void cyclic_scan(Size population, bool cached_prefix = true) {
                     static_cast<unsigned long long>(io.maps),
                     static_cast<unsigned long long>(io.unmaps));
         mapped_pass(io, descriptor_rows);
+        mapped_refill_discard_cadence(io, descriptor_rows);
         CHECK(ledger.cache_size() == ledger.cache_rows());
     }
 }

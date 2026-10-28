@@ -6,6 +6,7 @@
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
+#include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
@@ -15,6 +16,7 @@
 namespace ledger_cyclic_io {
 struct Counts {
     std::uint64_t reads = 0, bytes = 0, maps = 0, unmaps = 0, bad_maps = 0, stats = 0;
+    std::uint64_t discards = 0;
 };
 inline bool measuring = false;
 inline Counts counts;
@@ -81,4 +83,14 @@ extern "C" int munmap(void* address, std::size_t length) noexcept {
 extern "C" int fstat(int fd, struct stat* status) noexcept {
     if (ledger_cyclic_io::measuring) ++ledger_cyclic_io::counts.stats;
     return static_cast<int>(::syscall(SYS_fstat, fd, status));
+}
+
+extern "C" int posix_fadvise(int fd, off_t offset, off_t length, int advice) noexcept {
+    if (ledger_cyclic_io::measuring && advice == POSIX_FADV_DONTNEED)
+        ++ledger_cyclic_io::counts.discards;
+    const int saved_errno = errno;
+    const auto result = ::syscall(SYS_fadvise64, fd, offset, length, advice);
+    const int error = result < 0 ? errno : 0;
+    errno = saved_errno;
+    return error;
 }

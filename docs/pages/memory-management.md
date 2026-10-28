@@ -547,31 +547,31 @@ The view, copied-row mask, numeric storage and mapping allowance are O(1)
 in trade count at fixed configuration. Scratch bytes, arena chunk directories,
 caller-retained values and explicitly materialized history are separate.
 
-The single `ScratchFile::kKeepMappedIndexDontneed = true` policy switch
-keeps whole-file `fadvise(DONTNEED)` after each 65,536 logically read descriptor
-bytes, charged at numeric refills, and the existing bounded write sync.
+The single `ScratchFile::kKeepMappedIndexDontneed = true` policy switch governs
+all index pread/pwrite and mapped-read `fadvise(DONTNEED)`: after each 65,536
+logical descriptor bytes, charged at numeric refills, and bounded write sync.
 Cache and copied-row hits issue no syscalls. A mapped copy needs none on
 reuse; refills can issue discard advice and, on replacement, `munmap`,
 `fstat`, `mmap` and `madvise`. The switch does not change the arena's existing
-no-DONTNEED policy. Lifting it for the mapped index is an owner decision.
+no-DONTNEED policy. Lifting it for all index file access is an owner decision.
 Disk mappings contribute file-backed RSS; advice cannot evict pages still
 mapped, and subsequent advice may reclaim them after unmap. Dirty pages,
 kernel reclaim and other users preclude a hard physical page-cache bound.
 Memfd pages count as shared-memory RSS and their backing still costs host
 memory while unmapped.
 
-Backing size is checked at mapping/refill, never per reused row. A leaf
-copy uses a thread-local recovery frame for synchronous SIGBUS inside its
-source span, then raises typed EIO (`report_sink_failed`, `scratch_io` for
-plain files, `arena_io` for arena reads). Faults outside that span chain to
-the prior handler. Healthy copies use `sigsetjmp(..., 0)` without signal-mask
-syscalls; only fault recovery unblocks SIGBUS. No C++ destructor is crossed
-by the jump. This protects mapped reads from a concurrent shrink that
-invalidates a page, including the size-check-to-load race. The arena's
-existing writable/zero-fill path still requires a backing that retains size;
-sealed memfd shrink refusal is tested separately. A shrink within the final
-page need not raise SIGBUS; the supplied backing must retain size, apart from
-the deliberate page-invalidating fault tests.
+The library installs a process-wide SIGBUS handler on the first mapped read of a plain scratch file;
+it is never removed; it chains to the previous disposition; hosts that own SIGBUS
+(faulthandler, JVM, sanitizers) must install theirs before the first run.
+Backing size is checked at mapping/refill, never per reused row. A leaf copy uses a
+thread-local recovery frame for synchronous SIGBUS inside its source span, then raises typed EIO
+(`report_sink_failed`, `scratch_io` for plain files, `arena_io` for arena reads). Healthy copies use
+`sigsetjmp(..., 0)` without signal-mask syscalls; only fault recovery unblocks SIGBUS.
+No C++ destructor is crossed by the jump. This protects mapped reads from a concurrent shrink
+that invalidates a page, including the size-check-to-load race. The arena's writable/zero-fill
+path still requires a backing that retains size; sealed memfd shrink refusal is tested separately.
+A shrink within the final page need not raise SIGBUS; the supplied backing must retain size,
+apart from the deliberate page-invalidating fault tests.
 
 ## When a bound is exceeded {#memory_failures}
 

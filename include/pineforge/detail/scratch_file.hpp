@@ -43,7 +43,7 @@ public:
     static constexpr std::size_t kCacheBytes = 64 * 1024;
     static constexpr std::size_t kReadWindowBytes = 1024 * 1024;
     static_assert(kReadWindowBytes == ScratchArena::kChunkBytes);
-    // Owner policy: retain the existing whole-file discard cadence.
+    // Owner policy: DONTNEED for all index pread/pwrite and mapped reads.
     static constexpr bool kKeepMappedIndexDontneed = true;
 
     enum class IoRaiser { report_sink, auxiliary };
