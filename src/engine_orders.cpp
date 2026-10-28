@@ -409,7 +409,14 @@ struct TradeLedger::State {
                   == kNumericWindowRows * sizeof(Record) + 2 * sizeof(size_type));
     mutable NumericWindow numeric_window{};
     // Only misses update direction, leaving cache hits at one reference write.
-    mutable size_type last_numeric_miss = 0;
+    // Key and flags occupy 16 bytes on 64-bit targets, eight more than the key
+    // alone. No additional record or per-entry state is needed.
+    struct NumericDirection {
+        size_type last_numeric_miss = 0;
+        bool descending_step = false, window_backward = false;
+    };
+    static_assert(sizeof(NumericDirection) == 2 * sizeof(size_type));
+    mutable NumericDirection numeric_direction{};
 
     struct BlockExtent {
         std::uint64_t offset = 0;
@@ -456,7 +463,7 @@ struct TradeLedger::State {
     void invalidate_cache() const {
         cache_count = 0;
         numeric_window.count = 0;
-        last_numeric_miss = 0;
+        numeric_direction = {};
         // Generations make publication/rewind/move invalidation O(1).
         // Even the wraparound fallback touches at most the configured budget.
         if (cache_generation == std::numeric_limits<size_type>::max() - 3) {
@@ -539,11 +546,27 @@ struct TradeLedger::State {
     const Record& numeric_record(size_type global) const {
         if (const auto* entry = cached(global)) return entry->record;
         ensure_cache(end);
-        // Admitted neighbours become cache hits, so a descending scan may
-        // next miss just below the whole preceding window, not the last miss.
-        const bool descending = last_numeric_miss == global + 1
-            || (numeric_window.count != 0 && numeric_window.first == global + 1);
-        last_numeric_miss = global;
+        // Starting a reverse scan requires two consecutive descending miss
+        // steps. An ascending (i,i-1) pair supplies only one. Once a backward
+        // window is established, its lower edge also continues the scan past
+        // neighbours that were admitted and therefore became cache hits.
+        const bool descending_step = numeric_direction.last_numeric_miss == global + 1;
+        const bool descending = (descending_step && numeric_direction.descending_step)
+            || (numeric_direction.window_backward && numeric_window.count != 0
+                && numeric_window.first == global + 1);
+        // In an ascending pair stream, the preceding low miss is two below
+        // this high request. Keep the old window's last descriptor so the
+        // paired low request cannot immediately discard the new window.
+        // Ordinary ascending scans still read full, non-overlapping windows.
+        const bool retain_predecessor = !descending
+            && numeric_direction.descending_step
+            && global > numeric_direction.last_numeric_miss
+            && global - numeric_direction.last_numeric_miss == 2
+            && !numeric_direction.window_backward && numeric_window.count != 0
+            && global >= numeric_window.first
+            && global - numeric_window.first == numeric_window.count;
+        numeric_direction.last_numeric_miss = global;
+        numeric_direction.descending_step = descending_step;
         if (global >= resident_first) {
             const auto& record = rows[slot(global)];
             admit_numeric(global, record);
@@ -553,19 +576,25 @@ struct TradeLedger::State {
             && global - numeric_window.first < numeric_window.count)
             return numeric_window.records[global - numeric_window.first];
 
-        const auto count = std::min(kNumericWindowRows,
-                                    descending ? global + 1 : resident_first - global);
-        const auto first = descending ? global - (count - 1) : global;
+        const size_type retained = retain_predecessor ? 1 : 0;
+        const auto count = std::min(kNumericWindowRows - retained,
+                                    descending ? global - first + 1 : resident_first - global);
+        const auto window_first = descending ? global - (count - 1) : global - retained;
+        if (retain_predecessor)
+            numeric_window.records[0] = numeric_window.records[numeric_window.count - 1];
         // Clear validity before I/O so a failed transfer cannot expose any
         // mixture of the preceding window and the new descriptors.
         numeric_window.count = 0;
-        index.read(record_offset(first), numeric_window.records.data(),
+        index.read(record_offset(window_first + retained),
+                   numeric_window.records.data() + retained,
                    count * sizeof(Record));
-        numeric_window.first = first;
-        numeric_window.count = count;
-        for (size_type row = 0; row < count; ++row)
-            admit_numeric(first + row, numeric_window.records[row]);
-        return numeric_window.records[global - first];
+        numeric_window.first = window_first;
+        numeric_window.count = count + retained;
+        numeric_direction.window_backward = descending;
+        // The retained predecessor was already offered for admission.
+        for (size_type row = retained; row < numeric_window.count; ++row)
+            admit_numeric(window_first + row, numeric_window.records[row]);
+        return numeric_window.records[global - window_first];
     }
     const CacheEntry& load_block(size_type global) const {
         // These five fixed arrays total 35,392 bytes on the 64-bit build:

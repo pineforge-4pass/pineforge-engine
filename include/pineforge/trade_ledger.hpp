@@ -24,9 +24,10 @@ inline namespace engine_script_run_v19 {
 // numeric records in the cache and use scratch only for string reads.
 // Scalar numeric misses read descriptors only, with a separate fixed
 // kNumericWindowRows scan window (64,528 bytes including keys on 64-bit targets).
-// A further 8-byte key tracks scan direction: windows, tail and keys total
-// 10,752 + 10,752 + 64,528 + 8 = 86,040 bytes. Numeric admission gives
+// A further 16 bytes track scan direction: windows, tail, keys and flags total
+// 10,752 + 10,752 + 64,528 + 16 = 86,048 bytes. Numeric admission gives
 // referenced cache slots a second chance before replacing stale residents.
+// A cache hit writes the reference bit in the existing generation word.
 // Owning Trade values still belong to readers.
 //
 // Reads own their values. No reference or contiguous pointer into an
@@ -142,13 +143,25 @@ public:
     Trade numeric_at(size_type global) const;
     std::string entry_id_at(size_type global) const;
     // Pine field reads use the same check(global,true) as at(). A numeric
-    // hit loads just its Record member, without constructing/copying a Trade
-    // or any string. Numeric misses use kNumericWindowRows descriptor reads and no payload
+    // hit writes only the reference bit and loads its Record member, without
+    // constructing/copying a Trade or any string. Numeric misses use
+    // kNumericWindowRows descriptor reads and no payload
     // reads; forward/reverse numeric scans have O(1) amortised operation work
     // per field access on the plain-file backend, even above the cache cap
-    // (the whole scan is O(T)); the arena path is not measured. After lazy
-    // packing, a string hit copies only the requested packed bytes. Strings fitting
-    // the allowance are retained on their first string/full-row request.
+    // (the whole scan is O(T)); the arena path is not measured.
+    // For cyclic ascending scans with no mutation/string reads, C is the
+    // allocated cache capacity. For T up to about 2C the first C rows stay
+    // cached (D = max(0,T-C-64) per warm pass);
+    // above that every spilled row reads the window (D = max(0,T-64)).
+    // One descriptor read per window, plus 64 KiB transfer splits, is never
+    // worse than the old ascending scan bound. Reverse refills require two
+    // descending miss steps, or continuation below a backward window.
+    // Ascending (i,i-1) and (i+1,i) pairs retain a window predecessor instead
+    // of starting a reverse scan. Backward refills stop at base().
+    // A cold reverse scan has no probes; a warm one needs at most two forward
+    // probes, two extra windows and 2*(kNumericWindowRows-1) repeated rows.
+    // After lazy packing, a string hit copies only the requested packed bytes.
+    // Strings fitting the allowance are retained on their first string/full-row request.
     double pnl_at(size_type global) const;
     double pnl_pct_at(size_type global) const;
     double commission_at(size_type global) const;
