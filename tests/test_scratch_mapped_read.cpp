@@ -28,7 +28,7 @@
 
 namespace mapped_io {
 std::uint64_t maps = 0, unmaps = 0, reads = 0, discards = 0;
-std::uint64_t live = 0, peak = 0;
+std::uint64_t live = 0, peak = 0, baseline = 0;
 std::uint64_t stats = 0;
 std::uint64_t bad_maps = 0;
 std::size_t page_bytes = 4096;
@@ -39,11 +39,17 @@ int shrink_result = -1;
 std::uint64_t pages(std::size_t length) {
     return ((length + page_bytes - 1) / page_bytes) * page_bytes;
 }
-void reset() {
+void reset_counts() {
     maps = unmaps = reads = discards = 0;
     stats = 0;
     bad_maps = 0;
     peak = live;
+}
+void reset() {
+    // Global interposition also observes mappings created before a case.
+    // Keep that starting state out of its byte budget, without hiding leaks.
+    baseline = live;
+    reset_counts();
 }
 }
 
@@ -98,6 +104,14 @@ using namespace p2cx_tledger;
 using detail::ScratchArena;
 using detail::ScratchFile;
 constexpr std::size_t kWindow = ScratchFile::kReadWindowBytes;
+
+void test_mappings(const char* name, void (*body)()) {
+    mapped_io::reset();
+    test(name, body);
+    // Check after case-local owners have been destroyed, before rebasing.
+    CHECK(mapped_io::live - mapped_io::baseline == 0);
+    CHECK(mapped_io::balanced);
+}
 
 volatile sig_atomic_t chained_bus = 0;
 void previous_bus(int signal) { if (signal == SIGBUS) chained_bus = 1; }
@@ -206,16 +220,16 @@ void disk_bounds_and_mutations() {
     auto expected = bytes(3 * kWindow + 37);
     file.write(0, expected.data(), expected.size());
     std::vector<unsigned char> actual(expected.size());
-    mapped_io::reset();
+    mapped_io::reset_counts();
     file.read_mapped(view, 0, actual.data(), actual.size());
     CHECK(actual == expected);
     CHECK(mapped_io::reads == 0);
     CHECK(mapped_io::maps == 4);
     CHECK(mapped_io::bad_maps == 0 && mapped_io::stats == mapped_io::maps);
     CHECK(mapped_io::unmaps == 3);
-    CHECK(mapped_io::peak <= kWindow);
+    CHECK(mapped_io::peak - mapped_io::baseline <= kWindow);
     file.unmap(view);
-    CHECK(mapped_io::live == 0);
+    CHECK(mapped_io::live - mapped_io::baseline == 0);
 
     // Full descriptors can cross a window; scalar fields need no row copy.
     std::array<unsigned char, TradeLedger::kRecordBytes> crossing{};
@@ -227,26 +241,26 @@ void disk_bounds_and_mutations() {
     // including moves, resizes and reopening the same ScratchFile object.
     file.unmap(view);
     file.write(start, &replacement, 1);
-    CHECK(mapped_io::live == 0);
+    CHECK(mapped_io::live - mapped_io::baseline == 0);
     expected[start] = replacement;
     file.read_mapped(view, start, crossing.data(), crossing.size());
     CHECK(std::equal(crossing.begin(), crossing.end(), expected.begin() + start));
 
     file.unmap(view);
     ScratchFile moved(std::move(file));
-    CHECK(mapped_io::live == 0);
+    CHECK(mapped_io::live - mapped_io::baseline == 0);
     CHECK(!file.opened());
     moved.read_mapped(view, start, crossing.data(), crossing.size());
     CHECK(std::equal(crossing.begin(), crossing.end(), expected.begin() + start));
     ScratchFile assigned;
     moved.unmap(view);
     assigned = std::move(moved);
-    CHECK(mapped_io::live == 0);
+    CHECK(mapped_io::live - mapped_io::baseline == 0);
     assigned.read_mapped(view, start, crossing.data(), crossing.size());
     CHECK(std::equal(crossing.begin(), crossing.end(), expected.begin() + start));
     assigned.unmap(view);
     assigned.truncate(17);
-    CHECK(mapped_io::live == 0);
+    CHECK(mapped_io::live - mapped_io::baseline == 0);
     typed_io([&] { assigned.read_mapped(view, start, crossing.data(), crossing.size()); });
     assigned.unmap(view);
     assigned.ensure_size(64);
@@ -256,7 +270,7 @@ void disk_bounds_and_mutations() {
     CHECK(grown == zeros);
     assigned.unmap(view);
     assigned.clear();
-    CHECK(mapped_io::live == 0);
+    CHECK(mapped_io::live - mapped_io::baseline == 0);
     assigned.open("mapped-scratch-reopened");
     typed_io([&] { assigned.read_mapped(view, 0, grown.data(), grown.size()); });
 }
@@ -272,7 +286,7 @@ void live_disk_shrink_and_race() {
     file.write(offset, &expected, sizeof expected);
     file.read_mapped(view, offset, &actual, sizeof actual);
     CHECK(actual == expected);
-    mapped_io::reset();
+    mapped_io::reset_counts();
     for (int repeat = 0; repeat < 128; ++repeat)
         file.read_mapped(view, offset, &actual, sizeof actual);
     CHECK(actual == expected);
@@ -283,16 +297,16 @@ void live_disk_shrink_and_race() {
     });
     file.read_mapped(view, offset, &actual, sizeof actual);
     REQUIRE(actual == expected);
-    REQUIRE(mapped_io::live != 0);
+    REQUIRE(mapped_io::live - mapped_io::baseline != 0);
     REQUIRE(::ftruncate(file.descriptor(), 0) == 0);
     typed_io([&] { file.read_mapped(view, offset, &actual, sizeof actual); });
-    CHECK(mapped_io::live == 0);
+    CHECK(mapped_io::live - mapped_io::baseline == 0);
     for (int repeat = 0; repeat < 2; ++repeat) {
         file.unmap(view);
         file.write(offset, &expected, sizeof expected);
         file.read_mapped(view, offset, &actual, sizeof actual);
         REQUIRE(actual == expected);
-        REQUIRE(mapped_io::live != 0);
+        REQUIRE(mapped_io::live - mapped_io::baseline != 0);
         // Force a refill: reuse must not call fstat. The interposer shrinks
         // after the refill's genuine size snapshot and before mapped load.
         file.unmap(view);
@@ -301,7 +315,7 @@ void live_disk_shrink_and_race() {
         typed_io([&] { file.read_mapped(view, offset, &actual, sizeof actual); });
         REQUIRE(mapped_io::shrink_after_stat == -1);
         REQUIRE(mapped_io::shrink_result == 0);
-        CHECK(mapped_io::live == 0);
+        CHECK(mapped_io::live - mapped_io::baseline == 0);
     }
     // Two faults also detect a SIGBUS mask left blocked by recovery.
     file.unmap(view);
@@ -321,16 +335,16 @@ void discard_contract_and_forwarding_control() {
     file.write(0, expected.data(), expected.size());
     // Prove this wrapper observes and forwards actual advice before testing
     // the policy, including a build in which the owner flips the switch.
-    mapped_io::reset();
+    mapped_io::reset_counts();
     REQUIRE(::posix_fadvise(file.descriptor(), 0, 0, POSIX_FADV_DONTNEED) == 0);
     CHECK(mapped_io::discards == 1);
-    mapped_io::reset();
+    mapped_io::reset_counts();
     file.read_mapped(view, 0, actual.data(), actual.size());
     CHECK(actual == expected);
     CHECK(mapped_io::reads == 0);
     CHECK(mapped_io::discards == (ScratchFile::kKeepMappedIndexDontneed ? 1 : 0));
     // Ordinary read() still reaches the pread interposer.
-    mapped_io::reset();
+    mapped_io::reset_counts();
     file.read(0, actual.data(), 19);
     CHECK(mapped_io::reads == 1);
     CHECK(std::equal(actual.begin(), actual.begin() + 19, expected.begin()));
@@ -346,13 +360,13 @@ void arena_bounds_values_and_shrink() {
     const auto expected = bytes(3 * kWindow + 37);
     file.write(0, expected.data(), expected.size());
     std::vector<unsigned char> actual(expected.size());
-    mapped_io::reset();
+    mapped_io::reset_counts();
     file.read_mapped(view, 0, actual.data(), actual.size());
     CHECK(actual == expected);
     CHECK(mapped_io::reads == 0);
     CHECK(mapped_io::maps == 4);
     CHECK(mapped_io::bad_maps == 0 && mapped_io::stats == mapped_io::maps);
-    CHECK(mapped_io::peak <= kWindow);
+    CHECK(mapped_io::peak - mapped_io::baseline <= kWindow);
     CHECK(ScratchArena::attached()->stats().windows_mapped_bytes <= kWindow);
     file.unmap(view);
     CHECK(ScratchArena::attached()->stats().windows_mapped_bytes == 0);
@@ -361,7 +375,7 @@ void arena_bounds_values_and_shrink() {
     file.write(0, &word, sizeof word);
     file.read_mapped(view, 0, &result, sizeof result);
     CHECK(result == word);
-    mapped_io::reset();
+    mapped_io::reset_counts();
     for (int repeat = 0; repeat < 128; ++repeat)
         file.read_mapped(view, 0, &result, sizeof result);
     CHECK(result == word);
@@ -404,7 +418,7 @@ void slab_checked_copies() {
     const auto expected = bytes(73);
     std::vector<unsigned char> actual(expected.size());
     file.write(0, expected.data(), expected.size());
-    mapped_io::reset();
+    mapped_io::reset_counts();
     file.read_mapped(view, 0, actual.data(), actual.size());
     CHECK(actual == expected);
     CHECK(mapped_io::reads == 0 && mapped_io::maps == 0 && mapped_io::unmaps == 0);
@@ -429,12 +443,12 @@ void sealed_arena_windows() {
         detail::MappedIndexView view;
         file.open("mapped-sealed-values");
         file.write(0, expected.data(), expected.size());
-        mapped_io::reset();
+        mapped_io::reset_counts();
         file.read_mapped(view, 0, actual.data(), actual.size());
         CHECK(actual == expected);
         CHECK(mapped_io::reads == 0);
         CHECK(mapped_io::bad_maps == 0 && mapped_io::stats == mapped_io::maps);
-        CHECK(mapped_io::peak <= cap);
+        CHECK(mapped_io::peak - mapped_io::baseline <= cap);
         const auto stats = ScratchArena::attached()->stats();
         CHECK(stats.backend == detail::ScratchArenaBackend::sealed_memfd);
         CHECK(stats.windows_mapped_bytes <= cap);
@@ -497,16 +511,16 @@ int main() {
     const long page = ::sysconf(_SC_PAGESIZE);
     REQUIRE(page > 0);
     mapped_io::page_bytes = static_cast<std::size_t>(page);
-    test("unrelated SIGBUS chains to both prior handler forms", signal_chaining_controls);
-    test("bounded disk windows, crossing reads and mutation invalidation", disk_bounds_and_mutations);
-    test("live disk truncation and two fstat-to-load races", live_disk_shrink_and_race);
-    test("whole-file discard policy and forwarding controls", discard_contract_and_forwarding_control);
-    test("arena shared accounting, values and concurrent shrink", arena_bounds_values_and_shrink);
-    test("slab keeps checked copies without new mappings", slab_checked_copies);
-    test("sealed arena reuses its one-page and one-MiB budgets", sealed_arena_windows);
-    test("ledger fields, replace, rewind, publish, move and clear", ledger_mutations_and_all_fields);
+    test_mappings("unrelated SIGBUS chains to both prior handler forms", signal_chaining_controls);
+    test_mappings("bounded disk windows, crossing reads and mutation invalidation", disk_bounds_and_mutations);
+    test_mappings("live disk truncation and two fstat-to-load races", live_disk_shrink_and_race);
+    test_mappings("whole-file discard policy and forwarding controls", discard_contract_and_forwarding_control);
+    test_mappings("arena shared accounting, values and concurrent shrink", arena_bounds_values_and_shrink);
+    test_mappings("slab keeps checked copies without new mappings", slab_checked_copies);
+    test_mappings("sealed arena reuses its one-page and one-MiB budgets", sealed_arena_windows);
+    test_mappings("ledger fields, replace, rewind, publish, move and clear", ledger_mutations_and_all_fields);
     CHECK(mapped_io::balanced);
-    CHECK(mapped_io::live == 0);
+    CHECK(mapped_io::live - mapped_io::baseline == 0);
     std::printf("test_scratch_mapped_read: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }
