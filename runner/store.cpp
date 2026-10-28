@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <limits>
 #include <mutex>
+#include <new>
 #include <stdexcept>
 #include <string_view>
 
@@ -211,6 +212,84 @@ std::uint64_t saturated_multiply(std::uint64_t a, std::uint64_t b) {
     return b && a > UINT64_MAX / b ? UINT64_MAX : a * b;
 }
 
+// Observe cache lifetimes without changing SQLite's allocation, fetch, eviction
+// or spilling rules. xPagecount counts pages, avoiding the byte counter's
+// 32-bit truncation on older SQLite versions. Only ledger-owned caches register.
+struct LedgerCache {
+    sqlite3_pcache* cache;
+    const void* owner;
+    LedgerCache* next;
+};
+sqlite3_pcache_methods2 original_cache_methods{};
+std::mutex ledger_caches_mutex;
+LedgerCache* ledger_caches = nullptr;
+thread_local const void* opening_ledger = nullptr;
+
+class OpeningLedger {
+public:
+    explicit OpeningLedger(const void* owner) : previous_(opening_ledger) { opening_ledger = owner; }
+    ~OpeningLedger() { opening_ledger = previous_; }
+    OpeningLedger(const OpeningLedger&) = delete;
+    OpeningLedger& operator=(const OpeningLedger&) = delete;
+private:
+    const void* previous_;
+};
+
+sqlite3_pcache* create_ledger_cache(int page, int extra, int purgeable) {
+    auto* cache = original_cache_methods.xCreate(page, extra, purgeable);
+    if (!cache || !opening_ledger) return cache;
+    auto* entry = new (std::nothrow) LedgerCache{cache, opening_ledger, nullptr};
+    if (!entry) {
+        original_cache_methods.xDestroy(cache);
+        return nullptr;
+    }
+    std::lock_guard<std::mutex> lock(ledger_caches_mutex);
+    entry->next = ledger_caches;
+    ledger_caches = entry;
+    return cache;
+}
+
+void destroy_ledger_cache(sqlite3_pcache* cache) {
+    {
+        std::lock_guard<std::mutex> lock(ledger_caches_mutex);
+        auto** entry = &ledger_caches;
+        while (*entry && (*entry)->cache != cache) entry = &(*entry)->next;
+        if (*entry) {
+            auto* removed = *entry;
+            *entry = removed->next;
+            delete removed;
+        }
+    }
+    original_cache_methods.xDestroy(cache);
+}
+
+// Configuration must precede SQLite initialization, including read-only opens.
+// If another initializer already owns SQLite, leave its configuration alone
+// and use the logical-page fallback for the lifetime of this process.
+const bool ledger_cache_observer = [] {
+    if (sqlite3_config(SQLITE_CONFIG_GETPCACHE2, &original_cache_methods) != SQLITE_OK ||
+        !original_cache_methods.xCreate || !original_cache_methods.xDestroy ||
+        !original_cache_methods.xPagecount || !original_cache_methods.xShrink)
+        return false;
+    auto methods = original_cache_methods;
+    methods.xCreate = create_ledger_cache;
+    methods.xDestroy = destroy_ledger_cache;
+    return sqlite3_config(SQLITE_CONFIG_PCACHE2, &methods) == SQLITE_OK;
+}();
+
+std::optional<std::uint64_t> ledger_cached_pages(const void* owner) {
+    if (!ledger_cache_observer) return std::nullopt;
+    std::lock_guard<std::mutex> lock(ledger_caches_mutex);
+    std::optional<std::uint64_t> pages;
+    for (auto* entry = ledger_caches; entry; entry = entry->next) {
+        if (entry->owner != owner) continue;
+        const auto count = original_cache_methods.xPagecount(entry->cache);
+        if (count < 0) return std::nullopt;
+        pages = saturated_add(pages.value_or(0), static_cast<std::uint64_t>(count));
+    }
+    return pages;
+}
+
 void migrate_delivery_state(sqlite3* db) {
     const auto tables = scalar(db, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' "
         "AND name IN ('delivery_state','delivery_totals','delivery_targets')");
@@ -375,8 +454,11 @@ struct Ledger::Impl {
 
     // With cache_spill=OFF, SQL changes only cached pages until COMMIT. Bound
     // them after all triggers/splits/overflow allocation, before the first WAL
-    // write. Clean pages and other SQLite allocations are included, so shared
-    // tree paths are not charged separately for each mutation.
+    // write. Release unreferenced clean pages before counting this ledger's
+    // resident pages, so rollback history and unrelated SQLite allocations
+    // cannot change the request for a repeated write. Dirty pages stay pinned;
+    // referenced clean pages include the header COMMIT may dirty. Shared tree
+    // paths count once.
     // A writer may also add a payload margin to its admitted transaction.
     [[nodiscard]] std::function<void()> reserve(std::uint64_t extra_payload_bytes = 0) const {
         if (budget_failure) std::rethrow_exception(budget_failure);
@@ -394,17 +476,17 @@ struct Ledger::Impl {
         const auto page = scalar(db, "PRAGMA page_size");
         const auto pages = scalar(db, "PRAGMA page_count");
         auto dirty = pages;
-        // Every dirty page has a full page buffer allocated by SQLite.
-        // Its 64-bit allocation total also includes clean pages, statements
-        // and pager overhead; use that total rather than an approximate,
-        // int-sized cache statistic. With allocation tracking disabled, or
-        // auto-vacuum that can dirty more pages at COMMIT, use all logical
-        // pages. The runner installs no external page-cache allocator.
         const auto auto_vacuum = scalar(db, "PRAGMA auto_vacuum");
-        const auto memory = sqlite3_memory_used();
-        if (memory > 0 && auto_vacuum == 0)
-            dirty = std::min(dirty,
-                saturated_add(static_cast<std::uint64_t>(memory), page - 1) / page);
+        // This only evicts clean, unpinned pages; unlike cacheflush it never
+        // writes dirty pages or changes the WAL reader mark. The underlying
+        // cache implementation still owns every page buffer and its metadata.
+        if (sqlite3_db_release_memory(db) != SQLITE_OK) database_error();
+        if (auto_vacuum == 0) {
+            if (const auto cached = ledger_cached_pages(this))
+                dirty = std::min(dirty, *cached);
+        }
+        // Auto-vacuum can dirty more pages during COMMIT. An unavailable cache
+        // observer or an out-of-range page count also uses all logical pages.
         // Extra text: eight copies cover table/index/overflow storage; four
         // pages cover leaf rounding. Existing SQL payload is already cached.
         if (extra_payload_bytes)
@@ -474,8 +556,9 @@ Ledger::Ledger(const std::string& path, const std::string& deployment_identity, 
     if (impl_->database_fd < 0 || fstat(impl_->database_fd, &st) != 0 ||
         !S_ISREG(st.st_mode) || st.st_nlink != 1)
         throw std::runtime_error("native ledger requires an exclusively owned regular file");
+    OpeningLedger opening(impl_.get());
     if (sqlite3_open_v2(canonical.c_str(), &impl_->db,
-                        SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX, nullptr) != SQLITE_OK)
+                        SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX | SQLITE_OPEN_PRIVATECACHE, nullptr) != SQLITE_OK)
         database_error();
     if (max_bytes && sqlite3_db_config(impl_->db, SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, 1, nullptr) != SQLITE_OK)
         database_error();

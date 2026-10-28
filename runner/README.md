@@ -184,8 +184,11 @@ pineforge-live probe --status-file status.json --max-age 3 --ready
   implemented for that policy; a positive budget still applies with the opt-out.
   With a finite budget, SQL changes stay in SQLite's page cache until admission
   immediately before COMMIT. The runner reserves each accounted page once,
-  plus WAL, checkpoint and SHM overhead. Insufficient space rolls back the whole
-  transaction before database/WAL growth, carries `used`,
+  plus WAL, checkpoint and SHM overhead. It releases unreferenced clean pages
+  before counting this ledger's resident pages, so cache history and unrelated
+  SQLite allocations do not change a repeated write's reservation.
+  Insufficient space rolls back the whole transaction before database/WAL
+  growth, carries `used`,
   `requested` and `limit` in a typed `scratch_capacity_exceeded` failure
   (`resource: layout` names the ledger budget here), removes
   readiness and exits 3. Earlier committed inputs, actions and reports stay
@@ -201,15 +204,18 @@ earlier WAL pages still owed to the main file, at most one sector of frame
 padding per WAL/checkpoint allowance, and SHM region rounding. For a 32-page
 bound, no earlier checkpoint debt, a WAL-index bound of 64 KiB and an existing
 32 KiB SHM file, the next write needs **428,320 bytes at 4 KiB pages** or
-**4,359,760 bytes at 64 KiB pages**, beyond current usage. A 2 MiB allocation
+**4,359,760 bytes at 64 KiB pages**, beyond current usage. A 2 MiB resident-page
 bound needs **4,383,520 / 4,359,760 bytes**, respectively, under the same
 conditions. These numbers come from the
 [reservation formula](../docs/live-ledger-budget.md). The exact minimum budget
-for a write is `used + requested`; it varies with the transaction and checkpoint
-debt. **64 MB (64,000,000 bytes)** is a workable fresh-ledger budget for short
-ordinary inputs at both page sizes; the test covers initialization and
-1/10/100-action inputs. Large payloads and history need additional space.
-Auto-vacuum or disabled SQLite allocation tracking uses the whole logical page
+for a write is `used + requested`; re-evaluating admission against unchanged
+ledger files retains that reservation and the exact limit admits the write.
+Physical growth can be less than the reservation. The minimum varies with the
+transaction and checkpoint debt. **64 MB (64,000,000 bytes)** is a workable
+fresh-ledger budget for short ordinary inputs at both page sizes; the test
+covers initialization and 1/10/100-action inputs. Large payloads and history
+need additional space.
+Auto-vacuum or unavailable cache observation uses the whole logical page
 count as the bound; the accounting guide states the larger headroom and the
 finite-budget migration rule.
 

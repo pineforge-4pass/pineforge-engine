@@ -261,6 +261,10 @@ std::uint64_t expect_budget_refusal(Ledger& ledger, const std::string& path,
         CHECK(receipt.at("requested").integer<std::uint64_t>() == error.requested);
         CHECK(receipt.at("limit").integer<std::uint64_t>() == limit);
     }
+    if (!refused)
+        std::fprintf(stderr, "expected budget refusal: used=%llu limit=%llu after=%llu\n",
+            static_cast<unsigned long long>(snapshot_bytes(before)), static_cast<unsigned long long>(limit),
+            static_cast<unsigned long long>(snapshot_bytes(ledger_files(path))));
     CHECK(refused);
     CHECK(ledger_files(path) == before);
     ledger.set_byte_budget(0);
@@ -272,16 +276,23 @@ void exercise_writer_budget(Ledger& ledger, const std::string& path, Write&& wri
     const auto used = snapshot_bytes(ledger_files(path));
     const auto request = expect_budget_refusal(ledger, path, used + 1, write);
     CHECK(request > 1);
-    CHECK(expect_budget_refusal(ledger, path, used + request - 1, write) == request);
+    for (unsigned retry = 0; retry < 2; ++retry) {
+        const auto repeated = expect_budget_refusal(ledger, path, used + request - 1, write);
+        if (repeated != request)
+            std::fprintf(stderr, "writer request changed: retry=%u used=%llu request=%llu repeated=%llu\n",
+                retry, static_cast<unsigned long long>(used), static_cast<unsigned long long>(request),
+                static_cast<unsigned long long>(repeated));
+        CHECK(repeated == request);
+    }
     const auto before = snapshot_bytes(ledger_files(path));
-    ledger.set_byte_budget(used + request + 1);
+    ledger.set_byte_budget(used + request);
     write();
     const auto after = snapshot_bytes(ledger_files(path));
-    if (after > used + request + 1 || (after > before && after - before > request))
+    if (after > used + request || (after > before && after - before > request))
         std::fprintf(stderr, "writer growth: request=%llu before=%llu after=%llu limit=%llu\n",
             static_cast<unsigned long long>(request), static_cast<unsigned long long>(before),
-            static_cast<unsigned long long>(after), static_cast<unsigned long long>(used + request + 1));
-    CHECK(after <= used + request + 1);
+            static_cast<unsigned long long>(after), static_cast<unsigned long long>(used + request));
+    CHECK(after <= used + request);
     CHECK(after <= before || after - before <= request);
     ledger.set_byte_budget(0);
 }
@@ -376,6 +387,61 @@ void ledger_budget_admission() {
     ledger.bind_routing("{}");
     CHECK(ledger.request_redelivery("request-one", "default", 1, true) == 1);
     CHECK(throws([&] { Ledger tiny(temp.file("tiny.sqlite"), "tiny", 1); }));
+}
+
+void ledger_budget_repeatability() {
+    TempDir temp;
+    for (const auto page : {512U, 4096U, 65536U}) {
+        const auto path = temp.file("repeat-" + std::to_string(page) + ".sqlite");
+        prepare_empty_ledger(path, page);
+        Ledger ledger(path, "repeat");
+        const std::string payload(800000, 'x');
+        // Exceed the ordinary page cache so unrelated allocations can change
+        // the old allocation-based bound without changing any ledger bytes.
+        for (unsigned index = 0; index < 8; ++index)
+            ledger.commit_input(index, payload, index, {{std::to_string(index), payload}});
+        std::unique_ptr<void, decltype(&sqlite3_free)> unrelated(
+            sqlite3_malloc64(32ULL * 1024 * 1024), &sqlite3_free);
+        if (!unrelated) throw std::runtime_error("test SQLite allocation failed");
+        const auto write = [&] { ledger.bind_routing("{}"); };
+        const auto logical = std::stoull(scalar_text(path, "PRAGMA page_count")) * page;
+        const auto files = ledger_files(path);
+        const auto used = snapshot_bytes(files);
+        const auto main = files.front()->size();
+        const auto debt = logical > main ? logical - main : 0;
+        const auto request = expect_budget_refusal(ledger, path, used + 1, write);
+        CHECK(request > 1);
+        // A two-byte routing insert touches its root and the pinned header.
+        // At these page sizes, their frames, sector padding and SHM allowance
+        // need less than one historical record, apart from checkpoint debt.
+        // Charging the whole history instead of observing pages must fail.
+        if (request < debt || request - debt >= payload.size())
+            std::fprintf(stderr, "routing headroom: page_size=%u request=%llu debt=%llu record_bytes=%zu\n",
+                page, static_cast<unsigned long long>(request), static_cast<unsigned long long>(debt), payload.size());
+        CHECK(request >= debt && request - debt < payload.size());
+        unrelated.reset();
+        for (unsigned retry = 0; retry < 2; ++retry) {
+            // Warm different clean pages between refusals of the same write.
+            CHECK(ledger.input(retry ? 7 : 0)->canonical_json == payload);
+            const auto repeated = expect_budget_refusal(ledger, path, used + request - 1, write);
+            if (repeated != request)
+                std::fprintf(stderr, "repeat admission: page_size=%u retry=%u used=%llu request=%llu repeated=%llu\n",
+                    page, retry, static_cast<unsigned long long>(used), static_cast<unsigned long long>(request),
+                    static_cast<unsigned long long>(repeated));
+            CHECK(repeated == request);
+        }
+        const auto before = snapshot_bytes(ledger_files(path));
+        ledger.set_byte_budget(used + request);
+        write();
+        const auto after = snapshot_bytes(ledger_files(path));
+        if (after > used + request || (after > before && after - before > request))
+            std::fprintf(stderr, "repeat growth: page_size=%u request=%llu before=%llu after=%llu limit=%llu\n",
+                page, static_cast<unsigned long long>(request), static_cast<unsigned long long>(before),
+                static_cast<unsigned long long>(after), static_cast<unsigned long long>(used + request));
+        CHECK(after <= used + request);
+        CHECK(after <= before || after - before <= request);
+        CHECK(LedgerView(path).routing_document() == "{}");
+    }
 }
 
 void ledger_budget_action_batches() {
@@ -1081,6 +1147,7 @@ int main(int argc, char** argv) {
             previous_binary_ledger(argv[2]);
         } else {
             ledger_budget_admission();
+            ledger_budget_repeatability();
             ledger_budget_action_batches();
             ledger_terminal_budget();
             service_ledger_policy();
