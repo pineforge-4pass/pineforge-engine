@@ -367,7 +367,7 @@ thus 40+2*L+1, not 40+L.
 
 There is no sequence-minima store in this tree. `ScratchManifest` reserves
 `K_q` and `B_q` as zero (`include/pineforge/detail/scratch_tables.hpp:17-18`), and
-`compute_layout` rejects a nonzero q (`include/pineforge/detail/scratch_slab.hpp:79`).
+`compute_layout` rejects a nonzero q (`include/pineforge/detail/scratch_slab.hpp:76`).
 The former `sequenceData` and `sequenceIndex` allowances are removed.
 
 `src/source/pine_position_tail.hpp:20` specifies a 30-byte footer.

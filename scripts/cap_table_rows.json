@@ -367,10 +367,10 @@
     {
       "name": "scratch-store-default-mode",
       "header": "include/pineforge/detail/scratch_store.hpp",
-      "constant": "ScratchStoreConfig::mode",
+      "constant": "literal:{ create_empty, reopen }",
       "resource": "layout",
       "unit": "open mode",
-      "enforced": "CommandScratchStore open contract",
+      "enforced": "CommandScratchStore open contract; ScratchStoreConfig::mode defaults to reopen",
       "refusal": "none: engine status is outside the run-failure catalog",
       "unlimited": "no",
       "owner": "host configuration"
