@@ -190,6 +190,18 @@ if(PINEFORGE_BUILD_TESTS)
         target_compile_options(${native_test} PRIVATE -UNDEBUG)
         add_test(NAME ${native_test} COMMAND ${native_test})
     endforeach()
+    add_executable(test_native_live_report_cli ${PROJECT_SOURCE_DIR}/tests/test_native_live_report_cli.cpp)
+    target_link_libraries(test_native_live_report_cli PRIVATE pineforge_live_support)
+    target_compile_options(test_native_live_report_cli PRIVATE -UNDEBUG)
+    add_dependencies(test_native_live_report_cli pineforge-live native_market_example)
+    add_test(NAME test_native_live_report_first_commit COMMAND test_native_live_report_cli
+        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_market_example> first-commit)
+    add_test(NAME test_native_live_report_summary_only COMMAND test_native_live_report_cli
+        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_market_example> summary-only)
+    add_test(NAME test_native_live_report_options COMMAND test_native_live_report_cli
+        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_market_example> options)
+    set_tests_properties(test_native_live_report_first_commit test_native_live_report_summary_only
+        test_native_live_report_options PROPERTIES TIMEOUT 180)
     set_tests_properties(test_native_live_websocket PROPERTIES SKIP_RETURN_CODE 77)
     if(PINEFORGE_BUILD_SOURCE_LAYER)
         add_test(NAME native_live_routing_e2e COMMAND ${Python3_EXECUTABLE}

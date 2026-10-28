@@ -43,11 +43,18 @@ committed report-integrity chain in one read snapshot, including inputs, stored
 state hashes and immutable actions, even for an earlier requested cursor.
 A missing or mismatched digest refuses export. These SHA-256 digests detect
 ledger corruption, not edits by someone able to replace both data and digests;
-only `run` recomputes engine state by replay. `run --report-jsonl` mirrors
-each newly committed `pineforge-native-report-delta/v1` payload to stdout,
-followed by the existing operational run summary. Use
-`run --report-jsonl=full` when a cumulative `pineforge-native-report/v1`
-document is required. Replay of source-prefix messages is not mirrored again.
+only `run` recomputes engine state by replay. `run --report-jsonl` continues to
+mirror one cumulative `pineforge-native-report/v1` document per newly committed
+input, with unchanged bytes and field order. `run --report-jsonl=full` is an
+explicit alias with identical output. The new opt-in `run --report-jsonl=delta`
+mirrors the ledger's `pineforge-native-report-delta/v1` patch with an additional
+top-level integer `input_cursor`. Other option values are refused.
+Both streams begin after startup reads, warmup, recovery and the first new
+input's commit; the first committed input has cursor 1. Neither warmup nor
+replay of source-prefix messages is mirrored. To apply delta output, start with
+the cumulative document at the preceding cursor (`report --at-input 0` for a
+new run's warmup). Both streams end with the operational run summary.
+Without `--report-jsonl`, stdout contains exactly one line: that exit summary.
 A closed stdout pipe fails clearly with exit 1, never SIGPIPE; the last input
 and report are already durable, and export remains available.
 
@@ -59,9 +66,14 @@ canonical report JSON. Recovery verifies each input's engine hash, actions and
 exact report delta before delivery. Existing full-report rows remain immutable
 and readable; recovery verifies them against the reconstructed full report, then
 new inputs use deltas. This avoids quadratic report storage without changing the
-export schema or engine computation. The default delta stream retains scalar
-state and array counts only; `--report-jsonl=full` retains the cumulative
-document needed for full JSONL output.
+export schema or engine computation. The runner no longer rescans the
+closed-trade prefix per input. Delta output costs O(new rows) per input and
+avoids quadratic output as history grows. With no report stream or with
+`--report-jsonl=delta`, the runner retains only scalar state and array counts.
+Plain `--report-jsonl` and `--report-jsonl=full` retain the cumulative document
+and keep the old O(cumulative document) output cost per input, which can be
+quadratic over a growing run. The native `fill_report` call still rebuilds the
+engine's trade and equity/metrics report on each input in every mode.
 Array suffix replacement assumes at most one provisional trailing element for
 equity points and broker hashes. The runner never enables tracing and refuses
 nonempty `trace`: traces can contain several records per bucket, so enabling

@@ -220,6 +220,8 @@ public:
         for (std::size_t index = closed_trade_high_water_;
              index < static_cast<std::size_t>(report.trades_len); ++index) {
             ++closed_trade_visits_;
+            // fill_trades_section emits closed rows before range-end open rows,
+            // so a closed row after this open suffix is unreachable by design.
             if (report.trades[index].open_at_end)
                 break;
             closed.items.push_back(report_trade(report.trades[index]));
@@ -249,7 +251,7 @@ public:
     }
     std::string json() const {
         if (!document_)
-            throw std::runtime_error("full cumulative report requires --report-jsonl=full");
+            throw std::runtime_error("cumulative report document was not retained");
         return document_->dump();
     }
     std::string full_json(const pf_report_t& report, const std::string& deployment,

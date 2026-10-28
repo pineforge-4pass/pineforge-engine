@@ -79,8 +79,8 @@ void help() {
                  "         --from-input N --max-events N --max-attempts 8\n"
                  "         --native-config FILE (strict native run specification)\n"
                  "         --check (one HTTP snapshot) --poll-ms 1000\n"
-                 "         --report-jsonl (mirror committed report deltas to stdout)\n"
-                 "         --report-jsonl=full (mirror cumulative reports to stdout)\n"
+                 "         --report-jsonl[=full] (mirror cumulative reports to stdout)\n"
+                 "         --report-jsonl=delta (mirror committed report deltas to stdout)\n"
                  "         --status-file PATH --status-interval 1 (seconds, 1..300)\n"
                  "         --feed-idle-timeout 15 --feed-message-timeout 15 (seconds, 1..300)\n"
                  "         --control-dir PATH --max-ledger-bytes N (0 disables budget)\n"
@@ -140,10 +140,10 @@ Config args(int argc, char **argv) {
             if (!seen.insert("--report-jsonl").second)
                 throw std::runtime_error("duplicate option: --report-jsonl");
             c.explicit_flags.insert(a);
-            if (a == "--report-jsonl")
-                c.report_jsonl = ReportJsonlMode::Delta;
-            else if (a == "--report-jsonl=full")
+            if (a == "--report-jsonl" || a == "--report-jsonl=full")
                 c.report_jsonl = ReportJsonlMode::Full;
+            else if (a == "--report-jsonl=delta")
+                c.report_jsonl = ReportJsonlMode::Delta;
             else
                 throw std::runtime_error("unknown option: " + a);
             continue;
@@ -1057,8 +1057,15 @@ int run(Config c) {
             ++processed;
             source_timestamp = source_time(frame, source_time);
             if (c.report_jsonl != ReportJsonlMode::Off) {
-                std::cout << (c.report_jsonl == ReportJsonlMode::Full ? report_deltas.json() : report)
-                          << '\n' << std::flush;
+                if (c.report_jsonl == ReportJsonlMode::Full) {
+                    std::cout << report_deltas.json();
+                } else {
+                    // The committed patch is a JSON object. Add the stream
+                    // cursor without reparsing its rows as a bounded input frame.
+                    std::cout << "{\"input_cursor\":" << num(index + 1).dump() << ','
+                              << std::string_view(report).substr(1);
+                }
+                std::cout << '\n' << std::flush;
                 if (!std::cout) throw std::runtime_error("report-jsonl stdout write failed; committed input remains durable");
             }
         }

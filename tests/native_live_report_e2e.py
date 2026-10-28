@@ -118,18 +118,29 @@ def main():
                 assert len(full_mirror) == len(bars) - split
                 assert all(row["schema_version"] == "pineforge-native-report/v1"
                            for row in full_mirror)
+                plain_ledger = root / f"plain-ledger-{number}-{timeframe}.sqlite"
+                plain_command = full_command.copy()
+                plain_command[plain_command.index(str(ledger))] = str(plain_ledger)
+                plain_command[-1] = "--report-jsonl"
+                plain_lines = checked(plain_command).splitlines()
+                assert plain_lines[:-1] == full_lines[:-1]
 
                 delta_ledger = root / f"delta-ledger-{number}-{timeframe}.sqlite"
                 delta_command = full_command.copy()
                 delta_command[delta_command.index(str(ledger))] = str(delta_ledger)
-                delta_command[-1] = "--report-jsonl"
+                delta_command[-1] = "--report-jsonl=delta"
                 delta_lines = checked(delta_command).splitlines()
                 delta_mirror = [json.loads(line) for line in delta_lines[:-1]]
                 assert len(delta_mirror) == len(full_mirror)
                 assert all(row["schema_version"] == "pineforge-native-report-delta/v1"
                            for row in delta_mirror)
                 reconstructed = {}
+                with sqlite3.connect(delta_ledger) as database:
+                    warmup_delta = database.execute(
+                        "SELECT payload FROM report_snapshots WHERE input_cursor=0").fetchone()[0]
+                apply_delta(reconstructed, json.loads(warmup_delta))
                 for cursor, delta in enumerate(delta_mirror, 1):
+                    assert type(delta["input_cursor"]) is int and delta["input_cursor"] == cursor
                     apply_delta(reconstructed, delta)
                     equal(full_mirror[cursor - 1], reconstructed, "delta stream")
                 assert checked([runner, "report", "--ledger", str(delta_ledger)]) == full_lines[-2] + "\n"
@@ -170,7 +181,7 @@ def main():
                             growth_command = full_command.copy()
                             growth_command[growth_command.index(str(feed))] = str(growth_feed)
                             growth_command[growth_command.index(str(ledger))] = str(growth_ledger)
-                            growth_command[-1] = "--report-jsonl" if mode == "delta" else "--report-jsonl=full"
+                            growth_command[-1] = "--report-jsonl=delta" if mode == "delta" else "--report-jsonl=full"
                             reports, written = output_reports(checked(growth_command), schema)
                             assert len(reports) == count
                             growth_bytes[(mode, count)] = written

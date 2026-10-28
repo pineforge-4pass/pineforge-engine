@@ -94,6 +94,7 @@ void equivalence_and_open_boundary() {
         full.update(current.report, "seeded", input, 9000 + input);
         assert(full.full_json(current.report, "seeded", input, 9000 + input) == full.json());
         apply_delta_for_test(applied, parse_json(delta));
+        assert(applied.dump() == full.json());
     }
     assert(applied.dump() == full.json());
     assert(stream.closed_trade_visits() < 16 * 5);
@@ -106,36 +107,78 @@ void equivalence_and_open_boundary() {
     assert(refused);
 }
 
+void revised_last_closed_trade() {
+    for (const bool retain_document : {false, true}) {
+        ReportDeltas stream(retain_document);
+        ReportInput current(3, true, 4);
+        Json applied;
+        apply_delta_for_test(applied, parse_json(stream.update(current.report, "revision", 1, 100)));
+        assert(applied.dump() == native_report_document(current.report, "revision", 1, 100).dump());
+        current.trades[2].max_runup += 17.25;
+        const auto delta = parse_json(stream.update(current.report, "revision", 2, 101));
+        assert(delta.at("arrays").at("closed_trades").at("offset").integer<std::size_t>() == 2);
+        apply_delta_for_test(applied, delta);
+        assert(applied.dump() == native_report_document(current.report, "revision", 2, 101).dump());
+        assert(applied.at("closed_trades").items[2].at("max_runup").real() == 21.25);
+        if (retain_document) assert(stream.json() == applied.dump());
+    }
+}
+
+void closed_prefix_regression_is_refused() {
+    for (const bool retain_document : {false, true}) {
+        for (const bool shrink : {false, true}) {
+            ReportDeltas stream(retain_document);
+            ReportInput previous(3, true, 4);
+            stream.update(previous.report, "regression", 1, 100);
+            ReportInput current(shrink ? 2 : 3, false, 4);
+            if (!shrink) current.trades[2].open_at_end = 1;
+            bool refused = false;
+            try {
+                stream.update(current.report, "regression", 2, 101);
+            } catch (const std::runtime_error& error) {
+                refused = std::string(error.what()) == "cumulative report closed-trade prefix regressed";
+            }
+            assert(refused);
+        }
+    }
+}
+
 struct Growth {
     std::size_t visits = 0;
     std::size_t bytes = 0;
 };
 
-Growth growth(std::size_t inputs) {
-    ReportDeltas stream;
+Growth growth(std::size_t inputs, bool retain_document) {
+    ReportDeltas stream(retain_document);
     Growth result;
     for (std::size_t input = 0; input < inputs; ++input) {
         ReportInput current(input + 1, true, input + 1);
         const auto delta = stream.update(current.report, "growth", input, input);
-        result.bytes += delta.size();
+        result.bytes += retain_document ? stream.json().size() : delta.size();
     }
     result.visits = stream.closed_trade_visits();
     return result;
 }
 
 void growth_is_linear() {
-    const auto small = growth(16);
-    const auto large = growth(160);
-    assert(small.visits <= 3 * 16);
-    assert(large.visits <= 3 * 160);
-    assert(large.visits < 12 * small.visits);
-    assert(large.bytes < 12 * small.bytes);
+    // These are the shared extraction paths for off/delta and plain/full.
+    for (const bool retain_document : {false, true}) {
+        const auto small = growth(16, retain_document);
+        const auto large = growth(160, retain_document);
+        assert(small.visits <= 3 * 16);
+        assert(large.visits <= 3 * 160);
+        assert(large.visits < 12 * small.visits);
+        if (retain_document) assert(large.bytes > 12 * small.bytes);
+        else assert(large.bytes < 12 * small.bytes);
+    }
 }
 
 } // namespace
 
 int main() {
     equivalence_and_open_boundary();
+    revised_last_closed_trade();
+    closed_prefix_regression_is_refused();
     growth_is_linear();
     std::cout << "test_live_report: OK\n";
 }
