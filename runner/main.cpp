@@ -720,7 +720,11 @@ Json checkpoint_diagnostic_json(const std::optional<CheckpointDiagnostic>& diagn
     return Json::object({
         {"code", Json::string(checkpoint_failure_code_name(diagnostic->code))},
         {"cursor", num(diagnostic->cursor)}, {"message", Json::string(diagnostic->message)},
-        {"count", num(diagnostic->count)}});
+        {"count", num(diagnostic->count)},
+        {"reason", diagnostic->reason
+            ? Json::string(checkpoint_write_failure_reason_name(*diagnostic->reason)) : Json{}},
+        {"budget_count", num(diagnostic->budget_count)}, {"build_count", num(diagnostic->build_count)},
+        {"io_count", num(diagnostic->io_count)}});
 }
 void log_checkpoint_diagnostic(const std::optional<CheckpointDiagnostic>& diagnostic) {
     if (diagnostic)

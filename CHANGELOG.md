@@ -118,6 +118,7 @@ checkpoint onward. `report --verify-full` re-verifies the whole committed chain.
 A payload or integrity witness failure falls back to full report
 reconstruction; startup failures are published on stderr and in the service
 status file's `checkpoint_diagnostic` field.
+That diagnostic adds `reason` (`budget`, `build`, `io`) and separate `budget_count`, `build_count` and `io_count` fields while retaining every existing key and the total `count`.
 
 The checkpoint contains report state only. The engine has no state restore
 entry point, so restart recovery still replays committed strategy inputs and

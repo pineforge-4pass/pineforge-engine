@@ -114,6 +114,12 @@ additive. Scheduled report checkpoints are prepared from the input
 transaction's report state before its admission. The input is refused before
 growth if its cached pages plus that margin do not fit. A refused boundary
 input leaves database, WAL and SHM byte-identical, including repeated refusals.
+Charging the cumulative payload to the boundary input is intended
+(`Ledger::commit_input`, `runner/store.cpp:1084`). A boundary input can therefore
+hit a storage stop when the input alone would fit, up to the cumulative
+payload's reservation earlier than strictly necessary. This cost buys the
+guarantee that no input commits with a checkpoint admitted without room in its
+reservation.
 
 The report checkpoint uses its own transaction after the input commits.
 The writer mutex stays held between these transactions. That second
@@ -125,10 +131,20 @@ this remaining ceiling. If that admission refuses, the checkpoint rolls back,
 the `write_failed` diagnostic and its `count` are published, and the run
 continues without latching a required-write storage stop. The committed input
 remains durable and full report reconstruction remains available.
+The additive diagnostic `reason` is `budget` for a refused admission, `build`
+for preparation or allocation failure, or `io` for database setup/write failure.
+`budget_count`, `build_count` and `io_count` sum to the existing total `count`;
+the same fields appear in the status file and stderr diagnostic JSON.
+Checkpoint verification failures have null `reason` and zero reason counts.
 
 Startup and recovery checkpoints also admit their actual cached pages before
 COMMIT, using the configured budget without an input reservation. They are
-optional on refusal and publish the same diagnostic. Opening files already
+optional on refusal and publish the same diagnostic. This is intended for both
+startup and post-replay checkpoints (`Ledger::checkpoint_recovered_report`,
+`runner/store.cpp:1210`; the post-replay call is `checkpoint_recovered_report`,
+`runner/main.cpp:1039`): with a large budget, either can spend most of the
+remaining headroom on an O(report) payload before the first live input. The run
+can stop sooner, never over budget. Opening files already
 over a newly supplied finite budget refuses with `LedgerBudgetExceeded` before
 opening SQLite or attempting a checkpoint. Preparation failures skip the
 optional checkpoint; the input's admission then has no checkpoint payload.

@@ -134,6 +134,11 @@ transaction's report state before admission. Its serialized
 payload length supplies the extra-payload reservation. After the input commits,
 the checkpoint is inserted in its own admitted transaction while retaining the
 writer mutex, with a byte ceiling no greater than the input's reservation.
+Charging that payload to the boundary input is intended
+(`Ledger::commit_input`, `runner/store.cpp:1084`): the boundary input can hit a
+storage stop when the input alone would fit, up to the cumulative payload's
+reservation earlier than strictly necessary. This cost buys the guarantee that
+no input commits with a checkpoint admitted without room in its reservation.
 A checkpoint build or write failure records `write_failed` and continues with
 the input durable. If the separate transaction's actual page admission needs
 more room than reserved, only the checkpoint rolls back; the diagnostic count
@@ -182,6 +187,12 @@ reconstructs the full report history, taking O(N) report-row work and O(T)
 document memory. Ledgers that first need reports or integrity digests populated
 retry after startup replay, before new inputs. Later opens add no startup copy
 when a checkpoint already exists.
+Startup and post-replay checkpoints intentionally have no input reservation
+behind them (`Ledger::checkpoint_recovered_report`, `runner/store.cpp:1210`;
+the post-replay call is `checkpoint_recovered_report`, `runner/main.cpp:1039`).
+With a large budget, either can spend most of the remaining headroom on an
+O(T) payload before the first live input. The run can stop sooner, never over
+budget; this is the intended cost of preparing the report shortcut at startup.
 
 Recovery still replays every committed strategy input because the
 strategy state has no restore API; it verifies warmup, every input's engine hash
@@ -294,7 +305,13 @@ pineforge-live probe --status-file status.json --max-age 3 --ready
   The field persists through recovery, running and stopped status, including
   after a later successful checkpoint; it does not itself remove readiness.
   Its `count` field counts optional checkpoint preparation/write failures this
-  run (zero for a checkpoint verification failure).
+  run (zero for a checkpoint verification failure). The additive `reason` is
+  `budget` for a refused checkpoint admission, `build` for preparation or
+  allocation failure, or `io` for database setup/write failure.
+  `budget_count`, `build_count` and `io_count` count those reasons separately
+  and sum to the existing `count`. Verification failures have null `reason`
+  and zero reason counts. The status file and stderr use the same diagnostic
+  JSON fields.
 - `probe --status-file PATH --max-age S [--ready]` exits 0 only for a valid,
   alive control-loop heartbeat no older than S seconds (integer 1..86400).
   Add `--ready` to also require readiness. Missing, malformed, future-dated,

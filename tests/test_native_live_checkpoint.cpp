@@ -546,10 +546,35 @@ void legacy_digests_checkpoint_before_intake() {
         CHECK_OP(static_cast<int>(diagnostic->code), ==,
                  static_cast<int>(CheckpointFailureCode::write_failed));
         CHECK_OP(diagnostic->cursor, ==, 3u);
+        CHECK_OP(diagnostic->count, ==, 1u);
+        CHECK_OP(diagnostic->reason == CheckpointWriteFailureReason::build, ==, true);
+        CHECK_OP(diagnostic->build_count, ==, 1u);
+        CHECK_OP(diagnostic->budget_count, ==, 0u);
+        CHECK_OP(diagnostic->io_count, ==, 0u);
+        CHECK_OP(diagnostic->budget_count + diagnostic->build_count + diagnostic->io_count,
+                 ==, diagnostic->count);
     }
     ledger.verify_report(0, initial_report());
     for (std::uint64_t cursor = 1; cursor <= 3; ++cursor)
         ledger.verify_report(cursor, report_delta(cursor));
+    // A different optional failure in this run must preserve the build count
+    // while adding to the existing total, rather than replacing its reason.
+    execute_sql(path,
+        "CREATE TRIGGER reject_recovered_checkpoint BEFORE INSERT ON report_checkpoints "
+        "BEGIN SELECT RAISE(ABORT,'checkpoint test'); END;");
+    ledger.checkpoint_recovered_report(3);
+    const auto mixed = ledger.checkpoint_diagnostic();
+    CHECK_OP(mixed.has_value(), ==, true);
+    if (mixed) {
+        CHECK_OP(mixed->reason == CheckpointWriteFailureReason::io, ==, true);
+        CHECK_OP(mixed->count, ==, 2u);
+        CHECK_OP(mixed->build_count, ==, 1u);
+        CHECK_OP(mixed->io_count, ==, 1u);
+        CHECK_OP(mixed->budget_count, ==, 0u);
+        CHECK_OP(mixed->budget_count + mixed->build_count + mixed->io_count, ==, mixed->count);
+    }
+    CHECK_OP(scalar(path, "SELECT COUNT(*) FROM report_checkpoints"), ==, 0u);
+    execute_sql(path, "DROP TRIGGER reject_recovered_checkpoint;");
     ledger.checkpoint_recovered_report(3);
     CHECK_OP(ledger.input_count(), ==, 3u);
     CHECK_OP(ledger.verified_report_checkpoint(3).value_or(0), ==, 3u);
@@ -609,6 +634,12 @@ void checkpoint_write_failure_is_optional() {
                      static_cast<int>(CheckpointFailureCode::write_failed));
             CHECK_OP(diagnostic->cursor, ==, 2u);
             CHECK_OP(diagnostic->count, ==, 1u);
+            CHECK_OP(diagnostic->reason == CheckpointWriteFailureReason::io, ==, true);
+            CHECK_OP(diagnostic->io_count, ==, 1u);
+            CHECK_OP(diagnostic->budget_count, ==, 0u);
+            CHECK_OP(diagnostic->build_count, ==, 0u);
+            CHECK_OP(diagnostic->budget_count + diagnostic->build_count + diagnostic->io_count,
+                     ==, diagnostic->count);
         }
         CHECK_OP(LedgerView(path).report_json(2), ==, expected_report(2));
         ledger.commit_input(2, "{}", 3, {}, report_delta(3));

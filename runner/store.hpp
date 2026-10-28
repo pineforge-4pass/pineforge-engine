@@ -46,11 +46,18 @@ private:
     std::uint64_t cursor_;
 };
 
+enum class CheckpointWriteFailureReason { budget, build, io };
+const char* checkpoint_write_failure_reason_name(CheckpointWriteFailureReason reason) noexcept;
+
 struct CheckpointDiagnostic {
     CheckpointFailureCode code;
     std::uint64_t cursor = 0;
     std::string message;
     std::uint64_t count = 0;
+    std::optional<CheckpointWriteFailureReason> reason = std::nullopt;
+    std::uint64_t budget_count = 0;
+    std::uint64_t build_count = 0;
+    std::uint64_t io_count = 0;
 };
 
 struct ReportReadStats {

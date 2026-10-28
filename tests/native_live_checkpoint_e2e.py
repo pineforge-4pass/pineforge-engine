@@ -36,6 +36,16 @@ def diagnostic_lines(errors):
             if line.startswith(prefix + '{"checkpoint_diagnostic":')]
 
 
+def write_diagnostic(actual, reason, budget=0, build=0, io=0):
+    equal(actual["code"], "write_failed")
+    equal(actual["reason"], reason)
+    equal(actual["budget_count"], budget)
+    equal(actual["build_count"], build)
+    equal(actual["io_count"], io)
+    equal(actual["count"], budget + build + io)
+    equal(actual["count"], sum(actual[key] for key in ("budget_count", "build_count", "io_count")))
+
+
 def main():
     runner, library = sys.argv[1:]
     children = []
@@ -135,6 +145,9 @@ def main():
             status = json.loads(health.read_text())
             equal(status["checkpoint_diagnostic"]["code"], "payload_hash_mismatch")
             equal(status["checkpoint_diagnostic"]["cursor"], 4)
+            equal(status["checkpoint_diagnostic"]["reason"], None)
+            equal([status["checkpoint_diagnostic"][key] for key in
+                   ("count", "budget_count", "build_count", "io_count")], [0, 0, 0, 0])
             equal(status["ready"], True)
             equal(report(ledger).stdout, expected)
             summary, errors = finish(process)
@@ -174,6 +187,7 @@ def main():
             status = json.loads(health.read_text())
             equal(status["checkpoint_diagnostic"]["code"], "write_failed")
             equal(status["checkpoint_diagnostic"]["count"], 1)
+            write_diagnostic(status["checkpoint_diagnostic"], "io", io=1)
             equal(status["state"], "running")
             equal(status["ready"], True)
             equal(query(ledger, "SELECT COUNT(*) FROM inputs"), 2)
@@ -194,6 +208,8 @@ def main():
             equal([(item["code"], item["cursor"]) for item in diagnostic_lines(errors)],
                   [("write_failed", 2)])
             equal([item["count"] for item in diagnostic_lines(errors)], [1])
+            equal(diagnostic_lines(errors), [status["checkpoint_diagnostic"]])
+            equal(json.loads(health.read_text())["checkpoint_diagnostic"], status["checkpoint_diagnostic"])
             print("PASS a failed checkpoint leaves its input durable and the service running", flush=True)
 
             ledger = root / "upgrade.sqlite"
@@ -220,7 +236,10 @@ def main():
             equal(query(ledger, "SELECT MAX(input_cursor) FROM report_checkpoints"), 3)
             equal(report(ledger).stdout, expected)
             equal(json.loads(health.read_text())["checkpoint_diagnostic"]["code"], "write_failed")
-            finish(process)
+            status = json.loads(health.read_text())
+            write_diagnostic(status["checkpoint_diagnostic"], "build", build=1)
+            _, errors = finish(process)
+            equal(diagnostic_lines(errors), [status["checkpoint_diagnostic"]])
             print("PASS legacy digests are checkpointed after startup replay before intake", flush=True)
         finally:
             for process in children:
