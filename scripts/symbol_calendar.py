@@ -38,6 +38,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from run_strategy import SESSION_CALENDAR_SCHEMA as SCHEMA  # noqa: E402
+from run_strategy import _metrics_range_provenance  # noqa: E402
 from run_strategy import load_session_calendar  # noqa: E402,F401 -- the reader
 
 
@@ -81,7 +82,8 @@ def _sha256(path: Path) -> str:
 def calendar_document(tape_dir: Path) -> dict:
     """The calendar document of a reference run directory."""
     metrics = json.loads((tape_dir / "metrics.json").read_text(encoding="utf-8"))
-    provenance = metrics.get("wsProvenance") or {}
+    provenance, _ = _metrics_range_provenance(metrics)
+    provenance = provenance or {}
     sessions = calendar_from_tape(tape_dir / "tv_trades.csv")
     return {
         "schema": SCHEMA,
