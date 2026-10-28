@@ -32,8 +32,8 @@ env:
   PINEFORGE_REQUIRE_RELEASE_TAGS: "1"
 
 # The canon authz gate admits our events before any checkout.
-# Light jobs and per-leg aggregates use hosted ubuntu-24.04; Linux proof jobs use
-# the gke-runners group with separate amd64 and arm64 size labels.
+# Light jobs and per-leg aggregates use bare gke-2cpu-4gb-amd64; Linux proof jobs
+# use bare GKE scale-set names with fixed amd64 and arm64 sizes.
 # Jobs run directly in runner pods carrying the engine toolchain image and sudo.
 # Each verification sizes its parallelism to the runner that took it.
 # scripts/ci_preflight.py pins every runner and shard count. GitHub's platform
@@ -42,7 +42,7 @@ jobs:
   authz:
     name: authz
     # Fleet routing is fixed for this workflow; releases use pf-gcp-main.
-    runs-on: ubuntu-24.04
+    runs-on: gke-2cpu-4gb-amd64
     permissions: {}
     # No timeout-minutes: the owner's no-time-limits rule (check-no-time-limits refuses new ones).
     steps:
@@ -108,7 +108,7 @@ jobs:
   # builds the site as before. Classification uses the light pool class.
   changes:
     needs: [authz]
-    runs-on: ubuntu-24.04
+    runs-on: gke-2cpu-4gb-amd64
     permissions:
       contents: read
     env:
@@ -440,7 +440,7 @@ jobs:
     name: build (ubuntu-24.04, Release)
     needs: [authz, changes, build]
     if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
-    runs-on: ubuntu-24.04
+    runs-on: gke-2cpu-4gb-amd64
     steps:
       - name: Refuse an unauthorised run before anything else
         if: ${{ needs.authz.result != 'success' }}
@@ -460,7 +460,7 @@ jobs:
     name: build (ubuntu-24.04, Debug)
     needs: [authz, changes, build-debug]
     if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
-    runs-on: ubuntu-24.04
+    runs-on: gke-2cpu-4gb-amd64
     steps:
       - name: Refuse an unauthorised run before anything else
         if: ${{ needs.authz.result != 'success' }}
@@ -661,7 +661,7 @@ jobs:
     name: sanitizers
     needs: [authz, changes, sanitizers]
     if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
-    runs-on: ubuntu-24.04
+    runs-on: gke-2cpu-4gb-amd64
     steps:
       - name: Refuse an unauthorised run before anything else
         if: ${{ needs.authz.result != 'success' }}
@@ -765,7 +765,7 @@ jobs:
     name: kernel-only
     needs: [authz, changes, kernel-only]
     if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
-    runs-on: ubuntu-24.04
+    runs-on: gke-2cpu-4gb-amd64
     steps:
       - name: Refuse an unauthorised run before anything else
         if: ${{ needs.authz.result != 'success' }}
@@ -815,7 +815,7 @@ jobs:
     needs: [authz, changes, preflight, build, build-debug, build-release-gate, build-debug-gate, build-arm, sanitizers, sanitizers-gate, native-live, kernel-only, kernel-only-gate, corpus-parity-subset, preflight-slow, corpus-parity]
     if: always()
     # The aggregate runs inline Python and shell on the light pool class.
-    runs-on: ubuntu-24.04
+    runs-on: gke-2cpu-4gb-amd64
     permissions:
       contents: read
     env:
