@@ -7439,6 +7439,14 @@ endif()
 
 add_test(NAME test_run_json_sink_fd_skip_accounting COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/tests/test_run_json_sink_fd_skip_accounting.py --artifacts ${CMAKE_CURRENT_BINARY_DIR}/pytest-no-skips/test_run_json_sink_fd_skip_accounting)
 
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_test(NAME test_jailed_temp_files_witness
+        COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/scripts/run_pytest_no_skips.py
+            --artifacts ${CMAKE_CURRENT_BINARY_DIR}/pytest-no-skips/test_jailed_temp_files_witness
+            -- -q -p no:cacheprovider
+            ${PROJECT_SOURCE_DIR}/tests/test_jailed_temp_files_witness.py)
+endif()
+
 # Property reads and the diagnostic belong before the lane loop;
 # the fence grammar permits target definitions, not get_target_property/message.
 if(PINEFORGE_BUILD_SOURCE_LAYER)
