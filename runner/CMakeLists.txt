@@ -26,7 +26,6 @@ else()
     set(_pf_sqlite_target SQLite::SQLite3)
 endif()
 target_link_libraries(pineforge_live_support PUBLIC ${_pf_sqlite_target} CURL::libcurl OpenSSL::Crypto Threads::Threads PineForge::pineforge)
-target_compile_options(pineforge_live_support PRIVATE -ffp-contract=off)
 target_compile_options(pineforge_live_support PRIVATE -Wall -Wextra -Wpedantic)
 add_library(pineforge_live_startup STATIC native_startup.cpp)
 target_compile_features(pineforge_live_startup PUBLIC cxx_std_17)
@@ -80,23 +79,6 @@ if(PINEFORGE_BUILD_TESTS)
     target_include_directories(test_live_json PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_options(test_live_json PRIVATE -UNDEBUG)
     add_test(NAME test_live_json COMMAND test_live_json)
-    add_executable(test_live_report ${PROJECT_SOURCE_DIR}/tests/test_live_report.cpp)
-    target_include_directories(test_live_report PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/include ${PROJECT_BINARY_DIR}/include)
-    target_link_libraries(test_live_report PRIVATE PineForge::pineforge)
-    target_compile_options(test_live_report PRIVATE -UNDEBUG)
-    add_test(NAME test_live_report COMMAND test_live_report)
-    add_executable(test_live_report_accumulator
-        ${PROJECT_SOURCE_DIR}/tests/test_live_report_accumulator.cpp)
-    target_include_directories(test_live_report_accumulator PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-    target_link_libraries(test_live_report_accumulator PRIVATE pineforge_live_support PineForge::pineforge)
-    target_compile_options(test_live_report_accumulator PRIVATE -UNDEBUG -ffp-contract=off)
-    add_test(NAME test_live_report_accumulator_equivalence
-        COMMAND test_live_report_accumulator equivalence)
-    add_test(NAME test_live_report_accumulator_growth
-        COMMAND test_live_report_accumulator growth)
-    add_test(NAME test_live_ratio_export
-        COMMAND test_live_report_accumulator export)
     add_executable(test_live_identity ${PROJECT_SOURCE_DIR}/tests/test_live_identity.cpp)
     target_link_libraries(test_live_identity PRIVATE pineforge_live_support)
     target_compile_options(test_live_identity PRIVATE -UNDEBUG)
@@ -137,9 +119,6 @@ if(PINEFORGE_BUILD_TESTS)
         add_test(NAME native_live_report_e2e COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/tests/native_live_report_e2e.py $<TARGET_FILE:pineforge-live>
             $<TARGET_FILE:native_live_report_oracle> ${_pf_report_strategies})
-        add_test(NAME native_live_ratio_interval_e2e COMMAND ${Python3_EXECUTABLE}
-            ${PROJECT_SOURCE_DIR}/tests/native_live_ratio_interval_e2e.py $<TARGET_FILE:pineforge-live>
-            $<TARGET_FILE:native_live_report_oracle> $<TARGET_FILE:native_live_example>)
         add_test(NAME native_live_chart_input_e2e COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/tests/native_live_chart_input_e2e.py $<TARGET_FILE:pineforge-live>
             $<TARGET_FILE:native_live_report_oracle> $<TARGET_FILE:native_live_example>)
@@ -195,7 +174,6 @@ if(PINEFORGE_BUILD_TESTS)
     target_compile_definitions(pineforge_live_legacy_test_support PUBLIC PINEFORGE_LIVE_LEGACY_TEST_API)
     target_link_libraries(pineforge_live_legacy_test_support PUBLIC
         ${_pf_sqlite_target} CURL::libcurl OpenSSL::Crypto Threads::Threads PineForge::pineforge)
-    target_compile_options(pineforge_live_legacy_test_support PRIVATE -ffp-contract=off)
     foreach(native_test test_native_live_store test_native_live_websocket test_native_live_routing test_native_live_service)
         add_executable(${native_test} ${PROJECT_SOURCE_DIR}/tests/${native_test}.cpp)
         if(native_test STREQUAL "test_native_live_store")
@@ -559,5 +537,40 @@ if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)
         endif()
         set_tests_properties(native_live_genuine_retry_e2e ${_pf_equivalence_rows}
             PROPERTIES ENVIRONMENT "${_pf_genuine_retry_environment}")
+    endif()
+endif()
+
+# Keep the live-only reader out of the installed batch/kernel archives.
+# Reuse the runtime's compile options, including its floating-point rules.
+add_library(pineforge_live_report STATIC ${PROJECT_SOURCE_DIR}/src/live_report.cpp)
+target_link_libraries(pineforge_live_report PUBLIC PineForge::pineforge)
+get_target_property(_pf_live_report_compile_options pineforge COMPILE_OPTIONS)
+target_compile_options(pineforge_live_report PRIVATE ${_pf_live_report_compile_options})
+target_link_libraries(pineforge_live_startup PUBLIC pineforge_live_report)
+target_compile_options(pineforge_live_support PRIVATE -ffp-contract=off)
+
+if(PINEFORGE_BUILD_TESTS)
+    target_compile_options(pineforge_live_legacy_test_support PRIVATE -ffp-contract=off)
+    add_executable(test_live_report ${PROJECT_SOURCE_DIR}/tests/test_live_report.cpp)
+    target_include_directories(test_live_report PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/include ${PROJECT_BINARY_DIR}/include)
+    target_link_libraries(test_live_report PRIVATE PineForge::pineforge)
+    target_compile_options(test_live_report PRIVATE -UNDEBUG)
+    add_test(NAME test_live_report COMMAND test_live_report)
+    add_executable(test_live_report_accumulator
+        ${PROJECT_SOURCE_DIR}/tests/test_live_report_accumulator.cpp)
+    target_include_directories(test_live_report_accumulator PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(test_live_report_accumulator PRIVATE pineforge_live_support pineforge_live_report)
+    target_compile_options(test_live_report_accumulator PRIVATE -UNDEBUG -ffp-contract=off)
+    add_test(NAME test_live_report_accumulator_equivalence
+        COMMAND test_live_report_accumulator equivalence)
+    add_test(NAME test_live_report_accumulator_growth
+        COMMAND test_live_report_accumulator growth)
+    add_test(NAME test_live_ratio_export
+        COMMAND test_live_report_accumulator export)
+    if(PINEFORGE_BUILD_SOURCE_LAYER)
+        add_test(NAME native_live_ratio_interval_e2e COMMAND ${Python3_EXECUTABLE}
+            ${PROJECT_SOURCE_DIR}/tests/native_live_ratio_interval_e2e.py $<TARGET_FILE:pineforge-live>
+            $<TARGET_FILE:native_live_report_oracle> $<TARGET_FILE:native_live_example>)
     endif()
 endif()

@@ -21,8 +21,9 @@ void refresh_report_ratios(Json& document, const std::string& chart_timezone) {
     // a positive final-equity capital keeps that unused CAGR ratio at 1.
     const auto capital = !curve.empty() && curve.back().equity > 0.0 ? curve.back().equity : 1.0;
     const auto missing_price = std::numeric_limits<double>::quiet_NaN();
+    const pf_equity_point_t* curve_points = curve.empty() ? nullptr : curve.data();
     const auto result = pineforge::metrics::compute_equity_stats(
-        curve.empty() ? nullptr : curve.data(), static_cast<std::int64_t>(curve.size()),
+        curve_points, static_cast<std::int64_t>(curve.size()),
         capital, chart_timezone, missing_price, missing_price, 0, 0.0);
     auto& equity = document.members["report"].members["metrics"].members["equity"];
     equity.members["sharpe_monthly"] = report_number(result.sharpe_monthly);

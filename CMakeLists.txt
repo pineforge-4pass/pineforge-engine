@@ -126,7 +126,6 @@ set(PINEFORGE_KERNEL_SOURCES src/array.cpp
     src/engine_execution.cpp
     src/engine_path_resolve.cpp
     src/engine_report.cpp
-    src/live_report.cpp
     src/reservation_expansion.cpp
     src/engine_run.cpp
     src/engine_security.cpp

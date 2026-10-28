@@ -9,7 +9,6 @@
 #include <deque>
 #include <limits>
 #include <stdexcept>
-#include <type_traits>
 
 namespace pineforge {
 inline namespace engine_script_run_v19 {
@@ -25,6 +24,10 @@ struct LiveReportAccumulator::State {
     // Raw engine points, including its held point. A presented tail is used
     // only in a value copy of the fold and during a batch ratio computation.
     std::deque<pf_equity_point_t> curve;
+    // Reuse the presentation suffix and the batch ratio workspace on each
+    // read. Their lengths are the suffix and the ratio-boundary series.
+    std::vector<TradeC> trade_rows;
+    std::vector<pf_equity_point_t> ratio_curve;
     pf_equity_stats_t ratios{};
     bool have_ratios = false;
     std::uint64_t ratios_cursor = 0;
@@ -77,10 +80,9 @@ report::LiveReportPatch NativeExecutionConsumer::fill_live_report_patch(
             to.offset = std::min(start, n);
             to.logical_length = n;
             for (auto i = to.offset; i < n; ++i) {
-                typename std::decay_t<decltype(to.rows)>::value_type row{};
-                static_assert(sizeof row == sizeof rows[i], "report row wire layout");
-                std::memcpy(&row, &rows[i], sizeof row);
-                to.rows.push_back(row);
+                static_assert(sizeof to.rows.back() == sizeof rows[i], "report row wire layout");
+                to.rows.emplace_back();
+                std::memcpy(&to.rows.back(), &rows[i], sizeof rows[i]);
                 ++counter;
             }
         };
@@ -181,7 +183,8 @@ report::LiveReportPatch NativeExecutionConsumer::fill_live_report_patch(
     patch.closed_trades = closed;
     patch.trades.offset = std::min(trade_start, closed + open);
     patch.trades.logical_length = closed + open;
-    std::vector<TradeC> rows;
+    auto& rows = state.trade_rows;
+    rows.clear();
     rows.reserve(closed + open - trade_start);
     double net = state.net_prefix;
     for (std::size_t i = trade_start; i < closed + open; ++i) {
@@ -198,7 +201,7 @@ report::LiveReportPatch NativeExecutionConsumer::fill_live_report_patch(
     patch.equity.offset = old_points ? old_points - 1 : 0;
     patch.equity.logical_length = engine.equity_curve_.size();
     for (std::size_t i = patch.equity.offset; i < patch.equity.logical_length; ++i) {
-        const auto point = engine.equity_curve_[i];
+        const auto& point = engine.equity_curve_[i];
         ++state.work.equity_rows_materialized;
         const auto key = metrics::equity_month_key(point.time_ms, engine.chart_timezone_);
         if (i < old_points) {
@@ -281,18 +284,22 @@ report::LiveReportPatch NativeExecutionConsumer::fill_live_report_patch(
         && (!state.have_ratios || state.ratios_cursor != input_index)) {
         // Use precisely the batch routine, including both generated-return
         // passes and their validation/NaN rules. Its cost is accounted apart.
-        std::vector<pf_equity_point_t> ratio_curve;
-        ratio_curve.reserve(state.curve.size());
+        state.ratio_curve.resize(state.curve.size());
+        std::size_t point_index = 0;
         for (const auto& point : state.curve) {
-            ratio_curve.push_back(point);
+            state.ratio_curve[point_index++] = point;
             ++state.work.ratio_points_supplied;
         }
-        if (!ratio_curve.empty()) ratio_curve.back() = tail;
+        if (!state.ratio_curve.empty()) state.ratio_curve.back() = tail;
         if (input_index == 0) ++state.work.warmup_ratio_recomputations;
         else ++state.work.ratio_recomputations;
+        // A mutable pointer would select the structural-source template.
+        // The existing array entry point takes a pointer to const points.
+        const pf_equity_point_t* ratio_points =
+            state.ratio_curve.empty() ? nullptr : state.ratio_curve.data();
         state.ratios = metrics::compute_equity_stats(
-            ratio_curve.empty() ? nullptr : ratio_curve.data(),
-            static_cast<std::int64_t>(ratio_curve.size()), state.capital,
+            ratio_points,
+            static_cast<std::int64_t>(state.ratio_curve.size()), state.capital,
             engine.chart_timezone_, inputs.first_open, inputs.last_close,
             engine.bars_in_market_, presented.net_profit);
         state.ratios_cursor = input_index;
