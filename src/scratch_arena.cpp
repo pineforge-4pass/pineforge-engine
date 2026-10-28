@@ -3,6 +3,7 @@
 #endif
 
 #include <pineforge/detail/scratch_arena.hpp>
+#include <pineforge/detail/run_usage.hpp>
 
 #include <algorithm>
 #include <cerrno>
@@ -345,6 +346,7 @@ struct ScratchArena::Impl {
             }
             throw;
         }
+        run_usage_scratch_resize(region.size, bytes);
         region.size = bytes;
     }
 };
@@ -436,12 +438,14 @@ void ScratchArena::open_region(Region& region, std::optional<std::uint64_t> max_
     }
     region.max_bytes = max_bytes;
     ++impl_->open_regions;
+    run_usage_scratch_open(0);
 }
 
 void ScratchArena::release_region(Region& region) noexcept {
     const std::lock_guard<std::mutex> lock(impl_->mutex);
     for (const auto chunk : region.chunks) impl_->release_chunk(chunk);
     std::vector<std::uint32_t>{}.swap(region.chunks);
+    run_usage_scratch_close(region.size);
     region.size = 0;
     region.max_bytes.reset();
     --impl_->open_regions;
@@ -482,6 +486,7 @@ void ScratchArena::truncate(Region& region, std::uint64_t bytes) {
     }
     if (bytes == 0 && !region.max_bytes)
         std::vector<std::uint32_t>{}.swap(region.chunks);
+    run_usage_scratch_resize(region.size, bytes);
     region.size = bytes;
 }
 
