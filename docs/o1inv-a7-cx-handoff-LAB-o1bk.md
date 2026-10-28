@@ -3,7 +3,7 @@ LAB-o1bk edit-only handoff. HEAD remains
 No staging, commit, build, test, Python, Node, lab, or network command was run.
 Implementation and test source are supplied; compilation, executed fail-before,
 C++ verification, and corpus/parity verification remain unfinished on the remote
-hosts under LB-446.
+hosts under the release verification hosts.
 
 The exact per-file change list is:
 

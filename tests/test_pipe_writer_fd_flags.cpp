@@ -1,4 +1,4 @@
-// CR-150: isolate pipe flag observations from every engine operation.
+// Isolate pipe flag observations from every engine operation.
 #include "fd_flag_diagnostics.hpp"
 
 #include <array>

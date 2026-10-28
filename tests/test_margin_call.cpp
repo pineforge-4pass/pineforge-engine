@@ -218,7 +218,7 @@ static void test_short_margin_call_qty_step() {
 
     // Same scenario as test_short_margin_call. The shortfall (minimum restore
     // qty) is 3.80952381/4 = 0.95238095 contracts. TradingView floors the
-    // restore qty to the lot step BEFORE the 4x over-liquidation (KI-31), so:
+    // restore qty to the lot step BEFORE the 4x over-liquidation, so:
     //   floor(0.95238095 / 0.5) * 0.5 = 0.5, then * 4 = 2.0 (an exact step
     // multiple). Flooring the 4x product instead (the old bug) gave 3.5 and
     // desynced multi-nibble cascades from TV. The exit price is unchanged
@@ -237,7 +237,7 @@ static void test_short_margin_call_qty_step() {
 
     CHECK(eng.trade_count() >= 1);
     // First quantized lot: 4 * floor(shortfall/step)*step = 4 * 0.5 = 2.0,
-    // an exact multiple of the 0.5 step (floor-before-4x per KI-31).
+    // an exact multiple of the 0.5 step (floor-before-4x).
     CHECK(near(eng.trade_size(0), 2.0));
     CHECK(is_multiple_of(eng.trade_size(0), step));
     // Quantization never enlarges the lot: floored <= unquantized 3.80952381.
@@ -780,7 +780,7 @@ static void test_commissioned_frozen_all_in_true_flat_gap_is_rejected() {
 
 // Commission 10% + a gap-up that fits WITHOUT the fee: 9 x 110 = 990 <= 1000
 // admits, but 990 + the 99 opening fee is unaffordable, so the fill goes
-// through and the KI-61 entry-bar affordability trim fires: restoring needs
+// through and the entry-bar affordability trim fires: restoring needs
 // 9 - (1000 - 99)/110 = 0.809 lots, which floors to zero and takes the
 // opening event's one-contract fallback — one lot closes on the entry bar
 // at the fill, 8 are held. Pinned against TradingView behaviour (recorded
@@ -1046,7 +1046,7 @@ static void test_cash_per_order_floor_zero_closes_one_contract() {
     CHECK(near(eng.position_size(), 1.0));
 }
 
-// Repurposed from the KI-61 "sublot overage held" fixture (design-explicit-qty-
+    // Repurposed from the "sublot overage held" fixture (design-explicit-qty-
 // fill-admission). This is an EXPLICIT-qty all-in true-flat MARKET entry
 // (strategy.entry with qty=10 == equity/close) whose next-bar fill gaps
 // ADVERSELY to 110: notional 10*110 = 1100 overshoots equity 1000. TV DECLINES
@@ -1069,7 +1069,7 @@ static void test_explicit_all_in_zero_comm_adverse_gap_declined() {
     CHECK(std::isnan(eng.liq_price()));
 }
 
-// Repurposed from the KI-61 "lot trim uses entry affordability" fixture. An
+    // Repurposed from the "lot trim uses entry affordability" fixture. An
 // EXPLICIT-qty all-in true-flat MARKET entry (qty=10 == equity/close), commission
 // 4%, fill gaps ADVERSELY to 120: the NOTIONAL 10*120 = 1200 alone overshoots
 // equity 1000 (the fee is irrelevant to the predicate). Commission does not
@@ -1090,7 +1090,7 @@ static void test_explicit_all_in_commissioned_adverse_gap_declined() {
     CHECK(std::isnan(eng.liq_price()));
 }
 
-// Repurposed from the KI-61 "trim without qty_step" fixture. EXPLICIT-qty all-in
+    // Repurposed from the "trim without qty_step" fixture. EXPLICIT-qty all-in
 // true-flat MARKET entry (qty=10 == equity/close), zero commission, qty_step=0
 // (continuous mode), fill gaps ADVERSELY to 110: notional 1100 > equity 1000.
 // This is exactly test_explicit_qty_fill_admission RED-1's class (zero comm,
@@ -1111,13 +1111,13 @@ static void test_explicit_all_in_zero_comm_no_qty_step_declined() {
     CHECK(std::isnan(eng.liq_price()));
 }
 
-// Repurposed from the KI-61 "combines fx/pointvalue/commission" fixture. The
+    // Repurposed from the "combines fx/pointvalue/commission" fixture. The
 // explicit-qty fill-admission predicate carries the SAME pv/fx/margin factors as
-// KI-61 (|qty|*slipped_fill*pv*fx*margin/100). Signal-time admission is exact
+    // (|qty|*slipped_fill*pv*fx*margin/100). Signal-time admission is exact
 // (5*10*pv10*fx2 == 1000 == equity); the ADVERSE fill at 12 makes the notional
 // 5*12*10*2 = 1200 > equity 1000, so TV DECLINES (commission 10% excluded from
 // the predicate). Pins that the decline arithmetic combines pv, fx, and margin
-// exactly like the KI-61 trim it replaces here. No fill, no rows.
+    // exactly like the trim it replaces here. No fill, no rows.
 static void test_explicit_all_in_fx_pointvalue_commission_declined() {
     std::printf("test_explicit_all_in_fx_pointvalue_commission_declined\n");
     std::vector<Bar> bars = {
@@ -1198,10 +1198,10 @@ static void test_long_100pct_margin_stop_trim_uses_raw_base_and_exit_slip() {
     LongPricedOverAllocProbe eng(LongPricedOverAllocProbe::Kind::Stop);
     eng.run(bars.data(), (int)bars.size());
 
-    // KI-62 STAGE 3 (margin fill-time admission): this buy-stop 120.2 is
+    // STAGE 3 (margin fill-time admission): this buy-stop 120.2 is
     // OVER-ALLOCATED — qty 10 on a $1,000 account, and the margin gate costs it
     // at the FILL BAR'S OPEN (110): required 10*110*100% = 1100 > equity 1000 ->
-    // DECLINE. The order never fills, so the old KI-61 1x-long dust-trim (which
+    // DECLINE. The order never fills, so the old 1x-long dust-trim (which
     // used to report fill@123 then trim to size 4) does NOT fire — the
     // "declined fills must not fire the dust-trim" reconciliation.
     //

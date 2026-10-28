@@ -202,7 +202,7 @@ instead ([Run-failure codes](pages/run-failure-codes.md)).
 
 ## Current remote CTest contract: `ctest-shard-union/v1`
 
-**L6 rule, 2026-10-24 02:12 (supersedes the earlier 01:48 Debug-only ruling):**
+**Deferred-row rule, 2026-10-24 02:12 (supersedes the earlier 01:48 Debug-only ruling):**
 the default `slow` exclusion follows the declared CMake **Debug build type**.
 It covers `debug` and `sanitizers`, with or without `--ctest-shard`, and a
 future Debug profile inherits it whenever it uses the full test registry.
@@ -224,9 +224,9 @@ The declared exclusion and summary accounting apply equally to `debug` and
 full registry minus those names, and only selection is partitioned.
 The registry hash still covers every registered name. Both profiles retain
 null default execution floors. Their default runs now enter strict exclusion
-accounting: at least 904 registered rows for `debug`, 895 for `sanitizers`,
+accounting: at least 907 registered rows for `debug`, 898 for `sanitizers`,
 a nonempty exclusion that leaves selected rows, and exact accounting of that
-selection. Verifier 8 + preflight 8 + command-after 8 + report 4 add 28 public rows;
+selection. Verifier 8 + preflight 8 + command-after 8 + report 4 + scratch attribution 3 add 31 public rows;
 plain Debug-type runs enforce the increased registration floors. An explicit
 valid `--exclude-label X` still wins on unsharded and 1/1 paths. For `N > 1`,
 only the profile's declared Debug-build-type `slow` exclusion is accepted;
@@ -301,9 +301,9 @@ fail the multi-shard accounting. Excluded runs use the strict skip policy
 above, including when `minTests` is null. The unsupported-WebSocket allowance
 remains confined to full runs without the overlay.
 
-Every shard reports the same **undivided** `minTests`: Release 938 with the
-overlay or 631 without it (307 pinned placeholders), kernel 365 with the
-overlay or 334 without it (31 pinned placeholders). Debug, sanitizers and native
+Every shard reports the same **undivided** `minTests`: Release 941 with the
+overlay or 634 without it (307 pinned placeholders), kernel 368 with the
+overlay or 337 without it (31 pinned placeholders). Debug, sanitizers and native
 default to JSON null; live-only floors stay 21 (20 without transport.cpp). An explicit
 floor can raise minimums; a multi-shard run refuses a lower profile floor.
 Registry capacity is checked locally against that global floor, subtracting
@@ -440,7 +440,7 @@ For `N > 1`, global floors and local accounting are separate obligations:
   registry's runnable capacity. Without the overlay, capacity is the full
   registered count minus the registered pinned private-fixture names;
   with the overlay it is the full registered count. The
-  floor itself remains fixed at 631/334 absent or 938/365 present for
+  floor itself remains fixed at 634/337 absent or 941/368 present for
   Release/kernel, or the explicit `--min-tests` value. It is never divided by
   the shard count or lowered by an observed skip.
 * Each shard requires `ran + permitted skips = its own selected count`, with
@@ -657,7 +657,7 @@ profiles reject a skip for every required probe, even a pinned row and without
 `PINEFORGE_PRIVATE_FIXTURES`; other pinned-placeholder skips keep their policy.
 Replacing one row with eight probes plus the cover adds eight rows: the live
 run floor grows from 13 to 21, or 12 to 20 without transport, in both fixture
-worlds. The native PR registration floor is 1000: 964 + 28 public split rows + 8 probes.
+worlds. The native PR registration floor is 1003: 964 + 28 public split rows + 8 probes + 3 scratch cases.
 Release, debug and sanitizers build no runner; kernel omits this source-layer registration.
 
 `runner_e2e_test_names()` expands the equivalence driver into all eight rows.
@@ -703,13 +703,13 @@ floors.
 
 The two run floors are overlay-aware, keyed on `PINEFORGE_PRIVATE_FIXTURES`.
 Both numbers are constants of the profile, from the campaign's two-world
-counts plus registered row changes; they never move with the run's own `ctest -N` count or its
+counts plus registered row changes, including scratch attribution's `(1 + 12) - (1 + 9) = 3`; they never move with the run's own `ctest -N` count or its
 observed skips:
 
-| profile | floor, overlay present | floor, overlay absent | registered (present / absent) |
+| profile | floor, overlay present | floor, overlay absent | registered floor basis (present / absent) |
 |---|---|---|---|
-| `release` | 938 | 631 | 938 / 938 |
-| `kernel` | 365 | 334 | 365 / 365 |
+| `release` | 941 | 634 | 941 / 941 |
+| `kernel` | 368 | 337 | 368 / 368 |
 
 With the variable set and non-empty (the private-fixture overlay is present in
 the tree) the floor is the full population and EVERY row of it must run: a row
@@ -720,8 +720,8 @@ full population minus the pinned rows it registers, so a public row that
 leaves the registry or stops running falls under the floor either way, an
 unpinned skip is a loss with no margin to absorb it, and an explicit
 `--min-tests N` is used verbatim in both modes and is never lowered. The
-registered column is why the absent floor is not the absent registration, and
-it is to be re-measured after the registration fix lands.
+registered floor basis records the minimum population used for these constants;
+later registrations can raise the observed count without lowering these floors.
 `EXCLUDED_REGISTERED_MIN` is a registered floor, read only on an
 `--exclude-label` run, and stays out of the overlay rule entirely.
 
@@ -748,20 +748,20 @@ The PR registration floors are the keys of `EXCLUDED_REGISTERED_MIN` in
 `scripts/ci_verify.py`, one for each profile whose pull-request leg excludes
 the label; their values are in
 [PR tier versus MAIN/RELEASE](#pr-tier-versus-mainrelease-what-is-excluded-where).
-The full-run release and kernel floors are the table's own numbers above (631
-and 334 rows absent, 938 and 365 with the overlay present). A pull request's
+The full-run release and kernel floors are the table's own numbers above (634
+and 337 rows absent, 941 and 368 with the overlay present). A pull request's
 release and kernel legs exclude the label and are held to the registration
 floor instead; the full runs on push and dispatch exclude no label and are
 held to these run floors.
 
-CR-196 splits the ownership manifest controls into four CTest shards,
+Four ownership manifest control shards are registered; their cases are balanced across
 `test_selected_window_ownership_manifest_controls_shard_1of4` through
-`test_selected_window_ownership_manifest_controls_shard_4of4`, each with the
-existing 180-second timeout. This adds three public registered/run rows to
-every engine profile in both fixture worlds; it only raises the counts above
-the pinned minimum floors listed above. The private-fixture and receipt row
-populations stay the same. Preflight still runs the complete unsharded driver;
-see [the controls commands](../tests/ownership/README.md#manifest-checker-controls)
+`test_selected_window_ownership_manifest_controls_shard_4of4` using checker
+launch counts derived from helpers and literal loop lengths. Largest-first
+placement uses stable ids and lightest-shard tie breaks, without test deadlines.
+The four rows still add three public registered/run rows above pinned floors in
+every profile and fixture world; private-fixture and receipt counts stay the same.
+Preflight runs all cases; see [the controls commands](../tests/ownership/README.md#manifest-checker-controls)
 for parallel CTest and individual shard invocations.
 
 Preflight also runs the detached-comment census of the kernel compile closure
@@ -1432,9 +1432,9 @@ that profile's `EXCLUDED_REGISTERED_MIN` key and its overlay-aware run floor,
 the selection must remove some rows and leave some, and, with the overlay
 absent, the rows that ran plus the pinned skips must equal the selection with
 no other skip (the `--exclude-label` branch of `enforce_test_floor` in
-`scripts/ci_verify.py`). `EXCLUDED_REGISTERED_MIN` holds 904 for `debug`, 895
-for `sanitizers` and 1000 for `native`, and 923 for `release` and 365
-for `kernel`: +28 public split rows in each, plus eight native probes. The original `release` key was the
+`scripts/ci_verify.py`). `EXCLUDED_REGISTERED_MIN` holds 907 for `debug`, 898
+for `sanitizers` and 1003 for `native`, and 926 for `release` and 368
+for `kernel`: +31 public rows in each (28 split rows + 3 scratch cases), plus eight native probes. The original `release` key was the
 registered count in the sampled public pull-request runs (957) less the 62 rows
 by which the Debug key sits below the Debug registry in the same runs (938 less
 876); that also equals its own registry at the vintage of the other keys. The
@@ -1442,8 +1442,8 @@ same offset would give 309 for `kernel`, 17 rows below the kernel registry at
 that vintage (326), so the original `kernel` key took 337: 34 below the 371
 registered in every sampled pull-request and push run. The lab job's `ctest -N`
 confirms both or moves them. The
-run floors in the table above (938 and 365 with the overlay present, 631 and
-334 absent) are not read on an excluded run; push, dispatch and every other
+run floors in the table above (941 and 368 with the overlay present, 634 and
+337 absent) are not read on an excluded run; push, dispatch and every other
 full run still enforce them.
 
 **2026-10-24 supersedes the exclusion skip wording above:** the sole named
@@ -1470,7 +1470,7 @@ visible only in those profiles, such as an ASan-only defect in a `slow` row,
 is not seen by any run under this policy. Release is the only gate for those
 rows and cannot detect a defect that occurs only with sanitizer instrumentation.
 
-**Rule for the deferred rows (L6 condition, 10-20).** Every row and class this
+**Rule for the deferred rows (deferred-row condition, 10-20).** Every row and class this
 section excludes from a pull request still runs on the merge commit. A red
 result on `main` in an excluded row or class (the Release and kernel-only
 `slow` rows, or a SLOW verifier class) BLOCKS the next release cut, and the
@@ -1659,7 +1659,7 @@ HTTPS submodule clone retain their existing credential handling behind authz.
 carry no explicit `--exclude-label` arguments. The verifier's Debug-type
 default excludes `slow` from Debug and sanitizer runs on every event,
 including non-PR events; Release, kernel and native retain every row.
-PR CI keeps CR-233's Release smoke selected by CTest label `fast`.
+PR CI keeps the Release smoke selected by CTest label `fast`.
 
 Baseline promotion uses `["self-hosted","pf-gcp-main"]` for its GitHub App
 secrets and inherited `id-token: write` permission. The release class admits
@@ -1950,7 +1950,7 @@ identity refuse, even when an older row from an allowed creator succeeded.
 
 Adding a creator is a code change reviewed like any other.
 
-## Source allocation-bound gate (CR-150 / C4)
+## Source allocation-bound gate (C4)
 
 `scripts/cr150_source_gate.py` is the preflight stage `source-guard-cr150-source-bounds`, and its mutation controls, `scripts/test_cr150_source_gate.py`, run as `cr150-source-gate-tests`. Both stages run in the `fast` and default `all` tiers regardless of whether a scanned file changed; the `github-only` and `slow` tiers exclude them. The gate indexes growable-container constructs in the engine (`src/**`, `include/pineforge/**`) and the generated C++ present in the tree (`tutorial/**/generated*.cpp`): growth calls, `new`/`malloc`, by-value containers and temporaries, map subscripts, container assignment and string append.
 

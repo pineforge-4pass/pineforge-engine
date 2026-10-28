@@ -1,4 +1,4 @@
-"""CR-150 W2: typed sink details and attachment-lifetime success diagnostics.
+"""Typed sink details and attachment-lifetime success diagnostics.
 
 Reuse the fd suite's native-call doubles and real stream/subprocess helpers.
 Native rows use the lab-supplied module to check W1's writer translation.

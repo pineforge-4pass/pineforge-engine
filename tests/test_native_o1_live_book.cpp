@@ -1,4 +1,4 @@
-// CR-221 O1-E2, row E02 of the whole-run O(1) inventory: the live request book
+// Row E02 of the whole-run O(1) inventory: the live request book
 // and its re-pricing index.
 //
 // The book is a vector of every simultaneously live request (LiveRequest plus

@@ -3866,15 +3866,15 @@ endif()
 # EN-132 M: source-only ownership proof, controls, and an independent D4 route.
 add_test(NAME test_selected_window_ownership_manifest
     COMMAND ${Python3_EXECUTABLE} -I -B ${PROJECT_SOURCE_DIR}/scripts/check_selected_window_ownership.py)
-# CR-196: lab release/debug/sanitizers/kernel took 57.0/65.9/85.5/56.9 s.
-# Loaded pool release/kernel/native-live took 125.7/126.8/132.3 s; debug and
-# sanitizers timed out at 180.02 s. Four shards keep the same 180 s budget.
-# The cases are unequal: the heaviest shard (3) holds 15 of the 39 checker
-# runs. ESTIMATE, not measured: 132.3 s x 15/39 = 50.9 s on the loaded pool in
-# Release; scaling by the lab sanitizers/release ratio (85.5/57.0 = 1.5) gives
-# about 76 s for sanitizers, i.e. 2.4x headroom against 180 s. The lab run of
-# the four shard rows is the measurement; each shard also fails closed when it
-# runs a number of tests different from the number it selected.
+# The earlier modulo split put 21 of 61 checker launches on shard 1.
+# Full checks scan the source tree; mutation loops make cases unequal.
+# The driver now derives weights from subprocess calls, following self
+# helpers and literal loop lengths, with a one-unit minimum per case.
+# Largest-first assignment to the lightest shard gives estimated structural
+# loads 17/17/16/16 instead of 22/15/14/15; these are units, not wall times.
+# Stable case ids break work-order ties; case count and index break load ties.
+# All six ownership rows have no TIMEOUT property; checker children also have
+# no deadline. Each shard must run exactly as many tests as it selected.
 set(_pf_ownership_control_shards)
 foreach(_pf_ownership_shard 1 2 3 4)
     add_test(NAME test_selected_window_ownership_manifest_controls_shard_${_pf_ownership_shard}of4
@@ -7326,9 +7326,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     list(APPEND TEST_SOURCES test_scratch_watch_attribution)
     pineforge_add_unit_test(test_scratch_watch_attribution)
     target_link_libraries(test_scratch_watch_attribution PRIVATE ${CMAKE_DL_LIBS} Threads::Threads)
-    foreach(_pf_scratch_watch_case IN ITEMS
-            cotenant_default cotenant_jailed cotenant_positive
-            own_tmp own_transient_tmp own_other_tmp own_shm private_non_mkstemp header_scratch)
+    foreach(_pf_scratch_watch_case IN ITEMS cotenant_default cotenant_jailed cotenant_positive
+            own_tmp own_transient_tmp own_other_tmp own_shm private_non_mkstemp header_scratch
+            own_open_tmp own_descendant_tmp diagnostics)
         add_test(NAME test_scratch_watch_attribution_${_pf_scratch_watch_case}
             COMMAND test_scratch_watch_attribution ${_pf_scratch_watch_case})
     endforeach()

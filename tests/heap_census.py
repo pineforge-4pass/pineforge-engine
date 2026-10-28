@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CR-150 L0B: live allocation-site census, for the Linux lab only.
+"""Live allocation-site census, for the Linux test host only.
 
 No builds, code generation, feed derivation or corpus writes. Prerequisites:
 a fresh complete build, Valgrind/Massif + vgdb, and prebuilt corpus modules.

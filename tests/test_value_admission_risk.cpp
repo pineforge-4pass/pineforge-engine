@@ -1,4 +1,4 @@
-// EN-132 S1b: authored before the producers. Only existing host/intent APIs are
+// Authored before the producers. Only existing host/intent APIs are
 // used, so the failure rows compile against the previous header closure and
 // fail there because unchecked risk values are stored/replayed/restored.
 #include <pineforge/run_failure.hpp>

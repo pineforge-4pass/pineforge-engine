@@ -1,5 +1,5 @@
 /*
- * test_same_bar_add_exit_coverage.cpp — KI-62 keep-vs-scratch (probe-pinned).
+ * test_same_bar_add_exit_coverage.cpp — keep-vs-scratch (probe-pinned).
  *
  * When a pre-queued SAME-ID MARKET pyramid add and a from_entry PRICED bracket
  * exit both fill on the same bar, TradingView's open-tick fill priority is

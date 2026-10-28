@@ -1,7 +1,7 @@
 # Binary bar input for APP
 
 Source snapshot: `2995a52e37735efe07d2b72e67c9d38281843575`
-(`core/cr150-bin`, batch-C). All source coordinates below refer to that tree.
+(`the source tree`, batch-C). All source coordinates below refer to that tree.
 This page describes the `run_json.py` input contract, implemented by
 `load_bars_bin` docker/run_json.py:2779 and `convert_csv` docker/pf_bars.py:296.
 

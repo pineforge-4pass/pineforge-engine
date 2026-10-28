@@ -1,4 +1,4 @@
-"""Linux statfs controls for S4E. No row skips; run only on the lab box."""
+"""Linux statfs controls. No row skips; run only on the Linux test host."""
 import ctypes
 import json
 import os

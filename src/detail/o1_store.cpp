@@ -1,4 +1,4 @@
-// CR-150 A5 — implementation of the O(1) external script-state store.
+// Implementation of the O(1) external script-state store.
 //
 // Storage shape. This is a thin object layer over ScratchStore. An object id is a
 // monotonic counter value that is never reused (not after release and not after a

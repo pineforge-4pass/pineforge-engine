@@ -1,4 +1,4 @@
-"""CR-150 L9S: selected full/v1 bytes from the sink versus the current array producer.
+"""Selected full/v1 bytes from the sink versus the current array producer.
 
 Only native calls and the planner are replaced in the unit rows. The sink
 reader, report builders, fingerprint checks, phase writer and serialization
