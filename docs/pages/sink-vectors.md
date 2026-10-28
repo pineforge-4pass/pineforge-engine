@@ -102,7 +102,7 @@ version string, and the header's `run_id` and `engine` as written. Capture
 passes a fixed `--run-id` and verifies it was preserved, recording
 `run_id_deterministic: true`. Readers must treat `run_id` as opaque and
 must not depend on that particular value. The tests freeze `time.time`
-inside their own harness (`tests/test_run_json_sink_fd.py:1267`); there is
+inside their own harness (`tests/test_run_json_sink_fd.py:1271`); there is
 no fixed-clock CLI option in `run_json.py`, so this direct subprocess leaves
 the clock unchanged. Its elapsed time is stdout metadata, outside the sink.
 
