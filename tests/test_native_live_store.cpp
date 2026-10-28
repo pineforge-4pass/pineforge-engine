@@ -247,9 +247,9 @@ std::uint64_t snapshot_bytes(const LedgerFiles& files) {
     return total;
 }
 
-// Independent arithmetic from the admission contract. The new exact-limit
-// fixtures use FULL auto-vacuum, so D=C1 regardless of cache observation.
-// Their small input rows fit existing roots: C1=C0, checked after the write.
+// Independent arithmetic from the admission contract. FULL fixtures use D=C1;
+// the default-cache fixture models the permitted resident-page counts below.
+// Small input rows fit existing roots: C1=C0, checked after the write.
 // Neither refusal receipts nor the production estimator supply expectations.
 std::uint64_t checkpoint_contract_request(const LedgerFiles& files, std::uint64_t page,
                                           std::uint64_t prior_pages, std::uint64_t changed_pages,
@@ -360,6 +360,76 @@ void scheduled_checkpoint_budget() {
     }
 }
 
+void cached_checkpoint_budget() {
+    TempDir temp;
+    constexpr std::uint64_t page = 4096;
+    const std::string retained(700, 'r');
+    const auto initial = "{\"retained\":\"" + retained + "\",\"value\":0}";
+    const auto expected = "{\"retained\":\"" + retained + "\",\"value\":1}";
+    const std::string patch = "{\"schema_version\":\"pineforge-native-report-delta/v1\","
+        "\"fields\":{\"value\":1},\"arrays\":{}}";
+    std::uint64_t full_request = 0;
+    for (const bool full : {true, false}) {
+        const auto path = temp.file(full ? "cache-control.sqlite" : "cache-default.sqlite");
+        if (full) prepare_checkpoint_budget_ledger(path, page);
+        else prepare_empty_ledger(path, page);
+        LedgerOptions options;
+        options.report_checkpoint_interval = 1;
+        Ledger ledger(path, "checkpoint-cache", options);
+        ledger.verify_report(0, initial);
+        const auto pages = std::stoull(scalar_text(path, "PRAGMA page_count"));
+        ledger.input_count();
+        const auto before = ledger_files(path);
+        const auto used = snapshot_bytes(before);
+        // The input changes three existing table roots: inputs, snapshots and
+        // integrity. D is at least three and at most C1=C0; clean pinned pages
+        // may also remain. Enumerate the contract's possible requests BEFORE
+        // observing a refusal, including D=C1 if cache observation falls back.
+        std::vector<std::uint64_t> expected_requests;
+        for (std::uint64_t dirty = full ? pages : 3; dirty <= pages; ++dirty)
+            expected_requests.push_back(
+                checkpoint_contract_request(before, page, pages, dirty, expected.size()));
+        CHECK_OP(expected_requests.empty(), ==, false);
+        if (expected_requests.empty()) continue;
+        if (full) full_request = checkpoint_contract_request(before, page, pages, pages, expected.size());
+        ledger.set_byte_budget(used + 1);
+        bool refused = false;
+        std::uint64_t request_observed = 0;
+        try { ledger.commit_input(0, "{}", 1, {}, patch); }
+        catch (const LedgerBudgetExceeded& error) {
+            refused = true;
+            request_observed = error.requested;
+            CHECK_OP(error.used, ==, used);
+            CHECK_OP(error.limit, ==, used + 1);
+        }
+        CHECK_OP(refused, ==, true);
+        CHECK_OP(request_observed, >, 1u);
+        CHECK_OP(request_observed, >=, expected_requests.front());
+        CHECK_OP(request_observed, <=, expected_requests.back());
+        CHECK_OP(std::find(expected_requests.begin(), expected_requests.end(), request_observed) !=
+                 expected_requests.end(), ==, true);
+        CHECK_OP(request_observed, <=, full_request);
+        if (full) CHECK_OP(request_observed, ==, full_request);
+        CHECK_OP(ledger_files(path) == before, ==, true);
+        CHECK_OP(ledger.input_count(), ==, 0u);
+        // The observed request chooses only the exact-limit retry. Expected
+        // request sizes above, payload bytes and real growth are independent.
+        ledger.set_byte_budget(used + request_observed);
+        ledger.commit_input(0, "{}", 1, {}, patch);
+        const auto after = snapshot_bytes(ledger_files(path));
+        CHECK_OP(ledger.input_count(), ==, 1u);
+        CHECK_OP(ledger.verified_report_checkpoint(1).value_or(0), ==, 1u);
+        CHECK_OP(ledger.checkpoint_diagnostic().has_value(), ==, false);
+        CHECK_OP(after, <=, used + request_observed);
+        CHECK_OP(after > used ? after - used : 0, <=, request_observed);
+        CHECK_OP(std::stoull(scalar_text(path, "PRAGMA page_count")), ==, pages);
+        CHECK_OP(scalar_text(path, "SELECT payload FROM report_checkpoints WHERE input_cursor=1") ==
+                 expected, ==, true);
+        CHECK_OP(LedgerView(path).report_json(1) == expected, ==, true);
+        CHECK_OP(std::stoull(scalar_text(path, "PRAGMA auto_vacuum")), ==, full ? 1u : 0u);
+    }
+}
+
 void checkpoint_reservation_ceiling_is_optional() {
     TempDir temp;
     const auto path = temp.file("checkpoint-ceiling.sqlite");
@@ -393,6 +463,12 @@ void checkpoint_reservation_ceiling_is_optional() {
         CHECK_OP(static_cast<int>(diagnostic->code), ==, static_cast<int>(CheckpointFailureCode::write_failed));
         CHECK_OP(diagnostic->cursor, ==, 2u);
         CHECK_OP(diagnostic->count, ==, 1u);
+        CHECK_OP(diagnostic->reason == CheckpointWriteFailureReason::budget, ==, true);
+        CHECK_OP(diagnostic->budget_count, ==, 1u);
+        CHECK_OP(diagnostic->build_count, ==, 0u);
+        CHECK_OP(diagnostic->io_count, ==, 0u);
+        CHECK_OP(diagnostic->budget_count + diagnostic->build_count + diagnostic->io_count,
+                 ==, diagnostic->count);
     }
     // No reset of the configured budget or latched failure between writes.
     ledger.commit_input(2, "{}", 3, {}, "{}");
@@ -442,6 +518,12 @@ void startup_and_recovery_checkpoint_budget() {
             CHECK_OP(static_cast<int>(diagnostic->code), ==, static_cast<int>(CheckpointFailureCode::write_failed));
             CHECK_OP(diagnostic->cursor, ==, 1u);
             CHECK_OP(diagnostic->count, ==, 1u);
+            CHECK_OP(diagnostic->reason == CheckpointWriteFailureReason::budget, ==, true);
+            CHECK_OP(diagnostic->budget_count, ==, 1u);
+            CHECK_OP(diagnostic->build_count, ==, 0u);
+            CHECK_OP(diagnostic->io_count, ==, 0u);
+            CHECK_OP(diagnostic->budget_count + diagnostic->build_count + diagnostic->io_count,
+                     ==, diagnostic->count);
         }
         ledger->input_count();
         const auto before_retry = ledger_files(path);
@@ -449,7 +531,15 @@ void startup_and_recovery_checkpoint_budget() {
         CHECK_OP(ledger_files(path) == before_retry, ==, true);
         diagnostic = ledger->checkpoint_diagnostic();
         CHECK_OP(diagnostic.has_value(), ==, true);
-        if (diagnostic) CHECK_OP(diagnostic->count, ==, 2u);
+        if (diagnostic) {
+            CHECK_OP(diagnostic->count, ==, 2u);
+            CHECK_OP(diagnostic->reason == CheckpointWriteFailureReason::budget, ==, true);
+            CHECK_OP(diagnostic->budget_count, ==, 2u);
+            CHECK_OP(diagnostic->build_count, ==, 0u);
+            CHECK_OP(diagnostic->io_count, ==, 0u);
+            CHECK_OP(diagnostic->budget_count + diagnostic->build_count + diagnostic->io_count,
+                     ==, diagnostic->count);
+        }
         // A refused accelerator did not latch a refusal for a required write
         // that fits the same unchanged configured budget.
         ledger->bind_routing("{}");
@@ -1411,6 +1501,7 @@ int main(int argc, char** argv) {
             previous_binary_ledger(argv[2]);
         } else {
             scheduled_checkpoint_budget();
+            cached_checkpoint_budget();
             checkpoint_reservation_ceiling_is_optional();
             startup_and_recovery_checkpoint_budget();
             over_budget_open_never_checkpoints();
