@@ -1659,6 +1659,15 @@ protected:
         }
     }
 
+    int report_equity_month_key(std::int64_t time_ms) const {
+        // An out-of-domain no-curve attempt is unpublishable: the monthly
+        // fold requests whole-report recovery. Avoid invoking the legacy
+        // int month-key expression speculatively on that attempt.
+        if (metrics_streaming_.no_curve && !metrics::monthly_replay_time_supported_v1(time_ms))
+            return 0;
+        return metrics::equity_month_key(time_ms, chart_timezone_);
+    }
+
     // Record one equity point per SCRIPT bar. ``script_bar_ts`` must be the
     // script-bar open timestamp captured BEFORE dispatch — current_bar_.timestamp
     // is overwritten by the magnifier sub-bar walk (engine_run.cpp), which would
@@ -1679,7 +1688,7 @@ protected:
             if (!equity_curve_.empty()) {
                 const auto& held = equity_curve_.back();
                 summary_equity_fold_.replace_last(
-                    held, metrics::equity_month_key(held.time_ms, chart_timezone_));
+                    held, report_equity_month_key(held.time_ms));
                 auto& prefix = summary_broker_equity_prefix_;
                 const double eq = held.equity;
                 if (eq > prefix[0]) prefix[0] = prefix[1] = eq;
@@ -1690,7 +1699,7 @@ protected:
                 if (ru > prefix[3]) prefix[3] = ru;
             }
             summary_equity_fold_.fold(
-                p, metrics::equity_month_key(p.time_ms, chart_timezone_),
+                p, report_equity_month_key(p.time_ms),
                 true, position_side_ != PositionSide::FLAT);
             if (equity_curve_.empty()) equity_curve_.push_back(p);
             else equity_curve_.back() = p;
@@ -1701,7 +1710,7 @@ protected:
         }
         if (metrics_streaming_.fold) {
             metrics_streaming_.fold->append(
-                p, metrics::equity_month_key(p.time_ms, chart_timezone_));
+                p, report_equity_month_key(p.time_ms));
             ++metrics_streaming_.points;
             metrics_streaming_.receipt.stop_boundary.completed_marks = metrics_streaming_.points;
             metrics_streaming_.receipt.stop_boundary.kind =

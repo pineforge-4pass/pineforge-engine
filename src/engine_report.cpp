@@ -139,8 +139,7 @@ void BacktestEngine::begin_metrics_streaming_v1(bool admitted_shape) {
     s.receipt.route_reason = MetricsRouteReasonV1::PlainNo;
     s.run_configuration = config;
     if (!plain) return;
-    const auto needs_curve = kMetricsNeedReturnsV1 | kMetricsNeedCurveV1
-        | kMetricsNeedMonthlyRatiosV1;
+    const auto needs_curve = kMetricsNeedReturnsV1 | kMetricsNeedCurveV1;
     const bool bound = plan.present == 1 && plan.attempt == config.attempt
         && plan.input_generation == config.input_generation
         && plan.admitted_view == config.admitted_view
@@ -149,16 +148,21 @@ void BacktestEngine::begin_metrics_streaming_v1(bool admitted_shape) {
             || (plan.extent.empty == 0 && plan.extent.count > 0));
     const bool off_needs_sharpe = config.streaming_sharpe == StreamingSharpeV1::Off
         && (config.metrics_needed & kMetricsNeedSharpeBarV1);
+    const bool month_domain = plan.extent.empty
+        || (monthly_replay_time_supported_v1(plan.extent.first_time_ms)
+            && monthly_replay_time_supported_v1(plan.extent.last_time_ms));
     // A sink/observer or a legacy SUMMARY_ONLY provider keeps its own
     // existing capture contract. No speculative E bytes or private curve
     // are smuggled into a prepared no-curve attempt.
     s.no_curve = config.curve_available == 0 && config.deterministic_replay == 1 && bound
+        && month_domain
         && !(config.metrics_needed & needs_curve) && !off_needs_sharpe
         && !report_sink_state_.enabled
         && !NativeExecutionConsumer::observer_registered(*this)
         && std::fegetround() == FE_TONEAREST
         && pending_equity_report_mode_ == ReportMode::FULL;
     if (!s.no_curve) {
+        if (!month_domain) s.receipt.route_reason = MetricsRouteReasonV1::NumericGuard;
         // The exact ordered replay is only needed for the no-curve route.
         // Existing curve routes keep their established provider and do not
         // allocate a second scratch history.
@@ -169,7 +173,9 @@ void BacktestEngine::begin_metrics_streaming_v1(bool admitted_shape) {
     s.run_configuration = config;
     try {
         if (make_streaming_equity_ratios_v1(config, plan, {}, s.fold)
-            == MetricsStreamingStatusV1::Ok) return;
+                == MetricsStreamingStatusV1::Ok
+            && enable_streaming_monthly_replay_v1(*s.fold) == MetricsStreamingStatusV1::Ok)
+            return;
     } catch (const std::bad_alloc&) {
         // An allocation used ONLY by this optimization cannot replace an
         // otherwise readable run with a new resource failure.
@@ -193,7 +199,7 @@ void BacktestEngine::sync_metrics_streaming_held_v1() const {
     if (s.fold && s.points > 0) {
         if (const auto* held = last_equity_point())
             s.fold->amend_held(s.points - 1, *held,
-                metrics::equity_month_key(held->time_ms, chart_timezone_));
+                report_equity_month_key(held->time_ms));
     }
 }
 
@@ -209,7 +215,7 @@ void BacktestEngine::finish_metrics_streaming_v1(
         if (curve.read && curve.count > 0) {
             const auto tail = curve.read(curve.context, curve.count - 1);
             s.fold->amend_held(s.points - 1, tail,
-                equity_month_key(tail.time_ms, chart_timezone_));
+                report_equity_month_key(tail.time_ms));
         }
         const auto status = s.fold->finish(s.result, curve);
         if (status == MetricsStreamingStatusV1::Ok) {
@@ -217,10 +223,14 @@ void BacktestEngine::finish_metrics_streaming_v1(
             s.receipt.plain_subset = 1;
             s.receipt.failed_plain_inputs = failed;
             s.receipt.stop_boundary = boundary;
-            // Whole-report recovery also covers exact monthly ratios and an
-            // interrupted attempt whose presentation/completion is unproved.
+            MetricsMonthlyResultV1 monthly;
+            const bool monthly_complete = streaming_monthly_result_v1(*s.fold, monthly)
+                == MetricsStreamingStatusV1::Ok && monthly.complete;
+            // Monthly replay replaces the curve only when complete.
+            // Interrupted attempts still need whole-report recovery because
+            // their presentation/completion is unproved.
             if (s.no_curve && (execution_failed
-                || summary_equity_fold_.first_pass().month_returns.count >= 2)) {
+                || (s.receipt.route == MetricsRatioRouteV1::Streaming && !monthly_complete))) {
                 s.receipt.route = MetricsRatioRouteV1::LegacyRerun;
                 s.receipt.route_reason = execution_failed
                     ? MetricsRouteReasonV1::ExistingFailure : MetricsRouteReasonV1::CurveNeeded;
@@ -666,7 +676,7 @@ void BacktestEngine::fill_metrics_section(ReportC* out) const {
                     "summary equity presentation must preserve its held-point view");
             if (held)
                 presented_fold.replace_last(presented,
-                    metrics::equity_month_key(presented.time_ms, chart_timezone_));
+                    report_equity_month_key(presented.time_ms));
             summary_equity_snapshot_ = presented_fold.first_pass();
             summary_equity_snapshot_valid_ = true;
             const auto* ratios = summary_equity_ratios_
@@ -676,8 +686,12 @@ void BacktestEngine::fill_metrics_section(ReportC* out) const {
             if (metrics_streaming_.no_curve) {
                 finish_metrics_streaming_v1({});
                 if (metrics_streaming_.receipt.route == metrics::MetricsRatioRouteV1::Streaming) {
+                    metrics::MetricsMonthlyResultV1 monthly;
+                    metrics::streaming_monthly_result_v1(*metrics_streaming_.fold, monthly);
                     streaming_ratios.expected = streaming_ratios.replayed = summary_equity_snapshot_;
                     streaming_ratios.complete = true;
+                    streaming_ratios.sharpe_monthly = monthly.sharpe_monthly;
+                    streaming_ratios.sortino_monthly = monthly.sortino_monthly;
                     streaming_ratios.sharpe_bar = metrics_streaming_.result.sharpe_bar;
                     streaming_ratios.sortino_bar = metrics_streaming_.result.sortino_bar;
                     streaming_ratios.nonfinite_field = metrics_streaming_.result.failure_field;
