@@ -1286,6 +1286,290 @@
    "ordinal": 1
   },
   {
+   "file": "include/pineforge/detail/drawing_order.hpp",
+   "symbol": "slots_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class DrawingOrder #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < std :: int32_t >",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/drawing_order.hpp",
+   "symbol": "<temp:const_iterator>",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class DrawingOrder #1"
+   ],
+   "cls": "temp",
+   "spelling": "const_iterator",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/drawing_order.hpp",
+   "symbol": "at_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class DrawingOrder #1",
+    "class const_iterator #1"
+   ],
+   "cls": "assign",
+   "spelling": "at_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/drawing_order.hpp",
+   "symbol": "<temp:const_iterator>",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class DrawingOrder #1",
+    "class const_iterator #1"
+   ],
+   "cls": "temp",
+   "spelling": "const_iterator",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/drawing_order.hpp",
+   "symbol": "<temp:const_iterator>",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class DrawingOrder #1",
+    "class const_iterator #1"
+   ],
+   "cls": "temp",
+   "spelling": "const_iterator",
+   "ordinal": 2
+  },
+  {
+   "file": "include/pineforge/detail/drawing_order.hpp",
+   "symbol": "slots_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class DrawingOrder #1",
+    "DrawingOrder ( std :: size_t cap , std :: shared_ptr < DrawingStorage > storage ) : external_ ( std :: move ( storage ) ) , capacity_ ( cap ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "slots_ . resize ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/drawing_order.hpp",
+   "symbol": "slots_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class DrawingOrder #1",
+    "DrawingOrder & operator = ( const DrawingOrder & rhs ) #1",
+    "if ( this ! = & rhs ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "slots_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/drawing_order.hpp",
+   "symbol": "slots_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class DrawingOrder #1",
+    "void prepare_assignment ( const DrawingOrder & rhs ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "slots_ . reserve ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/drawing_order.hpp",
+   "symbol": "begin",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class DrawingOrder #1"
+   ],
+   "cls": "decl",
+   "spelling": "const_iterator",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/drawing_order.hpp",
+   "symbol": "end",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class DrawingOrder #1"
+   ],
+   "cls": "decl",
+   "spelling": "const_iterator",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/drawing_order.hpp",
+   "symbol": "at",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class DrawingOrder #1"
+   ],
+   "cls": "decl",
+   "spelling": "const_iterator",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/drawing_order.hpp",
+   "symbol": "at",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class DrawingOrder #1"
+   ],
+   "cls": "decl",
+   "spelling": "const_iterator",
+   "ordinal": 2
+  },
+  {
+   "file": "include/pineforge/detail/drawing_order.hpp",
+   "symbol": "<temp:deque>",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class DrawingOrder #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: deque < std :: int32_t >",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/drawing_records.hpp",
+   "symbol": "store",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Rec , class Codec = DrawingTrivialCodec < Rec > , unsigned Levels = 6 > class DrawingExternalRecords #1",
+    "std :: pair < Id , bool > put_block ( Id id , Block value , std :: uint64_t payload ) const #1"
+   ],
+   "cls": "grow",
+   "spelling": "store . resize ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/history_ring.hpp",
+   "symbol": "buffer_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class T > class PagedHistoryRing #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < T >",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/history_ring.hpp",
+   "symbol": "next",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class T > class PagedHistoryRing #1",
+    "void relayout ( std :: uint64_t mask , std :: size_t retained , std :: size_t capacity ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "next = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/history_ring.hpp",
+   "symbol": "next",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class T > class PagedHistoryRing #1",
+    "void relayout ( std :: uint64_t mask , std :: size_t retained , std :: size_t capacity ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "next . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/history_ring.hpp",
+   "symbol": "next",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class T > class PagedHistoryRing #1",
+    "void promote ( std :: size_t capacity ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "next = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/history_ring.hpp",
+   "symbol": "<temp:vector>",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class T > class PagedHistoryRing #1",
+    "void promote ( std :: size_t capacity ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: vector < T >",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/history_ring.hpp",
+   "symbol": "buffer_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class T > class PagedHistoryRing #1",
+    "PagedHistoryRing ( std :: size_t capacity , std :: shared_ptr < DrawingStorage > storage ) : records_ ( std :: move ( storage ) ) , capacity_ ( capacity ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "buffer_ . resize ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/history_ring.hpp",
+   "symbol": "buffer_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class T > class PagedHistoryRing #1",
+    "PagedHistoryRing & operator = ( const PagedHistoryRing & rhs ) #1",
+    "if ( this ! = & rhs ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "buffer_ . reserve ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/history_ring.hpp",
+   "symbol": "buffer_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class T > class PagedHistoryRing #1",
+    "PagedHistoryRing & operator = ( const PagedHistoryRing & rhs ) #1",
+    "if ( this ! = & rhs ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "buffer_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/history_ring.hpp",
+   "symbol": "buffer_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class T > class PagedHistoryRing #1",
+    "PagedHistoryRing & operator = ( PagedHistoryRing && rhs ) #1",
+    "if ( this ! = & rhs ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "buffer_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/history_ring.hpp",
+   "symbol": "next",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class T > class PagedHistoryRing #1",
+    "void resize ( std :: size_t capacity ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < T >",
+   "ordinal": 1
+  },
+  {
    "file": "include/pineforge/detail/id_pair_ordered_fold.hpp",
    "symbol": "reader",
    "scope": [
@@ -1480,6 +1764,18 @@
   },
   {
    "file": "include/pineforge/detail/id_pair_store.hpp",
+   "symbol": "slots_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Value , bool MaintainSortedFold = false > class IdPairStore #1",
+    "void clear ( ) noexcept #1"
+   ],
+   "cls": "assign",
+   "spelling": "slots_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/id_pair_store.hpp",
    "symbol": "begin",
    "scope": [
     "namespace pineforge :: detail #1",
@@ -1618,6 +1914,18 @@
   },
   {
    "file": "include/pineforge/detail/id_pair_store.hpp",
+   "symbol": "slots_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Value , bool MaintainSortedFold = false > class IdPairStore #1",
+    "void grow_index ( ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "slots_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/id_pair_store.hpp",
    "symbol": "memory_",
    "scope": [
     "namespace pineforge :: detail #1",
@@ -1641,6 +1949,42 @@
    "ordinal": 1
   },
   {
+   "file": "include/pineforge/detail/id_pair_store.hpp",
+   "symbol": "slots_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Value , bool MaintainSortedFold = false > class IdPairStore #1"
+   ],
+   "cls": "assign",
+   "spelling": "slots_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/id_table_read_cache.hpp",
+   "symbol": "slots_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class IdTableReadCache #1",
+    "IdTableReadCache & operator = ( IdTableReadCache && other ) noexcept #1",
+    "if ( this ! = & other ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "slots_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/id_table_read_cache.hpp",
+   "symbol": "slots_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class IdTableReadCache #1",
+    "void set_capacity ( std :: size_t bytes ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "slots_ = . . .",
+   "ordinal": 1
+  },
+  {
    "file": "include/pineforge/detail/id_table_read_cache.hpp",
    "symbol": "reset",
    "scope": [
@@ -1651,6 +1995,17 @@
    ],
    "cls": "alloc",
    "spelling": "new",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/id_table_read_cache.hpp",
+   "symbol": "slots_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class IdTableReadCache #1"
+   ],
+   "cls": "assign",
+   "spelling": "slots_ = . . .",
    "ordinal": 1
   },
   {
@@ -2327,6 +2682,31 @@
   },
   {
    "file": "include/pineforge/detail/scratch_store_impl.hpp",
+   "symbol": "slots_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "namespace scratch_impl #1",
+    "class Core #1",
+    "Core ( const ScratchStoreConfig & c , ScratchBacking * b , std :: size_t total ) noexcept : total_ ( total ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "slots_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/scratch_store_impl.hpp",
+   "symbol": "slots_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "namespace scratch_impl #1",
+    "class Core #1"
+   ],
+   "cls": "assign",
+   "spelling": "slots_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/scratch_store_impl.hpp",
    "symbol": "operator new",
    "scope": [
     "namespace pineforge :: detail #1",
@@ -2648,24 +3028,26 @@
   },
   {
    "file": "include/pineforge/drawing.hpp",
+   "symbol": "text",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace detail #1",
+    "struct DrawingLabelCodec #1",
+    "static LabelRec decode ( const Wire & wire , o1 :: Store & store , o1 :: Id block , std :: uint64_t offset ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/drawing.hpp",
    "symbol": "recs_",
    "scope": [
     "namespace pineforge #1",
     "template < class Rec > class DrawingArena #1"
    ],
    "cls": "decl",
-   "spelling": "detail :: DrawingRecordStore < Rec >",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/drawing.hpp",
-   "symbol": "order_",
-   "scope": [
-    "namespace pineforge #1",
-    "template < class Rec > class DrawingArena #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: deque < int32_t >",
+   "spelling": "type",
    "ordinal": 1
   },
   {
@@ -2674,8 +3056,23 @@
    "scope": [
     "namespace pineforge #1",
     "template < class Rec > class DrawingArena #1",
-    "DrawingArena & operator = ( DrawingArena && other ) noexcept #1",
-    "if ( this ! = & other ) #1"
+    "DrawingArena & operator = ( const DrawingArena & other ) #1",
+    "if ( this ! = & other ) #1",
+    "if ( order_ . is_external ( ) || other . order_ . is_external ( ) ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "recs_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/drawing.hpp",
+   "symbol": "recs_",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class Rec > class DrawingArena #1",
+    "DrawingArena & operator = ( const DrawingArena & other ) #1",
+    "if ( this ! = & other ) #1",
+    "else #1"
    ],
    "cls": "assign",
    "spelling": "recs_ = . . .",
@@ -2687,8 +3084,9 @@
    "scope": [
     "namespace pineforge #1",
     "template < class Rec > class DrawingArena #1",
-    "DrawingArena & operator = ( DrawingArena && other ) noexcept #1",
-    "if ( this ! = & other ) #1"
+    "DrawingArena & operator = ( const DrawingArena & other ) #1",
+    "if ( this ! = & other ) #1",
+    "else #1"
    ],
    "cls": "assign",
    "spelling": "order_ = . . .",
@@ -2700,10 +3098,38 @@
    "scope": [
     "namespace pineforge #1",
     "template < class Rec > class DrawingArena #1",
-    "int32_t alloc ( Rec r ) #1"
+    "DrawingArena ( DrawingArena && other ) : order_ ( other . order_ ) , cap_ ( other . cap_ ) #1"
    ],
-   "cls": "grow",
-   "spelling": "recs_ . push_back ( . . . )",
+   "cls": "assign",
+   "spelling": "recs_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/drawing.hpp",
+   "symbol": "recs_",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class Rec > class DrawingArena #1",
+    "DrawingArena & operator = ( DrawingArena && other ) #1",
+    "if ( this ! = & other ) #1",
+    "if ( order_ . is_external ( ) || other . order_ . is_external ( ) ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "recs_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/drawing.hpp",
+   "symbol": "recs_",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class Rec > class DrawingArena #1",
+    "DrawingArena & operator = ( DrawingArena && other ) #1",
+    "if ( this ! = & other ) #1",
+    "else #1"
+   ],
+   "cls": "assign",
+   "spelling": "recs_ = . . .",
    "ordinal": 1
   },
   {
@@ -2712,10 +3138,25 @@
    "scope": [
     "namespace pineforge #1",
     "template < class Rec > class DrawingArena #1",
-    "int32_t alloc ( Rec r ) #1"
+    "DrawingArena & operator = ( DrawingArena && other ) #1",
+    "if ( this ! = & other ) #1",
+    "else #1"
+   ],
+   "cls": "assign",
+   "spelling": "order_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/drawing.hpp",
+   "symbol": "recs_",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class Rec > class DrawingArena #1",
+    "int32_t alloc ( Rec r ) #1",
+    "try #1"
    ],
    "cls": "grow",
-   "spelling": "order_ . push_back ( . . . )",
+   "spelling": "recs_ . push_back ( . . . )",
    "ordinal": 1
   },
   {
@@ -8420,6 +8861,50 @@
   },
   {
    "file": "include/pineforge/run_failure.hpp",
+   "symbol": "<temp:type>",
+   "scope": [
+    "namespace pineforge #1",
+    "struct RunFailureArg #1"
+   ],
+   "cls": "temp",
+   "spelling": "type",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/run_failure.hpp",
+   "symbol": "<temp:type>",
+   "scope": [
+    "namespace pineforge #1",
+    "struct RunFailureArg #1"
+   ],
+   "cls": "temp",
+   "spelling": "type",
+   "ordinal": 2
+  },
+  {
+   "file": "include/pineforge/run_failure.hpp",
+   "symbol": "<temp:type>",
+   "scope": [
+    "namespace pineforge #1",
+    "struct RunFailureArg #1"
+   ],
+   "cls": "temp",
+   "spelling": "type",
+   "ordinal": 3
+  },
+  {
+   "file": "include/pineforge/run_failure.hpp",
+   "symbol": "<temp:type>",
+   "scope": [
+    "namespace pineforge #1",
+    "struct RunFailureArg #1"
+   ],
+   "cls": "temp",
+   "spelling": "type",
+   "ordinal": 4
+  },
+  {
+   "file": "include/pineforge/run_failure.hpp",
    "symbol": "args",
    "scope": [
     "namespace pineforge #1",
@@ -8720,7 +9205,7 @@
    "symbol": "buffer_",
    "scope": [
     "namespace pineforge #1",
-    "template < typename T > class DynamicRingBuffer #1"
+    "template < typename T , bool Paged = std :: is_trivially_copyable_v < T > > class DynamicRingBuffer #1"
    ],
    "cls": "decl",
    "spelling": "std :: vector < T >",
@@ -8731,7 +9216,7 @@
    "symbol": "<temp:DynamicRingBuffer>",
    "scope": [
     "namespace pineforge #1",
-    "template < typename T > class DynamicRingBuffer #1"
+    "template < typename T , bool Paged = std :: is_trivially_copyable_v < T > > class DynamicRingBuffer #1"
    ],
    "cls": "temp",
    "spelling": "DynamicRingBuffer",
@@ -8739,22 +9224,10 @@
   },
   {
    "file": "include/pineforge/series.hpp",
-   "symbol": "buffer_",
-   "scope": [
-    "namespace pineforge #1",
-    "template < typename T > class DynamicRingBuffer #1",
-    "void push_front ( T val ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "buffer_ . resize ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/series.hpp",
    "symbol": "new_buffer",
    "scope": [
     "namespace pineforge #1",
-    "template < typename T > class DynamicRingBuffer #1",
+    "template < typename T , bool Paged = std :: is_trivially_copyable_v < T > > class DynamicRingBuffer #1",
     "void resize ( std :: size_t new_capacity ) #1"
    ],
    "cls": "decl",
@@ -8766,7 +9239,7 @@
    "symbol": "buffer_",
    "scope": [
     "namespace pineforge #1",
-    "template < typename T > class DynamicRingBuffer #1",
+    "template < typename T , bool Paged = std :: is_trivially_copyable_v < T > > class DynamicRingBuffer #1",
     "void resize ( std :: size_t new_capacity ) #1"
    ],
    "cls": "assign",
@@ -8816,6 +9289,17 @@
    "cls": "grow",
    "spelling": "buf . push_front ( . . . )",
    "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/series.hpp",
+   "symbol": "<temp:Series>",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename T > class Series #1"
+   ],
+   "cls": "temp",
+   "spelling": "Series",
+   "ordinal": 2
   },
   {
    "file": "include/pineforge/session_time.hpp",
@@ -12105,34 +12589,10 @@
     "namespace pineforge #1",
     "namespace source #1",
     "template < class T > class FirstCallBound #1",
-    "public : template < class Make > T & bind ( Make && make ) #1"
+    "template < class Make > T & bind ( Make && make ) #1"
    ],
    "cls": "grow",
    "spelling": "object_ . emplace ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/source/pine_ta_length.hpp",
-   "symbol": "frozen_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace source #1",
-    "class HeldHistory #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < std :: shared_ptr < const std :: vector < double > > >",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/source/pine_ta_length.hpp",
-   "symbol": "tail_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace source #1",
-    "class HeldHistory #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < double >",
    "ordinal": 1
   },
   {
@@ -12289,7 +12749,7 @@
     "class Change #1"
    ],
    "cls": "decl",
-   "spelling": "std :: deque < double >",
+   "spelling": "DynamicRingBuffer < double >",
    "ordinal": 1
   },
   {
@@ -12306,314 +12766,38 @@
   },
   {
    "file": "include/pineforge/ta.hpp",
-   "symbol": "buffer_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "class StdDev #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: deque < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/ta.hpp",
-   "symbol": "buffer_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "class PivotHigh #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: deque < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/ta.hpp",
-   "symbol": "buffer_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "class PivotLow #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: deque < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/ta.hpp",
-   "symbol": "buffer_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "class Linreg #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: deque < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/ta.hpp",
-   "symbol": "buffer_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "class PercentRank #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: deque < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/ta.hpp",
-   "symbol": "sv_buffer_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "class VWMA #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: deque < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/ta.hpp",
-   "symbol": "v_buffer_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "class VWMA #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: deque < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/ta.hpp",
-   "symbol": "buffer_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "class Mom #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: deque < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/ta.hpp",
-   "symbol": "buffer_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "class ROC #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: deque < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/ta.hpp",
-   "symbol": "buffer_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "class Rising #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: deque < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/ta.hpp",
-   "symbol": "buffer_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "class Falling #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: deque < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/ta.hpp",
-   "symbol": "buffer_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "class CCI #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: deque < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/ta.hpp",
-   "symbol": "buffer_",
+   "symbol": "prices_",
    "scope": [
     "namespace pineforge #1",
     "namespace ta #1",
     "class RCI #1"
    ],
    "cls": "decl",
-   "spelling": "std :: deque < double >",
+   "spelling": "std :: vector < double >",
    "ordinal": 1
   },
   {
    "file": "include/pineforge/ta.hpp",
-   "symbol": "buffer_",
+   "symbol": "order_",
    "scope": [
     "namespace pineforge #1",
     "namespace ta #1",
-    "class Variance #1"
+    "class RCI #1"
    ],
    "cls": "decl",
-   "spelling": "std :: deque < double >",
+   "spelling": "std :: vector < int >",
    "ordinal": 1
   },
   {
    "file": "include/pineforge/ta.hpp",
-   "symbol": "buffer_",
+   "symbol": "sorted_",
    "scope": [
     "namespace pineforge #1",
     "namespace ta #1",
     "class Median #1"
    ],
    "cls": "decl",
-   "spelling": "std :: deque < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/ta.hpp",
-   "symbol": "buffer_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "class ALMA #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: deque < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/ta.hpp",
-   "symbol": "buffer_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "class SWMA #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: deque < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/ta.hpp",
-   "symbol": "pos_buffer_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "class MFI #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: deque < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/ta.hpp",
-   "symbol": "saved_pos_buffer_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "class MFI #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: deque < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/ta.hpp",
-   "symbol": "up_buffer_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "class CMO #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: deque < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/ta.hpp",
-   "symbol": "saved_up_buffer_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "class CMO #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: deque < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/ta.hpp",
-   "symbol": "buffer_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "class COG #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: deque < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/ta.hpp",
-   "symbol": "values_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "class ValueWhen #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: deque < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/ta.hpp",
-   "symbol": "saved_values_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "class ValueWhen #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: deque < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/ta.hpp",
-   "symbol": "x_buffer_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "class Correlation #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: deque < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/ta.hpp",
-   "symbol": "history_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "class PercentileWindow #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: deque < double >",
+   "spelling": "std :: vector < double >",
    "ordinal": 1
   },
   {
@@ -12630,97 +12814,39 @@
   },
   {
    "file": "include/pineforge/ta.hpp",
-   "symbol": "buffer_",
+   "symbol": "keys_",
    "scope": [
     "namespace pineforge #1",
     "namespace ta #1",
     "class Mode #1"
    ],
    "cls": "decl",
-   "spelling": "std :: deque < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/ta.hpp",
-   "symbol": "buffer_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "class Dev #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: deque < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/ta.hpp",
-   "symbol": "pivot_point_levels",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1"
-   ],
-   "cls": "decl",
    "spelling": "std :: vector < double >",
    "ordinal": 1
   },
   {
    "file": "include/pineforge/ta.hpp",
-   "symbol": "pivot_point_levels",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < double >",
-   "ordinal": 2
-  },
-  {
-   "file": "include/pineforge/ta.hpp",
-   "symbol": "compute",
+   "symbol": "counts_",
    "scope": [
     "namespace pineforge #1",
     "namespace ta #1",
-    "class PivotPointLevels #1"
+    "class Mode #1"
    ],
    "cls": "decl",
-   "spelling": "std :: vector < double >",
+   "spelling": "std :: vector < int >",
    "ordinal": 1
   },
   {
    "file": "include/pineforge/ta.hpp",
-   "symbol": "recompute",
+   "symbol": "<temp:vector>",
    "scope": [
     "namespace pineforge #1",
     "namespace ta #1",
-    "class PivotPointLevels #1"
+    "struct PivotLevels : std :: array < double , 11 > #1"
    ],
-   "cls": "decl",
+   "cls": "temp",
    "spelling": "std :: vector < double >",
    "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/ta.hpp",
-   "symbol": "compute",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "class PivotPointLevels #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < double >",
-   "ordinal": 2
-  },
-  {
-   "file": "include/pineforge/ta.hpp",
-   "symbol": "recompute",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "class PivotPointLevels #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < double >",
-   "ordinal": 2
   },
   {
    "file": "include/pineforge/ta.hpp",
@@ -13041,25 +13167,71 @@
    "ordinal": 1
   },
   {
-   "file": "include/pineforge/window_sum.hpp",
-   "symbol": "values_",
+   "file": "include/pineforge/window_ring.hpp",
+   "symbol": "slots_",
    "scope": [
     "namespace pineforge #1",
-    "class KahanWindowSum #1"
+    "template < class T > class WindowRing #1"
    ],
    "cls": "decl",
-   "spelling": "std :: deque < double >",
+   "spelling": "std :: vector < T >",
    "ordinal": 1
   },
   {
-   "file": "include/pineforge/window_sum.hpp",
-   "symbol": "addends_",
+   "file": "include/pineforge/window_ring.hpp",
+   "symbol": "next",
    "scope": [
     "namespace pineforge #1",
-    "class KahanWindowSum #1"
+    "template < class T > class WindowRing #1",
+    "void reserve_capacity ( std :: size_t capacity ) #1"
    ],
    "cls": "decl",
-   "spelling": "std :: deque < double >",
+   "spelling": "std :: vector < T >",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/window_ring.hpp",
+   "symbol": "<temp:const_iterator>",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class T > class WindowRing #1"
+   ],
+   "cls": "temp",
+   "spelling": "const_iterator",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/window_ring.hpp",
+   "symbol": "<temp:const_iterator>",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class T > class WindowRing #1",
+    "class const_iterator #1"
+   ],
+   "cls": "temp",
+   "spelling": "const_iterator",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/window_ring.hpp",
+   "symbol": "begin",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class T > class WindowRing #1"
+   ],
+   "cls": "decl",
+   "spelling": "const_iterator",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/window_ring.hpp",
+   "symbol": "end",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class T > class WindowRing #1"
+   ],
+   "cls": "decl",
+   "spelling": "const_iterator",
    "ordinal": 1
   },
   {
@@ -14282,6 +14454,93 @@
    ],
    "cls": "grow",
    "spelling": "store_ . resize ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/drawing_storage.cpp",
+   "symbol": "refusal",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "namespace #1",
+    "class DrawingScratchFile final : public ScratchBacking #1",
+    "public : explicit DrawingScratchFile ( std :: size_t page_size ) : ScratchBacking ( ScratchBackingKind :: disk , page_size ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/drawing_storage.cpp",
+   "symbol": "path",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "namespace #1",
+    "class DrawingScratchFile final : public ScratchBacking #1",
+    "public : explicit DrawingScratchFile ( std :: size_t page_size ) : ScratchBacking ( ScratchBackingKind :: disk , page_size ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/drawing_storage.cpp",
+   "symbol": "<temp:string>",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "namespace #1",
+    "class DrawingScratchFile final : public ScratchBacking #1",
+    "public : explicit DrawingScratchFile ( std :: size_t page_size ) : ScratchBacking ( ScratchBackingKind :: disk , page_size ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/drawing_storage.cpp",
+   "symbol": "path",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "namespace #1",
+    "class DrawingScratchFile final : public ScratchBacking #1",
+    "public : explicit DrawingScratchFile ( std :: size_t page_size ) : ScratchBacking ( ScratchBackingKind :: disk , page_size ) #1"
+   ],
+   "cls": "append",
+   "spelling": "path + = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/drawing_storage.cpp",
+   "symbol": "path",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "namespace #1",
+    "class DrawingScratchFile final : public ScratchBacking #1",
+    "public : explicit DrawingScratchFile ( std :: size_t page_size ) : ScratchBacking ( ScratchBackingKind :: disk , page_size ) #1"
+   ],
+   "cls": "append",
+   "spelling": "path + = . . .",
+   "ordinal": 2
+  },
+  {
+   "file": "src/drawing_storage.cpp",
+   "symbol": "storage",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "std :: shared_ptr < DrawingStorage > open_drawing_storage ( ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "src/drawing_storage.cpp",
+   "symbol": "backing",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "std :: shared_ptr < DrawingStorage > open_drawing_storage ( ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_unique",
    "ordinal": 1
   },
   {
@@ -42318,131 +42577,15 @@
   },
   {
    "file": "src/source/pine_ta_length.cpp",
-   "symbol": "frozen_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace source #1",
-    "void HeldHistory :: push ( double value ) #1",
-    "if ( tail_ . size ( ) = = kChunk ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "frozen_ . push_back ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_ta_length.cpp",
-   "symbol": "push_back",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace source #1",
-    "void HeldHistory :: push ( double value ) #1",
-    "if ( tail_ . size ( ) = = kChunk ) #1"
-   ],
-   "cls": "alloc",
-   "spelling": "make_shared",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_ta_length.cpp",
-   "symbol": "tail_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace source #1",
-    "void HeldHistory :: push ( double value ) #1",
-    "if ( tail_ . size ( ) = = kChunk ) #1"
-   ],
-   "cls": "assign",
-   "spelling": "tail_ = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_ta_length.cpp",
-   "symbol": "<temp:vector>",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace source #1",
-    "void HeldHistory :: push ( double value ) #1",
-    "if ( tail_ . size ( ) = = kChunk ) #1"
-   ],
-   "cls": "temp",
-   "spelling": "std :: vector < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_ta_length.cpp",
-   "symbol": "tail_",
+   "symbol": "values_",
    "scope": [
     "namespace pineforge #1",
     "namespace source #1",
     "void HeldHistory :: push ( double value ) #1"
    ],
    "cls": "grow",
-   "spelling": "tail_ . reserve ( . . . )",
+   "spelling": "values_ . push_back ( . . . )",
    "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_ta_length.cpp",
-   "symbol": "tail_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace source #1",
-    "void HeldHistory :: push ( double value ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "tail_ . push_back ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_ta_length.cpp",
-   "symbol": "tail_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace source #1",
-    "void HeldHistory :: write ( long long bar , double value , std :: size_t keep ) #1",
-    "if ( gap > = static_cast < long long > ( keep ) ) #1"
-   ],
-   "cls": "assign",
-   "spelling": "tail_ = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_ta_length.cpp",
-   "symbol": "<temp:vector>",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace source #1",
-    "void HeldHistory :: write ( long long bar , double value , std :: size_t keep ) #1",
-    "if ( gap > = static_cast < long long > ( keep ) ) #1"
-   ],
-   "cls": "temp",
-   "spelling": "std :: vector < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_ta_length.cpp",
-   "symbol": "std::to_string",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace source #1",
-    "SeriesWindowExtreme :: Result SeriesWindowExtreme :: update ( double src , long long length , bool advance , bool want_max , const char * function ) #1",
-    "if ( length - 1 > kMaxBarsBack ) #1"
-   ],
-   "cls": "temp",
-   "spelling": "std :: to_string ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_ta_length.cpp",
-   "symbol": "std::to_string",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace source #1",
-    "SeriesWindowExtreme :: Result SeriesWindowExtreme :: update ( double src , long long length , bool advance , bool want_max , const char * function ) #1",
-    "if ( length - 1 > kMaxBarsBack ) #1"
-   ],
-   "cls": "temp",
-   "spelling": "std :: to_string ( . . . )",
-   "ordinal": 2
   },
   {
    "file": "src/source/pine_ta_length.cpp",
@@ -43547,18 +43690,6 @@
   },
   {
    "file": "src/ta_extremes_volume.cpp",
-   "symbol": "sorted",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "double Median :: compute ( double src ) #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_extremes_volume.cpp",
    "symbol": "buffer_",
    "scope": [
     "namespace pineforge #1",
@@ -43571,62 +43702,54 @@
   },
   {
    "file": "src/ta_extremes_volume.cpp",
-   "symbol": "counts",
+   "symbol": "counts_",
    "scope": [
     "namespace pineforge #1",
     "namespace ta #1",
-    "double Mode :: compute ( double src ) #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: unordered_map < double , int >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_extremes_volume.cpp",
-   "symbol": "counts",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "double Mode :: compute ( double src ) #1"
+    "double Mode :: mode ( ) #1",
+    "for ( const double value : buffer_ ) #1"
    ],
    "cls": "subscript",
-   "spelling": "counts [ . . . ]",
+   "spelling": "counts_ [ . . . ]",
    "ordinal": 1
   },
   {
    "file": "src/ta_extremes_volume.cpp",
-   "symbol": "sorted",
+   "symbol": "counts_",
    "scope": [
     "namespace pineforge #1",
     "namespace ta #1",
-    "double Median :: recompute ( double src ) #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_extremes_volume.cpp",
-   "symbol": "counts",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "double Mode :: recompute ( double src ) #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: unordered_map < double , int >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_extremes_volume.cpp",
-   "symbol": "counts",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "double Mode :: recompute ( double src ) #1"
+    "double Mode :: mode ( ) #1",
+    "for ( const double value : buffer_ ) #1"
    ],
    "cls": "subscript",
-   "spelling": "counts [ . . . ]",
+   "spelling": "counts_ [ . . . ]",
+   "ordinal": 2
+  },
+  {
+   "file": "src/ta_extremes_volume.cpp",
+   "symbol": "counts_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace ta #1",
+    "double Mode :: mode ( ) #1",
+    "for ( const double value : buffer_ ) #1"
+   ],
+   "cls": "subscript",
+   "spelling": "counts_ [ . . . ]",
+   "ordinal": 3
+  },
+  {
+   "file": "src/ta_extremes_volume.cpp",
+   "symbol": "counts_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace ta #1",
+    "double Mode :: mode ( ) #1",
+    "+ + i ) #1"
+   ],
+   "cls": "subscript",
+   "spelling": "counts_ [ . . . ]",
    "ordinal": 1
   },
   {
@@ -43651,18 +43774,6 @@
    ],
    "cls": "grow",
    "spelling": "buffer_ . push_back ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_misc.cpp",
-   "symbol": "saved_values_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "double ValueWhen :: compute ( bool condition , double source , int occurrence ) #1"
-   ],
-   "cls": "assign",
-   "spelling": "saved_values_ = . . .",
    "ordinal": 1
   },
   {
@@ -43766,94 +43877,11 @@
   },
   {
    "file": "src/ta_misc.cpp",
-   "symbol": "pivot_point_levels",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_misc.cpp",
-   "symbol": "<temp:vector>",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "std :: vector < double > pivot_point_levels ( const std :: string & method , double high , double low , double close ) #1",
-    "if ( is_na ( high ) || is_na ( low ) || is_na ( close ) ) #1"
-   ],
-   "cls": "temp",
-   "spelling": "std :: vector < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_misc.cpp",
-   "symbol": "out",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "std :: vector < double > pivot_point_levels ( const std :: string & method , double high , double low , double close ) #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_misc.cpp",
-   "symbol": "pivot_point_levels",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < double >",
-   "ordinal": 2
-  },
-  {
-   "file": "src/ta_misc.cpp",
-   "symbol": "out",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "std :: vector < double > pivot_point_levels ( const std :: string & method , double open , double high , double low , double close , double next_open ) #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_misc.cpp",
-   "symbol": "<temp:vector>",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "std :: vector < double > PivotPointLevels :: compute ( PivotLevelsType type , bool anchor , bool developing , double open , double high , double low , double close ) #1"
-   ],
-   "cls": "temp",
-   "spelling": "std :: vector < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_misc.cpp",
-   "symbol": "out",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "std :: vector < double > PivotPointLevels :: compute ( PivotLevelsType type , bool anchor , bool developing , double open , double high , double low , double close ) #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_misc.cpp",
    "symbol": "held_",
    "scope": [
     "namespace pineforge #1",
     "namespace ta #1",
-    "std :: vector < double > PivotPointLevels :: recompute ( PivotLevelsType type , bool anchor , bool developing , double open , double high , double low , double close ) #1"
+    "PivotLevels PivotPointLevels :: recompute ( PivotLevelsType type , bool anchor , bool developing , double open , double high , double low , double close ) #1"
    ],
    "cls": "assign",
    "spelling": "held_ = . . .",
@@ -43967,6 +43995,70 @@
   },
   {
    "file": "src/ta_oscillators.cpp",
+   "symbol": "history_limit_message",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace ta #1",
+    "namespace #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/ta_oscillators.cpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace ta #1",
+    "namespace #1",
+    "std :: string history_limit_message ( long long requested ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/ta_oscillators.cpp",
+   "symbol": "<temp:string>",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace ta #1",
+    "namespace #1",
+    "std :: string history_limit_message ( long long requested ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/ta_oscillators.cpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace ta #1",
+    "namespace #1",
+    "std :: string history_limit_message ( long long requested ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 2
+  },
+  {
+   "file": "src/ta_oscillators.cpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace ta #1",
+    "namespace #1",
+    "std :: string history_limit_message ( long long requested ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 3
+  },
+  {
+   "file": "src/ta_oscillators.cpp",
    "symbol": "history",
    "scope": [
     "namespace pineforge #1",
@@ -43974,7 +44066,19 @@
     "double Change :: compute ( double src , int length ) #1"
    ],
    "cls": "grow",
-   "spelling": "history . push_back ( . . . )",
+   "spelling": "history . resize ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/ta_oscillators.cpp",
+   "symbol": "history",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace ta #1",
+    "double Change :: compute ( double src , int length ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "history . push_front ( . . . )",
    "ordinal": 1
   },
   {
@@ -44051,54 +44155,6 @@
   },
   {
    "file": "src/ta_oscillators.cpp",
-   "symbol": "prices",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "double RCI :: compute ( double src ) #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_oscillators.cpp",
-   "symbol": "order",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "double RCI :: compute ( double src ) #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < int >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_oscillators.cpp",
-   "symbol": "price_rank",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "double RCI :: compute ( double src ) #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_oscillators.cpp",
-   "symbol": "saved_pos_buffer_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "double MFI :: compute ( double src , double vol ) #1"
-   ],
-   "cls": "assign",
-   "spelling": "saved_pos_buffer_ = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_oscillators.cpp",
    "symbol": "pos_buffer_",
    "scope": [
     "namespace pineforge #1",
@@ -44119,18 +44175,6 @@
    ],
    "cls": "grow",
    "spelling": "neg_buffer_ . push_back ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_oscillators.cpp",
-   "symbol": "saved_up_buffer_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "double CMO :: compute ( double src ) #1"
-   ],
-   "cls": "assign",
-   "spelling": "saved_up_buffer_ = . . .",
    "ordinal": 1
   },
   {
@@ -44167,66 +44211,6 @@
    ],
    "cls": "grow",
    "spelling": "buffer_ . push_back ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_oscillators.cpp",
-   "symbol": "prices",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "double RCI :: recompute ( double src ) #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_oscillators.cpp",
-   "symbol": "order",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "double RCI :: recompute ( double src ) #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < int >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_oscillators.cpp",
-   "symbol": "price_rank",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "double RCI :: recompute ( double src ) #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_oscillators.cpp",
-   "symbol": "pos_buffer_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "double MFI :: recompute ( double src , double vol ) #1"
-   ],
-   "cls": "assign",
-   "spelling": "pos_buffer_ = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_oscillators.cpp",
-   "symbol": "up_buffer_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "double CMO :: recompute ( double src ) #1"
-   ],
-   "cls": "assign",
-   "spelling": "up_buffer_ = . . .",
    "ordinal": 1
   },
   {

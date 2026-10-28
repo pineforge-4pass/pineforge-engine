@@ -74,7 +74,7 @@ scan:
   generated_files:
     - "tutorial/**/generated*.cpp"
 ceilings:
-  unreviewed: 1329
+  unreviewed: 1330
   pending-flat-memory: 172
 owners:
   - {name: "generated-cpp", globs: ["tutorial/**"]}
@@ -1589,5 +1589,6 @@ entries:
   - {id: "U1588", file: "src/matrix.cpp", symbol: "storage_", ops: ["alloc"], container: "unresolved by the index: make_shared", owner: "script-state", phase: "unclassified", state: "unreviewed", line: 56, note: "one handle record per matrix; no size guard the gate accepts"}
   - {id: "U1594", file: "include/pineforge/detail/id_pair_store.hpp", symbol: "slots_", ops: ["assign"], container: "std::uint64_t", owner: "engine-core", phase: "unclassified", state: "unreviewed", note: "Integer slot count assigned in the constructor, clear and the index replacement, not a container; the scanner reports it because the drawing order unit declares a vector of the same name."}
   - {id: "U1595", file: "include/pineforge/detail/scratch_store_impl.hpp", symbol: "slots_", ops: ["assign"], container: "std::size_t", owner: "engine-core", phase: "unclassified", state: "unreviewed", note: "Integer slot count assigned once per core, not a container; the scanner reports it because the drawing order unit declares a vector of the same name."}
+  - {id: "U1629", file: "include/pineforge/detail/id_table_read_cache.hpp", symbol: "slots_", ops: ["assign"], container: "std::size_t", owner: "engine-core", phase: "unclassified", state: "unreviewed", note: "Integer slot count assigned in the move assignment, in the capacity setter and by its member initializer, not a container; the scanner reports it because the drawing order unit declares a vector of the same name."}
   - {id: "U1596", file: "include/pineforge/run_failure.hpp", symbol: "<temp:type>", ops: ["temp"], container: "unresolved by the index: type", owner: "engine-core", phase: "unclassified", state: "unreviewed", note: "The enable_if member type of four template constructor defaults, not a container; the scanner reports it because the drawing store unit names a member alias type."}
   - {id: "U1597", file: "include/pineforge/detail/drawing_records.hpp", symbol: "store", ops: ["grow"], container: "unresolved by the index: store.resize(...)", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 140, note: "One Store object per 32-record label block: the block, then the text bytes of its records. When this value owns the block and nothing shares it (same epoch, one reference) the object is resized in place to the block plus that text; a new or shared block is created at full size instead. Growth spills to the Store backing; the size follows label text length and no declared fixed input or supported own-size guard bounds it."}
