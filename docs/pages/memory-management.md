@@ -14,7 +14,7 @@ row.
 | Place | What is in it | Grows with |
 | --- | --- | --- |
 | Process heap | The engine's working book window, the resident windows of the stores below, retained placement rows, settled bracket-family records, the strategy's own containers (arrays, strings, maps, matrices, user-defined types, series and indicator history, drawing objects), the equity curve when no report sink is installed, and the owning arrays of a FULL report | See [what scales with what](#memory_scaling) |
-| Scratch backing | The spilled part of the trade ledger, the command journals, the order book, the id tables and the report chain. Without an arena these are unlinked files in a writable, disk-backed directory (`TMPDIR`, else `/tmp`; a tmpfs is refused). In the jailed profile they live in the inherited arena (descriptor 5, a sealed memfd), which the host charges as memory | The run's own counts (bars, closed trades, distinct ids, successor rows) |
+| Scratch backing | The spilled part of the trade ledger, the command journals, the order book, the id tables and the report chain. Without an arena these are unlinked files in a writable, disk-backed directory (`TMPDIR`, else `/tmp`; a tmpfs is refused). In the jailed profile they live in the inherited arena (descriptor 5, a sealed memfd), which the host charges as memory | Physical spool bytes, including record, index and chunk-slack bytes |
 | Input bars | The OHLCV arrays. The engine borrows them and copies nothing; they must outlive the run. `docker/run_json.py` maps a binary bars file privately, copy-on-write, so touched pages count toward its resident size | Input bars N |
 
 The jailed/no-sink stdout route, J0, keeps the legacy result behavior: a FULL
@@ -82,8 +82,7 @@ record arrays, and `_prepare_stream_report` docker/run_json.py:7434-7454
 serializes them to a temporary artifact.
 Lazy serialization bounds buffers, not output bytes.
 The test that checks the resident claim runs with a fixed minimal table
-admission (one entry per table); the default bounded-memory table manifest,
-which sizes the id tables from the bar count, is outside this claim.
+descriptor; the shared scratch byte allowance is outside this claim.
 
 Whenever a scratch arena is attached (a **jailed run with `--report-sink-fd`**
 always, and any other run that inherits one), curve scratch instead consumes
@@ -101,9 +100,8 @@ Arena allocation rounds to **1 MiB chunks**
 (`kChunkBytes` include/pineforge/detail/scratch_arena.hpp:112;
 `grow` src/scratch_arena.cpp:297-309); metadata and other stores are additional.
 Bounded mapping windows do not remove that arena memory cost.
-Exhaustion fails closed with typed `report_sink_failed`
-(`ReportScratchIoError` include/pineforge/detail/scratch_arena.hpp:16-21),
-reason `arena_exhausted` src/scratch_arena.cpp:234-238.
+Spool exhaustion fails closed with typed `scratch_capacity_exceeded`,
+resource `spool_bytes`, and the physical `limit` and `need` values.
 There is no RAM fallback (the comment on `ScratchFile`
 include/pineforge/detail/scratch_file.hpp:31-37).
 
@@ -272,9 +270,9 @@ to EOF got exit status 0 and a complete verified trailer.
 | --- | --- | --- | --- |
 | `PINEFORGE_COMMAND_SCRATCH_MAX_BYTES` | environment, positive decimal `uint64` | unset: no cap | Caps the bytes the command-store backings of one thread may extend, in total. A malformed value fails the run with `scratch_configuration_invalid`; exceeding it fails with `scratch_io_failed` |
 | `PINEFORGE_COMMAND_SCRATCH_DIR`, `TMPDIR` | environment, a directory | `TMPDIR`, else `/tmp` | Where scratch files go when no arena is attached. An explicit directory never falls back; a tmpfs or ramfs is refused |
-| `PF_SCRATCH_ARENA_FD`, `PF_SCRATCH_ARENA_BYTES` | environment | none | The inherited arena: descriptor 5 (only 5 is accepted) and its size in bytes, in whole 1 MiB chunks (under 1 MiB is refused). A run that crosses it fails with `report_sink_failed`, reason `arena_exhausted`, and the failure carries a lower bound of the bytes needed |
+| `PF_SCRATCH_ARENA_FD`, `PF_SCRATCH_ARENA_BYTES` | environment | none | The inherited arena: descriptor 5 (only 5 is accepted) and its size in bytes, in whole 1 MiB chunks (under 1 MiB is refused). A run that crosses it fails with `scratch_capacity_exceeded`, resource `spool_bytes`, and the failure carries the allowed and requested bytes |
 | `PF_SCRATCH_WINDOW_BYTES` | environment | 32 MiB | Total cap on the arena bytes mapped at one time, rounded down to whole pages. Mapped pages count toward the resident size while mapped |
-| `pf_scratch_tables_v1` through `strategy_set_scratch_tables_v1` | descriptor of eleven maxima | disk tables; with `bounded_memory`, the policy values of [Scratch tables](@ref scratch_tables) | Sizes the fixed slab of the historical tables: `K_e`, `B_e`, `K_c`, `B_c`, `U`, `B_U`, `V`, `B_V`, `R` and the unused q pair. Exceeding a maximum fails the run with `scratch_capacity_exceeded` |
+| `pf_scratch_tables_v1` through `strategy_set_scratch_tables_v1` | descriptor of eleven sizing fields | disk tables; with `bounded_memory`, the byte policy of [Scratch tables](@ref scratch_tables) | Supplies ABI-compatible population hints and byte estimates for historical tables. The shared attached spool is the admission budget; population estimates do not reject a run |
 | A report sink (`strategy_set_report_sink_v1`, `strategy_set_report_sink_fd_v1`) | setter | none | Streams the trades and the equity curve to the sink instead of keeping them in the report. See [Report schema](@ref report_schema) |
 | `--spill-dir DIR` | `docker/run_json.py` flag (`docker/run_json.py:5364`), available only when `run_json.py` is invoked directly: the release entrypoint forwards no command-line flags | the system temporary directory, then `/var/tmp` if disk backing is required | The writable directory for engine scratch and unlinked report temporaries when no arena is attached. The jailed profile refuses it |
 | `--profile jailed` or `PINEFORGE_RUN_JSON_PROFILE=jailed` | `docker/run_json.py` flag or environment (`docker/run_json.py:5289,5402`); the release entrypoint forwards the environment form only | `unjailed` | Selects the bounded-memory table backend and the inherited arena for the Python host. It is the scratch profile of the engine run, not a read-only container: the entrypoint itself still compiles in `${TMPDIR:-/tmp}`. Every executed success report carries `diagnostics.run_profile` (`"jailed"` or `"unjailed"`) and `diagnostics.scratch_arena_jailed` (true only when the jailed profile ran and the arena admission succeeded; `_add_scratch_arena_diagnostics` at `docker/run_json.py:5833-5838`); the marker records the checked profile and the admission, not an independent check of operating-system confinement |
@@ -298,7 +296,7 @@ store; the part that spills grows in the scratch backing.
 | Scratch files read through a bounded window | one 64 KiB window per file that enables it (`ScratchFile::kCacheBytes`, `include/pineforge/detail/scratch_file.hpp:40`) | Counted in bytes. It bounds the operating-system page cache the file pins (the kernel is asked to drop clean pages); it is not an engine heap cache | Not applicable |
 | Report sink writer | a fixed 64 KiB buffer; a record line may not exceed 1 MiB | Counted in bytes | The sink file or stream |
 | Position-tail read window | one fixed 64 KiB window | Counted in bytes | The position tail: a 30-byte footer plus the entry id per trade |
-| Cohort id table | Rows kept in memory: at most twice the rows left by the last spill pass, plus 64, plus the rows pinned by live exposure or an outstanding reference (the comment above `kMaxResidentCohorts` at `include/pineforge/detail/scratch_defaults.hpp:16`; the threshold is set in `DiskResidentIdTable::spill`, with the floor `kSpillFloor` of 64). That is not a bound in terms of live rows. In the bounded scratch (jailed) profile, admission also refuses a run that would hold more than 4,096 live (non-spillable) cohorts (`kMaxResidentCohorts`, `include/pineforge/detail/scratch_defaults.hpp:16`) with `scratch_capacity_exceeded`. The rows that hold an opening or live units are also tracked in an ordered set, one map node each. `DiskResidentIdTable::find` walks the disk AVL on every lookup, even for resident rows; those disk reads use the id-table page cache above. `exit_rank_keys_` is a separate plain `DiskIdTable`. The id-pair store's index file starts at 64 slots and doubles when it grows (`kInitialSlots` and `grow_index`, `include/pineforge/detail/id_pair_store.hpp`) | Not measured | The on-disk ordered tree |
+| Cohort id table | Rows kept in memory: at most twice the rows left by the last spill pass, plus 64, plus the rows pinned by live exposure or an outstanding reference. That is not a bound in terms of live rows. The jailed profile charges historical rows and indexes to the shared spool byte allowance; it does not refuse by cohort count. The rows that hold an opening or live units are also tracked in an ordered set, one map node each. `DiskResidentIdTable::find` walks the disk AVL on every lookup, even for resident rows; those disk reads use the id-table page cache above. `exit_rank_keys_` is a separate plain `DiskIdTable`. The id-pair store's index file grows with its physical byte demand | Not measured | The on-disk ordered tree |
 | Placement table (retained placement rows) | not a constant. It holds the live rows plus the rows the retirement rules pin, one heap node each; retirement erases the rest every bar, so it grows only for the patterns in the dormant-leg and settled-family rows below | Not measured (`sizeof` of a placement snapshot plus its node was not compiled) | Not applicable |
 
 For the short waiting-child parent-terminal fixture (short ids), the book and
@@ -306,23 +304,18 @@ journal caps give a per-engine definition plateau of 1,890,980 bytes (about
 1.9 MB) on GCC 13.4 on x86-64. That figure moves with definition size and is not
 a bound on total engine memory.
 
-## Scratch bytes: the formula and a worked example {#memory_formula}
+## Scratch bytes: the budget and accounting {#memory_formula}
 
-The scratch backing of a run is a sum of terms, one per store, each a count
-multiplied by a bytes-per-entry figure:
+The scratch backing of a run is a physical byte budget shared by its stores:
 
 ```text
-scratch bytes  =  base  +  sum over k of ( count_k x bytes_k )
+scratch bytes  =  serialized records + indexes + fold data + chunk slack
 ```
 
-`base` is the part that does not depend on the run's counts: the fixed
-portion of the table slab (below) and the chunk and page rounding. The counts
-are the run's own: `S` script bars, `T` closed trades, `D` distinct ids, `L`
-the longest id in bytes (at most 64 in the bounded profile: the id checks run only when the table slab exists, because `preflight_keys` at `include/pineforge/detail/id_pair_store.hpp:271-272` and `preflight_joined_single` at `include/pineforge/detail/id_pair_store.hpp:320-322` return at once without one, and the cohort table checks `bounded_cohorts()`), `Q` distinct id pairs (`D x D` at most), `R`
-successor-root rows and `E` stored equity points. The per-store figures below
-are logical peak bytes before the arena's 1 MiB chunk rounding. They are
-derived by hand in [the arena bound](../design/arena-bound.md), which also
-gives the rounding and the three command stores that this table leaves out.
+The host may derive a requested byte estimate from bars and receipt-declared
+per-bar needs. The arena rounds claims to 1 MiB chunks and reports the
+configured allowance and requested physical need. The estimate is a sizing
+hint; it is not a population ceiling.
 That derivation is authored and not certified on the corpus.
 
 | Store | Logical peak bytes |
@@ -396,21 +389,18 @@ can add them up; each is read from the source named in
 | Trade ledger | Descriptor window of 64 rows; read cache of up to 65,536 entries with or without a report sink. Chosen by the engine, not settable from the C API; cache allocation grows lazily up to the declared constant cap | 21,504 B for the window and its tail, plus up to 20,447,232 B of cache entries; `resident_cache_bytes(kSinkCacheRows)` accounts for the entries plus `sizeof(TradeLedger)+sizeof(State)` (including the window and its tail) |
 | Command journal | 2,048 resident events, 128 kept at least | Not a constant per event; plus 163,840 B of spill buffers per journal once it first spills |
 | Placement rows | No budget: the live rows plus the rows the retirement rules pin | Not measured |
-| Id tables | Cohort table: resident rows follow the spill rule above (at most twice the rows left by the last pass, plus 64, plus pinned rows), and the bounded profile admits at most 4,096 live cohorts. The ordered index is read through a 64 KiB window per scratch file | 64 KiB per file; the index itself is on disk |
+| Id tables | Cohort table: resident rows follow the spill rule above (at most twice the rows left by the last pass, plus 64, plus pinned rows). Historical rows and indexes consume the shared spool byte allowance; no jailed population ceiling is derived from the descriptor | 64 KiB per file; the index itself is on disk |
 
 ## Getting the bound before a run {#memory_before}
 
-* The slab: evaluate the formula above, or call `default_scratch_manifest`
-  with the number of bars (header `include/pineforge/detail/scratch_defaults.hpp`;
-  the Python host mirrors it) and size the slab from the manifest. A host can
-  also set its own maxima through `pf_scratch_tables_v1`.
+* The spool: derive a physical byte estimate from bars and receipt-declared
+  per-bar needs, then supply the host's scratch byte allowance. The default
+  manifest (`include/pineforge/detail/scratch_defaults.hpp`; mirrored by the
+  Python host) carries compatibility hints and byte estimates only.
 * The arena: the host chooses `PF_SCRATCH_ARENA_BYTES`. The calculator
   `scripts/arena_bound.py` returns a certified byte count or marks the term
-  `unbounded`. It certifies nothing for a general strategy in this release, because
-  the compiler facts it needs are not produced yet, so a host starts from its
-  default arena and may re-place the run on a larger one after `arena_exhausted`
-  (a host that makes one attempt, such as the current development service,
-  returns the failure instead).
+  `unbounded`. A run that needs more physical spool bytes returns
+  `scratch_capacity_exceeded` with `spool_bytes`, `limit` and `need`.
 * An engine export or report field that returns a planned byte count before a
   run: none exists in this release, so the formula and the constants above are the
   only way to size a run before it starts.
@@ -441,8 +431,7 @@ or bounds the row.
 
 | Signal | Meaning |
 | --- | --- |
-| `scratch_capacity_exceeded`, argument `resource` | A slab region ran out, more than 4,096 cohorts are live in the bounded profile, or an id is longer than 64 bytes in the bounded profile (refused before any store change). Admit larger maxima or shorter ids before another attempt |
-| `report_sink_failed`, reason `arena_exhausted` | The inherited arena filled. A host may re-place the run on a larger arena; one that makes a single attempt returns the failure |
+| `scratch_capacity_exceeded`, arguments `resource`, `limit`, `need` | The shared scratch spool needs more physical bytes than its allowance. For `resource=spool_bytes`, the host receives the configured limit and requested need; an id longer than 64 bytes remains a length refusal |
 | `scratch_io_failed` | A scratch read, write, create or resize failed, or the command-scratch byte cap was reached |
 | `scratch_configuration_invalid` | `PINEFORGE_COMMAND_SCRATCH_MAX_BYTES` is not a positive decimal |
 | `out_of_memory` | The allocator failed. It is not relabelled as a capacity failure |

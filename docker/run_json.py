@@ -3066,22 +3066,23 @@ def _bind_scratch_tables(lib) -> None:
 
 
 def default_scratch_manifest(bars: int | None) -> ScratchTablesC:
-    """Host mirror of detail/scratch_defaults.hpp's P0 POLICY, not a measured bound.
+    """Host mirror of the byte-budgeted default scratch descriptor.
 
-    None means a stream without a declared lifetime bar count. Each call makes
-    a fresh descriptor; the setter copies it and each run owns fresh occupancy.
+    The population fields are compatibility hints only. None means a stream
+    without a declared lifetime bar count; each call makes a fresh descriptor,
+    the setter copies it and each run owns fresh byte occupancy.
     """
     if bars is None:
-        roots = 65536
+        roots = 0
     else:
         if bars < 0 or bars > ((1 << 64) - 1) // 2:
             raise RunFailure("default scratch replacement reserve overflow",
                              "scratch_capacity_exceeded", {"resource": "layout"})
-        roots = 2 * bars
+        roots = 0
     return ScratchTablesC(
         ctypes.sizeof(ScratchTablesC), 1, 1, 0,  # bounded_memory
         0, 0,  # q is removed; retain its ABI fields with zero capacity
-        262144, 25165824, 32768, 4227072, 65536, 4194304, 27, 6912, roots)
+        0, 25165824, 0, 4227072, 0, 4194304, 27, 6912, roots)
 
 
 def apply_scratch_tables(lib, state, manifest: ScratchTablesC) -> None:

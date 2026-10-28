@@ -23,12 +23,11 @@ void require(bool value, const char* message) {
 
 void policy_fields(const detail::ScratchManifest& m, std::uint64_t roots) {
     require(m.K_q == 0 && m.B_q == 0, "removed q reserves no data or index");
-    require(m.K_e == 262144 && m.B_e == 25165824, "P0 erased key/byte policy");
-    require(m.K_c == 32768 && m.B_c == 4227072, "P0 consumed key/byte policy");
-    require(m.U == 65536 && m.B_U == 4194304, "P0 cohort row/byte policy");
-    require(detail::kMaxResidentCohorts == 4096, "active cohort policy remains the old U");
-    require(m.V == 27 && m.B_V == 6912, "P0 rank row/byte policy");
-    require(m.R == roots, "replacement policy uses this run's bar count");
+    require(m.K_e == 0 && m.B_e == 25165824, "erased byte estimate has no key cap");
+    require(m.K_c == 0 && m.B_c == 4227072, "consumed byte estimate has no key cap");
+    require(m.U == 0 && m.B_U == 4194304, "cohort byte estimate has no row cap");
+    require(m.V == 27 && m.B_V == 6912, "rank descriptor remains valid");
+    require(m.R == roots, "replacement descriptor has no row cap");
 }
 
 void layout_pages(const detail::ScratchManifest& m, std::uint64_t root_pages,
@@ -38,7 +37,7 @@ void layout_pages(const detail::ScratchManifest& m, std::uint64_t root_pages,
     // Dc=40*32768+4227072=5537792 -> 1352; Ic=16*65536 -> 256.
     // Coh=1+96*65536+4194304=10485761 -> 2561 (2560 pages + 1 byte).
     // Rank=1+60*27+6912=8533 -> 3. q=0. Fixed sum=14924 pages.
-    const std::array<std::uint64_t, 9> pages{{0, 0, 8704, 2048, 1352, 256, 2561, 3, root_pages}};
+    const std::array<std::uint64_t, 9> pages{{0, 0, 6144, 0, 1032, 0, 0, 3, root_pages}};
     const auto layout = detail::compute_layout(m); // Real layout, no multi-GB allocation.
     std::uint64_t offset = 0;
     for (std::size_t i = 0; i < pages.size(); ++i) {
@@ -50,9 +49,9 @@ void layout_pages(const detail::ScratchManifest& m, std::uint64_t root_pages,
     require(layout.slab_size == slab_bytes, "independent decimal byte total");
     require(layout.regions[0].capacity == 0 && layout.regions[1].capacity == 0,
             "q fields retain zero exact capacity");
-    require(layout.regions[6].capacity == 10485761, "cohort page padding is not capacity");
+    require(layout.regions[6].capacity == 0, "cohort population has no capacity");
     require(layout.regions[7].capacity == 8533, "rank page padding is not capacity");
-    require(layout.regions[8].capacity == 16 * m.R, "exact root capacity");
+    require(layout.regions[8].capacity == 0, "root population has no capacity");
 }
 
 void finite_batch_layouts() {
@@ -61,10 +60,10 @@ void finite_batch_layouts() {
     // 32000 -> 8; 3200000=781*4096+1024 -> 782;
     // 32000000=7812*4096+2048 -> 7813; 3200000000=781250*4096.
     const std::array<Case, 4> cases{{
-        {1000, 2000, 8, 14932, 61161472},
-        {100000, 200000, 782, 15706, 64331776},
-        {1000000, 2000000, 7813, 22737, 93130752},
-        {100000000, 200000000, 781250, 796174, 3261128704ULL},
+        {1000, 0, 0, 7179, 29405184},
+        {100000, 0, 0, 7179, 29405184},
+        {1000000, 0, 0, 7179, 29405184},
+        {100000000, 0, 0, 7179, 29405184},
     }};
     for (const auto& c : cases) {
         const auto m = detail::default_scratch_manifest(c.bars);
@@ -73,10 +72,20 @@ void finite_batch_layouts() {
     }
 }
 
+void declared_population_is_only_a_byte_hint() {
+    const auto manifest = detail::default_scratch_manifest(1048577);
+    require(manifest.K_e == 0 && manifest.K_c == 0 && manifest.U == 0
+                && manifest.R == 0,
+            "estimate above the former population cap is accepted without a count limit");
+    require(manifest.B_e == 25165824 && manifest.B_c == 4227072
+                && manifest.B_U == 4194304,
+            "the accepted estimate keeps byte sizing fields");
+}
+
 void overflow_and_stream_tier() {
     const auto maximum = std::numeric_limits<std::uint64_t>::max();
     // Test the multiply boundary separately from layout's stricter byte limits.
-    policy_fields(detail::default_scratch_manifest(maximum / 2), maximum - 1);
+    policy_fields(detail::default_scratch_manifest(maximum / 2), 0);
     for (const auto bars : {maximum / 2 + 1, maximum}) {
         bool caught = false;
         try {
@@ -94,34 +103,11 @@ void overflow_and_stream_tier() {
         require(caught, "2*bars overflow must refuse before wrapping");
     }
     const auto stream = detail::default_scratch_manifest();
-    policy_fields(stream, 65536);
-    // 16*65536=1048576=256 pages; 14924+256=15180, 62177280 bytes.
-    layout_pages(stream, 256, 15180, 62177280);
+    policy_fields(stream, 0);
+    layout_pages(stream, 0, 7179, 29405184);
     const auto empty_batch = detail::default_scratch_manifest(0);
     policy_fields(empty_batch, 0);
-    layout_pages(empty_batch, 0, 14924, 61128704);
-}
-
-void default_limit_messages() {
-    const auto m = detail::default_scratch_manifest(0);
-    require(detail::scratch_count_limit_message(detail::ScratchResource::cohort, m.U) ==
-        "more than 65,536 distinct order ids in one run; reuse ids, e.g. build the id from a modulo of bar_index",
-        "default cohort count text");
-    require(detail::scratch_byte_limit_message(detail::ScratchResource::cohort, m.B_U) ==
-        "order ids use more than 4,194,304 bytes in one run; use shorter ids or reuse ids",
-        "default cohort byte text");
-    require(detail::scratch_count_limit_message(detail::ScratchResource::erased_index, m.K_e) ==
-        "more than 262,144 retired order-id keys in one run (each retired order uses 2); reuse ids, e.g. a modulo of bar_index",
-        "default retired key text");
-    require(detail::scratch_byte_limit_message(detail::ScratchResource::erased_data, m.B_e) ==
-        "retired order ids use more than 25,165,824 bytes in one run; use shorter ids or reuse ids",
-        "default retired byte text");
-    require(detail::scratch_count_limit_message(detail::ScratchResource::consumed_index, m.K_c) ==
-        "more than 32,768 keys for partially filled exits in one run; reuse ids, e.g. a modulo of bar_index",
-        "default partial exit key text");
-    require(detail::scratch_byte_limit_message(detail::ScratchResource::consumed_data, m.B_c) ==
-        "partially filled exits use more than 4,227,072 bytes in one run; use shorter ids or reuse ids",
-        "default partial exit byte text");
+    layout_pages(empty_batch, 0, 7179, 29405184);
 }
 
 // Exercise the actual prepare boundary. Stop there deliberately, before the
@@ -192,8 +178,8 @@ void engine_all_zero_selects_per_run_default() {
 int main() {
     try {
         finite_batch_layouts();
+        declared_population_is_only_a_byte_hint();
         overflow_and_stream_tier();
-        default_limit_messages();
         engine_all_zero_selects_per_run_default();
         std::puts("test_scratch_defaults: OK");
         return 0;

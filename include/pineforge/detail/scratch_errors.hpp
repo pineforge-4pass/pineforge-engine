@@ -2,7 +2,9 @@
 
 #include <pineforge/run_failure.hpp>
 
+#include <cerrno>
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <system_error>
@@ -21,6 +23,7 @@ enum class ScratchResource : std::uint32_t {
     cohort,
     exit_rank,
     successor_roots,
+    spool_bytes,
 };
 
 inline const char* scratch_resource_name(ScratchResource resource) noexcept {
@@ -35,6 +38,7 @@ inline const char* scratch_resource_name(ScratchResource resource) noexcept {
     case ScratchResource::cohort: return "cohort";
     case ScratchResource::exit_rank: return "exit_rank";
     case ScratchResource::successor_roots: return "successor_roots";
+    case ScratchResource::spool_bytes: return "spool_bytes";
     }
     return "layout";
 }
@@ -136,6 +140,22 @@ public:
           RunFailureInfo(RunFailureCode::scratch_capacity_exceeded,
                          {{"resource", scratch_resource_name(resource)}}) {}
 };
+
+inline std::int64_t scratch_failure_bytes(std::uint64_t bytes) noexcept {
+    constexpr auto maximum =
+        static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
+    return static_cast<std::int64_t>(bytes > maximum ? maximum : bytes);
+}
+
+inline coded<std::system_error> scratch_spool_bytes_exhausted(
+    std::uint64_t limit, std::uint64_t need) {
+    return coded<std::system_error>(
+        RunFailureCode::scratch_capacity_exceeded,
+        {{"limit", scratch_failure_bytes(limit)},
+         {"need", scratch_failure_bytes(need)},
+         {"resource", "spool_bytes"}},
+        std::system_error(EFBIG, std::generic_category(), "scratch capacity exceeded"));
+}
 
 // Preserve errno and the existing system_error English; only table scratch
 // failures use this code. The report sink retains report_sink_failed.

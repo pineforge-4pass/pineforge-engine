@@ -33,8 +33,8 @@ REAL_CDLL = ctypes.CDLL
 PROFILE_ENV = "PINEFORGE_RUN_JSON_PROFILE"
 SETTER = "strategy_set_scratch_tables_v1"
 FIELDS = ("K_q", "B_q", "K_e", "B_e", "K_c", "B_c", "U", "B_U", "V", "B_V", "R")
-# P0 policy, independently transcribed from the brief, after q removal.
-P0_FIXED = (0, 0, 262144, 25165824, 32768, 4227072, 65536, 4194304, 27, 6912)
+# Default byte policy, independently transcribed from the host mirror.
+P0_FIXED = (0, 0, 0, 25165824, 0, 4227072, 0, 4194304, 27, 6912)
 
 
 class Descriptor(ctypes.Structure):
@@ -351,7 +351,7 @@ def assert_admission(library, count, roots, *, require_arena=False):
         admission = next(row for row in history if row[0] == "scratch")
         run = next(row for row in history if row[0] == "run")
         assert admission[2] == (104, 1, 1, 0)
-        assert admission[3] == run[3] == P0_FIXED + (roots,)
+        assert admission[3] == run[3] == P0_FIXED + (0,)
 
 
 def test_jailed_configures_every_fresh_bench_and_body_handle_without_a_sink(tmp_path, monkeypatch):
@@ -569,6 +569,8 @@ def test_jailed_spill_dir_refuses_before_loading_a_library(tmp_path, monkeypatch
 
 @pytest.mark.parametrize("code,args", [
     ("scratch_capacity_exceeded", {"resource": "successor_roots"}),
+    ("scratch_capacity_exceeded",
+     {"limit": 1048576, "need": 2097152, "resource": "spool_bytes"}),
     ("scratch_io_failed", {}),
 ])
 @pytest.mark.parametrize("bench", [False, True])
@@ -687,15 +689,15 @@ def test_optional_binding_has_the_exact_descriptor_layout(tmp_path, monkeypatch)
 @pytest.mark.parametrize("count", [1000, 100000, 1000000, 100000000])
 def test_host_policy_mirror_uses_each_run_bar_count(count):
     manifest = run_json.default_scratch_manifest(count)
-    assert tuple(getattr(manifest, name) for name in FIELDS) == P0_FIXED + (2 * count,)
+    assert tuple(getattr(manifest, name) for name in FIELDS) == P0_FIXED + (0,)
     assert (manifest.struct_size, manifest.version, manifest.backend, manifest.reserved) == (104, 1, 1, 0)
 
 
 def test_host_stream_and_checked_multiply():
     stream = run_json.default_scratch_manifest(None)
-    assert tuple(getattr(stream, name) for name in FIELDS) == P0_FIXED + (65536,)
+    assert tuple(getattr(stream, name) for name in FIELDS) == P0_FIXED + (0,)
     assert run_json.default_scratch_manifest(0).R == 0
-    assert run_json.default_scratch_manifest(((1 << 64) - 1) // 2).R == (1 << 64) - 2
+    assert run_json.default_scratch_manifest(((1 << 64) - 1) // 2).R == 0
     for count in (1 << 63, (1 << 64) - 1, -1):
         with pytest.raises(run_json.RunFailure) as failure:
             run_json.default_scratch_manifest(count)

@@ -19,6 +19,11 @@ since 1.7.0: the optional `engine_invariant` reason vocabulary and the expected
 ABI number in `strategy_library_incompatible`'s message. The report keys are
 unchanged except for two additive diagnostics keys, described below.
 
+- Jailed historical scratch admission is now expressed in physical spool
+  bytes. Population estimates in the compatibility manifest no longer cap
+  ids, keys or successor rows; byte exhaustion reports
+  `scratch_capacity_exceeded` with `resource=spool_bytes`, `limit` and `need`.
+
 - Monthly Sharpe/Sortino month keys for timestamps beyond about 34,800 years from the epoch no longer overflow; in-range results are unchanged.
 
 ### Compatibility and migration

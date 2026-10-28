@@ -1284,6 +1284,12 @@
   },
   "scratch_capacity_exceeded": {
    "args": {
+    "limit": {
+     "kind": "integer"
+    },
+    "need": {
+     "kind": "integer"
+    },
     "resource": {
      "kind": "vocab",
      "values": [
@@ -1296,12 +1302,13 @@
       "consumed_index",
       "cohort",
       "exit_rank",
-      "successor_roots"
+      "successor_roots",
+      "spool_bytes"
      ]
     }
    },
    "class": "resource",
-   "description": "The admitted scratch-table layout or a fixed region's capacity was exceeded. The run must be admitted with sufficient finite maxima before retrying.",
+   "description": "The shared scratch spool exhausted its byte allowance while a layout or store operation needed more bytes. limit and need report the byte budget and the requested physical bytes.",
    "english": [
     "scratch capacity exceeded"
    ],

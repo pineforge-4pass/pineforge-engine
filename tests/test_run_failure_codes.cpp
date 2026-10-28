@@ -20,6 +20,7 @@
 #include "run_failure_codes_strategies.hpp"
 
 #include <pineforge/checked_settings.hpp>
+#include <pineforge/detail/scratch_errors.hpp>
 #include <pineforge/engine.hpp>
 #include <pineforge/native_module.hpp>
 #include <pineforge/native_run_spec.hpp>
@@ -28,6 +29,7 @@
 #include "../src/source/pine_run_failure.hpp"
 
 #include <algorithm>
+#include <cerrno>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -1831,6 +1833,24 @@ void chain_vocabulary_rows() {
               {{"pruner", "median"}, {"capability", "x"}}, invariant, "{}");
 }
 
+void scratch_spool_failure_rows() {
+    const auto failure = pineforge::detail::scratch_spool_bytes_exhausted(
+        1048576, 2097152);
+    CHECK(failure.code().value() == EFBIG);
+    CHECK(std::string(failure.what()).find("scratch capacity exceeded") != std::string::npos);
+    CHECK(failure.run_failure_code() == RunFailureCode::scratch_capacity_exceeded);
+    CHECK_EQ("scratch spool args", failure.run_failure().args
+                 ? *failure.run_failure().args : std::string("{}"),
+             R"({"limit":1048576,"need":2097152,"resource":"spool_bytes"})");
+
+    const auto saturated = pineforge::detail::scratch_spool_bytes_exhausted(
+        std::numeric_limits<std::uint64_t>::max(),
+        std::numeric_limits<std::uint64_t>::max());
+    CHECK_EQ("scratch spool integer saturation", saturated.run_failure().args
+                 ? *saturated.run_failure().args : std::string("{}"),
+             R"({"limit":9223372036854775807,"need":9223372036854775807,"resource":"spool_bytes"})");
+}
+
 void registry_rows() {
     std::ifstream in(PINEFORGE_RUN_FAILURE_CATALOG, std::ios::binary);
     CHECK_EQ("catalog readable", in ? "open" : "missing", "open");
@@ -1914,6 +1934,7 @@ int main() {
     registry_rows();
     window_vocabulary_rows();
     chain_vocabulary_rows();
+    scratch_spool_failure_rows();
     std::printf("test_run_failure_codes: %d checks, %d failed\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

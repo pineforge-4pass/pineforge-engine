@@ -13,7 +13,7 @@ fake library establish orchestration only.
 | Backend | Value | Contract |
 | --- | ---: | --- |
 | `disk_scratch` / `PF_SCRATCH_TABLE_DISK_SCRATCH` | 0 | Existing temporary-file tables. This remains the unjailed default. |
-| `bounded_memory` / `PF_SCRATCH_TABLE_BOUNDED_MEMORY` | 1 | Slab prepared once before the run, sized from the declared maxima and the input-bar count (about 32 bytes per bar for the root region), with count/byte admission and no growth or disk fallback on exhaustion; historical keys are not reclaimed, and exceeding a cap fails the run. |
+| `bounded_memory` / `PF_SCRATCH_TABLE_BOUNDED_MEMORY` | 1 | Scratch storage is backed by the host-supplied byte allowance. Historical tables grow in the attached spool, and exhaustion reports the requested and allowed bytes; population estimates do not refuse a run. |
 
 Call #strategy_set_scratch_tables_v1 on an idle handle before running it.
 The `pf_scratch_tables_v1` descriptor in `include/pineforge/pineforge.h`
@@ -24,13 +24,11 @@ Set `struct_size=sizeof(pf_scratch_tables_v1)`, `version=1`, and `reserved=0`.
 The targeted ABI size is 104 bytes, with the first maximum at byte 16.
 The setter copies the values and retains no pointer into a ctypes temporary.
 
-`K` counts distinct ever-stored keys across the single-key and exact-pair
-domains; `B` counts their total stored key bytes, including embedded NULs and
-both pair components. Erasure does not reclaim this historical budget.
-`U/B_U` cover historical cohort IDs and their bytes; `V/B_V` cover exit-rank
-IDs and bytes, with `V<=27`; `R` covers rooted replacement successors,
-including internally generated replacements. The q store is being removed:
-its descriptor fields remain for compatibility, and the default sets both to
+`K`, `U`, `V` and `R` remain ABI fields for callers that describe a sizing
+hint. They are not population admission limits. `B` fields describe byte
+estimates; physical allocation is charged to the shared spool allowance,
+including links, key text, payload, indexes, fold data and chunk slack. The q
+store is removed: its descriptor fields remain for compatibility and remain
 zero. No descriptor field is a measured occupancy or a live-book count.
 
 The return value is 0 on success, -1 for a null handle or invalid
@@ -46,74 +44,49 @@ explicit: zero fields in that manifest stay zero. Disk mode never activates
 this default. Layout arithmetic must fit `uint64_t`, `size_t` and `off_t`
 before allocation; actual allocation failure remains `out_of_memory`.
 
-## Default P0 admission policy
+## Default byte policy
 
 `default_scratch_manifest(std::uint64_t bars)` is the header-only helper in
-`include/pineforge/detail/scratch_defaults.hpp`. These are **policy limits,
-not measured bounds**, and do not prove that an arbitrary strategy fits.
-The Python host mirrors this tier explicitly, so its fresh-handle wiring does
-not depend on the engine's all-zero expansion.
+`include/pineforge/detail/scratch_defaults.hpp`. The Python host mirrors this
+descriptor. Population fields are zero compatibility hints; the byte fields
+remain available to describe expected work, while the attached spool is the
+actual shared allowance.
 
-| Maximum | P0 value |
+| Descriptor field | Default value |
 | --- | ---: |
 | `K_q`, `B_q` | 0, 0 (q removed) |
-| `K_e`, `B_e` | 262,144 keys, 25,165,824 key bytes |
-| `K_c`, `B_c` | 32,768 keys, 4,227,072 key bytes |
-| `U`, `B_U` | 65,536 IDs, 4,194,304 ID bytes |
-| `V`, `B_V` | 27 IDs, 6,912 ID bytes |
-| `R` for a finite batch | `2*bars`, with checked multiplication |
-| `R` without a declared stream lifetime bar count | 65,536 |
+| `K_e`, `B_e` | 0 population hint, 25,165,824 byte estimate |
+| `K_c`, `B_c` | 0 population hint, 4,227,072 byte estimate |
+| `U`, `B_U` | 0 population hint, 4,194,304 byte estimate |
+| `V`, `B_V` | 27 descriptor units, 6,912 byte estimate |
+| `R` | 0 population hint |
 
-The no-argument C++ overload selects the stream tier; Python uses
-`default_scratch_manifest(None)`. A zero-bar finite batch has `R=0`.
-The current stream-begin API supplies a warmup length, not a declared total
-lifetime bar count: even with warmup bars, the all-zero stream
-default is 65,536. A caller with a finite stream envelope supplies an explicit
-manifest for the whole admitted lifetime.
+The no-argument C++ overload selects the same byte policy; Python uses
+`default_scratch_manifest(None)`. The checked bar arithmetic remains a layout
+validity check, not a population admission check. A caller may supply an
+explicit byte allowance through the host's scratch budget.
 
-The key/byte choices split a 64 MiB budget (65,536 IDs of up to 64 bytes) and
-refuse a single ID longer than 64 bytes before any store mutation; they are
-otherwise aggregate descriptor limits. Two roots per input bar is an allowance, not an
-orders-per-bar bound. Repeated intrabar replacements or loops can exhaust it.
-For larger permitted workloads, the host must admit a larger representable
-manifest before execution and charge the corresponding memory.
+The byte estimates do not impose a key or trade ceiling. A single ID longer
+than 64 bytes remains a representation refusal. Repeated replacements and
+large historical tables consume the shared spool and can exhaust its byte
+allowance.
 
-### Hand arithmetic (4096-byte pages)
+### Byte accounting
 
-Define `Q(0)=0`; for positive K, `Q(K)=pow2ceil(max(64,2*K))`.
-Data bytes are `40*K+B`, index bytes `16*Q(K)`, cohort bytes
-`1+96*U+B_U`, rank bytes `1+60*V+B_V`, and root bytes `16*R`.
-Empty cohort/rank populations reserve zero. Round each region separately:
-`page(x)=4096*ceil(x/4096)`, `page(0)=0`; the slab is at least one page.
+The budget is physical bytes, not rows. Charge serialized records, links,
+key text, indexes, fold/undo records, replacement indexes and whole-chunk
+slack. The arena claims whole 1 MiB chunks and reports the requested physical
+need before a claim; mapped windows are a separate resident-byte limit.
 
-| Region | Unrounded P0 bytes | Pages |
-| --- | ---: | ---: |
-| Sequence data / index (q) | 0 / 0 | 0 / 0 |
-| Erased data (e) | `40*262144+25165824 = 35,651,584` | 8,704 |
-| Erased index (e) | `16*524288 = 8,388,608` | 2,048 |
-| Consumed data (c) | `40*32768+4227072 = 5,537,792` | 1,352 |
-| Consumed index (c) | `16*65536 = 1,048,576` | 256 |
-| Cohorts | `1+96*65536+4194304 = 10,485,761` | 2,561 |
-| Exit rank | `1+60*27+6912 = 8,533` | 3 |
-| Successor roots | `16*(2*bars) = 32*bars` | `ceil(bars/128)` |
+The old page-sized reservation table is no longer an admission formula.
+Charge serialized records, links, key text, indexes, fold/undo records,
+replacement indexes and whole-chunk slack to the shared spool byte allowance.
 
-The fixed portion is `8704+2048+1352+256+2561+3 = 14924` pages, or 61,128,704
-bytes. The following totals are hand-derived policy reservations, not an
-allocation/RSS measurement:
-
-| Input bars | Root bytes | Root pages | Total slab pages | Slab bytes |
-| ---: | ---: | ---: | ---: | ---: |
-| 1,000 | 32,000 | 8 | 14,932 | 61,161,472 |
-| 100,000 | 3,200,000 | 782 | 15,706 | 64,331,776 |
-| 1,000,000 | 32,000,000 | 7,813 | 22,737 | 93,130,752 |
-| 100,000,000 | 3,200,000,000 | 781,250 | 796,174 | 3,261,128,704 |
-
-The stream tier reserves 1,048,576 root bytes (256 pages), for a total of
-15,180 pages / 62,177,280 bytes. Region descriptors, shared-owner metadata,
-the existing 1,024-byte root tail, live rows/strings, allocator overhead,
-OHLCV, strategy heap and reports are additional. Page padding is not extra
-admitted capacity. Concurrent HPO trials charge the sum of their slabs;
-retiring readers can keep a preceding slab alive too.
+The declared bar count and receipt per-bar needs can provide a byte estimate,
+but they do not reserve a population-sized anonymous mapping. Region
+directories, the existing 1,024-byte root tail, fixed caches, OHLCV, strategy
+heap and reports are additional. Concurrent runs charge their own byte
+allowances.
 
 ## Native request journal residency
 
@@ -234,14 +207,12 @@ and HPO drivers are in other repositories; their integration is **planned**.
 
 | Code | Typed args | Class | Retryable | Required host action |
 | --- | --- | --- | --- | --- |
-| `scratch_capacity_exceeded` | `resource` (closed name) | resource | false | Refuse completion and refund the run/trial reservation. Admit a different envelope before a new attempt. |
+| `scratch_capacity_exceeded` | `limit`, `need`, `resource` (`spool_bytes` for byte exhaustion) | resource | false | Refuse completion and refund the run/trial reservation. The host may retry with a larger byte allowance. |
 | `scratch_io_failed` | `{}` | resource | false | Refuse completion and refund the run/trial reservation. Investigate backing I/O/corruption. |
 
-Capacity resources are `layout`, `sequence_data`, `sequence_index`,
-`erased_data`, `erased_index`, `consumed_data`, `consumed_index`, `cohort`,
-`exit_rank`, and `successor_roots`. q names remain in the wire vocabulary.
-The implemented bounded-memory checks cover the entire operation's count and
-byte workset before its first semantic mutation, with no grow/rehash/fallback.
+The population resources remain in the wire vocabulary for descriptor and
+layout validity. Byte exhaustion uses `spool_bytes`; the operation reports its
+physical limit and need before semantic mutation.
 Physical allocator failure stays `out_of_memory`; it is not relabeled as a
 logical capacity breach. Report-sink failures retain their separate code.
 See [Run-failure codes](@ref run_failure_codes) for the channel and catalog.
@@ -287,4 +258,4 @@ this coverage; it does not certify their jailed execution or storage bounds.
 
 Release wording for implemented bounded-memory tables; remote disk/RAM identity and jailed proof remain pending:
 
-> Scratch tables use a single allocation before the run, with enforced count and byte capacities and typed failure on exhaustion. Historical distinct IDs, ID pairs, consumed-exit combinations and replacement successors consume that budget; the default replacement reserve depends on input-bar count. This is not a guarantee that only OHLCV memory scales.
+> Scratch tables use a shared byte allowance before the run, with typed failure on exhaustion. Historical distinct IDs, ID pairs, consumed-exit combinations and replacement successors consume physical spool bytes; population estimates do not cap the run. This does not make the strategy heap or OHLCV storage bounded.

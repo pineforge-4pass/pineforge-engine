@@ -178,7 +178,7 @@ in addition to its six released 1.4.0 reasons.
 | `run_mode_unsupported` | `unsupported` | no | `feature` (vocab, 11 values) | A feature the requested run mode does not support. |
 | `run_options_rejected` | `input` | no | `input_tf` (timeframe, optional), `option` (vocab, 11 values), `script_tf` (timeframe, optional) | The run's own options (timeframes, intrabar path, magnifier, path order) were refused. |
 | `run_request_invalid` | `input` | no | `option` (vocab, 25 values) | The harness command line or one of its JSON options is invalid. |
-| `scratch_capacity_exceeded` | `resource` | no | `resource` (vocab, 10 values) | The admitted scratch-table layout or a fixed region's capacity was exceeded. The run must be admitted with sufficient finite maxima before retrying. |
+| `scratch_capacity_exceeded` | `resource` | no | `limit` (integer), `need` (integer), `resource` (vocab, 11 values) | The shared scratch spool exhausted its byte allowance while a layout or store operation needed more bytes. limit and need report the byte budget and the requested physical bytes. |
 | `scratch_configuration_invalid` | `input` | no | `reason` (vocab, 3 values), `stage` (vocab, 1 values) | The command-scratch byte cap from the environment or the caller is malformed: not a positive decimal, out of uint64_t range, or zero. |
 | `scratch_io_failed` | `resource` | no | none | The engine could not create, resize, read or write command scratch or the storage of one of its auxiliary tables (the disk id table, the id-pair store or the placement table). Command scratch also raises this code when the default-directory policy fails a directory query or refuses memory-backed default candidates, or when an explicit memory-backed command directory is refused. Native runs create command scratch at begin, so these failures are resource failures before any strategy callback. The run has no successful completion. Report-sink scratch files, the curve writer and the position-tail facade do not raise this code: they raise report_sink_failed with reason scratch_io. |
 | `security_feed_refused` | `input` | no | `reason` (vocab, 11 values) | An auxiliary or native request.security feed was refused. |
@@ -235,12 +235,11 @@ values. `retryable` says whether the same request can succeed when it is run
 again: after memory frees up, once the caller refreshes the symbol's
 metadata, or after an aborted run.
 
-`report_sink_failed.store` also includes `command` for an attached arena's
-command/exit scratch region. Its `arena_exhausted` exception keeps the original
-allocator counters when a command-store owner rethrows it. Crossing the
-per-store arena share carries this same typed verdict, with needed bytes
-computed as the arena size satisfying that store's required extent. A separate
-command byte-budget refusal retains its status-only I/O behavior.
+The shared scratch spool reports byte exhaustion as
+`scratch_capacity_exceeded` with `resource` `spool_bytes`. Its `limit` and
+`need` arguments identify the configured byte allowance and requested physical
+bytes. Layout, length, representation and ordinary scratch I/O failures retain
+their own typed contracts.
 
 File-backed scratch must have disk backing. With no scratch directory configured, the engine checks filesystem type with `statfs`,
 using nonempty `TMPDIR` if disk-backed, or the legacy `/tmp` candidate when `TMPDIR` is unset or empty. Only a successful query proving
