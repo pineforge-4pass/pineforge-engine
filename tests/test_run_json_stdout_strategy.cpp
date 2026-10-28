@@ -4,6 +4,7 @@
 #include "sha256.hpp"
 
 #include <cerrno>
+#include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
 #include <string>
@@ -112,7 +113,9 @@ PF_API const char* pf_version_string(void) {
 }
 
 PF_API pf_strategy_t strategy_create(const char*) {
-    return new Stub;
+    auto* state = new Stub;
+    if (const char* mode = std::getenv("PINEFORGE_STDOUT_TEST_MODE")) state->mode = mode;
+    return state;
 }
 
 PF_API void strategy_free(pf_strategy_t strategy) {

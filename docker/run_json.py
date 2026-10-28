@@ -7522,7 +7522,8 @@ def _host_main(argv=None) -> int:
     except Exception as error:
         status = 1
         if output.published:
-            traceback.print_exc(file=sys.stderr)
+            _write_diagnostic(f"run_json: fault after report publication: "
+                              f"{type(error).__name__}: {error}\n")
         else:
             try:
                 write_failure(f"harness internal error: {type(error).__name__}: {error}",
