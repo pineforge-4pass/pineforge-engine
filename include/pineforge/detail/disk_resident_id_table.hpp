@@ -261,6 +261,7 @@ public:
     };
 
     DiskResidentIdTable() = default;
+    explicit DiskResidentIdTable(std::size_t cache_bytes) : index_(cache_bytes) {}
     DiskResidentIdTable(const DiskResidentIdTable&) = delete;
     DiskResidentIdTable& operator=(const DiskResidentIdTable&) = delete;
     DiskResidentIdTable(DiskResidentIdTable&& other) noexcept { *this = std::move(other); }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <pineforge/detail/scratch_file.hpp>
+#include <pineforge/detail/id_table_read_cache.hpp>
 
 #include <algorithm>
 #include <cerrno>
@@ -32,11 +33,13 @@ class DiskIdTable {
 public:
     using Offset = std::uint64_t;
     DiskIdTable() = default;
+    explicit DiskIdTable(std::size_t cache_bytes) : read_cache_(cache_bytes) {}
     DiskIdTable(const DiskIdTable&) = delete;
     DiskIdTable& operator=(const DiskIdTable&) = delete;
     DiskIdTable(DiskIdTable&& other) noexcept { *this = std::move(other); }
     DiskIdTable& operator=(DiskIdTable&& other) noexcept {
         if (this != &other) {
+            read_cache_ = std::move(other.read_cache_); // Both owners lose every valid line.
             file_ = std::move(other.file_);
             root_ = std::exchange(other.root_, 0);
             first_ = std::exchange(other.first_, 0);
@@ -59,9 +62,11 @@ public:
         if (slab && resource != ScratchResource::cohort && resource != ScratchResource::exit_rank)
             throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                          "scratch id table requires a tree region");
+        read_cache_.release();
         file_.bind_scratch(slab, resource);
     }
     void clear() noexcept {
+        read_cache_.release();
         file_.clear();
         root_ = first_ = last_ = size_ = 0;
         end_ = 1; // offset zero is the null link
@@ -137,12 +142,12 @@ public:
     Value get(Offset at) const {
         validate(at);
         Value value{};
-        file_.read(at + sizeof(Links), &value, sizeof value);
+        read(at + sizeof(Links), &value, sizeof value);
         return value;
     }
     void set(Offset at, const Value& value) {
         validate(at);
-        file_.write(at + sizeof(Links), &value, sizeof value);
+        write(at + sizeof(Links), &value, sizeof value);
     }
     std::pair<Offset, bool> insert(const std::string& key, const Value& value) {
         Offset parent = 0;
@@ -168,9 +173,9 @@ public:
         Links row;
         row.parent = parent;
         row.key_size = key.size();
-        file_.write(at, &row, sizeof row);
-        file_.write(at + sizeof(Links), &value, sizeof value);
-        file_.write(at + header, key.data(), key.size());
+        write(at, &row, sizeof row);
+        write(at + sizeof(Links), &value, sizeof value);
+        write(at + header, key.data(), key.size());
         // All data bytes exist before linking the row into the logical table.
         // Any partial link/rotation I/O error fails the run; it is never
         // converted to a successful absent lookup or retried as another id.
@@ -203,6 +208,15 @@ public:
     }
 
 private:
+    void read(Offset offset, void* data, std::size_t length) const {
+        // descriptor() is -1 for any arena, even an unjailed file arena,
+        // and for a slab. Never use the attached arena's inherited fd here.
+        read_cache_.read(file_, file_.descriptor() >= 0, end_, 0, offset, data, length);
+    }
+    void write(Offset offset, const void* data, std::size_t length) {
+        if (file_.descriptor() >= 0) read_cache_.before_write(0, end_, offset, length);
+        file_.write(offset, data, length); // Always immediate, including errors.
+    }
     void require_id_size(std::size_t key_size) const {
         if (file_.scratch_owner() && file_.scratch_resource() == ScratchResource::cohort
             && key_size > 64)
@@ -253,18 +267,18 @@ private:
     Links links(Offset at) const {
         validate(at);
         Links row{};
-        file_.read(at, &row, sizeof row);
+        read(at, &row, sizeof row);
         if (row.height == 0 || row.height > 128
             || row.key_size > end_ - at - sizeof(Links) - sizeof(Value))
             io_error(EIO, "scratch id invalid node");
         return row;
     }
-    void put_links(Offset at, const Links& row) { file_.write(at, &row, sizeof row); }
+    void put_links(Offset at, const Links& row) { write(at, &row, sizeof row); }
     std::string read_key(Offset at, const Links& row) const {
         if (row.key_size > std::string{}.max_size())
             io_error(EFBIG, "scratch id key too long");
         std::string key(static_cast<std::size_t>(row.key_size), '\0');
-        file_.read(at + sizeof(Links) + sizeof(Value), key.data(), key.size());
+        read(at + sizeof(Links) + sizeof(Value), key.data(), key.size());
         return key;
     }
     std::uint64_t height(Offset at) const { return at == 0 ? 0 : links(at).height; }
@@ -316,6 +330,7 @@ private:
     }
 
     ScratchFile file_{ScratchFile::IoRaiser::auxiliary};
+    IdTableReadCache read_cache_;
     Offset root_ = 0, first_ = 0, last_ = 0, end_ = 1;
     std::uint64_t size_ = 0;
 };

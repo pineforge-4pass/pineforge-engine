@@ -1834,6 +1834,19 @@
    "ordinal": 1
   },
   {
+   "file": "include/pineforge/detail/id_table_read_cache.hpp",
+   "symbol": "reset",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class IdTableReadCache #1",
+    "template < class File > void read ( const File & source , bool plain_disk , std :: uint64_t logical_end , unsigned file , std :: uint64_t offset , void * destination , std :: size_t length ) const #1",
+    "if ( ! bytes_ ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "new",
+   "ordinal": 1
+  },
+  {
    "file": "include/pineforge/detail/journal_codec.hpp",
    "symbol": "out",
    "scope": [
@@ -13127,7 +13140,7 @@
     "StoreImpl :: StoreImpl ( const Shape & shape , ScratchBacking & backing ) : chunk_bytes_ ( shape . chunk_bytes ) #1"
    ],
    "cls": "alloc",
-   "spelling": "new std::byte",
+   "spelling": "new std :: byte",
    "ordinal": 1
   },
   {
@@ -13141,6 +13154,19 @@
    ],
    "cls": "alloc",
    "spelling": "new CommandScratchStore",
+   "ordinal": 1
+  },
+  {
+   "file": "src/detail/o1_store.cpp",
+   "symbol": "<temp:string>",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace detail #1",
+    "namespace o1 #1",
+    "[ [ noreturn ] ] void StoreImpl :: throw_status ( const char * what , ScratchStatus status ) const #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: string",
    "ordinal": 1
   },
   {
@@ -13167,19 +13193,6 @@
    ],
    "cls": "alloc",
    "spelling": "new StoreImpl",
-   "ordinal": 1
-  },
-  {
-   "file": "src/detail/o1_store.cpp",
-   "symbol": "<temp:string>",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace detail #1",
-    "namespace o1 #1",
-    "[ [ noreturn ] ] void StoreImpl :: throw_status ( const char * what , ScratchStatus status ) const #1"
-   ],
-   "cls": "temp",
-   "spelling": "std::string",
    "ordinal": 1
   },
   {
