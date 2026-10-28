@@ -221,6 +221,68 @@ def test_unamended_and_terminal_rows_have_neutral_markers_and_terminal_equity_op
 
 
 @pytest.mark.parametrize("route", ["array", "sink"])
+def test_nondyadic_unamended_pnl_is_the_exact_settlement_operand(
+        tmp_path, monkeypatch, route):
+    # Closes: 3 @ 100.7 -> 100.9, 5 @ 101.7 -> 101.9, 13 @ 102.9 -> 102.7.
+    # These decimal tenths survive tick snapping unchanged but are not binary
+    # exact; 13 * 0.07 also rounds in binary64. Sig10 changes all three P&Ls
+    # and their final fold, so rounded report operands cannot pass this vector.
+    result = rq.invoke(tmp_path, monkeypatch, "nondyadic", route=route)
+    observation = rq.successful(result)
+    assert observation["groups"] == 0 and observation["physical"] == []
+    document = result.document
+    rows = document["trades"]
+    assert len(rows) == 4
+    assert [row["settlement_index"] for row in rows] == [0, 1, 2, None]
+    assert [row["open_at_end"] for row in rows] == [False, False, False, True]
+    assert all(row["recut"] is None for row in rows)
+    expected = rq.sources("nondyadic")
+    terminal = rq.nondyadic_source(1, 103.7, 104.9)
+    for row, wanted in zip(rows, expected + [terminal]):
+        for field in ("entry_price", "exit_price", "qty", "commission", "pnl"):
+            rq.same(row[field], wanted[field])
+    assert [row["entry_bar_index"] for row in rows] == [1, 3, 5, 7]
+    assert [row["exit_bar_index"] for row in rows] == [2, 4, 6, 8]
+    rq.assert_exact(document, "nondyadic")
+    rq.assert_q_schedule(document, "nondyadic")
+
+    presented = [+0.0]
+    for row in rows[:3]:
+        presented.append(presented[-1] + row["pnl"])
+    total = document["replay"]["net_profit_sum"]
+    rq.same(presented[-1], total)
+    assert rq.bits(presented[-1] + rows[3]["pnl"]) != rq.bits(total)
+
+    records, _ = rq.replay_records(result.companion)
+    scalars = rq.rows_with_tag(records, "S")
+    assert len(scalars) == 1
+    rq.same(scalars[0]["net_profit_sum"], presented[-1])
+    replay_rows = rq.rows_with_tag(records, "R")
+    assert len(replay_rows) == 4
+    for trade, row in zip(rows, replay_rows):
+        assert row["n"] == trade["n"]
+        assert row["settlement_index"] == trade["settlement_index"]
+        assert all(row[field] is None for field in rq.MARKER_FIELDS)
+    points = rq.rows_with_tag(records, "Q")
+    assert len(points) == len(document["equity_curve"])
+    for point in document["equity_curve"] + points:
+        if point["net_profit_sum"] is not None:
+            cutoff = point["settlement_count"]
+            assert type(cutoff) is int and 0 <= cutoff <= 3
+            rq.same(point["net_profit_sum"], presented[cutoff])
+
+    def sig10(value):
+        return float("%.10g" % value)
+
+    # Negative control: precision is deliberately lost only in this fold.
+    rounded = [+0.0]
+    for row in rows[:3]:
+        rounded.append(rounded[-1] + sig10(row["pnl"]))
+    assert any(rq.bits(sig10(row["pnl"])) != rq.bits(row["pnl"]) for row in rows[:3])
+    assert rq.bits(rounded[-1]) != rq.bits(total)
+
+
+@pytest.mark.parametrize("route", ["array", "sink"])
 def test_terminal_quote_basis_uses_pre_capital_report_operand_not_raw_n(tmp_path, monkeypatch, route):
     """ANSWER:200-201,239,248: distinct terminal_quote formula and retimed Q2."""
     result = rq.invoke(tmp_path, monkeypatch, "quote", route=route)

@@ -1,7 +1,7 @@
 """Test support for the replay R/Q records. Nothing here is a production replay provider.
 
 ANSWER.md:169-177,197-218,232-246; DELTA.md:60-68,104-110.
-Expected operands below come from the fixed integer-price order schedule,
+Expected operands below come from the fixed price and order schedule,
 never from a report's scalar/marker. All success captures run a real module.
 """
 from __future__ import annotations
@@ -59,7 +59,8 @@ def load_line(value):
 
 
 def csv_tape(path, shape):
-    count = 46 if shape == "sealed" else 60 if shape == "quote" else 8
+    count = 46 if shape == "sealed" else 60 if shape == "quote" else (
+        9 if shape == "nondyadic" else 8)
     lines = ["timestamp,open,high,low,close,volume\n"]
     for index in range(count):
         opening = high = low = close = 128
@@ -70,6 +71,9 @@ def csv_tape(path, shape):
             opening = high = low = close = 136
         if shape == "ordinary" and index == count - 1:
             opening = high = low = close = 144
+        if shape == "nondyadic":
+            prices = (100.7, 100.7, 100.9, 101.7, 101.9, 102.9, 102.7, 103.7, 104.9)
+            opening = high = low = close = prices[index]
         if shape == "cancellation":
             large = 1 << 54
             opening = high = low = close = 1 if index < 2 else (
@@ -270,11 +274,34 @@ def source(qty, entry=128, exit_price=136, fee=1):
             "pnl_pct": ((gross - commission) / float(entry * qty)) * 100.0}
 
 
+def nondyadic_source(qty, entry, exit_price):
+    """Independent binary64 oracle; no report value or rounding seeds it."""
+    qty = float(qty)
+    pointvalue, fx, fee = 1.0, 1.0, 0.07
+    entry_commission = fee * qty
+    exit_commission = fee * qty
+    # engine_orders.cpp:102-104: subtract, multiply left to right, then
+    # subtract the sum of the two fees. A full close retains its entry fee.
+    gross = (exit_price - entry) * qty * pointvalue * fx
+    pnl = gross
+    pnl -= entry_commission + exit_commission
+    entry_cost = entry * qty * pointvalue * fx
+    return {"qty": qty, "entry_price": entry, "exit_price": exit_price,
+            "pnl": pnl, "commission": entry_commission + exit_commission,
+            "max_runup": max(0.0, max(0.0, gross) - entry_commission),
+            "max_drawdown": max(0.0, max(0.0, -gross) + entry_commission),
+            "pnl_pct": (pnl / entry_cost) * 100.0}
+
+
 def sources(shape):
     if shape == "zero":
         return []
     if shape == "ordinary":
         return [source(1)]
+    if shape == "nondyadic":
+        return [nondyadic_source(3, 100.7, 100.9),
+                nondyadic_source(5, 101.7, 101.9),
+                nondyadic_source(13, 102.9, 102.7)]
     if shape == "quote":
         return [source(1, exit_price=128)]
     if shape == "sealed":
@@ -376,12 +403,13 @@ def assert_q_schedule(document, shape, *, selected_anchor=False):
     close_bars = {
         "zero": [], "any": [3, 3], "fifo": [3, 3], "fifo_no_fees": [3, 3],
         "sort": [3, 3], "ordinary": [2], "quote": [30],
+        "nondyadic": [2, 4, 6],
         "two_groups": [3, 3, 3, 3], "cancellation": [4, 4, 4],
         "sealed": [2, 6, 10, 14, 18, 22, 27, 27, 34, 38, 42],
     }[shape]
     points = document["equity_curve"]
     expected_minutes = list(range(0, 60, 15)) if shape == "quote" else list(
-        range(46 if shape == "sealed" else 8))
+        range(46 if shape == "sealed" else 9 if shape == "nondyadic" else 8))
     if shape == "quote":
         expected_minutes[-1] = 60  # Quote retimes the minute-45 completed mark.
     if selected_anchor:
@@ -395,11 +423,13 @@ def assert_q_schedule(document, shape, *, selected_anchor=False):
             continue
         bar = (point["time_ms"] - START) // MINUTE
         assert point["settlement_count"] == len([at for at in close_bars if at <= bar])
-        terminal = index == len(points) - 1 and shape in ("ordinary", "quote")
+        terminal = index == len(points) - 1 and shape in ("ordinary", "quote", "nondyadic")
         assert point["equity_basis"] == (
             "terminal_quote" if terminal and shape == "quote"
             else "range_end" if terminal else "kernel_open")
         term = ((144.0 - 128.0) - (1.0 + 1.0)) if terminal else 0.0
+        if terminal and shape == "nondyadic":
+            term = nondyadic_source(1, 103.7, 104.9)["pnl"]
         if terminal and shape == "quote":
             term = ((128.0 - 128.0) - (1.0 + 1.0)) + term
         if shape == "cancellation":

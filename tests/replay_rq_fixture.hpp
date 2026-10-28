@@ -62,6 +62,7 @@ public:
         config.pyramiding = 4;
         config.commission_type = static_cast<int>(CommissionType::CASH_PER_CONTRACT);
         config.commission_value = shape == "fifo_no_fees" ? 0.0
+            : shape == "nondyadic" ? 0.07
             : shape == "cancellation" ? 0.5 : 1.0;
         config.close_entries_rule_any = shape == "any" || shape == "cancellation";
         config.calc_on_order_fills = false;
@@ -76,7 +77,7 @@ public:
         configure_pine_strategy(config);
         set_syminfo_timezone("UTC");
         set_syminfo_session("24x7");
-        set_syminfo_mintick(1.0);
+        set_syminfo_mintick(shape == "nondyadic" ? 0.1 : 1.0);
         set_syminfo_pointvalue(1.0);
         set_syminfo_metadata("qty_step", 1.0);
         set_trade_history_streamable(shape == "sealed");
@@ -98,6 +99,15 @@ public:
             if (bar == 1) strategy_close("ordinary");
             if (bar == (shape == "quote" ? 2 : 3))
                 strategy_entry("held", true, absent, absent, 1.0);
+            return;
+        }
+        if (shape == "nondyadic") {
+            // Separate market closes: no global-exit replacement or re-cut.
+            if (bar == 0) strategy_entry("decimal", true, absent, absent, 3.0);
+            if (bar == 2) strategy_entry("decimal", true, absent, absent, 5.0);
+            if (bar == 4) strategy_entry("decimal", true, absent, absent, 13.0);
+            if (bar == 1 || bar == 3 || bar == 5) strategy_close("decimal");
+            if (bar == 6) strategy_entry("held", true, absent, absent, 1.0);
             return;
         }
         const int offset = shape == "sealed" ? 24 : 0;
@@ -152,7 +162,8 @@ protected:
 };
 
 inline std::vector<Bar> tape(const std::string& shape) {
-    const int count = shape == "sealed" ? 46 : shape == "quote" ? 60 : 8;
+    const int count = shape == "sealed" ? 46 : shape == "quote" ? 60
+        : shape == "nondyadic" ? 9 : 8;
     std::vector<Bar> result;
     for (int i = 0; i < count; ++i) {
         Bar bar{128.0, 128.0, 128.0, 128.0, 1.0, start + i * minute};
@@ -164,6 +175,11 @@ inline std::vector<Bar> tape(const std::string& shape) {
             bar.open = bar.high = bar.low = bar.close = 136.0;
         if (shape == "ordinary" && i == count - 1)
             bar.open = bar.high = bar.low = bar.close = 144.0;
+        if (shape == "nondyadic") {
+            constexpr std::array<double, 9> prices{
+                100.7, 100.7, 100.9, 101.7, 101.9, 102.9, 102.7, 103.7, 104.9};
+            bar.open = bar.high = bar.low = bar.close = prices[static_cast<std::size_t>(i)];
+        }
         if (shape == "cancellation") {
             const double large = static_cast<double>(UINT64_C(1) << 54);
             const double price = i < 2 ? 1.0 : i == 3 ? large * 2.0 : large;

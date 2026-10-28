@@ -145,6 +145,50 @@ void check_terminal_shape(const std::string& shape, const replay_rq::Host& host,
     }
 }
 
+void check_nondyadic_shape(const replay_rq::Host& host, const pf_report_t& report) {
+    replay_rq::require(host.last_run_status() == 0 && host.last_error().empty(),
+                      "decimal-price fixture did not complete");
+    replay_rq::require(host.groups == 0 && report.trades_len == 4,
+                      "decimal-price fixture needs three separate closes and one held lot");
+    const std::array<double, 4> entries{100.7, 101.7, 102.9, 103.7};
+    const std::array<double, 4> exits{100.9, 101.9, 102.7, 104.9};
+    const std::array<double, 4> quantities{3.0, 5.0, 13.0, 1.0};
+    const std::array<int, 4> entry_bars{1, 3, 5, 7}, exit_bars{2, 4, 6, 8};
+    double expected_net = +0.0, presented_net = +0.0;
+    for (std::size_t i = 0; i < entries.size(); ++i) {
+        const auto& row = report.trades[i];
+        replay_rq::require(row.is_long != 0 && (row.open_at_end != 0) == (i == 3),
+                          "decimal-price fixture has the wrong close or terminal population");
+        replay_rq::require(row.entry_bar_index == entry_bars[i]
+                          && row.exit_bar_index == exit_bars[i]
+                          && row.entry_time == replay_rq::start + entry_bars[i] * replay_rq::minute
+                          && row.exit_time == replay_rq::start + exit_bars[i] * replay_rq::minute,
+                          "decimal-price orders did not fill on the scheduled bars");
+        replay_rq::require(std::memcmp(&row.entry_price, &entries[i], sizeof(double)) == 0
+                          && std::memcmp(&row.exit_price, &exits[i], sizeof(double)) == 0
+                          && std::memcmp(&row.qty, &quantities[i], sizeof(double)) == 0,
+                          "decimal-price fills differ from the independent schedule");
+        const double entry_fee = 0.07 * quantities[i];
+        const double exit_fee = 0.07 * quantities[i];
+        const double commission = entry_fee + exit_fee;
+        double pnl = (exits[i] - entries[i]) * quantities[i] * 1.0 * 1.0;
+        pnl -= entry_fee + exit_fee;
+        replay_rq::require(std::memcmp(&row.pnl, &pnl, sizeof(double)) == 0
+                          && std::memcmp(&row.commission, &commission, sizeof(double)) == 0,
+                          "decimal-price row changed its binary64 close operands");
+        if (i < 3) {
+            expected_net = expected_net + pnl;
+            presented_net = presented_net + row.pnl;
+        }
+    }
+    const double actual_net = host.raw_sum_before_extension();
+    replay_rq::require(std::memcmp(&actual_net, &expected_net, sizeof(double)) == 0
+                      && std::memcmp(&actual_net, &presented_net, sizeof(double)) == 0,
+                      "decimal-price presented close fold differs from the booked total");
+    replay_rq::require(report.equity_curve_len == 9,
+                      "decimal-price fixture has the wrong equity-point population");
+}
+
 std::string single_line(std::string text) {
     for (char& value : text)
         if (value == '\n' || value == '\r') value = ' ';
@@ -158,7 +202,7 @@ int main() {
     // while the later guards still execute and print their own observations.
     for (const std::string shape : {
             "any", "fifo", "fifo_no_fees", "sort", "two_groups", "cancellation",
-            "ordinary", "quote"}) {
+            "ordinary", "quote", "nondyadic"}) {
         pf_strategy_t state = nullptr;
         pf_report_t report{};
         std::string failure;
@@ -172,7 +216,9 @@ int main() {
                 "1", shape == "quote" ? "15" : "1", shape == "quote" ? 1 : 0,
                 4, PF_MAGNIFIER_ENDPOINTS, &report);
             const auto& host = fixture(state);
-            if (shape == "ordinary" || shape == "quote")
+            if (shape == "nondyadic")
+                check_nondyadic_shape(host, report);
+            else if (shape == "ordinary" || shape == "quote")
                 check_terminal_shape(shape, host, report);
             else
                 check_global_shape(shape, host, report);

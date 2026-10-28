@@ -2,16 +2,16 @@
   "source": "pineforge-engine main 95f4fd1f408bf0ded941ecc4144b278a026a677f, default (no replay switch), unjailed, wall clock fixed at 1.0, run id replay-off-golden",
   "scenarios": {
     "fifo": {
-      "default_json": {"sha256": "", "bytes": 0},
-      "primary_sink": {"sha256": "", "bytes": 0}
+      "default_json": {"sha256": "f78a872b6251a8a7a9ba95caa2074a33b519f2c654ad6bf876b341ce7572b2da", "bytes": 9701},
+      "primary_sink": {"sha256": "dfa2679110fbbf9f24f43c902e2e3a2fc33a1d804a202b8554632206d790686e", "bytes": 1554}
     },
     "any": {
-      "default_json": {"sha256": "", "bytes": 0},
-      "primary_sink": {"sha256": "", "bytes": 0}
+      "default_json": {"sha256": "e1de7974b44ece51cdf2577a14a334e5b60da3782b8aa022adadd4ebfbad6ff1", "bytes": 9353},
+      "primary_sink": {"sha256": "64852f4bb3b132efdd085a9a9c092de7b89224d7bf69bbefe4b779a851e81b14", "bytes": 1440}
     },
     "ordinary": {
-      "default_json": {"sha256": "", "bytes": 0},
-      "primary_sink": {"sha256": "", "bytes": 0}
+      "default_json": {"sha256": "afbfc63879d67c30f9f19251545e5643b2ce94e6e100fa7e66a889aa090b521c", "bytes": 9363},
+      "primary_sink": {"sha256": "7c7f414f108b930471026d66174c219304454ffb19232f5d77ea962a7c1455ce", "bytes": 1453}
     }
   }
 }
