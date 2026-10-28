@@ -5,9 +5,9 @@
 // The bar the heap is held to has two parts. A sink run may hold the ledger's
 // declared read-cache cap (TradeLedger::kSinkCacheRows rows of
 // kLedgerEntryBytes each, read from the engine's own constants) above its
-// zero-trade control, plus the fixed slack below. And that excess must not
-// move with the number of trades: the populations below reach the cap and go
-// far past it, and their excess over the control has to agree within the slack.
+// zero-trade control, plus the fixed slack below. That excess must not move
+// with the trade count: the populations below pass the cap, their excess over
+// the control agrees within the slack. A retiring run sizes it by retained rows.
 #define PINEFORGE_TEST_ALLOCATION_BYTES
 #include "global_allocation_replacement.hpp"
 

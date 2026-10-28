@@ -5,7 +5,7 @@ README's *Releases* section and on the GitHub releases page. From 1.0.0 the
 version number follows semantic versioning over the surfaces the
 [public contract](docs/pages/public-contract.md) lists.
 
-## 1.8.0 — 2026-10-27
+## Unreleased
 
 **[1.8.0](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.8.0)**,
 paired with [pineforge-codegen 1.8.0](https://github.com/pineforge-4pass/pineforge-codegen-oss/releases/tag/v1.8.0).
