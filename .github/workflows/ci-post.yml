@@ -20,17 +20,6 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.run_id }}
   cancel-in-progress: false
 
-env:
-  CCACHE_DIR: ${{ github.workspace }}/.ccache
-  CCACHE_COMPILERCHECK: content
-  CCACHE_COMPRESS: "1"
-  CCACHE_MAXSIZE: 500M
-  # The run-failure source guards read the newest release tag. Every job that
-  # runs them fetches it (fetch-depth: 0), so here a missing tag fails them
-  # instead of taking their tag-less offline path (rebuilding the published
-  # catalog from the checked-in diff), which only a clone without tags needs.
-  PINEFORGE_REQUIRE_RELEASE_TAGS: "1"
-
 # The canon authz gate admits our events before any checkout.
 # Light jobs and per-leg aggregates use bare gke-2cpu-4gb-amd64; Linux proof jobs
 # use bare GKE scale-set names with fixed amd64 and arm64 sizes.
@@ -101,66 +90,14 @@ jobs:
           esac
           echo "authz: allowed ($EVENT${PR_AUTHOR:+ by $PR_AUTHOR})" >> "$GITHUB_STEP_SUMMARY"
 
-  # Whether the change is documentation only; scripts/ci_docs_only.py holds the
-  # rule, and every doubt answers no. On a docs-only push the
-  # proof jobs below skip and the build aggregate accepts exactly that skip.
-  # Preflight consumes its independent verifier-class answer, and docs.yml
-  # builds the site as before. Classification uses the light pool class.
-  changes:
-    needs: [authz]
-    runs-on: gke-2cpu-4gb-amd64
-    permissions:
-      contents: read
-    env:
-      PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64"]'
-    outputs:
-      docs_only: ${{ steps.classify.outputs.docs_only }}
-      verifier_slow: ${{ steps.verifier.outputs.verifier_slow }}
-    steps:
-      # The tested commit and its parents: a pull request's merge and the base
-      # it merged into, a push's commit and its parent.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          fetch-depth: 2
-          persist-credentials: false
-
-      # The base's own copy of the rule judges the change, so a change to the
-      # rule is never judged by itself; a base without one runs every job.
-      - name: Classify the change
-        id: classify
-        env:
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PUSH_BEFORE: ${{ github.event.before }}
-          PUSH_FORCED: ${{ github.event.forced }}
-        run: |
-          if git show HEAD^1:scripts/ci_docs_only.py > "$RUNNER_TEMP/ci_docs_only.py"; then
-            python3 "$RUNNER_TEMP/ci_docs_only.py" --root . --github-output "$GITHUB_OUTPUT"
-          else
-            echo "not docs-only: the base holds no scripts/ci_docs_only.py"
-            echo "docs_only=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      # This helper uses the base ci_docs_only.py staged above to read the
-      # same tested diff. A base without the new rule runs every class.
-      - name: Classify verifier self-tests
-        id: verifier
-        env:
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          if git show HEAD^1:scripts/ci_verifier_paths.py > "$RUNNER_TEMP/ci_verifier_paths.py"; then
-            python3 "$RUNNER_TEMP/ci_verifier_paths.py" --root . --github-output "$GITHUB_OUTPUT"
-          else
-            echo "verifier SLOW: the base holds no scripts/ci_verifier_paths.py"
-            echo "verifier_slow=true" >> "$GITHUB_OUTPUT"
-          fi
-
   preflight:
-    needs: [authz, changes]
-    if: ${{ always() && needs.authz.result == 'success' }}
+    needs: [authz]
     runs-on: gke-8cpu-16gb-amd64
     env:
       PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64-16"]'
-      PINEFORGE_VERIFIER_SLOW: ${{ needs.changes.result == 'success' && needs.changes.outputs.verifier_slow || 'true' }}
+      PINEFORGE_VERIFIER_SLOW: 'true'
+      # Source guards require the newest release tag from the full checkout.
+      PINEFORGE_REQUIRE_RELEASE_TAGS: "1"
     # PRs run only source, documentation and policy checks. Build-driving
     # controls and dependency-heavy harness tests live in preflight-slow.
     steps:
@@ -209,9 +146,14 @@ jobs:
 
   # CR-233: build-driving controls and the pytest harness run only on full events.
   preflight-slow:
-    needs: [authz, changes]
-    if: ${{ always() && needs.authz.result == 'success' }}
+    needs: [authz]
     runs-on: gke-8cpu-16gb-amd64
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_COMPILERCHECK: content
+      CCACHE_COMPRESS: "1"
+      CCACHE_MAXSIZE: 500M
+      PINEFORGE_REQUIRE_RELEASE_TAGS: "1"
     steps:
       - name: Refuse an unauthorised run before anything else
         if: ${{ needs.authz.result != 'success' }}
@@ -247,8 +189,13 @@ jobs:
     name: build-shard (${{ matrix.platform.os }}, ${{ matrix.build_type }}, ${{ matrix.shard }}/4)
     # Proof jobs follow authz and classification alongside preflight. Only a
     # successful docs-only answer skips scheduling.
-    needs: [authz, changes]
-    if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
+    needs: [authz]
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_COMPILERCHECK: content
+      CCACHE_COMPRESS: "1"
+      CCACHE_MAXSIZE: 500M
+      PINEFORGE_REQUIRE_RELEASE_TAGS: "1"
     strategy:
       fail-fast: false
       matrix:
@@ -332,8 +279,13 @@ jobs:
 
   build-debug:
     name: build-shard (${{ matrix.platform.os }}, ${{ matrix.build_type }}, ${{ matrix.shard }}/2)
-    needs: [authz, changes]
-    if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
+    needs: [authz]
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_COMPILERCHECK: content
+      CCACHE_COMPRESS: "1"
+      CCACHE_MAXSIZE: 500M
+      PINEFORGE_REQUIRE_RELEASE_TAGS: "1"
     strategy:
       fail-fast: false
       matrix:
@@ -403,8 +355,8 @@ jobs:
 
   build-release-gate:
     name: build (ubuntu-24.04, Release)
-    needs: [authz, changes, build]
-    if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
+    needs: [authz, build]
+    if: ${{ !cancelled() && needs.authz.result == 'success' }}
     runs-on: gke-2cpu-4gb-amd64
     steps:
       - name: Refuse an unauthorised run before anything else
@@ -413,6 +365,7 @@ jobs:
           echo "::error::authz did not pass; nothing of this run's code is checked out or run"
           exit 1
       - name: Require every shard to have passed
+        if: ${{ needs.authz.result == 'success' }}
         shell: bash
         env:
           SHARD_RESULT: ${{ needs.build.result }}
@@ -423,8 +376,8 @@ jobs:
 
   build-debug-gate:
     name: build (ubuntu-24.04, Debug)
-    needs: [authz, changes, build-debug]
-    if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
+    needs: [authz, build-debug]
+    if: ${{ !cancelled() && needs.authz.result == 'success' }}
     runs-on: gke-2cpu-4gb-amd64
     steps:
       - name: Refuse an unauthorised run before anything else
@@ -433,6 +386,7 @@ jobs:
           echo "::error::authz did not pass; nothing of this run's code is checked out or run"
           exit 1
       - name: Require every shard to have passed
+        if: ${{ needs.authz.result == 'success' }}
         shell: bash
         env:
           SHARD_RESULT: ${{ needs.build-debug.result }}
@@ -444,8 +398,13 @@ jobs:
   # GKE arm64 cells run the same verification steps as the amd64 post jobs.
   build-arm:
     name: build (ubuntu-24.04-arm, ${{ matrix.build_type }})
-    needs: [authz, changes]
-    if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
+    needs: [authz]
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_COMPILERCHECK: content
+      CCACHE_COMPRESS: "1"
+      CCACHE_MAXSIZE: 500M
+      PINEFORGE_REQUIRE_RELEASE_TAGS: "1"
     strategy:
       fail-fast: false
       matrix:
@@ -530,14 +489,18 @@ jobs:
   # PINEFORGE_ENABLE_SANITIZERS).
   sanitizers:
     name: sanitizers-shard (${{ matrix.shard }}/4)
-    needs: [authz, changes]
-    if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
+    needs: [authz]
     strategy:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4]
     runs-on: gke-32cpu-64gb-amd64
     env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_COMPILERCHECK: content
+      CCACHE_COMPRESS: "1"
+      CCACHE_MAXSIZE: 500M
+      PINEFORGE_REQUIRE_RELEASE_TAGS: "1"
       ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:abort_on_error=1
       UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
     steps:
@@ -590,8 +553,8 @@ jobs:
 
   sanitizers-gate:
     name: sanitizers
-    needs: [authz, changes, sanitizers]
-    if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
+    needs: [authz, sanitizers]
+    if: ${{ !cancelled() && needs.authz.result == 'success' }}
     runs-on: gke-2cpu-4gb-amd64
     steps:
       - name: Refuse an unauthorised run before anything else
@@ -600,6 +563,7 @@ jobs:
           echo "::error::authz did not pass; nothing of this run's code is checked out or run"
           exit 1
       - name: Require every shard to have passed
+        if: ${{ needs.authz.result == 'success' }}
         shell: bash
         env:
           SHARD_RESULT: ${{ needs.sanitizers.result }}
@@ -616,8 +580,13 @@ jobs:
   # runs as an example_* row asserting both its exit code and its summary line.
   kernel-only:
     name: kernel-only-shard (${{ matrix.shard }}/2)
-    needs: [authz, changes]
-    if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
+    needs: [authz]
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_COMPILERCHECK: content
+      CCACHE_COMPRESS: "1"
+      CCACHE_MAXSIZE: 500M
+      PINEFORGE_REQUIRE_RELEASE_TAGS: "1"
     strategy:
       fail-fast: false
       matrix:
@@ -678,8 +647,8 @@ jobs:
 
   kernel-only-gate:
     name: kernel-only
-    needs: [authz, changes, kernel-only]
-    if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
+    needs: [authz, kernel-only]
+    if: ${{ !cancelled() && needs.authz.result == 'success' }}
     runs-on: gke-2cpu-4gb-amd64
     steps:
       - name: Refuse an unauthorised run before anything else
@@ -688,6 +657,7 @@ jobs:
           echo "::error::authz did not pass; nothing of this run's code is checked out or run"
           exit 1
       - name: Require every shard to have passed
+        if: ${{ needs.authz.result == 'success' }}
         shell: bash
         env:
           SHARD_RESULT: ${{ needs.kernel-only.result }}
@@ -698,8 +668,7 @@ jobs:
 
   # Reuse all three native profiles on main, nightly and manual CI runs.
   native-live:
-    needs: [authz, changes]
-    if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
+    needs: [authz]
     uses: ./.github/workflows/native-live.yml
     with:
       exclude_slow: false
@@ -709,32 +678,25 @@ jobs:
   # The maintainers post the required pineforge/parity status from their
   # separate parity verdict.
   corpus-parity-subset:
-    needs: [authz, changes]
-    if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
+    needs: [authz]
     uses: ./.github/workflows/corpus-parity.yml
     with:
       mode: subset
 
   corpus-parity:
-    needs: [authz, changes]
-    if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
+    needs: [authz]
     uses: ./.github/workflows/corpus-parity.yml
     with:
       mode: full
 
-  # Advisory aggregate context covering every GitHub Actions lane. The merge
-  # ruleset requires pineforge/verify and pineforge/parity, posted by the
-  # maintainers, rather than this build context.
+  # The required aggregate covers every job directly; every result must succeed.
   build-gate:
-    name: build
-    needs: [authz, changes, preflight, build, build-debug, build-release-gate, build-debug-gate, build-arm, sanitizers, sanitizers-gate, native-live, kernel-only, kernel-only-gate, corpus-parity-subset, preflight-slow, corpus-parity]
+    needs: [authz, preflight, build, build-debug, build-release-gate, build-debug-gate, build-arm, sanitizers, sanitizers-gate, native-live, kernel-only, kernel-only-gate, corpus-parity-subset, preflight-slow, corpus-parity]
     if: always()
-    # The aggregate runs inline Python and shell on the light pool class.
+    # The aggregate runs only the refusal and result checks on the light pool.
     runs-on: gke-2cpu-4gb-amd64
     permissions:
       contents: read
-    env:
-      PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64"]'
     steps:
       - name: Refuse an unauthorised run before anything else
         if: ${{ needs.authz.result != 'success' }}
@@ -742,45 +704,8 @@ jobs:
           echo "::error::authz did not pass; nothing of this run's code is checked out or run"
           exit 1
       - name: Require every verification lane to have passed
-        shell: bash
         env:
-          AUTHZ_RESULT: ${{ needs.authz.result }}
-          CHANGES_RESULT: ${{ needs.changes.result }}
-          DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
-          PREFLIGHT_RESULT: ${{ needs.preflight.result }}
-          BUILD_RESULT: ${{ needs.build.result }}
-          DEBUG_BUILD_RESULT: ${{ needs.build-debug.result }}
-          RELEASE_GATE_RESULT: ${{ needs.build-release-gate.result }}
-          DEBUG_GATE_RESULT: ${{ needs.build-debug-gate.result }}
-          ARM_BUILD_RESULT: ${{ needs.build-arm.result }}
-          SANITIZER_RESULT: ${{ needs.sanitizers.result }}
-          SANITIZER_GATE_RESULT: ${{ needs.sanitizers-gate.result }}
-          NATIVE_RESULT: ${{ needs.native-live.result }}
-          KERNEL_RESULT: ${{ needs.kernel-only.result }}
-          KERNEL_GATE_RESULT: ${{ needs.kernel-only-gate.result }}
-          PARITY_RESULT: ${{ needs.corpus-parity-subset.result }}
-          SLOW_PREFLIGHT_RESULT: ${{ needs.preflight-slow.result }}
-          FULL_PARITY_RESULT: ${{ needs.corpus-parity.result }}
+          RESULTS: ${{ toJSON(needs.*.result) }}
         run: |
-          printf '%s\n' "authz: $AUTHZ_RESULT" "changes: $CHANGES_RESULT, docs only: ${DOCS_ONLY:-unanswered}" \
-            "preflight: $PREFLIGHT_RESULT" "matrix: $BUILD_RESULT" \
-            "debug shards: $DEBUG_BUILD_RESULT" "release aggregate: $RELEASE_GATE_RESULT" "debug aggregate: $DEBUG_GATE_RESULT" \
-            "arm64 matrix: $ARM_BUILD_RESULT" \
-            "sanitizers: $SANITIZER_RESULT" "native: $NATIVE_RESULT" \
-            "sanitizers aggregate: $SANITIZER_GATE_RESULT" "kernel aggregate: $KERNEL_GATE_RESULT" \
-            "kernel: $KERNEL_RESULT" "corpus parity (subset): $PARITY_RESULT" \
-            "preflight (slow): $SLOW_PREFLIGHT_RESULT" "corpus parity (full): $FULL_PARITY_RESULT"
-          # Every shard matrix, leg aggregate and full-event proof must pass.
-          # Only a classified docs-only push may skip proof jobs.
-          # Both preflight tiers must pass even for a docs-only push.
-          docs_only=false
-          if [[ "$CHANGES_RESULT" == "success" && "$DOCS_ONLY" == "true" ]]; then docs_only=true; fi
-          passed() { [[ "$1" == "success" || ( "$docs_only" == "true" && "$1" == "skipped" ) ]]; }
-          [[ "$AUTHZ_RESULT" == "success" && "$CHANGES_RESULT" == "success" ]] \
-            && [[ "$PREFLIGHT_RESULT" == "success" ]] && passed "$BUILD_RESULT" \
-            && passed "$DEBUG_BUILD_RESULT" && passed "$RELEASE_GATE_RESULT" && passed "$DEBUG_GATE_RESULT" \
-            && passed "$ARM_BUILD_RESULT" \
-            && passed "$SANITIZER_RESULT" && passed "$NATIVE_RESULT" \
-            && passed "$SANITIZER_GATE_RESULT" && passed "$KERNEL_GATE_RESULT" \
-            && passed "$KERNEL_RESULT" && passed "$PARITY_RESULT" \
-            && [[ "$SLOW_PREFLIGHT_RESULT" == "success" ]] && passed "$FULL_PARITY_RESULT"
+          echo "$RESULTS"
+          [ "$(echo "$RESULTS" | tr -d '[] \n"' | tr ',' '\n' | grep -vc '^success$')" = "0" ] || { echo "::error::a needed job did not succeed"; exit 1; }

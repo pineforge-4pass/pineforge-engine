@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Whether a CI run's change is documentation only, for .github/workflows/ci.yml.
+"""Whether a pull request's change is documentation only.
 
-The workflow's ``changes`` job runs this script before anything else. On a
-docs-only change the proof jobs -- the four ``build`` legs, ``sanitizers``,
-``kernel-only``, ``native-live`` and ``corpus-parity-subset`` -- are skipped,
-and the ``build`` aggregate accepts exactly that skip. ``preflight`` still runs,
+PR admission runs this script before the proof jobs. On a docs-only pull
+request the proof jobs are skipped and the result accepts exactly that skip.
+Every non-PR event runs every proof job. ``preflight`` still runs,
 and page checks outside PROOF_READS are among its stages
 (doc-anchors, doc-lint, doc-reverts, doc-pine-coverage, design-inventory,
 kernel-seam-rows, the native C surface table), as are the workflow wiring
@@ -24,28 +23,28 @@ under ``docs/``, unless
 
 A change is docs-only when it changes at least one path and every path it
 changes, both sides of a rename, is documentation. Whatever the script cannot
-establish answers "not docs-only", and every proof job runs: an event other
-than a pull request or a push (a manual dispatch runs everything), a push that
-created the branch, was forced or carried more than one commit, a pull request
+establish answers "not docs-only", and every proof job runs: any event other
+than a pull request, a pull request
 whose checked-out merge is not the merge of its head, a commit git cannot read,
 an empty change.
 
 The change is HEAD, checked out with its parents, against its first parent:
 for a pull request the merge GitHub tests against the base it merged into,
-exactly what the tested tree changes; for a push the pushed commit against
-``before``, which must be that parent.
+exactly what the tested tree changes. Pushes need no diff classification.
 
-The workflow runs the copy of this script that the first parent holds, with
-``--root`` naming the checkout, so a change to the rule is judged by the rule
-it changes and never by itself; a base without the script runs everything.
+Admission checks out the base copy of this script and supplies ``--paths``;
+a change to the rule is judged by the rule it changes. Event-mode callers
+can use ``--root`` to name the checkout holding the tested PR merge.
 
     python3 ci_docs_only.py [--root DIR] [--github-output FILE]
     python3 ci_docs_only.py --paths FILE [--github-output FILE]
 
-reads GITHUB_EVENT_NAME, and PR_HEAD_SHA (pull request) or PUSH_BEFORE and
-PUSH_FORCED (push), from the environment. It prints its reasons, appends
+reads GITHUB_EVENT_NAME and PR_HEAD_SHA (pull request) from the environment.
+It prints its reasons, appends
 ``docs_only=true|false`` and ``github_only=true|false`` to FILE, and exits 0
-whatever it decides. ``--paths`` reads a complete NUL-separated list as data;
+whatever it decides. Non-PR event classification also appends ``code=true``.
+``--paths`` is the event-independent PR admission API; it reads a complete
+NUL-separated list as data and preserves the PR output format;
 an unreadable or unterminated list is neither class. The classifier is held by
 scripts/test_ci_docs_only.py (a ci_preflight stage).
 """
@@ -80,7 +79,6 @@ PROOF_READS = {
         'docs/build.sh --self-test-seo before building the site',
 }
 SHA = re.compile(r'[0-9a-f]{40}')
-NO_COMMIT = '0' * 40
 SHOWN = 40
 
 
@@ -103,7 +101,7 @@ def classify_paths(paths: list[str], *, pull_request: bool = True) -> tuple[bool
     containing newlines, quotes or ``..`` are still names, and only the exact
     directory prefixes below classify them.
     """
-    if not paths:
+    if not pull_request or not paths:
         return False, False
     docs_only = all(is_documentation(path) for path in paths)
     github_only = pull_request and all(path.startswith('.github/') for path in paths)
@@ -144,26 +142,14 @@ def git(root: Path, *args: str) -> str:
 def compared(env: dict[str, str], root: Path) -> tuple[str, str, str]:
     """The two commits whose trees the change is, and what they are."""
     event = env.get('GITHUB_EVENT_NAME', '')
-    if event not in ('pull_request', 'push'):
+    if event != 'pull_request':
         raise Doubt(f'{event or "an unnamed event"} runs every job')
     commits = git(root, 'rev-list', '--parents', '--max-count=1', 'HEAD').split()
-    if event == 'pull_request':
-        pr_head = env.get('PR_HEAD_SHA', '')
-        if len(commits) != 3 or not SHA.fullmatch(pr_head) or commits[2] != pr_head:
-            raise Doubt(f'HEAD is not a merge of the pull request head {pr_head or "(none)"}: '
-                        f'HEAD and its parents are {" ".join(commits) or "(none)"}')
-        return commits[1], commits[0], 'the tested merge against its base'
-    before, forced = env.get('PUSH_BEFORE', ''), env.get('PUSH_FORCED', '')
-    if forced != 'false':
-        raise Doubt('the push was forced' if forced == 'true' else f'push forced={forced!r}')
-    if before == NO_COMMIT:
-        raise Doubt('the push created the branch')
-    if not SHA.fullmatch(before):
-        raise Doubt(f'push before={before!r} names no commit')
-    if len(commits) != 2 or commits[1] != before:
-        raise Doubt(f'the push carried more than its one commit: before {before} is not the parent '
-                    f'of HEAD, whose parents are {" ".join(commits[1:]) or "(none)"}')
-    return before, commits[0], 'the pushed commit against the previous tip'
+    pr_head = env.get('PR_HEAD_SHA', '')
+    if len(commits) != 3 or not SHA.fullmatch(pr_head) or commits[2] != pr_head:
+        raise Doubt(f'HEAD is not a merge of the pull request head {pr_head or "(none)"}: '
+                    f'HEAD and its parents are {" ".join(commits) or "(none)"}')
+    return commits[1], commits[0], 'the tested merge against its base'
 
 
 def changed_paths(root: Path, base: str, head: str) -> list[str]:
@@ -236,6 +222,8 @@ def main(argv: list[str] | None = None) -> int:
         with args.github_output.open('a', encoding='utf-8') as output:
             output.write(f'docs_only={"true" if docs_only else "false"}\n')
             output.write(f'github_only={"true" if github_only else "false"}\n')
+            if args.paths is None and os.environ.get('GITHUB_EVENT_NAME') != 'pull_request':
+                output.write('code=true\n')
     return 0
 
 

@@ -22,10 +22,11 @@ import ci_verify
 from ci_verifier_classes import select_test_ids, verifier_class_tier
 from run_unittest_shards import discover_test_ids
 from ci_preflight import (AUTHZ_ALWAYS, AUTHZ_REFUSE_STEP, CORES,
-                          DOCS_ONLY_SKIP, GITHUB_ONLY_SKIP, HEAVY_SKIP, HOSTED_MATRIX_RUNNER, JOB_COMMANDS,
+                          DOCS_ONLY_SKIP, HOSTED_MATRIX_RUNNER, JOB_COMMANDS,
+                          POST_LEG_IF,
                           PR_RUNNER, POST_RUNNER, MATRIX_LINUX_RUNNER, MATRIX_RUNNER,
                           NATIVE_EXCLUSION,
-                          PREFLIGHT_IF, PROOF_JOBS, PR_PROOF_JOBS, RELEASE_RUNNER, _jobs, check_commands,
+                          PROOF_JOBS, PR_PROOF_JOBS, RELEASE_RUNNER, _jobs, check_commands,
                           ADMIT_MAX_DEPTH, ADMIT_MAX_FILE_BYTES, ADMIT_MAX_LINE, ADMIT_MAX_LINES,
                           ADMIT_MAX_TOTAL_BYTES, admit_rule_findings, admit_shape_findings,
                           admit_yaml_findings, gke_admit_workflow_findings,
@@ -52,7 +53,7 @@ GKE_2 = 'gke-2cpu-4gb-amd64'
 GKE_4 = 'gke-4cpu-8gb-amd64'
 EXPECTED_LIGHT_GKE_JOBS = {
     'ci-post.yml': dict.fromkeys(
-        ('authz', 'changes', 'build-release-gate', 'build-debug-gate',
+        ('authz', 'build-release-gate', 'build-debug-gate',
          'sanitizers-gate', 'kernel-only-gate', 'build-gate'), GKE_2),
     'native-live.yml': dict.fromkeys(
         ('authz', 'native-live-native', 'native-live-gate'), GKE_4),
@@ -154,7 +155,7 @@ GKE_PR_JOB_IDS = ('admit', 'preflight', 'build', 'build-debug',
 GKE_PROOF_IF = ("${{ needs.admit.outputs.allowed == 'true' && "
                 "needs.admit.outputs.docs_only != 'true' && "
                 "needs.admit.outputs.github_only != 'true' }}")
-POST_CI_JOB_IDS = ('authz', 'changes', 'preflight', 'preflight-slow', 'build',
+POST_CI_JOB_IDS = ('authz', 'preflight', 'preflight-slow', 'build',
                   'build-debug', 'build-release-gate', 'build-debug-gate',
                   'sanitizers-gate', 'kernel-only-gate',
                   'build-arm', 'sanitizers', 'kernel-only', 'native-live', 'corpus-parity-subset',
@@ -165,7 +166,7 @@ NATIVE_HOSTED_RUNNERS = {'authz': GKE_4, 'native-live': GKE_16,
 FLEET_JOB_IDS = {
     'ci.yml': ('authz',),
     'gke-pr.yml': GKE_PR_JOB_IDS,
-    'ci-post.yml': ('authz', 'changes', 'preflight', 'preflight-slow', 'build',
+    'ci-post.yml': ('authz', 'preflight', 'preflight-slow', 'build',
                     'build-debug', 'build-arm', 'sanitizers', 'kernel-only', 'build-gate',
                     'build-release-gate', 'build-debug-gate', 'sanitizers-gate', 'kernel-only-gate'),
     'native-live.yml': ('authz', 'native-live', 'native-live-shards', 'native-live-native', 'native-live-gate'),
@@ -179,7 +180,7 @@ FLEET_JOB_IDS = {
 LIGHT_JOB_IDS = {
     'ci.yml': ('authz',),
     'gke-pr.yml': ('admit', 'legs', 'result'),
-    'ci-post.yml': ('authz', 'changes', 'build-gate', 'build-release-gate',
+    'ci-post.yml': ('authz', 'build-gate', 'build-release-gate',
                     'build-debug-gate', 'sanitizers-gate', 'kernel-only-gate'),
     'corpus-parity.yml': ('authz',),
     'docs.yml': ('authz', 'build'),
@@ -309,12 +310,15 @@ jobs:
 
 
 def job_script(ci, job, step_name=None):
-    """A job's run block, exactly as the runner receives it."""
+    """A job's inline command or run block, exactly as the runner receives it."""
     body = _jobs(ci)[job]
     if step_name is not None:
         body = ci_preflight._step_named(ci_preflight._steps(body), '      - name: ' + step_name)
     lines = body.split('\n')
-    start = next(index for index, line in enumerate(lines) if line.strip() == 'run: |')
+    start = next(index for index, line in enumerate(lines) if line.strip().startswith('run: '))
+    command = lines[start].strip().removeprefix('run: ')
+    if command != '|':
+        return command + '\n'
     depth = len(lines[start + 1]) - len(lines[start + 1].lstrip(' '))
     script = []
     for line in lines[start + 1:]:
@@ -894,9 +898,9 @@ class WorkflowEventFleets(unittest.TestCase):
         findings = ci_preflight.runner_findings({**workflows, 'ci-post.yml': changed})
         self.assertIn(f'ci-post.yml job build-arm must run on {GKE_ARM}', findings)
         for scope, before, after in (
-                (None, '\nenv:\n', f"\nenv:\n  PF_CI_LABELS: '{POST_RUNNER}'\n"),
-                ('build-arm', '    steps:\n',
-                 f"    env:\n      PF_CI_LABELS: '{POST_RUNNER}'\n    steps:\n")):
+                (None, '\njobs:\n', f"\nenv:\n  PF_CI_LABELS: '{POST_RUNNER}'\njobs:\n"),
+                ('build-arm', '    env:\n',
+                 f"    env:\n      PF_CI_LABELS: '{POST_RUNNER}'\n")):
             with self.subTest(metadata_scope=scope):
                 changed = in_job(post, scope, before, after)
                 self.assertNotEqual(changed, post)
@@ -1128,7 +1132,7 @@ class LightGkeRunnerPolicy(unittest.TestCase):
             self.assertIn(f'{name} job {job} must not expose credentials on GKE',
                           ci_preflight.runner_findings({**workflows, name: changed}))
 
-    def test_real_post_light_split_pins_seven_and_five_instances(self):
+    def test_real_post_light_split_pins_six_and_five_instances(self):
         names = ('ci-post.yml', 'native-live.yml', 'corpus-parity.yml')
         workflows = {name: (ROOT / '.github/workflows' / name).read_text() for name in names}
         calls = [value.removeprefix('./.github/workflows/')
@@ -1142,9 +1146,9 @@ class LightGkeRunnerPolicy(unittest.TestCase):
                 self.assertEqual(ci_preflight._job_values(body, 'runs-on', unquote=False), [runner])
                 self.assertEqual(ci_preflight._matrix_rows(body), [{}])
                 counts[runner] += 1 if name == 'ci-post.yml' else calls.count(name)
-        self.assertEqual(counts, {GKE_2: 7, GKE_4: 5})
+        self.assertEqual(counts, {GKE_2: 6, GKE_4: 5})
         self.assertEqual(ci_preflight._gke_cap_findings(workflows), [])
-        for name, label, boundary, overflow in (('ci-post.yml', GKE_2, 2, 3),
+        for name, label, boundary, overflow in (('ci-post.yml', GKE_2, 3, 4),
                                                  ('native-live.yml', GKE_4, 4, 5)):
             for replicas in (boundary, overflow):
                 matrix = ('    strategy:\n      matrix:\n        replica: ['
@@ -1738,10 +1742,10 @@ class PostFleetRunnerPolicy(unittest.TestCase):
             "Hosted `ubuntu-24.04` runs PR `authz`, admission, `legs` and `result` jobs, and `docs.yml`'s `build`; "
             'secret-free post guards and aggregates use bare scalar GKE names. '
             'These light, secret-free jobs need no VM-only tools, mounts or caches.',
-            'The seven `ci-post.yml` light jobs use `gke-2cpu-4gb-amd64`; called parity/native light jobs use '
+            'The six `ci-post.yml` light jobs use `gke-2cpu-4gb-amd64`; called parity/native light jobs use '
             '`gke-4cpu-8gb-amd64` to satisfy the per-label cap, without a weight claim.',
-            'Local reusable calls cannot mix PR and GKE jobs. The full post call graph expands to 36 GKE job instances: '
-            "amd64 32/16/8/4/2 CPU labels carry 8/7/7/5/7 jobs and arm64 16 CPU carries 2; each label's static cap is 8.",
+            'Local reusable calls cannot mix PR and GKE jobs. The full post call graph expands to 35 GKE job instances: '
+            "amd64 32/16/8/4/2 CPU labels carry 8/7/7/5/6 jobs and arm64 16 CPU carries 2; each label's static cap is 8.",
             'The amd64 post build shards and the two arm64 post cells use bare scalar',
             'Hosted exceptions cover PR light jobs and the existing hosted release cells; post light jobs use bare scalar GKE names.',
             '`native-live.yml` runs four `native` shards on `gke-8cpu-16gb-amd64`;\n'
@@ -1752,7 +1756,7 @@ class PostFleetRunnerPolicy(unittest.TestCase):
             "Promotion's `promote-guard` and docs-post/probe `authz` each use one "
             '`gke-2cpu-4gb-amd64` instance in separate roots; their image must include `gh` for permission lookups.',
             '| `ci-post.yml` | Push to `main`, 01:30 UTC schedule, dispatch | '
-            'Seven light jobs: scalar `gke-2cpu-4gb-amd64`; bare GKE scalars: '
+            'Six light jobs: scalar `gke-2cpu-4gb-amd64`; bare GKE scalars: '
             'Release/sanitizers `gke-32cpu-64gb-amd64`, Debug/kernel `gke-16cpu-32gb-amd64`, '
             'preflight tiers `gke-8cpu-16gb-amd64`, arm64 `gke-16cpu-32gb-arm64` |',
             '| `native-live.yml` | Dispatch and post CI callers on `main` | '
@@ -1789,6 +1793,91 @@ POST_SHARD_CASES = (
     ('sanitizers', 'sanitizers', 4, GKE_32, 'sanitizers-gate', 'sanitizers'),
     ('kernel-only', 'kernel', 2, GKE_16, 'kernel-only-gate', 'kernel-only'),
 )
+
+
+class PostCanonPolicy(unittest.TestCase):
+    def post(self):
+        return (ROOT / '.github/workflows/ci-post.yml').read_text()
+
+    def test_post_has_no_classifier_and_only_one_status_aggregate(self):
+        post = self.post()
+        jobs = _jobs(post)
+        self.assertNotIn('changes', jobs)
+        self.assertEqual(ci_preflight._events(post),
+                         {'push', 'schedule', 'workflow_dispatch'})
+        self.assertEqual(ci_preflight._job_values(post, 'env'), [])
+        self.assertEqual(
+            [job for job, body in jobs.items()
+             if any('always()' in value for value in ci_preflight._job_values(body, 'if'))],
+            ['build-gate'])
+        gate = jobs['build-gate']
+        self.assertEqual(ci_preflight._job_values(gate, 'name'), [])
+        self.assertEqual(ci_preflight._job_values(gate, 'env'), [])
+        self.assertEqual(set(ci_preflight._needs(gate)), set(jobs) - {'build-gate'})
+        self.assertEqual(ci_preflight._step_values(ci_preflight._steps(gate)[-1], 'shell'), [])
+
+    def test_post_refuses_restored_classification_and_pr_trigger(self):
+        post = self.post()
+        restored = post + ('\n  changes:\n    needs: [authz]\n'
+                           '    runs-on: gke-2cpu-4gb-amd64\n    steps:\n'
+                           '      - run: echo classification\n')
+        self.assertIn('ci-post.yml must not classify full-event changes',
+                      ci_preflight.pipeline_workflow_findings(restored, 'ci-post.yml', pr=False))
+        changed = post.replace('  push:\n', '  pull_request:\n  push:\n', 1)
+        self.assertNotEqual(changed, post)
+        self.assertIn('ci-post.yml must keep its exact main push, nightly and manual triggers',
+                      ci_preflight.pipeline_workflow_findings(changed, 'ci-post.yml', pr=False))
+
+    def test_post_gate_requires_every_direct_need(self):
+        post = self.post()
+        jobs = _jobs(post)
+        self.assertEqual(ci_preflight._job_values(jobs['build-gate'], 'name'), [])
+        needs = ci_preflight._needs(jobs['build-gate'])
+        self.assertEqual(set(needs), set(jobs) - {'build-gate'})
+        self.assertEqual(len(needs), len(set(needs)))
+        declaration = '    needs: [' + ', '.join(needs) + ']\n'
+        self.assertIn(declaration, jobs['build-gate'])
+        for omitted in needs:
+            with self.subTest(omitted=omitted):
+                changed = in_job(post, 'build-gate', declaration,
+                                 '    needs: [' + ', '.join(
+                                     job for job in needs if job != omitted) + ']\n')
+                self.assertNotEqual(changed, post)
+                self.assertIn('build-gate must directly need every other full-event job',
+                              ci_preflight.pipeline_workflow_findings(
+                                  changed, 'ci-post.yml', pr=False))
+
+    def test_post_aggregate_fields_and_local_environments_are_binding(self):
+        post = self.post()
+        self.assertEqual(
+            re.findall(r'(?m)^    ([A-Za-z_][A-Za-z_0-9-]*):', _jobs(post)['build-gate']),
+            ['needs', 'if', 'runs-on', 'permissions', 'steps'])
+        for extra in ('    name: build\n', '    env: {}\n', '    defaults: {}\n',
+                      '    continue-on-error: true\n'):
+            with self.subTest(extra=extra):
+                changed = in_job(post, 'build-gate', '    steps:\n', extra + '    steps:\n')
+                self.assertNotEqual(changed, post)
+                self.assertIn('build-gate must keep only the canonical aggregate fields and direct needs',
+                              ci_preflight.pipeline_workflow_findings(changed, 'ci-post.yml', pr=False))
+        changed = post.replace('\njobs:\n', '\nenv:\n  CCACHE_COMPRESS: "1"\njobs:\n', 1)
+        self.assertNotEqual(changed, post)
+        self.assertIn('ci-post.yml must keep workflow env and defaults out of the aggregate',
+                      ci_preflight.pipeline_workflow_findings(changed, 'ci-post.yml', pr=False))
+        verdict = '      - name: Require every verification lane to have passed\n'
+        changed = in_job(post, 'build-gate', verdict, verdict + '        shell: bash\n')
+        self.assertNotEqual(changed, post)
+        self.assertIn('build-gate must require exactly success from every needed job',
+                      ci_preflight.pipeline_workflow_findings(changed, 'ci-post.yml', pr=False))
+        for job in ('preflight-slow', 'build', 'build-debug', 'build-arm', 'sanitizers', 'kernel-only'):
+            environment = ci_preflight._job_block(_jobs(post)[job], 'env')
+            self.assertEqual(len(environment), 8 if job == 'sanitizers' else 6)
+            for line in environment[1:]:
+                with self.subTest(job=job, removed=line):
+                    changed = in_job(post, job, line + '\n', '')
+                    self.assertNotEqual(changed, post)
+                    self.assertIn(f'{job} must retain its local compiler and release-tag environment',
+                                  ci_preflight.pipeline_workflow_findings(
+                                      changed, 'ci-post.yml', pr=False))
 
 
 class PostCTestShardPolicy(unittest.TestCase):
@@ -1912,26 +2001,28 @@ class PostCTestShardPolicy(unittest.TestCase):
         for job, _, _, _, aggregate, display in POST_SHARD_CASES:
             post = ('on: workflow_dispatch\njobs:\n'
                     f'  {aggregate}:\n    name: {display}\n'
-                    f'    needs: [authz, changes, {job}]\n'
-                    f'    if: {DOCS_ONLY_SKIP}\n'
+                    f'    needs: [authz, {job}]\n'
+                    f'    if: {POST_LEG_IF}\n'
                     '    runs-on: ubuntu-24.04\n    steps:\n'
                     + AUTHZ_REFUSE_STEP
                     + '      - name: Require every shard to have passed\n'
+                    "        if: ${{ needs.authz.result == 'success' }}\n"
                     '        shell: bash\n        env:\n'
                     f'          SHARD_RESULT: ${{{{ needs.{job}.result }}}}\n'
                     '        run: |\n          set -euo pipefail\n'
                     '          printf \'%s\\n\' "shards: $SHARD_RESULT"\n'
                     '          [[ "$SHARD_RESULT" == "success" ]]\n')
             for before, after in (
-                    (f'needs: [authz, changes, {job}]', 'needs: [authz, changes]'),
+                    (f'needs: [authz, {job}]', 'needs: [authz]'),
                     (f'needs.{job}.result', 'needs.other-leg.result'),
                     ('[[ "$SHARD_RESULT" == "success" ]]',
                      '[[ "$SHARD_RESULT" == "success" || "$SHARD_RESULT" == "skipped" ]]'),
-                    (f'    if: {DOCS_ONLY_SKIP}\n', '    if: always()\n')):
+                    (f'    if: {POST_LEG_IF}\n', '    if: always()\n'),
+                    ("        if: ${{ needs.authz.result == 'success' }}\n", '')):
                 with self.subTest(aggregate=aggregate, replacement=after):
                     changed = in_job(post, aggregate, before, after)
                     self.assertIn(f'{aggregate} must require only its own complete shard matrix '
-                                  'and keep its docs-only scheduling policy',
+                                  'and keep its guarded non-required override policy',
                                   ci_preflight.pipeline_workflow_findings(
                                       changed, 'ci-post.yml', pr=False))
 
@@ -2032,7 +2123,7 @@ class PostLinuxBuildPolicy(unittest.TestCase):
     def test_post_gate_requires_the_arm_job(self):
         post = self.post().replace(', build-arm,', ',', 1)
         self.assertNotIn('build-arm', ci_preflight._needs(_jobs(post)['build-gate']))
-        self.assertIn('build-gate must aggregate authz, every proof job, preflight and changes',
+        self.assertIn('build-gate must directly need every other full-event job',
                       ci_preflight.pipeline_workflow_findings(post, 'ci-post.yml', pr=False))
 
     def test_post_arm_refuses_a_non_arm_runner(self):
@@ -3010,8 +3101,8 @@ class PreflightFailures(unittest.TestCase):
 
     def test_light_jobs_accept_exactly_the_requested_routing(self):
         workflows = self.light_workflows()
-        # CI 1 + admission 3 + post 7 + parity 1 + docs 3 + native 3 + probe 1.
-        self.assertEqual(sum(map(len, LIGHT_JOB_IDS.values())), 19)
+        # CI 1 + admission 3 + post 6 + parity 1 + docs 3 + native 3 + probe 1.
+        self.assertEqual(sum(map(len, LIGHT_JOB_IDS.values())), 18)
         self.assertEqual(ci_preflight.runner_findings(workflows), [])
         self.assertEqual(ci_preflight.workflow_fleet_findings(workflows), [])
         for name in ('corpus-parity.yml', 'docs.yml', 'docs-post.yml'):
@@ -3047,15 +3138,18 @@ class PreflightFailures(unittest.TestCase):
         workflows = self.light_workflows()
         self.assertEqual(ci_preflight.runner_findings(workflows), [])
         for name in ('ci-post.yml',):
-            for job in ('changes', 'build-gate'):
+            for job in ('build-gate',):
                 expected = EXPECTED_LIGHT_GKE_JOBS.get(name, {}).get(job, 'ubuntu-24.04')
-                env = ci_preflight._job_block(_jobs(workflows[name])[job], 'env')
-                marker, = [line + '\n' for line in env if 'PF_CI_LABELS:' in line]
-                for replacement in ('', f"      PF_CI_LABELS: '{PR_RUNNER}'\n",
-                                    f"      PF_CI_LABELS: '{RELEASE_RUNNER}'\n"):
+                for replacement in ('', f"    env:\n      PF_CI_LABELS: '{PR_RUNNER}'\n",
+                                    f"    env:\n      PF_CI_LABELS: '{RELEASE_RUNNER}'\n"):
                     with self.subTest(workflow=name, job=job, metadata=replacement):
-                        changed = in_job(workflows[name], job, marker, replacement)
-                        self.assertEqual(ci_preflight.runner_findings({**workflows, name: changed}), [])
+                        changed = in_job(workflows[name], job, '    steps:\n',
+                                         replacement + '    steps:\n')
+                        if replacement:
+                            self.assertIn(f'{name} job {job} must not set PF_CI_LABELS on a GKE job',
+                                          ci_preflight.runner_findings({**workflows, name: changed}))
+                        else:
+                            self.assertEqual(ci_preflight.runner_findings({**workflows, name: changed}), [])
                         changed = in_job(changed, job, f'    runs-on: {expected}\n',
                                          f'    runs-on: {PR_RUNNER}\n')
                         suffix = ' (hosted)' if expected == 'ubuntu-24.04' else ''
@@ -3317,7 +3411,11 @@ class PreflightFailures(unittest.TestCase):
             for after in ('', AUTHZ_REFUSE_STEP.replace('exit 1', 'true'),
                           '      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0\n' + AUTHZ_REFUSE_STEP):
                 with self.subTest(job=job, mutation=after):
-                    findings = self.mutated_file_findings(index, job, AUTHZ_REFUSE_STEP, after)
+                    sources = self.ci_sources()
+                    sources[index] = in_job(
+                        sources[index], job, '    steps:\n', f'    if: {POST_LEG_IF}\n    steps:\n')
+                    sources[index] = in_job(sources[index], job, AUTHZ_REFUSE_STEP, after)
+                    findings = ci_workflow_findings(*sources, others=self.other_sources())
                     self.assertIn(f'{Path(CI_SOURCES[index]).name} job {job} with a status function must refuse authz first',
                                   findings)
 
@@ -3332,8 +3430,8 @@ class PreflightFailures(unittest.TestCase):
         unnamed_run = '      - run: python3 scripts/ci_preflight.py --output-dir build-ci-preflight\n'
         for function in ('always()', 'cancelled()', 'failure()', 'success()'):
             condition = '${{ ' + function + " && needs.authz.result == 'success' }}"
-            conditioned = in_job(body, None, f'    if: {AUTHZ_ALWAYS}\n',
-                                 f'    if: {condition}\n')
+            conditioned = in_job(body, None, '    steps:\n',
+                                 f'    if: {condition}\n    steps:\n')
             mutations = (
                 (in_job(conditioned, None, AUTHZ_REFUSE_STEP, ''),
                  'ci-post.yml job preflight with a status function must refuse authz first'),
@@ -3371,26 +3469,13 @@ class PreflightFailures(unittest.TestCase):
             (6, '  kernel-only:\n', '  missing-kernel:\n'),
             (6, '  corpus-parity-subset:\n', '  missing-subset:\n'),
             (6, '  build-gate:\n', '  missing-gate:\n'),
-            (6, 'passed "$SANITIZER_RESULT"', 'true'),
-            (6, '[[ "$PREFLIGHT_RESULT" == "success" ]] && passed "$BUILD_RESULT"',
-                'passed "$PREFLIGHT_RESULT" && passed "$BUILD_RESULT"'),
-            (6, 'needs: [authz, changes, preflight,', 'needs: [authz, preflight,'),
-            (6, '          CHANGES_RESULT: ${{ needs.changes.result }}\n', ''),
-            (6, '          DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}\n',
-                "          DOCS_ONLY: 'true'\n"),
-            # The docs-only answer is the classifier's, never a constant.
-            (6, '      docs_only: ${{ steps.classify.outputs.docs_only }}\n',
-                "      docs_only: 'true'\n"),
-            # The base's copy judges; the answer is the script's alone.
-            (6, 'python3 "$RUNNER_TEMP/ci_docs_only.py" --root . --github-output "$GITHUB_OUTPUT"',
-                'python3 scripts/ci_docs_only.py --github-output "$GITHUB_OUTPUT"'),
-            (6, 'git show HEAD^1:scripts/ci_docs_only.py', 'git show HEAD:scripts/ci_docs_only.py'),
-            (6, '--root . --github-output "$GITHUB_OUTPUT"\n',
-                '--root . --github-output "$GITHUB_OUTPUT" || echo docs_only=true >> "$GITHUB_OUTPUT"\n'),
-            (6, 'echo "docs_only=false" >> "$GITHUB_OUTPUT"', 'echo "docs_only=true" >> "$GITHUB_OUTPUT"'),
-            (6, '          PUSH_FORCED: ${{ github.event.forced }}\n', ''),
-            (6, '        id: classify\n', '        id: classify\n        continue-on-error: true\n'),
-            (6, '  changes:\n', '  classify:\n'),
+            (6, "grep -vc '^success$'", "grep -vc '^success$\\|^skipped$'"),
+            (6, 'toJSON(needs.*.result)', "toJSON(needs.build.result)"),
+            (6, 'needs: [authz, preflight,', 'needs: [authz,'),
+            (6, '          RESULTS: ${{ toJSON(needs.*.result) }}\n', ''),
+            (6, '          RESULTS: ${{ toJSON(needs.*.result) }}\n',
+                "          RESULTS: '[\"success\"]'\n"),
+            (6, '  build-gate:\n', '  changes:\n'),
             (6, '  sanitizers:\n', '  sanitizers:\n    needs: preflight\n'),
             (6, '--ccache\n',
                 "--ccache ${{ github.event_name == 'pull_request' && matrix.build_type == 'Debug' "
@@ -4358,22 +4443,19 @@ exit "$lookup_exit"
                     self.assertIn(f'ci-post.yml is missing job {job}',
                                   self.mutated_file_findings(6, None, before, after))
         for job in HEAVY_CI_JOBS:
-            condition, = ci_preflight._job_values(_jobs(ci)[job], 'if')
-            before = f'    if: {condition}\n'
-            self.assertNotIn('github.event_name', condition)
+            self.assertEqual(ci_preflight._job_values(_jobs(ci)[job], 'if'), [])
+            before = '    needs: [authz]\n'
             finding = ('preflight-slow must run all deferred stages on full events only'
                        if job == 'preflight-slow' else
-                       f'{job} must start alongside preflight, after authz and changes, '
-                       'and skip only its classified path policy')
+                       f'{job} must follow authz on every full event without a status override')
             mutations = [
-                '', f'    if: {ci_preflight.AUTHZ_SUCCESS}\n', '    if: false\n',
+                '', before + f'    if: {ci_preflight.AUTHZ_SUCCESS}\n',
+                before + '    if: false\n',
             ]
             for event in ('push', 'schedule', 'workflow_dispatch'):
                 mutations += [
-                    before.replace("needs.authz.result == 'success'",
-                                   f"needs.authz.result == 'success' && github.event_name == '{event}'"),
-                    before.replace("needs.authz.result == 'success'",
-                                   f"needs.authz.result == 'success' && github.event_name != '{event}'"),
+                    before + f"    if: github.event_name == '{event}'\n",
+                    before + f"    if: github.event_name != '{event}'\n",
                 ]
             for after in mutations:
                 with self.subTest(job=job, condition=after):
@@ -4832,16 +4914,12 @@ exit "$lookup_exit"
     def test_verifier_classification_wiring_fails_closed(self):
         original, others = self.ci_sources(), self.other_sources()
         mutations = (
-            ('changes', '      verifier_slow: ${{ steps.verifier.outputs.verifier_slow }}',
-             "      verifier_slow: 'false'"),
-            ('changes', 'git show HEAD^1:scripts/ci_verifier_paths.py',
-             'git show HEAD:scripts/ci_verifier_paths.py'),
-            ('changes', 'python3 "$RUNNER_TEMP/ci_verifier_paths.py"',
-             'python3 scripts/ci_verifier_paths.py'),
-            ('changes', 'echo "verifier_slow=true"', 'echo "verifier_slow=false"'),
-            ('preflight', ci_preflight.PREFLIGHT_VERIFIER_SLOW, "'false'"),
-            ('preflight', ci_preflight.PREFLIGHT_VERIFIER_SLOW,
-             ci_preflight.PREFLIGHT_VERIFIER_SLOW.replace("|| 'true'", "|| 'false'")),
+            ('preflight', "      PINEFORGE_VERIFIER_SLOW: 'true'\n", ''),
+            ('preflight', "      PINEFORGE_VERIFIER_SLOW: 'true'", "      PINEFORGE_VERIFIER_SLOW: 'false'"),
+            ('preflight', "      PINEFORGE_VERIFIER_SLOW: 'true'",
+             "      PINEFORGE_VERIFIER_SLOW: ${{ needs.changes.outputs.verifier_slow }}"),
+            ('preflight', "      PINEFORGE_VERIFIER_SLOW: 'true'",
+             "      PINEFORGE_VERIFIER_SLOW: ${{ needs.changes.outputs.verifier_slow || 'false' }}"),
             ('preflight', '        run: python3 scripts/ci_preflight.py --output-dir build-ci-preflight',
              '        run: python3 scripts/ci_preflight.py --output-dir build-ci-preflight --class-tier fast'),
         )
@@ -4850,7 +4928,10 @@ exit "$lookup_exit"
                 changed = original.copy()
                 changed[6] = in_job(changed[6], job, before, after)
                 self.assertNotEqual(changed[6], original[6])
-                self.assertNotEqual(ci_workflow_findings(*changed, others=others), [])
+                self.assertIn(
+                    'preflight must invoke only its fast stage plan' if '--class-tier fast' in after
+                    else 'preflight must run all verifier classes with required release tags',
+                    ci_workflow_findings(*changed, others=others))
 
     def test_ci_contract_pins_spot_runners_time_limits_and_parallelism(self):
         original, others = self.ci_sources(), self.other_sources()
@@ -4864,7 +4945,7 @@ exit "$lookup_exit"
                          {'ci.yml': {'authz': 'ubuntu-24.04'},
                           'gke-pr.yml': {'admit': 'ubuntu-24.04', 'legs': 'ubuntu-24.04',
                                          'result': 'ubuntu-24.04', **EXPECTED_GKE_JOBS['gke-pr.yml']},
-                          'ci-post.yml': {'authz': GKE_2, 'changes': GKE_2,
+                          'ci-post.yml': {'authz': GKE_2,
                                           'build-release-gate': GKE_2,
                                           'build-debug-gate': GKE_2,
                                           'sanitizers-gate': GKE_2,
@@ -4993,10 +5074,10 @@ exit "$lookup_exit"
             (6, 'kernel-only', 'timeout-minutes: 360', 'timeout-minutes: 45',
              'ci-post.yml job kernel-only must declare no timeout-minutes (owner #827)'),
             (6, 'build-gate', '    timeout-minutes: 360\n', '', None),
-            (6, 'changes', GKE_2, 'pf-linux-x64-16',
-             f'ci-post.yml job changes must run on {GKE_2}'),
-            (6, 'changes', '    timeout-minutes: 360\n', '    timeout-minutes: 300\n',
-             'ci-post.yml job changes must declare no timeout-minutes (owner #827)'),
+            (6, 'build-release-gate', GKE_2, 'pf-linux-x64-16',
+             f'ci-post.yml job build-release-gate must run on {GKE_2}'),
+            (6, 'build-release-gate', '    timeout-minutes: 360\n', '    timeout-minutes: 300\n',
+             'ci-post.yml job build-release-gate must declare no timeout-minutes (owner #827)'),
             (1, 'native-live', 'timeout-minutes: 360', 'timeout-minutes: 60',
              'native-live.yml job native-live must declare no timeout-minutes (owner #827)'),
             (1, 'native-live-gate', 'timeout-minutes: 360', 'timeout-minutes: 60',
@@ -5087,7 +5168,10 @@ exit "$lookup_exit"
                                             '    timeout-minutes: 360\n    steps:\n')
                     message = (f'{Path(CI_SOURCES[index]).name} job {job} '
                                'must declare no timeout-minutes (owner #827)')
-                    self.assertEqual(ci_workflow_findings(*changed, others=others), [message])
+                    expected = [message]
+                    if index == 6 and job == 'build-gate':
+                        expected.append('build-gate must keep only the canonical aggregate fields and direct needs')
+                    self.assertEqual(ci_workflow_findings(*changed, others=others), expected)
                 changed[index] = in_job(changed[index], job, before, after)
                 findings = ci_workflow_findings(*changed, others=others)
                 if timeout_mutation:
@@ -5298,13 +5382,12 @@ exit "$lookup_exit"
                 self.assertIn(f'gke-pr.yml job {job} must run on {GKE_PR_8}', findings)
 
     def test_ci_contract_pins_the_docs_only_skip(self):
-        """Keep each pipeline's path policy and dependencies; PR suite jobs
-        also require a ready PR, and post-merge preflight always runs."""
+        """Only PR admission may skip proofs; every full event needs every lane."""
         original, others = self.ci_sources(), self.other_sources()
         self.assertEqual(ci_workflow_findings(*original, others=others), [])
         docs_skip = f'    if: {DOCS_ONLY_SKIP}\n'
         mutations = []
-        for index, proofs, policy in ((6, PROOF_JOBS, DOCS_ONLY_SKIP),):
+        for index, proofs in ((6, PROOF_JOBS),):
             wrong_skips = [f'    if: {ready_pr(condition) if index == 0 else condition}\n'
                            for condition in (
                                "${{ needs.changes.outputs.docs_only != 'true' }}",
@@ -5314,36 +5397,32 @@ exit "$lookup_exit"
             for job in proofs:
                 if index == 6 and job in ci_preflight.POST_LEG_GATES:
                     continue  # Per-leg dependencies and skips have independent exact controls.
-                skip = f'    if: {policy}\n'
-                refused = f'{job} must start alongside preflight, after authz and changes'
+                needs = '    needs: [authz]\n'
+                refused = f'{job} must follow authz on every full event without a status override'
                 mutations += [
-                    (index, job, '    needs: [authz, changes]\n', '', refused),
-                    (index, job, '    needs: [authz, changes]\n', '    needs: [changes, preflight]\n', refused),
-                    (index, job, '    needs: [authz, changes]\n', '    needs: preflight\n', refused),
-                    (index, job, skip, '', refused),
-                    (index, job, skip, wrong_skips[0], refused),
-                    (index, job, skip, wrong_skips[1], refused),
-                    (index, job, skip, skip.replace("!= 'true'", "!= 'true' && github.event_name != 'push'"),
-                     refused),
-                    (index, job, skip, wrong_skips[2], refused)]
+                    (index, job, needs, '', refused),
+                    (index, job, needs, '    needs: [changes, preflight]\n', refused),
+                    (index, job, needs, '    needs: preflight\n', refused),
+                    (index, job, needs, needs + '    if: always()\n', refused),
+                    (index, job, needs, needs + wrong_skips[0], refused),
+                    (index, job, needs, needs + wrong_skips[1], refused),
+                    (index, job, needs, needs + "    if: github.event_name != 'push'\n", refused),
+                    (index, job, needs, needs + wrong_skips[2], refused)]
         mutations += [
-            (6, 'preflight', '    needs: [authz, changes]\n', '',
-             'preflight must follow authz and changes'),
-            (6, 'preflight', '    needs: [authz, changes]\n', '    needs: build\n',
-             'preflight must follow authz and changes'),
-            (6, 'preflight', f'    if: {AUTHZ_ALWAYS}\n', docs_skip,
-             'preflight must follow authz and changes'),
-            (6, 'preflight', f'    if: {AUTHZ_ALWAYS}\n', '',
-             'preflight must follow authz and changes'),
-            (6, 'changes', '    steps:\n', '    needs: preflight\n    steps:\n',
-             'changes must start after authz'),
-            (6, 'changes', '    steps:\n',
-             "    if: github.event_name != 'pull_request'\n    steps:\n",
-             'changes must start after authz'),
+            (6, 'preflight', '    needs: [authz]\n', '',
+             'preflight must follow authz on every full event'),
+            (6, 'preflight', '    needs: [authz]\n', '    needs: build\n',
+             'preflight must follow authz on every full event'),
+            (6, 'preflight', '    needs: [authz]\n', '    needs: [authz]\n' + docs_skip,
+             'preflight must follow authz on every full event'),
+            (6, 'preflight', '    needs: [authz]\n',
+             f'    needs: [authz]\n    if: {AUTHZ_ALWAYS}\n',
+             'preflight must follow authz on every full event'),
             # A lane that continues on error reports success however it ended.
             (6, 'sanitizers', '    steps:\n', '    continue-on-error: true\n    steps:\n',
              'ci-post.yml job sanitizers must not continue on error'),
-            (6, 'build-gate', '        shell: bash\n', '        shell: bash\n        continue-on-error: true\n',
+            (6, 'build-gate', '      - name: Require every verification lane to have passed\n',
+             '      - name: Require every verification lane to have passed\n        continue-on-error: true\n',
              'ci-post.yml job build-gate must not continue on error'),
             (6, 'preflight', f'        run: {PREFLIGHT_RUN}\n',
              f'        run: {PREFLIGHT_RUN}\n'
@@ -5357,9 +5436,9 @@ exit "$lookup_exit"
                 self.assertTrue(any(finding in line for line in findings), findings)
         # The same wiring spelled another way is no finding.
         for index, job, before, after in (
-                (6, 'kernel-only', '    needs: [authz, changes]\n', '    needs: [changes, authz]\n'),
-                (6, 'sanitizers', f'    if: {HEAVY_SKIP}\n', f'    if: "{HEAVY_SKIP}"\n'),
-                (6, 'changes', '    steps:\n', '    # classify first\n    steps:\n')):
+                (6, 'kernel-only', '    needs: [authz]\n', '    needs: authz\n'),
+                (6, 'sanitizers-gate', f'    if: {POST_LEG_IF}\n', f'    if: "{POST_LEG_IF}"\n'),
+                (6, 'preflight', '    steps:\n', '    # source checks first\n    steps:\n')):
             with self.subTest(job=job, harmless=after):
                 changed = original.copy()
                 changed[index] = in_job(changed[index], job, before, after)
@@ -5385,21 +5464,16 @@ exit "$lookup_exit"
     def test_build_gate_rejects_missing_matrix_exceptions_on_push(self):
         original, others = self.ci_sources(), self.other_sources()
         self.assertEqual(ci_workflow_findings(*original, others=others), [])
-        passed = ('          passed() { [[ "$1" == "success" || '
-                  '( "$docs_only" == "true" && "$1" == "skipped" ) ]]; }\n')
+        verdict = "grep -vc '^success$'"
         mutations = (
             # (e) Neither an empty result nor a skipped matrix on push is the
             # PR's absent cell; accepting either must fail the exact gate pin.
-            (passed, passed.replace('|| (', '|| -z "$1" || (')),
-            (passed, passed.replace('|| (', '|| "$1" == "skipped" || (')),
-            ('passed "$BUILD_RESULT"',
-             '( passed "$BUILD_RESULT" || [[ "$GITHUB_EVENT_NAME" == "push" ]] )'),
-            ('          BUILD_RESULT: ${{ needs.build.result }}\n',
-             "          BUILD_RESULT: ${{ needs.build.result || 'success' }}\n"),
-            ('          docs_only=false\n', '          docs_only=true\n'),
-            ('            && [[ "$SLOW_PREFLIGHT_RESULT" == "success" ]] && passed "$FULL_PARITY_RESULT"\n',
-             '            && [[ "$SLOW_PREFLIGHT_RESULT" == "success" ]] && passed "$FULL_PARITY_RESULT"\n'
-             '          true\n'),
+            (verdict, "grep -vc '^success$\\|^$'"),
+            (verdict, "grep -vc '^success$\\|^skipped$'"),
+            ('exit 1; }', '[[ "$GITHUB_EVENT_NAME" == "push" ]] || exit 1; }'),
+            ('toJSON(needs.*.result)', "toJSON(needs.*.result) || '[\"success\"]'"),
+            ('echo "$RESULTS"\n', 'RESULTS=\'["success"]\'\n          echo "$RESULTS"\n'),
+            ('exit 1; }\n', 'true; }\n          true\n'),
         )
         for before, after in mutations:
             with self.subTest(after=after):
@@ -5407,16 +5481,11 @@ exit "$lookup_exit"
                 changed[6] = in_job(changed[6], 'build-gate', before, after)
                 self.assertNotEqual(changed[6], original[6])
                 self.assertIn(
-                    'build-gate must keep the exact result policy: success or a classified docs-only skip',
+                    'build-gate must require exactly success from every needed job',
                     ci_workflow_findings(*changed, others=others))
 
     def test_build_aggregate_requires_matrix_success_on_pr_and_full_events(self):
-        env = {'PATH': os.environ.get('PATH', '/usr/bin:/bin'),
-               'AUTHZ_RESULT': 'success',
-               'CHANGES_RESULT': 'success', 'DOCS_ONLY': 'false',
-               'PREFLIGHT_RESULT': 'success',
-               'SLOW_PREFLIGHT_RESULT': 'success',
-               **{variable: 'success' for variable in PROOF_JOBS.values()}}
+        env = {'PATH': os.environ.get('PATH', '/usr/bin:/bin')}
         pr_script = job_script(self.gke(), 'legs', 'Require every proof leg')
         for variable in ('BUILD_RESULT', 'DEBUG_RESULT', 'PARITY_RESULT'):
             for outcome in ('success', 'failure', 'cancelled', 'skipped', ''):
@@ -5430,80 +5499,91 @@ exit "$lookup_exit"
         for event in ('push', 'workflow_dispatch', 'schedule', 'release'):
             script = job_script(self.ci_sources()[6], 'build-gate',
                                 'Require every verification lane to have passed')
-            matrices = [('BUILD_RESULT', 'matrix')]
-            if event != 'pull_request':
-                matrices.append(('ARM_BUILD_RESULT', 'arm64 matrix'))
-            for variable, label in matrices:
+            needs = ci_preflight._needs(_jobs(self.ci_sources()[6])['build-gate'])
+            for job in ('build', 'build-arm'):
                 for outcome in ('success', 'failure', 'cancelled', 'skipped', ''):
-                    with self.subTest(event=event, lane=variable, matrix=outcome):
+                    with self.subTest(event=event, lane=job, matrix=outcome):
+                        results = json.dumps([outcome if need == job else 'success' for need in needs])
                         result = subprocess.run(
                             ['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', script],
-                            env={**env, 'GITHUB_EVENT_NAME': event, variable: outcome},
+                            env={**env, 'GITHUB_EVENT_NAME': event, 'RESULTS': results},
                             capture_output=True, text=True)
                         self.assertEqual(result.returncode, 0 if outcome == 'success' else 1,
                                          result.stdout + result.stderr)
-                        self.assertIn(f'{label}: {outcome}\n', result.stdout)
+                        self.assertIn(results, result.stdout)
 
     def test_the_build_aggregate_passes_a_docs_only_skip_and_nothing_else(self):
-        """Run the aggregate's own shell over every outcome of every lane: a
-        proof lane passes by succeeding, or by being skipped after changes
-        succeeded and answered docs-only; preflight always has to succeed."""
+        """Run the real gate over every lane outcome; docs flags excuse no skips."""
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         script = Path(directory.name) / 'gate.sh'
         script.write_text(job_script(self.ci_sources()[6], 'build-gate',
                                      'Require every verification lane to have passed'))
-        env = {'PATH': os.environ.get('PATH', '/usr/bin:/bin'), 'AUTHZ_RESULT': 'success',
-               'GITHUB_EVENT_NAME': 'push', 'SLOW_PREFLIGHT_RESULT': 'success'}
-        lanes = list(PROOF_JOBS.values())
+        env = {'PATH': os.environ.get('PATH', '/usr/bin:/bin'), 'GITHUB_EVENT_NAME': 'push'}
+        lanes = ci_preflight._needs(_jobs(self.ci_sources()[6])['build-gate'])
+        # Supply both transports so the old gate really accepts its docs skip
+        # when this regression is applied to main, rather than lacking inputs.
+        skipped = {
+            'AUTHZ_RESULT': 'success', 'CHANGES_RESULT': 'success',
+            'PREFLIGHT_RESULT': 'success', 'SLOW_PREFLIGHT_RESULT': 'success',
+            'DOCS_ONLY': 'true', **dict.fromkeys(PROOF_JOBS.values(), 'skipped'),
+            'RESULTS': json.dumps(['skipped' if job in PROOF_JOBS else 'success' for job in lanes]),
+        }
+        refused = subprocess.run(
+            ['bash', '--noprofile', '--norc', '-eo', 'pipefail', str(script)],
+            env={**env, **skipped}, capture_output=True, text=True)
+        self.assertEqual(refused.returncode, 1, refused.stdout + refused.stderr)
         vectors = set()
         for common in ('success', 'skipped'):
             for odd in range(len(lanes)):
-                for outcome in ('success', 'skipped', 'failure', 'cancelled'):
+                for outcome in ('success', 'skipped', 'failure', 'cancelled', '', 'neutral'):
+                    # GitHub never reports an empty needs result. The canonical
+                    # gate text is fixed by the org checker and drops a final empty item.
+                    if outcome == '' and odd == len(lanes) - 1:
+                        continue
                     results = [common] * len(lanes)
                     results[odd] = outcome
                     vectors.add(tuple(results))
-        cases = [(changes, docs_only, preflight, *results)
-                 for preflight in ('success', 'failure', 'skipped', 'cancelled')
-                 for changes in ('success', 'failure', 'skipped')
-                 for docs_only in ('true', 'false', '') for results in sorted(vectors)]
+        cases = [(docs_only, results) for docs_only in ('true', 'false', '')
+                 for results in sorted(vectors)]
         # One bash reads every case; each runs the step in a subshell with the
         # options GitHub gives a bash step (-e, pipefail).
-        names = ['CHANGES_RESULT', 'DOCS_ONLY', 'PREFLIGHT_RESULT', *lanes]
-        # The harness's own variables share no name with the step's.
-        columns = [f'case_{name.lower()}' for name in names]
-        driver = ('while read -r ' + ' '.join(columns) + '; do\n'
+        driver = ('while read -r case_docs_only case_results; do\n'
                   '  [ "$case_docs_only" = - ] && case_docs_only=\n'
                   '  ( set -eo pipefail\n'
-                  '    export ' + ' '.join(f'{name}="${column}"' for name, column in zip(names, columns))
-                  + '\n'
-                  '    unset ' + ' '.join(columns) + '\n'
+                  '    export DOCS_ONLY="$case_docs_only" RESULTS="$case_results"\n'
+                  '    unset case_docs_only case_results\n'
                   '    . "$1" ) >/dev/null 2>&1\n'
                   '  echo "$?"\n'
                   'done\n')
+        # A terminated work row must report its own nonzero status.
+        crash = Path(directory.name) / 'crash.sh'
+        crash.write_text('kill -TERM "$BASHPID"\n')
+        crashed = subprocess.run(
+            ['bash', '--noprofile', '--norc', '-c', driver, 'gate', str(crash)], env=env,
+            input='false []\n', capture_output=True, text=True, check=True)
+        self.assertEqual(crashed.stdout.split(), ['143'], crashed.stderr)
         answers = subprocess.run(
             ['bash', '--noprofile', '--norc', '-c', driver, 'gate', str(script)], env=env,
-            input=''.join(' '.join(value or '-' for value in case) + '\n' for case in cases),
+            input=''.join((docs_only or '-') + ' ' + json.dumps(results, separators=(',', ':')) + '\n'
+                          for docs_only, results in cases),
             capture_output=True, text=True, check=True).stdout.split()
         self.assertEqual(len(answers), len(cases))
         for case, answer in zip(cases, answers):
-            changes, docs_only, preflight, *results = case
-            excused = changes == 'success' and docs_only == 'true'
-            expected = changes == 'success' and preflight == 'success' and all(
-                result == 'success' or (excused and result == 'skipped') for result in results)
-            with self.subTest(case=dict(zip(names, case))):
+            docs_only, results = case
+            expected = all(result == 'success' for result in results)
+            with self.subTest(docs_only=docs_only, results=dict(zip(lanes, results))):
                 self.assertEqual(answer == '0', expected, answer)
-        # And as the runner starts it: the docs-only pass, and a skip that is not.
-        docs_only = dict(zip(names, ('success', 'true', 'success', *['skipped'] * len(lanes))))
-        for override, code in (({}, 0), ({'DOCS_ONLY': 'false'}, 1), ({'CHANGES_RESULT': 'failure'}, 1),
-                               *[({'AUTHZ_RESULT': result}, 1)
-                                 for result in ('failure', 'cancelled', 'skipped', '')]):
-            with self.subTest(override=override):
+        # The runner's direct command also refuses an all-skipped docs push.
+        for outcome, code in (('success', 0), ('skipped', 1), ('failure', 1),
+                              ('cancelled', 1), ('', 1)):
+            results = json.dumps([outcome] * len(lanes))
+            with self.subTest(outcome=outcome):
                 result = subprocess.run(['bash', '--noprofile', '--norc', '-eo', 'pipefail', str(script)],
-                                        env={**env, **docs_only, **override}, capture_output=True, text=True)
+                                        env={**env, 'DOCS_ONLY': 'true', 'RESULTS': results},
+                                        capture_output=True, text=True)
                 self.assertEqual(result.returncode, code, result.stdout + result.stderr)
-                self.assertIn('preflight: success', result.stdout)
-                self.assertIn('matrix: skipped', result.stdout)
+                self.assertIn(results, result.stdout)
 
     def github_only_aggregate(self, rows, *, files_response='fixture',
                               second_rows=None, results=None):
@@ -5659,7 +5739,7 @@ finally:
                 self.assertNotIn(job, pr_jobs)
                 self.assertNotIn(variable, pr_gate)
                 self.assertIn(job, ci_preflight._needs(post_gate))
-                self.assertIn(f'{variable}: ${{{{ needs.{job}.result }}}}', post_gate)
+                self.assertIn('RESULTS: ${{ toJSON(needs.*.result) }}', post_gate)
             for outcome in ('failure', 'cancelled', ''):
                 with self.subTest(job=job, result=outcome):
                     result, _ = self.github_only_aggregate(rows, results={variable: outcome})
@@ -5812,60 +5892,46 @@ finally:
         for event in ('push', 'schedule', 'workflow_dispatch'):
             script = job_script(self.ci_sources()[6], 'build-gate',
                                 'Require every verification lane to have passed')
-            required = {'AUTHZ_RESULT', 'CHANGES_RESULT', 'PREFLIGHT_RESULT', 'SLOW_PREFLIGHT_RESULT'}
-            proof = {'BUILD_RESULT', 'PARITY_RESULT', 'ARM_BUILD_RESULT', 'SANITIZER_RESULT', 'NATIVE_RESULT',
-                          'KERNEL_RESULT', 'FULL_PARITY_RESULT', 'DEBUG_BUILD_RESULT',
-                          'RELEASE_GATE_RESULT', 'DEBUG_GATE_RESULT',
-                          'SANITIZER_GATE_RESULT', 'KERNEL_GATE_RESULT'}
+            needs = ci_preflight._needs(_jobs(self.ci_sources()[6])['build-gate'])
             for docs_only in ('false', 'true'):
-                base = {name: 'success' for name in required | proof}
+                base = dict.fromkeys(needs, 'success')
                 if docs_only == 'true':
-                    base.update({name: 'skipped' for name in proof})
-                for name in sorted(base):
+                    base.update({name: 'skipped' for name in PROOF_JOBS})
+                for position, name in enumerate(base):
                     for outcome in ('success', 'skipped', 'failure', 'cancelled', ''):
+                        # GitHub never reports an empty needs result. The canonical
+                        # gate text is fixed by the org checker and drops a final empty item.
+                        if outcome == '' and position == len(base) - 1:
+                            continue
                         results = {**base, name: outcome}
-                        expected = all(results[key] == 'success' for key in required)
-                        expected = expected and all(
-                            results[key] == 'success'
-                            or (results[key] == 'skipped'
-                                and docs_only == 'true')
-                            for key in proof)
+                        expected = all(value == 'success' for value in results.values())
                         with self.subTest(event=event, docs_only=docs_only, lane=name, result=outcome):
                             result = subprocess.run(
                                 ['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', script],
                                 env={'PATH': os.environ.get('PATH', '/usr/bin:/bin'),
-                                     'GITHUB_EVENT_NAME': event, 'DOCS_ONLY': docs_only, **results},
+                                     'GITHUB_EVENT_NAME': event, 'DOCS_ONLY': docs_only,
+                                     'RESULTS': json.dumps(list(results.values()))},
                                 capture_output=True, text=True)
                             self.assertEqual(result.returncode == 0, expected,
                                              result.stdout + result.stderr)
-                            self.assertIn('preflight (slow): ', result.stdout)
-                            self.assertIn('corpus parity (full): ', result.stdout)
+                            self.assertIn(json.dumps(list(results.values())), result.stdout)
 
     def test_build_gate_refuses_widened_deferrals_and_lost_heavy_dependencies(self):
         mutations = [
-            ('"$docs_only" == "true" && "$1" == "skipped"', '"$1" == "skipped"'),
-            ('passed "$DEBUG_BUILD_RESULT"', 'true'),
-            ('passed "$RELEASE_GATE_RESULT"', 'true'),
-            ('passed "$DEBUG_GATE_RESULT"', 'true'),
-            ('passed "$SANITIZER_GATE_RESULT"', 'true'),
-            ('passed "$KERNEL_GATE_RESULT"', 'true'),
-            ('passed "$ARM_BUILD_RESULT"', 'true'),
-            ('passed "$SANITIZER_RESULT"', 'true'),
-            ('&& [[ "$SLOW_PREFLIGHT_RESULT" == "success" ]] && passed "$FULL_PARITY_RESULT"',
-             '&& true && passed "$FULL_PARITY_RESULT"'),
-            ('passed "$FULL_PARITY_RESULT"', 'true'),
-            ('PARITY_RESULT: ${{ needs.corpus-parity-subset.result }}',
-             "PARITY_RESULT: ${{ needs.corpus-parity-subset.result || 'success' }}"),
-            ('SLOW_PREFLIGHT_RESULT: ${{ needs.preflight-slow.result }}',
-             "SLOW_PREFLIGHT_RESULT: ${{ needs.preflight-slow.result || 'success' }}"),
-            ('ARM_BUILD_RESULT: ${{ needs.build-arm.result }}',
-             "ARM_BUILD_RESULT: ${{ needs.build-arm.result || 'success' }}"),
+            ("grep -vc '^success$'", "grep -vc '^success$\\|^skipped$'"),
+            ('echo "$RESULTS"', 'RESULTS=\'["success"]\''),
+            ('= "0" ]', '-ge "0" ]'),
+            ('exit 1; }', 'true; }'),
+            *[('toJSON(needs.*.result)', f'toJSON(needs.{job}.result)')
+              for job in PROOF_JOBS],
+            ('RESULTS: ${{ toJSON(needs.*.result) }}',
+             "RESULTS: ${{ toJSON(needs.*.result) || '[\"success\"]' }}"),
         ]
         for before, after in mutations:
             with self.subTest(replacement=after):
                 findings = self.mutated_file_findings(6, 'build-gate', before, after)
                 self.assertIn(
-                    'build-gate must keep the exact result policy: success or a classified docs-only skip',
+                    'build-gate must require exactly success from every needed job',
                     findings)
         ci = self.ci_sources()[6]
         needs, = ci_preflight._job_values(_jobs(ci)['build-gate'], 'needs')
@@ -5876,18 +5942,27 @@ finally:
                                     if item != job)
             findings = self.mutated_file_findings(6, 'build-gate', '    needs: ' + needs,
                                                   '    needs: [' + replacement + ']')
-            self.assertIn('build-gate must aggregate authz, every proof job, preflight and changes', findings)
+            self.assertIn('build-gate must directly need every other full-event job', findings)
 
     def test_the_classification_is_the_base_copy_of_the_rule(self):
-        """Run the changes job's own shell in throwaway repositories: the
-        parent's scripts/ci_docs_only.py judges the change, so a change that
-        breaks the rule cannot skip its own proof jobs, and a parent without
-        the script runs every job."""
+        """Run admission's real classifier step on a base checkout and a git diff.
+        A changed rule cannot judge itself; a missing base rule refuses admission."""
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         root = Path(directory.name)
         step = root / 'classify.sh'
-        step.write_text(job_script(self.ci_sources()[6], 'changes', 'Classify the change'))
+        workflow = self.gke()
+        step_name = 'Classify with the base tree'
+        classify_step = ci_preflight._step_named(
+            ci_preflight._steps(_jobs(workflow)['admit']), '      - name: ' + step_name)
+        command, = ci_preflight._step_values(classify_step, 'run')
+        script = job_script(workflow, 'admit', step_name)
+        self.assertEqual(script, command + '\n')
+        changed_command = command.replace('"$PATH_FILE"', '"$OTHER_PATH_FILE"', 1)
+        self.assertNotEqual(changed_command, command)
+        changed = in_step(workflow, 'admit', step_name, command, changed_command)
+        self.assertEqual(job_script(changed, 'admit', step_name), changed_command + '\n')
+        step.write_text(script)
         git_env = {'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_CONFIG_NOSYSTEM': '1',
                    'GIT_AUTHOR_NAME': 'ci', 'GIT_AUTHOR_EMAIL': 'ci@example.invalid',
                    'GIT_COMMITTER_NAME': 'ci', 'GIT_COMMITTER_EMAIL': 'ci@example.invalid'}
@@ -5910,29 +5985,35 @@ finally:
                     (repo / path).write_text(text)
                 run('add', '--all')
                 run('commit', '--quiet', '--allow-empty', '-m', 'commit')
-            before = run('rev-parse', 'HEAD^1').strip()
+            listed = run('diff', '--no-renames', '--no-ext-diff', '--name-only',
+                         '-z', 'HEAD^1', 'HEAD', '--')
+            run('checkout', '--quiet', '--detach', 'HEAD^1')
             temp, output = root / f'{name}-temp', root / f'{name}-output'
             temp.mkdir()
+            paths = temp / 'paths'
+            paths.write_bytes(listed.encode())
             output.write_text('')
             result = subprocess.run(
-                ['bash', '-e', str(step)], cwd=repo, capture_output=True, text=True,
-                env={**os.environ, **git_env, 'GITHUB_EVENT_NAME': 'push', 'PUSH_BEFORE': before,
-                     'PUSH_FORCED': 'false', 'RUNNER_TEMP': str(temp), 'GITHUB_OUTPUT': str(output)})
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            return output.read_text(), result.stdout
+                ['bash', '-eo', 'pipefail', str(step)], cwd=repo, capture_output=True, text=True,
+                env={**os.environ, **git_env, 'GITHUB_EVENT_NAME': 'pull_request_target',
+                     'PATH_FILE': str(paths), 'RUNNER_TEMP': str(temp), 'GITHUB_OUTPUT': str(output)})
+            return output.read_text(), result
 
         page = {'docs/ci.md': 'new\n'}
-        answer, _ = classify('docs', {'scripts/ci_docs_only.py': rule, 'docs/ci.md': 'old\n'}, page)
+        answer, ran = classify('docs', {'scripts/ci_docs_only.py': rule, 'docs/ci.md': 'old\n'}, page)
+        self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
         self.assertEqual(answer, 'docs_only=true\ngithub_only=false\n')
         # A change that breaks the rule is judged by the rule it breaks.
-        answer, out = classify('rule', {'scripts/ci_docs_only.py': rule, 'docs/ci.md': 'old\n'},
+        answer, ran = classify('rule', {'scripts/ci_docs_only.py': rule, 'docs/ci.md': 'old\n'},
                                {'scripts/ci_docs_only.py': broken, 'src/engine.cpp': 'int x;\n', **page})
-        self.assertEqual(answer, 'docs_only=false\ngithub_only=false\n', out)
-        self.assertIn('scripts/ci_docs_only.py', out)
-        # A base without the rule runs every job.
-        answer, out = classify('bare', {'docs/ci.md': 'old\n'}, {'scripts/ci_docs_only.py': rule, **page})
-        self.assertEqual(answer, 'docs_only=false\n', out)
-        self.assertIn('the base holds no scripts/ci_docs_only.py', out)
+        self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+        self.assertEqual(answer, 'docs_only=false\ngithub_only=false\n', ran.stdout)
+        self.assertIn('not docs-only: a changed path is not documentation', ran.stdout)
+        # Admission cannot proceed when its checked-out base has no classifier.
+        answer, ran = classify('bare', {'docs/ci.md': 'old\n'}, {'scripts/ci_docs_only.py': rule, **page})
+        self.assertNotEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+        self.assertEqual(answer, '', ran.stdout)
+        self.assertIn('ci_docs_only.py', ran.stderr)
 
     def test_harmless_spellings_are_not_findings(self):
         self.assertEqual(ci_preflight.runner_findings(self.light_workflows()), [])
@@ -5940,8 +6021,8 @@ finally:
 
         def quoted_key_findings(sources):
             # These two existing spellings remain harmless to the runner and
-            # sizing policies, but the YAML whitelist now explicitly refuses
-            # quoted keys. Keep both inputs and require exactly that refusal.
+            # sizing policies. YAML refuses quoted keys; post preflight also
+            # pins its complete environment block.
             findings = []
             # Match ci_workflow_findings' documented YAML/action-pin order:
             # ci-post.yml precedes docs.yml.
@@ -5950,6 +6031,8 @@ finally:
                     if re.match(r' *(?:"PF_CI_LABELS"|"runs-on"):', line):
                         findings.append(ActionPins.unsupported_finding(
                             CI_SOURCES[index], number, line.strip(), 'quoted keys'))
+            if '      "PF_CI_LABELS":' in sources[6]:
+                findings.append('preflight must run all verifier classes with required release tags')
             return findings
 
         quoted_edits = (
