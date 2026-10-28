@@ -225,8 +225,9 @@ def test_nondyadic_unamended_pnl_is_the_exact_settlement_operand(
         tmp_path, monkeypatch, route):
     # Closes: 3 @ 100.7 -> 100.9, 5 @ 101.7 -> 101.9, 13 @ 102.9 -> 102.7.
     # These decimal tenths survive tick snapping unchanged but are not binary
-    # exact; 13 * 0.07 also rounds in binary64. Sig10 changes all three P&Ls
-    # and their final fold, so rounded report operands cannot pass this vector.
+    # exact; 13 * 0.07 also rounds in binary64. Sig10 changes at least one P&L
+    # and the final fold (both asserted below), so rounded report operands
+    # cannot pass this vector.
     result = rq.invoke(tmp_path, monkeypatch, "nondyadic", route=route)
     observation = rq.successful(result)
     assert observation["groups"] == 0 and observation["physical"] == []

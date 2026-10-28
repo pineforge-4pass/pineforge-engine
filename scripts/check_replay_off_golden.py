@@ -21,6 +21,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -74,7 +75,10 @@ def mask_build_identity(text, document):
     token, digest = fingerprint.get("token"), fingerprint.get("digest")
     if not isinstance(token, str) or not isinstance(digest, str):
         raise RuntimeError("fingerprint token or digest is missing")
-    provenance = json.loads(base64.b64decode(token))
+    token_bytes = base64.b64decode(token, validate=True)
+    if digest != "sha256:" + hashlib.sha256(token_bytes).hexdigest():
+        raise RuntimeError("fingerprint digest is not sha256 of the token bytes")
+    provenance = json.loads(token_bytes)
     engine = provenance.get("engine")
     if (not isinstance(engine, dict) or "version_string" not in engine
             or "commit_sha" not in engine):
@@ -93,9 +97,19 @@ def mask_build_identity(text, document):
         if masked.count(needle) != 1:
             raise RuntimeError("fingerprint value not found exactly once in the raw report")
         masked = masked.replace(needle, b'"<build-identity>"')
+    # The token's own bytes (spelling, key order, separators) with only the two
+    # engine strings replaced, and the digest scheme, so neither is hidden.
+    spelled = token_bytes
+    for key in ("version_string", "commit_sha"):
+        spelled, count = re.subn(rb'("%s":)"[^"]*"' % key.encode("ascii"),
+                                 rb'\1"<build-identity>"', spelled)
+        if count != 1:
+            raise RuntimeError(f"engine {key} not found exactly once in the token bytes")
     return (masked + b"\nprovenance-without-build-identity "
             + json.dumps(provenance, sort_keys=True, separators=(",", ":")).encode("utf-8")
-            + b"\n")
+            + b"\ntoken-bytes-without-build-identity-sha256 "
+            + hashlib.sha256(spelled).hexdigest().encode("ascii")
+            + b"\ndigest-scheme sha256: length " + str(len(digest)).encode("ascii") + b"\n")
 
 
 def measure(runner, library, shape, directory):
