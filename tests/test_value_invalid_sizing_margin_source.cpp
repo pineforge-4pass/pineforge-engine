@@ -1,4 +1,4 @@
-// EN-132 D6 rows 1/3/7. Authored before the adapter producers.
+// D6 rows 1/3/7. Authored before the adapter producers.
 // Source-bound companion to the source-free native TU. The public stream
 // warmup ABI runs real source callbacks; no generated/private fixture is used.
 #define PINEFORGE_VALUE_INVALID_SIZING_MARGIN_FIXTURES 1
@@ -395,6 +395,6 @@ int main() {
     keep_disabled_margin();
     finite_boundary_is_bit_identical();
     finite_cash_fee_boundary_is_bit_identical();
-    std::printf("EN132 sizing/margin source: %d checks, %d failures\n", checks, failures);
+    std::printf("Sizing/margin source: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

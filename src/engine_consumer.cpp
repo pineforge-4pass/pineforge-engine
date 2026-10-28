@@ -1,14 +1,72 @@
 #include "engine_internal.hpp"
+#include "native_execution_consumer.hpp"
 
+#include <pineforge/detail/matrix_store.hpp>
 #include <pineforge/execution_consumer.hpp>
 #include <pineforge/native_host.hpp>
 
+#include <exception>
 #include <stdexcept>
 #include <limits>
 #include <utility>
 
 namespace pineforge {
 inline namespace engine_script_run_v19 {
+
+namespace {
+
+// Every public call below that runs script code makes the engine's run the
+// calling thread's matrix Runtime source (detail/matrix_store.hpp), so the
+// matrices a script creates live in the run's own Store, and the call's matrix
+// work runs in one transaction on it; outside these calls a library caller
+// keeps native matrices. The run opens its Runtime with its first matrix.
+// Each call ends with flush(): the call's matrices, which a fixed resident
+// budget fronts within the call, are written back to the run's Store and
+// committed before the call returns, and a failure there fails this call and
+// latches the run failed, so every later call of the run is refused.
+// When the outermost call returns with no stream live (a batch
+// run's return, stream_end, a refused or failed stream_begin) the run is over
+// and the engine drops its share: the Runtime closes, and its scratch bytes
+// are freed, with the last matrix, snapshot or borrow still reading it (a
+// generated strategy resets its matrices in the next run's
+// prepare_script_run, or frees them with the strategy), and the next run
+// opens its own. A stream keeps its Runtime from stream_begin to stream_end.
+class MatrixRunCall {
+public:
+    explicit MatrixRunCall(BacktestEngine& engine)
+        : engine_(engine),
+          run_(NativeExecutionConsumer::bound(engine).matrix_run()),
+          scope_(run_) {}
+    MatrixRunCall(const MatrixRunCall&) = delete;
+    MatrixRunCall& operator=(const MatrixRunCall&) = delete;
+    ~MatrixRunCall() {
+        if (scope_.outermost() && !engine_.stream_is_realtime()) run_.close();
+    }
+
+    // The call's boundary (RunRuntime::flush). False when it failed: the
+    // failure latches the run failed, as a failure inside the entry does, and
+    // is this call's, recorded with its code and the entry's name unless the
+    // call recorded a failure of its own first
+    // (NativeExecutionConsumer::fail_matrix_flush).
+    bool flush(const char* entrypoint) {
+        try {
+            run_.flush();
+            return true;
+        } catch (const std::exception& error) {
+            NativeExecutionConsumer::fail_matrix_flush(engine_, entrypoint, &error);
+        } catch (...) {
+            NativeExecutionConsumer::fail_matrix_flush(engine_, entrypoint, nullptr);
+        }
+        return false;
+    }
+
+private:
+    BacktestEngine& engine_;
+    detail::matrix_store::RunRuntime& run_;
+    detail::matrix_store::RunScope scope_;
+};
+
+}  // namespace
 
 BacktestEngine::BacktestEngine(NativeConsumerBindTag) {
     execution_consumer_slot_.native = true;
@@ -65,7 +123,9 @@ void BacktestEngine::set_syminfo_metadata(const std::string& key, double value) 
 }
 
 void BacktestEngine::run(const Bar* bars, int n) {
+    MatrixRunCall matrices(*this);
     execution_consumer().run_simple(*this, bars, n);
+    if (!matrices.flush("run")) last_run_status_ = 1;
 }
 
 void BacktestEngine::run(const Bar* input_bars, int n_input,
@@ -74,8 +134,10 @@ void BacktestEngine::run(const Bar* input_bars, int n_input,
                          bool bar_magnifier,
                          int magnifier_samples,
                          MagnifierDistribution magnifier_dist) {
+    MatrixRunCall matrices(*this);
     execution_consumer().run_tf(*this, input_bars, n_input, input_tf, script_tf,
                                 bar_magnifier, magnifier_samples, magnifier_dist);
+    if (!matrices.flush("run")) last_run_status_ = 1;
 }
 
 void BacktestEngine::run(const Bar* input_bars, int n_input,
@@ -87,36 +149,62 @@ void BacktestEngine::run(const Bar* input_bars, int n_input,
                          bool bar_magnifier,
                          int magnifier_samples,
                          MagnifierDistribution magnifier_dist) {
+    MatrixRunCall matrices(*this);
     execution_consumer().run_rich(*this, input_bars, n_input, input_tf, script_tf,
                                   inputs, syminfo, overrides, bar_magnifier,
                                   magnifier_samples, magnifier_dist);
+    if (!matrices.flush("run")) last_run_status_ = 1;
 }
 
 bool BacktestEngine::stream_begin(const Bar* warmup_bars, int n_warmup,
                                   const std::string& input_tf,
                                   const std::string& script_tf) {
-    return execution_consumer().stream_begin(*this, warmup_bars, n_warmup,
-                                             input_tf, script_tf);
+    MatrixRunCall matrices(*this);
+    const bool done = execution_consumer().stream_begin(*this, warmup_bars, n_warmup,
+                                                        input_tf, script_tf);
+    if (matrices.flush("stream_begin")) return done;
+    last_run_status_ = 1;
+    return false;
 }
 
 bool BacktestEngine::stream_push_bar(const Bar& bar) {
-    return execution_consumer().stream_push_bar(*this, bar);
+    MatrixRunCall matrices(*this);
+    const bool done = execution_consumer().stream_push_bar(*this, bar);
+    if (matrices.flush("stream_push_bar")) return done;
+    last_run_status_ = 1;
+    return false;
 }
 
 bool BacktestEngine::stream_push_tick(const TradeTick& tick) {
-    return execution_consumer().stream_push_tick(*this, tick);
+    MatrixRunCall matrices(*this);
+    const bool done = execution_consumer().stream_push_tick(*this, tick);
+    if (matrices.flush("stream_push_tick")) return done;
+    last_run_status_ = 1;
+    return false;
 }
 
 bool BacktestEngine::stream_push_ticks(const TradeTick* ticks, int n) {
-    return execution_consumer().stream_push_ticks(*this, ticks, n);
+    MatrixRunCall matrices(*this);
+    const bool done = execution_consumer().stream_push_ticks(*this, ticks, n);
+    if (matrices.flush("stream_push_ticks")) return done;
+    last_run_status_ = 1;
+    return false;
 }
 
 bool BacktestEngine::stream_advance_time(int64_t timestamp_ms) {
-    return execution_consumer().stream_advance_time(*this, timestamp_ms);
+    MatrixRunCall matrices(*this);
+    const bool done = execution_consumer().stream_advance_time(*this, timestamp_ms);
+    if (matrices.flush("stream_advance_time")) return done;
+    last_run_status_ = 1;
+    return false;
 }
 
 bool BacktestEngine::stream_end(bool finalize_partial_input_bar) {
-    return execution_consumer().stream_end(*this, finalize_partial_input_bar);
+    MatrixRunCall matrices(*this);
+    const bool done = execution_consumer().stream_end(*this, finalize_partial_input_bar);
+    if (matrices.flush("stream_end")) return done;
+    last_run_status_ = 1;
+    return false;
 }
 
 void BacktestEngine::source_stream_entry_comment(const PyramidEntry&, std::string&) const {}

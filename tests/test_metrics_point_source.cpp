@@ -1,4 +1,4 @@
-// CR-150 lane L7B: the array point source and the allocation-free equity
+// The array point source and the allocation-free equity
 // metric walks (DESIGN.md 3.3).  This is intentionally smaller than the L0
 // sink harness: it exercises the public point-source contract against the
 // existing, frozen-equivalent equity walk.

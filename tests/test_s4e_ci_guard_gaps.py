@@ -1,4 +1,4 @@
-"""S4E L-F-01/02: late PR-fast rewrites and foreign lane properties."""
+"""Late PR-fast rewrites and foreign lane properties."""
 from pathlib import Path
 import sys
 

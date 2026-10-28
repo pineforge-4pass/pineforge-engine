@@ -1,0 +1,12 @@
+diff --git a/src/source/pine_adapter.cpp b/src/source/pine_adapter.cpp
+--- a/src/source/pine_adapter.cpp
++++ b/src/source/pine_adapter.cpp
+@@ -3894,7 +3894,7 @@
+     // incarnation order. Keep its lifecycle so suspension/cancellation still
+     // changes the consumed-leg answer; do not replace it with a sticky bit.
+     auto& origin_pins = sweep.origin_pins;
+-    placement_.visit_rows([&](std::uint64_t, const PlacementSnapshot& value) { ++work.row_visits; ++work.pin_rows; observe_retirement_expiry(value, interval);
++    placement_.visit_rows([&](std::uint64_t, const PlacementSnapshot& value) { ++work.row_visits; ++work.pin_rows;
+         if (!exit_family(value.family) || !value.legs.dormant()
+             || value.legs.target().incarnation == 0
+             || !contains(askable_origins, value.bracket_origin.incarnation)) return false;

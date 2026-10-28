@@ -646,7 +646,9 @@ ADR_RULED_TEXTS_MIN = 61  # 59 + the two matrix.diff texts of the kernel unit sr
 EXCLUDED_REGISTERED_MIN = {
     # +28 rows in every engine profile: verifier 8 + preflight 8 + command-after 8 + report 4.
     # Each is slices + cover - parent; native adds equivalence: 964 + 28 + 8 = 1000.
-    'debug': 904, 'sanitizers': 895, 'native': 1000,
+    # Three scratch cases plus drawing/history rows: 19 source-enabled, 15 kernel.
+    # 907/898/1003 + 19 = 926/917/1022; release/kernel 926/368 + 19/15 = 945/383.
+    'debug': 926, 'sanitizers': 917, 'native': 1022,
     # D1, run 39221717231 of the PR TSV, historical REGISTERED counts
     # (selected + 29 then; the current slow pin covers 60): Debug 938 - 876 = 62 and
     # sanitizers 929 - 867 = 62 below their registry; Release and kernel-only
@@ -657,7 +659,7 @@ EXCLUDED_REGISTERED_MIN = {
     # Basis of the offset: the existing keys count rows registered BEFORE -LE,
     # so a selected count (909, 900) is never compared with a key (876, 867).
     # See docs/ci.md, "PR tier versus MAIN/RELEASE", and COVERAGE-FLOORS.
-    'release': 923, 'kernel': 365,
+    'release': 945, 'kernel': 383,
 }
 # test_native_live_websocket exits 77 wherever the linked libcurl has no
 # WebSocket support (a system libcurl); main's kernel floor counted that skip
@@ -799,8 +801,10 @@ PRIVATE_FIXTURE_SKIP_LITERAL = 'SKIP private fixtures not present: '
 # reads each from one line, and the table references the names. Re-measuring a row
 # means editing these literals and the `pinned` counts in the table.
 # +28 public rows: verifier 8 + preflight 8 + command-after 8 + report 4; 910 + 28 = 938, 337 + 28 = 365.
-RELEASE_MIN_TESTS = 938
-KERNEL_MIN_TESTS = 365
+# Scratch attribution: aggregate stays one row; nine individual cases become twelve (+3).
+# Drawings/history add 19 source-enabled or 15 kernel rows in both fixture worlds; pinned counts stay fixed.
+RELEASE_MIN_TESTS = 960
+KERNEL_MIN_TESTS = 383
 PRIVATE_FIXTURE_PROFILE_FLOORS = {
     'release': (RELEASE_MIN_TESTS, 307),
     'kernel': (KERNEL_MIN_TESTS, 31),
@@ -808,7 +812,7 @@ PRIVATE_FIXTURE_PROFILE_FLOORS = {
 
 # The earlier manifest-controls split replaced one public row with four shards (+3
 # registered/run rows in every engine profile, in either fixture world).
-# These pinned minimum floors (absent: 938 - 307 = 631, 365 - 31 = 334) and the PR
+# These pinned minimum floors (absent: 960 - 307 = 653, 383 - 31 = 352) and the PR
 # registration minima remain lower bounds; more rows only raise the count.
 # The receipt/private-fixture populations and runner-only floors are unchanged.
 
@@ -914,7 +918,7 @@ def permitted_exclusion_skips(pinned: frozenset[str], host_platform: str) -> fro
 # Conditional registration may omit pins; every discovered slow name must
 # belong to this set. A new slow row requires an explicit policy change.
 # Each verifier and command-after split replaces one slow name with eight (+7).
-# Four report slices replace one direct name (+3); 43 loop + 18 direct = 61, covers unlabelled.
+# Four report slices replace one direct name (+3); 43 loop + 31 direct = 74 source-labelled names, covers unlabelled.
 PINNED_SLOW_TEST_ROWS = frozenset((
     # tests/CMakeLists.txt: the timing list, labelled by its slow loop.
     'test_adapter_live_state_equivalence',
@@ -924,6 +928,7 @@ PINNED_SLOW_TEST_ROWS = frozenset((
     'test_broker_state_hash_coverage_mutations',
     'test_chart_day_memo',
     *(f'test_ci_verify_slice_{index}' for index in range(1, 9)),
+    'test_standing_orders_wall',
     'test_l10recon1_merge_fill_liveness',
     'test_local_time_fields',
     'test_magnifier_endpoints4',
@@ -940,6 +945,7 @@ PINNED_SLOW_TEST_ROWS = frozenset((
     'test_native_cpp_versions',
     'test_native_definition_index',
     'test_native_direct_mutation',
+    'test_native_dormant_book_capacity',
     'test_native_event_retention',
     'test_native_group_absorption',
     'test_native_group_keep_handle',
@@ -953,7 +959,7 @@ PINNED_SLOW_TEST_ROWS = frozenset((
     'test_native_runtime_ambient',
     'test_native_script_bucket_completions',
     'test_native_settlement_carry',
-    # tests/CMakeLists.txt:7354.
+    # tests/CMakeLists.txt:7516.
     'test_run_json_selected_sink_memory_l9s',
     # tests/CMakeLists.txt:7354 (report-memory bound row).
     'test_report_sink_scratch_curve_resident',
@@ -1001,6 +1007,17 @@ PINNED_SLOW_TEST_ROWS = frozenset((
     'test_p2_a5_map_prepared_1m',
     # tests/cr150.d/p2cx-a5arr.cmake:5.
     'test_array_growth_1m',
+    # tests/cr150.d/report-trade-retirement.cmake and report-trade-reference.cmake:
+    # the closed-trade retirement witnesses, the identity row against the frozen
+    # reference, the reference corruption row and the sink-consumer row.
+    'test_report_sink_trade_comparison',
+    'test_report_sink_trade_history',
+    'test_report_sink_trade_identity',
+    'test_report_sink_trade_legacy',
+    'test_report_sink_trade_reference',
+    'test_report_sink_trade_residency',
+    'test_report_sink_trade_retirement',
+    'test_sink_history_consumers',
 ))
 
 

@@ -92,9 +92,10 @@ ABSENT_FLOOR = {name: entry[0] - entry[1]
 
 # Independent expectations for the lab's ctest-shard-union/v1 contract.
 # Three eight-row splits plus four report rows: 910 + 28 = 938, 337 + 28 = 365.
+# Scratch and drawing/history rows raise the floors to 960/383 full, 653/352 absent.
 # Do not derive these from stage/floor helpers: mutations must turn them red.
-LAB_SHARD_FLOORS = {'release': {False: 631, True: 938},
-                    'kernel': {False: 334, True: 365}}
+LAB_SHARD_FLOORS = {'release': {False: 653, True: 960},
+                    'kernel': {False: 352, True: 383}}
 # Transcribed ctestExcludeLabel(CI_VERIFY_PROFILES[profile]) results from
 # pineforge-workflow campaign/src/remote/recipes.mjs:38-53, consumed by
 # campaign/src/remote/shards.mjs, merged in b53dba5e44 (PR #211).
@@ -3348,8 +3349,8 @@ class DriverOrderingAndAggregation(unittest.TestCase):
 
     def test_pr_exclusion_proves_registered_minus_labelled_equals_ran(self):
         self.assertEqual(ci_verify.EXCLUDED_REGISTERED_MIN,
-                         {'debug': 904, 'sanitizers': 895, 'native': 1000,
-                          'release': 923, 'kernel': 365})
+                         {'debug': 926, 'sanitizers': 917, 'native': 1022,
+                          'release': 945, 'kernel': 383})
         self.assertNotIn('test_open_report_rows_flat', ci_verify.PINNED_SLOW_TEST_ROWS)
         self.assertNotIn('test_open_report_rows_flat_slices_cover',
                          ci_verify.PINNED_SLOW_TEST_ROWS)
@@ -4468,14 +4469,14 @@ class PrivateFixtureFloors(unittest.TestCase):
         # feeds them. A profile outside the table keeps its declared value, and
         # PRIVATE_FIXTURE_ROW_COUNT bounds the pinned half by construction.
         self.assertEqual(ci_verify.PRIVATE_FIXTURE_PROFILE_FLOORS,
-                         {'release': (938, 307), 'kernel': (365, 31)})
-        self.assertEqual(FULL_FLOOR, {'release': 938, 'kernel': 365})
-        self.assertEqual(ABSENT_FLOOR, {'release': 631, 'kernel': 334})
+                         {'release': (960, 307), 'kernel': (383, 31)})
+        self.assertEqual(FULL_FLOOR, {'release': 960, 'kernel': 383})
+        self.assertEqual(ABSENT_FLOOR, {'release': 653, 'kernel': 352})
         self.assertEqual(
             {name for name in ci_verify.PINNED_SLOW_TEST_ROWS
              if name.startswith('test_native_command_after')},
             {f'test_native_command_after_slice_{index}' for index in range(1, 9)})
-        self.assertEqual(len(ci_verify.PINNED_SLOW_TEST_ROWS), 74)
+        self.assertEqual(len(ci_verify.PINNED_SLOW_TEST_ROWS), 84)
         self.assertEqual(LIVE_SANITIZERS_MIN_TESTS, 21)
         for name, (full, pinned) in ci_verify.PRIVATE_FIXTURE_PROFILE_FLOORS.items():
             with self.subTest(profile=name):
@@ -4503,8 +4504,8 @@ class PrivateFixtureFloors(unittest.TestCase):
             self.assertEqual(validate_config(parse_args(['kernel'])).min_tests,
                              FULL_FLOOR['kernel'])
         self.assertEqual(ci_verify.EXCLUDED_REGISTERED_MIN,
-                         {'debug': 904, 'sanitizers': 895, 'native': 1000,
-                          'release': 923, 'kernel': 365})
+                         {'debug': 926, 'sanitizers': 917, 'native': 1022,
+                          'release': 945, 'kernel': 383})
 
     def test_overlay_flag_moves_the_floor_and_is_the_only_input(self):
         # F9: the flag must MOVE the value. A test that only reads the
@@ -4676,9 +4677,9 @@ class PrivateFixtureFloors(unittest.TestCase):
         # Two absent-world shapes driven through the real Driver. The dated
         # kernel absent run (rj-20261012t003154-1c9988) registered 337 rows
         # with its 28 pinned placeholders skipping: 309 ran. The current
-        # kernel shape has 31 pinned skips: 365 - 31 = 334 ran, at the floor.
+        # kernel shape has 31 pinned skips: 383 - 31 = 352 ran, at the floor.
         # The historical shrunken registry registered 900 with 298 pinned skips:
-        # 602 ran, still below the current 631 (938 - 307) floor, so it fails.
+        # 602 ran, still below the current 653 (960 - 307) floor, so it fails.
         # The two rows the twin guards drop are not bought back by a registry
         # that shrank with them. That is the red the old observed-skip
         # floor could not show (it passed 603 against 602).
@@ -4695,9 +4696,9 @@ class PrivateFixtureFloors(unittest.TestCase):
 
     def test_min_tests_values_are_never_lowered(self):
         # Lowering keys on the profile, not on the floor's value: an explicit
-        # --min-tests 365 is used verbatim in the absent world, where the
-        # profile's own floor is 334. It fails the same 334-row run the default
-        # accepts; an explicit 334 passes. The replaced rule lowered explicit
+        # --min-tests 383 is used verbatim in the absent world, where the
+        # profile's own floor is 352. It fails the same 352-row run the default
+        # accepts; an explicit 352 passes. The replaced rule lowered explicit
         # values by observed skips and passed a run below its requested floor.
         pinned = self.pinned_probe(31)
         code, summary, _, _ = self.absent_run('kernel', FULL_FLOOR['kernel'], pinned)
@@ -4705,17 +4706,17 @@ class PrivateFixtureFloors(unittest.TestCase):
         self.assertEqual(summary['minTests'], ABSENT_FLOOR['kernel'])
         with self.overlay_absent():
             code, summary, _, _ = self.run_profile(
-                'kernel', extra=['--min-tests', '365'], ctest_registered=365,
-                ctest_rows=365, ctest_skipped=pinned)
+                'kernel', extra=['--min-tests', '383'], ctest_registered=383,
+                ctest_rows=383, ctest_skipped=pinned)
         self.assertEqual(code, 1)
         self.assertIn('ctest-floor', failure_stages(summary))
-        self.assertEqual(summary['minTests'], 365)
+        self.assertEqual(summary['minTests'], 383)
         with self.overlay_absent():
             code, summary, _, _ = self.run_profile(
-                'kernel', extra=['--min-tests', '334'], ctest_registered=365,
-                ctest_rows=365, ctest_skipped=pinned)
+                'kernel', extra=['--min-tests', '352'], ctest_registered=383,
+                ctest_rows=383, ctest_skipped=pinned)
         self.assertEqual(code, 0, summary['failures'])
-        self.assertEqual(summary['minTests'], 334)
+        self.assertEqual(summary['minTests'], 352)
 
     def test_the_lowered_note_prints_only_for_the_tables_own_lowering(self):
         # N5: an explicit --min-tests that happens to equal full minus pinned
@@ -4819,7 +4820,7 @@ class PrivateFixtureFloors(unittest.TestCase):
                      if item['stage'] == 'ctest-floor')
         self.assertIn('pinned rows that ran: 1', error)
         self.assertIn(pinned[-1], error)
-        # 365 - 30 = 335 ran, one above the 334 floor: only this rule sees it.
+        # 383 - 30 = 353 ran, one above the 352 floor: only this rule sees it.
         self.assertEqual(summary['ctestRows'], ABSENT_FLOOR['kernel'] + 1)
 
     def test_green_absent_every_registered_pinned_row_skips(self):
@@ -4852,7 +4853,7 @@ class PrivateFixtureFloors(unittest.TestCase):
         # N6: main's kernel floor counted test_native_live_websocket's 77 as a
         # run (its number sat one below the registered count). The table's full
         # floor counts that row as running, so the one named row keeps the
-        # allowance: 365 registered, 31 pinned + 1 websocket skipping, 333 ran.
+        # allowance: 383 registered, 31 pinned + 1 websocket skipping, 351 ran.
         pinned = self.pinned_probe(
             ci_verify.PRIVATE_FIXTURE_PROFILE_FLOORS['kernel'][1])
         with self.overlay_absent():
@@ -4922,7 +4923,7 @@ class PrExclusionWithFixturesAbsent(unittest.TestCase):
         # D1 floors are independent policy literals, not read back from the
         # implementation being tested. Exercise the real enforcement branch
         # without repeating an engine configure/build or scripted source guard.
-        for profile, floor in (('release', 923), ('kernel', 365)):
+        for profile, floor in (('release', 945), ('kernel', 383)):
             pinned = self.pinned_probe(1)
             cases = (
                 (floor, floor - 5, floor - 5, pinned, 'passed', ''),
@@ -4956,21 +4957,22 @@ class PrExclusionWithFixturesAbsent(unittest.TestCase):
         # Control (a): the PR shape's own numbers. RED before the fix: exit 1,
         # 'but ran 587; not counted: 290 skipped'. The current fixture stays
         # above the registration floor, retaining five slow and 290 pinned rows.
+        # Scratch cases add three: 906 + 3 = 909 registered, 901 + 3 = 904 selected.
         code, summary, _, build_dir = self.run_profile(
-            'debug', ctest_registered=906, ctest_labelled=5, ctest_rows=901,
+            'debug', ctest_registered=909, ctest_labelled=5, ctest_rows=904,
             ctest_skipped=self.pinned_probe(290))
         self.assertEqual(code, 0, summary['failures'])
         self.assertIn('ctest-exclusion', stage_names(summary))
-        self.assertEqual(summary['ctestRows'], 901 - 290)
+        self.assertEqual(summary['ctestRows'], 904 - 290)
         log = (build_dir / 'ci-logs' / 'ctest-exclusion.log').read_text()
-        self.assertIn('611', log)
+        self.assertIn('614', log)
         self.assertIn('290 pinned private-fixture rows skipping', log)
 
     def test_red_an_unpinned_skip_fails(self):
         # Control (b): one skipped row outside the pin is a failure even
         # though the arithmetic alone would tolerate it.
         code, summary, _, _ = self.run_profile(
-            'debug', ctest_registered=906, ctest_labelled=5, ctest_rows=901,
+            'debug', ctest_registered=909, ctest_labelled=5, ctest_rows=904,
             ctest_skipped=self.pinned_probe(290) + ['test_row_not_pinned'])
         self.assertEqual(code, 1)
         self.assertIn('ctest-exclusion', failure_stages(summary))
@@ -4983,14 +4985,14 @@ class PrExclusionWithFixturesAbsent(unittest.TestCase):
         # Control (c): one public row fewer ran than the selection holds:
         # ran + pinned skips < selected.
         code, summary, _, _ = self.run_profile(
-            'debug', ctest_registered=906, ctest_labelled=5, ctest_rows=900,
+            'debug', ctest_registered=909, ctest_labelled=5, ctest_rows=903,
             ctest_skipped=self.pinned_probe(290))
         self.assertEqual(code, 1)
         self.assertIn('ctest-exclusion', failure_stages(summary))
         error = next(item['error'] for item in summary['failures']
                      if item['stage'] == 'ctest-exclusion')
-        self.assertIn('610', error)
-        self.assertIn('selected 901', error)
+        self.assertIn('613', error)
+        self.assertIn('selected 904', error)
 
     def test_red_overlay_present_a_pinned_skip_fails_the_exclusion(self):
         # Control (d): with the overlay present every selected private-fixture
@@ -4998,7 +5000,7 @@ class PrExclusionWithFixturesAbsent(unittest.TestCase):
         # and the exclusion stage. The platform exception is not a fixture.
         with mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES': '1'}):
             code, summary, _, _ = self.run_profile(
-                'debug', ctest_registered=906, ctest_labelled=5, ctest_rows=901,
+                'debug', ctest_registered=909, ctest_labelled=5, ctest_rows=904,
                 ctest_skipped=self.pinned_probe(1))
         self.assertEqual(code, 1)
         self.assertIn('ctest-exclusion', failure_stages(summary))
@@ -5009,7 +5011,7 @@ class PrExclusionWithFixturesAbsent(unittest.TestCase):
         # overlay is present (only the exclusion stage catches it).
         with mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES': '1'}):
             code, summary, _, _ = self.run_profile(
-                'debug', ctest_registered=906, ctest_labelled=5, ctest_rows=901,
+                'debug', ctest_registered=909, ctest_labelled=5, ctest_rows=904,
                 ctest_skipped=['test_native_live_websocket'])
         self.assertEqual(code, 1)
         self.assertEqual(failure_stages(summary), ['ctest-exclusion'])
@@ -5040,8 +5042,8 @@ class PrExclusionWithFixturesAbsent(unittest.TestCase):
                 source=source, runner=default_runner, stream_output=False)
             driver = ci_verify.Driver(cfg)
             driver.enforce_test_floor(
-                Completed(0, ctest_output(901, tuple(self.pinned_probe(2))), b''),
-                registered=906, selected=901,
+                Completed(0, ctest_output(904, tuple(self.pinned_probe(2))), b''),
+                registered=909, selected=904,
                 excluded_names=frozenset(SCRIPTED_SLOW_FIXTURE_NAMES))
         self.assertEqual([stage['status'] for stage in driver.stages], ['failed'])
         self.assertIn('a truncated pin cannot clear the rows it lost',
@@ -5191,7 +5193,7 @@ class LiveProfilesWithFixturesAbsent(unittest.TestCase):
         # the floor's, which this profile declares none of).
         pinned = self.pinned_probe(1)
         code, summary, _, _ = self.run_profile(
-            'native', ctest_registered=1000, ctest_rows=1000,
+            'native', ctest_registered=1022, ctest_rows=1022,
             ctest_skipped=pinned)
         self.assertEqual(code, 0, summary['failures'])
         self.assertNotIn('live-test-skips', stage_names(summary))
@@ -5218,7 +5220,7 @@ class FloorDocsPointAtTheTable(unittest.TestCase):
     )
     DOC_PLACES = ('CONTRIBUTING.md', 'docs/pages/contributing-llm.md',
                   'docs/pages/native-engine.md', 'docs/ci.md',
-                  '.github/workflows/ci.yml')
+                  '.github/workflows/ci-post.yml')
 
     def test_ci_documentation_pins_the_combined_profile_floors(self):
         text = (ROOT / 'docs/ci.md').read_text()
@@ -5226,21 +5228,21 @@ class FloorDocsPointAtTheTable(unittest.TestCase):
             r'^\| `(release|kernel)` \| (\d+) \| (\d+) \| (\d+) / (\d+) \|$',
             text, re.MULTILINE)
         self.assertEqual(table, [
-            ('release', '938', '631', '938', '938'),
-            ('kernel', '365', '334', '365', '365'),
+            ('release', '960', '653', '960', '960'),
+            ('kernel', '383', '352', '383', '383'),
         ])
         self.assertRegex(
-            text, r'Every shard reports the same \*\*undivided\*\* `minTests`: Release 938 with the\n'
-            r'overlay or 631 without it \(307 pinned placeholders\), kernel 365 with the\n'
-            r'overlay or 334 without it \(31 pinned placeholders\)\.')
-        self.assertIn('floor itself remains fixed at 631/334 absent or 938/365 present', text)
-        self.assertIn('numbers above (631\nand 334 rows absent, 938 and 365', text)
-        self.assertIn('at least 904 registered rows for `debug`, 895 for `sanitizers`', text)
-        self.assertIn('`EXCLUDED_REGISTERED_MIN` holds 904 for `debug`, 895\n'
-                      'for `sanitizers` and 1000 for `native`, and 923 for `release` and 365\n', text)
-        self.assertIn('run floors in the table above (938 and 365 with the overlay present, 631 and\n'
-                      '334 absent)', text)
-        self.assertIn('native PR registration floor is 1000: 964 + 28 public split rows + 8 probes.', text)
+            text, r'Every shard reports the same \*\*undivided\*\* `minTests`: Release 960 with the\n'
+            r'overlay or 653 without it \(307 pinned placeholders\), kernel 383 with the\n'
+            r'overlay or 352 without it \(31 pinned placeholders\)\.')
+        self.assertIn('floor itself remains fixed at 653/352 absent or 960/383 present', text)
+        self.assertIn('numbers above (653\nand 352 rows absent, 960 and 383', text)
+        self.assertIn('at least 926 registered rows for `debug`, 917 for `sanitizers`', text)
+        self.assertIn('`EXCLUDED_REGISTERED_MIN` holds 926 for `debug`, 917\n'
+                      'for `sanitizers` and 1022 for `native`, and 945 for `release` and 383\n', text)
+        self.assertIn('run floors in the table above (960 and 383 with the overlay present, 653 and\n'
+                      '352 absent)', text)
+        self.assertIn('native PR registration floor is 1022: 964 + 28 public split rows + 8 probes + 3 scratch cases + 19 drawing/history rows.', text)
         self.assertIn('live-only floors stay 21 (20 without transport.cpp)', text)
 
     def test_the_two_names_are_literals_the_table_references(self):
@@ -5266,7 +5268,7 @@ class FloorDocsPointAtTheTable(unittest.TestCase):
                 self.assertIsInstance(value, ast.Constant)
                 self.assertIsInstance(value.value, int)
                 self.assertEqual(value.value, {
-                    'RELEASE_MIN_TESTS': 938, 'KERNEL_MIN_TESTS': 365,
+                    'RELEASE_MIN_TESTS': 960, 'KERNEL_MIN_TESTS': 383,
                 }[name])
         self.assertIsInstance(table, ast.Dict)
         entries = {}
@@ -5299,7 +5301,7 @@ class FloorDocsPointAtTheTable(unittest.TestCase):
                 for stale in self.STALE_INSTRUCTIONS:
                     self.assertNotIn(stale, text)
         for rel in ('docs/pages/contributing-llm.md', 'docs/pages/native-engine.md',
-                    'CONTRIBUTING.md', '.github/workflows/ci.yml'):
+                    'CONTRIBUTING.md', '.github/workflows/ci.yml', '.github/workflows/ci-post.yml'):
             with self.subTest(place=rel):
                 text = (ROOT / rel).read_text()
                 self.assertNotIn('KERNEL_MIN_TESTS', text)

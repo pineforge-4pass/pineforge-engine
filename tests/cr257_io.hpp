@@ -80,7 +80,7 @@ inline void require(bool condition, const char* message) {
 }
 
 inline Count ceil_div(Count value, Count divisor) {
-    require(divisor != 0, "CR-257 zero bound denominator");
+    require(divisor != 0, "Zero bound denominator");
     return value / divisor + (value % divisor != 0);
 }
 

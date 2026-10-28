@@ -1,4 +1,4 @@
-/* CR-150 P00: report_sink.h must also parse as C, as existing test targets
+/* report_sink.h must also parse as C, as existing test targets
  * already compile C callers. This TU is part of test_cr150_contract_headers;
  * it declares no runtime objects/functions and uses no sink implementation.
  * DESIGN revision 6, section 6:1283-1306 and section 3.8:906-907. */
@@ -58,7 +58,7 @@ _Static_assert(offsetof(pf_report_sink_summary_v1, complete) == 60, "summary com
 _Static_assert(_Generic(&strategy_report_sink_summary_v1,
     int (*)(pf_strategy_t, pf_report_sink_summary_v1*): 1, default: 0),
     "summary query signature changed");
-_Static_assert(PF_ABI_VERSION == 4, "existing C ABI version changed");
+_Static_assert(PF_ABI_VERSION == 5, "strategy module ABI version changed");
 
 _Static_assert(sizeof(pf_equity_point_t) == 24, "scratch point size changed");
 _Static_assert(offsetof(pf_equity_point_t, time_ms) == 0, "point timestamp moved");

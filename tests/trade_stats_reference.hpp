@@ -1,6 +1,6 @@
 #pragma once
 
-// CR-150 lane L0: the report's trade statistics as src/engine_metrics.cpp
+// The report's trade statistics as src/engine_metrics.cpp
 // computed them at 3fc010a8b (the lane's base commit), before lane L7a moved
 // the loop body into TradeStatsAccumulator::fold() and the tail into
 // finish(). Transcribed verbatim into this namespace; only the function and

@@ -350,7 +350,7 @@ def compile_command(prefix, cpp, so):
 
 
 def runtime_command(run_json, work, options, *, phase_fd=None):
-    # docker/entrypoint.sh:297-310, ordinary TRANSPILED=true route.
+    # docker/entrypoint.sh:298-311, ordinary TRANSPILED=true route.
     command = [
         sys.executable, str(run_json), "--so", str(work / "strategy.so"),
         "--ohlcv", str(work / "bars.csv"),

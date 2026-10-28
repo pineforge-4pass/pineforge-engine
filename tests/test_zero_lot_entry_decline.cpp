@@ -158,7 +158,7 @@ void test_red1_pooc_explicit_zero_lot_declined_then_next_fills() {
 }
 
 // RED-2. CASH default sizing (qty = na, default 240 cash): frozen quantity
-// floors to 0 at 320.25 -> declined (KI-72 covers only percent_of_equity);
+// floors to 0 at 320.25 -> declined (the rule covers only percent_of_equity);
 // next signal fills 1.
 void test_red2_cash_default_zero_lot_declined() {
     std::printf("-- RED-2: CASH default zero-lot declined --\n");

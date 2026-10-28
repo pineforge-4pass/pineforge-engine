@@ -176,6 +176,27 @@ try:
         def export(ledger):
             return json.loads(invoke(["report", "--ledger", ledger]))
 
+        for suffix, options in (("unset", []), ("zero", ["--max-ledger-bytes", "0"])):
+            process, ledger, health = start("service-" + suffix, options)
+            process.stdin.write(batch)
+            process.stdin.flush()
+            wait_for(lambda: query(ledger, "SELECT count(*) FROM inputs") == [(1,)])
+            finish(process)
+            assert export(ledger)["input_cursor"] == 1
+        for name, options in (("unbounded", ["--ledger-unbounded"]),
+                              ("explicit-zero", ["--max-ledger-bytes", "0", "--ledger-unbounded"])):
+            process, ledger, health = start(name, options)
+            process.stdin.write(batch)
+            process.stdin.flush()
+            wait_for(lambda: query(ledger, "SELECT count(*) FROM inputs") == [(1,)])
+            finish(process)
+            assert export(ledger)["input_cursor"] == 1
+        for suffix, options in (("default", []), ("zero", ["--max-ledger-bytes", "0"])):
+            ledger = root / ("ordinary-" + suffix + ".sqlite")
+            result = json.loads(invoke(base(ledger) + ["--feed", feed] + options))
+            assert result["inputs_committed"] == 1
+        print("PASS service and ordinary unlimited defaults and explicit unlimited opt-out", flush=True)
+
         baseline = root / "baseline.sqlite"
         invoke(base(baseline, gated_library) + ["--feed", feed])
         expected_report = export(baseline)["report"]
@@ -354,11 +375,16 @@ try:
         assert query(ledger, "SELECT * FROM delivery_log ORDER BY log_id") == delivery_rows
         finish(process)
         assert len(receipts) == 9
+        before_attempts = query(ledger, "SELECT * FROM delivery_log ORDER BY log_id")
         invoke(["redeliver", "--ledger", ledger, "--deployment", deployment, "--target", "default",
-            "--from", str(from_sequence)], env=environment)
+            "--from", str(from_sequence), "--max-ledger-bytes", "1"], 3, env=environment)
+        assert len(receipts) == 9
+        assert query(ledger, "SELECT * FROM delivery_log ORDER BY log_id") == before_attempts
+        invoke(["redeliver", "--ledger", ledger, "--deployment", deployment, "--target", "default",
+            "--from", str(from_sequence), "--max-ledger-bytes", "64000000"], env=environment)
         assert len(receipts) == 10
         assert receipts_by_sequence(receipts[9:], receipt_sequence) == expected_selected
-        print("PASS live failed/selected redelivery, stable IDs, dedup, restart, audit and offline lock", flush=True)
+        print("PASS live failed/selected redelivery, stable IDs, dedup, restart, audit and offline budget/lock", flush=True)
 
         typo = root / "missing-control"
         invoke(["redeliver", "--ledger", ledger, "--deployment", deployment, "--target", "default",
@@ -444,14 +470,14 @@ try:
         process.stdin.write(large_batch + json.dumps({"type": "time", "ts": 301 * 180000}) + "\n")
         process.stdin.flush()
         finish(process, 3, stop=False)
-        assert query(ledger, "SELECT count(*) FROM inputs") == [(1,)]
-        assert export(ledger)["input_cursor"] == 1
+        assert query(ledger, "SELECT count(*) FROM inputs") == [(0,)]
+        assert export(ledger)["input_cursor"] == 0
         assert status(health)["state"] == "storage_budget" and not status(health)["readiness"]["storage_below_budget"]
         invoke(["probe", "--status-file", health, "--max-age", "2", "--ready"], 1)
         before = invoke(["report", "--ledger", ledger])
         invoke(base(ledger) + ["--feed", feed, "--max-ledger-bytes", "1", "--status-file", health], 3)
         assert invoke(["report", "--ledger", ledger]) == before
-        print("PASS storage budget stops after whole message without losing cursor, outbox or report", flush=True)
+        print("PASS storage budget refuses a whole message before growth and preserves the committed report", flush=True)
 finally:
     receiver_release.set()
     keepalive_release.set()

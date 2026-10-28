@@ -450,10 +450,8 @@ void completed_fd_removal(const fs::path& directory, const std::vector<Bar>& bar
         unchanged_generation(host, before, before_summary);
         fd_trace.record("after second removal checks/fill_report");
         unchanged_storage(host, storage, scratch);
-        const auto final_flags = fd_trace.record("final NULL removal assertion");
-        require(fd_flag_diagnostics::comparable_status_flags(final_flags.flags)
-                    == fd_flag_diagnostics::comparable_status_flags(flags)
-                && final_flags.descriptor_flags == descriptor_flags,
+        fd_trace.record("final NULL removal assertion");
+        require(fd_trace.unchanged(),
                 fd_trace.message("NULL removal closed the borrowed fd or changed its flags"));
 
         // A retained receipt must not keep the sink installed for the next
@@ -476,9 +474,9 @@ void completed_fd_removal(const fs::path& directory, const std::vector<Bar>& bar
         require(receipt(host).complete == 0 && summary(host).complete == 0,
                 "next run retained the previous generation's completion");
     }
-    const auto after_destruction = fd_trace.record("after host destruction");
-    require(after_destruction.descriptor_flags == descriptor_flags,
-            fd_trace.message("destruction after NULL removal closed the borrowed fd"));
+    fd_trace.record("after host destruction");
+    require(fd_trace.unchanged(),
+            fd_trace.message("destruction after NULL removal closed or re-flagged the borrowed fd"));
     require(output->finish() == bytes, "NULL removal or the next run appended sink bytes");
 }
 
@@ -504,30 +502,31 @@ void ordinary_scratch_removal_refused(const fs::path& directory, const std::vect
 std::string fd_run(const fs::path& directory, const std::vector<Bar>& bars,
                    const Result& expected, Transport transport, bool slow = false) {
     auto output = stream(transport, directory, slow);
-    const int flags = ::fcntl(output->fd(), F_GETFL);
-    const int descriptor_flags = ::fcntl(output->fd(), F_GETFD);
-    require(flags >= 0 && descriptor_flags >= 0, "cannot read caller fd flags");
+    fd_flag_diagnostics::Trace fd_trace(output->fd(), "before sink installation");
+    require(fd_trace.unchanged(), fd_trace.message("cannot read caller fd flags"));
     {
         Fixture host;
         const auto replaced = directory / "must-not-exist.ndjson";
         install_path(host, replaced);
         install_fd(host, output->fd()); // fd replaces path, no path parent used
-        equal_result(execute(host, bars), expected);
+        fd_trace.record("after sink installation");
+        equal_result(execute(host, bars, Expect::success, &fd_trace), expected);
         require(!fs::exists(replaced), "fd sink opened the replaced path");
         pf_report_sink_fd_v1 invalid{sizeof invalid, 2, output->fd(), run_id};
         require(strategy_set_report_sink_fd_v1(host.handle(), &invalid) == -1,
                 "bad replacement version accepted");
         require(receipt(host).complete == 1, "bad replacement erased completed receipt");
-        require(fd_flag_diagnostics::comparable_status_flags(::fcntl(output->fd(), F_GETFL))
-                    == fd_flag_diagnostics::comparable_status_flags(flags)
-                && ::fcntl(output->fd(), F_GETFD) == descriptor_flags,
-                "writer changed caller fd flags");
+        fd_trace.record("after invalid replacement");
+        require(fd_trace.unchanged(), fd_trace.message("writer changed caller fd flags"));
         require(strategy_set_report_sink_v1(host.handle(), nullptr) == 0,
                 "path setter cannot remove an fd sink");
-        require(::fcntl(output->fd(), F_GETFD) >= 0, "sink removal closed caller fd");
+        fd_trace.record("after sink removal");
+        require(fd_trace.unchanged(), fd_trace.message("sink removal closed or re-flagged caller fd"));
         install_fd(host, output->fd()); // destruction must not close it either
+        fd_trace.record("after sink reinstallation");
     }
-    require(::fcntl(output->fd(), F_GETFD) >= 0, "handle destruction closed caller fd");
+    fd_trace.record("after host destruction");
+    require(fd_trace.unchanged(), fd_trace.message("destruction closed or re-flagged caller fd"));
     return output->finish();
 }
 
@@ -633,16 +632,20 @@ void jailed(const fs::path& directory, const std::vector<Bar>& bars,
 void incomplete(const fs::path& directory, const std::vector<Bar>& bars,
                 Transport transport, bool peer_closed, bool abort) {
     auto output = stream(transport, directory, false, peer_closed ? 8192 : 0);
+    fd_flag_diagnostics::Trace fd_trace(output->fd(), "before sink installation");
     {
         Fixture host;
         host.abort = abort;
         host.fail = !peer_closed && !abort;
         install_fd(host, output->fd());
+        fd_trace.record("after sink installation");
         execute(host, bars, peer_closed ? Expect::sink_failure : Expect::incomplete);
         require(host.callbacks < static_cast<int>(bars.size()), "failure did not interrupt the run");
-        require(::fcntl(output->fd(), F_GETFD) >= 0, "failure closed borrowed fd");
+        fd_trace.record("after failed/aborted run");
+        require(fd_trace.unchanged(), fd_trace.message("failure closed or re-flagged borrowed fd"));
     }
-    require(::fcntl(output->fd(), F_GETFD) >= 0, "failed handle destruction closed borrowed fd");
+    fd_trace.record("after failed host destruction");
+    require(fd_trace.unchanged(), fd_trace.message("failed destruction closed or re-flagged borrowed fd"));
     const auto bytes = output->finish();
     require(!bytes.empty() && bytes.find("{\"trailer\":") == std::string::npos,
             "failed run emitted a trailer or fixture never reached the stream");

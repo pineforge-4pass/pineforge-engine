@@ -1,4 +1,4 @@
-// CR-150 A5 — O(1) resident script-state store contract.
+// O(1) resident script-state store contract.
 //
 // PURPOSE. Script-owned state (arrays, strings, map payloads, matrices, UDT graphs,
 // drawing records) grows with bars or with objects the script creates. This header
@@ -19,12 +19,12 @@
 //    reordering that a script can observe.
 //
 // IMPLEMENTATION SHAPE (CORE-TOP ruling L6, 2026-10-21). This interface is a THIN
-// OBJECT LAYER over pineforge::detail::ScratchStore, so the project has one page
-// cache and one backing boundary. An object is a header record plus fixed-size data
-// chunk records, each record keyed by the 16-byte big-endian pair (object id, chunk
-// number) and ordered by a plain bytewise compare. Chunk 0's value is the 16-byte
-// header (logical size, alignment) followed by that chunk's data bytes; every later
-// chunk's value is its data bytes. The layer keeps no per-object, per-chunk or
+// OBJECT LAYER over pineforge::detail::ScratchStore, so the project has one page cache and one
+// backing boundary per Store; a unit may front it with a fixed in-call budget flushed at the
+// boundary. An object is a header record plus fixed-size data chunk records, each record keyed by
+// the 16-byte big-endian pair (object id, chunk number) and ordered by a plain bytewise compare.
+// Chunk 0's value is the 16-byte header (logical size, alignment) followed by that chunk's data
+// bytes; every later chunk's value is its data bytes. The layer keeps no per-object, per-chunk or
 // per-byte heap state: an id counter, a few scalars and fixed buffers only.
 //
 // DECLARATIONS ONLY. The single implementation is src/detail/o1_store.cpp on the

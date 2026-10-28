@@ -49,14 +49,38 @@ detail::o1::Id NumericMatrix::detach_external() {
     return cells->detach();
 }
 
+// Row-major records of a numeric matrix move through one kTransferBytes
+// buffer: the whole object in one Store call when it fits, else spans of
+// this many records.
+static constexpr std::uint64_t kSpanRecords = ms::kTransferBytes / sizeof(double);
+
 NumericMatrix::NumericMatrix(Eigen::MatrixXd value) {
     if (auto* runtime = ms::current_runtime()) {
         ms::Scope transaction(*runtime);
-        auto cells = std::make_shared<ms::Cells>(*runtime, value.rows(), value.cols(), sizeof(double));
-        for (Eigen::Index r = 0; r < value.rows(); ++r)
-            for (Eigen::Index c = 0; c < value.cols(); ++c)
-                ms::write_value(*cells, static_cast<std::uint64_t>(r) * value.cols() + c,
-                                value(r, c));
+        const auto rows = static_cast<std::uint64_t>(value.rows());
+        const auto columns = static_cast<std::uint64_t>(value.cols());
+        std::shared_ptr<ms::Cells> cells;
+        std::array<unsigned char, ms::kTransferBytes> buffer;
+        const auto encode = [&](std::uint64_t cell, unsigned char* record) {
+            ms::codec<double>::encode(value(static_cast<Eigen::Index>(cell / columns),
+                                            static_cast<Eigen::Index>(cell % columns)), record);
+        };
+        if (ms::Cells::layout_bytes(rows, columns, sizeof(double)) <= ms::kTransferBytes) {
+            for (std::uint64_t i = 0, n = rows * columns; i < n; ++i)
+                encode(i, buffer.data() + sizeof(ms::Cells::Shape) + i * sizeof(double));
+            cells = std::make_shared<ms::Cells>(*runtime, rows, columns, sizeof(double),
+                                                buffer.data());
+        } else {
+            cells = std::make_shared<ms::Cells>(*runtime, rows, columns, sizeof(double));
+            const ms::Cells::Shape shape{rows, columns, sizeof(double), 0}; // as just created
+            for (std::uint64_t first = 0, n = rows * columns; first < n;) {
+                const auto span = std::min(kSpanRecords, n - first);
+                for (std::uint64_t i = 0; i < span; ++i)
+                    encode(first + i, buffer.data() + i * sizeof(double));
+                cells->write_span(shape, first, span, buffer.data());
+                first += span;
+            }
+        }
         storage_ = std::make_shared<Storage>(std::move(cells));
         transaction.commit();
     } else {
@@ -67,11 +91,29 @@ NumericMatrix::NumericMatrix(Eigen::MatrixXd value) {
 Eigen::MatrixXd NumericMatrix::dense() const {
     const auto& storage = require_storage();
     if (!storage.external) return storage.data;
-    Eigen::MatrixXd result(rows(), columns());
-    for (int r = 0; r < result.rows(); ++r)
-        for (int c = 0; c < result.cols(); ++c)
-            result(r, c) = ms::read_value<double>(*storage.external,
-                static_cast<std::uint64_t>(r) * result.cols() + c);
+    const auto& cells = *storage.external;
+    std::array<unsigned char, ms::kTransferBytes> buffer;
+    bool whole = false;
+    const auto shape = cells.load(buffer, whole);
+    Eigen::MatrixXd result(static_cast<int>(shape.rows), static_cast<int>(shape.columns));
+    const auto columns = static_cast<std::uint64_t>(result.cols());
+    const auto decode = [&](std::uint64_t cell, const unsigned char* record) {
+        result(static_cast<Eigen::Index>(cell / columns),
+               static_cast<Eigen::Index>(cell % columns)) = ms::codec<double>::decode(record);
+    };
+    const auto n = static_cast<std::uint64_t>(result.rows()) * columns;
+    if (n && shape.width != sizeof(double)) ms::invariant("matrix record read outside its schema");
+    if (whole) {
+        for (std::uint64_t i = 0; i < n; ++i)
+            decode(i, buffer.data() + sizeof(ms::Cells::Shape) + i * sizeof(double));
+        return result;
+    }
+    for (std::uint64_t first = 0; first < n;) {
+        const auto span = std::min(kSpanRecords, n - first);
+        cells.read_span(shape, first, span, buffer.data());
+        for (std::uint64_t i = 0; i < span; ++i) decode(first + i, buffer.data() + i * sizeof(double));
+        first += span;
+    }
     return result;
 }
 
@@ -133,17 +175,20 @@ void NumericMatrix::restore(const Snapshot& snapshot) {
 
 double NumericMatrix::get(int row, int col) const {
     const auto& storage = require_storage();
-    if (storage.external)
-        return ms::read_value<double>(*storage.external,
-            storage.external->index(row, col));
+    if (storage.external) {
+        // One Store read: the descriptor index() checks and, when the record
+        // lies in the object's first bytes, the record.
+        const ms::Cells::Prefix prefix(*storage.external);
+        return ms::read_value<double>(prefix, ms::Cells::index(prefix.shape(), row, col));
+    }
     return storage.data(row, col);
 }
 
 void NumericMatrix::set(int row, int col, double val) {
     auto& storage = require_storage();
     if (storage.external) {
-        ms::write_value(*storage.external,
-            storage.external->index(row, col), val);
+        const auto shape = storage.external->shape();
+        ms::write_value(*storage.external, shape, ms::Cells::index(shape, row, col), val);
     } else {
         storage.data(row, col) = val;
     }
@@ -153,8 +198,7 @@ void NumericMatrix::fill(double val) {
     auto& storage = require_storage();
     if (storage.external) {
         ms::Scope transaction(storage.external->runtime());
-        for (std::uint64_t i = 0, end = storage.external->count(); i < end; ++i)
-            ms::write_value(*storage.external, i, val);
+        ms::fill_value(*storage.external, val);
         transaction.commit();
     } else {
         storage.data.setConstant(val);
@@ -164,7 +208,7 @@ void NumericMatrix::fill(double val) {
 std::vector<double> NumericMatrix::row(int idx) const {
     if (require_storage().external) {
         std::vector<double> result(static_cast<std::size_t>(columns()));
-        for (int c = 0; c < columns(); ++c) result[static_cast<std::size_t>(c)] = get(idx, c);
+        for (int c = 0, n = columns(); c < n; ++c) result[static_cast<std::size_t>(c)] = get(idx, c);
         return result;
     }
     Eigen::VectorXd r = data().row(idx);
@@ -174,7 +218,7 @@ std::vector<double> NumericMatrix::row(int idx) const {
 std::vector<double> NumericMatrix::col(int idx) const {
     if (require_storage().external) {
         std::vector<double> result(static_cast<std::size_t>(rows()));
-        for (int r = 0; r < rows(); ++r) result[static_cast<std::size_t>(r)] = get(r, idx);
+        for (int r = 0, n = rows(); r < n; ++r) result[static_cast<std::size_t>(r)] = get(r, idx);
         return result;
     }
     Eigen::VectorXd c = data().col(idx);
@@ -276,11 +320,19 @@ NumericMatrix NumericMatrix::submatrix(int from_row, int to_row, int from_col, i
         ms::Scope transaction(cells->runtime());
         auto result = std::make_shared<ms::Cells>(cells->runtime(), to_row - from_row,
                                                    to_col - from_col, sizeof(double));
-        for (int r = from_row; r < to_row; ++r)
-            for (int c = from_col; c < to_col; ++c)
-                result->copy_cell(static_cast<std::uint64_t>(r - from_row) * result->columns() +
-                                  c - from_col, *cells,
-                                  static_cast<std::uint64_t>(r) * cells->columns() + c);
+        // A block with cells inside the matrix moves as runs of records, read
+        // once the result exists, as the per-cell copy reads it. Any other
+        // block keeps the per-cell copy and what it refuses.
+        if (!(0 <= from_row && from_row < to_row && 0 <= from_col && from_col < to_col &&
+              result->copy_block(*cells, static_cast<std::uint64_t>(from_row),
+                                 static_cast<std::uint64_t>(from_col),
+                                 static_cast<std::uint64_t>(to_row - from_row),
+                                 static_cast<std::uint64_t>(to_col - from_col), sizeof(double))))
+            for (int r = from_row; r < to_row; ++r)
+                for (int c = from_col; c < to_col; ++c)
+                    result->copy_cell(static_cast<std::uint64_t>(r - from_row) * result->columns() +
+                                      c - from_col, *cells,
+                                      static_cast<std::uint64_t>(r) * cells->columns() + c);
         transaction.commit();
         return NumericMatrix(std::move(result));
     }
@@ -318,11 +370,7 @@ void NumericMatrix::reverse() {
 NumericMatrix NumericMatrix::transpose() const {
     if (const auto& cells = require_storage().external) {
         ms::Scope transaction(cells->runtime());
-        auto result = std::make_shared<ms::Cells>(cells->runtime(), cells->columns(),
-                                                   cells->rows(), sizeof(double));
-        for (std::uint64_t r = 0; r < cells->rows(); ++r)
-            for (std::uint64_t c = 0; c < cells->columns(); ++c)
-                result->copy_cell(c * cells->rows() + r, *cells, r * cells->columns() + c);
+        auto result = cells->transpose(false);
         transaction.commit();
         return NumericMatrix(std::move(result));
     }
@@ -360,6 +408,13 @@ NumericMatrix NumericMatrix::concat(const NumericMatrix& other, bool horizontal)
         const int result_rows = horizontal ? r : r + other.rows();
         const int result_columns = horizontal ? c + other.columns() : c;
         ms::Scope transaction(cells->runtime());
+        // Both in the Store with matching sides: records move as bytes. Any
+        // other pair keeps the per-cell copy below and what it refuses.
+        if (own && rhs && (horizontal ? r == other.rows() : c == other.columns())) {
+            auto result = own->concat(*rhs, horizontal, false);
+            transaction.commit();
+            return NumericMatrix(std::move(result));
+        }
         auto result = std::make_shared<ms::Cells>(cells->runtime(), result_rows,
                                                    result_columns, sizeof(double));
         for (int i = 0; i < result_rows; ++i)
@@ -402,8 +457,8 @@ double NumericMatrix::sum() const {
 
 double NumericMatrix::mode() const {
     std::map<double, int> freq;
-    for (int i = 0; i < rows(); ++i)
-        for (int j = 0; j < columns(); ++j)
+    for (int i = 0, n = rows(), m = columns(); i < n; ++i)
+        for (int j = 0; j < m; ++j)
             freq[get(i, j)]++;
     int best = 0;
     double result = 0;
@@ -537,7 +592,8 @@ std::vector<double> NumericMatrix::eigenvalues() const {
     const Eigen::MatrixXd& operand = is_external_storage() ? workspace : data();
     if (!all_coeffs_finite(operand))
         return {};
-    if (is_symmetric()) {
+    // is_symmetric()'s test, on the operand already gathered.
+    if (operand.isApprox(operand.transpose(), EPS)) {
         Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> solver(
             operand, Eigen::EigenvaluesOnly);
         if (solver.info() != Eigen::Success)
@@ -567,7 +623,8 @@ NumericMatrix NumericMatrix::eigenvectors() const {
     const Eigen::MatrixXd& operand = is_external_storage() ? workspace : data();
     if (!all_coeffs_finite(operand))
         return NumericMatrix::new_(0, 0, 0.0);
-    if (is_symmetric()) {
+    // is_symmetric()'s test, on the operand already gathered.
+    if (operand.isApprox(operand.transpose(), EPS)) {
         Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> solver(
             operand, Eigen::ComputeEigenvectors);
         if (solver.info() != Eigen::Success)
@@ -620,7 +677,13 @@ int NumericMatrix::elements_count() const {
 
 // ── Properties ──────────────────────────────────────────────────────────────
 
-bool NumericMatrix::is_square() const { return rows() == columns(); }
+bool NumericMatrix::is_square() const {
+    if (const auto& cells = require_storage().external) {
+        const auto shape = cells->shape(); // one descriptor read for both sides
+        return static_cast<int>(shape.rows) == static_cast<int>(shape.columns);
+    }
+    return rows() == columns();
+}
 
 bool NumericMatrix::is_identity() const {
     if (!is_square()) return false;
@@ -630,8 +693,8 @@ bool NumericMatrix::is_identity() const {
 }
 
 bool NumericMatrix::is_diagonal() const {
-    for (int i = 0; i < rows(); ++i)
-        for (int j = 0; j < columns(); ++j)
+    for (int i = 0, n = rows(), m = columns(); i < n; ++i)
+        for (int j = 0; j < m; ++j)
             if (i != j && std::abs(get(i, j)) > EPS) return false;
     return true;
 }
@@ -665,8 +728,8 @@ bool NumericMatrix::is_antisymmetric() const {
 
 bool NumericMatrix::is_triangular() const {
     bool upper = true, lower = true;
-    for (int i = 0; i < rows(); ++i)
-        for (int j = 0; j < columns(); ++j) {
+    for (int i = 0, n = rows(), m = columns(); i < n; ++i)
+        for (int j = 0; j < m; ++j) {
             if (i > j && std::abs(get(i, j)) > EPS) upper = false;
             if (i < j && std::abs(get(i, j)) > EPS) lower = false;
         }
@@ -674,11 +737,12 @@ bool NumericMatrix::is_triangular() const {
 }
 
 bool NumericMatrix::is_stochastic() const {
-    for (int i = 0; i < rows(); ++i) {
+    for (int i = 0, n = rows(), m = columns(); i < n; ++i) {
         double s = 0;
-        for (int j = 0; j < columns(); ++j) {
-            if (get(i, j) < -EPS) return false;
-            s += get(i, j);
+        for (int j = 0; j < m; ++j) {
+            const double value = get(i, j);
+            if (value < -EPS) return false;
+            s += value;
         }
         if (std::abs(s - 1.0) > EPS) return false;
     }
@@ -686,11 +750,11 @@ bool NumericMatrix::is_stochastic() const {
 }
 
 bool NumericMatrix::is_binary() const {
-    for (int i = 0; i < rows(); ++i)
-        for (int j = 0; j < columns(); ++j)
-            if (std::abs(get(i, j)) > EPS &&
-                std::abs(get(i, j) - 1.0) > EPS)
-                return false;
+    for (int i = 0, n = rows(), m = columns(); i < n; ++i)
+        for (int j = 0; j < m; ++j) {
+            const double value = get(i, j);
+            if (std::abs(value) > EPS && std::abs(value - 1.0) > EPS) return false;
+        }
     return true;
 }
 

@@ -12,6 +12,7 @@
 #include <pineforge/run_failure.hpp>
 
 #include "equity_stats_reference.hpp"
+#include "metrics_streaming_stop_fixture.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -461,10 +462,49 @@ void cases() {
 }
 } // namespace
 
+// streaming-ratio extension: unlike O1W's existing two-walk fold, streaming-ratio must commit the
+// return only on release and finish repeatedly without replaying the curve.
+// This added row is RED on the first-stage stub, not an expected-failure test.
+static void released_held_return_row() {
+    namespace mt = metrics_streaming_test;
+    using namespace pineforge::metrics;
+    mt::HeldScript script;
+    script.append({mt::epoch, 100., 0.});
+    script.append({mt::epoch + mt::day, 104., 4.});
+    script.amend(1, {mt::epoch + mt::day, 102., 0.});
+    script.amend(1, {mt::epoch + mt::day, 101., 0.});
+    script.append({mt::epoch + 2 * mt::day, 97., 0.});
+    const auto points = mt::source(script.final);
+    const auto want = mt::legacy(points);
+    auto config = mt::config();
+    config.streaming_sharpe = StreamingSharpeV1::Off;
+    config.metrics_needed = kMetricsNeedSortinoBarV1;
+    std::unique_ptr<StreamingEquityRatiosV1> fold;
+    const auto status = make_streaming_equity_ratios_v1(config, mt::plan(points), {}, fold);
+    CHECK(status == MetricsStreamingStatusV1::Ok);
+    if (status != MetricsStreamingStatusV1::Ok) return;
+    CHECK(fold != nullptr);
+    if (!fold) return;
+    for (const auto& event : script.events) {
+        const int key = equity_stats_reference::month_key_utc(event.point.time_ms);
+        CHECK((event.amendment ? fold->amend_held(event.index, event.point, key)
+                               : fold->append(event.point, key)) == MetricsStreamingStatusV1::Ok);
+    }
+    MetricsStreamingResultV1 result, repeated;
+    CHECK(fold->finish(result) == MetricsStreamingStatusV1::Ok);
+    CHECK(fold->finish(repeated) == MetricsStreamingStatusV1::Ok);
+    CHECK(result.receipt.route == MetricsRatioRouteV1::Streaming);
+    CHECK(mt::same(result.sortino_bar, want.sortino));
+    CHECK(mt::same(result.downside_sum, want.down));
+    CHECK(mt::same(repeated.sortino_bar, want.sortino));
+    CHECK(mt::same(repeated.downside_sum, want.down));
+}
+
 int main() {
     finalize_annualization_span_rule();
     cases();
     failure_order();
+    released_held_return_row();
     std::printf("metrics fold: first=%zu bytes, second=%zu bytes; %d checks, %d failures\n",
                 sizeof(EquityMetricsFold), sizeof(EquityMetricsSecondPass), checks, failures);
     return failures ? 1 : 0;

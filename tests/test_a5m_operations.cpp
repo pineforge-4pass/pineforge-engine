@@ -3,11 +3,13 @@
 #include <pineforge/generic_matrix.hpp>
 #include <pineforge/matrix.hpp>
 #include <pineforge/detail/matrix_store.hpp>
+#include <pineforge/run_failure.hpp>
 
 #include <array>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -262,6 +264,40 @@ void numeric_coordinates() {
             a5m_test::require(matrix.get(r, c) == r * 7 + c * 3 + 1,
                               "invalid matrix write changed a valid cell");
     a5m_test::require(matrix.external_hash() == before, "invalid matrix access changed its bytes");
+}
+
+// matrix.diff of two shapes that differ, in rows, in columns or in both, is
+// the catalog's pine_matrix_error with its own function and reason, as the run
+// classifies it, and the refusal leaves both operands as they were.
+void diff_dimension_mismatch() {
+    auto left = pineforge::NumericMatrix::new_(2, 3, 1.5);
+    const auto left_before = left.external_hash();
+    const std::array<std::pair<int, int>, 3> shapes{{{3, 3}, {2, 2}, {3, 2}}};
+    for (const auto& shape : shapes) {
+        auto right = pineforge::NumericMatrix::new_(shape.first, shape.second, 0.5);
+        a5m_test::require(left.is_external_storage() && right.is_external_storage(),
+                          "matrix.diff operands are not store-backed");
+        const auto right_before = right.external_hash();
+        bool refused = false;
+        try {
+            (void)left.diff(right);
+        } catch (const std::invalid_argument& error) {
+            refused = true;
+            const auto value = pineforge::classify_run_failure(error);
+            a5m_test::require(value.code == pineforge::RunFailureCode::pine_matrix_error &&
+                                  value.args != nullptr &&
+                                  *value.args == "{\"function\":\"matrix.diff\","
+                                                 "\"reason\":\"dimension_mismatch\"}",
+                              "the matrix.diff refusal lost its code or arguments");
+            a5m_test::require(std::string(error.what()) == "matrix.diff: dimension mismatch",
+                              "the matrix.diff refusal changed its text");
+        }
+        a5m_test::require(refused, "matrix.diff of two shapes that differ was not refused");
+        a5m_test::require(right.external_hash() == right_before,
+                          "a refused matrix.diff changed its right operand");
+    }
+    a5m_test::require(left.external_hash() == left_before,
+                      "a refused matrix.diff changed its left operand");
 }
 
 void wide_records(pineforge::detail::matrix_store::Runtime& runtime) {
@@ -610,6 +646,7 @@ int main() {
         snapshot_identity<pineforge::GenericMatrix<bool>>(false, true);
         raw_float_cells();
         numeric_coordinates();
+        diff_dimension_mismatch();
         wide_records(runtime);
         depth_six_handles(numeric_reference, integer_reference, boolean_reference);
         return 0;

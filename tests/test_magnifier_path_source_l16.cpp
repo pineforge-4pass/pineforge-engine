@@ -1,4 +1,4 @@
-// CR-150 L16 red witness: ddc9c94c9 has no make_magnifier_path_source.
+// Red witness: ddc9c94c9 has no make_magnifier_path_source.
 // The lab must record that first diagnostic before building the implementation.
 #define PINEFORGE_TEST_ALLOCATION_BYTES
 #include "global_allocation_replacement.hpp"

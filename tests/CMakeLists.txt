@@ -1288,7 +1288,7 @@ list(APPEND TEST_SOURCES test_native_batch_log_presize)
 # Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_state_continuation)
 list(APPEND TEST_SOURCES test_native_tick_volume)
-# R5 V19-B: the order core's journal is a window (native_order_v7) -- absolute
+# The order core's journal is a window (native_order_v8) -- absolute
 # journal positions, the chain index against a journal oracle over randomized
 # command streams, chain membership that is not a chain walk (scaling), and a
 # live deferred group-adjustment chain pinning the window. Source-free, so it
@@ -1312,9 +1312,10 @@ list(APPEND TEST_SOURCES test_native_calendar_memo)
 # an idle run allocates on the heap within 0.25 per bar of the FeedTolerant
 # run (84 per bar before the memo). Source-free.
 list(APPEND TEST_SOURCES test_native_calendar_memo_cost)
-# R5 lane PERF-P5611 (P5): the monthly-Sharpe walk's UTC month key by integer
-# civil-from-days arithmetic, swept against gmtime_r. Source-free, so it also
-# runs in the kernel-only profile.
+# Monthly-Sharpe month keys over all int64 millisecond timestamps, against
+# independent Gregorian cycles and in-range gmtime_r; UTC/local report walks
+# and summary folds retain full-width keys. Public and source-free, including
+# the kernel-only and sanitizer profiles.
 list(APPEND TEST_SOURCES test_utc_month_key_arithmetic)
 # R5 lane D2-D: the monthly walk keeps its UTC month key with the month's
 # seconds -- the kept key against month_key_utc at every point of fixed-step,
@@ -1383,8 +1384,8 @@ list(APPEND TEST_SOURCES test_native_match_allocations)
 # Source-bound.
 list(APPEND TEST_SOURCES test_adapter_command_allocations)
 list(APPEND TEST_SOURCES test_adapter_exit_scratch)
-# R5 lane PERF-L1: the NativeStrategyHost reads -- the consumer read off the
-# engine's slot, the inline book aggregate, the running lifecycle view --
+list(APPEND TEST_SOURCES test_reversal_exit_owner_gate)
+# R5 lane PERF-L1: NativeStrategyHost's consumer, aggregate and lifecycle reads
 # against the lookups they replaced, inside every host hook of randomized
 # runs. Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_host_reads)
@@ -1399,7 +1400,7 @@ list(APPEND TEST_SOURCES test_native_lean_path)
 # so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_intrabar_scratch)
 list(APPEND TEST_SOURCES test_parent_terminal_scratch)
-list(APPEND TEST_SOURCES test_same_bar_trade_scratch)
+list(APPEND TEST_SOURCES test_same_bar_trade_scratch test_exit_group_reorder_scaling)
 list(APPEND TEST_SOURCES test_global_exit_recut_scratch)
 # R5 lane PERF-L1: the interval cache's prior answers and the session-point
 # memo hold only what a fresh, memo-free resolution answers, in every host hook
@@ -1481,7 +1482,7 @@ list(APPEND TEST_SOURCES test_native_fused_settlement_allocations)
 # order, working request, position, trade, equity point and admission field --
 # as on the lane's base and as with the erasure switched off (equivalence).
 # Source-bound.
-list(APPEND TEST_SOURCES test_adapter_live_state_scaling)
+list(APPEND TEST_SOURCES test_adapter_live_state_scaling test_retirement_work_scaling)
 list(APPEND TEST_SOURCES test_adapter_live_state_equivalence)
 # R5 lane V19-D: a bracket family's roster parks the erased members behind a
 # retained one (the v4 fold reads what is retained): randomized append /
@@ -2455,6 +2456,32 @@ endif()
 
 add_test(NAME test_settlement_cpp_abi_tooling
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_settlement_cpp_abi.py)
+
+# Public order-epoch controls also run without the private host ABI fixtures.
+# Reuse the settlement caller/compiler flags and the full report-word fixture.
+if(UNIX)
+    add_test(NAME test_native_order_epoch_reject
+        COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/scripts/check_settlement_cpp_abi.py
+            --order-check reject
+            --compiler ${CMAKE_CXX_COMPILER}
+            --library $<TARGET_FILE:pineforge>
+            --include ${PROJECT_SOURCE_DIR}/include
+            --generated-include ${PROJECT_BINARY_DIR}/include
+            --receipt ${PROJECT_BINARY_DIR}/native-order-abi/reject.json
+            ${_pf_script_cpp_abi_flags})
+    add_test(NAME test_native_order_epoch_rebuild_bytes
+        COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/scripts/check_settlement_cpp_abi.py
+            --order-check rebuild
+            --compiler ${CMAKE_CXX_COMPILER}
+            --library $<TARGET_FILE:pineforge>
+            --include ${PROJECT_SOURCE_DIR}/include
+            --generated-include ${PROJECT_BINARY_DIR}/include
+            --current-build ${PROJECT_BINARY_DIR}
+            --receipt ${PROJECT_BINARY_DIR}/native-order-abi/rebuild.json
+            ${_pf_script_cpp_abi_flags})
+    set_tests_properties(test_native_order_epoch_rebuild_bytes PROPERTIES PROCESSORS 4)
+endif()
+
 # A receipt-gated row above skips (exit 77) wherever
 # PINEFORGE_REQUIRE_ABI_RECEIPTS is OFF and its providers are not prepared in
 # this build tree, and CTest counts a skipped row as passed.
@@ -3036,6 +3063,25 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX
         add_test(NAME test_per_entry_exit_tapes COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: ${_pf_pee_missing}")
         set_tests_properties(test_per_entry_exit_tapes PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
     endif()
+endif()
+
+# The Python host loads this small shared library; its native entry point
+# can write fd 1, fail after that write, and emit a deterministic empty sink stream.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX
+   AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
+    add_library(run_json_stdout_strategy MODULE
+        test_run_json_stdout_strategy.cpp ${PROJECT_SOURCE_DIR}/src/sha256.cpp)
+    target_include_directories(run_json_stdout_strategy PRIVATE
+        ${PROJECT_SOURCE_DIR}/include ${PROJECT_BINARY_DIR}/include
+        ${PROJECT_SOURCE_DIR}/src)
+    target_compile_options(run_json_stdout_strategy PRIVATE -ffp-contract=off)
+    set_target_properties(run_json_stdout_strategy PROPERTIES
+        PREFIX "" SUFFIX ".so" LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/run_json_stdout")
+    add_test(NAME test_run_json_stdout_contract
+        COMMAND ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider
+            ${PROJECT_SOURCE_DIR}/tests/test_run_json_stdout.py)
+    set_property(TEST test_run_json_stdout_contract APPEND PROPERTY ENVIRONMENT
+        "PINEFORGE_STDOUT_STRATEGY_SO=$<TARGET_FILE:run_json_stdout_strategy>")
 endif()
 
 # Recorded outputs through docker/run_json.py (--outputs): two strategy
@@ -3752,7 +3798,22 @@ list(REMOVE_ITEM TEST_SOURCES ${_pf_private_fixture_rows})
 
 # Report arithmetic and C-host failure ownership, with source-free includes.
 list(APPEND TEST_SOURCES test_metrics_overflow)
-list(APPEND TEST_SOURCES test_native_c_host_report_failure)
+list(APPEND TEST_SOURCES test_native_c_host_report_failure test_scratch_bulk_advance)
+list(APPEND TEST_SOURCES test_native_unreachable_book)
+list(APPEND TEST_SOURCES test_native_dormant_book_cost)
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    list(APPEND TEST_SOURCES test_standing_orders_wall test_projected_pending_scaling)
+endif()
+list(APPEND TEST_SOURCES test_native_dormant_book_resident)
+list(APPEND TEST_SOURCES test_native_dormant_book_transcript)
+list(APPEND TEST_SOURCES test_native_dormant_book_switch)
+list(APPEND TEST_SOURCES test_native_dormant_book_tokens)
+list(APPEND TEST_SOURCES test_native_dormant_book_read_failure)
+list(APPEND TEST_SOURCES test_native_dormant_book_index_fault)
+list(APPEND TEST_SOURCES test_native_dormant_book_allocation_fault)
+list(APPEND TEST_SOURCES test_native_dormant_book_reachability)
+list(APPEND TEST_SOURCES test_native_dormant_book_core_contract)
+list(APPEND TEST_SOURCES test_native_dormant_book_capacity)
 
 # CR-150: engine-free pipe flag control beside the ordinary C++ unit rows.
 if(UNIX)
@@ -3764,6 +3825,31 @@ foreach(test_name ${TEST_SOURCES})
 endforeach()
 if(TEST test_drawing_checkpoint)
     set_tests_properties(test_drawing_checkpoint PROPERTIES LABELS "slow;mem")
+endif()
+
+if(UNIX)
+    # PASS_REGULAR_EXPRESSION makes output matching replace CTest's exit-code
+    # result, while WILL_FAIL accepts every nonzero result. The driver checks
+    # the planted mode's exact exit 1 and its boundary-specific guard message.
+    add_test(NAME test_pipe_writer_fd_flags_plant_nonblock
+        COMMAND ${CMAKE_COMMAND}
+            -DPIPE_WRITER=$<TARGET_FILE:test_pipe_writer_fd_flags>
+            -DPLANT_MODE=--plant-nonblock
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/run_pipe_writer_fd_flags.cmake)
+    add_test(NAME test_pipe_writer_fd_flags_plant_close
+        COMMAND ${CMAKE_COMMAND}
+            -DPIPE_WRITER=$<TARGET_FILE:test_pipe_writer_fd_flags>
+            -DPLANT_MODE=--plant-close
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/run_pipe_writer_fd_flags.cmake)
+endif()
+
+add_test(NAME test_native_dormant_book_notification_middle_spill
+    COMMAND test_native_dormant_book_transcript --notification-middle-spill)
+add_test(NAME test_native_dormant_book_resident_window
+    COMMAND test_native_dormant_book_transcript --resident-window)
+set_tests_properties(test_native_dormant_book_capacity PROPERTIES LABELS "slow")
+if(TEST test_standing_orders_wall)
+    set_tests_properties(test_standing_orders_wall PROPERTIES LABELS "slow")
 endif()
 
 if(PINEFORGE_BUILD_SOURCE_LAYER)
@@ -3869,15 +3955,15 @@ endif()
 # EN-132 M: source-only ownership proof, controls, and an independent D4 route.
 add_test(NAME test_selected_window_ownership_manifest
     COMMAND ${Python3_EXECUTABLE} -I -B ${PROJECT_SOURCE_DIR}/scripts/check_selected_window_ownership.py)
-# CR-196: lab release/debug/sanitizers/kernel took 57.0/65.9/85.5/56.9 s.
-# Loaded pool release/kernel/native-live took 125.7/126.8/132.3 s; debug and
-# sanitizers timed out at 180.02 s. Four shards keep the same 180 s budget.
-# The cases are unequal: the heaviest shard (3) holds 15 of the 39 checker
-# runs. ESTIMATE, not measured: 132.3 s x 15/39 = 50.9 s on the loaded pool in
-# Release; scaling by the lab sanitizers/release ratio (85.5/57.0 = 1.5) gives
-# about 76 s for sanitizers, i.e. 2.4x headroom against 180 s. The lab run of
-# the four shard rows is the measurement; each shard also fails closed when it
-# runs a number of tests different from the number it selected.
+# The earlier modulo split put 21 of 61 checker launches on shard 1.
+# Full checks scan the source tree; mutation loops make cases unequal.
+# The driver now derives weights from subprocess calls, following self
+# helpers and literal loop lengths, with a one-unit minimum per case.
+# Largest-first assignment to the lightest shard gives estimated structural
+# loads 17/17/16/16 instead of 22/15/14/15; these are units, not wall times.
+# Stable case ids break work-order ties; case count and index break load ties.
+# All six ownership rows have no TIMEOUT property; checker children also have
+# no deadline. Each shard must run exactly as many tests as it selected.
 set(_pf_ownership_control_shards)
 foreach(_pf_ownership_shard 1 2 3 4)
     add_test(NAME test_selected_window_ownership_manifest_controls_shard_${_pf_ownership_shard}of4
@@ -4256,6 +4342,23 @@ if(PINEFORGE_ENABLE_COVERAGE)
     target_compile_options(test_c_abi PRIVATE ${_pf_cov_test_flags})
 endif()
 pineforge_add_twin_test(test_c_abi test_c_abi)
+
+# Public ABI-stamp probes reuse the runner contract modules and the real
+# run_json loader. They need neither private fixtures nor the live runner.
+if(UNIX)
+    foreach(_pf_abi_probe previous current)
+        add_library(strategy_abi_${_pf_abi_probe} MODULE test_live_contract_plugins.cpp)
+        target_include_directories(strategy_abi_${_pf_abi_probe} PRIVATE
+            ${PROJECT_SOURCE_DIR}/include ${PROJECT_BINARY_DIR}/include)
+        target_compile_options(strategy_abi_${_pf_abi_probe} PRIVATE -fvisibility=hidden)
+        set_target_properties(strategy_abi_${_pf_abi_probe} PROPERTIES PREFIX "")
+    endforeach()
+    target_compile_definitions(strategy_abi_previous PRIVATE PF_LIVE_ABI_STAMP=4)
+    target_compile_definitions(strategy_abi_current PRIVATE PF_LIVE_ABI_STAMP=PF_ABI_VERSION)
+    add_test(NAME test_strategy_module_abi_epoch
+        COMMAND ${Python3_EXECUTABLE} -E -B ${PROJECT_SOURCE_DIR}/tests/test_run_json_bin.py
+            --abi-epoch $<TARGET_FILE:strategy_abi_previous> $<TARGET_FILE:strategy_abi_current>)
+endif()
 
 # Lane REL10: the four spellings ADR-0001 "Deprecated public spellings"
 # scheduled for removal -- pf_equity_stats_t::sharpe_tv / sortino_tv and
@@ -7329,9 +7432,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     list(APPEND TEST_SOURCES test_scratch_watch_attribution)
     pineforge_add_unit_test(test_scratch_watch_attribution)
     target_link_libraries(test_scratch_watch_attribution PRIVATE ${CMAKE_DL_LIBS} Threads::Threads)
-    foreach(_pf_scratch_watch_case IN ITEMS
-            cotenant_default cotenant_jailed cotenant_positive
-            own_tmp own_transient_tmp own_other_tmp own_shm private_non_mkstemp header_scratch)
+    foreach(_pf_scratch_watch_case IN ITEMS cotenant_default cotenant_jailed cotenant_positive
+            own_tmp own_transient_tmp own_other_tmp own_shm private_non_mkstemp header_scratch
+            own_open_tmp own_descendant_tmp diagnostics)
         add_test(NAME test_scratch_watch_attribution_${_pf_scratch_watch_case}
             COMMAND test_scratch_watch_attribution ${_pf_scratch_watch_case})
     endforeach()
@@ -7374,6 +7477,14 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_libraries(test_jailed_scratch_tmpfs_tmpdir PRIVATE ${CMAKE_DL_LIBS} Threads::Threads)
 endif()
 # --- CR-150 s4e-fix-tmp end ---
+
+# --- CR-150 streaming-ratios begin ---
+# The two-thread determinism row links Threads; a lane file may not link.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
+    target_link_libraries(test_metrics_streaming_ratios PRIVATE Threads::Threads)
+    target_link_libraries(tool_metrics_streaming_compare PRIVATE Threads::Threads)
+endif()
+# --- CR-150 streaming-ratios end ---
 
 # --- CR-150 core-cr150-l6b1 begin ---
 # CR-150 L6B1: appended after every pre-existing line pin. A real source

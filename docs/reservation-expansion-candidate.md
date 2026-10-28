@@ -3,9 +3,10 @@
 This historical candidate described reservation expansion and typed Pine
 instructions before adapter lowering. L3b removes the compatibility-order
 representation; equivalent live-request and adapter-placement facts provide
-the public projection. Public C ABI 4, stream API 1 and pending-mirror schema 1
-remain unchanged. The frozen shipped mirror prefix is preserved; reservation
-and frozen-instruction facts are appended fields of that mirror
+the public projection. The candidate preserved public C ABI 4, stream API 1
+and pending-mirror schema 1. The current C ABI version is 5. The frozen shipped
+mirror prefix is preserved; reservation and frozen-instruction facts are
+appended fields of that mirror
 (`include/pineforge/pending_order_mirror.hpp`, 406 POD fields today).
 
 The EXIT owns a capture of cycle and side plus its first later admitted

@@ -16,9 +16,8 @@ ROOT = Path(__file__).resolve().parents[1]
 # manifests checker.verify reads) out of the public tree.  Absent, every
 # control that reads a manifest skips with the project's pinned literal
 # instead of failing inside the checker; present, the suite runs exactly as
-# before.  test_real_link_accept_and_reject_pair is NOT one of them: it
-# compiles a synthetic pair through cpp_abi_pairing.run_synthetic_pair, reads
-# no fixture, and runs in both worlds.
+# before. Compiler and order-value controls read no private fixture and run
+# in both worlds.
 PRIVATE_FIXTURE_SKIP_LITERAL = "SKIP private fixtures not present: "
 PRIVATE_FIXTURE_MANIFESTS = (checker.MANIFEST, checker.V16_V18_MANIFEST)
 requires_private_fixtures = unittest.skipUnless(
@@ -79,19 +78,58 @@ class SettlementAbi(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 checker.verify(include)
 
-    @requires_private_fixtures
-    def test_v6_order_epoch_is_refused(self):
-        # V19-B: the relocation manifest pins native_order_v6 -> v7, so a
-        # tree whose request values are still v6 fails the surface audit.
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            include = root / "include"
-            shutil.copytree(ROOT / "include", include)
-            path = include / "pineforge/native_order.hpp"
-            path.write_text(path.read_text().replace(
-                "inline namespace native_order_v7 {", "inline namespace native_order_v6 {", 1))
-            with self.assertRaises(RuntimeError):
-                checker.verify(include)
+    def test_current_order_epoch(self):
+        self.assertEqual(checker.verify_order_epoch(ROOT / "include"), "native_order_v8")
+
+    def test_stale_order_epochs_are_refused(self):
+        for stale in ("native_order_v6", "native_order_v7"):
+            with self.subTest(stale=stale), tempfile.TemporaryDirectory() as directory:
+                include = Path(directory) / "include"
+                shutil.copytree(ROOT / "include", include)
+                path = include / "pineforge/native_order.hpp"
+                before = "inline namespace native_order_v8 {"
+                self.assertIn(before, path.read_text())
+                path.write_text(path.read_text().replace(before, "inline namespace " + stale + " {", 1))
+                with self.assertRaisesRegex(RuntimeError, "native_order_v8"):
+                    checker.verify_order_epoch(include)
+
+    def test_successful_stale_link_is_not_a_refusal(self):
+        with self.assertRaisesRegex(PairingError, "unexpectedly linked"):
+            checker.require_order_rejection(0, "")
+
+    def test_unrelated_link_failure_is_not_a_refusal(self):
+        for diagnostic in ("cannot find -lpineforge",
+                           "undefined reference to `unrelated_symbol'",
+                           "native_order_v7::WorkingRequestCore::WorkingRequestCore: syntax error",
+                           "native_order_v7::WorkingRequestCore::WorkingRequestCore: syntax error\n"
+                           "undefined reference to `unrelated_symbol'"):
+            with self.subTest(diagnostic=diagnostic):
+                with self.assertRaisesRegex(PairingError, "wrong reason"):
+                    checker.require_order_rejection(1, diagnostic)
+
+    def test_old_namespace_must_be_named_by_the_linker(self):
+        checker.require_order_rejection(
+            1, "undefined reference to `pineforge::native_order::native_order_v7"
+               "::WorkingRequestCore::WorkingRequestCore(...)'")
+        checker.require_order_rejection(
+            1, 'Undefined symbols for architecture arm64:\n'
+               '  "pineforge::native_order::native_order_v7::WorkingRequestCore'
+               '::WorkingRequestCore(...)", referenced from:\n  _main in order_v7.o')
+        with self.assertRaisesRegex(PairingError, "signal"):
+            checker.require_order_rejection(
+                -11, "undefined reference to `pineforge::native_order::native_order_v7"
+                     "::WorkingRequestCore::WorkingRequestCore(...)'")
+        with self.assertRaisesRegex(PairingError, "wrong reason"):
+            checker.require_order_rejection(
+                1, "undefined reference to `pineforge::native_order::native_order_v8"
+                   "::WorkingRequestCore::WorkingRequestCore(...)'")
+
+    def test_empty_or_banner_only_report_comparison_is_refused(self):
+        for raw in (b"", b"test_native_settlement_row_finite: ok (0 rows)\n",
+                    b"finite_closed_zero not-a-binary64-word\n"):
+            with self.subTest(raw=raw):
+                with self.assertRaises(PairingError):
+                    checker.require_report_transcript(raw)
 
     @requires_private_fixtures
     def test_missing_tick_hook_is_refused(self):

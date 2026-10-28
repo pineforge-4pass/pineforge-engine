@@ -664,7 +664,8 @@
       "matrix.submatrix",
       "matrix.concat",
       "matrix.reshape",
-      "matrix.restore"
+      "matrix.restore",
+      "matrix.diff"
      ]
     },
     "reason": {
@@ -679,7 +680,8 @@
       "from_col_after_to_col",
       "row_count_mismatch",
       "column_count_mismatch",
-      "element_count_mismatch"
+      "element_count_mismatch",
+      "dimension_mismatch"
      ]
     }
    },
@@ -697,6 +699,7 @@
     "matrix.col: column index out of range",
     "matrix.concat: column count mismatch",
     "matrix.concat: row count mismatch",
+    "matrix.diff: dimension mismatch",
     "matrix.get: column index out of range",
     "matrix.get: row index out of range",
     "matrix.new: negative dimensions",
@@ -1536,7 +1539,7 @@
     "--outputs: the outputs manifest's {key} is not a list of entries with {fields}",
     "cannot load the strategy library: {error}",
     "checked settings API mismatch: the strategy library must export strategy_settings_api_version() == 1, strategy_create_checked, strategy_set_input_checked and strategy_set_override_checked, or none of them; rebuild.",
-    "pineforge ABI mismatch: .so reports {abi}, harness expects 4; rebuild.",
+    "pineforge ABI mismatch: .so reports {abi}, harness expects 5; rebuild.",
     "strategy .so predates pf_abi_version (ABI v1); rebuild it against the current pineforge runtime (pf_report_t grew).",
     "the strategy library has no strategy_set_syminfo_metadata, so syminfo.mincontract cannot be applied",
     "the strategy library has no {export}",

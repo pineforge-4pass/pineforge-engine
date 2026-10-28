@@ -109,7 +109,7 @@ int hhmm_to_minutes(const std::string& hhmm);
 // Value-identical to Pine hour()/minute()/dayofweek()/... (dayofweek 1=Sun..7=Sat,
 // month 1..12, year full). Codegen routes hour()/minute()/... through these
 // instead of an inline setenv+tzset lambda, which stops the per-call macOS
-// tzset()->notifyd IPC storm (KI-35): UTC uses tzset-free gmtime_r, other zones
+// tzset()->notifyd IPC storm: UTC uses tzset-free gmtime_r, other zones
 // use the cached ScopedTimezone. DST-correct (localtime_r via the tz database).
 int local_hour(int64_t bar_ms, const std::string& tz);
 int local_minute(int64_t bar_ms, const std::string& tz);

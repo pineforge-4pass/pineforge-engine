@@ -25,6 +25,8 @@
 //                 std::bad_alloc from the throwing forms, nullptr from the
 //                 nothrow ones -- and allocates nothing;
 //   refused       counts those refusals.
+//   fail_after    allow this many allocation calls, then throw bad_alloc ONCE
+//                 and disarm; max() is disabled. Counts in refused too.
 // With PINEFORGE_TEST_ALLOCATION_BYTES defined before the include, every
 // block also carries its size in a header in front of it, so a recording
 // window can see the bytes it asked for and what of them it gave back:
@@ -45,6 +47,7 @@ namespace global_allocation {
 inline std::size_t allocations = 0;
 inline bool refusing = false;
 inline std::size_t refused = 0;
+inline std::size_t fail_after = std::numeric_limits<std::size_t>::max();
 
 #if defined(PINEFORGE_TEST_ALLOCATION_BYTES)
 inline bool recording = false;
@@ -118,6 +121,14 @@ inline void deallocate(void* block) noexcept {
 // The throwing forms: the new-handler loop of [new.delete.single], except
 // that a refusal throws at once.
 inline void* allocate_or_throw(std::size_t size, std::size_t align) {
+    if (fail_after != std::numeric_limits<std::size_t>::max()) {
+        if (fail_after == 0) {
+            fail_after = std::numeric_limits<std::size_t>::max();
+            ++refused;
+            throw std::bad_alloc();
+        }
+        --fail_after;
+    }
     for (;;) {
         if (void* block = allocate(size, align)) return block;
         if (refusing) throw std::bad_alloc();

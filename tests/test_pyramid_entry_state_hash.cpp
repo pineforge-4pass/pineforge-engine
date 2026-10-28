@@ -44,7 +44,7 @@ public:
     }
     PyramidEntry& lot() { return pyramid_entries_.front(); }
     const PyramidEntry& lot() const { return pyramid_entries_.front(); }
-    // R5 lane L12 (2.ii j) moved the KI-62 market-add provenance off the
+    // The market-add provenance moved off the
     // generic lot into the adapter, keyed by entry_incarnation. It must
     // still be covered by the broker hash, through the source extension.
     void mark_market_add() { adapter_.mark_market_pyramid_add(lot().entry_incarnation); }
@@ -104,7 +104,7 @@ int main() {
         }
     }
 
-    // The relocated KI-62 flag is adapter state now; the broker hash folds
+    // The relocated flag is adapter state now; the broker hash folds
     // it through the source extension, so marking it must still move the hash.
     {
         LiteralBook marked;

@@ -1,4 +1,4 @@
-"""S4E singleton regressions. Execute only on the lab box."""
+"""Singleton regressions. Execute only on the Linux test host."""
 import ctypes
 import json
 from pathlib import Path

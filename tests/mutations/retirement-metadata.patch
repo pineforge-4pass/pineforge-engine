@@ -1,0 +1,21 @@
+diff --git a/src/source/pine_adapter.cpp b/src/source/pine_adapter.cpp
+--- a/src/source/pine_adapter.cpp
++++ b/src/source/pine_adapter.cpp
+@@ -1288,7 +1288,7 @@
+         snapshot.coof_cascade_seg_i = coof_context_.coordinate.interval_index;
+         snapshot.coof_cascade_inflight_fires = true;
+     }
+-    if (handle.incarnation && placement_.contains(handle.incarnation)) invalidate_retirement();
++
+     const bool exit = snapshot.family == PineOrderFamily::ExitLimit
+         || snapshot.family == PineOrderFamily::ExitStop
+         || snapshot.family == PineOrderFamily::ExitTrail;
+@@ -11379,7 +11379,7 @@
+ // lot this fill opens, and end with it.
+ void PineExecutionAdapter::bind_pending_exits_to_fill(const SourceId& entry_id) {
+     const auto bind = [&](PlacementSnapshot& row) {
+-        if (row.pending_bound_exit && row.from_entry == entry_id) { row.pending_bound_exit = false; invalidate_retirement(); }
++        if (row.pending_bound_exit && row.from_entry == entry_id) row.pending_bound_exit = false;
+     };
+     for (auto& pending : pending_bracket_legs_) bind(pending.snapshot);
+     for (auto& pending : pending_coof_requests_) bind(pending.snapshot);
