@@ -28496,28 +28496,6 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "placement_",
-   "scope": [
-    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: remember ( const native_order :: RequestHandle & handle , PlacementSnapshot && snapshot ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "placement_ . try_emplace ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_adapter.cpp",
-   "symbol": "live_handles_",
-   "scope": [
-    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: remember ( const native_order :: RequestHandle & handle , PlacementSnapshot && snapshot ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "live_handles_ . push_back ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_adapter.cpp",
    "symbol": "askable_origins",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
@@ -35627,7 +35605,7 @@
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: on_bar_open ( const Bar & bar , const NativeDecisionContext & context ) #1",
-    "for ( const auto & handle : live_handles_ ) #1"
+    "if ( has_live_trail_policy ( ) ) for ( const auto & handle : live_handles_ ) #1"
    ],
    "cls": "grow",
    "spelling": "trail_state_at_open_ . emplace ( . . . )",
@@ -37493,18 +37471,6 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "live_handles_",
-   "scope": [
-    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: order_same_point_entries ( ) #1",
-    "+ + index ) #2"
-   ],
-   "cls": "grow",
-   "spelling": "live_handles_ . push_back ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_adapter.cpp",
    "symbol": "position_tail_summary_",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
@@ -37639,6 +37605,39 @@
    ],
    "cls": "assign",
    "spelling": "key = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "placement_",
+   "scope": [
+    "namespace pineforge :: source #6",
+    "void PineExecutionAdapter :: remember_live ( const native_order :: RequestHandle & handle , PlacementSnapshot && snapshot ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "placement_ . try_emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "live_handles_",
+   "scope": [
+    "namespace pineforge :: source #6",
+    "void PineExecutionAdapter :: remember_live ( const native_order :: RequestHandle & handle , PlacementSnapshot && snapshot ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "live_handles_ . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "live_handles_",
+   "scope": [
+    "namespace pineforge :: source #6",
+    "void PineExecutionAdapter :: requeue_live ( const native_order :: RequestHandle & handle ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "live_handles_ . push_back ( . . . )",
    "ordinal": 1
   },
   {
