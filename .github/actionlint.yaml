@@ -6,6 +6,8 @@ self-hosted-runner:
     - pf-ci-release
     - pf-gcp-post
     - pf-gcp-main
+    - gke-2cpu-4gb-amd64
+    - gke-4cpu-8gb-amd64
     - gke-32cpu-64gb-amd64
     - gke-16cpu-32gb-amd64
     - gke-8cpu-16gb-amd64
