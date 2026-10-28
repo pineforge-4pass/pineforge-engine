@@ -86,7 +86,7 @@ summary of it.
   `NativeCoordinate::interval_index` (`market_driver.hpp:74`) is the sequential
   SCRIPT-bar index even when `input_tf` is finer than `script_tf`. The same
   script coordinate books `PyramidEntry::entry_bar_index`, trade-row indices and
-  the inclusive bar metrics (`entry_bar_index` / `exit_bar_index` `engine_orders.cpp:127-128`, `bars` `engine_metrics.cpp:642`).
+  the inclusive bar metrics (`entry_bar_index` / `exit_bar_index` `engine_orders.cpp:128-129`, `bars` `engine_metrics.cpp:642`).
   `NativeCoordinate::input_interval_index` (`market_driver.hpp:79`) names the
   input slot that supplied the point for a host that needs input cadence. Both
   coordinate values are folded by `hash_coordinate`
