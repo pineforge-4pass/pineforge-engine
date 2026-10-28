@@ -1,5 +1,41 @@
 # CR-150/C4 source gate: re-emit (reading file for the reviewer)
 
+## Replay incremental source read (2026-10-28)
+
+The supplied CLOUD preflight for implementation tree `a6936abc1` reported
+39 findings: 38 new identities and one stale header identity. This update is
+a manual source read, not a gate execution or a flat-memory verdict. The
+checker, scan scope, codegen pin, fixed inputs and existing states are unchanged.
+The exact new scopes/operations/ordinals are appended in the JSON inventory;
+only the moved summary push is removed. The TSV updates U0056 and U1414 and
+adds U1524–U1541, with source evidence for each group.
+
+The 18 new groups stay `unreviewed`/OPEN. The reviewed ceiling rises from
+1277 to 1295; `pending-flat-memory` stays 188 and `bounded` stays zero.
+The expected totals from this static accounting are 1483 groups/entries and
+3571 sites; these are expectations for the supervisor's run, not measured
+results. No blanket exemption or bounded claim was added.
+
+Replay trades, Q operands and recut replacements use `ScratchSequence`:
+one fixed 64 KiB window per sequence, checked logical extents, and typed
+scratch IO refusals. `ReportReplay::retire` consumes only an R prefix already
+written and is called by native sealing; `write_q` consumes its emitted Q.
+An empty sequence clears its backing file. Partial prefix retirement advances
+an offset; it does **not** compact the file, so logical scratch can still be
+O(T + Q) until clearing or run destruction. The recut temporary is destroyed at
+function return. There is no new history-sized RAM directory.
+
+Configuration strings have the setter's 64 KiB path/run-ID admission; the
+scratch-directory length retains the existing admission and has no new proof.
+The writer's existing `Line` is a checked 1 MiB array and its IO window is
+64 KiB. R/Q line temporaries have fixed field counts and numeric/enum operands.
+The moved summary vector push retains one point by pushing only when empty;
+the FULL recorder and the R01 OPEN debt remain. These forms are outside the
+gate's deliberately narrow scalar-vector proof, so none is marked bounded.
+
+The earlier top block and review sections below describe their original
+snapshot; the replay accounting above is a separate incremental review.
+
 ## Top block
 
 - base (first-parent-main merge, the PR's pre-re-emit tree): `1d83e49a3acb9be316d894658a9beff023619c7e`; main tip it merges: `7a7d099918`.

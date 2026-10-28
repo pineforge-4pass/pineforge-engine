@@ -7,6 +7,7 @@
 #include "selected_report_view.hpp"
 #include <pineforge/metrics_stream.hpp>
 #include "report_scratch.hpp"
+#include "report_replay.hpp"
 
 #include <pineforge/metrics.hpp>
 #include <pineforge/detail/scratch_sequence.hpp>
@@ -84,6 +85,7 @@ void BacktestEngine::fill_report(ReportC* out) const try {
     // report). A live selected sink cannot supply the ordinary full prefix.
     if (NativeExecutionConsumer::fill_selected_report(*this, out)) {
         finish_report_sink(out);
+        if (report_sink_state_.replay) finish_report_replay(out);
         return;
     }
     if (report_sink_state_.selected_equity_stream) {
@@ -142,6 +144,7 @@ void BacktestEngine::fill_report(ReportC* out) const try {
         out->broker_state_hash_len = 0;
     }
     finish_report_sink(out);
+    if (report_sink_state_.replay) finish_report_replay(out);
 } catch (const std::exception& error) {
     // A C wrapper can ask for partial rows after execution already failed.
     // A later invalid metric must not replace that latched typed failure.
@@ -972,9 +975,11 @@ BacktestEngine::ReportSinkState::ReportSinkState() = default;
 BacktestEngine::ReportSinkState::~ReportSinkState() = default;
 BacktestEngine::ReportSinkState::ReportSinkState(const ReportSinkState& other)
     : enabled(other.enabled), trade_history_streamable(other.trade_history_streamable),
+      fd_identity_valid(other.fd_identity_valid), fd(other.fd),
       path(other.path), run_id(other.run_id), scratch_dir(other.scratch_dir),
-      fd(other.fd), fd_device(other.fd_device), fd_inode(other.fd_inode),
-      fd_identity_valid(other.fd_identity_valid) {}
+      fd_device(other.fd_device), fd_inode(other.fd_inode) {
+    if (other.replay) replay = other.replay->configuration_copy();
+}
 BacktestEngine::ReportSinkState&
 BacktestEngine::ReportSinkState::operator=(const ReportSinkState& other) {
     if (this != &other) *this = ReportSinkState(other);
@@ -1039,6 +1044,7 @@ int BacktestEngine::set_report_sink_v1(const pf_report_sink_v1* descriptor) {
             next.selected_equity_stream = std::move(report_sink_state_.selected_equity_stream);
         }
     }
+    next.replay = std::move(report_sink_state_.replay);
     report_sink_state_ = std::move(next);
     return 0;
 }
@@ -1073,6 +1079,7 @@ int BacktestEngine::set_report_sink_fd_v1(const pf_report_sink_fd_v1* descriptor
         next.equity_tail_stored = report_sink_state_.equity_tail_stored;
         next.selected_equity_stream = std::move(report_sink_state_.selected_equity_stream);
     }
+    next.replay = std::move(report_sink_state_.replay);
     report_sink_state_ = std::move(next);
     return 0;
 }
@@ -1133,6 +1140,7 @@ void BacktestEngine::set_trade_history_streamable(bool streamable) {
 
 void BacktestEngine::begin_report_sink() {
     auto& sink = report_sink_state_;
+    if (sink.replay) begin_report_replay();
     // A begin owns a fresh run: the optional-sequence witnesses start empty
     // beside the arrays the run resets.
     reset_optional_sequence_witness();
@@ -1151,6 +1159,7 @@ void BacktestEngine::begin_report_sink() {
     sink.output_base = 0;
     // Run preparation, before callbacks/bar zero, also when no sink is set.
     active_equity_report_mode_ = pending_equity_report_mode_;
+    if (sink.replay) active_equity_report_mode_ = ReportMode::STREAMED;
     summary_equity_fold_ = {};
     summary_equity_snapshot_ = {};
     summary_equity_snapshot_valid_ = summary_equity_ratios_ready_ = false;
@@ -1261,11 +1270,13 @@ void BacktestEngine::finish_report_sink(ReportC* out) const {
                     pf_equity_point_t point{};
                     report_sink::read_scratch_points(region, i, &point, 1);
                     sink.writer->write_e(point);
+                    if (sink.replay) write_report_replay_equity(point);
                     ++sink.receipt.count_e;
                 }
             } else {
                 for (int64_t i = sink.receipt.count_e; i < out->equity_curve_len; ++i) {
                     sink.writer->write_e(out->equity_curve[i]);
+                    if (sink.replay) write_report_replay_equity(out->equity_curve[i]);
                     ++sink.receipt.count_e;
                 }
             }
@@ -1404,6 +1415,8 @@ void BacktestEngine::write_report_sink_trades(const TradeC* open_rows, int count
         sink.writer->write_t(i + INT64_C(1), wire, identity->entry_incarnation,
             classify_report_close_cause(*identity), identity->entry_id,
             identity->exit_id, identity->exit_comment);
+        if (sink.replay)
+            write_report_replay_trade(static_cast<std::size_t>(i), i >= closed_count);
         ++sink.receipt.count_t;
     }
 }

@@ -26,19 +26,19 @@ disk with a small resident window (see below).
 Default C/C++ and Python callers without a report sink keep the native equity
 curve on the heap: **24 B per script bar plus vector spare capacity**
 (`pf_equity_point_t` include/pineforge/pineforge.h:326-330;
-`equity_curve_` include/pineforge/engine.hpp:719).
+`equity_curve_` include/pineforge/engine.hpp:723).
 Building the default FULL report then adds an owning **24 B per script bar**
-copy (`equity_curve` src/engine_report.cpp:481-484).
+copy (`equity_curve` src/engine_report.cpp:484-487).
 
 On the default sink route, the engine releases the resident vector and installs
-a scratch writer (`equity_curve_` src/engine_report.cpp:1205-1211), keeping an editable
+a scratch writer (`equity_curve_` src/engine_report.cpp:1214-1220), keeping an editable
 tail for reporting (`fill_report_sink_metrics_section`
-src/engine_report.cpp:1460-1467).
+src/engine_report.cpp:1473-1480).
 The writer batches **2,730 points of 24 B**, within a **64 KiB** window
 (`kScratchWindowPoints` src/report_scratch.hpp:18-20;
 `ScratchCurveWriter::State` src/report_scratch.cpp:154-161).
 Metrics re-read scratch through bounded windows
-(`compute_report_sink_metrics` src/engine_report.cpp:1439-1450;
+(`compute_report_sink_metrics` src/engine_report.cpp:1452-1463;
 `ScratchCurveWindow` src/report_scratch.cpp:270-310).
 This bounds resident equity-report buffers; the scratch backing and output
 still grow with the run.
@@ -69,7 +69,7 @@ read the records from the sink. See [Report schema](@ref report_schema).
 
 The default **unjailed** `run_json` route, with a sink-capable module,
 installs a temporary path sink (`_new_report_sink`
-docker/run_json.py:5790-5822; `_ReportSink` docker/run_json.py:6183-6220).
+docker/run_json.py:5822-5854; `_ReportSink` docker/run_json.py:6215-6252).
 The full equity curve is **not resident**: with disk scratch and no arena
 attached, its resident equity-curve buffers are **O(1) in bars**.
 Binary curve scratch on **disk** still costs **24 B per script bar**
@@ -77,8 +77,8 @@ Binary curve scratch on **disk** still costs **24 B per script bar**
 **6 MiB at 262,144 bars** and **48 MiB at 2,097,152 bars**, calculated payload
 sizes excluding other scratch and output.
 The sink's `E` output and the default route's JSON artifact also grow with
-the bar count: `_build_sink_report` docker/run_json.py:7102-7148 supplies lazy
-record arrays, and `_prepare_stream_report` docker/run_json.py:6983-7003
+the bar count: `_build_sink_report` docker/run_json.py:7138-7184 supplies lazy
+record arrays, and `_prepare_stream_report` docker/run_json.py:7019-7039
 serializes them to a temporary artifact.
 Lazy serialization bounds buffers, not output bytes.
 The test that checks the resident claim runs with a fixed minimal table
@@ -89,10 +89,10 @@ Whenever a scratch arena is attached (a **jailed run with `--report-sink-fd`**
 always, and any other run that inherits one), curve scratch instead consumes
 the **RAM-backed arena**, so those same **24 B per script bar are memory**.
 The fd setter attaches the arena (`attach_from_environment`
-src/engine_report.cpp:1067), and `ScratchFile::open`
+src/engine_report.cpp:1073), and `ScratchFile::open`
 include/pineforge/detail/scratch_file.hpp:127-134 selects it.
 Linux jailed admission requires sealed memfd backing
-(`strategy_require_report_scratch_arena_v1` src/c_abi.cpp:1431-1448).
+(`strategy_require_report_scratch_arena_v1` src/c_abi.cpp:1455-1472).
 The hosting wrapper supplies `PF_SCRATCH_ARENA_BYTES`
 src/scratch_arena.cpp:385-386.
 The engine never resizes that backing (the sizing comment above `ScratchArena`
@@ -108,7 +108,7 @@ There is no RAM fallback (the comment on `ScratchFile`
 include/pineforge/detail/scratch_file.hpp:30-36).
 
 A **jailed run without `--report-sink-fd` has no sink at all**:
-`_new_report_sink` docker/run_json.py:5809-5826 returns `None`, so it retains
+`_new_report_sink` docker/run_json.py:5841-5858 returns `None`, so it retains
 the native curve and owning FULL report copy described above. It also builds
 the whole report text in memory before writing stdout, and that text is the
 largest per-bar term of this route. It is held as UTF-8 bytes: about one byte
@@ -133,13 +133,13 @@ bytes.
 
 The sink-off jailed route buffers the whole report text before writing to
 stdout, so a serialization error publishes no partial report
-(`_prepare_report_json`, `docker/run_json.py:7025`; publication in
-`_write_report`, `docker/run_json.py:4662`). Its UTF-8 byte buffer uses about
+(`_prepare_report_json`, `docker/run_json.py:7061`; publication in
+`_write_report`, `docker/run_json.py:4680`). Its UTF-8 byte buffer uses about
 one byte of resident text per output byte, plus bounded encoding and
 read-back buffers, on top of the input mapping and the engine's storage:
 this is `O(output)` memory for the report the caller requested. Passing
 `--report-sink-fd` selects the fd sink before the jailed no-sink fallback
-(`_new_report_sink`, `docker/run_json.py:5809`), avoiding the full report-text
+(`_new_report_sink`, `docker/run_json.py:5841`), avoiding the full report-text
 buffer; stdout then buffers only the bounded summary.
 
 ## The report-sink descriptor: what a caller passes and what it gets {#memory_sink_fd}
@@ -160,19 +160,19 @@ passes every argument that is not `hpo` to `/opt/pineforge/bin/entrypoint.sh`, t
 decides it is `grep -c REPORT_SINK_FD /opt/pineforge/bin/entrypoint.sh` (0 on 1.7.0, 1 from 1.8.0), or
 the sha256 of that file against the release's `HARNESS-SHA256SUMS`. After a run, a descriptor that
 received no header line, with the trade and equity arrays on stdout, means the variable was ignored.
-`run_json.py --capabilities-json` (`_capabilities_main` at `docker/run_json.py:4731`) carries no
+`run_json.py --capabilities-json` (`_capabilities_main` at `docker/run_json.py:4749`) carries no
 report-sink key, so it is not a probe.
 
 **What the caller passes.** A descriptor number N, open for writing in the process that executes the
 entrypoint: a FIFO or an `AF_UNIX` stream socket. N is from 3 through `INT_MAX` and is not 5. A request
 that breaks any rule below fails at argument validation, before any bar is read, as one failure line on
 stdout with code `run_request_invalid` and exit status 2 (`_validate_sink_options` at
-`docker/run_json.py:5744-5771`):
+`docker/run_json.py:5776-5803`):
 
 | Refused | Why |
 | --- | --- |
 | N below 3 or above `INT_MAX` | outside the range |
-| a value that is not an integer, an empty string included | the option is an integer option (`--report-sink-fd` at `docker/run_json.py:5223`), so the argument parser refuses it with the same code and exit status |
+| a value that is not an integer, an empty string included | the option is an integer option (`--report-sink-fd` at `docker/run_json.py:5246`), so the argument parser refuses it with the same code and exit status |
 | N = 5 | the engine's scratch arena owns descriptor 5 (`PF_SCRATCH_ARENA_FD`) |
 | together with `--report-sink PATH` | the file sink and the descriptor sink are exclusive |
 | together with `--bench` or `--validate-window-only` | the descriptor carries one run's stream |
@@ -190,17 +190,17 @@ number: in particular 6 is not reserved. A host that gives 6 to its own sink and
 it.
 
 **Route.** The descriptor sink is chosen before the jailed check, so a jailed run that is given the
-descriptor uses it (`_new_report_sink` at `docker/run_json.py:5809-5826`). A strategy library without the five descriptor-sink
+descriptor uses it (`_new_report_sink` at `docker/run_json.py:5841-5858`). A strategy library without the five descriptor-sink
 symbols fails with the typed `symbol_missing` reason (same lines).
 
 **What is written to the descriptor.** The `pf-report-sink/v1` stream described in [Report
 schema](@ref report_schema): newline-delimited JSON, each line at most 1 MiB (`MAX_LINE_BYTES`,
-`docker/pf_sink.py:29`), one header line, then equity (`E`) and trade (`T`) records, and when requested
+`docker/pf_sink.py:30`), one header line, then equity (`E`) and trade (`T`) records, and when requested
 the `O`, `V`, `K`, `X` and `H` records, then one trailer line
 `{"trailer":"pf-report-sink","version":1,"counts":{...},"sha256":"..."}`. The sha256 covers the header
 and every data line with its LF, not the trailer. The writer and the header are byte-identical in v1.7.0
 and at main. `run_json.py` closes the descriptor after the run through the `close` method of `_InheritedSinkFd`
-(`docker/run_json.py:5844-5858`), so a reader sees EOF.
+(`docker/run_json.py:5876-5890`), so a reader sees EOF.
 
 **What stdout carries.** Only the bounded summary document: about 9 KB in the measured runs (9,274 bytes
 at 2 M bars), with no trade or equity array. Do not use it to verify the stream: the stdout summary of a
@@ -211,7 +211,7 @@ the trailer against.
 Read every record as provisional until the trailer's counts and sha256 equal what the reader counted and
 hashed. The reader `SinkReader` in
 `docker/pf_sink.py` does this check: its `_finish` rejects a count or sha256 mismatch and bytes
-after the trailer (`SinkReader._finish` at `docker/pf_sink.py:341-358`), and a stream that ends without a
+after the trailer (`SinkReader._finish` at `docker/pf_sink.py:342-359`), and a stream that ends without a
 trailer raises `missing header or trailer`.
 
 **When it fails.** A failure of `run_json.py` itself is one failure line on stdout and exit status 1
@@ -229,9 +229,9 @@ from the closed list of the catalog (`report_sink_failed` at `docker/run_failure
 `arena_bytes`, `claimed_bytes`, `store` and `needed_bytes_lower_bound`, `sink_exhausted` carries
 `sink_bytes` and `cap_bytes`, and every other reason carries `reason` alone, a closed reader included.
 A write error while `run_json.py` prepares the report in scratch is raised as `RunFailure` with
-`scratch_io` (`docker/run_json.py:7014-7017`); it is not a write to the descriptor. `sink_peer_closed` is also raised when the descriptor setup itself
+`scratch_io` (`docker/run_json.py:7050-7053`); it is not a write to the descriptor. `sink_peer_closed` is also raised when the descriptor setup itself
 finds a closed peer (`EPIPE`, `ECONNRESET` or `ENOTCONN`, with the message "report sink fd setup
-failed"; `RunFailure` at `docker/run_json.py:5879-5887`). The descriptor then holds records without a
+failed"; `RunFailure` at `docker/run_json.py:5911-5919`). The descriptor then holds records without a
 verified trailer, and a caller treats it as absent. The engine writer loops a short write to completion,
 retries `EINTR` and fails on a zero-byte write with `EIO`. On a nonblocking descriptor it waits with
 `poll` on `EAGAIN`, and a closed peer shows as `POLLERR` or `POLLHUP` (`wait_writable` at
@@ -255,9 +255,9 @@ to EOF got exit status 0 and a complete verified trailer.
 | `PF_SCRATCH_WINDOW_BYTES` | environment | 32 MiB | Total cap on the arena bytes mapped at one time, rounded down to whole pages. Mapped pages count toward the resident size while mapped |
 | `pf_scratch_tables_v1` through `strategy_set_scratch_tables_v1` | descriptor of eleven maxima | disk tables; with `bounded_memory`, the policy values of [Scratch tables](@ref scratch_tables) | Sizes the fixed slab of the historical tables: `K_e`, `B_e`, `K_c`, `B_c`, `U`, `B_U`, `V`, `B_V`, `R` and the unused q pair. Exceeding a maximum fails the run with `scratch_capacity_exceeded` |
 | A report sink (`strategy_set_report_sink_v1`, `strategy_set_report_sink_fd_v1`) | setter | none | Streams the trades and the equity curve to the sink instead of keeping them in the report. See [Report schema](@ref report_schema) |
-| `--spill-dir DIR` | `docker/run_json.py` flag (`docker/run_json.py:5230`), available only when `run_json.py` is invoked directly: the release entrypoint forwards no command-line flags | the system temporary directory, then `/var/tmp` if disk backing is required | The writable directory for engine scratch and unlinked report temporaries when no arena is attached. The jailed profile refuses it |
-| `--profile jailed` or `PINEFORGE_RUN_JSON_PROFILE=jailed` | `docker/run_json.py` flag or environment (`docker/run_json.py:5155,5268`); the release entrypoint forwards the environment form only | `unjailed` | Selects the bounded-memory table backend and the inherited arena for the Python host. It is the scratch profile of the engine run, not a read-only container: the entrypoint itself still compiles in `${TMPDIR:-/tmp}`. Every executed success report carries `diagnostics.run_profile` (`"jailed"` or `"unjailed"`) and `diagnostics.scratch_arena_jailed` (true only when the jailed profile ran and the arena admission succeeded; `_add_scratch_arena_diagnostics` at `docker/run_json.py:5716-5721`); the marker records the checked profile and the admission, not an independent check of operating-system confinement |
-| `PINEFORGE_REPORT_SINK_FD` | environment, read by the release entrypoint (`PINEFORGE_REPORT_SINK_FD` at `docker/entrypoint.sh:272`) | unset | When set, the entrypoint passes `--report-sink-fd <value>` to `run_json.py`, so the report records stream to that inherited descriptor. `run_json.py` validates the value: a descriptor number from 3 through `INT_MAX`, not 5, not combined with `--report-sink`, not in a benchmark run (`PINEFORGE_BENCH`), not in a validate-only run and not the same number as `--run-phase-fd` (`_validate_sink_options` at `docker/run_json.py:5744-5771`); a refusal is a `run_request_invalid` failure with exit status 2. Unset, nothing changes |
+| `--spill-dir DIR` | `docker/run_json.py` flag (`docker/run_json.py:5253`), available only when `run_json.py` is invoked directly: the release entrypoint forwards no command-line flags | the system temporary directory, then `/var/tmp` if disk backing is required | The writable directory for engine scratch and unlinked report temporaries when no arena is attached. The jailed profile refuses it |
+| `--profile jailed` or `PINEFORGE_RUN_JSON_PROFILE=jailed` | `docker/run_json.py` flag (`ap.add_argument` at `docker/run_json.py:5312`) or environment (`environment_profile` at `docker/run_json.py:5195`); the release entrypoint forwards the environment form only | `unjailed` | Selects the bounded-memory table backend and the inherited arena for the Python host. It is the scratch profile of the engine run, not a read-only container: the entrypoint itself still compiles in `${TMPDIR:-/tmp}`. Every executed success report carries `diagnostics.run_profile` (`"jailed"` or `"unjailed"`) and `diagnostics.scratch_arena_jailed` (true only when the jailed profile ran and the arena admission succeeded; `_add_scratch_arena_diagnostics` at `docker/run_json.py:5748-5753`); the marker records the checked profile and the admission, not an independent check of operating-system confinement |
+| `PINEFORGE_REPORT_SINK_FD` | environment, read by the release entrypoint (`PINEFORGE_REPORT_SINK_FD` at `docker/entrypoint.sh:272`) | unset | When set, the entrypoint passes `--report-sink-fd <value>` to `run_json.py`, so the report records stream to that inherited descriptor. `run_json.py` validates the value: a descriptor number from 3 through `INT_MAX`, not 5, not combined with `--report-sink`, not in a benchmark run (`PINEFORGE_BENCH`), not in a validate-only run and not the same number as `--run-phase-fd` (`_validate_sink_options` at `docker/run_json.py:5776-5803`); a refusal is a `run_request_invalid` failure with exit status 2. Unset, nothing changes |
 | Resident sizes of the ledger, journal, book and id caches | none in this tree | fixed constants (next section) | There is no setter for a resident size in this release. The trade-ledger read cache is chosen by the engine itself (65,536 entries without a report sink, 128 with one; `src/native_execution_consumer.cpp:3172`); the command journal, the order book, the position-tail window and the id tables have fixed constants (next section) |
 | `PF_SCRATCH_ARENA_JAILED` | environment, exactly `1` or `0` | unset | Read with the arena variables by `ScratchArena::attach_from_environment` (declared at `include/pineforge/detail/scratch_arena.hpp:131`, defined in `src/scratch_arena.cpp`). `1` additionally requires the attached arena to be a sealed memfd at attachment, else the attach fails with `EINVAL`; `0` or unset adds no requirement (a direct attach may then use ordinary files); any other value fails with `EINVAL`. The separate admission call `strategy_require_report_scratch_arena_v1` requires a sealed memfd on Linux whatever this variable says (stated in the comment on the `ScratchArena` class in `include/pineforge/detail/scratch_arena.hpp`; see [Scratch tables](@ref scratch_tables)) |
 
@@ -404,7 +404,7 @@ or bounds the row.
 | C/C++ or Python host with no sink, including jailed Python without `--report-sink-fd` (the default route of the C API): equity curve | `N`: 24 B per script bar plus vector spare capacity, then another 24 B per bar for the owning FULL report copy when the default FULL report is built, plus the whole report text held until written (`O(output)`, about one byte of resident text per stdout byte on the jailed route; see [Report memory](#memory_sink)); sources in [Report memory](#memory_sink) | Heap | Install a report sink (no bounded default route exists in this release); account for disk scratch or jailed arena memory as above |
 | Same route (no sink): closed trades | `T`: 168 B plus text per trade | Scratch, with 64 descriptor rows resident and a read cache of up to 65,536 entries (312 B each, allocated as trades accumulate); the FULL report built from them is `O(T)` heap | Install a report sink |
 | Default report sink route (native or Pine host, history streamed or not) | Equity-report buffers are bounded (an editable tail and one 64 KiB writer batch, plus bounded metric-read windows); the ledger has 64 descriptor rows and a 128-entry read cache. The trailing block of rows that share the last exit time stays resident only when history is streamed (`K` lots closed at one time, `O(K)`). Binary curve scratch grows at 24 B per script bar; `E` output and the default path route's JSON artifact also grow | Disk scratch without an arena; RAM-backed scratch in the jailed arena, plus resident buffers and the sink file or stream; sources in [Report memory](#memory_sink) | Not applicable |
-| Pine product host (`PineStrategyHost`) | It cannot select `STREAMED` or `SUMMARY_ONLY`. With a sink installed and the default report mode (the legacy route) its resident equity buffers and ledger cache are bounded as in the row above: the curve through the scratch writer (`ScratchCurveWriter` at `src/engine_report.cpp:1211`), selected by the Pine host's report policy (`KernelRecordedAtHostMarks` at `src/source/pine_adapter.cpp:3039`) and the install condition (`report_policy` at `src/engine_report.cpp:1205`); and the ledger at 64 descriptor rows (`kResidentRows` at `include/pineforge/trade_ledger.hpp:38`) with the 128-entry sink read cache. Adapter state (placement rows, settled bracket families, script containers) is separate and has its own rows below | Resident equity buffers and ledger cache bounded; curve scratch grows on disk or in the jailed RAM-backed arena; adapter state as the rows below | Not applicable |
+| Pine product host (`PineStrategyHost`) | It cannot select `STREAMED` or `SUMMARY_ONLY`. With a sink installed and the default report mode (the legacy route) its resident equity buffers and ledger cache are bounded as in the row above: the curve through the scratch writer (`ScratchCurveWriter` at `src/engine_report.cpp:1220`), selected by the Pine host's report policy (`KernelRecordedAtHostMarks` at `src/source/pine_adapter.cpp:3039`) and the install condition (`report_policy` at `src/engine_report.cpp:1214`); and the ledger at 64 descriptor rows (`kResidentRows` at `include/pineforge/trade_ledger.hpp:38`) with the 128-entry sink read cache. Adapter state (placement rows, settled bracket families, script containers) is separate and has its own rows below | Resident equity buffers and ledger cache bounded; curve scratch grows on disk or in the jailed RAM-backed arena; adapter state as the rows below | Not applicable |
 | A touched dormant leg that is re-issued | One placement row per re-issue, until the position cycle ends or the origin closes; an untouched re-issue with the same exit id replaces its row in place | Heap | Planned, with no release date |
 | Settled bracket families | One fixed record per archived family, which grows with `T` on a bracket strategy; not measured | Heap | Not scheduled |
 | Pending-book reads | `R`: `O(R^2)` for a size or a late indexed copy, `O(P R^2)` for a full indexed walk of `P` projected rows, up to `O(R^3)` when `P = R`; this is time, and it was already so in v1.6.3 | CPU | Planned, with no release date |

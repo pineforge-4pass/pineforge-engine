@@ -33,7 +33,7 @@ The separate PineForge compiler, [`pineforge-codegen`](https://github.com/pinefo
 - **Open runtime.** The engine and native live runner are Apache-2.0. The separately distributed [PineForge compiler](https://github.com/pineforge-4pass/pineforge-codegen-oss/blob/main/LICENSE) is source-available under the PineForge Source License 1.2 from its release 1.3.0 (release 1.2.0 keeps the PineForge Source License 1.1, and releases up to 1.1.0 keep the PolyForm Noncommercial terms they shipped with); personal trading is free, and commercial use requires a separate license; the capital in an account a proprietary-trading firm or funded-trader program provides or allocates, including a challenge, evaluation or simulated account, is investment capital. Public reference strategies, benchmarks and validation tooling are available in their respective repositories; the community-script test set is not redistributed.
 - **Fast.** In-process, no interpreter: median **36× faster than PyneCore** on the 200 strategies both engines time (100 corpus probes and 100 held-out private strategies), measured at engine `35db01c8` on 2026-09-29 on an AWS c7a.8xlarge with PyneCore timed as a subprocess, its interpreter start-up included (PineForge runs a median 807k bars/s per strategy over its 201 slots with the bar magnifier on; [method](benchmarks/results/speed.md)). Parameter sweeps re-run a loaded `.so` with new inputs — no recompile, no fork.
 - **Deterministic to the bit.** Two runs with the same inputs produce identical trade lists.
-- **Yours to embed.** 159 `PF_API` declarations across six installed headers — `pineforge.h`'s 103 (83 of the 94 runtime exports and up to 20 per-strategy functions a generated module defines), eleven more runtime declarations in `execution_observer.h`, `selected_window.h` and `report_sink.h` (three, three and five), `native_c_api.h`'s 43 native-host declarations and `selected_window_plan.h`'s two planner declarations — an ABI that is append-only within a major version from 1.0 on. Call it from C, Python, Rust, Go, Node, Julia — or let an AI agent drive it over MCP.
+- **Yours to embed.** 162 `PF_API` declarations across six installed headers — `pineforge.h`'s 106 (86 of the 97 runtime exports and up to 20 per-strategy functions a generated module defines), eleven more runtime declarations in `execution_observer.h`, `selected_window.h` and `report_sink.h` (three, three and five), `native_c_api.h`'s 43 native-host declarations and `selected_window_plan.h`'s two planner declarations — an ABI that is append-only within a major version from 1.0 on. Call it from C, Python, Rust, Go, Node, Julia — or let an AI agent drive it over MCP.
 
 Recorded outputs and their additional API declarations described here are
 part of **1.5.0**.
@@ -540,11 +540,11 @@ is in [CHANGELOG.md](CHANGELOG.md).
 
 The counts below describe the current API, including recorded outputs, the report sink and scratch-table selection; recorded outputs are not part of 1.4.0.
 
-A newly generated strategy `.so` exposes 110 compiled-strategy `PF_API` declarations
-(94 runtime implementations plus sixteen generated exports) plus 43 native-host
-declarations: 153 `PF_API` exports in total; `use_bar_magnifier = true` adds
+A newly generated strategy `.so` exposes 113 compiled-strategy `PF_API` declarations
+(97 runtime implementations plus sixteen generated exports) plus 43 native-host
+declarations: 156 `PF_API` exports in total; `use_bar_magnifier = true` adds
 `strategy_declares_bar_magnifier` and a module that records [outputs](docs/outputs.md) its
-three outputs exports, bringing the inventories to at most 114 and 157. Older modules lack the six opt-in
+three outputs exports, bringing the inventories to at most 117 and 160. Older modules lack the six opt-in
 [checked-settings exports](docs/checked-settings.md). Older modules can also lack
 the two opt-in [execution-capability exports](docs/strategy-capabilities.md).
 In an optimized build `nm -gU` also shows libc++'s
@@ -590,6 +590,8 @@ inventories are pinned by `scripts/check_c_abi_runtime.py`:
 | `strategy_position_avg_price` / `strategy_position_cycle_seq` / `strategy_position_size` | ABI v4: the live position's volume-weighted average entry price, its cycle id, and its script-facing signed size |
 | `strategy_closed_trade_entry_id` / `_exit_id` / `_exit_comment` / `_close_cause` | ABI v4: per-closed-trade id/comment strings and a `close_cause` (`pf_close_cause_t`: `SCRIPT`, `BRACKET`, `LIQUIDATION` for a margin call, `RISK_LIMIT` for the intraday loss cap, `FILL_CAP` for the intraday fill cap, `RANGE_END`), indexed like `strategy_closed_trade_entry_incarnation` |
 | `strategy_initial_capital` | ABI v4: the engine's effective configured initial capital, after the native run specification or strategy override; `NaN` if `s` is `NULL` or the read raises |
+| `strategy_net_profit_sum` / `strategy_report_pointvalue` | ABI v4 additive replay accessors: raw whole-lot realized P&L and effective pointvalue; `NaN` on `NULL` |
+| `strategy_set_report_replay_v1` | Opt in to a separate [report replay companion](docs/pages/report-replay-rq.md) while idle; no existing report or sink layout changes |
 | `strategy_current_equity` / `strategy_script_bars_processed` | ABI v4: `initial_capital + netprofit` (not Pine's `strategy.equity`, which also adds open profit); total script bars dispatched by the most recent run |
 
 ### Driving the kernel from C

@@ -557,7 +557,7 @@ non-command certificates exactly.
 
 These formulas apply to the EngineRecorded streamed invocation. The
 selected recorder appends its anchor and selected observations in one
-writer (`equity_scratch` append at `src/engine_report.cpp:1215`), and capture transfers that writer as `metric_curve`
+writer (`equity_scratch` append at `src/engine_report.cpp:1224`), and capture transfers that writer as `metric_curve`
 instead of copying its prefix (`src/native_execution_consumer.cpp:12920`).
 HostRecorded array presentation and a second full curve are outside this
 profile. Adding another persistent scratch user requires another term and
@@ -631,7 +631,7 @@ nX = S*tracePerBar + traceFixed            if trace else 0
 nH = S*hashesPerBar + hashesFixed          if hashes else 0
 ```
 
-K is at most one by `src/report_sink_writer.cpp:531`. The compiler can
+K is at most one by `src/report_sink_writer.cpp:581`. The compiler can
 tighten other counts only with a proof; finite E/T does not bound event
 or trace calls made inside an unknown loop.
 
@@ -644,13 +644,13 @@ becomes at most six JSON bytes, plus two quotes; see
 
 | Tag | Maximum line bytes, before taking the hard ceiling | Builder |
 | --- | --- | --- |
-| E | 154 | `src/report_sink_writer.cpp:503` |
+| E | 154 | `src/report_sink_writer.cpp:553` |
 | T | 675 + 12*L + 6*commentBytes | `src/report_sink_writer.cpp:398` |
-| O | 60 + 65*seriesSlots | `src/report_sink_writer.cpp:603` |
-| V | 239 + 6*messageBytes | `src/report_sink_writer.cpp:513` |
-| K | 6 + 65*constantSlots | `src/report_sink_writer.cpp:527` |
-| X | 110 + 6*traceNameBytes | `src/report_sink_writer.cpp:537` |
-| H | 25 | `src/report_sink_writer.cpp:545` |
+| O | 60 + 65*seriesSlots | `src/report_sink_writer.cpp:653` |
+| V | 239 + 6*messageBytes | `src/report_sink_writer.cpp:563` |
+| K | 6 + 65*constantSlots | `src/report_sink_writer.cpp:577` |
+| X | 110 + 6*traceNameBytes | `src/report_sink_writer.cpp:587` |
+| H | 25 | `src/report_sink_writer.cpp:595` |
 
 For variable-width rows use min(expression,1048576). Missing comment,
 message or trace-name byte proofs use the existing full-line ceiling,

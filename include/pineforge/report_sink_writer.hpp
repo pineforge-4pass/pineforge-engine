@@ -65,6 +65,12 @@ std::string escaped_string(std::string_view utf8);
 /// O/V/K/X/H operations below implement the same fixed version-1 descriptors.
 class LineWriter {
 public:
+    // Separate replay companion framing. These operations use the same bounded
+    // I/O backend, but never describe or append records to a primary v1 stream.
+    void begin_companion(std::string_view header);
+    void companion_record(std::string_view record);
+    void finish_companion(std::string_view counts, std::string_view base_sha256);
+
     /// Descriptor strings are copied, as required by 6:1307. This is a
     /// declaration of configuration; run-begin work belongs to write_header.
     explicit LineWriter(const pf_report_sink_v1& sink);

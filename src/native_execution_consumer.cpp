@@ -13811,6 +13811,7 @@ bool NativeExecutionConsumer::capture_selected_sink(BacktestEngine& engine) {
         // presented prefix, including the anchor even for M = 0 or M = 1.
         for (int64_t i = 0; i < presentation_.equity_curve_len; ++i) {
             sink.writer->write_e(point_at(i));
+            if (sink.replay) engine.write_report_replay_equity(point_at(i));
             ++sink.receipt.count_e;
         }
         presentation_sink_equity_written_ = true;
@@ -13935,6 +13936,7 @@ void NativeExecutionConsumer::write_streamed_trade(
         sink.writer->write_t(static_cast<std::int64_t>(global) + 1, wire,
             identity.entry_incarnation, engine.closed_trade_close_cause(static_cast<int>(global)),
             identity.entry_id, identity.exit_id, identity.exit_comment);
+        if (sink.replay) engine.write_report_replay_trade(global, false);
         ++sink.receipt.count_t;
     } catch (const report_sink::WriterError& error) {
         sink.writer.reset();
@@ -13985,6 +13987,7 @@ void NativeExecutionConsumer::seal_closed_rows(
         engine.fold_trade_percent_prefix(row);
     }
     engine.trades_.seal(global_end);
+    if (engine.report_sink_state_.replay) engine.retire_report_replay_trades(global_end);
     const std::size_t checkpoint_base = closed_rows_digested_ - closed_row_prefix_.size();
     if (global_end > checkpoint_base) {
         const auto retired = std::min(global_end - checkpoint_base, closed_row_prefix_.size());
