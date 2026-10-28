@@ -7,6 +7,13 @@ add_test(NAME test_replay_sink
 if(UNIX)
     list(APPEND TEST_SOURCES test_replay_abi)
     pineforge_add_unit_test(test_replay_abi)
+    list(APPEND TEST_SOURCES test_replay_engine_layout test_replay_engine_lifecycle)
+    pineforge_add_unit_test(test_replay_engine_layout)
+    pineforge_add_unit_test(test_replay_engine_lifecycle)
+    if(PINEFORGE_BUILD_SOURCE_LAYER)
+        list(APPEND TEST_SOURCES test_replay_equity_terms)
+        pineforge_add_unit_test(test_replay_equity_terms)
+    endif()
 endif()
 
 # Same real-engine orders through the production JSON CLI. The fixture module

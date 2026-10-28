@@ -746,9 +746,6 @@ protected:
     // derived broker-prefix helper restores the ALREADY HASHED four extrema;
     // it adds no broker leaf and changes no existing hash domain.
     ReportMode pending_equity_report_mode_ = ReportMode::FULL;
-    // STREAMED is an internal recorder selection for the opt-in companion.
-    // The public equity recording policy remains FULL; summary retains its
-    // existing folds. Reuse this dispatch so OFF adds no per-point branch.
     ReportMode active_equity_report_mode_ = ReportMode::FULL;
     metrics::EquityMetricsFold summary_equity_fold_;
     mutable metrics::EquityFoldSnapshot summary_equity_snapshot_;
@@ -767,8 +764,7 @@ public:
     // Configuration takes effect at the next run begin.
     int set_equity_report_mode(ReportMode mode);
     ReportMode equity_report_mode() const {
-        return active_equity_report_mode_ == ReportMode::STREAMED
-            ? ReportMode::FULL : active_equity_report_mode_;
+        return active_equity_report_mode_;
     }
     std::int64_t equity_logical_point_count() const {
         return active_equity_report_mode_ == ReportMode::SUMMARY_ONLY
@@ -1578,15 +1574,37 @@ protected:
     // is overwritten by the magnifier sub-bar walk (engine_run.cpp), which would
     // make the curve differ between magnifier on/off.
     void record_equity_point(int64_t script_bar_ts) {
-        const bool specialized = active_equity_report_mode_ != ReportMode::FULL;
-        if (specialized ? prepare_special_equity_point() : prepare_equity_point())
+        const bool summary = active_equity_report_mode_ == ReportMode::SUMMARY_ONLY;
+        if (summary ? equity_curve_.empty() : prepare_equity_point())
             first_bar_open_ = current_bar_.open;
         pf_equity_point_t p;
         p.time_ms = script_bar_ts;
         p.open_profit = open_profit(current_bar_.close);
         p.equity = initial_capital_ + net_profit_sum_ + p.open_profit;
-        if (specialized) store_special_equity_point(p);
-        else store_equity_point(p);
+        if (summary) {
+            if (!equity_curve_.empty()) {
+                const auto& held = equity_curve_.back();
+                summary_equity_fold_.replace_last(
+                    held, metrics::equity_month_key(held.time_ms, chart_timezone_));
+                auto& prefix = summary_broker_equity_prefix_;
+                const double eq = held.equity;
+                if (eq > prefix[0]) prefix[0] = prefix[1] = eq;
+                if (eq < prefix[1]) prefix[1] = eq;
+                const double dd = prefix[0] - eq;
+                if (dd > prefix[2]) prefix[2] = dd;
+                const double ru = eq - prefix[1];
+                if (ru > prefix[3]) prefix[3] = ru;
+            }
+            summary_equity_fold_.fold(
+                p, metrics::equity_month_key(p.time_ms, chart_timezone_),
+                true, position_side_ != PositionSide::FLAT);
+            if (equity_curve_.empty()) equity_curve_.push_back(p);
+            else equity_curve_.back() = p;
+            summary_equity_snapshot_valid_ = summary_equity_ratios_ready_ = false;
+            summary_equity_ratios_.reset();
+        } else {
+            store_equity_point(p);
+        }
         if (position_side_ != PositionSide::FLAT) ++bars_in_market_;
     }
 
@@ -2560,23 +2578,20 @@ private:
     // Reporting configuration and run-local output ownership. Copies retain
     // configuration, never a writer, receipt, or an active-call barrier.
     struct ReportSinkState {
-        // Pack configuration/flags before pointer-aligned owners. The replay
-        // slot consumes existing private padding rather than growing OFF RAM.
         bool enabled = false;
         bool trade_history_streamable = false;
-        bool fd_identity_valid = false;
-        bool equity_tail_stored = false; // scratch includes the held tail
-        int fd = -1; // borrowed stream; -1 selects the owned path writer
-        std::uint32_t active_calls = 0;
-        std::uint32_t stream_calls = 0;
         std::string path, run_id, scratch_dir;
+        int fd = -1; // borrowed stream; -1 selects the owned path writer
         std::uint64_t fd_device = 0;
         std::uint64_t fd_inode = 0;
+        bool fd_identity_valid = false;
+        std::uint32_t active_calls = 0;
+        std::uint32_t stream_calls = 0;
         std::unique_ptr<report_sink::LineWriter> writer;
-        std::unique_ptr<report::ReportReplay> replay;
         // Shared ordinary/selected record-time curve. Selected capture moves
         // this owner to its immutable presentation snapshot.
         std::unique_ptr<report_sink::ScratchCurveWriter> equity_scratch;
+        bool equity_tail_stored = false; // scratch includes the held tail
         pf_report_sink_receipt_v1 receipt{};
         pf_report_sink_summary_v1 summary{}; // report output, shares the sink hash waiver
         // Derived report-tail prefix, in max/min/drawdown/runup order. The
@@ -2650,8 +2665,6 @@ private:
     void finish_report_replay(const ReportC* out) const;
     void record_report_replay_close(std::size_t global);
     void record_report_replay_point(const pf_equity_point_t& point);
-    bool prepare_special_equity_point();
-    void store_special_equity_point(const pf_equity_point_t& point);
     void write_report_replay_equity(const pf_equity_point_t& point) const;
     void write_report_replay_trade(std::size_t global, bool terminal) const;
     void retire_report_replay_trades(std::size_t global_end);
@@ -2698,9 +2711,25 @@ public:
     bool trade_history_streamable() const { return report_sink_state_.trade_history_streamable; }
 
 protected:
-    report::ReportReplay* report_replay_state() const noexcept {
-        return report_sink_state_.replay.get();
+    // A private configuration tag uses the existing pending scalar, never
+    // object padding or a public recorder mode. The setter admits only the
+    // three public values; begin strips the tag before activating the mode.
+    // OFF hooks perform no registry lookup, lock, allocation or replay call.
+    static constexpr std::uint32_t report_replay_flag = UINT32_C(0x80000000);
+    ReportMode pending_equity_report_mode() const noexcept {
+        return static_cast<ReportMode>(
+            static_cast<std::uint32_t>(pending_equity_report_mode_) & ~report_replay_flag);
     }
+    ReportMode with_report_replay_flag(ReportMode mode) const noexcept {
+        return static_cast<ReportMode>(static_cast<std::uint32_t>(mode)
+            | (static_cast<std::uint32_t>(pending_equity_report_mode_) & report_replay_flag));
+    }
+    report::ReportReplay* report_replay_state() const noexcept {
+        if (!(static_cast<std::uint32_t>(pending_equity_report_mode_) & report_replay_flag))
+            return nullptr;
+        return find_report_replay();
+    }
+    report::ReportReplay* find_report_replay() const noexcept;
     void amend_report_replay_point(std::int64_t time, report::EquityBasis basis,
                                   double term) const;
     // Begin-only source binder input. Backends copy the owner, not this

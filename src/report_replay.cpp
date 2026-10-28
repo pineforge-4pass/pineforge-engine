@@ -3,10 +3,15 @@
 #include "native_execution_consumer.hpp"
 #include "report_value_invalid.hpp"
 #include "report_sink_writer.hpp"
+#include "selected_report_view.hpp"
 
 #include <pineforge/version.h>
+#include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <iterator>
+#include <map>
+#include <mutex>
 #include <stdexcept>
 #include <sys/stat.h>
 #include <utility>
@@ -41,6 +46,19 @@ const char* basis_name(EquityBasis basis) {
 
 bool same_bits(double a, double b) { return std::memcmp(&a, &b, sizeof a) == 0; }
 
+struct ReplayRegistry {
+    std::mutex mutex;
+    std::map<const void*, std::unique_ptr<ReportReplay>> owners;
+};
+
+ReplayRegistry& replay_registry() {
+    // ReportSinkState constructors establish this lifetime before their
+    // engine finishes construction, including engines with static storage.
+    // Empty OFF registries have no nodes and allocate no heap storage.
+    static ReplayRegistry registry;
+    return registry;
+}
+
 // Fixed descriptors belong to the companion only. Primary E/T are untouched.
 const char* descriptors =
     "[{\"type\":\"S\",\"fields\":[\"initial_capital\",\"pointvalue\",\"net_profit_sum\"],"
@@ -56,6 +74,47 @@ const char* descriptors =
     "\"f64?\",\"f64?\",\"f64?\",\"f64?\",\"f64?\",\"f64?\",\"f64?\",\"f64?\"],"
     "\"units\":[\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"qty\",\"qty\",\"account_ccy\","
     "\"account_ccy\",\"account_ccy\",\"account_ccy\",\"account_ccy\",\"account_ccy\"]}]";
+}
+
+void initialize_replay_registry() { (void)replay_registry(); }
+
+ReportReplay* find_replay(const void* key) noexcept {
+    auto& registry = replay_registry();
+    const std::lock_guard<std::mutex> lock(registry.mutex);
+    const auto found = registry.owners.find(key);
+    return found == registry.owners.end() ? nullptr : found->second.get();
+}
+
+void erase_replay(const void* key) noexcept {
+    auto& registry = replay_registry();
+    const std::lock_guard<std::mutex> lock(registry.mutex);
+    registry.owners.erase(key);
+}
+
+void install_replay(const void* key, std::unique_ptr<ReportReplay> replay) {
+    auto& registry = replay_registry();
+    const std::lock_guard<std::mutex> lock(registry.mutex);
+    registry.owners.insert_or_assign(key, std::move(replay));
+}
+
+void copy_replay(const void* from, const void* to) {
+    auto& registry = replay_registry();
+    const std::lock_guard<std::mutex> lock(registry.mutex);
+    const auto found = registry.owners.find(from);
+    if (found != registry.owners.end())
+        registry.owners.emplace(to, found->second->configuration_copy());
+}
+
+void move_replay(const void* from, const void* to) noexcept {
+    if (from == to) return;
+    auto& registry = replay_registry();
+    const std::lock_guard<std::mutex> lock(registry.mutex);
+    auto node = registry.owners.extract(from);
+    registry.owners.erase(to);
+    if (!node.empty()) {
+        node.key() = to;
+        registry.owners.insert(std::move(node)); // node transfer allocates nothing
+    }
 }
 
 ReportReplay::ReportReplay(std::string path, std::string run_id)
@@ -215,7 +274,8 @@ int BacktestEngine::set_report_replay_v1(const char* path, const char* run_id) {
     if (status != 0) return status;
     if (trades_.base() != 0) return -3;
     if (!path) {
-        report_sink_state_.replay.reset();
+        report::erase_replay(&report_sink_state_);
+        pending_equity_report_mode_ = pending_equity_report_mode();
         return 0;
     }
     // Bound new configuration allocations before copying either C string.
@@ -223,27 +283,31 @@ int BacktestEngine::set_report_replay_v1(const char* path, const char* run_id) {
     if (!*path || ::strnlen(path, max_text + 1) > max_text
         || (run_id && ::strnlen(run_id, max_text + 1) > max_text)
         || (report_sink_state_.enabled && path == report_sink_state_.path)) return -1;
-    report_sink_state_.replay = std::make_unique<report::ReportReplay>(
-        path, run_id ? run_id : "");
+    auto replay = std::make_unique<report::ReportReplay>(path, run_id ? run_id : "");
+    report::install_replay(&report_sink_state_, std::move(replay));
+    pending_equity_report_mode_ = static_cast<ReportMode>(
+        static_cast<std::uint32_t>(pending_equity_report_mode_) | report_replay_flag);
     return 0;
 }
 
 double BacktestEngine::report_pointvalue() const noexcept {
-    const auto* replay = report_sink_state_.replay.get();
+    const auto* replay = report_replay_state();
     return replay && replay->begun() ? replay->pointvalue() : syminfo_.pointvalue;
 }
 
 void BacktestEngine::begin_report_replay() {
     auto& sink = report_sink_state_;
+    auto* replay = report_replay_state();
+    if (!replay) return;
     struct stat primary{}, companion{};
     if (sink.enabled && sink.fd < 0
-        && (sink.path == sink.replay->path()
+        && (sink.path == replay->path()
             || (::stat(sink.path.c_str(), &primary) == 0
-                && ::stat(sink.replay->path().c_str(), &companion) == 0
+                && ::stat(replay->path().c_str(), &companion) == 0
                 && primary.st_dev == companion.st_dev && primary.st_ino == companion.st_ino)))
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                       "primary and replay sinks must be separate files");
-    if (pending_equity_report_mode_ == ReportMode::SUMMARY_ONLY)
+    if (pending_equity_report_mode() == ReportMode::SUMMARY_ONLY)
         throw coded<std::logic_error>(RunFailureCode::report_shape_unsupported,
             {{"shape", "replay_summary"}}, "exact replay requires recorded equity points");
     const auto* consumer = execution_consumer_slot_.ptr
@@ -254,76 +318,37 @@ void BacktestEngine::begin_report_replay() {
             {{"shape", "replay_host_curve"}}, "exact replay requires recorded equity operands");
     pf_selected_window_config_v1 window{};
     const bool selected = NativeExecutionConsumer::selected_window_admitted(*this, &window);
-    sink.replay->begin(sink.enabled ? sink.scratch_dir : trades_.scratch_directory(),
+    replay->begin(sink.enabled ? sink.scratch_dir : trades_.scratch_directory(),
         initial_capital_, syminfo_.pointvalue, selected, window.start_ms, window.end_ms);
 }
 
 void BacktestEngine::record_report_replay_close(std::size_t global) {
-    report_sink_state_.replay->close(global);
+    if (auto* replay = report_replay_state()) replay->close(global);
 }
 void BacktestEngine::record_report_replay_point(const pf_equity_point_t& point) {
-    report_sink_state_.replay->point(point, net_profit_sum_);
-}
-
-bool BacktestEngine::prepare_special_equity_point() {
-    if (active_equity_report_mode_ == ReportMode::SUMMARY_ONLY) return equity_curve_.empty();
-    const auto* held = last_equity_point();
-    const bool first = prepare_equity_point();
-    // Ordinary prepare just released this E. Selected capture releases its
-    // complete presented window later; array capture releases nothing here.
-    const auto& sink = report_sink_state_;
-    if (held && sink.enabled && sink.writer && !sink.selected_equity_stream)
-        write_report_replay_equity(*held);
-    return first;
-}
-
-void BacktestEngine::store_special_equity_point(const pf_equity_point_t& p) {
-    if (active_equity_report_mode_ != ReportMode::SUMMARY_ONLY) {
-        record_report_replay_point(p);
-        store_equity_point(p);
-        return;
-    }
-    // The existing summary fold, unchanged in operation and value order.
-    if (!equity_curve_.empty()) {
-        const auto& held = equity_curve_.back();
-        summary_equity_fold_.replace_last(
-            held, metrics::equity_month_key(held.time_ms, chart_timezone_));
-        auto& prefix = summary_broker_equity_prefix_;
-        const double eq = held.equity;
-        if (eq > prefix[0]) prefix[0] = prefix[1] = eq;
-        if (eq < prefix[1]) prefix[1] = eq;
-        const double dd = prefix[0] - eq;
-        if (dd > prefix[2]) prefix[2] = dd;
-        const double ru = eq - prefix[1];
-        if (ru > prefix[3]) prefix[3] = ru;
-    }
-    summary_equity_fold_.fold(
-        p, metrics::equity_month_key(p.time_ms, chart_timezone_),
-        true, position_side_ != PositionSide::FLAT);
-    if (equity_curve_.empty()) equity_curve_.push_back(p);
-    else equity_curve_.back() = p;
-    summary_equity_snapshot_valid_ = summary_equity_ratios_ready_ = false;
-    summary_equity_ratios_.reset();
+    if (auto* replay = report_replay_state()) replay->point(point, net_profit_sum_);
 }
 
 void BacktestEngine::amend_report_replay_point(
         std::int64_t time, report::EquityBasis basis, double term) const {
-    if (report_sink_state_.replay)
-        report_sink_state_.replay->amend_point(time, basis, term, net_profit_sum_);
+    if (auto* replay = report_replay_state())
+        replay->amend_point(time, basis, term, net_profit_sum_);
 }
 void BacktestEngine::write_report_replay_equity(const pf_equity_point_t& point) const {
-    report_sink_state_.replay->write_q(point);
+    if (auto* replay = report_replay_state()) replay->write_q(point);
 }
 void BacktestEngine::write_report_replay_trade(std::size_t global, bool terminal) const {
-    report_sink_state_.replay->write_r(global, terminal);
+    if (auto* replay = report_replay_state()) replay->write_r(global, terminal);
 }
 void BacktestEngine::retire_report_replay_trades(std::size_t global_end) {
-    report_sink_state_.replay->retire(global_end);
+    if (auto* replay = report_replay_state()) replay->retire(global_end);
 }
 
 void BacktestEngine::finish_report_replay(const ReportC* out) const {
     auto& sink = report_sink_state_;
-    auto& replay = *sink.replay;
+    auto* owner = report_replay_state();
+    if (!owner) return;
+    auto& replay = *owner;
     const auto* consumer = execution_consumer_slot_.ptr
         ? &as_native_consumer(*execution_consumer_slot_.ptr) : nullptr;
     if (replay.complete() || last_run_status_ != 0 || !last_error_.empty()
@@ -345,5 +370,40 @@ void BacktestEngine::finish_report_replay(const ReportC* out) const {
     }
     replay.finish(net_profit_sum_,
                   sink.enabled ? std::string_view(sink.receipt.sha256_hex) : std::string_view{});
+}
+
+report::ReportReplay* BacktestEngine::find_report_replay() const noexcept {
+    return report::find_replay(&report_sink_state_);
+}
+
+BacktestEngine::ReportSinkState::ReportSinkState(ReportSinkState&& other) noexcept
+    : ReportSinkState() { *this = std::move(other); }
+
+BacktestEngine::ReportSinkState&
+BacktestEngine::ReportSinkState::operator=(ReportSinkState&& other) noexcept {
+    if (this == &other) return *this;
+    report::move_replay(&other, this);
+    enabled = other.enabled;
+    trade_history_streamable = other.trade_history_streamable;
+    path = std::move(other.path);
+    run_id = std::move(other.run_id);
+    scratch_dir = std::move(other.scratch_dir);
+    fd = other.fd;
+    fd_device = other.fd_device;
+    fd_inode = other.fd_inode;
+    fd_identity_valid = other.fd_identity_valid;
+    active_calls = other.active_calls;
+    stream_calls = other.stream_calls;
+    writer = std::move(other.writer);
+    equity_scratch = std::move(other.equity_scratch);
+    equity_tail_stored = other.equity_tail_stored;
+    receipt = other.receipt;
+    summary = other.summary;
+    std::copy(std::begin(other.equity_prefix), std::end(other.equity_prefix), equity_prefix);
+    output_base = other.output_base;
+    selected_equity_stream = std::move(other.selected_equity_stream);
+    std::copy(std::begin(other.selected_released_extremes), std::end(other.selected_released_extremes),
+              selected_released_extremes);
+    return *this;
 }
 } // namespace pineforge

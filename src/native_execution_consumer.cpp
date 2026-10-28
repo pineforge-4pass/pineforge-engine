@@ -3029,7 +3029,7 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     // Capture needs full trade/equity rows or a sink. Check both mode settings
     // before reset/admission and the first host callback.
     if ((engine.report_mode_ == ReportMode::SUMMARY_ONLY
-         || engine.pending_equity_report_mode_ == ReportMode::SUMMARY_ONLY)
+         || engine.pending_equity_report_mode() == ReportMode::SUMMARY_ONLY)
         && !engine.report_sink_state_.enabled
         && (selected_epoch_.observer_registered || selected_epoch_.window_configured)) {
         fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Begin});
@@ -13415,7 +13415,7 @@ int NativeExecutionConsumer::set_execution_observer_v1(
         // Refuse either SUMMARY_ONLY mode before binding or replacing an observer.
         // Only the pending legacy mode configures the next run.
         if (engine->report_mode_ == ReportMode::SUMMARY_ONLY
-            || engine->pending_equity_report_mode_ == ReportMode::SUMMARY_ONLY)
+            || engine->pending_equity_report_mode() == ReportMode::SUMMARY_ONLY)
             return -2;
     }
     NativeExecutionConsumer* consumer = nullptr;
@@ -13609,13 +13609,13 @@ void NativeExecutionConsumer::restore_report_sink_equity_curve(BacktestEngine& e
 }
 
 void BacktestEngine::store_equity_point(const pf_equity_point_t& point) {
+    if (auto* replay = report_replay_state()) replay->point(point, net_profit_sum_);
     if (report_sink_state_.equity_scratch && !equity_curve_.empty())
         equity_curve_.back() = point;
     else
         equity_curve_.push_back(point);
     if (report_sink_state_.equity_scratch) report_sink_state_.equity_tail_stored = false;
 }
-
 bool BacktestEngine::prepare_equity_point() {
     const auto* held = last_equity_point();
     auto& sink = report_sink_state_;
@@ -13645,6 +13645,7 @@ bool BacktestEngine::prepare_equity_point() {
         if (!selected) {
             sink.writer->write_e(*held);
             ++sink.receipt.count_e;
+            if (auto* replay = report_replay_state()) replay->write_q(*held);
         }
     } catch (const report_sink::WriterError& error) {
         sink.writer.reset();
@@ -13655,7 +13656,6 @@ bool BacktestEngine::prepare_equity_point() {
     }
     return false;
 }
-
 void BacktestEngine::fold_report_equity_extreme(double equity) {
     if (report_sink_state_.enabled) {
         auto& prefix = report_sink_state_.equity_prefix;
@@ -13811,7 +13811,7 @@ bool NativeExecutionConsumer::capture_selected_sink(BacktestEngine& engine) {
         // presented prefix, including the anchor even for M = 0 or M = 1.
         for (int64_t i = 0; i < presentation_.equity_curve_len; ++i) {
             sink.writer->write_e(point_at(i));
-            if (sink.replay) engine.write_report_replay_equity(point_at(i));
+            if (engine.report_replay_state()) engine.write_report_replay_equity(point_at(i));
             ++sink.receipt.count_e;
         }
         presentation_sink_equity_written_ = true;
@@ -13936,7 +13936,7 @@ void NativeExecutionConsumer::write_streamed_trade(
         sink.writer->write_t(static_cast<std::int64_t>(global) + 1, wire,
             identity.entry_incarnation, engine.closed_trade_close_cause(static_cast<int>(global)),
             identity.entry_id, identity.exit_id, identity.exit_comment);
-        if (sink.replay) engine.write_report_replay_trade(global, false);
+        if (engine.report_replay_state()) engine.write_report_replay_trade(global, false);
         ++sink.receipt.count_t;
     } catch (const report_sink::WriterError& error) {
         sink.writer.reset();
@@ -13987,7 +13987,7 @@ void NativeExecutionConsumer::seal_closed_rows(
         engine.fold_trade_percent_prefix(row);
     }
     engine.trades_.seal(global_end);
-    if (engine.report_sink_state_.replay) engine.retire_report_replay_trades(global_end);
+    if (engine.report_replay_state()) engine.retire_report_replay_trades(global_end);
     const std::size_t checkpoint_base = closed_rows_digested_ - closed_row_prefix_.size();
     if (global_end > checkpoint_base) {
         const auto retired = std::min(global_end - checkpoint_base, closed_row_prefix_.size());

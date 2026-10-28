@@ -65,5 +65,14 @@ private:
     bool selected_ = false, last_selected_ = false, complete_ = false;
     std::int64_t start_ = 0, end_ = 0;
 };
+
+// Keys are addresses of the unchanged engine-owned report state. Only ON
+// configurations occupy nodes; destruction and moves retire/rebind the key.
+void initialize_replay_registry();
+ReportReplay* find_replay(const void* key) noexcept;
+void erase_replay(const void* key) noexcept;
+void install_replay(const void* key, std::unique_ptr<ReportReplay> replay);
+void copy_replay(const void* from, const void* to);
+void move_replay(const void* from, const void* to) noexcept;
 } // namespace report
 } // namespace pineforge

@@ -1,6 +1,31 @@
 # CR-150/C4 source gate: re-emit (reading file for the reviewer)
 
-## Replay incremental source read (2026-10-28)
+## Replay layout repair: current source read (2026-10-28)
+
+The original header summary push returns to U0056; its relocated U1534 group
+and identity are removed. U1542 reviews the library registry's declaration
+and three grow identities: install, configuration copy and allocation-free
+node transfer. The registry contains one node per opted-in live engine,
+erases on destruction/clear, and has no nodes or lookup calls on OFF point
+paths. Its engine population has no fixed cap, so it remains OPEN.
+The relocated report-state move also adds one string assignment identity to
+each of U1525 and U1526. All other replay identities keep their scopes.
+
+Net change from the preceding inventory: six sites, zero groups. Expected
+current accounting is **3577 sites, 1483 groups, 1295 unreviewed, 188 pending,
+zero bounded**. The ceiling and the real-tree test pin stay unchanged.
+This is a manual read; neither the gate nor its tests were run here.
+
+The interrupted manifest edit was audited against HEAD, this inventory and
+the source. Every TSV row has 14 columns; neither the YAML IDs nor the TSV
+IDs repeat. U0056 restores the original header identity; U1542 replaces the
+removed relocated-push group without changing the OPEN ceiling. U1525/U1526
+include the two relocated string assignments. The companion-open comment
+moved the five trailer appends to report_sink_writer.cpp:527-533; both U1414
+reviews now cite that range. The remaining changed rows agree on identities,
+operation counts and source positions. No checker or bounded claim changed.
+
+## Initial replay incremental source read (2026-10-28)
 
 The supplied CLOUD preflight for implementation tree `a6936abc1` reported
 39 findings: 38 new identities and one stale header identity. This update is

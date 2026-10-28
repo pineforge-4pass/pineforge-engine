@@ -493,6 +493,8 @@ void LineWriter::begin_companion(std::string_view header_text) {
             throw WriterError(WriterFailure::invalid_state, "invalid companion writer state");
         state.scratch.clear();
         state.scratch.append(header_text);
+        // Caller path follows symlinks (no O_NOFOLLOW). Same-file refusal
+        // covers path primaries only; an fd primary may alias this target.
         int descriptor;
         do { descriptor = ::open(state.path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600); }
         while (descriptor < 0 && errno == EINTR);
