@@ -1773,6 +1773,10 @@ public:
     std::uint64_t fixture_pending_projection_operations() const noexcept {
         return pending_projection_operations_;
     }
+    // Fixture-only simulation of a failed pending-projection cache rebuild.
+    void fixture_force_pending_projection_fallback(bool enabled) noexcept {
+        pending_projection_force_fallback_ = enabled;
+    }
     // Read-only fixture facade for command-boundary rows that have not yet
     // become live native requests.  It never participates in matching.
     std::vector<FixturePendingSnapshot> fixture_pending_snapshots() const;
@@ -2954,6 +2958,7 @@ private:
     mutable std::unordered_map<PendingProjectionKey, int, PendingProjectionKeyHash>
         pending_projection_seen_;
     mutable std::uint64_t pending_projection_operations_ = 0;
+    mutable bool pending_projection_force_fallback_ = false;
     ::pineforge::detail::ScratchSequence<std::uint8_t> trade_exit_phase_;
     // TradingView's entry-id table (global_exit_child_ranks): every entry id
     // in the order of its first fill, never removed, with a running digest,

@@ -24,12 +24,15 @@ struct Live { friend auto access(Live); };
 struct SameBar { friend auto access(SameBar); };
 struct Entries { friend auto access(Entries); };
 struct Brackets { friend auto access(Brackets); };
+struct ProjectionCacheInitialized { friend auto access(ProjectionCacheInitialized); };
 
 template struct Access<Placements, &Adapter::placement_>;
 template struct Access<Live, &Adapter::live_handles_>;
 template struct Access<SameBar, &Adapter::pending_same_bar_commands_>;
 template struct Access<Entries, &Adapter::pending_entries_>;
 template struct Access<Brackets, &Adapter::pending_bracket_legs_>;
+template struct Access<ProjectionCacheInitialized,
+                       &Adapter::pending_projection_cache_initialized_>;
 
 struct RawRow {
     PlacementSnapshot snapshot{};
@@ -229,17 +232,21 @@ void check_returned_values(const Fixture& fixture,
     }
 }
 
-void check_projection(const Fixture& fixture) {
+void check_projection(const Fixture& fixture, bool force_fallback = false) {
     const auto expected = independent_projection(fixture.adapter);
     CHECK(fixture.adapter.pending_intent_view().size()
           == static_cast<int>(expected.size()));
+    if (force_fallback)
+        CHECK(!(fixture.adapter.*access(ProjectionCacheInitialized{})));
     check_returned_values(fixture, expected);
     pf_pending_order_v1_t extra{};
     CHECK(fixture.adapter.pending_intent_view().copy_v1(
               static_cast<int>(expected.size()), &extra) == -1);
+    if (force_fallback)
+        CHECK(!(fixture.adapter.*access(ProjectionCacheInitialized{})));
 }
 
-void check_cross_family_projection() {
+void check_cross_family_projection(bool force_fallback = false) {
     Fixture fixture(4);
     const auto first = raw_rows(fixture.adapter).front().snapshot;
     auto& same_bar = fixture.adapter.*access(SameBar{});
@@ -253,53 +260,57 @@ void check_cross_family_projection() {
 
     // Equal sibling levels isolate identity and representative selection.
     // Each change follows a read and keeps the raw population unchanged.
-    check_projection(fixture);
+    if (force_fallback) check_projection(fixture);
+    fixture.adapter.fixture_force_pending_projection_fallback(force_fallback);
+    check_projection(fixture, force_fallback);
     auto& changed = same_bar.front().snapshot;
     changed.source_id += "-rekeyed";
-    check_projection(fixture);
+    check_projection(fixture, force_fallback);
     changed.source_id = first.source_id;
-    check_projection(fixture);
+    check_projection(fixture, force_fallback);
     changed.from_entry += "-rekeyed";
-    check_projection(fixture);
+    check_projection(fixture, force_fallback);
     changed.from_entry = first.from_entry;
-    check_projection(fixture);
+    check_projection(fixture, force_fallback);
     changed.bracket_origin.run.session_key = "pending-book-other-session";
-    check_projection(fixture);
+    check_projection(fixture, force_fallback);
     changed.bracket_origin = first.bracket_origin;
-    check_projection(fixture);
+    check_projection(fixture, force_fallback);
     ++changed.bracket_origin.run.run_number;
-    check_projection(fixture);
+    check_projection(fixture, force_fallback);
     changed.bracket_origin = first.bracket_origin;
-    check_projection(fixture);
+    check_projection(fixture, force_fallback);
     ++changed.bracket_origin.incarnation;
-    check_projection(fixture);
+    check_projection(fixture, force_fallback);
     changed.bracket_origin = first.bracket_origin;
-    check_projection(fixture);
+    check_projection(fixture, force_fallback);
     changed.family = PineOrderFamily::Entry;
-    check_projection(fixture);
+    check_projection(fixture, force_fallback);
     changed.family = PineOrderFamily::ExitStop;
-    check_projection(fixture);
+    check_projection(fixture, force_fallback);
 
     // Erase only the placement: the live roster retains a raw hole. The
     // next representative is staged, and therefore has no live incarnation.
     auto& placements = fixture.adapter.*access(Placements{});
     const auto live_handle = (fixture.adapter.*access(Live{})).front();
     CHECK(placements.erase(live_handle.incarnation));
-    check_projection(fixture);
+    check_projection(fixture, force_fallback);
     CHECK(placements.try_emplace(live_handle.incarnation, first).second);
-    check_projection(fixture);
+    check_projection(fixture, force_fallback);
 }
 
-void check_roster_reorder() {
+void check_roster_reorder(bool force_fallback = false) {
     Fixture fixture(12);
     auto& placements = fixture.adapter.*access(Placements{});
     auto& live = fixture.adapter.*access(Live{});
     placements.at(live[1].incarnation) = placements.at(live[0].incarnation);
-    check_projection(fixture);
+    if (force_fallback) check_projection(fixture);
+    fixture.adapter.fixture_force_pending_projection_fallback(force_fallback);
+    check_projection(fixture, force_fallback);
     // A,A,B becomes B,A,A: count is unchanged, but the second selected raw
     // ordinal moves from 2 to 1 and must carry that live handle's incarnation.
     std::swap(live.front(), live.back());
-    check_projection(fixture);
+    check_projection(fixture, force_fallback);
 }
 
 std::uint64_t measure_size(std::size_t population) {
@@ -330,6 +341,13 @@ std::uint64_t measure_size(std::size_t population) {
     std::printf("pending-book indexed R=%zu probes=%llu\n", population,
                 static_cast<unsigned long long>(indexed_operations));
     check_returned_values(fixture, expected);
+    // Exercise fallback and retry after sampling both measured intervals.
+    if (population == 64) {
+        fixture.adapter.fixture_force_pending_projection_fallback(true);
+        check_projection(fixture, true);
+        fixture.adapter.fixture_force_pending_projection_fallback(false);
+        check_projection(fixture);
+    }
     return operations;
 }
 }
@@ -343,6 +361,8 @@ int main() {
     CHECK(operations_256 <= 20U * operations_16);
     check_cross_family_projection();
     check_roster_reorder();
+    check_cross_family_projection(true);
+    check_roster_reorder(true);
     std::printf("s4e-px2-pendingbook reads: ops16=%llu ops64=%llu ops256=%llu "
                 "checks=%d failures=%d\n",
                 static_cast<unsigned long long>(operations_16),
