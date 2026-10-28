@@ -1,4 +1,4 @@
-// EN-132 D6 rows 4/5/6/9/10. Fault expectations were pinned before producers;
+// D6 rows 4/5/6/9/10. Fault expectations were pinned before producers;
 // row 5 is KEEP per ENGINE-TOP/L6 13:10, pinned to the execution-terms neighbour.
 // This TU is source-free / kernel-profile safe.
 // Real C callback hosts run through strategy_native_run_v1. The few tuples
@@ -593,6 +593,6 @@ int main() {
     keep_host_sized_nan_rejection();
     keep_margin_finite_paths();
     finite_boundary_is_bit_identical();
-    std::printf("EN132 sizing/margin native: %d checks, %d failures\n", checks, failures);
+    std::printf("Sizing/margin native: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

@@ -1,4 +1,4 @@
-// CR-150 L19A: successor lookup survives journal retirement without a
+// Successor lookup survives journal retirement without a
 // per-replacement heap slope. The heap witness uses only the base API.
 #define PINEFORGE_TEST_ALLOCATION_BYTES
 #include "global_allocation_replacement.hpp"

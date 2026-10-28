@@ -1,7 +1,7 @@
 /*
- * test_short_reversal_emission.cpp — KI-72 short-decline emission corruption.
+ * test_short_reversal_emission.cpp — short-decline emission corruption.
  *
- * Pins the fix for the emission/accounting split found during the KI-57 fix
+ * Pins the fix for the emission/accounting split found during the earlier fix
  * cycle (PARK-DOSSIER D1a): a default-sized percent_of_equity reversal frozen
  * at NON-POSITIVE sizing equity (realized + open PnL underwater past the whole
  * account — reachable when a held SHORT's unbounded adverse excursion drives
@@ -12,7 +12,7 @@
  * it then emitted a negative-qty trade row that flipped the exported PnL sign
  * and blew the cumulative-PnL column, while the realized net_profit_sum_ stayed
  * healthy — the emission/accounting split. On almesned with symmetric-scope
- * KI-57 zero-tolerance this collapsed match 90.8% -> 53.4%, EVERY exported qty
+ * Zero-tolerance: this collapsed match 90.8% -> 53.4%, EVERY exported qty
  * negative, cumulative -122k.
  *
  * The fix declines such a non-positive-qty open CLEANLY (no fill, no trade row),
@@ -194,7 +194,7 @@ void test_solvent_reversal_opens_normally() {
 }
 
 // C2. CONTROL — a SOLVENT true-flat all-in long open is unchanged: opens the
-// full floor lot, one entry, no spurious decline. Pins that the KI-72 branch
+// full floor lot, one entry, no spurious decline. Pins that the branch
 // does not touch ordinary flat opens.
 void test_solvent_flat_open_unchanged() {
     std::printf("-- C2: solvent flat all-in open unchanged (control) --\n");
@@ -214,7 +214,7 @@ void test_solvent_flat_open_unchanged() {
 }  // namespace
 
 int main() {
-    std::printf("--- short_reversal_emission (KI-72) ---\n");
+    std::printf("--- short_reversal_emission ---\n");
     test_negative_equity_reversal_declined_clean();
     test_exported_pnl_matches_realized();
     test_solvent_reversal_opens_normally();

@@ -2575,10 +2575,10 @@ def engine_version(lib: ctypes.CDLL) -> dict:
 
 # pf_report_t is CALLER-allocated: a .so built against a different ABI
 # writes past (or short of) our ReportC buffer. Assert version up front.
-# v4 appended the live-runtime accessors and grew pf_report_t with the
-# broker_state_hash array after equity_curve_len (ReportC above already
-# carries both fields).
-EXPECTED_PF_ABI = 4
+# v4 added the live accessors and broker_state_hash after equity_curve_len.
+# The mirrors already carry those fields; v5 requires rebuilt 1.8.0 modules
+# without growing the C report/trade layouts.
+EXPECTED_PF_ABI = 5
 
 
 def check_abi(lib: ctypes.CDLL) -> None:
@@ -5108,7 +5108,7 @@ def main(argv=None) -> int:
     command line argparse refuses. The one exception is a success report stdout
     cannot take whole (_main): exit 1 with the reason on stderr and no line after
     the part written. The csv2bin subcommand instead returns 2 on refusal and
-    writes its one failure line to stderr (CR-150's converter contract)."""
+    writes its one failure line to stderr (the converter contract)."""
     tokens = sys.argv[1:] if argv is None else argv
     if tokens and tokens[0] == "csv2bin":
         return _csv2bin_main(tokens[1:])
@@ -5651,7 +5651,7 @@ def _main(argv, binary_inputs) -> int:
     return 0
 
 
-# --- CR-150 L9A/L9B: full and summary JSON from the fixed v1 report sink -------
+# --- Full and summary JSON from the fixed v1 report sink -----------------------
 
 class ReportSinkC(ctypes.Structure):
     """Exact pf_report_sink_v1; the setter copies all three strings."""

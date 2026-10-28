@@ -1,6 +1,6 @@
-"""EN-132 X: force failures through main(), with the real phase descriptor.
+"""Force failures through main(), with the real phase descriptor.
 
-The engine/planner are EN-133's existing stand-ins, with real ctypes reports
+The engine/planner are existing stand-ins, with real ctypes reports
 and the native-style observer callback. Faults come from the library exports,
 report-data reads, the standard JSON encoder, or buffer/descriptor IO. The
 builder, validator, phase/boundary classifiers and failure writer stay real.
@@ -93,7 +93,7 @@ def harness(tmp_path):
 
 
 def run_with_library(harness, mode, *, configure=None, after_native=None, **options):
-    """Extend only the fake library; run_json.main and the EN-133 harness are real."""
+    """Extend only the fake library; run_json.main and the harness are real."""
     base = reports.ReportLib
 
     class Library(base):
@@ -115,7 +115,7 @@ def run_with_library(harness, mode, *, configure=None, after_native=None, **opti
 
 
 def assert_records(result, phases):
-    # EN-133's fixed clock makes each received record exact, including the
+    # The fixed clock makes each received record exact, including the
     # last record; these assertions do not inspect the writer to infer phase.
     expected = []
     for sequence, phase in enumerate(phases, 1):

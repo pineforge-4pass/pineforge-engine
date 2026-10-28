@@ -12,7 +12,7 @@ struct Directory {
         char name[] = "/var/tmp/s4e-command-missing-XXXXXX";
         require(::mkdtemp(name) != nullptr, "cannot create command decision fixture");
         path = name;
-        std::printf("S4E owned inspection paths: %s, %s/missing, /dev/shm\n",
+        std::printf("Owned inspection paths: %s, %s/missing, /dev/shm\n",
                     path.c_str(), path.c_str());
     }
     ~Directory() { ::rmdir(path.c_str()); }

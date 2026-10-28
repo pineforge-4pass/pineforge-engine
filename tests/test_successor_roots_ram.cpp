@@ -1,4 +1,4 @@
-// CR-150 bounded successor roots. Against the d91c96d47d header the expected
+// Bounded successor roots. Against the d91c96d47d header the expected
 // first diagnostic is no WorkingRequestCore member named bind_scratch_slab.
 // Compile/run this complete unit remotely; that red is predicted, not observed.
 #include "global_allocation_replacement.hpp"

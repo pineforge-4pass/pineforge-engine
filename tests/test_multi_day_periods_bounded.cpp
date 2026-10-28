@@ -1,5 +1,5 @@
 /*
- * test_multi_day_periods_bounded.cpp -- CR-150 L19k.
+ * test_multi_day_periods_bounded.cpp -- bounded multi-day periods.
  *
  * An N-day request.security ("2D" .. "13D") buckets the symbol's trading
  * dates N at a time from each year's first. The partition used to be a stored

@@ -1,4 +1,4 @@
-// test_chart_ema_na_warmup — pins the opt-in KI-55 chart-EMA warmup flag.
+// test_chart_ema_na_warmup — pins the opt-in chart-EMA warmup flag.
 //
 // ``chart_ema_na_warmup`` is an independent, default-off run flag carried
 // through the syminfo-metadata channel.  While chart strategy code executes,

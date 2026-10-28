@@ -1,7 +1,7 @@
 # Binary bar input for APP
 
 Source snapshot: `2995a52e37735efe07d2b72e67c9d38281843575`
-(`core/cr150-bin`, batch-C). All source coordinates below refer to that tree.
+(`the source tree`, batch-C). All source coordinates below refer to that tree.
 This page describes the `run_json.py` input contract, implemented by
 `load_bars_bin` docker/run_json.py:2779 and `convert_csv` docker/pf_bars.py:296.
 
@@ -211,7 +211,7 @@ docker/run_json.py:2350).
 This selection contract belongs to `run_json.py`. The container entrypoint
 still sets `OHLCV` to `/in/ohlcv.csv` (subject to its input-directory prefix)
 and invokes `--ohlcv`; renaming its mount alone does not switch routes
-(`OHLCV` docker/entrypoint.sh:105; `OHLCV` docker/entrypoint.sh:299).
+(`OHLCV` docker/entrypoint.sh:105; `OHLCV` docker/entrypoint.sh:300).
 
 ## 4. HPO
 

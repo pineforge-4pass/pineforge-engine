@@ -947,22 +947,13 @@ def _check_python_modules(prefix: list[Statement], fences: list[Fence]) -> None:
 
 
 def _check_registration_timeouts() -> None:
-    """H2-8: no lane/fence or new main-file row may declare TIMEOUT."""
-    # This exact statement predates the CR-150 registrations. Preserve the
-    # inherited ownership rows, without granting a deadline to any new row.
-    inherited_main = [
-        "test_selected_window_ownership_manifest", "${_pf_ownership_control_shards}",
-        "test_selected_window_ownership_d4", "PROPERTIES", "WORKING_DIRECTORY",
-        "${PROJECT_SOURCE_DIR}", "TIMEOUT", "180",
-    ]
+    """H2-8: no lane/fence or main-file row may declare TIMEOUT."""
     for path in [CMAKE, *sorted(LANE_DIR.glob("*.cmake"))]:
         for statement in _statements(path, path.read_text(), mask_quotes=True):
             name = statement.name.lower()
             if name not in ("set_tests_properties", "set_property"):
                 continue
             words = _fence_words(statement)
-            if path == CMAKE and words == inherited_main:
-                continue
             if name == "set_tests_properties":
                 at = next((i for i, word in enumerate(words)
                            if word.upper() == "PROPERTIES"), len(words))

@@ -237,6 +237,7 @@ Build the generated strategy module with the repository recipe (or
 | [Scratch tables](@ref scratch_tables) | Disk or bounded memory, the default admission policy, jailed host/HPO setup, typed resource failures and planned jail proof. |
 | [Memory management](@ref memory_management) | How much memory a run can use: the controls, the fixed resident bounds, the scratch formula with a worked example, and what grows with bars, trades and open orders. |
 | [Report schema](@ref report_schema) | `pf_report_t` field by field, including the equity curve. |
+| [Report sink golden vectors](@ref sink_vectors) | Byte-exact v1 streams and reader results for independent sink implementations. |
 | [Run-failure codes](@ref run_failure_codes) | The stable code and typed arguments beside a failed run's text: the getters, the rules, every code, and the catalog and per-release diff each release publishes. |
 | [Trading metrics reference](@ref metrics) | Every `pf_metrics_t` field: units, NaN rules, validation status. |
 | [ABI stability](@ref abi_stability) | The append-only guarantee, and the internal C++ epochs behind it. |

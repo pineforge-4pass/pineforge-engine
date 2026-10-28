@@ -38,7 +38,7 @@ public:
             memory_created = ::mkdtemp(memory_name) != nullptr;
             require(memory_created, "cannot create tmpfs directory fixture");
             memory = memory_name;
-            std::printf("S4E owned inspection paths: /dev/null, %s, %s\n",
+            std::printf("Owned inspection paths: /dev/null, %s, %s\n",
                         disk.c_str(), memory.c_str());
             const std::array<const std::string*, 2> roots{{&disk, &memory}};
             for (std::size_t i = 0; i < roots.size(); ++i) {
@@ -74,7 +74,7 @@ public:
         check("/dev/null", ENOTDIR);
         for (const auto& root : {disk, memory}) check(root + "/regular", ENOTDIR);
         scratch_unprivileged("mode-0000 scratch cells", [&] {
-            std::printf("S4E mode-0000 cells: effective uid %lu\n",
+            std::printf("Mode-0000 cells: effective uid %lu\n",
                         static_cast<unsigned long>(::geteuid()));
             for (const auto& root : {disk, memory}) check(root + "/mode0000", EACCES);
         });

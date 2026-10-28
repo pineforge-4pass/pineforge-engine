@@ -7379,7 +7379,7 @@ void NativeExecutionConsumer::match_path(
             // back row and shifts the rest, so a resident row the scan held
             // can name another request by now. Every such move raises the
             // book's epoch: the winner is then held again by its handle (lane
-            // b1 round 7, argon F-NEW-01).
+            // matching round 7).
             if (winner_held && requests_.epoch_ != book_epoch) {
                 winner_held = requests_.hold_live(winner->handle);
             }
@@ -13552,7 +13552,7 @@ int native_selected_window_counts_v1(const BacktestEngine* engine,
     return NativeExecutionConsumer::selected_window_counts_v1(engine, out);
 }
 
-// CR-150 L6b-2: report-tail helpers share the consumer's engine epoch.
+// Report-tail helpers share the consumer's engine epoch.
 // Keep them in this scope so their definitions have the header's ABI owner.
 
 pf_equity_point_t* BacktestEngine::last_equity_point() noexcept {
@@ -13748,7 +13748,7 @@ void BacktestEngine::present_report_equity_tail(ReportC* out) const {
     out->equity_curve_len = count;
 }
 
-// CR-150 L17A/B: walk the FINAL recorded values through the selected latches.
+// Walk the FINAL recorded values through the selected latches.
 // Presentation edits only the capture's bounded independent tail; the full
 // metric curve is already in private scratch. E emission reads it in bounded
 // chunks; the engine's held point is never edited by presentation.
@@ -13826,7 +13826,7 @@ bool NativeExecutionConsumer::capture_selected_sink(BacktestEngine& engine) {
     return true;
 }
 
-// CR-150 L17B: the only source factory over the L6b-4 scratch owner.
+// The only source factory over the scratch owner.
 // The region is the FINAL selected metric curve, independent of the sink's
 // published E count. Its descriptor remains live across repeated report reads.
 metrics::SpillCurve NativeExecutionConsumer::make_selected_metric_curve() const {
@@ -13867,7 +13867,7 @@ bool NativeExecutionConsumer::streams_closed_rows(const BacktestEngine& engine) 
         && engine.report_sink_state_.trade_history_streamable;
 }
 
-// CR-150 L18: the scratch directory the sink bound at setup (set_report_sink_v1
+// The scratch directory the sink bound at setup (set_report_sink_v1
 // resolves a null directory to the sink path's parent); the consumer is the
 // friend that may read the private sink state.
 const std::string& NativeExecutionConsumer::report_scratch_directory(

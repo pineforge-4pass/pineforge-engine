@@ -1,4 +1,4 @@
-// CR-221 O1-E2, row E04: the paged contract for the prior adjustment ids a
+// The paged contract for the prior adjustment ids a
 // resolution spent.
 //
 // A request whose units are deferred collects the group fills deducted into it

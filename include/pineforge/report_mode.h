@@ -72,7 +72,7 @@ typedef struct pf_report_metadata_v1 {
     pf_report_sequence_v1 output_events;
 } pf_report_metadata_v1;
 
-/** Opt-in envelope, not an extension of the caller-allocated ABI-4 report.
+/** Opt-in envelope, separate from the report layout introduced in ABI 4.
  *  report.total_trades remains the logical total; report.trades_len and
  *  report.equity_curve_len describe resident arrays only. In SUMMARY_ONLY
  *  and STREAMED those arrays are NULL/0. The payload's existing free rules
