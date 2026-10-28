@@ -1,0 +1,12 @@
+diff --git a/src/source/pine_adapter.cpp b/src/source/pine_adapter.cpp
+--- a/src/source/pine_adapter.cpp
++++ b/src/source/pine_adapter.cpp
+@@ -2307,7 +2307,7 @@
+         const exit_legs::Action action{candidate.legs.target(), candidate.legs.revision(),
+             cause, exit_legs::Cancel{{exit_legs::Leg::Stop, exit_legs::Leg::Limit,
+                                       exit_legs::Leg::Trail}}};
+-        (void)candidate.legs.apply(candidate.legs.target(), action); invalidate_retirement();
++        (void)candidate.legs.apply(candidate.legs.target(), action);
+     };
+     for (const auto& [incarnation, event] : cancelled) {
+         const auto found = placement_.find(incarnation);
