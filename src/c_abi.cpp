@@ -38,6 +38,7 @@
  *     strategy_set_report_sink_v1, strategy_set_report_sink_fd_v1, strategy_report_sink_receipt_v1,
  *     strategy_set_scratch_tables_v1, strategy_report_sink_summary_v1,
  *     pf_report_scratch_arena_stats,
+ *     strategy_report_sink_diagnostics_v1,
  *     pf_run_abort_install_sigterm_v1, pf_run_abort_requested_v1,
  *     pf_run_abort_restore_sigterm_v1 — the
  *     authoritative list is EXPECTED_RUNTIME in scripts/check_c_abi_runtime.py (CI). Other
@@ -1402,6 +1403,12 @@ PF_API int pf_report_scratch_arena_stats(uint64_t* high_water_bytes, uint64_t* a
     } catch (...) {
         return -1;
     }
+}
+
+PF_API int strategy_report_sink_diagnostics_v1(
+        pf_strategy_t s, pf_report_sink_diagnostics_v1* out) {
+    if (!s) return -1;
+    return static_cast<const pineforge::BacktestEngine*>(s)->report_sink_diagnostics_v1(out);
 }
 
 PF_API int strategy_set_report_sink_v1(pf_strategy_t s, const pf_report_sink_v1* sink) {

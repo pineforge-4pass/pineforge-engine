@@ -125,6 +125,36 @@ pf_report_sink_receipt_v1 receipt(BacktestEngine& host) {
             "trailer receipt query refused");
     return result;
 }
+pf_report_sink_diagnostics_v1 diagnostics(BacktestEngine& host) {
+    pf_report_sink_diagnostics_v1 result{};
+    result.struct_size = sizeof result;
+    result.version = 1;
+    require(strategy_report_sink_diagnostics_v1(handle(host), &result) == 0,
+            "sink diagnostics query refused");
+    return result;
+}
+void equal_diagnostics(BacktestEngine& host, const ReportC& array) {
+    const auto got = diagnostics(host);
+    require(got.complete == 1 && got.count_e == array.equity_curve_len,
+            "sink diagnostics lost the presented equity count");
+    if (got.count_e) {
+        const auto equal_point = [](const auto& left, const auto& right) {
+            return left.time_ms == right.time_ms && same(left.equity, right.equity)
+                && same(left.open_profit, right.open_profit);
+        };
+        require(equal_point(got.first, array.equity_curve[0])
+                && equal_point(got.last, array.equity_curve[array.equity_curve_len - 1]),
+                "sink diagnostics differ from the independent array endpoints");
+    }
+    bool trade_at_start = false;
+    for (int i = 0; i < array.trades_len; ++i)
+        trade_at_start |= array.trades[i].entry_bar_index <= 0;
+    require(got.trade_at_start == static_cast<std::uint32_t>(trade_at_start),
+            "sink diagnostics lost the report's first-bar trade provenance");
+    const auto repeated = diagnostics(host);
+    require(std::memcmp(&got, &repeated, sizeof got) == 0,
+            "reading sink diagnostics changed their published generation");
+}
 void install_path(BacktestEngine& host, const std::string& path) {
     const pf_report_sink_v1 sink{sizeof sink, 1, path.c_str(), "L22Q", nullptr};
     require(strategy_set_report_sink_v1(handle(host), &sink) == 0, "path sink refused");
@@ -356,6 +386,10 @@ void unpublished(BacktestEngine& host) {
     empty.struct_size = sizeof empty;
     empty.version = 1;
     equal(summary(host), empty, "incomplete summary");
+    const auto endpoints = diagnostics(host);
+    require(endpoints.complete == 0 && endpoints.count_e == 0
+            && endpoints.trade_at_start == 0,
+            "unpublished sink exposed annualization provenance");
 }
 
 void check_fold_copy(BacktestEngine& host, const ReportC& array,
@@ -422,6 +456,7 @@ pf_report_sink_summary_v1 pine_case(Directory& directory, Options options, int c
         host->fill_report(&actual.value);
         const auto got = summary(*host);
         equal(got, ref, "array reference");
+        equal_diagnostics(*host, expected.value);
         const auto trailer = receipt(*host);
         require(got.complete == trailer.complete && got.count_t == trailer.count_t,
                 "summary and trailer disagree");
@@ -504,6 +539,7 @@ void presented_case(Directory& directory, const std::vector<double>& pnls, int i
             Report actual;
             host->fill_report(&actual.value);
             equal(summary(*host), ref, "presented array reference");
+            equal_diagnostics(*host, array.value);
             repeated_read(*host, ref, "presented route");
         }
     }
@@ -514,6 +550,25 @@ void lifecycle(Directory& directory) {
     PineFixture host(Options{});
     unpublished(host); // no sink; never binds a consumer merely to query
     require(strategy_report_sink_summary_v1(handle(host), nullptr) == -1, "NULL out accepted");
+    require(strategy_report_sink_diagnostics_v1(handle(host), nullptr) == -1,
+            "NULL diagnostics accepted");
+    pf_report_sink_diagnostics_v1 bad_diagnostics;
+    std::memset(&bad_diagnostics, 0xa5, sizeof bad_diagnostics);
+    bad_diagnostics.struct_size = sizeof bad_diagnostics;
+    bad_diagnostics.version = 1;
+    const auto original_diagnostics = bad_diagnostics;
+    require(strategy_report_sink_diagnostics_v1(nullptr, &bad_diagnostics) == -1
+            && std::memcmp(&bad_diagnostics, &original_diagnostics, sizeof bad_diagnostics) == 0,
+            "bad diagnostics handle rewrote output");
+    for (const bool bad_version : {false, true}) {
+        bad_diagnostics = original_diagnostics;
+        if (bad_version) bad_diagnostics.version = 2;
+        else --bad_diagnostics.struct_size;
+        const auto before = bad_diagnostics;
+        require(strategy_report_sink_diagnostics_v1(handle(host), &bad_diagnostics) == -1
+                && std::memcmp(&bad_diagnostics, &before, sizeof before) == 0,
+                "bad diagnostics prefix rewrote output");
+    }
     pf_report_sink_summary_v1 bad;
     std::memset(&bad, 0xa5, sizeof bad);
     bad.struct_size = sizeof bad;

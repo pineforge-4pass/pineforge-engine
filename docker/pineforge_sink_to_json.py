@@ -79,7 +79,7 @@ if sys.flags.isolated:
 
 from pf_sink import I53_MAX, SinkFormatError
 from pineforge_sink_finalize import (
-    CHUNK_BYTES, _Failure, _FinalizerReader, _descriptor, _reader_code, _write_all,
+    CHUNK_BYTES, _Failure, _FinalizerReader, _descriptor, _line_bound, _reader_code, _write_all,
 )
 
 
@@ -129,12 +129,16 @@ class _PreadInput(io.RawIOBase):
     def __init__(self, fd):
         super().__init__()
         self.fd, self.offset = fd, 0
+        self.line_bytes = 0
 
     def readable(self):
         return True
 
     def readinto(self, buffer):
         data = os.pread(self.fd, min(len(buffer), CHUNK_BYTES), self.offset)
+        # Match the finalizer's transport bound before SinkReader can treat
+        # an overlong prefix without LF as an incomplete final fragment.
+        self.line_bytes = _line_bound(data, self.line_bytes)
         self.offset += len(data)
         buffer[:len(data)] = data
         return len(data)

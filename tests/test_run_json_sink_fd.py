@@ -58,6 +58,7 @@ class FdLibrary(summaries.SummaryLibrary):
         self.trade_rows, self.summary_queries = [], 0
         self.strategy_set_report_sink_fd_v1 = self.export("set_fd", self.install_fd)
         self.strategy_report_sink_summary_v1 = self.export("summary", self.summary_receipt)
+        self.strategy_report_sink_diagnostics_v1 = self.export("diagnostics", self.diagnostics_receipt)
         self.strategy_get_last_error = self.export("last_error", lambda state: (
             self.error[0].encode() if self.error else b""))
         self.strategy_get_last_error_code = self.export("last_code", lambda state: (
@@ -98,6 +99,7 @@ class FdLibrary(summaries.SummaryLibrary):
     def write_sink(self, path, rows, *, outputs=False, fault=None):
         rows = list(rows)
         self.trade_rows = [row[1:] for row in rows if row[0] == "T"]
+        self.equity_rows = [row[1:] for row in rows if row[0] == "E"]
         if self.fd is None:
             return super().write_sink(path, rows, outputs=outputs, fault=fault)
         header = full.header(outputs)
@@ -181,6 +183,24 @@ class FdLibrary(summaries.SummaryLibrary):
             return -1
         return status
 
+    def diagnostics_receipt(self, state, ref):
+        result = ref._obj
+        assert result.struct_size == ctypes.sizeof(run_json.ReportSinkDiagnosticsC) == 72
+        assert result.version == 1
+        result.count_e = len(self.equity_rows)
+        if self.equity_rows:
+            result.first = run_json.EquityPointC(*self.equity_rows[0])
+            result.last = run_json.EquityPointC(*self.equity_rows[-1])
+        result.trade_at_start = any(row[12] <= 0 for row in self.trade_rows)
+        result.complete = 1
+        if self.fd_fault == "diagnostics-incomplete":
+            result.complete = 0
+        elif self.fd_fault == "diagnostics-count":
+            result.count_e += 1
+        elif self.fd_fault == "diagnostics-status":
+            return -1
+        return 0
+
     def constants(self, state, destination, capacity):
         values = full.outputs_reader().constants()
         for index in range(min(capacity, len(values))):
@@ -205,6 +225,7 @@ class SelectedFdLibrary(selected_sinks.NamedSinkLibrary):
         self.trade_rows, self.summary_queries, self.all_tags = [], 0, False
         self.strategy_set_report_sink_fd_v1 = self.install_fd
         self.strategy_report_sink_summary_v1 = self.summary_receipt
+        self.strategy_report_sink_diagnostics_v1 = self.diagnostics_receipt
         self.strategy_outputs_series_count = lambda state: 2
         self.strategy_outputs_constants_copy = self.constants
         self.strategy_get_last_error = lambda state: self.error[0].encode() if self.error else b""
@@ -230,6 +251,7 @@ class SelectedFdLibrary(selected_sinks.NamedSinkLibrary):
 
     install_fd = FdLibrary.install_fd
     summary_receipt = FdLibrary.summary_receipt
+    diagnostics_receipt = FdLibrary.diagnostics_receipt
     constants = FdLibrary.constants
 
     def write_sink(self, path, rows, **kwargs):
@@ -264,13 +286,31 @@ def forbid_report_files():
                      "TemporaryDirectory", "mkdtemp"):
             stack.enter_context(mock.patch.object(run_json.tempfile, name, forbidden))
         for name in ("_ReportSink", "_TemporaryReportSink", "_json_temporary",
-                     "_JSONColumn", "_prepare_stream_report"):
+                     "_prepare_stream_report"):
             stack.enter_context(mock.patch.object(run_json, name, forbidden))
+        # The serializer uses this class as an isinstance target on every
+        # value. Forbid construction without replacing the type itself.
+        stack.enter_context(mock.patch.object(run_json._JSONColumn, "__init__", forbidden))
         stack.enter_context(mock.patch.object(pf_sink, "SinkReader", forbidden))
         stack.enter_context(mock.patch.object(builtins, "open", read_only_open))
         stack.enter_context(mock.patch.object(io, "open", read_only_open))
         stack.enter_context(mock.patch.object(os, "open", read_only_os_open))
         yield
+
+
+@pytest.mark.parametrize("profile", ["unjailed", "jailed"])
+def test_fd_file_guard_allows_serialization_and_refuses_columns(profile):
+    rows = [{"value": -0.0}, {"value": 'quote"\n漢'}]
+    document = {"rows": run_json._JSONRecordArray(lambda: iter(rows), len(rows))}
+    args = argparse.Namespace(profile=profile, spill_dir=None)
+    with forbid_report_files(), contextlib.ExitStack() as resources:
+        buffer = run_json._prepare_report_json(
+            document, resources, args, types.SimpleNamespace(fd_mode=True))
+        assert buffer.read() == json.dumps(
+            {"rows": rows}, separators=(",", ":"), allow_nan=False) + "\n"
+        with pytest.raises(AssertionError, match="report tempfile or sink read-back"):
+            run_json._JSONColumn(resources, None)
+    assert buffer.closed
 
 
 class Stream:
@@ -397,6 +437,56 @@ def test_fd_matches_file_document_and_wire(tmp_path, transport, outputs, pnls):
     assert "trades" not in json.loads(actual[1]) and "equity_curve" not in json.loads(actual[1])
 
 
+def test_fd_annualization_matches_verified_file_endpoints(tmp_path):
+    source = bars.csv_file(tmp_path)
+    reference = invoke(source, FdLibrary(), [
+        "--report-sink", str(tmp_path / "annualization.sink")])
+    assert (reference[0], reference[2]) == (0, ""), reference
+    expected = json.loads(reference[1])["diagnostics"]["annualization"]
+    with Stream() as stream:
+        actual = invoke(source, FdLibrary(), [
+            "--report-sink-fd", str(stream.writer)], no_files=True)
+    assert (actual[0], actual[2]) == (0, ""), actual
+    assert json.loads(actual[1])["diagnostics"]["annualization"] == expected
+
+
+@pytest.mark.parametrize("span,final,trade_at_start,open_profit,has_reason", [
+    (120000, 2., True, 0., True),
+    (0, 2., False, 0., False),
+    (172800000, 2., False, 0., False),
+    (86400000, 1e308, False, 0., True),
+    (86400000, 1e308, True, 0., False),
+    (86400000, 1e308, False, 1., False),
+])
+def test_fd_annualization_uses_presented_endpoints_not_input_span(
+        tmp_path, span, final, trade_at_start, open_profit, has_reason):
+    class PresentedEndpoints(FdLibrary):
+        def write_sink(self, path, rows, **kwargs):
+            rows = [list(row) for row in rows]
+            equity = [row for row in rows if row[0] == "E"]
+            assert len(equity) > 1
+            for index, row in enumerate(equity):
+                row[1] = bars.T0 + span * index // (len(equity) - 1)
+                row[2] = 1. + (final - 1.) * (index / (len(equity) - 1))
+                row[3] = open_profit if index == 0 else 0.
+            for row in rows:
+                if row[0] == "T" and not trade_at_start:
+                    row[13] += 1
+            return super().write_sink(path, rows, **kwargs)
+
+    source = bars.csv_file(tmp_path)
+    reference = invoke(source, PresentedEndpoints(), [
+        "--report-sink", str(tmp_path / "presented.sink")])
+    assert (reference[0], reference[2]) == (0, ""), reference
+    expected = json.loads(reference[1])["diagnostics"].get("annualization")
+    assert bool(expected) == has_reason
+    with Stream() as stream:
+        actual = invoke(source, PresentedEndpoints(), [
+            "--report-sink-fd", str(stream.writer)], no_files=True)
+    assert (actual[0], actual[2]) == (0, ""), actual
+    assert json.loads(actual[1])["diagnostics"].get("annualization") == expected
+
+
 def test_fd_layout_and_bindings(tmp_path, monkeypatch):
     library = FdLibrary()
     monkeypatch.setattr(ctypes, "CDLL", lambda path: library)
@@ -407,6 +497,13 @@ def test_fd_layout_and_bindings(tmp_path, monkeypatch):
     assert library.strategy_report_sink_summary_v1.restype is ctypes.c_int
     assert library.strategy_report_sink_summary_v1.argtypes == [
         ctypes.c_void_p, ctypes.POINTER(run_json.ReportSinkSummaryC)]
+    assert library.strategy_report_sink_diagnostics_v1.argtypes == [
+        ctypes.c_void_p, ctypes.POINTER(run_json.ReportSinkDiagnosticsC)]
+    assert library.strategy_report_sink_diagnostics_v1.restype is ctypes.c_int
+    assert ctypes.sizeof(run_json.ReportSinkDiagnosticsC) == 72
+    for name, offset in (("struct_size", 0), ("version", 4), ("count_e", 8),
+                         ("first", 16), ("last", 40), ("trade_at_start", 64), ("complete", 68)):
+        assert getattr(run_json.ReportSinkDiagnosticsC, name).offset == offset
     fd_type, summary_type = run_json.ReportSinkFdC, run_json.ReportSinkSummaryC
     assert fd_type.struct_size.offset == 0 and fd_type.version.offset == 4
     assert fd_type.fd.offset == 8
@@ -424,6 +521,7 @@ def test_fd_layout_and_bindings(tmp_path, monkeypatch):
     "summary-incomplete", "summary-count", "summary-status", "unknown-field",
     "metric-count", "report-count", "receipt-incomplete", "receipt-count",
     "receipt-status", "negative-count",
+    "diagnostics-incomplete", "diagnostics-count", "diagnostics-status",
 ])
 def test_fd_rejects_incomplete_or_inconsistent_summary(tmp_path, fault):
     source = bars.csv_file(tmp_path)
@@ -494,6 +592,7 @@ def test_fd_and_phase_transport_cannot_share_the_endpoint(tmp_path):
 
 @pytest.mark.parametrize("missing", [
     "strategy_set_report_sink_fd_v1", "strategy_report_sink_summary_v1",
+    "strategy_report_sink_diagnostics_v1",
 ])
 def test_fd_missing_api_never_falls_back_to_a_path(tmp_path, missing):
     source, library = bars.csv_file(tmp_path), FdLibrary()

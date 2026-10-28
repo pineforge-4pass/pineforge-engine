@@ -2677,6 +2677,7 @@ public:
     int set_report_sink_fd_v1(const pf_report_sink_fd_v1* sink);
     int report_sink_receipt_v1(pf_report_sink_receipt_v1* out) const noexcept;
     int report_sink_summary_v1(pf_report_sink_summary_v1* out) const noexcept;
+    int report_sink_diagnostics_v1(pf_report_sink_diagnostics_v1* out) const noexcept;
     // Codegen opts in only for modules that do not read closedtrades.*.
     // L6B1 still retains every row; L8c consumes this policy at sealing.
     void set_trade_history_streamable(bool streamable);

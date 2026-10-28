@@ -244,6 +244,7 @@ if __name__ == "__main__" and len(sys.argv) > 1:
 
 import base64
 import ctypes
+import io
 import itertools
 import types
 
@@ -298,7 +299,7 @@ def synthetic(tmp_path, pnls=(13.25, -4.5, 0.0, -0.0, 2.0), *, outputs=False):
                      index + 17, index % 4, f"entry {index} 漢", f"exit {index}", 'quote"\n'])
     for index, point in enumerate(curve):
         point.time_ms = 1700000000000 + (index // 2) * 60000  # repeat times are legal
-        point.equity = 10000.0 + index if index % 3 else float("nan")
+        point.equity = 10000.0 + index
         point.open_profit = float(index % 5) if index % 2 else -0.0
         # E before T proves that report order is obtained through replay.
         rows.insert(index, ["E", point.time_ms, finite(point.equity), point.open_profit])
@@ -339,16 +340,25 @@ def synthetic(tmp_path, pnls=(13.25, -4.5, 0.0, -0.0, 2.0), *, outputs=False):
                 finite(event.value), "0123456789abcdef", event.message])
         rows.insert(0, ["K", *reader.constants()])
     expected["fingerprint"] = None
+    # Match the current finite-result contract and serialize the lazy native
+    # arrays while their ctypes owners are alive. Only this small test oracle
+    # is materialized; the converter still replays the retained sink.
+    run_json._validate_report_result(expected)
+    with io.StringIO() as encoded:
+        run_json._stream_json(expected, encoded)
+        expected = json.loads(encoded.getvalue())
     sink, metadata = tmp_path / "retained.sink", tmp_path / "stdout.json"
     write_stream(sink, fixtures.header(outputs=outputs), rows)
     metadata.write_bytes(report_bytes(projection(expected)))
     return sink, metadata, expected
 
 
-def invoke(sink, metadata, *, extra=(), launcher=False):
+def invoke(sink, metadata, *, max_bytes=None, extra=(), launcher=False):
+    if max_bytes is None:
+        max_bytes = sink.stat().st_size
     return subprocess.run([sys.executable, "-I", "-B", "-S", str(LAUNCHER if launcher else TOOL),
         "--in", str(sink), "--stdout-json", str(metadata), "--out", "-", "--max-bytes",
-        str(sink.stat().st_size), *map(str, extra)], stdin=subprocess.DEVNULL,
+        str(max_bytes), *map(str, extra)], stdin=subprocess.DEVNULL,
         capture_output=True, preexec_fn=no_file_writes, cwd=sink.parent)
 
 
@@ -786,13 +796,18 @@ def test_missing_stdout_capture_is_a_logged_metadata_drop(tmp_path):
 
 def test_sink_cap_run_id_and_empty_sink_are_refusals(tmp_path):
     sink, metadata, _ = synthetic(tmp_path)
-    result = invoke(sink, metadata, extra=("--max-bytes", sink.stat().st_size - 1))
+    result = invoke(sink, metadata, max_bytes=sink.stat().st_size - 1)
     assert result.returncode == 8 and result.stdout == b""
     result = invoke(sink, metadata, extra=("--run-id", "different"))
     assert result.returncode == 3 and result.stdout == b""
     sink.write_bytes(b"")
-    result = invoke(sink, metadata, extra=("--max-bytes", "1"))
-    assert result.returncode == 6 and result.stdout == b""
+    result = invoke(sink, metadata, max_bytes=1)
+    assert result.returncode == 6 and result.stdout == b"", result.stderr.decode()
+    lines = diagnostics(result)
+    assert len(lines) == 1
+    assert lines[0]["event"] == "sink_refused" and lines[0]["sink_verified"] is False
+    assert lines[0]["detail"] == "line 1: missing header or trailer"
+    assert lines[0]["billing"] == "normal" and lines[0]["metadata_drops"] == 0
 
 
 def test_readwrite_sink_and_live_pipe_are_usage_refusals(tmp_path):

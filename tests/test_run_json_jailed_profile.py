@@ -28,6 +28,8 @@ import test_run_json_nonfinite_report as reports
 import test_run_json_sink as sinks
 import test_run_json_sink_fd as fd_sinks
 
+REAL_CDLL = ctypes.CDLL
+
 PROFILE_ENV = "PINEFORGE_RUN_JSON_PROFILE"
 SETTER = "strategy_set_scratch_tables_v1"
 FIELDS = ("K_q", "B_q", "K_e", "B_e", "K_c", "B_c", "U", "B_U", "V", "B_V", "R")
@@ -197,9 +199,22 @@ def forbid_spools(monkeypatch):
     return hits
 
 
+def test_jailed_serializer_handles_lazy_arrays_without_a_file(monkeypatch):
+    files = forbid_spools(monkeypatch)
+    rows = [{"value": -0.0}, {"value": 'quote"\n漢'}]
+    document = {"rows": run_json._JSONRecordArray(lambda: iter(rows), len(rows))}
+    args = run_json.argparse.Namespace(profile="jailed", spill_dir=None)
+    with contextlib.ExitStack() as resources:
+        buffer = run_json._prepare_report_json(document, resources, args, None)
+        assert buffer.read() == json.dumps(
+            {"rows": rows}, separators=(",", ":"), allow_nan=False) + "\n"
+    assert buffer.closed and files == []
+
+
 def invoke(tmp_path, monkeypatch, library, *extra):
     source = bars.csv_file(tmp_path)
-    monkeypatch.setattr(run_json.ctypes, "CDLL", lambda path: library)
+    monkeypatch.setattr(run_json.ctypes, "CDLL", lambda path, *args, **kwargs: (
+        REAL_CDLL(path, *args, **kwargs) if path is None else library))
     monkeypatch.setattr(run_json.time, "time", lambda: 10.0)
     stdout, stderr = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
