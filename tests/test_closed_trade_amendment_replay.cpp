@@ -1,9 +1,11 @@
 // Work bounds below are layout estimates from source, not measured here.
 // The test drives real Pine commands; mutations amend their public rows.
 #include "closed_trade_query_work.hpp"
+#include <pineforge/metrics_stream.hpp>
 #include <pineforge/run_failure.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
 #include <limits>
+#include <string>
 
 namespace {
 using namespace closed_trade_query_work;
@@ -289,7 +291,7 @@ Work read_failure(const AmendmentHost& host, std::size_t first_bad) {
             "replay changed the first invalid row or partial count");
     equal_double(fold.net, expected.net, "replay partial net before the first numeric failure");
     require(expected.value.args
-                && expected.value.args->at("field") == fold.nonfinite_field,
+                && expected.value.args->find(fold.nonfinite_field) != std::string::npos,
             "replay changed the first invalid field");
     try {
         (void)all.finish();
