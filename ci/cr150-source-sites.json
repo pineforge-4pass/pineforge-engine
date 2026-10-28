@@ -11763,6 +11763,42 @@
   },
   {
    "file": "include/pineforge/ta.hpp",
+   "symbol": "prices_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace ta #1",
+    "class RCI #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < double >",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/ta.hpp",
+   "symbol": "order_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace ta #1",
+    "class RCI #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < int >",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/ta.hpp",
+   "symbol": "price_rank_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace ta #1",
+    "class RCI #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < double >",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/ta.hpp",
    "symbol": "buffer_",
    "scope": [
     "namespace pineforge #1",
@@ -11787,6 +11823,18 @@
   },
   {
    "file": "include/pineforge/ta.hpp",
+   "symbol": "scratch_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace ta #1",
+    "class Median #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < double >",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/ta.hpp",
    "symbol": "buffer_",
    "scope": [
     "namespace pineforge #1",
@@ -11795,6 +11843,18 @@
    ],
    "cls": "decl",
    "spelling": "std :: deque < double >",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/ta.hpp",
+   "symbol": "weights_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace ta #1",
+    "class ALMA #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < double >",
    "ordinal": 1
   },
   {
@@ -11818,7 +11878,7 @@
     "class MFI #1"
    ],
    "cls": "decl",
-   "spelling": "std :: deque < double >",
+   "spelling": "DynamicRingBuffer < double >",
    "ordinal": 1
   },
   {
@@ -11830,7 +11890,7 @@
     "class MFI #1"
    ],
    "cls": "decl",
-   "spelling": "std :: deque < double >",
+   "spelling": "DynamicRingBuffer < double >",
    "ordinal": 1
   },
   {
@@ -11842,7 +11902,7 @@
     "class CMO #1"
    ],
    "cls": "decl",
-   "spelling": "std :: deque < double >",
+   "spelling": "DynamicRingBuffer < double >",
    "ordinal": 1
   },
   {
@@ -11854,7 +11914,7 @@
     "class CMO #1"
    ],
    "cls": "decl",
-   "spelling": "std :: deque < double >",
+   "spelling": "DynamicRingBuffer < double >",
    "ordinal": 1
   },
   {
@@ -11939,6 +11999,18 @@
    ],
    "cls": "decl",
    "spelling": "std :: deque < double >",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/ta.hpp",
+   "symbol": "counts_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace ta #1",
+    "class Mode #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < CountEntry >",
    "ordinal": 1
   },
   {
@@ -42300,14 +42372,83 @@
   },
   {
    "file": "src/ta_extremes_volume.cpp",
-   "symbol": "sorted",
+   "symbol": "counts_",
    "scope": [
     "namespace pineforge #1",
     "namespace ta #1",
-    "double Median :: compute ( double src ) #1"
+    "void Mode :: add_count ( double value ) #1",
+    "+ + probe ) #1"
+   ],
+   "cls": "subscript",
+   "spelling": "counts_ [ . . . ]",
+   "ordinal": 1
+  },
+  {
+   "file": "src/ta_extremes_volume.cpp",
+   "symbol": "counts_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace ta #1",
+    "void Mode :: add_count ( double value ) #1",
+    "+ + probe ) #1",
+    "else #1"
+   ],
+   "cls": "subscript",
+   "spelling": "counts_ [ . . . ]",
+   "ordinal": 1
+  },
+  {
+   "file": "src/ta_extremes_volume.cpp",
+   "symbol": "counts_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace ta #1",
+    "void Mode :: add_count ( double value ) #1",
+    "if ( first_deleted ! = slot_count ) #1"
+   ],
+   "cls": "subscript",
+   "spelling": "counts_ [ . . . ]",
+   "ordinal": 1
+  },
+  {
+   "file": "src/ta_extremes_volume.cpp",
+   "symbol": "counts_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace ta #1",
+    "void Mode :: remove_count ( double value ) #1",
+    "+ + probe ) #1"
+   ],
+   "cls": "subscript",
+   "spelling": "counts_ [ . . . ]",
+   "ordinal": 1
+  },
+  {
+   "file": "src/ta_extremes_volume.cpp",
+   "symbol": "counts",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace ta #1",
+    "double Mode :: current_mode ( ) const #1",
+    "for ( double value : buffer_ ) #1",
+    "if ( is_na ( value ) ) #1"
    ],
    "cls": "decl",
-   "spelling": "std :: vector < double >",
+   "spelling": "std :: unordered_map < double , int >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/ta_extremes_volume.cpp",
+   "symbol": "counts",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace ta #1",
+    "double Mode :: current_mode ( ) const #1",
+    "for ( double value : buffer_ ) #1",
+    "if ( is_na ( value ) ) #1"
+   ],
+   "cls": "subscript",
+   "spelling": "counts [ . . . ]",
    "ordinal": 1
   },
   {
@@ -42320,66 +42461,6 @@
    ],
    "cls": "grow",
    "spelling": "buffer_ . push_back ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_extremes_volume.cpp",
-   "symbol": "counts",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "double Mode :: compute ( double src ) #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: unordered_map < double , int >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_extremes_volume.cpp",
-   "symbol": "counts",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "double Mode :: compute ( double src ) #1"
-   ],
-   "cls": "subscript",
-   "spelling": "counts [ . . . ]",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_extremes_volume.cpp",
-   "symbol": "sorted",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "double Median :: recompute ( double src ) #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_extremes_volume.cpp",
-   "symbol": "counts",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "double Mode :: recompute ( double src ) #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: unordered_map < double , int >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_extremes_volume.cpp",
-   "symbol": "counts",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "double Mode :: recompute ( double src ) #1"
-   ],
-   "cls": "subscript",
-   "spelling": "counts [ . . . ]",
    "ordinal": 1
   },
   {
@@ -42453,6 +42534,19 @@
    ],
    "cls": "grow",
    "spelling": "y_buffer_ . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/ta_misc.cpp",
+   "symbol": "ranked_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace ta #1",
+    "PercentileWindow :: PercentileWindow ( int length ) : length_ ( length ) #1",
+    "if ( length_ > 0 ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "ranked_ . reserve ( . . . )",
    "ordinal": 1
   },
   {
@@ -42696,6 +42790,18 @@
   },
   {
    "file": "src/ta_moving_averages.cpp",
+   "symbol": "weights_",
+   "scope": [
+    "namespace pineforge #2",
+    "namespace ta #1",
+    "ALMA :: ALMA ( int length , double offset , double sigma , bool floor ) : length_ ( length ) , offset_ ( offset ) , sigma_ ( sigma ) , floor_ ( floor ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "weights_ . resize ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/ta_moving_averages.cpp",
    "symbol": "buffer_",
    "scope": [
     "namespace pineforge #2",
@@ -42804,42 +42910,6 @@
   },
   {
    "file": "src/ta_oscillators.cpp",
-   "symbol": "prices",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "double RCI :: compute ( double src ) #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_oscillators.cpp",
-   "symbol": "order",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "double RCI :: compute ( double src ) #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < int >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_oscillators.cpp",
-   "symbol": "price_rank",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "double RCI :: compute ( double src ) #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_oscillators.cpp",
    "symbol": "saved_pos_buffer_",
    "scope": [
     "namespace pineforge #1",
@@ -42859,7 +42929,7 @@
     "double MFI :: compute ( double src , double vol ) #1"
    ],
    "cls": "grow",
-   "spelling": "pos_buffer_ . push_back ( . . . )",
+   "spelling": "pos_buffer_ . push_front ( . . . )",
    "ordinal": 1
   },
   {
@@ -42871,7 +42941,7 @@
     "double MFI :: compute ( double src , double vol ) #1"
    ],
    "cls": "grow",
-   "spelling": "neg_buffer_ . push_back ( . . . )",
+   "spelling": "neg_buffer_ . push_front ( . . . )",
    "ordinal": 1
   },
   {
@@ -42895,7 +42965,7 @@
     "double CMO :: compute ( double src ) #1"
    ],
    "cls": "grow",
-   "spelling": "up_buffer_ . push_back ( . . . )",
+   "spelling": "up_buffer_ . push_front ( . . . )",
    "ordinal": 1
   },
   {
@@ -42907,7 +42977,7 @@
     "double CMO :: compute ( double src ) #1"
    ],
    "cls": "grow",
-   "spelling": "down_buffer_ . push_back ( . . . )",
+   "spelling": "down_buffer_ . push_front ( . . . )",
    "ordinal": 1
   },
   {
@@ -42920,42 +42990,6 @@
    ],
    "cls": "grow",
    "spelling": "buffer_ . push_back ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_oscillators.cpp",
-   "symbol": "prices",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "double RCI :: recompute ( double src ) #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_oscillators.cpp",
-   "symbol": "order",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "double RCI :: recompute ( double src ) #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < int >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_oscillators.cpp",
-   "symbol": "price_rank",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "double RCI :: recompute ( double src ) #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < double >",
    "ordinal": 1
   },
   {
