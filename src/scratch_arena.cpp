@@ -3,8 +3,10 @@
 #endif
 
 #include <pineforge/detail/scratch_arena.hpp>
+#include <pineforge/detail/scratch_mapped_read.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
@@ -13,6 +15,8 @@
 #include <limits>
 #include <mutex>
 #include <new>
+#include <pthread.h>
+#include <setjmp.h>
 #include <signal.h>
 #include <stdexcept>
 #include <sys/mman.h>
@@ -26,6 +30,38 @@
 
 namespace pineforge::detail {
 namespace {
+
+struct MappedReadFrame {
+    sigjmp_buf recovery;
+    std::uintptr_t begin;
+    std::size_t length;
+    MappedReadFrame* previous;
+};
+static_assert(std::atomic<MappedReadFrame*>::is_always_lock_free);
+thread_local std::atomic<MappedReadFrame*> active_mapped_read{nullptr};
+struct sigaction previous_bus_action{};
+std::once_flag mapped_read_handler_once;
+
+void mapped_read_bus(int signal, siginfo_t* information, void* context) {
+    auto* frame = active_mapped_read.load(std::memory_order_relaxed);
+    const auto address = reinterpret_cast<std::uintptr_t>(information->si_addr);
+    if (frame && information->si_code > 0 && address >= frame->begin
+        && address - frame->begin < frame->length)
+        siglongjmp(frame->recovery, 1);
+
+    // Preserve an embedder's handler (including sanitizer handlers) for faults
+    // outside the guarded source span. Default faults retain signal semantics.
+    if (previous_bus_action.sa_handler == SIG_IGN) return;
+    if (previous_bus_action.sa_handler != SIG_DFL) {
+        if (previous_bus_action.sa_flags & SA_SIGINFO)
+            previous_bus_action.sa_sigaction(signal, information, context);
+        else
+            previous_bus_action.sa_handler(signal);
+        return;
+    }
+    (void)::sigaction(signal, &previous_bus_action, nullptr);
+    (void)::raise(signal);
+}
 
 [[noreturn]] void arena_error(int error, const char* operation,
                              const char* reason = "arena_io") {
@@ -124,11 +160,51 @@ ScratchArenaBackend validate_backing(int fd, std::uint64_t bytes) {
 
 } // namespace
 
+void prepare_scratch_mapped_read() {
+    std::call_once(mapped_read_handler_once, [] {
+        struct sigaction action{};
+        action.sa_sigaction = mapped_read_bus;
+        action.sa_flags = SA_SIGINFO;
+        sigemptyset(&action.sa_mask);
+        if (::sigaction(SIGBUS, &action, &previous_bus_action) != 0)
+            throw ReportScratchIoError(errno, "scratch mapped read handler");
+    });
+}
+
+bool copy_scratch_mapped_bytes(void* destination, const void* source,
+                               std::size_t length) noexcept {
+    MappedReadFrame frame;
+    frame.begin = reinterpret_cast<std::uintptr_t>(source);
+    frame.length = length;
+    frame.previous = active_mapped_read.load(std::memory_order_relaxed);
+    // This leaf has only trivial automatic storage. A fault returns here,
+    // before the caller raises its normal typed I/O error and unwinds locks.
+    if (sigsetjmp(frame.recovery, 0) != 0) {
+        active_mapped_read.store(frame.previous, std::memory_order_relaxed);
+        // sigsetjmp deliberately avoids a mask syscall on healthy reads.
+        // SIGBUS was unblocked before this synchronous fault; delivery
+        // blocked it while in the handler, and longjmp bypassed sigreturn.
+        sigset_t bus;
+        sigemptyset(&bus);
+        sigaddset(&bus, SIGBUS);
+        (void)::pthread_sigmask(SIG_UNBLOCK, &bus, nullptr);
+        return false;
+    }
+    active_mapped_read.store(&frame, std::memory_order_relaxed);
+    std::atomic_signal_fence(std::memory_order_seq_cst);
+    std::memcpy(destination, source, length);
+    std::atomic_signal_fence(std::memory_order_seq_cst);
+    active_mapped_read.store(frame.previous, std::memory_order_relaxed);
+    return true;
+}
+
 struct ScratchArena::Impl {
     struct Window {
         void* address = MAP_FAILED;
         std::uint64_t offset = 0;
         std::size_t length = 0;
+        const Region* reader = nullptr;
+        bool valid = false;
     };
 
     int source_fd;
@@ -190,9 +266,18 @@ struct ScratchArena::Impl {
         return true;
     }
 
-    Window& mapped(std::uint64_t physical) {
+    void invalidate_reads(const Region& region) noexcept {
+        for (auto& window : windows)
+            if (window.reader == &region) {
+                window.valid = false;
+                (void)unmap(window);
+            }
+    }
+
+    Window& mapped(std::uint64_t physical, const Region* reader = nullptr) {
         for (auto at = windows.begin(); at != windows.end(); ++at) {
-            if (at->address != MAP_FAILED && physical >= at->offset
+            if (at->valid && at->address != MAP_FAILED && at->reader == reader
+                && physical >= at->offset
                 && physical - at->offset < at->length) {
                 std::rotate(windows.begin(), at, std::next(at));
                 return windows.front();
@@ -211,13 +296,19 @@ struct ScratchArena::Impl {
             std::min<std::uint64_t>(window_bytes, kChunkBytes - window_start));
         // A regular backing can be shrunk through the inherited fd despite
         // RLIMIT_FSIZE=0. Refuse before mapping beyond its new EOF. This cannot
-        // protect a cached window or close a concurrent fstat-to-access race.
+        // protect a legacy write/zero-fill hit. Opt-in reads guard their
+        // leaf copies against shrink after this map-time size check.
         validate_backing_size(fd.value, supplied_bytes, EIO, "scratch arena map size");
-        void* address = ::mmap(nullptr, length, PROT_READ | PROT_WRITE,
+        void* address = ::mmap(nullptr, length, reader ? PROT_READ : PROT_READ | PROT_WRITE,
                                MAP_SHARED, fd.value, static_cast<off_t>(offset));
         if (address == MAP_FAILED) arena_error(errno, "scratch arena map");
-        *at = Window{address, offset, length};
+        *at = Window{address, offset, length, reader, true};
         counters.windows_mapped_bytes += length;
+        if (reader && ::madvise(address, length, MADV_RANDOM) != 0) {
+            const int error = errno;
+            (void)unmap(*at);
+            arena_error(error, "scratch arena mapped random access");
+        }
         std::rotate(windows.begin(), at, std::next(at));
         return windows.front();
     }
@@ -267,8 +358,10 @@ struct ScratchArena::Impl {
         const auto offset = static_cast<std::uint64_t>(chunk) * kChunkBytes;
         for (auto& window : windows)
             if (window.address != MAP_FAILED && window.offset >= offset
-                && window.offset - offset < kChunkBytes)
+                && window.offset - offset < kChunkBytes) {
+                window.valid = false;
                 (void)unmap(window);
+            }
 #if defined(__linux__)
         // Optional reclamation only. Reuse always zeroes through mappings,
         // so failure/unsupported punching can never disclose an old store.
@@ -450,11 +543,13 @@ void ScratchArena::release_region(Region& region) noexcept {
 void ScratchArena::ensure_size(Region& region, std::uint64_t bytes,
                                std::uint64_t needed_bytes_lower_bound) {
     const std::lock_guard<std::mutex> lock(impl_->mutex);
+    impl_->invalidate_reads(region);
     impl_->grow(region, bytes, needed_bytes_lower_bound);
 }
 
 void ScratchArena::truncate(Region& region, std::uint64_t bytes) {
     const std::lock_guard<std::mutex> lock(impl_->mutex);
+    impl_->invalidate_reads(region);
     if (bytes >= region.size) {
         impl_->grow(region, bytes);
         return;
@@ -490,6 +585,7 @@ void ScratchArena::write(Region& region, std::uint64_t offset,
     if (length == 0) return;
     if (!data) arena_error(EFAULT, "scratch arena write");
     const std::lock_guard<std::mutex> lock(impl_->mutex);
+    impl_->invalidate_reads(region);
     impl_->grow(region, offset + length);
     const auto* source = static_cast<const unsigned char*>(data);
     std::size_t written = 0;
@@ -503,6 +599,53 @@ void ScratchArena::write(Region& region, std::uint64_t offset,
         const auto count = std::min(length - written, window.length - inside);
         std::memcpy(static_cast<unsigned char*>(window.address) + inside, source + written, count);
         written += count;
+    }
+}
+
+void ScratchArena::invalidate_mapped_reads(const Region& region) const noexcept {
+    const std::lock_guard<std::mutex> lock(impl_->mutex);
+    impl_->invalidate_reads(region);
+}
+
+std::size_t ScratchArena::read_window_bytes() const noexcept {
+    return impl_->window_bytes; // Immutable after attach.
+}
+
+void ScratchArena::read_mapped(const Region& region, std::uint64_t offset,
+                              void* data, std::size_t length, std::size_t span,
+                              std::size_t field_offset, bool descending) const {
+    if (length == 0) return;
+    if (!data) arena_error(EFAULT, "scratch arena mapped read");
+    prepare_scratch_mapped_read();
+    const std::lock_guard<std::mutex> lock(impl_->mutex);
+    if (offset > region.size || span > region.size - offset)
+        arena_error(EIO, "scratch read");
+    // No backing-size syscall on an LRU hit. Leaf recovery handles shrink
+    // after mapping without jumping across this lock's destructor.
+    try {
+        auto* destination = static_cast<unsigned char*>(data);
+        std::size_t remaining = length;
+        while (remaining != 0) {
+            const auto position = descending ? remaining - 1 : length - remaining;
+            const auto logical = offset + field_offset + position;
+            const auto in_chunk = logical % kChunkBytes;
+            const auto physical = static_cast<std::uint64_t>(
+                region.chunks[static_cast<std::size_t>(logical / kChunkBytes)])
+                    * kChunkBytes + in_chunk;
+            auto& window = impl_->mapped(physical, &region);
+            const auto inside = static_cast<std::size_t>(physical - window.offset);
+            const auto count = std::min(remaining, descending ? inside + 1
+                                                             : window.length - inside);
+            const auto first = descending ? position + 1 - count : position;
+            const auto source = descending ? inside + 1 - count : inside;
+            if (!copy_scratch_mapped_bytes(destination + first,
+                    static_cast<const unsigned char*>(window.address) + source, count))
+                arena_error(EIO, "scratch arena mapped read");
+            remaining -= count;
+        }
+    } catch (...) {
+        impl_->invalidate_reads(region);
+        throw;
     }
 }
 

@@ -60,6 +60,12 @@ public:
     // 65,536 x 312 = 20,447,232 entry bytes, plus sizeof(TradeLedger)+sizeof(State).
     // Allocation remains lazy and grows by powers of two up to this cap.
     static constexpr size_type kSinkCacheRows = kDefaultCacheRows;
+    // Mapped numeric sources add a 48-byte caller-owned view and a 48-byte
+    // copied-row mask to the 86,048-byte windows/tail/direction subtotal:
+    // 86,144 bytes on 64-bit targets, included in sizeof(State).
+    // Plain indices retain one at-most-1-MiB read-only shared mapping;
+    // arena reads share its capped LRU and slabs use checked copies.
+    // ScratchFile's embedded size and the 16-byte direction state stay fixed.
     using Visitor = std::function<bool(size_type, const Trade&)>;
 
     class const_iterator {
@@ -93,7 +99,7 @@ public:
     TradeLedger(TradeLedger&&);
     TradeLedger& operator=(TradeLedger&&);
 
-    // Bind before the first spill. No mapping or in-memory offset directory.
+    // Bind before the first spill. No in-memory offset directory.
     void set_scratch_directory(const std::string&);
     const std::string& scratch_directory() const;
     // Configure before the first append/spill; clear() preserves the budget.
@@ -145,7 +151,7 @@ public:
     // Pine field reads use the same check(global,true) as at(). A numeric
     // hit writes only the reference bit and loads its Record member, without
     // constructing/copying a Trade or any string. Numeric misses use
-    // kNumericWindowRows descriptor reads and no payload
+    // kNumericWindowRows mapped descriptors and no payload
     // reads; forward/reverse numeric scans have O(1) amortised operation work
     // per field access on the plain-file backend, even above the cache cap
     // (the whole scan is O(T)); the arena path is not measured.
@@ -153,8 +159,8 @@ public:
     // allocated cache capacity. For T up to about 2C the first C rows stay
     // cached (D = max(0,T-C-64) per warm pass);
     // above that every spilled row reads the window (D = max(0,T-64)).
-    // One descriptor read per window, plus 64 KiB transfer splits, is never
-    // worse than the old ascending scan bound. Reverse refills require two
+    // Logical descriptor reads retain the 64 KiB discard budget.
+    // Copies reuse the mapped source without preads. Reverse refills require two
     // descending miss steps, or continuation below a backward window.
     // Ascending (i,i-1) and (i+1,i) pairs retain a window predecessor instead
     // of starting a reverse scan. Backward refills stop at base().

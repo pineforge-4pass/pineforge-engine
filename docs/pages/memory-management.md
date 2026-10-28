@@ -90,22 +90,22 @@ always, and any other run that inherits one), curve scratch instead consumes
 the **RAM-backed arena**, so those same **24 B per script bar are memory**.
 The fd setter attaches the arena (`attach_from_environment`
 src/engine_report.cpp:1067), and `ScratchFile::open`
-include/pineforge/detail/scratch_file.hpp:127-134 selects it.
+include/pineforge/detail/scratch_file.hpp:134-141 selects it.
 Linux jailed admission requires sealed memfd backing
 (`strategy_require_report_scratch_arena_v1` src/c_abi.cpp:1431-1448).
 The hosting wrapper supplies `PF_SCRATCH_ARENA_BYTES`
-src/scratch_arena.cpp:385-386.
+src/scratch_arena.cpp:478-479.
 The engine never resizes that backing (the sizing comment above `ScratchArena`
 include/pineforge/detail/scratch_arena.hpp:71-110).
 Arena allocation rounds to **1 MiB chunks**
 (`kChunkBytes` include/pineforge/detail/scratch_arena.hpp:112;
-`grow` src/scratch_arena.cpp:297-309); metadata and other stores are additional.
+`grow` src/scratch_arena.cpp:390-403); metadata and other stores are additional.
 Bounded mapping windows do not remove that arena memory cost.
 Exhaustion fails closed with typed `report_sink_failed`
 (`ReportScratchIoError` include/pineforge/detail/scratch_arena.hpp:16-21),
-reason `arena_exhausted` src/scratch_arena.cpp:234-238.
+reason `arena_exhausted` src/scratch_arena.cpp:326-330.
 There is no RAM fallback (the comment on `ScratchFile`
-include/pineforge/detail/scratch_file.hpp:30-36).
+include/pineforge/detail/scratch_file.hpp:31-38).
 
 A **jailed run without `--report-sink-fd` has no sink at all**:
 `_new_report_sink` docker/run_json.py:5917-5934 returns `None`, so it retains
@@ -269,12 +269,12 @@ store; the part that spills grows in the scratch backing.
 | Store | Resident bound | Bytes per entry | Spills to scratch |
 | --- | --- | --- | --- |
 | Trade ledger (`TradeLedger`), descriptor window | 64 rows (`kResidentRows`, `include/pineforge/trade_ledger.hpp:44`), and a fixed payload tail of the same size | 168 B per row descriptor (`kRecordBytes`), so 10,752 B for the rows and 10,752 B for the tail; the four strings of a row are variable | Older rows and all string payloads: 168 B plus text per closed trade |
-| Trade ledger, numeric scan window | 384 descriptors (`TradeLedger::kNumericWindowRows`, `include/pineforge/trade_ledger.hpp`), independent of the trade count; referenced cache slots get a second chance and stale residents can be replaced | 64,512 B of descriptors plus two 8 B keys = 64,528 B on 64-bit targets, plus 16 B for direction (key, two flags and padding), included in `sizeof(State)`. No payload bytes or separate allocation | Reads only the descriptor file for scalar numeric misses; collisions can stream through this window while preserving frequently hit entries |
+| Trade ledger, numeric scan window | 384 descriptors (`TradeLedger::kNumericWindowRows`, `include/pineforge/trade_ledger.hpp:47`), independent of the trade count; referenced cache slots get a second chance and stale residents can be replaced | 64,512 B of descriptors plus two 8 B keys = 64,528 B on 64-bit targets, plus 16 B for direction (key, two flags and padding), included in `sizeof(State)`. No payload bytes or separate allocation. The mapped source adds a 48 B caller-owned view and a 48 B copied-row mask in `State`; mapped pages are additional | Reads only the descriptor file for scalar numeric misses; collisions can stream through this window while preserving frequently hit entries |
 | Trade ledger, read cache | Up to 65,536 entries with or without a report sink (`kSinkCacheRows = kDefaultCacheRows`; the ceiling `kMaxCacheRows` is 1,048,576). Direct-mapped, allocated at the first read at the smaller of the cap and the next power of two that is at least the larger of 64 and the trade count (the comment on `TradeLedger::cache_resident_bytes`, `include/pineforge/trade_ledger.hpp`), so a run with few trades holds few entries. Chosen by the engine when the run begins, through `TradeLedger::set_cache_rows` (`src/native_execution_consumer.cpp`); the C API has no setter for it in this release | 312 B per entry (`kLedgerEntryBytes`: 168 B record, 16 B key and generation, 128 inline string bytes). The declared bound is `resident_cache_bytes(kSinkCacheRows)`: 65,536 x 312 = 20,447,232 B (19.5 MiB) plus `sizeof(TradeLedger)+sizeof(State)`, with or without a sink; the cap is independent of the trade and bar counts | Not applicable (a cache over the spilled rows) |
 | Command journal | 2,048 events (`kMaxResident`, `src/native_order.cpp:1705`), in 32-event chunks (`kChunk`), with a floor of 128 events kept (`kKeepResident`) | Not a constant: an event is a variant with variable payload and `sizeof` of a resident slot is not stated in the source and was not compiled. Plus one lazy 163,840 B spill buffer per journal: a 32,768 B write buffer and four 32,768 B reload buffers (`SpillStorage`) | Older events, in pages of 32,768 B (`kSpillPageBytes`, `:1726`) read back through four decoded page slots. An event whose serialized form exceeds one page is refused with `EFBIG` (about 1,360 external openings) and stays resident |
 | Order book | 4,096 rows | See the drain plateau below | Older rows |
 | Command-store resident prefix / read cache | Fixed K = 202,752 B (198 KiB) per run: three 64 KiB page buffers plus 2 KiB per decorator, including slot keys (`CachedScratchBacking::kCommandScratchMemoryBytes`, `src/command_scratch_cache.hpp:28`; `static_assert(sizeof(CachedScratchBacking)` at `src/command_scratch_cache.hpp:76`); pages larger than 64 KiB or smaller than 512 B bypass the buffer | Counted in bytes; independent of extent and bars; replaces the previous read-cache allowance | Each disk store holds its prefix in the same buffer until its extent exceeds 64 KiB, then spills the prefix once and reuses the buffer as a read cache. Attached arenas retain direct mapped admission |
-| Scratch files read through a bounded window | one 64 KiB window per file that enables it (`ScratchFile::kCacheBytes`, `include/pineforge/detail/scratch_file.hpp:39`) | Counted in bytes. It bounds the operating-system page cache the file pins (the kernel is asked to drop clean pages); it is not an engine heap cache | Not applicable |
+| Scratch files read through a bounded window | one 64 KiB traffic budget per file that enables it (`ScratchFile::kCacheBytes`, `include/pineforge/detail/scratch_file.hpp:42`) | Counted in bytes. The kernel is asked to drop clean pages at that cadence; this is not an engine heap cache or a hard physical page-cache bound. Mapped index reads additionally retain at most 1 MiB of file-backed pages per plain file | Not applicable |
 | Report sink writer | a fixed 64 KiB buffer; a record line may not exceed 1 MiB | Counted in bytes | The sink file or stream |
 | Position-tail read window | one fixed 64 KiB window | Counted in bytes | The position tail: a 30-byte footer plus the entry id per trade |
 | Cohort id table | Rows kept in memory: at most twice the rows left by the last spill pass, plus 64, plus the rows pinned by live exposure or an outstanding reference (the comment above `kMaxResidentCohorts` at `include/pineforge/detail/scratch_defaults.hpp:16`; the threshold is set in `DiskResidentIdTable::spill` at `include/pineforge/detail/disk_resident_id_table.hpp:450-467`, with the floor `kSpillFloor` of 64). That is not a bound in terms of live rows. In the bounded scratch (jailed) profile, admission also refuses a run that would hold more than 4,096 live (non-spillable) cohorts (`kMaxResidentCohorts`, `include/pineforge/detail/scratch_defaults.hpp:16`) with `scratch_capacity_exceeded`. The rows that hold an opening or live units are also tracked in an ordered set, one map node each. The ordered index lives on disk and is read through one 64 KiB window per scratch file (`ScratchFile::kCacheBytes`, above); the id-pair store's index file starts at 64 slots and doubles when it grows (`kInitialSlots`, `include/pineforge/detail/id_pair_store.hpp:72`; `grow_index`, `include/pineforge/detail/id_pair_store.hpp:604-608`) | Not measured | The on-disk ordered tree |
@@ -345,6 +345,8 @@ The equity curve is not in this sum: with no sink it stays on the heap, at
 ledger windows and direction state add a fixed
 `10,752 + 10,752 + 64,528 + 16 = 86,048` bytes of heap, and the
 spilled rows add `168 x 1,000 = 168,000` bytes of scratch plus their text.
+The mapped source adds 96 bytes of heap for its view and copied-row mask,
+making the subtotal 86,144 bytes, plus at most one 1 MiB plain-file mapping.
 These are hand-derived logical peaks, not an allocation or RSS measurement,
 and they exclude the engine's own objects, the strategy's containers and the
 input bars.
@@ -373,7 +375,7 @@ can add them up; each is read from the source named in
 
 | Kind of store | Default budget | Resident memory at that budget |
 | --- | --- | --- |
-| Trade ledger | Descriptor window of 64 rows, a separate 384-row numeric scan window (`TradeLedger::kNumericWindowRows`), and a read cache of up to 65,536 entries with or without a report sink. Chosen by the engine, not settable from the C API; cache allocation grows lazily up to the declared constant cap | 86,048 B for the windows, tail, numeric-window keys and direction state, plus up to 20,447,232 B of cache entries; `resident_cache_bytes(kSinkCacheRows)` accounts for the entries plus `sizeof(TradeLedger)+sizeof(State)` (including both windows and the tail) |
+| Trade ledger | Descriptor window of 64 rows, a separate 384-row numeric scan window (`TradeLedger::kNumericWindowRows`), and a read cache of up to 65,536 entries with or without a report sink. Chosen by the engine, not settable from the C API; cache allocation grows lazily up to the declared constant cap | 86,048 B for the windows, tail, numeric-window keys and direction state, plus up to 20,447,232 B of cache entries; `resident_cache_bytes(kSinkCacheRows)` accounts for the entries plus `sizeof(TradeLedger)+sizeof(State)` (including both windows and the tail). The view and copied-row mask add 96 B to that fixed base, for an 86,144 B subtotal; mapped pages are additional (at most 1 MiB for a plain index, or part of the arena's existing global cap) |
 | Command journal | 2,048 resident events, 128 kept at least | Not a constant per event; plus 163,840 B of spill buffers per journal once it first spills |
 | Placement rows | No budget: the live rows plus the rows the retirement rules pin | Not measured |
 | Id tables | Cohort table: resident rows follow the spill rule above (at most twice the rows left by the last pass, plus 64, plus pinned rows), and the bounded profile admits at most 4,096 live cohorts. The ordered index is read through a 64 KiB window per scratch file | 64 KiB per file; the index itself is on disk |
@@ -412,7 +414,7 @@ or bounds the row.
 | Pending-book reads | `R`: `O(R^2)` for a size or a late indexed copy, `O(P R^2)` for a full indexed walk of `P` projected rows, up to `O(R^3)` when `P = R`; this is time, and it was already so in v1.6.3 | CPU | Planned, with no release date |
 | Cohort lookups | A cohort lookup was `O(1)` before 1.7.0 and was `O(resident rows + log of the id population x key length)` per call in 1.7.0. Since 1.8.0 a lookup of a resident cohort is `O(log r)` in the number `r` of resident rows, without allocation or disk | CPU, plus scratch reads | Partly fixed in 1.8.0: a full close on N owners seeks the scratch index 2N+1 times (it was N(N+1)/2), and the walks that need only the cohorts holding an opening or live units no longer visit every pending-only cohort. Not fixed: the per-bar retire pass is still proportional to the resident rows, and a close event is still quadratic in N in in-memory work, so in the release's own measurement a dense script (many pending orders) did not finish within 600 s at 10,000 bars and above, and a script with many orders and few ids was only 12.5 to 16 percent faster at 30,000 to 100,000 bars; no release date for the rest |
 | Pending orders that never fill | `R`: about 2.5 kB each on dense scripts (the release notes' known limit) | Heap | Planned for a later release, with no date |
-| Closed-trade reads from a script | An ascending or descending scalar numeric scan of all `T` closed trades takes O(T) operation work, O(1) amortised per access, on the plain-file backend; the arena path is not measured. This includes scans above the cache cap. Numeric misses read only 384-row descriptor blocks, giving referenced entries a second chance and streaming collisions through a fixed window. String/full-row misses retain the existing block payload path; first string reads of numeric-only cache entries pack up to 128 bytes per row | CPU and scratch I/O | Fixed cache cap plus a 384-row numeric window; the numeric bound below counts actual preads on the plain-file backend, including 64 KiB transfer splits; the arena path is not measured |
+| Closed-trade reads from a script | An ascending or descending scalar numeric scan of all `T` closed trades takes O(T) operation work, O(1) amortised per access, on the plain-file backend; the arena path is not measured. This includes scans above the cache cap. Numeric misses read only 384-row descriptor blocks, giving referenced entries a second chance and streaming collisions through a fixed window. String/full-row misses retain the existing block payload path; first string reads of numeric-only cache entries pack up to 128 bytes per row | CPU, mapped page faults and scratch I/O | Fixed cache cap plus a 384-row numeric window and fixed mapping allowance; the numeric assertions below count mapping calls and require zero preads on the plain-file backend; the arena path is not measured |
 | The strategy's own containers (arrays, strings, maps, matrices, user-defined types, series and indicator history, drawing objects) | What the script stores | Heap, unchanged from v1.6.3 | Planned, with no release date |
 | Distinct ids, pairs and successor rows | `D`, `Q`, `R`, by the formulas above | Scratch, or the slab | Bounded by the admitted maxima |
 | Input bars | `N` bars of OHLCV | The host | Not applicable |
@@ -423,20 +425,22 @@ reads, let `C` be the allocated cache capacity and `D = max(0, T - 64)` on
 the first pass. For `T` up to about `2C` the first `C` rows stay cached
 (`D = max(0, T - C - 64)` per warm pass); above that every row of a pass
 reads the window except the 64-row resident tail (`D = max(0, T - 64)`).
-The scan reads at most `168 * D` descriptor bytes and zero payload bytes, using at most
-`blocks + ceil(168 * D / 65536)` actual preads, where
-`blocks = ceil(D / kNumericWindowRows)` and the public
-`TradeLedger::kNumericWindowRows` is 384. The second term covers
-transfers split by the scratch file's 64 KiB read budget. Dividing by `T`
-gives at most `1/kNumericWindowRows + 168/65536 + 2/T` preads per access, independent of
-`T - C`. `test_ledger_cyclic_scan` checks the byte count, this bound and every
-returned value at 85,536 and 90,000 rows over a cold pass and eight following
-passes, and at 196,608 rows (`3C`) with `D = T - 64` on every pass. Above
-about `2C` this is the same ascending bound as the old code, never worse:
-there is still one descriptor read per window, plus transfer splits.
+The scan charges at most `168 * D` logical descriptor bytes and reads zero
+payload bytes, in `blocks = ceil(D / kNumericWindowRows)` logical refills;
+the public `TradeLedger::kNumericWindowRows` is 384.
+The scratch file's 64 KiB read budget still governs discard advice, without
+splitting mapped copies into preads. Above about `2C` the logical ascending
+descriptor bound remains the same.
+For `L = ceil(168 * D / 1048576)`, `test_ledger_cyclic_scan` requires zero
+preads, `mmap + munmap <= 2*L + 2`, exactly `PROT_READ` and `MAP_SHARED`,
+and one size check per mapping with none on reuse.
+It compares every returned value at 85,536 and 90,000 rows over a cold pass
+and eight following passes, and at 196,608 rows (`3C`) with `D = T - 64`
+on every pass. Mapping bounds include both eviction and admission.
 This is an operation-count bound, not a wall-time measurement or a
 claim about arbitrary mixtures of string reads, replacements and traversal
-orders.
+orders. Descriptor counts below refer to logical refill spans charged to
+the discard budget; selected records are copied from the mapped source.
 
 Descending scans refill a window ending at the requested row only when the
 previous misses were exactly `global + 2`, then `global + 1`, or when the
@@ -448,9 +452,8 @@ after caching the suffix in the tested
 forward startup probes, two extra blocks and `2*(kNumericWindowRows - 1)`
 repeated descriptors (766 at the default window size). This is one extra
 forward probe compared with a rule that starts after a single descending
-miss step. Its warm pread bound is
-`ceil(D/kNumericWindowRows) + 2 + ceil(168*(D+2*(kNumericWindowRows-1))/65536)`;
-the cold bound remains `ceil(D/kNumericWindowRows) + ceil(168*D/65536)`.
+miss step. For `L = ceil(168 * T / 1048576)`, the mapped test permits
+`mmap + munmap <= 2*L` cold and `<= 2*L + 4` warm, with zero preads.
 Backward windows stop at the ledger's publication boundary, so they never
 read or admit sealed descriptors below the first checked row.
 
@@ -459,9 +462,10 @@ miss step at a time and keep forward windows. At a pair's forward boundary,
 the preceding window's last descriptor is retained in the same buffer,
 without rereading or readmitting it, leaving room for 383 new descriptors.
 The test checks both orders over eight passes at 85,536 rows. With
-`D = T - 64` cold and `D = T - C - 64` warm, it permits at most
-`168*(D+384)` bytes and
-`ceil(D/384) + 2 + ceil(168*(D+384)/65536)` preads per pass.
+`D = T - 64` cold and `D = T - C - 64` warm, the logical refill bound is
+`168*(D+384)` logical descriptor bytes per pass.
+The mapped test requires zero preads and `mmap + munmap <= 2*L + 2`,
+where `L = ceil(168 * T / 1048576)`, for both pair orders.
 The constants cover one startup probe (including the small prefix hole
 created by repeated resident-tail reads) and one extra block because
 retaining a predecessor leaves 383 rather than 384 new rows per window.
@@ -474,11 +478,11 @@ A colliding numeric miss clears a set bit without replacing the resident;
 a subsequent collision can replace it if it has not been hit again.
 The test also checks sliding 200-trade and 1,000-trade lookbacks, in both orders, after an
 initial full scan of 69,632 trades. Across 32 appends it permits at most
-six and ten preads per bar respectively during two warm-up bars and requires
-zero preads in total over the remaining 30 bars, checking every returned value.
-These bounds use `refills = ceil(N/kNumericWindowRows) + 2`,
-`bytes = refills * kNumericWindowRows * 168` and
-`preads = refills + ceil(bytes/65536)`. The 200-trade lookback fits in one
+two maps per bar during two warm-up bars and requires zero maps over the
+remaining 30 bars, checking every returned value, with zero preads throughout.
+The map bound is `ceil(168*(N+2*kNumericWindowRows)/1048576) + 1`,
+covering startup probes and mapping-boundary alignment.
+The 200-trade lookback fits in one
 numeric window; 1,000 trades span more than two windows.
 
 The numeric window adds a fixed `kNumericWindowRows * 168 + 2 * 8 = 64,528`
@@ -491,10 +495,61 @@ string/full-row block misses retain the existing 35,392-byte fixed array
 workspace. Cache entries remain 312 bytes, the default cap remains 65,536
 rows, and the maximum remains 1,048,576 rows.
 
+The mapped source copies requested 168-byte records into that numeric
+storage and previews cache admissions in a fixed 6,144-byte stack array of
+keys and generations, preserving collision order even below 384 cache rows.
+Only requested and selected neighbours are copied before publishing cache
+changes; other rows are copied lazily. A descriptor window crossing a mapping
+boundary retains all its records to avoid revisiting the preceding mapping.
+The retained predecessor is copied from the old source if necessary before
+reusing the buffer; its admission and logical read charge are not repeated.
+The copied-row mask is 48 bytes and the caller-owned mapped view is 48 bytes
+on 64-bit targets, additional to the unchanged 86,048-byte subtotal.
+`ScratchFile` retains its embedded layout, asserted as
+`112 + sizeof(std::string)` bytes on 64-bit targets (144 with libstdc++,
+136 with libc++). Its opt-in functions take the external view by reference.
+The ledger unmaps before every index write, rewind, publication, move and
+clear/destruction; generic callers must also unmap before truncate or growth.
+
 Numeric reads never validate or read strings, so a corrupt string extent in
 a neighbouring row no longer makes a numeric access throw. Copying a ledger
 after numeric-only scans reads strings from scratch when they have not yet
 been packed into the cache.
+
+Plain-file reads retain one page-aligned, EOF-limited mapping of at most
+1,048,576 bytes, advised `MADV_RANDOM`. Arena mapped reads borrow the
+existing locked LRU and evict before mapping within its configured global
+cap (32 MiB by default); no independent per-file arena allowance is added.
+Slab reads continue through `ScratchSlab::read_at` without new mappings.
+The view, copied-row mask, numeric storage and mapping allowance are O(1)
+in trade count at fixed configuration. Scratch bytes, arena chunk directories,
+caller-retained values and explicitly materialized history are separate.
+
+The single `ScratchFile::kKeepMappedIndexDontneed = true` policy switch
+keeps whole-file `fadvise(DONTNEED)` after each 65,536 logically read descriptor
+bytes, charged at numeric refills, and the existing bounded write sync.
+Cache and copied-row hits issue no syscalls. A mapped copy needs none on
+reuse; refills can issue discard advice and, on replacement, `munmap`,
+`fstat`, `mmap` and `madvise`. The switch does not change the arena's existing
+no-DONTNEED policy. Lifting it for the mapped index is an owner decision.
+Disk mappings contribute file-backed RSS; advice cannot evict pages still
+mapped, and subsequent advice may reclaim them after unmap. Dirty pages,
+kernel reclaim and other users preclude a hard physical page-cache bound.
+Memfd pages count as shared-memory RSS and their backing still costs host
+memory while unmapped.
+
+Backing size is checked at mapping/refill, never per reused row. A leaf
+copy uses a thread-local recovery frame for synchronous SIGBUS inside its
+source span, then raises typed EIO (`report_sink_failed`, `scratch_io` for
+plain files, `arena_io` for arena reads). Faults outside that span chain to
+the prior handler. Healthy copies use `sigsetjmp(..., 0)` without signal-mask
+syscalls; only fault recovery unblocks SIGBUS. No C++ destructor is crossed
+by the jump. This protects mapped reads from a concurrent shrink that
+invalidates a page, including the size-check-to-load race. The arena's
+existing writable/zero-fill path still requires a backing that retains size;
+sealed memfd shrink refusal is tested separately. A shrink within the final
+page need not raise SIGBUS; the supplied backing must retain size, apart from
+the deliberate page-invalidating fault tests.
 
 ## When a bound is exceeded {#memory_failures}
 

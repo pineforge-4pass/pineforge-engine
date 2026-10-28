@@ -3,6 +3,7 @@
 #include <pineforge/detail/scratch_slab.hpp>
 #include <pineforge/detail/scratch_arena.hpp>
 #include <pineforge/detail/scratch_directory.hpp>
+#include <pineforge/detail/scratch_mapped_read.hpp>
 
 #include <algorithm>
 #include <cerrno>
@@ -32,11 +33,17 @@ using ScratchIoError = ReportScratchIoError;
 // explicitly attached arena, or the original mkstemp/unlink/pwrite/pread backend.
 // Sparse growth reads as zero in both modes, including reused arena chunks;
 // reads beyond the logical end still fail with EIO. No implicit attachment
-// or RAM fallback. clear() releases the region and its mapped windows.
+// or RAM fallback. A caller using read_mapped must unmap its external view
+// before any write/write_some, truncate/ensure_size, bind, clear or move.
+// This type retains no view pointer or generation; unopted users are unchanged.
 class ScratchFile {
 public:
     // Fixed byte window shared by scratch I/O amortisation contracts.
     static constexpr std::size_t kCacheBytes = 64 * 1024;
+    static constexpr std::size_t kReadWindowBytes = 1024 * 1024;
+    static_assert(kReadWindowBytes == ScratchArena::kChunkBytes);
+    // Owner policy: retain the existing whole-file discard cadence.
+    static constexpr bool kKeepMappedIndexDontneed = true;
 
     enum class IoRaiser { report_sink, auxiliary };
     explicit ScratchFile(IoRaiser raiser = IoRaiser::report_sink) : io_raiser_(raiser) {}
@@ -285,7 +292,8 @@ public:
         }
         return static_cast<ssize_t>(count);
     }
-    void write(std::uint64_t offset, const void* data, std::size_t length) {
+    void write(std::uint64_t offset, const void* data, std::size_t length,
+               bool mapped_index = false) {
         if (slab_) {
             slab_->write_at(resource_, offset, data, length);
             return;
@@ -298,7 +306,7 @@ public:
         const auto* bytes = static_cast<const unsigned char*>(data);
         std::size_t written = 0;
         while (written < length) {
-            prepare_write();
+            prepare_write(mapped_index);
             const auto chunk = std::min(length - written, bounded_cache_
                 ? kCacheBytes - bytes_written_since_sync_
                 : static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()));
@@ -310,7 +318,8 @@ public:
             if (bounded_cache_) bytes_written_since_sync_ += static_cast<std::size_t>(count);
         }
     }
-    void read(std::uint64_t offset, void* data, std::size_t length) const {
+    void read(std::uint64_t offset, void* data, std::size_t length,
+              bool mapped_index = false) const {
         if (slab_) {
             slab_->read_at(resource_, offset, data, length);
             return;
@@ -324,7 +333,8 @@ public:
         std::size_t received = 0;
         while (received < length) {
             // Retry a failed discard before admitting another read batch.
-            if (bounded_cache_ && clean_bytes_read_ == kCacheBytes) discard_clean_cache();
+            if (bounded_cache_ && clean_bytes_read_ == kCacheBytes)
+                discard_clean_cache(mapped_index);
             const auto chunk = std::min(length - received, bounded_cache_
                 ? kCacheBytes - clean_bytes_read_
                 : static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()));
@@ -335,8 +345,142 @@ public:
             received += static_cast<std::size_t>(count);
             if (bounded_cache_) {
                 clean_bytes_read_ += static_cast<std::size_t>(count);
-                if (clean_bytes_read_ == kCacheBytes) discard_clean_cache();
+                if (clean_bytes_read_ == kCacheBytes) discard_clean_cache(mapped_index);
             }
+        }
+    }
+
+    // Explicit caller invalidation is required before any backing mutation.
+    // A failed munmap marks the view invalid; admission retries the checked
+    // unmap before mapping again, retaining the one-window address-space cap.
+    void unmap(MappedIndexView& view) const noexcept {
+        (void)view.reset();
+        if (arena_) arena_->invalidate_mapped_reads(region_);
+    }
+
+    bool mapped_read_crosses_window(std::uint64_t offset, std::size_t length) const {
+        if (slab_) return false;
+        const auto in_chunk = offset % kReadWindowBytes;
+        if (length > kReadWindowBytes - in_chunk) return true;
+        const auto width = arena_ ? arena_->read_window_bytes() : kReadWindowBytes;
+        return length > width - in_chunk % width;
+    }
+
+    // Charge logical descriptor traffic once per numeric refill, even when
+    // only admitted/requested rows are copied. No advice on ordinary hits.
+    void charge_mapped_read(std::size_t bytes) const {
+        if (slab_ || arena_ || !bounded_cache_) return;
+        while (bytes != 0) {
+            if (clean_bytes_read_ == kCacheBytes) discard_clean_cache(true);
+            const auto step = std::min(bytes, kCacheBytes - clean_bytes_read_);
+            clean_bytes_read_ += step;
+            bytes -= step;
+            if (clean_bytes_read_ == kCacheBytes) discard_clean_cache(true);
+        }
+    }
+
+    // Refill caller-owned descriptor storage, with no payload access. Reverse
+    // copies visit the high fragment first so a descending refill straddling
+    // a mapping boundary does not bounce between the two windows.
+    void read_mapped(MappedIndexView& view, std::uint64_t offset, void* data,
+                     std::size_t length, std::size_t descriptor_bytes = 0,
+                     std::size_t field_offset = 0, bool descending = false,
+                     bool charge = true) const {
+        const auto span = descriptor_bytes == 0 ? length : descriptor_bytes;
+        if (field_offset > span || length > span - field_offset)
+            throw std::logic_error("scratch mapped field outside descriptor");
+        check_extent(offset, span, arena_ != nullptr, io_raiser_);
+        if (slab_) {
+            const auto& region = slab_->region(resource_);
+            if (offset > region.logical_extent || span > region.logical_extent - offset
+                || offset > region.capacity || span > region.capacity - offset)
+                throw AuxiliaryScratchIoError(EIO, "scratch read outside logical extent");
+            slab_->read_at(resource_, offset + field_offset, data, length);
+            return;
+        }
+        if (arena_) {
+            arena_io([&] {
+                arena_->read_mapped(region_, offset, data, length, span,
+                                    field_offset, descending);
+            });
+            return;
+        }
+        if (length == 0) return;
+        if (!data) io_error(EFAULT, "scratch mapped read");
+        prepare_scratch_mapped_read();
+        if (!view.page_checked_) {
+            const long page = ::sysconf(_SC_PAGESIZE);
+            if (page <= 0 || kReadWindowBytes % static_cast<std::size_t>(page) != 0)
+                io_error(EINVAL, "scratch mapped page size");
+            view.page_checked_ = true;
+        }
+        try {
+            auto* destination = static_cast<unsigned char*>(data);
+            std::size_t remaining = length;
+            while (remaining != 0) {
+                if (charge && bounded_cache_ && clean_bytes_read_ == kCacheBytes)
+                    discard_clean_cache(true);
+                const auto position = descending ? remaining - 1 : length - remaining;
+                const auto at = offset + field_offset + position;
+                if (!view.valid_ || view.owner_ != this || at < view.offset_
+                    || at - view.offset_ >= view.length_) {
+                    // Size is checked once per mapping, never on reuse.
+                    if (!view.reset()) io_error(errno, "scratch unmap");
+                    struct stat status{};
+                    int result;
+                    do { result = ::fstat(fd_, &status); }
+                    while (result != 0 && errno == EINTR);
+                    if (result != 0) io_error(errno, "scratch mapped size");
+                    if (status.st_size < 0 || !S_ISREG(status.st_mode))
+                        io_error(EIO, "scratch mapped size");
+                    const auto size = static_cast<std::uint64_t>(status.st_size);
+                    if (offset > size || span > size - offset)
+                        io_error(EIO, "scratch mapped descriptor extent");
+                    const auto start = at - at % kReadWindowBytes;
+                    const auto count = static_cast<std::size_t>(
+                        std::min<std::uint64_t>(kReadWindowBytes, size - start));
+                    void* address = ::mmap(nullptr, count, PROT_READ, MAP_SHARED,
+                                            fd_, static_cast<off_t>(start));
+                    if (address == MAP_FAILED) io_error(errno, "scratch map");
+                    view.address_ = address;
+                    view.offset_ = start;
+                    view.length_ = count;
+                    view.backing_size_ = size;
+                    view.owner_ = this;
+                    view.valid_ = true;
+                    if (::madvise(address, count, MADV_RANDOM) != 0)
+                        io_error(errno, "scratch mapped random access");
+                }
+                // The cached EOF also validates complete descriptor extents,
+                // including a scalar whose enclosing record is truncated.
+                if (offset > view.backing_size_ || span > view.backing_size_ - offset)
+                    io_error(EIO, "scratch mapped descriptor extent");
+                const auto inside = static_cast<std::size_t>(at - view.offset_);
+                auto count = std::min(remaining, descending ? inside + 1
+                                                           : view.length_ - inside);
+                if (charge && bounded_cache_ && descriptor_bytes == 0)
+                    count = std::min(count, kCacheBytes - clean_bytes_read_);
+                const auto first = descending ? position + 1 - count : position;
+                const auto source = descending ? inside + 1 - count : inside;
+                if (!copy_scratch_mapped_bytes(destination + first,
+                        static_cast<const unsigned char*>(view.address_) + source, count))
+                    io_error(EIO, "scratch mapped read");
+                remaining -= count;
+                if (charge && bounded_cache_) {
+                    auto charged_bytes = descriptor_bytes == 0 ? count
+                        : (remaining == 0 ? span : 0);
+                    while (charged_bytes != 0) {
+                        if (clean_bytes_read_ == kCacheBytes) discard_clean_cache(true);
+                        const auto step = std::min(charged_bytes, kCacheBytes - clean_bytes_read_);
+                        clean_bytes_read_ += step;
+                        charged_bytes -= step;
+                        if (clean_bytes_read_ == kCacheBytes) discard_clean_cache(true);
+                    }
+                }
+            }
+        } catch (...) {
+            unmap(view);
+            throw;
         }
     }
 
@@ -361,24 +505,28 @@ private:
     }
     // Bound traffic between whole-file discards: at most kCacheBytes of reads
     // and kCacheBytes of unsynced writes per file, independent of offset span.
-    // With RANDOM disabling read-ahead, the current users on 4 KiB OS pages
-    // have much smaller per-window footprints: TradeLedger's 168 B records
-    // and short strings touch at most about 391 pages; ScratchSequence's
+    // With RANDOM disabling read-ahead, ScratchSequence's
     // whole 64 KiB windows touch at most about 17 pages. The universal
     // worst-case bound across the read and unsynced-write windows is
     // 2*kCacheBytes OS pages for one-byte accesses to distinct pages:
     // 512 MiB at 4 KiB pages, not 128 KiB of physical cache. DONTNEED retains
     // any still-dirty pages; the write counter bounds those until the next
-    // sync and discard.
-    void discard_clean_cache() const {
+    // sync and discard. Mapped index reads additionally retain one 1 MiB
+    // file-backed window; DONTNEED cannot discard pages while mapped. After
+    // unmap, later advice may reclaim them; this is no hard page-cache cap.
+    void discard_clean_cache(bool mapped_index = false) const {
         if (!bounded_cache_) return;
 #if defined(__linux__)
-        const int error = ::posix_fadvise(fd_, 0, 0, POSIX_FADV_DONTNEED);
-        if (error != 0) io_error(error, "scratch discard cache");
+        if (!mapped_index || kKeepMappedIndexDontneed) {
+            const int error = ::posix_fadvise(fd_, 0, 0, POSIX_FADV_DONTNEED);
+            if (error != 0) io_error(error, "scratch discard cache");
+        }
+#else
+        (void)mapped_index;
 #endif
         clean_bytes_read_ = 0;
     }
-    void prepare_write() {
+    void prepare_write(bool mapped_index = false) {
         if (!bounded_cache_ || bytes_written_since_sync_ < kCacheBytes) return;
 #if defined(__linux__)
         int result;
@@ -387,7 +535,7 @@ private:
 #endif
         // Only the successful byte count triggers sync; a far-back update
         // followed by a tail append cannot flush once per offset change.
-        discard_clean_cache();
+        discard_clean_cache(mapped_index);
         bytes_written_since_sync_ = 0;
     }
     int fd_ = -1;
@@ -406,4 +554,9 @@ private:
     mutable std::size_t clean_bytes_read_ = 0;
     std::size_t bytes_written_since_sync_ = 0;
 };
+// The previous field layout is 112 bytes plus std::string, with 8-byte
+// alignment: 144 B on 64-bit libstdc++, 136 B on 64-bit libc++. Preserve the
+// embedded fold-array budget across both library ABIs.
+static_assert(sizeof(void*) != 8 || sizeof(ScratchFile) == 112 + sizeof(std::string),
+              "scratch file must retain its original embedded footprint");
 } // namespace pineforge::detail

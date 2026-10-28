@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bitset>
 #include <cctype>
 #include <cmath>
 #include <map>
@@ -408,6 +409,12 @@ struct TradeLedger::State {
     static_assert(sizeof(NumericWindow)
                   == kNumericWindowRows * sizeof(Record) + 2 * sizeof(size_type));
     mutable NumericWindow numeric_window{};
+    mutable detail::MappedIndexView index_view;
+    // One bit per descriptor actually copied from the mapped source.
+    // Unadmitted neighbours stay in the view until requested.
+    using NumericCopies = std::bitset<kNumericWindowRows>;
+    static_assert(sizeof(NumericCopies) == 48);
+    mutable NumericCopies numeric_copied{};
     // Only misses update direction, leaving cache hits at one reference write.
     // Key and flags occupy 16 bytes on 64-bit targets, eight more than the key
     // alone. No additional record or per-entry state is needed.
@@ -427,6 +434,7 @@ struct TradeLedger::State {
         index.bound_cache();
         payload.bound_cache();
     }
+    ~State() { index.unmap(index_view); }
     static void validate_cache_rows(size_type rows) {
         if (rows == 0 || rows > kMaxCacheRows)
             throw coded<std::invalid_argument>(RunFailureCode::setting_rejected,
@@ -452,6 +460,7 @@ struct TradeLedger::State {
         return &entry;
     }
     void invalidate(size_type global) {
+        index.unmap(index_view);
         if (global >= numeric_window.first
             && global - numeric_window.first < numeric_window.count)
             numeric_window.count = 0;
@@ -461,6 +470,7 @@ struct TradeLedger::State {
         }
     }
     void invalidate_cache() const {
+        index.unmap(index_view);
         cache_count = 0;
         numeric_window.count = 0;
         numeric_direction = {};
@@ -543,6 +553,45 @@ struct TradeLedger::State {
         entry.generation = cache_generation | kReferenced; // Strings stay lazy.
         ++cache_count;
     }
+    NumericCopies numeric_copies(size_type first, size_type count,
+                                 size_type requested, size_type retained) const {
+        struct Key { size_type global, generation; };
+        // Preview collisions in admission order without publishing changes
+        // before every potentially failing mapped copy has succeeded.
+        // At most 383 slots need shadowing: larger caches cannot collide
+        // within a single numeric window. The fixed workspace is 6,144 bytes.
+        std::array<Key, kNumericWindowRows> shadow;
+        const bool collisions = cache_capacity < count;
+        if (collisions)
+            for (size_type i = 0; i < cache_capacity; ++i)
+                shadow[i] = {cache[i].global, cache[i].generation};
+        NumericCopies copies;
+        copies[requested - first] = true;
+        if (retained) copies[0] = true;
+        for (size_type row = retained; row < count; ++row) {
+            const auto global = first + row;
+            const auto at = cache_slot(global);
+            Key key = collisions ? shadow[at]
+                                 : Key{cache[at].global, cache[at].generation};
+            if ((key.generation & ~size_type{3}) == cache_generation) {
+                if (key.global == global) continue;
+                if (key.generation & kReferenced) {
+                    key.generation &= ~kReferenced;
+                    if (collisions) shadow[at] = key;
+                    continue;
+                }
+            }
+            copies[row] = true;
+            if (collisions) shadow[at] = {global, cache_generation | kReferenced};
+        }
+        return copies;
+    }
+    void copy_numeric(size_type row, size_type first, size_type count,
+                      bool descending) const {
+        index.read_mapped(index_view, record_offset(first),
+                          &numeric_window.records[row], sizeof(Record),
+                          count * sizeof(Record), row * sizeof(Record), descending, false);
+    }
     const Record& numeric_record(size_type global) const {
         if (const auto* entry = cached(global)) return entry->record;
         ensure_cache(end);
@@ -573,25 +622,64 @@ struct TradeLedger::State {
             return record;
         }
         if (global >= numeric_window.first
-            && global - numeric_window.first < numeric_window.count)
-            return numeric_window.records[global - numeric_window.first];
+            && global - numeric_window.first < numeric_window.count) {
+            const auto row = global - numeric_window.first;
+            if (!numeric_copied[row]) {
+                try {
+                    copy_numeric(row, numeric_window.first, numeric_window.count, descending);
+                    numeric_copied[row] = true;
+                } catch (...) {
+                    numeric_window.count = 0;
+                    throw;
+                }
+            }
+            return numeric_window.records[row];
+        }
 
         const size_type retained = retain_predecessor ? 1 : 0;
         const auto count = std::min(kNumericWindowRows - retained,
                                     descending ? global - first + 1 : resident_first - global);
         const auto window_first = descending ? global - (count - 1) : global - retained;
-        if (retain_predecessor)
-            numeric_window.records[0] = numeric_window.records[numeric_window.count - 1];
+        if (retain_predecessor) {
+            const auto row = numeric_window.count - 1;
+            // A cache hit may have left the predecessor uncopied. Preserve
+            // its actual descriptor before reusing the old window's storage.
+            try {
+                if (!numeric_copied[row])
+                    copy_numeric(row, numeric_window.first, numeric_window.count, false);
+                numeric_window.records[0] = numeric_window.records[row];
+            } catch (...) {
+                numeric_window.count = 0;
+                throw;
+            }
+        }
         // Clear validity before I/O so a failed transfer cannot expose any
         // mixture of the preceding window and the new descriptors.
         numeric_window.count = 0;
-        index.read(record_offset(window_first + retained),
-                   numeric_window.records.data() + retained,
-                   count * sizeof(Record));
+        numeric_copied = numeric_copies(window_first, count + retained, global, retained);
+        // Retain both sides of a crossing window to avoid revisiting the
+        // preceding mapping for a lazily copied row during a monotone scan.
+        if (index.mapped_read_crosses_window(record_offset(window_first),
+                                             (count + retained) * sizeof(Record)))
+            numeric_copied.set();
+        try {
+            for (size_type step = 0; step < count; ++step) {
+                const auto row = descending ? count - 1 - step : retained + step;
+                if (numeric_copied[row])
+                    copy_numeric(row, window_first, count + retained, descending);
+            }
+            // Preserve the logical descriptor-read DONTNEED cadence.
+            // The retained predecessor and lazy copies are not charged again.
+            index.charge_mapped_read(count * sizeof(Record));
+        } catch (...) {
+            index.unmap(index_view);
+            throw;
+        }
         numeric_window.first = window_first;
         numeric_window.count = count + retained;
         numeric_direction.window_backward = descending;
         // The retained predecessor was already offered for admission.
+        // Replay admission only after all selected copies have succeeded.
         for (size_type row = retained; row < numeric_window.count; ++row)
             admit_numeric(window_first + row, numeric_window.records[row]);
         return numeric_window.records[global - window_first];
@@ -610,7 +698,7 @@ struct TradeLedger::State {
 
         const auto count = std::min(kResidentRows,
                                     std::min(end - global, resident_first - global));
-        index.read(record_offset(global), records.data(), count * sizeof(Record));
+        index.read(record_offset(global), records.data(), count * sizeof(Record), true);
 
         size_type extent_count = 0;
         for (size_type row = 0; row < count; ++row) {
@@ -818,7 +906,9 @@ struct TradeLedger::State {
         record.commission = row.commission; record.entry_incarnation = row.entry_incarnation;
         record.close_cause = row.close_cause; record.is_long = row.is_long;
         record.exit_from_bracket = row.exit_from_bracket; record.open_at_end = row.open_at_end;
-        index.write(record_offset(global), &record, sizeof(record));
+        // Growth changes the view's memoized EOF even outside the window.
+        index.unmap(index_view);
+        index.write(record_offset(global), &record, sizeof(record), true);
         return record;
     }
     static Trade decode_numeric(const Record& record) {
@@ -856,11 +946,14 @@ struct TradeLedger::State {
         }
         return row;
     }
-    Record descriptor(size_type global) const {
+    Record descriptor(size_type global, bool mapped = false) const {
         if (const auto* entry = cached(global)) return entry->record;
         if (global >= resident_first) return rows[slot(global)];
         Record record{};
-        index.read(record_offset(global), &record, sizeof(record));
+        if (mapped)
+            index.read_mapped(index_view, record_offset(global), &record, sizeof(record));
+        else
+            index.read(record_offset(global), &record, sizeof(record), true);
         return record;
     }
     void evict() {
@@ -979,7 +1072,8 @@ Trade TradeLedger::back() const {
 
 Trade TradeLedger::numeric_at(size_type global) const {
     state_->check(global, true);
-    return State::decode_numeric(state_->descriptor(global));
+    // Preserve this whole-numeric-row accessor's existing admission behavior.
+    return State::decode_numeric(state_->descriptor(global, true));
 }
 
 std::string TradeLedger::entry_id_at(size_type global) const {
@@ -1119,6 +1213,7 @@ void TradeLedger::seal(size_type global_end) {
     if (global_end < state_->first || global_end > size())
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                        "trade ledger: seal outside resident window");
+    state_->index.unmap(state_->index_view);
     // Publication changes no row content, and the checked accessors refuse
     // sealed rows before they reach the cache: cached entries stay valid, so a
     // closedtrades loop is not made cold again by every published trade.
