@@ -372,3 +372,38 @@ inline void check_completed(const NativeStrategyHost& host) {
 }
 
 } // namespace closed_trade_query_work
+
+#include "trade_stats_reference.hpp"
+
+namespace closed_trade_query_work {
+
+struct OrderedClosedFoldOracle {
+    PercentOracle percentages;
+    double net = 0.0;
+    std::size_t count = 0;
+    pf_trade_stats_t all{}, longs{}, shorts{};
+};
+
+inline OrderedClosedFoldOracle ordered_closed_fold_oracle(const BacktestEngine& engine) {
+    OrderedClosedFoldOracle result;
+    std::vector<TradeC> rows;
+    for (std::size_t index = 0; index < engine.closed_trade_count(); ++index) {
+        const auto row = engine.closed_trade(index);
+        result.percentages.add(row);
+        result.net += row.pnl;
+        rows.push_back(public_report_row(row));
+    }
+    result.count = rows.size();
+    const auto count = static_cast<int>(rows.size());
+    // The frozen scalar reference is independent of the live accumulators
+    // and preserves the original ALL/LONG/SHORT left-fold operation order.
+    result.all = trade_stats_reference::compute_trade_stats(
+        rows.data(), count, metrics::TradeFilter::ALL, initial_capital);
+    result.longs = trade_stats_reference::compute_trade_stats(
+        rows.data(), count, metrics::TradeFilter::LONG, initial_capital);
+    result.shorts = trade_stats_reference::compute_trade_stats(
+        rows.data(), count, metrics::TradeFilter::SHORT, initial_capital);
+    return result;
+}
+
+} // namespace closed_trade_query_work

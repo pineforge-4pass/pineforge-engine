@@ -554,6 +554,49 @@ void terminal_rows_are_transient() {
     }
 }
 
+void replay_window_boundary() {
+    constexpr std::size_t replay_rows = 16; // The contract's fixed repair window.
+    ReportHost host(ReportMode::SUMMARY_ONLY);
+    run_population(host, small_trades);
+    require(host.rows().size() - host.rows().base() > replay_rows,
+            "setup failure: repair boundary needs an older unsealed row");
+
+    const auto inside_index = host.rows().size() - replay_rows;
+    host.rows().modify(inside_index, [](Trade& row) {
+        row.pnl += 0.25;
+        row.pnl_pct += 0.125;
+    });
+    // The oldest row inside the window has a pre-row snapshot, so replay
+    // consumes exactly the rows from its changed index to the current end.
+    exact_rebuild(current_report(host, "amend oldest retained snapshot row"),
+                  host.rows().size() - inside_index,
+                  "oldest retained snapshot amendment did not replay exactly the changed suffix");
+
+    const auto outside_index = host.rows().size() - replay_rows - 1;
+    host.rows().modify(outside_index, [](Trade& row) {
+        row.pnl += 0.25;
+        row.pnl_pct += 0.125;
+    });
+    // One row farther back has no retained pre-row snapshot, so the read
+    // must rebuild every unsealed row from the current base to the end.
+    exact_rebuild(current_report(host, "amend row just outside snapshot window"),
+                  host.rows().size() - host.rows().base(),
+                  "outside-window amendment did not rebuild exactly the unsealed rows");
+
+    const auto newest_index = host.rows().size() - 1;
+    auto newest_row = host.closed_trade(newest_index);
+    newest_row.pnl += 0.25;
+    newest_row.pnl_pct += 0.125;
+    host.rows().replace(newest_index, newest_row);
+    // The newest covered row has its own pre-row snapshot, so only the
+    // suffix from that changed index to the current end is consumed.
+    exact_rebuild(current_report(host, "replace newest covered row"),
+                  host.rows().size() - newest_index,
+                  "newest-row replacement did not replay exactly the changed suffix");
+    no_closed_work(current_report(host, "quiet report after boundary amendments"),
+                   "quiet report after boundary amendments consumed closed rows");
+}
+
 } // namespace
 
 int main() {
@@ -578,6 +621,7 @@ int main() {
                     && large.execution.report_fold_rows == large_trades,
                 "run did not eagerly fold every newly closed row exactly once");
         old_row_amendments();
+        replay_window_boundary();
         truncate_and_reappend();
         invalid_numeric_rows();
         copy_then_diverge();

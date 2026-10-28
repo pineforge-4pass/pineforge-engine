@@ -263,8 +263,11 @@ void truncate_and_reappend() {
     for (std::size_t index = 0; index < tail.size(); ++index)
         host.rows().replace(end - tail.size() + index, tail[index]);
     const auto restored = current_percentages(host, "replace resized rows");
-    require(percent_visits(restored) == expanded_rows,
-            "restored rows did not rebuild exactly resident rows");
+    const auto changed_index = end - tail.size();
+    // The first restored tail row is inside the replay window. Its pre-row
+    // snapshot leaves exactly the rows from that index to the end to consume.
+    require(percent_visits(restored) == host.rows().size() - changed_index,
+            "restored rows did not replay exactly the changed suffix");
 }
 
 void reset_and_reuse() {
@@ -347,6 +350,42 @@ void seal_and_amend() {
     run_population(host, large_trades);
 }
 
+void replay_window_boundary() {
+    constexpr std::size_t replay_rows = 16; // The contract's fixed repair window.
+    PercentHost host(small_trades);
+    run_population(host, small_trades);
+    require(host.rows().size() - host.rows().base() > replay_rows,
+            "setup failure: repair boundary needs an older unsealed row");
+
+    const auto inside_index = host.rows().size() - replay_rows;
+    host.rows().modify(inside_index, [](Trade& row) { row.pnl_pct += 0.125; });
+    const auto inside = current_percentages(host, "amend oldest retained snapshot row");
+    // The oldest row inside the window has a pre-row snapshot, so replay
+    // consumes exactly the rows from its changed index to the current end.
+    require(percent_visits(inside) == host.rows().size() - inside_index,
+            "oldest retained snapshot amendment did not replay exactly the changed suffix");
+
+    const auto outside_index = host.rows().size() - replay_rows - 1;
+    host.rows().modify(outside_index, [](Trade& row) { row.pnl_pct += 0.125; });
+    const auto outside = current_percentages(host, "amend row just outside snapshot window");
+    // One row farther back has no retained pre-row snapshot, so the read
+    // must rebuild every unsealed row from the current base to the end.
+    require(percent_visits(outside) == host.rows().size() - host.rows().base(),
+            "outside-window amendment did not rebuild exactly the unsealed rows");
+
+    const auto newest_index = host.rows().size() - 1;
+    auto newest_row = host.closed_trade(newest_index);
+    newest_row.pnl_pct += 0.125;
+    host.rows().replace(newest_index, newest_row);
+    const auto newest = current_percentages(host, "replace newest covered row");
+    // The newest covered row has its own pre-row snapshot, so only the
+    // suffix from that changed index to the current end is consumed.
+    require(percent_visits(newest) == host.rows().size() - newest_index,
+            "newest-row replacement did not replay exactly the changed suffix");
+    require(percent_visits(current_percentages(host, "quiet read after boundary amendments")) == 0,
+            "quiet percentage read after boundary amendments consumed cached rows");
+}
+
 } // namespace
 
 int main() {
@@ -354,6 +393,7 @@ int main() {
         const auto small = sample(small_trades);
         const auto large = sample(large_trades);
         old_row_amendments();
+        replay_window_boundary();
         truncate_and_reappend();
         reset_and_reuse();
         copy_then_diverge();

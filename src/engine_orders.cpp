@@ -394,11 +394,18 @@ struct TradeLedger::State {
 
     // Run-owned, reconstructible scalars only. The seed is compared bitwise
     // so signed zero and NaN payloads cannot alias a different sealed fold.
+    struct PercentSnapshot {
+        PercentFold fold{};
+        size_type global = 0;
+        std::uint64_t generation = 0;
+        bool valid = false;
+    };
     struct PercentCache {
         PercentFold seed{}, fold{};
         size_type base = 0, end = 0;
         std::uint64_t generation = 0;
         bool valid = false;
+        std::array<PercentSnapshot, kFoldReplayRows> snapshots{};
     };
     std::uint64_t row_generation = 0;
     // Fixed diagnostic observer only. A fresh State starts at zero; this
@@ -406,6 +413,15 @@ struct TradeLedger::State {
     mutable std::uint64_t percent_fold_rows_consumed = 0;
     mutable PercentCache percent_cache;
 
+    struct ReportSnapshot {
+        metrics::TradeStatsAccumulator all{metrics::TradeFilter::ALL, 0.0};
+        metrics::TradeStatsAccumulator longs{metrics::TradeFilter::LONG, 0.0};
+        metrics::TradeStatsAccumulator shorts{metrics::TradeFilter::SHORT, 0.0};
+        ReportFold fold{};
+        size_type global = 0;
+        std::uint64_t generation = 0;
+        bool valid = false;
+    };
     struct ReportCache {
         double capital = 0.0, seed_net = 0.0;
         metrics::TradeStatsAccumulator seed_all{metrics::TradeFilter::ALL, 0.0};
@@ -418,25 +434,109 @@ struct TradeLedger::State {
         size_type base = 0, end = 0;
         std::uint64_t generation = 0;
         bool explicit_seed = false, valid = false;
+        std::array<ReportSnapshot, kFoldReplayRows> snapshots{};
     };
-    static constexpr size_type kReportAccumulatorStates = 6; // Seeds and current folds.
+    // Seeds, current folds and the three fixed states per pre-row snapshot.
+    static constexpr size_type kReportAccumulatorStates = 6 + 3 * kFoldReplayRows;
     mutable ReportCache report_cache;
     mutable std::uint64_t report_fold_rows_consumed = 0;
 
+    template<class Cache>
+    static void discard_snapshots(Cache& cached) noexcept {
+        for (auto& snapshot : cached.snapshots) snapshot.valid = false;
+    }
+    template<class Cache>
+    void carry_snapshots(Cache& cached, std::uint64_t previous_generation,
+                         size_type first_changed) noexcept {
+        for (auto& snapshot : cached.snapshots) {
+            // A pre-row prefix at first_changed excludes the changed row.
+            // Every later snapshot includes it and must be discarded.
+            if (snapshot.valid && snapshot.generation == previous_generation
+                && snapshot.global <= first_changed)
+                snapshot.generation = row_generation;
+            else
+                snapshot.valid = false;
+        }
+    }
     void rows_changed(bool uncovered_only = false, bool report_uncovered = false) noexcept {
+        const auto previous_generation = row_generation;
+        const bool can_retain = row_generation != std::numeric_limits<std::uint64_t>::max();
         const bool retain = uncovered_only && percent_cache.valid
-            && percent_cache.generation == row_generation;
+            && percent_cache.generation == row_generation && can_retain;
         const bool retain_report = report_uncovered && report_cache.valid
-            && report_cache.generation == row_generation;
+            && report_cache.generation == row_generation && can_retain;
         ++row_generation;
         // Appends and edits at/after the cursor cannot touch a covered row.
         // Carry their generation forward; the reader folds that suffix once.
         // Other changes invalidate BEFORE they can write stored rows.
         // Wraparound cannot revive a stale fold: validity is explicit.
-        if (retain) percent_cache.generation = row_generation;
-        else percent_cache.valid = false;
-        if (retain_report) report_cache.generation = row_generation;
-        else report_cache.valid = false;
+        if (retain) {
+            percent_cache.generation = row_generation;
+            carry_snapshots(percent_cache, previous_generation, end);
+        } else {
+            percent_cache.valid = false;
+            discard_snapshots(percent_cache);
+        }
+        if (retain_report) {
+            report_cache.generation = row_generation;
+            carry_snapshots(report_cache, previous_generation, end);
+        } else {
+            report_cache.valid = false;
+            discard_snapshots(report_cache);
+        }
+    }
+    template<class Cache>
+    bool can_amend(const Cache& cached, size_type global) const noexcept {
+        if (!cached.valid || cached.generation != row_generation
+            || row_generation == std::numeric_limits<std::uint64_t>::max()
+            || cached.base != first || cached.end < first || cached.end > end)
+            return false;
+        if (global >= cached.end) return true; // No covered row changes.
+        const auto& snapshot = cached.snapshots[global % kFoldReplayRows];
+        return cached.end - global <= kFoldReplayRows && snapshot.valid
+            && snapshot.global == global && snapshot.generation == row_generation;
+    }
+    void rows_amended(size_type global) {
+        const auto previous_generation = row_generation;
+        const bool retain_percent = can_amend(percent_cache, global);
+        const bool retain_report = can_amend(report_cache, global);
+        // Restore only unaffected prefixes, before a replacement can write.
+        // Multiple amendments before a read leave end at their lowest index.
+        percent_cache.valid = report_cache.valid = false;
+        ++row_generation;
+        try {
+            if (retain_percent) {
+                if (global < percent_cache.end) {
+                    percent_cache.fold = percent_cache.snapshots[global % kFoldReplayRows].fold;
+                    percent_cache.end = global;
+                }
+                percent_cache.generation = row_generation;
+                carry_snapshots(percent_cache, previous_generation, global);
+                percent_cache.valid = true;
+            } else {
+                discard_snapshots(percent_cache);
+            }
+            if (retain_report) {
+                if (global < report_cache.end) {
+                    const auto& snapshot = report_cache.snapshots[global % kFoldReplayRows];
+                    report_cache.fold = snapshot.fold;
+                    report_cache.all = snapshot.all;
+                    report_cache.longs = snapshot.longs;
+                    report_cache.shorts = snapshot.shorts;
+                    report_cache.end = global;
+                }
+                report_cache.generation = row_generation;
+                carry_snapshots(report_cache, previous_generation, global);
+                report_cache.valid = true;
+            } else {
+                discard_snapshots(report_cache);
+            }
+        } catch (...) {
+            percent_cache.valid = report_cache.valid = false;
+            discard_snapshots(percent_cache);
+            discard_snapshots(report_cache);
+            throw;
+        }
     }
     static bool same_percent_seed(const PercentFold& a, const PercentFold& b) noexcept {
         return a.all_count == b.all_count && a.win_count == b.win_count
@@ -448,6 +548,15 @@ struct TradeLedger::State {
 
     void consume_report_row(const Trade& row) {
         auto& cached = report_cache;
+        auto& snapshot = cached.snapshots[cached.end % kFoldReplayRows];
+        snapshot.valid = false;
+        snapshot.fold = cached.fold;
+        snapshot.all = cached.all;
+        snapshot.longs = cached.longs;
+        snapshot.shorts = cached.shorts;
+        snapshot.global = cached.end;
+        snapshot.generation = row_generation;
+        snapshot.valid = true;
         ++report_fold_rows_consumed;
         // Preserve validate_trade's row/field order without throwing during
         // publication. The report raises the same typed failure on demand.
@@ -904,8 +1013,7 @@ bool TradeLedger::is_long_at(size_type global) const {
 void TradeLedger::replace(size_type global, const Trade& row) {
     state_->check(global, true);
     const auto previous = state_->descriptor(global);
-    state_->rows_changed(global >= state_->percent_cache.end,
-                        global >= state_->report_cache.end);
+    state_->rows_amended(global);
     state_->invalidate(global);
     const auto record = state_->store(global, row, &previous);
     if (global >= state_->resident_first) state_->rows[state_->slot(global)] = record;
@@ -1010,6 +1118,7 @@ TradeLedger::PercentFold TradeLedger::percent_fold(const PercentFold& sealed_pre
         || cached.base != base() || cached.end < base() || cached.end > size()
         || !State::same_percent_seed(cached.seed, sealed_prefix)) {
         cached.valid = false;
+        State::discard_snapshots(cached);
         cached.seed = cached.fold = sealed_prefix;
         cached.base = cached.end = base();
         cached.generation = state_->row_generation;
@@ -1023,6 +1132,8 @@ TradeLedger::PercentFold TradeLedger::percent_fold(const PercentFold& sealed_pre
     cached.valid = false;
     while (cached.end < size()) {
         const Trade row = read(cached.end);
+        auto& snapshot = cached.snapshots[cached.end % kFoldReplayRows];
+        snapshot = {cached.fold, cached.end, state_->row_generation, true};
         cached.fold.all_sum += row.pnl_pct;
         ++cached.fold.all_count;
         if (row.pnl > 0.0) {
@@ -1072,6 +1183,7 @@ TradeLedger::ReportFold TradeLedger::report_fold(
         || cached.base != base() || cached.end < base() || cached.end > size()
         || !same_seed) {
         cached.valid = false;
+        State::discard_snapshots(cached);
         cached.capital = initial_capital;
         cached.seed_net = sealed_seed.net;
         cached.explicit_seed = explicit_seed;

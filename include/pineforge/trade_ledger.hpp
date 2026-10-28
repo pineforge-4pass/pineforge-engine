@@ -225,6 +225,12 @@ public:
     // Fixed diagnostic state only, never hashed or used as a cache key.
     std::uint64_t report_fold_rows_consumed() const noexcept;
 
+    // Each derived fold retains this many fixed pre-row snapshots. Covered
+    // replace/modify edits inside the window restore the exact prefix and
+    // replay its suffix in order; older edits restart from the sealed seed.
+    // Snapshots are reconstructible, run-owned and never hashed.
+    static constexpr size_type kFoldReplayRows = 16;
+
 private:
     struct State;
     std::unique_ptr<State> state_;

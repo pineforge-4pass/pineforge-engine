@@ -7950,3 +7950,8 @@ foreach(_closed_trade_test IN LISTS _closed_trade_work_tests)
         "${PROJECT_SOURCE_DIR}/include/pineforge"
         "${PROJECT_SOURCE_DIR}/src")
 endforeach()
+
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    list(APPEND TEST_SOURCES test_closed_trade_amendment_replay)
+    pineforge_add_unit_test(test_closed_trade_amendment_replay)
+endif()
