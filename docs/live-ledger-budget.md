@@ -62,13 +62,28 @@ logical database bytes and `256 + 32*events + 16*delivery_log_rows` mutations.
 This is conservative per-row overhead, not measured SQLite packing density.
 
 The ledger test exercises 512, 4096 and 65536-byte pages, short text and
-overflow records up to 800000 bytes. It compares reservations against real
+overflow records up to 800000 bytes. It persists each page size with `VACUUM`
+before closing the empty fixture, explicitly selects no auto-vacuum, and
+verifies the size after reopening. Setting `page_size` alone on an empty file
+would lose that setting at close. It compares reservations against real
 database/WAL/SHM growth, tries limits one byte below and above admission, and
-compares all three files byte for byte after refusals. Its independent slack
-ceiling for the two-event input fixture is
-`32*B + 56*16*66*(P+24) + 3*32768`; it also requires actual growth to fit the
-reservation and the admitted limit. The extra writer cases cover reports,
-routing, legacy delivery, audited attempts/results and redelivery requests.
+compares all three files byte for byte after refusals.
+
+Its independent slack ceiling uses the verified page size and
+`N = floor(16*B/P) + 1 + 56*8*(32+2)` touched pages for the two-event fixture.
+The 56 tree mutations include triggers and indexes. SQLite's 32-bit page
+numbers bound binary-tree depth by 32; eight pages per level and two balancing
+levels cover tree work. For `P >= 512`, `8/(P-64) <= 16/P` bounds text and
+overflow copies without repeating the estimator's computed height. With `F`
+equal to the pre-commit WAL length divided by `P+24`, the ceiling is
+`2*N*(P+24) + 32 + C*P + (2 + floor((F+N)/4096))*32768`:
+WAL frames plus checkpoint copies, the WAL header, all earlier logical pages,
+and WAL-index regions allowing eight bytes per frame and allocation rounding.
+No freelist or WAL reuse is assumed. The test requires actual growth to fit
+the reservation and the admitted limit, and prints request, before/after
+bytes, slack and page size on a growth-check failure. The extra writer cases
+cover reports, routing, legacy delivery, audited attempts/results and
+redelivery requests.
 
 Delivery status uses transactional `delivery_totals`, `delivery_targets` and
 `delivery_state` tables. Global pending/unsent counts require one singleton

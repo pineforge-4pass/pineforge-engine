@@ -78,6 +78,17 @@ std::string scalar_text(const std::string& path, const char* sql) {
     return result;
 }
 
+std::uint64_t prepare_empty_ledger(const std::string& path, std::uint64_t page) {
+    // page_size alone only configures this connection while the file is empty.
+    // VACUUM writes the header before closing; WAL cannot change page size later.
+    execute_sql(path, ("PRAGMA page_size=" + std::to_string(page) +
+        "; PRAGMA auto_vacuum=NONE; VACUUM").c_str());
+    const auto actual_page = std::stoull(scalar_text(path, "PRAGMA page_size"));
+    CHECK(actual_page == page);
+    CHECK(scalar_text(path, "PRAGMA auto_vacuum") == "0");
+    return actual_page;
+}
+
 using SqlRow = std::vector<std::optional<std::string>>;
 std::vector<SqlRow> source_rows(const std::string& path, const char* sql) {
     sqlite3* database = nullptr;
@@ -273,9 +284,11 @@ void ledger_budget_admission() {
     for (const auto page : {512U, 4096U, 65536U}) {
         for (const auto length : {257U, 16385U, 800000U}) {
             const auto path = temp.file("budget-" + std::to_string(page) + "-" + std::to_string(length) + ".sqlite");
-            execute_sql(path, ("PRAGMA page_size=" + std::to_string(page)).c_str());
+            const auto page_size = prepare_empty_ledger(path, page);
             Ledger ledger(path, "budget");
             ledger.verify_report(0, "{}");
+            CHECK(scalar_text(path, "PRAGMA journal_mode") == "wal");
+            CHECK(std::stoull(scalar_text(path, "PRAGMA page_size")) == page_size);
             const std::string payload = "{\"bytes\":\"" + std::string(length, 'x') + "\"}";
             const std::vector<Event> events{{"one", payload, "main", "delivery-one"}, {"two", "{}", std::nullopt, "delivery-two"}};
             const auto commit = [&] { ledger.commit_input(0, payload, 123, events, payload); };
@@ -284,18 +297,35 @@ void ledger_budget_admission() {
             CHECK(request > 1);
             CHECK(expect_budget_refusal(ledger, path, used + request - 1, commit) == request);
             CHECK(ledger.input_count() == 0 && ledger.pending_count() == 0 && ledger.unsent_count() == 0);
-            const auto before = snapshot_bytes(ledger_files(path));
+            const auto logical_pages = std::stoull(scalar_text(path, "PRAGMA page_count"));
+            const auto before_files = ledger_files(path);
+            const auto before = snapshot_bytes(before_files);
             ledger.set_byte_budget(used + request + 1);
             commit();
             const auto after = snapshot_bytes(ledger_files(path));
+            // Independent ceiling for this row set: 56 tree writes, at most
+            // 32 binary levels (32-bit SQLite page numbers), 8 pages per level
+            // plus two balancing levels. For P>=512, 8/(P-64) <= 16/P bounds
+            // text/overflow copies without using the estimator's height.
+            const auto text = payload.size() * 3 + 3 + 3 + 3 + 2 + 4 + 12 + 12 + 64;
+            const auto touched_pages = 16ULL * text / page_size + 1 + 56ULL * 8 * (32 + 2);
+            const auto frame_size = page_size + 24;
+            const auto prior_frames = before_files[1] ? before_files[1]->size() / frame_size : 0;
+            // WAL + checkpoint, earlier logical pages, and 32 KiB index
+            // regions: <=8 bytes per frame, with two regions for rounding.
+            const auto index_bytes = (2 + (prior_frames + touched_pages) / 4096) * 32768;
+            const auto slack = 2 * touched_pages * frame_size + 32 +
+                logical_pages * page_size + index_bytes;
+            const bool within_slack = after >= before && request >= after - before &&
+                request - (after - before) <= slack;
+            if (!within_slack || after > used + request + 1)
+                std::fprintf(stderr, "ledger growth: request=%llu before=%llu after=%llu slack=%llu page_size=%llu\n",
+                    static_cast<unsigned long long>(request), static_cast<unsigned long long>(before),
+                    static_cast<unsigned long long>(after), static_cast<unsigned long long>(slack),
+                    static_cast<unsigned long long>(page_size));
             CHECK(after >= before && after - before <= request);
             CHECK(after <= used + request + 1);
-            // Independent, documented slack ceiling: text amplification <=32,
-            // binary-tree height <=64, 8 pages/level, WAL plus checkpoint, and
-            // 3 WAL-index regions. This includes 56 tree writes for this row set.
-            const auto text = payload.size() * 3 + 3 + 3 + 3 + 2 + 4 + 12 + 12 + 64;
-            const std::uint64_t slack = 32ULL * text + 56ULL * 16 * 66 * (page + 24) + 3 * 32768;
-            CHECK(request >= after - before && request - (after - before) <= slack);
+            CHECK(within_slack);
             ledger.set_byte_budget(0);
             CHECK(ledger.input(0)->canonical_json == payload && ledger.input(0)->report_json == payload);
             CHECK(ledger.pending_count() == 2 && ledger.unsent_count() == 1);
@@ -372,7 +402,7 @@ void ledger_terminal_budget() {
     CHECK(recovered.input_count() == 1 && recovered.input(0)->canonical_json == std::string(900000, 'x'));
 
     const auto sidecar_path = temp.file("sidecar.sqlite");
-    execute_sql(sidecar_path, "PRAGMA page_size=512");
+    prepare_empty_ledger(sidecar_path, 512);
     {
         Ledger writer(sidecar_path, "sidecar");
         const std::string payload(800000, 'x');
