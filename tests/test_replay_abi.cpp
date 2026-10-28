@@ -31,7 +31,7 @@ struct Report {
 };
 
 void check_frozen_layouts() {
-    static_assert(PF_ABI_VERSION == 4, "the report replay scalar keeps ABI v4");
+    static_assert(PF_ABI_VERSION == 5, "report replay leaves the current ABI version unchanged");
     static_assert(offsetof(pf_equity_stats_t, sharpe_monthly) == 48,
                   "pf_equity_stats_t::sharpe_monthly moved");
     static_assert(offsetof(pf_equity_stats_t, sortino_monthly) == 56,

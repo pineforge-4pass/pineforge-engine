@@ -12,6 +12,9 @@ replay_rq::Host& fixture(pf_strategy_t state) {
 }
 
 extern "C" {
+// Only the sealed shape opts into retirement. Its strategy never indexes
+// retired rows; sort control reads the retained tail before publication.
+PF_API int strategy_reads_trade_history() { return 0; }
 pf_strategy_t strategy_create(const char*) {
     return static_cast<pineforge::BacktestEngine*>(new replay_rq::Host);
 }

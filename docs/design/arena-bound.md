@@ -1,6 +1,6 @@
 # Pre-start arena and invocation bounds
 
-This is the CR-150 sizing interface for COMPUTE and APP. Its implementation is
+This is the scratch-storage sizing interface for COMPUTE and APP. Its implementation is
 `scripts/arena_bound.py`; its hand-derived cross-language vectors are
 `tests/data/arena_bound_vectors.json`. All sizes are bytes, all arithmetic is
 integer arithmetic, and no completed-run count is an input.
@@ -342,12 +342,12 @@ indexPeak(k) = 24 * slots(k)                       # k > 32
 | Position tail | (30+L)*T | `src/source/pine_position_tail.hpp:20`; footer packing at `src/source/pine_position_tail.cpp:94` |
 | Cohort AVL and five-word summary | (96+L)*D + 1[D>0] | `include/pineforge/detail/disk_id_table.hpp:109`; `include/pineforge/source/pine_adapter.hpp:1957` |
 | Entry-rank AVL | (60+L)*J + 1[J>0] | `src/source/pine_adapter.cpp:6377`; `include/pineforge/detail/disk_id_table.hpp:109` |
-| Erased minima data | (40+L)*D + (40+2*L)*Q | `erased_minima_` at `include/pineforge/source/pine_adapter.hpp:946`; 40-byte header at `include/pineforge/detail/id_pair_store.hpp:68` |
+| Erased minima data | (40+L)*D + (40+2*L)*Q | `erased_minima_` at `include/pineforge/source/pine_adapter.hpp:947`; 40-byte header at `include/pineforge/detail/id_pair_store.hpp:68` |
 | Erased minima index | indexPeak(D+Q) | 16-byte slot at `include/pineforge/detail/id_pair_store.hpp:68`; replacement at `:573` |
 | Consumed partial-cycle data | (41+2*L)*Q | `include/pineforge/source/pine_adapter.hpp:2727`; joined key at `src/source/pine_adapter.cpp:25357` |
 | Consumed partial-cycle index | indexPeak(Q) | `include/pineforge/detail/id_pair_store.hpp:573` |
 | Ordered consumed-cycle fold | 136*leaves + 2088*branches + 2096*savedPath | `include/pineforge/detail/id_pair_ordered_fold.hpp:161`, `:165`, `:172`, size assertion for `Leaf`, `Branch` and `Snapshot` at `:183` |
-| Successor-root rows | 16*R | `src/native_order.cpp:7984`, row assertion for `Row` at `:8264`, 64-row tail bound `kTailRows` at `:8269` |
+| Successor-root rows | 16*R | `src/native_order.cpp:7984`, row assertion for `Row` at `:7981`, 64-row tail bound `kTailRows` at `:7986` |
 | Frozen external openings | **0 in this certified profile** | Stock source builds owned vectors at `src/source/pine_adapter.cpp:7032`, `:6995`, `:9669`; generic external owners are excluded below |
 
 The AVL node is seven uint64 words = 56 bytes, then its value and exact key
@@ -376,7 +376,7 @@ exit_time (8), qty (8), entry_incarnation (8), side (1), margin flag (1)
 and ID length (4), after the ID bytes. This is not sizeof(Row).
 
 Successor rows are two uint64 values. The WorkingRequestCore method `index_committed`
-defined at `src/native_order.cpp:3243` omits kept-handle replacements and appends a
+defined at `src/native_order.cpp:2960` omits kept-handle replacements and appends a
 root only when a newly issued definition has one. The 64-row RAM tail makes
 charging every issued row conservative. Partial closes create one trade
 row per affected lot: `src/engine_execution.cpp:1241`. Bracket definitions
@@ -446,7 +446,7 @@ host supplying `BindOpenings.external_openings`; such a host needs the
 membership/lifetime facts above before using this bound.
 Both descriptors of a generic freeze now use `ScratchFile`: a configured
 core directory is honored, standalone freezes use TMPDIR then the common
-fallback, and an attached arena creates no private file (CR-260).
+fallback, and an attached arena creates no private file.
 
 Summing these ten storage contributions and the explicit openings zero gives:
 
@@ -557,8 +557,8 @@ non-command certificates exactly.
 
 These formulas apply to the EngineRecorded streamed invocation. The
 selected recorder appends its anchor and selected observations in one
-writer (`equity_scratch` append at `src/engine_report.cpp:1224`), and capture transfers that writer as `metric_curve`
-instead of copying its prefix (`src/native_execution_consumer.cpp:12920`).
+writer (`equity_scratch` append at `src/engine_report.cpp:1534`), and capture transfers that writer as `metric_curve`
+instead of copying its prefix (`src/native_execution_consumer.cpp:13135`).
 HostRecorded array presentation and a second full curve are outside this
 profile. Adding another persistent scratch user requires another term and
 rounding region.
@@ -774,7 +774,7 @@ The eight JSON vectors were calculated by hand:
 | All terms | B=18146, b=15, q=1; A=18*1048576=18874368 as for Unicode. Primary one-page RSS/two-page AS; extra bar+two column+close buffers consume four pages with RSS copies=2: RSS=36864, AS=24576. Counts T/E/O/V/K/X/H=3/2/2/5/1/3/2; line maxima 717/154/190/263/71/140/25. U=2097152+2151+308+380+1315+71+420+50=2101847. Private RSS/AS are null and its own flag is true; top-level unbounded=false, unboundedTerms=[], reason="". |
 | Unbounded emitting loop | Null arena inputs except E=2; no finite guessed size. unboundedTerms=[arena,ohlcv,finalizerStream]; childPrivate remains informational. Default attempt-0 arena applies. |
 
-All eight vectors use the three-term verdict; CR150-CX's combined-arena
+All eight vectors use the three-term verdict; the combined-arena
 arithmetic leaves the current logical B contributions unchanged. The first six have
 `unboundedTerms=["ohlcv","finalizerStream"]`; their absent private proof
 continues to set only its own flag. In the all-terms vector, removing the
@@ -885,7 +885,7 @@ transcripts return over a pipe to the ordinary parent oracle. The fold
 witness also exercises all three record sizes at the 4095-byte segment
 ceiling and repeated partial-write journal recovery. The directory row
 records creation paths as well as listing /tmp before/after; immediate
-unlink cannot hide the CR-260 regression.
+unlink cannot hide the combined-arena regression.
 
 These changes are static read only on the Mac. The supervisor must execute
 set A on the old implementation (compare matches; jail/directory fail for

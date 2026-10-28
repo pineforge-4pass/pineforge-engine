@@ -56,7 +56,7 @@ FINGERPRINT_VERSION = 2
 # selected_window_contract_revisions of --capabilities-json). This is the ONE place it is
 # written; capabilities_record is the code that reads it. Revision 1.3 declares value
 # ownership "complete": the section-4 producers and manifest are present, the completeness
-# proof has run (EN-115), and the typed value-ownership codes strategy_value_invalid,
+# proof has run, and the typed value-ownership codes strategy_value_invalid,
 # engine_command_value_invalid, report_result_invalid and report_post_execution_failed are
 # emitted. A full build declares 1.3, never 1.3-parity; a parity build declares 1.3-parity
 # (value_ownership parity_with_reference) and never 1.3; a tuple holding both is invalid.
@@ -760,7 +760,7 @@ def capabilities_record(supported: bool) -> Dict[str, Any]:
 
     selected_window_contract_revisions is CONTRACT_REVISIONS as a fresh list when supported:
     exactly ["1.3"], declaring value ownership "complete": the section-4 producers and
-    manifest are present, the completeness proof has run (EN-115), and the typed
+    manifest are present, the completeness proof has run, and the typed
     value-ownership codes (strategy_value_invalid, engine_command_value_invalid,
     report_result_invalid and report_post_execution_failed) are emitted. A full build
     declares "1.3", never "1.3-parity"; a parity build declares exactly ["1.3-parity"] and

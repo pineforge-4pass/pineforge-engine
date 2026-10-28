@@ -965,7 +965,7 @@ void source::PineStrategyHost::on_native_bar(
 
 void source::PineStrategyHost::on_native_applied(
         const native_order::ExecutionAppliedEvent& event,
-        const NativeDecisionContext& context) {
+        const NativeDecisionContext& context) { adapter_.invalidate_exit_group(event.first_trade_index, event.closed_trade_count); // Covers later close_cause, exit_time and exit_id writes; no exit-group sort intervenes.
     // R5 lane F3: the kernel records CloseCause::Bracket for a close its
     // owner's fill armed (WaitForApplied). A Pine row keeps the cause this host
     // has always given it -- a strategy.exit leg by its order family
@@ -1025,7 +1025,7 @@ void source::PineStrategyHost::on_native_applied(
             for (std::size_t index = event.first_trade_index + event.closed_trade_count;
                  index < trades_.size(); ++index) {
                 if (trades_[index].entry_incarnation == event.handle().incarnation)
-                    trades_.modify(index, [&](Trade& row) { row.entry_time = script_open; });
+                    { adapter_.invalidate_exit_group(index); trades_.modify(index, [&](Trade& row) { row.entry_time = script_open; }); }
             }
         }
         for (std::size_t i = 0; i < event.closed_trade_count; ++i) {
@@ -1040,7 +1040,7 @@ void source::PineStrategyHost::on_native_applied(
             || (std::isfinite(p->second.exit_levels.limit) && p->second.exit_levels.limit > 0.0));
     if (event.opened_units != 0.0) {
         // ab9714be pine_orders.cpp:750-753 and pine_fills.cpp:7189-7193
-        // (KI-62): a MARKET entry that adds to a live same-side position is
+        // A MARKET entry that adds to a live same-side position is
         // flagged so a same-bar from_entry bracket exit covers it.
         const bool market_add = !pine_priced && event.closed_units == 0.0
             && p != adapter_.placement_.end()
@@ -1129,7 +1129,7 @@ void source::PineStrategyHost::on_native_applied(
             else if (row.exit_comment.rfind(source::kIntradayLossComment, 0) == 0)
                 row.close_cause = execution::CloseCause::RiskLimit;
         }
-        trades_.replace(index, row);
+        adapter_.invalidate_exit_group(index); trades_.replace(index, row);
     }
     project_short_seed_report_rows(event);
     if (!other_exit_here) order_global_exit_children(event);
@@ -1632,7 +1632,7 @@ void source::PineStrategyHost::adapter_label_bracket_trades(
     for (std::size_t offset = 0; offset < event.closed_trade_count; ++offset) {
         const std::size_t index = event.first_trade_index + offset;
         if (index >= trades_.size()) continue;
-        trades_.modify(index, [&](Trade& trade) { trade.exit_from_bracket = from_bracket; });
+        adapter_.invalidate_exit_group(index); trades_.modify(index, [&](Trade& trade) { trade.exit_from_bracket = from_bracket; });
     }
 }
 
@@ -1815,7 +1815,7 @@ void source::PineStrategyHost::project_short_seed_report_rows(
         if (trade.entry_incarnation == plan.materialize_long.incarnation
             && trade.entry_id == plan.materialize_label) {
             trade.entry_incarnation = plan.final_short.incarnation;
-            trades_.replace(index, trade);
+            adapter_.invalidate_exit_group(index); trades_.replace(index, trade);
         }
     }
     const std::size_t begin = event.first_trade_index;
@@ -1823,7 +1823,7 @@ void source::PineStrategyHost::project_short_seed_report_rows(
     for (std::size_t index = begin; index < end && index < trades_.size(); ++index) {
         if (trades_[index].entry_incarnation == plan.final_short.incarnation
             && trades_[index].entry_id == plan.final_short_id) {
-            trades_.modify(index, [&](Trade& row) {
+            adapter_.invalidate_exit_group(index); trades_.modify(index, [&](Trade& row) {
                 row.entry_incarnation = plan.materialize_long.incarnation;
             });
         }
@@ -2022,7 +2022,7 @@ bool source::PineStrategyHost::same_symbol_sites_routable(
     // sites from realtime prints (the kernel takes confirmed bars only); an
     // aggregated chart or the bar magnifier can hold an input back until the
     // calling bar's callback has run (PineScheduler::input's deferrals); the
-    // auxiliary slice is fed per chart bar; the KI-55 range-start cut, the
+    // auxiliary slice is fed per chart bar; the range-start cut, the
     // historical lookahead projection and the OTC-daily pins veto or
     // re-shape inputs before the aggregator sees them.
     if (stream_warmup_mode_ || scheduler_.bar_magnifier_enabled()) return false;
@@ -2572,7 +2572,7 @@ void source::PineStrategyHost::order_global_exit_children(
             replay->replace(first + i, annotation);
         }
     }
-    trades_.resize(first);
+    adapter_.invalidate_exit_group(first, trades_.size() - first); trades_.resize(first);
     scratch_walk(scratch, scratch_row, [&](::pineforge::detail::ScratchHandle handle, const TradeScratchKey&) {
         const auto header = scratch_read_trade(scratch, handle);
         Trade row{};
@@ -2599,7 +2599,7 @@ void source::PineStrategyHost::order_global_exit_children(
 // (NativeStrategyHost::native_closed_rows_amended).
 std::optional<std::size_t> source::PineStrategyHost::sort_same_bar_exit_trades(
         TradeLedger& trades, source::PineExecutionAdapter& adapter) {
-    if (trades.size() < 2) return std::nullopt;
+    ++adapter.exit_group_work_.publications; if (adapter.exit_group_certified(trades) || trades.size() < 2) return std::nullopt;
     const std::size_t end = trades.size();
     std::size_t start = end - 1;
     while (start > 0
@@ -2608,7 +2608,7 @@ std::optional<std::size_t> source::PineStrategyHost::sort_same_bar_exit_trades(
            && trades[start - 1].entry_id == trades[end - 1].entry_id
            && trades[start - 1].exit_from_bracket
            && trades[end - 1].exit_from_bracket) {
-        --start;
+        --start; ++adapter.exit_group_work_.tail_rows;
     }
     if (end - start > 1) {
         // ab9714be pine_scheduler.cpp:262-283 and pine_fills.cpp:3710-3730:
@@ -2616,7 +2616,7 @@ std::optional<std::size_t> source::PineStrategyHost::sort_same_bar_exit_trades(
         // bracket exits that fill within the same phase tie-break by command
         // sequence (test_l10m_corpus_parity.cpp).
         const auto less = [&](std::size_t ia, std::size_t ib) {
-            const bool open_a = adapter.is_open_phase_exit(ia);
+            ++adapter.exit_group_work_.comparisons; const bool open_a = adapter.is_open_phase_exit(ia);
             const bool open_b = adapter.is_open_phase_exit(ib);
             if (open_a != open_b) return open_a;
             const auto sa = adapter.command_sequence_for_exit(trades[ia].exit_id, trades[ia].entry_id);
@@ -2627,9 +2627,9 @@ std::optional<std::size_t> source::PineStrategyHost::sort_same_bar_exit_trades(
         bool ordered = true;
         for (std::size_t index = start + 1; index < end; ++index)
             if (less(index, index - 1)) { ordered = false; break; }
-        if (ordered) return std::nullopt;
-        auto& scratch = trade_scratch();
-        TradeScratchTransaction transaction(scratch);
+        if (ordered) { adapter.certify_exit_group(trades, start); return std::nullopt; }
+        auto& scratch = trade_scratch(); adapter.certify_exit_group(trades, start, false);
+        const auto scratch_before = scratch.stats(); TradeScratchTransaction transaction(scratch);
         for (std::size_t source = start; source < end; ++source) {
             const auto phase = adapter.exit_phase_value(source);
             const auto sequence = adapter.command_sequence_for_exit(
@@ -2671,7 +2671,7 @@ std::optional<std::size_t> source::PineStrategyHost::sort_same_bar_exit_trades(
                 // here, without extending an absent all-None tail.
                 if (phase != none || adapter.exit_phase_value(current) != none)
                     adapter.set_exit_phase(current, phase);
-                if (source == cycle) trades.replace(current, row);
+                ++adapter.exit_group_work_.replacements; if (source == cycle) trades.replace(current, row);
                 else trades.replace(current, trades[source]);
                 if (replay)
                     replay->replace(current, source == cycle ? saved_replay : replay->trade(source));
@@ -2684,7 +2684,7 @@ std::optional<std::size_t> source::PineStrategyHost::sort_same_bar_exit_trades(
                                                   "incomplete trade scratch permutation");
             }
         }
-        transaction.finish();
+        transaction.finish(); adapter.finish_exit_group_sort(scratch, scratch_before);
         return start;
     }
     return std::nullopt;
@@ -2873,7 +2873,7 @@ void source::PineStrategyHost::scheduler_publish_source_bar(
         if (const auto moved = sort_same_bar_exit_trades(trades_, adapter_))
             native_closed_rows_amended(*moved);
     }
-    // CR-150 L8c: publish only the immutable prefix, once at this script-bar
+    // Publish only the immutable prefix, once at this script-bar
     // boundary. Keep the last exit-time block AND its predecessor: sorting
     // and global-child re-cutting both inspect that predecessor.
     auto& consumer = detail::run_consumer(*this);

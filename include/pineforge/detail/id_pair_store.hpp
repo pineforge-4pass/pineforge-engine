@@ -1,11 +1,12 @@
 #pragma once
 
-// CR-150 L19l-C. Exact string / string-pair tables with no per-key RAM
+// Exact string / string-pair tables with no per-key RAM
 // directory. Like L19a's successor-root file, scratch files are private,
 // unlinked at creation, close-on-exec, and accessed with pread/pwrite.
 #include <pineforge/detail/id_pair_ordered_fold.hpp>
 #include <pineforge/detail/id_pair_slab_fold.hpp>
 #include <pineforge/detail/scratch_slab.hpp>
+#include <pineforge/detail/id_table_read_cache.hpp>
 
 #include <algorithm>
 #include <array>
@@ -172,6 +173,7 @@ public:
     };
 
     IdPairStore() = default;
+    explicit IdPairStore(std::size_t cache_bytes) : read_cache_(cache_bytes) {}
     IdPairStore(const IdPairStore&) = delete;
     IdPairStore& operator=(const IdPairStore&) = delete;
     IdPairStore(IdPairStore&& other) noexcept { swap(other); }
@@ -189,6 +191,7 @@ public:
         directory_ = directory;
     }
     void clear() noexcept {
+        read_cache_.release();
         data_.reset();
         index_.reset();
         data_bytes_ = 0;
@@ -450,6 +453,8 @@ private:
     }
     void swap(IdPairStore& other) noexcept {
         using std::swap;
+        // std::swap uses the cache's invalidating moves, never line transfer.
+        swap(read_cache_, other.read_cache_);
         swap(data_, other.data_);
         swap(index_, other.index_);
         swap(directory_, other.directory_);
@@ -494,11 +499,14 @@ private:
     }
     void read_data(std::uint64_t offset, void* destination, std::size_t length) const {
         if (slab_) slab_->read_at(data_resource_, offset, destination, length);
-        else data_.read(offset, destination, length);
+        else read_cache_.read(data_, data_.disk_backed(), data_bytes_, 0, offset, destination, length);
     }
     void write_data(std::uint64_t offset, const void* source, std::size_t length) {
         if (slab_) slab_->write_at(data_resource_, offset, source, length);
-        else data_.write(offset, source, length);
+        else {
+            if (data_.disk_backed()) read_cache_.before_write(0, data_bytes_, offset, length);
+            data_.write(offset, source, length);
+        }
     }
     void read_index(std::uint64_t offset, void* destination, std::size_t length) const {
         if constexpr (MaintainSortedFold) {
@@ -512,7 +520,8 @@ private:
             }
         }
         if (slab_) slab_->read_at(index_resource_, offset, destination, length);
-        else index_.read(offset, destination, length);
+        else read_cache_.read(index_, index_.disk_backed(), slots_ * sizeof(Slot),
+                              1, offset, destination, length);
     }
     void write_index(std::uint64_t offset, const void* source, std::size_t length) {
         if constexpr (MaintainSortedFold) {
@@ -524,7 +533,10 @@ private:
             }
         }
         if (slab_) slab_->write_at(index_resource_, offset, source, length);
-        else index_.write(offset, source, length);
+        else {
+            if (index_.disk_backed()) read_cache_.before_write(1, slots_ * sizeof(Slot), offset, length);
+            index_.write(offset, source, length);
+        }
     }
     Header read_header(std::uint64_t offset) const {
         if (offset > data_bytes_ || data_bytes_ - offset < sizeof(Header))
@@ -605,6 +617,7 @@ private:
         constexpr auto maximum = static_cast<std::uint64_t>(std::numeric_limits<off_t>::max())
             / sizeof(Slot);
         if (slots_ > maximum / 2) throw IdPairStoreError(EFBIG, "id table index exhausted");
+        if (data_.disk_backed() || index_.disk_backed()) read_cache_.invalidate();
         const auto next_slots = slots_ == 0 ? kInitialSlots : slots_ * 2;
         IdPairScratchFile next(MaintainSortedFold
             ? ScratchStore::partial_cycles_idx : ScratchStore::erased_minima_idx);
@@ -621,6 +634,7 @@ private:
             at += count;
         }
         index_ = std::move(next); // publish only a complete replacement
+        if (data_.disk_backed() || index_.disk_backed()) read_cache_.invalidate();
         slots_ = next_slots;
     }
     std::optional<Value> lookup_key(std::string_view first,
@@ -682,6 +696,10 @@ private:
         const Slot slot{hash, data_bytes_ + 1};
         if constexpr (MaintainSortedFold) publish_fold(first, data_bytes_, header, found.first, slot);
         else write_index(found.first * sizeof(Slot), &slot, sizeof(slot));
+        // publish_fold may have read older keys using the OLD logical end
+        // after the append writes. Discard that data tail again, retaining
+        // complete earlier pages and the unchanged index namespace.
+        if (data_.disk_backed()) read_cache_.invalidate_from(0, data_bytes_);
         data_bytes_ += sizeof(Header) + first.size() + second_size;
         ++used_;
         ++size_;
@@ -849,6 +867,9 @@ private:
         ? ScratchStore::partial_cycles : ScratchStore::erased_minima};
     IdPairScratchFile index_{MaintainSortedFold
         ? ScratchStore::partial_cycles_idx : ScratchStore::erased_minima_idx};
+    // Disabled unless the owner explicitly supplies a bounded capacity.
+    // Data+index share one allocation; fold files have no cache.
+    IdTableReadCache read_cache_;
     std::string directory_;
     std::uint64_t data_bytes_ = 0;
     std::uint64_t slots_ = 0;

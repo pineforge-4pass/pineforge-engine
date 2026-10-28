@@ -1,4 +1,4 @@
-// CR-150 L15b: borrowed symbol-feed export and host storage.
+// Borrowed symbol-feed export and host storage.
 // The conditional declaration keeps the first witness linkable against the
 // L15a tree: before the implementation, the missing runtime symbol is the
 // intended red edge.

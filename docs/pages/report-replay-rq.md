@@ -10,7 +10,8 @@ JSON; `--report-replay-sink PATH` explicitly negotiates a separate
 `pf-report-replay/v1` companion. S carries `initial_capital`, `pointvalue` and
 the raw `net_profit_sum`. Existing primary `pf-report-sink/v1` E/T records,
 header, receipt, counts and bytes keep their current meanings. No existing
-C report, trade or equity-point allocation grows; ABI version remains 4.
+C report, trade or equity-point allocation grows; ABI version remains 5,
+unchanged by this extension.
 
 ## R records and JSON trade members
 

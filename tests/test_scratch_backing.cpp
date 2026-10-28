@@ -1,4 +1,4 @@
-// CR-150 O1C. Predicted first red on 6cfcff0696: the frozen closure has no
+// Predicted first red on 6cfcff0696: the frozen closure has no
 // pineforge/detail/scratch_backing.hpp (fatal error: file not found). The
 // body needs only the header-defined backing, so it runs without the store.
 // The complete body must be compiled there on the lab; no fail-before or

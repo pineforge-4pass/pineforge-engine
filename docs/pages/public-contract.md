@@ -26,7 +26,8 @@ two releases pair as the last section below says.
 1.4.0 followed on 2026-10-08: engine v1.4.0 with pineforge-codegen 1.4.0.
 It adds two runtime failure getters and the feature probe
 `PINEFORGE_HAS_RUN_FAILURE_CODES_V1`, without changing C layouts or
-`PF_ABI_VERSION` 4. It also changes report provenance types and adds
+the then-current `PF_ABI_VERSION` 4, which was unchanged in 1.4.0. <!-- verified HEAD -->
+It also changes report provenance types and adds
 resolution/failure fields. The repository's
 [CHANGELOG.md](../../CHANGELOG.md#140--2026-10-08), under
 *1.4.0 — 2026-10-08*, inventories the state-hash additions and report migration.
@@ -46,7 +47,8 @@ It extends typed failures across source value admission
 (`engine_command_value_invalid`), non-finite canonical trade or summary doubles
 (`report_result_invalid`) and post-boundary serialization faults
 (`report_post_execution_failed`), without changing C layouts or
-`PF_ABI_VERSION` 4. The repository's
+the previous `PF_ABI_VERSION` 4. <!-- verified HEAD -->
+The repository's
 [CHANGELOG.md](../../CHANGELOG.md#160--2026-10-17), under
 *1.6.0 — 2026-10-17*, inventories these changes and the documentation, test,
 CI and benchmark updates since 1.5.0.
@@ -61,7 +63,8 @@ the 1.4.0 reference on tested cases, and no completeness claim (1.6.0 declared
 `1.3` without a completeness proof). It also records per-stage `startedAt` and
 `seconds` in the preflight summary and adds `noindex` to raw Doxygen source
 listings and omits them from `sitemap.xml`, without changing C layouts or
-`PF_ABI_VERSION` 4. The repository's
+the previous `PF_ABI_VERSION` 4. <!-- verified HEAD -->
+The repository's
 [CHANGELOG.md](../../CHANGELOG.md#161--2026-10-18), under
 *1.6.1 — 2026-10-18*, inventories these changes and the CI, documentation and
 test updates since 1.6.0.
@@ -70,7 +73,7 @@ Use the same-version 1.6.1 pair, with regeneration and relinking as below.
 From 1.6.2, the image declares selected-window contract
 revision `1.3` again (`["1.3"]` under
 `capabilities.selected_window_contract_revisions` when the runtime supports
-selected windows and `[]` otherwise), now with the EN-115 completeness proof:
+selected windows and `[]` otherwise), now with the completeness proof:
 the section-4 producers and manifest are present and value ownership is
 `complete`, and it emits the four typed codes
 (`strategy_value_invalid`, `engine_command_value_invalid`,
@@ -82,6 +85,16 @@ published 1.6.0 image declared `1.3` without a completeness proof; and engine
 1.6.1, released without a hub image, declares `1.3-parity`). The repository's
 [CHANGELOG.md](../../CHANGELOG.md), under *1.7.0*, inventories this
 change.
+
+The public surface and stability rules for these revisions are in
+[Selected windows and walk-forward use](#selected_windows_walk_forward).
+
+1.8.0 requires rebuilding native C++ objects for `native_order_v8` and
+relinking strategy libraries against the matching headers and archive.
+`PF_ABI_VERSION` is 5: the loader refuses a library stamped 4 at its ABI
+mismatch check before calling strategy entry points. This is an explicit
+exception to the earlier promise of one ABI number throughout 1.x; the
+caller-allocated C report and trade layouts remain unchanged.
 
 ## Versions
 
@@ -115,12 +128,16 @@ The C ABI is `<pineforge/pineforge.h>` and the native host API
 `<pineforge/native_c_api.h>` it includes: the `PF_API` functions, the `pf_*`
 structs and enumerations, and the `PF_*` constants.
 
-- **`PF_ABI_VERSION` is 4 for every 1.x release.** It versions the layouts a
+- **`PF_ABI_VERSION` is 5 from 1.8.0.** Earlier 1.x releases used ABI 4.
+  It versions module compatibility as well as the layouts a
   caller allocates or strides over (`pf_report_t`, `pf_trade_t`, the metrics
   structs), and a consumer checks `pf_abi_version() == PF_ABI_VERSION` before
   it runs a strategy. `test_c_abi` checks that equality, `test_live_run_status`
-  pins the value 4, and `test_run_strategy_range_end` pins the Python
-  harness's `EXPECTED_PF_ABI` to it.
+  pins the value 5, and `test_run_strategy_range_end` pins the Python
+  harness's `EXPECTED_PF_ABI` to it. The public Unix
+  `test_strategy_module_abi_epoch` row requires the typed refusal of a
+  stamp-4 module before any strategy entry point runs, and acceptance of a
+  module stamped with the current header value.
 - **Functions are append-only.** No `PF_API` function is removed or renamed in
   1.x; new ones are added. `scripts/check_c_abi_runtime.py` (a source guard of
   every `ci_verify` profile and of `ci_preflight`) pins the exact name sets
@@ -151,6 +168,129 @@ structs and enumerations, and the `PF_*` constants.
   reason, and
   `src/c_abi.cpp`'s `static_assert`s pin the `pf_magnifier_distribution_t`
   values. No checker compares a value with the previous release.
+
+## Selected windows and walk-forward use {#selected_windows_walk_forward}
+
+The selected-window path is **PUBLIC for walk-forward use** through the
+`docker/run_json.py` command line or the C headers
+`<pineforge/selected_window.h>` and `<pineforge/selected_window_plan.h>`.
+A walk-forward driver such as the HPO native layer may submit successive
+non-overlapping windows over one chart, for example `[T0, T1)` followed by
+`[T1, T2)`. Each window is one independent request. The CLI creates a fresh
+strategy state for its request in `_make_state` (`docker/run_json.py:4974`)
+inside `_selected_run` (`docker/run_json.py:4881`).
+
+### Public request and capability surface
+
+These are the selected-window options declared by the CLI:
+
+| Option | Contract | Declaration |
+| --- | --- | --- |
+| `--report-policy selected-window/v1` | Opt into the selected-window report policy. | `add_argument` (`docker/run_json.py:5397`) |
+| `--window-start-ms` | Start T in calendar-aligned Unix milliseconds. | `add_argument` (`docker/run_json.py:5400`) |
+| `--window-end-ms` | End E in calendar-aligned Unix milliseconds; T < E. | `add_argument` (`docker/run_json.py:5402`) |
+| `--preroll-bars` | Requested warm-up N in script bars, from 0 through 5000. | `add_argument` (`docker/run_json.py:5404`) |
+| `--fed-start-ms` | Frozen start F of the supplied primary feed; F <= T. | `add_argument` (`docker/run_json.py:5406`) |
+| `--capabilities-json` | With `--so LIB`, report runtime support without reading OHLCV or running a strategy. | `add_argument` (`docker/run_json.py:5408`) |
+| `--validate-window-only` | Validate and plan the request; return `report_window` with `applied: false`, without executing a strategy. | `add_argument` (`docker/run_json.py:5411`) |
+| `--run-phase-fd` | Inherited AF_UNIX SOCK_STREAM descriptor N >= 3 for phase transport v1. | `add_argument` (`docker/run_json.py:5414`) |
+| `--request-feed-inventory` | Inventory bound to the strategy library, used for selected-window admission. | `add_argument` (`docker/run_json.py:5417`) |
+| `--report-shape` | This build offers `full/v1` for selected-window requests. | `add_argument` (`docker/run_json.py:5420`) |
+| `--curve-point-budget` | Refused by this build, which does not offer a compact shape. | `add_argument` (`docker/run_json.py:5422`) |
+| `--results-digest` | Refused by this build, which does not offer a results digest. | `add_argument` (`docker/run_json.py:5425`) |
+
+An execution request supplies the policy, all four window arguments and
+explicit `--input-tf` and `--script-tf` values, as checked by
+`validate_request` (`docker/selected_window_report.py:200`), together with the
+strategy library, chart and request-feed inventory. The selected interval is
+`[T, E)`; preroll precedes T, as the configuration header documents.
+
+Before relying on the CLI path, probe the library with
+`docker/run_json.py --so LIB --capabilities-json`. The probe is
+`_capabilities_main` (`docker/run_json.py:4864`); its support decision is
+`_runtime_supports_selected_window` (`docker/run_json.py:4835`), which checks
+the selected-window ABI, execution observer, phase transport and planner.
+The capability record is built by
+`capabilities_record` (`docker/selected_window_report.py:756`).
+Require `capabilities.selected_window_wire_version == 1`,
+`capabilities.report_policy == "selected-window/v1"`, `full/v1` in
+`capabilities.report_shapes`, and a
+`capabilities.selected_window_contract_revisions` literal that the driver
+understands. This tree declares `["1.3"]` on a supported runtime and `[]`
+otherwise; see the [capability table](../../docker/README.md#selected-window-contract-revision)
+for revision history. The revision is declared in the probe, not in each
+report. The probe also sets `selected_window_bars_bin_version`
+(`docker/run_json.py:4877`) to 0: selected-window requests
+require a CSV chart. General binary-feed support does not imply selected-window
+binary-chart support.
+
+### Public C entry points
+
+The public declarations include the descriptors and return contracts in the
+two headers:
+
+| Header | Function and declaration | Purpose |
+| --- | --- | --- |
+| `include/pineforge/selected_window.h` | `pf_selected_window_version` (`include/pineforge/selected_window.h:61`) | Selected-window ABI version, currently 1. |
+| `include/pineforge/selected_window.h` | `strategy_set_selected_window_v1` (`include/pineforge/selected_window.h:84`) | Copy pending bounds, or clear selection with a null descriptor, for the next admitted generation. |
+| `include/pineforge/selected_window.h` | `strategy_selected_window_counts_v1` (`include/pineforge/selected_window.h:99`) | Read counts belonging to the latest attempt's successful selected Results generation. |
+| `include/pineforge/selected_window_plan.h` | `pf_selected_plan_version` (`include/pineforge/selected_window_plan.h:114`) | Planner bridge version, currently 1. |
+| `include/pineforge/selected_window_plan.h` | `pf_plan_selected_primary_v1` (`include/pineforge/selected_window_plan.h:131`) | Plan one request over primary rows, without loading or running a strategy. |
+
+For direct C use, check the relevant version getter returns 1 and initialize
+each descriptor's `struct_size` and `version` exactly as its header requires.
+The planner bridge is a separate shared library from the caller's pinned
+build; it is not the strategy library. The C ABI versions do not declare a
+CLI contract revision; consumers of the CLI must use its capability record.
+
+The configuration setter and counts getter return 0 on success and negative
+values for the refusals documented in the header. A refused setter leaves the
+configuration unchanged; a failed counts read leaves valid output storage
+unchanged. The planner bridge instead returns 0 when it writes a whole
+result, including a planner refusal: inspect `status`, where 0 is a successful
+plan. A negative bridge return is a bridge failure and leaves valid output
+storage unchanged.
+
+### Window reports and stability
+
+The policy and report shape follow the [report schema](report-schema.md),
+including its [revision 3.1 clarification](../design/selected-window-wire-v1.3-revision-3.1.md).
+The report carries the window bounds and coverage, feed identity, and requested,
+available, used and trimmed preroll with its timestamps and shortfall, assembled
+by `build_report_window` (`docker/selected_window_report.py:460`). These warm-up
+bars precede the window and are counted separately. The lookback declaration
+is `unknown` in this build, so the requested preroll is not a proof of sufficient
+warm-up. The same `report_window` appears at the top level, in `applied_runtime`
+and in `fingerprint.provenance.runtime`, held by
+`check_report_placements` (`docker/selected_window_report.py:707`).
+The selected curve has one anchor at T with initial capital and zero open
+profit, then one point per window script bar, held by
+`check_selected_curve` (`docker/selected_window_report.py:609`).
+
+An executed success is a complete report with `report_window.applied: true`
+and harness exit status 0. A validation-only plan has `applied: false` and
+does not establish execution success. Request or execution failures have a
+nonzero harness status and the typed `code` / `args` failure line described in
+@ref run_failure_codes. If stdout cannot take a whole report, the harness
+returns 1 with the reason on stderr and no second JSON document, as enforced by
+`_write_report` (`docker/run_json.py:4791`).
+
+**Functions and flags are append-only.** No published function or flag above
+is removed or renamed in 1.x; new ones are added. The C layout rules above
+apply to these descriptors. A contract revision changes only by a new revision
+literal in `capabilities.selected_window_contract_revisions`, rather than by
+changing the meaning of an existing literal. The version rule applies here:
+a PATCH release fixes behaviour, a MINOR release adds to a surface, and only a
+MAJOR release removes or changes one. `scripts/check_c_abi_runtime.py` pins the
+runtime export names; review holds the flag and revision stability promise
+across releases.
+
+The pure helper modules `docker/selected_window_*.py` and siblings such as
+`docker/run_phase_transport.py`, `docker/run_execution_observer.py` and
+`docker/request_feed_inventory.py` are implementation details, even where
+cited here as evidence. Their Python imports and call signatures are not a
+public API. Code under `src/` not reachable through the published headers or
+CLI is outside this contract. A consumer must go through the CLI or the headers.
 
 ## Run-failure codes
 

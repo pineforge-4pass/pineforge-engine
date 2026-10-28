@@ -1,4 +1,4 @@
-"""S4E E-03: the replay converter retains report interpretation metadata."""
+"""The replay converter retains report interpretation metadata."""
 import json
 
 import pytest

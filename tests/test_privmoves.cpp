@@ -657,7 +657,7 @@ std::uint64_t creation_refusals = 0;
 
 std::set<std::string> tmp_entries() {
     DIR* directory = ::opendir("/tmp");
-    require(directory != nullptr, "list /tmp before/after CR-260");
+    require(directory != nullptr, "list /tmp before/after the scratch check");
     std::set<std::string> entries;
     while (const auto* entry = ::readdir(directory)) {
         // Other processes share /tmp; only this backend's names are relevant.
@@ -691,7 +691,7 @@ void compare(const std::string& which) {
 
 void directory_policy() {
     Directory scratch;
-    require(scratch.path.compare(0, 5, "/tmp/") != 0, "CR-260 needs a non-/tmp directory");
+    require(scratch.path.compare(0, 5, "/tmp/") != 0, "The scratch check needs a non-/tmp directory");
     const auto before = tmp_entries();
     {
         Environment temporary("TMPDIR", scratch.path);
@@ -704,7 +704,7 @@ void directory_policy() {
                 }) == 12, "observer sees both files for all six opening freezes");
         for (const auto& path : created_paths)
             require(path.compare(0, scratch.path.size() + 1, scratch.path + "/") == 0,
-                    "CR-260: opening file bypassed configured non-/tmp scratch directory");
+                    "Opening file bypassed configured non-/tmp scratch directory");
 #endif
     }
     // Core directory wins over a deliberately unusable TMPDIR.
@@ -728,10 +728,10 @@ void directory_policy() {
                 }) == 2, "core freeze creates exactly retained and work opening files");
         for (const auto& path : created_paths)
             require(path.compare(0, scratch.path.size() + 1, scratch.path + "/") == 0,
-                    "CR-260: core opening freeze ignored explicit scratch directory");
+                    "Core opening freeze ignored explicit scratch directory");
 #endif
     }
-    require(tmp_entries() == before, "CR-260 leaves no new opening file under /tmp");
+    require(tmp_entries() == before, "No new opening file under /tmp");
 }
 
 #if defined(__linux__)

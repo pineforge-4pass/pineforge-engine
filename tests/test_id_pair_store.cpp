@@ -1,4 +1,4 @@
-// CR-150 L19l-C. Reference maps, real anonymous files, and a retained-byte
+// Reference maps, real anonymous files, and a retained-byte
 // witness. Fail-before against b3c39238e: id_pair_store.hpp is absent.
 #define PINEFORGE_TEST_ALLOCATION_BYTES
 #include "global_allocation_replacement.hpp"

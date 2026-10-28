@@ -1,6 +1,45 @@
-# CR-150/C4 source gate: re-emit (reading file for the reviewer)
+# Source gate: review record
 
-## Replay layout repair: current source read (2026-10-28)
+## Replay merge source read (2026-10-29)
+
+Main contributes 3,605 site identities and 1,483 groups: 1,299 unreviewed,
+184 pending, zero bounded. Replay adds 43 identities and 18 unreviewed
+groups. The merged static inventory therefore has **3,648 identities and
+1,501 groups: 1,317 unreviewed, 184 pending, zero bounded**.
+These are counts of the reviewed manifests, not an executed gate verdict.
+No scanner, scan scope, state, fixed-input proof or codegen pin is relaxed.
+
+Main independently allocated group IDs that the replay branch had used.
+Main's IDs are retained. Replay's former U1524–U1533 become U1580–U1589;
+former U1535–U1542 become U1590–U1597. The YAML and TSV use the same mapping,
+including the constructor cross-references. The removed U1534 remains absent.
+The single original header equity push is retained in main's canonical
+inventory position, under `if (summary)`; the automatic merge had also
+appended that same identity at the end, which was a duplicate, not a new site.
+
+The 43 replay identities remain 31 in the replay implementation, three in
+its header, seven writer grows and two source-host recut operations.
+U0056 retains main's one inline summary push and its existing pending
+history debt; U1414 retains 62 original grows plus five companion-trailer
+grows at `src/report_sink_writer.cpp:527-533`. New U1593 covers the two
+companion record appends at :495 and :514 in that same writer. The registry
+remains U1597, with one declaration and three grows, one node per configured
+live engine and no fixed bound on that population.
+
+The recut scratch owner and annotation append remain at
+`src/source/pine_strategy_host.cpp:2422` and :2459, with the replacement-count
+check at :2565-2568. Main's cache invalidation is retained immediately after
+annotation replacement. Sealing invokes replay retirement at
+`src/native_execution_consumer.cpp:14096`. The original layout pins remain
+valid by hand derivation: report state is `360 + 3*sizeof(std::string)` bytes,
+and the next capture-policy member immediately follows it.
+
+The following two replay sections record the pre-merge snapshots and use
+their former group IDs and totals. Their bounds and operation reviews still
+apply through the mapping above. The source gate and all executable checks
+are reserved for the supervisor's verification hosts.
+
+## Replay layout repair: pre-merge source read (2026-10-28)
 
 The original header summary push returns to U0056; its relocated U1534 group
 and identity are removed. U1542 reviews the library registry's declaration

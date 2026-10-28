@@ -5,29 +5,63 @@ README's *Releases* section and on the GitHub releases page. From 1.0.0 the
 version number follows semantic versioning over the surfaces the
 [public contract](docs/pages/public-contract.md) lists.
 
-## 1.8.0 — 2026-10-27
+## Unreleased
 
 **[1.8.0](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.8.0)**,
 paired with [pineforge-codegen 1.8.0](https://github.com/pineforge-4pass/pineforge-codegen-oss/releases/tag/v1.8.0).
 A minor release. It speeds up the `run_json` wrapper (the wrapper only, not the
 engine), adds one unused storage building block to the library, states where
 scratch files are placed, carries release-gate and CI changes, and stops
-building and publishing macOS. The C ABI (`PF_ABI_VERSION` 4) and the
-run-failure code catalog are unchanged (0 codes added, changed or removed
-since 1.7.0). The report keys are unchanged except for two additive
-diagnostics keys, described below.
+building and publishing macOS. The C ABI version is now `PF_ABI_VERSION` 5,
+requiring strategy libraries to be rebuilt for the native order layouts.
+The run-failure code catalog adds or removes no code and changes two entries
+since 1.7.0: the optional `engine_invariant` reason vocabulary and the expected
+ABI number in `strategy_library_incompatible`'s message. The report keys are
+unchanged except for two additive diagnostics keys, described below.
+
+- Monthly Sharpe/Sortino month keys for timestamps beyond about 34,800 years from the epoch no longer overflow; in-range results are unchanged.
 
 ### Compatibility and migration
 
+- **Selected windows are public for walk-forward use.** The
+  [public contract](docs/pages/public-contract.md#selected_windows_walk_forward)
+  declares the CLI options, capability probe, report policy and versioned C
+  headers consumers may build on, with append-only functions and flags in
+  1.x. Each walk-forward window is one independent request.
+- The macOS report-sink limit recorded for 1.7.0 is no longer listed. It was
+  re-examined, not re-measured: the descriptor tests now account for the
+  system's write bookkeeping and the stream memory test allows a larger bound
+  for macOS page size and allocator behaviour. macOS is not a supported
+  platform in 1.8.0 (Linux only), and no CI job exercises these macOS checks,
+  so nothing here says the report sink works on macOS.
 - **Supported platforms: Linux x86_64 and arm64.** From 1.8.0 the engine is built, tested and published for Linux only: the release carries `pineforge-v1.8.0-linux-x86_64.tar.gz` and `pineforge-v1.8.0-linux-aarch64.tar.gz` (each with a `.sha256`) and no macOS archive, and CI no longer runs macOS jobs. A macOS build is neither tested nor supported.
 - Pairs with codegen 1.8.0 exactly. Regenerate strategy C++ with codegen 1.8.0
   and relink every strategy library against the 1.8.0 headers and
   `libpineforge.a`, as for every pair change; replacing the archive alone does
   not update a statically linked strategy library.
-- No public header changed. The only new header is
-  `include/pineforge/detail/o1_store.hpp`, an internal building block that no
-  engine path uses yet (below); its object code is part of `libpineforge.a`,
-  which therefore grows slightly.
+- **Native C++ modules require a rebuild.** The native order value namespace
+  advances from the previous `pineforge::native_order::native_order_v7` to <!-- verified HEAD -->
+  `pineforge::native_order::native_order_v8`. The layouts of `BindOpenings`,
+  `OpeningsClose`, `TargetObservation`, `CommandContext` and
+  `WorkingRequestCore` changed between 1.6.x and 1.7.0 inside the v7
+  namespace, and 1.7.0 shipped without moving it, so a module built against
+  1.6.x headers could not be told apart from one built against 1.7.0. The new
+  namespace separates them: every native C++ module built against earlier
+  headers, 1.7.0 included, is refused and must be rebuilt. Rebuild every C++
+  object that includes these headers and relink
+  against the matching archive; stale v7 order symbols now fail to link or
+  load. Identity types remain in `native_order_v1`. The C ABI version
+  advances from 4 to 5 because the adapter and engine headers grew members
+  and the C export `strategy_initial_capital` was added since 1.7.0, so a
+  strategy library stamped 4 is refused at load
+  with the existing `pineforge ABI mismatch: .so reports 4, harness expects 5; rebuild.`
+  typed diagnostic in the Python loader, before a strategy entry point is called.
+  The caller-allocated C report and trade layouts do not grow.
+- The C++ report folds in `include/pineforge/metrics_fold.hpp` now carry
+  64-bit month keys; rebuild C++ callers with the matching headers and archive.
+- `include/pineforge/detail/o1_store.hpp` is a new internal building block
+  that no engine path uses yet (below); its object code is part of
+  `libpineforge.a`, which therefore grows slightly.
 - Hosts that read the codegen input manifest must recognize the new input type
   `color` (a packed unsigned `0xAARRGGBB` integer default). That is a codegen
   change, described in the codegen 1.8.0 notes; the engine side is unchanged:
@@ -35,6 +69,21 @@ diagnostics keys, described below.
   `get_input_int64`.
 - The release harness file `docker/run_json.py` changed (below). The hub image
   for this pair carries the 1.8.0 copy.
+
+### Live ledger resource control
+
+- Ledger writes now reserve payload and SQLite overhead before growth and
+  refuse a whole transaction with a typed storage-budget failure. Service and
+  ordinary runs keep their unlimited default in this release; requiring a
+  service budget remains a pending policy decision. The `--ledger-unbounded`
+  opt-out is available for that policy. Offline redelivery accepts the same
+  `--max-ledger-bytes` budget.
+- Delivery status uses transactional counters and oldest-pending indexes,
+  keeping status work independent of action and attempt history. Existing
+  ledgers acquire verified summaries in an automatic, one-way migration;
+  earlier runners cannot open the migrated database. The summaries add one
+  row and up to three partial-index entries per action, plus per-target rows
+  and indexes.
 
 ### Run profile in the report diagnostics
 
@@ -78,6 +127,28 @@ diagnostics keys, described below.
   with unique ids. The gap to 1.6.3 is **not** closed. The engine's own
   per-record sink parse and the dense-script close path are separate work, not in
   this release.
+
+### Native live report stream
+
+- **Delta JSONL is opt-in; the default stream is unchanged.**
+  `pineforge-live run --report-jsonl` continues to emit one cumulative
+  `pineforge-native-report/v1` document per committed input, with the same
+  bytes and field order. `--report-jsonl=full` is an explicit alias with
+  identical output. The new `--report-jsonl=delta` emits the ledger's
+  `pineforge-native-report-delta/v1` patch with an additional top-level integer
+  `input_cursor` as the first key of the line (the stored ledger row has no
+  such key), beginning at the same commit point as the cumulative stream.
+- **The runner no longer rescans the closed-trade prefix per input; delta
+  output is linear in the appended rows.** The native `fill_report` call still
+  rebuilds the engine's trade and equity/metrics report on each input; removing
+  that remaining term needs an engine-side carried report accumulator and a
+  separate batch-byte equivalence proof. The runner carries a closed-trade
+  high-water mark in every mode. Delta output costs O(new rows) per input,
+  avoiding quadratic output as history grows. Runs without a report stream
+  and runs with `--report-jsonl=delta` retain only scalar state and array
+  counts. Plain `--report-jsonl` and `--report-jsonl=full` retain the cumulative
+  document and keep the old O(cumulative document) output cost per input,
+  which can be quadratic over a growing run.
 
 ### Scratch placement (behaviour of 1.7.0 and later, restated)
 
@@ -129,8 +200,8 @@ diagnostics keys, described below.
   holds waiting requests used to end the run as `engine_invariant`; it now ends
   it as `scratch_io_failed` (a non-retryable `resource` failure), as the
   other scratch consumers already did. A typed failure the storage layer had
-  already recorded keeps its own code. The catalog is unchanged: no code is
-  added, changed or removed.
+  already recorded keeps its own code. This classification adds or removes
+  no code.
 
 ### Known limits
 
@@ -146,6 +217,28 @@ diagnostics keys, described below.
   value is forwarded unchanged and `run_json.py` validates it (a number from 3
   up, not 5, different from any phase descriptor); a refusal ends the run with
   the usual entrypoint status. With the variable unset nothing changes.
+
+- **`PINEFORGE_RUN_ID`.** When set, the entrypoint passes
+  `--run-id <value>` to `run_json.py` for the report sink header. The value is
+  forwarded unchanged, including an empty value, and `run_json.py` validates
+  UTF-8 text without NUL; the entrypoint adds no other limit, so a caller that
+  needs an id must refuse an empty one itself. Unset, the run id keeps its
+  empty default.
+
+### Isolated report channel
+
+- The JSON host reserves the caller's stdout before parsing or loading a
+  strategy, redirects native fd 1 to stderr, and writes the report and typed
+  failures through the saved descriptor. FD sink records stay on their
+  caller-supplied stream, and descriptor collisions with the report channel,
+  phase channel, or arena slot use the existing `run_request_invalid` failure.
+  Isolation holds only when the harness keeps stdout and stderr separate;
+  when they name the same file, the host emits one diagnostic and still runs.
+  The library can write the saved descriptor because it runs in this process;
+  the descriptor is non-inheritable, so exec'd children do not get it. This
+  isolates ordinary native fd 1 output without creating a security boundary.
+  Host report text is now encoded as UTF-8 rather than using Python stdout's
+  encoding; reports are ASCII, so no difference is expected.
 
 ### CI and release process
 
@@ -229,7 +322,7 @@ is not reliably rejected at link time: rebuild every object.
 
 ### Breaking for hosts
 
-- **Disk-backed scratch and default directory selection (CR-150).**
+- **Disk-backed scratch and default directory selection.**
   Closing a trade writes `TradeLedger` scratch even without a report sink.
   An attached scratch arena takes precedence over files. Otherwise, report
   and ledger scratch use the configured scratch directory; a path sink
@@ -269,7 +362,7 @@ deployments using Docker `--tmpfs /tmp` or Kubernetes `emptyDir` with
 
 ### Report sink and scratch spill
 
-- **Version-1 report sinks (CR-150).** The additive `report_sink.h` API,
+- **Version-1 report sinks.** The additive `report_sink.h` API,
   announced by `PINEFORGE_HAS_REPORT_SINK_V1` and queried through
   `pf_report_sink_version()`, writes `pf-report-sink/v1` to a path or a
   caller-selected FIFO or Unix stream socket. The stream carries equity,
@@ -284,7 +377,7 @@ deployments using Docker `--tmpfs /tmp` or Kubernetes `emptyDir` with
   `trades_len`. The library borrows the fd and never closes it; a FIFO
   host must ignore SIGPIPE to receive a typed closed-peer failure.
 
-- **Sink summaries and lifecycle (CR-150).** Receipt, T-row summary and
+- **Sink summaries and lifecycle.** Receipt, T-row summary and
   `strategy_report_sink_diagnostics_v1` annualization queries publish
   completion only with the trailer. They do not replay a report. A failed
   or aborted sink has no valid trailer. Setters refuse changes during
@@ -300,7 +393,7 @@ deployments using Docker `--tmpfs /tmp` or Kubernetes `emptyDir` with
   A stream-begin request with a sink is refused as
   `run_mode_unsupported`, feature `stream_report_sink`.
 
-- **Native report modes and reader declarations (CR-150).** C++ clients
+- **Native report modes and reader declarations.** C++ clients
   gain `set_report_mode_v1`, `fill_report_envelope_v1` and the separate
   version-1 envelope. Logical counts, capture and external storage are
   distinct. FULL and SUMMARY_ONLY conflict with an installed sink;
@@ -322,7 +415,7 @@ deployments using Docker `--tmpfs /tmp` or Kubernetes `emptyDir` with
   `install_equity_ratio_result()` when a second pass is needed; until then
   its four Sharpe/Sortino fields are NaN and the envelope is incomplete.
 
-- **Scratch-backed trade history and report metrics (CR-150).**
+- **Scratch-backed trade history and report metrics.**
   `TradeLedger` replaces the vector of closed trades. C++ closed-row access
   returns a value; `TradeLedger::read()`, `visit()` and `previous()` reach
   retired history. Rows and text use scratch storage; sink sealing,
@@ -337,7 +430,7 @@ deployments using Docker `--tmpfs /tmp` or Kubernetes `emptyDir` with
   `set_exit_phase()` to translate global indices relative to the sealed
   trade base, preserving exit phases after older rows are sealed.
 
-- **Selected-window sink reports (CR-150).** Selected runs can write a named
+- **Selected-window sink reports.** Selected runs can write a named
   sink, keep bounded equity tails and trade captures, and derive their
   metrics from scratch instead of copying the selected curve and all trade
   rows. Sealed rows are counted and emitted once in global trade order.
@@ -345,7 +438,7 @@ deployments using Docker `--tmpfs /tmp` or Kubernetes `emptyDir` with
   `report_shape_unsupported`, shape `live_selected_sink`.
 
 - **Streamed trade history: T records can be interleaved with E records in the
-  sink file (CR-271).** Regenerated scripts that opt into streamed trade history
+  sink file.** Regenerated scripts that opt into streamed trade history
   (`set_trade_history_streamable`) write T records interleaved with E records in
   the sink file as trades close; the record set and every report value are
   unchanged; consumers must not rely on E-before-T order. When rows are sealed
@@ -357,7 +450,7 @@ deployments using Docker `--tmpfs /tmp` or Kubernetes `emptyDir` with
   (`89b48cb6e2fe`); its gitlink is `8425ca820c4b`, and the committed
   per-probe trade digests are unchanged.
 
-- **Optional sequences and borrowed native reads (CR-150).** Native optional
+- **Optional sequences and borrowed native reads.** Native optional
   sequence policies can retain arrays, stream records or fold summary
   witnesses while releasing rows. Summary output-event row indices advance
   by discarded rows, including across repeated calculations. A rewritten
@@ -374,7 +467,7 @@ deployments using Docker `--tmpfs /tmp` or Kubernetes `emptyDir` with
   Borrowed values require the source generation to remain alive and forbid
   host mutation inside visitors.
 
-- **Spilled native working books (CR-150).** The matcher holds spilled
+- **Spilled native working books.** The matcher holds spilled
   rows across sibling sizing, trail observation and other book reads;
   `WorkingRequestCore::hold_live()` gives native hosts the same lifetime
   control. A spilled row stays alive with its returned shared pointer;
@@ -389,7 +482,7 @@ deployments using Docker `--tmpfs /tmp` or Kubernetes `emptyDir` with
   a truncated hash or terminating in the fold. Journal retirement stages
   fallible reads before changing its retained window.
 
-- **Admitted scratch-table storage (CR-150).**
+- **Admitted scratch-table storage.**
   `PINEFORGE_HAS_SCRATCH_TABLES_V1` announces
   `strategy_set_scratch_tables_v1`, which selects disk scratch or a fixed
   memory slab before execution, independently of report capture. Explicit
@@ -403,8 +496,8 @@ deployments using Docker `--tmpfs /tmp` or Kubernetes `emptyDir` with
   bytes respectively. Exceeding a region fails; it never grows the slab
   or falls back to disk.
 
-- **Inherited scratch arenas and opt-in admission (CR-150, CR-260,
-  CR-267).** The arena can serve report scratch, command stores, ID-pair
+- **Inherited scratch arenas and opt-in admission (related storage changes).**
+  The arena can serve report scratch, command stores, ID-pair
   tables, ordered folds, successor roots and openings.
   `PF_SCRATCH_ARENA_FD=5` and `PF_SCRATCH_ARENA_BYTES` select its backing.
   A host requiring an arena calls
@@ -431,7 +524,7 @@ deployments using Docker `--tmpfs /tmp` or Kubernetes `emptyDir` with
   **A successful new arena attachment sets process-wide SIGXFSZ to
   `SIG_IGN`; detach does not restore it.**
 
-- **Command scratch backing and byte budgets (CR-150, CR-221).** Source and
+- **Command scratch backing and byte budgets (related storage changes).** Source and
   native run setup provision the command, trade and dependency stores
   through the production backing. The store supplies transactional
   put/erase, rollback, stable handles, ordered readers and content/state
@@ -447,7 +540,7 @@ deployments using Docker `--tmpfs /tmp` or Kubernetes `emptyDir` with
   Carried arena failures retain their typed reason through rollback and
   state-hash reads.
 
-- **Scratch I/O buffering and exit-scope cleanup (CR-257, CR-265).**
+- **Scratch I/O buffering and exit-scope cleanup.**
   Command backings use up to 64 KiB of read-cache page bytes per store,
   at most 192 KiB for three stores, plus metadata. Pages outside the
   supported cache geometry bypass it. Trade payloads gain a buffered tail.
@@ -460,7 +553,7 @@ deployments using Docker `--tmpfs /tmp` or Kubernetes `emptyDir` with
   run-local diagnostic state, excluded from the broker-state hash.
   These changes do not establish a bound on total writes or cleanup time.
 
-- **Bounded resident command journals (CR-150).** The working book and older
+- **Bounded resident command journals.** The working book and older
   journal, chain and receipt populations spill to scratch. The journal's
   non-codec resident limit is 2,048 events; spill pages hold at most
   32 events and 32,768 bytes; spilling keeps at least 128 newest events
@@ -481,7 +574,7 @@ deployments using Docker `--tmpfs /tmp` or Kubernetes `emptyDir` with
 
 ### run_json and CLI
 
-- **Binary bar inputs and conversion (CR-150).** `run_json.py csv2bin
+- **Binary bar inputs and conversion.** `run_json.py csv2bin
   --chart|--feed --symbol SYMBOL --tf TF IN.csv OUT.bin` writes headerless
   48-byte little-endian `pf_bar_t/v1` rows, a JSON sidecar and, for feeds,
   `.close.bin` close times. The sidecar is published last after durable
@@ -496,7 +589,7 @@ deployments using Docker `--tmpfs /tmp` or Kubernetes `emptyDir` with
   with the required borrowed-feed support and
   `selected_window_bars_bin_version=0`.
 
-- **Streaming JSON report assembly and named-sink stdout (CR-150).** With
+- **Streaming JSON report assembly and named-sink stdout.** With
   a complete sink-v1 API, unjailed `run_json.py` uses a temporary path sink
   by default and streams report arrays back from the strict reader instead
   of building an owning result document. `--report-sink PATH` retains the
@@ -520,7 +613,7 @@ deployments using Docker `--tmpfs /tmp` or Kubernetes `emptyDir` with
   A module without any sink API keeps the legacy route unless a sink was
   explicitly requested; a partial or incompatible sink API is refused.
 
-- **Jailed and fd CLI routes (CR-150, CR-267).** `--profile jailed`, also
+- **Jailed and fd CLI routes (related storage changes).** `--profile jailed`, also
   selected by `PINEFORGE_RUN_JSON_PROFILE=jailed`, installs bounded scratch
   tables and requires the inherited arena on every fresh handle.
   The default is `unjailed`. Jailed runs refuse path sinks and `--spill-dir`
@@ -537,7 +630,7 @@ deployments using Docker `--tmpfs /tmp` or Kubernetes `emptyDir` with
   `mode` and `contract=pineforge-report/v1`, because this ctypes host has
   no envelope provider bridge.
 
-- **Sink finalization and JSON conversion (CR-150, CR-289).**
+- **Sink finalization and JSON conversion.**
   `pineforge-sink-finalize` verifies an inherited stream, counts, SHA, run ID
   and ordering before publishing a retained file, or forwards provisional
   verified lines with `--out -`. Its options include `--in-fd`, `--out`,
@@ -558,7 +651,7 @@ deployments using Docker `--tmpfs /tmp` or Kubernetes `emptyDir` with
   An overlong LF-terminated line is 3. Consumers must discard stdout on
   any nonzero exit and require successful completion.
 
-- **Strategy-runner sink opt-in (CR-150).** `PINEFORGE_REPORT_SINK=1`
+- **Strategy-runner sink opt-in.** `PINEFORGE_REPORT_SINK=1`
   requires sink-v1 and reads reports through it. Each probe prints a
   `sink_canary:` line including bytes, records, trades and equity count
   checked against the engine receipt. `PINEFORGE_KEEP_REPORT_SINK=all` or
@@ -567,7 +660,7 @@ deployments using Docker `--tmpfs /tmp` or Kubernetes `emptyDir` with
   lines; the corpus subset command adds a second, sink-on pass.
   `PINEFORGE_SUBSET_SINK=0` skips that second pass for a developer loop.
 
-- **Bounded scratch in the HPO example (CR-150).** The throughput
+- **Bounded scratch in the HPO example.** The throughput
   `grid_search_repro.py` example installs the default bounded scratch
   manifest on each fresh trial handle and checks run status before ranking
   its results. A failed trial cannot enter the ranking.
@@ -581,7 +674,7 @@ deployments using Docker `--tmpfs /tmp` or Kubernetes `emptyDir` with
   and `scratch_io_failed=69`; `kRunFailureCodeCount` is 70.
   The C failure getters return names.
 
-- **Typed storage failure details (CR-150, CR-267).** `report_sink_failed`
+- **Typed storage failure details (related storage changes).** `report_sink_failed`
   is a non-retryable `engine_fault` and distinguishes `arena_exhausted`,
   `arena_io`, `arena_backing`, `scratch_io`, `sink_io`,
   `sink_peer_closed` and `sink_exhausted`. Exhaustion diagnostics can
@@ -614,14 +707,14 @@ deployments using Docker `--tmpfs /tmp` or Kubernetes `emptyDir` with
   Configuring a window for the next run does not invalidate the envelope
   of an already completed SUMMARY_ONLY generation.
 
-- **Codec-bound execution preparation (CR-150).** Native hosts that call
+- **Codec-bound execution preparation.** Native hosts that call
   `bind_journal_codec` now get `PreparationError` with
   `CoreFailure::UnsupportedTransition` from plan-form
   `WorkingRequestCore::prepare_execution`, before state changes.
   The plan's noexcept installation cannot report codec I/O failures;
   refusing preparation avoids a later `std::terminate`.
 
-- **Nonfinite sink equity is refused (CR-289).** The path and fd writers
+- **Nonfinite sink equity is refused.** The path and fd writers
   reject nonfinite E-row `equity` or `open_profit` before writing the row,
   using `report_result_invalid`, `reason=nonfinite` and
   `field=equity_curve.equity` or `equity_curve.open_profit`.
@@ -632,21 +725,21 @@ deployments using Docker `--tmpfs /tmp` or Kubernetes `emptyDir` with
   released point, equity first; completed array/metric routes check
   final `open_profit` first, so the reported field can differ.
 
-- **Resource retries and boolean arguments (CR-150).** The `resource`
+- **Resource retries and boolean arguments.** The `resource`
   class no longer implies retryability. Read each code's `retryable`:
   `scratch_capacity_exceeded` and `scratch_io_failed` are not retryable;
   `out_of_memory` still is. The catalog adds the argument kind `boolean`,
   used by `run_aborted.strategy_started`; `strategy_get_last_error_args`
   emits it as JSON `true` or `false`.
 
-- **A latched `report_sink_failed` yields an empty report (CR-150).**
+- **A latched `report_sink_failed` yields an empty report.**
   Every later report read returns NULL arrays and zero counts instead of
   retrying failed storage, including native spill failures with no sink
   and a sink failure at finish time after execution succeeded. The typed
   status, code, arguments and message stay latched. Other failure codes
   retain their partial-report behavior.
 
-- **Cooperative SIGTERM abort (CR-150).** The opt-in process-wide
+- **Cooperative SIGTERM abort.** The opt-in process-wide
   `pf_run_abort_install_sigterm_v1`, `pf_run_abort_requested_v1` and
   `pf_run_abort_restore_sigterm_v1` API lets a batch stop after its
   in-flight input bar. `run_json.py` blocks SIGTERM from startup on
@@ -674,18 +767,18 @@ deployments using Docker `--tmpfs /tmp` or Kubernetes `emptyDir` with
   host folds only the constant `source:none` for the source layer, so none of
   the causes below applies to it. Apart from the last cause, the changes
   alter hash values only (the re-pin commits report unchanged trades, counts
-  and curves); the last cause, CR-277, also alters trades in one measured
+  and curves); the last cause, the pending-key change, also alters trades in one measured
   configuration. Causes:
   - the trade command store: the host extension folds a presence flag and, when
     the store exists, its state digest (order id, next handle, record count and
     every live row's handle, key and value, independent of backing and cache
     placement); after a run releases the store the same presence and digest
-    bytes are folded (CR-150);
+    bytes are folded (the scratch-storage state);
   - the exit command store: the adapter folds, right after its domain, a
     presence flag and, when an exit scratch exists, the run identity, presence
     flags for its version provider, its lots callback and its working callback,
     and the exit store's presence flag and state digest (same contents as
-    above) (CR-150); the exit context's temporary scope-allocation counter is
+    above); the exit context's temporary scope-allocation counter is
     not folded (LAB-QUIETFIX), which is not a difference from 1.6.3, which
     never folded it;
   - retired limit-only placements (O1W): a terminally filled, non-revivable
@@ -693,7 +786,7 @@ deployments using Docker `--tmpfs /tmp` or Kubernetes `emptyDir` with
     placement table's high-water, erased-row count and erased-identity digest,
     and a filled-exit placement folds an extra marker; hash values change
     wherever such a limit retires;
-  - placement retirement rules (CR-150): entry and order placements retire by
+  - placement retirement rules: entry and order placements retire by
     their script-bar open time instead of an input-bar index (on a chart that
     aggregates input bars, 1.6.3 kept every entry row of the run), and for the
     dormant exit legs of one origin, exit id, family and entry only the oldest
@@ -708,7 +801,7 @@ deployments using Docker `--tmpfs /tmp` or Kubernetes `emptyDir` with
     digest) after the working families, and it is absent when none is
     archived;
   - `strategy.close("")` and `strategy.close_all()` keep a pending entry's real
-    id as its replacement key (CR-277; it was an empty string), and the hash
+    id as its replacement key (it was an empty string), and the hash
     folds every pending entry's key, so a hash taken while such an entry is
     pending differs. A same-id `strategy.entry` re-issued behind such a close
     now replaces the pending entry instead of opening a second one, as
@@ -726,7 +819,7 @@ deployments using Docker `--tmpfs /tmp` or Kubernetes `emptyDir` with
 
 ### Adapter behavior
 
-- **Adapter history retirement (CR-150).** Origin/cohort receipts, bracket
+- **Adapter history retirement.** Origin/cohort receipts, bracket
   rosters, historical IDs, successor roots and position tails use retirement,
   bounded resident windows or scratch instead of retaining all history in
   RAM, except that rows pinned for the current position cycle and one record
@@ -740,7 +833,7 @@ deployments using Docker `--tmpfs /tmp` or Kubernetes `emptyDir` with
   The partial-exit-cycle sorted hash fold is maintained on mutation rather
   than rebuilt at each hash read; its mutations are not constant-time.
 
-- **Bracket cancels of members no longer working (CR-150).** When an exit
+- **Bracket cancels of members no longer working.** When an exit
   bracket family is cancelled, members the kernel no longer works,
   including settled members, record a `NotWorking` outcome against one
   never-issued incarnation (`UINT64_MAX`) of the same run, in roster order.
@@ -748,7 +841,7 @@ deployments using Docker `--tmpfs /tmp` or Kubernetes `emptyDir` with
   do not depend on whether non-working rows have already been retired.
 
 - **Entry incarnation numbers can differ from 1.6.3 after a same-id re-entry
-  behind a full close (CR-277).** The public C ABI value
+  behind a full close.** The public C ABI value
   `strategy_closed_trade_entry_incarnation`, the C++ `Trade::entry_incarnation`
   and the `entry_incarnation` of the sink T records and the `run_json` trade
   rows can differ from 1.6.3 in scripts that reissue an entry with the
@@ -757,7 +850,7 @@ deployments using Docker `--tmpfs /tmp` or Kubernetes `emptyDir` with
   non-zero, unique and monotonic; `entry_id` is unchanged. `pf_trade_t` has no
   such member and is unchanged.
 
-- **Store-once bars and bounded calendar views (CR-150).** Native bar views,
+- **Store-once bars and bounded calendar views.** Native bar views,
   the chart scheduler and the magnifier share borrowed input or generate
   bounded path segments instead of copying whole feeds and completion
   arrays. `PINEFORGE_HAS_SYMBOL_FEED_BORROWED_V1` announces
@@ -779,7 +872,7 @@ deployments using Docker `--tmpfs /tmp` or Kubernetes `emptyDir` with
 
 ### CI and docs
 
-- **Scratch sizing and ABI inventories (CR-150, CR-249, CR-260).** The public
+- **Scratch sizing and ABI inventories (related storage changes).** The public
   scratch-table and arena documentation distinguishes policy admission from
   a certified bound. The arena estimator accounts for the ordered fold,
   excludes openings for its stock-source profile and reserves the three
@@ -800,13 +893,13 @@ deployments using Docker `--tmpfs /tmp` or Kubernetes `emptyDir` with
   post-merge Release, kernel and native run every registered row, while
   Debug and sanitizers retain their default `slow` exclusion.
 
-- **Ownership manifest controls run in four CTest shards (CR-196).** The same
+- **Ownership manifest controls run in four CTest shards.** The same
   loader-discovered cases keep every assertion and the 180-second timeout per
   row; a cheap guard checks complete, disjoint assignment for shard counts
   1 through 8. Preflight continues to run the complete unsharded suite. This
   was already in the v1.6.2 and v1.6.3 sources; it is first documented here.
 
-- **Selected-window completeness (EN-115).** (Already declared by the v1.6.2 and
+- **Selected-window completeness.** (Already declared by the v1.6.2 and
   v1.6.3 sources; first documented here.) The image declares selected-window
   contract revision `1.3`: the section-4 producers and manifest are present,
   `value_ownership` is `complete`, and revision `1.3` pairs only with a
@@ -816,7 +909,7 @@ deployments using Docker `--tmpfs /tmp` or Kubernetes `emptyDir` with
   `1.3-parity`; a tuple holding both is invalid. The selected-window wire
   version stays 1, the phase version 1 and the fingerprint/schema version 2.
 
-- **Corpus regeneration tooling (CR-271).**
+- **Corpus regeneration tooling.**
   `scripts/regen_corpus_cpp.sh` makes its fetched codegen checkout readable
   by the runtime image's non-root user and prints the last three stderr
   lines when transpilation fails.
@@ -922,7 +1015,7 @@ deployments using Docker `--tmpfs /tmp` or Kubernetes `emptyDir` with
   `strategy_closed_trade_close_cause` and
   `strategy_closed_trade_entry_incarnation` swallow a failed ledger read
   and answer as for an out-of-range index (NULL, -1 or 0) without setting
-  `strategy_get_last_error`. Tracked as card ORG-171-IO, a
+  `strategy_get_last_error`. Tracked as a
   1.7.1 priority.
 
 - **The closed-trade cache, and the reads that still cost I/O.** The
@@ -990,7 +1083,7 @@ deployments using Docker `--tmpfs /tmp` or Kubernetes `emptyDir` with
   O(1) and is now O(resident rows + log of the id population x key length)
   per call. None of the three is
   measured: this release pins no throughput bound for them. Tracked as card
-  ORG-171-COSTS.
+  related cost item.
 
 - **A refused begin can empty the report sink file.** A path report sink is
   opened with `O_TRUNC` when a run begins (`BacktestEngine::begin_report_sink`,
@@ -1000,7 +1093,7 @@ deployments using Docker `--tmpfs /tmp` or Kubernetes `emptyDir` with
   created and truncated to zero bytes, so a file from an earlier run at the
   same path is lost even though the new run was refused. Use a sink path
   whose old contents you can lose, or check the scratch directory before
-  `begin`. Tracked as card ORG-171-SINK, a 1.7.1 priority.
+  `begin`. Tracked as a 1.7.1 priority.
 
 - **A touched dormant leg that is re-issued keeps one placement row per
   re-issue.** A script that re-issues `strategy.exit` on a leg held dormant (a
@@ -1013,7 +1106,7 @@ deployments using Docker `--tmpfs /tmp` or Kubernetes `emptyDir` with
   with the same exit id replaces its row in place and does not grow. A
   strategy that never goes flat and keeps re-issuing a touched dormant leg
   therefore grows resident memory with the number of such re-issues, and it
-  is tracked as card ORG-171-DORMANT, a bounded retirement for this pattern
+  is tracked as a bounded retirement for this pattern
   with a RETAIN-ladder bound test that exercises an unwithdrawn dormant
   re-issue.
 
@@ -1043,11 +1136,11 @@ is the run-failure code catalog diff published with the release.
 
 - **CI runs on the GCP fleet.** The engine's CI runs on the GCP fleet
   (`pf-gcp-pr`, `pf-gcp-main`), fork-gated (#474). The pull-request wall is
-  split from full-event verification (CR-233 A and B, squash of #477, #480).
+  split from full-event verification (the CI split, squash of #477, #480).
 - **A release needs full verify and parity green first.** The release job
   requires both before an engine release (C2, #479).
 - **Test-only.** The live test matches delivery receipts by request sequence
-  (CR-223, #478); a session tape comment no longer names a private repository
+  (request-sequence matching, #478); a session tape comment no longer names a private repository
   (#476).
 
 ## 1.6.2 — 2026-10-21
@@ -1066,22 +1159,22 @@ stopped the release job's Linux x86-64 leg; SHA-256
 strategy C++ with the matching codegen and relink against the matching engine
 headers and archive.
 
-- **Selected-window contract revision `1.3`, with the EN-115 completeness
+- **Selected-window contract revision `1.3`, with the completeness
   proof (#412).** The engine and `docker/run_json.py --capabilities-json`
   declare `capabilities.selected_window_contract_revisions` as `["1.3"]` on a
   supported runtime and `[]` otherwise; 1.6.1 declared `1.3-parity`. The
-  ownership probes were fixed so proof B reads 118/118 (CR-139, #446), and the
+  ownership probes were fixed so proof B reads 118/118 (#446), and the
   ownership manifest-controls test is sharded four ways so the Debug and ASan
-  runs stop timing out (CR-196, #445).
+  runs stop timing out (#445).
 - **Proportional annualisation for runs shorter than a day, never null
-  (CR-202, W-73, #456).**
+  (short-run annualisation, #456).**
 - **CI.** Linux x64 jobs run on the pf-ci-spot pool (#420) and release jobs on
   pf-ci-release (#461); `timeout-minutes` is removed (#462); the actions of
   `promote-baseline.yml` are pinned by SHA (#443); native-live and the Ubuntu
   Debug leg are pool-only required pull-request checks (#464); macOS Debug is
-  deferred from pull requests (D3, CR-195, #454); the pull-request tier
+  deferred from pull requests (D3, #454); the pull-request tier
   excludes the slow rows on Release and kernel-only, with registration floors,
-  and defers the slow verifier self-test classes (D1, CR-195, #449); only
+  and defers the slow verifier self-test classes (D1, #449); only
   superseded pull-request runs of the docs workflow are cancelled (#444);
   the App-token owner follows the repository owner (#439).
 
@@ -1102,13 +1195,13 @@ matching codegen and relink against the matching engine headers and archive;
 replacing the archive alone does not update a statically linked strategy
 library.
 
-- **The selected-window contract is revision `1.3-parity` (EN-115, [#401]).** Since
+- **The selected-window contract is revision `1.3-parity` ([#401]).** Since
   [#388], `docker/selected_window_report.py` (`CONTRACT_REVISIONS`) and the
   `docker/run_json.py --capabilities-json` probe declared
   `capabilities.selected_window_contract_revisions` as `["1.3"]` in 1.6.0.
   Under amendment 6 of the selected-window contract, revision `"1.3"` pairs
   only with `value_ownership` `"complete"`, and no completeness proof has run
-  (EN-115). The probe now declares `["1.3-parity"]` when the runtime supports
+  The probe now declares `["1.3-parity"]` when the runtime supports
   selected windows and `[]` otherwise (`value_ownership`
   `parity_with_reference`, as 1.5.0 declared): value parity with the 1.4.0
   reference on the tested cases, with the four typed value-ownership codes
@@ -1116,8 +1209,8 @@ library.
   `report_result_invalid` and `report_post_execution_failed`) emitted, and no
   completeness claim. A build declaring `1.3-parity` cannot be promoted to a
   stable app pin; the app pins it only as a prerelease (`1.6.1-rc.N`), and
-  only a completeness proof (EN-115) allows `"1.3"` again. The C layouts stay
-  at ABI 4, `PF_ABI_VERSION` stays 4, the selected-window wire version stays
+  only a completeness proof allows `"1.3"` again. The C layouts stay
+  at ABI 4, `PF_ABI_VERSION` was still 4, the selected-window wire version stays <!-- verified HEAD -->
   1, the phase version 1 and the fingerprint/schema version 2.
 - **Preflight stage timings ([#402]).** `scripts/ci_preflight.py` records `startedAt` (UTC ISO-8601) and `seconds` (monotonic duration; `null` while a stage is running) on each stage and on the top-level `preflight-summary.json` summary.
 - **API documentation (`noindex` on Doxygen source listings and report-schema wording, [#398], [#400]).**
@@ -1164,13 +1257,13 @@ matching codegen release candidate and relink against the matching engine
 headers and archive; replacing the archive alone does not update a statically
 linked strategy library.
 
-- **The selected-window contract is revision `1.3-parity` (EN-115, [#401]).** Since
+- **The selected-window contract is revision `1.3-parity` ([#401]).** Since
   [#388], `docker/selected_window_report.py` (`CONTRACT_REVISIONS`) and the
   `docker/run_json.py --capabilities-json` probe declared
   `capabilities.selected_window_contract_revisions` as `["1.3"]` in 1.6.0.
   Under amendment 6 of the selected-window contract, revision `"1.3"` pairs
   only with `value_ownership` `"complete"`, and no completeness proof has run
-  (EN-115). The probe now declares `["1.3-parity"]` when the runtime supports
+  The probe now declares `["1.3-parity"]` when the runtime supports
   selected windows and `[]` otherwise (`value_ownership`
   `parity_with_reference`, as 1.5.0 declared): value parity with the 1.4.0
   reference on the tested cases, with the four typed value-ownership codes
@@ -1178,8 +1271,8 @@ linked strategy library.
   `report_result_invalid` and `report_post_execution_failed`) emitted, and no
   completeness claim. A build declaring `1.3-parity` cannot be promoted to a
   stable app pin; the app pins it only as a prerelease (`1.6.1-rc.N`), and
-  only a completeness proof (EN-115) allows `"1.3"` again. The C layouts stay
-  at ABI 4, `PF_ABI_VERSION` stays 4, the selected-window wire version stays
+  only a completeness proof allows `"1.3"` again. The C layouts stay
+  at ABI 4, `PF_ABI_VERSION` was still 4, the selected-window wire version stays <!-- verified HEAD -->
   1, the phase version 1 and the fingerprint/schema version 2.
 - **Preflight stage timings ([#402]).** `scripts/ci_preflight.py` records `startedAt` (UTC ISO-8601) and `seconds` (monotonic duration; `null` while a stage is running) on each stage and on the top-level `preflight-summary.json` summary.
 - **API documentation (`noindex` on Doxygen source listings and report-schema wording, [#398], [#400]).**
@@ -1519,7 +1612,7 @@ does not update a statically linked strategy library.
   `docker/run_failure_codes.json`). Recording is off until a caller
   turns it on, and nothing a run computes depends on it: trades, reports,
   metrics and every hash are byte-identical, `pf_report_t` and every existing
-  symbol are unchanged, and `PF_ABI_VERSION` stays 4. The new members enter
+  symbol are unchanged, and `PF_ABI_VERSION` was still 4. The new members enter <!-- verified HEAD -->
   `engine_script_run_v19` without an epoch; a C++ object compiled against an
   earlier v19 header is rebuilt with the library.
 - **A run's report belongs to the call that began it ([#361]).** Once a call
@@ -1607,7 +1700,7 @@ strategy library.
 The C header adds `strategy_get_last_error_code` and
 `strategy_get_last_error_args`, behind `PINEFORGE_HAS_RUN_FAILURE_CODES_V1`.
 No existing C signature, struct layout or enumerator changes:
-`PF_ABI_VERSION` stays 4 and `PF_CAPABILITIES_API_VERSION` stays 1.
+`PF_ABI_VERSION` was still 4 and `PF_CAPABILITIES_API_VERSION` stays 1. <!-- verified HEAD -->
 The native C header and frozen header fixtures are unchanged. The script
 epoch stays `engine_script_run_v19`; *State hashes* below describes the
 recipe additions. *Report keys and provenance* describes the JSON changes
@@ -1733,7 +1826,7 @@ results on that population, not cross-version trade or hash identity.
   the text, so a script's `runtime.error` always reads
   `strategy_runtime_error`, whatever English it copies; an argument is never a
   value the script computed while it ran. Both getters are additive runtime
-  exports that every strategy library links, so `PF_ABI_VERSION` stays 4; a
+  exports that every strategy library links, so `PF_ABI_VERSION` was still 4; a <!-- verified HEAD -->
   harness looks them up with `dlsym` (Python: `hasattr`), and a library built
   against an earlier runtime lacks them.
   [Run-failure codes](docs/pages/run-failure-codes.md) lists every code, its
@@ -2023,8 +2116,8 @@ pineforge-codegen 1.3.0, the pair the release hub's image
 attaches the three prebuilt tarballs, `pineforge-v1.3.0-linux-x86_64.tar.gz`,
 `pineforge-v1.3.0-linux-aarch64.tar.gz` and
 `pineforge-v1.3.0-macos-universal.tar.gz`, each with a `.sha256`.
-`<pineforge/pineforge.h>` is v1.2.0's byte for byte, so `PF_ABI_VERSION` stays
-4 and `PF_CAPABILITIES_API_VERSION` stays 1; the two confirmed-bar calls are
+`<pineforge/pineforge.h>` was v1.2.0's byte for byte, so `PF_ABI_VERSION` was still 4 <!-- verified HEAD -->
+and `PF_CAPABILITIES_API_VERSION` stays 1; the two confirmed-bar calls are
 per-strategy symbols the generated module defines, not runtime exports.
 `native_c_api.h` and the native C++ host headers are unchanged, so no
 published layout moves; the frozen historical headers and archives are
@@ -2264,7 +2357,7 @@ pairs with pineforge-codegen 1.2.0, the pair the release hub's image
 attaches the three prebuilt tarballs, `pineforge-v1.2.0-linux-x86_64.tar.gz`,
 `pineforge-v1.2.0-linux-aarch64.tar.gz` and
 `pineforge-v1.2.0-macos-universal.tar.gz`, each with a `.sha256`.
-`PF_ABI_VERSION` stays 4: `pineforge.h` only gains declarations and one
+`PF_ABI_VERSION` was still 4: `pineforge.h` only gains declarations and one <!-- verified HEAD -->
 updated comment, and `native_c_api.h` and the native C++ host headers are
 unchanged, so no published layout moves; the frozen historical headers and
 archives are untouched. The script ABI epoch stays `engine_script_run_v19` and
@@ -2337,7 +2430,9 @@ release either.
   the committed inputs, stored state hashes, actions and report rows, so a
   ledger written before 1.2.0 needs one verified `run` replay to fill in its
   reports and digests before it exports. `run --report-jsonl` mirrors each new
-  report to stdout; a closed pipe exits 1, not SIGPIPE, and loses no input.
+  cumulative report to stdout as before; `run --report-jsonl=full` is an
+  explicit alias, and `run --report-jsonl=delta` opts into delta output.
+  A closed pipe exits 1, not SIGPIPE, and loses no input.
   The runner keeps tracing off and refuses to export a nonempty trace. A
   confirmed-bar run's report is checked field by field against a batch
   backtest of the same bars; the one tested difference is that a batch seals a
@@ -2540,7 +2635,7 @@ lists the other symbols' feeds a script requests
 installs ([#327]). The GitHub release attaches the three prebuilt tarballs,
 `pineforge-v1.1.0-linux-x86_64.tar.gz`, `pineforge-v1.1.0-linux-aarch64.tar.gz`
 and `pineforge-v1.1.0-macos-universal.tar.gz`, each with a `.sha256`.
-`PF_ABI_VERSION` stays 4: `pineforge.h` only gains declarations, and
+`PF_ABI_VERSION` was still 4: `pineforge.h` only gains declarations, and <!-- verified HEAD -->
 `native_c_api.h` and the native C++ host headers are unchanged, so no published
 layout moves; the frozen historical headers and archives are untouched. The
 script ABI epoch stays `engine_script_run_v19` and the state hashes keep their
@@ -2848,7 +2943,7 @@ A documentation-only release that pairs with pineforge-codegen 1.0.1, the pair
 the release hub's image `ghcr.io/pineforge-4pass/pineforge-release:1.0.1`
 carries. Since v1.0.0 no file under `src/`, `include/`, `cmake/` or
 `examples/`, no CMake file and nothing under `docker/` but its README changed:
-the library, the C ABI (`PF_ABI_VERSION` 4), the native C++ API, the script ABI
+the library, the then-current C ABI (`PF_ABI_VERSION` 4, which was unchanged), the native C++ API, the script ABI <!-- verified HEAD -->
 epoch `engine_script_run_v19` and its state-hash values, and the JSON report
 keys of `docker/run_json.py` (`metrics.equity.sharpe_tv` / `sortino_tv`
 included) are v1.0.0's. The GitHub release attaches the three prebuilt
@@ -2918,7 +3013,7 @@ was never tagged.
 
 ### Breaking changes: what a 0.x user must act on
 
-- **C ABI version 4.** `PF_ABI_VERSION` is 4 (0.13.1: 3). `pf_report_t`
+- **C ABI version 4.** `PF_ABI_VERSION` was 4 in 1.0.0 (0.13.1: 3). `pf_report_t` <!-- verified HEAD -->
   appends `broker_state_hash` and `broker_state_hash_len`, and it is
   caller-allocated, so a mirror built for ABI 3 under-sizes it: update FFI
   mirrors and check `pf_abi_version() == PF_ABI_VERSION` before a run

@@ -169,6 +169,7 @@ header) are configured via separate env vars:
 | `PINEFORGE_MAGNIFIER_SAMPLES` | `4`            | Sub-bar sample count when magnifier is on (≥2)                        |
 | `PINEFORGE_MAGNIFIER_DIST`    | `endpoints`    | `uniform`, `cosine`, `triangle`, `endpoints`, `front_loaded`, `back_loaded` |
 | `PINEFORGE_REPORT_SINK_FD`    | unset          | Raw `--report-sink-fd` value; set-empty is forwarded                    |
+| `PINEFORGE_RUN_ID`            | `""`           | Raw `--run-id` for the sink header; set-empty is forwarded as empty (a caller that needs an id refuses empty itself); unset keeps the empty default |
 
 The caller must open an inheritable descriptor numbered from 3 through INT_MAX, excluding 5 and any phase descriptor; `run_json.py` closes its copy after capture.
 An invalid value is refused like `--report-sink-fd` (entrypoint exit 4), and the failure line or small success document stays on stdout.
@@ -308,7 +309,7 @@ tested cases, and no completeness claim (the published 1.6.0 image declares
 From 1.6.2, the engine/codegen image's `run_json.py --so
 <strategy.so> --capabilities-json` probe declares revision `1.3`: with the
 section-4 producers and manifest present and value ownership `complete`
-(EN-115), it emits the four typed codes (`strategy_value_invalid`,
+(the completeness proof), it emits the four typed codes (`strategy_value_invalid`,
 `engine_command_value_invalid`, `report_result_invalid` and
 `report_post_execution_failed`). A build declaring `1.3` pairs only with a
 `complete` receipt; `1.3-parity` remains the parity build's literal, and a

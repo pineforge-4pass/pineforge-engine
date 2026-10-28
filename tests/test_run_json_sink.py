@@ -1,4 +1,4 @@
-"""CR-150 L9A: full JSON from a verified temporary v1 sink.
+"""Full JSON from a verified temporary v1 sink.
 
 The red commit is intentionally executable against the merged L2/L6b-1 base:
 the first test fails because main never installs the existing sink ABI. Native

@@ -1,24 +1,24 @@
-# CR-150 P00 declaration contracts
+# Report-sink declaration contracts
 
-DESIGN coordinate basis: `core-cr150-design/work/DESIGN.md`, revision 6 text
-identified by the P00-7 gating read's SHA-256:
+DESIGN coordinate basis: the revision 6 design text
+identified by the gating read's SHA-256:
 `68bda6e37931c096522a348603623c7f3cba2b1371a9c0a442edbf53d25ab0ad`.
 DESIGN line citations below use that pinned text; the amendments below take
-precedence. Dispatch is the external design lane's `PARALLEL-PLAN.md`,
+precedence. Dispatch follows the external design plan;
 lines 27–30 and 63. C++ declarations spell
 the operations described by DESIGN; OPEN items below preserve its unspecified
 policies.
 
-CORE-TOP's rev 6 amendment (10-18 16:04) in the external design lane's
-`core-cr150-design/work/REVISION.md`, lines 342–348, resolves S1 and T1.
+The rev 6 amendment (10-18 16:04) in the external design notes resolves S1 and
+T1.
 References to amendment S1 or T1 below name that ruling, which binds L6b-1
 and L8a respectively.
 
-CORE-TOP's rev 6 amendment recorded at 10-18 19:24 in the same external
-`core-cr150-design/work/REVISION.md`, lines 351–358, resolves V1 and V2. It
-adopts `core-cr150-l15a/PROPOSAL-V1-V2.md`, SHA-256
+The rev 6 amendment recorded at 10-18 19:24 in the same external design notes
+resolves V1 and V2. It adopts the V1/V2 proposal,
+SHA-256
 `b17ff9f2dab20d876df2e3148ca1c2aba2b5d78f7ccf8c4f026643cfdb14674e`,
-with required changes 1–9 of `core-cr150-read-v1v2/REVIEW.md`. That ruling
+with the required review changes 1–9. That ruling
 also approves eager provider/feed component digests at configure, superseding
 the lazy timing in DESIGN 5:1243-1246. The review notes that the later 19:11
 converter amendment shifts live DESIGN coordinates at/after 1173 by +3;
@@ -225,14 +225,14 @@ references; L15a must maintain these anchors and mechanically pin every current
 |---|---|---|
 | Kernel instrument-feed pump: current bar, close, next open, count | `NativeExecutionConsumer::pump_instrument_subscription` `src/native_execution_consumer.hpp:1230` | 357-358 |
 | Host feed lookup/delivery and column reads | `installed_symbol_feed` `src/source/pine_security_eval.cpp:1059-1068`; `installed_symbol_feed` `src/source/pine_security_eval.cpp:1291-1301`; `installed_symbol_feed` `src/source/pine_security_eval.cpp:1320-1328` | 359-360 |
-| Feed validation: bar values/order, close length/bounds, column length; configure and consumer entry points | `feed.bars` `src/native_run_spec.cpp:259-290`; `instrument_feed_shapes` `src/native_run_spec.cpp:743`; `validate_native_instrument_feeds` `src/native_run_spec.cpp:1019-1022`; `validate_native_timeframe_subscriptions` `src/native_execution_consumer.cpp:9997`; `validate_native_timeframe_subscriptions` `src/native_execution_consumer.cpp:10022` | 361-363 |
+| Feed validation: bar values/order, close length/bounds, column length; configure and consumer entry points | `feed.bars` `src/native_run_spec.cpp:259-290`; `instrument_feed_shapes` `src/native_run_spec.cpp:743`; `validate_native_instrument_feeds` `src/native_run_spec.cpp:1019-1022`; `validate_native_timeframe_subscriptions` `src/native_execution_consumer.cpp:10029`; `validate_native_timeframe_subscriptions` `src/native_execution_consumer.cpp:10054` | 361-363 |
 | Adapter projection validation: use the context normalizer; host stages after lending and before projection, using a context built from its store | `normalize_projected_spec` `src/source/pine_adapter.cpp:3189` | 361-363; V1/V2 change 5 |
-| Instrument-feed digest and cached/uncached continuation folds | `digest_instrument_feed_views` `src/native_run_spec.cpp:1162-1205`; `native_instrument_feeds_digest` `src/native_execution_consumer.cpp:328`; `native_instrument_feeds_digest` `src/native_execution_consumer.cpp:2907`; `native_run_spec_digest` `src/native_execution_consumer.cpp:14184` | 364-365 |
+| Instrument-feed digest and cached/uncached continuation folds | `digest_instrument_feed_views` `src/native_run_spec.cpp:1162-1205`; `native_instrument_feeds_digest` `src/native_execution_consumer.cpp:330`; `native_instrument_feeds_digest` `src/native_execution_consumer.cpp:2909`; `native_run_spec_digest` `src/native_execution_consumer.cpp:14290` | 364-365 |
 | Staged feed counts in host state and its hash | `installed_symbol_feed` `src/source/pine_strategy_host.cpp:536-546`; `staged_.instrument_feeds` `src/source/pine_state_hash.cpp:339-346` | 366-367 |
 | Refresh of symbol-data digest and host hash fold | `refresh_symbol_data_digest` `src/source/pine_security_eval.cpp:1553-1566`; `symbol_data_digest_` `src/source/pine_state_hash.cpp:1238-1244` | 367-368 |
 | Restore/store upkeep and column-setter length check | `held.bars` `src/source/pine_security_eval.cpp:1091-1101`; `data.bars` `src/source/pine_security_eval.cpp:1433-1439` | 369-370 |
 | Lower-path preflight/validation | `NativeExecutionConsumer::preflight_intrabar_path` `src/native_execution_consumer.hpp:1189` | 371,1221-1222 |
-| Lower-path digest (count first) and continuation hash | `native_intrabar_path_digest` `src/native_run_spec.cpp:891-919`; `native_intrabar_path_digest` `src/native_execution_consumer.cpp:293` | 371,1223-1224 |
+| Lower-path digest (count first) and continuation hash | `native_intrabar_path_digest` `src/native_run_spec.cpp:891-919`; `native_intrabar_path_digest` `src/native_execution_consumer.cpp:295` | 371,1223-1224 |
 | Per-script-bar lower-path binary search/walk | `candidate` `src/native_execution_consumer.cpp:9094-9127` | 371,1225 |
 | Scheduler sub-bar lookup and one-bar look-ahead | `PineScheduler::lower_path_bar_at` `src/source/pine_scheduler_native.cpp:265-287`; `next_open` `src/source/pine_scheduler_native.cpp:328-329` | 371,1226-1227 |
 | Lower-path emptiness test | `inactive_sampler_path` `src/source/pine_adapter.cpp:3620` | 371,1228 |
@@ -314,21 +314,21 @@ before any state change: retired rows remain in the sink and cannot be
 recovered from resident storage.
 
 L17c/d and L8c use one report path. `fill_trades_section`
-(`src/engine_report.cpp:165`) keeps the logical global count and copies only
+(`src/engine_report.cpp:422`) keeps the logical global count and copies only
 open rows for a sink. `report_closed_net_profit`
-(`src/engine_report.cpp:265`) starts at `ClosedTradePrefix::pnl` and adds the
+(`src/engine_report.cpp:522`) starts at `ClosedTradePrefix::pnl` and adds the
 resident suffix in order. `finish_streamed_trade_metrics`
-(`src/native_execution_consumer.cpp:14004`) finishes copies of the sealed
+(`src/native_execution_consumer.cpp:14110`) finishes copies of the sealed
 accumulators over resident closed rows, then the presented open rows. The
 source host's terminal-quote presentation continues that same closed-row PnL
 fold before adding its edited open rows (`net_profit`
 `src/source/pine_strategy_host.cpp:2250-2251`).
 
 Selected carry-in validation includes the minimum entry time folded at seal
-(`first_entry_time` `src/native_execution_consumer.cpp:12942`), so a
+(`first_entry_time` `src/native_execution_consumer.cpp:12984`), so a
 window starting after a sealed entry refuses with the existing typed
 `engine_invariant`. Validation never indexes a retired row. `write_report_sink_trades`
-(`src/engine_report.cpp:1361`) resumes at the global T cursor: sealed rows
+(`src/engine_report.cpp:1671`) resumes at the global T cursor: sealed rows
 already in the sink are emitted exactly once, followed by the resident suffix
 and open rows. The sink remains the complete row report.
 
@@ -346,7 +346,7 @@ and held point. It replaces that suffix with the edited window and transfers
 the same scratch owner to the selected metric snapshot. No selected history
 vector or second scratch writer is built on this recorder path.
 
-A live `fill_report` (`src/engine_report.cpp:75`) during an open selected
+A live `fill_report` (`src/engine_report.cpp:322`) during an open selected
 kernel-recorder sink run refuses with a coded `std::logic_error`,
 `report_shape_unsupported` and `{"shape":"live_selected_sink"}`. It clears the
 output before allocating report rows, calling presentation or staging a point.

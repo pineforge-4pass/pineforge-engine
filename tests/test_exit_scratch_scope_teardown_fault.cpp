@@ -1,4 +1,4 @@
-// S4E A-3. Fork isolation turns a noexcept teardown abort into a failing row.
+// Fork isolation turns a noexcept teardown abort into a failing row.
 // Compile and execute on the lab box, including the sanitizers profile.
 #include <pineforge/source/pine_adapter.hpp>
 #include "../src/source/exit_scratch_versions_production.hpp"

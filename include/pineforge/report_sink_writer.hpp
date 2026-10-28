@@ -1,6 +1,6 @@
 #pragma once
 
-// CR-150 P00 internal C++ declarations only. DESIGN.md revision 6,
+// Internal C++ declarations only. DESIGN.md revision 6,
 // section 3.7:782-901; C receipt mapping in section 6:1291-1317.
 #include <pineforge/report_sink.h>
 

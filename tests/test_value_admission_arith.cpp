@@ -1,4 +1,4 @@
-// EN-132 S3: raw-argument overflow through real source command doors.
+// Raw-argument overflow through real source command doors.
 // Written before the checked header / adapter changes; expectations come
 // from revision 3 section 4. The supervisor builds and runs these rows.
 #include <pineforge/compat/pine/trail_ticks.hpp>

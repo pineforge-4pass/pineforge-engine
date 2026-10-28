@@ -11,7 +11,11 @@ against tomorrow's runtime — and tells you when it won't.
 From 1.0.0, within one `PINEFORGE_VERSION_MAJOR` (the
 [public contract](public-contract.md) is the full statement):
 
-- **`PF_ABI_VERSION` stays 4.** The layouts a caller allocates or strides
+- **`PF_ABI_VERSION` is 5 from 1.8.0.** This release requires rebuilding
+  strategy libraries for the native order layout change; libraries stamped 4
+  are refused by the loader's ABI mismatch check. The previous 1.x releases
+  used `PF_ABI_VERSION` 4. <!-- verified HEAD -->
+  The layouts a caller allocates or strides
   over (`pf_report_t`, `pf_trade_t`, the metrics structs) do not change; a
   size-prefixed native struct grows only by an appended tail.
 - **`extern "C"` functions are append-only.** New functions may be added;
@@ -38,14 +42,14 @@ parties are the program that loads it and the library it loads:
 
 | Scenario | Outcome |
 | --- | --- |
-| A consumer built against one 1.x `pineforge.h` loads a strategy library built from a later 1.x release. | Works: same `PF_ABI_VERSION`, append-only functions. |
-| The same consumer loads a library built from an earlier 1.x release. | Works for every function that release has; probe a newer one with `dlsym` first. |
+| A consumer loads a strategy library with the same `PF_ABI_VERSION`. | Works for every function that release has; probe a newer one with `dlsym` first. |
+| A 1.8.0 consumer loads a strategy library stamped 4. | Refused at the ABI mismatch check; rebuild the library against matching headers and archive. |
 | Consumer and library from different majors, or from different 0.x minors. | **No guarantee.** Check `pf_abi_version()` and rebuild. |
 | A C++ object (a generated strategy, a native host) built against another release's headers. | **Not supported.** Rebuild against the headers and archive it links. |
 
 ## How it's enforced
 
-Three layers:
+Four layers:
 
 1. **Compile-time `static_assert`s** in `src/c_abi.cpp` pin the size and
    key field offsets of the structs the header shares with the runtime
@@ -65,13 +69,20 @@ Three layers:
    and every `ci_verify` profile. Strategy-side parity is checked by
    `scripts/check_corpus_parity.sh` against the public `corpus/` submodule.
 
+4. **Module stamp check** — the public Unix CTest row
+   `test_strategy_module_abi_epoch` loads compiled stamp probes through
+   `docker/run_json.py::load_strategy`. It requires the typed ABI mismatch,
+   both version numbers and zero strategy entry-point calls for stamp 4,
+   plus acceptance of the current header stamp. Dynamic-loader resolution
+   and initializers precede this function-based stamp check.
+
 ### Report replay accessors
 
 The append-only nonvirtual function
 `strategy_net_profit_sum(pf_strategy_t)` returns the raw
 `BacktestEngine::net_profit_sum_` value used by the opt-in report replay
 extension. A null handle returns `NaN`. The function leaves
-`PF_ABI_VERSION` at 4 and appends no fields to any existing C struct,
+`PF_ABI_VERSION` unchanged at 5 and appends no fields to any existing C struct,
 including `pf_report_t`, `pf_trade_t`, `pf_equity_point_t`, or report sink
 receipts. It reads the accumulator directly before or after report retrieval,
 without summing report rows or using the Pine shadow accessor.
@@ -168,7 +179,7 @@ nm -D --defined-only my_strategy.so | awk '$2=="T"{print $3}' | sort
 Include `<pineforge/report_sink.h>` for the additive
 `pf_report_sink_fd_v1` descriptor and `strategy_set_report_sink_fd_v1`.
 `pf_report_sink_version()` remains 1, the wire format remains version 1,
-and `PF_ABI_VERSION` remains 4. The existing path descriptor and all existing
+and `PF_ABI_VERSION` is 5. The existing path descriptor and all existing
 report, trade and receipt layouts stay unchanged.
 
 | Field | Type | Offset |
@@ -239,7 +250,7 @@ only after the fd API is admitted.
 `<pineforge/report_sink.h>` for both sink transports. It avoids a record
 read-back when a jailed child publishes its summary. The existing
 `pf_report_sink_receipt_v1` remains exactly 144 bytes, the wire and report
-sink ABI version remain 1, and `PF_ABI_VERSION` remains 4.
+sink ABI version remain 1, and `PF_ABI_VERSION` is 5.
 
 `pf_report_sink_summary_v1` is 64 bytes, aligned to 8 bytes, with these
 offsets on both LP64 and ILP32:
@@ -296,12 +307,12 @@ notice:
 - The shape of internal log lines (use them for humans, not parsers).
 
 Rebuild generated and native C++ objects against matching engine headers and
-runtime. R4-D L1 advanced `BacktestEngine`, `NativeStrategyHost`, and the
-private consumer to `engine_script_run_v17`; R5 L6 advanced the same three to <!-- verified HEAD -->
+runtime. R4-D advanced `BacktestEngine`, `NativeStrategyHost`, and the
+private consumer to `engine_script_run_v17`; the higher-timeframe update advanced the same three to <!-- verified HEAD -->
 `engine_script_run_v18` for the native higher-timeframe host surface <!-- verified HEAD -->
-(`on_native_timeframe_bar`, `native_series_bar`), joined by R5 L4's margin
+(`on_native_timeframe_bar`, `native_series_bar`), joined by the margin
 surface (`resolve_margin_call_units`, `on_native_margin_call`,
-`native_liquidation_price`) R5 L5's calculation-timing surface
+`native_liquidation_price`) and the calculation-timing surface
 (`on_native_recalculate`, `on_native_sub_bar`, `current_partial_bar`) and R5
 L7b's anchored-leg hook (`resolve_anchored_level` over
 `NativeAnchoredLevelView`) and R5 N5's generic host hash extension
@@ -310,23 +321,24 @@ complete public type and `hash_source_extension` kept as the deprecated
 spelling the default forwards to). N5 landed inside v18 rather than opening an
 epoch, and moved no fingerprint: a host that overrides nothing folds the same
 `"source:none"` marker, and the source host folds the same bytes through the
-generic hook. The v19 value epoch (R5 lane V19-A) advances the same three to
+generic hook. The v19 value epoch advances the same three to
 `engine_script_run_v19`; the host capability macro is
 `PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V19`. Its frozen predecessor is
 `host-fc7aad6`, the last epoch-18 `main` commit, and
-`relocation-manifest-v18-v19.json` beside it is the live transition: no host
-virtual is added or removed, the request values move from `native_order_v6` <!-- verified HEAD -->
-to `native_order_v7` inside the epoch (R5 lane V19-B), and later v19 lanes change
+`relocation-manifest-v18-v19.json` beside it records that transition: no host
+virtual was added or removed, the request values moved from `native_order_v6` <!-- verified HEAD -->
+to the previous `native_order_v7` inside the epoch, and later work changed <!-- verified HEAD -->
 layouts inside v19. L3b removes the source compatibility
 order type; the source extension hashes adapter and scheduler state instead
-(under `pineforge-source-adapter/v3`, advanced to v4 by R5 lane V19-E). <!-- verified HEAD --> Native request/core/event values are `native_order_v7`, the private
+(under `pineforge-source-adapter/v3`, advanced to v4). <!-- verified HEAD -->
+Native request/core/event values are `native_order_v8`, the private
 consumer identity is
 `native-consumer/v9`, driver types are `native_driver_v5`, and run specs are
-`native_run_spec_v3` (R5 L6 adds `NativeRunSpec::subscriptions`, folded into
-the continuation hash only when it is non-empty; R5 L4 adds
-`NativeRunSpec::margin`, folded only when it is set; R5 L5 adds `calculation`,
+`native_run_spec_v3` (the higher-timeframe update adds `NativeRunSpec::subscriptions`, folded into
+the continuation hash only when it is non-empty; the margin update adds
+`NativeRunSpec::margin`, folded only when it is set; the calculation update adds `calculation`,
 `max_recalculations_per_point` and `open_bar_view`, folded only once the
-trigger or the open-bar view is non-default). R5 L4 also adds
+trigger or the open-bar view is non-default). The margin update also adds
 `RequestDefinition::origin` and the `MarginCallEvent` alternative to the
 request values; `RequestOrigin::Host` — every host request — folds nothing,
 so no established continuation hash moves.
@@ -351,8 +363,8 @@ aggregate controls each exercise that pair; no caller executable is run. The
 (`scripts/check_runtime_budget.py`) and a historical input.
 
 The v18 to v19 step, between development builds before v1.0.0, is an internal C++ epoch
-transition rather than a public C ABI break: `PF_ABI_VERSION` is 4 on both sides and the append-only C ABI
-guarantee remains in force.
+transition rather than a public C ABI break: the historical `PF_ABI_VERSION` was 4 on both sides. <!-- verified HEAD -->
+The 1.8.0 module rebuild requirement advances the C ABI independently.
 
 R5 lane D2-A adds two non-virtual `NativeStrategyHost` members inside v19,
 without an epoch: `declare_native_bar_open_hook(bool)` and
@@ -374,7 +386,7 @@ header is rebuilt with the library (the subclass contract is internal, as
 `engine.hpp` states). No value moves: the kernel's defaults answer false, and
 a run with no symbol data folds nothing new. The C side is append-only -- four
 functions, each behind its own `PINEFORGE_HAS_…_V1` probe -- so
-`PF_ABI_VERSION` stays 4.
+`PF_ABI_VERSION` was still 4 when these functions were added. <!-- verified HEAD -->
 
 Recorded outputs are released in 1.5.0, and not part of 1.4.0.
 
@@ -388,8 +400,8 @@ rebuilt with the library, as for XSYM-D's virtuals; the script and settlement
 ABI matrices accept it unchanged. No value moves: recording is off until a
 caller enables it, and nothing a run computes reads the record. The C side is
 append-only -- group `pf_outputs`, behind `PINEFORGE_HAS_OUTPUTS_V1`: nine
-runtime functions and three a recording module defines -- so `PF_ABI_VERSION`
-stays 4 and `pf_report_t` is unchanged.
+runtime functions and three a recording module defines. In 1.5.0, `PF_ABI_VERSION` was 4, <!-- verified HEAD -->
+and `pf_report_t` did not grow.
 
 R5 gap lane P2c gave two TradingView-named public surfaces a generic primary
 spelling without an epoch, because an alias needs none, and lane REL10 removed
@@ -438,8 +450,9 @@ part of this aggregate ABI.
 `PINEFORGE_HAS_SCRIPT_RUN_PREPARE_V1` remains 1: it describes the existing hook
 capability, not the class layout version. Regenerate and rebuild a strategy
 module to obtain complete script-state reset; replacing an archive does not
-retrofit an old module. Public C function signatures, `PF_ABI_VERSION` (4),
-and `strategy_stream_api_version()` (1) are unchanged. The pending-order v1
+retrofit an old module. Public C function signatures and
+`strategy_stream_api_version()` (1) are unchanged; `PF_ABI_VERSION` is now 5
+for the 1.8.0 module rebuild requirement. The pending-order v1
 mirror preserves all 406 pre-change field names/types/offsets and its full
 3192-byte size. No field is added for these placement derivations: the original
 admission operands already have actual-value projections, while removed native
@@ -478,14 +491,14 @@ at once again: R5 lane PERF-P1's deferred view saved the v18 log folds, which
 v19 no longer makes, and no value moves with it. `native_run_spec_digest`
 keeps its byte-wise FNV-1a and its values. The values the tree pins were
 re-pinned once, each marked "expectation corrected".
-The journal window (R5 lane V19-B) moves the request values to
-`native_order_v7`: the order core's command journal is a window with
+The journal window originally moved the request values to
+the previous `native_order_v7`: the order core's command journal is a window with <!-- verified HEAD -->
 absolute positions, `RequestDefinition::root` and the core's chain index
 replace the journal scan the cohort commands made, and a trail's arm ordinal
 is its tracking state's. `NativeRunSpec::event_retention` joins
 `native_run_spec_v3` and folds into the spec digest only when it is not the
 default `Window`, so a spec that leaves it keeps its digest. The C surface
-grows additively under `PF_ABI_VERSION` 4 — `strategy_native_acknowledge_events_v1`,
+grew additively under the previous `PF_ABI_VERSION` 4 — `strategy_native_acknowledge_events_v1`, <!-- verified HEAD -->
 `strategy_native_event_window_v1` and a fifth `pf_native_run_spec_ext_v1`
 layout — and a C caller that does not send the retention word keeps `FULL`,
 so a caller built before the tail reads back the record it always did. The
@@ -540,7 +553,17 @@ too. The corpus moves only where the excursion cells moved toward TradingView
 (19 probes); the values the tree pins were re-pinned once more, each marked
 "expectation corrected (H-THIN, ...)" with the value's cause.
 Stable `RunIdentity` / `RequestHandle` / `Birth` remain
-`native_order_v1`; request, core, and event values own `native_order_v7`.
+`native_order_v1`; request, core, and event values own `native_order_v8`.
+The 1.8.0 value epoch advances from the previous `native_order_v7` to `native_order_v8` <!-- verified HEAD -->
+because those layouts changed between 1.6.x and 1.7.0 inside v7, and 1.7.0
+shipped without an epoch move; the new namespace separates every earlier native
+module, 1.7.0 ones included, from this release. Rebuild
+native C++ modules against the matching headers and archive; stale v7 order
+symbols are refused at link or load time. `PF_ABI_VERSION` advances from 4
+to 5 because the adapter and engine headers grew members and the C export
+`strategy_initial_capital` was added since 1.7.0, so the loader also refuses a
+strategy library stamped 4 with its ABI mismatch diagnostic before calling any
+strategy entry point.
 Terms receipts, attempted terms, deferred
 remaining/allowance state, and a staged FX-curve digest contribute through the
 native continuation hash. Lifecycle definitions, generations, obligations and

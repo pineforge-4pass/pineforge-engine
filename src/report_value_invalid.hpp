@@ -22,6 +22,15 @@ inline double finite_value(double value, const char* field, const char* prefix =
     return value;
 }
 
+// An instant the platform's calendar cannot express (a failed local-time
+// lookup) is an invalid report timestamp, never a key read from a zeroed value.
+inline void throw_unrepresentable_time(const char* field) {
+    throw coded<std::runtime_error>(
+        RunFailureCode::report_result_invalid,
+        RunFailureArgs{{"field", field}, {"reason", "type_schema"}},
+        "The report timestamp cannot be represented in the chart timezone.");
+}
+
 // A missed execution invariant is still an R at the report boundary. This
 // does not replace the earlier engine-owned settlement/admission guards.
 template<class Trade>

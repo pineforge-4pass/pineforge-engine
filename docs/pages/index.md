@@ -165,7 +165,7 @@ The public C surface is **162 `PF_API` declarations** across the six installed h
 | --- | --- | --- |
 | Lifecycle | `strategy_create`, `strategy_free`, `run_backtest`, `run_backtest_full`, `report_free`, `strategy_closed_trade_entry_incarnation` | @ref pf_lifecycle |
 | Streaming | `strategy_stream_begin`, `strategy_stream_push_tick`, `strategy_stream_push_ticks`, `strategy_stream_advance_time`, `strategy_stream_end`, `strategy_stream_fill_report` | @ref pf_streaming |
-| Live runtime (ABI v4) | `strategy_request_abort`, `strategy_set_realtime_tail`, `strategy_set_probe_suppress_tail_logic`, `strategy_set_path_order`, the broker-state hash, the pending-order mirror, closed-trade id/comment/close-cause, position, initial-capital, equity and replay accessors — 28 default-off exports | @ref pf_live |
+| Live runtime | `strategy_request_abort`, `strategy_set_realtime_tail`, `strategy_set_probe_suppress_tail_logic`, `strategy_set_path_order`, the broker-state hash, the pending-order mirror, closed-trade id/comment/close-cause, position, initial-capital, equity and replay accessors — 28 default-off exports | @ref pf_live |
 | Configuration | Inputs, strategy overrides, tracing, trade start, chart / symbol timezone, session, tick size, point value, numeric metadata, and timestamped account-currency FX | @ref pf_config |
 | Diagnostics | `strategy_get_last_error`, `strategy_get_last_error_code`, `strategy_get_last_error_args` | @ref run_failure_codes |
 | Version | `pf_version_get`, `pf_abi_version`, `pf_version_string` | @ref pf_version |
@@ -237,6 +237,7 @@ Build the generated strategy module with the repository recipe (or
 | [Scratch tables](@ref scratch_tables) | Disk or bounded memory, the default admission policy, jailed host/HPO setup, typed resource failures and planned jail proof. |
 | [Memory management](@ref memory_management) | How much memory a run can use: the controls, the fixed resident bounds, the scratch formula with a worked example, and what grows with bars, trades and open orders. |
 | [Report schema](@ref report_schema) | `pf_report_t` field by field, including the equity curve. |
+| [Report sink golden vectors](@ref sink_vectors) | Byte-exact v1 streams and reader results for independent sink implementations. |
 | [Run-failure codes](@ref run_failure_codes) | The stable code and typed arguments beside a failed run's text: the getters, the rules, every code, and the catalog and per-release diff each release publishes. |
 | [Trading metrics reference](@ref metrics) | Every `pf_metrics_t` field: units, NaN rules, validation status. |
 | [ABI stability](@ref abi_stability) | The append-only guarantee, and the internal C++ epochs behind it. |

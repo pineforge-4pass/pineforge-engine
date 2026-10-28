@@ -1,0 +1,8 @@
+{"schema":"pf-report-sink","version":1,"run_id":"pf-sink-vector-v1-native","engine":"1.7.0","records":[{"type":"E","fields":["time_ms","equity","open_profit"],"types":["i64","f64?","f64?"],"units":["unix_ms","account_ccy","account_ccy"]},{"type":"T","fields":["n","side","entry_time","exit_time","entry_price","exit_price","qty","pnl","pnl_pct","max_runup","max_drawdown","commission","entry_bar_index","exit_bar_index","open_at_end","entry_incarnation","close_cause","entry_id","exit_id","exit_comment"],"types":["i64","str","i64","i64","f64?","f64?","f64?","f64?","f64?","f64?","f64?","f64?","i64","i64","bool","u64","i64","str","str","str"],"units":["","","unix_ms","unix_ms","quote_ccy","quote_ccy","qty","account_ccy","percent","account_ccy","account_ccy","account_ccy","script_bar","script_bar","","","","","",""]}]}
+["E",1735776000000,1000000.0,0.0]
+["E",1735776060000,1000000.0,0.0]
+["E",1735776120000,1000001.0,1.0]
+["E",1735776180000,1000002.0,2.0]
+["E",1735776240000,1000003.0,0.0]
+["T",1,"long",1735776120000,1735776240000,102.0,105.0,1.0,3.0,2.941176470588235,4.0,1.0,0.0,2,4,true,1,6,"Long","",""]
+{"trailer":"pf-report-sink","version":1,"counts":{"E":5,"T":1},"sha256":"d86dc4bc8bfa8bdda53b733e85ed46a1bdb333c38f71a0cf3ae4c76c24f938e5"}

@@ -1,6 +1,6 @@
-// Pin the 1.6.3 create diagnostics through real opens, with explicit paths.
-// No TMPDIR changes or injected failures. RED at e36e585064 is predicted,
-// not observed: compile and execute this unit only on the supervisor's box.
+// Pin the create diagnostics of the scratch files and the wrappers that open
+// them (command, report, id-pair and successor-roots scratch) through real
+// opens, with explicit paths. No TMPDIR changes or injected failures.
 #include "scratch_process_fixture.hpp"
 #include "../src/command_scratch_production.hpp"
 #include "../src/report_scratch.hpp"
@@ -31,14 +31,14 @@ struct Directory {
     std::string path, missing, unwritable;
 
     Directory() {
-        std::puts("S4E fixture parent: /var/tmp; owned mkdtemp template: "
+        std::puts("Fixture parent: /var/tmp; owned mkdtemp template: "
                   "/var/tmp/s4e-create-pinned-XXXXXX");
         char name[] = "/var/tmp/s4e-create-pinned-XXXXXX";
         require(::mkdtemp(name) != nullptr, "cannot create pinned-text directory");
         path = name;
         missing = path + "/missing";
         unwritable = path + "/mode0500";
-        std::printf("S4E owned inspection paths: %s, %s (absent), %s (mode 0500)\n",
+        std::printf("Owned inspection paths: %s, %s (absent), %s (mode 0500)\n",
                     path.c_str(), missing.c_str(), unwritable.c_str());
         std::fflush(stdout);
         std::uint64_t type = 0;
