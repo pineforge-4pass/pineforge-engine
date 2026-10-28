@@ -48,17 +48,30 @@ onward; replayed report deltas below it are not compared individually.
 `report --verify-full` bypasses checkpoints and re-verifies every committed
 report-integrity row, including rows after a requested historical cursor.
 With no usable checkpoint, export retains this full-chain verification.
+Each export path checks its selected report-integrity rows in one read snapshot
+against their inputs, stored state hashes and immutable actions. A missing or
+mismatched report-integrity digest refuses export.
 A mismatched checkpoint witness falls back to full report reconstruction and
 records a typed diagnostic. These SHA-256 digests detect ledger corruption, not
 edits by someone able to replace both data and digests. A consistent edit of a
 checkpoint's payload and payload hash in the same row is not detected at
 default export; restart's equality check against the recomputed cumulative
 report refuses it. Only `run` recomputes engine state by replay.
-`run --report-jsonl` mirrors
-each newly committed report to stdout, followed by the existing operational run
-summary; replayed source-prefix messages are not mirrored again. A closed
-stdout pipe fails clearly with exit 1, never SIGPIPE; the last input and report
-are already durable, and export remains available.
+`run --report-jsonl` continues to mirror one cumulative
+`pineforge-native-report/v1` document per newly committed input, with unchanged
+bytes and field order. `run --report-jsonl=full` is an explicit alias with
+identical output. The new opt-in `run --report-jsonl=delta` mirrors the ledger's
+`pineforge-native-report-delta/v1` patch with an additional top-level integer
+`input_cursor` as the FIRST key of the line (the stored ledger row has no such
+key and begins with `schema_version`). Other option values are refused.
+Both streams begin after startup reads, warmup, recovery and the first new
+input's commit; the first committed input has cursor 1. Neither warmup nor
+replay of source-prefix messages is mirrored. To apply delta output, start with
+the cumulative document at the preceding cursor (`report --at-input 0` for a
+new run's warmup). Both streams end with the operational run summary.
+Without `--report-jsonl`, stdout contains exactly one line: that exit summary.
+A closed stdout pipe fails clearly with exit 1, never SIGPIPE; the last input
+and report are already durable, and export remains available.
 
 The input, engine hash, actions, report delta and its integrity digest commit in
 one SQLite transaction. After that commit, an optional checkpoint is prepared
@@ -118,7 +131,20 @@ report JSON. Recovery still replays every committed strategy input because the
 strategy state has no restore API; it verifies warmup, every input's engine hash
 and actions before delivery, verifies the recomputed report at the
 checkpoint and later inputs, and uses the checkpoint only for the report-side
-prefix. Strategy-state recovery remains full replay work.
+prefix. At the checkpoint boundary, restart compares the checkpoint payload
+with the recomputed cumulative document, including in delta and no-stream modes.
+Existing full-report rows remain immutable and readable; when recovery verifies
+one, it compares it with the recomputed cumulative document. New inputs use
+deltas. Strategy-state recovery remains full replay work.
+
+The export schema and engine computation are unchanged. The runner no longer
+rescans the closed-trade prefix per input. Delta output costs O(new rows) per
+input and avoids quadratic output as history grows. With no report stream or with
+`--report-jsonl=delta`, the runner retains only scalar state and array counts.
+Plain `--report-jsonl` and `--report-jsonl=full` retain the cumulative document
+and keep the old O(cumulative document) output cost per input, which can be
+quadratic over a growing run. The native `fill_report` call still rebuilds the
+engine's trade and equity/metrics report on each input in every mode.
 Array suffix replacement assumes at most one provisional trailing element for
 equity points and broker hashes. The runner never enables tracing and refuses
 nonempty `trace`: traces can contain several records per bucket, so enabling

@@ -108,6 +108,28 @@ validates their state hashes and actions. The diagnostic measurement row prints
 the lab's file, WAL, RSS, descriptor and timing values; this release does not
 claim those unmeasured values in its documentation.
 
+### Native live report stream
+
+- **Delta JSONL is opt-in; the default stream is unchanged.**
+  `pineforge-live run --report-jsonl` continues to emit one cumulative
+  `pineforge-native-report/v1` document per committed input, with the same
+  bytes and field order. `--report-jsonl=full` is an explicit alias with
+  identical output. The new `--report-jsonl=delta` emits the ledger's
+  `pineforge-native-report-delta/v1` patch with an additional top-level integer
+  `input_cursor` as the first key of the line (the stored ledger row has no
+  such key), beginning at the same commit point as the cumulative stream.
+- **The runner no longer rescans the closed-trade prefix per input; delta
+  output is linear in the appended rows.** The native `fill_report` call still
+  rebuilds the engine's trade and equity/metrics report on each input; removing
+  that remaining term needs an engine-side carried report accumulator and a
+  separate batch-byte equivalence proof. The runner carries a closed-trade
+  high-water mark in every mode. Delta output costs O(new rows) per input,
+  avoiding quadratic output as history grows. Runs without a report stream
+  and runs with `--report-jsonl=delta` retain only scalar state and array
+  counts. Plain `--report-jsonl` and `--report-jsonl=full` retain the cumulative
+  document and keep the old O(cumulative document) output cost per input,
+  which can be quadratic over a growing run.
+
 ### Scratch placement (behaviour of 1.7.0 and later, restated)
 
 - **Where scratch goes and when a run is refused.** The text is in
@@ -2366,7 +2388,9 @@ release either.
   the committed inputs, stored state hashes, actions and report rows, so a
   ledger written before 1.2.0 needs one verified `run` replay to fill in its
   reports and digests before it exports. `run --report-jsonl` mirrors each new
-  report to stdout; a closed pipe exits 1, not SIGPIPE, and loses no input.
+  cumulative report to stdout as before; `run --report-jsonl=full` is an
+  explicit alias, and `run --report-jsonl=delta` opts into delta output.
+  A closed pipe exits 1, not SIGPIPE, and loses no input.
   The runner keeps tracing off and refuses to export a nonempty trace. A
   confirmed-bar run's report is checked field by field against a batch
   backtest of the same bars; the one tested difference is that a batch seals a

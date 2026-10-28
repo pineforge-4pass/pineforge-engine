@@ -79,6 +79,12 @@ if(PINEFORGE_BUILD_TESTS)
     target_include_directories(test_live_json PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_options(test_live_json PRIVATE -UNDEBUG)
     add_test(NAME test_live_json COMMAND test_live_json)
+    add_executable(test_live_report ${PROJECT_SOURCE_DIR}/tests/test_live_report.cpp)
+    target_include_directories(test_live_report PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/include ${PROJECT_BINARY_DIR}/include)
+    target_link_libraries(test_live_report PRIVATE PineForge::pineforge)
+    target_compile_options(test_live_report PRIVATE -UNDEBUG)
+    add_test(NAME test_live_report COMMAND test_live_report)
     add_executable(test_live_identity ${PROJECT_SOURCE_DIR}/tests/test_live_identity.cpp)
     target_link_libraries(test_live_identity PRIVATE pineforge_live_support)
     target_compile_options(test_live_identity PRIVATE -UNDEBUG)
@@ -188,6 +194,20 @@ if(PINEFORGE_BUILD_TESTS)
         target_compile_options(${native_test} PRIVATE -UNDEBUG)
         add_test(NAME ${native_test} COMMAND ${native_test})
     endforeach()
+    add_executable(test_native_live_report_cli ${PROJECT_SOURCE_DIR}/tests/test_native_live_report_cli.cpp)
+    target_link_libraries(test_native_live_report_cli PRIVATE pineforge_live_support)
+    target_compile_options(test_native_live_report_cli PRIVATE -UNDEBUG)
+    add_dependencies(test_native_live_report_cli pineforge-live native_market_example)
+    add_test(NAME test_native_live_report_first_commit COMMAND test_native_live_report_cli
+        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_market_example> first-commit)
+    add_test(NAME test_native_live_report_summary_only COMMAND test_native_live_report_cli
+        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_market_example> summary-only)
+    add_test(NAME test_native_live_report_options COMMAND test_native_live_report_cli
+        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_market_example> options)
+    add_test(NAME test_native_live_report_default_recovery COMMAND test_native_live_report_cli
+        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_market_example> default-recovery)
+    set_tests_properties(test_native_live_report_first_commit test_native_live_report_summary_only
+        test_native_live_report_options test_native_live_report_default_recovery PROPERTIES TIMEOUT 180)
     set_tests_properties(test_native_live_websocket PROPERTIES SKIP_RETURN_CODE 77)
     add_executable(test_native_live_checkpoint
         ${PROJECT_SOURCE_DIR}/tests/test_native_live_checkpoint.cpp)

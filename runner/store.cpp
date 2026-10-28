@@ -351,6 +351,7 @@ CheckpointRow prepare_report_checkpoint(sqlite3* database, std::uint64_t cursor)
 }
 
 void write_report_checkpoint(sqlite3* database, const CheckpointRow& checkpoint) {
+    // the checkpoint payload is added to the ledger reservation when the budget branch is merged
     Statement insert(database,
         "INSERT INTO report_checkpoints(input_cursor,report_integrity_digest,"
         "previous_integrity_digest,payload_hash,payload) VALUES(?,?,?,?,?)");
