@@ -1,6 +1,13 @@
 // The sink keeps the logical T result complete while moving closed rows out of
 // the process heap. This witness compares every trade population with a
 // same-bar zero-trade control and checks both sink transports.
+//
+// The bar the heap is held to has two parts. A sink run may hold the ledger's
+// declared read-cache cap (TradeLedger::kSinkCacheRows rows of
+// kLedgerEntryBytes each, read from the engine's own constants) above its
+// zero-trade control, plus the fixed slack below. And that excess must not
+// move with the number of trades: the populations below reach the cap and go
+// far past it, and their excess over the control has to agree within the slack.
 #define PINEFORGE_TEST_ALLOCATION_BYTES
 #include "global_allocation_replacement.hpp"
 
@@ -43,6 +50,20 @@ namespace no = pineforge::native_order;
 constexpr std::int64_t kStartMs = INT64_C(1704067200000);
 constexpr std::int64_t kMinuteMs = INT64_C(60000);
 constexpr std::size_t kHeapSlack = 2 * report_sink::kScratchWindowBytes + 512 * 1024;
+// The declared read-cache cap of a sink run, in bytes, from the ledger's own
+// constants: the cache allocation never exceeds this however many trades close.
+const std::size_t kSinkCacheCapBytes =
+    TradeLedger::resident_cache_bytes(TradeLedger::kSinkCacheRows);
+
+// What one population leaves above its same-bar control, per transport.
+struct Excess {
+    std::size_t path_peak = 0;
+    std::size_t fd_peak = 0;
+};
+
+std::size_t above(std::size_t value, std::size_t control) {
+    return value > control ? value - control : 0;
+}
 
 void require(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
@@ -489,7 +510,7 @@ void remove_output(const Sample& sample) {
     require(::unlink(sample.output_path.c_str()) == 0, "cannot remove sink output");
 }
 
-void run_population(const Directory& directory, int population) {
+Excess run_population(const Directory& directory, int population) {
     const BarTape tape(population);
     const auto path_control = run_sample(directory, population, false, false, tape,
                                          "path-control.ndjson");
@@ -512,14 +533,16 @@ void run_population(const Directory& directory, int population) {
     describe("path_trades", path_trades);
     describe("fd_trades", fd_trades);
 
-    require(path_trades.peak <= path_control.peak + kHeapSlack,
-            "path sink heap peak grew with the trade population");
-    require(fd_trades.peak <= fd_control.peak + kHeapSlack,
-            "fd sink heap peak grew with the trade population");
-    require(path_trades.live <= path_control.live + kHeapSlack,
-            "path sink retained heap grew with the trade population");
-    require(fd_trades.live <= fd_control.live + kHeapSlack,
-            "fd sink retained heap grew with the trade population");
+    // Above its control a sink run holds at most the declared cache cap.
+    const std::size_t bound = kSinkCacheCapBytes + kHeapSlack;
+    require(path_trades.peak <= path_control.peak + bound,
+            "path sink heap peak exceeded the control plus the declared cache cap");
+    require(fd_trades.peak <= fd_control.peak + bound,
+            "fd sink heap peak exceeded the control plus the declared cache cap");
+    require(path_trades.live <= path_control.live + bound,
+            "path sink retained heap exceeded the control plus the declared cache cap");
+    require(fd_trades.live <= fd_control.live + bound,
+            "fd sink retained heap exceeded the control plus the declared cache cap");
 
     const auto path_wire = check_wire_shape(path_trades.output_path, population, tape.bars.size());
     const auto fd_wire = check_wire_shape(fd_trades.output_path, population, tape.bars.size());
@@ -535,8 +558,13 @@ void run_population(const Directory& directory, int population) {
     remove_output(fd_control);
     remove_output(path_trades);
     remove_output(fd_trades);
-    std::printf("report sink residency: trades=%d path_peak=%zu fd_peak=%zu\n",
-                population, path_trades.peak, fd_trades.peak);
+    std::printf("report sink residency: trades=%d path_peak=%zu fd_peak=%zu "
+                "path_excess=%zu fd_excess=%zu cache_cap_bytes=%zu\n",
+                population, path_trades.peak, fd_trades.peak,
+                above(path_trades.peak, path_control.peak),
+                above(fd_trades.peak, fd_control.peak), kSinkCacheCapBytes);
+    return {above(path_trades.peak, path_control.peak),
+            above(fd_trades.peak, fd_control.peak)};
 }
 
 } // namespace
@@ -544,8 +572,26 @@ void run_population(const Directory& directory, int population) {
 int main() {
     try {
         Directory directory;
-        for (const int population : {100000, 300000, 1000000})
-            run_population(directory, population);
+        // 100,000 trades already pass the cache cap's row count (65,536); 200,000
+        // and 1,000,000 go 3x and 15x past it. Zero growth past the cap means
+        // the excess over each population's own control agrees across them.
+        std::vector<Excess> excess;
+        for (const int population : {100000, 200000, 1000000})
+            excess.push_back(run_population(directory, population));
+        const auto spread = [&](std::size_t Excess::*member) {
+            std::size_t low = excess.front().*member, high = low;
+            for (const auto& item : excess) {
+                low = std::min(low, item.*member);
+                high = std::max(high, item.*member);
+            }
+            return high - low;
+        };
+        std::printf("report sink residency spread: path=%zu fd=%zu slack=%zu\n",
+                    spread(&Excess::path_peak), spread(&Excess::fd_peak), kHeapSlack);
+        require(spread(&Excess::path_peak) <= kHeapSlack,
+                "path sink heap peak grew with the trade population past the cache cap");
+        require(spread(&Excess::fd_peak) <= kHeapSlack,
+                "fd sink heap peak grew with the trade population past the cache cap");
         return 0;
     } catch (const std::exception& error) {
         global_allocation::recording = false;
