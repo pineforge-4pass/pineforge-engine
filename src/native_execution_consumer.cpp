@@ -13609,7 +13609,7 @@ void NativeExecutionConsumer::restore_report_sink_equity_curve(BacktestEngine& e
 }
 
 void BacktestEngine::store_equity_point(const pf_equity_point_t& point) {
-    if (auto* replay = report_replay_state()) replay->point(point, net_profit_sum_);
+    if (report_replay_state()) record_report_replay_point(point);
     if (report_sink_state_.equity_scratch && !equity_curve_.empty())
         equity_curve_.back() = point;
     else
@@ -13645,7 +13645,7 @@ bool BacktestEngine::prepare_equity_point() {
         if (!selected) {
             sink.writer->write_e(*held);
             ++sink.receipt.count_e;
-            if (auto* replay = report_replay_state()) replay->write_q(*held);
+            if (report_replay_state()) write_report_replay_equity(*held);
         }
     } catch (const report_sink::WriterError& error) {
         sink.writer.reset();
