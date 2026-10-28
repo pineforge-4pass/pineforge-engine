@@ -7083,21 +7083,9 @@ void NativeExecutionConsumer::match_path(
     auto& rows = match_rows_;
     rows.clear();
     bool rescan_winner_only = false;
-    // The request a row was scanned from, held for its reader. In a book that
-    // is all resident a refresh updates its row in place, so between a scan
-    // and its winner's first use the row's own index names it. Once part of
-    // the book is outside the heap an index walks the book from its front: a
-    // row the scan found outside the heap is read where the scan found it
-    // (book_at, see the winner's row below), and a row it found resident is
-    // looked up by its handle. That lookup stays in the heap only while the
-    // row does: every row a refresh brings into the heap spills the heap's
-    // back row to make room, so the row that stood at the back at the scan
-    // (one per point, unless a rebuild rescanned the book first) is outside
-    // the heap by its reuse and is found by a keyed search of the spilled
-    // table, O(log N) table steps (book_lookup_reads counts it as one row read
-    // back). The core's handle lookup also answers whenever the reuse is
-    // switched off. Held: a spilled row's copy lives as long as the answer,
-    // whatever the book reads meanwhile.
+    // Read the current row at the scan's locator. Allowance refresh changes
+    // neither residency nor the table generation. Other mutations can still
+    // invalidate a locator; hold_scanned then falls back to the handle.
     auto scanned_request = [&](const Candidate& row)
             -> std::shared_ptr<const native_order::LiveRequest> {
         if (match_row_reuse_ && !requests_.book_spilled()) {
@@ -7106,10 +7094,13 @@ void NativeExecutionConsumer::match_path(
                 return unowned_live(book[row.live_index]);
             }
         }
-        return requests_.hold_live(row.handle);
+        return requests_.hold_scanned(row.handle, row.book_at, row.book_generation,
+                                       row.kind == Kind::Evaluate);
     };
-    // The refreshed winner a winner-only rescan reads again (see below).
-    native_order::RequestHandle rescan_handle{};
+    // A fresh read made after publication, inside the refresh's failure
+    // boundary. Never reuse the spilled copy decoded before the write.
+    Candidate rescan_row{};
+    std::shared_ptr<const native_order::LiveRequest> refreshed_request;
     // A whole scan that stands in for a reuse whose kept rows name entries of
     // a spilled table rebuilt since (see the winner below).
     bool rescan_after_rebuild = false;
@@ -7151,13 +7142,10 @@ void NativeExecutionConsumer::match_path(
         std::shared_ptr<const native_order::LiveRequest> rescanned;
         std::shared_ptr<const native_order::LiveRequest> winner_held;
         if (winner_only) {
-            // The refreshed winner's row is the first one: take it off and
-            // scan that one request again. Its index names it in a book that
-            // is all resident; otherwise its handle does (the refresh brought
-            // it back into the heap, so the lookup reads no spilled row).
+            // The refreshed winner's row is the first one. Its saved read
+            // followed the write and kept the same validated scan locator.
             winner_index = rows.take_first();
-            rescanned = requests_.book_spilled() ? requests_.hold_live(rescan_handle)
-                                                 : unowned_live(live_requests[winner_index]);
+            rescanned = std::move(refreshed_request);
             snapshot_size = 1;
         } else {
             book_row = live_requests.begin();
@@ -7252,6 +7240,9 @@ void NativeExecutionConsumer::match_path(
             if (!winner_only) {
                 row.book_at = book_row.spilled_at();
                 row.book_generation = scan_generation;
+            } else {
+                row.book_at = rescan_row.book_at;
+                row.book_generation = rescan_row.book_generation;
             }
             if (needs_evaluation(*live, facts)) {
                 erase_provenance_for(handle);
@@ -7355,8 +7346,8 @@ void NativeExecutionConsumer::match_path(
         }
         if (!winner) break;
         // A row kept from an earlier scan names the spilled-table entry that
-        // scan read its request from, and the refresh it is reused after may
-        // have rebuilt the table (BookSpill::compact), which leaves no entry
+        // scan read its request from. A different mutation may have rebuilt
+        // the table (BookSpill::compact), which leaves no entry
         // where it was. Then the whole book is scanned again instead: that
         // scan picks the winner the reuse would have (see above) and reads
         // every row where it now stands. Nothing has moved at this cursor
@@ -7388,24 +7379,16 @@ void NativeExecutionConsumer::match_path(
         cursor_price = winner->price;
         path_cursor = make_cursor(point, t_cursor);
         eval.cursor = path_cursor;
-        // The winner's row: the one the walk held; for a row kept from an
-        // earlier scan, the request read at the table entry that scan found it
-        // at outside the heap -- one entry and one row, in a book of any size
-        // -- or else its lookup. Held until this winner is done with. That
-        // read is the matcher's own, and it is O(1) in the book only for a row
-        // the scan found outside the heap; the refresh an Evaluate winner then
-        // asks of the core (refresh_allowance: classify, promote_book_row)
-        // finds the row in the spilled table and spills the heap's back row,
-        // O(log N) table operations per spilled winner per point, which
-        // book_lookup_reads does not count (lane b1 round 4, the real bound).
+        // A retained winner reads the current bytes at its scan locator:
+        // one slot and one blob, including after an allowance refresh.
         std::shared_ptr<const native_order::LiveRequest> winner_row;
-        if (winner_held) {
-            winner_row = std::move(winner_held);
-        } else if (winner->book_at != 0) {
-            winner_row = requests_.hold_scanned(winner->handle, winner->book_at,
-                                                winner->book_generation);
-        } else {
-            winner_row = scanned_request(*winner);
+        try {
+            winner_row = winner_held ? std::move(winner_held) : scanned_request(*winner);
+        } catch (const std::exception& e) {
+            fail(engine, NativeFailure{NativeFailureCode::Allocation,
+                                       NativeFailureOperation::Settlement, P});
+            render_exception(engine, e);
+            return;
         }
         const auto* live = winner_row.get();
         if (!live) continue;
@@ -7426,22 +7409,31 @@ void NativeExecutionConsumer::match_path(
         if (winner->kind == Kind::Evaluate) {
             // A refresh at this cursor leaves every other row as it is.
             const bool reuse_after_refresh = keep_rows && cursor_unmoved;
-            rescan_handle = winner->handle;
             try {
+                const auto refreshed = [&] {
+                    rescan_winner_only = reuse_after_refresh;
+                    if (reuse_after_refresh) {
+                        rescan_row = *winner;
+                        refreshed_request = scanned_request(rescan_row);
+                    }
+                };
                 if (winner_target) {
                     // The cohort refresh: the core's context-bearing form under
                     // the grant (refresh_cohort_allowance forwards to the same
                     // body without one).
                     if (requests_.refresh_allowance(winner->handle, eval, *winner_target,
-                                                    open_grant)) {
-                        rescan_winner_only = reuse_after_refresh;
+                                                    nullptr, open_grant, winner->book_at,
+                                                    winner->book_generation)) {
+                        refreshed();
                         continue;
                     }
                 } else if (std::holds_alternative<native_order::BookClose>(live->authority)) {
                     native_order::TargetObservation obs;
                     obs.current_position = read_position(engine);
-                    if (requests_.refresh_allowance(winner->handle, eval, obs, open_grant)) {
-                        rescan_winner_only = reuse_after_refresh;
+                    if (requests_.refresh_allowance(winner->handle, eval, obs, nullptr,
+                                                    open_grant, winner->book_at,
+                                                    winner->book_generation)) {
+                        refreshed();
                         continue;
                     }
                 } else {
@@ -7450,9 +7442,10 @@ void NativeExecutionConsumer::match_path(
                     // binding the book still has binds here, taking an
                     // ordinal (ReplaceOptions::keep_binding, R5 lane V19-D).
                     if (requests_.refresh_allowance(winner->handle, eval, match_target_,
-                                                    next_timeline_ordinal_, open_grant)) {
+                                                    &next_timeline_ordinal_, open_grant,
+                                                    winner->book_at, winner->book_generation)) {
                         catch_up_timeline();
-                        rescan_winner_only = reuse_after_refresh;
+                        refreshed();
                         continue;
                     }
                 }

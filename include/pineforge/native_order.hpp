@@ -1941,6 +1941,19 @@ public:
         std::uint64_t steps = 0;
     };
     BookLookupReads book_lookup_reads() const noexcept;
+    /// Physical work during allowance refresh and its winner reads. Diagnostics
+    /// only, never hashed or used to decide engine behaviour; reset with the book.
+    struct BookRefreshWork {
+        std::uint64_t promotions = 0;
+        std::uint64_t evictions = 0;
+        std::uint64_t tombstones = 0;
+        std::uint64_t compactions = 0;
+        std::uint64_t keyed_searches = 0;
+        std::uint64_t in_place_writes = 0;
+        std::uint64_t appended_writes = 0;
+        std::uint64_t spilled_refreshes = 0;
+    };
+    BookRefreshWork book_refresh_work() const noexcept;
     const CommandEvent* event_at(const EventId& id) const;
 
     /// Command-boundary roster maintenance.  A rejected add/remove records a
@@ -2082,6 +2095,9 @@ public:
     /// refresh. It preserves prepare_evaluation's eligibility and liveness
     /// checks while avoiding a transient mutation envelope per driver point.
     void refresh_point_allowances(uint64_t point, const PositionIdentity& position);
+    /// Refresh one selected row without changing its queue position or
+    /// residency. False paths write nothing. Every success advances the epoch,
+    /// so no preparation made before a successful refresh can install after it.
     bool refresh_allowance(const RequestHandle& target,
                            const EvaluationContext& context,
                            const TargetObservation& observation);
@@ -2398,10 +2414,15 @@ private:
     /// form that does not name one).
     bool refresh_allowance(const RequestHandle& target, const EvaluationContext& context,
                            const TargetObservation& observation,
-                           uint64_t* next_timeline_ordinal, bool open_activation_grant);
+                           uint64_t* next_timeline_ordinal, bool open_activation_grant,
+                           uint64_t at = 0, uint64_t generation = 0);
+    bool refresh_allowance_row(LiveRequest& live, const EvaluationContext& context,
+                               const TargetObservation& observation,
+                               uint64_t* next_timeline_ordinal, bool open_activation_grant,
+                               uint64_t& binding_ordinal);
     bool refresh_kept_binding(LiveRequest& live, const EvaluationContext& context,
                               const TargetObservation& observation,
-                              uint64_t& next_timeline_ordinal);
+                              uint64_t& next_timeline_ordinal, uint64_t& binding_ordinal);
     TargetKind classify_repriced(uint64_t incarnation, std::size_t* live_index) const noexcept;
     const LiveRequest* find_repriced(uint64_t incarnation) const noexcept;
     /// Records that the request under `incarnation` now stands at
@@ -2571,7 +2592,8 @@ private:
     // entry still holds the request spilled. Otherwise -- the table rebuilt
     // since, the row back in the heap or ended -- it answers hold_live(handle).
     std::shared_ptr<const LiveRequest> hold_scanned(const RequestHandle& handle, uint64_t at,
-                                                    uint64_t generation) const;
+                                                    uint64_t generation,
+                                                    bool allowance_refresh = false) const;
     void forget_repriced(uint64_t incarnation) noexcept;
     BookCursor book_begin() const;
     bool book_done(const BookCursor& cursor) const noexcept;

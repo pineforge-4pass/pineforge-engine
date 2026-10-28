@@ -21150,12 +21150,26 @@
   },
   {
    "file": "src/native_order.cpp",
+   "symbol": "bytes",
+   "scope": [
+    "namespace pineforge :: native_order #1",
+    "inline namespace native_order_v7 #1",
+    "struct WorkingRequestCore :: BookSpill #1",
+    "LiveRequest read_for_refresh ( const BookSlot & slot ) const #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < unsigned char >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order.cpp",
    "symbol": "blobs",
    "scope": [
     "namespace pineforge :: native_order #1",
     "inline namespace native_order_v7 #1",
     "struct WorkingRequestCore :: BookSpill #1",
-    "void rewrite ( uint64_t at , BookSlot slot , const LiveRequest & row ) #1"
+    "void rewrite ( uint64_t at , BookSlot slot , const LiveRequest & row ) #1",
+    "try #1"
    ],
    "cls": "grow",
    "spelling": "blobs . append ( . . . )",

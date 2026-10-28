@@ -983,6 +983,9 @@ PINNED_SLOW_TEST_ROWS = frozenset((
     'test_adapter_spaced_ids_scaling',
     # tests/cr150.d/p2cx-a5arr.cmake:5.
     'test_array_growth_1m',
+    # Allowance-refresh counter witnesses, registered with direct slow labels.
+    'test_native_book_allowance_cost_5000',
+    'test_native_book_allowance_cost_8000',
 ))
 
 

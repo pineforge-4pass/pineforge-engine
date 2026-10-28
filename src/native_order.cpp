@@ -2122,6 +2122,20 @@ struct WorkingRequestCore::BookSpill {
     // book_lookup_reads: rows read back and table steps walked by lookups.
     mutable uint64_t lookup_rows = 0;
     mutable uint64_t lookup_steps = 0;
+    mutable BookRefreshWork refresh_work{};
+    mutable bool refresh_io = false;
+
+    struct RefreshScope {
+        const BookSpill* spill;
+        bool previous;
+        explicit RefreshScope(const BookSpill* value, bool enabled = true) noexcept
+            : spill(value), previous(value && value->refresh_io) {
+            if (spill && enabled) spill->refresh_io = true;
+        }
+        ~RefreshScope() {
+            if (spill) spill->refresh_io = previous;
+        }
+    };
 
     // Throws the carried failure, if any: an I/O failure as the typed
     // scratch failure (scratch_io_failed), anything else as it was thrown.
@@ -2160,6 +2174,7 @@ struct WorkingRequestCore::BookSpill {
             const auto linked = links.insert(book_key(incarnation), link);
             if (!linked.second) links.set(linked.first, link);
         }
+        if (refresh_io) ++refresh_work.keyed_searches;
         const auto placed = rows.insert(book_key(priority), slot);
         if (!placed.second) {
             // The row was spilled before and came back: its entry is revived.
@@ -2170,6 +2185,7 @@ struct WorkingRequestCore::BookSpill {
         }
     }
     LiveRequest read(const WorkingRequestCore& core, const BookSlot& slot) const {
+        check();
         std::vector<unsigned char> bytes(static_cast<std::size_t>(slot.length));
         blobs.read(slot.offset, bytes.data(), bytes.size());
         ByteReader in(bytes.data(), bytes.size());
@@ -2204,26 +2220,53 @@ struct WorkingRequestCore::BookSpill {
         if (match.matched) row.definition = *resident;
         return row;
     }
+    // Refresh needs the same logical row without constructing another
+    // external openings file just to reject it or write its allowance. The
+    // serialized handles are already immutable and in canonical order.
+    LiveRequest read_for_refresh(const BookSlot& slot) const {
+        check();
+        std::vector<unsigned char> bytes(static_cast<std::size_t>(slot.length));
+        blobs.read(slot.offset, bytes.data(), bytes.size());
+        ByteReader in(bytes.data(), bytes.size());
+        LoadAr ar{in};
+        ar.openings_as_stored = true;
+        LiveRequest row;
+        ar(row);
+        return row;
+    }
     // Replaces the serialized row of the live entry at `at`, keeping its
     // priority. Bytes of the same length (a refreshed allowance usually is)
     // overwrite the old ones in place; anything else is appended and the
     // entry points at it, the old bytes becoming garbage.
     void rewrite(uint64_t at, BookSlot slot, const LiveRequest& row) {
+        check();
         ByteWriter out;
         SaveAr ar{out};
         ar(row);
-        if (out.size() == slot.length) {
-            blobs.write(slot.offset, out.data(), out.size());
-            return;
+        try {
+            if (out.size() == slot.length) {
+                blobs.write(slot.offset, out.data(), out.size());
+                if (refresh_io) ++refresh_work.in_place_writes;
+                return;
+            }
+            const uint64_t old_length = slot.length;
+            slot.offset = blobs.append(out.data(), out.size());
+            slot.length = out.size();
+            rows.set(at, slot);
+            garbage += old_length;
+            if (refresh_io) ++refresh_work.appended_writes;
+        } catch (...) {
+            // An overwrite or slot publication can be partial. No reader may
+            // decode those bytes, even after the underlying I/O recovers.
+            failure = std::current_exception();
+            check();
+            throw;
         }
-        const uint64_t old_length = slot.length;
-        slot.offset = blobs.append(out.data(), out.size());
-        slot.length = out.size();
-        rows.set(at, slot);
-        garbage += old_length;
     }
     // The spilled row filed under `priority`.
     bool find(uint64_t priority, BookSlot* slot, uint64_t* at) const {
+        check();
+        if (refresh_io) ++refresh_work.keyed_searches;
         const auto found = rows.find(book_key(priority));
         if (!found) return false;
         const BookSlot value = rows.get(*found);
@@ -2233,6 +2276,8 @@ struct WorkingRequestCore::BookSpill {
         return true;
     }
     uint64_t priority_of(uint64_t incarnation) const {
+        check();
+        if (refresh_io) ++refresh_work.keyed_searches;
         const auto found = links.find(book_key(incarnation));
         if (found) {
             const IncarnationSlot link = links.get(*found);
@@ -2250,6 +2295,7 @@ struct WorkingRequestCore::BookSpill {
     void retire_row(uint64_t at, BookSlot slot) {
         slot.state = 1;
         rows.set(at, slot);
+        if (refresh_io) ++refresh_work.tombstones;
     }
     void retired(const BookSlot& slot, uint64_t priority) noexcept {
         garbage += slot.length;
@@ -2266,12 +2312,13 @@ struct WorkingRequestCore::BookSpill {
         }
     }
     uint64_t alive_from(uint64_t at) const {
+        check();
         while (at != 0 && rows.get(at).state != 0) at = rows.next_sorted(at);
         return at;
     }
-    uint64_t first_alive() const { return alive_from(rows.first_sorted()); }
-    uint64_t next_alive(uint64_t at) const { return alive_from(rows.next_sorted(at)); }
-    uint64_t priority_at(uint64_t at) const { return book_key_value(rows.key(at)); }
+    uint64_t first_alive() const { check(); return alive_from(rows.first_sorted()); }
+    uint64_t next_alive(uint64_t at) const { check(); return alive_from(rows.next_sorted(at)); }
+    uint64_t priority_at(uint64_t at) const { check(); return book_key_value(rows.key(at)); }
     // Keeps a copy of a spilled row alive for a reader; the last kSide copies
     // stay valid. keep hands the copy to a reader that holds it itself (the
     // ring and the reader share it, so it lives until both let go); stash
@@ -2289,6 +2336,7 @@ struct WorkingRequestCore::BookSpill {
     // Rebuilds both tables and the blob file from the entries that still
     // stand. Table offsets taken before are no longer valid.
     void compact() {
+        check();
         detail::DiskIdTable<BookSlot> fresh_rows;
         detail::DiskIdTable<IncarnationSlot> fresh_links;
         ExtFile fresh_blobs;
@@ -2317,6 +2365,7 @@ struct WorkingRequestCore::BookSpill {
         gone = 0;
         garbage = 0;
         ++generation;
+        if (refresh_io) ++refresh_work.compactions;
     }
 };
 
@@ -2377,6 +2426,7 @@ void WorkingRequestCore::make_book_room() {
         const uint64_t incarnation = row.handle().incarnation;
         const bool repriced = row.priority() != incarnation;
         spill.spill(row);
+        if (spill.refresh_io) ++spill.refresh_work.evictions;
         if (repriced) forget_repriced(incarnation);
         live_.pop_back();
         ++spill.alive;
@@ -2421,6 +2471,7 @@ bool WorkingRequestCore::promote_book_row(uint64_t incarnation, std::size_t* ind
     live_.insert(place, std::move(row));
     if (priority != incarnation) note_repriced(incarnation, priority);
     bump_epoch();
+    if (spill.refresh_io) ++spill.refresh_work.promotions;
     *index = where;
     return true;
 }
@@ -2440,7 +2491,7 @@ std::shared_ptr<LiveRequest> WorkingRequestCore::spilled_held(uint64_t incarnati
     uint64_t at = 0;
     if (!spill.find(priority, &slot, &at) || slot.incarnation != incarnation) return nullptr;
     ++spill.lookup_rows;
-    return spill.keep(spill.read(*this, slot));
+    return spill.keep(spill.refresh_io ? spill.read_for_refresh(slot) : spill.read(*this, slot));
 }
 
 const LiveRequest* WorkingRequestCore::find_resident(const RequestHandle& handle) const noexcept {
@@ -2475,7 +2526,9 @@ uint64_t WorkingRequestCore::book_generation() const noexcept {
 // the request's incarnation and still holds it spilled. One entry read and one
 // row read, whatever the size of the book.
 std::shared_ptr<const LiveRequest> WorkingRequestCore::hold_scanned(
-        const RequestHandle& handle, uint64_t at, uint64_t generation) const {
+        const RequestHandle& handle, uint64_t at, uint64_t generation,
+        bool allowance_refresh) const {
+    const BookSpill::RefreshScope scope(book_spill_.get(), allowance_refresh);
     if (at == 0 || spilled_count() == 0 || generation != book_spill_->generation
         || !names_run(handle, identity_)) {
         return hold_live(handle);
@@ -2484,7 +2537,7 @@ std::shared_ptr<const LiveRequest> WorkingRequestCore::hold_scanned(
     spill.check();
     const BookSlot slot = spill.rows.get(at);
     if (slot.state != 0 || slot.incarnation != handle.incarnation) return hold_live(handle);
-    return spill.keep(spill.read(*this, slot));
+    return spill.keep(allowance_refresh ? spill.read_for_refresh(slot) : spill.read(*this, slot));
 }
 
 bool WorkingRequestCore::carry_book_read_failure(std::exception_ptr failure) const noexcept {
@@ -2504,6 +2557,10 @@ WorkingRequestCore::BookLookupReads WorkingRequestCore::book_lookup_reads() cons
         reads.steps = book_spill_->lookup_steps;
     }
     return reads;
+}
+
+WorkingRequestCore::BookRefreshWork WorkingRequestCore::book_refresh_work() const noexcept {
+    return book_spill_ ? book_spill_->refresh_work : BookRefreshWork{};
 }
 
 WorkingRequestCore::BookCursor WorkingRequestCore::book_begin() const {
@@ -2603,10 +2660,12 @@ void WorkingRequestCore::LiveView::const_iterator::settle() {
 }
 
 const LiveRequest& WorkingRequestCore::LiveView::const_iterator::operator*() const {
+    if (held_) core_->book_spill_->check();
     return held_ ? *held_ : core_->live_[cursor_.r];
 }
 
 std::shared_ptr<const LiveRequest> WorkingRequestCore::LiveView::const_iterator::hold() const {
+    if (held_) core_->book_spill_->check();
     if (held_) return held_;
     return unowned_live(core_->live_[cursor_.r]);
 }
@@ -5149,9 +5208,8 @@ void WorkingRequestCore::refresh_point_allowances(uint64_t point,
     // The rows outside the heap get the same refresh: read back, refreshed,
     // and written again where it changed them. Rewriting an entry moves
     // neither its place in the table nor any other entry, so the walk goes on.
-    // A refresh that stops half way (an unreadable file) leaves the rest
-    // behind the point; the next call picks them up, a row already at the
-    // point being skipped.
+    // A read failure leaves the rest behind the point; a later call skips
+    // rows already refreshed. A partial write poisons subsequent book reads.
     BookSpill& spill = *book_spill_;
     spill.check();
     for (uint64_t at = spill.first_alive(); at != 0; at = spill.next_alive(at)) {
@@ -5193,11 +5251,53 @@ bool WorkingRequestCore::refresh_allowance(
 bool WorkingRequestCore::refresh_allowance(
         const RequestHandle& target, const EvaluationContext& context,
         const TargetObservation& observation, uint64_t* next_timeline_ordinal,
-        bool open_activation_grant) {
+        bool open_activation_grant, uint64_t at, uint64_t generation) {
     require_identity(identity_);
+    if (!names_run(target, identity_)) return false;
+    const BookSpill::RefreshScope scope(book_spill_.get());
     std::size_t live_index = 0;
-    if (classify(target, &live_index) != TargetKind::Live) return false;
-    LiveRequest& live = live_[live_index];
+    uint64_t binding_ordinal = 0;
+    if (classify_resident(target, &live_index) == TargetKind::Live) {
+        if (!refresh_allowance_row(live_[live_index], context, observation,
+                                   next_timeline_ordinal, open_activation_grant,
+                                   binding_ordinal)) return false;
+    } else {
+        if (spilled_count() == 0) return false;
+        BookSpill& spill = *book_spill_;
+        spill.check();
+        BookSlot slot;
+        bool located = at != 0 && generation == spill.generation;
+        if (located) {
+            slot = spill.rows.get(at);
+            located = slot.state == 0 && slot.incarnation == target.incarnation;
+        }
+        if (!located) {
+            const uint64_t priority = spill.priority_of(target.incarnation);
+            if (!spill.find(priority, &slot, &at) || slot.incarnation != target.incarnation) {
+                return false;
+            }
+        }
+        LiveRequest row = spill.read_for_refresh(slot);
+        if (!refresh_allowance_row(row, context, observation, next_timeline_ordinal,
+                                   open_activation_grant, binding_ordinal)) return false;
+        spill.rewrite(at, slot, row);
+        ++spill.refresh_work.spilled_refreshes;
+        // No compaction here: the matcher still holds scan locators. Room
+        // making and the bulk point refresh reclaim any changed-width bytes.
+    }
+    // Publish the kept binding's ordinal only after its row is written. All
+    // successful refreshes invalidate preparations; the absolute epoch is not
+    // observable. The row helpers have checked room for both advances.
+    if (binding_ordinal != 0) last_ordinal_ = binding_ordinal;
+    bump_epoch();
+    bump_epoch();
+    return true;
+}
+
+bool WorkingRequestCore::refresh_allowance_row(
+        LiveRequest& live, const EvaluationContext& context,
+        const TargetObservation& observation, uint64_t* next_timeline_ordinal,
+        bool open_activation_grant, uint64_t& binding_ordinal) {
     if (std::holds_alternative<Wait>(live.authority)) return false;
     const EligibilityFacts facts = eligibility_facts(live, context, open_activation_grant);
     if (!facts.birth_ok || !facts.driver_ok) return false;
@@ -5221,7 +5321,8 @@ bool WorkingRequestCore::refresh_allowance(
         // prepare_evaluation binds it. Every other unbound close is left to
         // the evaluation, which binds it with a CloseBoundEvent or ends it.
         if (!next_timeline_ordinal || !live.definition->kept_binding) return false;
-        return refresh_kept_binding(live, context, observation, *next_timeline_ordinal);
+        return refresh_kept_binding(live, context, observation, *next_timeline_ordinal,
+                                     binding_ordinal);
     }
     if (same_point_allowance(live.allowance, context.cursor.point.ordinal)) {
         return false;
@@ -5230,9 +5331,6 @@ bool WorkingRequestCore::refresh_allowance(
         throw std::overflow_error("native working-request epoch exhausted");
     }
     live.allowance = evaluated_allowance(live, context.cursor.point.ordinal);
-    if (!bump_epoch() || !bump_epoch()) {
-        throw std::overflow_error("native working-request epoch exhausted");
-    }
     return true;
 }
 
@@ -5241,7 +5339,8 @@ bool WorkingRequestCore::refresh_allowance(
 // installed, and the ordinal its CloseBoundEvent would take taken, unrecorded.
 bool WorkingRequestCore::refresh_kept_binding(LiveRequest& live, const EvaluationContext& context,
                                               const TargetObservation& observation,
-                                              uint64_t& next_timeline_ordinal) {
+                                              uint64_t& next_timeline_ordinal,
+                                              uint64_t& binding_ordinal) {
     const auto* book = std::get_if<PositionNonflat>(&observation.current_position);
     if (!book || book->cycle <= 0 || !binds_kept(live, *book)) return false;
     if (same_point_allowance(live.allowance, context.cursor.point.ordinal)) {
@@ -5253,10 +5352,7 @@ bool WorkingRequestCore::refresh_kept_binding(LiveRequest& live, const Evaluatio
     }
     live.allowance = evaluated_allowance(live, context.cursor.point.ordinal);
     live.authority = kept_book_close(*book, context, identity_, ordinal);
-    last_ordinal_ = ordinal;
-    if (!bump_epoch() || !bump_epoch()) {
-        throw std::overflow_error("native working-request epoch exhausted");
-    }
+    binding_ordinal = ordinal;
     return true;
 }
 

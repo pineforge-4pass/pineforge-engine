@@ -1,0 +1,3 @@
+book-allowance-reference/v1
+B=64 callbacks=64 live=64 continuation=e038c10e8679151d broker=586edc01d2a88310 rows=52b697a7b490f9c6 trades=0 report_trades=0 fills=0
+B=4100 callbacks=4100 live=4100 continuation=d245d99d36b4812e broker=7fb5c644fb48cb8b rows=4dc6ba84b599b822 trades=0 report_trades=0 fills=0
