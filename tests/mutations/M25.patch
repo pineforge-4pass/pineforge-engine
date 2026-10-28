@@ -1,0 +1,15 @@
+diff --git a/src/native_order_book.hpp b/src/native_order_book.hpp
+--- a/src/native_order_book.hpp
++++ b/src/native_order_book.hpp
+@@ -507,6 +507,11 @@
+             if (r.in_progress) r.W = finish ? std::numeric_limits<uint64_t>::max()
+                                            : std::max(r.W, priority);
+         }
++        for (auto& held : side) {
++            DormantSpec spec;
++            if (held && dormant_class(core, *held, spec))
++                held->allowance = core.evaluated_allowance(*held, reg[spec.cls].cur);
++        }
+     }
+     void advance(WorkingRequestCore& core, uint64_t priority) { sweep(core, priority, false); }
+     void complete(WorkingRequestCore& core, bool finish_sweep) {

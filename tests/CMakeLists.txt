@@ -1400,7 +1400,7 @@ list(APPEND TEST_SOURCES test_native_lean_path)
 # so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_intrabar_scratch)
 list(APPEND TEST_SOURCES test_parent_terminal_scratch)
-list(APPEND TEST_SOURCES test_same_bar_trade_scratch)
+list(APPEND TEST_SOURCES test_same_bar_trade_scratch test_exit_group_reorder_scaling)
 list(APPEND TEST_SOURCES test_global_exit_recut_scratch)
 # R5 lane PERF-L1: the interval cache's prior answers and the session-point
 # memo hold only what a fresh, memo-free resolution answers, in every host hook
@@ -1482,7 +1482,7 @@ list(APPEND TEST_SOURCES test_native_fused_settlement_allocations)
 # order, working request, position, trade, equity point and admission field --
 # as on the lane's base and as with the erasure switched off (equivalence).
 # Source-bound.
-list(APPEND TEST_SOURCES test_adapter_live_state_scaling)
+list(APPEND TEST_SOURCES test_adapter_live_state_scaling test_retirement_work_scaling)
 list(APPEND TEST_SOURCES test_adapter_live_state_equivalence)
 # R5 lane V19-D: a bracket family's roster parks the erased members behind a
 # retained one (the v4 fold reads what is retained): randomized append /
@@ -3799,6 +3799,21 @@ list(REMOVE_ITEM TEST_SOURCES ${_pf_private_fixture_rows})
 # Report arithmetic and C-host failure ownership, with source-free includes.
 list(APPEND TEST_SOURCES test_metrics_overflow)
 list(APPEND TEST_SOURCES test_native_c_host_report_failure test_scratch_bulk_advance)
+list(APPEND TEST_SOURCES test_native_unreachable_book)
+list(APPEND TEST_SOURCES test_native_dormant_book_cost)
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    list(APPEND TEST_SOURCES test_standing_orders_wall test_projected_pending_scaling)
+endif()
+list(APPEND TEST_SOURCES test_native_dormant_book_resident)
+list(APPEND TEST_SOURCES test_native_dormant_book_transcript)
+list(APPEND TEST_SOURCES test_native_dormant_book_switch)
+list(APPEND TEST_SOURCES test_native_dormant_book_tokens)
+list(APPEND TEST_SOURCES test_native_dormant_book_read_failure)
+list(APPEND TEST_SOURCES test_native_dormant_book_index_fault)
+list(APPEND TEST_SOURCES test_native_dormant_book_allocation_fault)
+list(APPEND TEST_SOURCES test_native_dormant_book_reachability)
+list(APPEND TEST_SOURCES test_native_dormant_book_core_contract)
+list(APPEND TEST_SOURCES test_native_dormant_book_capacity)
 
 # CR-150: engine-free pipe flag control beside the ordinary C++ unit rows.
 if(UNIX)
@@ -3823,6 +3838,15 @@ if(UNIX)
             -DPIPE_WRITER=$<TARGET_FILE:test_pipe_writer_fd_flags>
             -DPLANT_MODE=--plant-close
             -P ${CMAKE_CURRENT_SOURCE_DIR}/run_pipe_writer_fd_flags.cmake)
+endif()
+
+add_test(NAME test_native_dormant_book_notification_middle_spill
+    COMMAND test_native_dormant_book_transcript --notification-middle-spill)
+add_test(NAME test_native_dormant_book_resident_window
+    COMMAND test_native_dormant_book_transcript --resident-window)
+set_tests_properties(test_native_dormant_book_capacity PROPERTIES LABELS "slow")
+if(TEST test_standing_orders_wall)
+    set_tests_properties(test_standing_orders_wall PROPERTIES LABELS "slow")
 endif()
 
 if(PINEFORGE_BUILD_SOURCE_LAYER)

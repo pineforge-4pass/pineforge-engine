@@ -1,0 +1,12 @@
+diff --git a/src/native_execution_consumer.cpp b/src/native_execution_consumer.cpp
+--- a/src/native_execution_consumer.cpp
++++ b/src/native_execution_consumer.cpp
+@@ -14405,7 +14405,7 @@
+         if (native_matching::double_bits(t) == native_matching::double_bits(0.0)) {
+             consumer_.match_book_advance(priority);
+         } else {
+-            complete();
++            consumer_.match_book_advance(priority);
+         }
+     } catch (const std::exception& error) {
+         failure(error);
