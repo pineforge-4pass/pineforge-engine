@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -22,9 +23,13 @@ namespace {
 
 int failures = 0;
 
-#define CHECK(condition) do { \
-    if (!(condition)) { \
-        std::fprintf(stderr, "FAIL %s:%d %s\n", __FILE__, __LINE__, #condition); \
+#define CHECK_OP(actual, operation, expected) do { \
+    const auto actual_value = (actual); \
+    const auto expected_value = (expected); \
+    if (!(actual_value operation expected_value)) { \
+        std::cerr << "FAIL " << __FILE__ << ':' << __LINE__ << ' ' \
+                  << #actual << ' ' << #operation << ' ' << #expected \
+                  << " actual=" << actual_value << " expected=" << expected_value << '\n'; \
         ++failures; \
     } \
 } while (false)
@@ -133,14 +138,14 @@ void measure(std::uint64_t inputs, std::uint64_t interval) {
     const auto export_seconds =
         std::chrono::duration<double>(std::chrono::steady_clock::now() - export_start).count();
 
-    CHECK(from_checkpoint == expected_report(target));
-    CHECK(full_replay == expected_report(target));
-    CHECK(exported == full_replay);
-    CHECK(checkpoint_stats.checkpoint_rows == 1);
-    CHECK(checkpoint_stats.checkpoint_rows + checkpoint_stats.delta_rows <= interval);
-    CHECK(full_stats.checkpoint_rows == 0);
-    CHECK(full_stats.delta_rows == target + 1);
-    CHECK(export_stats.checkpoint_rows == 1);
+    CHECK_OP(from_checkpoint, ==, expected_report(target));
+    CHECK_OP(full_replay, ==, expected_report(target));
+    CHECK_OP(exported, ==, full_replay);
+    CHECK_OP(checkpoint_stats.checkpoint_rows, ==, 1u);
+    CHECK_OP(checkpoint_stats.checkpoint_rows + checkpoint_stats.delta_rows, <=, interval);
+    CHECK_OP(full_stats.checkpoint_rows, ==, 0u);
+    CHECK_OP(full_stats.delta_rows, ==, inputs + 1);
+    CHECK_OP(export_stats.checkpoint_rows, ==, 1u);
 
     std::printf("| %llu | %llu | %llu | %llu | %llu | %.6f | %.6f | %.6f |\n",
         static_cast<unsigned long long>(inputs),

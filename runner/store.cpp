@@ -244,9 +244,7 @@ Json verify_checkpoint(sqlite3* database, const CheckpointRow& checkpoint) {
 
 void apply_report_snapshot(Json& document, const std::string& bytes) {
     auto payload = parse_json(bytes);
-    if (payload.kind == Json::Kind::Object &&
-        payload.members.count("schema_version") &&
-        payload.at("schema_version").kind == Json::Kind::String &&
+    if (payload.members.count("schema_version") &&
         payload.at("schema_version").text() == "pineforge-native-report-delta/v1")
         apply_report_delta(document, payload);
     else
@@ -254,12 +252,13 @@ void apply_report_snapshot(Json& document, const std::string& bytes) {
 }
 
 Json read_full_report(sqlite3* database, std::uint64_t target, ReportReadStats* stats) {
+    const auto committed = scalar(database, "SELECT COUNT(*) FROM inputs");
     Json document;
+    bool found = false;
     std::uint64_t expected_cursor = 0;
     std::string previous_hash;
     Statement report(database,
-        "SELECT input_cursor,payload FROM report_snapshots WHERE input_cursor<=? ORDER BY input_cursor");
-    report.bind(1, target);
+        "SELECT input_cursor,payload FROM report_snapshots ORDER BY input_cursor");
     while (report.row()) {
         const auto cursor = report.integer(0);
         if (cursor != expected_cursor++)
@@ -270,11 +269,15 @@ Json read_full_report(sqlite3* database, std::uint64_t target, ReportReadStats* 
             throw std::runtime_error("resume this ledger with run before exporting reports");
         const auto digest = report_integrity(database, cursor, bytes, previous_hash);
         if (*stored != digest) throw std::runtime_error("native ledger report integrity mismatch");
-        apply_report_snapshot(document, bytes);
         previous_hash = digest;
         if (stats) ++stats->delta_rows;
+        if (cursor > target) continue;
+        apply_report_snapshot(document, bytes);
+        found = cursor == target;
     }
-    if (!expected_cursor || expected_cursor - 1 != target)
+    if (expected_cursor != committed + 1)
+        throw std::runtime_error("cumulative report delta hole");
+    if (!found)
         throw std::runtime_error("no cumulative report at requested input cursor");
     return document;
 }
@@ -357,13 +360,12 @@ std::string export_report(sqlite3* database, std::optional<std::uint64_t> cursor
         "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN "
         "('report_snapshots','report_integrity')");
     if (!available.row() || available.integer(0) != 2)
-        throw std::runtime_error("resume this ledger before exporting reports");
+        throw std::runtime_error("resume this ledger with run before exporting reports");
     const auto committed = scalar(database, "SELECT COUNT(*) FROM inputs");
     const auto target = cursor.value_or(committed);
-    if (target > committed)
-        throw std::runtime_error("invalid cumulative report cursor");
     if (stats) *stats = {};
-    return read_report_document(database, target, use_checkpoints, checkpoints_available, stats).dump();
+    return read_report_document(database, target, use_checkpoints && target <= committed,
+                                checkpoints_available, stats).dump();
 }
 
 std::uint64_t commit_time() {
