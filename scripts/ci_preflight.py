@@ -95,6 +95,8 @@ GKE_32_LABEL = 'gke-32cpu-64gb-amd64'
 GKE_16_LABEL = 'gke-16cpu-32gb-amd64'
 GKE_8_LABEL = 'gke-8cpu-16gb-amd64'
 GKE_ARM_LABEL = 'gke-16cpu-32gb-arm64'
+GKE_2_LABEL = 'gke-2cpu-4gb-amd64'
+GKE_4_LABEL = 'gke-4cpu-8gb-amd64'
 GKE_JOB_LABELS = {
     'ci-post.yml': {'preflight': GKE_8_LABEL, 'preflight-slow': GKE_8_LABEL,
                     'build': GKE_32_LABEL, 'build-debug': GKE_16_LABEL,
@@ -103,9 +105,22 @@ GKE_JOB_LABELS = {
     'corpus-parity.yml': {'corpus-parity': GKE_16_LABEL, 'corpus-parity-subset': GKE_8_LABEL},
     'native-live.yml': {'native-live': GKE_16_LABEL, 'native-live-shards': GKE_8_LABEL},
 }
+GKE_LIGHT_JOB_RUNNERS = {
+    'ci-post.yml': dict.fromkeys(
+        ('authz', 'changes', 'build-release-gate', 'build-debug-gate',
+         'sanitizers-gate', 'kernel-only-gate', 'build-gate'), GKE_2_LABEL),
+    # Separate called-workflow guards to keep each static label count <= 8.
+    'native-live.yml': dict.fromkeys(
+        ('authz', 'native-live-native', 'native-live-gate'), GKE_4_LABEL),
+    'corpus-parity.yml': {'authz': GKE_4_LABEL},
+    'docs-post.yml': {'authz': GKE_2_LABEL},
+    'release-ruleset-probe.yml': {'authz': GKE_2_LABEL},
+    'promote-baseline.yml': {'promote-guard': GKE_2_LABEL},
+}
 GKE_JOB_RUNNERS = {
-    name: dict(jobs)
-    for name, jobs in GKE_JOB_LABELS.items()
+    name: {**GKE_JOB_LABELS.get(name, {}),
+           **GKE_LIGHT_JOB_RUNNERS.get(name, {})}
+    for name in {**GKE_JOB_LABELS, **GKE_LIGHT_JOB_RUNNERS}
 }
 CI_EVENTS = '''on:
   pull_request:
@@ -283,22 +298,20 @@ JOB_COMMANDS = {
 # Historical name: this table also holds the exact GKE pins.
 HOSTED_JOB_RUNNERS = {
     'ci.yml': dict.fromkeys(('authz', 'changes', 'build-gate'), 'ubuntu-24.04'),
-    'ci-post.yml': {**dict.fromkeys(('authz', 'changes', 'build-gate'), 'ubuntu-24.04'),
-                    **dict.fromkeys(POST_LEG_GATES, 'ubuntu-24.04'),
-                    **GKE_JOB_RUNNERS['ci-post.yml']},
-    **{name: {'authz': 'ubuntu-24.04'} for name in (
-        'corpus-parity-subset.yml', 'docs-post.yml')},
-    'native-live.yml': {'authz': 'ubuntu-24.04', **GKE_JOB_RUNNERS['native-live.yml'],
-                        'native-live-native': 'ubuntu-24.04', 'native-live-gate': 'ubuntu-24.04'},
-    'corpus-parity.yml': {'authz': 'ubuntu-24.04', **GKE_JOB_RUNNERS['corpus-parity.yml']},
+    'ci-post.yml': GKE_JOB_RUNNERS['ci-post.yml'],
+    'corpus-parity-subset.yml': {'authz': 'ubuntu-24.04'},
+    'docs-post.yml': GKE_JOB_RUNNERS['docs-post.yml'],
+    'native-live.yml': GKE_JOB_RUNNERS['native-live.yml'],
+    'corpus-parity.yml': GKE_JOB_RUNNERS['corpus-parity.yml'],
     'docs.yml': {'authz': 'ubuntu-24.04', 'build': 'ubuntu-24.04'},
-    'promote-baseline.yml': {'promote-guard': 'ubuntu-latest'},
+    'promote-baseline.yml': GKE_JOB_RUNNERS['promote-baseline.yml'],
+    'release-ruleset-probe.yml': GKE_JOB_RUNNERS['release-ruleset-probe.yml'],
 }
 # Release/probe credential pins and ARM strategies remain isolated.
 RELEASE_JOB_RUNNERS = {
     'release.yml': {'release': RELEASE_RUNNER, 'prebuilt': HOSTED_MATRIX_RUNNER,
                     'notify-hub': RELEASE_RUNNER},
-    'release-ruleset-probe.yml': {'authz': 'ubuntu-24.04', 'probe': POST_RUNNER},
+    'release-ruleset-probe.yml': {'probe': POST_RUNNER},
     'promote-baseline.yml': {'promote': RELEASE_RUNNER},
 }
 # Credential-bearing jobs outside the release pins and gated docs build retain
@@ -560,7 +573,7 @@ _CONTINUE_ON_ERROR = re.compile(r'\s*(?:-\s+)?["\']?continue-on-error["\']?\s*:'
 # the codegen and campaign pins must carry this same literal, without repo edits.
 PROMOTE_GUARD = r'''  promote-guard:
     name: promote-guard
-    runs-on: ubuntu-latest
+    runs-on: gke-2cpu-4gb-amd64
     # Resolution needs read access in private repos; no secrets or OIDC here.
     permissions:
       pull-requests: read
@@ -1391,15 +1404,22 @@ def _events(workflow: str) -> set[str] | None:
     return {event.group(1) for event in events}
 
 
-def _holds_credentials(workflow: str, body: str) -> bool:
+def _effective_permissions(workflow: str, body: str) -> list[str]:
+    """A job permission declaration replaces the workflow's token scopes."""
+    return _job_values(body, 'permissions') or _job_values(workflow, 'permissions')
+
+
+def _holds_credentials(workflow: str, body: str, *, effective_permissions: bool = False) -> bool:
     """L6: non-GITHUB_TOKEN secrets, OIDC writes or a deployment environment.
 
-    Include inherited workflow env and permissions. Bracket/dynamic secret
-    access and inherited reusable-workflow secrets must not bypass the rule.
+    Existing VM checks conservatively include workflow permissions. GKE checks
+    use the job's effective scopes. Bracket/dynamic secret access and inherited
+    reusable-workflow secrets must not bypass either rule.
     """
     if _job_values(body, 'environment') or _job_values(body, 'secrets') == ['inherit']:
         return True
-    permissions = _job_values(workflow, 'permissions') + _job_values(body, 'permissions')
+    permissions = (_effective_permissions(workflow, body) if effective_permissions else
+                   _job_values(workflow, 'permissions') + _job_values(body, 'permissions'))
     oidc_write = r'''(?<![\w-])["']?id-token["']?\s*:\s*(?:"write"|'write'|write)(?=$|[\s,}])'''
     if any(value == 'write-all' or re.search(oidc_write, value, re.IGNORECASE)
            for value in permissions):
@@ -1493,9 +1513,10 @@ def _workflow_runner(workflow: str) -> str:
     return POST_RUNNER if (_events(workflow) or set()) & POST_EVENTS else PR_RUNNER
 
 
-def _authz_header(workflow: str) -> str:
-    # Light canon authz uses the same exact hosted image for every event.
-    return AUTHZ_JOB_HEADER
+def _authz_header(name: str) -> str:
+    # Only the runner varies; the canon step hash and all header keys stay pinned.
+    runner = GKE_LIGHT_JOB_RUNNERS.get(name, {}).get('authz', 'ubuntu-24.04')
+    return AUTHZ_JOB_HEADER.replace('runs-on: ubuntu-24.04', f'runs-on: {runner}')
 
 
 _GKE_ROUTE = re.compile(r'(?<![\w.-])gke-[\w.-]+', re.IGNORECASE)
@@ -1713,8 +1734,8 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
             if has_gke and _job_values(body, 'services'):
                 findings.append(f'{name} job {job} must not declare job services on GKE')
             if has_gke:
-                permissions = _job_values(workflow, 'permissions') + _job_values(body, 'permissions')
-                if (_holds_credentials(workflow, body)
+                permissions = _effective_permissions(workflow, body)
+                if (_holds_credentials(workflow, body, effective_permissions=True)
                         or any(re.search(r'\bid-token\b', value) for value in permissions)):
                     findings.append(f'{name} job {job} must not expose credentials on GKE')
             runner_text = ' '.join(runs_on + _job_block(body, 'strategy'))
@@ -1726,7 +1747,7 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
             if any(not value.startswith('./.github/workflows/') for value in uses):
                 findings.append(f'{name} job {job} calls a workflow the runner contract '
                                 'cannot see; call one under ./.github/workflows/')
-            credentials = _holds_credentials(workflow, body)
+            credentials = _holds_credentials(workflow, body, effective_permissions=has_gke)
             if job not in pinned:
                 if pinned and runs_on:
                     findings.append(f'{name} job {job} needs a pinned runner and time limit')
@@ -1765,7 +1786,9 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                     findings.append(f'{name} job {job} must keep production credentials '
                                     'on a hosted standard runner')
                 if (name == 'native-live.yml'
-                        or name == 'ci-post.yml' and job not in ('preflight', 'preflight-slow')):
+                        or name == 'promote-baseline.yml'
+                        or name == 'ci-post.yml' and job not in (
+                            'preflight', 'preflight-slow', 'changes', 'build-gate')):
                     environments = _job_values(workflow, 'env') + _job_values(body, 'env')
                     if any(re.search(r'\bPF_CI_LABELS["\']?\s*:', value) for value in environments):
                         findings.append(f'{name} job {job} must not set PF_CI_LABELS on a GKE job')
@@ -1999,8 +2022,8 @@ jobs:
   authz:
     name: authz
     # Preflight pins executable workflow lines after removing comment-only lines.
-    # authz uses hosted ubuntu-24.04; the App-token probe uses pf-gcp-post.
-    runs-on: ubuntu-24.04
+    # authz uses gke-2cpu-4gb-amd64; the App-token probe uses pf-gcp-post.
+    runs-on: gke-2cpu-4gb-amd64
     permissions: {}
     # No timeout-minutes: the owner's no-time-limits rule (check-no-time-limits refuses new ones).
     steps:
@@ -2175,7 +2198,7 @@ def authz_workflow_findings(workflow: str, name: str, aggregate: str) -> list[st
     steps = _steps(authz)
     step = steps[0].rstrip('\n') + '\n' if len(steps) == 1 else ''
     if (not jobs or next(iter(jobs)) != 'authz'
-            or not authz.startswith('\n' + _authz_header(workflow))
+            or not authz.startswith('\n' + _authz_header(name))
             or _job_values(authz, 'name') != ['authz']
             or _job_values(authz, 'permissions') != ['{}']
             or any(_job_values(authz, key) for key in ('needs', 'if', 'env', 'uses', 'strategy'))
@@ -2258,10 +2281,10 @@ def gated_workflow_findings(workflow: str, name: str) -> list[str]:
     steps = _steps(authz)
     step = steps[0].rstrip('\n') + '\n' if len(steps) == 1 else ''
     if (not jobs or _unparsed(workflow) or next(iter(jobs)) != 'authz'
-            or not authz.startswith('\n' + _authz_header(workflow))
+            or not authz.startswith('\n' + _authz_header(name))
             # Extra job keys such as continue-on-error can bypass refusal
             # without changing either the header or the single step's hash.
-            or _code(authz) != _code(_authz_header(workflow)) + ['    steps:'] + _code(step)
+            or _code(authz) != _code(_authz_header(name)) + ['    steps:'] + _code(step)
             or _job_values(authz, 'name') != ['authz']
             or _job_values(authz, 'permissions') != ['{}']
             or any(_job_values(authz, key) for key in ('needs', 'if', 'env', 'uses', 'strategy'))
