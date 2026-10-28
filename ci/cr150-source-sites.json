@@ -6722,19 +6722,6 @@
   },
   {
    "file": "include/pineforge/native_order.hpp",
-   "symbol": "index_",
-   "scope": [
-    "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v8 #1",
-    "class WorkingRequestCore :: CohortView #1",
-    "public : class const_iterator #1"
-   ],
-   "cls": "assign",
-   "spelling": "index_ = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/native_order.hpp",
    "symbol": "begin",
    "scope": [
     "namespace pineforge :: native_order #1",
