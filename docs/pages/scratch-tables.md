@@ -263,11 +263,11 @@ trace-name dedup, Docker feed trim and reverse-CSV staging need writable storage
 It raises the existing typed RuntimeError (exit 1), reason
 `strategy_driver_no_jailed_route`, before any native result or output staging.
 `pineforge-sink-finalize` file-output mode is excluded before output removal
-and spool creation (exit 3), reason `finalizer_file_output_no_jailed_route`.
+and spool creation: exit 3 with a text diagnostic naming
+`finalizer_file_output_no_jailed_route` (no typed code or arguments).
+The strategy driver uses `run_request_invalid` and `{"option":"arguments"}`;
+its reason is in diagnostic text, without new typed argument keys.
 Unjailed file mode needs writable output and spool directories.
-Both refusals use `run_request_invalid` and `{"option":"arguments"}`;
-the reason strings are in diagnostic text, without new typed argument keys.
-The finalizer keeps its existing failure receipt/diagnostic shape.
 
 The finalizer's stdout mode (`--out -` with a positive `--max-bytes`) remains
 accepted and writes no file. In valid jailed `docker/run_json.py` runs, the

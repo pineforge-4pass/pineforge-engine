@@ -645,22 +645,23 @@ def test_finalizer_spool_creates_no_file_under_jailed_environment(tmp_path):
     _assert_no_files(stdout, "finalizer stdout mode")
 
     result = _child(tmp_path, "finalizer-file", [
-        "--in-fd", "0", "--out", "{work}/result.sink", "--receipt-fd", "2",
+        "--in-fd", "0", "--out", "{work}/result.sink",
         "--max-bytes", str(len(wire)), "--spool-dir", "{tmp}",
     ], input_bytes=wire)
     _assert_jail(result)
-    receipt = json.loads(result.stderr)
-    assert result.status == 3 and result.stdout == b"", result
+    assert result.status == 3, result
+    assert result.stderr == (
+        b"pineforge-sink-finalize: jailed profile excludes "
+        b"pineforge-sink-finalize file-output mode: "
+        b"finalizer_file_output_no_jailed_route\n"), result
+    receipt = json.loads(result.stdout)
     expected = {
         "complete": False,
         **{"count_" + tag: 0 for tag in "etovkxh"},
         "sink_bytes": 0, "sha256": "", "finalizer_version": "1.1.0",
-        "tool": "pineforge-sink-finalize", "event": "sink_refused", "exit_code": 3,
-        "detail": ("jailed profile excludes pineforge-sink-finalize file-output mode: "
-                   "finalizer_file_output_no_jailed_route"),
-        "code": "run_request_invalid", "args": {"option": "arguments"},
     }
     assert receipt == expected and tuple(receipt) == tuple(expected), receipt
+    assert not any(event["kind"] == "typed-refusal" for event in result.events)
     assert _entered(result, FINALIZER, "main")
     assert not _entered(result, FINALIZER, "_receive")
     assert not _entered(result, FINALIZER, "_verify")

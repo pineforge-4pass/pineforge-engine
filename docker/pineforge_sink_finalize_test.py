@@ -411,37 +411,41 @@ def test_file_mode_runs_normally_outside_jailed_profile(tmp_path, monkeypatch, p
     assert tuple(receipt) == RECEIPT_KEYS
 
 
-@pytest.mark.parametrize("stderr_receipt", [False, True])
-def test_jailed_file_mode_keeps_the_typed_failure_channels(
-        tmp_path, monkeypatch, stderr_receipt):
-    monkeypatch.setenv("PINEFORGE_RUN_JSON_PROFILE", "jailed")
+@pytest.mark.parametrize("profile,message", [
+    ("jailed", "jailed profile excludes pineforge-sink-finalize file-output mode: "
+               "finalizer_file_output_no_jailed_route"),
+    ("invalid", "PINEFORGE_RUN_JSON_PROFILE must be unjailed or jailed"),
+])
+@pytest.mark.parametrize("receipt_channel", ["stdout", "pipe", "stderr"])
+@pytest.mark.parametrize("existing_output", [False, True])
+def test_host_profile_refusals_keep_text_diagnostics_and_ordinary_receipts(
+        tmp_path, monkeypatch, profile, message, receipt_channel, existing_output):
+    monkeypatch.setenv("PINEFORGE_RUN_JSON_PROFILE", profile)
     payload = fixture_stream(tmp_path)
     output = tmp_path / "out.sink"
     previous = b"previous output\n"
-    output.write_bytes(previous)
+    if existing_output:
+        output.write_bytes(previous)
     result, receipt, out, spool = invoke(
-        tmp_path, payload, out=output, receipt_pipe=True,
-        extra=("--receipt-fd", "2") if stderr_receipt else ())
-    assert result.returncode == 3 and result.stdout == b"", result.stderr
-    diagnostic = json.loads(result.stderr)
-    if stderr_receipt:
-        assert receipt is None
-        receipt = diagnostic
-        assert tuple(receipt) == TYPED_REFUSAL_RECEIPT_KEYS
+        tmp_path, payload, out=output, receipt_pipe=receipt_channel != "stdout",
+        extra=("--receipt-fd", "2") if receipt_channel == "stderr" else ())
+    assert result.returncode == 3, result.stderr
+    if receipt_channel == "stderr":
+        assert receipt is None and result.stdout == b""
+        receipt = json.loads(result.stderr)
+        assert result.stderr == encoded(receipt)
     else:
-        assert tuple(receipt) == RECEIPT_KEYS
-        assert tuple(diagnostic) == ("tool", "event", "exit_code", "detail", "code", "args")
-    assert diagnostic["tool"] == "pineforge-sink-finalize"
-    assert diagnostic["event"] == "sink_refused" and diagnostic["exit_code"] == 3
-    assert diagnostic["code"] == "run_request_invalid"
-    assert diagnostic["args"] == {"option": "arguments"}
-    assert diagnostic["detail"] == (
-        "jailed profile excludes pineforge-sink-finalize file-output mode: "
-        "finalizer_file_output_no_jailed_route")
+        assert result.stdout == (b"" if receipt_channel == "pipe" else result.receipt_bytes)
+        assert result.stderr == f"pineforge-sink-finalize: {message}\n".encode()
+    assert tuple(receipt) == RECEIPT_KEYS
+    assert "code" not in receipt and "args" not in receipt
     assert receipt["complete"] is False and receipt["sha256"] == ""
     assert receipt["sink_bytes"] == 0
     assert all(receipt["count_" + tag.lower()] == 0 for tag in TAGS)
-    assert out.read_bytes() == previous
+    if existing_output:
+        assert out.read_bytes() == previous
+    else:
+        assert not os.path.lexists(out)
     assert list(spool.iterdir()) == []
 
 

@@ -36,10 +36,9 @@ PATH is a dedicated output pathname owned exclusively by this invocation.
 File mode runs as a uid permitted to write the output and spool directories,
 without RLIMIT_FSIZE=0.
 PINEFORGE_RUN_JSON_PROFILE accepts unjailed (default) or jailed. File mode
-is excluded under jailed before touching PATH or creating a spool: typed
-exit 3, code=run_request_invalid, args={option: arguments}, with reason
-finalizer_file_output_no_jailed_route in the diagnostic text. Stdout mode
-with a positive --max-bytes remains accepted.
+is excluded under jailed before touching PATH or creating a spool: exit 3,
+with reason finalizer_file_output_no_jailed_route in a text diagnostic.
+Stdout mode with a positive --max-bytes remains accepted.
 An old entry at PATH is unlinked before receiving input, so a failed run
 cannot leave an old success behind. A random mode-0600 spool is created
 in DIR (default: PATH's directory), filled, fsynced, closed, and verified
@@ -105,8 +104,7 @@ removes PATH and returns 5; the receiver must require exit 0.
 Exit codes:
   0  complete and verified; sink delivered/published and receipt written
   2  usage error
-  3  malformed stream: JSON/schema/line rule, run-id mismatch, E/T/O/K order,
-     or a typed host-profile refusal
+  3  malformed stream; host-profile refusal with a text diagnostic naming the reason
   4  verification failure: trailer grammar, counts, SHA-256, or extra bytes
   5  input/output I/O failure (including receipt/rename)
   6  EOF without a trailer, including empty input/final fragments
@@ -435,9 +433,7 @@ def main(argv: list[str] | None = None) -> int:
     failure_diagnostic = {}
     try:
         if profile not in ("unjailed", "jailed"):
-            raise _Failure(3, "PINEFORGE_RUN_JSON_PROFILE must be unjailed or jailed",
-                           failure_code="run_request_invalid",
-                           failure_args={"option": "arguments"})
+            raise _Failure(3, "PINEFORGE_RUN_JSON_PROFILE must be unjailed or jailed")
         if stdout_mode:
             with io.BufferedReader(_StreamInput(args.in_fd, receipt, args.max_bytes),
                                    buffer_size=CHUNK_BYTES) as stream:
@@ -446,9 +442,7 @@ def main(argv: list[str] | None = None) -> int:
             if profile == "jailed":
                 raise _Failure(
                     3, "jailed profile excludes pineforge-sink-finalize file-output mode: "
-                    "finalizer_file_output_no_jailed_route",
-                    failure_code="run_request_invalid",
-                    failure_args={"option": "arguments"})
+                    "finalizer_file_output_no_jailed_route")
             directory = (os.path.abspath(args.spool_dir) if args.spool_dir is not None
                          else os.path.dirname(out))
             _unlink(out)
