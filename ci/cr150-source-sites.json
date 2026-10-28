@@ -10192,6 +10192,18 @@
   },
   {
    "file": "include/pineforge/source/pine_adapter.hpp",
+   "symbol": "end",
+   "scope": [
+    "namespace pineforge :: source #2",
+    "class PineExecutionAdapter #1",
+    "private : struct ExitGroupCertificate #1"
+   ],
+   "cls": "assign",
+   "spelling": "end = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_adapter.hpp",
    "symbol": "open_exit_first_id_",
    "scope": [
     "namespace pineforge :: source #2",
@@ -10509,6 +10521,42 @@
    ],
    "cls": "decl",
    "spelling": "std :: vector < int >",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_adapter.hpp",
+   "symbol": "opened",
+   "scope": [
+    "namespace pineforge :: source #2",
+    "class PineExecutionAdapter #1",
+    "struct RetirementPopulation #1"
+   ],
+   "cls": "assign",
+   "spelling": "opened = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_adapter.hpp",
+   "symbol": "roots",
+   "scope": [
+    "namespace pineforge :: source #2",
+    "class PineExecutionAdapter #1",
+    "struct RetirementInputs #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < std :: uint64_t >",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_adapter.hpp",
+   "symbol": "bar_numbers",
+   "scope": [
+    "namespace pineforge :: source #2",
+    "class PineExecutionAdapter #1",
+    "struct RetirementInputs #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < std :: int32_t >",
    "ordinal": 1
   },
   {
@@ -28535,7 +28583,7 @@
    "symbol": "askable_origins",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1"
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1"
    ],
    "cls": "grow",
    "spelling": "askable_origins . push_back ( . . . )",
@@ -28546,7 +28594,7 @@
    "symbol": "askable_origins",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1",
     "for ( const auto & cohort : cohorts_by_id_ . held_rows ( ) ) #1"
    ],
    "cls": "grow",
@@ -28558,7 +28606,7 @@
    "symbol": "origin_pins",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1",
     "placement_ . visit_rows ( [ & ] ( std :: uint64_t , const PlacementSnapshot & value ) #1"
    ],
    "cls": "grow",
@@ -28570,7 +28618,7 @@
    "symbol": "held",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1",
     "placement_ . visit_rows ( [ & ] ( std :: uint64_t incarnation , const PlacementSnapshot & value ) #1",
     "if ( cycle_held ) #1"
    ],
@@ -28583,7 +28631,7 @@
    "symbol": "rows",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1",
     "const auto release_superseded = [ & ] #1"
    ],
    "cls": "assign",
@@ -28595,7 +28643,7 @@
    "symbol": "named",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1",
     "const auto release_superseded = [ & ] #1",
     "+ + it ) #1"
    ],
@@ -28608,7 +28656,7 @@
    "symbol": "kept",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1",
     "const auto release_superseded = [ & ] #1"
    ],
    "cls": "assign",
@@ -28620,7 +28668,7 @@
    "symbol": "memo",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1",
     "const auto release_superseded = [ & ] #1"
    ],
    "cls": "grow",
@@ -28632,7 +28680,7 @@
    "symbol": "kept",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1",
     "const auto release_superseded = [ & ] #1"
    ],
    "cls": "assign",
@@ -28644,7 +28692,7 @@
    "symbol": "released",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1",
     "const auto release_superseded = [ & ] #1",
     "for ( const auto & leg : held ) #1"
    ],
@@ -28657,7 +28705,7 @@
    "symbol": "roots",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1",
     "const auto root = [ & ] ( std :: uint64_t incarnation ) #1"
    ],
    "cls": "grow",
@@ -28669,7 +28717,7 @@
    "symbol": "live_groups",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1",
     "const auto queued_snapshot = [ & ] ( const PlacementSnapshot & snapshot ) #1"
    ],
    "cls": "grow",
@@ -28681,7 +28729,7 @@
    "symbol": "source_bars",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1",
     "const auto queued_snapshot = [ & ] ( const PlacementSnapshot & snapshot ) #1"
    ],
    "cls": "grow",
@@ -28693,7 +28741,7 @@
    "symbol": "live_groups",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1",
     "for ( const auto & handle : live_handles_ ) #1"
    ],
    "cls": "grow",
@@ -28705,7 +28753,7 @@
    "symbol": "source_bars",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1",
     "for ( const auto & handle : live_handles_ ) #1"
    ],
    "cls": "grow",
@@ -28717,7 +28765,7 @@
    "symbol": "candidates",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1"
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1"
    ],
    "cls": "assign",
    "spelling": "candidates = . . .",
@@ -28728,7 +28776,7 @@
    "symbol": "held",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1",
     "placement_ . visit_rows ( [ & ] ( std :: uint64_t incarnation , const PlacementSnapshot & value ) #2",
     "if ( unpinned ) #1"
    ],
@@ -28741,7 +28789,7 @@
    "symbol": "candidates",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1",
     "placement_ . visit_rows ( [ & ] ( std :: uint64_t incarnation , const PlacementSnapshot & value ) #2"
    ],
    "cls": "grow",
@@ -28753,7 +28801,7 @@
    "symbol": "candidate_names",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1",
     "for ( const auto & c : candidates ) #1"
    ],
    "cls": "grow",
@@ -28765,7 +28813,7 @@
    "symbol": "candidate_names",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1",
     "for ( const auto & c : candidates ) #1"
    ],
    "cls": "grow",
@@ -28777,7 +28825,7 @@
    "symbol": "next_reissues",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1",
     "+ + index ) #1"
    ],
    "cls": "grow",
@@ -28789,7 +28837,7 @@
    "symbol": "new_candidates",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1",
     "+ + index ) #1"
    ],
    "cls": "grow",
@@ -28801,7 +28849,7 @@
    "symbol": "known_candidates",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1",
     "+ + index ) #1",
     "else #1"
    ],
@@ -28814,7 +28862,7 @@
    "symbol": "unresolved_candidates",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1",
     "+ + index ) #1",
     "else #1"
    ],
@@ -28827,7 +28875,7 @@
    "symbol": "rows",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1",
     "if ( ! sweep . unresolved_candidates . empty ( ) ) #1"
    ],
    "cls": "assign",
@@ -28839,7 +28887,7 @@
    "symbol": "first_reissues",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1"
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1"
    ],
    "cls": "grow",
    "spelling": "first_reissues . push_back ( . . . )",
@@ -28850,7 +28898,7 @@
    "symbol": "doomed",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1",
     "placement_ . visit_rows ( [ & ] ( std :: uint64_t incarnation , const PlacementSnapshot & value ) #3"
    ],
    "cls": "grow",
@@ -37741,6 +37789,17 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
+   "symbol": "pending",
+   "scope": [
+    "namespace pineforge :: source #1",
+    "PineExecutionAdapter :: RetirementPopulation PineExecutionAdapter :: retirement_population ( ) const #1"
+   ],
+   "cls": "assign",
+   "spelling": "pending = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
    "symbol": "origins",
    "scope": [
     "namespace pineforge :: source #2",
@@ -37803,6 +37862,247 @@
    ],
    "cls": "grow",
    "spelling": "pending_write . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "order",
+   "scope": [
+    "namespace pineforge :: source #7",
+    "struct PlacementTable :: SequenceIndex #1",
+    "static Status compare ( void * context , const :: pineforge :: detail :: ScratchByteSource & a , const :: pineforge :: detail :: ScratchByteSource & b , int & order ) noexcept #1",
+    ") #1",
+    "if ( compared ! = 0 ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "order = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "order",
+   "scope": [
+    "namespace pineforge :: source #7",
+    "struct PlacementTable :: SequenceIndex #1",
+    "static Status compare ( void * context , const :: pineforge :: detail :: ScratchByteSource & a , const :: pineforge :: detail :: ScratchByteSource & b , int & order ) noexcept #1"
+   ],
+   "cls": "assign",
+   "spelling": "order = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "result",
+   "scope": [
+    "namespace pineforge :: source #7",
+    "struct PlacementTable :: SequenceIndex #1",
+    "std :: uint64_t minimum ( unsigned domain , std :: string_view id , std :: optional < std :: string_view > from = std :: nullopt ) const #1"
+   ],
+   "cls": "assign",
+   "spelling": "result = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "result",
+   "scope": [
+    "namespace pineforge :: source #7",
+    "struct PlacementTable :: SequenceIndex #1",
+    "std :: uint64_t minimum ( unsigned domain , std :: string_view id , std :: optional < std :: string_view > from = std :: nullopt ) const #1"
+   ],
+   "cls": "assign",
+   "spelling": "result = . . .",
+   "ordinal": 2
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "next",
+   "scope": [
+    "namespace pineforge :: source #7",
+    "PlacementTable :: SequenceIndex & PlacementTable :: sequence_index ( ) const #1",
+    "if ( ! sequence_index_ ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "next = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "next",
+   "scope": [
+    "namespace pineforge :: source #7",
+    "PlacementTable :: SequenceIndex & PlacementTable :: sequence_index ( ) const #1",
+    "if ( ! sequence_index_ ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "next",
+   "scope": [
+    "namespace pineforge :: source #7",
+    "PlacementTable :: SequenceIndex & PlacementTable :: sequence_index ( ) const #1",
+    "if ( ! sequence_index_ ) #1",
+    "visit_rows ( [ & ] ( std :: uint64_t incarnation , const PlacementSnapshot & row ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "next . insert ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "rows",
+   "scope": [
+    "namespace pineforge :: source #7",
+    "void PlacementTable :: prepare_place ( std :: uint64_t incarnation ) #1",
+    "const auto reserve = [ ] ( auto & rows , std :: size_t required ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "rows . reserve ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "index",
+   "scope": [
+    "namespace pineforge :: source #7",
+    "void PlacementTable :: change_sequences ( std :: uint64_t incarnation , const PlacementSnapshot * before , const PlacementSnapshot * after ) #1",
+    "try #1"
+   ],
+   "cls": "grow",
+   "spelling": "index . insert ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "result",
+   "scope": [
+    "namespace pineforge :: source #7",
+    "PineExecutionAdapter :: ExitGroupWork PineExecutionAdapter :: exit_group_work ( ) const noexcept #1"
+   ],
+   "cls": "assign",
+   "spelling": "result = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "<temp:vector>",
+   "scope": [
+    "namespace pineforge :: source #8",
+    "namespace #1",
+    "template < class T > void compact_retirement_set ( std :: vector < T > & values ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: vector < T >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "roots",
+   "scope": [
+    "namespace pineforge :: source #8",
+    "bool PineExecutionAdapter :: capture_retirement_inputs ( RetirementInputs & inputs ) const #1",
+    "const auto root = [ & ] ( std :: uint64_t value ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "roots . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "groups",
+   "scope": [
+    "namespace pineforge :: source #8",
+    "bool PineExecutionAdapter :: capture_retirement_inputs ( RetirementInputs & inputs ) const #1",
+    "const auto snapshot = [ & ] ( const PlacementSnapshot & value ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "groups . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "bar_numbers",
+   "scope": [
+    "namespace pineforge :: source #8",
+    "bool PineExecutionAdapter :: capture_retirement_inputs ( RetirementInputs & inputs ) const #1",
+    "const auto snapshot = [ & ] ( const PlacementSnapshot & value ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "bar_numbers . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "askable",
+   "scope": [
+    "namespace pineforge :: source #8",
+    "bool PineExecutionAdapter :: capture_retirement_inputs ( RetirementInputs & inputs ) const #1",
+    "for ( const auto & handle : live_handles_ ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "askable . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "groups",
+   "scope": [
+    "namespace pineforge :: source #8",
+    "bool PineExecutionAdapter :: capture_retirement_inputs ( RetirementInputs & inputs ) const #1",
+    "for ( const auto & handle : live_handles_ ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "groups . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "bar_numbers",
+   "scope": [
+    "namespace pineforge :: source #8",
+    "bool PineExecutionAdapter :: capture_retirement_inputs ( RetirementInputs & inputs ) const #1",
+    "for ( const auto & handle : live_handles_ ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "bar_numbers . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "askable",
+   "scope": [
+    "namespace pineforge :: source #8",
+    "bool PineExecutionAdapter :: capture_retirement_inputs ( RetirementInputs & inputs ) const #1",
+    "for ( const auto & cohort : cohorts_by_id_ . held_rows ( ) ) #1",
+    "for ( const auto & opening : cohort . second . opened ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "askable . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "marks",
+   "scope": [
+    "namespace pineforge :: source #8",
+    "bool PineExecutionAdapter :: capture_retirement_inputs ( RetirementInputs & inputs ) const #1"
+   ],
+   "cls": "grow",
+   "spelling": "marks . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "cohorts",
+   "scope": [
+    "namespace pineforge :: source #8",
+    "std :: array < std :: uint64_t , 3 > PineExecutionAdapter :: retirement_validation_state ( ) const #1"
+   ],
+   "cls": "assign",
+   "spelling": "cohorts = . . .",
    "ordinal": 1
   },
   {

@@ -1258,7 +1258,7 @@ next margin-call slice came back after a cancel too. A script cancel now
 retires every leg of each exit row it names and drops such a parked stop
 (`retire_cancelled_exits` pine_adapter.cpp:2284), the revival skips a withdrawn
 exit, and K1 holds a withdrawn leg only while its origin is live or opened -- the one reader left is `origin_leg_consumed`,
-and it asks about such origins alone (`erase_retired_rows`
+and it asks about such origins alone (`sweep_retired_rows`
 pine_adapter.cpp:3854). Both shapes now cost ×1.89 to ×2.12 per doubling up
 to 64,000 bars and retain 3 rows. Row D was the kernel's half: the adapter
 enrolled every opening in its id's kernel roster (`cohort_add`) and never took
