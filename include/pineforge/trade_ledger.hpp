@@ -19,10 +19,13 @@ inline namespace engine_script_run_v19 {
 // A kResidentRows descriptor window and an equally sized fixed byte tail of
 // the string payload stay in memory. All four string payloads and all older
 // mutable/sealed descriptors use the existing run-owned positional scratch
-// files. A separate, budgeted read cache retains numeric records and up to
-// kCacheStringBytes of decoded string bytes per row. Wider rows retain their
-// numeric records in the cache and use scratch only for string reads.
-// Owning Trade values still belong to readers.
+// files. Numeric fields below the descriptor window read the existing index
+// through read-only shared mappings: one 1 MiB disk window, or the attached
+// arena's existing mapping cap. They copy only the requested scalar, without
+// reading payloads or populating the string cache. A separate, budgeted cache
+// for whole-row/string reads retains records and up to kCacheStringBytes of
+// decoded text per row. Wider strings retain their scratch fallback.
+// Owning Trade values and strings still belong to readers.
 //
 // Reads own their values. No reference or contiguous pointer into an
 // evictable page escapes. Iteration visits [base(),size()) as before, now
@@ -84,7 +87,7 @@ public:
     TradeLedger(TradeLedger&&);
     TradeLedger& operator=(TradeLedger&&);
 
-    // Bind before the first spill. No mapping or in-memory offset directory.
+    // Bind before the first spill. No in-memory offset directory.
     void set_scratch_directory(const std::string&);
     const std::string& scratch_directory() const;
     // Configure before the first append/spill; clear() preserves the budget.
@@ -100,9 +103,9 @@ public:
     // legacy materialize() map. Validates the same row range as the setter.
     static size_type resident_cache_bytes(size_type rows);
     // Actual allocation: fixed base plus allocated capacity*kLedgerEntryBytes.
-    // Allocated on the first read, at min(cache_rows(), the next power of two
-    // >= max(64,size())). Further growth invalidates entries; capacity stays
-    // bounded by cache_rows() and independent of the number of bars.
+    // Allocated on the first whole-row/string read, at min(cache_rows(), the
+    // next power of two >= max(64,size())). Further growth invalidates entries;
+    // capacity stays bounded by cache_rows() and independent of bar count.
     size_type cache_resident_bytes() const;
     // Occupied decoded entries only; separate from resident_size()'s legacy
     // descriptor/materialization accounting.
@@ -121,7 +124,7 @@ public:
     // unsealed-window contract for existing settlement callers.
     // Hits allocate only the owning strings already required by read().
     // Direct-mapped eviction above cache_rows(), or oversized strings, retains
-    // the existing scratch path; a history loop can still cost O(T).
+    // the block/payload scratch path; a history loop still costs O(T).
     Trade read(size_type global) const;
     Trade operator[](size_type global) const;
     Trade at(size_type global) const;
@@ -131,10 +134,11 @@ public:
     // entry_id_at() returns only that string and shares the field read cache.
     Trade numeric_at(size_type global) const;
     std::string entry_id_at(size_type global) const;
-    // Pine field reads use the same check(global,true) as at(). A numeric
-    // hit loads just its Record member, without constructing/copying a Trade
-    // or any string. A string hit copies only the requested packed bytes.
-    // Misses retain the numeric record and all strings fitting the allowance.
+    // Pine field reads use the same check(global,true) as at(). Numeric fields
+    // read just their member from the resident descriptor or a mapped index
+    // window. Mapped access checks backing size even on reuse and guards a
+    // concurrent shrink as typed scratch I/O failure. It allocates no strings.
+    // String hits copy requested packed bytes; misses keep block readback.
     double pnl_at(size_type global) const;
     double pnl_pct_at(size_type global) const;
     double commission_at(size_type global) const;

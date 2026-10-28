@@ -3,6 +3,7 @@
 #include <pineforge/detail/scratch_slab.hpp>
 #include <pineforge/detail/scratch_arena.hpp>
 #include <pineforge/detail/scratch_directory.hpp>
+#include <pineforge/detail/scratch_mapped_read.hpp>
 
 #include <algorithm>
 #include <cerrno>
@@ -15,6 +16,7 @@
 #include <stdexcept>
 #include <string>
 #include <sys/stat.h>
+#include <sys/mman.h>
 #include <system_error>
 #include <unistd.h>
 #include <utility>
@@ -34,9 +36,20 @@ using ScratchIoError = ReportScratchIoError;
 // reads beyond the logical end still fail with EIO. No implicit attachment
 // or RAM fallback. clear() releases the region and its mapped windows.
 class ScratchFile {
+    struct ReadWindow {
+        void* address = MAP_FAILED;
+        std::uint64_t offset = 0;
+        std::size_t length = 0;
+    };
 public:
     // Fixed byte window shared by scratch I/O amortisation contracts.
     static constexpr std::size_t kCacheBytes = 64 * 1024;
+    // One read-only window per opted-in disk file. Arena reads instead use
+    // the arena's existing shared cap, never an additional mapping budget.
+    static constexpr std::size_t kReadWindowBytes = 1024 * 1024;
+    // Owner policy: this single switch lifts whole-file DONTNEED for the
+    // mapped index only. Keep the shipped contract until explicitly changed.
+    static constexpr bool kKeepMappedIndexDontneed = true;
 
     enum class IoRaiser { report_sink, auxiliary };
     explicit ScratchFile(IoRaiser raiser = IoRaiser::report_sink) : io_raiser_(raiser) {}
@@ -46,6 +59,7 @@ public:
     ScratchFile& operator=(ScratchFile&& other) noexcept {
         if (this != &other) {
             clear();
+            other.invalidate_mapped_reads();
             fd_ = std::exchange(other.fd_, -1);
             directory_ = std::move(other.directory_);
             slab_ = std::move(other.slab_);
@@ -55,6 +69,8 @@ public:
             other.region_.size = 0;
             io_raiser_ = other.io_raiser_;
             bounded_cache_ = other.bounded_cache_;
+            mapped_index_ = other.mapped_index_;
+            read_window_page_checked_ = other.read_window_page_checked_;
             clean_bytes_read_ = std::exchange(other.clean_bytes_read_, 0);
             bytes_written_since_sync_ = std::exchange(other.bytes_written_since_sync_, 0);
         }
@@ -91,6 +107,10 @@ public:
         if (fd_ >= 0) throw std::logic_error("scratch cache policy changed after open");
         bounded_cache_ = true;
     }
+    void map_index_reads() {
+        if (opened()) throw std::logic_error("scratch mapped policy changed after open");
+        mapped_index_ = true;
+    }
     void set_directory(const std::string& value) {
         if (arena_) return;
         if (fd_ >= 0 && directory_ != value)
@@ -98,6 +118,7 @@ public:
         directory_ = value;
     }
     void clear() noexcept {
+        invalidate_mapped_reads();
         if (arena_) arena_->release_region(region_);
         arena_ = nullptr;
         if (fd_ >= 0) ::close(fd_);
@@ -113,6 +134,7 @@ public:
     // Arena readers continue to borrow the store rather than the shared fd.
     int descriptor() const noexcept { return fd_; }
     void truncate(std::uint64_t bytes) {
+        if (!arena_) invalidate_mapped_reads();
         if (slab_) throw std::logic_error("scratch truncate requires a file or arena");
         check_extent(bytes, 0, arena_ != nullptr, io_raiser_);
         if (arena_) {
@@ -222,6 +244,7 @@ public:
         do { result = ::fstat(fd_, &status); } while (result != 0 && errno == EINTR);
         if (result != 0) io_error(errno, "scratch size");
         if (status.st_size >= static_cast<off_t>(bytes)) return;
+        invalidate_mapped_reads();
         do { result = ::ftruncate(fd_, static_cast<off_t>(bytes)); }
         while (result != 0 && errno == EINTR);
         if (result != 0) io_error(errno, "scratch resize");
@@ -243,6 +266,7 @@ public:
     // No descriptor escape: even fixture prefix writes select the arena.
     ssize_t write_some(std::uint64_t offset, const void* data, std::size_t length) {
         check_extent(offset, length, arena_ != nullptr, io_raiser_);
+        if (!arena_) invalidate_mapped_reads();
         // This window-edge cap is inert for current users: IdPairScratchFile
         // does not enable bound_cache(), and cache-bound users call write().
         const auto count = std::min(length, bounded_cache_
@@ -286,6 +310,7 @@ public:
         return static_cast<ssize_t>(count);
     }
     void write(std::uint64_t offset, const void* data, std::size_t length) {
+        if (!arena_) invalidate_mapped_reads();
         if (slab_) {
             slab_->write_at(resource_, offset, data, length);
             return;
@@ -340,7 +365,121 @@ public:
         }
     }
 
+    // Unlike read(), this opt-in path copies from PROT_READ/MAP_SHARED
+    // storage. No raw pointer escapes. Only the requested field bytes move;
+    // descriptor_bytes validates/charges the whole descriptor; field_offset
+    // selects the scalar without loading strings or copying other fields.
+    // Slabs retain checked copies: their storage is already process-visible.
+    void read_mapped(std::uint64_t offset, void* data, std::size_t length,
+                     std::size_t descriptor_bytes = 0, std::size_t field_offset = 0) const {
+        if (!mapped_index_) throw std::logic_error("scratch mapped read not enabled");
+        const auto span = descriptor_bytes == 0 ? length : descriptor_bytes;
+        if (field_offset > span || length > span - field_offset)
+            throw std::logic_error("scratch mapped field outside descriptor");
+        if (slab_) {
+            const auto& region = slab_->region(resource_);
+            if (offset > region.logical_extent || span > region.logical_extent - offset
+                || offset > region.capacity || span > region.capacity - offset)
+                throw AuxiliaryScratchIoError(EIO, "scratch read outside logical extent");
+            slab_->read_at(resource_, offset + field_offset, data, length);
+            return;
+        }
+        check_extent(offset, span, arena_ != nullptr, io_raiser_);
+        if (arena_) {
+            arena_io([&] { arena_->read_mapped(region_, offset, data, length, span, field_offset); });
+            return;
+        }
+        if (length == 0) return;
+        if (!data) io_error(EFAULT, "scratch mapped read");
+        prepare_scratch_mapped_read();
+        if (!read_window_page_checked_) {
+            const long page = ::sysconf(_SC_PAGESIZE);
+            if (page <= 0 || kReadWindowBytes % static_cast<std::size_t>(page) != 0)
+                io_error(EINVAL, "scratch mapped page size");
+            read_window_page_checked_ = true;
+        }
+        try {
+            if (bounded_cache_ && clean_bytes_read_ == kCacheBytes) discard_clean_cache();
+            // Check both new mappings and hits. A concurrent shrink after
+            // this check is handled by the guarded leaf copy, not a crash.
+            struct stat status{};
+            int result;
+            do { result = ::fstat(fd_, &status); } while (result != 0 && errno == EINTR);
+            if (result != 0) io_error(errno, "scratch mapped size");
+            if (status.st_size < 0 || !S_ISREG(status.st_mode))
+                io_error(EIO, "scratch mapped size");
+            const auto size = static_cast<std::uint64_t>(status.st_size);
+            auto& window = read_window_;
+            if (offset > size || span > size - offset
+                || (window.address != MAP_FAILED
+                    && (window.offset > size || window.length > size - window.offset)))
+                io_error(EIO, "scratch read");
+            auto* destination = static_cast<unsigned char*>(data);
+            std::size_t received = 0;
+            while (received < length) {
+                const auto at = offset + field_offset + received;
+                if (!read_window_valid_ || window.address == MAP_FAILED || at < window.offset
+                    || at - window.offset >= window.length) {
+                    unmap_read_window();
+                    const auto start = at - at % kReadWindowBytes;
+                    const auto count = static_cast<std::size_t>(
+                        std::min<std::uint64_t>(kReadWindowBytes, size - start));
+                    void* address = ::mmap(nullptr, count, PROT_READ, MAP_SHARED,
+                                            fd_, static_cast<off_t>(start));
+                    if (address == MAP_FAILED) io_error(errno, "scratch map");
+                    window = ReadWindow{address, start, count};
+                    read_window_valid_ = true;
+                    // fadvise(RANDOM) covers positional I/O; mapped faults
+                    // need their own advice to suppress speculative read-ahead.
+                    if (::madvise(address, count, MADV_RANDOM) != 0)
+                        io_error(errno, "scratch mapped random access");
+                }
+                const auto inside = static_cast<std::size_t>(at - window.offset);
+                auto count = std::min(length - received, window.length - inside);
+                if (bounded_cache_ && descriptor_bytes == 0)
+                    count = std::min(count, kCacheBytes - clean_bytes_read_);
+                if (!copy_scratch_mapped_bytes(destination + received,
+                        static_cast<const unsigned char*>(window.address) + inside, count))
+                    io_error(EIO, "scratch mapped read");
+                received += count;
+                if (bounded_cache_) {
+                    auto charge = descriptor_bytes == 0 ? count
+                        : (received == length ? descriptor_bytes : 0);
+                    while (charge != 0) {
+                        if (clean_bytes_read_ == kCacheBytes) discard_clean_cache();
+                        const auto step = std::min(charge, kCacheBytes - clean_bytes_read_);
+                        clean_bytes_read_ += step;
+                        charge -= step;
+                        if (clean_bytes_read_ == kCacheBytes) discard_clean_cache();
+                    }
+                }
+            }
+        } catch (...) {
+            invalidate_mapped_reads();
+            throw;
+        }
+    }
+    // Reset on every writer, truncate, publication, rewind and move. Arena
+    // invalidation shares its locked window table. Releasing a slab exposes
+    // no borrowed pointer in the first place.
+    void invalidate_mapped_reads() const noexcept {
+        // A failed cleanup cannot turn an invalidated window into a hit.
+        // The next admission must retry its checked unmap before mmap.
+        read_window_valid_ = false;
+        if (arena_) arena_->invalidate_mapped_reads(region_);
+        if (read_window_.address != MAP_FAILED) {
+            if (::munmap(read_window_.address, read_window_.length) == 0)
+                read_window_ = ReadWindow{};
+        }
+    }
+
 private:
+    void unmap_read_window() const {
+        if (read_window_.address == MAP_FAILED) return;
+        if (::munmap(read_window_.address, read_window_.length) != 0)
+            io_error(errno, "scratch unmap");
+        read_window_ = ReadWindow{};
+    }
     template<class Operation> void arena_io(Operation operation) const {
         try { operation(); }
         catch (const ReportScratchIoError& error) {
@@ -361,20 +500,22 @@ private:
     }
     // Bound traffic between whole-file discards: at most kCacheBytes of reads
     // and kCacheBytes of unsynced writes per file, independent of offset span.
-    // With RANDOM disabling read-ahead, the current users on 4 KiB OS pages
-    // have much smaller per-window footprints: TradeLedger's 168 B records
-    // and short strings touch at most about 391 pages; ScratchSequence's
-    // whole 64 KiB windows touch at most about 17 pages. The universal
+    // RANDOM advice suppresses read-ahead. ScratchSequence's whole 64 KiB
+    // transfers touch at most about 17 pages on a 4 KiB-page host. The universal
     // worst-case bound across the read and unsynced-write windows is
     // 2*kCacheBytes OS pages for one-byte accesses to distinct pages:
-    // 512 MiB at 4 KiB pages, not 128 KiB of physical cache. DONTNEED retains
-    // any still-dirty pages; the write counter bounds those until the next
-    // sync and discard.
+    // 512 MiB at 4 KiB pages, not 128 KiB of physical cache. An opted-in index
+    // adds at most one 1 MiB mapped window: DONTNEED cannot drop mapped pages.
+    // After eviction, the next discard can reclaim its clean pages. Advice
+    // is not a hard cache guarantee and retains dirty or otherwise pinned
+    // pages; the write counter bounds this owner's bytes until the next sync.
     void discard_clean_cache() const {
         if (!bounded_cache_) return;
 #if defined(__linux__)
-        const int error = ::posix_fadvise(fd_, 0, 0, POSIX_FADV_DONTNEED);
-        if (error != 0) io_error(error, "scratch discard cache");
+        if (!mapped_index_ || kKeepMappedIndexDontneed) {
+            const int error = ::posix_fadvise(fd_, 0, 0, POSIX_FADV_DONTNEED);
+            if (error != 0) io_error(error, "scratch discard cache");
+        }
 #endif
         clean_bytes_read_ = 0;
     }
@@ -391,9 +532,8 @@ private:
         bytes_written_since_sync_ = 0;
     }
     int fd_ = -1;
-    // Group policy scalars in existing padding: the fixed fold-segment
-    // arrays embed this type and retain their unchanged 32 KiB assertion,
-    // including the command lane's additional per-region limit metadata.
+    // Group policy scalars in existing padding. The fixed fold-segment
+    // arrays embedding this type must still meet their 32 KiB assertions.
     IoRaiser io_raiser_ = IoRaiser::report_sink;
     std::string directory_;
     // Physical backing only; logical table records and hash folds are shared
@@ -401,9 +541,14 @@ private:
     std::shared_ptr<ScratchSlab> slab_;
     ScratchResource resource_ = ScratchResource::cohort;
     bool bounded_cache_ = false;
+    bool mapped_index_ = false;
+    mutable bool read_window_page_checked_ = false;
+    mutable bool read_window_valid_ = false;
     ScratchArena* arena_ = nullptr;
     ScratchArena::Region region_;
     mutable std::size_t clean_bytes_read_ = 0;
     std::size_t bytes_written_since_sync_ = 0;
+    // Inline metadata, with no first-read allocation or row-sized directory.
+    mutable ReadWindow read_window_;
 };
 } // namespace pineforge::detail

@@ -269,11 +269,12 @@ store; the part that spills grows in the scratch backing.
 | Store | Resident bound | Bytes per entry | Spills to scratch |
 | --- | --- | --- | --- |
 | Trade ledger (`TradeLedger`), descriptor window | 64 rows (`kResidentRows`, `include/pineforge/trade_ledger.hpp:38`), and a fixed payload tail of the same size | 168 B per row descriptor (`kRecordBytes`), so 10,752 B for the rows and 10,752 B for the tail; the four strings of a row are variable | Older rows and all string payloads: 168 B plus text per closed trade |
-| Trade ledger, read cache | Up to 65,536 entries with or without a report sink (`kSinkCacheRows = kDefaultCacheRows`; the ceiling `kMaxCacheRows` is 1,048,576). Direct-mapped, allocated at the first read at the smaller of the cap and the next power of two that is at least the larger of 64 and the trade count (the comment on `TradeLedger::cache_resident_bytes`, `include/pineforge/trade_ledger.hpp`), so a run with few trades holds few entries. Chosen by the engine when the run begins, through `TradeLedger::set_cache_rows` (`src/native_execution_consumer.cpp`); the C API has no setter for it in this release | 312 B per entry (`kLedgerEntryBytes`: 168 B record, 16 B key and generation, 128 inline string bytes). The declared bound is `resident_cache_bytes(kSinkCacheRows)`: 65,536 x 312 = 20,447,232 B (19.5 MiB) plus `sizeof(TradeLedger)+sizeof(State)`, with or without a sink; the cap is independent of the trade and bar counts | Not applicable (a cache over the spilled rows) |
+| Trade ledger, read cache | Up to 65,536 entries with or without a report sink (`kSinkCacheRows = kDefaultCacheRows`; the ceiling `kMaxCacheRows` is 1,048,576). Direct-mapped, allocated at the first whole-row/string read at the smaller of the cap and the next power of two that is at least the larger of 64 and the trade count (the comment on `TradeLedger::cache_resident_bytes`, `include/pineforge/trade_ledger.hpp`). Numeric field reads bypass this cache. Chosen by the engine when the run begins, through `TradeLedger::set_cache_rows`; the C API has no setter for it in this release | 312 B per entry (`kLedgerEntryBytes`: 168 B record, 16 B key and generation, 128 inline string bytes). The declared heap bound is `resident_cache_bytes(kSinkCacheRows)`: 65,536 x 312 = 20,447,232 B (19.5 MiB) plus `sizeof(TradeLedger)+sizeof(State)`, with or without a sink; mapped pages are additional | Not applicable (a cache over the spilled rows) |
+| Trade ledger, mapped numeric index | One read-only shared disk window of at most 1 MiB (`ScratchFile::kReadWindowBytes`); arena reads share the existing `PF_SCRATCH_WINDOW_BYTES` cap across all stores | At most 1 MiB additional disk mapping address space and file-backed RSS per ledger, independent of trade count. Arena mappings add no separate allowance. Slabs keep their existing checked copies and allocation | The unchanged 168 B descriptors remain in the existing index file |
 | Command journal | 2,048 events (`kMaxResident`, `src/native_order.cpp:1705`), in 32-event chunks (`kChunk`), with a floor of 128 events kept (`kKeepResident`) | Not a constant: an event is a variant with variable payload and `sizeof` of a resident slot is not stated in the source and was not compiled. Plus one lazy 163,840 B spill buffer per journal: a 32,768 B write buffer and four 32,768 B reload buffers (`SpillStorage`) | Older events, in pages of 32,768 B (`kSpillPageBytes`, `:1726`) read back through four decoded page slots. An event whose serialized form exceeds one page is refused with `EFBIG` (about 1,360 external openings) and stays resident |
 | Order book | 4,096 rows | See the drain plateau below | Older rows |
 | Command-store resident prefix / read cache | Fixed K = 202,752 B (198 KiB) per run: three 64 KiB page buffers plus 2 KiB per decorator, including slot keys (`CachedScratchBacking::kCommandScratchMemoryBytes`, `src/command_scratch_cache.hpp:28`; `static_assert(sizeof(CachedScratchBacking)` at `src/command_scratch_cache.hpp:76`); pages larger than 64 KiB or smaller than 512 B bypass the buffer | Counted in bytes; independent of extent and bars; replaces the previous read-cache allowance | Each disk store holds its prefix in the same buffer until its extent exceeds 64 KiB, then spills the prefix once and reuses the buffer as a read cache. Attached arenas retain direct mapped admission |
-| Scratch files read through a bounded window | one 64 KiB window per file that enables it (`ScratchFile::kCacheBytes`, `include/pineforge/detail/scratch_file.hpp:39`) | Counted in bytes. It bounds the operating-system page cache the file pins (the kernel is asked to drop clean pages); it is not an engine heap cache | Not applicable |
+| Scratch files with bounded cache traffic | Whole-file DONTNEED after each 64 KiB of reads and after each synced 64 KiB of writes (`ScratchFile::kCacheBytes`); mapped numeric reads charge the whole 168 B descriptor | This bounds traffic between advisory discards, not physical cache to 64 KiB. Mapped, dirty or otherwise pinned pages can remain. The mapped index also retains its one 1 MiB window until eviction | Not applicable |
 | Report sink writer | a fixed 64 KiB buffer; a record line may not exceed 1 MiB | Counted in bytes | The sink file or stream |
 | Position-tail read window | one fixed 64 KiB window | Counted in bytes | The position tail: a 30-byte footer plus the entry id per trade |
 | Cohort id table | Rows kept in memory: at most twice the rows left by the last spill pass, plus 64, plus the rows pinned by live exposure or an outstanding reference (the comment above `kMaxResidentCohorts` at `include/pineforge/detail/scratch_defaults.hpp:16`; the threshold is set in `DiskResidentIdTable::spill` at `include/pineforge/detail/disk_resident_id_table.hpp:450-467`, with the floor `kSpillFloor` of 64). That is not a bound in terms of live rows. In the bounded scratch (jailed) profile, admission also refuses a run that would hold more than 4,096 live (non-spillable) cohorts (`kMaxResidentCohorts`, `include/pineforge/detail/scratch_defaults.hpp:16`) with `scratch_capacity_exceeded`. The rows that hold an opening or live units are also tracked in an ordered set, one map node each. The ordered index lives on disk and is read through one 64 KiB window per scratch file (`ScratchFile::kCacheBytes`, above); the id-pair store's index file starts at 64 slots and doubles when it grows (`kInitialSlots`, `include/pineforge/detail/id_pair_store.hpp:72`; `grow_index`, `include/pineforge/detail/id_pair_store.hpp:604-608`) | Not measured | The on-disk ordered tree |
@@ -283,6 +284,49 @@ For the short waiting-child parent-terminal fixture (short ids), the book and
 journal caps give a per-engine definition plateau of 1,890,980 bytes (about
 1.9 MB) on GCC 13.4 on x86-64. That figure moves with definition size and is not
 a bound on total engine memory.
+
+Numeric ledger fields use the existing index bytes without reading the payload
+file or packing strings. Each scalar access uses constant metadata and copies
+only its field bytes; it still checks file size with `fstat` on a mapped hit.
+The 64 resident descriptors need no mapping. A full numeric scan is `O(T)`
+work and touches `O(168 T)` bytes of file pages. The new window metadata,
+mapped address space and mapped RSS are `O(1)` in `T`, at fixed arena settings.
+The existing arena chunk directory and scratch backing are separate: they grow
+with claimed chunks. Strings retain the 64-row block/payload read path and
+the fixed packed cache; owning returned text costs its actual length. The
+explicit legacy `materialize()` map and retained caller results remain outside
+the fixed cache allowance.
+
+Disk windows use `PROT_READ`, `MAP_SHARED` and `MADV_RANDOM`. Eviction unmaps
+before mapping, including transient address-space accounting. Every index
+write invalidates its read window; truncate, clear, rewind, publication and
+move also reset it. No mapped pointer escapes a field read. Backing-size
+checks run before mapping and on reuse; a guarded leaf copy converts a
+concurrent-shrink SIGBUS to the existing typed scratch I/O failure.
+
+`ScratchFile::kKeepMappedIndexDontneed` is the single owner-policy switch;
+its default is `true`. DONTNEED cannot evict the current mapped pages. After
+unmapping, the next whole-file discard can reclaim their clean disk pages.
+This is advisory, so dirty pages, other mappings and kernel policy prevent a
+hard page-cache guarantee. Setting the switch to `false` leaves the process
+mapping bound unchanged but permits page cache to retain the whole numeric
+index: 12,278,616 bytes at 73,087 trades, or 168,000,000 bytes at 1,000,000.
+That policy change needs an owner decision.
+
+At 4 KiB pages those spans touch up to 2,998 and 41,016 pages per pass,
+respectively (the resident 64 rows save a few pages). Both switch settings
+replace page-table entries as windows move; a lifted policy therefore still
+incurs minor faults on warm cached pages. Keeping DONTNEED can instead make
+disk misses major faults requiring I/O. Fault-around, cache pressure and
+backing state determine actual minor/major counts; these byte/page counts
+are derivations, not measured fault or timing results.
+
+Ordinary bounded disk scratch refuses tmpfs. In a tmpfs/memfd arena,
+unmapped bytes remain RAM-backed scratch charged to the host; DONTNEED cannot
+turn them into disk storage. Such mapped RSS is generally `RssShmem`, rather
+than the disk mapping's `RssFile`. The switch does not change the existing
+arena policy, which does not issue whole-file DONTNEED. Slabs already occupy
+their admitted process allocation and add no mapping on a numeric read.
 
 ## Scratch bytes: the formula and a worked example {#memory_formula}
 
@@ -371,7 +415,7 @@ can add them up; each is read from the source named in
 
 | Kind of store | Default budget | Resident memory at that budget |
 | --- | --- | --- |
-| Trade ledger | Descriptor window of 64 rows; read cache of up to 65,536 entries with or without a report sink. Chosen by the engine, not settable from the C API; cache allocation grows lazily up to the declared constant cap | 21,504 B for the window and its tail, plus up to 20,447,232 B of cache entries; `resident_cache_bytes(kSinkCacheRows)` accounts for the entries plus `sizeof(TradeLedger)+sizeof(State)` (including the window and its tail) |
+| Trade ledger | Descriptor window of 64 rows; whole-row/string cache of up to 65,536 entries, plus one read-only 1 MiB numeric index mapping on disk. Arena reads share its existing cap | 21,504 B for the descriptor window and payload tail, plus up to 20,447,232 B of cache entries; `resident_cache_bytes(kSinkCacheRows)` accounts for heap entries and the fixed base. Add at most 1 MiB of mapped file pages on disk |
 | Command journal | 2,048 resident events, 128 kept at least | Not a constant per event; plus 163,840 B of spill buffers per journal once it first spills |
 | Placement rows | No budget: the live rows plus the rows the retirement rules pin | Not measured |
 | Id tables | Cohort table: resident rows follow the spill rule above (at most twice the rows left by the last pass, plus 64, plus pinned rows), and the bounded profile admits at most 4,096 live cohorts. The ordered index is read through a 64 KiB window per scratch file | 64 KiB per file; the index itself is on disk |
@@ -410,7 +454,7 @@ or bounds the row.
 | Pending-book reads | `R`: `O(R^2)` for a size or a late indexed copy, `O(P R^2)` for a full indexed walk of `P` projected rows, up to `O(R^3)` when `P = R`; this is time, and it was already so in v1.6.3 | CPU | Planned, with no release date |
 | Cohort lookups | A cohort lookup was `O(1)` before 1.7.0 and was `O(resident rows + log of the id population x key length)` per call in 1.7.0. Since 1.8.0 a lookup of a resident cohort is `O(log r)` in the number `r` of resident rows, without allocation or disk | CPU, plus scratch reads | Partly fixed in 1.8.0: a full close on N owners seeks the scratch index 2N+1 times (it was N(N+1)/2), and the walks that need only the cohorts holding an opening or live units no longer visit every pending-only cohort. Not fixed: the per-bar retire pass is still proportional to the resident rows, and a close event is still quadratic in N in in-memory work, so in the release's own measurement a dense script (many pending orders) did not finish within 600 s at 10,000 bars and above, and a script with many orders and few ids was only 12.5 to 16 percent faster at 30,000 to 100,000 bars; no release date for the rest |
 | Pending orders that never fill | `R`: about 2.5 kB each on dense scripts (the release notes' known limit) | Heap | Planned for a later release, with no date |
-| Closed-trade reads from a script | A script reading all `T` closed trades on every bar, with the sink-run read cache at its declared cap, pays one scratch read per row only on the first pass for rows up to the cap; beyond the cap a miss reads a 64-row block (one index read and one coalesced payload read per block) | CPU and scratch I/O | Bounded by the declared read-cache cap and 64-row block reads |
+| Closed-trade reads from a script | Numeric fields read resident descriptors or a bounded read-only mapping of the existing index, independently of packed-cache collisions. Each mapped access still checks backing size. Whole-row/string misses retain 64-row index/payload block reads; wide strings retain their payload fallback | CPU, page faults and scratch I/O. Every complete history scan remains `O(T)`; owning strings cost their lengths | Numeric scans have a constant mapping bound. The witness counts preads and map/unmap calls, not speed or fault counts; string scan cost can still grow with cache collisions and text |
 | The strategy's own containers (arrays, strings, maps, matrices, user-defined types, series and indicator history, drawing objects) | What the script stores | Heap, unchanged from v1.6.3 | Planned, with no release date |
 | Distinct ids, pairs and successor rows | `D`, `Q`, `R`, by the formulas above | Scratch, or the slab | Bounded by the admitted maxima |
 | Input bars | `N` bars of OHLCV | The host | Not applicable |

@@ -363,6 +363,7 @@ struct TradeLedger::State {
         bool is_long = false, exit_from_bracket = false, open_at_end = false;
     };
     static_assert(std::is_trivially_copyable_v<Record>);
+    static_assert(std::is_standard_layout_v<Record>);
     static_assert(TradeLedger::kRecordBytes == sizeof(Record));
     static_assert(sizeof(int) == sizeof(std::int32_t));
     // The row window holds fixed descriptors; even the newest row's four
@@ -404,6 +405,7 @@ struct TradeLedger::State {
 
     State() {
         index.bound_cache();
+        index.map_index_reads();
         payload.bound_cache();
     }
     static void validate_cache_rows(size_type rows) {
@@ -435,6 +437,7 @@ struct TradeLedger::State {
         }
     }
     void invalidate_cache() const {
+        index.invalidate_mapped_reads();
         cache_count = 0;
         // Generations make publication/rewind/move invalidation O(1).
         // Even the wraparound fallback touches at most the configured budget.
@@ -607,10 +610,18 @@ struct TradeLedger::State {
         if (const auto* entry = cached(global)) return *entry;
         return block_result;
     }
-    template<auto Member>
+    template<auto Member, size_type Offset>
     auto numeric_field(size_type global) const {
         check(global, true);
-        return load(global).record.*Member;
+        // Numeric reads neither populate nor inspect packed strings. Keep
+        // the resident descriptor fast path; older fields come straight
+        // from the existing index bytes, with no 168-byte row copy.
+        if (global >= resident_first) return rows[slot(global)].*Member;
+        using Value = std::remove_cv_t<std::remove_reference_t<decltype(rows[0].*Member)>>;
+        Value value{};
+        index.read_mapped(record_offset(global), &value, sizeof(value),
+                          sizeof(Record), Offset);
+        return value;
     }
     template<StringExtent Record::*Member>
     std::string string_field(size_type global) const {
@@ -753,6 +764,12 @@ struct TradeLedger::State {
         }
         return row;
     }
+    Record numeric_descriptor(size_type global) const {
+        if (global >= resident_first) return rows[slot(global)];
+        Record record{};
+        index.read_mapped(record_offset(global), &record, sizeof(record));
+        return record;
+    }
     Record descriptor(size_type global) const {
         if (const auto* entry = cached(global)) return entry->record;
         if (global >= resident_first) return rows[slot(global)];
@@ -876,7 +893,7 @@ Trade TradeLedger::back() const {
 
 Trade TradeLedger::numeric_at(size_type global) const {
     state_->check(global, true);
-    return State::decode_numeric(state_->descriptor(global));
+    return State::decode_numeric(state_->numeric_descriptor(global));
 }
 
 std::string TradeLedger::entry_id_at(size_type global) const {
@@ -892,46 +909,57 @@ std::string TradeLedger::exit_id_at(size_type global) const {
     return state_->string_field<&State::Record::exit_id>(global);
 }
 double TradeLedger::pnl_at(size_type global) const {
-    return state_->numeric_field<&State::Record::pnl>(global);
+    return state_->numeric_field<&State::Record::pnl, offsetof(State::Record, pnl)>(global);
 }
 double TradeLedger::pnl_pct_at(size_type global) const {
-    return state_->numeric_field<&State::Record::pnl_pct>(global);
+    return state_->numeric_field<&State::Record::pnl_pct,
+                                 offsetof(State::Record, pnl_pct)>(global);
 }
 double TradeLedger::commission_at(size_type global) const {
-    return state_->numeric_field<&State::Record::commission>(global);
+    return state_->numeric_field<&State::Record::commission,
+                                 offsetof(State::Record, commission)>(global);
 }
 std::int32_t TradeLedger::entry_bar_index_at(size_type global) const {
-    return state_->numeric_field<&State::Record::entry_bar_index>(global);
+    return state_->numeric_field<&State::Record::entry_bar_index,
+                                 offsetof(State::Record, entry_bar_index)>(global);
 }
 std::int32_t TradeLedger::exit_bar_index_at(size_type global) const {
-    return state_->numeric_field<&State::Record::exit_bar_index>(global);
+    return state_->numeric_field<&State::Record::exit_bar_index,
+                                 offsetof(State::Record, exit_bar_index)>(global);
 }
 std::uint64_t TradeLedger::entry_incarnation_at(size_type global) const {
-    return state_->numeric_field<&State::Record::entry_incarnation>(global);
+    return state_->numeric_field<&State::Record::entry_incarnation,
+                                 offsetof(State::Record, entry_incarnation)>(global);
 }
 double TradeLedger::entry_price_at(size_type global) const {
-    return state_->numeric_field<&State::Record::entry_price>(global);
+    return state_->numeric_field<&State::Record::entry_price,
+                                 offsetof(State::Record, entry_price)>(global);
 }
 double TradeLedger::exit_price_at(size_type global) const {
-    return state_->numeric_field<&State::Record::exit_price>(global);
+    return state_->numeric_field<&State::Record::exit_price,
+                                 offsetof(State::Record, exit_price)>(global);
 }
 std::int64_t TradeLedger::entry_time_at(size_type global) const {
-    return state_->numeric_field<&State::Record::entry_time>(global);
+    return state_->numeric_field<&State::Record::entry_time,
+                                 offsetof(State::Record, entry_time)>(global);
 }
 std::int64_t TradeLedger::exit_time_at(size_type global) const {
-    return state_->numeric_field<&State::Record::exit_time>(global);
+    return state_->numeric_field<&State::Record::exit_time,
+                                 offsetof(State::Record, exit_time)>(global);
 }
 double TradeLedger::qty_at(size_type global) const {
-    return state_->numeric_field<&State::Record::qty>(global);
+    return state_->numeric_field<&State::Record::qty, offsetof(State::Record, qty)>(global);
 }
 double TradeLedger::max_runup_at(size_type global) const {
-    return state_->numeric_field<&State::Record::max_runup>(global);
+    return state_->numeric_field<&State::Record::max_runup,
+                                 offsetof(State::Record, max_runup)>(global);
 }
 double TradeLedger::max_drawdown_at(size_type global) const {
-    return state_->numeric_field<&State::Record::max_drawdown>(global);
+    return state_->numeric_field<&State::Record::max_drawdown,
+                                 offsetof(State::Record, max_drawdown)>(global);
 }
 bool TradeLedger::is_long_at(size_type global) const {
-    return state_->numeric_field<&State::Record::is_long>(global);
+    return state_->numeric_field<&State::Record::is_long, offsetof(State::Record, is_long)>(global);
 }
 
 void TradeLedger::replace(size_type global, const Trade& row) {
@@ -1016,6 +1044,7 @@ void TradeLedger::seal(size_type global_end) {
     if (global_end < state_->first || global_end > size())
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                        "trade ledger: seal outside resident window");
+    state_->index.invalidate_mapped_reads();
     // Publication changes no row content, and the checked accessors refuse
     // sealed rows before they reach the cache: cached entries stay valid, so a
     // closedtrades loop is not made cold again by every published trade.
