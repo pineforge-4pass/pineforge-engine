@@ -66,12 +66,12 @@ distinct from zero. Kernel `max`/`RLIM_INFINITY` is not a finite value.
 
 | Stage | Engine-local behaviour and limits | Host assumption; consequence when absent |
 | --- | --- | --- |
-| Source preparation / codegen | The shell creates `WORK` under `TMPDIR` or `/tmp`, installs an EXIT cleanup trap, and writes generated C++ and optional inventory. Transpile exceptions handled there become shell exit 5. It installs no OS resource limits in these functions. `EM:docker/entrypoint.sh:108`, `EM:docker/entrypoint.sh:115`, `EM:docker/entrypoint.sh:141`. | Codegen's own source-character limit is 5 MiB, nesting limit 512, and cooperative transpile timer 120 seconds at CM; these are not a hard process/tree budget. `CM:pineforge_codegen/limits.py:26`, `CM:pineforge_codegen/limits.py:37`, `CM:pineforge_codegen/limits.py:45`, `CM:pineforge_codegen/limits.py:122`. The engine wrapper supplies no memory, temp, fd, task or hard-deadline installer: `EM:docker/entrypoint.sh:115`. |
-| Compile/link / bind | One literal `g++ -std=c++17 -O2 -ffp-contract=off -fPIC -shared` invocation links the whole static archive. Compiler failure becomes shell exit 3; selected inventory binding follows under the same shell, also with exit 3 on failure. No CPU/wall/RSS/temp limit surrounds these calls. `EM:docker/entrypoint.sh:227`, `EM:docker/entrypoint.sh:233`, `EM:docker/entrypoint.sh:245`. | Compiler descendants, peak RSS, optimizer time, diagnostics and temporary amplification are not bounded by this command. The codegen syntax-check helper likewise calls `subprocess.run` without a timeout; it is a test helper, not a production compiler jail. `CM:tests/_compile.py:216`, `CM:tests/_compile.py:253`. A source-size check does not establish compiler cost. |
-| Load / run | `ctypes.CDLL` loads the caller's native module into the harness process. Jailed setup installs a bounded scratch manifest and requires arena admission for each fresh handle; the profile rejects path sinks and `--spill-dir`. `EM:docker/run_json.py:2826`, `EM:docker/run_json.py:2960`, `EM:docker/run_json.py:2979`, `EM:docker/run_json.py:5432`, `EM:docker/run_json.py:5737`, `EM:docker/run_json.py:5748`. | `jailed` does not install or verify AS, cgroup memory, disk quota, CPU, wall, fd or task limits. The source calls the already loaded library rather than a resource launcher. `EM:docker/run_json.py:5448`, `EM:docker/entrypoint.sh:297`. Missing OS limits leave resources outside the engine-local sublimits uncontrolled. |
-| Report preparation inside run_json | Jailed/fd routes serialize into `TextIOWrapper(BytesIO())`; other routes can use a file temporary. Buffer preparation precedes native cleanup, so native state, arena backing and JSON can coexist. There is no whole-report byte check in this preparer. `EM:docker/run_json.py:7002`, `EM:docker/run_json.py:7025`, `EM:docker/run_json.py:5609`, `EM:docker/run_json.py:5634`. | AS/RSS and report budgets are external assumptions. The output-column route creates three temporaries plus one per series entry; it does not first admit a descriptor budget. `EM:docker/run_json.py:7336`. Whole-process memory and output-slot fan-out remain outside the arena capacity check. |
-| Publication from run_json | `_write_report` writes and flushes stdout; a partial-report write failure returns 1 and does not append another JSON document in that handler. Phase-aware post-execution exceptions have typed classification. No deadline is installed there. `EM:docker/run_json.py:4662`, `EM:docker/run_json.py:4558`. | A blocked writer needs an outside deadline. `report_post_execution_failed` already permits `reason=deadline`, but vocabulary alone does not install a watchdog. `EM:docker/run_failure_codes.json:879`. |
-| Separate sink finalizer / host publication | `--out -` requires a positive `--max-bytes`; file mode makes that cap optional, and omission leaves total input uncapped. Overflow reads at most B+1 bytes and exits 8. File mode creates a spool, syncs it, verifies it, then renames it. `EM:docker/pineforge_sink_finalize.py:61`, `EM:docker/pineforge_sink_finalize.py:417`, `EM:docker/pineforge_sink_finalize.py:439`. | Its `RLIMIT_FSIZE=0`/`--no-fork` text describes a host jail; it does not install one. File mode explicitly needs a writable environment without that zero file-size limit. `EM:docker/pineforge_sink_finalize.py:19`, `EM:docker/pineforge_sink_finalize.py:37`. No EOF/deadline or aggregate spool filesystem quota is established by the helper. Its I/O failure is exit 5, not proof of a particular quota cause. `EM:docker/pineforge_sink_finalize.py:459`. |
+| Source preparation / codegen | The shell creates `WORK` under `TMPDIR` or `/tmp`, installs an EXIT cleanup trap, and writes generated C++ and optional inventory. Transpile exceptions handled there become shell exit 5. It installs no OS resource limits in these functions. `docker/entrypoint.sh`. | Codegen's own source-character limit is 5 MiB, nesting limit 512, and cooperative transpile timer 120 seconds at CM; these are not a hard process/tree budget. `pineforge_codegen/limits.py`. The engine wrapper supplies no memory, temp, fd, task or hard-deadline installer: `docker/entrypoint.sh`. |
+| Compile/link / bind | One literal `g++ -std=c++17 -O2 -ffp-contract=off -fPIC -shared` invocation links the whole static archive. Compiler failure becomes shell exit 3; selected inventory binding follows under the same shell, also with exit 3 on failure. No CPU/wall/RSS/temp limit surrounds these calls. `docker/entrypoint.sh`. | Compiler descendants, peak RSS, optimizer time, diagnostics and temporary amplification are not bounded by this command. The codegen syntax-check helper likewise calls `subprocess.run` without a timeout; it is a test helper, not a production compiler jail. `tests/_compile.py`. A source-size check does not establish compiler cost. |
+| Load / run | `ctypes.CDLL` loads the caller's native module into the harness process. Jailed setup installs a bounded scratch manifest and requires arena admission for each fresh handle; the profile rejects path sinks and `--spill-dir`. `docker/run_json.py`. | `jailed` does not install or verify AS, cgroup memory, disk quota, CPU, wall, fd or task limits. The source calls the already loaded library rather than a resource launcher. `docker/run_json.py`, `docker/entrypoint.sh`. Missing OS limits leave resources outside the engine-local sublimits uncontrolled. |
+| Report preparation inside run_json | Jailed/fd routes serialize into `TextIOWrapper(BytesIO())`; other routes can use a file temporary. Buffer preparation precedes native cleanup, so native state, arena backing and JSON can coexist. There is no whole-report byte check in this preparer. `docker/run_json.py`. | AS/RSS and report budgets are external assumptions. The output-column route creates three temporaries plus one per series entry; it does not first admit a descriptor budget. `docker/run_json.py`. Whole-process memory and output-slot fan-out remain outside the arena capacity check. |
+| Publication from run_json | `_write_report` writes and flushes stdout; a partial-report write failure returns 1 and does not append another JSON document in that handler. Phase-aware post-execution exceptions have typed classification. No deadline is installed there. `docker/run_json.py`. | A blocked writer needs an outside deadline. `report_post_execution_failed` already permits `reason=deadline`, but vocabulary alone does not install a watchdog. `docker/run_failure_codes.json`. |
+| Separate sink finalizer / host publication | `--out -` requires a positive `--max-bytes`; file mode makes that cap optional, and omission leaves total input uncapped. Overflow reads at most B+1 bytes and exits 8. File mode creates a spool, syncs it, verifies it, then renames it. `docker/pineforge_sink_finalize.py`. | Its `RLIMIT_FSIZE=0`/`--no-fork` text describes a host jail; it does not install one. File mode explicitly needs a writable environment without that zero file-size limit. `docker/pineforge_sink_finalize.py`. No EOF/deadline or aggregate spool filesystem quota is established by the helper. Its I/O failure is exit 5, not proof of a particular quota cause. `docker/pineforge_sink_finalize.py`. |
 
 ### Engine-local sublimits are not whole-invocation limits
 
@@ -81,53 +81,46 @@ size rounded down to 1 MiB chunks. Claim/grow checks precede allocation;
 exhaustion carries `report_sink_failed(reason=arena_exhausted)` and an
 arena snapshot. The mapping cap defaults to 32 MiB, rounded down to pages,
 and evicts before replacing a mapping. These are actual implementation
-checks: `EM:src/scratch_arena.cpp:86`, `EM:src/scratch_arena.cpp:97`,
-`EM:src/scratch_arena.cpp:147`, `EM:src/scratch_arena.cpp:204`,
-`EM:src/scratch_arena.cpp:225`, `EM:src/scratch_arena.cpp:250`,
-`EM:src/scratch_arena.cpp:304`.
+checks: `src/scratch_arena.cpp`.
 
 Neither capacity nor the mapping window equals charged physical memory.
 Attachment initializes bitmap/window metadata; growth zeroes entire newly
 claimed chunks. Unmapping does not release the backing's charged pages.
-`EM:src/scratch_arena.cpp:171`, `EM:src/scratch_arena.cpp:285`,
-`EM:src/scratch_arena.cpp:332`. The public scratch-table descriptor also
+`src/scratch_arena.cpp`. The public scratch-table descriptor also
 reserves a separate slab; its P0 root allowance is 2N, not arena space.
-`EM:docker/run_json.py:2960`, `EM:include/pineforge/pineforge.h:904`.
+`docker/run_json.py`, `include/pineforge/pineforge.h`.
 
 The published EM memory contract specifies a 64-row trade-ledger descriptor
 window and equally sized payload tail, plus a separate read cache. Those
 windows do not bound total ledger text, backing or private heap.
-`EM:docs/pages/memory-management.md:271`,
-`EM:docs/pages/memory-management.md:272`. The same published contract
+`docs/pages/memory-management.md`. The same published contract
 describes `PINEFORGE_COMMAND_SCRATCH_MAX_BYTES`: positive decimal uint64,
 unset means uncapped, and the cap covers command backings of one thread,
 not all run files. Malformation is `scratch_configuration_invalid`;
 exhaustion is `scratch_io_failed`.
-`EM:docs/pages/memory-management.md:252`,
-`EM:docker/run_failure_codes.json:1311`,
-`EM:docker/run_failure_codes.json:1336`. These published sublimits are
+`docs/pages/memory-management.md`,
+`docker/run_failure_codes.json`. These published sublimits are
 retained; neither is accepted as evidence of a host quota.
 
 The host dependency is explicit: the embedding host sets `RLIMIT_FSIZE`;
 arena attachment ignores SIGXFSZ so EFBIG can be reported rather than
-killing that process. `EM:include/pineforge/pineforge.h:945`,
-`EM:include/pineforge/detail/scratch_arena.hpp:94`.
+killing that process. `include/pineforge/pineforge.h`,
+`include/pineforge/detail/scratch_arena.hpp`.
 The arena calculator's `RLIMIT_AS` / typed `memory_limit` language is
 likewise a hosting assumption, not a limit installer.
-`EM:scripts/arena_bound.py:490`. With an omitted host limit there is no
+`scripts/arena_bound.py`. With an omitted host limit there is no
 corresponding whole-resource protection; with an OS kill there is no
 guarantee that in-process exception handling produces any failure line.
-`EM:docker/run_json.py:5103`.
+`docker/run_json.py`.
 
 Current success diagnostics expose profile and arena capacity/high water,
 not OS confinement or whole-process usage.
-`EM:docker/run_json.py:5716`, `EM:docker/run_json.py:5724`.
+`docker/run_json.py`.
 `elapsed_seconds` surrounds the native run interval and excludes the
 earlier compiler and later JSON publication.
-`EM:docker/run_json.py:5499`, `EM:docker/run_json.py:5505`,
-`EM:docker/run_json.py:5609`. The finalizer receipt has sink bytes/counts
+`docker/run_json.py`. The finalizer receipt has sink bytes/counts
 and a digest, not a compiler/RSS/CPU/disk/fd/task usage block.
-`EM:docker/pineforge_sink_finalize.py:214`.
+`docker/pineforge_sink_finalize.py`.
 
 ## Stage and reservation model
 
@@ -179,12 +172,12 @@ or a policy allowance.
 
 | Quantity | PROPOSED default or resolution rule | Derivation / limitation |
 | --- | --- | --- |
-| A | Certified arena requirement if available; otherwise 4 GiB, rounded up to whole engine chunks | A finite starting policy, not a promise arbitrary strategies fit. The existing calculator requires certified facts and leaves unknowns explicit: `EM:docs/design/arena-bound.md:8`, `EM:scripts/arena_bound.py:490`. |
-| W | Existing 32 MiB default, or an explicitly admitted positive page multiple | Existing engine default: `EM:include/pineforge/detail/scratch_arena.hpp:112`, `EM:src/scratch_arena.cpp:161`. It is not substituted for A in physical-memory admission. |
-| S(N), the slab | Exact admitted manifest layout; for the documented P0 batch: `61,128,704 + 4096*ceil(32*N/4096)` bytes | Existing P0 hand arithmetic and extra-memory exclusions: `EM:docs/pages/scratch-tables.md:81`, `EM:docs/pages/scratch-tables.md:98`, `EM:docs/pages/scratch-tables.md:100`, `EM:docs/pages/scratch-tables.md:112`. Explicit manifests use their actual layout, not this shortcut. |
-| Input resident/AS allowances, O_r/O_a | Corresponding independently certified OHLCV terms; otherwise 1 GiB each | A resident observation cannot certify AS. Unknown CSV/parser/copy overhead remains subject to the whole-stage caps. Existing calculator separates these terms: `EM:scripts/arena_bound.py:342`, `EM:scripts/arena_bound.py:455`. |
-| U | Certified `finalizerStream.bytes` if available; otherwise 64 MiB | A finite policy cap, not a prediction. Existing stream arithmetic is conditional: `EM:scripts/arena_bound.py:391`. |
-| J | Explicit report-channel reservation; otherwise 8 MiB | New policy recommendation only. There is no EM 8 MiB report cap in `_prepare_report_json`: `EM:docker/run_json.py:7025`. U and J are independent, including escaping/expanded JSON. |
+| A | Certified arena requirement if available; otherwise 4 GiB, rounded up to whole engine chunks | A finite starting policy, not a promise arbitrary strategies fit. The existing calculator requires certified facts and leaves unknowns explicit: `docs/design/arena-bound.md`, `scripts/arena_bound.py`. |
+| W | Existing 32 MiB default, or an explicitly admitted positive page multiple | Existing engine default: `include/pineforge/detail/scratch_arena.hpp`, `src/scratch_arena.cpp`. It is not substituted for A in physical-memory admission. |
+| S(N), the slab | Exact admitted manifest layout; for the documented P0 batch: `61,128,704 + 4096*ceil(32*N/4096)` bytes | Existing P0 hand arithmetic and extra-memory exclusions: `docs/pages/scratch-tables.md`. Explicit manifests use their actual layout, not this shortcut. |
+| Input resident/AS allowances, O_r/O_a | Corresponding independently certified OHLCV terms; otherwise 1 GiB each | A resident observation cannot certify AS. Unknown CSV/parser/copy overhead remains subject to the whole-stage caps. Existing calculator separates these terms: `scripts/arena_bound.py`. |
+| U | Certified `finalizerStream.bytes` if available; otherwise 64 MiB | A finite policy cap, not a prediction. Existing stream arithmetic is conditional: `scripts/arena_bound.py`. |
+| J | Explicit report-channel reservation; otherwise 8 MiB | New policy recommendation only. There is no EM 8 MiB report cap in `_prepare_report_json`: `docker/run_json.py`. U and J are independent, including escaping/expanded JSON. |
 | Run physical cap M_r | `page(A + S(N) + O_r + 1 GiB + 2*J + 64 KiB)` | A full arena-charge allowance, slab, input allowance, finite private allowance, two encoded-report allowances and a transfer buffer. This is a policy envelope, not a proof of allocator overhead or native-array sufficiency. |
 | Run AS cap V_r | `page(S(N) + O_a + W + 2 GiB + 2*J + 64 KiB)` | Includes virtual image/stack/private headroom as a finite allowance. Only the arena mapping window enters AS; all possible arena backing enters M_r. Actual mappings and address-space fragmentation still have to fit. |
 | Shared disk quota D | `fsblock(64 MiB + 512 MiB + 2*U + 2*J + 64 MiB)` | Reserves preparation, compiler temporary growth, coexisting spool/output copies and control/metadata allowance. With default U/J this is 784 MiB before filesystem rounding. This is one aggregate ceiling, not independent 512 MiB compiler enforcement. Compile's hard temp ceiling is the remaining shared D. |
@@ -218,7 +211,7 @@ The reference job parent permits one logical CPU in
 applies to the stage leaves. This follows the one-execution-lane
 finding as a reservation recommendation, not a claim about installed
 affinity or compiler internals. The synchronous run call is visible at
-`EM:docker/run_json.py:5448`.
+`docker/run_json.py`.
 
 The job's workload stop deadline is the sum of the five workload-stage wall
 budgets: 420 seconds after job start by default. The receipt/cleanup deadline
@@ -298,33 +291,30 @@ Existing catalog meanings remain authoritative:
 
 - `out_of_memory` has no args and class `resource`; a caught allocation
   failure does not prove an installed memory limit was reached.
-  `EM:docker/run_failure_codes.json:503`.
+  `docker/run_failure_codes.json`.
 - `scratch_capacity_exceeded` takes only its closed `resource` vocabulary;
   `scratch_io_failed` takes no args.
-  `EM:docker/run_failure_codes.json:1285`,
-  `EM:docker/run_failure_codes.json:1336`.
+  `docker/run_failure_codes.json`.
 - `report_sink_failed` is class `engine_fault`, including `sink_io`,
   `scratch_io`, arena exhaustion and sink exhaustion. `sink_io` is a
   **reason**, not a separate code. Existing size/store arguments apply only
-  to their documented reasons. `EM:docker/run_failure_codes.json:965`.
+  to their documented reasons. `docker/run_failure_codes.json`.
 - `report_post_execution_failed` already has phase
   `result_assembly|results_digest|serialization` and reason
   `deadline|exception|io|resource`. `run_aborted` remains cooperative
   cancellation, not a CPU/wall-budget failure.
-  `EM:docker/run_failure_codes.json:879`,
-  `EM:docker/run_failure_codes.json:1136`.
+  `docker/run_failure_codes.json`.
 
 `memory_limit` occurs in the existing hosting design assumption, but is
 **not present in the EM failure catalog**. Registering it is proposed work,
 not reuse of an already implemented engine raiser.
-`EM:scripts/arena_bound.py:495`; catalog resource entries above.
+`scripts/arena_bound.py`; catalog resource entries above.
 
 The following additions are PROPOSED. All have `since=1.8.0` and
 `retryable=false`; a larger attempt remains an explicit placement decision.
 Their spelling follows the current code pattern and closed argument rules.
-`EM:docker/run_json.py:2173`,
-`EM:docs/pages/run-failure-codes.md:68`,
-`EM:docs/pages/run-failure-codes.md:487`.
+`docker/run_json.py`,
+`docs/pages/run-failure-codes.md`.
 
 | Abbreviation / proposed code | Class | Required typed args | Optional typed args |
 | --- | --- | --- | --- |
@@ -368,7 +358,7 @@ schemas. Trusted finalizer exit 8 plus its matching receipt uses the
 existing sink-exhaustion mapping before a generic output-cap mapping.
 Cleanup can replace the finalizer's exit-8 outcome with I/O failure today;
 only its final exit 8 gets exhaustion fields.
-`EM:docker/pineforge_sink_finalize.py:490`.
+`docker/pineforge_sink_finalize.py`.
 
 A deadline in the isolated trusted report worker maps to the existing
 `report_post_execution_failed{phase:result_assembly,reason:deadline}`;
@@ -758,8 +748,7 @@ report channel is available. The external supervisor can always report a
 typed terminal admission refusal even when the child never starts.
 Existing shell/tool statuses are retained in `raw_exit`: the shell maps a
 failed backtest to 4 and compile to 3 today, rather than preserving the
-Python status. `EM:docker/entrypoint.sh:233`,
-`EM:docker/entrypoint.sh:310`. The proposed hosting adapter returns
+Python status. `docker/entrypoint.sh`. The proposed hosting adapter returns
 nonzero and carries the authoritative typed outcome separately; it does
 not infer codes by reversing these coarse statuses.
 
@@ -870,9 +859,9 @@ meter failed.
 
 Current failure serialization is `engine,error,code,args`, with arena and
 abort mirrors and bounded text/argument/line sizes.
-`EM:docker/run_json.py:2170`, `EM:docker/run_json.py:2300`.
+`docker/run_json.py`.
 Current profile/arena diagnostics are success-only diagnostics, not
-host proof. `EM:docs/pages/report-schema.md:345`.
+host proof. `docs/pages/report-schema.md`.
 
 **R13 — additive carrier, frozen payloads (T1, T20, T27, T29).**
 The hosting integration MUST carry complete limits/usage in the external
@@ -881,7 +870,7 @@ It must not alter frozen report/sink/fingerprint bytes, append usage to
 the native sink trailer, change existing error text/class/retryability/args,
 or make an old optional arg required. New hosting codes require the
 catalog/registry/docs/release-diff additions first. Existing catalog
-versioning rules apply: `EM:docs/pages/run-failure-codes.md:487`.
+versioning rules apply: `docs/pages/run-failure-codes.md`.
 
 The engine's admission error can use the existing failure-line encoder
 with the newly registered code. The host stores that failure object
@@ -1211,7 +1200,7 @@ makes no claim that the hosting layer currently implements any of its proposals.
 The durable live runner's ledger/WAL/cache and repeated-report lifetimes
 need a separate finite service/job envelope; this proposal does not infer
 conformance from the batch scratch profile. EM's scratch documentation
-also distinguishes that product: `EM:docs/pages/scratch-tables.md:281`.
+also distinguishes that product: `docs/pages/scratch-tables.md`.
 
 ## Implementation notes
 
@@ -1222,12 +1211,8 @@ The following is dependency order, not a claim these changes exist at EM.
    catalog-dependent registry/docs/release diff through the repository's
    normal implementation workflow. Preserve existing classes, retryability,
    English and args. Current catalog/versioning anchors:
-   `EM:docker/run_failure_codes.json:408`,
-   `EM:docker/run_failure_codes.json:503`,
-   `EM:docker/run_failure_codes.json:879`,
-   `EM:docker/run_failure_codes.json:965`,
-   `EM:docs/pages/run-failure-codes.md:381`,
-   `EM:docs/pages/run-failure-codes.md:487`.
+   `docker/run_failure_codes.json`,
+   `docs/pages/run-failure-codes.md`.
 
 2. **Trusted launcher, proof validator and host adapter.** Add a shared
    engine-side hosting-proof module/launch stub, PROPOSED
@@ -1238,10 +1223,7 @@ The following is dependency order, not a claim these changes exist at EM.
    Add this module to the shipped harness/image as a versioned dependency.
 
 3. **Cover preparation and compiler before run_json.** Change the launch
-   choreography at `EM:docker/entrypoint.sh:108`,
-   `EM:docker/entrypoint.sh:115`, `EM:docker/entrypoint.sh:141`,
-   `EM:docker/entrypoint.sh:227`, `EM:docker/entrypoint.sh:245`,
-   `EM:docker/entrypoint.sh:297`.
+   choreography at `docker/entrypoint.sh`.
    Invoke trusted gated stages rather than placing only run_json in a jail.
    Route compile/transpile diagnostics through bounded report-channel collectors.
    Preserve compiler flags, especially `-ffp-contract=off` and whole-archive;
@@ -1250,46 +1232,36 @@ The following is dependency order, not a claim these changes exist at EM.
 4. **Pre-load run admission on every entry.** Extend `main`/`_main` and
    the shared pre-load path before ordinary, selected and capabilities
    calls to `load_strategy`. Current anchors:
-   `EM:docker/run_json.py:5103`, `EM:docker/run_json.py:5170`,
-   `EM:docker/run_json.py:4736`, `EM:docker/run_json.py:4830`,
-   `EM:docker/run_json.py:5390`, `EM:docker/run_json.py:2826`.
+   `docker/run_json.py`.
    Keep the existing per-handle manifest and arena checks; add host proof
    before library constructors, rather than replacing those checks.
    Current functions: `default_scratch_manifest`, `apply_scratch_tables`,
    `_require_jailed_arena` at
-   `EM:docker/run_json.py:2960`, `EM:docker/run_json.py:2979`,
-   `EM:docker/run_json.py:5748`.
+   `docker/run_json.py`.
 
 5. **Bound report preparation and publication.** Add J checks at the
    encoded-byte writer/preparer, column demand admission before creation,
    and report-channel protected publication coordination. Existing anchors:
-   `EM:docker/run_json.py:6861`, `EM:docker/run_json.py:7002`,
-   `EM:docker/run_json.py:7025`, `EM:docker/run_json.py:7336`,
-   `EM:docker/run_json.py:4662`. Do not exempt the BytesIO route or free/
+   `docker/run_json.py`. Do not exempt the BytesIO route or free/
    destructor interval from `run`; preparation and cleanup currently occur
-   at `EM:docker/run_json.py:5609`, `EM:docker/run_json.py:5634`.
+   at `docker/run_json.py`.
 
 6. **Gate and meter finalizer/publication.** Require the positive hosted
    U cap in both file and stdout modes before input, validate its stage
    proof, and bind usage to the protected host terminal outcome.
    Preserve finalizer exit/receipt order, overflow U+1 accounting,
    provisional-output rules and actual cleanup failure precedence:
-   `EM:docker/pineforge_sink_finalize.py:17`,
-   `EM:docker/pineforge_sink_finalize.py:61`,
-   `EM:docker/pineforge_sink_finalize.py:411`,
-   `EM:docker/pineforge_sink_finalize.py:439`,
-   `EM:docker/pineforge_sink_finalize.py:478`,
-   `EM:docker/pineforge_sink_finalize.py:490`.
+   `docker/pineforge_sink_finalize.py`.
 
 7. **Join usage without rewriting frozen bytes.** Keep engine attachment
    counters in their existing diagnostics/snapshot roles and hand them to
    the planned measured-usage receipt with attachment identity. Merge host usage in the external
    receipt, not the fingerprint or sink trailer.
-   `EM:docker/run_json.py:5724`,
-   `EM:include/pineforge/detail/scratch_arena.hpp:53`.
+   `docker/run_json.py`,
+   `include/pineforge/detail/scratch_arena.hpp`.
    Update the API/hosting documentation around
-   `EM:include/pineforge/pineforge.h:945` and
-   `EM:scripts/arena_bound.py:490` so host assumptions refer to this
+   `include/pineforge/pineforge.h` and
+   `scripts/arena_bound.py` so host assumptions refer to this
    verified contract rather than implying an installed limit.
 
 8. **Ship and qualify the actual image.** Carry the changed harness,
