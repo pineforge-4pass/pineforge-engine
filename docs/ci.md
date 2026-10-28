@@ -83,6 +83,8 @@ bare scalar `gke-2cpu-4gb-amd64` and `probe` on `["self-hosted","pf-gcp-post"]`.
 Tag pushes no longer trigger docs: the post fleet admits only engine `main`.
 Release and baseline promotion retain their separate `pf-gcp-main` policy.
 
+Human-dispatched App-token jobs (`release.yml`'s `release` and `notify-hub`, and `release-ruleset-probe.yml`'s `probe`) are bound to `release` (main only). Automatic `promote-baseline.yml`'s `promote` uses `release-bot` (main only, no reviewer), including manual re-fires. Preflight requires a literal, non-empty environment for visible App minting or private-key secret handoffs. Same-named environment secrets shadow repository secrets. Rollback reverts this preflight guard and its probe pin and removes the `environment:` lines; repository secret copies remain until the owner deletes them after dry runs.
+
 Start with the preflight used by GitHub Actions. Install actionlint 1.7.12,
 ShellCheck and pytest, then run:
 

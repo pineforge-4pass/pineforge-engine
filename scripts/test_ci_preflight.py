@@ -255,6 +255,7 @@ jobs:
   probe:
     needs: [authz]
     runs-on: ["self-hosted","pf-gcp-post"]
+    environment: release
     steps:
       - name: Refuse a dispatch ref other than main
         env:
@@ -435,6 +436,237 @@ class WorkflowActionPins(unittest.TestCase):
         self.assertEqual(ci_preflight.action_pin_findings(changed), [
             f'{path}:2: unsupported YAML construct in a workflow (quoted keys): '
             f'rewrite it in plain block style; {line!r}'])
+
+
+class AppTokenEnvironments(unittest.TestCase):
+    """Exercise the existing contract entrypoint, including its file loader."""
+
+    WORKFLOW = 'app-token-guard.yml'
+    # CiFileLoading.make_tree reads these two names from the test it is lent to.
+    CONFIG = '.github/actionlint.yaml'
+    CMAKE = 'tests/CMakeLists.txt'
+    SHA = '0123456789abcdef0123456789abcdef01234567'
+    STEP = ('      - uses: actions/create-github-app-token@' + SHA + ' # v1.12.0\n')
+
+    @classmethod
+    def workflow(cls, environment='', steps=None):
+        return ('on: workflow_dispatch\njobs:\n  mint:\n'
+                f'    runs-on: {POST_RUNNER}\n' + environment
+                + '    steps:\n' + (cls.STEP if steps is None else steps))
+
+    @staticmethod
+    def finding(name, job='mint'):
+        return (f'{name} job {job}: App-token minting/private-key use requires a '
+                'literal, non-empty environment; review other minting methods by hand')
+
+    def app_findings(self, workflows, *, checker=None):
+        # This entrypoint exists on main. Missing policy must yield a
+        # missing finding, never an import/setup error for a new helper.
+        sources = [(ROOT / path).read_text() for path in CI_SOURCES]
+        checker = ci_workflow_findings if checker is None else checker
+        findings = checker(*sources, others=workflows)
+        return [finding for finding in findings if ': App-token ' in finding
+                and any(finding.startswith(f'{name} job ') for name in workflows)]
+
+    def assert_refused(self, workflow, *, checker=None):
+        self.assertEqual(self.app_findings({self.WORKFLOW: workflow}, checker=checker),
+                         [self.finding(self.WORKFLOW)])
+
+    def test_mint_action_requires_environment_at_every_ref(self):
+        for ref in (self.SHA, 'v1', 'v2', 'main'):
+            for quote in ('', '"', "'"):
+                with self.subTest(ref=ref, quote=quote):
+                    steps = ('      - name: Obtain installation credential\n'
+                             f'        uses: {quote}actions/create-github-app-token@{ref}'
+                             f'{quote} # v1.12.0\n')
+                    self.assert_refused(self.workflow(steps=steps))
+
+    def test_tibdex_mint_action_requires_environment_whatever_feeds_its_key(self):
+        for ref in (self.SHA, 'v1', 'main'):
+            for quote in ('', '"', "'"):
+                for key_source in ('vars.APP_KEY', 'inputs.key', 'secrets.RELEASE_PEM'):
+                    with self.subTest(ref=ref, quote=quote, key_source=key_source):
+                        steps = ('      - name: Obtain installation credential\n'
+                                 f'        uses: {quote}tibdex/github-app-token@{ref}{quote}\n'
+                                 '        with:\n'
+                                 f'          app_id: 1\n          key: ${{{{ {key_source} }}}}\n')
+                        self.assert_refused(self.workflow(steps=steps))
+                        self.assertEqual(self.app_findings({self.WORKFLOW: self.workflow(
+                            '    environment: release\n', steps=steps)}), [])
+
+    def test_literal_names_and_mapping_names_have_removal_controls(self):
+        for environment in (
+                '    environment: release\n',
+                '    environment: 1a\n',
+                '    environment: "release-bot" # automatic\n',
+                "    environment: 'release'\n",
+                '    environment:\n      name: release\n',
+                '    environment:\n      name: "release-bot"\n'
+                '      url: ${{ steps.deploy.outputs.url }}\n'):
+            with self.subTest(environment=environment):
+                self.assertEqual(self.app_findings(
+                    {self.WORKFLOW: self.workflow(environment)}), [])
+                self.assert_refused(self.workflow())
+
+    def test_empty_expression_and_non_name_environments_are_refused(self):
+        for environment in (
+                '    environment:\n',
+                '    environment: ""\n',
+                "    environment: ''\n",
+                '    environment: "   "\n',
+                '    environment: null\n',
+                '    environment: ~\n',
+                '    environment: false\n',
+                '    environment: 123\n',
+                '    environment: .5\n',
+                '    environment: 0x10\n',
+                '    environment: {}\n',
+                '    environment: []\n',
+                '    environment: ${{ inputs.environment }}\n',
+                '    environment: "release-${{ github.ref_name }}"\n',
+                "    environment: ${{ 'release' }}\n",
+                '    environment:\n      name:\n',
+                '    environment:\n      name: ""\n',
+                '    environment:\n      name: ${{ inputs.environment }}\n',
+                '    environment:\n      url: https://example.com\n',
+                '    environment:\n      name:\n        nested: release\n',
+                '    environment: release\n    environment: release-bot\n',
+                '    environment:\n      name: release\n      name: release-bot\n',
+                '    environment: {name: release}\n'):
+            with self.subTest(environment=environment):
+                self.assert_refused(self.workflow(environment))
+
+    def test_each_job_and_each_workflow_needs_its_own_environment(self):
+        safe = self.workflow('    environment: release\n')
+        second = self.workflow().replace('  mint:', '  later:', 1)
+        second = second.replace('jobs:\n', 'jobs:\n  ordinary:\n'
+                                f'    runs-on: {POST_RUNNER}\n'
+                                '    steps:\n      - run: "true"\n', 1)
+        workflows = {self.WORKFLOW: safe, 'second-app-token.yaml': second}
+        self.assertEqual(self.app_findings(workflows),
+                         [self.finding('second-app-token.yaml', 'later')])
+        same_file = safe + second.split('jobs:\n', 1)[1]
+        self.assertEqual(self.app_findings({self.WORKFLOW: same_file}),
+                         [self.finding(self.WORKFLOW, 'later')])
+
+    def test_quoted_environment_keys_do_not_hide_empty_names(self):
+        for key in ('"environment"', "'environment'"):
+            with self.subTest(key=key):
+                text = self.workflow(f'    {key}: ""\n')
+                self.assert_refused(text)
+                # Existing YAML policy explicitly refuses even a quoted key
+                # with a literal value; it cannot silently skip that job.
+                accepted_name = self.workflow(f'    {key}: release\n')
+                path = f'.github/workflows/{self.WORKFLOW}'
+                self.assertIn(ActionPins.unsupported_finding(
+                    path, 5, f'{key}: release', 'quoted keys'),
+                    ci_preflight.action_pin_findings({path: accepted_name}))
+
+    def test_flow_jobs_and_steps_are_explicit_yaml_refusals(self):
+        path = f'.github/workflows/{self.WORKFLOW}'
+        for text, number, source in (
+                ('on: workflow_dispatch\njobs: {mint: {steps: ['
+                 '{uses: actions/create-github-app-token@v2}]}}\n', 2,
+                 'jobs: {mint: {steps: [{uses: actions/create-github-app-token@v2}]}}'),
+                (self.workflow(steps='      - {uses: actions/create-github-app-token@v2}\n'),
+                 6, '- {uses: actions/create-github-app-token@v2}')):
+            with self.subTest(source=source):
+                self.assertIn(ActionPins.unsupported_finding(path, number, source),
+                              ci_preflight.action_pin_findings({path: text}))
+        # The supported spelling must also refuse the missing environment.
+        self.assert_refused(self.workflow())
+
+    def test_private_key_handoffs_to_other_actions_and_scripts_are_refused(self):
+        for steps in (
+                '      - uses: example/installation-token@' + self.SHA + ' # v1.0.0\n'
+                '        with:\n          private-key: ${{ secrets.RELEASE_PEM }}\n',
+                '      - uses: example/installation-token@' + self.SHA + ' # v1.0.0\n'
+                '        with:\n          private_key: ${{ secrets.RELEASE_PEM }}\n',
+                '      - run: python3 mint.py\n'
+                '        env:\n          APP_KEY: ${{ secrets.PINEFORGE_APP_PRIVATE_KEY }}\n',
+                '      - run: python3 mint.py\n'
+                "        env:\n          APP_KEY: ${{ secrets['PINEFORGE_APP_PRIVATE_KEY'] }}\n",
+                '      - run: python3 mint.py\n'
+                '        env:\n          APP_KEY: ${{ secrets . PINEFORGE_APP_PRIVATE_KEY }}\n',
+                '      - run: python3 mint.py\n'
+                '        env:\n          PRIVATE_KEY: ${{ secrets.RELEASE_PEM }}\n',
+                '      - run: |\n'
+                '          python3 mint.py --private-key "${{ secrets.RELEASE_PEM }}"\n',
+                '      - run: python3 mint.py\n'
+                '        env:\n          PRIVATE_KEY: |\n'
+                '            ${{ secrets.RELEASE_PEM }}\n'):
+            with self.subTest(steps=steps):
+                self.assert_refused(self.workflow(steps=steps))
+                self.assertEqual(self.app_findings({self.WORKFLOW: self.workflow(
+                    '    environment: release\n', steps=steps)}), [])
+
+    def test_inherited_private_key_and_script_mint_indicators_are_refused(self):
+        inherited = self.workflow(steps='      - run: python3 mint.py\n').replace(
+            'jobs:\n', 'env:\n  APP_KEY: ${{ secrets.PINEFORGE_APP_PRIVATE_KEY }}\njobs:\n', 1)
+        self.assert_refused(inherited)
+        for command in (
+                'gh api --method POST "app/installations/$APP_INSTALLATION/access_tokens"',
+                'curl -X POST "https://api.github.com/app/installations/123/access_tokens"',
+                "const auth = createAppAuth({appId, privateKey});",
+                'integration = GithubIntegration(app_id, private_key)',
+                'auth = github.Auth.AppAuth(app_id, private_key)'):
+            with self.subTest(command=command):
+                self.assert_refused(self.workflow(steps='      - run: |\n          '
+                                                 + command + '\n'))
+
+    def test_ordinary_jobs_and_commented_action_names_do_not_need_environment(self):
+        ordinary = self.workflow(steps=(
+            '      # - uses: actions/create-github-app-token@v2\n'
+            '      - run: |\n'
+            '          echo "uses: actions/create-github-app-token@v2"\n'
+            '        env:\n          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n'))
+        self.assertEqual(self.app_findings({self.WORKFLOW: ordinary}), [])
+        self.assert_refused(self.workflow())
+
+    def test_second_workflow_files_are_discovered_by_the_ci_entrypoint(self):
+        tree = CiFileLoading.make_tree(self)
+        for name in ('second-app-token.yml', 'second-app-token.yaml'):
+            with self.subTest(name=name):
+                (tree / '.github/workflows' / name).write_text(self.workflow())
+                code, output = CiFileLoading.run_stage(tree, '--check-ci-workflow')
+                self.assertIn(self.finding(name), output.splitlines())
+                self.assertEqual(code, 1, output)
+
+    def test_disabling_or_loosening_the_guard_breaks_the_regression_assertion(self):
+        self.assert_refused(self.workflow())
+        source = inspect.getsource(ci_workflow_findings)
+        guard = '    findings += app_token_environment_findings(workflows)\n'
+        self.assertEqual(source.count(guard), 1)
+        namespace = dict(ci_workflow_findings.__globals__)
+        exec(compile(source.replace(guard, '', 1),
+                     '<app-token-environment-check-removed>', 'exec'), namespace)
+        with self.assertRaises(AssertionError):
+            self.assert_refused(self.workflow(), checker=namespace['ci_workflow_findings'])
+        source = inspect.getsource(ci_preflight.app_token_environment_findings)
+        guard = '            if not _literal_job_environment(body):\n'
+        self.assertEqual(source.count(guard), 1)
+        mutant = source.replace(guard,
+                                "            if not _job_values(body, 'environment'):\n", 1)
+        exec(compile(mutant, '<app-token-environment-check-loosened>', 'exec'), namespace)
+        exec(compile(inspect.getsource(ci_workflow_findings),
+                     '<contract-with-loosened-environment-check>', 'exec'), namespace)
+        with self.assertRaises(AssertionError):
+            self.assert_refused(self.workflow('    environment: ${{ inputs.environment }}\n'),
+                                checker=namespace['ci_workflow_findings'])
+
+    def test_real_minting_jobs_have_exactly_the_inventoried_environments(self):
+        expected = {
+            ('release.yml', 'release'): ['release'],
+            ('release.yml', 'notify-hub'): ['release'],
+            ('release-ruleset-probe.yml', 'probe'): ['release'],
+            ('promote-baseline.yml', 'promote'): ['release-bot'],
+        }
+        actual = {(path.name, job): ci_preflight._job_values(body, 'environment')
+                  for path in sorted((ROOT / '.github/workflows').iterdir())
+                  if path.suffix in ('.yml', '.yaml')
+                  for job, body in _jobs(path.read_text()).items()
+                  if ci_preflight._job_values(body, 'environment')}
+        self.assertEqual(actual, expected)
 
 
 class WorkflowEventFleets(unittest.TestCase):
@@ -1413,7 +1645,7 @@ class PostFleetRunnerPolicy(unittest.TestCase):
 
     def test_post_fleet_docs_match_runner_policy(self):
         docs = (ROOT / 'docs/ci.md').read_text()
-        self.assertEqual(len(docs.splitlines()), 2014)
+        self.assertEqual(len(docs.splitlines()), 2016)
         requirements = (
             'Post Release/Debug/kernel and native shards, post sanitizers and both native-live sanitizer\n'
             'profiles use fixed bare GKE scale-set names directly in runner pods carrying the engine toolchain image and sudo. No job routes by event.',
@@ -3162,7 +3394,7 @@ class PreflightFailures(unittest.TestCase):
 
     def test_documented_slow_row_counts_match_literal_population(self):
         text = (ROOT / 'docs/ci.md').read_text()
-        self.assertEqual(len(text.splitlines()), 2014)
+        self.assertEqual(len(text.splitlines()), 2016)
         counts = re.findall(
             r'^the (\d+) CTest rows labelled `slow` in `tests/CMakeLists.txt`$'
             r'|^The label `slow` (?:is|includes) `PINEFORGE_PR_SLOW_TESTS` '
@@ -3460,9 +3692,19 @@ class PreflightFailures(unittest.TestCase):
                     'promote-baseline.yml job promote-guard must keep production credentials '
                     'on a hosted standard runner',
                 ]
-                expected = self.quoted_key_lint_findings(changed[2], setting) + credentials + [
-                    f'baseline promotion must not define workflow-level {key}',
-                ]
+                # ci_workflow_findings reports runner findings first, then the
+                # action-pin lint, then the App-token environment finding, then
+                # the promotion findings.
+                app_token = []
+                if key == 'env' and 'secrets.PINEFORGE_APP_PRIVATE_KEY' in setting:
+                    # The inherited key also reaches the unbound guard job;
+                    # retain the original workflow-level refusal below it.
+                    app_token = [AppTokenEnvironments.finding(
+                        'promote-baseline.yml', 'promote-guard')]
+                expected = (credentials + self.quoted_key_lint_findings(changed[2], setting)
+                            + app_token + [
+                                f'baseline promotion must not define workflow-level {key}',
+                            ])
                 self.assertEqual(ci_workflow_findings(*changed), expected)
 
     def test_promotion_guard_rejects_job_defaults(self):
