@@ -6686,8 +6686,8 @@ void PineExecutionAdapter::retire_in_position_exits_at_flat(
 std::uint64_t PineExecutionAdapter::command_sequence_for_exit(
         const SourceId& exit_id, const SourceId& from_entry) const {
     // The same-bar exit sort asks this on every script bar while its tail
-    // group persists; the table answers from its per-id index instead of a
-    // scan over every placement ever retained (quadratic over a long run).
+    // group persists; the table scans retained placements and consults the
+    // historical minima for erased rows.
     return placement_.command_sequence_for(exit_id, from_entry);
 }
 
