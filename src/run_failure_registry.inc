@@ -430,6 +430,12 @@ static constexpr const char* kRegistryValues[] = {
     "window",
     "schema_version",
     "objective",
+    "network",
+    "process",
+    "exec",
+    "ptrace",
+    "privileged",
+    "filesystem",
 };
 
 static constexpr RegistryArg kRegistryArgs[] = {
@@ -554,6 +560,8 @@ static constexpr RegistryArg kRegistryArgs[] = {
     {"expected", RunFailureArgKind::integer, false, 408, 0},
     {"field", RunFailureArgKind::vocab, false, 408, 3},
     {"option", RunFailureArgKind::vocab, false, 411, 13},
+    {"class", RunFailureArgKind::vocab, false, 424, 6},
+    {"syscall", RunFailureArgKind::integer, false, 430, 0},
 };
 
 static constexpr RegistryCode kRegistryCodes[] = {
@@ -627,7 +635,13 @@ static constexpr RegistryCode kRegistryCodes[] = {
     {"scratch_capacity_exceeded", RunFailureClass::resource, false, 64, 1},
     {"scratch_configuration_invalid", RunFailureClass::input, false, 65, 2},
     {"scratch_io_failed", RunFailureClass::resource, false, 67, 0},
+    // Reserved 70..73: replace with the other lanes' catalog rows on integration.
+    {"", RunFailureClass::engine_fault, false, 0, 0},
+    {"", RunFailureClass::engine_fault, false, 0, 0},
+    {"", RunFailureClass::engine_fault, false, 0, 0},
+    {"", RunFailureClass::engine_fault, false, 0, 0},
+    {"sandbox_violation", RunFailureClass::resource, false, 121, 2},
 };
 
-static_assert(sizeof(kRegistryCodes) / sizeof(kRegistryCodes[0]) == 70,
+static_assert(sizeof(kRegistryCodes) / sizeof(kRegistryCodes[0]) == 75,
               "the registry must have one row per RunFailureCode");

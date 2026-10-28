@@ -7816,6 +7816,21 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 8)
         "-Wl,--wrap=_ZnamRKSt9nothrow_t")
 endif()
 # --- CR-150 resident-command-scratch end ---
+# --- CR-150 run-sandbox begin ---
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_libraries(test_run_sandbox PRIVATE Threads::Threads)
+    add_test(NAME test_run_sandbox_stacked COMMAND test_run_sandbox seccomp stacked)
+    add_test(NAME test_run_sandbox_landlock_write COMMAND test_run_sandbox landlock-write)
+    add_test(NAME test_run_sandbox_landlock_strict COMMAND test_run_sandbox landlock-strict)
+    add_test(NAME test_run_sandbox_landlock_write_stacked
+        COMMAND test_run_sandbox landlock-write stacked)
+    add_test(NAME test_run_sandbox_landlock_strict_stacked
+        COMMAND test_run_sandbox landlock-strict stacked)
+    set_tests_properties(test_run_sandbox_landlock_write test_run_sandbox_landlock_strict
+        test_run_sandbox_landlock_write_stacked test_run_sandbox_landlock_strict_stacked
+        PROPERTIES SKIP_RETURN_CODE 77)
+endif()
+# --- CR-150 run-sandbox end ---
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
         message(FATAL_ERROR "PR fast row or executable is missing: ${_pf_fast_test}")

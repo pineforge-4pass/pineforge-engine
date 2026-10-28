@@ -757,6 +757,35 @@ PF_API int pf_run_abort_requested_v1(void);
  *  Returns 0 (also when uninstalled), or -1 on signal-setup failure. */
 PF_API int pf_run_abort_restore_sigterm_v1(void);
 
+/** Optional process sandbox configuration. Initialize struct_size to sizeof
+ *  this struct, descriptors to -1 when absent, all other fields to zero.
+ *  Paths must already exist. Counts describe borrowed arrays of UTF-8 paths.
+ *  NULL config selects write-deny with no additional writable roots.
+ *  Default reads are unrestricted; strict_read opts into staged reads only.
+ *  required refuses unavailable seccomp/no_new_privs; Landlock is best effort.
+ *  Descriptors are borrowed, never closed, renumbered or otherwise changed.
+ */
+typedef struct pf_run_sandbox_config_v1 {
+    uint32_t struct_size;
+    const char* const* write_roots;
+    size_t write_root_count;
+    const char* const* read_roots;
+    size_t read_root_count;
+    uint32_t strict_read;
+    uint32_t required;
+    int32_t sink_fd;
+    int32_t arena_fd;
+} pf_run_sandbox_config_v1;
+
+/** Enter once, after host setup and before the first strategy call.
+ *  Irreversible on Linux, inherited by subsequent threads; existing threads
+ *  receive seccomp through TSYNC where available. Repeated calls reassert the
+ *  SIGSYS handler without stacking another filter. Returns 0 on success or
+ *  optional degradation, -74 (sandbox_violation) for a required-layer refusal,
+ *  -1 for an invalid config. Non-Linux logs once and returns 0.
+ */
+PF_API int pf_run_sandbox_enter_v1(const pf_run_sandbox_config_v1* config);
+
 /** Return the physical entry incarnation for one closed-trade row.
  *
  *  Partial-close/FIFO fragments emitted from the same physical entry share

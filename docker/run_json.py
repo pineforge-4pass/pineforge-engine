@@ -4828,6 +4828,7 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
     # 5. Execution begins before the strategy library loads.
     _advance(phases, "execution")
     lib = load_strategy(args.so)
+    _enter_run_sandbox(lib, args)
     abort = getattr(binary_inputs, "_sigterm_abort", None)
     if abort is not None:
         abort.attach(lib)
@@ -5388,6 +5389,7 @@ def _main(argv, binary_inputs) -> int:
 
     _advance(phases, "execution")
     lib = load_strategy(args.so)
+    _enter_run_sandbox(lib, args)
     if abort is not None:
         abort.attach(lib)
     checked = uses_checked_settings(lib)
@@ -5839,6 +5841,64 @@ def _new_report_sink(lib, state, args, *, body=True):
     return _ReportSink(lib, state, directory=getattr(args, "spill_dir", None),
                        run_id=getattr(args, "run_id", ""),
                        path=getattr(args, "report_sink", None) if body else None)
+
+
+class _RunSandboxConfigC(ctypes.Structure):
+    _fields_ = [
+        ("struct_size", ctypes.c_uint32),
+        ("write_roots", ctypes.POINTER(ctypes.c_char_p)),
+        ("write_root_count", ctypes.c_size_t),
+        ("read_roots", ctypes.POINTER(ctypes.c_char_p)),
+        ("read_root_count", ctypes.c_size_t),
+        ("strict_read", ctypes.c_uint32),
+        ("required", ctypes.c_uint32),
+        ("sink_fd", ctypes.c_int32),
+        ("arena_fd", ctypes.c_int32),
+    ]
+
+
+def _enter_run_sandbox(lib, args):
+    enter = getattr(lib, "pf_run_sandbox_enter_v1", None)
+    if enter is None:
+        return  # Older strategy libraries keep their existing host contract.
+    enter.argtypes = [ctypes.POINTER(_RunSandboxConfigC)]
+    enter.restype = ctypes.c_int
+    # Resolve the same scratch location the host's sink/assembly already use.
+    # The arena-only jailed path does not require a disk scratch probe.
+    scratch = (getattr(args, "spill_dir", None) or tempfile.gettempdir()
+               if getattr(args, "profile", "unjailed") == "jailed"
+               else _disk_report_directory(getattr(args, "spill_dir", None)))
+    writes = {os.path.abspath(os.fspath(scratch))}
+    # Command scratch selects independently of --spill-dir.
+    command_scratch = os.environ.get("PINEFORGE_COMMAND_SCRATCH_DIR")
+    if command_scratch:
+        writes.add(os.path.abspath(command_scratch))
+    elif getattr(args, "profile", "unjailed") != "jailed":
+        writes.add(_disk_report_directory())
+    if getattr(args, "report_sink", None) is not None:
+        writes.add(os.path.dirname(os.path.abspath(os.fspath(args.report_sink))))
+    reads = {os.getcwd()}
+    for name in ("so", "ohlcv", "ohlcv_bin", "syminfo", "symbol_feeds",
+                 "request_feed_inventory"):
+        path = getattr(args, name, None)
+        if path is not None:
+            reads.add(os.path.dirname(os.path.abspath(os.fspath(path))))
+    write_paths = (ctypes.c_char_p * len(writes))(*(os.fsencode(p) for p in sorted(writes)))
+    read_paths = (ctypes.c_char_p * len(reads))(*(os.fsencode(p) for p in sorted(reads)))
+    try:
+        arena_fd = int(os.environ.get("PF_SCRATCH_ARENA_FD", "-1"))
+    except ValueError:
+        arena_fd = -1  # Existing arena admission publishes malformed backing.
+    sink_fd = getattr(args, "report_sink_fd", None)
+    config = _RunSandboxConfigC(
+        ctypes.sizeof(_RunSandboxConfigC), write_paths, len(write_paths),
+        read_paths, len(read_paths),
+        os.environ.get("PINEFORGE_SANDBOX_STRICT_READ") == "1",
+        os.environ.get("PINEFORGE_SANDBOX_REQUIRED") == "1",
+        -1 if sink_fd is None else sink_fd, arena_fd)
+    if enter(ctypes.byref(config)) != 0:
+        raise RunFailure("required strategy sandbox could not be installed",
+                         "sandbox_violation", {"class": "privileged", "syscall": -1})
 
 
 class _InheritedSinkFd:

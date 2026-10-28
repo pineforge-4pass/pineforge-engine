@@ -130,6 +130,7 @@ INPUT                  = groups.dox \
                          pages/live-surface.md \
                          pages/report-schema.md \
                          pages/run-failure-codes.md \
+                         pages/run-sandbox.md \
                          pages/metrics.md \
                          pages/configuration.md \
                          pages/scratch-tables.md \

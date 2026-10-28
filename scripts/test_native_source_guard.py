@@ -17,6 +17,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 HEADER_ROOTS = (
+    "include/pineforge/run_sandbox.hpp",
     "include/pineforge/engine.hpp",
     "include/pineforge/native_host.hpp",
     "include/pineforge/native_order.hpp",
@@ -26,12 +27,17 @@ HEADER_ROOTS = (
     "include/pineforge/market_driver.hpp",
 )
 SOURCE_ROOTS = (
+    "src/run_sandbox.cpp",
+    "src/run_sandbox_stub.cpp",
     "src/engine_execution.cpp",
     "src/engine_state_hash.cpp",
     "src/c_abi.cpp",
     "src/pending_order_mirror.cpp",
 )
 IDENTIFIER_ROOTS = (
+    "include/pineforge/run_sandbox.hpp",
+    "src/run_sandbox.cpp",
+    "src/run_sandbox_stub.cpp",
     "include/pineforge/engine.hpp",
     "include/pineforge/native_host.hpp",
     "src/native_execution_consumer.cpp",

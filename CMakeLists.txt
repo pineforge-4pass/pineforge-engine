@@ -166,6 +166,11 @@ set(PINEFORGE_KERNEL_SOURCES src/array.cpp
     src/detail/o1_store.cpp
     src/scratch_arena.cpp
 )
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    list(APPEND PINEFORGE_KERNEL_SOURCES src/run_sandbox.cpp)
+else()
+    list(APPEND PINEFORGE_KERNEL_SOURCES src/run_sandbox_stub.cpp)
+endif()
 add_library(pineforge_kernel STATIC ${PINEFORGE_KERNEL_SOURCES}) # kernel-only archive: libpineforge.a's kernel objects and flags, for consumers that never speak Pine
 add_library(PineForge::kernel ALIAS pineforge_kernel)
 # So a find_package(PineForge) consumer spells it the same way an in-tree one

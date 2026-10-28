@@ -27,6 +27,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 EXPECTED_RUNTIME = frozenset({
+    "pf_run_sandbox_enter_v1",
     "strategy_closed_trade_entry_incarnation",
     "strategy_set_trace_enabled",
     "strategy_set_trade_start_time",
@@ -140,8 +141,8 @@ RUNTIME_HEADERS = (
     "report_sink.h",
 )
 
-EXPECTED_PUBLIC_DECLARATIONS = 114
-EXPECTED_RUNTIME_IMPLEMENTATIONS = 94
+EXPECTED_PUBLIC_DECLARATIONS = 115
+EXPECTED_RUNTIME_IMPLEMENTATIONS = 95
 
 # Runtime setters whose data a stream cannot take: the source host refuses
 # stream_begin() while any of them holds data (the native daily feed since its

@@ -137,9 +137,9 @@ directly, so a Pine-layer symbol reaching one is a link error.
 
 The counts below describe the current API, including recorded outputs and the report sink; recorded outputs are not part of 1.4.0.
 
-The public C surface is **159 `PF_API` declarations** across the six installed headers that declare any:
+The public C surface is **160 `PF_API` declarations** across the six installed headers that declare any:
 
-- `<pineforge/pineforge.h>` — **103**: 83 of the 94 runtime implementations (the other eleven are declared in `execution_observer.h`, `selected_window.h` and `report_sink.h`) plus twenty
+- `<pineforge/pineforge.h>` — **104**: 84 of the 95 runtime implementations (the other eleven are declared in `execution_observer.h`, `selected_window.h` and `report_sink.h`) plus twenty
   per-strategy generated exports (`strategy_declares_bar_magnifier` only in a
   script that declares `use_bar_magnifier = true`, the three recorded-outputs exports only in a module that records outputs). This is what a compiled
   strategy `.so` exports and what a harness calls. Older modules lack the six
@@ -150,7 +150,7 @@ The public C surface is **159 `PF_API` declarations** across the six installed h
   execute, read the book, read the lots. Additive: no symbol, struct or
   behaviour of the first set changes.
 - `<pineforge/execution_observer.h>`, `<pineforge/selected_window.h>` and `<pineforge/report_sink.h>` —
-  three, three and five: the eleven of the 94 runtime implementations that
+  three, three and five: the eleven of the 95 runtime implementations that
   `pineforge.h` does not declare. Each supplies a version reader and a
   setter/query pair; the report-sink header also supplies the borrowed-fd
   setter `strategy_set_report_sink_fd_v1` and T-summary query
@@ -235,6 +235,7 @@ Build the generated strategy module with the repository recipe (or
 | [Strategy lifecycle](@ref lifecycle) | Handle ownership, run reuse and report freeing. |
 | [Configuration](@ref configuration) | Inputs, `strategy()` overrides, the bar magnifier, trace recording and the trade-start gate. |
 | [Scratch tables](@ref scratch_tables) | Disk or bounded memory, the default admission policy, jailed host/HPO setup, typed resource failures and planned jail proof. |
+| [Run sandbox](@ref run_sandbox) | Linux process protection, filesystem roots, mode receipts and host-selected strict/required policy. |
 | [Memory management](@ref memory_management) | How much memory a run can use: the controls, the fixed resident bounds, the scratch formula with a worked example, and what grows with bars, trades and open orders. |
 | [Report schema](@ref report_schema) | `pf_report_t` field by field, including the equity curve. |
 | [Run-failure codes](@ref run_failure_codes) | The stable code and typed arguments beside a failed run's text: the getters, the rules, every code, and the catalog and per-release diff each release publishes. |

@@ -8,6 +8,8 @@
 #include "presentation_capture_window.hpp"
 #include "report_sink_writer.hpp"
 #include "run_abort.hpp"
+#include <pineforge/run_sandbox.hpp>
+#include <pineforge/detail/scratch_arena.hpp>
 #include <pineforge/execution_close_scope.hpp>
 #include <pineforge/market_driver.hpp>
 #include <pineforge/timeframe.hpp>
@@ -1367,6 +1369,13 @@ void NativeExecutionConsumer::fail(BacktestEngine& engine, NativeFailure failure
 
 void NativeExecutionConsumer::store_rendered(BacktestEngine& engine, const char* text,
                                              RunFailureValue value) const {
+    const auto violation = run_sandbox_violation();
+    if (violation.syscall_number != -1) {
+        text = "strategy sandbox violation";
+        value = make_run_failure(RunFailureCode::sandbox_violation,
+            {{"class", run_sandbox_class_name(violation.kind)},
+             {"syscall", violation.syscall_number}});
+    }
     engine.last_error_ = text ? text : "";
     run_failure_.code = value.code;
     run_failure_.args = std::move(value.args);
@@ -1594,6 +1603,7 @@ void NativeExecutionConsumer::close_open_epoch_at_exit(BacktestEngine& engine, b
 
 void NativeExecutionConsumer::terminal_success(BacktestEngine& engine,
                                                NativeFailureOperation operation) {
+    if (!check_sigterm_abort(engine, true)) return;
     NativeSelectedEpoch& epoch = selected_epoch_;
     pf_execution_observation_v1& seen = epoch.observation;
     if (seen.phase == kEpochSealed && seen.fault_stage != kEpochFaultNone) {
@@ -1913,6 +1923,15 @@ void NativeExecutionConsumer::latch_abort(BacktestEngine& engine,
 
 bool NativeExecutionConsumer::check_sigterm_abort(BacktestEngine& engine,
                                                  bool strategy_started) {
+    const auto violation = run_sandbox_violation();
+    if (violation.syscall_number != -1) {
+        if (engine.report_sink_state_.writer) engine.report_sink_state_.writer->abandon();
+        fail(engine, NativeFailure{NativeFailureCode::Aborted, NativeFailureOperation::Input});
+        render(engine, "strategy sandbox violation", RunFailureCode::sandbox_violation,
+               {{"class", run_sandbox_class_name(violation.kind)},
+                {"syscall", violation.syscall_number}});
+        return false;
+    }
     if (failed()) return false;
     if (!run_sigterm_requested()) return true;
     const auto* running = std::get_if<NativeRunning>(&state_);
@@ -3051,6 +3070,16 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
         render(engine, "native run generation counter exhausted");
         return false;
     }
+    // Host setup has finished; no strategy callback may precede this fallback.
+    // An explicit C host call wins: repeat entry only reasserts SIGSYS.
+    const auto& sandbox_sink = engine.report_sink_state_;
+    const char* sandbox_arena = std::getenv("PF_SCRATCH_ARENA_FD");
+    (void)run_sandbox_enter_defaults(sandbox_sink.scratch_dir.c_str(),
+                                     sandbox_sink.path.c_str(), sandbox_sink.fd,
+                                     detail::ScratchArena::attached() && sandbox_arena
+                                         && std::strcmp(sandbox_arena, "5") == 0
+                                         ? detail::ScratchArena::kInheritedFd : -1);
+    if (!check_sigterm_abort(engine, false)) return false;
     release_run_command_scratch();
     for (auto& run : run_command_scratch_) run.reset();
     dependency_scratch_stats_ = {};
@@ -3209,7 +3238,7 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     state_ = NativeRunning{std::move(ready->spec), phase};
     cache_running_policy();
     if (!check_abort_or_projection(engine, NativeFailureOperation::Begin)) return false;
-    if (phase == NativeRunPhase::Batch && !check_sigterm_abort(engine, false)) return false;
+    if (!check_sigterm_abort(engine, false)) return false;
     // The host's opaque state is dropped here: after the final pre-host check has
     // passed and before the run-begin callback, so state the host adopts from
     // on_native_run_begin or later survives this run. A begin that returns before
@@ -3246,6 +3275,7 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
         }
         in_callback_ = false;
         in_run_begin_ = false;
+        if (!check_sigterm_abort(engine, true)) return false;
         if (!check_abort_or_projection(engine, NativeFailureOperation::Callback)) return false;
     }
     // Declared higher-timeframe series are wired LAST, after the host's own
@@ -10720,7 +10750,7 @@ bool NativeExecutionConsumer::consume_confirmed_input(BacktestEngine& engine, co
         return false;
     }
     processing_input_ = false;
-    return !failed();
+    return check_sigterm_abort(engine, true) && !failed();
 }
 
 void NativeExecutionConsumer::pump_batch(BacktestEngine& engine, const Bar* bars, int n) {
@@ -11180,6 +11210,7 @@ bool NativeExecutionConsumer::stream_push_bar(BacktestEngine& engine, const Bar&
             if (!consume_confirmed_input(engine, bar, next_interval_index_, false)) return false;
         }
         select_input_mode(InputMode::ConfirmedBars);
+        if (!check_sigterm_abort(engine, true)) return false;
         if (!check_abort_or_projection(engine, NativeFailureOperation::Input)) return false;
         return !failed();
     } catch (const std::exception& e) {
@@ -11575,7 +11606,7 @@ bool NativeExecutionConsumer::deliver_tick(BacktestEngine& engine, const TradeTi
         has_tick_sequence_ = true;
     }
     processing_input_ = false;
-    return !failed();
+    return check_sigterm_abort(engine, true) && !failed();
 }
 
 bool NativeExecutionConsumer::stream_push_tick(BacktestEngine& engine, const TradeTick& tick) {
@@ -11591,7 +11622,8 @@ bool NativeExecutionConsumer::stream_push_tick(BacktestEngine& engine, const Tra
             PumpScope pump(*this);
             if (!deliver_tick(engine, tick)) return false;
         }
-        return check_abort_or_projection(engine, NativeFailureOperation::Input);
+        return check_sigterm_abort(engine, true)
+            && check_abort_or_projection(engine, NativeFailureOperation::Input);
     } catch (const std::exception& e) {
         processing_input_ = false;
         fail_from_exception(engine, NativeFailureOperation::Input, e);
@@ -11616,6 +11648,7 @@ bool NativeExecutionConsumer::stream_push_ticks(BacktestEngine& engine, const Tr
             PumpScope pump(*this);
             for (int i = 0; i < n; ++i) {
                 if (!deliver_tick(engine, ticks[i])) return false;
+                if (!check_sigterm_abort(engine, true)) return false;
                 if (!check_abort(engine, NativeFailureOperation::Input)) return false;
             }
         }
@@ -11671,6 +11704,7 @@ bool NativeExecutionConsumer::stream_advance_time(BacktestEngine& engine, int64_
             }
         }
         if (!check_abort_or_projection(engine, NativeFailureOperation::Stream)) return false;
+        if (!check_sigterm_abort(engine, true)) return false;
         raise_floor(timestamp_ms);
         return !failed();
     } catch (const std::exception& e) {

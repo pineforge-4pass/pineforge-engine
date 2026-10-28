@@ -41,7 +41,7 @@
  *     pf_report_scratch_arena_stats, strategy_require_report_scratch_arena_v1,
  *     strategy_report_sink_diagnostics_v1,
  *     pf_run_abort_install_sigterm_v1, pf_run_abort_requested_v1,
- *     pf_run_abort_restore_sigterm_v1 — the
+ *     pf_run_abort_restore_sigterm_v1, pf_run_sandbox_enter_v1 — the
  *     authoritative list is EXPECTED_RUNTIME in scripts/check_c_abi_runtime.py (CI). Other
  *     `extern "C"` symbols listed in pineforge.h (strategy_create,
  *     run_backtest, etc.) are emitted per-compiled-strategy by the
@@ -58,9 +58,11 @@
 #include <pineforge/engine.hpp>
 #include <pineforge/native_host.hpp>
 #include <pineforge/run_failure.hpp>
+#include <pineforge/run_sandbox.hpp>
 #include <pineforge/detail/scratch_arena.hpp>
 #include <pineforge/bar.hpp>
 #include <pineforge/magnifier.hpp>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <cerrno>
@@ -91,6 +93,8 @@ int native_selected_window_counts_v1(const BacktestEngine*, pf_selected_window_c
 namespace {
 
 volatile sig_atomic_t run_sigterm_stop = 0;
+static_assert(ATOMIC_INT_LOCK_FREE == 2, "sandbox abort ingress must be signal-safe");
+std::atomic<unsigned> run_sandbox_stop{0};
 struct sigaction previous_sigterm {};
 bool sigterm_installed = false;
 
@@ -353,11 +357,21 @@ static_assert(static_cast<int>(pineforge::MagnifierDistribution::BACK_LOADED)  =
 
 namespace pineforge {
 bool run_sigterm_requested() noexcept {
-    return sigterm_installed && run_sigterm_stop != 0;
+    return run_sandbox_abort_requested() || (sigterm_installed && run_sigterm_stop != 0);
+}
+void run_abort_request_sandbox() noexcept {
+    run_sandbox_stop.store(1, std::memory_order_release);
+}
+bool run_sandbox_abort_requested() noexcept {
+    return run_sandbox_stop.load(std::memory_order_acquire) != 0;
 }
 } // namespace pineforge
 
 extern "C" {
+
+PF_API int pf_run_sandbox_enter_v1(const pf_run_sandbox_config_v1* config) {
+    return pineforge::run_sandbox_enter(config);
+}
 
 PF_API int pf_run_abort_install_sigterm_v1(void) {
     // The caller blocks SIGTERM across installation. Repeated installation

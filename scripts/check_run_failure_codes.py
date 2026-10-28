@@ -329,8 +329,29 @@ def ordered_codes(catalog: dict) -> list[str]:
     return released + additions
 
 
+def numbered_codes(catalog: dict) -> dict[int, str]:
+    # main already assigned 65..69. Same-release alphabetical insertion must
+    # not move those IDs. CR150 reserves 70..73 for concurrent lane additions;
+    # sandbox is explicitly assigned 74 by the campaign brief.
+    fixed = RELEASED_V163_CODES + (
+        "report_mode_unsupported", "report_sink_failed",
+        "scratch_capacity_exceeded", "scratch_configuration_invalid", "scratch_io_failed",
+    )
+    codes = catalog["codes"]
+    assigned = {number: name for number, name in enumerate(fixed, 1) if name in codes}
+    if "sandbox_violation" in codes:
+        assigned[74] = "sandbox_violation"
+    remaining = [name for name in ordered_codes(catalog) if name not in assigned.values()]
+    number = 1
+    for name in remaining:
+        while number in assigned:
+            number += 1
+        assigned[number] = name
+    return dict(sorted(assigned.items()))
+
+
 def render_codes_header(catalog: dict) -> str:
-    names = ordered_codes(catalog)
+    names = numbered_codes(catalog)
     lines = [HEADER_BANNER, "#pragma once\n", "#include <cstdint>\n",
              "namespace pineforge {\n",
              "// The closed run-failure vocabulary (run_failure_codes.json),",
@@ -338,10 +359,10 @@ def render_codes_header(catalog: dict) -> str:
              "// wire: the C getters answer with the names.",
              "enum class RunFailureCode : std::uint16_t {",
              "    none = 0,"]
-    for number, name in enumerate(names, 1):
+    for number, name in names.items():
         lines.append(f"    {name} = {number},")
     lines += ["};", "",
-              f"inline constexpr std::uint16_t kRunFailureCodeCount = {len(names) + 1};", "",
+              f"inline constexpr std::uint16_t kRunFailureCodeCount = {max(names, default=0) + 1};", "",
               "}  // namespace pineforge", ""]
     return "\n".join(lines)
 
@@ -351,7 +372,7 @@ def cpp_string(value: str) -> str:
 
 
 def render_registry(catalog: dict) -> str:
-    names = ordered_codes(catalog)
+    names = numbered_codes(catalog)
     values: list[str] = []
     args_rows: list[str] = []
     code_rows: list[str] = []
@@ -371,7 +392,11 @@ def render_registry(catalog: dict) -> str:
                 f"{'true' if arg.get('optional') else 'false'}, {first_value}, "
                 f"{len(values) - first_value}}},")
         arg_ranges[name] = first_arg, len(args_rows) - first_arg
-    for name in names:
+    for number in range(1, max(names, default=0) + 1):
+        name = names.get(number)
+        if name is None:
+            code_rows.append('    {"", RunFailureClass::engine_fault, false, 0, 0},')
+            continue
         entry = catalog["codes"][name]
         first_arg, arg_count = arg_ranges[name]
         code_rows.append(
@@ -390,7 +415,7 @@ def render_registry(catalog: dict) -> str:
               '    {"", RunFailureClass::engine_fault, false, 0, 0},']
     lines += code_rows
     lines += ["};", "",
-              f"static_assert(sizeof(kRegistryCodes) / sizeof(kRegistryCodes[0]) == {len(names) + 1},",
+              f"static_assert(sizeof(kRegistryCodes) / sizeof(kRegistryCodes[0]) == {max(names, default=0) + 1},",
               '              "the registry must have one row per RunFailureCode");', ""]
     return "\n".join(lines)
 
@@ -724,6 +749,18 @@ def self_test() -> int:
         },
     }
     failures = []
+    numeric = {"codes": {name: {"since": "1.7.0"}
+                        for name in RELEASED_V163_CODES + (
+                            "report_mode_unsupported", "report_sink_failed",
+                            "scratch_capacity_exceeded", "scratch_configuration_invalid",
+                            "scratch_io_failed", "sandbox_violation",
+                            "lane_a", "lane_b", "lane_c", "run_budget_exceeded")}}
+    numbered = numbered_codes(numeric)
+    if (numbered.get(65) != "report_mode_unsupported"
+            or numbered.get(69) != "scratch_io_failed"
+            or numbered.get(74) != "sandbox_violation"
+            or set(numbered) != set(range(1, 75))):
+        failures.append("CR150 numbering changed assigned IDs or lost reserved lane slots")
     if validate_catalog(good, canonical(good)):
         failures.append("a valid catalog was refused: " + repr(validate_catalog(good)))
     bad = json.loads(json.dumps(good))

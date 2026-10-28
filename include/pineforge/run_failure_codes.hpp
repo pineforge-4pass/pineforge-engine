@@ -82,8 +82,10 @@ enum class RunFailureCode : std::uint16_t {
     scratch_capacity_exceeded = 67,
     scratch_configuration_invalid = 68,
     scratch_io_failed = 69,
+    // 70..73 belong to concurrent CR150 lanes; supervisor supplies their rows.
+    sandbox_violation = 74,
 };
 
-inline constexpr std::uint16_t kRunFailureCodeCount = 70;
+inline constexpr std::uint16_t kRunFailureCodeCount = 75;
 
 }  // namespace pineforge
