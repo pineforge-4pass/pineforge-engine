@@ -14519,7 +14519,8 @@
    "symbol": "new:uint64_t",
    "scope": [
     "namespace pineforge #1",
-    "void BacktestEngine :: fill_report ( ReportC * out ) const try #1",
+    "void BacktestEngine :: fill_report ( ReportC * out ) const #1",
+    "try #1",
     "if ( report_mode_ = = ReportMode :: FULL ) #1",
     "else #1"
    ],
@@ -17338,6 +17339,34 @@
     "namespace pineforge #1",
     "inline namespace engine_script_run_v19 #1",
     "void NativeExecutionConsumer :: note_failure_record ( BacktestEngine & engine , std :: string text , RunFailureValue value ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "text = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
+   "symbol": "last_error_",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v19 #1",
+    "void NativeExecutionConsumer :: latch_report_failure ( BacktestEngine & engine , const std :: exception * error ) noexcept #1",
+    "try #1",
+    "try #1"
+   ],
+   "cls": "assign",
+   "spelling": "last_error_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
+   "symbol": "text",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v19 #1",
+    "void NativeExecutionConsumer :: latch_report_failure ( BacktestEngine & engine , const std :: exception * error ) noexcept #1",
+    "try #1",
+    "try #1"
    ],
    "cls": "assign",
    "spelling": "text = . . .",
@@ -24174,6 +24203,18 @@
   },
   {
    "file": "src/report_sink_writer.cpp",
+   "symbol": "private_path",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report_sink #1",
+    "struct LineWriter :: State #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/report_sink_writer.cpp",
    "symbol": "path",
    "scope": [
     "namespace pineforge #1",
@@ -24197,6 +24238,142 @@
    "cls": "temp",
    "spelling": "std :: string",
    "ordinal": 1
+  },
+  {
+   "file": "src/report_sink_writer.cpp",
+   "symbol": "private_path",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report_sink #1",
+    "struct LineWriter :: State #1",
+    "void open_private ( ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "private_path = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/report_sink_writer.cpp",
+   "symbol": "private_path",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report_sink #1",
+    "struct LineWriter :: State #1",
+    "void open_private ( ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "private_path . assign ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/report_sink_writer.cpp",
+   "symbol": "private_path",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report_sink #1",
+    "struct LineWriter :: State #1",
+    "void open_private ( ) #1"
+   ],
+   "cls": "append",
+   "spelling": "private_path + = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/report_sink_writer.cpp",
+   "symbol": "private_path",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report_sink #1",
+    "struct LineWriter :: State #1",
+    "void open_private ( ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "private_path . reserve ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/report_sink_writer.cpp",
+   "symbol": "private_path",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report_sink #1",
+    "struct LineWriter :: State #1",
+    "void open_private ( ) #1",
+    "+ + attempt ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "private_path . resize ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/report_sink_writer.cpp",
+   "symbol": "private_path",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report_sink #1",
+    "struct LineWriter :: State #1",
+    "void open_private ( ) #1",
+    "+ + attempt ) #1"
+   ],
+   "cls": "append",
+   "spelling": "private_path + = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/report_sink_writer.cpp",
+   "symbol": "private_path",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report_sink #1",
+    "struct LineWriter :: State #1",
+    "void open_private ( ) #1",
+    "+ + attempt ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "private_path . append ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/report_sink_writer.cpp",
+   "symbol": "private_path",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report_sink #1",
+    "struct LineWriter :: State #1",
+    "void open_private ( ) #1",
+    "+ + attempt ) #1"
+   ],
+   "cls": "append",
+   "spelling": "private_path + = . . .",
+   "ordinal": 2
+  },
+  {
+   "file": "src/report_sink_writer.cpp",
+   "symbol": "private_path",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report_sink #1",
+    "struct LineWriter :: State #1",
+    "void open_private ( ) #1",
+    "+ + attempt ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "private_path . append ( . . . )",
+   "ordinal": 2
+  },
+  {
+   "file": "src/report_sink_writer.cpp",
+   "symbol": "private_path",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report_sink #1",
+    "struct LineWriter :: State #1",
+    "void open_private ( ) #1",
+    "+ + attempt ) #1"
+   ],
+   "cls": "append",
+   "spelling": "private_path + = . . .",
+   "ordinal": 3
   },
   {
    "file": "src/report_sink_writer.cpp",

@@ -638,13 +638,13 @@ a host reacts to its own execution and may submit again. A request born there,
 mid-bar on a continuous segment, is eligible on the **remaining path suffix** of
 that segment — the birth is admitted at the current cursor and the geometric
 search then sees only the unconsumed suffix (`born_on_remaining_path`,
-`native_execution_consumer.cpp:6873-6877`). Requests accepted before the
+`native_execution_consumer.cpp:6935-6939`). Requests accepted before the
 segment, and discrete points, keep the ordinary birth gate above.
 
 `on_native_bar_open` fires at the modeled opening, before that point's matching
-pass (`native_execution_consumer.cpp:8492`). **Lookahead warning:** the
+pass (`native_execution_consumer.cpp:8550`). **Lookahead warning:** the
 `Bar` it receives is the *complete* script bar — the consumer has already set
-`engine.current_bar_ = open_view` (`native_execution_consumer.cpp:8486`), the
+`engine.current_bar_ = open_view` (`native_execution_consumer.cpp:8544`), the
 complete bar unless the spec asks for `NativeOpenBarView::OpenOnly` — so its
 high, low and close are the finished bar's, not what is known at the open. A
 host that must decide on open-only information reads
@@ -2106,22 +2106,22 @@ drawdown/run-up walk, and metrics computed over a real series.
 The per-bar **broker-state hash** is a row of that same report, so
 `KernelRecorded` records it too. It stays behind the recording switch it
 always had — `set_broker_state_hash_recording(true)`
-(`engine.hpp:2530`; C: `strategy_set_broker_state_hash_recording`), off by
+(`engine.hpp:2532`; C: `strategy_set_broker_state_hash_recording`), off by
 default, set while no run is active — because each row is a full
 `broker_state_hash()` over the lots and the closed rows (since v19 a row costs
 the live state, not the run's length: the closed rows enter through a running
 digest). With the switch on,
 one row follows each point, after the extremes that point just folded
-(`record_script_report_point`, `native_execution_consumer.cpp:9397`), so
+(`record_script_report_point`, `native_execution_consumer.cpp:9455`), so
 
 ```text
 broker_state_hash_len == equity_curve_len == script_bars_processed
 ```
 
 on a completed run in batch and across a stream's warmup and realtime legs
-alike. A Failed or Aborted run may expose only a recorded prefix, whose last
-row need not equal the final scalar. That length identity is the only part of
-the array that holds across drivings.
+alike. After a fault, report readers expose no recorded rows. A deliberate
+abort may retain a shorter prefix, whose last row need not equal the scalar.
+That length identity is the only part of the array that holds across drivings.
 
 **What a row is, and what it is for.** A row is the run's *continuation
 identity* at that bar, not its trade outcome. `broker_state_hash()` is
@@ -3086,7 +3086,7 @@ Only completed buckets are published, so this recipe has no lookahead by
 construction. It is the same class the kernel's own subscription evaluator
 aggregates with, and the one the kernel's `script_bucket_completions` query
 feeds when the Pine scheduler asks how its input span buckets
-(`ScriptBucketCursor` `native_execution_consumer.cpp:14223`). What it does
+(`ScriptBucketCursor` `native_execution_consumer.cpp:14281`). What it does
 **not** give you is what a
 declared subscription does: an `authoritative_bars` feed, the `gaps` and
 `lookahead` delivery rules, the lazy-seal chronology, a C spelling, and the
@@ -4024,23 +4024,23 @@ earlier, fails the lifecycle there, and leaves the high-water where it was. A
 batch begin over a live stream, or a begin made from a callback, is a contract
 failure that latches `Failed` (`Contract`, `Begin`; a generated source host,
 whose preparation calls `configure` first, latches `Contract`, `Configure`),
-so the stream cannot be driven on after it, although its snapshot stays
-readable. A repeated `stream_begin` on a stream that is already realtime is the
+so the stream cannot be driven on after it, and its report readers return
+empty. A repeated `stream_begin` on a stream that is already realtime is the
 exception: it is refused (`stream is already realtime`) before the begin is
-admitted, latches nothing, and leaves the stream `Running`. A begun run publishes its `Completed`
-report or partial rows on failure, except when `report_sink_failed` is latched: every later read
-yields the empty report (every array `NULL`, every count 0), also after a sink failure at finish time
-following an otherwise successful run. The run-failure latch retains status, code, arguments and message.
+admitted, latches nothing, and leaves the stream `Running`. A begun run publishes its completed
+report or an empty report after any fault: every array is `NULL`, every count/metric is zero.
+This also applies to later reads after an assembly or sink-finish fault following run success.
+Deliberate aborts retain diagnostic reports. The latch retains the original status, code, arguments and message.
 `strategy_native_run_v1` answers `PF_NATIVE_OK` only for a run that call carried to `Completed`
 (the consumed run-number high-water moved) and `PF_NATIVE_E_RUN_FAILED` otherwise; the reason stays in
 `strategy_get_last_error`, `strategy_get_last_error_code`, `strategy_get_last_error_args` and
 `strategy_last_run_status` (1). A `Completed` handle runs again after a successful
 `strategy_configure_native_v1`. `strategy_stream_fill_report` is the explicit snapshot: the same
-function asked for the rows' own owner, subject to the same sink-failure gate. A live stream's rows
-survive a batch call refused over it, which reads empty, and the batch reader stays empty after
-the snapshot until the next run call. A run call made from inside a running run's callback reads
-empty the same way, while the outer run publishes its own rows when it ends, subject to
-the same `report_sink_failed` exception.
+function asked for the rows' own owner, subject to the same fault gate. An unfaulted live stream
+keeps its snapshots after a repeated `stream_begin` refusal that leaves it `Running`.
+A batch begin over a live stream is a durable contract fault, so both report readers return empty.
+Snapshot reads restore the batch reader's ownership gate on normal return and on exceptions.
+Selected-window fences and retained internal execution/diagnostic state keep their existing rules.
 
 **Commands.** `strategy_native_submit_v1`, `_replace_v1` / `_replace_ext_v1`,
 `_cancel_v1`, `_cancel_all_v1`, `_cancel_where_v1` and `_execute_current_v1`

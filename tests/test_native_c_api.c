@@ -10161,13 +10161,102 @@ static void check_px_native_attempt(void) {
     fflush(stdout);
 }
 
-/* A genuine host that produces a trade and then fails: the twin arm's entry
- * and flatten close one round trip, then the callback refuses five
- * calculations after the exit. With a non-NULL out the failed call keeps its
- * own partial report (the closed trade and the bar counters of the run that
- * began, as before the attempt gate), and the next call on the Failed handle is
- * refused without beginning: E_RUN_FAILED and the empty report, never the failed
- * run's rows. Defined fields only. */
+static void check_empty_fault_trade_stats(const pf_trade_stats_t* stats) {
+    const double values[] = {
+        stats->percent_profitable, stats->net_profit, stats->net_profit_pct,
+        stats->gross_profit, stats->gross_profit_pct, stats->gross_loss, stats->gross_loss_pct,
+        stats->profit_factor, stats->avg_trade, stats->avg_trade_pct, stats->avg_win,
+        stats->avg_win_pct, stats->avg_loss, stats->avg_loss_pct, stats->ratio_avg_win_avg_loss,
+        stats->largest_win, stats->largest_win_pct, stats->largest_loss, stats->largest_loss_pct,
+        stats->commission_paid, stats->expectancy, stats->avg_bars_in_trade,
+        stats->avg_bars_in_wins, stats->avg_bars_in_losses
+    };
+    size_t i;
+    CHECK(stats->num_trades == 0 && stats->num_wins == 0 && stats->num_losses == 0
+              && stats->num_even == 0 && stats->max_consecutive_wins == 0
+              && stats->max_consecutive_losses == 0,
+          "faulted report published trade-statistic counts");
+    for (i = 0; i < sizeof(values) / sizeof(values[0]); ++i)
+        CHECK(values[i] == 0 && !signbit(values[i]), "faulted report published trade metrics");
+}
+
+static void check_empty_fault_report(const pf_report_t* report) {
+    const pf_equity_stats_t* equity = &report->metrics.equity;
+    const double values[] = {
+        equity->max_equity_drawdown, equity->max_equity_drawdown_pct,
+        equity->max_equity_runup, equity->max_equity_runup_pct,
+        equity->buy_hold_return, equity->buy_hold_return_pct,
+        equity->sharpe_monthly, equity->sortino_monthly, equity->sharpe_bar, equity->sortino_bar,
+        equity->cagr, equity->calmar, equity->recovery_factor,
+        equity->time_in_market_pct, equity->open_pl
+    };
+    size_t i;
+    CHECK(report->total_trades == 0 && report->trades_len == 0 && report->trades == NULL,
+          "faulted report published trades");
+    CHECK(report->net_profit == 0, "faulted report published profit");
+    CHECK(report->equity_curve == NULL && report->equity_curve_len == 0,
+          "faulted report published an equity curve");
+    CHECK(report->broker_state_hash == NULL && report->broker_state_hash_len == 0,
+          "faulted report published hashes");
+    CHECK(report->security_diag == NULL && report->security_diag_len == 0,
+          "faulted report published security diagnostics");
+    CHECK(report->trace == NULL && report->trace_len == 0
+              && report->trace_names == NULL && report->trace_names_len == 0,
+          "faulted report published trace data");
+    CHECK(report->input_bars_processed == 0 && report->script_bars_processed == 0,
+          "faulted report published bar counters");
+    CHECK(report->security_feeds_total == 0 && report->security_complete_total == 0
+              && report->security_partial_total == 0 && report->magnifier_sub_bars_total == 0
+              && report->magnifier_sample_ticks_total == 0,
+          "faulted report published diagnostic totals");
+    CHECK(report->input_tf_seconds == 0 && report->script_tf_seconds == 0
+              && report->script_tf_ratio == 0 && report->needs_aggregation == 0
+              && report->bar_magnifier_enabled == 0,
+          "faulted report published timeframe metadata");
+    check_empty_fault_trade_stats(&report->metrics.all);
+    check_empty_fault_trade_stats(&report->metrics.longs);
+    check_empty_fault_trade_stats(&report->metrics.shorts);
+    for (i = 0; i < sizeof(values) / sizeof(values[0]); ++i)
+        CHECK(values[i] == 0 && !signbit(values[i]), "faulted report published equity metrics");
+}
+
+/* Execution events and the diagnostic bar counter survive report suppression. */
+static void check_failed_trade_progress(const twin_state* state) {
+    pf_native_event_v1 events[PF_TWIN_MAX_EVENTS];
+    uint64_t after_ordinal = 0;
+    int written;
+    int opened = 0;
+    int closed = 0;
+    int i;
+    memset(events, 0, sizeof(events));
+    for (;;) {
+        written = strategy_native_events_v1(state->host, after_ordinal,
+                                            events, PF_TWIN_MAX_EVENTS);
+        CHECK(written >= 0 && written <= PF_TWIN_MAX_EVENTS, "failed run event read failed");
+        if (written <= 0 || written > PF_TWIN_MAX_EVENTS) break;
+        for (i = 0; i < written; ++i) {
+            if (events[i].kind != PF_NATIVE_EVENT_APPLIED) continue;
+            if (events[i].incarnation == state->entry
+                && events[i].opened_units == 1.0 && events[i].closed_units == 0.0) ++opened;
+            if (events[i].incarnation == state->exit
+                && events[i].closed_units == 1.0 && events[i].opened_units == 0.0) ++closed;
+        }
+        CHECK(events[written - 1].ordinal > after_ordinal, "event page did not advance its cursor");
+        if (events[written - 1].ordinal <= after_ordinal) break;
+        after_ordinal = events[written - 1].ordinal;
+    }
+    CHECK(after_ordinal > 0, "failed run lost its execution events");
+    CHECK_EQ_INT(opened, 1, "the entry did not open the real trade before the failure");
+    CHECK_EQ_INT(closed, 1, "the flatten did not close the real trade before the failure");
+    CHECK_EQ_INT(state->calculations, PF_TWIN_EXIT_BAR + 5,
+                 "the callback did not stop at the intended failure");
+    CHECK(strategy_script_bars_processed(state->host) > PF_TWIN_EXIT_BAR,
+          "the failed run lost its diagnostic bar progress");
+}
+
+/* The twin arm closes one real round trip, then the callback refuses five
+ * calculations after the exit. The failed call and a later refused reuse both
+ * return an empty report; execution events still prove the trade occurred. */
 static int partial_trade_then_fail_on_bar(void* user, const pf_bar_t* bar,
                                           const pf_native_decision_v1* at) {
     twin_state* state = (twin_state*)user;
@@ -10191,9 +10280,9 @@ static void check_started_then_failed_report(void) {
     table = blank_callbacks(&state);
     table.on_bar = partial_trade_then_fail_on_bar;
     state.host = strategy_native_host_create_v1(&table);
-    CHECK(state.host != NULL, "partial-report host create failed");
+    CHECK(state.host != NULL, "faulted-report host create failed");
     if (!state.host) return;
-    CHECK_EQ_INT(strategy_configure_native_v1(state.host, &spec), 0, "partial-report configure");
+    CHECK_EQ_INT(strategy_configure_native_v1(state.host, &spec), 0, "faulted-report configure");
     bars = pf_twin_bars(&n);
     CHECK(n > PF_TWIN_EXIT_BAR + 5, "the twin bars end before the failing calculation");
     CHECK_EQ_INT(strategy_native_run_v1(state.host, bars, n, &report), PF_NATIVE_E_RUN_FAILED,
@@ -10203,12 +10292,18 @@ static void check_started_then_failed_report(void) {
     CHECK_EQ_INT(strategy_native_state_v1(state.host, &native_state), PF_NATIVE_OK,
                  "failed-state read");
     CHECK_EQ_INT(native_state.lifecycle, PF_NATIVE_LIFECYCLE_FAILED, "lifecycle is not Failed");
+    CHECK_EQ_INT(native_state.failure_code, PF_NATIVE_FAILURE_CALLBACK_EXCEPTION,
+                 "the callback refusal lost its durable cause");
+    CHECK_EQ_INT(strategy_last_run_status(state.host), 1, "the callback refusal lost its status");
+    CHECK(strcmp(strategy_get_last_error_code(state.host), "engine_unclassified_error") == 0,
+          "the callback refusal changed its typed code");
+    CHECK(strcmp(strategy_get_last_error_args(state.host), "{}") == 0,
+          "the callback refusal changed its arguments");
+    CHECK(strcmp(strategy_get_last_error(state.host), "native C callback refused in on_bar") == 0,
+          "the callback refusal changed its text");
     CHECK_EQ_INT(state.command_error, 0, "a command returned an error before the failure");
-    CHECK_EQ_INT(report.total_trades, 1, "the partial report lost the closed trade");
-    CHECK_EQ_INT(report.trades_len, 1, "the partial report lost the trade row");
-    CHECK(report.trades != NULL, "the partial report has no trade array");
-    CHECK(report.script_bars_processed > PF_TWIN_EXIT_BAR,
-          "the partial report lost the bar counters");
+    check_failed_trade_progress(&state);
+    check_empty_fault_report(&report);
     strategy_native_report_free_v1(&report);
 
     /* Indeterminate bytes in, the empty report out: overwritten, never freed. */
@@ -10220,6 +10315,19 @@ static void check_started_then_failed_report(void) {
     CHECK(reuse.trades == NULL, "the refused call handed out the failed run's trade array");
     CHECK_EQ_INT(reuse.script_bars_processed, 0,
                  "the refused call kept the failed run's bar counters");
+    check_empty_fault_report(&reuse);
+    CHECK_EQ_INT(strategy_native_state_v1(state.host, &native_state), PF_NATIVE_OK,
+                 "reused failed-state read");
+    CHECK_EQ_INT(native_state.lifecycle, PF_NATIVE_LIFECYCLE_FAILED,
+                 "the refused reuse changed the failed lifecycle");
+    CHECK_EQ_INT(native_state.failure_code, PF_NATIVE_FAILURE_CALLBACK_EXCEPTION,
+                 "the refused reuse changed the durable callback cause");
+    CHECK_EQ_INT(strategy_last_run_status(state.host), 1, "the refused reuse changed run status");
+    CHECK(strcmp(strategy_get_last_error_code(state.host), "engine_unclassified_error") == 0
+              && strcmp(strategy_get_last_error_args(state.host), "{}") == 0
+              && strcmp(strategy_get_last_error(state.host),
+                        "native C callback refused in on_bar") == 0,
+          "the refused reuse changed the original callback diagnostic");
     strategy_native_report_free_v1(&reuse);
     strategy_native_host_free(state.host);
 }
@@ -10229,12 +10337,10 @@ static void check_started_then_failed_report(void) {
  * after the flatten (the round trip is closed by then), over an output that
  * holds indeterminate bytes. The engine refuses a begin while the host runs (a
  * contract failure), so the nested call began nothing: it answers E_RUN_FAILED
- * with the empty report, overwritten and never freed. The outer run did begin.
- * It ends Failed (the nested refusal latched the lifecycle; the lifecycle is
- * read here, never assumed Running) and still publishes its OWN partial rows:
- * the closed trade stays. Two separate effects of the one nested exit are
- * observed: the nested caller's report is empty, and the outer call keeps its
- * right to publish. Defined fields only. */
+ * with the empty report, overwritten and never freed. The outer run also
+ * returns empty after that fault. Its retained execution events independently
+ * prove the closed trade, and its durable lifecycle keeps the contract cause.
+ * Defined fields only. */
 typedef struct nested_report_state {
     twin_state      twin;       /* the twin callback's own state, first member */
     const pf_bar_t* bars;
@@ -10284,6 +10390,7 @@ static void check_nested_run_report_ownership(void) {
                  "a run whose callback made a nested run did not fail");
     CHECK_EQ_INT(state.fired, 1, "the nested run was never made");
     CHECK_EQ_INT(state.twin.command_error, 0, "a command returned an error before the nested run");
+    check_failed_trade_progress(&state.twin);
 
     /* The nested call: refused without beginning, the empty report. */
     CHECK_EQ_INT(state.nested_rc, PF_NATIVE_E_RUN_FAILED, "the nested run was not refused");
@@ -10295,19 +10402,18 @@ static void check_nested_run_report_ownership(void) {
     CHECK_EQ_INT(state.nested.script_bars_processed, 0,
                  "the nested call kept the outer run's bar counters");
     CHECK(state.nested.equity_curve == NULL, "the nested call handed out an equity curve");
+    check_empty_fault_report(&state.nested);
     strategy_native_report_free_v1(&state.nested);
 
-    /* The outer call: it began, so its partial rows are its own. */
+    /* The outer call keeps the fault and execution progress, with empty results. */
     px_read_state(&after, state.twin.host);
     CHECK_EQ_INT(after.rc, PF_NATIVE_OK, "outer state read");
     CHECK_EQ_INT(after.lifecycle, PF_NATIVE_LIFECYCLE_FAILED, "the outer lifecycle is not Failed");
     CHECK_EQ_INT(after.failure_code, PF_NATIVE_FAILURE_CONTRACT,
                  "the nested refusal did not latch a contract failure");
-    CHECK_EQ_INT(report.total_trades, 1, "the outer report lost the closed trade");
-    CHECK_EQ_INT(report.trades_len, 1, "the outer report lost the trade row");
-    CHECK(report.trades != NULL, "the outer report has no trade array");
-    CHECK(report.script_bars_processed > PF_TWIN_EXIT_BAR,
-          "the outer report lost the bar counters");
+    CHECK_EQ_INT(strategy_last_run_status(state.twin.host), 1,
+                 "the nested refusal lost its failed status");
+    check_empty_fault_report(&report);
     strategy_native_report_free_v1(&report);
     strategy_native_host_free(state.twin.host);
 }

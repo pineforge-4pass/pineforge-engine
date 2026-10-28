@@ -8,6 +8,7 @@
 #include <pineforge/native_c_api.h>
 #include <pineforge/pineforge.h>
 #include <pineforge/report_sink.h>
+#include <pineforge/report_sink_writer.hpp>
 #include <pineforge/run_failure.hpp>
 
 #include <array>
@@ -53,6 +54,28 @@ struct Pipe {
         for (const int fd : descriptors) if (fd >= 0) ::close(fd);
     }
 };
+
+Failure writer_failure(const Curve& curve) {
+    Pipe pipe;
+    const pf_report_sink_fd_v1 sink{sizeof sink, 1, pipe.descriptors[1], "nonfinite-precedence"};
+    pineforge::report_sink::LineWriter writer(sink);
+    writer.write_header({false, false, false, 0, 0});
+    std::size_t accepted = 0;
+    try {
+        for (const auto& point : curve) {
+            writer.write_e(point);
+            ++accepted;
+        }
+    } catch (const std::exception& error) {
+        // Count successful writer calls independently of the faulted host's
+        // empty public receipt, so the earliest refused point stays pinned.
+        require(accepted == 1, "writer did not refuse the earliest nonfinite point");
+        const auto failure = pineforge::classify_run_failure(error);
+        require(failure.args != nullptr, "writer failure lost its arguments");
+        return {pineforge::run_failure_code_name(failure.code), *failure.args};
+    }
+    throw std::runtime_error("writer accepted the nonfinite curve");
+}
 
 // As in cabi_fd, use an inherited member pointer on the actual engine base;
 // never downcast the C host object to this access helper.
@@ -140,8 +163,10 @@ Failure fd_failure(const Curve& curve) {
     receipt.struct_size = sizeof receipt;
     receipt.version = 1;
     require(strategy_report_sink_receipt_v1(host.handle, &receipt) == 0, "receipt query failed");
-    require(receipt.count_e == 1 && receipt.complete == 0 && receipt.sha256_hex[0] == '\0',
-            "fd writer accepted the bad point or completed");
+    require(receipt.count_e == 0 && receipt.count_t == 0 && receipt.count_o == 0
+            && receipt.count_v == 0 && receipt.count_k == 0 && receipt.count_x == 0
+            && receipt.count_h == 0 && receipt.complete == 0 && receipt.sha256_hex[0] == '\0',
+            "faulted fd receipt published results or completed");
     pf_native_state_v1 state{};
     state.struct_size = static_cast<std::uint32_t>(sizeof state);
     require(strategy_native_state_v1(host.handle, &state) == PF_NATIVE_OK
@@ -180,14 +205,17 @@ void test_report_nonfinite_equity_precedence() {
     const auto folded = metric_failure([&] {
         (void)pineforge::metrics::finalize_equity_metrics(first, inputs, &ratios);
     });
+    const auto writer = writer_failure(curve);
     const auto sink = fd_failure(curve);
     require(array.code == "report_result_invalid" && folded.code == array.code
-            && sink.code == array.code, "routes disagree on failure code");
+            && writer.code == array.code && sink.code == array.code,
+            "routes disagree on failure code");
     require(array.args == "{\"field\":\"equity_curve.open_profit\",\"reason\":\"nonfinite\"}",
             "completed array lost final-open-profit precedence");
     require(folded.args == array.args, "completed fold changed field or reason");
     require(sink.args == "{\"field\":\"equity_curve.equity\",\"reason\":\"nonfinite\"}",
             "fd sink lost earliest-released-equity precedence");
+    require(writer.args == sink.args, "native fd route changed the writer's refusal");
     // Both exact argument assertions above also require the same nonfinite reason.
 }
 } // namespace

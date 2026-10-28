@@ -220,8 +220,8 @@ this revision adds no guessed row, bar or distinct-key limit.
 “Same” below means the identical value/bits from the same FULL execution,
 including NaNs, signed zero, undefined-statistic rules, selected presentation
 and terminal rows. Public and internal spellings differ for the security
-evaluation totals; both are listed. On failure the existing partial-report
-rules apply, with `complete=0`; no complete summary is inferred from a prefix.
+evaluation totals; both are listed. After a fault, payload and logical counts are zero, with
+`complete=0` and the original typed failure. Deliberate abort diagnostics keep their existing rules.
 
 The FULL column describes retained sequences. The equity and optional-sequence
 controls above can omit their respective resident histories in FULL: the
@@ -557,17 +557,17 @@ The trailer has `trailer` (`"pf-report-sink"`), `version` (`1`), `counts` and
 digest. Before preparing the JSON, the harness checks the entire file,
 `run_id`, and the engine's complete sink receipt, including trade count.
 
-The engine creates or truncates `PATH` when it writes the header
-(`O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC`); the harness passes the named path
-without first creating a temporary sink. The named file persists for the
-caller after report/state cleanup. `--run-id` is an opaque caller identifier,
-not a generated ID. `--spill-dir DIR` supplies the engine's `scratch_dir` and
-the directory for one unlinked, prepared JSON document. The harness serializes
-and flushes that document before publishing any report bytes, and publishes
-after native cleanup succeeds. It creates no per-output column temporaries
-for this projection. `DIR` must be an existing writable directory; when
-omitted, it defaults to the system temporary directory. The named sink stays
-at `PATH`, independently of `DIR`.
+At begin the engine creates a unique `.pf-report-sink-*.in-progress` sibling
+of `PATH` (`O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC`, mode 0600 while writing).
+New paths stay 0600; replacement rwx bits are restored before the final sync.
+Header, windows and trailer go there; one sync and checked close precede rename.
+Failure, abandon or destruction removes the sibling and preserves any prior
+`PATH`. The completed named file persists after cleanup. `--run-id` is opaque.
+`--spill-dir DIR` supplies `scratch_dir` and the directory for one unlinked,
+prepared JSON document, serialized and flushed before report bytes publish
+after native cleanup. This projection creates no per-output column temporaries.
+`DIR` must exist and be writable; omitted, it is the system temporary directory.
+The sink's private sibling and final `PATH` stay in `PATH`'s writable parent.
 
 For any of `--report-sink`, `--run-id` or `--spill-dir`, embedded NUL or text
 that cannot encode as UTF-8 fails before library loading with

@@ -27,6 +27,50 @@ void require(bool condition, const std::string& message) {
     if (!condition) throw std::runtime_error(message);
 }
 
+void require_empty_report(const pineforge::ReportC& report) {
+    require(report.trades == nullptr && report.trades_len == 0 && report.total_trades == 0
+            && report.net_profit == 0, "faulted report published trades or profit");
+    require(report.security_diag == nullptr && report.security_diag_len == 0
+            && report.trace == nullptr && report.trace_len == 0
+            && report.trace_names == nullptr && report.trace_names_len == 0
+            && report.equity_curve == nullptr && report.equity_curve_len == 0
+            && report.broker_state_hash == nullptr && report.broker_state_hash_len == 0,
+            "faulted report published an array");
+    require(report.input_bars_processed == 0 && report.script_bars_processed == 0
+            && report.security_feeds_total == 0 && report.security_eval_complete_total == 0
+            && report.security_eval_partial_total == 0 && report.magnifier_sub_bars_total == 0
+            && report.magnifier_sample_ticks_total == 0 && report.input_tf_seconds == 0
+            && report.script_tf_seconds == 0 && report.script_tf_ratio == 0
+            && report.needs_aggregation == 0 && report.bar_magnifier_enabled == 0,
+            "faulted report published diagnostics");
+    const pf_trade_stats_t* blocks[]{&report.metrics.all, &report.metrics.longs,
+                                    &report.metrics.shorts};
+    for (const auto* stats : blocks) {
+        require(stats->num_trades == 0 && stats->num_wins == 0 && stats->num_losses == 0
+                && stats->num_even == 0 && stats->max_consecutive_wins == 0
+                && stats->max_consecutive_losses == 0, "faulted report published trade counts");
+        const double values[]{
+            stats->percent_profitable, stats->net_profit, stats->net_profit_pct,
+            stats->gross_profit, stats->gross_profit_pct, stats->gross_loss, stats->gross_loss_pct,
+            stats->profit_factor, stats->avg_trade, stats->avg_trade_pct, stats->avg_win,
+            stats->avg_win_pct, stats->avg_loss, stats->avg_loss_pct, stats->ratio_avg_win_avg_loss,
+            stats->largest_win, stats->largest_win_pct, stats->largest_loss, stats->largest_loss_pct,
+            stats->commission_paid, stats->expectancy, stats->avg_bars_in_trade,
+            stats->avg_bars_in_wins, stats->avg_bars_in_losses};
+        for (double number : values)
+            require(number == 0 && !std::signbit(number), "faulted report published trade metrics");
+    }
+    const auto& equity = report.metrics.equity;
+    const double values[]{
+        equity.max_equity_drawdown, equity.max_equity_drawdown_pct,
+        equity.max_equity_runup, equity.max_equity_runup_pct,
+        equity.buy_hold_return, equity.buy_hold_return_pct,
+        equity.sharpe_monthly, equity.sortino_monthly, equity.sharpe_bar, equity.sortino_bar,
+        equity.cagr, equity.calmar, equity.recovery_factor, equity.time_in_market_pct, equity.open_pl};
+    for (double number : values)
+        require(number == 0 && !std::signbit(number), "faulted report published equity metrics");
+}
+
 struct Pipe {
     int descriptors[2]{-1, -1};
     Pipe() {
@@ -112,11 +156,16 @@ void fd_run(int field, double value, bool refuses) {
         ~Report() { pineforge::BacktestEngine::free_report(&value); }
     } report;
     bool threw = false;
+    int run_status = -1;
+    std::string run_error;
     pineforge::RunFailureValue carried;
     const char* exception_boundary = "after run (exception)";
     try {
         host.run(bars.data(), bar_count);
         fd_trace.record("after run");
+        run_status = host.last_run_status();
+        run_error = host.last_error();
+        carried = pineforge::run_failure_value_of(host);
         exception_boundary = "after fill_report (exception)";
         host.fill_report(&report.value);
         fd_trace.record("after fill_report");
@@ -141,7 +190,13 @@ void fd_run(int field, double value, bool refuses) {
     const auto bytes = pipe.drain();
     fd_trace.record("after draining reader");
     if (refuses) {
-        require(threw && host.last_run_status() == 1, "C++ run/capture did not report failure");
+        // run() already retained the execution fault. Report capture must
+        // return empty without throwing or rereading the poisoned point.
+        require(!threw && run_status == 1 && host.last_run_status() == 1,
+                "C++ run/capture changed the execution failure");
+        require_empty_report(report.value);
+        require(!run_error.empty() && host.last_error() == run_error,
+                "report capture changed the original error");
         require(host.callbacks == 2 && receipt.count_e == 0, "writer did not refuse the first E");
         const std::string expected = std::string("{\"field\":\"equity_curve.")
             + (field == 0 ? "equity" : "open_profit") + "\",\"reason\":\"nonfinite\"}";

@@ -3468,55 +3468,27 @@ PF_API int strategy_native_run_v1(pf_strategy_t s, const pf_bar_t* bars, int n,
          * were, so the lifecycle alone cannot tell it from a finished run: the
          * consumed run-number high-water can, because begin_ready moves it,
          * strictly upward, for every attempt that gets past admission. The
-         * report is decided by BacktestEngine::fill_report: the latest attempt's completed or
-         * partial rows publish unless report_sink_failed is latched, even at finish after run success.
-         * Later reads then give empty ReportC; status, code, arguments and message stay in the run-failure
-         * latch. A call that did not begin also reads empty. */
+         * report is decided by BacktestEngine::fill_report: a fault publishes
+         * an empty report and preserves the original typed failure. Deliberate
+         * aborts retain their diagnostic report. A call that did not begin
+         * also reads empty. */
         const std::uint64_t high_water = host->native_consumed_high_water();
         host->run(reinterpret_cast<const Bar*>(bars), n);
         if (out) {
-            // A failed execution may have a partial curve whose report metrics
-            // overflow. fill_report rethrows that execution's earlier typed
-            // failure, not R. Preserve its run-failed status rather than routing
-            // the rethrow through guarded()'s generic E_STATE exception case.
-            const bool failed = host->native_state().kind == pineforge::NativeLifecycleKind::Failed;
-            const auto earlier = pineforge::run_failure_value_of(*host);
             pineforge::ReportC local{};
             static_assert(sizeof(local) == sizeof(*out), "native report layouts must match");
             std::unique_ptr<pineforge::ReportC, decltype(&pineforge::BacktestEngine::free_report)>
                 cleanup(&local, &pineforge::BacktestEngine::free_report);
-            try {
-                host->fill_report(&local);
-            } catch (const std::exception& error) {
-                const auto carried = pineforge::classify_run_failure(error);
-                if (!failed && carried.code == pineforge::RunFailureCode::report_result_invalid) {
-                    // A completed execution with an invalid report answers
-                    // E_STATE with the recorded R and an empty, freeable out.
-                    // cleanup releases every allocation made before the throw.
-                    pineforge::note_run_failure(*host, error.what(), carried);
-                    return PF_NATIVE_E_STATE;
-                }
-                if (!failed || host->last_error().empty()
-                    || earlier.code == pineforge::RunFailureCode::none
-                    || dynamic_cast<const pineforge::RunFailureInfo*>(&error) == nullptr
-                    || carried.code != earlier.code || carried.args != earlier.args
-                    || host->last_error() != error.what()) {
-                    throw;
-                }
-                // Reached only for a handle already Failed whose rethrown failure equals the latch:
-                // publish the partial rows. A latched report_sink_failed never gets here (the report
-                // gate returns empty first; a finish-time sink failure rethrows past this branch).
-                // Publish the zero-initialized local: trade length counts only initialized rows; later
-                // arrays stay null. Overwrite a possibly uninitialized out without reading or freeing it.
-                std::memcpy(out, &local, sizeof(local));
-                (void)cleanup.release();
-                return PF_NATIVE_E_RUN_FAILED;
-            }
+            // Assembly owns and latches its failures. No catch may copy a
+            // partially assembled value into the C caller's empty output.
+            host->fill_report(&local);
             std::memcpy(out, &local, sizeof(local));
             (void)cleanup.release();
         }
         return host->native_state().kind == pineforge::NativeLifecycleKind::Completed
                 && host->native_consumed_high_water() > high_water
+                && host->last_run_status() == 0
+                && pineforge::run_failure_value_of(*host).code == pineforge::RunFailureCode::none
             ? PF_NATIVE_OK
             : PF_NATIVE_E_RUN_FAILED;
     });

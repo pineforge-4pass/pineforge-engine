@@ -2210,6 +2210,8 @@ public:
     // --- Even-trade count (strategy.eventrades) ---
     int eventrades() const { return eventrades_count_; }
 
+    // Publication only: retained execution and diagnostic rows are not erased.
+    bool report_publication_allowed() const noexcept;
     void fill_report(ReportC* out) const;
     static void free_report(ReportC* report);
 
@@ -2606,19 +2608,26 @@ public:
     // last_error() says which unless it holds a failed run's error, and a
     // success leaves it as it is. A change of the flag clears the record.
     bool set_outputs_enabled(bool on);
-    // The readers behind the C exports. While recording is off the record is
-    // empty and the counts are 0.
-    int output_series_count() const { return outputs_enabled_ ? outputs_slots_ : 0; }
-    int64_t output_bars_len() const { return static_cast<int64_t>(output_open_ms_.size()); }
+    // The readers behind the C exports. Faulted or unowned results are empty.
+    int output_series_count() const {
+        return report_publication_allowed() && outputs_enabled_ ? outputs_slots_ : 0;
+    }
+    int64_t output_bars_len() const {
+        return report_publication_allowed() ? static_cast<int64_t>(output_open_ms_.size()) : 0;
+    }
     bool output_bar_times_copy(int64_t from_bar, int64_t* open_ms, int64_t* close_ms,
                                int64_t capacity, int64_t* written) const;
     bool output_series_copy(int slot, int64_t from_bar, double* out, int64_t capacity,
                             int64_t* written) const;
-    int output_events_len() const { return static_cast<int>(output_events_.size()); }
+    int output_events_len() const {
+        return report_publication_allowed() ? static_cast<int>(output_events_.size()) : 0;
+    }
     const OutputEvent* output_event_at(int index) const;
     // Drops the queued events; rows, ordinals and the sequence stay.
     void output_events_clear();
-    int output_constants_count() const { return outputs_enabled_ ? outputs_constants_ : 0; }
+    int output_constants_count() const {
+        return report_publication_allowed() && outputs_enabled_ ? outputs_constants_ : 0;
+    }
     // NaN for na, for a value not written this run, or out of range.
     double output_constant_value(int index) const;
 
@@ -2748,18 +2757,18 @@ private:
     ReportMode report_mode_ = ReportMode::FULL;
 
     class ReportSinkCallScope {
-        ReportSinkState& state;
+        const BacktestEngine& engine;
         bool stream;
     public:
-        explicit ReportSinkCallScope(const BacktestEngine& engine, bool is_stream = false)
-            : state(engine.report_sink_state_), stream(is_stream) {
-            ++state.active_calls;
-            if (stream) ++state.stream_calls;
+        explicit ReportSinkCallScope(const BacktestEngine& owner, bool is_stream = false)
+            : engine(owner), stream(is_stream) {
+            ++engine.report_sink_state_.active_calls;
+            if (stream) ++engine.report_sink_state_.stream_calls;
         }
-        ~ReportSinkCallScope() {
-            if (stream) --state.stream_calls;
-            --state.active_calls;
-        }
+        ~ReportSinkCallScope();
+        // Run-boundary cleanup also covers faults outside the writer.
+        // Definition lives beside the sink's report lifecycle.
+
         ReportSinkCallScope(const ReportSinkCallScope&) = delete;
         ReportSinkCallScope& operator=(const ReportSinkCallScope&) = delete;
     };

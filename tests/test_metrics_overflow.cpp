@@ -104,6 +104,8 @@ public:
             trades_.push_back(t);
         }
     }
+    // This protected helper retains initialized allocations for its caller to
+    // clean up. Public fill_report owns that storage and publishes none on fault.
     void read(ReportC& out) const { fill_trades_section(&out); }
 };
 
@@ -182,18 +184,126 @@ void earlier_failure_keeps_its_code() {
     CHECK(host.last_error().empty());
     auto bad = trade(1);
     bad.max_runup = kInf;
-    host.append(bad);  // Missed producer invariant in a partial report.
+    host.append(bad);  // Faulted public reads must not revisit this invalid row.
     note_run_failure(host, "earlier strategy stop", RunFailureCode::strategy_runtime_error);
     ReportC out{};
-    try {
+    for (int read = 0; read != 2; ++read) {
         host.fill_report(&out);
-        CHECK(false);
-    } catch (const std::exception& error) {
-        CHECK(classify_run_failure(error).code == RunFailureCode::strategy_runtime_error);
-        CHECK(std::string(error.what()) == "earlier strategy stop");
+        CHECK(out.trades == nullptr && out.trades_len == 0 && out.total_trades == 0);
+        CHECK(out.equity_curve == nullptr && out.equity_curve_len == 0);
+        CHECK(out.security_diag == nullptr && out.security_diag_len == 0);
+        CHECK(out.trace == nullptr && out.trace_len == 0);
+        CHECK(out.trace_names == nullptr && out.trace_names_len == 0);
+        CHECK(out.broker_state_hash == nullptr && out.broker_state_hash_len == 0);
+        CHECK(out.net_profit == 0 && out.input_bars_processed == 0
+              && out.script_bars_processed == 0);
+        CHECK(out.metrics.all.num_trades == 0 && out.metrics.all.net_profit == 0);
         CHECK(run_failure_value_of(host).code == RunFailureCode::strategy_runtime_error);
+        CHECK(host.last_error() == "earlier strategy stop");
+        CHECK(std::string(run_failure_args_of(host)) == "{}");
+        BacktestEngine::free_report(&out);
     }
-    BacktestEngine::free_report(&out);
+}
+
+void check_empty_public_report(const ReportC& out) {
+    CHECK(out.trades == nullptr && out.trades_len == 0 && out.total_trades == 0);
+    CHECK(out.equity_curve == nullptr && out.equity_curve_len == 0);
+    CHECK(out.security_diag == nullptr && out.security_diag_len == 0);
+    CHECK(out.trace == nullptr && out.trace_len == 0);
+    CHECK(out.trace_names == nullptr && out.trace_names_len == 0);
+    CHECK(out.broker_state_hash == nullptr && out.broker_state_hash_len == 0);
+    CHECK(out.net_profit == 0 && out.input_bars_processed == 0 && out.script_bars_processed == 0);
+    CHECK(out.security_feeds_total == 0 && out.security_eval_complete_total == 0
+          && out.security_eval_partial_total == 0);
+    CHECK(out.metrics.all.num_trades == 0 && out.metrics.all.net_profit == 0);
+    CHECK(out.metrics.equity.buy_hold_return == 0 && out.metrics.equity.cagr == 0);
+}
+
+class AssemblyFaultHost final : public ReportRowsHost {
+public:
+    enum class Fault { None, Unknown, Recorded, RecordedThenThrow };
+    Fault fault = Fault::None;
+    mutable int presentations = 0;
+    void present_report(ReportC*) const override {
+        ++presentations;
+        if (fault == Fault::Recorded || fault == Fault::RecordedThenThrow)
+            note_run_failure(const_cast<AssemblyFaultHost&>(*this),
+                "original presentation failure", RunFailureCode::strategy_runtime_error);
+        if (fault == Fault::Unknown || fault == Fault::RecordedThenThrow) throw 73;
+    }
+};
+
+void public_report_assembly_faults() {
+    for (int mode = 0; mode != 4; ++mode) {
+        row = "public_report_assembly_fault_after_successful_read";
+        AssemblyFaultHost host;
+        NativeRunSpec spec;
+        spec.identity = {"report-assembly", 1};
+        spec.input_tf = spec.script_tf = "1";
+        spec.tickerid = "TEST:ASSEMBLY";
+        spec.timezone = "UTC"; spec.session = "24x7";
+        spec.initial_capital = 10000;
+        spec.point_value = spec.account_fx = 1;
+        spec.price_tick = 1;
+        spec.report_policy = NativeReportPolicy::KernelRecorded;
+        CHECK(host.configure_native(spec).status == NativeSetupStatus::Applied);
+        const Bar bars[]{{100, 100, 100, 100, 1, kTime},
+                         {100, 100, 100, 100, 1, kTime + 60000}};
+        host.run(bars, 2);
+        CHECK(host.last_run_status() == 0 && host.last_error().empty());
+        host.append(trade(3));
+        ReportC before{};
+        host.fill_report(&before);
+        CHECK(before.total_trades == 1 && before.trades_len == 1 && before.trades);
+        CHECK(before.equity_curve_len == 2 && before.equity_curve);
+        CHECK(host.presentations == 1);
+        BacktestEngine::free_report(&before);
+
+        if (mode == 0) {
+            auto bad = trade(1);
+            bad.max_runup = kInf;
+            host.append(bad);
+        } else {
+            host.fault = mode == 1 ? AssemblyFaultHost::Fault::Unknown
+                : mode == 2 ? AssemblyFaultHost::Fault::Recorded
+                            : AssemblyFaultHost::Fault::RecordedThenThrow;
+        }
+        ReportC failed;
+        std::memset(&failed, 0xA5, sizeof failed);
+        bool threw = false;
+        RunFailureValue carried{};
+        try {
+            host.fill_report(&failed);
+        } catch (const std::exception& error) {
+            threw = true;
+            carried = classify_run_failure(error);
+        } catch (...) {
+            CHECK(false);  // Unknown assembly exceptions must become typed failures.
+        }
+        CHECK(threw == (mode != 2));
+        check_empty_public_report(failed);
+        const auto expected = mode == 0 ? RunFailureCode::report_result_invalid
+            : mode == 1 ? RunFailureCode::engine_unclassified_error
+                        : RunFailureCode::strategy_runtime_error;
+        CHECK(host.last_run_status() == 1 && run_failure_value_of(host).code == expected);
+        if (threw) CHECK(carried.code == expected);
+        const std::string first_text = host.last_error();
+        const std::string first_args = run_failure_args_of(host);
+        if (mode >= 2) CHECK(first_text == "original presentation failure");
+        const int presentations = host.presentations;
+        for (int repeat = 0; repeat != 2; ++repeat) {
+            host.fill_report(&failed);
+            check_empty_public_report(failed);
+            CHECK(host.presentations == presentations);
+            CHECK(host.last_error() == first_text);
+            CHECK(std::string(run_failure_args_of(host)) == first_args);
+            CHECK(run_failure_value_of(host).code == expected);
+            BacktestEngine::free_report(&failed);
+        }
+        BacktestEngine::free_report(&failed);
+        // Fault suppression never rolls back the committed internal row space.
+        CHECK(host.closed_trade_count() == (mode == 0 ? 2u : 1u));
+    }
 }
 
 pf_equity_stats_t equity(std::vector<double> values, double capital = 1.0,
@@ -894,6 +1004,7 @@ static void overflow_matching_plan_row() {
 int main() {
     report_trade_assembly();
     earlier_failure_keeps_its_code();
+    public_report_assembly_faults();
     trade_arithmetic();
     equity_arithmetic();
     annualization_span_rule();

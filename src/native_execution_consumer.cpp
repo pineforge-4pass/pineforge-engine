@@ -1449,6 +1449,64 @@ RunFailureValue NativeExecutionConsumer::failure_value_of(const BacktestEngine& 
     return RunFailureValue{RunFailureCode::engine_unclassified_error, nullptr};
 }
 
+bool NativeExecutionConsumer::report_rows_publishable(const BacktestEngine& engine) noexcept {
+    const auto* consumer = static_cast<const NativeExecutionConsumer*>(
+        engine.execution_consumer_slot_.ptr.get());
+    if (consumer && !consumer->rows_current_) return false;
+    const auto code = failure_value_of(engine).code;
+    if (consumer && consumer->failed()) {
+        // Quiet and Error aborts are deliberate stops. Any other durable
+        // failure, or a later typed fault on an aborted run, suppresses results.
+        return consumer->recoverable_abort()
+            && (code == RunFailureCode::none || code == RunFailureCode::run_aborted);
+    }
+    if (engine.last_run_status_ != 0) return false;
+    // A refused repeated begin can render a diagnostic while an unfaulted
+    // stream remains Running. It does not invalidate that stream's snapshot.
+    if (consumer && consumer->running()) return true;
+    return code == RunFailureCode::none;
+}
+
+void NativeExecutionConsumer::latch_report_failure(BacktestEngine& engine,
+                                                  const std::exception* error) noexcept {
+    const auto* existing = static_cast<const NativeExecutionConsumer*>(
+        engine.execution_consumer_slot_.ptr.get());
+    const bool preserve_cause = engine.last_run_status_ != 0
+        || (existing && existing->failed()) || !existing || !existing->running();
+    engine.last_run_status_ = 1;
+    try {
+        auto& consumer = bound(engine);
+        // A report fault on a live stream must survive later input attempts.
+        // Completed execution keeps its lifecycle, as finish-time sink faults
+        // do; its failed report status and typed record suppress later reads.
+        if (consumer.running()) {
+            consumer.latch_failure(
+                NativeFailure{NativeFailureCode::Unexpected, NativeFailureOperation::None});
+        } else if (consumer.recoverable_abort()) {
+            // The stop itself was clean; assembly has now faulted as well.
+            std::get<NativeFailed>(consumer.state_).failure =
+                NativeFailure{NativeFailureCode::Unexpected, NativeFailureOperation::None};
+        }
+        if (preserve_cause && failure_value_of(engine).code != RunFailureCode::none) return;
+        const auto failure = error ? classify_run_failure(*error)
+            : RunFailureValue{RunFailureCode::engine_unclassified_error, nullptr};
+        // Store the code before rendering: even allocation failure while
+        // copying the message leaves a typed, non-publishable fault.
+        consumer.run_failure_.code = failure.code;
+        consumer.run_failure_.args = failure.args;
+        try {
+            engine.last_error_ = error ? error->what() : "unknown report assembly exception";
+            consumer.run_failure_.text = engine.last_error_;
+        } catch (...) {
+            engine.last_error_.clear();
+            consumer.run_failure_.text.clear();
+        }
+    } catch (...) {
+        // Binding can allocate on an engine that has never begun a run.
+        // The failed status above still prevents publication.
+    }
+}
+
 NativeExecutionConsumer::AttemptScope::AttemptScope(NativeExecutionConsumer& c) noexcept
     : c_(c), nested_(c.in_attempt_call_), over_live_(!nested_ && (c.running_spec_
           || c.in_callback_ || c.processing_input_ || c.preparing_begin_)) {
@@ -12807,9 +12865,8 @@ std::uint64_t NativeStrategyHost::broker_state_hash_projection() const {
 // stream_begin CALL. Every such call opens an AttemptScope first. With nothing
 // live, it disowns retained rows until begin_ready's reset hands them back; a
 // refusal before reset (not Ready, bad bars/option, calendar) reports empty.
-// A begun failed run publishes partial rows except for report_sink_failed: later
-// reads give empty ReportC, also after finish-time sink failure following run success;
-// status, code, arguments and message stay in the run-failure latch. A call entered over
+// A begun faulted run publishes no report; a deliberate abort keeps its
+// diagnostic rows. Status, code, arguments and message stay latched. A call entered over
 // a live attempt (stream between pushes, callback, input in flight) is refused; it owns
 // no rows and leaves rows_current_ alone. Its exit clears batch_current_, so its wrapper
 // reads empty. A nested call closes before the outer call, whose exit sets batch_current_
@@ -12847,6 +12904,11 @@ void NativeExecutionConsumer::fill_snapshot_report(const BacktestEngine& engine,
 // C host's hooks, in the engine epoch: strategy_stream_fill_report reads through it.
 void native_stream_snapshot_report(BacktestEngine* engine, ReportC* out) {
     NativeExecutionConsumer::fill_snapshot_report(*engine, out);
+}
+
+void native_report_read_failed(BacktestEngine* engine,
+                               const std::exception* error) noexcept {
+    NativeExecutionConsumer::latch_report_failure(*engine, error);
 }
 
 // The selected-window query fence (include/pineforge/query_refusal.hpp). The

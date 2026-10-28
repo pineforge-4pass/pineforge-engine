@@ -168,10 +168,12 @@ inline bool magnifier_unsupported(int bar_magnifier, int magnifier_samples,
         || distribution != PF_MAGNIFIER_ENDPOINTS;
 }
 
-/// Fills a local report first: the caller's struct is written only once the
-/// engine has produced a complete, owned value.
+/// Assemble an owned local value before transferring it to the caller.
+/// A valid call initializes the destination to empty before assembly, so
+/// an exception leaves no partial output and never frees unowned pointers.
 inline void publish_report(BacktestEngine* engine, pf_report_t* out) {
     if (!engine || !out) return;
+    *out = pf_report_t{};
     ReportC local{};
     try {
         engine->fill_report(&local);
@@ -231,6 +233,7 @@ void run_batch(pf_strategy_t strategy, pf_bar_t* bars, int count,
                pf_report_t* out) {
     if (!strategy) return;
     auto* engine = as_engine(strategy);
+    if (out) *out = pf_report_t{};
     try {
         const Bar* source = reinterpret_cast<const Bar*>(bars);
         // The size and every field offset are pinned above, matching the
@@ -249,9 +252,11 @@ void run_batch(pf_strategy_t strategy, pf_bar_t* bars, int count,
         }
         publish_report(engine, out);
     } catch (const std::exception& error) {
-        note_error<Host>(strategy, error.what(), classify_run_failure(error));
+        if (run_failure_value_of(*engine).code == RunFailureCode::none)
+            note_error<Host>(strategy, error.what(), classify_run_failure(error));
     } catch (...) {
-        note_error<Host>(strategy, "native module C batch failed", unclassified_failure());
+        if (run_failure_value_of(*engine).code == RunFailureCode::none)
+            note_error<Host>(strategy, "native module C batch failed", unclassified_failure());
     }
 }
 

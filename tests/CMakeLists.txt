@@ -7894,6 +7894,7 @@ endif()
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_libraries(test_report_sink_deferred_sync PRIVATE Threads::Threads)
     target_link_options(test_report_sink_deferred_sync PRIVATE
+        "-Wl,--wrap=openat" "-Wl,--wrap=fchmod"
         "-Wl,--wrap=pwrite" "-Wl,--wrap=ftruncate"
         "-Wl,--wrap=fdatasync" "-Wl,--wrap=fsync")
     add_test(NAME test_report_sink_deferred_sync_count COMMAND test_report_sink_deferred_sync count)
@@ -7910,11 +7911,14 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_test(NAME test_report_sink_deferred_sync_abandon
         COMMAND test_report_sink_deferred_sync abandon)
     add_test(NAME test_report_sink_deferred_sync_memory COMMAND test_report_sink_deferred_sync memory)
+    add_test(NAME test_report_sink_deferred_sync_close_fault COMMAND test_report_sink_deferred_sync close_fault)
+    add_test(NAME test_report_sink_deferred_sync_permissions COMMAND test_report_sink_deferred_sync permissions)
     set_tests_properties(test_report_sink_deferred_sync test_report_sink_deferred_sync_count
         test_report_sink_deferred_sync_bytes test_report_sink_deferred_sync_sync_fault
         test_report_sink_deferred_sync_write_fault test_report_sink_deferred_sync_truncate_fault
         test_report_sink_deferred_sync_engine test_report_sink_deferred_sync_engine_sync_fault
         test_report_sink_deferred_sync_abandon test_report_sink_deferred_sync_memory
+        test_report_sink_deferred_sync_close_fault test_report_sink_deferred_sync_permissions
         PROPERTIES LABELS "sink_sync")
 endif()
 # --- CR-150 deferred-sink-sync end ---
@@ -7927,6 +7931,39 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 8)
         "-Wl,--wrap=_ZnamRKSt9nothrow_t")
 endif()
 # --- CR-150 resident-command-scratch end ---
+# --- CR-150 perf-nopartial begin ---
+# One lane-owned executable. Reuse CR-257's syscall accounting and
+# independent reference; keep its extra translation units to resolve the
+# imported (renamed, uncalled) harness entry without replacing any provider.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_sources(test_perf_nopartial_success PRIVATE
+        perf_nopartial_harness.cpp
+        test_perf_nopartial_scratch_read.cpp
+        test_perf_nopartial_scratch_write.cpp
+        test_perf_nopartial_scratch_sync.cpp
+        test_perf_nopartial_scratch_teardown.cpp
+        test_perf_nopartial_scratch_capacity.cpp
+        test_perf_nopartial_typed_failure.cpp
+        test_perf_nopartial_callback_exception.cpp
+        test_perf_nopartial_native_c_callback.cpp
+        test_perf_nopartial_generated.cpp
+        test_perf_nopartial_generated_full.cpp
+        test_perf_nopartial_native_module.cpp
+        test_perf_nopartial_native_module_full.cpp
+        test_perf_nopartial_stream_file.cpp
+        test_perf_nopartial_sink_record.cpp
+        test_perf_nopartial_sink_flush.cpp
+        test_cr257_source_exit_scratch_io_100k.cpp
+        test_cr257_exit_scope_io.cpp
+        test_cr257_scratch_file_io.cpp)
+    target_link_options(test_perf_nopartial_success PRIVATE
+        "-Wl,--wrap=pread" "-Wl,--wrap=pwrite"
+        "-Wl,--wrap=read" "-Wl,--wrap=readv"
+        "-Wl,--wrap=preadv" "-Wl,--wrap=preadv2" "-Wl,--wrap=mmap"
+        "-Wl,--wrap=posix_fadvise" "-Wl,--wrap=fdatasync")
+endif()
+# --- CR-150 perf-nopartial end ---
+
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
         message(FATAL_ERROR "PR fast row or executable is missing: ${_pf_fast_test}")

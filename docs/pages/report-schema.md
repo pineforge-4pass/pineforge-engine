@@ -384,7 +384,7 @@ present in exactly this order, matching `REFERENCE_KEYS` in
 
 `E` and `T` are always enabled. `O`, `V`, `K` carry requested outputs;
 `X` and `H` carry enabled trace/hash recording. The reference counts and digest
-match the complete trailer and engine receipt.
+match the complete trailer and engine receipt. `PATH` is atomically replaced only after private writing, one final sync and checked close; failure/abandon preserves any previous file and removes the private sibling.
 
 Every member of `summary` is present:
 
@@ -779,9 +779,9 @@ typedef struct pf_equity_point_s {
 ```
 
 On the ordinary legacy/FULL owning-array route, `equity_curve_len` equals
-`script_bars_processed` on a completed `KernelRecorded` run (an exception,
-cooperative abort or other failure mid-run can truncate the recorded prefix —
-check `strategy_get_last_error`). A
+`script_bars_processed` on a completed `KernelRecorded` run. A deliberate abort
+can expose a shorter diagnostic prefix. After a fault, every public report
+array/count/metric is empty; the original typed failure remains available. A
 bare native host using the default `HostRecorded` policy has no kernel-owned
 curve. The array is heap-allocated and freed by #report_free. Note the length
 field is `int64_t`, not `int`.

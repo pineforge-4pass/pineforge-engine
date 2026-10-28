@@ -57,7 +57,7 @@ std::string escaped_string(std::string_view utf8);
 /// uses exactly 16 lowercase hex digits. f64/strings use the helpers above.
 ///
 /// Lifecycle: header at run begin, records in final order, trailer only on
-/// successful fill/capture. Failure/refusal/abort leaves no valid trailer.
+/// successful fill/capture. Fault/abort removes owned paths; no valid trailer.
 /// I/O errors fail the run with the catalog code planned in DESIGN 6:1330-1332
 /// (docker/run_failure_codes.json; 3.7:881-888). OPEN S2: DESIGN does not
 /// choose the internal C++ error transport or repeated-finalization policy;
@@ -73,7 +73,7 @@ public:
     explicit LineWriter(const pf_report_sink_fd_v1& sink);
     ~LineWriter();
 
-    /// Open the owned path, or validate the borrowed stream fd without
+    /// Open a private sibling of the path, or validate the borrowed fd without
     /// creating anything, and emit, in order, schema, version, run_id,
     /// engine, records (3.7:795-809, 881-883). schema="pf-report-sink",
     /// version=1, run_id from the descriptor (NULL => ""), engine is
@@ -103,7 +103,7 @@ public:
     /// Emit trailer,version,counts,sha256 in that key order, version=1
     /// (3.7:833-837). SHA-256 is FIPS 180-4 over every byte before the
     /// trailer, including the header and each LF; the trailer excludes
-    /// itself. Flush/check writes before returning the trailer values.
+    /// itself. Flush/check writes; owned paths sync once, check close and rename.
     /// SHA-256 runs inside the engine with no new external dependency
     /// (3.7:881-888). No destructor-generated success trailer is promised.
     Trailer write_trailer();
@@ -113,7 +113,7 @@ public:
     pf_report_sink_diagnostics_v1 diagnostics() const noexcept;
 
     /// At a completed-bar boundary, flush the last complete records and
-    /// permanently abandon this stream without a trailer or a receipt.
+    /// abandon without a trailer/receipt; remove the owned private sibling.
     /// Does not close a borrowed fd; its owner closes it after native cleanup.
     void abandon();
 

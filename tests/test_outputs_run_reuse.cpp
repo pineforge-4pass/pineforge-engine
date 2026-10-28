@@ -3,8 +3,7 @@
 // and finally a batch whose callback throws; after each completed run it
 // records exactly what a fresh handle records over the same bars (the
 // sequence starts at 1 again, no row of an earlier run survives). A failed
-// run leaves its last error set, which is the caller's signal to read
-// nothing.
+// run leaves its last error set and exposes an empty public output record.
 //
 // A C++ host must state the run boundary itself (output_run_begin(), in
 // on_native_run_begin). One that never states it fails its first recorded
@@ -129,8 +128,8 @@ void off_and_on() {
     CHECK(error_of(s).empty());
     CHECK(same_record(read_record(s), fresh(bars, 9)));
 
-    // A run whose callback throws on its fourth bar: the run fails and keeps
-    // its partial record; the caller, seeing the last error, reads nothing.
+    // A run whose callback throws on its fourth bar publishes no output
+    // record, even though the host recorded four rows before the fault.
     host->script = [](OutputsHost& h, const Bar& b, const NativeDecisionContext&) {
         h.value(0, b.close);
         if (h.published == 4) throw std::runtime_error("host failure on bar 4");
@@ -139,9 +138,13 @@ void off_and_on() {
     host->run(bars.data(), 9);
     CHECK(host->native_state().kind == NativeLifecycleKind::Failed);
     CHECK(error_of(s) == "host failure on bar 4");
+    CHECK(host->published == 4);
     const Record failed_run = read_record(s);
-    CHECK(failed_run.bars == 4);
+    CHECK(failed_run.bars == 0);
     CHECK(failed_run.events.empty());
+    CHECK(failed_run.series_count == 0 && failed_run.series.empty());
+    CHECK(failed_run.open_ms.empty() && failed_run.close_ms.empty());
+    CHECK(failed_run.constants.empty());
 }
 
 // The host states the run boundary itself.

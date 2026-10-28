@@ -77,6 +77,9 @@ namespace pineforge {
 void clear_native_c_host_refusal_error(BacktestEngine* engine) noexcept;
 bool native_c_host_in_postrun_hook_frame(BacktestEngine* engine) noexcept;
 inline namespace engine_script_run_v19 { void native_stream_snapshot_report(BacktestEngine* engine, ReportC* out); }
+inline namespace engine_script_run_v19 {
+void native_report_read_failed(BacktestEngine*, const std::exception*) noexcept;
+}
 inline namespace engine_script_run_v19 { bool native_selected_query_closed(const BacktestEngine* engine) noexcept; }
 inline namespace engine_script_run_v19 {
 // The private bridges behind the execution observer and selected-window
@@ -142,6 +145,25 @@ int pf_cabi_int(pf_strategy_t s, Fn&& fn) noexcept {
         note_cabi_refusal(s, nullptr);
         return -1;
     }
+}
+
+template <typename Result, typename Fn>
+Result pf_report_read(pf_strategy_t s, Result empty, Fn&& fn) noexcept {
+    if (!s) return empty;
+    auto* engine = static_cast<pineforge::BacktestEngine*>(s);
+    if (!engine->report_publication_allowed()) return empty;
+    try {
+        const Result result = std::forward<Fn>(fn)(*engine);
+        return engine->report_publication_allowed() ? result : empty;
+    } catch (const pineforge::detail::RetiredTradeHistoryRead& error) {
+        // A retired-row query remains a recoverable refusal, not a run fault.
+        note_cabi_refusal(s, &error);
+    } catch (const std::exception& error) {
+        pineforge::native_report_read_failed(engine, &error);
+    } catch (...) {
+        pineforge::native_report_read_failed(engine, nullptr);
+    }
+    return empty;
 }
 
 #if defined(__GNUC__) || defined(__clang__)
@@ -402,17 +424,10 @@ PF_API int pf_run_abort_restore_sigterm_v1(void) {
  * close. No struct changed by this accessor (PF_ABI_VERSION is 5). */
 PF_API uint64_t strategy_closed_trade_entry_incarnation(
         pf_strategy_t s, int trade_index) {
-    if (!s) return 0;
-    const auto* engine = static_cast<const pineforge::BacktestEngine*>(s);
-    try {
-        if (engine->closed_trade_close_cause(trade_index) < 0) return 0;
-        return engine->get_report_trade(trade_index).entry_incarnation;
-    } catch (const pineforge::detail::RetiredTradeHistoryRead& error) {
-        note_cabi_refusal(s, &error);
-        return 0;
-    } catch (...) {
-        return 0;
-    }
+    return pf_report_read(s, uint64_t{0}, [trade_index](const auto& engine) -> uint64_t {
+        if (engine.closed_trade_close_cause(trade_index) < 0) return 0;
+        return engine.get_report_trade(trade_index).entry_incarnation;
+    });
 }
 
 /* ABI v4 live-runtime surface (task 9): closed-trade id / exit-comment
@@ -431,45 +446,27 @@ PF_API uint64_t strategy_closed_trade_entry_incarnation(
  * NULL on a NULL handle or an
  * out-of-range/streamed row, checked by the close-cause query before indexing. */
 PF_API const char* strategy_closed_trade_entry_id(pf_strategy_t s, int trade_index) {
-    if (!s) return nullptr;
-    const auto* engine = static_cast<const pineforge::BacktestEngine*>(s);
-    try {
-        if (engine->closed_trade_close_cause(trade_index) < 0) return nullptr;
-        return engine->materialize_report_trade(trade_index).entry_id.c_str();
-    } catch (const pineforge::detail::RetiredTradeHistoryRead& error) {
-        note_cabi_refusal(s, &error);
-        return nullptr;
-    } catch (...) {
-        return nullptr;
-    }
+    return pf_report_read(s, static_cast<const char*>(nullptr),
+        [trade_index](const auto& engine) -> const char* {
+            if (engine.closed_trade_close_cause(trade_index) < 0) return nullptr;
+            return engine.materialize_report_trade(trade_index).entry_id.c_str();
+        });
 }
 
 PF_API const char* strategy_closed_trade_exit_id(pf_strategy_t s, int trade_index) {
-    if (!s) return nullptr;
-    const auto* engine = static_cast<const pineforge::BacktestEngine*>(s);
-    try {
-        if (engine->closed_trade_close_cause(trade_index) < 0) return nullptr;
-        return engine->materialize_report_trade(trade_index).exit_id.c_str();
-    } catch (const pineforge::detail::RetiredTradeHistoryRead& error) {
-        note_cabi_refusal(s, &error);
-        return nullptr;
-    } catch (...) {
-        return nullptr;
-    }
+    return pf_report_read(s, static_cast<const char*>(nullptr),
+        [trade_index](const auto& engine) -> const char* {
+            if (engine.closed_trade_close_cause(trade_index) < 0) return nullptr;
+            return engine.materialize_report_trade(trade_index).exit_id.c_str();
+        });
 }
 
 PF_API const char* strategy_closed_trade_exit_comment(pf_strategy_t s, int trade_index) {
-    if (!s) return nullptr;
-    const auto* engine = static_cast<const pineforge::BacktestEngine*>(s);
-    try {
-        if (engine->closed_trade_close_cause(trade_index) < 0) return nullptr;
-        return engine->materialize_report_trade(trade_index).exit_comment.c_str();
-    } catch (const pineforge::detail::RetiredTradeHistoryRead& error) {
-        note_cabi_refusal(s, &error);
-        return nullptr;
-    } catch (...) {
-        return nullptr;
-    }
+    return pf_report_read(s, static_cast<const char*>(nullptr),
+        [trade_index](const auto& engine) -> const char* {
+            if (engine.closed_trade_close_cause(trade_index) < 0) return nullptr;
+            return engine.materialize_report_trade(trade_index).exit_comment.c_str();
+        });
 }
 
 /* ABI v4 live-runtime surface (task 9): why a REPORT-row closed trade
@@ -486,15 +483,9 @@ PF_API const char* strategy_closed_trade_exit_comment(pf_strategy_t s, int trade
  * convention (strategy_pending_order_fill_qty/_level_resolved/
  * _effective_levels). */
 PF_API int strategy_closed_trade_close_cause(pf_strategy_t s, int trade_index) {
-    if (!s) return -1;
-    try {
-        return static_cast<const pineforge::BacktestEngine*>(s)->closed_trade_close_cause(trade_index);
-    } catch (const pineforge::detail::RetiredTradeHistoryRead& error) {
-        note_cabi_refusal(s, &error);
-        return -1;
-    } catch (...) {
-        return -1;
-    }
+    return pf_report_read(s, -1, [trade_index](const auto& engine) {
+        return engine.closed_trade_close_cause(trade_index);
+    });
 }
 
 /* ABI v4 live-runtime surface (task 9): the script-facing position size

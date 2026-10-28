@@ -152,11 +152,22 @@ void run_case(int field, double value, bool refuses) {
     const auto bytes = pipe.drain();
     fd_trace.record("after draining reader");
     if (refuses) {
-        // A failed run's partial report can itself refuse the poisoned scratch
-        // point. Both public failure statuses must retain the typed cause.
-        require((status == PF_NATIVE_E_RUN_FAILED || status == PF_NATIVE_E_STATE)
+        // The execution fault is latched before report capture. The reader
+        // returns empty without revisiting the poisoned scratch point.
+        require(status == PF_NATIVE_E_RUN_FAILED
                 && strategy_last_run_status(host.handle) == 1,
                 "C run/capture did not report failure");
+        require(report.value.trades == nullptr && report.value.trades_len == 0
+                && report.value.total_trades == 0 && report.value.net_profit == 0
+                && report.value.equity_curve == nullptr && report.value.equity_curve_len == 0
+                && report.value.security_diag == nullptr && report.value.security_diag_len == 0
+                && report.value.trace == nullptr && report.value.trace_len == 0
+                && report.value.trace_names == nullptr && report.value.trace_names_len == 0
+                && report.value.broker_state_hash == nullptr && report.value.broker_state_hash_len == 0
+                && report.value.input_bars_processed == 0 && report.value.script_bars_processed == 0
+                && report.value.metrics.all.num_trades == 0
+                && report.value.metrics.equity.buy_hold_return == 0,
+                "faulted C report is not empty");
         require(host.callbacks == 2 && receipt.count_e == 0, "writer did not refuse the first E");
         pf_native_state_v1 state{};
         state.struct_size = static_cast<std::uint32_t>(sizeof state);
