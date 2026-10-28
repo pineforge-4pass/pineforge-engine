@@ -1,12 +1,12 @@
 diff --git a/src/source/pine_adapter.cpp b/src/source/pine_adapter.cpp
 --- a/src/source/pine_adapter.cpp
 +++ b/src/source/pine_adapter.cpp
-@@ -29437,7 +29437,7 @@
+@@ -29457,7 +29457,7 @@
      const bool unchanged = gate.certified && gate.cycle == current_position_cycle_
          && interval >= gate.interval && interval < gate.interval_expiry
          && last_broker_open_ms_ >= gate.broker_open && last_broker_open_ms_ <= gate.broker_expiry
 -        && gate.current == gate.saved;
 +        ;
-     if (unchanged) {
+     if (unchanged && !excess_capacity) {
  #ifndef NDEBUG
          // Use the original reader on these very inputs, including its phase
