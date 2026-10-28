@@ -4957,22 +4957,22 @@ class PrExclusionWithFixturesAbsent(unittest.TestCase):
         # Control (a): the PR shape's own numbers. RED before the fix: exit 1,
         # 'but ran 587; not counted: 290 skipped'. The current fixture stays
         # above the registration floor, retaining five slow and 290 pinned rows.
-        # Scratch cases add three: 906 + 3 = 909 registered, 901 + 3 = 904 selected.
+        # Scratch cases add three: 925 + 3 = 928 registered, 920 + 3 = 923 selected.
         code, summary, _, build_dir = self.run_profile(
-            'debug', ctest_registered=909, ctest_labelled=5, ctest_rows=904,
+            'debug', ctest_registered=928, ctest_labelled=5, ctest_rows=923,
             ctest_skipped=self.pinned_probe(290))
         self.assertEqual(code, 0, summary['failures'])
         self.assertIn('ctest-exclusion', stage_names(summary))
-        self.assertEqual(summary['ctestRows'], 904 - 290)
+        self.assertEqual(summary['ctestRows'], 923 - 290)
         log = (build_dir / 'ci-logs' / 'ctest-exclusion.log').read_text()
-        self.assertIn('614', log)
+        self.assertIn('633', log)
         self.assertIn('290 pinned private-fixture rows skipping', log)
 
     def test_red_an_unpinned_skip_fails(self):
         # Control (b): one skipped row outside the pin is a failure even
         # though the arithmetic alone would tolerate it.
         code, summary, _, _ = self.run_profile(
-            'debug', ctest_registered=909, ctest_labelled=5, ctest_rows=904,
+            'debug', ctest_registered=928, ctest_labelled=5, ctest_rows=923,
             ctest_skipped=self.pinned_probe(290) + ['test_row_not_pinned'])
         self.assertEqual(code, 1)
         self.assertIn('ctest-exclusion', failure_stages(summary))
@@ -4985,14 +4985,14 @@ class PrExclusionWithFixturesAbsent(unittest.TestCase):
         # Control (c): one public row fewer ran than the selection holds:
         # ran + pinned skips < selected.
         code, summary, _, _ = self.run_profile(
-            'debug', ctest_registered=909, ctest_labelled=5, ctest_rows=903,
+            'debug', ctest_registered=928, ctest_labelled=5, ctest_rows=922,
             ctest_skipped=self.pinned_probe(290))
         self.assertEqual(code, 1)
         self.assertIn('ctest-exclusion', failure_stages(summary))
         error = next(item['error'] for item in summary['failures']
                      if item['stage'] == 'ctest-exclusion')
-        self.assertIn('613', error)
-        self.assertIn('selected 904', error)
+        self.assertIn('632', error)
+        self.assertIn('selected 923', error)
 
     def test_red_overlay_present_a_pinned_skip_fails_the_exclusion(self):
         # Control (d): with the overlay present every selected private-fixture
@@ -5000,7 +5000,7 @@ class PrExclusionWithFixturesAbsent(unittest.TestCase):
         # and the exclusion stage. The platform exception is not a fixture.
         with mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES': '1'}):
             code, summary, _, _ = self.run_profile(
-                'debug', ctest_registered=909, ctest_labelled=5, ctest_rows=904,
+                'debug', ctest_registered=928, ctest_labelled=5, ctest_rows=923,
                 ctest_skipped=self.pinned_probe(1))
         self.assertEqual(code, 1)
         self.assertIn('ctest-exclusion', failure_stages(summary))
@@ -5011,7 +5011,7 @@ class PrExclusionWithFixturesAbsent(unittest.TestCase):
         # overlay is present (only the exclusion stage catches it).
         with mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES': '1'}):
             code, summary, _, _ = self.run_profile(
-                'debug', ctest_registered=909, ctest_labelled=5, ctest_rows=904,
+                'debug', ctest_registered=928, ctest_labelled=5, ctest_rows=923,
                 ctest_skipped=['test_native_live_websocket'])
         self.assertEqual(code, 1)
         self.assertEqual(failure_stages(summary), ['ctest-exclusion'])
@@ -5042,8 +5042,8 @@ class PrExclusionWithFixturesAbsent(unittest.TestCase):
                 source=source, runner=default_runner, stream_output=False)
             driver = ci_verify.Driver(cfg)
             driver.enforce_test_floor(
-                Completed(0, ctest_output(904, tuple(self.pinned_probe(2))), b''),
-                registered=909, selected=904,
+                Completed(0, ctest_output(923, tuple(self.pinned_probe(2))), b''),
+                registered=928, selected=923,
                 excluded_names=frozenset(SCRIPTED_SLOW_FIXTURE_NAMES))
         self.assertEqual([stage['status'] for stage in driver.stages], ['failed'])
         self.assertIn('a truncated pin cannot clear the rows it lost',
