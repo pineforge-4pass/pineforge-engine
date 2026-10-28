@@ -1436,6 +1436,18 @@
    "ordinal": 1
   },
   {
+   "file": "include/pineforge/detail/drawing_records.hpp",
+   "symbol": "store",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Rec , class Codec = DrawingTrivialCodec < Rec > , unsigned Levels = 6 > class DrawingExternalRecords #1",
+    "std :: pair < Id , bool > put_block ( Id id , Block value , std :: uint64_t payload ) const #1"
+   ],
+   "cls": "grow",
+   "spelling": "store . resize ( . . . )",
+   "ordinal": 1
+  },
+  {
    "file": "include/pineforge/detail/history_ring.hpp",
    "symbol": "buffer_",
    "scope": [
@@ -1452,7 +1464,7 @@
    "scope": [
     "namespace pineforge :: detail #1",
     "template < class T > class PagedHistoryRing #1",
-    "void rebase ( ) #1"
+    "void relayout ( std :: uint64_t mask , std :: size_t retained , std :: size_t capacity ) #1"
    ],
    "cls": "assign",
    "spelling": "next = . . .",
@@ -1464,7 +1476,7 @@
    "scope": [
     "namespace pineforge :: detail #1",
     "template < class T > class PagedHistoryRing #1",
-    "void rebase ( ) #1"
+    "void relayout ( std :: uint64_t mask , std :: size_t retained , std :: size_t capacity ) #1"
    ],
    "cls": "grow",
    "spelling": "next . push_back ( . . . )",
@@ -1476,7 +1488,7 @@
    "scope": [
     "namespace pineforge :: detail #1",
     "template < class T > class PagedHistoryRing #1",
-    "void promote ( ) #1"
+    "void promote ( std :: size_t capacity ) #1"
    ],
    "cls": "assign",
    "spelling": "next = . . .",
@@ -1488,7 +1500,7 @@
    "scope": [
     "namespace pineforge :: detail #1",
     "template < class T > class PagedHistoryRing #1",
-    "void promote ( ) #1"
+    "void promote ( std :: size_t capacity ) #1"
    ],
    "cls": "temp",
    "spelling": "std :: vector < T >",
@@ -1538,7 +1550,7 @@
    "scope": [
     "namespace pineforge :: detail #1",
     "template < class T > class PagedHistoryRing #1",
-    "PagedHistoryRing & operator = ( PagedHistoryRing && rhs ) noexcept #1",
+    "PagedHistoryRing & operator = ( PagedHistoryRing && rhs ) #1",
     "if ( this ! = & rhs ) #1"
    ],
    "cls": "assign",
@@ -2958,47 +2970,7 @@
     "namespace pineforge #1",
     "namespace detail #1",
     "struct DrawingLabelCodec #1",
-    "struct Wire #1"
-   ],
-   "cls": "assign",
-   "spelling": "text = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/drawing.hpp",
-   "symbol": "text",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace detail #1",
-    "struct DrawingLabelCodec #1",
-    "static Wire encode ( const LabelRec & rec , o1 :: Store & store ) #1"
-   ],
-   "cls": "assign",
-   "spelling": "text = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/drawing.hpp",
-   "symbol": "text",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace detail #1",
-    "struct DrawingLabelCodec #1",
-    "static Wire encode ( const LabelRec & rec , o1 :: Store & store ) #1",
-    "if ( ! rec . text . empty ( ) ) #1"
-   ],
-   "cls": "assign",
-   "spelling": "text = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/drawing.hpp",
-   "symbol": "text",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace detail #1",
-    "struct DrawingLabelCodec #1",
-    "static LabelRec decode ( const Wire & wire , o1 :: Store & store ) #1"
+    "static LabelRec decode ( const Wire & wire , o1 :: Store & store , o1 :: Id block , std :: uint64_t offset ) #1"
    ],
    "cls": "decl",
    "spelling": "std :: string",
@@ -3017,15 +2989,16 @@
   },
   {
    "file": "include/pineforge/drawing.hpp",
-   "symbol": "order_",
+   "symbol": "recs_",
    "scope": [
     "namespace pineforge #1",
     "template < class Rec > class DrawingArena #1",
     "DrawingArena & operator = ( const DrawingArena & other ) #1",
-    "if ( this ! = & other ) #1"
+    "if ( this ! = & other ) #1",
+    "if ( order_ . is_external ( ) || other . order_ . is_external ( ) ) #1"
    ],
    "cls": "assign",
-   "spelling": "order_ = . . .",
+   "spelling": "recs_ = . . .",
    "ordinal": 1
   },
   {
@@ -3035,10 +3008,25 @@
     "namespace pineforge #1",
     "template < class Rec > class DrawingArena #1",
     "DrawingArena & operator = ( const DrawingArena & other ) #1",
-    "if ( this ! = & other ) #1"
+    "if ( this ! = & other ) #1",
+    "else #1"
    ],
    "cls": "assign",
    "spelling": "recs_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/drawing.hpp",
+   "symbol": "order_",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class Rec > class DrawingArena #1",
+    "DrawingArena & operator = ( const DrawingArena & other ) #1",
+    "if ( this ! = & other ) #1",
+    "else #1"
+   ],
+   "cls": "assign",
+   "spelling": "order_ = . . .",
    "ordinal": 1
   },
   {
@@ -3055,25 +3043,13 @@
   },
   {
    "file": "include/pineforge/drawing.hpp",
-   "symbol": "order_",
-   "scope": [
-    "namespace pineforge #1",
-    "template < class Rec > class DrawingArena #1",
-    "DrawingArena & operator = ( DrawingArena && other ) #1",
-    "if ( this ! = & other ) #1"
-   ],
-   "cls": "assign",
-   "spelling": "order_ = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/drawing.hpp",
    "symbol": "recs_",
    "scope": [
     "namespace pineforge #1",
     "template < class Rec > class DrawingArena #1",
     "DrawingArena & operator = ( DrawingArena && other ) #1",
-    "if ( this ! = & other ) #1"
+    "if ( this ! = & other ) #1",
+    "if ( order_ . is_external ( ) || other . order_ . is_external ( ) ) #1"
    ],
    "cls": "assign",
    "spelling": "recs_ = . . .",
@@ -3085,7 +3061,36 @@
    "scope": [
     "namespace pineforge #1",
     "template < class Rec > class DrawingArena #1",
-    "int32_t alloc ( Rec r ) #1"
+    "DrawingArena & operator = ( DrawingArena && other ) #1",
+    "if ( this ! = & other ) #1",
+    "else #1"
+   ],
+   "cls": "assign",
+   "spelling": "recs_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/drawing.hpp",
+   "symbol": "order_",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class Rec > class DrawingArena #1",
+    "DrawingArena & operator = ( DrawingArena && other ) #1",
+    "if ( this ! = & other ) #1",
+    "else #1"
+   ],
+   "cls": "assign",
+   "spelling": "order_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/drawing.hpp",
+   "symbol": "recs_",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class Rec > class DrawingArena #1",
+    "int32_t alloc ( Rec r ) #1",
+    "try #1"
    ],
    "cls": "grow",
    "spelling": "recs_ . push_back ( . . . )",
