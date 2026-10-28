@@ -29316,9 +29316,20 @@ struct PlacementTable::SequenceIndex {
         return Status::ok;
     }
 
+    static std::unique_ptr<::pineforge::detail::ScratchBacking> make_backing() {
+        // Derived identities are not command scopes. The factory snapshots
+        // the observer, so isolate their accounting without changing the
+        // backing selection, shared byte budget or failure propagation.
+        struct RestoreObserver {
+            ::pineforge::detail::ScratchIoObserver previous =
+                detail::set_command_scratch_io_observer({});
+            ~RestoreObserver() { detail::set_command_scratch_io_observer(previous); }
+        } restore;
+        return detail::make_command_scratch_backing(512);
+    }
+
     mutable std::uint64_t operations = 0;
-    std::unique_ptr<::pineforge::detail::ScratchBacking> backing =
-        detail::make_command_scratch_backing(512);
+    std::unique_ptr<::pineforge::detail::ScratchBacking> backing = make_backing();
     ::pineforge::detail::CommandScratchStore store{
         {2, 512, 1, 1, {0x6578697473657131ULL, this, compare},
          ::pineforge::detail::ScratchOpenMode::create_empty}, backing.get()};
@@ -29490,8 +29501,8 @@ PlacementTable::SequenceIndex& PlacementTable::sequence_index() const {
     if (!sequence_index_) {
         auto next = std::make_shared<SequenceIndex>();
         SequenceIndex::Transaction transaction(*next);
-        // The normal first insertion builds an empty index. Only a failed
-        // derived write or a backing rebind needs this recovery walk.
+        // A deferred first insertion leaves at most one row to build.
+        // Failed derived writes or a backing rebind can need a recovery walk.
         visit_rows([&](std::uint64_t incarnation, const PlacementSnapshot& row) {
             ++sequence_rows_;
             next->insert(incarnation, row);
@@ -29527,6 +29538,10 @@ void PlacementTable::change_sequences(std::uint64_t incarnation,
                                      const PlacementSnapshot* after) {
     static_assert(std::is_nothrow_move_assignable_v<PlacementSnapshot>,
                   "placement publication must not fail after its identity update");
+    // The first insertion has no index or certified answer to maintain.
+    // Avoid claiming an arena region before the authoritative cohort/rank
+    // stores admit it. The next mutation or query builds from retained rows.
+    if (!before && size_ == 0 && !sequence_index_) return;
     if (before && after && before->source_id == after->source_id
         && before->from_entry == after->from_entry
         && before->command_sequence == after->command_sequence) return;
