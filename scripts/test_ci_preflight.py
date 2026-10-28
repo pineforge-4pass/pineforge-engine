@@ -3522,9 +3522,9 @@ class PreflightFailures(unittest.TestCase):
         inventory = re.findall(
             r'pins all (\d+) source-labelled names: (\d+) from the\n'
             r'`PINEFORGE_PR_SLOW_TESTS` loop and (\d+) direct CMake', text)
-        self.assertEqual(inventory, [('62', '43', '19')])
-        self.assertIn('The timing list contains 43 names, and 19 additional names', text)
-        self.assertIn('making 62 distinct pinned slow names.', text)
+        self.assertEqual(inventory, [('66', '43', '23')])
+        self.assertIn('The timing list contains 43 names, and 23 additional names', text)
+        self.assertIn('making 66 distinct pinned slow names.', text)
 
     def test_floor_table_documentation_anchors_point_to_definition(self):
         source = (ROOT / 'scripts/ci_verify.py').read_text().splitlines()
@@ -8667,6 +8667,31 @@ class GkeAdmissionRuleTests(unittest.TestCase):
             with mock.patch.object(ci_preflight, 'ROOT', Path(second)):
                 contradictory = admit_rule_findings(directory, run_actionlint=False)
             self.assertEqual(contradictory, normal)
+
+    def test_admission_accepts_the_release_matrix_runner_under_its_fetched_path(self) -> None:
+        # Admission names a fetched file by its repository path, so the one
+        # `runs-on: ${{ matrix.runner }}` that release.yml carries must be
+        # excused under `.github/workflows/release.yml`, not only as a bare name.
+        release = (ROOT / '.github/workflows/release.yml').read_text()
+        self.assertIn('runs-on: ${{ matrix.runner }}', release)
+        refusal = 'every runs-on must be a literal value'
+        with tempfile.TemporaryDirectory() as fetched:
+            directory = Path(fetched)
+            for relative in ('.github/workflows/gke-pr.yml', '.github/workflows/release.yml',
+                             '.github/actionlint.yaml',
+                             '.github/actions/setup-live-curl/action.yml'):
+                target = directory / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(ROOT / relative, target)
+            self.assertEqual(admit_rule_findings(directory, run_actionlint=False), [])
+            # The excuse is for release.yml alone: the same line in another
+            # workflow is still refused, under the same fetched-path naming.
+            other = directory / '.github/workflows/other.yml'
+            other.write_text('name: other\non: workflow_dispatch\njobs:\n  job:\n'
+                             '    runs-on: ${{ matrix.runner }}\n    steps: []\n')
+            findings = admit_rule_findings(directory, run_actionlint=False)
+            self.assertTrue(any('other.yml' in finding and refusal in finding
+                                for finding in findings), findings)
 
 
 if __name__ == '__main__':

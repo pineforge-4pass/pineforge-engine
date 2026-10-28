@@ -14,7 +14,7 @@
 #include <pineforge/order_action.hpp>
 #include <pineforge/run_failure.hpp>
 #include <pineforge/detail/scratch_file.hpp>
-
+#include "retired_trade_history_read.hpp"
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -372,6 +372,10 @@ struct TradeLedger::State {
     size_type first = 0, end = 0, resident_first = 0, count = 0, head = 0;
     detail::ScratchFile index, payload;
     std::uint64_t payload_end = 0;
+    // Physical origins only. Record keys, text extents, size/base, all money
+    // folds and every hash remain in the original global coordinate space.
+    std::uint64_t index_origin = 0, payload_origin = 0, payload_retired = 0;
+    bool retiring = false;
     std::array<char, kPayloadTailBytes> payload_tail{};
     std::string directory;
     mutable std::map<size_type, Trade> materialized;
@@ -437,6 +441,11 @@ struct TradeLedger::State {
         }
     }
     void ensure_cache(size_type population) const {
+        // A retiring ledger refuses reads below `first`, so only the retained
+        // rows can ever be cached: size by them, not by every trade ever
+        // closed. Slots are global & mask, so any capacity covering the
+        // retained window holds it without collisions, wherever it starts.
+        if (retiring && population > first) population -= first;
         if (cache && (population <= cache_capacity || cache_capacity == cache_rows)) return;
         size_type capacity = kResidentRows;
         while (capacity < population && capacity < cache_rows) capacity *= 2;
@@ -502,12 +511,16 @@ struct TradeLedger::State {
             offset += static_cast<size_type>(entry.record.exit_comment.length);
         return std::string(entry.strings.data() + offset, static_cast<size_type>(text.length));
     }
-    static std::uint64_t record_offset(size_type global) {
+    static std::uint64_t absolute_record_offset(size_type global) {
         if (global > std::numeric_limits<std::uint64_t>::max() / sizeof(Record))
             throw detail::ScratchIoError(EFBIG, "trade ledger offset");
         return static_cast<std::uint64_t>(global) * sizeof(Record);
     }
+    std::uint64_t record_offset(size_type global) const {
+        return absolute_record_offset(global) - index_origin;
+    }
     void check(size_type global, bool mutable_row = false) const {
+        if (retiring && global < first) throw detail::RetiredTradeHistoryRead();
         if (global >= end || (mutable_row && global < first))
             throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                            "trade ledger: row outside resident window");
@@ -531,7 +544,7 @@ struct TradeLedger::State {
         detail::ScratchFile::check_extent(payload_end, text.size());
         const StringExtent result{payload_end, static_cast<std::uint64_t>(text.size())};
         if (!text.empty()) {
-            payload.write(payload_end, text.data(), text.size());
+            payload.write(payload_end - payload_origin, text.data(), text.size());
             remember_payload(payload_end, text);
         }
         payload_end += text.size();
@@ -539,7 +552,8 @@ struct TradeLedger::State {
     }
     void validate_string(StringExtent text) const {
         if (text.length > std::numeric_limits<size_type>::max()
-            || text.offset > payload_end || text.length > payload_end - text.offset)
+            || text.offset > payload_end || text.length > payload_end - text.offset
+            || (text.length != 0 && text.offset < payload_retired))
             throw detail::ScratchIoError(EIO, "trade ledger string extent");
     }
     void read_string(StringExtent text, char* result) const {
@@ -554,7 +568,7 @@ struct TradeLedger::State {
                 std::copy_n(payload_tail.data() + span.slot, span.first, result);
                 std::copy_n(payload_tail.data(), length - span.first, result + span.first);
             } else {
-                payload.read(text.offset, result, length);
+                payload.read(text.offset - payload_origin, result, length);
             }
         }
     }
@@ -592,6 +606,79 @@ struct TradeLedger::State {
         record.exit_from_bracket = row.exit_from_bracket; record.open_at_end = row.open_at_end;
         index.write(record_offset(global), &record, sizeof(record));
         return record;
+    }
+    static void erase_bytes(detail::ScratchFile& file, std::uint64_t first,
+                            std::uint64_t stop) {
+        const std::array<unsigned char, 4096> zeros{};
+        while (first < stop) {
+            const auto count = static_cast<size_type>(
+                std::min<std::uint64_t>(zeros.size(), stop - first));
+            file.write(first, zeros.data(), count);
+            first += count;
+        }
+    }
+    void erase_payload(StringExtent text) {
+        if (text.length == 0) return;
+        validate_string(text);
+        erase_bytes(payload, text.offset - payload_origin,
+                    text.offset - payload_origin + text.length);
+        // Also remove the erased bytes from the fixed resident payload tail.
+        const auto first = std::max(text.offset, payload_end > kPayloadTailBytes
+            ? payload_end - kPayloadTailBytes : 0);
+        const auto stop = text.offset + text.length;
+        if (first < stop) {
+            const auto count = static_cast<size_type>(stop - first);
+            const auto span = tail_span(first, count);
+            std::fill_n(payload_tail.data() + span.slot, span.first, '\0');
+            std::fill_n(payload_tail.data(), count - span.first, '\0');
+        }
+    }
+    static void release_head(detail::ScratchFile& file, std::uint64_t& origin,
+                             std::uint64_t old_end, std::uint64_t new_end,
+                             bool empty) {
+        if (new_end == origin && !empty) return;
+        if (empty) {
+            // No suffix, including an all-empty-string payload: release the
+            // final partial chunk too. Keep the configured backing open.
+            if (file.opened()) file.truncate(0);
+            origin = new_end;
+            return;
+        }
+        const auto bytes = (new_end - origin) / detail::ScratchArena::kChunkBytes
+            * detail::ScratchArena::kChunkBytes;
+        file.release_prefix(bytes);
+        origin += bytes;
+        // At most one zero-filled head chunk remains. It contains no closed
+        // row bytes; complete chunks have returned to the allocator/file.
+        erase_bytes(file, std::max(old_end, origin) - origin, new_end - origin);
+    }
+    void retire(size_type global_end) {
+        if (!retiring || global_end == first) return;
+        // Mutable rows may have been replaced out of order. The first live
+        // row's text is not necessarily the first live text extent: examine
+        // every surviving descriptor before selecting a payload watermark.
+        std::uint64_t text_first = payload_end;
+        for (size_type i = global_end; i < end; ++i) {
+            const auto row = descriptor(i);
+            for (const auto text : {row.entry_id, row.entry_comment,
+                                    row.exit_comment, row.exit_id})
+                if (text.length != 0) text_first = std::min(text_first, text.offset);
+        }
+        // No strings are shared between rows. Erase retired text even when a
+        // replacement put it AFTER a surviving row's earliest payload.
+        for (size_type i = first; i < global_end; ++i) {
+            const auto row = descriptor(i);
+            for (const auto text : {row.entry_id, row.entry_comment,
+                                    row.exit_comment, row.exit_id})
+                erase_payload(text);
+        }
+        release_head(index, index_origin, absolute_record_offset(first),
+                     absolute_record_offset(global_end), global_end == end);
+        release_head(payload, payload_origin, payload_retired, text_first,
+                     text_first == payload_end);
+        payload_retired = text_first;
+        invalidate_cache();
+        materialized.erase(materialized.begin(), materialized.lower_bound(global_end));
     }
     static Trade decode_numeric(const Record& record) {
         Trade row{};
@@ -652,7 +739,14 @@ TradeLedger::TradeLedger(const TradeLedger& other)
     set_scratch_directory(other.state_->directory);
     // Do not populate/copy the read cache just to clone scratch. Existing
     // source hits may serve the copy; misses keep the original O(T) I/O path.
-    for (size_type i = 0; i < other.size(); ++i) {
+    if (other.state_->retiring) {
+        // A copy owns the same logical window, without trying to resurrect an
+        // intentionally retired prefix. Rebuild only the retained payload.
+        state_->retiring = true;
+        state_->first = state_->end = state_->resident_first = other.base();
+        state_->index_origin = State::absolute_record_offset(other.base());
+    }
+    for (size_type i = state_->end; i < other.size(); ++i) {
         const auto* entry = other.state_->cached(i);
         push_back(entry && entry->strings_valid()
                       ? State::decode_cached(*entry)
@@ -697,6 +791,19 @@ void TradeLedger::set_scratch_directory(const std::string& directory) {
     state_->directory = directory;
 }
 const std::string& TradeLedger::scratch_directory() const { return state_->directory; }
+
+void TradeLedger::set_history_retirement(bool enabled) {
+    if (state_->end != 0 || state_->index.opened() || state_->payload.opened())
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                       "trade ledger: retirement policy changed after append");
+    state_->retiring = enabled;
+}
+
+void TradeLedger::check_history_read(size_type global) const { state_->check(global); }
+
+std::array<std::uint64_t, 2> TradeLedger::scratch_storage_bytes() const {
+    return {state_->index.storage_bytes(), state_->payload.storage_bytes()};
+}
 
 void TradeLedger::set_cache_rows(size_type rows) {
     State::validate_cache_rows(rows);
@@ -814,6 +921,16 @@ void TradeLedger::replace(size_type global, const Trade& row) {
     const auto previous = state_->descriptor(global);
     state_->invalidate(global);
     const auto record = state_->store(global, row, &previous);
+    if (state_->retiring) {
+        const State::StringExtent old_texts[]{previous.entry_id, previous.entry_comment,
+                                             previous.exit_comment, previous.exit_id};
+        const State::StringExtent new_texts[]{record.entry_id, record.entry_comment,
+                                             record.exit_comment, record.exit_id};
+        for (size_type i = 0; i < 4; ++i)
+            if (old_texts[i].offset != new_texts[i].offset
+                || old_texts[i].length != new_texts[i].length)
+                state_->erase_payload(old_texts[i]);
+    }
     if (global >= state_->resident_first) state_->rows[state_->slot(global)] = record;
     const auto legacy = state_->materialized.find(global);
     if (legacy != state_->materialized.end()) legacy->second = row;
@@ -891,6 +1008,9 @@ void TradeLedger::seal(size_type global_end) {
     if (global_end < state_->first || global_end > size())
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                        "trade ledger: seal outside resident window");
+    // The consumer has already emitted T and folded all logical identities.
+    // Only an explicitly admitted sink run drops its physical history.
+    state_->retire(global_end);
     // Publication changes no row content, and the checked accessors refuse
     // sealed rows before they reach the cache: cached entries stay valid, so a
     // closedtrades loop is not made cold again by every published trade.

@@ -2159,7 +2159,7 @@ def normalize_release_provenance(provenance, cpp_text, receipt, checked):
 
 # --- The failure line -------------------------------------------------------
 #
-# Every failure prints ONE line on stdout, written by failure_line:
+# Every failure publishes ONE line on the report channel, written by failure_line:
 #     {"engine":"pineforge","error":"<text>","code":"<code>","args":{...}}
 # "engine" and "error" lead, so the line still starts with
 # {"engine":"pineforge","error":" and "error" is the English text, unchanged
@@ -2271,7 +2271,7 @@ class _SigtermAbort:
     def close(self):
         if self.mask is None:
             return
-        # Keep the native handler through cleanup AND the single stdout line.
+        # Keep the native handler through cleanup AND the single report line.
         # Consume blocked repeats before restoring an embedding caller's mask.
         signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
         if self.lib is not None and self.lib.pf_run_abort_restore_sigterm_v1() != 0:
@@ -2361,8 +2361,8 @@ def failure_line(text, code=None, code_args=None) -> str:
 
 
 def write_failure(text, code=None, code_args=None) -> None:
-    sys.stdout.write(failure_line(text, code, code_args))
-    sys.stdout.flush()
+    line = failure_line(text, code, code_args)
+    _publish_failure(line)
 
 
 def _c_text(raw) -> str:
@@ -4491,6 +4491,9 @@ class _ArgumentParser(argparse.ArgumentParser):
     run_request_invalid{option}; it still prints the usage and the message to
     stderr and exits 2."""
 
+    def print_help(self, file=None):
+        super().print_help(file=_report_output() if file is None else file)
+
     def error(self, message):
         self.print_usage(sys.stderr)
         text = f"{self.prog}: error: {message}"
@@ -4547,7 +4550,7 @@ def run_failure(lib, strat):
 #      Afterwards the retained callback exception is raised first, the native counts must equal
 #      the plan, the report is assembled (the engine supplies the selected trades, curve and
 #      metrics; nothing is recalculated here) and serialized once the serialization phase has
-#      begun; completed follows the stdout flush.
+#      begun; completed follows the report-channel flush.
 
 _TYPED_ERROR_NAMES = frozenset({"SelectedWindowError", "InventoryAdmissionError",
                                 "PlanBridgeError", "ObserverBindingError",
@@ -4768,33 +4771,37 @@ def _syminfo_clock(syminfo_path) -> tuple:
 
 
 def _write_report(text, phases=None) -> int:
-    """Write the whole document to stdout and flush: 0, or 1 when stdout cannot take it. No
-    failure line (no second JSON document) may follow part of a report, so the reason goes to
-    stderr, stdout is pointed at /dev/null, the exit status is 1 and the phase writer is left
+    """Write the whole document to the report channel and flush: 0, or 1 when it cannot
+    take it. No failure line (no second JSON document) may follow part of a report, so the reason
+    goes to stderr, the report descriptor is discarded, the exit status is 1 and the phase writer is left
     where it is (serialization): the watchdog sees the terminal status and the last phase.
     With a phase session (a run past the boundary) any exception from the write is that
     outcome, and the stderr line names it as report_post_execution_failed with the real
-    phase and the reason (resource, io or exception); without one, only OSError and ValueError
-    are, and the line is the ordinary one."""
-    caught = (OSError, ValueError) if phases is None else Exception
+    phase and the reason (resource, io or exception); without one, the line is the ordinary
+    one and library calls retain their OSError/ValueError handling."""
+    caught = (OSError, ValueError) if phases is None and _REPORT_OUTPUT is None else Exception
+    already_published = _report_published()
     try:
+        _begin_report()
         if isinstance(text, str):
-            sys.stdout.write(text)
+            _report_output().write(text)
         else:
             # A fully prepared, ASCII JSON temporary. No report byte is
             # published until serialization and native cleanup have succeeded.
             try:
                 while chunk := text.read(1024 * 1024):
-                    written = sys.stdout.write(chunk)
+                    written = _report_output().write(chunk)
                     if written is not None and written != len(chunk):
                         raise OSError("short report write")
             finally:
                 # Close errors after publication obey the same stderr-only
-                # rule as stdout errors; the outer resource stack is idempotent.
+                # rule as report-channel errors; the outer resource stack is idempotent.
                 text.close()
-        sys.stdout.flush()
+        _finish_report()
     except caught as error:
-        _discard_stdout()
+        # A rejected second library publication must not discard the caller's stdout.
+        if _REPORT_OUTPUT is not None or not already_published:
+            _discard_stdout()
         if phases is None:
             print(f"run_json: the report could not be written: {error}", file=sys.stderr)
         else:
@@ -5138,7 +5145,7 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
         out["diagnostics"]["phase_timing"] = phases.writer.phase_timing()
         buffer = _prepare_report_json(out, binary_inputs, args, sink)
         if output_files is not None:
-            output_files.close()  # surface column close failures before stdout
+            output_files.close()  # surface column close failures before report publication
     except Exception as error:
         # Once the engine has acknowledged result_assembly (the REAL writer phase), an
         # unclassified failure is report_post_execution_failed{phase, reason}; typed faults,
@@ -5176,7 +5183,7 @@ def _csv2bin_main(argv) -> int:
     """Standalone conversion: no strategy library, one refusal line on stderr."""
     import pf_bars
 
-    class ConverterParser(argparse.ArgumentParser):
+    class ConverterParser(_ArgumentParser):
         def error(self, message):
             raise RunFailure(f"csv2bin: {message}", "run_request_invalid",
                              {"option": "arguments"}, exit_status=2)
@@ -5209,42 +5216,44 @@ def _csv2bin_main(argv) -> int:
 
 
 def main(argv=None) -> int:
-    """Run the harness. Every failure ends as the one failure line on stdout:
+    """Run the harness. Every failure ends as the one failure line on the report channel:
     run_json's own (RunFailure) with its code, a selected-window helper's typed error
     (_typed_failure) with its code, and anything unexpected as
     harness_internal_error (its traceback on stderr). Exit status 1, or 2 for a
-    command line argparse refuses. The one exception is a success report stdout
+    command line argparse refuses. The one exception is a success report publication
     cannot take whole (_main): exit 1 with the reason on stderr and no line after
     the part written. The csv2bin subcommand instead returns 2 on refusal and
     writes its one failure line to stderr (the converter contract)."""
-    tokens = sys.argv[1:] if argv is None else argv
-    if tokens and tokens[0] == "csv2bin":
-        return _csv2bin_main(tokens[1:])
-    abort = _SigtermAbort()
-    try:
-        with ExitStack() as binary_inputs:
-            binary_inputs._sigterm_abort = abort
-            return _main(argv, binary_inputs)
-    except RunFailure as failure:
-        if not abort.started and abort.requested():
-            failure = abort.failure()
-        write_failure(str(failure), failure.code, failure.code_args)
-        return failure.exit_status
-    except Exception as error:
-        if not abort.started and abort.requested():
-            failure = abort.failure()
+    with _LibraryReportRun():
+        tokens = sys.argv[1:] if argv is None else argv
+        if tokens and tokens[0] == "csv2bin":
+            return _csv2bin_main(tokens[1:])
+        abort = _SigtermAbort()
+        try:
+            with ExitStack() as binary_inputs:
+                binary_inputs._sigterm_abort = abort
+                return _main(argv, binary_inputs)
+        except RunFailure as failure:
+            if not abort.started and abort.requested():
+                failure = abort.failure()
             write_failure(str(failure), failure.code, failure.code_args)
+            return failure.exit_status
+        except Exception as error:
+            if not abort.started and abort.requested():
+                failure = abort.failure()
+                write_failure(str(failure), failure.code, failure.code_args)
+                return 1
+            typed = _typed_failure(error)
+            if typed is not None:
+                write_failure(str(typed), typed.code, typed.code_args)
+                return typed.exit_status
+            traceback.print_exc(file=sys.stderr)
+            write_failure(f"harness internal error: {type(error).__name__}: {error}",
+                          "harness_internal_error")
             return 1
-        typed = _typed_failure(error)
-        if typed is not None:
-            write_failure(str(typed), typed.code, typed.code_args)
-            return typed.exit_status
-        traceback.print_exc(file=sys.stderr)
-        write_failure(f"harness internal error: {type(error).__name__}: {error}",
-                      "harness_internal_error")
-        return 1
-    finally:
-        abort.close()
+        finally:
+            abort.close()
+    return 1  # A fault after library publication was diagnosed by the run guard.
 
 
 def _legacy_abbreviations(argv, legacy_long, all_long):
@@ -5565,7 +5574,7 @@ def _main(argv, binary_inputs) -> int:
     # isolates the engine hot loop (closest to the GBench harness). dlopen
     # already happened above (load_strategy), outside any loop. A rejected
     # --syminfo / --symbol-feeds / setting raises its RunFailure before any
-    # stdout; main() prints it.
+    # publication; main() writes it.
     timing = None
     if args.symbol_feeds:
         symbol_feeds = _run_symbol_feeds(args, binary_inputs)
@@ -5729,7 +5738,7 @@ def _main(argv, binary_inputs) -> int:
                                  {"field": "report.document", "reason": "nonfinite"}) from error
             raise
         if output_files is not None:
-            output_files.close()  # detect column close errors before any stdout
+            output_files.close()  # detect column close errors before report publication
     except Exception as error:
         # Without --run-phase-fd the writer above types its non-finite refusal;
         # other errors keep their existing classification.
@@ -5843,8 +5852,9 @@ def _add_scratch_arena_counters(lib, diagnostics):
 
 
 def _refuse_jailed_path_sink(args):
-    if (getattr(args, "profile", "unjailed") == "jailed"
-            and getattr(args, "report_sink", None) is not None):
+    if (_validate_report_fd_separation(args)
+            or (getattr(args, "profile", "unjailed") == "jailed"
+            and getattr(args, "report_sink", None) is not None)):
         raise _request_invalid("error: --profile jailed refuses --report-sink paths; "
                                "use --report-sink-fd", "arguments")
     if (getattr(args, "profile", "unjailed") == "jailed"
@@ -7427,7 +7437,7 @@ def _prepare_stream_report(document, resources, directory, *, sink_errors=True):
             file = _json_temporary(prepared, directory)
             _stream_json(document, file)
             file.write("\n")
-            file.flush()  # disk errors must precede the first stdout byte
+            file.flush()  # disk errors must precede the first report byte
             file.seek(0)
             # A failed serialization closes its artifact immediately, even
             # when the caller catches the error inside its resource scope.
@@ -7875,9 +7885,260 @@ def _read_strategy_initial_capital(lib, state):
     return accessor(state)
 
 
+_REPORT_OUTPUT = None
+_LIBRARY_REPORT_RUN = None
+
+
+class _LibraryReportRun:
+    """Scope publication state to one main() call without owning any descriptor."""
+
+    def __enter__(self):
+        global _LIBRARY_REPORT_RUN
+        self.previous = _LIBRARY_REPORT_RUN
+        self.published = False
+        _LIBRARY_REPORT_RUN = self
+        return self
+
+    def __exit__(self, kind, error, tb):
+        global _LIBRARY_REPORT_RUN
+        _LIBRARY_REPORT_RUN = self.previous
+        if (_REPORT_OUTPUT is None and self.published
+                and isinstance(error, Exception)):
+            _write_diagnostic(f"run_json: fault after report publication: "
+                              f"{type(error).__name__}: {error}\n")
+            return True
+        return False
+
+
+class _ReportOutput:
+    """Own the caller's report descriptor and route native fd 1 to stderr."""
+
+    def __init__(self):
+        if _same_open_file(1, 2):
+            _write_diagnostic("report channel not isolated: "
+                              "stdout and stderr are the same file\n")
+        fd = os.dup(1)
+        try:
+            if fd == 5:
+                replacement = os.dup(1)
+                os.close(fd)
+                fd = replacement
+            os.set_inheritable(fd, False)
+            os.dup2(2, 1)
+        except BaseException:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            raise
+        self.fd = fd
+        self._state = "open"
+
+    @property
+    def published(self):
+        return self._state != "open"
+
+    def write(self, text):
+        if self._state == "open":
+            self._state = "publishing"
+        elif self._state != "publishing":
+            raise OSError("the report channel has already been published")
+        data = text.encode("utf-8")
+        offset = 0
+        while offset < len(data):
+            try:
+                written = os.write(self.fd, data[offset:])
+            except InterruptedError:
+                continue
+            if written <= 0:
+                raise OSError("short report write")
+            offset += written
+        return len(text)
+
+    def flush(self):
+        return None
+
+    def finish(self):
+        if self._state != "publishing":
+            raise OSError("the report channel has already been published")
+        self.flush()
+        self._state = "published"
+
+    def discard(self):
+        self._state = "published"
+        if self.fd is None:
+            return
+        try:
+            devnull = os.open(os.devnull, os.O_WRONLY)
+            try:
+                os.dup2(devnull, self.fd, inheritable=False)
+            finally:
+                os.close(devnull)
+        except OSError:
+            pass
+
+    def close(self):
+        fd = self.fd
+        if fd is None:
+            return
+        self._state = "published"
+        try:
+            self.flush()
+        finally:
+            self.fd = None
+            try:
+                os.close(fd)
+            except OSError as error:
+                if error.errno != errno.EBADF:
+                    raise
+
+
+def _report_output():
+    # Library callers may replace sys.stdout between writes or between runs.
+    return sys.stdout if _REPORT_OUTPUT is None else _REPORT_OUTPUT
+
+
+def _report_published():
+    if _REPORT_OUTPUT is not None:
+        return _REPORT_OUTPUT.published
+    return _LIBRARY_REPORT_RUN is not None and _LIBRARY_REPORT_RUN.published
+
+
+def _begin_report():
+    if _report_published():
+        raise OSError("the report channel has already been published")
+    if _REPORT_OUTPUT is None and _LIBRARY_REPORT_RUN is not None:
+        _LIBRARY_REPORT_RUN.published = True
+
+
+def _finish_report():
+    if _REPORT_OUTPUT is None:
+        sys.stdout.flush()
+    else:
+        _REPORT_OUTPUT.finish()
+
+
+def _same_open_file(left, right):
+    if left is None or right is None:
+        return False
+    if left == right:
+        return True
+    sameopenfile = getattr(os.path, "sameopenfile", None)
+    if sameopenfile is None:
+        return False
+    try:
+        return bool(sameopenfile(left, right))
+    except (OSError, TypeError, ValueError):
+        return False
+
+
+def _validate_report_fd_separation(args):
+    owner = _REPORT_OUTPUT
+    if owner is None or owner.fd is None:
+        return None
+
+    def check(fd, label):
+        if isinstance(fd, int) and 3 <= fd <= (1 << (ctypes.sizeof(ctypes.c_int) * 8 - 1)) - 1 and (
+                fd == owner.fd or _same_open_file(owner.fd, fd)):
+            raise _request_invalid(
+                f"error: {label} collides with the reserved report descriptor",
+                "arguments", exit_status=2)
+
+    sink_fd = getattr(args, "report_sink_fd", None)
+    check(sink_fd, "--report-sink-fd")
+    phase_fd = getattr(args, "run_phase_fd", None)
+    if isinstance(phase_fd, int):
+        check(phase_fd, "--run-phase-fd")
+    elif (isinstance(phase_fd, str)
+          and re.fullmatch(r"[0-9]{1,10}", phase_fd) is not None):
+        check(int(phase_fd), "--run-phase-fd")
+    check(5, "PF_SCRATCH_ARENA_FD")
+    sink_path = getattr(args, "report_sink", None)
+    if sink_path is not None:
+        try:
+            report_target = os.path.realpath(os.fspath(sink_path))
+            saved_target = os.path.realpath(f"/proc/self/fd/{owner.fd}")
+        except (OSError, TypeError, ValueError):
+            report_target = saved_target = None
+        if report_target is not None and report_target == saved_target:
+            raise _request_invalid(
+                "error: --report-sink aliases the reserved report descriptor",
+                "arguments", exit_status=2)
+    return None
+
+
+_REPORT_MAIN = main
+
+
+def _host_main(argv=None) -> int:
+    global _REPORT_OUTPUT
+    try:
+        output = _ReportOutput()
+    except Exception as error:
+        sys.stderr.write(f"run_json: report channel setup failed: {error}\n")
+        sys.stderr.flush()
+        return 1
+    _REPORT_OUTPUT = output
+    status = 1
+    try:
+        status = _REPORT_MAIN(argv)
+    except Exception as error:
+        status = 1
+        if output.published:
+            _write_diagnostic(f"run_json: fault after report publication: "
+                              f"{type(error).__name__}: {error}\n")
+        else:
+            try:
+                write_failure(f"harness internal error: {type(error).__name__}: {error}",
+                              "harness_internal_error")
+            except Exception:
+                traceback.print_exc(file=sys.stderr)
+    finally:
+        try:
+            output.close()
+        except Exception as error:
+            status = 1
+            if output.published:
+                sys.stderr.write(f"run_json: report channel close failed: {error}\n")
+                sys.stderr.flush()
+            else:
+                try:
+                    write_failure(f"harness internal error: {type(error).__name__}: {error}",
+                                  "harness_internal_error")
+                except Exception:
+                    traceback.print_exc(file=sys.stderr)
+        _REPORT_OUTPUT = None
+    return status
+
+
+def _write_diagnostic(text):
+    sys.stderr.write(text)
+    sys.stderr.flush()
+
+
+def _publish_failure(line):
+    if _report_published():
+        _write_diagnostic(f"run_json: fault after report publication: {line}")
+        return
+    _begin_report()
+    if _REPORT_OUTPUT is None:
+        sys.stdout.write(line)
+        sys.stdout.flush()
+        return
+    try:
+        output = _report_output()
+        output.write(line)
+        output.finish()
+    except (OSError, ValueError) as error:
+        _discard_stdout()
+        _write_diagnostic(f"run_json: the failure could not be written: {error}\n")
+
+
 def _discard_stdout() -> None:
-    """Point stdout's file descriptor at /dev/null after a failed report write,
-    so what stdout still buffers is dropped instead of written again at exit."""
+    """Discard the host's report descriptor, or the library caller's current stdout."""
+    if _REPORT_OUTPUT is not None:
+        _REPORT_OUTPUT.discard()
+        return
     try:
         fd = sys.stdout.fileno()
     except (AttributeError, OSError, ValueError):  # not a file: nothing to drop
@@ -7890,4 +8151,4 @@ def _discard_stdout() -> None:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(_host_main())

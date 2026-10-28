@@ -6,6 +6,7 @@
 
 #include "../runner/report.hpp"
 #include "equity_stats_reference.hpp"
+#include "metrics_streaming_stop_fixture.hpp"
 
 #include <cmath>
 #include <cstddef>
@@ -844,6 +845,52 @@ void producer_boundaries() {
 }
 }  // namespace
 
+// streaming-ratio extension. Matching extent does not certify failure order:
+// the legacy interleaving must promote Sharpe's overflow before Sortino's.
+// Expected diagnostics/operation order come from the frozen test reference.
+static void overflow_matching_plan_row() {
+    namespace mt = metrics_streaming_test;
+    for (bool actual_return : {true, false}) {
+        row = actual_return ? "streaming-O-RETURN-matching-plan" : "streaming-O-ORDER-matching-plan";
+        const std::vector<double> equity = actual_return
+            ? std::vector<double>{1., -1., 0x1p-600, 0x1p600, 1.}
+            : std::vector<double>{1., -0x1p600, 1., 2.};
+        std::vector<pf_equity_point_t> points;
+        for (std::size_t i = 0; i < equity.size(); ++i)
+            points.push_back({static_cast<std::int64_t>(i) * mt::day, equity[i], 0.});
+        const auto source = mt::source(points);
+        CHECK(mt::overflow_prefix_is_finite(source));
+        const auto want = mt::legacy(source);
+        CHECK(want.failure_field == "metrics.equity.sharpe_bar");
+        CHECK(want.failure_index == (actual_return ? 1 : 0));
+        CHECK(want.failure_operation == (actual_return ? "promote.return.first_pass"
+                                                       : "variance.add_square"));
+        std::vector<mt::Trace> trace;
+        std::unique_ptr<metrics::StreamingEquityRatiosV1> fold;
+        const auto status = metrics::make_streaming_equity_ratios_v1(
+            mt::config(), mt::plan(source), {&trace, &mt::collect_trace}, fold);
+        CHECK(status == metrics::MetricsStreamingStatusV1::Ok);
+        if (status != metrics::MetricsStreamingStatusV1::Ok) continue;
+        CHECK(fold != nullptr);
+        if (!fold) continue;
+        for (const auto& p : points)
+            CHECK(fold->append(p, equity_stats_reference::month_key_utc(p.time_ms))
+                  == metrics::MetricsStreamingStatusV1::Ok);
+        metrics::MetricsStreamingResultV1 got;
+        CHECK(fold->finish(got) == metrics::MetricsStreamingStatusV1::Ok);
+        CHECK(got.failure_code && want.failure_code == got.failure_code);
+        CHECK(got.failure_field && want.failure_field == got.failure_field);
+        CHECK(got.failure_reason && want.failure_reason == got.failure_reason);
+        const auto failure = std::find_if(trace.begin(), trace.end(),
+            [](const mt::Trace& t) { return !t.code.empty(); });
+        CHECK(failure != trace.end());
+        if (failure != trace.end()) {
+            CHECK(failure->index == want.failure_index);
+            CHECK(failure->operation == want.failure_operation);
+        }
+    }
+}
+
 int main() {
     report_trade_assembly();
     earlier_failure_keeps_its_code();
@@ -856,6 +903,7 @@ int main() {
     short_span_real_report();
     defined_absences_and_finite_values();
     producer_boundaries();
+    overflow_matching_plan_row();
     std::printf("metrics overflow: %d failure(s)\n", failures);
     return failures ? 1 : 0;
 }

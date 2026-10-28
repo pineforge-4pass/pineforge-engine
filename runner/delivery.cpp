@@ -68,8 +68,12 @@ DeliveryWorker::~DeliveryWorker() {
 }
 
 void DeliveryWorker::check() const {
-    if (worker_failed_.load(std::memory_order_acquire))
+    if (worker_failed_.load(std::memory_order_acquire)) {
+        try { std::rethrow_exception(error_); }
+        catch (const LedgerBudgetExceeded&) { throw; }
+        catch (...) {}
         throw std::runtime_error("webhook delivery worker failed; committed actions remain in the ledger");
+    }
 }
 
 void DeliveryWorker::limit_drain() {
@@ -141,15 +145,23 @@ void DeliveryWorker::run() {
             retries.clear();
         }
         if (!deadline && DeliveryClock::now() >= control_due) {
+            std::exception_ptr budget_failure;
             controls.poll(deployment_, [&](const Json& request) {
+                if (budget_failure) std::rethrow_exception(budget_failure);
                 const auto target = request.at("target").text();
                 const auto from = request.at("from").integer<std::uint64_t>();
                 if (!targets_.count(target) || !from || request.at("failed_only").kind != Json::Kind::Bool)
                     throw std::invalid_argument("invalid redelivery selection");
-                return ledger_.request_redelivery(request.at("request_id").text(), target, from,
-                    request.at("failed_only").value == "true");
+                try {
+                    return ledger_.request_redelivery(request.at("request_id").text(), target, from,
+                        request.at("failed_only").value == "true");
+                } catch (const LedgerBudgetExceeded&) {
+                    budget_failure = std::current_exception();
+                    throw;
+                }
             });
             control_errors_ = controls.errors();
+            if (budget_failure) std::rethrow_exception(budget_failure);
             control_due = DeliveryClock::now() + std::chrono::milliseconds(100);
         }
         bool exhausted = false;

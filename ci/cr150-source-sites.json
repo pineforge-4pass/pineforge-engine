@@ -1641,6 +1641,19 @@
    "ordinal": 1
   },
   {
+   "file": "include/pineforge/detail/id_table_read_cache.hpp",
+   "symbol": "reset",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class IdTableReadCache #1",
+    "template < class File > void read ( const File & source , bool plain_disk , std :: uint64_t logical_end , unsigned file , std :: uint64_t offset , void * destination , std :: size_t length ) const #1",
+    "if ( ! bytes_ ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "new",
+   "ordinal": 1
+  },
+  {
    "file": "include/pineforge/detail/journal_codec.hpp",
    "symbol": "out",
    "scope": [
@@ -3347,6 +3360,20 @@
    ],
    "cls": "grow",
    "spelling": "equity_curve_ . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/engine.hpp",
+   "symbol": "fold",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v19 #2",
+    "class BacktestEngine #1",
+    "void record_equity_point ( int64_t script_bar_ts ) #1",
+    "if ( metrics_streaming_ . fold ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "fold . append ( . . . )",
    "ordinal": 1
   },
   {
@@ -5161,106 +5188,6 @@
   },
   {
    "file": "include/pineforge/map.hpp",
-   "symbol": "<temp:PineMap>",
-   "scope": [
-    "namespace pineforge #1"
-   ],
-   "cls": "temp",
-   "spelling": "PineMap",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/map.hpp",
-   "symbol": "<temp:PineMap>",
-   "scope": [
-    "namespace pineforge #1",
-    "template < typename Key , typename Value > class PineMap #1"
-   ],
-   "cls": "temp",
-   "spelling": "PineMap",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/map.hpp",
-   "symbol": "<temp:PineMap>",
-   "scope": [
-    "namespace pineforge #1",
-    "template < typename Key , typename Value > class PineMap #1"
-   ],
-   "cls": "temp",
-   "spelling": "PineMap",
-   "ordinal": 2
-  },
-  {
-   "file": "include/pineforge/map.hpp",
-   "symbol": "<temp:PineMap>",
-   "scope": [
-    "namespace pineforge #1",
-    "template < typename Key , typename Value > class PineMap #1"
-   ],
-   "cls": "temp",
-   "spelling": "PineMap",
-   "ordinal": 3
-  },
-  {
-   "file": "include/pineforge/map.hpp",
-   "symbol": "new_",
-   "scope": [
-    "namespace pineforge #1",
-    "template < typename Key , typename Value > class PineMap #1"
-   ],
-   "cls": "decl",
-   "spelling": "PineMap",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/map.hpp",
-   "symbol": "<temp:PineMap>",
-   "scope": [
-    "namespace pineforge #1",
-    "template < typename Key , typename Value > class PineMap #1",
-    "[ [ nodiscard ] ] static PineMap new_ ( ) #1"
-   ],
-   "cls": "temp",
-   "spelling": "PineMap",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/map.hpp",
-   "symbol": "copy",
-   "scope": [
-    "namespace pineforge #1",
-    "template < typename Key , typename Value > class PineMap #1"
-   ],
-   "cls": "decl",
-   "spelling": "PineMap",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/map.hpp",
-   "symbol": "<temp:PineMap>",
-   "scope": [
-    "namespace pineforge #1",
-    "template < typename Key , typename Value > class PineMap #1",
-    "[ [ nodiscard ] ] PineMap copy ( ) const #1"
-   ],
-   "cls": "temp",
-   "spelling": "PineMap",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/map.hpp",
-   "symbol": "<temp:PineMap>",
-   "scope": [
-    "namespace pineforge #1",
-    "template < typename Key , typename Value > class PineMap #1"
-   ],
-   "cls": "temp",
-   "spelling": "PineMap",
-   "ordinal": 4
-  },
-  {
-   "file": "include/pineforge/map.hpp",
    "symbol": "holder",
    "scope": [
     "namespace pineforge #1",
@@ -5463,6 +5390,16 @@
   },
   {
    "file": "include/pineforge/map.hpp",
+   "symbol": "<temp:PineMap>",
+   "scope": [
+    "namespace pineforge #1"
+   ],
+   "cls": "temp",
+   "spelling": "PineMap",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/map.hpp",
    "symbol": "heap_values",
    "scope": [
     "namespace pineforge #1",
@@ -5475,6 +5412,50 @@
   },
   {
    "file": "include/pineforge/map.hpp",
+   "symbol": "<temp:PineMap>",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename Key , typename Value > class PineMap #1"
+   ],
+   "cls": "temp",
+   "spelling": "PineMap",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/map.hpp",
+   "symbol": "<temp:PineMap>",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename Key , typename Value > class PineMap #1"
+   ],
+   "cls": "temp",
+   "spelling": "PineMap",
+   "ordinal": 2
+  },
+  {
+   "file": "include/pineforge/map.hpp",
+   "symbol": "<temp:PineMap>",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename Key , typename Value > class PineMap #1"
+   ],
+   "cls": "temp",
+   "spelling": "PineMap",
+   "ordinal": 3
+  },
+  {
+   "file": "include/pineforge/map.hpp",
+   "symbol": "new_",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename Key , typename Value > class PineMap #1"
+   ],
+   "cls": "decl",
+   "spelling": "PineMap",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/map.hpp",
    "symbol": "storage",
    "scope": [
     "namespace pineforge #1",
@@ -5483,6 +5464,18 @@
    ],
    "cls": "alloc",
    "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/map.hpp",
+   "symbol": "<temp:PineMap>",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename Key , typename Value > class PineMap #1",
+    "[ [ nodiscard ] ] static PineMap new_ ( ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "PineMap",
    "ordinal": 1
   },
   {
@@ -5551,6 +5544,17 @@
   },
   {
    "file": "include/pineforge/map.hpp",
+   "symbol": "copy",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename Key , typename Value > class PineMap #1"
+   ],
+   "cls": "decl",
+   "spelling": "PineMap",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/map.hpp",
    "symbol": "storage",
    "scope": [
     "namespace pineforge #1",
@@ -5575,6 +5579,18 @@
   },
   {
    "file": "include/pineforge/map.hpp",
+   "symbol": "<temp:PineMap>",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename Key , typename Value > class PineMap #1",
+    "[ [ nodiscard ] ] PineMap copy ( ) const #1"
+   ],
+   "cls": "temp",
+   "spelling": "PineMap",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/map.hpp",
    "symbol": "previous",
    "scope": [
     "namespace pineforge #1",
@@ -5584,6 +5600,17 @@
    "cls": "assign",
    "spelling": "previous = . . .",
    "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/map.hpp",
+   "symbol": "<temp:PineMap>",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename Key , typename Value > class PineMap #1"
+   ],
+   "cls": "temp",
+   "spelling": "PineMap",
+   "ordinal": 4
   },
   {
    "file": "include/pineforge/map.hpp",
@@ -10283,6 +10310,18 @@
   },
   {
    "file": "include/pineforge/source/pine_adapter.hpp",
+   "symbol": "end",
+   "scope": [
+    "namespace pineforge :: source #2",
+    "class PineExecutionAdapter #1",
+    "private : struct ExitGroupCertificate #1"
+   ],
+   "cls": "assign",
+   "spelling": "end = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_adapter.hpp",
    "symbol": "open_exit_first_id_",
    "scope": [
     "namespace pineforge :: source #2",
@@ -10578,6 +10617,64 @@
    ],
    "cls": "decl",
    "spelling": "std :: vector < std :: pair < native_order :: CohortHandle , std :: uint64_t > >",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_adapter.hpp",
+   "symbol": "projected_pending_indexes_",
+   "scope": [
+    "namespace pineforge :: source #2",
+    "class PineExecutionAdapter #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < int >",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_adapter.hpp",
+   "symbol": "projected_pending_next_",
+   "scope": [
+    "namespace pineforge :: source #2",
+    "class PineExecutionAdapter #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < int >",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_adapter.hpp",
+   "symbol": "opened",
+   "scope": [
+    "namespace pineforge :: source #2",
+    "class PineExecutionAdapter #1",
+    "struct RetirementPopulation #1"
+   ],
+   "cls": "assign",
+   "spelling": "opened = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_adapter.hpp",
+   "symbol": "roots",
+   "scope": [
+    "namespace pineforge :: source #2",
+    "class PineExecutionAdapter #1",
+    "struct RetirementInputs #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < std :: uint64_t >",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_adapter.hpp",
+   "symbol": "bar_numbers",
+   "scope": [
+    "namespace pineforge :: source #2",
+    "class PineExecutionAdapter #1",
+    "struct RetirementInputs #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < std :: int32_t >",
    "ordinal": 1
   },
   {
@@ -13197,32 +13294,6 @@
   },
   {
    "file": "src/detail/o1_store.cpp",
-   "symbol": "new:StoreImpl",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace detail #1",
-    "namespace o1 #1",
-    "std :: unique_ptr < Store > Store :: open ( const Shape & shape , ScratchBacking & backing ) #1"
-   ],
-   "cls": "alloc",
-   "spelling": "new StoreImpl",
-   "ordinal": 1
-  },
-  {
-   "file": "src/detail/o1_store.cpp",
-   "symbol": "<temp:string>",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace detail #1",
-    "namespace o1 #1",
-    "[ [ noreturn ] ] void StoreImpl :: throw_status ( const char * what , ScratchStatus status ) const #1"
-   ],
-   "cls": "temp",
-   "spelling": "std::string",
-   "ordinal": 1
-  },
-  {
-   "file": "src/detail/o1_store.cpp",
    "symbol": "operator new",
    "scope": [
     "namespace pineforge #1",
@@ -13300,6 +13371,19 @@
   },
   {
    "file": "src/detail/o1_store.cpp",
+   "symbol": "<temp:string>",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace detail #1",
+    "namespace o1 #1",
+    "[ [ noreturn ] ] void StoreImpl :: throw_status ( const char * what , ScratchStatus status ) const #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/detail/o1_store.cpp",
    "symbol": "transaction",
    "scope": [
     "namespace pineforge #1",
@@ -13309,6 +13393,54 @@
    ],
    "cls": "alloc",
    "spelling": "new",
+   "ordinal": 1
+  },
+  {
+   "file": "src/detail/o1_store.cpp",
+   "symbol": "new:StoreImpl",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace detail #1",
+    "namespace o1 #1",
+    "std :: unique_ptr < Store > Store :: open ( const Shape & shape , ScratchBacking & backing ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "new StoreImpl",
+   "ordinal": 1
+  },
+  {
+   "file": "src/detail/udt_graph.cpp",
+   "symbol": "store_",
+   "scope": [
+    "namespace pineforge :: detail :: o1 #1",
+    "void UdtGraph :: resize_edges ( Id id , std :: uint64_t count ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "store_ . resize ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/detail/udt_graph.cpp",
+   "symbol": "store_",
+   "scope": [
+    "namespace pineforge :: detail :: o1 #1",
+    "void UdtGraph :: resize_payload ( Id id , std :: uint64_t bytes ) #1",
+    "if ( bytes > n . payload_bytes ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "store_ . resize ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/detail/udt_graph.cpp",
+   "symbol": "store_",
+   "scope": [
+    "namespace pineforge :: detail :: o1 #1",
+    "void UdtGraph :: resize_payload ( Id id , std :: uint64_t bytes ) #1",
+    "else #1"
+   ],
+   "cls": "grow",
+   "spelling": "store_ . resize ( . . . )",
    "ordinal": 1
   },
   {
@@ -13980,6 +14112,64 @@
   },
   {
    "file": "src/engine_metrics.cpp",
+   "symbol": "returns",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace metrics #1",
+    "namespace #1",
+    "namespace streaming_v1 #1",
+    "struct Prefix #1",
+    "void fold ( const pf_equity_point_t & point , int month ) #1",
+    "else if ( previous_equity > 0 . 0 ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "returns . append ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/engine_metrics.cpp",
+   "symbol": "held_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace metrics #1",
+    "namespace #1",
+    "namespace streaming_v1 #1",
+    "class Fold final : public StreamingEquityRatiosV1 #1",
+    "MetricsStreamingStatusV1 append ( const pf_equity_point_t & point , int month ) override #1"
+   ],
+   "cls": "assign",
+   "spelling": "held_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/engine_metrics.cpp",
+   "symbol": "held_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace metrics #1",
+    "namespace #1",
+    "namespace streaming_v1 #1",
+    "class Fold final : public StreamingEquityRatiosV1 #1",
+    "MetricsStreamingStatusV1 amend_held ( std :: int64_t index , const pf_equity_point_t & point , int month ) override #1"
+   ],
+   "cls": "assign",
+   "spelling": "held_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/engine_metrics.cpp",
+   "symbol": "out",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace metrics #1",
+    "MetricsStreamingStatusV1 make_streaming_equity_ratios_v1 ( const MetricsStreamingConfigV1 & config , const MetricsExtentPlanV1 & plan , MetricsRatioTraceSinkV1 sink , std :: unique_ptr < StreamingEquityRatiosV1 > & out ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_unique",
+   "ordinal": 1
+  },
+  {
+   "file": "src/engine_metrics.cpp",
    "symbol": "state_",
    "scope": [
     "namespace pineforge #1",
@@ -14281,6 +14471,18 @@
   },
   {
    "file": "src/engine_report.cpp",
+   "symbol": "held",
+   "scope": [
+    "namespace pineforge #1",
+    "void BacktestEngine :: sync_metrics_streaming_held_v1 ( ) const #1",
+    "if ( s . fold && s . points > 0 ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "held = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/engine_report.cpp",
    "symbol": "trace_names_",
    "scope": [
     "namespace pineforge #1",
@@ -14355,7 +14557,7 @@
    "scope": [
     "namespace pineforge #1",
     "void BacktestEngine :: fill_metrics_section ( ReportC * out ) const #1",
-    "if ( active_equity_report_mode_ = = ReportMode :: SUMMARY_ONLY ) #1"
+    "if ( active_equity_report_mode_ = = ReportMode :: SUMMARY_ONLY || metrics_streaming_ . no_curve ) #1"
    ],
    "cls": "assign",
    "spelling": "held = . . .",
@@ -14563,7 +14765,7 @@
    "scope": [
     "namespace pineforge #3",
     "void BacktestEngine :: begin_report_sink ( ) #1",
-    "if ( active_equity_report_mode_ = = ReportMode :: SUMMARY_ONLY ) #1"
+    "if ( active_equity_report_mode_ = = ReportMode :: SUMMARY_ONLY || metrics_streaming_ . no_curve ) #1"
    ],
    "cls": "decl",
    "spelling": "std :: vector < pf_equity_point_t >",
@@ -14575,7 +14777,7 @@
    "scope": [
     "namespace pineforge #3",
     "void BacktestEngine :: begin_report_sink ( ) #1",
-    "if ( active_equity_report_mode_ = = ReportMode :: SUMMARY_ONLY ) #1"
+    "if ( active_equity_report_mode_ = = ReportMode :: SUMMARY_ONLY || metrics_streaming_ . no_curve ) #1"
    ],
    "cls": "grow",
    "spelling": "held . reserve ( . . . )",
@@ -17826,30 +18028,6 @@
   },
   {
    "file": "src/native_execution_consumer.cpp",
-   "symbol": "handles",
-   "scope": [
-    "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
-    "void NativeExecutionConsumer :: observe_trails ( BacktestEngine & engine , const NativeDriverPoint & point , const native_order :: MatchCursor & cursor , bool continuous , double price ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "handles . reserve ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/native_execution_consumer.cpp",
-   "symbol": "handles",
-   "scope": [
-    "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
-    "void NativeExecutionConsumer :: observe_trails ( BacktestEngine & engine , const NativeDriverPoint & point , const native_order :: MatchCursor & cursor , bool continuous , double price ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "handles . push_back ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/native_execution_consumer.cpp",
    "symbol": "held",
    "scope": [
     "namespace pineforge #1",
@@ -19438,6 +19616,18 @@
   },
   {
    "file": "src/native_execution_consumer.cpp",
+   "symbol": "out",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v19 #1",
+    "metrics :: MetricsStreamingStatusV1 BacktestEngine :: admit_metrics_plain_v1 ( const MetricsPlainInputsV1 & inputs , const metrics :: MetricsExtentPlanV1 & plan , metrics :: MetricsExtentReceiptV1 * out ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "out = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
    "symbol": "held",
    "scope": [
     "namespace pineforge #1",
@@ -19560,6 +19750,90 @@
    ],
    "cls": "assign",
    "spelling": "subscriptions = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
+   "symbol": "resident_",
+   "scope": [
+    "namespace pineforge :: engine_script_run_v19 #1",
+    "bool NativeExecutionConsumer :: MatchDormantPoint :: scan ( ) #1",
+    "if ( fast_ ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "resident_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
+   "symbol": "handles",
+   "scope": [
+    "namespace pineforge :: engine_script_run_v19 #1",
+    "bool NativeExecutionConsumer :: collect_match_trails ( const NativeDriverPoint & point , const native_order :: MatchCursor & cursor , bool continuous ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "handles = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
+   "symbol": "handles",
+   "scope": [
+    "namespace pineforge :: engine_script_run_v19 #1",
+    "bool NativeExecutionConsumer :: collect_match_trails ( const NativeDriverPoint & point , const native_order :: MatchCursor & cursor , bool continuous ) #1",
+    "if ( resident_only ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "handles . reserve ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
+   "symbol": "handles",
+   "scope": [
+    "namespace pineforge :: engine_script_run_v19 #1",
+    "bool NativeExecutionConsumer :: collect_match_trails ( const NativeDriverPoint & point , const native_order :: MatchCursor & cursor , bool continuous ) #1",
+    "if ( resident_only ) #1",
+    "+ + i ) #2"
+   ],
+   "cls": "grow",
+   "spelling": "handles . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
+   "symbol": "handles",
+   "scope": [
+    "namespace pineforge :: engine_script_run_v19 #1",
+    "bool NativeExecutionConsumer :: collect_match_trails ( const NativeDriverPoint & point , const native_order :: MatchCursor & cursor , bool continuous ) #1",
+    "else #1"
+   ],
+   "cls": "grow",
+   "spelling": "handles . reserve ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
+   "symbol": "handles",
+   "scope": [
+    "namespace pineforge :: engine_script_run_v19 #1",
+    "bool NativeExecutionConsumer :: collect_match_trails ( const NativeDriverPoint & point , const native_order :: MatchCursor & cursor , bool continuous ) #1",
+    "else #1"
+   ],
+   "cls": "grow",
+   "spelling": "handles . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
+   "symbol": "make_unique",
+   "scope": [
+    "namespace pineforge :: engine_script_run_v19 #1",
+    "namespace #1",
+    "std :: unique_ptr < detail :: ScratchBacking > make_book_scratch_backing ( std :: size_t page_size ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_unique",
    "ordinal": 1
   },
   {
@@ -20366,20 +20640,6 @@
   },
   {
    "file": "src/native_order.cpp",
-   "symbol": "bytes",
-   "scope": [
-    "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v8 #1",
-    "namespace #3",
-    "class ByteWriter #1",
-    "void raw ( const void * data , std :: size_t length ) #1"
-   ],
-   "cls": "assign",
-   "spelling": "bytes = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "src/native_order.cpp",
    "symbol": "buffer_",
    "scope": [
     "namespace pineforge :: native_order #1",
@@ -20556,31 +20816,6 @@
    ],
    "cls": "alloc",
    "spelling": "make_shared",
-   "ordinal": 1
-  },
-  {
-   "file": "src/native_order.cpp",
-   "symbol": "book_key",
-   "scope": [
-    "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v8 #1",
-    "namespace #3"
-   ],
-   "cls": "decl",
-   "spelling": "std :: string",
-   "ordinal": 1
-  },
-  {
-   "file": "src/native_order.cpp",
-   "symbol": "key",
-   "scope": [
-    "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v8 #1",
-    "namespace #3",
-    "std :: string book_key ( uint64_t value ) #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: string",
    "ordinal": 1
   },
   {
@@ -20795,19 +21030,6 @@
   },
   {
    "file": "src/native_order.cpp",
-   "symbol": "bytes",
-   "scope": [
-    "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v8 #1",
-    "struct WorkingRequestCore :: JournalStore #1",
-    "const std :: vector < CommandEvent > & load ( uint64_t page_no , const JournalPage & page ) const #1"
-   ],
-   "cls": "assign",
-   "spelling": "bytes = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "src/native_order.cpp",
    "symbol": "events",
    "scope": [
     "namespace pineforge :: native_order #1",
@@ -20830,194 +21052,6 @@
    ],
    "cls": "assign",
    "spelling": "events = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "src/native_order.cpp",
-   "symbol": "directory",
-   "scope": [
-    "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v8 #1",
-    "struct WorkingRequestCore :: BookSpill #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: string",
-   "ordinal": 1
-  },
-  {
-   "file": "src/native_order.cpp",
-   "symbol": "directory",
-   "scope": [
-    "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v8 #1",
-    "struct WorkingRequestCore :: BookSpill #1",
-    "void set_directory ( const std :: string & value ) #1"
-   ],
-   "cls": "assign",
-   "spelling": "directory = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "src/native_order.cpp",
-   "symbol": "blobs",
-   "scope": [
-    "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v8 #1",
-    "struct WorkingRequestCore :: BookSpill #1",
-    "void spill ( const LiveRequest & row ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "blobs . append ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/native_order.cpp",
-   "symbol": "links",
-   "scope": [
-    "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v8 #1",
-    "struct WorkingRequestCore :: BookSpill #1",
-    "void spill ( const LiveRequest & row ) #1",
-    "if ( priority ! = incarnation ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "links . insert ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/native_order.cpp",
-   "symbol": "rows",
-   "scope": [
-    "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v8 #1",
-    "struct WorkingRequestCore :: BookSpill #1",
-    "void spill ( const LiveRequest & row ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "rows . insert ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/native_order.cpp",
-   "symbol": "bytes",
-   "scope": [
-    "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v8 #1",
-    "struct WorkingRequestCore :: BookSpill #1",
-    "LiveRequest read ( const WorkingRequestCore & core , const BookSlot & slot ) const #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < unsigned char >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/native_order.cpp",
-   "symbol": "blobs",
-   "scope": [
-    "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v8 #1",
-    "struct WorkingRequestCore :: BookSpill #1",
-    "void rewrite ( uint64_t at , BookSlot slot , const LiveRequest & row ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "blobs . append ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/native_order.cpp",
-   "symbol": "kept",
-   "scope": [
-    "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v8 #1",
-    "struct WorkingRequestCore :: BookSpill #1",
-    "std :: shared_ptr < LiveRequest > keep ( LiveRequest row ) const #1"
-   ],
-   "cls": "alloc",
-   "spelling": "make_shared",
-   "ordinal": 1
-  },
-  {
-   "file": "src/native_order.cpp",
-   "symbol": "bytes",
-   "scope": [
-    "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v8 #1",
-    "struct WorkingRequestCore :: BookSpill #1",
-    "void compact ( ) #1",
-    "at = next_alive ( at ) ) #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < unsigned char >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/native_order.cpp",
-   "symbol": "fresh_blobs",
-   "scope": [
-    "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v8 #1",
-    "struct WorkingRequestCore :: BookSpill #1",
-    "void compact ( ) #1",
-    "at = next_alive ( at ) ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "fresh_blobs . append ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/native_order.cpp",
-   "symbol": "key",
-   "scope": [
-    "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v8 #1",
-    "struct WorkingRequestCore :: BookSpill #1",
-    "void compact ( ) #1",
-    "at = next_alive ( at ) ) #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: string",
-   "ordinal": 1
-  },
-  {
-   "file": "src/native_order.cpp",
-   "symbol": "fresh_rows",
-   "scope": [
-    "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v8 #1",
-    "struct WorkingRequestCore :: BookSpill #1",
-    "void compact ( ) #1",
-    "at = next_alive ( at ) ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "fresh_rows . insert ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/native_order.cpp",
-   "symbol": "fresh_links",
-   "scope": [
-    "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v8 #1",
-    "struct WorkingRequestCore :: BookSpill #1",
-    "void compact ( ) #1",
-    "at = next_alive ( at ) ) #1",
-    "if ( priority ! = slot . incarnation ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "fresh_links . insert ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/native_order.cpp",
-   "symbol": "rows",
-   "scope": [
-    "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v8 #1",
-    "struct WorkingRequestCore :: BookSpill #1",
-    "void compact ( ) #1"
-   ],
-   "cls": "assign",
-   "spelling": "rows = . . .",
    "ordinal": 1
   },
   {
@@ -21552,18 +21586,6 @@
    ],
    "cls": "assign",
    "spelling": "inline_ids = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "src/native_order.cpp",
-   "symbol": "key",
-   "scope": [
-    "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v8 #1",
-    "GroupEffectReceipt WorkingRequestCore :: group_effect_receipt ( std :: size_t index ) const #1"
-   ],
-   "cls": "assign",
-   "spelling": "key = . . .",
    "ordinal": 1
   },
   {
@@ -23033,17 +23055,6 @@
   },
   {
    "file": "src/native_order.cpp",
-   "symbol": "bytes",
-   "scope": [
-    "namespace pineforge :: detail #1",
-    "ScratchStatus PayloadReadback :: field ( std :: uint64_t index , PayloadField & out ) const noexcept #1"
-   ],
-   "cls": "assign",
-   "spelling": "bytes = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "src/native_order.cpp",
    "symbol": "first",
    "scope": [
     "namespace pineforge :: detail #1",
@@ -23065,6 +23076,300 @@
    ],
    "cls": "assign",
    "spelling": "first = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order_book.hpp",
+   "symbol": "book_key",
+   "scope": [
+    "namespace #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order_book.hpp",
+   "symbol": "key",
+   "scope": [
+    "namespace #1",
+    "std :: string book_key ( uint64_t value ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order_book.hpp",
+   "symbol": "directory",
+   "scope": [
+    "struct WorkingRequestCore :: BookSpill #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order_book.hpp",
+   "symbol": "resident",
+   "scope": [
+    "struct WorkingRequestCore :: BookSpill #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < ResidentMeta >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order_book.hpp",
+   "symbol": "resident",
+   "scope": [
+    "struct WorkingRequestCore :: BookSpill #1",
+    "explicit BookSpill ( const std :: vector < LiveRequest > & live ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "resident . reserve ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order_book.hpp",
+   "symbol": "resident",
+   "scope": [
+    "struct WorkingRequestCore :: BookSpill #1",
+    "explicit BookSpill ( const std :: vector < LiveRequest > & live ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "resident . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order_book.hpp",
+   "symbol": "created",
+   "scope": [
+    "struct WorkingRequestCore :: BookSpill #1",
+    "static BookSpill & ensure ( WorkingRequestCore & core ) #1",
+    "if ( ! core . book_spill_ ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order_book.hpp",
+   "symbol": "directory",
+   "scope": [
+    "struct WorkingRequestCore :: BookSpill #1",
+    "static BookSpill & ensure ( WorkingRequestCore & core ) #1",
+    "if ( ! core . book_spill_ ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "directory = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order_book.hpp",
+   "symbol": "key",
+   "scope": [
+    "struct WorkingRequestCore :: BookSpill #1",
+    "void erase_index ( const WorkingRequestCore & core , const LiveRequest & row ) noexcept #1"
+   ],
+   "cls": "assign",
+   "spelling": "key = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order_book.hpp",
+   "symbol": "resident",
+   "scope": [
+    "struct WorkingRequestCore :: BookSpill #1",
+    "void promoted ( WorkingRequestCore & core , const BookSlot & slot , std :: size_t at ) noexcept #1"
+   ],
+   "cls": "grow",
+   "spelling": "resident . insert ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order_book.hpp",
+   "symbol": "resident",
+   "scope": [
+    "struct WorkingRequestCore :: BookSpill #1",
+    "void pushed ( const WorkingRequestCore & core ) noexcept #1"
+   ],
+   "cls": "grow",
+   "spelling": "resident . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order_book.hpp",
+   "symbol": "directory",
+   "scope": [
+    "struct WorkingRequestCore :: BookSpill #1",
+    "void set_directory ( const std :: string & value ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "directory = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order_book.hpp",
+   "symbol": "blobs",
+   "scope": [
+    "struct WorkingRequestCore :: BookSpill #1",
+    "void spill ( const LiveRequest & row , const ResidentMeta & meta ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "blobs . append ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order_book.hpp",
+   "symbol": "links",
+   "scope": [
+    "struct WorkingRequestCore :: BookSpill #1",
+    "void spill ( const LiveRequest & row , const ResidentMeta & meta ) #1",
+    "if ( priority ! = incarnation ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "links . insert ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order_book.hpp",
+   "symbol": "rows",
+   "scope": [
+    "struct WorkingRequestCore :: BookSpill #1",
+    "void spill ( const LiveRequest & row , const ResidentMeta & meta ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "rows . insert ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order_book.hpp",
+   "symbol": "bytes",
+   "scope": [
+    "struct WorkingRequestCore :: BookSpill #1",
+    "LiveRequest read ( const WorkingRequestCore & core , const BookSlot & slot ) const #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < unsigned char >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order_book.hpp",
+   "symbol": "resident",
+   "scope": [
+    "struct WorkingRequestCore :: BookSpill #1",
+    "LiveRequest read ( const WorkingRequestCore & core , const BookSlot & slot ) const #1"
+   ],
+   "cls": "assign",
+   "spelling": "resident = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order_book.hpp",
+   "symbol": "resident",
+   "scope": [
+    "struct WorkingRequestCore :: BookSpill #1",
+    "LiveRequest read ( const WorkingRequestCore & core , const BookSlot & slot ) const #1",
+    "if ( const auto * accepted = std :: get_if < AcceptedEvent > ( & event ) ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "resident = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order_book.hpp",
+   "symbol": "resident",
+   "scope": [
+    "struct WorkingRequestCore :: BookSpill #1",
+    "LiveRequest read ( const WorkingRequestCore & core , const BookSlot & slot ) const #1",
+    "else if ( const auto * replaced = std :: get_if < ReplacedEvent > ( & event ) ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "resident = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order_book.hpp",
+   "symbol": "blobs",
+   "scope": [
+    "struct WorkingRequestCore :: BookSpill #1",
+    "void rewrite ( uint64_t at , BookSlot slot , const LiveRequest & row ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "blobs . append ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order_book.hpp",
+   "symbol": "kept",
+   "scope": [
+    "struct WorkingRequestCore :: BookSpill #1",
+    "std :: shared_ptr < LiveRequest > keep ( LiveRequest row ) const #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order_book.hpp",
+   "symbol": "bytes",
+   "scope": [
+    "struct WorkingRequestCore :: BookSpill #1",
+    "void compact ( ) #1",
+    "at = next_alive ( at ) ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < unsigned char >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order_book.hpp",
+   "symbol": "fresh_blobs",
+   "scope": [
+    "struct WorkingRequestCore :: BookSpill #1",
+    "void compact ( ) #1",
+    "at = next_alive ( at ) ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "fresh_blobs . append ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order_book.hpp",
+   "symbol": "key",
+   "scope": [
+    "struct WorkingRequestCore :: BookSpill #1",
+    "void compact ( ) #1",
+    "at = next_alive ( at ) ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order_book.hpp",
+   "symbol": "fresh_rows",
+   "scope": [
+    "struct WorkingRequestCore :: BookSpill #1",
+    "void compact ( ) #1",
+    "at = next_alive ( at ) ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "fresh_rows . insert ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order_book.hpp",
+   "symbol": "fresh_links",
+   "scope": [
+    "struct WorkingRequestCore :: BookSpill #1",
+    "void compact ( ) #1",
+    "at = next_alive ( at ) ) #1",
+    "if ( priority ! = slot . incarnation ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "fresh_links . insert ( . . . )",
    "ordinal": 1
   },
   {
@@ -27442,6 +27747,20 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
+   "symbol": "next",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "namespace #3",
+    "bool java_string_hash ( std :: string_view text , std :: uint32_t & hash ) noexcept #1",
+    ") #1",
+    "+ + k ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "next = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
    "symbol": "remaining",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
@@ -28224,32 +28543,10 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "placement_",
-   "scope": [
-    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: remember ( const native_order :: RequestHandle & handle , PlacementSnapshot && snapshot ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "placement_ . try_emplace ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_adapter.cpp",
-   "symbol": "live_handles_",
-   "scope": [
-    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: remember ( const native_order :: RequestHandle & handle , PlacementSnapshot && snapshot ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "live_handles_ . push_back ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_adapter.cpp",
    "symbol": "askable_origins",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1"
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1"
    ],
    "cls": "grow",
    "spelling": "askable_origins . push_back ( . . . )",
@@ -28260,7 +28557,7 @@
    "symbol": "askable_origins",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1",
     "for ( const auto & cohort : cohorts_by_id_ . held_rows ( ) ) #1"
    ],
    "cls": "grow",
@@ -28272,7 +28569,7 @@
    "symbol": "origin_pins",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1",
     "placement_ . visit_rows ( [ & ] ( std :: uint64_t , const PlacementSnapshot & value ) #1"
    ],
    "cls": "grow",
@@ -28284,7 +28581,7 @@
    "symbol": "held",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1",
     "placement_ . visit_rows ( [ & ] ( std :: uint64_t incarnation , const PlacementSnapshot & value ) #1",
     "if ( cycle_held ) #1"
    ],
@@ -28297,7 +28594,7 @@
    "symbol": "rows",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1",
     "const auto release_superseded = [ & ] #1"
    ],
    "cls": "assign",
@@ -28309,7 +28606,7 @@
    "symbol": "named",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1",
     "const auto release_superseded = [ & ] #1",
     "+ + it ) #1"
    ],
@@ -28322,7 +28619,7 @@
    "symbol": "kept",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1",
     "const auto release_superseded = [ & ] #1"
    ],
    "cls": "assign",
@@ -28334,7 +28631,7 @@
    "symbol": "memo",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1",
     "const auto release_superseded = [ & ] #1"
    ],
    "cls": "grow",
@@ -28346,7 +28643,7 @@
    "symbol": "kept",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1",
     "const auto release_superseded = [ & ] #1"
    ],
    "cls": "assign",
@@ -28358,7 +28655,7 @@
    "symbol": "released",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1",
     "const auto release_superseded = [ & ] #1",
     "for ( const auto & leg : held ) #1"
    ],
@@ -28371,7 +28668,7 @@
    "symbol": "roots",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1",
     "const auto root = [ & ] ( std :: uint64_t incarnation ) #1"
    ],
    "cls": "grow",
@@ -28383,7 +28680,7 @@
    "symbol": "live_groups",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1",
     "const auto queued_snapshot = [ & ] ( const PlacementSnapshot & snapshot ) #1"
    ],
    "cls": "grow",
@@ -28395,7 +28692,7 @@
    "symbol": "source_bars",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1",
     "const auto queued_snapshot = [ & ] ( const PlacementSnapshot & snapshot ) #1"
    ],
    "cls": "grow",
@@ -28407,7 +28704,7 @@
    "symbol": "live_groups",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1",
     "for ( const auto & handle : live_handles_ ) #1"
    ],
    "cls": "grow",
@@ -28419,7 +28716,7 @@
    "symbol": "source_bars",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1",
     "for ( const auto & handle : live_handles_ ) #1"
    ],
    "cls": "grow",
@@ -28431,7 +28728,7 @@
    "symbol": "candidates",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1"
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1"
    ],
    "cls": "assign",
    "spelling": "candidates = . . .",
@@ -28442,7 +28739,7 @@
    "symbol": "held",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1",
     "placement_ . visit_rows ( [ & ] ( std :: uint64_t incarnation , const PlacementSnapshot & value ) #2",
     "if ( unpinned ) #1"
    ],
@@ -28455,7 +28752,7 @@
    "symbol": "candidates",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1",
     "placement_ . visit_rows ( [ & ] ( std :: uint64_t incarnation , const PlacementSnapshot & value ) #2"
    ],
    "cls": "grow",
@@ -28467,7 +28764,7 @@
    "symbol": "candidate_names",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1",
     "for ( const auto & c : candidates ) #1"
    ],
    "cls": "grow",
@@ -28479,7 +28776,7 @@
    "symbol": "candidate_names",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1",
     "for ( const auto & c : candidates ) #1"
    ],
    "cls": "grow",
@@ -28491,7 +28788,7 @@
    "symbol": "next_reissues",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1",
     "+ + index ) #1"
    ],
    "cls": "grow",
@@ -28503,7 +28800,7 @@
    "symbol": "new_candidates",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1",
     "+ + index ) #1"
    ],
    "cls": "grow",
@@ -28515,7 +28812,7 @@
    "symbol": "known_candidates",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1",
     "+ + index ) #1",
     "else #1"
    ],
@@ -28528,7 +28825,7 @@
    "symbol": "unresolved_candidates",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1",
     "+ + index ) #1",
     "else #1"
    ],
@@ -28541,7 +28838,7 @@
    "symbol": "rows",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1",
     "if ( ! sweep . unresolved_candidates . empty ( ) ) #1"
    ],
    "cls": "assign",
@@ -28553,7 +28850,7 @@
    "symbol": "first_reissues",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1"
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1"
    ],
    "cls": "grow",
    "spelling": "first_reissues . push_back ( . . . )",
@@ -28564,7 +28861,7 @@
    "symbol": "doomed",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: erase_retired_rows ( const NativeDecisionContext & context ) #1",
+    "void PineExecutionAdapter :: sweep_retired_rows ( const NativeDecisionContext & context , RetirementWork & work ) #1",
     "placement_ . visit_rows ( [ & ] ( std :: uint64_t incarnation , const PlacementSnapshot & value ) #3"
    ],
    "cls": "grow",
@@ -28866,6 +29163,18 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
+   "symbol": "next",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "double PineExecutionAdapter :: cohort_exposure_for ( const CohortFacts & facts ) const noexcept #1",
+    ") #1"
+   ],
+   "cls": "assign",
+   "spelling": "next = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
    "symbol": "positions",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
@@ -28875,6 +29184,21 @@
    ],
    "cls": "assign",
    "spelling": "positions = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "next",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "double PineExecutionAdapter :: cohort_exposure_for ( const CohortFacts & facts ) const noexcept #1",
+    ") #1",
+    "for ( const auto & unit : facts . live_units_by_origin ) #1",
+    "for ( const auto position : * positions ) #1",
+    "if ( ! have_next || position < next ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "next = . . .",
    "ordinal": 1
   },
   {
@@ -29980,7 +30304,7 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "pending_bracket_legs_",
+   "symbol": "pending_write",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: stage_flat_children_before_parent ( const SourceId & parent_id , std :: int32_t created_bar , std :: int64_t script_open_ms ) #1",
@@ -29988,20 +30312,31 @@
     "if ( queued = = pending_bracket_legs_ . end ( ) ) #1"
    ],
    "cls": "grow",
-   "spelling": "pending_bracket_legs_ . push_back ( . . . )",
+   "spelling": "pending_write . push_back ( . . . )",
    "ordinal": 1
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "queued",
+   "symbol": "next",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: stage_flat_children_before_parent ( const SourceId & parent_id , std :: int32_t created_bar , std :: int64_t script_open_ms ) #1",
-    "for ( const auto & handle : children ) #1",
-    "else #2"
+    "bool PineExecutionAdapter :: coof_waits_for_next_sub_bar ( ) const noexcept #1"
    ],
    "cls": "assign",
-   "spelling": "queued = . . .",
+   "spelling": "next = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "next",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "double PineExecutionAdapter :: coof_next_waypoint ( int * path_index ) const noexcept #1",
+    "if ( state . spec && state . spec -> intrabar . lower ( ) ) #1",
+    "if ( const auto * pine_host = pine_view_of ( & require_host ( ) ) ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "next = . . .",
    "ordinal": 1
   },
   {
@@ -30017,7 +30352,7 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "pending_coof_requests_",
+   "symbol": "pending_write",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: flush_coof_tail ( bool openings_only , bool include_next_open ) #1",
@@ -30025,7 +30360,7 @@
     "if ( ( pending . next_open && ! include_next_open ) || ( openings_only && ( ! pending . opening || std :: holds_alternative < native_order :: Market > ( pending . request . trigger ) ) ) ) #1"
    ],
    "cls": "grow",
-   "spelling": "pending_coof_requests_ . push_back ( . . . )",
+   "spelling": "pending_write . push_back ( . . . )",
    "ordinal": 1
   },
   {
@@ -30042,14 +30377,14 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "pending_entries_",
+   "symbol": "pending_write",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: place_entry ( const SourceId & id , bool is_long , double limit_price , double stop_price , double qty , const std :: string & comment , const std :: string & oca_name , int oca_type , int qty_type ) #1",
     "if ( ! source_point && detail :: run_state ( require_host ( ) ) . kind = = NativeLifecycleKind :: Unconfigured ) #1"
    ],
    "cls": "grow",
-   "spelling": "pending_entries_ . push_back ( . . . )",
+   "spelling": "pending_write . push_back ( . . . )",
    "ordinal": 1
   },
   {
@@ -30140,14 +30475,14 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "source_shadow_pending_",
+   "symbol": "pending_write",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: place_entry ( const SourceId & id , bool is_long , double limit_price , double stop_price , double qty , const std :: string & comment , const std :: string & oca_name , int oca_type , int qty_type ) #1",
     "if ( explicit_fixed && normalized_qty = = 0 . 0 && current = = 0 . 0 && ! priced ) #1"
    ],
    "cls": "grow",
-   "spelling": "source_shadow_pending_ . push_back ( . . . )",
+   "spelling": "pending_write . push_back ( . . . )",
    "ordinal": 1
   },
   {
@@ -30277,6 +30612,18 @@
    ],
    "cls": "assign",
    "spelling": "pending = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "next",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "void PineExecutionAdapter :: place_entry ( const SourceId & id , bool is_long , double limit_price , double stop_price , double qty , const std :: string & comment , const std :: string & oca_name , int oca_type , int qty_type ) #1",
+    "if ( pure_stop_entry && explicit_fixed && current ! = 0 . 0 && ( ( current > 0 . 0 ) ! = is_long ) && source_point && ! config_ . process_orders_on_close && ! config_ . calc_on_order_fills ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "next = . . .",
    "ordinal": 1
   },
   {
@@ -30531,20 +30878,7 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "queued",
-   "scope": [
-    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: place_entry ( const SourceId & id , bool is_long , double limit_price , double stop_price , double qty , const std :: string & comment , const std :: string & oca_name , int oca_type , int qty_type ) #1",
-    "if ( close_all_precedes && preceding_close_all . incarnation ! = 0 ) #1",
-    "if ( queued ! = pending_entries_ . end ( ) ) #1"
-   ],
-   "cls": "assign",
-   "spelling": "queued = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_adapter.cpp",
-   "symbol": "pending_same_bar_commands_",
+   "symbol": "pending_write",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: place_entry ( const SourceId & id , bool is_long , double limit_price , double stop_price , double qty , const std :: string & comment , const std :: string & oca_name , int oca_type , int qty_type ) #1",
@@ -30552,12 +30886,12 @@
     "if ( existing = = pending_same_bar_commands_ . end ( ) ) #1"
    ],
    "cls": "grow",
-   "spelling": "pending_same_bar_commands_ . push_back ( . . . )",
+   "spelling": "pending_write . push_back ( . . . )",
    "ordinal": 1
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "pending_same_bar_commands_",
+   "symbol": "pending_write",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: place_entry ( const SourceId & id , bool is_long , double limit_price , double stop_price , double qty , const std :: string & comment , const std :: string & oca_name , int oca_type , int qty_type ) #1",
@@ -30567,19 +30901,19 @@
     "if ( existing = = pending_same_bar_commands_ . end ( ) ) #1"
    ],
    "cls": "grow",
-   "spelling": "pending_same_bar_commands_ . push_back ( . . . )",
+   "spelling": "pending_write . push_back ( . . . )",
    "ordinal": 1
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "pending_entries_",
+   "symbol": "pending_write",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: place_entry ( const SourceId & id , bool is_long , double limit_price , double stop_price , double qty , const std :: string & comment , const std :: string & oca_name , int oca_type , int qty_type ) #1",
     "if ( preceding_close_all . incarnation ! = 0 ) #1"
    ],
    "cls": "grow",
-   "spelling": "pending_entries_ . push_back ( . . . )",
+   "spelling": "pending_write . push_back ( . . . )",
    "ordinal": 1
   },
   {
@@ -30596,27 +30930,15 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "pending_entries_",
+   "symbol": "pending_write",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: submit_entry_with_policy ( native_order :: Request request , PlacementSnapshot snapshot , const SourceId & id , const EntrySubmissionContext & context ) #1",
     "if ( source_same_side_market_add || close_first_percent_add ) #1"
    ],
    "cls": "grow",
-   "spelling": "pending_entries_ . push_back ( . . . )",
+   "spelling": "pending_write . push_back ( . . . )",
    "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_adapter.cpp",
-   "symbol": "queued",
-   "scope": [
-    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: submit_entry_with_policy ( native_order :: Request request , PlacementSnapshot snapshot , const SourceId & id , const EntrySubmissionContext & context ) #1",
-    "if ( source_same_side_market_add || close_first_percent_add ) #1"
-   ],
-   "cls": "assign",
-   "spelling": "queued = . . .",
-   "ordinal": 2
   },
   {
    "file": "src/source/pine_adapter.cpp",
@@ -30662,7 +30984,7 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "pending_entries_",
+   "symbol": "pending_write",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: submit_entry_with_policy ( native_order :: Request request , PlacementSnapshot snapshot , const SourceId & id , const EntrySubmissionContext & context ) #1",
@@ -30670,7 +30992,7 @@
     "if ( token ! = named_entry_cancel_tokens_ . end ( ) && token -> second . entry_incarnation ! = 0 && token -> second . surviving_exit_incarnation ! = 0 ) #1"
    ],
    "cls": "grow",
-   "spelling": "pending_entries_ . push_back ( . . . )",
+   "spelling": "pending_write . push_back ( . . . )",
    "ordinal": 1
   },
   {
@@ -30691,19 +31013,6 @@
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: submit_entry_with_policy ( native_order :: Request request , PlacementSnapshot snapshot , const SourceId & id , const EntrySubmissionContext & context ) #1",
-    "if ( ! priced && reverses ) #1",
-    "if ( queued ! = pending_entries_ . end ( ) ) #1"
-   ],
-   "cls": "assign",
-   "spelling": "queued = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_adapter.cpp",
-   "symbol": "queued",
-   "scope": [
-    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: submit_entry_with_policy ( native_order :: Request request , PlacementSnapshot snapshot , const SourceId & id , const EntrySubmissionContext & context ) #1",
     "if ( priced && reverses && ! config_ . process_orders_on_close && ! config_ . calc_on_order_fills ) #1"
    ],
    "cls": "assign",
@@ -30712,86 +31021,100 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "pending_entries_",
+   "symbol": "pending_write",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: submit_entry_with_policy ( native_order :: Request request , PlacementSnapshot snapshot , const SourceId & id , const EntrySubmissionContext & context ) #1",
     "if ( priced && reverses && ! config_ . process_orders_on_close && ! config_ . calc_on_order_fills ) #1"
    ],
    "cls": "grow",
-   "spelling": "pending_entries_ . push_back ( . . . )",
+   "spelling": "pending_write . push_back ( . . . )",
    "ordinal": 1
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "queued",
-   "scope": [
-    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: submit_entry_with_policy ( native_order :: Request request , PlacementSnapshot snapshot , const SourceId & id , const EntrySubmissionContext & context ) #1",
-    "if ( priced && reverses && ! config_ . process_orders_on_close && ! config_ . calc_on_order_fills ) #1"
-   ],
-   "cls": "assign",
-   "spelling": "queued = . . .",
-   "ordinal": 2
-  },
-  {
-   "file": "src/source/pine_adapter.cpp",
-   "symbol": "pending_entries_",
+   "symbol": "pending_write",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: submit_entry_with_policy ( native_order :: Request request , PlacementSnapshot snapshot , const SourceId & id , const EntrySubmissionContext & context ) #1",
     "if ( config_ . process_orders_on_close && ! close_batch_callsites_ . empty ( ) && ! priced && ! coof_recalc_active_ ) #1"
    ],
    "cls": "grow",
-   "spelling": "pending_entries_ . push_back ( . . . )",
+   "spelling": "pending_write . push_back ( . . . )",
    "ordinal": 1
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "pending_entries_",
+   "symbol": "next",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "void PineExecutionAdapter :: submit_entry_with_policy ( native_order :: Request request , PlacementSnapshot snapshot , const SourceId & id , const EntrySubmissionContext & context ) #1",
+    "const bool ordinary_flat_pure_stop = [ & ] ( ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "next = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "pending_write",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: submit_entry_with_policy ( native_order :: Request request , PlacementSnapshot snapshot , const SourceId & id , const EntrySubmissionContext & context ) #1",
     "if ( coof_flat_priced || ordinary_flat_pure_stop ) #1"
    ],
    "cls": "grow",
-   "spelling": "pending_entries_ . push_back ( . . . )",
+   "spelling": "pending_write . push_back ( . . . )",
    "ordinal": 1
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "pending_coof_requests_",
+   "symbol": "pending_write",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: submit_entry_with_policy ( native_order :: Request request , PlacementSnapshot snapshot , const SourceId & id , const EntrySubmissionContext & context ) #1",
     "if ( coof_market_next_open || coof_priced_next_open ) #1"
    ],
    "cls": "grow",
-   "spelling": "pending_coof_requests_ . push_back ( . . . )",
+   "spelling": "pending_write . push_back ( . . . )",
    "ordinal": 1
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "pending_coof_requests_",
+   "symbol": "pending_write",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: submit_entry_with_policy ( native_order :: Request request , PlacementSnapshot snapshot , const SourceId & id , const EntrySubmissionContext & context ) #1",
     "if ( defer_coof_tail ( ) && ! coof_market_at_second_extreme ) #1"
    ],
    "cls": "grow",
-   "spelling": "pending_coof_requests_ . push_back ( . . . )",
+   "spelling": "pending_write . push_back ( . . . )",
    "ordinal": 1
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "source_shadow_pending_",
+   "symbol": "next",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "void PineExecutionAdapter :: submit_entry_with_policy ( native_order :: Request request , PlacementSnapshot snapshot , const SourceId & id , const EntrySubmissionContext & context ) #1",
+    "if ( accepted ) #1",
+    "if ( default_sized && ! priced && reverses && source_point && config_ . default_qty_type = = static_cast < int > ( QtyType :: PERCENT_OF_EQUITY ) && config_ . default_qty_value < = 100 . 0 ) #1",
+    "if ( auto * pine_host = pine_view_of ( & require_host ( ) ) ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "next = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "pending_write",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: submit_entry_with_policy ( native_order :: Request request , PlacementSnapshot snapshot , const SourceId & id , const EntrySubmissionContext & context ) #1",
     "else if ( paired_all_in_reentry ) #1"
    ],
    "cls": "grow",
-   "spelling": "source_shadow_pending_ . push_back ( . . . )",
+   "spelling": "pending_write . push_back ( . . . )",
    "ordinal": 1
   },
   {
@@ -31112,7 +31435,7 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "source_shadow_pending_",
+   "symbol": "pending_write",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: close ( const SourceId & id , const std :: string & comment , double qty , double qty_percent , bool immediately , std :: uint64_t callsite_token ) #1",
@@ -31120,7 +31443,7 @@
     "if ( ( empty_entry && opposite_entry ) || all_in_reversal ) #1"
    ],
    "cls": "grow",
-   "spelling": "source_shadow_pending_ . push_back ( . . . )",
+   "spelling": "pending_write . push_back ( . . . )",
    "ordinal": 1
   },
   {
@@ -31195,7 +31518,7 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "pending_entries_",
+   "symbol": "pending_write",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: close ( const SourceId & id , const std :: string & comment , double qty , double qty_percent , bool immediately , std :: uint64_t callsite_token ) #1",
@@ -31205,12 +31528,12 @@
     "if ( result . status = = native_order :: CancelStatus :: Cancelled ) #1"
    ],
    "cls": "grow",
-   "spelling": "pending_entries_ . push_back ( . . . )",
+   "spelling": "pending_write . push_back ( . . . )",
    "ordinal": 1
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "pending_entries_",
+   "symbol": "pending_write",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: close ( const SourceId & id , const std :: string & comment , double qty , double qty_percent , bool immediately , std :: uint64_t callsite_token ) #1",
@@ -31220,7 +31543,7 @@
     "if ( it -> opening && it -> snapshot . family = = PineOrderFamily :: Entry && ! it -> snapshot . projection_over_pyramiding && it -> snapshot . placement_script_open_ms = = cur_pt -> decision . script_bar_open_ms ) #1"
    ],
    "cls": "grow",
-   "spelling": "pending_entries_ . push_back ( . . . )",
+   "spelling": "pending_write . push_back ( . . . )",
    "ordinal": 1
   },
   {
@@ -31301,14 +31624,14 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "pending_same_bar_commands_",
+   "symbol": "pending_write",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: close ( const SourceId & id , const std :: string & comment , double qty , double qty_percent , bool immediately , std :: uint64_t callsite_token ) #1",
     "if ( same_bar_market_tx_scope ( ) && ! immediately && id . size ( ) ! = 0 && std :: isnan ( qty ) && std :: isnan ( qty_percent ) && current ! = 0 . 0 && finite_positive ( frozen_qty ) ) #1"
    ],
    "cls": "grow",
-   "spelling": "pending_same_bar_commands_ . push_back ( . . . )",
+   "spelling": "pending_write . push_back ( . . . )",
    "ordinal": 1
   },
   {
@@ -31386,14 +31709,14 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "source_shadow_pending_",
+   "symbol": "pending_write",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: close ( const SourceId & id , const std :: string & comment , double qty , double qty_percent , bool immediately , std :: uint64_t callsite_token ) #1",
     "if ( opposite_reversal_pair ) #1"
    ],
    "cls": "grow",
-   "spelling": "source_shadow_pending_ . push_back ( . . . )",
+   "spelling": "pending_write . push_back ( . . . )",
    "ordinal": 1
   },
   {
@@ -31453,26 +31776,26 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "pending_coof_requests_",
+   "symbol": "pending_write",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: close ( const SourceId & id , const std :: string & comment , double qty , double qty_percent , bool immediately , std :: uint64_t callsite_token ) #1",
     "if ( coof_close_next_open ) #1"
    ],
    "cls": "grow",
-   "spelling": "pending_coof_requests_ . push_back ( . . . )",
+   "spelling": "pending_write . push_back ( . . . )",
    "ordinal": 1
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "source_shadow_pending_",
+   "symbol": "pending_write",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: close ( const SourceId & id , const std :: string & comment , double qty , double qty_percent , bool immediately , std :: uint64_t callsite_token ) #1",
     "if ( ! accepted && all_in_dependent_close ) #1"
    ],
    "cls": "grow",
-   "spelling": "source_shadow_pending_ . push_back ( . . . )",
+   "spelling": "pending_write . push_back ( . . . )",
    "ordinal": 1
   },
   {
@@ -31594,7 +31917,7 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "pending_entries_",
+   "symbol": "pending_write",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: close_all ( ) #1",
@@ -31603,12 +31926,12 @@
     "if ( result . status = = native_order :: CancelStatus :: Cancelled ) #1"
    ],
    "cls": "grow",
-   "spelling": "pending_entries_ . push_back ( . . . )",
+   "spelling": "pending_write . push_back ( . . . )",
    "ordinal": 1
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "pending_entries_",
+   "symbol": "pending_write",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: close_all ( ) #1",
@@ -31617,7 +31940,7 @@
     "if ( it -> opening && it -> snapshot . family = = PineOrderFamily :: Entry && ! it -> snapshot . projection_over_pyramiding && it -> snapshot . placement_script_open_ms = = cur_pt -> decision . script_bar_open_ms ) #1"
    ],
    "cls": "grow",
-   "spelling": "pending_entries_ . push_back ( . . . )",
+   "spelling": "pending_write . push_back ( . . . )",
    "ordinal": 1
   },
   {
@@ -31883,7 +32206,7 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "source_shadow_pending_",
+   "symbol": "pending_write",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
@@ -31891,7 +32214,7 @@
     "else #1"
    ],
    "cls": "grow",
-   "spelling": "source_shadow_pending_ . push_back ( . . . )",
+   "spelling": "pending_write . push_back ( . . . )",
    "ordinal": 1
   },
   {
@@ -32106,7 +32429,7 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "pending_bracket_legs_",
+   "symbol": "pending_write",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
@@ -32115,22 +32438,8 @@
     "if ( stage_chart_tick_scope ) #1"
    ],
    "cls": "grow",
-   "spelling": "pending_bracket_legs_ . push_back ( . . . )",
+   "spelling": "pending_write . push_back ( . . . )",
    "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_adapter.cpp",
-   "symbol": "queued",
-   "scope": [
-    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
-    "auto submit_leg = [ & ] ( PineOrderFamily family , native_order :: Trigger trigger ) #1",
-    ") #1",
-    "if ( stage_chart_tick_scope ) #1"
-   ],
-   "cls": "assign",
-   "spelling": "queued = . . .",
-   "ordinal": 2
   },
   {
    "file": "src/source/pine_adapter.cpp",
@@ -32147,21 +32456,7 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "queued",
-   "scope": [
-    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
-    "auto submit_leg = [ & ] ( PineOrderFamily family , native_order :: Trigger trigger ) #1",
-    ") #1",
-    "queued ! = pending_bracket_legs_ . end ( ) ) #1"
-   ],
-   "cls": "assign",
-   "spelling": "queued = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_adapter.cpp",
-   "symbol": "pending_coof_requests_",
+   "symbol": "pending_write",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
@@ -32170,7 +32465,7 @@
     "if ( defer_coof_tail ( ) && ! finite_positive ( coof_stop_waypoint_price ) ) #1"
    ],
    "cls": "grow",
-   "spelling": "pending_coof_requests_ . push_back ( . . . )",
+   "spelling": "pending_write . push_back ( . . . )",
    "ordinal": 1
   },
   {
@@ -32189,7 +32484,7 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "pending_bracket_legs_",
+   "symbol": "pending_write",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
@@ -32198,22 +32493,8 @@
     "if ( snapshot . reservation_deferred_to_pending_entry && physical . signed_units = = 0 . 0 && ! ( cohort_exposure_for ( snapshot . from_entry ) > 0 . 0 ) ) #1"
    ],
    "cls": "grow",
-   "spelling": "pending_bracket_legs_ . push_back ( . . . )",
+   "spelling": "pending_write . push_back ( . . . )",
    "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_adapter.cpp",
-   "symbol": "queued",
-   "scope": [
-    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
-    "auto submit_leg = [ & ] ( PineOrderFamily family , native_order :: Trigger trigger ) #1",
-    ") #1",
-    "if ( snapshot . reservation_deferred_to_pending_entry && physical . signed_units = = 0 . 0 && ! ( cohort_exposure_for ( snapshot . from_entry ) > 0 . 0 ) ) #1"
-   ],
-   "cls": "assign",
-   "spelling": "queued = . . .",
-   "ordinal": 2
   },
   {
    "file": "src/source/pine_adapter.cpp",
@@ -32231,7 +32512,7 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "pending_bracket_legs_",
+   "symbol": "pending_write",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
@@ -32240,22 +32521,8 @@
     "if ( defer_for_same_bar_priority || defer_for_live_parent ) #1"
    ],
    "cls": "grow",
-   "spelling": "pending_bracket_legs_ . push_back ( . . . )",
+   "spelling": "pending_write . push_back ( . . . )",
    "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_adapter.cpp",
-   "symbol": "queued",
-   "scope": [
-    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
-    "auto submit_leg = [ & ] ( PineOrderFamily family , native_order :: Trigger trigger ) #1",
-    ") #1",
-    "if ( defer_for_same_bar_priority || defer_for_live_parent ) #1"
-   ],
-   "cls": "assign",
-   "spelling": "queued = . . .",
-   "ordinal": 2
   },
   {
    "file": "src/source/pine_adapter.cpp",
@@ -32273,7 +32540,7 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "pending_bracket_legs_",
+   "symbol": "pending_write",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
@@ -32282,22 +32549,8 @@
     "if ( defer_new_instance && live_by_source_key_ . find ( checked_live_key ( replacement_key ) ) = = live_by_source_key_ . end ( ) ) #1"
    ],
    "cls": "grow",
-   "spelling": "pending_bracket_legs_ . push_back ( . . . )",
+   "spelling": "pending_write . push_back ( . . . )",
    "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_adapter.cpp",
-   "symbol": "queued",
-   "scope": [
-    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
-    "auto submit_leg = [ & ] ( PineOrderFamily family , native_order :: Trigger trigger ) #1",
-    ") #1",
-    "if ( defer_new_instance && live_by_source_key_ . find ( checked_live_key ( replacement_key ) ) = = live_by_source_key_ . end ( ) ) #1"
-   ],
-   "cls": "assign",
-   "spelling": "queued = . . .",
-   "ordinal": 2
   },
   {
    "file": "src/source/pine_adapter.cpp",
@@ -32621,14 +32874,14 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "source_shadow_pending_",
+   "symbol": "pending_write",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: exit ( const SourceId & exit_id , const SourceId & from_entry , double limit_price , double stop_price , double trail_points , double trail_offset , double trail_price , double qty_percent , const std :: string & comment , double qty , const std :: string & oca_name , double profit_ticks , double loss_ticks ) #1",
     "if ( ! placed_absolute_leg && ! ( has_trail_request && finite_positive ( trail_price ) ) ) #1"
    ],
    "cls": "grow",
-   "spelling": "source_shadow_pending_ . push_back ( . . . )",
+   "spelling": "pending_write . push_back ( . . . )",
    "ordinal": 1
   },
   {
@@ -32743,7 +32996,7 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "pending_bracket_legs_",
+   "symbol": "pending_write",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: flush_pending_bracket_legs ( native_order :: RequestHandle just_applied , bool post_calculation , bool pre_script_drain ) #1",
@@ -32752,7 +33005,7 @@
     "if ( has_parent && ! parent_walks_first ( leg . snapshot ) ) #1"
    ],
    "cls": "grow",
-   "spelling": "pending_bracket_legs_ . push_back ( . . . )",
+   "spelling": "pending_write . push_back ( . . . )",
    "ordinal": 1
   },
   {
@@ -32783,7 +33036,7 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "pending_bracket_legs_",
+   "symbol": "pending_write",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: flush_pending_bracket_legs ( native_order :: RequestHandle just_applied , bool post_calculation , bool pre_script_drain ) #1",
@@ -32791,12 +33044,12 @@
     "if ( leg . snapshot . from_entry . empty ( ) && leg . snapshot . bracket_origin . incarnation = = 0 && detail :: exit_binding_rule_switches ( ) . global_exit_binds_working_entries && margins_disabled ( ) && whole_level_exit ( leg . snapshot . exit_levels . limit , leg . snapshot . exit_levels . stop , leg . snapshot . exit_levels . trail_points , leg . snapshot . exit_levels . trail_price , leg . snapshot . exit_levels . profit_ticks , leg . snapshot . exit_levels . loss_ticks , leg . snapshot . requested_qty , leg . snapshot . qty_percent ) && detail :: run_position ( require_host ( ) ) . signed_units = = 0 . 0 && priced_entry_order_working ( nullptr ) ) #1"
    ],
    "cls": "grow",
-   "spelling": "pending_bracket_legs_ . push_back ( . . . )",
+   "spelling": "pending_write . push_back ( . . . )",
    "ordinal": 1
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "pending_bracket_legs_",
+   "symbol": "pending_write",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: flush_pending_bracket_legs ( native_order :: RequestHandle just_applied , bool post_calculation , bool pre_script_drain ) #1",
@@ -32804,7 +33057,7 @@
     "if ( leg . snapshot . reservation_deferred_to_pending_entry && ! ( cohort_exposure_for ( leg . snapshot . from_entry ) > 0 . 0 ) ) #1"
    ],
    "cls": "grow",
-   "spelling": "pending_bracket_legs_ . push_back ( . . . )",
+   "spelling": "pending_write . push_back ( . . . )",
    "ordinal": 1
   },
   {
@@ -32899,7 +33152,7 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "pending_bracket_legs_",
+   "symbol": "pending_write",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: flush_pending_bracket_legs ( native_order :: RequestHandle just_applied , bool post_calculation , bool pre_script_drain ) #1",
@@ -32908,7 +33161,7 @@
     "if ( parent_held ) #1"
    ],
    "cls": "grow",
-   "spelling": "pending_bracket_legs_ . push_back ( . . . )",
+   "spelling": "pending_write . push_back ( . . . )",
    "ordinal": 1
   },
   {
@@ -32927,7 +33180,7 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "pending_bracket_legs_",
+   "symbol": "pending_write",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: flush_pending_bracket_legs ( native_order :: RequestHandle just_applied , bool post_calculation , bool pre_script_drain ) #1",
@@ -32935,12 +33188,12 @@
     "if ( ( leg . snapshot . bracket_origin . incarnation ! = 0 && leg . snapshot . bracket_origin ! = just_applied && origin_is_pending ( leg . snapshot . bracket_origin ) ) || retained_parent_pending ) #1"
    ],
    "cls": "grow",
-   "spelling": "pending_bracket_legs_ . push_back ( . . . )",
+   "spelling": "pending_write . push_back ( . . . )",
    "ordinal": 1
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "pending_bracket_legs_",
+   "symbol": "pending_write",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: flush_pending_bracket_legs ( native_order :: RequestHandle just_applied , bool post_calculation , bool pre_script_drain ) #1",
@@ -32948,7 +33201,7 @@
     "if ( leg . snapshot . defer_until_post_parent_calculation && ! post_calculation && ! parent_walks_first ( leg . snapshot ) ) #1"
    ],
    "cls": "grow",
-   "spelling": "pending_bracket_legs_ . push_back ( . . . )",
+   "spelling": "pending_write . push_back ( . . . )",
    "ordinal": 1
   },
   {
@@ -33074,14 +33327,14 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "pending_entries_",
+   "symbol": "pending_write",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: flush_pending_entries ( ) #1",
     "auto deferred = std :: remove_if ( queued . begin ( ) , queued . end ( ) , [ & ] ( PendingEntry & entry ) #1"
    ],
    "cls": "grow",
-   "spelling": "pending_entries_ . push_back ( . . . )",
+   "spelling": "pending_write . push_back ( . . . )",
    "ordinal": 1
   },
   {
@@ -33181,6 +33434,18 @@
    ],
    "cls": "decl",
    "spelling": "std :: vector < PendingSameBarCommand >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "next",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "void PineExecutionAdapter :: flush_pending_same_bar_commands ( bool flat_pair_follows , bool invalidate_batch ) #1",
+    "const auto apply_known_reversal_gap = [ & ] ( const auto & accepted ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "next = . . .",
    "ordinal": 1
   },
   {
@@ -33894,6 +34159,17 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
+   "symbol": "next",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "[ [ gnu :: noinline , gnu :: cold ] ] bool PineExecutionAdapter :: close_all_at_next_point ( const Bar & bar , int fired , const std :: vector < std :: pair < native_order :: RequestHandle , PlacementSnapshot > > & closes , const NativeDecisionContext & context ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "next = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
    "symbol": "lot",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
@@ -33927,6 +34203,31 @@
    ],
    "cls": "assign",
    "spelling": "lots = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "next",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "void PineExecutionAdapter :: follow_margin_call ( double called_units , double fill , double current , const NativeDecisionContext & context ) #1",
+    "while ( finite_positive ( fill ) ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "next = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "next",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "void PineExecutionAdapter :: follow_margin_call ( double called_units , double fill , double current , const NativeDecisionContext & context ) #1",
+    "while ( finite_positive ( fill ) ) #1",
+    "else if ( phase = = NativePathPhase :: High || phase = = NativePathPhase :: Low ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "next = . . .",
    "ordinal": 1
   },
   {
@@ -34151,6 +34452,17 @@
    ],
    "cls": "grow",
    "spelling": "taken . emplace_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "next",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "void PineExecutionAdapter :: schedule_lagged_short_follow_up ( const native_order :: ExecutionAppliedEvent & event , const NativeDecisionContext & context ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "next = . . .",
    "ordinal": 1
   },
   {
@@ -35076,7 +35388,7 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "pending_bracket_legs_",
+   "symbol": "pending_write",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: apply_reversal_gap_bracket_policy ( const Bar & bar , const NativeDecisionContext & context , bool defer_trails ) #1",
@@ -35085,7 +35397,7 @@
     "else #1"
    ],
    "cls": "grow",
-   "spelling": "pending_bracket_legs_ . push_back ( . . . )",
+   "spelling": "pending_write . push_back ( . . . )",
    "ordinal": 1
   },
   {
@@ -35355,7 +35667,7 @@
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: on_bar_open ( const Bar & bar , const NativeDecisionContext & context ) #1",
-    "for ( const auto & handle : live_handles_ ) #1"
+    "if ( has_live_trail_policy ( ) ) for ( const auto & handle : live_handles_ ) #1"
    ],
    "cls": "grow",
    "spelling": "trail_state_at_open_ . emplace ( . . . )",
@@ -35918,6 +36230,18 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
+   "symbol": "next",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "void PineExecutionAdapter :: run_opening_checkpoint ( double fill , bool market , bool sibling_book , bool adds_book_last , const NativeDecisionContext & context ) #1",
+    "else if ( ! defer_slipped_pooc_rounding ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "next = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
    "symbol": "taken",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
@@ -36062,14 +36386,14 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "pending_entries_",
+   "symbol": "pending_write",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: on_applied ( const native_order :: ExecutionAppliedEvent & event , const NativeDecisionContext & context ) #1",
     "if ( placement_snapshot && ( placement_snapshot -> family = = PineOrderFamily :: Close || placement_snapshot -> family = = PineOrderFamily :: CloseAll ) && event . closed_units > 0 . 0 ) #1"
    ],
    "cls": "grow",
-   "spelling": "pending_entries_ . resize ( . . . )",
+   "spelling": "pending_write . resize ( . . . )",
    "ordinal": 1
   },
   {
@@ -36121,20 +36445,6 @@
    ],
    "cls": "grow",
    "spelling": "preserved_cohorts . push_back ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_adapter.cpp",
-   "symbol": "closed_cohorts",
-   "scope": [
-    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: on_applied ( const native_order :: ExecutionAppliedEvent & event , const NativeDecisionContext & context ) #1",
-    "if ( flipped_position && event . closed_units > 0 . 0 ) #1",
-    "cohorts_by_id_ . for_each_sorted_id ( [ & ] ( const SourceId & id ) #1",
-    "if ( ! std :: binary_search ( preserved_cohorts . begin ( ) , preserved_cohorts . end ( ) , id ) ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "closed_cohorts . push_back ( . . . )",
    "ordinal": 1
   },
   {
@@ -37117,6 +37427,108 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
+   "symbol": "<temp:vector>",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "void PineExecutionAdapter :: refresh_pending_view ( ) noexcept #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: vector < int >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "<temp:vector>",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "void PineExecutionAdapter :: refresh_pending_view ( ) noexcept #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: vector < int >",
+   "ordinal": 2
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "indexes",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "bool PineExecutionAdapter :: ensure_projected_pending_index ( ) const try #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < int >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "next",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "bool PineExecutionAdapter :: ensure_projected_pending_index ( ) const try #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < int >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "exits",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "bool PineExecutionAdapter :: ensure_projected_pending_index ( ) const try #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: unordered_map < Key , int , Hash >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "indexes",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "bool PineExecutionAdapter :: ensure_projected_pending_index ( ) const try #1"
+   ],
+   "cls": "grow",
+   "spelling": "indexes . reserve ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "exits",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "bool PineExecutionAdapter :: ensure_projected_pending_index ( ) const try #1"
+   ],
+   "cls": "grow",
+   "spelling": "exits . reserve ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "exits",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "bool PineExecutionAdapter :: ensure_projected_pending_index ( ) const try #1",
+    "+ + raw ) #1",
+    "if ( exit ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "exits . emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "indexes",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "bool PineExecutionAdapter :: ensure_projected_pending_index ( ) const try #1",
+    "+ + raw ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "indexes . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
    "symbol": "cancel",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
@@ -37217,18 +37629,6 @@
    ],
    "cls": "assign",
    "spelling": "result = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_adapter.cpp",
-   "symbol": "live_handles_",
-   "scope": [
-    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: order_same_point_entries ( ) #1",
-    "+ + index ) #2"
-   ],
-   "cls": "grow",
-   "spelling": "live_handles_ . push_back ( . . . )",
    "ordinal": 1
   },
   {
@@ -37338,6 +37738,28 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
+   "symbol": "pending",
+   "scope": [
+    "namespace pineforge :: source #1",
+    "PineExecutionAdapter :: RetirementPopulation PineExecutionAdapter :: retirement_population ( ) const #1"
+   ],
+   "cls": "assign",
+   "spelling": "pending = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "owners",
+   "scope": [
+    "namespace pineforge :: source #1",
+    "PineExecutionAdapter :: RetirementPopulation PineExecutionAdapter :: retirement_population ( ) const #1"
+   ],
+   "cls": "assign",
+   "spelling": "owners = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
    "symbol": "origins",
    "scope": [
     "namespace pineforge :: source #2",
@@ -37367,6 +37789,383 @@
    ],
    "cls": "assign",
    "spelling": "key = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "selection",
+   "scope": [
+    "namespace pineforge :: source #6",
+    "void PineExecutionAdapter :: cancel_reversal_exit_owners ( const std :: vector < SourceId > & preserved , detail :: ExitScratchRows < SourceId > & selection ) #1",
+    "if ( PINEFORGE_FULL_CLOSE_EXIT_ORACLE ( ) ) #1",
+    "cohorts_by_id_ . for_each_sorted_id ( [ & ] ( const SourceId & id ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "selection . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "owners",
+   "scope": [
+    "namespace pineforge :: source #6",
+    "void PineExecutionAdapter :: cancel_reversal_exit_owners ( const std :: vector < SourceId > & preserved , detail :: ExitScratchRows < SourceId > & selection ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < SourceId >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "owners",
+   "scope": [
+    "namespace pineforge :: source #6",
+    "void PineExecutionAdapter :: cancel_reversal_exit_owners ( const std :: vector < SourceId > & preserved , detail :: ExitScratchRows < SourceId > & selection ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "owners . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "owners",
+   "scope": [
+    "namespace pineforge :: source #6",
+    "void PineExecutionAdapter :: cancel_reversal_exit_owners ( const std :: vector < SourceId > & preserved , detail :: ExitScratchRows < SourceId > & selection ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "owners . push_back ( . . . )",
+   "ordinal": 2
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "owners",
+   "scope": [
+    "namespace pineforge :: source #6",
+    "void PineExecutionAdapter :: cancel_reversal_exit_owners ( const std :: vector < SourceId > & preserved , detail :: ExitScratchRows < SourceId > & selection ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "owners . push_back ( . . . )",
+   "ordinal": 3
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "owners",
+   "scope": [
+    "namespace pineforge :: source #6",
+    "void PineExecutionAdapter :: cancel_reversal_exit_owners ( const std :: vector < SourceId > & preserved , detail :: ExitScratchRows < SourceId > & selection ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "owners . push_back ( . . . )",
+   "ordinal": 4
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "owners",
+   "scope": [
+    "namespace pineforge :: source #6",
+    "void PineExecutionAdapter :: cancel_reversal_exit_owners ( const std :: vector < SourceId > & preserved , detail :: ExitScratchRows < SourceId > & selection ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "owners . push_back ( . . . )",
+   "ordinal": 5
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "owners",
+   "scope": [
+    "namespace pineforge :: source #6",
+    "void PineExecutionAdapter :: cancel_reversal_exit_owners ( const std :: vector < SourceId > & preserved , detail :: ExitScratchRows < SourceId > & selection ) #1",
+    "for ( const auto & handle : live_handles_ ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "owners . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "matches",
+   "scope": [
+    "namespace pineforge :: source #6",
+    "void PineExecutionAdapter :: cancel_reversal_exit_owners ( const std :: vector < SourceId > & preserved , detail :: ExitScratchRows < SourceId > & selection ) #1",
+    "cohorts_by_id_ . for_each_sorted_id ( [ & ] ( const SourceId & id ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "matches = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "placement_",
+   "scope": [
+    "namespace pineforge :: source #6",
+    "void PineExecutionAdapter :: remember_live ( const native_order :: RequestHandle & handle , PlacementSnapshot && snapshot ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "placement_ . try_emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "pending_write",
+   "scope": [
+    "namespace pineforge :: source #6",
+    "void PineExecutionAdapter :: remember_live ( const native_order :: RequestHandle & handle , PlacementSnapshot && snapshot ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "pending_write . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "pending_write",
+   "scope": [
+    "namespace pineforge :: source #6",
+    "void PineExecutionAdapter :: requeue_live ( const native_order :: RequestHandle & handle ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "pending_write . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "order",
+   "scope": [
+    "namespace pineforge :: source #7",
+    "struct PlacementTable :: SequenceIndex #1",
+    "static Status compare ( void * context , const :: pineforge :: detail :: ScratchByteSource & a , const :: pineforge :: detail :: ScratchByteSource & b , int & order ) noexcept #1",
+    ") #1",
+    "if ( compared ! = 0 ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "order = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "order",
+   "scope": [
+    "namespace pineforge :: source #7",
+    "struct PlacementTable :: SequenceIndex #1",
+    "static Status compare ( void * context , const :: pineforge :: detail :: ScratchByteSource & a , const :: pineforge :: detail :: ScratchByteSource & b , int & order ) noexcept #1"
+   ],
+   "cls": "assign",
+   "spelling": "order = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "result",
+   "scope": [
+    "namespace pineforge :: source #7",
+    "struct PlacementTable :: SequenceIndex #1",
+    "std :: uint64_t minimum ( unsigned domain , std :: string_view id , std :: optional < std :: string_view > from = std :: nullopt ) const #1"
+   ],
+   "cls": "assign",
+   "spelling": "result = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "result",
+   "scope": [
+    "namespace pineforge :: source #7",
+    "struct PlacementTable :: SequenceIndex #1",
+    "std :: uint64_t minimum ( unsigned domain , std :: string_view id , std :: optional < std :: string_view > from = std :: nullopt ) const #1"
+   ],
+   "cls": "assign",
+   "spelling": "result = . . .",
+   "ordinal": 2
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "next",
+   "scope": [
+    "namespace pineforge :: source #7",
+    "PlacementTable :: SequenceIndex & PlacementTable :: sequence_index ( ) const #1",
+    "if ( ! sequence_index_ ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "next = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "next",
+   "scope": [
+    "namespace pineforge :: source #7",
+    "PlacementTable :: SequenceIndex & PlacementTable :: sequence_index ( ) const #1",
+    "if ( ! sequence_index_ ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "next",
+   "scope": [
+    "namespace pineforge :: source #7",
+    "PlacementTable :: SequenceIndex & PlacementTable :: sequence_index ( ) const #1",
+    "if ( ! sequence_index_ ) #1",
+    "visit_rows ( [ & ] ( std :: uint64_t incarnation , const PlacementSnapshot & row ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "next . insert ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "rows",
+   "scope": [
+    "namespace pineforge :: source #7",
+    "void PlacementTable :: prepare_place ( std :: uint64_t incarnation ) #1",
+    "const auto reserve = [ ] ( auto & rows , std :: size_t required ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "rows . reserve ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "index",
+   "scope": [
+    "namespace pineforge :: source #7",
+    "void PlacementTable :: change_sequences ( std :: uint64_t incarnation , const PlacementSnapshot * before , const PlacementSnapshot * after ) #1",
+    "try #1"
+   ],
+   "cls": "grow",
+   "spelling": "index . insert ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "result",
+   "scope": [
+    "namespace pineforge :: source #7",
+    "PineExecutionAdapter :: ExitGroupWork PineExecutionAdapter :: exit_group_work ( ) const noexcept #1"
+   ],
+   "cls": "assign",
+   "spelling": "result = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "<temp:vector>",
+   "scope": [
+    "namespace pineforge :: source #8",
+    "namespace #1",
+    "template < class T > void compact_retirement_set ( std :: vector < T > & values ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: vector < T >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "roots",
+   "scope": [
+    "namespace pineforge :: source #8",
+    "bool PineExecutionAdapter :: capture_retirement_inputs ( RetirementInputs & inputs ) const #1",
+    "const auto root = [ & ] ( std :: uint64_t value ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "roots . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "groups",
+   "scope": [
+    "namespace pineforge :: source #8",
+    "bool PineExecutionAdapter :: capture_retirement_inputs ( RetirementInputs & inputs ) const #1",
+    "const auto snapshot = [ & ] ( const PlacementSnapshot & value ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "groups . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "bar_numbers",
+   "scope": [
+    "namespace pineforge :: source #8",
+    "bool PineExecutionAdapter :: capture_retirement_inputs ( RetirementInputs & inputs ) const #1",
+    "const auto snapshot = [ & ] ( const PlacementSnapshot & value ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "bar_numbers . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "askable",
+   "scope": [
+    "namespace pineforge :: source #8",
+    "bool PineExecutionAdapter :: capture_retirement_inputs ( RetirementInputs & inputs ) const #1",
+    "for ( const auto & handle : live_handles_ ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "askable . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "groups",
+   "scope": [
+    "namespace pineforge :: source #8",
+    "bool PineExecutionAdapter :: capture_retirement_inputs ( RetirementInputs & inputs ) const #1",
+    "for ( const auto & handle : live_handles_ ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "groups . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "bar_numbers",
+   "scope": [
+    "namespace pineforge :: source #8",
+    "bool PineExecutionAdapter :: capture_retirement_inputs ( RetirementInputs & inputs ) const #1",
+    "for ( const auto & handle : live_handles_ ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "bar_numbers . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "askable",
+   "scope": [
+    "namespace pineforge :: source #8",
+    "bool PineExecutionAdapter :: capture_retirement_inputs ( RetirementInputs & inputs ) const #1",
+    "for ( const auto & cohort : cohorts_by_id_ . held_rows ( ) ) #1",
+    "for ( const auto & opening : cohort . second . opened ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "askable . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "marks",
+   "scope": [
+    "namespace pineforge :: source #8",
+    "bool PineExecutionAdapter :: capture_retirement_inputs ( RetirementInputs & inputs ) const #1"
+   ],
+   "cls": "grow",
+   "spelling": "marks . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "cohorts",
+   "scope": [
+    "namespace pineforge :: source #8",
+    "std :: array < std :: uint64_t , 3 > PineExecutionAdapter :: retirement_validation_state ( ) const #1"
+   ],
+   "cls": "assign",
+   "spelling": "cohorts = . . .",
    "ordinal": 1
   },
   {
@@ -40884,146 +41683,6 @@
   },
   {
    "file": "src/str_utils.cpp",
-   "symbol": "str_format_values",
-   "scope": [
-    "namespace pineforge #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: string",
-   "ordinal": 1
-  },
-  {
-   "file": "src/str_utils.cpp",
-   "symbol": "str_format",
-   "scope": [
-    "namespace pineforge #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: string",
-   "ordinal": 1
-  },
-  {
-   "file": "src/str_utils.cpp",
-   "symbol": "str_format_time",
-   "scope": [
-    "namespace pineforge #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: string",
-   "ordinal": 1
-  },
-  {
-   "file": "src/str_utils.cpp",
-   "symbol": "fmt",
-   "scope": [
-    "namespace pineforge #1",
-    "std :: string str_format_time ( long long timestamp_ms , const std :: string & format , const std :: string & timezone ) #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: string",
-   "ordinal": 1
-  },
-  {
-   "file": "src/str_utils.cpp",
-   "symbol": "<temp:string>",
-   "scope": [
-    "namespace pineforge #1",
-    "std :: string str_format_time ( long long timestamp_ms , const std :: string & format , const std :: string & timezone ) #1"
-   ],
-   "cls": "temp",
-   "spelling": "std :: string",
-   "ordinal": 1
-  },
-  {
-   "file": "src/str_utils.cpp",
-   "symbol": "str_match",
-   "scope": [
-    "namespace pineforge #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: string",
-   "ordinal": 1
-  },
-  {
-   "file": "src/str_utils.cpp",
-   "symbol": "str_split",
-   "scope": [
-    "namespace pineforge #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < std :: string >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/str_utils.cpp",
-   "symbol": "result",
-   "scope": [
-    "namespace pineforge #1",
-    "std :: vector < std :: string > str_split ( const std :: string & source , const std :: string & separator ) #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < std :: string >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/str_utils.cpp",
-   "symbol": "result",
-   "scope": [
-    "namespace pineforge #1",
-    "std :: vector < std :: string > str_split ( const std :: string & source , const std :: string & separator ) #1",
-    "while ( ( pos = source . find ( separator , start ) ) ! = std :: string :: npos ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "result . push_back ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/str_utils.cpp",
-   "symbol": "result",
-   "scope": [
-    "namespace pineforge #1",
-    "std :: vector < std :: string > str_split ( const std :: string & source , const std :: string & separator ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "result . push_back ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/str_utils.cpp",
-   "symbol": "str_tostring",
-   "scope": [
-    "namespace pineforge #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: string",
-   "ordinal": 1
-  },
-  {
-   "file": "src/str_utils.cpp",
-   "symbol": "oss",
-   "scope": [
-    "namespace pineforge #1",
-    "std :: string str_tostring ( double value , const std :: string & format_mode , double mintick ) #1",
-    "if ( format_mode = = && mintick > 0 . 0 ) #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: ostringstream",
-   "ordinal": 1
-  },
-  {
-   "file": "src/str_utils.cpp",
-   "symbol": "oss",
-   "scope": [
-    "namespace pineforge #1",
-    "std :: string str_tostring ( double value , const std :: string & format_mode , double mintick ) #1",
-    "if ( format_mode = = && mintick > 0 . 0 ) #1"
-   ],
-   "cls": "append",
-   "spelling": "oss < < . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "src/str_utils.cpp",
    "symbol": "result",
    "scope": [
     "namespace pineforge #1",
@@ -41441,6 +42100,26 @@
   },
   {
    "file": "src/str_utils.cpp",
+   "symbol": "str_format_values",
+   "scope": [
+    "namespace pineforge #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/str_utils.cpp",
+   "symbol": "str_format",
+   "scope": [
+    "namespace pineforge #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/str_utils.cpp",
    "symbol": "rendered",
    "scope": [
     "namespace pineforge #1",
@@ -41461,6 +42140,126 @@
    ],
    "cls": "grow",
    "spelling": "rendered . append ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/str_utils.cpp",
+   "symbol": "str_format_time",
+   "scope": [
+    "namespace pineforge #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/str_utils.cpp",
+   "symbol": "fmt",
+   "scope": [
+    "namespace pineforge #1",
+    "std :: string str_format_time ( long long timestamp_ms , const std :: string & format , const std :: string & timezone ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/str_utils.cpp",
+   "symbol": "<temp:string>",
+   "scope": [
+    "namespace pineforge #1",
+    "std :: string str_format_time ( long long timestamp_ms , const std :: string & format , const std :: string & timezone ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/str_utils.cpp",
+   "symbol": "str_match",
+   "scope": [
+    "namespace pineforge #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/str_utils.cpp",
+   "symbol": "str_split",
+   "scope": [
+    "namespace pineforge #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < std :: string >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/str_utils.cpp",
+   "symbol": "result",
+   "scope": [
+    "namespace pineforge #1",
+    "std :: vector < std :: string > str_split ( const std :: string & source , const std :: string & separator ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < std :: string >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/str_utils.cpp",
+   "symbol": "result",
+   "scope": [
+    "namespace pineforge #1",
+    "std :: vector < std :: string > str_split ( const std :: string & source , const std :: string & separator ) #1",
+    "while ( ( pos = source . find ( separator , start ) ) ! = std :: string :: npos ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "result . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/str_utils.cpp",
+   "symbol": "result",
+   "scope": [
+    "namespace pineforge #1",
+    "std :: vector < std :: string > str_split ( const std :: string & source , const std :: string & separator ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "result . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/str_utils.cpp",
+   "symbol": "str_tostring",
+   "scope": [
+    "namespace pineforge #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/str_utils.cpp",
+   "symbol": "oss",
+   "scope": [
+    "namespace pineforge #1",
+    "std :: string str_tostring ( double value , const std :: string & format_mode , double mintick ) #1",
+    "if ( format_mode = = && mintick > 0 . 0 ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: ostringstream",
+   "ordinal": 1
+  },
+  {
+   "file": "src/str_utils.cpp",
+   "symbol": "oss",
+   "scope": [
+    "namespace pineforge #1",
+    "std :: string str_tostring ( double value , const std :: string & format_mode , double mintick ) #1",
+    "if ( format_mode = = && mintick > 0 . 0 ) #1"
+   ],
+   "cls": "append",
+   "spelling": "oss < < . . .",
    "ordinal": 1
   },
   {

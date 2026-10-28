@@ -160,8 +160,12 @@ a stream. Without it, the host uses ordinary report arrays and the in-memory
 JSON path, including lazy arrays; optional recorded outputs use the ordinary
 retained-output reader. This preserves the existing report format but does
 not make array report assembly bounded in bars or trades. With an fd sink,
-stdout carries the summary and diagnostics; the trusted finalizer consumes
-the v1 records. Neither jailed route constructs a sink file or JSON spool.
+the reserved report channel carries the summary and failures, while native fd 1
+diagnostics go to stderr; the trusted finalizer consumes the v1 records. Neither
+jailed route constructs a sink file or JSON spool. The library can write the saved
+report descriptor because it runs in this process. The descriptor is non-inheritable,
+so exec'd children do not get it. With stdout and stderr kept separate, this is
+transport isolation rather than a security boundary.
 
 Every jailed handle also calls `strategy_require_report_scratch_arena_v1`
 after table admission and before sink installation/execution. It attaches and
