@@ -500,6 +500,18 @@ void run_population(const Directory& directory, int population) {
     const auto fd_trades = run_sample(directory, population, true, true, tape,
                                       "fd-trades.ndjson");
 
+    // Print the four samples before judging them, so a failure names the sizes.
+    const auto describe = [&](const char* label, const Sample& sample) {
+        std::printf("report sink residency sample: trades=%d %s peak=%zu live=%zu "
+                    "resident_rows=%zu cache_bytes=%zu slack=%zu\n",
+                    population, label, sample.peak, sample.live, sample.resident_rows,
+                    sample.cache_bytes, kHeapSlack);
+    };
+    describe("path_control", path_control);
+    describe("fd_control", fd_control);
+    describe("path_trades", path_trades);
+    describe("fd_trades", fd_trades);
+
     require(path_trades.peak <= path_control.peak + kHeapSlack,
             "path sink heap peak grew with the trade population");
     require(fd_trades.peak <= fd_control.peak + kHeapSlack,
