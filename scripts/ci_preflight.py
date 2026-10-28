@@ -297,17 +297,17 @@ JOB_COMMANDS = {
     'docs.yml': {'authz': None, 'build': None},
     'docs-post.yml': {'authz': None, 'build': None},
 }
-# Exact hosted pins and bare GKE scale-set names, checked per job.
-# Historical name: this table also holds the exact GKE pins.
+# Exact PR fleet/hosted pins and bare GKE scale-set names, checked per job.
+# Historical name: this table also holds the exact fleet and GKE pins.
 HOSTED_JOB_RUNNERS = {
-    'ci.yml': {'authz': 'ubuntu-24.04'},
+    'ci.yml': {'authz': PR_RUNNER},
     'gke-pr.yml': {**dict.fromkeys(('admit', 'legs', 'result'), 'ubuntu-24.04'),
                    **GKE_JOB_RUNNERS['gke-pr.yml']},
     'ci-post.yml': GKE_JOB_RUNNERS['ci-post.yml'],
     'docs-post.yml': GKE_JOB_RUNNERS['docs-post.yml'],
     'native-live.yml': GKE_JOB_RUNNERS['native-live.yml'],
     'corpus-parity.yml': GKE_JOB_RUNNERS['corpus-parity.yml'],
-    'docs.yml': {'authz': 'ubuntu-24.04', 'build': 'ubuntu-24.04'},
+    'docs.yml': {'authz': PR_RUNNER, 'build': PR_RUNNER},
     'promote-baseline.yml': GKE_JOB_RUNNERS['promote-baseline.yml'],
     'release-ruleset-probe.yml': GKE_JOB_RUNNERS['release-ruleset-probe.yml'],
 }
@@ -2170,7 +2170,9 @@ def _workflow_runner(workflow: str) -> str:
 
 def _authz_header(name: str) -> str:
     # Only the runner varies; the canon step hash and all header keys stay pinned.
-    runner = GKE_LIGHT_JOB_RUNNERS.get(name, {}).get('authz', 'ubuntu-24.04')
+    runner = HOSTED_JOB_RUNNERS.get(name, {}).get('authz', 'ubuntu-24.04')
+    if runner == PR_RUNNER:
+        runner = json.dumps(json.loads(runner))
     return AUTHZ_JOB_HEADER.replace('runs-on: ubuntu-24.04', f'runs-on: {runner}')
 
 
@@ -2347,7 +2349,7 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
             findings.append(f'{name} must not define a larger_runner key; use the GCP fleet or hosted exceptions')
         timed = JOB_COMMANDS.get(name, {})
         fixed_hosted = {job: label for job, label in HOSTED_JOB_RUNNERS.get(name, {}).items()
-                        if label == 'ubuntu-24.04' or name == 'gke-pr.yml'
+                        if label in ('ubuntu-24.04', PR_RUNNER) or name == 'gke-pr.yml'
                         or (routes[name] & POST_EVENTS and 'pull_request' not in routes[name])}
         if _LARGER_RUNNER_LABEL.search(code):
             findings.append(f'{name} must not use larger-runner labels; use the GCP fleet or hosted exceptions')
@@ -2448,17 +2450,19 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                     environments = _job_values(workflow, 'env') + _job_values(body, 'env')
                     if any(re.search(r'\bPF_CI_LABELS["\']?\s*:', value) for value in environments):
                         findings.append(f'{name} job {job} must not set PF_CI_LABELS on a GKE job')
-            elif fixed_hosted.get(job) == POST_RUNNER:
+            elif fixed_hosted.get(job) in (PR_RUNNER, POST_RUNNER):
+                runner = fixed_hosted[job]
                 actual = _job_values(body, 'runs-on', unquote=False)
-                if [_runner_value(value) for value in actual] != [_runner_value(POST_RUNNER)]:
-                    findings.append(f'{name} job {job} must run on {POST_RUNNER}')
+                if [_runner_value(value) for value in actual] != [_runner_value(runner)]:
+                    findings.append(f'{name} job {job} must run on {runner}')
                 if credentials:
                     findings.append(f'{name} job {job} must keep production credentials '
                                     'on a hosted standard runner')
                 environments = _job_values(workflow, 'env') + _job_values(body, 'env')
                 if any(re.search(r'\bPF_CI_LABELS["\']?\s*:', value) for value in environments):
+                    fleet = 'PR' if runner == PR_RUNNER else 'post'
                     findings.append(f'{name} job {job} must not set PF_CI_LABELS '
-                                    'on a post fleet job')
+                                    f'on a {fleet} fleet job')
             elif (job in fixed_hosted
                   or (credentials and (name, job) != ('docs-post.yml', 'build'))
                   or (job not in pinned and hosted_platform)):
@@ -3588,7 +3592,7 @@ _LITERAL_RUNNER_LABEL = r'''(?:"[^"\n]+"|'[^'\n]+'|[A-Za-z0-9_.-]+)'''
 
 
 def ci_authz_only_findings(workflow: str) -> list[str]:
-    """The retained PR workflow has one hosted authorization context."""
+    """The retained PR workflow has one fleet authorization context."""
     findings = []
     if _events(workflow) != {'pull_request'}:
         findings.append('ci.yml must retain only the pull_request trigger')
@@ -3604,15 +3608,16 @@ def ci_authz_only_findings(workflow: str) -> list[str]:
         findings.append('ci.yml must retain only its authz job after PR legs move to gke-pr')
     authz = jobs.get('authz', '')
     # The probe's authz job runs on a pod; ci.yml's copy is the same job on the
-    # hosted image, so only the runner line differs (and is pinned just below).
+    # PR fleet, so only the runner line differs (and is pinned just below).
     canon = _jobs(RELEASE_RULESETS_PROBE_WORKFLOW)['authz'].replace(
-        f'runs-on: {GKE_2_LABEL}', 'runs-on: ubuntu-24.04', 1)
+        f'runs-on: {GKE_2_LABEL}', f'runs-on: {json.dumps(json.loads(PR_RUNNER))}', 1)
     if (_unparsed(workflow) or _code(authz) != _code(canon)):
         findings.append('ci.yml must start with the verbatim canon authz job')
-    if (_job_values(authz, 'runs-on') != ['ubuntu-24.04']
+    if ([_runner_value(value) for value in _job_values(authz, 'runs-on', unquote=False)]
+            != [_runner_value(PR_RUNNER)]
             or _job_values(authz, 'permissions') != ['{}']
             or not _steps(authz)):
-        findings.append('ci.yml authz must remain a hosted read-only authorization gate')
+        findings.append('ci.yml authz must remain a PR fleet read-only authorization gate')
     if 'actions/cache' in workflow or re.search(r'(?m)^\s*cache\s*:', workflow):
         findings.append('ci.yml must not retain an Actions cache')
     return findings

@@ -37,7 +37,7 @@ PREFLIGHT_TEST_WEIGHTS = {
     'test_ci_preflight.PreflightFailures.'
     'test_gcp_sites_reject_retired_and_void_labels': 120,
     'test_ci_preflight.PreflightFailures.'
-    'test_light_jobs_refuse_vm_labels_unlisted_images_arrays_and_fallbacks': 100,
+    'test_light_jobs_refuse_other_routes_unlisted_images_arrays_and_fallbacks': 100,
     'test_ci_preflight.PreflightFailures.'
     'test_no_stage_runs_under_a_timeout_and_jobs_keep_the_platform_maximum': 90,
     'test_ci_preflight.PreflightFailures.'
