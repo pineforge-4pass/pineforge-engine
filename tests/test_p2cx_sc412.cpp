@@ -659,6 +659,32 @@ std::string budget_key(int n) {
     key.resize(budget_key_bytes, 'x');
     return key;
 }
+namespace budget_files {
+// Read the live owners, not the syscall registry: rehash closes old indexes,
+// and a later file can reuse both a recorded descriptor and its inode.
+template<class Tag, auto Member> struct Access { friend auto member(Tag) { return Member; } };
+struct TreeFile { friend auto member(TreeFile); };
+struct PairData { friend auto member(PairData); };
+struct PairIndex { friend auto member(PairIndex); };
+struct PairFile { friend auto member(PairFile); };
+template struct Access<TreeFile, &DiskIdTable<std::uint64_t>::file_>;
+template struct Access<PairData, &IdPairStore<std::uint64_t>::data_>;
+template struct Access<PairIndex, &IdPairStore<std::uint64_t>::index_>;
+template struct Access<PairFile, &IdPairScratchFile::file_>;
+
+int descriptor(const IdPairScratchFile& file) {
+    return (file.*member(PairFile{})).descriptor();
+}
+using Images = std::vector<std::vector<unsigned char>>;
+Images capture(const DiskIdTable<std::uint64_t>& table) {
+    return {image((table.*member(TreeFile{})).descriptor())};
+}
+Images capture(const IdPairStore<std::uint64_t>& table) {
+    // File roles define the order; every byte of both files is compared.
+    return {image(descriptor(table.*member(PairData{}))),
+            image(descriptor(table.*member(PairIndex{})))};
+}
+}
 struct BudgetObservation {
     std::size_t resident_bytes = 0;
     Traffic io;
@@ -734,7 +760,7 @@ std::size_t budget_for(int entries) {
             result.io = measure.finish()[ids];
             result.resident_bytes = cache_bytes;
         }
-        result.disk = images(); // Image/oracle allocations are not cache allocations.
+        result.disk = budget_files::capture(table); // Outside cache allocation accounting.
         return result;
     };
     const auto cached = run(budget), direct = run(0);
@@ -807,7 +833,7 @@ std::size_t pair_budget_for(int entries) {
             result.io = measure.finish()[pairs];
             result.resident_bytes = cache_bytes;
         }
-        result.disk = images();
+        result.disk = budget_files::capture(table);
         return result;
     };
     const auto cached = run(budget / 2), direct = run(0);
