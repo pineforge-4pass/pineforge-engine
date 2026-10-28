@@ -53,6 +53,9 @@ CR-352 adds bare-line corroboration controls: the machine-code-shaped TvJO
 line is ignored without independent evidence, while symbols, installed
 headers and compiled escaped/adjacent literals still fail. The legacy
 source-literal findings and ruled-row presence remain independently tested.
+
+Compiler-free object/archive byte fixtures check that executable bytes stay
+outside the strings surface; unknown data and nm names remain visible.
 """
 from __future__ import annotations
 
@@ -61,11 +64,14 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 import check_kernel_residuals as guard
 
@@ -190,6 +196,165 @@ def evaluate_table(strings: list[str], nm: list[str], **surfaces):
     unless the case brings its own header surface."""
     surfaces.setdefault("header_lines", table_headers())
     return guard.evaluate(strings, nm, RULED, **surfaces)
+
+
+def ar_bytes(members: list[tuple[str, bytes]]) -> bytes:
+    """Hand-build an ar archive, preserving repeated short member names."""
+    output = bytearray(b"!<arch>\n")
+    for name, contents in members:
+        if len(name.encode("ascii")) > 15:
+            raise ValueError("fixture requires a short ar member name")
+        header = (f'{name + "/":<16}{0:<12}{0:<6}{0:<6}'
+                  f'{"100644":<8}{len(contents):<10}`\n').encode("ascii")
+        output.extend(header)
+        output.extend(contents)
+        if len(contents) % 2:
+            output.extend(b"\n")
+    return bytes(output)
+
+
+def macho_object(sections: list[tuple[str, bytes, int, str]], *,
+                 is_64: bool = True, endian: str = "<",
+                 cputype: int | None = None) -> bytes:
+    """Hand-built Mach-O: section name, bytes/zerofill size, flags, segment."""
+    header_size = 32 if is_64 else 28
+    command_size = (72 if is_64 else 56) + (80 if is_64 else 68) * len(sections)
+    payload_offset = header_size + command_size
+    payload = bytearray()
+    section_table = bytearray()
+    address = 0
+    for name, contents, flags, segment in sections:
+        zerofill = (flags & 0xFF) in (1, 0xC, 0x12)
+        offset = 0 if zerofill else payload_offset + len(payload)
+        fields = [
+            name.encode("ascii").ljust(16, b"\0"),
+            segment.encode("ascii").ljust(16, b"\0"),
+            address, len(contents), offset, 0, 0, 0, flags, 0, 0,
+        ]
+        if is_64:
+            fields.append(0)
+        section_table.extend(struct.pack(
+            endian + ("16s16sQQIIIIIIII" if is_64 else "16s16sIIIIIIIII"),
+            *fields))
+        if not zerofill:
+            payload.extend(contents)
+        address += len(contents)
+    # MH_OBJECT's unnamed segment permits sections with different segnames.
+    segment = struct.pack(
+        endian + ("II16sQQQQiiII" if is_64 else "II16sIIIIiiII"),
+        0x19 if is_64 else 0x1, command_size, b"\0" * 16,
+        0, address, payload_offset, len(payload), 7, 5,
+        len(sections), 0)
+    if cputype is None:
+        cputype = 0x0100000C if is_64 else 12
+    subtype = 3 if cputype == 0x01000007 else 0
+    header_fields = [
+        0xfeedfacf if is_64 else 0xfeedface, cputype, subtype, 1, 1, command_size, 0,
+    ]
+    if is_64:
+        header_fields.append(0)
+    header = struct.pack(endian + ("IIIIIIII" if is_64 else "IIIIIII"),
+                         *header_fields)
+    return header + segment + bytes(section_table) + bytes(payload)
+
+
+def macho64(sections: list[tuple[str, bytes]], *,
+            cputype: int = 0x0100000C) -> bytes:
+    """A compiler-free 64-bit little-endian Mach-O object fixture."""
+    return macho_object([
+        (name, contents,
+         0x80000400 if name == "__text" else 0x2 if name == "__cstring" else 0,
+         "__TEXT")
+        for name, contents in sections
+    ], cputype=cputype)
+
+
+def fat_macho(slices: list[tuple[int, bytes]], *, is_64: bool = False,
+              endian: str = ">") -> bytes:
+    """Hand-build fat_arch or fat_arch_64 records around thin slices."""
+    header_size = 8 + (32 if is_64 else 20) * len(slices)
+    offset = header_size
+    entries: list[bytes] = []
+    locations: list[tuple[int, bytes]] = []
+    for cputype, contents in slices:
+        offset = (offset + 7) & ~7
+        subtype = 3 if cputype == 0x01000007 else 0
+        fields = [cputype, subtype, offset, len(contents), 3]
+        if is_64:
+            fields.append(0)
+        entries.append(struct.pack(endian + ("IIQQII" if is_64 else "IIIII"),
+                                   *fields))
+        locations.append((offset, contents))
+        offset += len(contents)
+    output = bytearray(struct.pack(
+        endian + "II", 0xcafebabf if is_64 else 0xcafebabe, len(slices)))
+    output.extend(b"".join(entries))
+    for location, contents in locations:
+        output.extend(b"\0" * (location - len(output)))
+        output.extend(contents)
+    return bytes(output)
+
+
+def elf_object(sections: list[tuple[str, bytes, int, int]], *,
+               is_64: bool = True, endian: str = "<",
+               extended_count: bool = False, extended_names: bool = False) -> bytes:
+    """Hand-built ELF: section name, bytes/NOBITS size, flags, type.
+
+    Small extended-count fixtures deliberately use section zero's escape
+    fields without allocating tens of thousands of section headers.
+    """
+    names = b"\0" + b"".join(name.encode("ascii") + b"\0" for name, _, _, _ in sections)
+    shstr_name_offset = len(names)
+    names += b".shstrtab\0"
+    name_offsets: dict[str, int] = {}
+    cursor = 1
+    for name, _, _, _ in sections:
+        name_offsets[name] = cursor
+        cursor += len(name) + 1
+    name_offsets[".shstrtab"] = shstr_name_offset
+
+    header_size = 64 if is_64 else 52
+    section_size = 64 if is_64 else 40
+    section_format = endian + ("IIQQQQIIQQ" if is_64 else "IIIIIIIIII")
+    section_count = len(sections) + 2
+    output = bytearray(b"\0" * header_size)
+    section_headers: list[bytes] = [
+        struct.pack(section_format, 0, 0, 0, 0, 0,
+                    section_count if extended_count else 0,
+                    section_count - 1 if extended_names else 0, 0, 0, 0)]
+    for name, contents, flags, section_type in sections:
+        entry_size = (1 if flags & 0x20 else 16) if flags & 0x10 else 0
+        alignment = entry_size or 1
+        output.extend(b"\0" * (-len(output) % alignment))
+        if entry_size:
+            contents += b"\0" * (-len(contents) % entry_size)
+        offset = 0 if section_type == 8 else len(output)
+        if section_type != 8:
+            output.extend(contents)
+        section_headers.append(struct.pack(
+            section_format, name_offsets[name], section_type, flags, 0, offset, len(contents),
+            0, 0, alignment, entry_size))
+    shstr_offset = len(output)
+    output.extend(names)
+    section_headers.append(struct.pack(
+        section_format, name_offsets[".shstrtab"], 3, 0, 0, shstr_offset, len(names),
+        0, 0, 1, 0))
+    output.extend(b"\0" * (-len(output) % 8))
+    section_table_offset = len(output)
+    output.extend(b"".join(section_headers))
+    ident = b"\x7fELF" + bytes((2 if is_64 else 1, 1 if endian == "<" else 2, 1, 0)) + b"\0" * 8
+    machine = (62 if endian == "<" else 21) if is_64 else (3 if endian == "<" else 20)
+    output[:header_size] = struct.pack(
+        endian + ("16sHHIQQQIHHHHHH" if is_64 else "16sHHIIIIIHHHHHH"),
+        ident, 1, machine, 1, 0, 0, section_table_offset, 0,
+        header_size, 0, 0, section_size, 0 if extended_count else section_count,
+        0xFFFF if extended_names else section_count - 1)
+    return bytes(output)
+
+
+def elf64(sections: list[tuple[str, bytes, int]]) -> bytes:
+    """A compiler-free 64-bit little-endian ELF relocatable fixture."""
+    return elf_object([(name, contents, flags, 1) for name, contents, flags in sections])
 
 
 class SanitizerAndDebugBuildTests(unittest.TestCase):
@@ -499,6 +664,391 @@ class BareStringsTests(unittest.TestCase):
                          [("stale", "tv_carry_qty")])
         self.assertEqual(summary["ruledIdentifiersPresent"],
                          absent["ruledIdentifiersPresent"] + 1)
+
+
+class ObjectSectionTests(unittest.TestCase):
+    """The archive string surface is limited to literal-bearing sections."""
+
+    @staticmethod
+    def unruled_tokens(strings: list[str], nm: list[str]) -> set[str]:
+        findings, _ = guard.evaluate(strings, nm, RULED)
+        return {finding.token for finding in findings if finding.kind == "unruled"}
+
+    def read_fixture(self, data: bytes, directory: Path, *,
+                     symbols: str = "", code_control: bool = True
+                     ) -> tuple[list[str], list[str]]:
+        return self.read_archive_fixture(
+            ar_bytes([("probe.o", data)]), directory,
+            symbols=symbols, code_control=code_control)
+
+    def read_archive_fixture(self, data: bytes, directory: Path, *,
+                             symbols: str = "", code_control: bool = False,
+                             stripped_data: bytes | None = None
+                             ) -> tuple[list[str], list[str]]:
+        """Exercise the old and new read_archive API without compiling.
+
+        Only stripping (the fixture has no debug data) and nm (synthetic symbol
+        output) are stubbed. Real ar/strings read a standard archive containing
+        hand-built members, including every architecture of a fat member.
+        """
+        directory.mkdir()
+        archive = directory / "probe.a"
+        archive.write_bytes(data)
+        run_tool = guard.run_tool
+        if code_control:
+            # Control: the old whole-archive operation sees the code word.
+            old_lines = run_tool(["strings", "-a", str(archive)]).splitlines()
+            self.assertIn("code TvJO bytes", old_lines)
+            self.assertIn("TvJO", self.unruled_tokens(old_lines, []))
+
+        def copy_fixture(source: Path, destination: Path) -> str:
+            if stripped_data is None:
+                shutil.copyfile(source, destination)
+            else:
+                destination.write_bytes(stripped_data)
+            return "fixture-no-debug"
+
+        def fixture_tool(argv: list[str]) -> str:
+            if argv[0] == "nm":
+                self.assertEqual(argv, ["nm", "-C", str(archive)])
+                return symbols
+            return run_tool(argv)
+
+        with mock.patch.object(guard, "strip_debug_info", side_effect=copy_fixture), \
+                mock.patch.object(guard, "run_tool", side_effect=fixture_tool):
+            strings, nm, tool = guard.read_archive(archive, directory)
+        self.assertEqual(tool, "fixture-no-debug")
+        self.assertEqual(nm, symbols.splitlines())
+        return strings, nm
+
+    def test_machine_code_bytes_in_text_are_ignored(self) -> None:
+        """Must fail on the old read_archive's whole-archive strings scan."""
+        thin = macho64([("__text", b"\0code TvJO bytes\0")])
+        fixtures = (
+            ("Mach-O thin arm64", thin),
+            ("Mach-O fat arm64", fat_macho([
+                (0x01000007, macho64([("__text", b"neutral\0")],
+                                    cputype=0x01000007)),
+                (0x0100000C, thin),
+            ])),
+            ("ELF", elf64([
+                (".text", b"\0code TvJO bytes\0", 0x6),
+                (".text.hot", b"\0code TvJO bytes\0", 0x6),
+                (".text.unlikely", b"\0code TvJO bytes\0", 0x6),
+                (".rodata", b"neutral\0", 0x2),
+            ])),
+        )
+        with tempfile.TemporaryDirectory(prefix="pineforge-residual-sections-") as directory:
+            root = Path(directory)
+            for label, object_bytes in fixtures:
+                with self.subTest(label=label):
+                    strings, nm = self.read_fixture(object_bytes, root / label)
+                    self.assertNotIn("TvJO", "\n".join(strings))
+                    self.assertNotIn("TvJO", self.unruled_tokens(strings, nm))
+
+    def test_data_sections_and_symbols_are_still_flagged(self) -> None:
+        """Keep data/symbol findings while discarding code in the same object."""
+        fixtures = (
+            ("Mach-O __cstring", macho64([
+                ("__text", b"\0code TvJO bytes\0"),
+                ("__cstring", b"xx TvJO yy\0"),
+            ]), ""),
+            ("Mach-O __const", macho64([
+                ("__text", b"\0code TvJO bytes\0"),
+                ("__const", b"xx TvJO yy\0"),
+            ]), ""),
+            ("Mach-O fat __cstring arm64", fat_macho([
+                (0x01000007, macho64([("__text", b"neutral\0")],
+                                    cputype=0x01000007)),
+                (0x0100000C, macho64([
+                    ("__text", b"\0code TvJO bytes\0"),
+                    ("__cstring", b"xx TvJO yy\0"),
+                ])),
+            ]), ""),
+            *((f"ELF {section}", elf64([
+                (".text", b"\0code TvJO bytes\0", 0x6),
+                (section, b"xx TvJO yy\0", flags),
+            ]), "") for section, flags in (
+                (".rodata", 0x2), (".rodata.str1.1", 0x32),
+                (".rodata.cst16", 0x12), (".data.rel.ro", 0x3),
+                (".tdata", 0x403), (".gnu.linkonce.r.probe", 0x2),
+            )),
+            ("Mach-O symbol", macho64([
+                ("__text", b"\0code TvJO bytes\0"),
+            ]), "0000000000000000 T _TvJO\n"),
+            ("ELF symbol", elf64([
+                (".text", b"\0code TvJO bytes\0", 0x6),
+            ]), "0000000000000000 T TvJO\n"),
+        )
+        with tempfile.TemporaryDirectory(prefix="pineforge-residual-data-") as directory:
+            root = Path(directory)
+            for label, object_bytes, symbols in fixtures:
+                with self.subTest(label=label):
+                    strings, nm = self.read_fixture(
+                        object_bytes, root / label, symbols=symbols)
+                    if symbols:
+                        findings, _ = guard.evaluate(strings, nm, RULED)
+                        self.assertTrue(any(f.token == "TvJO" and "via nm" in f.detail
+                                            for f in findings))
+                    else:
+                        self.assertIn("xx TvJO yy", strings)
+                    self.assertIn("TvJO", self.unruled_tokens(strings, nm))
+                    # This paired negative control makes this row red on the
+                    # old checker too; retaining data alone already passed it.
+                    self.assertNotIn("code TvJO bytes", strings)
+
+    def test_duplicate_member_names_are_infrastructure_errors(self) -> None:
+        """Both APIs must reject duplicates, not read the first object twice."""
+        neutral = elf64([(".rodata", b"neutral\0", 2)])
+        forbidden = elf64([(".rodata", b"xx TvJO yy\0", 2)])
+        with tempfile.TemporaryDirectory(prefix="pineforge-residual-duplicates-") as directory:
+            root = Path(directory)
+            for name in ("probe.o", "other.o"):
+                data = ar_bytes([(name, neutral), (name, forbidden)])
+                archive = root / (name + ".a")
+                archive.write_bytes(data)
+                message = "duplicate archive member.*" + re.escape(name)
+                with self.subTest(name=name, entry="archive_members"):
+                    with self.assertRaisesRegex(guard.InfrastructureError, message):
+                        guard.archive_members(archive)
+                with self.subTest(name=name, entry="read_archive"):
+                    with self.assertRaisesRegex(guard.InfrastructureError, message):
+                        self.read_archive_fixture(data, root / name)
+
+    def test_stripped_duplicate_member_names_are_infrastructure_errors(self) -> None:
+        """Validate the stripped member list as well as the original list."""
+        neutral = elf64([(".rodata", b"neutral\0", 2)])
+        original = ar_bytes([("probe.o", neutral)])
+        stripped = ar_bytes([("shadow.o", neutral), ("shadow.o", neutral)])
+        with tempfile.TemporaryDirectory(prefix="pineforge-residual-strip-duplicates-") as directory:
+            with self.assertRaisesRegex(guard.InfrastructureError,
+                                        r"duplicate archive member.*shadow\.o"):
+                self.read_archive_fixture(
+                    original, Path(directory) / "read",
+                    stripped_data=stripped)
+
+    def test_unknown_non_executable_sections_are_flagged(self) -> None:
+        """Unknown data, including misleading text/metadata names, is visible."""
+        fixtures = [
+            (f"Mach-O {name}", macho_object([
+                ("__opcodes", b"\0code TvJO bytes\0", 0x80000400, "__TEXT"),
+                (name, b"xx TvJO yy\0", 0, "__DATA"),
+            ]))
+            for name in ("__vendor_blob", "__foreign_data", "__text")
+        ] + [
+            (f"ELF {name}", elf_object([
+                (".opcodes", b"\0code TvJO bytes\0", 0x6, 1),
+                (name, b"xx TvJO yy\0", 0x2, 1),
+            ]))
+            for name in (".vendor.blob", ".unfamiliar", ".text.unflagged",
+                         ".debuggerdata", ".symtab")
+        ]
+        with tempfile.TemporaryDirectory(prefix="pineforge-residual-unknown-") as directory:
+            for index, (label, data) in enumerate(fixtures):
+                with self.subTest(label=label):
+                    strings, nm = self.read_fixture(data, Path(directory) / str(index))
+                    self.assertIn("xx TvJO yy", strings)
+                    self.assertIn("TvJO", self.unruled_tokens(strings, nm))
+                    self.assertNotIn("code TvJO bytes", strings)
+
+    def test_metadata_deny_lists_are_ignored(self) -> None:
+        """Known metadata stays out; nm remains the separate symbol surface."""
+        code = b"\0code TvJO bytes\0"
+        forbidden = b"xx TvJO yy\0"
+        neutral = b"kept neutral data\0"
+        elf_metadata = (
+            (".symtab", 2), (".strtab", 3), (".rela.data", 4),
+            (".rel.data", 9), (".dynsym", 11), (".symtab_shndx", 18),
+            (".relr.dyn", 19),
+        )
+        metadata_rows = list(elf_metadata)
+        # Types must work even with a data-like name.
+        metadata_rows.extend((".rodata", kind) for _, kind in elf_metadata)
+        metadata_rows.extend((name, 1) for name in (
+            ".debug", ".zdebug", ".debug_info", ".debug_info.dwo",
+            ".zdebug_str", ".gdb_index", ".gnu_debuglink", ".gnu_debugaltlink",
+        ))
+        fixtures = [
+            (f"ELF {name} type {kind}", elf_object([
+                (".text", code, 6, 1), (".data", neutral, 3, 1),
+                (name, forbidden, 0, kind),
+            ]))
+            for name, kind in metadata_rows
+        ] + [
+            (label, macho_object([
+                ("__text", code, 0x80000400, "__TEXT"),
+                ("__data", neutral, 0, "__DATA"),
+                (name, forbidden, flags, segment),
+            ]))
+            for label, name, flags, segment in (
+                ("Mach-O debug segment", "__const", 0, "__DWARF"),
+                ("Mach-O linker segment", "__const", 0, "__LINKEDIT"),
+                ("Mach-O debug attribute", "__cstring", 0x02000002, "__DATA"),
+            )
+        ]
+        with tempfile.TemporaryDirectory(prefix="pineforge-residual-metadata-") as directory:
+            for index, (label, data) in enumerate(fixtures):
+                with self.subTest(label=label):
+                    strings, nm = self.read_fixture(data, Path(directory) / str(index))
+                    self.assertIn("kept neutral data", strings)
+                    self.assertNotIn("xx TvJO yy", strings)
+                    self.assertNotIn("code TvJO bytes", strings)
+                    self.assertNotIn("TvJO", self.unruled_tokens(strings, nm))
+
+    def test_executable_and_fileless_sections_are_ignored(self) -> None:
+        """Flags and no-file-byte types apply independently of section names."""
+        fixtures = [
+            (f"Mach-O instruction flag {flags:#x}", macho_object([
+                ("__data", b"kept neutral data\0", 0, "__DATA"),
+                ("__unknown_code", b"\0code TvJO bytes\0", flags, "__TEXT"),
+            ]))
+            for flags in (0x80000000, 0x400)
+        ] + [
+            (f"Mach-O zerofill {kind:#x}", macho_object([
+                ("__text", b"\0code TvJO bytes\0", 0x80000400, "__TEXT"),
+                ("__data", b"kept neutral data\0", 0, "__DATA"),
+                ("__const", b"xx TvJO yy\0", kind, "__DATA"),
+                ("__empty", b"", 0, "__DATA"),
+            ]))
+            for kind in (1, 0xC, 0x12)
+        ] + [
+            ("ELF executable and NOBITS", elf_object([
+                (".unknown_code", b"\0code TvJO bytes\0", 6, 1),
+                (".data", b"kept neutral data\0", 3, 1),
+                (".rodata", b"xx TvJO yy\0", 2, 8),
+                (".empty", b"", 2, 1),
+            ])),
+        ]
+        with tempfile.TemporaryDirectory(prefix="pineforge-residual-fileless-") as directory:
+            for index, (label, data) in enumerate(fixtures):
+                with self.subTest(label=label):
+                    strings, nm = self.read_fixture(data, Path(directory) / str(index))
+                    self.assertIn("kept neutral data", strings)
+                    self.assertNotIn("TvJO", "\n".join(strings))
+                    self.assertNotIn("TvJO", self.unruled_tokens(strings, nm))
+
+    def test_object_layout_variants_keep_data_and_skip_code(self) -> None:
+        """Byte fixtures cover both widths/orders and both fat record layouts."""
+        fixtures: list[tuple[str, bytes]] = []
+        for is_64 in (False, True):
+            for endian in ("<", ">"):
+                label = f"{'64' if is_64 else '32'} {endian}"
+                fixtures.extend((
+                    ("Mach-O " + label, macho_object([
+                        ("__text", b"\0code TvJO bytes\0", 0x80000400, "__TEXT"),
+                        ("__cstring", b"xx TvJO yy\0", 2, "__TEXT"),
+                    ], is_64=is_64, endian=endian)),
+                    ("ELF " + label, elf_object([
+                        (".text", b"\0code TvJO bytes\0", 6, 1),
+                        (".rodata", b"xx TvJO yy\0", 2, 1),
+                    ], is_64=is_64, endian=endian)),
+                    ("fat Mach-O " + label, fat_macho([
+                        (0x01000007, macho64([("__cstring", b"neutral\0")],
+                                            cputype=0x01000007)),
+                        (0x0100000C, macho64([
+                            ("__text", b"\0code TvJO bytes\0"),
+                            ("__cstring", b"xx TvJO yy\0"),
+                        ])),
+                    ], is_64=is_64, endian=endian)),
+                ))
+        with tempfile.TemporaryDirectory(prefix="pineforge-residual-layouts-") as directory:
+            for index, (label, data) in enumerate(fixtures):
+                with self.subTest(label=label):
+                    strings, nm = self.read_fixture(data, Path(directory) / str(index))
+                    self.assertIn("xx TvJO yy", strings)
+                    self.assertIn("TvJO", self.unruled_tokens(strings, nm))
+                    self.assertNotIn("code TvJO bytes", strings)
+
+    def test_elf_extended_section_counts_and_name_indexes(self) -> None:
+        """Exercise each escape field independently and together, at both widths."""
+        with tempfile.TemporaryDirectory(prefix="pineforge-residual-extended-") as directory:
+            root = Path(directory)
+            for is_64 in (False, True):
+                for endian in ("<", ">"):
+                    for counts, names in ((True, False), (False, True), (True, True)):
+                        label = f"{is_64}-{endian}-{counts}-{names}"
+                        with self.subTest(label=label):
+                            data = elf_object([
+                                (".text", b"\0code TvJO bytes\0", 6, 1),
+                                (".rodata", b"xx TvJO yy\0", 2, 1),
+                            ], is_64=is_64, endian=endian,
+                                extended_count=counts, extended_names=names)
+                            strings, nm = self.read_fixture(data, root / label)
+                            self.assertEqual(strings, ["xx TvJO yy"])
+                            self.assertIn("TvJO", self.unruled_tokens(strings, nm))
+
+    def test_malformed_object_members_are_infrastructure_errors(self) -> None:
+        """Require named errors for specific unsupported/truncated byte layouts."""
+        def changed(data: bytes, offset: int, fmt: str, value: int) -> bytes:
+            output = bytearray(data)
+            struct.pack_into(fmt, output, offset, value)
+            return bytes(output)
+
+        elf = elf64([(".rodata", b"xx TvJO yy\0", 2)])
+        shoff = struct.unpack_from("<Q", elf, 40)[0]
+        shnum = struct.unpack_from("<H", elf, 60)[0]
+        names_header = shoff + (shnum - 1) * 64
+        names_offset, names_size = struct.unpack_from("<QQ", elf, names_header + 24)
+        macho = macho64([("__cstring", b"xx TvJO yy\0")])
+        macho32 = macho_object([("__cstring", b"xx TvJO yy\0", 2, "__TEXT")],
+                               is_64=False)
+        fat = fat_macho([(0x0100000C, macho)])
+        fat64 = fat_macho([(0x0100000C, macho)], is_64=True)
+        fat_offset = struct.unpack_from(">I", fat, 16)[0]
+        fixtures = (
+            ("unknown magic", b"not-an-object", "unsupported object member"),
+            ("ELF ident", b"\x7fELF", "not an ELF object"),
+            ("ELF class", changed(elf, 4, "B", 3), "unsupported ELF class"),
+            ("ELF order", changed(elf, 5, "B", 3), "unsupported ELF byte order"),
+            ("ELF header", elf[:16], "truncated ELF header"),
+            ("ELF missing table", changed(elf, 40, "<Q", 0), "section table is missing"),
+            ("ELF short entries", changed(elf, 58, "<H", 1), "section table is missing"),
+            ("ELF section zero", changed(elf, 40, "<Q", len(elf)), "section zero is outside"),
+            ("ELF zero count", changed(elf, 60, "<H", 0), "section table has no names"),
+            ("ELF name index", changed(elf, 62, "<H", shnum), "section table has no names"),
+            ("ELF table bounds", changed(elf, 60, "<H", 0xFFFE), "section table is outside"),
+            ("ELF names bounds", changed(elf, names_header + 24, "<Q", len(elf)),
+             "section names is outside"),
+            ("ELF name offset", changed(elf, shoff + 64, "<I", 0xFFFFFFFF),
+             "section name is outside its table"),
+            ("ELF unterminated name", changed(elf, names_offset + names_size - 1, "B", 88),
+             "unterminated ELF section name"),
+            ("ELF payload bounds", changed(elf, shoff + 64 + 24, "<Q", len(elf)),
+             r"\.rodata is outside"),
+            ("Mach-O header", macho[:4], "truncated Mach-O header"),
+            ("Mach-O command bounds", changed(macho, 20, "<I", len(macho)),
+             "load commands is outside"),
+            ("Mach-O command count", changed(macho, 16, "<I", 2),
+             "load command 1 is truncated"),
+            ("Mach-O short command", changed(macho, 36, "<I", 4),
+             "invalid Mach-O load command 0"),
+            ("Mach-O long command", changed(macho, 36, "<I", len(macho)),
+             "invalid Mach-O load command 0"),
+            ("Mach-O 64 segment in 32", changed(macho32, 28, "<I", 0x19),
+             "64-bit segment in 32-bit Mach-O"),
+            ("Mach-O 32 segment in 64", changed(macho, 32, "<I", 0x1),
+             "32-bit segment in 64-bit Mach-O"),
+            ("Mach-O short segment", changed(macho, 36, "<I", 8),
+             "truncated Mach-O segment"),
+            ("Mach-O section count", changed(macho, 96, "<I", 2),
+             "truncated Mach-O section table"),
+            ("Mach-O payload bounds", changed(macho, 152, "<I", len(macho)),
+             "__cstring is outside"),
+            ("fat header", fat[:4], "truncated fat Mach-O header"),
+            ("fat zero slices", changed(fat, 4, ">I", 0), "no architecture slices"),
+            ("fat table bounds", fat[:8], "architecture table is outside"),
+            ("fat slice bounds", changed(fat, 16, ">I", len(fat)), "architecture 0 is outside"),
+            ("fat64 slice bounds", changed(fat64, 16, ">Q", len(fat64)),
+             "architecture 0 is outside"),
+            ("fat invalid slice", changed(fat, fat_offset, ">I", 0),
+             "not a Mach-O object"),
+        )
+        with tempfile.TemporaryDirectory(prefix="pineforge-residual-malformed-") as directory:
+            for index, (label, data, message) in enumerate(fixtures):
+                with self.subTest(label=label):
+                    with self.assertRaisesRegex(guard.InfrastructureError, message) as raised:
+                        self.read_fixture(data, Path(directory) / str(index), code_control=False)
+                    self.assertIn("probe.o", str(raised.exception))
 
 
 class DecodedLiteralCorroborationTests(unittest.TestCase):
