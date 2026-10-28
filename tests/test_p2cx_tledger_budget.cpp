@@ -94,7 +94,11 @@ void budgets_and_accounting() {
         CHECK(ledger.cache_resident_bytes() == fixed_bytes);
         for (Size i = 0; i < expected.size(); ++i) {
             same_trade(ledger.read(i), expected[i]);
-            CHECK(ledger.cache_size() == std::min(i + 1, allocated_rows));
+            // A miss below the resident window loads up to kResidentRows
+            // consecutive rows, so the cache holds at least the rows read so
+            // far and at most one block beyond the row just read.
+            CHECK(ledger.cache_size() >= std::min(i + 1, allocated_rows));
+            CHECK(ledger.cache_size() <= std::min(allocated_rows, i + TradeLedger::kResidentRows));
             CHECK(ledger.cache_resident_bytes()
                   == fixed_bytes + allocated_rows * TradeLedger::kLedgerEntryBytes);
             bounded(ledger);
