@@ -232,7 +232,7 @@ references; L15a must maintain these anchors and mechanically pin every current
 | Refresh of symbol-data digest and host hash fold | `refresh_symbol_data_digest` `src/source/pine_security_eval.cpp:1553-1566`; `symbol_data_digest_` `src/source/pine_state_hash.cpp:1238-1244` | 367-368 |
 | Restore/store upkeep and column-setter length check | `held.bars` `src/source/pine_security_eval.cpp:1091-1101`; `data.bars` `src/source/pine_security_eval.cpp:1433-1439` | 369-370 |
 | Lower-path preflight/validation | `NativeExecutionConsumer::preflight_intrabar_path` `src/native_execution_consumer.hpp:1189` | 371,1221-1222 |
-| Lower-path digest (count first) and continuation hash | `native_intrabar_path_digest` `src/native_run_spec.cpp:891-919`; `native_intrabar_path_digest` `src/native_execution_consumer.cpp:294` | 371,1223-1224 |
+| Lower-path digest (count first) and continuation hash | `native_intrabar_path_digest` `src/native_run_spec.cpp:891-919`; `native_intrabar_path_digest` `src/native_execution_consumer.cpp:295` | 371,1223-1224 |
 | Per-script-bar lower-path binary search/walk | `candidate` `src/native_execution_consumer.cpp:9094-9127` | 371,1225 |
 | Scheduler sub-bar lookup and one-bar look-ahead | `PineScheduler::lower_path_bar_at` `src/source/pine_scheduler_native.cpp:265-287`; `next_open` `src/source/pine_scheduler_native.cpp:328-329` | 371,1226-1227 |
 | Lower-path emptiness test | `inactive_sampler_path` `src/source/pine_adapter.cpp:3620` | 371,1228 |

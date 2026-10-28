@@ -208,7 +208,7 @@ strategy library, chart and request-feed inventory. The selected interval is
 Before relying on the CLI path, probe the library with
 `docker/run_json.py --so LIB --capabilities-json`. The probe is
 `_capabilities_main` (`docker/run_json.py:4839`); its support decision is
-`_runtime_supports_selected_window` (`docker/run_json.py:4810`), which checks
+`_runtime_supports_selected_window` (`docker/run_json.py:4817`), which checks
 the selected-window ABI, execution observer, phase transport and planner.
 The capability record is built by
 `capabilities_record` (`docker/selected_window_report.py:718`).
@@ -273,7 +273,7 @@ does not establish execution success. Request or execution failures have a
 nonzero harness status and the typed `code` / `args` failure line described in
 @ref run_failure_codes. If stdout cannot take a whole report, the harness
 returns 1 with the reason on stderr and no second JSON document, as enforced by
-`_write_report` (`docker/run_json.py:4770`).
+`_write_report` (`docker/run_json.py:4773`).
 
 **Functions and flags are append-only.** No published function or flag above
 is removed or renamed in 1.x; new ones are added. The C layout rules above

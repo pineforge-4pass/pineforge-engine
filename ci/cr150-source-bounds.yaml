@@ -74,7 +74,7 @@ scan:
   generated_files:
     - "tutorial/**/generated*.cpp"
 ceilings:
-  unreviewed: 1298
+  unreviewed: 1299
   pending-flat-memory: 184
 owners:
   - {name: "generated-cpp", globs: ["tutorial/**"]}
@@ -1572,3 +1572,4 @@ entries:
   - {id: "U1576", file: "src/source/pine_adapter.cpp", symbol: "owners", ops: ["assign", "decl", "grow"], container: "std::vector<SourceId>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 28905}
   - {id: "U1577", file: "src/source/pine_adapter.cpp", symbol: "pending_write", ops: ["grow"], container: "unresolved by the index: pending_write.push_back(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 7106}
   - {id: "U1578", file: "src/source/pine_adapter.cpp", symbol: "selection", ops: ["grow"], container: "unresolved by the index: selection.push_back(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 29182}
+  - {id: "U1579", file: "src/detail/udt_graph.cpp", symbol: "store_", ops: ["grow"], container: "unresolved by the index: store_.resize(...)", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 266}
