@@ -155,19 +155,15 @@ void compare_result(const mt::LegacyRatios& want, const MetricsStreamingResultV1
     STREAM_CHECK(std::string(got.failure_field ? got.failure_field : "") == want.failure_field);
     STREAM_CHECK(std::string(got.failure_reason ? got.failure_reason : "") == want.failure_reason);
     if (!want.failure_code.empty()) return;
-    const bool exact = got.receipt.route != MetricsRatioRouteV1::Streaming;
+    // The Streaming route is the ordered replay: the legacy fold over the same
+    // returns in the same order, so every route compares bit for bit.
     if (needed & kMetricsNeedSortinoBarV1)
         STREAM_CHECK(mt::same(got.sortino_bar, want.sortino));
     // A caller without SharpeBar may skip Sharpe altogether, under either
     // switch value. Do not turn an unread objective into a curve requirement.
     if (!(needed & kMetricsNeedSharpeBarV1)) return;
     STREAM_CHECK(std::isnan(got.sharpe_bar) == std::isnan(want.sharpe));
-    if (exact || want.sharpe == 0.0) {
-        STREAM_CHECK(mt::same(got.sharpe_bar, want.sharpe));
-    } else if (std::isfinite(want.sharpe)) {
-        STREAM_CHECK(std::isfinite(got.sharpe_bar));
-        STREAM_CHECK(std::abs((got.sharpe_bar - want.sharpe) / want.sharpe) <= 1e-12);
-    }
+    STREAM_CHECK(mt::same(got.sharpe_bar, want.sharpe));
 }
 bool candidate(const mt::PointSource& points, MetricsExtentPlanV1 planned,
                MetricsStreamingConfigV1 cfg, MetricsRatioRouteV1 required,
@@ -409,10 +405,9 @@ void determinism_and_tie_rows() {
         const bool second_ok = record_trial("series-b", second);
         if (first_ok && second_ok) {
             const double x = first.result->sharpe_bar, y = second.result->sharpe_bar;
-            STREAM_CHECK(std::abs((x - old_a.sharpe) / old_a.sharpe) <= 1e-12);
-            STREAM_CHECK(std::abs((y - old_b.sharpe) / old_b.sharpe) <= 1e-12);
-            STREAM_CHECK(std::abs((x - y) / y) <= 1e-12);
-            STREAM_CHECK(std::abs((y - x) / x) <= 1e-12);
+            STREAM_CHECK(mt::same(x, old_a.sharpe));
+            STREAM_CHECK(mt::same(y, old_b.sharpe));
+            STREAM_CHECK(mt::same(x, y));
         }
         // HPO resolves equal objectives by the lower trial_id. Its tie-break
         // does not read objective bits beyond equality; last-bit changes
@@ -458,9 +453,9 @@ void domains() {
     // addition of mean^2 (about 32244.135 spacings) advances it by exactly
     // 32244 spacings, so it loses about 1.464e-14 against a centered sum of
     // about 1.748e-3. An exact-variance Sharpe therefore differs from the
-    // legacy bits by about 4.19e-12 relative, above the 1e-12 ceiling, so the
-    // numeric certificate must refuse and the run keeps today's exact path
-    // (src/engine_metrics.cpp: the NumericGuard route). The oracle values
+    // legacy bits by about 4.19e-12 relative, so the ordered replay is required
+    // (the legacy fold over the stored returns, in the legacy order), and an
+    // ideal centered fold would not be bit-identical. The oracle values
     // below are checked at run time; the mean screen itself passes.
     if (row("flat-between-nonflat-ends-1000000")) {
         const mt::PointSource points{1000000, [](std::int64_t i) {
@@ -524,7 +519,8 @@ void exact_rows() {
     }
     // R=2^20-1, h=2^-32; r=(R,R,R+h). Exact mu=R+h/3,
     // sample variance=h^2/3. Legacy sum ties to 3R, mean=R, var=h^2/2.
-    // Even an ideal centered fold exceeds 1e-12: it MUST use the curve.
+    // Even an ideal centered fold differs from the legacy bits by more than 1e-12:
+    // the ordered replay (the legacy fold itself) is required.
     const auto high = mt::equities({1., 0x1p20, 0x1p40, 0x1p60 + 0x1p8});
     if (row("kappa-nonrepresentable-mean")) {
         const auto exact = mt::exact_reference(high);
