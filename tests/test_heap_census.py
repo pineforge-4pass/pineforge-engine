@@ -69,25 +69,25 @@ class CensusEvidence(unittest.TestCase):
 
     def test_demangled_push_functions_and_element_types_name_known_lanes(self):
         command_event = "std::variant<" + ", ".join(
-            "pineforge::native_order_v7::" + name for name in (
+            "pineforge::native_order_v8::" + name for name in (
                 "AcceptedEvent", "RejectedEvent", "ReplacedEvent", "ReplaceRejectedEvent",
                 "CancelledEvent", "NotWorkingEvent", "InvalidHandleEvent", "NoEffectEvent",
                 "MatchRejectedEvent", "ExecutionAppliedEvent", "CloseBoundEvent", "ActivatedEvent",
                 "ReservationReducedEvent", "DeferredGroupAdjustmentEvent", "QuantityBoundEvent",
                 "ArmedEvent", "TermsResolvedEvent", "MarginCallEvent", "NativeRiskEvent")) + ">"
         frames = (
-            ("L19a", "pineforge::native_order_v7::WorkingRequestCore::index_committed("
+            ("L19a", "pineforge::native_order_v8::WorkingRequestCore::index_committed("
              + command_event + " const&) (src/native_order.cpp:1206)"),
-            ("L19b", "std::vector<pineforge::native_order_v7::WorkingRequestCore::ReceiptKey, "
-             "std::allocator<pineforge::native_order_v7::WorkingRequestCore::ReceiptKey> >::"
+            ("L19b", "std::vector<pineforge::native_order_v8::WorkingRequestCore::ReceiptKey, "
+             "std::allocator<pineforge::native_order_v8::WorkingRequestCore::ReceiptKey> >::"
              "_M_realloc_insert<>(__gnu_cxx::__normal_iterator<"
-             "pineforge::native_order_v7::WorkingRequestCore::ReceiptKey*, "
-             "std::vector<pineforge::native_order_v7::WorkingRequestCore::ReceiptKey> >) (vector.tcc:453)"),
-            ("L19c", "std::vector<pineforge::native_order_v7::CohortReceipt, "
-             "std::allocator<pineforge::native_order_v7::CohortReceipt> >::"
+             "pineforge::native_order_v8::WorkingRequestCore::ReceiptKey*, "
+             "std::vector<pineforge::native_order_v8::WorkingRequestCore::ReceiptKey> >) (vector.tcc:453)"),
+            ("L19c", "std::vector<pineforge::native_order_v8::CohortReceipt, "
+             "std::allocator<pineforge::native_order_v8::CohortReceipt> >::"
              "_M_default_append(unsigned long) (vector.tcc:627)"),
             ("L19d", "pineforge::source::OriginRoster::push_back("
-             "pineforge::native_order_v7::RequestHandle const&) (include/pineforge/source/pine_adapter.hpp:945)"),
+             "pineforge::native_order_v8::RequestHandle const&) (include/pineforge/source/pine_adapter.hpp:945)"),
             ("L19e", "pineforge::admission::market_admission_v2::Journal::append("
              "std::variant<pineforge::admission::market_admission_v2::CommandEvent, "
              "pineforge::admission::market_admission_v2::ReviewEvent, "
@@ -162,7 +162,7 @@ class CensusEvidence(unittest.TestCase):
                          "pineforge::detail::IdPairStore<unsigned long>&, "
                          "pineforge::source::PlacementSnapshot const&)"), ("L19l", False))
         applied = ("pineforge::source::PineExecutionAdapter::on_applied("
-                   "pineforge::native_order_v7::ExecutionAppliedEvent const&, "
+                   "pineforge::native_order_v8::ExecutionAppliedEvent const&, "
                    "pineforge::native_driver_v5::NativeDecisionContext const&)")
         id_node = ("std::__detail::_Hash_node<std::pair<std::__cxx11::basic_string<char> const, "
                    "long>, true>::_Hash_node() <- " + applied)

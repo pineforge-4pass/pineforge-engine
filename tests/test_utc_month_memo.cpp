@@ -10,10 +10,10 @@
 //     and weekend gaps, of random-order reads, at every month boundary of
 //     1900-2100 to the millisecond (pre-epoch truncation included), at every
 //     day of years 1-9999, and across the +/-2^40-second edge of the
-//     arithmetic;
+//     cache;
 //   * the kept range is exactly the civil month of the second's floor day --
 //     computed here by days_from_civil, the inverse the walk does not use --
-//     clamped to the arithmetic's span, and a second beyond the span keeps
+//     clamped to the cache span, and a second beyond the span keeps
 //     nothing;
 //   * compute_equity_stats equals the 6c081f5d walk field for field, bit for
 //     bit, over curves of every bar width, UTC spelling and length, and over
@@ -97,12 +97,13 @@ long long reads = 0;
 void read(detail::UtcMonthMemo& memo, std::int64_t ts_ms) {
     ++reads;
     const detail::UtcMonthMemo before = memo;
-    const int direct = detail::month_key_utc(ts_ms);
-    const int kept = detail::month_key_utc(memo, ts_ms);
+    const std::int64_t direct = detail::month_key_utc(ts_ms);
+    const std::int64_t kept = detail::month_key_utc(memo, ts_ms);
     CHECK(kept == direct);
     CHECK(kept == ref::month_key_utc(ts_ms));
     if (kept != direct && failures <= 20) {
-        std::fprintf(stderr, "  ts_ms=%" PRId64 " kept %d direct %d\n", ts_ms, kept, direct);
+        std::fprintf(stderr, "  ts_ms=%" PRId64 " kept %" PRId64 " direct %" PRId64 "\n",
+                     ts_ms, kept, direct);
     }
     const std::int64_t secs = ts_ms / 1000;
     if (secs > -kCivilSpan && secs < kCivilSpan) {
@@ -119,7 +120,7 @@ void read(detail::UtcMonthMemo& memo, std::int64_t ts_ms) {
         CHECK(memo.key == direct);
         if (memo.lo != before.lo || memo.hi != before.hi) ++kept_months;
     } else {
-        // gmtime_r's answer: nothing kept, the memo as it was.
+        // Outside the cache span: nothing kept, the memo as it was.
         CHECK(memo.lo == before.lo && memo.hi == before.hi && memo.key == before.key);
     }
 }
@@ -203,8 +204,8 @@ void random_order() {
     }
 }
 
-// The +/-2^40-second edge: the arithmetic's last seconds are kept, clamped
-// to the span; gmtime_r's seconds beyond it keep nothing.
+// The +/-2^40-second cache edge: the kept seconds are clamped to the span;
+// seconds beyond it keep nothing.
 void span_edges() {
     for (std::int64_t sign : {1LL, -1LL}) {
         detail::UtcMonthMemo memo;

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Source guard for the CommandScratchStore / ScratchReadback / ScratchBacking headers.
 
-CR-150 O1C. The behavioural fixtures (test_scratch_backing, test_scratch_store)
+The behavioural fixtures (test_scratch_backing, test_scratch_store)
 prove what the contract does; this guard pins what the headers must never
 contain, so a later lane cannot weaken the contract by editing them:
 

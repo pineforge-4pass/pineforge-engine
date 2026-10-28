@@ -202,7 +202,7 @@ public:
             {"position_cycle_seq_", [](Probe& s) { s.position_cycle_seq_ += 1; }},
             {"next_position_cycle_seq_", [](Probe& s) { s.next_position_cycle_seq_ += 1; }},
 
-            // KI-64 POOC freeze snapshot + same-bar close carry
+            // POOC freeze snapshot + same-bar close carry
             {"pos_view_freeze_bar_", [](Probe& s) { s.pos_view_freeze_bar_ += 1; }},
             {"pos_view_frozen_side_", [](Probe& s) {
                 s.pos_view_frozen_side_ = (s.pos_view_frozen_side_ == PositionSide::LONG)

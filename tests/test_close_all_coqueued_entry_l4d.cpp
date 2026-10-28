@@ -421,7 +421,7 @@ static void test_G_carry_priorbar_still_cancelled() {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// G-opposite (KI-64 untouched — characterization). An opposite-direction entry
+// G-opposite (untouched — characterization). An opposite-direction entry
 // co-queued with close_all is never a target of the same-direction wipe
 // (is_long != exit_closed_was_long); its behavior is IDENTICAL before and after
 // this fix. Pins the generated-script behavior: the opposite short stop
@@ -436,7 +436,7 @@ static void test_G_carry_priorbar_still_cancelled() {
 // EXPECTED (pre- and post-fix, generated-source characterization): SHORT 2.
 // ─────────────────────────────────────────────────────────────────────
 static void test_G_opposite_unchanged_ki64() {
-    std::printf("G-opposite (KI-64 opposite-direction unchanged)\n");
+    std::printf("G-opposite (opposite-direction unchanged)\n");
     class Probe : public ProbeBase {
     public:
         Probe() : ProbeBase(2) {}

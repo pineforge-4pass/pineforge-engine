@@ -17,7 +17,7 @@
  * it; margin 50 admits it, including a favorable next-open gap.
  *
  * At or below 100% nothing changes: those entries never receive an
- * affordability snapshot and keep the pinned KI-54 / gap-reject /
+ * affordability snapshot and keep the pinned margin-admission / gap-reject /
  * gross-admission family (test_frozen_flat_gap_reject,
  * test_default_flat_market_gross_admission, test_affordability_fx).
  */
@@ -146,7 +146,7 @@ private:
 // 200% of 10,000 at margin 100 sizes floor(20,000 / 125.50) = 159 lots.
 // Cost = 159 * 125.50 = 19,954.50 > 10,000: each entry is declined AT
 // PLACEMENT (no PendingOrder, no fill, no trade row), with margin calls both
-// disabled and enabled. Pre-fix: KI-54 skips pct > 100 and no other gate ran.
+// disabled and enabled. Pre-fix: the margin gate skips pct > 100 and no other gate ran.
 void test_case_200pct_margin100_declined() {
     std::printf("-- synthetic 200%% at margin 100: 0 entries --\n");
     for (bool mc : {false, true}) {
@@ -192,7 +192,7 @@ void test_case_200pct_margin50_fills() {
 }
 
 // Exactly 100% is byte-identical: no affordability snapshot is attached (the
-// order stays on the KI-54 / gap-reject family) and the all-in entry fills as
+// order stays on the margin-admission / gap-reject family) and the all-in entry fills as
 // before: floor(10,000 / 125.50) = 79 lots at the favorable 125.00 open.
 void test_case_100pct_control_unchanged() {
     std::printf("-- synthetic 100%% control: no snapshot, fills 79 --\n");

@@ -10,7 +10,7 @@
  *   entry armed before an opening queue for it; a reversal voids the reversed
  *   side's global exit off the book too), W5-ENG-MARGIN-V6 M2, C2 and MK (the
  *   opening margin calls of process_orders_on_close and slipped market
- *   positions) and W8E-EXITS C1 (the KI-62 same-id cover);
+ *   positions) and W8E-EXITS C1 (the same-id cover);
  * - the exit-reservation functions (W3 rule A: exits reserve an entry's
  *   quantity in the order they were created) beside W5's MR (a global exit is
  *   the held position's under a declined reversal) and W8E C1;
@@ -40,7 +40,7 @@
  *   it is declined and the long keeps its global exit; where it can, the
  *   reversal voids it;
  * - c2: W3 rule B and W5 C2 at each of the eight openings, at the same fill;
- * - c3, a control: the KI-62 cover stands behind a queued explicit exit pair
+ * - c3, a control: the cover stands behind a queued explicit exit pair
  *   (neither W3's nor W8E's change acts; main books the tape too);
  * - c4: W8A R-B admits the entries a pending limit no longer blocks (E3's P3,
  *   E4b's HM) and R1-CONSOLIDATE's R-A fills the market orders at an opening

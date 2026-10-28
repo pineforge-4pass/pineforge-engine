@@ -1,6 +1,6 @@
 #pragma once
 
-// CR150-CX L4 / CR-221 scope B. A header-only definition of CommandScratchStore, kept
+// Scope-B. A header-only definition of CommandScratchStore, kept
 // apart from the contract header so it can be replaced without touching the
 // declarations. Included by scratch_store.hpp; never include it first.
 //

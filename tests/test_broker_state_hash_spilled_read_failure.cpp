@@ -51,7 +51,7 @@
 // below). It is registered only when the source layer is built, so the four
 // rows above stay source-free and keep running in the kernel-only profile.
 //
-// Each twin row is its own executable (tests/cr150.d/s4e-fix-b1.cmake: a lane
+// Each twin row is its own executable (the dedicated scratch matching fixture:
 // file names every row after a source of its own), built from this body with
 // PINEFORGE_B1_TWIN_FLAG set to the flag the row stands for.
 #include <pineforge/pineforge.h>

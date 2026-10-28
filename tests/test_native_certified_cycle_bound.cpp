@@ -1,4 +1,4 @@
-// CR-150 lane L19n: the consumer's ring of certified cycles owns a fixed heap,
+// The consumer's ring of certified cycles owns a fixed heap,
 // and the cycles it keeps are the calendar's days.
 //
 // The L0b heap census (4,000 against 16,000 one-minute UTC bars) found a second

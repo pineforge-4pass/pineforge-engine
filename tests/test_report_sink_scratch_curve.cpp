@@ -1,4 +1,4 @@
-// CR-150 L6b-4, fix rounds 1-2: the engine WRITE side and sink removal.
+// The engine WRITE side and sink removal.
 //
 // The accepted library (src/report_scratch.*) is proved by test_report_scratch;
 // this fixture proves its engine integration. DESIGN 3.2/3.8: with a

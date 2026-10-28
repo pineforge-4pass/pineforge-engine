@@ -2306,7 +2306,7 @@
 // of the 138 recording-on runs, final hash 276); trades digest and the three counts moved 0. Cause: QUIETFIX
 // commit 82ab96884e removes a scope-allocation counter, not state; retained records, store digest and run identity
 // stay folded; design, not a bug. The generator owns the rows; never edit a row by hand.
-// expectation corrected (CR-277, 4 of 276 rows), because PineExecutionAdapter::close("") and close_all() now store the
+// expectation corrected (4 of 276 rows), because PineExecutionAdapter::close("") and close_all() now store the
 // pending entry's real source id as its replacement key (they stored the empty string of a moved-from SourceId), and
 // pine_state_hash.cpp:421 folds every pending_entries_ key into the broker-state hash; harvested by the generator
 // (both harvest switches on, tree = the 1.7.0 picks head 57e662382d, job rj-20261023t194305-8550f4, lab-only). Only

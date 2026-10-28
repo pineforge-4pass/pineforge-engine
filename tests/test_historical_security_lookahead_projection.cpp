@@ -286,7 +286,7 @@ void test_range_start_inside_bucket_drops_whole_bucket_from_projection() {
     ProjectionHarness harness;
     harness.set_syminfo_metadata(
         "historical_security_lookahead_projection", 1.0);
-    // Range start INSIDE the 01:00 bucket (01:15). The KI-55 cut is taken on
+    // Range start INSIDE the 01:00 bucket (01:15). The range-start cut is taken on
     // HTF-bucket opens (finding 452): the whole 01:00 bucket opened before the
     // range start and is absent, not a three-child partial. The projection is
     // built from that same retained suffix — only the two-child 02:00 tail —

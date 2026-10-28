@@ -38,13 +38,13 @@ class NativeExecutionConsumer;
 }
 
 namespace pineforge::native_order {
-inline namespace native_order_v7 {
+inline namespace native_order_v8 {
 
 // Isolated working-request/value core: current LIVE requests and immutable
 // command history. It does not own positions, cash, paid fees, matching,
 // calendar, host phase, or a second physical book.
 //
-// Identity types remain native_order_v1. Request/core/event values are v7.
+// Identity types remain native_order_v1. Request/core/event values are v8.
 // Physical execution::Action is unchanged; native Reduce uses a typed size
 // source instead of a dummy units field. ExecutionPlan is a transient widening
 // used at the core/consumer boundary.
@@ -2528,7 +2528,7 @@ private:
                                                   uint64_t& next_timeline_ordinal,
                                                   bool open_activation_grant);
 
-    // CR-221 E03--E05. The journal, the group-effect keys and the long
+    // The journal, the group-effect keys and the long
     // chains' id lists keep a fixed resident part and write the rest to
     // run-owned scratch files, created on the first spill. They are defined in
     // native_order.cpp and held by shared_ptr so this header stays complete.
@@ -3003,7 +3003,7 @@ static_assert(std::variant_size_v<ExecutionScope> == 3);
 static_assert(std::variant_size_v<TriggerState> == 9);
 static_assert(std::variant_size_v<TriggerAnchor> == 2);
 
-}  // inline namespace native_order_v7
+}  // inline namespace native_order_v8
 }  // namespace pineforge::native_order
 
 namespace std {

@@ -1,4 +1,4 @@
-// CR-150 L17B: selected metric reads over P00 sources, and real selected
+// Selected metric reads over report sources, and real selected
 // sink-on/off fixtures. RED on b3c39238e: the selected source overloads are
 // undeclared; with declarations only, they and SpillCurve fail at link.
 // No fixture pin is harvested. All metric bytes come from the existing array
@@ -1310,6 +1310,7 @@ struct CaptureStorage {
     std::size_t peak_live = 0;
     std::size_t recorded_points = 0;
     std::size_t recorded_capacity_bytes = 0;
+    std::size_t ledger_cache_bytes = 0;
 };
 
 CaptureStorage measured_capture;
@@ -1616,6 +1617,9 @@ struct TradeStorageHost final : NativeStrategyHost {
     mutable TradeC open_before{}, open_after{};
     std::optional<CaptureAllocationScope> capture_scope;
 
+    std::size_t ledger_cache_bytes() const { return trades_.cache_resident_bytes(); }
+    std::size_t ledger_cache_rows() const { return trades_.cache_rows(); }
+
     void on_native_bar(const Bar& bar, const NativeDecisionContext& context) override {
         const int index = calculations++;
         if (index < 2 * target) {
@@ -1828,8 +1832,10 @@ CaptureStorage trade_capture_and_read_storage(
     const bool measured = streamed.capture_scope.has_value();
     streamed.fill_report(&summary.value);
     streamed.fill_report(&again.value);
-    const CaptureStorage storage = measured_capture;
+    CaptureStorage storage = measured_capture;
     streamed.capture_scope.reset();
+    storage.ledger_cache_bytes = streamed.ledger_cache_bytes();
+    CHECK(streamed.ledger_cache_rows() == TradeLedger::kSinkCacheRows);
     CHECK(measured == !host_recorded);
     CHECK(streamed.native_state().kind == NativeLifecycleKind::Completed);
     CHECK(streamed.calculations == count);
@@ -1917,6 +1923,12 @@ CaptureStorage trade_capture_and_read_storage(
 }
 
 void sink_trade_capture_and_reads_are_bounded(Directory& directory) {
+    CHECK(TradeLedger::kSinkCacheRows == 65536);
+    const TradeLedger empty;
+    const auto fixed_bytes = empty.cache_resident_bytes();
+    const auto cache_bound = TradeLedger::resident_cache_bytes(TradeLedger::kSinkCacheRows);
+    CHECK(cache_bound == fixed_bytes + 20447232);
+    CHECK(cache_bound <= TradeLedger::resident_cache_bytes(TradeLedger::kDefaultCacheRows));
     for (int mode = 0; mode < 3; ++mode) {
         const bool selected = mode == 1;
         const bool observed = mode == 2;
@@ -1928,24 +1940,39 @@ void sink_trade_capture_and_reads_are_bounded(Directory& directory) {
             selected ? "trades-selected-100k.ndjson" : observed
                 ? "trades-observed-100k.ndjson" : "trades-ordinary-100k.ndjson",
             100000, selected, false, false, observed);
+        // Both populations exceed the declared cap, so lazy growth has
+        // finished. Compare their actual heap usage, not just a large ceiling.
+        const auto capped = trade_capture_and_read_storage(directory,
+            selected ? "trades-selected-70k.ndjson" : observed
+                ? "trades-observed-70k.ndjson" : "trades-ordinary-70k.ndjson",
+            70000, selected, false, false, observed);
         std::printf("sink trade capture/read heap mode=%d: 1k largest=%zu peak=%zu; "
-                    "100k largest=%zu peak=%zu\n", mode,
+                    "70k largest=%zu peak=%zu; 100k largest=%zu peak=%zu\n", mode,
                     small.largest_request, small.peak_live,
+                    capped.largest_request, capped.peak_live,
                     large.largest_request, large.peak_live);
-        // Production's fixed scratch windows bound all capture/read working
-        // storage, including EVERY replaceable allocation and temporary buffer.
-        // Writer formatting can differ by integer width between these runs;
-        // the permitted difference is itself a fixed production window.
+        // Count EVERY replaceable allocation and temporary buffer. A cache
+        // allocated before this interval is covered by the exact resident-byte
+        // assertions too. The 1k run must retain only 1,024 cache entries;
+        // 70k and 100k must both stop at the declared constant, not trade count.
+        CHECK(small.ledger_cache_bytes == fixed_bytes + 1024 * TradeLedger::kLedgerEntryBytes);
+        CHECK(capped.ledger_cache_bytes == cache_bound);
+        CHECK(large.ledger_cache_bytes == cache_bound);
         const auto window = report_sink::kScratchWindowBytes;
-        const auto budget = 2 * window;
+        const auto small_budget = 1024 * TradeLedger::kLedgerEntryBytes + 2 * window;
+        const auto budget = cache_bound - fixed_bytes + 2 * window;
         CHECK(small.largest_request > 0 && small.peak_live > 0);
+        CHECK(capped.largest_request > 0 && capped.peak_live > 0);
         CHECK(large.largest_request > 0 && large.peak_live > 0);
-        CHECK(small.largest_request <= budget && large.largest_request <= budget);
-        CHECK(small.peak_live <= budget && large.peak_live <= budget);
-        CHECK(large.peak_live <= small.peak_live + window);
-        CHECK(small.peak_live <= large.peak_live + window);
-        CHECK(large.largest_request <= small.largest_request + window);
-        CHECK(small.largest_request <= large.largest_request + window);
+        CHECK(small.largest_request <= small_budget && small.peak_live <= small_budget);
+        CHECK(capped.largest_request <= budget && large.largest_request <= budget);
+        CHECK(capped.peak_live <= budget && large.peak_live <= budget);
+        // Formatting can differ by integer width; the plateau tolerance
+        // remains one fixed production scratch window, as in the old witness.
+        CHECK(large.peak_live <= capped.peak_live + window);
+        CHECK(capped.peak_live <= large.peak_live + window);
+        CHECK(large.largest_request <= capped.largest_request + window);
+        CHECK(capped.largest_request <= large.largest_request + window);
     }
 }
 

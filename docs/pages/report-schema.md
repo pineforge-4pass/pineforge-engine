@@ -15,7 +15,7 @@ revision `1.3`. The published 1.5.0 image declared `1.3-parity` (earlier
 images carried no revision member), the 1.6.0 image declared `1.3` without a
 completeness proof, and engine 1.6.1 (released, no hub image) declares
 `1.3-parity`; from 1.6.2
-the image declares `1.3` again, now with the EN-115 completeness
+the image declares `1.3` again, now with the completeness
 proof: the section-4 producers and manifest are
 present, value ownership is `complete`, and it emits the four typed codes
 (`strategy_value_invalid`, `engine_command_value_invalid`,
@@ -87,13 +87,16 @@ typedef struct pf_report_s {
 
 @note The `metrics` / `equity_curve` fields were appended in **ABI
 version 2** (`PF_ABI_VERSION`). `pf_report_t` is caller-allocated, so
-consumers must check `pf_abi_version() == 4` (v1.0.0; a v0.13.1 `.so`
-answers 3) before running — a `.so`
+consumers must check `pf_abi_version() == PF_ABI_VERSION` (5 from v1.8.0)
+before running. Earlier 1.x libraries answered 4; a v0.13.1 `.so`
+answers 3. A `.so`
 with no `pf_abi_version` symbol is ABI v1 and predates these fields.
 **ABI version 3** appends `pf_trade_t::open_at_end`, the range-end close
 flag; a v2 reader would misindex the trades array. **ABI version 4**
 appends `pf_report_t::broker_state_hash` / `broker_state_hash_len`; a v3
-reader's struct is 16 bytes too small.
+reader's struct is 16 bytes too small. **ABI version 5** requires rebuilding
+strategy libraries for the 1.8.0 native order layouts; it preserves the C
+report and trade layouts.
 
 ## Versioned report modes {#report_modes_v1}
 
@@ -196,7 +199,7 @@ typedef struct pf_report_envelope_v1 {
 ```
 
 Initialize metadata's `struct_size` and `version` before a versioned native
-read. `PF_ABI_VERSION` stays 4: passing an envelope to a legacy report function
+read. `PF_ABI_VERSION` is 5: passing an envelope to a legacy report function
 is invalid. Free the embedded payload with the existing report free operation;
 the caller owns the envelope. Bounded per-definition security diagnostics
 remain in the payload in all modes.

@@ -796,14 +796,14 @@ source site that created them. Token 0 continues to use the historical
 id-only maps above without any behavior change.
 ```
 
-## 3. KI-62: same-bar pyramid-add scratch after a priced bracket exit
+## 3. Same-bar pyramid-add scratch after a priced bracket exit
 
 Was `src/engine_orders.cpp`, historical lines 198-208 recorded by `44b17c185` (comment-only — the helper it documented
 is gone) and, in short form, `include/pineforge/engine.hpp`, historical lines 2659-2663. The
 scratch is produced by the adapter today.
 
 ```text
-KI-62: after a from_entry PRICED bracket exit fills, scratch (close dur-0)
+After a from_entry PRICED bracket exit fills, scratch (close dur-0)
 any same-bar same-id MARKET pyramid-add slice still open — it filled earlier
 this bar, ahead of the exit in TV's open-tick fill sequence, so TV's exit
 covers it. Targets ONLY flagged same-bar (entry_bar_index == bar_index_)
@@ -820,7 +820,7 @@ this exit's fill price), matching TV's per-pyramid scratch reporting.
 
 Was the contiguous comment-only block `include/pineforge/engine.hpp`, historical lines 2646-2845 recorded by `44b17c185`,
 in source order. Each paragraph documented a private member that no longer
-exists; that block's KI-62 paragraph is section 3 above.
+exists; that block's same-bar pyramid-add paragraph is section 3 above.
 
 ```text
 Range-end accounting: record the rows that close a position still
@@ -901,7 +901,7 @@ limit crossed at its own off-grid level keeps the directional tick
 (the private fixture set `half_tick_rounding`).
 
 ```text
-design-declined-reversal-close-leg: called at the KI-54 reversal-decline
+design-declined-reversal-close-leg: called at the reversal-decline
 site with the just-declined MARKET reversal entry. Flags every pending
 FULL close that was co-queued after it on the same bar against the held
 side (see the adapter cancellation receipt), releasing each close claim
@@ -1066,7 +1066,8 @@ TradingView reserves the entry commission when sizing percent_of_equity:
 it sizes the notional so that notional + entry_fee <= equity*pct, i.e.
 divides the sizing cash by (1 + commRate). Proven from TV exports for
 BOTH fractional (pct=10) and all-in (pct=100) sizing — the reservation is
-not gated on headroom (KI-52 probes: ki52-pct-equity-commission-{frac,allin},
+not gated on headroom (percent-of-equity commission probes:
+ki52-pct-equity-commission-{frac,allin},
 first-entry qty = equity/(price*(1+commRate)) to the lot step, 16/16). Only
 percent commission reserves; cash-per-order/contract and a zero rate are
 exact no-ops, so FIXED/CASH qty types and commission_value_==0 are unchanged.
@@ -1223,7 +1224,7 @@ bar's close, after the pass. An order that fills there stays invisible to the
 pass that placed it: the rest of the pass reads the pre-fill
 `strategy.position_size` and `strategy.position_avg_price`. The adapter fills
 two calls at the call itself. An ordinary `close_all` freezes the script's
-position view first (KI-64). The other is the re-issued exit that
+position view first (the freeze-aware rule). The other is the re-issued exit that
 `PineExecutionAdapter::exit()` fills at its call when a one-lot short's stop
 or limit is already through the close (its current-close path). That exit now freezes the
 view as `close_all` does. Once the fill has left the book flat, a generated

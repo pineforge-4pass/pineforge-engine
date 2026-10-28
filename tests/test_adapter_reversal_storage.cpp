@@ -1,4 +1,4 @@
-// CR-150 L19l/L19m: real reversals with storage release/eviction on and off.
+// Real reversals with storage release/eviction on and off.
 // The script/tape are the Flip shape in test_adapter_lookup_index_witness.
 // No pinned values: the reference keeps cohort rows and empty capacity, as
 // the old implementation did, while placement retirement stays enabled.
