@@ -249,7 +249,10 @@ int main(int argc, char** argv) {
         zero_and_reset();
         slabs_do_not_alias();
         std::puts("lazy scratch slab: OK");
-        return 0;
+        // One registered row runs the layout checks and then the RSS bound; a
+        // platform without a resident-size measurement (77) keeps the layout result.
+        const int rss = rss_row();
+        return rss == 77 ? 0 : rss;
     } catch (const std::exception& error) {
         std::fprintf(stderr, "lazy scratch slab: %s\n", error.what());
         return 1;

@@ -1,4 +1,2 @@
 list(APPEND TEST_SOURCES test_cr_lazy_slab)
 pineforge_add_unit_test(test_cr_lazy_slab)
-add_test(NAME test_cr_lazy_slab_rss COMMAND test_cr_lazy_slab --rss)
-set_tests_properties(test_cr_lazy_slab_rss PROPERTIES SKIP_RETURN_CODE 77)
