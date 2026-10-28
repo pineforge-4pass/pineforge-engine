@@ -637,8 +637,9 @@ void BacktestEngine::reset_trade_percent_prefix() {
     trades_.invalidate_percent_fold();
     trade_percent_prefix_ = {};
     // Bind the empty report seeds before publication; the first read after
-    // a finished ordinary run must not discover its closed history.
-    (void)trades_.report_fold(initial_capital_, {});
+    // a finished ordinary run must not discover its closed history. A ledger
+    // that still has a sealed base has no empty prefix to bind.
+    if (trades_.base() == 0) (void)trades_.report_fold(initial_capital_, {});
 }
 
 TradeLedger::PercentFold BacktestEngine::current_trade_percent_fold() const {
