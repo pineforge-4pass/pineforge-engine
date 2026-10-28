@@ -30,6 +30,28 @@ ROOT = Path(__file__).resolve().parents[1]
 
 _RAN_RE = re.compile(r'^Ran (\d+) tests? in ', re.MULTILINE)
 
+# Relative scheduling estimates from the large mutation loops, not measured
+# seconds. Keep whole methods: unittest's executed-count guard still applies.
+# All other IDs have weight 1; modules without these rows retain round robin.
+PREFLIGHT_TEST_WEIGHTS = {
+    'test_ci_preflight.PreflightFailures.'
+    'test_gcp_sites_reject_retired_and_void_labels': 120,
+    'test_ci_preflight.PreflightFailures.'
+    'test_light_jobs_refuse_vm_labels_unlisted_images_arrays_and_fallbacks': 100,
+    'test_ci_preflight.PreflightFailures.'
+    'test_no_stage_runs_under_a_timeout_and_jobs_keep_the_platform_maximum': 90,
+    'test_ci_preflight.PreflightFailures.'
+    'test_pool_jobs_reject_hosted_runners_and_fallbacks_from_mutated_files': 60,
+    'test_ci_preflight.PreflightFailures.'
+    'test_ci_contract_pins_spot_runners_time_limits_and_parallelism': 50,
+    'test_ci_preflight.PreflightFailures.'
+    'test_ci_contract_pins_the_docs_only_skip': 45,
+    'test_ci_preflight.PreflightFailures.'
+    'test_gcp_sites_reject_cross_class_routes': 40,
+    'test_ci_preflight.PreflightFailures.'
+    'test_authz_and_every_dependency_are_required_from_mutated_files': 35,
+}
+
 _SHARD_BOOTSTRAP = """
 import os
 import sys
@@ -113,11 +135,19 @@ def discover_test_ids(module_path: Path | str) -> list[str]:
 
 
 def split_into_shards(test_ids: Sequence[str], shard_count: int) -> list[list[str]]:
-    """Split test_ids deterministically into shard_count shards in round-robin order."""
+    """Balance known expensive preflight methods; otherwise use round robin."""
     if shard_count < 1:
         raise ValueError(f'shard_count must be at least 1, got {shard_count}')
     ordered = sorted(test_ids)
-    return [list(ordered[index::shard_count]) for index in range(shard_count)]
+    if not any(test_id in PREFLIGHT_TEST_WEIGHTS for test_id in ordered):
+        return [list(ordered[index::shard_count]) for index in range(shard_count)]
+    shards: list[list[str]] = [[] for _ in range(shard_count)]
+    loads = [0] * shard_count
+    for test_id in sorted(ordered, key=lambda row: (-PREFLIGHT_TEST_WEIGHTS.get(row, 1), row)):
+        index = min(range(shard_count), key=lambda slot: (loads[slot], slot))
+        shards[index].append(test_id)
+        loads[index] += PREFLIGHT_TEST_WEIGHTS.get(test_id, 1)
+    return [sorted(shard) for shard in shards]
 
 
 def validate_shard_partition(full_ids: Sequence[str], shards: Sequence[Sequence[str]]) -> None:

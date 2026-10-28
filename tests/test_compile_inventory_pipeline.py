@@ -686,6 +686,35 @@ def test_entrypoint_report_sink_fd_refusal_comes_from_run_json(box, value, error
     assert direct.stderr in result.stderr, observed
 
 
+@pytest.mark.parametrize("kind", ["pine", "cpp"])
+def test_entrypoint_run_id_unset_keeps_the_old_argv(box, kind):
+    put_pine(box) if kind == "pine" else put_cpp(box)
+    result = run_entrypoint(box)
+    argv = box.logged("run_json.argv.json")
+    observed = f"observed run_json argv: {argv!r}\n{result!r}"
+    assert "--run-id" not in argv, observed
+    assert normalized(argv) == old_argv("true" if kind == "pine" else "false"), observed
+    assert result.returncode == 0, observed
+    assert result.stdout == '{"engine":"pineforge","marker":"run_json_stub"}\n', observed
+
+
+@pytest.mark.parametrize("kind", ["pine", "cpp"])
+@pytest.mark.parametrize("value", ["caller-run-123", 'caller "quoted"\n漢', ""],
+                         ids=["value", "unicode-and-quoting", "empty"])
+def test_entrypoint_forwards_run_id_verbatim(box, kind, value):
+    put_pine(box) if kind == "pine" else put_cpp(box)
+    result = run_entrypoint(box, {"PINEFORGE_RUN_ID": value,
+                                  "STUB_RUN_JSON_VALIDATE": "1"})
+    argv = box.logged("run_json.argv.json")
+    observed = f"observed run_json argv: {argv!r}\n{result!r}"
+    expected = old_argv("true" if kind == "pine" else "false") + ["--run-id", value]
+    assert normalized(argv) == expected, observed
+    assert argv.count("--run-id") == 1, observed
+    assert box.logged("run_json.status.json") == 0, observed
+    assert result.returncode == 0, observed
+    assert result.stdout == '{"engine":"pineforge","marker":"run_json_stub"}\n', observed
+
+
 def test_entrypoint_report_sink_fd_keeps_selected_and_provenance_argument_order(box):
     put_pine(box)
     runtime_env = {
@@ -702,13 +731,16 @@ def test_entrypoint_report_sink_fd_keeps_selected_and_provenance_argument_order(
     ]
     result = run_entrypoint(box, dict(SELECTED_ENV, **runtime_env,
                                       PINEFORGE_REPORT_SINK_FD="7",
+                                      PINEFORGE_RUN_ID="caller-run-123",
                                       STUB_RUN_JSON_VALIDATE="1"))
     argv = box.logged("run_json.argv.json")
     observed = f"observed run_json argv: {argv!r}\n{result!r}"
-    expected = (old_argv("true") + runtime_flags + ["--report-sink-fd", "7"]
+    expected = (old_argv("true") + runtime_flags
+                + ["--report-sink-fd", "7", "--run-id", "caller-run-123"]
                 + SELECTED_FLAGS + ["--request-feed-inventory", "<path>"])
     assert normalized(argv) == expected, observed
     assert argv.count("--report-sink-fd") == 1, observed
+    assert argv.count("--run-id") == 1, observed
     assert box.logged("run_json.status.json") == 0, observed
     assert result.returncode == 0, observed
     assert result.stdout == '{"engine":"pineforge","marker":"run_json_stub"}\n', observed

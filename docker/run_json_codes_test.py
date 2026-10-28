@@ -825,7 +825,7 @@ def test_load_bars_failures_stay_value_errors(tmp_path):
      "strategy .so predates pf_abi_version (ABI v1); rebuild it against the current "
      "pineforge runtime (pf_report_t grew)."),
     (None, {"pf_abi_version": 3}, CORE, {"reason": "abi_mismatch", "abi": 3},
-     "pineforge ABI mismatch: .so reports 3, harness expects 4; rebuild."),
+     "pineforge ABI mismatch: .so reports 3, harness expects 5; rebuild."),
     (None, {}, tuple(n for n in CORE if n != "run_backtest_full"),
      {"reason": "symbol_missing", "missing": "run_backtest_full"},
      "the strategy library has no run_backtest_full"),

@@ -1,4 +1,4 @@
-// R5 lane V19-B, the order core's journal window (native_order_v7).
+// The order core's journal window (native_order_v8).
 //
 // The core's command journal becomes a window: retire_history drops a prefix,
 // and nothing the core decides afterwards may read a retired event. Four
