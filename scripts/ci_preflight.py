@@ -1411,7 +1411,7 @@ def _admit_flow_findings(name: str, key: str, value: str, line: int) -> list[str
     value = _admit_strip_comment(value).strip()
     if not value or value.startswith('${{'):
         if key == 'runs-on' and value.startswith('${{') and not (
-                name == 'release.yml' and value == '${{ matrix.runner }}'):
+                Path(name).name == 'release.yml' and value == '${{ matrix.runner }}'):
             return [f'{name}:{line}: every runs-on must be a literal value']
         return []
     if key == 'permissions':

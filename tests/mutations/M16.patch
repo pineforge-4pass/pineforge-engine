@@ -1,0 +1,12 @@
+diff --git a/src/native_order_book.hpp b/src/native_order_book.hpp
+--- a/src/native_order_book.hpp
++++ b/src/native_order_book.hpp
+@@ -304,8 +304,6 @@
+         return {UINT64_C(0x5046424f4f4b0001), nullptr, compare_keys};
+     }
+     void index_failed() noexcept {
+-        if (!poison) ++poison_events;
+-        poison = true;
+         if (level_index && level_index->transaction_active()) (void)level_index->rollback();
+     }
+     bool index_ok(detail::ScratchStatus status) noexcept {

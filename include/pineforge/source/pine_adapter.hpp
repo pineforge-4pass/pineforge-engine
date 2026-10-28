@@ -34,7 +34,7 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
-
+#include <array>
 namespace pineforge::source {
 
 // A2: Pine entry ids and from_entry values are source strings, never a
@@ -613,9 +613,9 @@ public:
 
         Iterator() = default;
 
-        Reference operator*() const { return {key_, *row_}; }
+        Reference operator*() const { return {key_, borrow()}; }
         Reference* operator->() const {
-            reference_.emplace(key_, *row_);
+            reference_.emplace(key_, borrow());
             return &*reference_;
         }
         Iterator& operator++() {
@@ -638,11 +638,11 @@ public:
         friend class PlacementTable;
         Iterator(Owner* owner, std::uint64_t key, Snapshot* row)
             : owner_(owner), key_(key), row_(row) {}
-
-        // The row is named by its incarnation and its node, never by a
-        // position, so an iterator stays valid across every insert and every
-        // erase of another row. key_ 0 is end().
-        Owner* owner_ = nullptr;
+        Snapshot& borrow() const {
+            if constexpr (!IsConst) ++owner_->pending_observer_version_;
+            return *row_;
+        }
+        Owner* owner_ = nullptr; // Nodes stay stable; key 0 is end().
         std::uint64_t key_ = 0;
         Snapshot* row_ = nullptr;
         mutable std::optional<Reference> reference_;
@@ -652,6 +652,7 @@ public:
     using const_iterator = Iterator<true>;
 
     PlacementTable() = default;
+    explicit PlacementTable(std::size_t cache_bytes) : erased_minima_(cache_bytes) {}
     PlacementTable(const PlacementTable&) = delete;
     PlacementTable& operator=(const PlacementTable&) = delete;
     PlacementTable(PlacementTable&&) noexcept = default;
@@ -667,14 +668,14 @@ public:
     // are monotone, so a handle above this mark at an observation time was
     // unknown to every adapter collection populated before that observation.
     std::uint64_t high_water() const noexcept { return high_water_; }
-    // Rows erased over the run (a statistic; nothing reads it back).
+    std::array<std::uint64_t, 5> sequence_work() const noexcept;
     std::uint64_t erased_rows() const noexcept { return erased_rows_; }
     // The window is reserved for the rows a run keeps live at once, not for
     // every incarnation it will allocate: the table stays O(live).
     void reserve(std::size_t count) {
         window_.reserve(std::min<std::size_t>(count, kWindowReserve));
     }
-    void clear() noexcept {
+    void clear() noexcept { ++pending_observer_version_;
         window_.clear();
         head_ = 0;
         base_ = 1;
@@ -682,15 +683,15 @@ public:
         old_.clear();
         size_ = 0;
         high_water_ = 0;
-        erased_rows_ = 0;
+        erased_rows_ = 0; visited_slots_ = 0;
         erased_digest_ = kFoldBasis;
-        erased_minima_.clear();
+        erased_minima_.clear(); sequence_index_.reset(); sequence_queries_ = sequence_rows_ = 0;
         erased_foreign_ids_.clear();
 #if PINEFORGE_PLACEMENT_AUDIT
         detail::placement_audit_forget(this);
 #endif
     }
-
+    std::uint64_t visited_slots() const noexcept { return visited_slots_; } // Observer only; never folded.
     iterator begin() noexcept {
         const auto first = next_after(0);
         return iterator(this, first.first, first.second);
@@ -712,11 +713,11 @@ public:
     // For a whole-table read: no row is inserted or erased while it runs.
     template<class Visit>
     [[gnu::always_inline]] void visit_rows(Visit&& visit) const {
-        for (const auto& entry : old_) {
+        for (const auto& entry : old_) { ++visited_slots_;
             if (visit(entry.first, static_cast<const PlacementSnapshot&>(*entry.second))) return;
         }
         for (std::size_t index = head_; index < window_.size(); ++index) {
-            const auto& slot = window_[index];
+            const auto& slot = window_[index]; ++visited_slots_;
             if (slot
                 && visit(base_ + static_cast<std::uint64_t>(index - head_),
                          static_cast<const PlacementSnapshot&>(*slot))) {
@@ -760,7 +761,7 @@ public:
         return locate(incarnation) != nullptr;
     }
 
-    PlacementSnapshot& at(std::uint64_t incarnation) {
+    PlacementSnapshot& at(std::uint64_t incarnation) { ++pending_observer_version_;
         PlacementSnapshot* row = locate(incarnation);
         if (!row) throw std::out_of_range("source placement handle is absent");
         return *row;
@@ -772,7 +773,7 @@ public:
     }
 
     template<class... Args>
-    std::pair<iterator, bool> try_emplace(std::uint64_t incarnation, Args&&... args) {
+    std::pair<iterator, bool> try_emplace(std::uint64_t incarnation, Args&&... args) { ++pending_observer_version_;
         if (incarnation == 0 || incarnation == std::numeric_limits<std::uint64_t>::max()) {
             throw std::length_error("source placement incarnation is out of range");
         }
@@ -788,17 +789,17 @@ public:
             spare_.pop_back();
             overwrite(*node, std::forward<Args>(args)...);
         }
-        PlacementSnapshot* row = node.get();
-        place(incarnation, std::move(node));
+        PlacementSnapshot* row = node.get(); prepare_place(incarnation);
+        change_sequences(incarnation, nullptr, row); place(incarnation, std::move(node));
         ++size_;
         high_water_ = std::max(high_water_, incarnation);
         return {iterator(this, incarnation, row), true};
     }
 
-    // Queries scan retained identities directly. Replacement has no scratch
-    // workset to refold/reserve, and never changes the erased minima.
+    // Publish the derived identity update before replacing the retained row.
+    // Rewritten predecessors never become erased history.
     void replace(std::uint64_t incarnation, PlacementSnapshot&& snapshot) {
-        at(incarnation) = std::move(snapshot);
+        auto& row = at(incarnation); change_sequences(incarnation, &row, &snapshot); row = std::move(snapshot);
     }
 
     // Borrow the complete retirement workset before touching any row, cohort
@@ -816,13 +817,13 @@ public:
     // Erases a row. The compact records keep what later logic reads of it:
     // its command sequence under its (source_id, from_entry) and, for a
     // non-margin row, its source id. Returns false when no row is there.
-    bool erase(std::uint64_t incarnation) {
+    bool erase(std::uint64_t incarnation) { ++pending_observer_version_;
         const PlacementSnapshot* row = locate(incarnation);
         if (!row) return false;
         preflight_erased_rows([&](const auto& emit) { emit(*row); });
-        // Fold the admitted pair before taking the node as well: a disk I/O
-        // failure must not lose its retained-row query evidence.
-        fold_sequence(erased_minima_, *row);
+        // A failed derived write publishes no placement or erased-history change.
+        change_sequences(incarnation, row, nullptr);
+        try { fold_sequence(erased_minima_, *row); } catch (...) { sequence_index_.reset(); throw; }
         std::unique_ptr<PlacementSnapshot> node = take(incarnation);
         remember_erased(*node);
         --size_;
@@ -844,11 +845,11 @@ public:
     // Smallest command_sequence among the rows ever inserted whose source_id
     // is `source_id`: over the rows bound to `from_entry` when any is, else
     // over all of them; UINT64_MAX when no row carried the id. The retained
-    // rows are scanned without a q cache; replace() rewrites their identity
-    // wholesale. Every erased row was folded into e when it left.
+    // rows have a replacement-safe backed identity index; erased minima stay
+    // separate. An explicitly present UINT64_MAX pair still falls back.
     std::uint64_t command_sequence_for(const std::string& source_id,
                                        const std::string& from_entry) const;
-
+private: friend class PineExecutionAdapter; bool exit_sequences_certified() const noexcept; void begin_exit_sequence_certificate(); void watch_exit_sequence(const SourceId&, const SourceId&); void certify_exit_sequences() noexcept; public:
     // Whether an erased row that is not a margin close carried a source id
     // other than `first` and `second`: what a scan for such a row over every
     // placement ever made reads of the erased ones.
@@ -868,7 +869,7 @@ private:
     static constexpr std::size_t kWindowReserve = 256;
     static constexpr std::size_t kSpareNodes = 64;
     static constexpr std::uint64_t kFoldBasis = 1469598103934665603ULL;
-
+    struct SequenceIndex; SequenceIndex& sequence_index() const; std::array<std::uint64_t, 2> retained_sequences(const SourceId&, const SourceId&) const;
     // Single keys hold the minimum over any from_entry; pair keys hold the
     // exact (source_id, from_entry) minimum. Their separate key domains keep
     // an empty from_entry distinct from the any-entry summary. Neither the
@@ -916,11 +917,11 @@ private:
         if (after < base_) {
             const auto found = std::upper_bound(old_.begin(), old_.end(), after,
                 [](std::uint64_t key, const auto& entry) { return key < entry.first; });
-            if (found != old_.end()) return {found->first, found->second.get()};
+            if (found != old_.end()) { ++visited_slots_; return {found->first, found->second.get()}; }
         }
         std::size_t index = after < base_ ? head_
             : head_ + static_cast<std::size_t>(after - base_) + 1U;
-        for (; index < window_.size(); ++index) {
+        for (; index < window_.size(); ++index) { ++visited_slots_;
             if (window_[index])
                 return {base_ + static_cast<std::uint64_t>(index - head_), window_[index].get()};
         }
@@ -929,8 +930,8 @@ private:
 
     void place(std::uint64_t incarnation, std::unique_ptr<PlacementSnapshot> node);
     std::unique_ptr<PlacementSnapshot> take(std::uint64_t incarnation) noexcept;
-    void remember_erased(const PlacementSnapshot& row);
-
+    void remember_erased(const PlacementSnapshot& row); void prepare_place(std::uint64_t incarnation);
+    void change_sequences(std::uint64_t, const PlacementSnapshot*, const PlacementSnapshot*);
     // window_[head_ + i] holds incarnation base_ + i, or null; old_ holds the
     // rows below base_, ascending.
     std::vector<std::unique_ptr<PlacementSnapshot>> window_;
@@ -940,16 +941,16 @@ private:
     std::vector<std::pair<std::uint64_t, std::unique_ptr<PlacementSnapshot>>> old_;
     std::size_t size_ = 0;
     std::uint64_t high_water_ = 0;
-    std::uint64_t erased_rows_ = 0;
+    std::uint64_t erased_rows_ = 0; mutable std::uint64_t visited_slots_ = 0;
     std::uint64_t erased_digest_ = kFoldBasis;
-    // Only erased history needs storage. Retained rows are the q query view.
+    mutable std::shared_ptr<SequenceIndex> sequence_index_; mutable std::uint64_t sequence_queries_ = 0, sequence_rows_ = 0;
     Minima erased_minima_;
     // Up to three distinct source ids of erased non-margin rows: as many as
     // erased_non_margin_id_outside() can ever need.
     std::vector<SourceId> erased_foreign_ids_;
-    // Erased rows' nodes, for the next rows. Not state: a spare node still
-    // holds the row it was erased with, which nothing reads, until the next
-    // placement overwrites it.
+    // Spare nodes and the observer epoch are derived, outside broker state.
+    friend class PineExecutionAdapter;
+    std::uint64_t pending_observer_version_ = 0;
     std::vector<std::unique_ptr<PlacementSnapshot>> spare_;
 };
 
@@ -1595,7 +1596,7 @@ void bind_id_pair_scratch_tables(source::PineExecutionAdapter&,
 
 namespace pineforge::source {
 
-// Allocation-free view facade for Appendix C's later C projection. L2 does
+// Read-only view facade for Appendix C's later C projection. L2 does
 // not wire the C ABI; this only exposes named truthful sources to native
 // fixture tests and keeps observer reads side-effect-free.
 class PendingIntentView {
@@ -1968,7 +1969,7 @@ public:
     bool immediate_calculation_close(
         const native_order::ExecutionAppliedEvent&,
         const NativeDecisionContext&) const noexcept;
-
+    struct ExitGroupWork;
     std::uint64_t command_sequence_for_exit(const SourceId& exit_id,
                                             const SourceId& from_entry = {}) const;
     bool is_open_phase_exit(std::size_t trade_index) const;
@@ -1983,7 +1984,7 @@ public:
     // slot start + i takes the phase of the trade previously at indices[i].
     void permute_exit_phases(std::size_t start, const std::vector<std::size_t>& indices);
     void permute_exit_phase_rows(std::size_t start, std::size_t count,
-                                const std::function<std::size_t(std::size_t)>& source_at);
+                                const std::function<std::size_t(std::size_t)>& source_at); ExitGroupWork exit_group_work() const noexcept;
     // The place of each of `ids` among the children one global strategy.exit
     // fill closes, in TradingView's entry-id table (exit_rank_keys_); nullopt
     // where the pinned table does not reach (PineStrategyHost::
@@ -2764,10 +2765,12 @@ private:
     std::uint64_t source_command_sequence_ = 0;
     std::int32_t entry_attempt_bar_ = -1;
     std::uint32_t entry_attempts_on_bar_ = 0;
-    CohortTable cohorts_by_id_;
+    // 192 KiB per adapter, not per engine. One adapter owns each cache;
+    // these private disk read caches are never shared across threads.
+    CohortTable cohorts_by_id_{pineforge::detail::IdTableReadCache::kCacheBytes};
     void observe_pending_scan(PendingScanCounter&) const noexcept;
     CohortTable::iterator require_cohort(const SourceId&);
-    PlacementTable placement_;
+    PlacementTable placement_{pineforge::detail::IdTableReadCache::kPairCacheBytes};
     std::unordered_map<std::uint64_t, detail::LiveSourceHandle> live_by_source_key_;
     std::unordered_map<std::uint64_t, BracketRoster> bracket_families_;
     // Immutable, wholly settled families. All appends restore through
@@ -2814,7 +2817,8 @@ private:
     // then suppress just that duplicate debit at notification delivery.
     std::unordered_set<std::uint64_t> current_debited_applied_ordinals_;
     std::unordered_set<std::uint64_t> intraday_loss_relabel_ordinals_;
-    pineforge::detail::IdPairStore<std::int64_t, true> consumed_partial_exit_cycles_;
+    pineforge::detail::IdPairStore<std::int64_t, true> consumed_partial_exit_cycles_{
+        pineforge::detail::IdTableReadCache::kPairCacheBytes};
     std::unordered_set<std::uint64_t> bracket_shadowed_openings_;
     std::unordered_map<SourceId, NamedEntryCancelToken> named_entry_cancel_tokens_;
     // An exit bound to its entry id whose working order a strategy.cancel of
@@ -2991,12 +2995,34 @@ private:
         std::numeric_limits<std::int64_t>::min();
     PendingIntentView pending_view_{};
     ::pineforge::detail::ScratchSequence<std::uint8_t> trade_exit_phase_;
+public:
+    struct ExitGroupWork {
+        std::uint64_t publications = 0, tail_rows = 0, comparisons = 0;
+        std::uint64_t sequence_queries = 0, sequence_rows = 0, sequence_index_operations = 0;
+        std::uint64_t sequence_index_pages = 0, sequence_index_resident_bytes = 0;
+        std::uint64_t scratch_operations = 0, replacements = 0;
+        std::size_t retained_placements = 0;
+    };
+private:
+    // Derived ordering evidence and diagnostics are absent from the state fold.
+    struct ExitGroupCertificate {
+        const TradeLedger* ledger = nullptr;
+        std::size_t base = 0, start = 0, end = 0;
+        bool rows_valid = false;
+    } exit_group_certificate_;
+    ExitGroupWork exit_group_work_{};
+    bool exit_group_certified(const TradeLedger&) const noexcept;
+    void invalidate_exit_group(std::size_t first, std::size_t count = 1) noexcept;
+    void certify_exit_group(const TradeLedger&, std::size_t start, bool ordered = true);
+    void finish_exit_group_sort(::pineforge::detail::CommandScratchStore&,
+                                const ::pineforge::detail::ScratchStoreStats&) noexcept;
     // TradingView's entry-id table (global_exit_child_ranks): every entry id
     // in the order of its first fill, never removed, with a running digest,
     // and the most keys it ever held counting one transient key per live
     // strategy.close / close_all order -- and, for the alternative the tapes
     // leave open, per live strategy.order market order too.
-    ::pineforge::detail::DiskIdTable<std::uint32_t> exit_rank_keys_;
+    ::pineforge::detail::DiskIdTable<std::uint32_t> exit_rank_keys_{
+        pineforge::detail::IdTableReadCache::kCacheBytes};
     std::uint64_t exit_rank_keys_digest_ = 1469598103934665603ULL;
     std::uint32_t exit_rank_peak_ = 0;
     std::uint32_t exit_rank_alt_peak_ = 0;
@@ -3123,14 +3149,27 @@ private:
         // lots and those no roster holds as a root, the origins leaving a
         // roster (cohort, incarnation), and the handle a lot is looked up by
         // (its run identity copied only when it changes) -- and whether a
-        // receipt read has seen a command event since its last pass (a memo:
-        // with none, the pass would take nothing off; a run begin sets it).
+        // receipt read has seen a command other than Accepted since its last
+        // pass (a memo: fresh working roots release nothing; begin sets it).
         std::vector<std::uint64_t> working_roots;
         std::vector<std::uint64_t> lot_openings;
         std::vector<std::uint64_t> successor_lots;
         std::vector<std::pair<native_order::CohortHandle, std::uint64_t>> released_origins;
         native_order::RequestHandle lot_probe{};
         bool roster_pass_due = true;
+        // Derived live-family counts stay in step with placements and live handles
+        // at their shared writer; they add no lifecycle or hash state. Contiguous
+        // Entry..Risk slots count families; extra slots count unpriced Order rows
+        // and rows eligible for dynamic-exit or capture policy.
+        static constexpr std::size_t family_count =
+            static_cast<std::size_t>(PineOrderFamily::Risk) + 1;
+        static constexpr std::size_t market_order_slot = family_count;
+        static constexpr std::size_t exit_policy_slot = family_count + 1;
+        std::size_t live_families[family_count + 2]{};
+        // True certifies the existing retire_origin_prefixes early return:
+        // each nonempty front has a placement. Only placement erasure can
+        // falsify it; a new origin is appended after remember().
+        bool origin_fronts_pinned = true;
         void clear() noexcept {
             roots.clear();
             askable_origins.clear();
@@ -3150,6 +3189,16 @@ private:
         }
     };
     RetiredRowScratch retired_row_scratch_;
+    void remember_live(const native_order::RequestHandle&, PlacementSnapshot&&);
+    void forget_live(const native_order::RequestHandle&) noexcept;
+    void requeue_live(const native_order::RequestHandle&);
+    void clear_live() noexcept;
+    void erase_placement(std::uint64_t);
+    void count_live(const PlacementSnapshot&, bool adding) noexcept;
+    void assert_live_counts() const noexcept;
+    bool has_live_family(PineOrderFamily) const noexcept;
+    bool has_live_exit_policy() const noexcept;
+    bool has_live_trail_policy() const noexcept;
     // The configuration's part of the margin and admission scopes, which the
     // per-bar path asks several times a bar: each a conjunction of reads of
     // config_ and staged_ alone, formed again whenever either is set
@@ -3190,6 +3239,108 @@ private:
     void fold_admission_events() const;
     std::uint64_t checked_live_key(const SourceId&) const;
     detail::LiveSourceHandle live_source_value(native_order::RequestHandle, const SourceId&) const;
+    void cancel_reversal_exit_owners(const std::vector<SourceId>& preserved,
+                                    detail::ExitScratchRows<SourceId>& selection);
+    // Diagnostic only; never folded into continuation state.
+    mutable std::uint64_t projected_raw_pending_calls_ = 0;
+    // A disposable projection of current raw positions, never row pointers.
+    // Mutable placement borrows and every queue writer invalidate its inputs.
+    std::uint64_t pending_projection_version_ = 0;
+    mutable std::uint64_t projected_pending_version_ = 0;
+    mutable std::uint64_t projected_placement_version_ = 0;
+    mutable bool projected_pending_valid_ = false;
+    mutable std::vector<int> projected_pending_indexes_;
+    mutable std::vector<int> projected_pending_next_;
+    bool ensure_projected_pending_index() const;
+    int projected_pending_next(int index) const noexcept;
+    int projected_raw_pending_next(int raw) const noexcept;
+    int projected_level_resolved(const PlacementSnapshot&) const noexcept;
+    // Bump the version before mutation. Do not keep the returned reference
+    // across another pending_write of the same container.
+    template<class Row> Row& pending_write(Row& row) noexcept {
+        refresh_pending_view();
+        return row;
+    }
+    static int scan_projected_pending_size(const PineExecutionAdapter&) noexcept;
+    static bool scan_projected_pending_at(
+        const PineExecutionAdapter&, int index, const PlacementSnapshot*&,
+        native_order::RequestHandle&, int* raw_index = nullptr) noexcept;
+
+public:
+    // Cumulative physical work, reset at run begin. No decision or state fold
+    // reads these integers. Population snapshots are explicit diagnostics.
+    struct RetirementWork {
+        std::uint64_t placement_sweeps = 0, prefix_sweeps = 0;
+        std::uint64_t row_visits = 0, pin_rows = 0, gate_rows = 0;
+        std::uint64_t candidate_rows = 0, final_rows = 0;
+        std::uint64_t pin_comparisons = 0, peer_visits = 0, held_comparisons = 0;
+        std::uint64_t k3_pairs = 0, root_visits = 0, family_visits = 0;
+        std::uint64_t cohort_rows = 0, certificate_rows = 0, fronts_tested = 0;
+        std::uint64_t missing_fronts = 0, missing_fronts_pinned = 0;
+        std::uint64_t rows_erased = 0, origins_retired = 0;
+        // Slots include empty dense-window slots, as well as returned old rows.
+        // Backing counts are restored/spilled cohort records, not page I/O.
+        std::uint64_t placement_slots = 0, backing_rows_restored = 0;
+        std::uint64_t backing_rows_spilled = 0, spill_rows_visited = 0;
+        // Debug repeats the sweep independently of the decision-path counts.
+        std::uint64_t validation_sweeps = 0, validation_row_visits = 0;
+    };
+    struct RetirementPopulation {
+        std::uint64_t m = 0, R = 0, C = 0;
+        std::uint64_t live = 0, pending = 0, owners = 0, opened = 0, retired_exit_rows = 0;
+    };
+    const RetirementWork& retirement_work() const noexcept { return retirement_work_; }
+    // Explicit observation only: visits placements to classify nonlive exits.
+    RetirementPopulation retirement_population() const;
+
+private:
+    RetirementWork retirement_work_{};
+    struct RetirementObservation {
+        PineExecutionAdapter& adapter;
+        RetirementWork& work;
+        std::uint64_t slots, restored, spilled, spill_visits;
+        explicit RetirementObservation(PineExecutionAdapter& owner) noexcept
+            : RetirementObservation(owner, owner.retirement_work_) {}
+        RetirementObservation(PineExecutionAdapter& owner, RetirementWork& destination) noexcept
+            : adapter(owner), work(destination), slots(owner.placement_.visited_slots()),
+              restored(owner.cohorts_by_id_.work_counters().rows_restored),
+              spilled(owner.cohorts_by_id_.work_counters().rows_spilled),
+              spill_visits(owner.cohorts_by_id_.work_counters().rows_visited_by_spill) {}
+        ~RetirementObservation() {
+            const auto& backing = adapter.cohorts_by_id_.work_counters();
+            work.placement_slots += adapter.placement_.visited_slots() - slots;
+            work.backing_rows_restored += backing.rows_restored - restored;
+            work.backing_rows_spilled += backing.rows_spilled - spilled;
+            work.spill_rows_visited += backing.rows_visited_by_spill - spill_visits;
+        }
+    };
+    // Exact current references, never a digest or a historical placement copy.
+    // These sets and the certificate are derived scratch, outside source state.
+    struct RetirementInputs {
+        std::vector<std::uint64_t> roots, askable, groups, marks;
+        std::vector<std::int32_t> bar_numbers;
+        bool operator==(const RetirementInputs& other) const noexcept {
+            return roots == other.roots && askable == other.askable
+                && groups == other.groups && marks == other.marks && bar_numbers == other.bar_numbers;
+        }
+    };
+    struct RetirementGate {
+        RetirementInputs saved, current;
+        bool certified = false;
+        std::int64_t cycle = -1, interval = -1;
+        std::int64_t broker_open = std::numeric_limits<std::int64_t>::min();
+        std::int64_t interval_expiry = std::numeric_limits<std::int64_t>::max();
+        std::int64_t broker_expiry = std::numeric_limits<std::int64_t>::max();
+    };
+    RetirementGate retirement_gate_;
+    void invalidate_retirement() noexcept { retirement_gate_.certified = false; }
+    bool capture_retirement_inputs(RetirementInputs&) const;
+    void observe_retirement_expiry(const PlacementSnapshot&, std::int64_t interval) noexcept;
+    void sweep_retired_rows(const NativeDecisionContext&, RetirementWork&);
+    void finish_retirement_phases();
+#ifndef NDEBUG
+    std::array<std::uint64_t, 3> retirement_validation_state() const;
+#endif
 };
 
 namespace detail {

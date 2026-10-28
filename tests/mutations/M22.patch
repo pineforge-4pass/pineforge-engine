@@ -1,0 +1,13 @@
+diff --git a/src/native_execution_consumer.cpp b/src/native_execution_consumer.cpp
+index 4e68cb669..0008f8475 100644
+--- a/src/native_execution_consumer.cpp
++++ b/src/native_execution_consumer.cpp
+@@ -14232,7 +14232,7 @@ double NativeExecutionConsumer::dormant_margin(
+     // 2^-20 relative or two-tick allowance requires checking eager geometry.
+     const double scale = std::max({1.0, std::abs(lo), std::abs(hi)});
+     const double relative = std::ldexp(scale, -20);
+-    return relative + 2.0 * grid_tick;
++    return relative + grid_tick;
+ }
+ 
+ NativeExecutionConsumer::DormantReach NativeExecutionConsumer::dormant_join_reach() noexcept {

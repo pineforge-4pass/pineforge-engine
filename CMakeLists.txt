@@ -165,6 +165,7 @@ set(PINEFORGE_KERNEL_SOURCES src/array.cpp
     src/metrics_spill_curve.cpp
     src/report_scratch.cpp
     src/detail/o1_store.cpp
+    src/detail/udt_graph.cpp
     src/scratch_arena.cpp
     src/script_store.cpp)
 add_library(pineforge_kernel STATIC ${PINEFORGE_KERNEL_SOURCES}) # kernel-only archive: libpineforge.a's kernel objects and flags, for consumers that never speak Pine
@@ -252,6 +253,11 @@ foreach(_pf_library ${PINEFORGE_LIBRARY_TARGETS})
     # library's own flags above stay exactly as they are. install(EXPORT)
     # carries it into PineForgeTargets.cmake.
     target_compile_options(${_pf_library} INTERFACE -ffp-contract=off)
+    # src/strategy_history_policy.hpp (compiled into engine_report.cpp, a kernel
+    # source) resolves the strategy module's export with dladdr/dlopen/dlsym, so
+    # every consumer of either archive links the dynamic loader library; it is
+    # empty on platforms that fold it into libc.
+    target_link_libraries(${_pf_library} PUBLIC ${CMAKE_DL_LIBS})
     # Clang stops parsing at 256 nested brackets, parentheses and braces
     # (-fbracket-depth), and codegen transpiles Pine whose C++ nests deeper:
     # nested calls, long `+` / `and` chains and nested blocks fail past about

@@ -261,6 +261,7 @@ public:
     };
 
     DiskResidentIdTable() = default;
+    explicit DiskResidentIdTable(std::size_t cache_bytes) : index_(cache_bytes) {}
     DiskResidentIdTable(const DiskResidentIdTable&) = delete;
     DiskResidentIdTable& operator=(const DiskResidentIdTable&) = delete;
     DiskResidentIdTable(DiskResidentIdTable&& other) noexcept { *this = std::move(other); }
@@ -406,6 +407,9 @@ public:
         for (auto at = index_.first_sorted(); at != 0; at = index_.next_sorted(at))
             visit(index_.key(at));
     }
+    // Keys-only membership: reads the index alone, restores no row and does
+    // not run the implicit spill pass.
+    bool contains(const std::string& key) const { return index_.find(key).has_value(); }
     iterator find(const std::string& key) {
         spill_implicitly();
         const auto at = index_.find(key);

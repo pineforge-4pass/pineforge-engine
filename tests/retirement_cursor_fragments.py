@@ -1,5 +1,5 @@
 # Generates the header test_adapter_live_state_equivalence includes from src/source/pine_adapter.cpp: the three cursor
-# walks of PineExecutionAdapter::erase_retired_rows (askable_cursor, candidate_origin_cursor, root_cursor) are copied
+# walks of PineExecutionAdapter::sweep_retired_rows (askable_cursor, candidate_origin_cursor, root_cursor) are copied
 # verbatim by regex, so the test runs the production text. The patterns below match how those walks are written today.
 # A reformat of one of them, or a second walk with the same cursor name, makes this emit an #error and fails that
 # test's build: change the pattern in the same commit. tests/CMakeLists.txt regenerates the header when either file changes.
@@ -9,7 +9,7 @@ import re
 
 
 def generate(source):
-    retirement = source.split("void PineExecutionAdapter::erase_retired_rows(", 1)[1]
+    retirement = source.split("void PineExecutionAdapter::sweep_retired_rows(", 1)[1]
     retirement = retirement.split("\nvoid PineExecutionAdapter::", 1)[0]
     fragments = []
     for cursor, values, name, candidate in (
