@@ -2337,6 +2337,7 @@ public:
     // strategy_pending_order_level_resolved,
     // strategy_pending_order_effective_levels, strategy_trail_best_price --
     // include/pineforge/pineforge.h).
+    // Hosts may write derived caches; observation is single-threaded by contract.
     virtual int observe_last_bar_dual_entry_path_v1() const;
     virtual int observe_pending_count_v1() const;
     virtual int observe_pending_copy_v1(int index, pf_pending_order_v1_t* out) const;

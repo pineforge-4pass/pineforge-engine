@@ -2718,9 +2718,11 @@ void PineExecutionAdapter::reset_for_run() {
     last_bar_dual_entry_script_open_ms_ =
         std::numeric_limits<std::int64_t>::min();
     pending_projection_cache_initialized_ = false;
-    pending_projection_raw_keys_.clear();
-    pending_projection_rows_.clear();
-    pending_projection_seen_.clear();
+    // Swap to empty (not clear): a run's derived index must not keep the
+    // previous run's peak capacity, so retention is one run's peak R.
+    decltype(pending_projection_raw_keys_)().swap(pending_projection_raw_keys_);
+    decltype(pending_projection_rows_)().swap(pending_projection_rows_);
+    decltype(pending_projection_seen_)().swap(pending_projection_seen_);
     pending_projection_operations_ = 0;
     source_sequence_ = 0;
     command_ordinal_ = 0;
@@ -27270,35 +27272,109 @@ void PineExecutionAdapter::ensure_pending_projection_cache() const noexcept {
     }
     if (valid) return;
 
-    pending_projection_raw_keys_.clear();
-    pending_projection_rows_.clear();
-    pending_projection_seen_.clear();
-    pending_projection_raw_keys_.reserve(static_cast<std::size_t>(raw_count));
-    pending_projection_rows_.reserve(static_cast<std::size_t>(raw_count));
-    pending_projection_seen_.reserve(static_cast<std::size_t>(raw_count));
-    const auto is_exit = [](PineOrderFamily family) {
-        return family == PineOrderFamily::ExitLimit
-            || family == PineOrderFamily::ExitStop
-            || family == PineOrderFamily::ExitTrail;
-    };
-    for (int raw = 0; raw < raw_count; ++raw) {
-        const PlacementSnapshot* current = nullptr;
-        native_order::RequestHandle handle;
-        (void) projected_raw_pending_at(raw, current, handle);
-        const PendingProjectionKey key = make_key(current);
-        pending_projection_raw_keys_.push_back(key);
-        if (!key.present) continue;
-        if (is_exit(key.family)
-            && !pending_projection_seen_.emplace(key, raw).second) {
-            continue;
+    pending_projection_cache_initialized_ = false;
+    try {
+        pending_projection_raw_keys_.clear();
+        pending_projection_rows_.clear();
+        pending_projection_seen_.clear();
+        pending_projection_raw_keys_.reserve(static_cast<std::size_t>(raw_count));
+        pending_projection_rows_.reserve(static_cast<std::size_t>(raw_count));
+        pending_projection_seen_.reserve(static_cast<std::size_t>(raw_count));
+        const auto is_exit = [](PineOrderFamily family) {
+            return family == PineOrderFamily::ExitLimit
+                || family == PineOrderFamily::ExitStop
+                || family == PineOrderFamily::ExitTrail;
+        };
+        for (int raw = 0; raw < raw_count; ++raw) {
+            const PlacementSnapshot* current = nullptr;
+            native_order::RequestHandle handle;
+            (void) projected_raw_pending_at(raw, current, handle);
+            const PendingProjectionKey key = make_key(current);
+            pending_projection_raw_keys_.push_back(key);
+            if (!key.present) continue;
+            if (is_exit(key.family)
+                && !pending_projection_seen_.emplace(key, raw).second) {
+                continue;
+            }
+            pending_projection_rows_.push_back(raw);
         }
-        pending_projection_rows_.push_back(raw);
+        pending_projection_cache_initialized_ = true;
+    } catch (...) {
+        // No partial projection may escape a noexcept observer. Leave the
+        // cache invalid for retry and use the parent's allocation-free walk.
+        pending_projection_raw_keys_.clear();
+        pending_projection_rows_.clear();
+        pending_projection_seen_.clear();
+        pending_projection_cache_initialized_ = false;
     }
-    pending_projection_cache_initialized_ = true;
+}
+
+int PineExecutionAdapter::projected_pending_size_fallback() const noexcept {
+    const int raw_count = projected_raw_pending_size();
+    int count = 0;
+    for (int index = 0; index < raw_count; ++index) {
+        const PlacementSnapshot* candidate = nullptr;
+        native_order::RequestHandle handle;
+        if (!projected_raw_pending_at(index, candidate, handle) || !candidate) continue;
+        bool duplicate = false;
+        if (candidate->family == PineOrderFamily::ExitLimit
+            || candidate->family == PineOrderFamily::ExitStop
+            || candidate->family == PineOrderFamily::ExitTrail) {
+            for (int prior = 0; prior < index; ++prior) {
+                const PlacementSnapshot* earlier = nullptr;
+                native_order::RequestHandle earlier_handle;
+                if (projected_raw_pending_at(prior, earlier, earlier_handle) && earlier
+                    && same_projected_order(*candidate, *earlier)) {
+                    duplicate = true;
+                    break;
+                }
+            }
+        }
+        if (!duplicate && count != std::numeric_limits<int>::max()) ++count;
+    }
+    return count;
+}
+
+bool PineExecutionAdapter::projected_pending_at_fallback(
+        int index, const PlacementSnapshot*& snapshot,
+        native_order::RequestHandle& handle) const noexcept {
+    snapshot = nullptr;
+    handle = {};
+    if (index < 0) return false;
+    const int raw_count = projected_raw_pending_size();
+    int projected = 0;
+    for (int raw = 0; raw < raw_count; ++raw) {
+        const PlacementSnapshot* candidate = nullptr;
+        native_order::RequestHandle candidate_handle;
+        if (!projected_raw_pending_at(raw, candidate, candidate_handle) || !candidate) continue;
+        bool duplicate = false;
+        if (candidate->family == PineOrderFamily::ExitLimit
+            || candidate->family == PineOrderFamily::ExitStop
+            || candidate->family == PineOrderFamily::ExitTrail) {
+            for (int prior = 0; prior < raw; ++prior) {
+                const PlacementSnapshot* earlier = nullptr;
+                native_order::RequestHandle earlier_handle;
+                if (projected_raw_pending_at(prior, earlier, earlier_handle) && earlier
+                    && same_projected_order(*candidate, *earlier)) {
+                    duplicate = true;
+                    break;
+                }
+            }
+        }
+        if (duplicate) continue;
+        if (projected++ == index) {
+            snapshot = candidate;
+            handle = candidate_handle;
+            return true;
+        }
+    }
+    return false;
 }
 
 int PineExecutionAdapter::projected_pending_size() const noexcept {
     ensure_pending_projection_cache();
+    if (!pending_projection_cache_initialized_)
+        return projected_pending_size_fallback();
     return static_cast<int>(pending_projection_rows_.size());
 }
 
@@ -27309,6 +27385,8 @@ bool PineExecutionAdapter::projected_pending_at(
     handle = {};
     if (index < 0) return false;
     ensure_pending_projection_cache();
+    if (!pending_projection_cache_initialized_)
+        return projected_pending_at_fallback(index, snapshot, handle);
     if (index >= static_cast<int>(pending_projection_rows_.size())) return false;
     return projected_raw_pending_at(
         pending_projection_rows_[static_cast<std::size_t>(index)], snapshot, handle);

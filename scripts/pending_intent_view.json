@@ -6,9 +6,9 @@
     "pending_order_members": 65,
     "prefix_members": 98
   },
-  "purpose": "Appendix C proposal for allocation-free pf_pending_order_v1_t projection after the all-or-nothing lowering switch.",
+  "purpose": "Appendix C proposal for pf_pending_order_v1_t projection after the all-or-nothing lowering switch.",
   "conventions": {
-    "allocation": "Every view read is allocation-free: request definitions/live state are borrowed and PlacementSnapshot/receipt facts are looked up by RequestHandle.",
+    "allocation": "A view read may allocate when rebuilding the derived projection cache; reads of a valid warm cache do not allocate. Request definitions/live state are borrowed and PlacementSnapshot/receipt facts are looked up by RequestHandle.",
     "no_write": "Observer reads never mutate a request, PlacementSnapshot, receipt, cohort, or native live state.",
     "no_constant": "A compatibility field is never populated by a synthetic constant. Missing optional numeric facts use the named NaN convention; missing handles use 0 only where the legacy ABI already specifies it.",
     "nan": "Absent price/quantity/optional floating facts are IEEE quiet NaN. A present NaN payload is preserved, not normalized.",
