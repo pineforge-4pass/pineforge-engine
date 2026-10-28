@@ -86,11 +86,42 @@ PR_SLOW_ROWS = (
     'test_native_settlement_carry',
 )
 PR_FAST_ROWS_SHA256 = '0509b2219786efb6878b193639344c299ff8075ba4532dbe09e80e6e97b60a9a'
-# FLEET-POST=A: Linux PR and full-event jobs use separate, literal fleet arrays.
+# Linux PR jobs retain their fleet; secret-free post jobs use fixed GKE sizes.
 # Release artifacts and baseline promotion retain their isolated -main policy.
 PR_RUNNER = '["self-hosted","pf-gcp-pr"]'
 POST_RUNNER = '["self-hosted","pf-gcp-post"]'
 RELEASE_RUNNER = '["self-hosted","pf-gcp-main"]'
+GKE_32_LABEL = 'gke-32cpu-64gb-amd64'
+GKE_16_LABEL = 'gke-16cpu-32gb-amd64'
+GKE_8_LABEL = 'gke-8cpu-16gb-amd64'
+GKE_ARM_LABEL = 'gke-16cpu-32gb-arm64'
+GKE_2_LABEL = 'gke-2cpu-4gb-amd64'
+GKE_4_LABEL = 'gke-4cpu-8gb-amd64'
+GKE_JOB_LABELS = {
+    'ci-post.yml': {'preflight': GKE_8_LABEL, 'preflight-slow': GKE_8_LABEL,
+                    'build': GKE_32_LABEL, 'build-debug': GKE_16_LABEL,
+                    'sanitizers': GKE_32_LABEL, 'kernel-only': GKE_16_LABEL,
+                    'build-arm': GKE_ARM_LABEL},
+    'corpus-parity.yml': {'corpus-parity': GKE_16_LABEL, 'corpus-parity-subset': GKE_8_LABEL},
+    'native-live.yml': {'native-live': GKE_16_LABEL, 'native-live-shards': GKE_8_LABEL},
+}
+GKE_LIGHT_JOB_RUNNERS = {
+    'ci-post.yml': dict.fromkeys(
+        ('authz', 'changes', 'build-release-gate', 'build-debug-gate',
+         'sanitizers-gate', 'kernel-only-gate', 'build-gate'), GKE_2_LABEL),
+    # Separate called-workflow guards to keep each static label count <= 8.
+    'native-live.yml': dict.fromkeys(
+        ('authz', 'native-live-native', 'native-live-gate'), GKE_4_LABEL),
+    'corpus-parity.yml': {'authz': GKE_4_LABEL},
+    'docs-post.yml': {'authz': GKE_2_LABEL},
+    'release-ruleset-probe.yml': {'authz': GKE_2_LABEL},
+    'promote-baseline.yml': {'promote-guard': GKE_2_LABEL},
+}
+GKE_JOB_RUNNERS = {
+    name: {**GKE_JOB_LABELS.get(name, {}),
+           **GKE_LIGHT_JOB_RUNNERS.get(name, {})}
+    for name in {**GKE_JOB_LABELS, **GKE_LIGHT_JOB_RUNNERS}
+}
 CI_EVENTS = '''on:
   pull_request:
     # LB-387: suite jobs skip on a draft PR (the required aggregate then fails, never passes);
@@ -263,27 +294,24 @@ JOB_COMMANDS = {
     'docs.yml': {'authz': None, 'build': None},
     'docs-post.yml': {'authz': None, 'build': None},
 }
-# Exact hosted pins and post-fleet verification arrays, checked per job.
+# Exact hosted pins and bare GKE scale-set names, checked per job.
+# Historical name: this table also holds the exact GKE pins.
 HOSTED_JOB_RUNNERS = {
     'ci.yml': dict.fromkeys(('authz', 'changes', 'build-gate'), 'ubuntu-24.04'),
-    'ci-post.yml': {**dict.fromkeys(('authz', 'changes', 'build-gate'), 'ubuntu-24.04'),
-                    **dict.fromkeys(POST_LEG_GATES, 'ubuntu-24.04'),
-                    'build': POST_RUNNER, 'build-debug': POST_RUNNER,
-                    'sanitizers': POST_RUNNER, 'kernel-only': POST_RUNNER,
-                    'build-arm': 'ubuntu-24.04-arm'},
-    **{name: {'authz': 'ubuntu-24.04'} for name in (
-        'corpus-parity.yml', 'corpus-parity-subset.yml', 'docs-post.yml')},
-    'native-live.yml': {'authz': 'ubuntu-24.04', 'native-live': POST_RUNNER,
-                        'native-live-shards': POST_RUNNER,
-                        'native-live-native': 'ubuntu-24.04', 'native-live-gate': 'ubuntu-24.04'},
+    'ci-post.yml': GKE_JOB_RUNNERS['ci-post.yml'],
+    'corpus-parity-subset.yml': {'authz': 'ubuntu-24.04'},
+    'docs-post.yml': GKE_JOB_RUNNERS['docs-post.yml'],
+    'native-live.yml': GKE_JOB_RUNNERS['native-live.yml'],
+    'corpus-parity.yml': GKE_JOB_RUNNERS['corpus-parity.yml'],
     'docs.yml': {'authz': 'ubuntu-24.04', 'build': 'ubuntu-24.04'},
-    'promote-baseline.yml': {'promote-guard': 'ubuntu-latest'},
+    'promote-baseline.yml': GKE_JOB_RUNNERS['promote-baseline.yml'],
+    'release-ruleset-probe.yml': GKE_JOB_RUNNERS['release-ruleset-probe.yml'],
 }
 # Release/probe credential pins and ARM strategies remain isolated.
 RELEASE_JOB_RUNNERS = {
     'release.yml': {'release': RELEASE_RUNNER, 'prebuilt': HOSTED_MATRIX_RUNNER,
                     'notify-hub': RELEASE_RUNNER},
-    'release-ruleset-probe.yml': {'authz': 'ubuntu-24.04', 'probe': POST_RUNNER},
+    'release-ruleset-probe.yml': {'probe': POST_RUNNER},
     'promote-baseline.yml': {'promote': RELEASE_RUNNER},
 }
 # Credential-bearing jobs outside the release pins and gated docs build retain
@@ -545,7 +573,7 @@ _CONTINUE_ON_ERROR = re.compile(r'\s*(?:-\s+)?["\']?continue-on-error["\']?\s*:'
 # the codegen and campaign pins must carry this same literal, without repo edits.
 PROMOTE_GUARD = r'''  promote-guard:
     name: promote-guard
-    runs-on: ubuntu-latest
+    runs-on: gke-2cpu-4gb-amd64
     # Resolution needs read access in private repos; no secrets or OIDC here.
     permissions:
       pull-requests: read
@@ -1287,15 +1315,22 @@ def _events(workflow: str) -> set[str] | None:
     return {event.group(1) for event in events}
 
 
-def _holds_credentials(workflow: str, body: str) -> bool:
+def _effective_permissions(workflow: str, body: str) -> list[str]:
+    """A job permission declaration replaces the workflow's token scopes."""
+    return _job_values(body, 'permissions') or _job_values(workflow, 'permissions')
+
+
+def _holds_credentials(workflow: str, body: str, *, effective_permissions: bool = False) -> bool:
     """L6: non-GITHUB_TOKEN secrets, OIDC writes or a deployment environment.
 
-    Include inherited workflow env and permissions. Bracket/dynamic secret
-    access and inherited reusable-workflow secrets must not bypass the rule.
+    Existing VM checks conservatively include workflow permissions. GKE checks
+    use the job's effective scopes. Bracket/dynamic secret access and inherited
+    reusable-workflow secrets must not bypass either rule.
     """
     if _job_values(body, 'environment') or _job_values(body, 'secrets') == ['inherit']:
         return True
-    permissions = _job_values(workflow, 'permissions') + _job_values(body, 'permissions')
+    permissions = (_effective_permissions(workflow, body) if effective_permissions else
+                   _job_values(workflow, 'permissions') + _job_values(body, 'permissions'))
     oidc_write = r'''(?<![\w-])["']?id-token["']?\s*:\s*(?:"write"|'write'|write)(?=$|[\s,}])'''
     if any(value == 'write-all' or re.search(oidc_write, value, re.IGNORECASE)
            for value in permissions):
@@ -1389,17 +1424,181 @@ def _workflow_runner(workflow: str) -> str:
     return POST_RUNNER if (_events(workflow) or set()) & POST_EVENTS else PR_RUNNER
 
 
-def _authz_header(workflow: str) -> str:
-    # Light canon authz uses the same exact hosted image for every event.
-    return AUTHZ_JOB_HEADER
+def _authz_header(name: str) -> str:
+    # Only the runner varies; the canon step hash and all header keys stay pinned.
+    runner = GKE_LIGHT_JOB_RUNNERS.get(name, {}).get('authz', 'ubuntu-24.04')
+    return AUTHZ_JOB_HEADER.replace('runs-on: ubuntu-24.04', f'runs-on: {runner}')
+
+
+_GKE_ROUTE = re.compile(r'(?<![\w.-])gke-[\w.-]+', re.IGNORECASE)
+_GKE_SCALE_LABEL = re.compile(r'(?<![\w.-])gke-\d+cpu-\d+gb-(?:amd64|arm64)(?![\w.-])')
+
+
+def _matrix_rows(body: str) -> list[dict[str, str]] | None:
+    """Expand literal axes and include/exclude rows; expressions fail closed."""
+    strategy = '\n'.join(_job_block(body, 'strategy')[1:])
+    if not strategy:
+        return None if _job_values(body, 'strategy') else [{}]
+    if not _job_values(strategy, 'matrix'):
+        return [{}]
+    matrix = _job_block(strategy, 'matrix')[1:]
+    if not matrix:
+        return None
+    axes: dict[str, list[str]] = {}
+    includes: list[dict[str, str]] = []
+    excludes: list[dict[str, str]] = []
+    index = 0
+    while index < len(matrix):
+        header = re.fullmatch(r'        ([A-Za-z_]\w*):(?: (.*))?', matrix[index])
+        if not header:
+            return None
+        key, value = header.group(1), header.group(2) or ''
+        index += 1
+        children = []
+        while index < len(matrix) and _indent(matrix[index]) > 8:
+            children.append(matrix[index])
+            index += 1
+        if key in axes or key in ('include', 'exclude') and value:
+            return None
+        if key in ('include', 'exclude'):
+            rows = []
+            for line in children:
+                item = re.fullmatch(r'          - ([A-Za-z_]\w*): ([^{}\[\]]+)', line)
+                follow = re.fullmatch(r'            ([A-Za-z_]\w*): ([^{}\[\]]+)', line)
+                if item:
+                    rows.append({item.group(1): item.group(2).strip().strip('\'"')})
+                elif follow and rows and follow.group(1) not in rows[-1]:
+                    rows[-1][follow.group(1)] = follow.group(2).strip().strip('\'"')
+                else:
+                    return None
+            if not rows:
+                return None
+            (includes if key == 'include' else excludes).extend(rows)
+        elif value:
+            if children or not re.fullmatch(r'\[[^{}\[\]]+\]', value):
+                return None
+            values = [part.strip().strip('\'"') for part in value[1:-1].split(',')]
+            if any(not part or '${{' in part for part in values):
+                return None
+            axes[key] = values
+        else:
+            # An object-valued axis (platform.os) is one value per block item.
+            values = []
+            for line in children:
+                item = re.fullmatch(r'          - (.+)', line)
+                if item:
+                    values.append(item.group(1))
+                elif not values or _indent(line) != 12:
+                    return None
+                else:
+                    values[-1] += ' ' + line.strip()
+            if not values or any('${{' in part for part in values):
+                return None
+            axes[key] = values
+    originals = [{}] if axes else []
+    for key, values in axes.items():
+        originals = [dict(row, **{key: value}) for row in originals for value in values]
+    originals = [row for row in originals
+                 if not any(all(row.get(key) == value for key, value in excluded.items())
+                            for excluded in excludes)]
+    rows = [row.copy() for row in originals]
+    for included in includes:
+        matches = [index for index, row in enumerate(originals)
+                   if all(key not in axes or row.get(key) == value
+                          for key, value in included.items())]
+        if matches:
+            for index in matches:
+                rows[index].update(included)
+        else:
+            rows.append(included.copy())
+    return rows
+
+
+def _input_condition_skips(body: str, inputs: dict[str, str]) -> bool:
+    """Prune only a provably false literal input comparison in an AND condition."""
+    conditions = _job_values(body, 'if')
+    if len(conditions) != 1:
+        return False
+    condition = conditions[0].removeprefix('${{').removesuffix('}}').strip()
+    match = re.fullmatch(
+        r"""inputs\.([A-Za-z_]\w*)\s*(==|!=)\s*['"]([^'"]+)['"](?:\s*&&[^|]+)?""",
+        condition)
+    if not match or match.group(1) not in inputs:
+        return False
+    equal = inputs[match.group(1)] == match.group(3)
+    return not equal if match.group(2) == '==' else equal
+
+
+def _gke_cap_findings(workflows: dict[str, str]) -> list[str]:
+    """Refuse credentials through GKE calls and count one post CI run's instances."""
+    findings = []
+    counts: dict[str, int] = {}
+    workflow_jobs = {name: _jobs(workflow) for name, workflow in workflows.items()}
+    calls = {(name, job): [value.removeprefix('./.github/workflows/')
+                          for value in _job_values(body, 'uses')
+                          if value.startswith('./.github/workflows/')]
+             for name, jobs in workflow_jobs.items() for job, body in jobs.items()}
+    gke_workflows = {name for name, jobs in workflow_jobs.items()
+                     if any(_GKE_ROUTE.search(' '.join(_job_values(body, 'runs-on')))
+                            for body in jobs.values())}
+    # Credentials follow all calls, independent of input conditions or matrix rows.
+    while True:
+        callers = {name for (name, _), callees in calls.items()
+                   if any(callee in gke_workflows for callee in callees)}
+        if callers <= gke_workflows:
+            break
+        gke_workflows.update(callers)
+    for (name, job), callees in calls.items():
+        if any(callee in gke_workflows for callee in callees):
+            workflow, body = workflows[name], workflow_jobs[name][job]
+            permissions = _job_values(workflow, 'permissions') + _job_values(body, 'permissions')
+            if (_holds_credentials(workflow, body)
+                    or any(re.search(r'\bid-token\b', value) for value in permissions)):
+                findings.append(f'{name} job {job} must not expose credentials on GKE')
+
+    def visit(name: str, inputs: dict[str, str], multiplier: int, stack: tuple[str, ...]) -> None:
+        if name in stack:
+            findings.append(f'{name} must not recurse through reusable workflows for the GKE cap')
+            return
+        for job, body in workflow_jobs.get(name, {}).items():
+            if _input_condition_skips(body, inputs):
+                continue
+            runners = ' '.join(_job_values(body, 'runs-on'))
+            labels = [label.lower() for label in _GKE_ROUTE.findall(runners)
+                      if label.lower() != 'gke-runners']
+            callees = calls[(name, job)]
+            if not labels and not callees:
+                continue
+            rows = _matrix_rows(body)
+            if rows is None:
+                findings.append(f'{name} job {job} must use a readable static matrix for the GKE cap')
+                continue
+            instances = multiplier * len(rows)
+            for label in set(labels):
+                counts[label] = counts.get(label, 0) + instances
+            arguments = '\n'.join(_job_block(body, 'with')[1:])
+            keys = re.findall(r'^\s+([A-Za-z_]\w*):', arguments, re.MULTILINE)
+            passed = {key: values[0] for key in keys
+                      if len(values := _job_values(arguments, key)) == 1
+                      and '${{' not in values[0]}
+            for callee in callees:
+                visit(callee, passed, instances, (*stack, name))
+
+    if 'ci-post.yml' in workflows:
+        visit('ci-post.yml', {}, 1, ())
+    findings.extend(f'ci-post.yml GKE label {label} expands to {count} jobs; cap is 8'
+                    for label, count in sorted(counts.items()) if count > 8)
+    return findings
 
 
 def runner_findings(workflows: dict[str, str]) -> list[str]:
     """Enforce event-derived fleets, isolated releases and command/core pins."""
-    findings = workflow_fleet_findings(workflows)
+    findings = workflow_fleet_findings(workflows) + _gke_cap_findings(workflows)
     routes = workflow_event_routes(workflows)
     for name, workflow in workflows.items():
         code = '\n'.join(re.sub(r'\s+#.*$', '', line) for line in _code(workflow))
+        if 'pull_request' in routes[name] and _GKE_ROUTE.search(code):
+            findings.append(f'{name} is reachable from pull_request and must not contain GKE routing')
         if _LARGER_RUNNER_KEY.search(code):
             findings.append(f'{name} must not define a larger_runner key; use the GCP fleet or hosted exceptions')
         timed = JOB_COMMANDS.get(name, {})
@@ -1433,6 +1632,23 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
         findings += [f'{name} is missing job {job}' for job in pinned if job not in jobs]
         for job, body in jobs.items():
             runs_on, uses = _job_values(body, 'runs-on'), _job_values(body, 'uses')
+            gke_pin = GKE_JOB_RUNNERS.get(name, {}).get(job)
+            has_gke = bool(_GKE_ROUTE.search(' '.join(runs_on)))
+            raw_runners = _job_values(body, 'runs-on', unquote=False)
+            if has_gke and (len(raw_runners) != 1
+                            or not _GKE_SCALE_LABEL.fullmatch(raw_runners[0])):
+                findings.append(f'{name} job {job} must use a bare scalar GKE scale-set name')
+            if has_gke and runs_on != [gke_pin]:
+                findings.append(f'{name} job {job} may use GKE routing only at its exact pinned job and label')
+            if has_gke and _job_values(body, 'container'):
+                findings.append(f'{name} job {job} must not declare a job container on GKE')
+            if has_gke and _job_values(body, 'services'):
+                findings.append(f'{name} job {job} must not declare job services on GKE')
+            if has_gke:
+                permissions = _effective_permissions(workflow, body)
+                if (_holds_credentials(workflow, body, effective_permissions=True)
+                        or any(re.search(r'\bid-token\b', value) for value in permissions)):
+                    findings.append(f'{name} job {job} must not expose credentials on GKE')
             runner_text = ' '.join(runs_on + _job_block(body, 'strategy'))
             if _RELEASE_POOL_LABEL.search(runner_text) and job not in fixed_release:
                 # No flat-peak.yml exception: event reachability alone cannot
@@ -1442,7 +1658,7 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
             if any(not value.startswith('./.github/workflows/') for value in uses):
                 findings.append(f'{name} job {job} calls a workflow the runner contract '
                                 'cannot see; call one under ./.github/workflows/')
-            credentials = _holds_credentials(workflow, body)
+            credentials = _holds_credentials(workflow, body, effective_permissions=has_gke)
             if job not in pinned:
                 if pinned and runs_on:
                     findings.append(f'{name} job {job} needs a pinned runner and time limit')
@@ -1474,6 +1690,19 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                 if any(re.search(r'\bPF_CI_LABELS["\']?\s*:', value) for value in environments):
                     findings.append(f'{name} job {job} must not set PF_CI_LABELS '
                                     'on an isolated release job')
+            elif gke_pin and job in fixed_hosted:
+                if _job_values(body, 'runs-on', unquote=False) != [gke_pin]:
+                    findings.append(f'{name} job {job} must run on {gke_pin}')
+                if credentials:
+                    findings.append(f'{name} job {job} must keep production credentials '
+                                    'on a hosted standard runner')
+                if (name == 'native-live.yml'
+                        or name == 'promote-baseline.yml'
+                        or name == 'ci-post.yml' and job not in (
+                            'preflight', 'preflight-slow', 'changes', 'build-gate')):
+                    environments = _job_values(workflow, 'env') + _job_values(body, 'env')
+                    if any(re.search(r'\bPF_CI_LABELS["\']?\s*:', value) for value in environments):
+                        findings.append(f'{name} job {job} must not set PF_CI_LABELS on a GKE job')
             elif fixed_hosted.get(job) == POST_RUNNER:
                 actual = _job_values(body, 'runs-on', unquote=False)
                 if [_runner_value(value) for value in actual] != [_runner_value(POST_RUNNER)]:
@@ -1540,7 +1769,7 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
             ('ci-post.yml', 'build-debug', POST_DEBUG_BUILD_STRATEGY, post_build_name(2),
              'only Ubuntu Debug shards on full events'),
             ('ci-post.yml', 'build-arm', POST_ARM_BUILD_STRATEGY, POST_ARM_BUILD_NAME,
-             'only hosted Linux arm64 Release/Debug cells on full events')):
+             'only Linux arm64 Release/Debug cells on full events')):
         if name not in workflows:
             continue
         build = _jobs(workflows[name]).get(job, '')
@@ -1704,8 +1933,8 @@ jobs:
   authz:
     name: authz
     # Preflight pins executable workflow lines after removing comment-only lines.
-    # authz uses hosted ubuntu-24.04; the App-token probe uses pf-gcp-post.
-    runs-on: ubuntu-24.04
+    # authz uses gke-2cpu-4gb-amd64; the App-token probe uses pf-gcp-post.
+    runs-on: gke-2cpu-4gb-amd64
     permissions: {}
     # No timeout-minutes: the owner's no-time-limits rule (check-no-time-limits refuses new ones).
     steps:
@@ -1879,7 +2108,7 @@ def authz_workflow_findings(workflow: str, name: str, aggregate: str) -> list[st
     steps = _steps(authz)
     step = steps[0].rstrip('\n') + '\n' if len(steps) == 1 else ''
     if (not jobs or next(iter(jobs)) != 'authz'
-            or not authz.startswith('\n' + _authz_header(workflow))
+            or not authz.startswith('\n' + _authz_header(name))
             or _job_values(authz, 'name') != ['authz']
             or _job_values(authz, 'permissions') != ['{}']
             or any(_job_values(authz, key) for key in ('needs', 'if', 'env', 'uses', 'strategy'))
@@ -1962,10 +2191,10 @@ def gated_workflow_findings(workflow: str, name: str) -> list[str]:
     steps = _steps(authz)
     step = steps[0].rstrip('\n') + '\n' if len(steps) == 1 else ''
     if (not jobs or _unparsed(workflow) or next(iter(jobs)) != 'authz'
-            or not authz.startswith('\n' + _authz_header(workflow))
+            or not authz.startswith('\n' + _authz_header(name))
             # Extra job keys such as continue-on-error can bypass refusal
             # without changing either the header or the single step's hash.
-            or _code(authz) != _code(_authz_header(workflow)) + ['    steps:'] + _code(step)
+            or _code(authz) != _code(_authz_header(name)) + ['    steps:'] + _code(step)
             or _job_values(authz, 'name') != ['authz']
             or _job_values(authz, 'permissions') != ['{}']
             or any(_job_values(authz, key) for key in ('needs', 'if', 'env', 'uses', 'strategy'))
@@ -2691,9 +2920,11 @@ def actionlint_runner_label_findings(source: Path) -> list[str]:
             findings.append(f'{path.name}: cannot parse jobs for literal runner labels')
             continue
         for job, body in _jobs(workflow).items():
-            for value in _job_values(body, 'runs-on'):
+            mapping = '\n'.join(_job_block(body, 'runs-on')[1:])
+            values = _job_values(mapping, 'labels') if mapping else _job_values(body, 'runs-on')
+            for value in values:
                 if not value.startswith('['):
-                    if value.startswith('pf-') and re.fullmatch(_LITERAL_RUNNER_LABEL, value):
+                    if value.startswith(('pf-', 'gke-')) and re.fullmatch(_LITERAL_RUNNER_LABEL, value):
                         if value not in declared:
                             findings.append(f'{path.name} job {job}: label "{value}" is not declared '
                                             f'in {config_name}')
@@ -2705,7 +2936,7 @@ def actionlint_runner_label_findings(source: Path) -> list[str]:
                     continue
                 labels = {token.strip('\'"') for token in re.findall(_LITERAL_RUNNER_LABEL, value)
                           if '${{' not in token}
-                if 'self-hosted' in labels:
+                if mapping or 'self-hosted' in labels:
                     for label in sorted(labels - declared):
                         findings.append(f'{path.name} job {job}: label "{label}" is not declared '
                                         f'in {config_name}')

@@ -1993,22 +1993,22 @@ class RulesetsProbeTests(unittest.TestCase):
         docs = (ROOT / "docs/ci.md").read_text()
         requirements = (
             'PR build/preflight and parity subset use `["self-hosted","pf-gcp-pr"]`;\n'
-            'post preflight/parity and credentialed docs use `["self-hosted","pf-gcp-post"]`.\n'
+            'post preflight/parity use bare GKE scale-set names; credentialed docs keep `["self-hosted","pf-gcp-post"]`.\n'
             'Post Release/Debug/kernel and native shards, post sanitizers and both native-live sanitizer\n'
-            'profiles use `["self-hosted","pf-gcp-post"]`. No job routes by event.',
+            'profiles use fixed bare GKE scale-set names directly in runner pods carrying the engine toolchain image and sudo. No job routes by event.',
             "The manual `release-ruleset-probe.yml` workflow runs `authz` on\n"
-            'hosted `ubuntu-24.04` and `probe` on `["self-hosted","pf-gcp-post"]`.',
+            'bare scalar `gke-2cpu-4gb-amd64` and `probe` on `["self-hosted","pf-gcp-post"]`.',
             "Release and promotion use the isolated release fleet:\n"
             "`release`, `notify-hub`, Linux x64 `prebuilt` and baseline `promote` use\n"
             '`["self-hosted","pf-gcp-main"]`.\n'
-            'The release ruleset probe runs secret-free `authz` on hosted `ubuntu-24.04` and\n'
+            'The release ruleset probe runs secret-free `authz` on bare scalar `gke-2cpu-4gb-amd64` and\n'
             '`probe` on `["self-hosted","pf-gcp-post"]`.',
             "Dispatch **Release ruleset probe** (`release-ruleset-probe.yml`) once from\n"
             "`main` to check actual ruleset visibility with the same App token mint as\n"
             "`release.yml`. The workflow file must be on the default branch, and the run\n"
             "must use `main`'s copy.\n"
             'The credentialed probe job runs on `["self-hosted","pf-gcp-post"]`, with\n'
-            'secret-free `authz` on hosted `ubuntu-24.04`.',
+            'secret-free `authz` on bare scalar `gke-2cpu-4gb-amd64`.',
             "`pf-gcp-main` admits only allowlisted workflows (an org runner-group restriction),\n"
             "so the one-time probe uses `pf-gcp-post`.",
             "The dispatch must run from `main`; the workflow itself refuses any other ref\n"
@@ -2301,6 +2301,12 @@ class WorkflowPinTests(unittest.TestCase):
     def workflow(self):
         return (ROOT / ".github/workflows/release.yml").read_text()
 
+    def assert_gke_build(self, body, label):
+        self.assertIn("    runs-on: " + label + "\n",
+                      body, "required build jobs must keep GKE routing")
+        self.assertNotRegex(body, r'''(?m)^    ['"]?container['"]?\s*:''',
+                            "required build jobs must run directly in the runner pod")
+
     def ci_post_build_names(self, jobs):
         """Derive release checks from complete shard matrices and the arm matrix."""
         self.assertNotIn("build-macos", jobs, "post-merge verification must be Linux-only")
@@ -2322,7 +2328,8 @@ class WorkflowPinTests(unittest.TestCase):
             self.assertEqual([value.strip() for value in types[1].split(",")], [build_type])
             platforms = re.findall(r"(?m)^          - os: (\S+)$", matrix[1])
             self.assertEqual(platforms, ["ubuntu-24.04"])
-            self.assertRegex(body, r'(?m)^    runs-on: \["self-hosted","pf-gcp-post"\]$')
+            self.assert_gke_build(body, {"build": "gke-32cpu-64gb-amd64",
+                                         "build-debug": "gke-16cpu-32gb-amd64"}[job_id])
             shards = re.findall(r"(?m)^        shard: \[([0-9, ]+)\]$", matrix[1])
             self.assertEqual(len(shards), 1)
             self.assertEqual([int(value.strip()) for value in shards[0].split(",")],
@@ -2349,14 +2356,13 @@ class WorkflowPinTests(unittest.TestCase):
         self.assertIsNotNone(types)
         build_types = [value.strip() for value in types[1].split(",")]
         self.assertCountEqual(build_types, ["Release", "Debug"])
-        runner = re.search(r"(?m)^    runs-on: (ubuntu-[0-9]{2}\.[0-9]{2}-arm)$", body)
-        self.assertIsNotNone(runner, "arm64 must use an explicit hosted Linux runner")
+        self.assert_gke_build(body, "gke-16cpu-32gb-arm64")
         name = re.search(r"(?m)^    name: (.+)$", body)
         self.assertIsNotNone(name)
         for build_type in build_types:
             displayed = name[1].replace("${{ matrix.build_type }}", build_type)
             self.assertNotIn("${{", displayed, "every name axis must be expanded")
-            self.assertEqual(displayed, f"build ({runner[1]}, {build_type})")
+            self.assertEqual(displayed, f"build (ubuntu-24.04-arm, {build_type})")
             expanded.append(displayed)
         return expanded
 
@@ -2377,6 +2383,24 @@ class WorkflowPinTests(unittest.TestCase):
                 jobs[job_id] = jobs[job_id].replace(before, before.rsplit(", ", 1)[0] + "]", 1)
                 with self.assertRaisesRegex(AssertionError, "no required shard may be dropped"):
                     self.ci_post_build_names(jobs)
+
+    def test_ci_post_required_build_jobs_reject_runner_or_container_drift(self):
+        workflow = (ROOT / ".github/workflows/ci-post.yml").read_text()
+        self.ci_post_build_names(_jobs(workflow))
+        for job, label in (("build", "gke-32cpu-64gb-amd64"),
+                           ("build-debug", "gke-16cpu-32gb-amd64"),
+                           ("build-arm", "gke-16cpu-32gb-arm64")):
+            for before, after, finding in (
+                    ("    runs-on: " + label, "    runs-on: pf-linux-x64-16",
+                     "required build jobs must keep GKE routing"),
+                    ("    steps:\n", "    container:\n      image: ubuntu:24.04\n    steps:\n",
+                     "required build jobs must run directly in the runner pod")):
+                with self.subTest(job=job, replacement=after):
+                    jobs = _jobs(workflow)
+                    self.assertIn(before, jobs[job])
+                    jobs[job] = jobs[job].replace(before, after, 1)
+                    with self.assertRaisesRegex(AssertionError, finding):
+                        self.ci_post_build_names(jobs)
 
     def test_prebuilt_matrix_and_release_notes_publish_only_linux(self):
         workflow = self.workflow()

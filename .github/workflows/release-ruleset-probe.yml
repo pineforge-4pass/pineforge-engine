@@ -12,8 +12,8 @@ jobs:
   authz:
     name: authz
     # Preflight pins executable workflow lines after removing comment-only lines.
-    # authz uses hosted ubuntu-24.04; the App-token probe uses pf-gcp-post.
-    runs-on: ubuntu-24.04
+    # authz uses gke-2cpu-4gb-amd64; the App-token probe uses pf-gcp-post.
+    runs-on: gke-2cpu-4gb-amd64
     permissions: {}
     # No timeout-minutes: the owner's no-time-limits rule (check-no-time-limits refuses new ones).
     steps:

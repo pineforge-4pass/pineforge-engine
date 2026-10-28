@@ -3,6 +3,7 @@
 #include <pineforge/detail/scratch_backing.hpp>
 #include <pineforge/detail/scratch_store.hpp>
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -42,7 +43,13 @@ inline constexpr std::size_t kPagesPerCommit =
 pineforge::detail::ScratchIoObserver set_command_scratch_io_observer(
     pineforge::detail::ScratchIoObserver observer) noexcept;
 
-struct CommandScratchByteBudget;
+struct CommandScratchByteBudget {
+    explicit CommandScratchByteBudget(std::uint64_t bytes) noexcept : limit(bytes) {}
+    bool reserve(std::uint64_t bytes) noexcept;
+    void release(std::uint64_t bytes) noexcept;
+    const std::uint64_t limit;
+    std::atomic<std::uint64_t> live_bytes{0};
+};
 using CommandScratchByteCap = std::shared_ptr<CommandScratchByteBudget>;
 
 // Each numeric registration starts a fresh run budget on this thread; zero
@@ -69,7 +76,7 @@ ScratchStatus command_scratch_io_status(int error) noexcept;
 // supported; data/full return programming_error. Arena faults return io_error
 // and carry the original ReportScratchIoError for the owner to rethrow.
 // Crossing K is typed report_sink_failed, reason arena_exhausted;
-// the hosting layer re-places the run on a larger arena. Its needed byte
+// a hosting layer may re-place the run on a larger arena. Its needed byte
 // argument is ceil(chunkCeil(required store extent) / f), not a shortfall.
 // The same policy applies at every arena size, including the default.
 // Without an attachment, the disk-file directory comes from
@@ -78,6 +85,10 @@ ScratchStatus command_scratch_io_status(int error) noexcept;
 // Query errors retain their errno. An explicit directory never falls back.
 // Tmpfs/ramfs is refused by filesystem type. The unique file is unlinked
 // before returning and its close-on-exec descriptor is closed on destruction.
+// Its first 64 KiB of extent stays resident; crossing that fixed per-store
+// share spills the whole prefix once and retains the existing file/read-cache
+// policy thereafter. The same buffer serves both modes; the three-store K
+// (including decorator metadata) is named in command_scratch_cache.hpp.
 // With no registration, PINEFORGE_COMMAND_SCRATCH_MAX_BYTES supplies a default
 // shared across live backings created on this thread with that default. When
 // set, it must be positive decimal uint64_t, even with an explicit registration;
@@ -88,5 +99,12 @@ ScratchStatus command_scratch_io_status(int error) noexcept;
 // OS setup failures throw std::system_error.
 std::unique_ptr<pineforge::detail::ScratchBacking> make_command_scratch_backing(
     std::size_t page_size);
+
+// Internal construction seam for spill-boundary/all-file tests. The resident
+// cap cannot exceed CachedScratchBacking::kCacheBytes; zero selects all-file.
+// Attached arenas already map their pages and keep their existing direct
+// admission/claim/durability policy, independently of this disk-front cap.
+std::unique_ptr<pineforge::detail::ScratchBacking> make_command_scratch_backing(
+    std::size_t page_size, std::size_t resident_bytes);
 
 } // namespace pineforge::detail

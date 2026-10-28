@@ -68,14 +68,14 @@ env:
   # pin is almost entirely cache hits.
   CCACHE_MAXSIZE: 2G
 
-# Both parity jobs follow canon authz on pf-gcp-post, with no hosted fallback.
+# Both parity jobs follow canon authz directly in gke-runners toolchain pods with sudo.
 # The build uses every core of the runner.
 # scripts/ci_preflight.py pins runners and limits.
 jobs:
   authz:
     name: authz
     # Fleet routing is fixed for this workflow; releases use pf-gcp-main.
-    runs-on: ubuntu-24.04
+    runs-on: gke-4cpu-8gb-amd64
     permissions: {}
     # No timeout-minutes: the owner's no-time-limits rule (check-no-time-limits refuses new ones).
     steps:
@@ -140,7 +140,7 @@ jobs:
   corpus-parity:
     needs: [authz]
     if: inputs.mode != 'subset' && github.event_name != 'pull_request'
-    runs-on: ["self-hosted","pf-gcp-post"]
+    runs-on: gke-16cpu-32gb-amd64
     env:
       PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64-16"]'
     # 16.3-26.2 min on the standard runner; 360 minutes is the platform maximum,
@@ -219,7 +219,7 @@ jobs:
   corpus-parity-subset:
     needs: [authz]
     if: inputs.mode == 'subset'
-    runs-on: ["self-hosted","pf-gcp-post"]
+    runs-on: gke-8cpu-16gb-amd64
     env:
       PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64-16"]'
     # 1.8-4.7 min on the standard runner; 360 minutes is the platform
