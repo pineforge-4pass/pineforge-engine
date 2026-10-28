@@ -128,6 +128,23 @@ unchanged except for two additive diagnostics keys, described below.
   per-record sink parse and the dense-script close path are separate work, not in
   this release.
 
+### Metrics-only `run_json` request
+
+- **`--metrics-only[=auto|legacy]` prints the report without its per-bar and per-trade arrays.**
+  The document is the ordinary document without `trades`, `equity_curve`,
+  `elapsed_seconds` and the two scratch-arena byte counters; every other key
+  keeps its name, value and order. A bare option means `auto`. With `auto`, a
+  native module that certifies itself takes the engine's no-curve metrics route
+  (Sharpe, Sortino, the monthly ratios, the equity summary and the trade
+  statistics are computed as the run goes), which saves 16 bytes of resident
+  memory per bar as measured; the document is byte for byte the one `legacy`
+  prints. A module certifies itself through one new optional export,
+  `strategy_metrics_only_capability_v1`; a module without it, `legacy`, or a
+  result the runner cannot accept keeps the actual equity curve, as before. The
+  option is refused together with an explicit report sink, a phase stream,
+  selected-window options, outputs, a benchmark run or symbol feeds. Without the
+  option nothing changes.
+
 ### Native live report stream
 
 - **Delta JSONL is opt-in; the default stream is unchanged.**
