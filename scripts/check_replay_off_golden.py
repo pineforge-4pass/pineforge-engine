@@ -57,6 +57,29 @@ def worker(runner_path, library, shape, primary):
     return runner.main(argv)
 
 
+def mask_build_identity(text, document):
+    """The report names the build that produced it (engine.version_string, a git
+    describe, and engine.commit_sha, the short commit). Two builds of different
+    commits can never share those bytes, so the two strings are replaced by a
+    fixed token; every other byte of the report is compared as produced."""
+    engine = document.get("engine")
+    if not isinstance(engine, dict):
+        raise RuntimeError("default report has no engine identity block")
+    masked = text
+    # The longer string first: the describe text may contain the short commit.
+    for key in ("version_string", "commit_sha"):
+        value = engine.get(key)
+        if not isinstance(value, str):
+            raise RuntimeError(f"engine.{key} is missing from the default report")
+        if not value:
+            continue
+        needle = json.dumps(value).encode("utf-8")
+        if masked.count(needle) < 1:
+            raise RuntimeError(f"engine.{key} not found in the raw report bytes")
+        masked = masked.replace(needle, b'"<build-identity>"')
+    return masked
+
+
 def measure(runner, library, shape, directory):
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "chart.csv").write_text(chart_text(shape), encoding="utf-8")
@@ -84,7 +107,7 @@ def measure(runner, library, shape, directory):
         for row in document.get("trades", ()):
             assert "recut" not in row and "settlement_index" not in row
         if mode == "default":
-            results["default_json"] = process.stdout
+            results["default_json"] = mask_build_identity(process.stdout, document)
         else:
             data = primary.read_bytes()
             assert data.endswith(b"\n") and b'"pf-report-sink"' in data
@@ -132,6 +155,9 @@ def main():
                     print(f"FAIL off-bytes {shape} {label}: measured {size} bytes, sha256 {digest}; "
                           f"recorded {want['bytes']} bytes, sha256 {want['sha256']!r}",
                           file=sys.stderr)
+                    # The raw text of a mismatch, so it can be diffed against the record.
+                    print(f"DUMP off-bytes {shape} {label}: "
+                          f"{data.decode('utf-8', 'backslashreplace')!r}", file=sys.stderr)
     return 1 if failed else 0
 
 
