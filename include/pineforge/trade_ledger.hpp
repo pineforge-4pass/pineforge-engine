@@ -22,6 +22,9 @@ inline namespace engine_script_run_v19 {
 // files. A separate, budgeted read cache retains numeric records and up to
 // kCacheStringBytes of decoded string bytes per row. Wider rows retain their
 // numeric records in the cache and use scratch only for string reads.
+// Scalar numeric misses read descriptors only, with a separate fixed
+// kResidentRows scan window (10,768 bytes including keys on 64-bit targets).
+// Numeric admission retains the older key on a cache-slot collision.
 // Owning Trade values still belong to readers.
 //
 // Reads own their values. No reference or contiguous pointer into an
@@ -95,7 +98,8 @@ public:
     void set_cache_rows(size_type rows);
     size_type cache_rows() const;
     // Accounted ledger/cache storage: rows*kLedgerEntryBytes + a fixed base
-    // (sizeof ledger + State). Excludes allocator overhead, scratch/OS pages,
+    // (sizeof ledger + State, including the numeric scan window).
+    // Excludes allocator overhead, scratch/OS pages,
     // configured directory strings, returned owning Trades and the explicit
     // legacy materialize() map. Validates the same row range as the setter.
     static size_type resident_cache_bytes(size_type rows);
@@ -119,7 +123,8 @@ public:
 
     // read() spans the whole exact source; at()/[] retain the checked
     // unsealed-window contract for existing settlement callers.
-    // Hits allocate only the owning strings already required by read().
+    // Packed hits allocate only the owning strings required by read(); a
+    // numeric-only entry first fills its existing inline string allowance.
     // Direct-mapped eviction above cache_rows(), or oversized strings, retains
     // the existing scratch path; a history loop can still cost O(T).
     Trade read(size_type global) const;
@@ -133,8 +138,11 @@ public:
     std::string entry_id_at(size_type global) const;
     // Pine field reads use the same check(global,true) as at(). A numeric
     // hit loads just its Record member, without constructing/copying a Trade
-    // or any string. A string hit copies only the requested packed bytes.
-    // Misses retain the numeric record and all strings fitting the allowance.
+    // or any string. Numeric misses use 64-row descriptor reads and no payload
+    // reads; a forward numeric scan is O(1) amortised work per field access
+    // even above the cache cap (the whole scan is O(T)). After lazy packing,
+    // a string hit copies only the requested packed bytes. Strings fitting
+    // the allowance are retained on their first string/full-row request.
     double pnl_at(size_type global) const;
     double pnl_pct_at(size_type global) const;
     double commission_at(size_type global) const;
