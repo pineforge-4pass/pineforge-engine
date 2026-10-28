@@ -664,7 +664,8 @@
       "matrix.submatrix",
       "matrix.concat",
       "matrix.reshape",
-      "matrix.restore"
+      "matrix.restore",
+      "matrix.diff"
      ]
     },
     "reason": {
@@ -679,7 +680,8 @@
       "from_col_after_to_col",
       "row_count_mismatch",
       "column_count_mismatch",
-      "element_count_mismatch"
+      "element_count_mismatch",
+      "dimension_mismatch"
      ]
     }
    },
@@ -697,6 +699,7 @@
     "matrix.col: column index out of range",
     "matrix.concat: column count mismatch",
     "matrix.concat: row count mismatch",
+    "matrix.diff: dimension mismatch",
     "matrix.get: column index out of range",
     "matrix.get: row index out of range",
     "matrix.new: negative dimensions",
