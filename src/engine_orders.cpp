@@ -399,14 +399,14 @@ struct TradeLedger::State {
     static constexpr size_type kBlockPayloadBytes = kResidentRows * kCacheStringBytes;
 
     // Numeric scans retain descriptors independently of cache-slot admission.
-    // This fixed window adds 10,768 bytes on 64-bit targets, including its
+    // This fixed window adds 64,528 bytes on 64-bit targets, including its
     // two keys; it neither allocates nor retains payload bytes.
     struct NumericWindow {
-        std::array<Record, kResidentRows> records{};
+        std::array<Record, kNumericWindowRows> records{};
         size_type first = 0, count = 0;
     };
     static_assert(sizeof(NumericWindow)
-                  == kResidentRows * sizeof(Record) + 2 * sizeof(size_type));
+                  == kNumericWindowRows * sizeof(Record) + 2 * sizeof(size_type));
     mutable NumericWindow numeric_window{};
     // Only misses update direction, leaving cache hits at one reference write.
     mutable size_type last_numeric_miss = 0;
@@ -553,7 +553,7 @@ struct TradeLedger::State {
             && global - numeric_window.first < numeric_window.count)
             return numeric_window.records[global - numeric_window.first];
 
-        const auto count = std::min(kResidentRows,
+        const auto count = std::min(kNumericWindowRows,
                                     descending ? global + 1 : resident_first - global);
         const auto first = descending ? global - (count - 1) : global;
         // Clear validity before I/O so a failed transfer cannot expose any
