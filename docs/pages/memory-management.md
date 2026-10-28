@@ -207,6 +207,17 @@ at 2 M bars), with no trade or equity array. Do not use it to verify the stream:
 measured jailed descriptor run carried no sha256 of the stream, so a caller has nothing there to compare
 the trailer against.
 
+The host reserves the caller's original stdout as a private report descriptor before argument parsing or
+strategy loading (`_ReportOutput` at `docker/run_json.py:7372`; host startup at
+`docker/run_json.py:7510`). It redirects native fd 1 to fd 2, and writes the summary and every typed
+failure through the saved descriptor. The native stream N stays on the descriptor supplied by the caller.
+The host refuses a report descriptor that shares a number or open file with N, the phase descriptor, or
+arena fd 5, using `run_request_invalid` (`_validate_report_fd_separation` at
+`docker/run_json.py:7472`). Native code runs in the same process and inherits the saved
+descriptor, so code that deliberately writes through that inherited file description can still affect
+the report. This transport arrangement isolates ordinary native fd 1 output; it is not a security
+boundary.
+
 **When the report is complete.** The verified trailer is the completion marker, and EOF alone is not.
 Read every record as provisional until the trailer's counts and sha256 equal what the reader counted and
 hashed. The reader `SinkReader` in
@@ -214,7 +225,8 @@ hashed. The reader `SinkReader` in
 after the trailer (`SinkReader._finish` at `docker/pf_sink.py:341-358`), and a stream that ends without a
 trailer raises `missing header or trailer`.
 
-**When it fails.** A failure of `run_json.py` itself is one failure line on stdout and exit status 1
+**When it fails.** A failure of `run_json.py` itself is one failure line on the reserved report channel
+and exit status 1
 (2 for the refusals above). The separate sink finalizer tool,
 `docker/pineforge_sink_finalize.py`, has its own exit statuses: 0 complete and verified, 2 usage error,
 3 malformed stream, 4 verification failure, 5 input or output failure, 6 end of input without a

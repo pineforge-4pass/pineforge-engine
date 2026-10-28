@@ -187,9 +187,9 @@ if [[ -f "${PINE}" ]]; then
     echo "[pineforge] transpiling strategy.pine ..." >&2
     if [[ "${SELECTED}" == "true" ]]; then
         INVENTORY_IN="${WORK}/request_feed_inventory.source.json"
-        run_transpile_with_inventory "${PINE}" "${GEN}" "${INVENTORY_IN}"   # set -e aborts (exit 5)
+        run_transpile_with_inventory "${PINE}" "${GEN}" "${INVENTORY_IN}" >&2   # set -e aborts (exit 5)
     else
-        run_transpile "${PINE}" "${GEN}"   # set -e aborts (exit 5) on failure
+        run_transpile "${PINE}" "${GEN}" >&2   # set -e aborts (exit 5) on failure
     fi
     SRC="${GEN}"
     TRANSPILED=true
@@ -201,7 +201,7 @@ elif [[ -f "${SRC_CPP}" ]]; then
         # Freeze the caller's bytes once into the private work dir (GEN). From here g++, the
         # binder and run_json.py's --generated-cpp all use that one file, so the caller's
         # mutable file is read only here. A failed copy ends the run before compile and run.
-        cp -- "${SRC_CPP}" "${GEN}" \
+        cp -- "${SRC_CPP}" "${GEN}" >&2 \
             || { echo "[pineforge] cannot snapshot strategy.cpp into the work dir" >&2; exit 3; }
         SRC="${GEN}"
     fi
@@ -229,7 +229,7 @@ g++ -std=c++17 -O2 -ffp-contract=off -fPIC -shared \
     -I/usr/include/eigen3 \
     "${SRC}" \
     -Wl,--whole-archive "${PREFIX}/lib/libpineforge.a" -Wl,--no-whole-archive \
-    -o "${SO}" \
+    -o "${SO}" >&2 \
     || { echo "[pineforge] compile failed" >&2; exit 3; }
 
 # --- Selected path: bind the inventory to the C++ and library just built. ---
@@ -246,7 +246,7 @@ if [[ "${SELECTED}" == "true" ]]; then
             --inventory "${INVENTORY_IN}" \
             --cpp "${SRC}" \
             --so "${SO}" \
-            --out "${BOUND_INVENTORY}" \
+            --out "${BOUND_INVENTORY}" >&2 \
             || { echo "[pineforge] request-feed inventory binding failed" >&2; exit 3; }
     else
         echo "[pineforge] no request-feed inventory for this strategy.cpp; none is passed on" >&2

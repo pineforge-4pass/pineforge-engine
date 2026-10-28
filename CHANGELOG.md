@@ -147,6 +147,17 @@ diagnostics keys, described below.
   up, not 5, different from any phase descriptor); a refusal ends the run with
   the usual entrypoint status. With the variable unset nothing changes.
 
+### Isolated report channel
+
+- The JSON host reserves the caller's stdout before parsing or loading a
+  strategy, redirects native fd 1 to stderr, and writes the report and typed
+  failures through the saved descriptor. FD sink records stay on their
+  caller-supplied stream, and descriptor collisions with the report channel,
+  phase channel, or arena slot use the existing `run_request_invalid` failure.
+  The loaded strategy remains in the same process and inherits the saved
+  descriptor, so this isolates ordinary native fd 1 output without creating a
+  security boundary.
+
 ### CI and release process
 
 - **Light jobs on a pinned hosted image.** The light, secret-free CI jobs run

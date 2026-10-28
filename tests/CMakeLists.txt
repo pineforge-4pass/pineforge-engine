@@ -3038,6 +3038,25 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX
     endif()
 endif()
 
+# The stdout contract fixture is a small real shared library loaded by the
+# Python host. Its native entry point can write fd 1, fail after that write,
+# and emit a deterministic empty sink stream.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
+    add_library(run_json_stdout_strategy MODULE
+        test_run_json_stdout_strategy.cpp ${PROJECT_SOURCE_DIR}/src/sha256.cpp)
+    target_include_directories(run_json_stdout_strategy PRIVATE
+        ${PROJECT_SOURCE_DIR}/include ${PROJECT_BINARY_DIR}/include
+        ${PROJECT_SOURCE_DIR}/src)
+    target_compile_options(run_json_stdout_strategy PRIVATE -ffp-contract=off)
+    set_target_properties(run_json_stdout_strategy PROPERTIES
+        PREFIX "" SUFFIX ".so" LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/run_json_stdout")
+    add_test(NAME test_run_json_stdout_contract
+        COMMAND ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider
+            ${PROJECT_SOURCE_DIR}/tests/test_run_json_stdout.py)
+    set_property(TEST test_run_json_stdout_contract APPEND PROPERTY ENVIRONMENT
+        "PINEFORGE_STDOUT_STRATEGY_SO=$<TARGET_FILE:run_json_stdout_strategy>")
+endif()
+
 # Recorded outputs through docker/run_json.py (--outputs): two strategy
 # libraries run as a process, one that records outputs
 # (outputs_fixture_strategy.cpp, a bare host with the per-library outputs
