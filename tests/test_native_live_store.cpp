@@ -248,7 +248,7 @@ std::uint64_t snapshot_bytes(const LedgerFiles& files) {
 }
 
 // Independent arithmetic from the admission contract. FULL fixtures use D=C1;
-// the default-cache fixture models the permitted resident-page counts below.
+// the default-cache fixture enumerates allowed requests without measuring Q.
 // Small input rows fit existing roots: C1=C0, checked after the write.
 // Neither refusal receipts nor the production estimator supply expectations.
 std::uint64_t checkpoint_contract_request(const LedgerFiles& files, std::uint64_t page,
@@ -360,6 +360,10 @@ void scheduled_checkpoint_budget() {
     }
 }
 
+// This row checks that the observed production-default request belongs to the
+// contract's allowed set and is no larger than the logical-page (FULL) request.
+// Admission at used + request and growth at most request show exact-limit
+// safety; this does not pin the estimator to the resident-page count.
 void cached_checkpoint_budget() {
     TempDir temp;
     constexpr std::uint64_t page = 4096;
