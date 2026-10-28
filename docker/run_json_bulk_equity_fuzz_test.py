@@ -1,38 +1,14 @@
-"""Deterministic differential fuzz of the bulk equity path of docker/run_json.py.
+"""Deterministic differential fuzz of fused equity assembly against frozen code.
 
-The bulk path accepts a strict subset of canonical E lines at C speed and hands
-every other byte to the unchanged strict reader. Its safety claim is: it never
-accepts what the strict reader rejects, never writes other bytes, and a refusal
-keeps its type, text, typed code and priority. run_json_bulk_equity_test.py pins
-35 named corruptions; this file attacks the same claim with generated inputs.
+Fixed seeds retain the generated numbers, corruptions, window sizes and page
+geometry. The frozen strict reader supplies report bytes and complete refusal
+envelopes; generated points independently pin the curve and its endpoints.
+Delegating probes count accepted proofs and bytes encoded into real artifacts.
 
-Every generator is a fixed-seed random.Random over integers (no clock, no
-entropy, no hash randomisation), so the id of a failing row names a case that
-reproduces on any host. A failure message prints family, seed, variant, window,
-point count and the exact mutation list. The strict side is always the existing
-report entry (run_json_bulk_equity_test._run: verify, build, stream) with
-run_json._BULK_E_ENABLED switched off; the bulk side is the same call on the
-same file with it switched on and a small _BULK_E_WINDOW, so line cuts land at
-every offset. Two independent anchors keep both sides from being wrong alike:
-the generator's own rows (expected equity_curve bytes and endpoints) and, for
-the single-mutation rows, the exact pf_sink refusal text each mutation must
-produce.
-
-A second family builds one valid sink of about 76 KiB (read-only, shared by its
-rows) and puts a single fault on, beside and far from the real 64 KiB direct-I/O
-page boundary of the sink reader, and at the edges between the 128-line batches in
-which the bulk path takes a run of E lines (the last line of a batch, the first two
-of the next, the first of the third). Every line index is read off the file's bytes;
-each fault must be refused by the strict reader with its named check at exactly
-that line (or be accepted, for integer -0), at the production window and at 97.
-
-The controls at the end break the bulk acceptance on purpose and require the
-same comparison to fail (the repr proof, the integer -0 grammar, the time range
-test, the reader's E count and its line number), and require the engagement
-check (json.loads count) to fail for a bulk path that never accepts anything.
-
-No row is skipped or disabled. Run on the lab's disk-backed workspace like the
-other run_json rows; docker/run_json_*_test.py is found by preflight.
+Post-verification tampering exercises both the surviving raw scan's completed
+prefix and the fused report's immutable verified artifacts. Page and batch edge
+faults retain their exact refusal line and priority. Deliberate mutants break
+repr identity, integer spelling, timestamp bounds, bookkeeping and engagement.
 """
 import hashlib
 import inspect
@@ -53,9 +29,10 @@ sys.path.insert(0, str(ROOT / "docker"))
 
 import pf_sink
 import run_json
+import run_json_fused_test_support as support
 import test_run_json_sink as ordinary
 import test_run_json_stream_fastpath as oracle
-from run_json_bulk_equity_test import I53, _run
+from run_json_bulk_equity_test import I53, _assert_scan, _run, _scan
 from run_json_trade_scan_test import _event, _point, _sink, _trade, _trailer_start
 
 
@@ -224,9 +201,8 @@ def _first_difference(left, right):
 def _assert_same(strict, actual, context):
     """The one comparison every family and every control uses.
 
-    Both ran the same file through the same entry; the only difference is the
-    bulk switch. Same refusal (type, text, code, code_args), same bytes written
-    before it, same endpoints."""
+    Frozen strict assembly and fused assembly read the same file. Refusal
+    envelopes, published bytes and verified endpoints must agree."""
     assert actual[1] == strict[1], (
         f"{context}: the refusal differs\n  strict: {strict[1]!r}\n  bulk:   {actual[1]!r}")
     assert actual[0] == strict[0], (
@@ -234,6 +210,7 @@ def _assert_same(strict, actual, context):
         f"{_first_difference(actual[0], strict[0])} ({len(actual[0])} vs {len(strict[0])} bytes)")
     assert actual[3] == strict[3], (
         f"{context}: the endpoints differ\n  strict: {strict[3]!r}\n  bulk:   {actual[3]!r}")
+    support.assert_same(actual[4], strict[4])
 
 
 def _assert_oracle(spec, outcome, context):
@@ -245,7 +222,7 @@ def _assert_oracle(spec, outcome, context):
 
 
 def _assert_engaged(spec, strict, actual, context):
-    """json.loads stays O(1) in the E count: the bulk path really accepted its lines.
+    """Real fused proofs and encoded artifact rows cover every canonical point.
 
     Without this a bulk path that always falls back would make every
     comparison trivially equal."""
@@ -253,9 +230,9 @@ def _assert_engaged(spec, strict, actual, context):
     assert bulk["verify"] <= 2 + spec.others, (
         f"{context}: verify decoded {bulk['verify']} documents for {points} points "
         f"(header, trailer and {spec.others} other records allow {2 + spec.others})")
-    assert bulk["copy"] <= 2 + spec.trades, (
-        f"{context}: the copy decoded {bulk['copy']} documents for {points} points "
-        f"(two headers and {spec.trades} trades allow {2 + spec.trades})")
+    assert bulk["copy"] == 0, f"{context}: artifact readback decoded JSON"
+    assert bulk["bulk_e"] == bulk["encoded_e"] == points, (
+        f"{context}: proved {bulk['bulk_e']} and encoded {bulk['encoded_e']} of {points} points")
     assert bulk["decode_e"] == bulk["dump_e"] == 0, f"{context}: per-point decode or dump ran"
     assert base["verify"] >= points and base["copy"] >= points, (
         f"{context}: the strict path no longer decodes per point, so the counter is blind")
@@ -821,7 +798,7 @@ def _context(label, case):
 
 
 def _execute(tmp_path, monkeypatch, case, patches=()):
-    """Strict then bulk, on the very same mutated file, through the existing report entry."""
+    """Frozen strict assembly, then fused assembly, on the same mutated file."""
     with _sink(tmp_path, case.spec.rows, verify=False) as (sink, library, report):
         Path(sink.path).write_bytes(case.mutated.raw)
         if case.mutated.receipt is not None:
@@ -843,7 +820,10 @@ def test_generated_valid_sinks_are_byte_identical_and_really_bulk(tmp_path, monk
     spec = _spec(rng, count=rng.randint(513, 1100) if seed % 8 == 0 else None,
                  large_event=seed % 8 == 4)
     windows = (rng.randint(97, 160), rng.randint(161, 700), rng.randint(701, 5000), 64 * 1024)
-    with _sink(tmp_path, spec.rows, verify=False) as (sink, library, report):
+    with _sink(tmp_path, spec.rows) as (sink, library, report):
+        scan_reference = oracle._Destination()
+        strict_scan = _scan(sink, monkeypatch, False, destination=scan_reference)
+        assert strict_scan[1] is None
         reference = oracle._Destination()
         strict = _run(sink, library, report, monkeypatch, False, destination=reference)
         _assert_oracle(spec, strict, f"valid seed={seed} strict")
@@ -851,9 +831,14 @@ def test_generated_valid_sinks_are_byte_identical_and_really_bulk(tmp_path, monk
             context = (f"valid seed={seed} window={window} points={len(spec.points)} "
                        f"others={spec.others}")
             destination = oracle._Destination()
+            scan_destination = oracle._Destination()
             with monkeypatch.context() as patch:
                 patch.setattr(run_json, "_BULK_E_WINDOW", window, raising=True)
                 actual = _run(sink, library, report, patch, True, destination=destination)
+                actual_scan = _scan(sink, patch, True, destination=scan_destination)
+            _assert_scan(actual_scan, strict_scan)
+            assert scan_destination.calls == scan_reference.calls, (
+                f"{context}: standalone array write boundaries differ")
             _assert_same(strict, actual, context)
             assert destination.calls == reference.calls, f"{context}: write boundaries differ"
             _assert_oracle(spec, actual, context)
@@ -997,14 +982,16 @@ def _tamper(rng, raw):
 
 
 @pytest.mark.parametrize("seed", SEEDS, ids=SEED_IDS)
-def test_tampering_after_verification_ends_like_the_strict_path(tmp_path, monkeypatch, seed):
-    """The copy pass sees different bytes than verify did, with size and inode kept."""
+def test_tampered_source_scan_and_fused_artifacts_match_frozen(tmp_path, monkeypatch, seed):
+    """Keep scan refusals, reject corrupted reads, and publish only proved bytes."""
     rng = _rng("tamper", seed)
     spec = _spec(rng)
     with _sink(tmp_path, spec.rows) as (sink, library, report):
         path = Path(sink.path)
         raw = path.read_bytes()
         cut = _trailer_start(raw)
+        original = _run(sink, library, report, monkeypatch, False)
+        _assert_oracle(spec, original, f"tamper seed={seed} original")
         for variant in range(TAMPER_VARIANTS):
             tampered, offset, note = _tamper(_rng("tamper", seed, variant + 1), raw)
             window = _window(_rng("tamper", seed, 100 + variant))
@@ -1012,17 +999,33 @@ def test_tampering_after_verification_ends_like_the_strict_path(tmp_path, monkey
                        f"points={len(spec.points)}: {note}")
             assert len(tampered) == len(raw) and tampered != raw, context
             path.write_bytes(tampered)
-            strict = _run(sink, library, report, monkeypatch, False,
-                          copy_only=True, equity_only=True)
+            strict = _scan(sink, monkeypatch, False)
             with monkeypatch.context() as patch:
                 patch.setattr(run_json, "_BULK_E_WINDOW", window, raising=True)
-                actual = _run(sink, library, report, patch, True,
-                              copy_only=True, equity_only=True)
-            _assert_same(strict, actual, context)
+                actual = _scan(sink, patch, True)
+            _assert_scan(actual, strict)
             if offset < cut:
-                # The digest covers every body byte, so the strict pass must fail,
-                # at a format error or at the end-of-scan comparison.
                 assert strict[1] is not None, f"{context}: the strict path accepted a tampered body"
+            strict = _run(sink, library, report, monkeypatch, False)
+            with monkeypatch.context() as patch:
+                patch.setattr(run_json, "_BULK_E_WINDOW", window, raising=True)
+                actual = _run(sink, library, report, patch, True)
+            _assert_same(strict, actual, context + " corrupted read")
+            if offset < cut:
+                assert strict[1] is not None, f"{context}: corrupted body was verified"
+            path.write_bytes(raw)
+
+            def rewrite_after_read(target, native):
+                path.write_bytes(tampered)
+
+            audit = support.SinkIO(sink.path)
+            with monkeypatch.context() as patch:
+                patch.setattr(run_json, "_BULK_E_WINDOW", window, raising=True)
+                with audit.install(patch):
+                    stable = _run(
+                        sink, library, report, patch, True, after_verify=rewrite_after_read)
+            _assert_same(original, stable, context + " verified artifacts")
+            audit.assert_one_pass(raw)
     # (the sink and its temporary file are closed by _sink)
 
 
@@ -1381,16 +1384,24 @@ def test_a_valid_sink_with_an_equity_line_across_the_page_boundary_is_bulk(
         return fill(self)
 
     context = f"page valid window={window}"
-    with _sink(tmp_path, spec.rows, verify=False) as (sink, library, report):
+    with _sink(tmp_path, spec.rows) as (sink, library, report):
         assert Path(sink.path).read_bytes() == paged.raw, context
+        scan_reference = oracle._Destination()
+        strict_scan = _scan(sink, monkeypatch, False, destination=scan_reference)
+        assert strict_scan[1] is None
         reference = oracle._Destination()
         strict = _run(sink, library, report, monkeypatch, False, destination=reference)
         _assert_oracle(spec, strict, context + " strict")
         destination = oracle._Destination()
+        scan_destination = oracle._Destination()
         with monkeypatch.context() as patch:
             patch.setattr(run_json, "_BULK_E_WINDOW", window, raising=True)
             patch.setattr(run_json._BulkEquityFile, "_fill", spy, raising=True)
             actual = _run(sink, library, report, patch, True, destination=destination)
+            actual_scan = _scan(sink, patch, True, destination=scan_destination)
+    _assert_scan(actual_scan, strict_scan)
+    assert scan_destination.calls == scan_reference.calls, (
+        f"{context}: standalone array write boundaries differ")
     _assert_same(strict, actual, context)
     assert destination.calls == reference.calls, f"{context}: write boundaries differ"
     _assert_oracle(spec, actual, context)
@@ -1528,7 +1539,7 @@ def test_control_c_a_bulk_path_that_never_engages_fails_the_engagement_check(
     with _sink(tmp_path, spec.rows, verify=False) as (sink, library, report):
         strict = _run(sink, library, report, monkeypatch, False)
         if never == "switch-off":
-            silent = _run(sink, library, report, monkeypatch, False)
+            silent = _run(sink, library, report, monkeypatch, True, bulk=False)
         else:
             with monkeypatch.context() as patch:
                 patch.setattr(run_json, "_bulk_equity", lambda raw: None, raising=True)
@@ -1536,7 +1547,7 @@ def test_control_c_a_bulk_path_that_never_engages_fails_the_engagement_check(
     # Exactly the false success to prevent: identical bytes and refusals ...
     _assert_same(strict, silent, f"control {never}")
     _assert_oracle(spec, silent, f"control {never}")
-    # ... which only the json.loads count can tell from a real bulk run.
+    # ... which the JSON, proof and artifact probes distinguish from real bulk work.
     with pytest.raises(AssertionError):
         _assert_engaged(spec, strict, silent, f"control {never}")
 
