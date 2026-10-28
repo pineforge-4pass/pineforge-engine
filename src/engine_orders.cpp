@@ -395,7 +395,7 @@ struct TradeLedger::State {
     // cache. Keep the requested row available to the current accessor after
     // later rows replace its direct-mapped slot.
     mutable CacheEntry block_result{};
-    static constexpr size_type kBlockPayloadBytes = 64U * 1024U;
+    static constexpr size_type kBlockPayloadBytes = kResidentRows * kCacheStringBytes;
 
     struct BlockExtent {
         std::uint64_t offset = 0;
@@ -494,10 +494,11 @@ struct TradeLedger::State {
         return remember(global, descriptor(global));
     }
     const CacheEntry& load_block(size_type global) const {
-        // These fixed buffers total 92,736 bytes on the 64-bit build:
-        // 10,752 B descriptors, 65,536 B payload, 8,192 B packed strings
-        // and 8,192 B extent metadata, plus a small validity array. They are
-        // stack storage and do not grow with the ledger population.
+        // These five fixed arrays total 35,392 bytes on the 64-bit build:
+        // 64 * 168 descriptors + 64 * 128 payload + 64 * 128 packed strings
+        // + (64 * 4) * 32 extent metadata + 64 * 1 validity
+        // = 10,752 + 8,192 + 8,192 + 8,192 + 64. This stack workspace
+        // does not grow with the ledger population.
         std::array<Record, kResidentRows> records{};
         std::array<char, kBlockPayloadBytes> payload_bytes{};
         std::array<char, kResidentRows * kCacheStringBytes> strings{};
@@ -527,6 +528,9 @@ struct TradeLedger::State {
 
             size_type packed_offset = 0;
             for (const auto text : texts) {
+                // A corrupt extent in any packable neighbour can make a
+                // healthy requested row throw; scratch corruption fails the
+                // run anyway, even when the requested row is intact.
                 validate_string(text);
                 const auto length = static_cast<size_type>(text.length);
                 if (length != 0) {
@@ -561,27 +565,19 @@ struct TradeLedger::State {
             }
             const auto range_start = extents[begin].offset;
             const auto range_length = range_end - range_start;
-            if (range_length <= kBlockPayloadBytes) {
-                payload.read(range_start, payload_bytes.data(),
-                             static_cast<size_type>(range_length));
-                for (size_type i = begin; i < finish; ++i) {
-                    const auto& extent = extents[i];
-                    const auto relative = static_cast<size_type>(extent.offset - range_start);
-                    std::copy_n(payload_bytes.data() + relative, extent.length,
-                                strings.data() + extent.row * kCacheStringBytes
-                                    + extent.packed_offset);
-                }
-            } else {
-                // Valid packed rows have at most 128 bytes of payload. This
-                // path handles sparse replacement extents without allocating
-                // a buffer proportional to their address span.
-                for (size_type i = begin; i < finish; ++i) {
-                    const auto& extent = extents[i];
-                    payload.read(extent.offset,
-                                 strings.data() + extent.row * kCacheStringBytes
-                                     + extent.packed_offset,
-                                 extent.length);
-                }
+            // Only touching/overlapping extents merge, so a range is their
+            // union: at most 64 packable rows * 128 bytes = 8,192 bytes.
+            if (range_length > payload_bytes.size())
+                throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                               "trade ledger: block payload exceeds workspace");
+            payload.read(range_start, payload_bytes.data(),
+                         static_cast<size_type>(range_length));
+            for (size_type i = begin; i < finish; ++i) {
+                const auto& extent = extents[i];
+                const auto relative = static_cast<size_type>(extent.offset - range_start);
+                std::copy_n(payload_bytes.data() + relative, extent.length,
+                            strings.data() + extent.row * kCacheStringBytes
+                                + extent.packed_offset);
             }
             begin = finish;
         }
