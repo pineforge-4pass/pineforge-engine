@@ -13209,6 +13209,41 @@
    "ordinal": 1
   },
   {
+   "file": "src/detail/udt_graph.cpp",
+   "symbol": "store_",
+   "scope": [
+    "namespace pineforge :: detail :: o1 #1",
+    "void UdtGraph :: resize_edges ( Id id , std :: uint64_t count ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "store_ . resize ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/detail/udt_graph.cpp",
+   "symbol": "store_",
+   "scope": [
+    "namespace pineforge :: detail :: o1 #1",
+    "void UdtGraph :: resize_payload ( Id id , std :: uint64_t bytes ) #1",
+    "if ( bytes > n . payload_bytes ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "store_ . resize ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/detail/udt_graph.cpp",
+   "symbol": "store_",
+   "scope": [
+    "namespace pineforge :: detail :: o1 #1",
+    "void UdtGraph :: resize_payload ( Id id , std :: uint64_t bytes ) #1",
+    "else #1"
+   ],
+   "cls": "grow",
+   "spelling": "store_ . resize ( . . . )",
+   "ordinal": 1
+  },
+  {
    "file": "src/detail/o1_store.cpp",
    "symbol": "<temp:string>",
    "scope": [
