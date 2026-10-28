@@ -2,6 +2,7 @@
 
 #include <pineforge/detail/scratch_errors.hpp>
 #include <pineforge/detail/scratch_tables.hpp>
+#include <pineforge/detail/run_usage.hpp>
 
 #include <algorithm>
 #include <array>
@@ -125,6 +126,7 @@ public:
         zero();
     }
     ~ScratchSlab() {
+        for (std::size_t i = 0; i < regions_.size(); ++i) deactivate(i);
         ::operator delete(allocation_,
             std::align_val_t{static_cast<std::size_t>(kScratchPageSize)});
     }
@@ -137,6 +139,16 @@ public:
     const Layout& layout() const noexcept { return layout_; }
     const std::array<Region, kScratchRegionCount>& regions() const noexcept { return regions_; }
     const Region& region(ScratchResource resource) const { return regions_[index(resource)]; }
+
+    // Activity belongs to the shared logical region, not each borrowing
+    // ScratchFile. Construction alone does not count unused slab resources.
+    void activate(ScratchResource resource) {
+        const auto i = index(resource);
+        if (!usage_active_[i]) {
+            usage_active_[i] = true;
+            run_usage_scratch_open(regions_[i].logical_extent);
+        }
+    }
 
     // Read-only reservation: neither bytes nor logical_extent change, even
     // on success. Backend row/key tickets must precede their own first mutation.
@@ -166,6 +178,8 @@ public:
     void extend(ScratchResource resource, std::uint64_t new_extent) {
         require_extend(resource, new_extent);
         auto& item = regions_[index(resource)];
+        activate(resource);
+        run_usage_scratch_resize(item.logical_extent, std::max(item.logical_extent, new_extent));
         item.logical_extent = std::max(item.logical_extent, new_extent);
     }
 
@@ -200,6 +214,9 @@ public:
         if (length == 0) return;
         if (!source) throw AuxiliaryScratchIoError(EINVAL, "scratch write null source");
         std::memcpy(item.base + static_cast<std::size_t>(offset), source, length);
+        activate(resource);
+        run_usage_scratch_resize(item.logical_extent,
+            std::max(item.logical_extent, offset + static_cast<std::uint64_t>(length)));
         item.logical_extent = std::max(item.logical_extent,
                                       offset + static_cast<std::uint64_t>(length));
     }
@@ -221,14 +238,25 @@ public:
     }
     void reset() noexcept {
         zero();
-        for (auto& item : regions_) item.logical_extent = 0;
+        for (std::size_t i = 0; i < regions_.size(); ++i) {
+            deactivate(i);
+            regions_[i].logical_extent = 0;
+        }
     }
     void reset(ScratchResource resource) {
         zero(resource);
-        regions_[index(resource)].logical_extent = 0;
+        const auto i = index(resource);
+        deactivate(i);
+        regions_[i].logical_extent = 0;
     }
 
 private:
+    void deactivate(std::size_t i) noexcept {
+        if (usage_active_[i]) {
+            run_usage_scratch_close(regions_[i].logical_extent);
+            usage_active_[i] = false;
+        }
+    }
     static std::size_t index(ScratchResource resource) {
         const auto word = static_cast<std::uint32_t>(resource);
         if (word < 1 || word > kScratchRegionCount)
@@ -244,6 +272,9 @@ private:
     const Layout layout_;
     std::uint8_t* const allocation_;
     std::array<Region, kScratchRegionCount> regions_{};
+    // The slab is shared heap state; none of these flags is embedded in a
+    // ScratchFile, IdPairScratchFile, or a fixed fold segment.
+    std::array<bool, kScratchRegionCount> usage_active_{};
 };
 
 } // namespace pineforge::detail

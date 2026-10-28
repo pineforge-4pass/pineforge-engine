@@ -49,5 +49,24 @@ def test_receipt_forwards_every_field_and_failure_usage_is_last():
     assert usage_doc["usage"] == {**expected, "phases_ns": {"serialization": 9}}
 
 
+def test_unmeasured_scratch_values_and_mask_are_forwarded():
+    class ScratchUnmeasuredLibrary(ReceiptLibrary):
+        def pf_run_usage_v1(self, out):
+            super().pf_run_usage_v1(out)
+            receipt = ctypes.cast(
+                out, ctypes.POINTER(run_json.RunUsageC)).contents
+            receipt.scratch_file_bytes_peak = 0
+            receipt.scratch_file_count_peak = 0
+            # Public REPORT_BYTES, SCRATCH_BYTES and SCRATCH_COUNT bits.
+            receipt.unmeasured_mask = (1 << 4) | (1 << 5) | (1 << 6)
+            return 0
+
+    usage = run_json._read_run_usage(ScratchUnmeasuredLibrary())
+    assert usage["scratch_file_bytes_peak"] == 0
+    assert usage["scratch_file_count_peak"] == 0
+    assert usage["unmeasured_mask"] == (1 << 4) | (1 << 5) | (1 << 6)
+    assert usage["cpu_user_ns"] == 17
+
+
 if __name__ == "__main__":
     raise SystemExit(0)

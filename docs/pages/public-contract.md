@@ -330,7 +330,7 @@ are bytes except `scratch_file_count_peak`, `sink_rows_written`, and
 | `peak_rss_bytes` | Process `ru_maxrss`, converted to bytes for the host platform; it is not an allocation or cgroup counter. |
 | `run_wall_ns` | Monotonic time from run entry through the query; it includes engine cleanup before the query. |
 | `arena_high_water_bytes`, `arena_capacity_bytes` | Claimed high water and supplied capacity of the attached scratch arena; ordinary files are excluded. With no arena, both are measured as zero. |
-| `scratch_file_bytes_peak`, `scratch_file_count_peak` | Peak logical bytes and number of open engine-owned `ScratchFile` regions, including regions held by engine scratch backings; the final report file and host files are excluded. |
+| `scratch_file_bytes_peak`, `scratch_file_count_peak` | Peak logical bytes and number of open engine scratch regions, including ordinary files, arena regions and active slab resources. Shared slab resources count once. Clearing a region removes its live bytes and count, while the peak remains. The final report file and host files are excluded. |
 | `sink_bytes_written`, `sink_rows_written` | Logical sink bytes including framing, records and trailer, and emitted data-row count excluding framing; absent when no sink was installed. |
 | `report_bytes` | Final host report size when the engine knows it; this implementation marks it `UNMEASURED` because JSON serialization belongs to the host. |
 | `bars_processed` | Completed script bars dispatched by the engine. |
@@ -339,7 +339,12 @@ are bytes except `scratch_file_count_peak`, `sink_rows_written`, and
 `PF_RUN_USAGE_UNMEASURED_CPU_SYSTEM` cover unavailable process clocks;
 `PF_RUN_USAGE_UNMEASURED_SINK_BYTES` and
 `PF_RUN_USAGE_UNMEASURED_SINK_ROWS` cover runs without a sink; and
-`PF_RUN_USAGE_UNMEASURED_REPORT_BYTES` covers the host-owned report size. A
+`PF_RUN_USAGE_UNMEASURED_REPORT_BYTES` covers the host-owned report size.
+`PF_RUN_USAGE_UNMEASURED_SCRATCH_BYTES` and
+`PF_RUN_USAGE_UNMEASURED_SCRATCH_COUNT` cover overflow of the fixed
+256-entry ordinary-file registry. They remain set for the process lifetime,
+including later runs: an unregistered file can remain open across runs.
+Arena and slab regions do not consume registry entries. A
 set bit means that field was not measured, and the corresponding value is zero
 only because that bit is set.
 Zero is a measured value for an attached-arena absence and for genuine empty

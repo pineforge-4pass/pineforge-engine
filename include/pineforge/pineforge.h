@@ -2004,8 +2004,12 @@ PF_API int strategy_set_symbol_feed_borrowed_v1(
  *  time from run entry through this query. Arena bytes are the supplied arena
  *  capacity and claimed high water; they exclude ordinary files. Scratch
  *  bytes and count cover engine-owned open ScratchFile regions and exclude
- *  the sink's final report file. Sink bytes include the sink header, records
- *  and trailer when present; sink rows exclude those framing lines. Report
+ *  the sink's final report file. Slab regions are counted once per resource,
+ *  including when several owners share that resource. If the fixed 256-entry
+ *  ordinary-file tracker overflows, both scratch fields are zero with their
+ *  UNMEASURED bits set for the remaining process lifetime. Sink bytes include
+ *  the sink header, records and trailer when present; sink rows exclude those
+ *  framing lines. Report
  *  bytes are zero with #PF_RUN_USAGE_UNMEASURED_REPORT_BYTES because final
  *  JSON serialization is owned by the host. A set bit in `unmeasured_mask`
  *  means the corresponding value was not measured; zero never means
@@ -2035,6 +2039,8 @@ struct pf_run_usage_v1 {
 #define PF_RUN_USAGE_UNMEASURED_SINK_BYTES    (UINT64_C(1) << 2)
 #define PF_RUN_USAGE_UNMEASURED_SINK_ROWS     (UINT64_C(1) << 3)
 #define PF_RUN_USAGE_UNMEASURED_REPORT_BYTES  (UINT64_C(1) << 4)
+#define PF_RUN_USAGE_UNMEASURED_SCRATCH_BYTES (UINT64_C(1) << 5)
+#define PF_RUN_USAGE_UNMEASURED_SCRATCH_COUNT (UINT64_C(1) << 6)
 PF_STATIC_ASSERT(sizeof(struct pf_run_usage_v1) == 112);
 
 /** Returns 0 and fills the receipt, or -1 without changing it. */
