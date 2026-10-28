@@ -1836,7 +1836,7 @@ class PostFleetRunnerPolicy(unittest.TestCase):
             '`ci.yml` authz and `docs.yml` authz/build use `["self-hosted","pf-gcp-pr"]`; '
             'hosted `ubuntu-24.04` runs admission, `legs` and `result` jobs; '
             'secret-free post guards and aggregates use bare scalar GKE names. '
-            'These light, secret-free jobs need no VM-only tools, mounts or caches.',
+            'The hosted and GKE light jobs are secret-free and need no VM-only tools, mounts or caches.',
             'The seven `ci-post.yml` light jobs use `gke-2cpu-4gb-amd64`; called parity/native light jobs use '
             '`gke-4cpu-8gb-amd64` to satisfy the per-label cap, without a weight claim.',
             'Local reusable calls cannot mix PR and GKE jobs. The full post call graph expands to 36 GKE job instances: '

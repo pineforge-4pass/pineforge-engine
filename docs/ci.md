@@ -64,7 +64,7 @@ admit is hosted, while PR preflight, proof legs and parity use bare GKE scale-se
 credentialed post work keeps its protected `["self-hosted","pf-gcp-post"]` fleet.
 Post Release/Debug/kernel and native shards, post sanitizers and both native-live sanitizer
 profiles use fixed bare GKE scale-set names directly in runner pods carrying the engine toolchain image and sudo. No job routes by event.
-`ci.yml` authz and `docs.yml` authz/build use `["self-hosted","pf-gcp-pr"]`; hosted `ubuntu-24.04` runs admission, `legs` and `result` jobs; secret-free post guards and aggregates use bare scalar GKE names. These light, secret-free jobs need no VM-only tools, mounts or caches.
+`ci.yml` authz and `docs.yml` authz/build use `["self-hosted","pf-gcp-pr"]`; hosted `ubuntu-24.04` runs admission, `legs` and `result` jobs; secret-free post guards and aggregates use bare scalar GKE names. The hosted and GKE light jobs are secret-free and need no VM-only tools, mounts or caches.
 The seven `ci-post.yml` light jobs use `gke-2cpu-4gb-amd64`; called parity/native light jobs use `gke-4cpu-8gb-amd64` to satisfy the per-label cap, without a weight claim.
 Local reusable calls cannot mix PR and GKE jobs. The full post call graph expands to 36 GKE job instances: amd64 32/16/8/4/2 CPU labels carry 8/7/7/5/7 jobs and arm64 16 CPU carries 2; each label's static cap is 8.
 
@@ -1626,7 +1626,7 @@ refuses all PR events. Reusable workflows inherit their caller's event.
 `workflow_event_routes` and `workflow_fleet_findings` in `scripts/ci_preflight.py`
 follow local calls to a fixed point, refuse mixed event classes and require
 literal VM arrays or exact bare scalar GKE scale-set names outside hosted pins; job conditions cannot excuse routing.
-Fork PRs on hosted runners run without our secrets, so the VM-only fork-refusal hook is not needed.
+Fork PRs on hosted runners run without our secrets, so the VM-only fork-refusal hook is not needed there; the `pf-gcp-pr` jobs (`ci.yml` authz, `docs.yml` authz and build) are VM jobs where that hook applies.
 GKE jobs carry no deployment secrets, effective id-token permissions or environment; pull_request workflows cannot name GKE routing. Runner-group workflow/ref allowlists must admit the post-only workflows at refs/heads/main before they can acquire pods. GKE jobs start only from gke-pr.yml, ci-post.yml, corpus-parity.yml, native-live.yml, docs-post.yml, release-ruleset-probe.yml and promote-baseline.yml at refs/heads/main (the runner group lists those workflow refs); a dispatch from another ref queues without a runner.
 Rollback may restore an earlier GCP fleet pin; paid larger-runner labels remain refused.
 
