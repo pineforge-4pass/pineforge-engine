@@ -161,7 +161,7 @@ The carried declaration fields are visible in `PineStrategyConfig` at
 | --- | --- |
 | pyramiding | Source entry admission policy, including pending/same-point rules. The optional generic cap is `max_open_lots` at `include/pineforge/native_run_spec.hpp:664`; the Pine projection deliberately leaves it unset (the `max_open_lots` setting spelling is at `src/source/pine_adapter.cpp:2830`). Do not assume this caps strategy.order or use it as an unconditional H. |
 | calc_on_order_fills | Extra source callbacks. The adapter passes its 1<<20 guard `kCoofLoopGuard` through the native cadence at `src/source/pine_adapter.cpp:3011`; the `kCoofLoopGuard` literal is declared at `include/pineforge/source/pine_adapter.hpp:76`. The native point budget is a callback bound, not a total fill bound. |
-| max_recalculations_per_point | Further executions still apply after callbacks stop; see the cadence comment and `max_recalculations_per_point` declaration at `include/pineforge/native_run_spec.hpp:686-695`. The actual counter check is `src/native_execution_consumer.cpp:7770`. |
+| max_recalculations_per_point | Further executions still apply after callbacks stop; see the cadence comment and `max_recalculations_per_point` declaration at `include/pineforge/native_run_spec.hpp:686-695`. The actual counter check is `src/native_execution_consumer.cpp:8121`. |
 | first-open COOF chain | A second source-side guard exists at `src/source/pine_scheduler_native.cpp:888`. Count this source path; a native budget of 8 is not Pine's bound. |
 | process_orders_on_close | Adds a matching opportunity after calculation; projection at `src/source/pine_adapter.cpp:2823`. It does not impose an order/trade count. |
 | default_qty, margin, initial capital | Admission/sizing predicates can tighten a separately proved schedule. They provide no universal positive minimum close quantity or minimum loss, hence no universal T. Margin can create additional reductions. |
@@ -557,8 +557,8 @@ non-command certificates exactly.
 
 These formulas apply to the EngineRecorded streamed invocation. The
 selected recorder appends its anchor and selected observations in one
-writer (`equity_scratch` append at `src/engine_report.cpp:1215`), and capture transfers that writer as `metric_curve`
-instead of copying its prefix (`src/native_execution_consumer.cpp:12920`).
+writer (`equity_scratch` append at `src/engine_report.cpp:1217`), and capture transfers that writer as `metric_curve`
+instead of copying its prefix (`src/native_execution_consumer.cpp:13114`).
 HostRecorded array presentation and a second full curve are outside this
 profile. Adding another persistent scratch user requires another term and
 rounding region.
@@ -637,7 +637,7 @@ or trace calls made inside an unknown loop.
 
 Safe signed JSON integers use <=17 characters, hash64 is 18 quoted
 characters, and f64 conservatively uses <=64 characters: the formatter
-`f64` at `src/report_sink_writer.cpp:285` (its worker `real` at `src/report_sink_writer.cpp:71`) builds scientific output with a fixed
+`f64` at `src/report_sink_writer.cpp:289` (its worker `real` at `src/report_sink_writer.cpp:75`) builds scientific output with a fixed
 buffer then performs bounded exponent relayout. Each input string byte
 becomes at most six JSON bytes, plus two quotes; see
 `src/report_sink_writer.cpp:207`. Counting delimiters and the LF gives:

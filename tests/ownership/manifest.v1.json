@@ -382,7 +382,7 @@
     "file": "docker/run_failure_codes.json",
     "registry": "src/run_failure_registry.inc",
     "registry_sentinel": "",
-    "reconciliation": "Appendix C has 38 existing and 23 window/new rows. The actual catalog adds outputs_limit, outputs_rejected, window_pruner_unsupported, report_mode_unsupported, report_sink_failed, scratch_capacity_exceeded, scratch_configuration_invalid, and scratch_io_failed: 69 named codes, with one unnamed registry sentinel giving 70 registry entries. The plan's 40+24 groups those two outputs extensions with existing and the pruner extension with window; the sink and table-scratch resource extensions are engine-owned. Neither counts nor groups substitute for exact set comparisons.",
+    "reconciliation": "Appendix C has 38 existing and 23 window/new rows. The actual catalog adds outputs_limit, outputs_rejected, window_pruner_unsupported, report_mode_unsupported, report_sink_failed, scratch_capacity_exceeded, scratch_configuration_invalid, scratch_io_failed, and run_budget_exceeded: 70 named codes, with one unnamed registry sentinel giving 71 registry entries. The plan's 40+24 groups those two outputs extensions with existing and the pruner extension with window; the sink, table-scratch and invocation-budget resource extensions are engine-owned. Neither counts nor groups substitute for exact set comparisons.",
     "codes": [
       {"code": "chart_bars_rejected", "class": "input", "retryable": false, "since": "1.4.0", "appendix": "C-existing", "reachability": "no", "route": "caller primary feed"},
       {"code": "chart_bars_unreadable", "class": "input", "retryable": false, "since": "1.4.0", "appendix": "C-existing", "reachability": "no", "route": "caller file/parser"},
@@ -419,6 +419,7 @@
       {"code": "request_unsupported", "class": "unsupported", "retryable": false, "since": "1.4.0", "appendix": "C-existing", "reachability": "direct", "route": "unsupported source request"},
       {"code": "results_digest_unsupported", "class": "unsupported", "retryable": false, "since": "1.5.0", "appendix": "C-window", "reachability": "no", "route": "caller/build digest capability"},
       {"code": "run_aborted", "class": "engine_fault", "retryable": true, "since": "1.4.0", "appendix": "C-existing", "reachability": "no", "route": "host lifecycle/abort"},
+      {"code": "run_budget_exceeded", "class": "resource", "retryable": false, "since": "1.8.0", "appendix": "catalog-extension", "reachability": "indirect", "route": "host invocation wall/process CPU limits installed by pf_run_budget_install_v1 and sampled by check_run_budget in src/c_abi.cpp; src/native_execution_consumer.cpp publishes the reached budget at a cooperative checkpoint without a sink trailer"},
       {"code": "run_mode_unsupported", "class": "unsupported", "retryable": false, "since": "1.4.0", "appendix": "C-existing", "reachability": "no", "route": "caller run mode"},
       {"code": "run_options_rejected", "class": "input", "retryable": false, "since": "1.4.0", "appendix": "C-existing", "reachability": "no", "route": "caller options"},
       {"code": "run_request_invalid", "class": "input", "retryable": false, "since": "1.4.0", "appendix": "C-existing", "reachability": "no", "route": "caller parser/options including supplied text before binding"},

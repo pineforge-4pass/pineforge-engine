@@ -110,10 +110,10 @@ class ExportListTests(unittest.TestCase):
                 for symbol in source_symbols(include_dir / header)
             )
         self.assertEqual(runtime, sorted(expected_runtime))
-        self.assertEqual(len(runtime), 113)
-        self.assertEqual(len(implemented_names), 93)
+        self.assertEqual(len(runtime), 115)
+        self.assertEqual(len(implemented_names), 95)
         yes_count = sum(row[2] == "yes" for row in runtime)
-        self.assertEqual(yes_count, 93)
+        self.assertEqual(yes_count, 95)
         self.assertEqual(yes_count, len(implemented_names))
         for symbol, header, _ in runtime + native:
             with self.subTest(symbol=symbol, header=header):

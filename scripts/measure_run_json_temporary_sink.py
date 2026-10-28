@@ -125,7 +125,8 @@ def _worker(args):
             nonlocal clock_calls
             clock_calls += 1
             return 0. if clock_calls == 1 else args.elapsed_seconds
-        runner.time = SimpleNamespace(time=report_clock, perf_counter_ns=time.perf_counter_ns)
+        runner.time = SimpleNamespace(time=report_clock, perf_counter_ns=time.perf_counter_ns,
+                                      monotonic_ns=time.monotonic_ns)
     status = runner.main(_producer_arguments(args, args._scratch))
     if status:
         return status

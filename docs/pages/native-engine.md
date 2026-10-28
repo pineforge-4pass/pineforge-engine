@@ -638,11 +638,11 @@ a host reacts to its own execution and may submit again. A request born there,
 mid-bar on a continuous segment, is eligible on the **remaining path suffix** of
 that segment — the birth is admitted at the current cursor and the geometric
 search then sees only the unconsumed suffix (`born_on_remaining_path`,
-`native_execution_consumer.cpp:6854-6858`). Requests accepted before the
+`native_execution_consumer.cpp:6871-6875`). Requests accepted before the
 segment, and discrete points, keep the ordinary birth gate above.
 
 `on_native_bar_open` fires at the modeled opening, before that point's matching
-pass (`native_execution_consumer.cpp:8460`). **Lookahead warning:** the
+pass (`native_execution_consumer.cpp:8477`). **Lookahead warning:** the
 `Bar` it receives is the *complete* script bar — the consumer has already set
 `engine.current_bar_ = open_view` (`native_execution_consumer.cpp:8117`), the
 complete bar unless the spec asks for `NativeOpenBarView::OpenOnly` — so its
@@ -2112,7 +2112,7 @@ default, set while no run is active — because each row is a full
 the live state, not the run's length: the closed rows enter through a running
 digest). With the switch on,
 one row follows each point, after the extremes that point just folded
-(`record_script_report_point`, `native_execution_consumer.cpp:9365`), so
+(`record_script_report_point`, `native_execution_consumer.cpp:9383`), so
 
 ```text
 broker_state_hash_len == equity_curve_len == script_bars_processed
@@ -2239,13 +2239,13 @@ under the ticket the model or the run named. A host running its own forced
 close states the cause on the row it produced.
 
 `closed_trade_close_cause(i)` (`engine.hpp:2094`) is the C++ read and
-`strategy_closed_trade_close_cause` (`pineforge.h:1428`) the C one, with the
+`strategy_closed_trade_close_cause` (`pineforge.h:1446`) the C one, with the
 same numbering: `-1` for a bad index or a NULL handle, `0` UNKNOWN, `1`
 SCRIPT, `2` BRACKET, `3` MARGIN_CALL, `4` INTRADAY_LOSS_CAP, `5`
 INTRADAY_FILL_CAP, `6` RANGE_END. A row closed at the end of the run
 (`open_at_end`) always answers `6`, ahead of every other cause. The ticket a
 row was booked under is `strategy_closed_trade_entry_id` /
-`_exit_id` / `_exit_comment` (`pineforge.h:1351-1366`), which index exactly the
+`_exit_id` / `_exit_comment` (`pineforge.h:1364-1379`), which index exactly the
 rows of `fill_report`'s trade array and take any handle this engine produces
 — including a `pf_strategy_t` from `strategy_native_host_create_v1`, which is
 how a C host reads back the ticket its own margin model declared.
@@ -3086,7 +3086,7 @@ Only completed buckets are published, so this recipe has no lookahead by
 construction. It is the same class the kernel's own subscription evaluator
 aggregates with, and the one the kernel's `script_bucket_completions` query
 feeds when the Pine scheduler asks how its input span buckets
-(`ScriptBucketCursor` `native_execution_consumer.cpp:14117`). What it does
+(`ScriptBucketCursor` `native_execution_consumer.cpp:14138`). What it does
 **not** give you is what a
 declared subscription does: an `authoritative_bars` feed, the `gaps` and
 `lookahead` delivery rules, the lazy-seal chronology, a C spelling, and the
@@ -3173,7 +3173,7 @@ These are existing refusals, not implied future features:
   recorded request series
 
 A C host has the same stream and the same commands. Streaming needs no new
-symbol — `strategy_stream_begin` and its family (`pineforge.h:802`) take
+symbol — `strategy_stream_begin` and its family (`pineforge.h:820`) take
 a `pf_strategy_t` from `strategy_native_host_create_v1` unchanged — and
 `strategy_native_submit_v1` (`native_c_api.h:2748`) obeys the one legality
 rule its C++ spelling does.
