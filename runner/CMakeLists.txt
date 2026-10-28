@@ -82,6 +82,7 @@ if(PINEFORGE_BUILD_TESTS)
     add_executable(test_live_report ${PROJECT_SOURCE_DIR}/tests/test_live_report.cpp)
     target_include_directories(test_live_report PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/include ${PROJECT_BINARY_DIR}/include)
+    target_link_libraries(test_live_report PRIVATE PineForge::pineforge)
     target_compile_options(test_live_report PRIVATE -UNDEBUG)
     add_test(NAME test_live_report COMMAND test_live_report)
     add_executable(test_live_identity ${PROJECT_SOURCE_DIR}/tests/test_live_identity.cpp)
