@@ -687,7 +687,11 @@ def test_optional_binding_has_the_exact_descriptor_layout(tmp_path, monkeypatch)
 @pytest.mark.parametrize("count", [1000, 100000, 1000000, 100000000])
 def test_host_policy_mirror_uses_each_run_bar_count(count):
     manifest = run_json.default_scratch_manifest(count)
-    assert tuple(getattr(manifest, name) for name in FIELDS) == P0_FIXED + (2 * count,)
+    rows = max(65536, min(1048576, count))
+    erased, consumed = 4 * rows, rows // 2
+    expected = (0, 0, erased, 96 * erased, consumed, 129 * consumed,
+                rows, 64 * rows, 27, 6912, 2 * count)
+    assert tuple(getattr(manifest, name) for name in FIELDS) == expected
     assert (manifest.struct_size, manifest.version, manifest.backend, manifest.reserved) == (104, 1, 1, 0)
 
 

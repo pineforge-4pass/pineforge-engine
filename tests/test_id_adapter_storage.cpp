@@ -929,6 +929,18 @@ public:
             descriptor.struct_size = static_cast<std::uint32_t>(sizeof descriptor);
             descriptor.version = 1;
             descriptor.backend = PF_SCRATCH_TABLE_BOUNDED_MEMORY;
+            if (cap_probe_) {
+                const auto manifest = pineforge::detail::default_scratch_manifest(
+                    pineforge::detail::kMaxResidentCohorts + 1);
+                descriptor.K_q = manifest.K_q; descriptor.B_q = manifest.B_q;
+                descriptor.K_e = manifest.K_e; descriptor.B_e = manifest.B_e;
+                descriptor.K_c = manifest.K_c; descriptor.B_c = manifest.B_c;
+                // Leave a historical slot for the resident-refusal ticket.
+                descriptor.U = pineforge::detail::kMaxResidentCohorts + 1;
+                descriptor.B_U = descriptor.U * 32;
+                descriptor.V = manifest.V; descriptor.B_V = manifest.B_V;
+                descriptor.R = manifest.R;
+            }
             require(set_scratch_tables_v1(&descriptor) == 0, "select jailed cohort table");
         }
     }
@@ -936,19 +948,27 @@ public:
         const auto i = pine_bar_index();
         const auto na = std::numeric_limits<double>::quiet_NaN();
         auto& table = adapter_.*access(Cohorts{});
-        if (cap_probe_ && i == 4096) {
+        if (cap_probe_ && static_cast<std::size_t>(i) == pineforge::detail::kMaxResidentCohorts) {
             const auto logical = table.size();
             const auto resident = table.resident_size();
+            require(logical == pineforge::detail::kMaxResidentCohorts
+                    && resident == pineforge::detail::kMaxResidentCohorts,
+                    "cap probe reaches the full live ceiling");
             const auto slab = scratch_tables_for_run();
             const auto& region = slab->region(pineforge::detail::ScratchResource::cohort);
             const auto extent = region.logical_extent;
             std::vector<unsigned char> before(static_cast<std::size_t>(extent));
             slab->read_at(region, 0, before.data(), before.size());
-            const auto last_handle = table.find_resident("dense-4095")->second.handle;
+            const auto last = table.find_resident(
+                "dense-" + std::to_string(pineforge::detail::kMaxResidentCohorts - 1));
+            require(last != table.end(), "last admitted cohort remains resident");
+            const auto last_handle = last->second.handle;
             const auto before_hash = broker_state_hash_projection();
             try { (adapter_.*access(CohortFor{}))("refused-before-kernel"); }
             catch (const pineforge::detail::ScratchCapacityError& error) {
-                refused = std::string(error.what()).find("4,096") != std::string::npos;
+                const auto expected = "more than " + pineforge::detail::scratch_limit_number(
+                    pineforge::detail::kMaxResidentCohorts) + " order ids active at once";
+                refused = std::string(error.what()).find(expected) != std::string::npos;
                 const auto failure = pineforge::classify_run_failure(error);
                 require(failure.code == pineforge::RunFailureCode::scratch_capacity_exceeded
                         && failure.args && *failure.args == "{\"resource\":\"cohort\"}",
@@ -972,7 +992,7 @@ public:
             strategy_cancel(id);
         }
         strategy_entry(id, true, 1.0, na, 1.0); // Never fills on this chart.
-        // The cap witness needs 4,096 real pending origins, not exit legs.
+        // The cap witness uses real pending origins without exit legs.
         if (!cap_probe_) strategy_exit(exit_id, id, na, 50.0);
         if (i == 127) at_128 = adapter_.pending_scan_work();
         if (i == 255) at_256 = adapter_.pending_scan_work();
@@ -1154,8 +1174,11 @@ void dense_operation_growth_and_instrumentation(bool jailed) {
 }
 
 void adapter_cap_rollback() {
+    // A smaller policy must not silently shrink this boundary witness.
+    require(pineforge::detail::kMaxResidentCohorts == (std::size_t{1} << 16),
+            "resident ceiling retains the enlarged policy");
     auto bars = chart();
-    bars.resize(4097, bars.back());
+    bars.resize(pineforge::detail::kMaxResidentCohorts + 1, bars.back());
     for (std::size_t i = 0; i < bars.size(); ++i)
         bars[i].timestamp = 1736121600000LL + static_cast<std::int64_t>(i) * 60000;
     DenseHost capped(true, true);

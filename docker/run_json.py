@@ -2957,23 +2957,99 @@ def _bind_scratch_tables(lib) -> None:
         lib.strategy_set_scratch_tables_v1.restype = ctypes.c_int
 
 
-def default_scratch_manifest(bars: int | None) -> ScratchTablesC:
+_RESIDENT_COHORT_FLOOR = 65536
+_RESIDENT_COHORT_CAP = 1048576
+_SCRATCH_ERASED_KEYS_PER_COHORT = 4
+_SCRATCH_COHORTS_PER_CONSUMED_KEY = 2
+_SCRATCH_BYTES_PER_COHORT_ID = 64
+_SCRATCH_BYTES_PER_ERASED_KEY = 96
+_SCRATCH_BYTES_PER_CONSUMED_KEY = 129
+
+
+def _read_id_sites(lib, state) -> tuple[int, bool, str | None]:
+    """Read optional generated sizing metadata; invalid receipts keep k = 1."""
+    try:
+        version = getattr(lib, "strategy_id_sites_api_version", None)
+        receipt = getattr(lib, "strategy_id_sites_receipt", None)
+        if version is None or receipt is None:
+            return 1, False, "id-sites receipt unavailable"
+        version.argtypes = []
+        version.restype = ctypes.c_uint32
+        receipt.argtypes = [
+            ctypes.c_void_p, ctypes.c_char_p, ctypes.c_size_t,
+            ctypes.POINTER(ctypes.c_size_t), ctypes.c_char_p, ctypes.c_size_t]
+        receipt.restype = ctypes.c_int
+        if version() != 1:
+            return 1, False, "id-sites API version ignored"
+        required = ctypes.c_size_t(0)
+        error = ctypes.create_string_buffer(512)
+        if receipt(state, None, 0, ctypes.byref(required), error,
+                   len(error)) != PF_SETTINGS_BUFFER_TOO_SMALL:
+            return 1, False, "id-sites size query failed"
+        # Match the existing optional settings receipt's allocation guard.
+        if not 0 < required.value <= 16 * 1024 * 1024:
+            return 1, False, "id-sites receipt size ignored"
+        buffer = ctypes.create_string_buffer(required.value)
+        if receipt(state, buffer, len(buffer), ctypes.byref(required), error,
+                   len(error)) != PF_SETTINGS_OK:
+            return 1, False, "id-sites receipt call failed"
+        if not 0 < required.value <= len(buffer) or buffer.raw[required.value - 1] != 0:
+            return 1, False, "id-sites receipt buffer ignored"
+        document = json.loads(buffer.raw[:required.value - 1])
+        if type(document.get("version")) is not int or document["version"] != 1:
+            return 1, False, "id-sites receipt version ignored"
+        strategy = document["strategy"]
+        if strategy.get("freshPerBarStatus") == "unbounded":
+            return 1, True, None
+        ids = strategy["ids"]
+        if "freshPerBar" not in ids:
+            return 1, False, "id-sites freshPerBar unstated"
+        fresh_per_bar = ids["freshPerBar"]
+        if type(fresh_per_bar) is not int or not 0 <= fresh_per_bar <= (1 << 64) - 1:
+            return 1, False, "id-sites freshPerBar ignored"
+        return fresh_per_bar, False, None
+    except (AttributeError, KeyError, TypeError, ValueError, OSError,
+            OverflowError, MemoryError, RecursionError, ctypes.ArgumentError):
+        return 1, False, "id-sites receipt ignored"
+
+
+def default_scratch_manifest(
+        bars: int | None, fresh_per_bar: int = 1, literals: int = 0,
+        fixed_fresh: int = 0, declared: bool = False) -> ScratchTablesC:
     """Host mirror of detail/scratch_defaults.hpp's P0 POLICY, not a measured bound.
 
-    None means a stream without a declared lifetime bar count. Each call makes
-    a fresh descriptor; the setter copies it and each run owns fresh occupancy.
+    None selects the fixed stream tier. Finite batches use the same saturating
+    demand and floor/cap as resident_cohort_sizing; only declared excess refuses.
+    Each call makes a fresh descriptor; the setter copies it for this run.
     """
     if bars is None:
+        rows = _RESIDENT_COHORT_FLOOR
         roots = 65536
     else:
-        if bars < 0 or bars > ((1 << 64) - 1) // 2:
+        maximum = (1 << 64) - 1
+        if any(value < 0 or value > maximum
+               for value in (bars, fresh_per_bar, literals, fixed_fresh)):
+            raise RunFailure("default scratch sizing input outside uint64",
+                             "scratch_capacity_exceeded", {"resource": "layout"})
+        per_bar = min(maximum, bars * fresh_per_bar)
+        need = min(maximum, min(maximum, per_bar + literals) + fixed_fresh)
+        rows = max(_RESIDENT_COHORT_FLOOR, min(_RESIDENT_COHORT_CAP, need))
+        if declared and need > _RESIDENT_COHORT_CAP:
+            raise RunFailure(
+                f"resident cohort limit {rows:,} rows is below declared need {need:,}",
+                "scratch_capacity_exceeded", {"resource": "cohort"})
+        if bars > maximum // 2:
             raise RunFailure("default scratch replacement reserve overflow",
                              "scratch_capacity_exceeded", {"resource": "layout"})
         roots = 2 * bars
+    erased = _SCRATCH_ERASED_KEYS_PER_COHORT * rows
+    consumed = rows // _SCRATCH_COHORTS_PER_CONSUMED_KEY
     return ScratchTablesC(
         ctypes.sizeof(ScratchTablesC), 1, 1, 0,  # bounded_memory
         0, 0,  # q is removed; retain its ABI fields with zero capacity
-        262144, 25165824, 32768, 4227072, 65536, 4194304, 27, 6912, roots)
+        erased, _SCRATCH_BYTES_PER_ERASED_KEY * erased,
+        consumed, _SCRATCH_BYTES_PER_CONSUMED_KEY * consumed,
+        rows, _SCRATCH_BYTES_PER_COHORT_ID * rows, 27, 6912, roots)
 
 
 def apply_scratch_tables(lib, state, manifest: ScratchTablesC) -> None:
@@ -4858,7 +4934,10 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
             if args.outputs:
                 enable_outputs(lib, st)
             if args.profile == "jailed":
-                apply_scratch_tables(lib, st, default_scratch_manifest(fed_count))
+                fresh_per_bar, unbounded, _note = _read_id_sites(lib, st)
+                apply_scratch_tables(lib, st, default_scratch_manifest(
+                    fed_count, fresh_per_bar=fresh_per_bar,
+                    fixed_fresh=_RESIDENT_COHORT_CAP if unbounded else 0))
                 args._scratch_arena_admitted = _require_jailed_arena(lib, st)
             sink = _new_report_sink(lib, st, args)
         except BaseException:
@@ -5430,7 +5509,10 @@ def _main(argv, binary_inputs) -> int:
             if args.outputs:
                 enable_outputs(lib, st)
             if args.profile == "jailed":
-                apply_scratch_tables(lib, st, default_scratch_manifest(n))
+                fresh_per_bar, unbounded, _note = _read_id_sites(lib, st)
+                apply_scratch_tables(lib, st, default_scratch_manifest(
+                    n, fresh_per_bar=fresh_per_bar,
+                    fixed_fresh=_RESIDENT_COHORT_CAP if unbounded else 0))
                 args._scratch_arena_admitted = _require_jailed_arena(lib, st)
             sink = _new_report_sink(lib, st, args, body=body)
         except BaseException:

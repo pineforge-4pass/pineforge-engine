@@ -277,6 +277,8 @@ public:
             calls_since_spill_ = std::exchange(other.calls_since_spill_, 0);
             fixture_spill_interval_ = std::exchange(other.fixture_spill_interval_, 0);
             fixture_spill_predicate_ = std::exchange(other.fixture_spill_predicate_, nullptr);
+            resident_cohort_limit_ = std::exchange(
+                other.resident_cohort_limit_, kMaxResidentCohorts);
             other.resident_by_key_.clear();
             other.resident_.clear();
             other.held_.clear();
@@ -289,6 +291,14 @@ public:
     void set_directory(const std::string& directory) { index_.set_directory(directory); }
     void bind_scratch(const std::shared_ptr<ScratchSlab>& slab, ScratchResource resource) {
         index_.bind_scratch(slab, resource);
+        resident_cohort_limit_ = kMaxResidentCohorts;
+    }
+    void bind_scratch(const std::shared_ptr<ScratchSlab>& slab, ScratchResource resource,
+                      const ResidentCohortSizing& sizing) {
+        if (resource == ScratchResource::cohort) require_resident_cohort_sizing(sizing);
+        index_.bind_scratch(slab, resource);
+        resident_cohort_limit_ = resource == ScratchResource::cohort
+            ? resident_cohort_limit(sizing.limit) : kMaxResidentCohorts;
     }
     // A ticket anticipates making this id live, including a retired id that
     // is about to reopen. It is read-only even when a dirty empty row awaits
@@ -313,7 +323,7 @@ public:
                 if (prior++ < current && other == key) repeated = true;
             });
             if (!repeated) {
-                if (extra == kMaxResidentCohorts) require_live_growth(extra + 1);
+                if (extra == resident_cohort_limit_) require_live_growth(extra + 1);
                 ++extra;
             }
         });
@@ -489,8 +499,9 @@ public:
 private:
     void require_live_growth(std::size_t extra) const {
         if (extra == 0 || !index_.bounded_cohorts()) return;
-        if (resident_.size() <= kMaxResidentCohorts
-            && extra <= kMaxResidentCohorts - resident_.size()) return;
+        const auto limit = resident_cohort_limit_;
+        if (resident_.size() <= limit
+            && extra <= limit - resident_.size()) return;
         // Admission's O(R) dry pass must finish before spill can write any
         // bytes. It is at most one such pass per spill, never a per-ticket
         // scan: callers batch the ticket's extra rows before reaching here.
@@ -501,12 +512,15 @@ private:
             ++work_.rows_visited_by_capacity;
             if (!row.second.owner->second.spillable()) ++live;
         }
-        if (live > kMaxResidentCohorts || extra > kMaxResidentCohorts - live)
+        if (live > limit || extra > limit - live)
             throw ScratchCapacityError(ScratchResource::cohort,
-                scratch_resident_cohort_limit_message(kMaxResidentCohorts));
+                scratch_resident_cohort_limit_message(
+                    limit, static_cast<std::uint64_t>(live) + extra,
+                    static_cast<std::uint64_t>(kMaxResidentCohortsCap)));
     }
     void spill_before_admission(std::size_t extra) const {
-        if (extra != 0 && index_.bounded_cohorts() && resident_.size() >= kMaxResidentCohorts)
+        if (extra != 0 && index_.bounded_cohorts()
+            && resident_.size() >= resident_cohort_limit_)
             spill(); // The read-only ticket has already proved this can fit.
     }
     void insert_resident(Offset at, const std::shared_ptr<Row>& row) const {
@@ -578,6 +592,7 @@ private:
     mutable ResidentKeys resident_by_key_; // One borrowed key per resident row.
     mutable Held held_;
     mutable WorkCounters work_{};
+    std::size_t resident_cohort_limit_ = kMaxResidentCohorts;
     mutable std::size_t spill_threshold_ = kSpillFloor, spill_interval_ = kSpillFloor;
     mutable std::size_t calls_since_spill_ = 0;
     std::size_t fixture_spill_interval_ = 0;

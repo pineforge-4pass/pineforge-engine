@@ -426,7 +426,7 @@ public:
     bool checked = false;
 };
 
-// One-row byte/row ticket witnesses, not witnesses of the 4,096 resident cap.
+// One-row byte/row ticket witnesses, not witnesses of the resident-cohort ceiling.
 class ReversalCohortTicketHost final : public TreeHost {
 public:
     ReversalCohortTicketHost() : TreeHost(owner(true, 1, 1, 1, 1), true, false, 2) {}

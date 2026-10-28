@@ -29001,7 +29001,13 @@ void bind_tree_scratch_tables(source::PineExecutionAdapter& adapter,
     if (adapter.cohorts_by_id_.size() != 0 || adapter.exit_rank_keys_.size() != 0)
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
             "tree scratch backend changed after use");
-    adapter.cohorts_by_id_.bind_scratch(slab, ScratchResource::cohort);
+    // The finite manifest records two successor-root rows per input bar.
+    // Stream manifests use the fixed root tier, which maps back below the
+    // resident floor and therefore keeps the floor.
+    const auto sizing = slab
+        ? resident_cohort_sizing(slab->manifest().R / 2)
+        : ResidentCohortSizing{};
+    adapter.cohorts_by_id_.bind_scratch(slab, ScratchResource::cohort, sizing);
     adapter.exit_rank_keys_.bind_scratch(slab, ScratchResource::exit_rank);
 }
 

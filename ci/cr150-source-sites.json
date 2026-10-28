@@ -2098,6 +2098,71 @@
   },
   {
    "file": "include/pineforge/detail/scratch_errors.hpp",
+   "symbol": "scratch_capacity_message",
+   "scope": [
+    "namespace pineforge :: detail #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/scratch_errors.hpp",
+   "symbol": "message",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "inline std :: string scratch_capacity_message ( ScratchResource resource , std :: uint64_t limit , std :: uint64_t need ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/scratch_errors.hpp",
+   "symbol": "message",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "inline std :: string scratch_capacity_message ( ScratchResource resource , std :: uint64_t limit , std :: uint64_t need ) #1"
+   ],
+   "cls": "append",
+   "spelling": "message + = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/scratch_errors.hpp",
+   "symbol": "message",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "inline std :: string scratch_capacity_message ( ScratchResource resource , std :: uint64_t limit , std :: uint64_t need ) #1"
+   ],
+   "cls": "append",
+   "spelling": "message + = . . .",
+   "ordinal": 2
+  },
+  {
+   "file": "include/pineforge/detail/scratch_errors.hpp",
+   "symbol": "message",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "inline std :: string scratch_capacity_message ( ScratchResource resource , std :: uint64_t limit , std :: uint64_t need ) #1"
+   ],
+   "cls": "append",
+   "spelling": "message + = . . .",
+   "ordinal": 3
+  },
+  {
+   "file": "include/pineforge/detail/scratch_errors.hpp",
+   "symbol": "message",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "inline std :: string scratch_capacity_message ( ScratchResource resource , std :: uint64_t limit , std :: uint64_t need ) #1"
+   ],
+   "cls": "append",
+   "spelling": "message + = . . .",
+   "ordinal": 4
+  },
+  {
+   "file": "include/pineforge/detail/scratch_errors.hpp",
    "symbol": "scratch_count_limit_message",
    "scope": [
     "namespace pineforge :: detail #1"
@@ -2125,6 +2190,61 @@
    "cls": "decl",
    "spelling": "std :: string",
    "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/scratch_errors.hpp",
+   "symbol": "message",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "inline std :: string scratch_resident_cohort_limit_message ( std :: uint64_t limit , std :: uint64_t live , std :: uint64_t cap ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/scratch_errors.hpp",
+   "symbol": "message",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "inline std :: string scratch_resident_cohort_limit_message ( std :: uint64_t limit , std :: uint64_t live , std :: uint64_t cap ) #1"
+   ],
+   "cls": "append",
+   "spelling": "message + = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/scratch_errors.hpp",
+   "symbol": "message",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "inline std :: string scratch_resident_cohort_limit_message ( std :: uint64_t limit , std :: uint64_t live , std :: uint64_t cap ) #1"
+   ],
+   "cls": "append",
+   "spelling": "message + = . . .",
+   "ordinal": 2
+  },
+  {
+   "file": "include/pineforge/detail/scratch_errors.hpp",
+   "symbol": "message",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "inline std :: string scratch_resident_cohort_limit_message ( std :: uint64_t limit , std :: uint64_t live , std :: uint64_t cap ) #1"
+   ],
+   "cls": "append",
+   "spelling": "message + = . . .",
+   "ordinal": 3
+  },
+  {
+   "file": "include/pineforge/detail/scratch_errors.hpp",
+   "symbol": "message",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "inline std :: string scratch_resident_cohort_limit_message ( std :: uint64_t limit , std :: uint64_t live , std :: uint64_t cap ) #1"
+   ],
+   "cls": "append",
+   "spelling": "message + = . . .",
+   "ordinal": 4
   },
   {
    "file": "include/pineforge/detail/scratch_file.hpp",
@@ -2382,10 +2502,35 @@
   },
   {
    "file": "include/pineforge/detail/scratch_slab.hpp",
+   "symbol": "<temp:string>",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "namespace scratch_layout_detail #1",
+    "inline std :: uint64_t add ( std :: uint64_t left , std :: uint64_t right , const char * field ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/scratch_slab.hpp",
+   "symbol": "<temp:string>",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "namespace scratch_layout_detail #1",
+    "inline std :: uint64_t multiply ( std :: uint64_t left , std :: uint64_t right , const char * field ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/scratch_slab.hpp",
    "symbol": "operator new",
    "scope": [
     "namespace pineforge :: detail #1",
-    "class ScratchSlab #1"
+    "class ScratchSlab #1",
+    "private : static std :: uint8_t * allocate_backing ( std :: size_t bytes ) #1"
    ],
    "cls": "alloc",
    "spelling": "operator new",
@@ -13127,7 +13272,7 @@
     "StoreImpl :: StoreImpl ( const Shape & shape , ScratchBacking & backing ) : chunk_bytes_ ( shape . chunk_bytes ) #1"
    ],
    "cls": "alloc",
-   "spelling": "new std::byte",
+   "spelling": "new std :: byte",
    "ordinal": 1
   },
   {
@@ -13141,6 +13286,19 @@
    ],
    "cls": "alloc",
    "spelling": "new CommandScratchStore",
+   "ordinal": 1
+  },
+  {
+   "file": "src/detail/o1_store.cpp",
+   "symbol": "<temp:string>",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace detail #1",
+    "namespace o1 #1",
+    "[ [ noreturn ] ] void StoreImpl :: throw_status ( const char * what , ScratchStatus status ) const #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: string",
    "ordinal": 1
   },
   {
@@ -13167,19 +13325,6 @@
    ],
    "cls": "alloc",
    "spelling": "new StoreImpl",
-   "ordinal": 1
-  },
-  {
-   "file": "src/detail/o1_store.cpp",
-   "symbol": "<temp:string>",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace detail #1",
-    "namespace o1 #1",
-    "[ [ noreturn ] ] void StoreImpl :: throw_status ( const char * what , ScratchStatus status ) const #1"
-   ],
-   "cls": "temp",
-   "spelling": "std::string",
    "ordinal": 1
   },
   {

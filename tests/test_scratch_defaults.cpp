@@ -21,24 +21,33 @@ void require(bool value, const char* message) {
     if (!value) throw std::runtime_error(message);
 }
 
-void policy_fields(const detail::ScratchManifest& m, std::uint64_t roots) {
+void policy_fields(const detail::ScratchManifest& m, std::uint64_t roots,
+                   std::uint64_t rows = 65536) {
     require(m.K_q == 0 && m.B_q == 0, "removed q reserves no data or index");
-    require(m.K_e == 262144 && m.B_e == 25165824, "P0 erased key/byte policy");
-    require(m.K_c == 32768 && m.B_c == 4227072, "P0 consumed key/byte policy");
-    require(m.U == 65536 && m.B_U == 4194304, "P0 cohort row/byte policy");
-    require(detail::kMaxResidentCohorts == 4096, "active cohort policy remains the old U");
+    if (rows == 65536) {
+        require(m.K_e == 262144 && m.B_e == 25165824, "P0 erased key/byte policy");
+        require(m.K_c == 32768 && m.B_c == 4227072, "P0 consumed key/byte policy");
+        require(m.U == 65536 && m.B_U == 4194304, "P0 cohort row/byte policy");
+    } else {
+        require(m.K_e == 4 * rows && m.B_e == 96 * (4 * rows), "sized erased policy");
+        require(m.K_c == rows / 2 && m.B_c == 129 * (rows / 2), "sized consumed policy");
+        require(m.U == rows && m.B_U == 64 * rows, "sized cohort policy");
+    }
+    require(detail::kMaxResidentCohorts == 65536, "active cohort policy is 65,536");
     require(m.V == 27 && m.B_V == 6912, "P0 rank row/byte policy");
     require(m.R == roots, "replacement policy uses this run's bar count");
 }
 
 void layout_pages(const detail::ScratchManifest& m, std::uint64_t root_pages,
-                  std::uint64_t total_pages, std::uint64_t slab_bytes) {
+                  std::uint64_t total_pages, std::uint64_t slab_bytes,
+                  std::array<std::uint64_t, 6> fixed = {{8704, 2048, 1352, 256, 2561, 3}}) {
     // Independent arithmetic, not harvested output:
     // De=40*262144+25165824=35651584 -> 8704 pages; Ie=16*524288 -> 2048.
     // Dc=40*32768+4227072=5537792 -> 1352; Ic=16*65536 -> 256.
     // Coh=1+96*65536+4194304=10485761 -> 2561 (2560 pages + 1 byte).
     // Rank=1+60*27+6912=8533 -> 3. q=0. Fixed sum=14924 pages.
-    const std::array<std::uint64_t, 9> pages{{0, 0, 8704, 2048, 1352, 256, 2561, 3, root_pages}};
+    const std::array<std::uint64_t, 9> pages{{
+        0, 0, fixed[0], fixed[1], fixed[2], fixed[3], fixed[4], fixed[5], root_pages}};
     const auto layout = detail::compute_layout(m); // Real layout, no multi-GB allocation.
     std::uint64_t offset = 0;
     for (std::size_t i = 0; i < pages.size(); ++i) {
@@ -50,33 +59,39 @@ void layout_pages(const detail::ScratchManifest& m, std::uint64_t root_pages,
     require(layout.slab_size == slab_bytes, "independent decimal byte total");
     require(layout.regions[0].capacity == 0 && layout.regions[1].capacity == 0,
             "q fields retain zero exact capacity");
-    require(layout.regions[6].capacity == 10485761, "cohort page padding is not capacity");
+    require(layout.regions[6].capacity == 1 + 160 * m.U, "cohort page padding is not capacity");
     require(layout.regions[7].capacity == 8533, "rank page padding is not capacity");
     require(layout.regions[8].capacity == 16 * m.R, "exact root capacity");
 }
 
 void finite_batch_layouts() {
-    struct Case { std::uint64_t bars, roots, root_pages, pages, bytes; };
+    struct Case {
+        std::uint64_t bars, rows, roots, root_pages, pages, bytes;
+        std::array<std::uint64_t, 6> fixed;
+    };
     // Roots=32*N bytes. Ceiling pages:
     // 32000 -> 8; 3200000=781*4096+1024 -> 782;
     // 32000000=7812*4096+2048 -> 7813; 3200000000=781250*4096.
+    // For sized rows S: e data=544*S, e index=16*pow2ceil(8*S),
+    // c data=169*floor(S/2), c index=16*pow2ceil(2*floor(S/2)),
+    // cohort=160*S+1; ceil each separately to pages. Rank stays 3 pages.
     const std::array<Case, 4> cases{{
-        {1000, 2000, 8, 14932, 61161472},
-        {100000, 200000, 782, 15706, 64331776},
-        {1000000, 2000000, 7813, 22737, 93130752},
-        {100000000, 200000000, 781250, 796174, 3261128704ULL},
+        {1000, 65536, 2000, 8, 14932, 61161472, {{8704, 2048, 1352, 256, 2561, 3}}},
+        {100000, 100000, 200000, 782, 24645, 100945920, {{13282, 4096, 2063, 512, 3907, 3}}},
+        {1000000, 1000000, 2000000, 7813, 237186, 971513856, {{132813, 32768, 20630, 4096, 39063, 3}}},
+        {100000000, 1048576, 200000000, 781250, 1019974, 4177813504ULL, {{139264, 32768, 21632, 4096, 40961, 3}}},
     }};
     for (const auto& c : cases) {
         const auto m = detail::default_scratch_manifest(c.bars);
-        policy_fields(m, c.roots);
-        layout_pages(m, c.root_pages, c.pages, c.bytes);
+        policy_fields(m, c.roots, c.rows);
+        layout_pages(m, c.root_pages, c.pages, c.bytes, c.fixed);
     }
 }
 
 void overflow_and_stream_tier() {
     const auto maximum = std::numeric_limits<std::uint64_t>::max();
     // Test the multiply boundary separately from layout's stricter byte limits.
-    policy_fields(detail::default_scratch_manifest(maximum / 2), maximum - 1);
+    policy_fields(detail::default_scratch_manifest(maximum / 2), maximum - 1, 1048576);
     for (const auto bars : {maximum / 2 + 1, maximum}) {
         bool caught = false;
         try {

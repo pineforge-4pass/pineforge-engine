@@ -449,21 +449,31 @@ void capacity_text(const char* resource, const std::string& expected, F&& operat
 }
 
 void resident_cap_is_active_only_and_read_only() {
+    constexpr auto limit = detail::kMaxResidentCohorts;
+    // A smaller policy must not silently shrink this boundary witness.
+    require(limit == (std::size_t{1} << 16), "resident ceiling retains the enlarged policy");
+    constexpr auto historical_count = limit + 1;
     auto manifest = detail::default_scratch_manifest(0);
+    // Closed history, the full live population, and one spare distinct ID.
+    // Neither historical count nor ID bytes may mask the resident refusal.
+    manifest.U = historical_count + limit + 1;
+    manifest.B_U = manifest.U * 32;
     auto slab = std::make_shared<ScratchSlab>(manifest);
     LiveTable table;
     table.bind_scratch(slab, ScratchResource::cohort);
-    for (std::size_t i = 0; i < 5000; ++i) {
+    for (std::size_t i = 0; i < historical_count; ++i) {
         const auto key = "closed-" + std::to_string(i);
         table.require_insert(key);
         const auto placed = table.emplace(key, LiveFacts{value(i), true}).first;
         placed->second.live = false;
     }
     table.spill();
-    require(table.size() == 5000 && table.resident_size() == 0,
-            "5000 promptly closed cohorts are admitted");
-    for (std::size_t i = 0; i < 4096; ++i)
+    require(table.size() == historical_count && table.resident_size() == 0,
+            "closed cohorts exceeding the live ceiling are admitted");
+    for (std::size_t i = 0; i < limit; ++i)
         table.emplace("live-" + std::to_string(i), LiveFacts{value(i), true});
+    require(table.size() == historical_count + limit && table.resident_size() == limit,
+            "resident refusal witness reaches the full live ceiling");
     // Keep a dirty, spillable row beside a full active population. A refused
     // ticket must not first spill it and thereby change index bytes.
     {
@@ -476,12 +486,14 @@ void resident_cap_is_active_only_and_read_only() {
     const auto keys = live_keys(table);
     const auto logical = table.size();
     const auto resident = table.resident_size();
-    const std::string text =
-        "more than 4,096 order ids active at once (placed and not yet closed or cancelled); "
-        "close or cancel orders sooner, or reuse ids";
+    const std::string text = "more than " + detail::scratch_limit_number(limit) +
+        " order ids active at once (placed and not yet closed or cancelled); "
+        "close or cancel orders sooner, or reuse ids; live count " +
+        detail::scratch_limit_number(limit + 1) + ", approved maximum " +
+        detail::scratch_limit_number(detail::kMaxResidentCohortsCap);
     capacity_text("cohort", text, [&] { table.require_insert("one-too-many"); });
     capacity_text("cohort", text, [&] {
-        table.emplace("one-too-many", LiveFacts{value(5001), true});
+        table.emplace("one-too-many", LiveFacts{value(historical_count + 1), true});
     });
     const std::array<std::string, 3> workset{{"live-0", "closed-1", "closed-1"}};
     capacity_text("cohort", text, [&] {
@@ -501,12 +513,12 @@ void resident_cap_is_active_only_and_read_only() {
     table.find_resident("live-0")->second.live = false;
     table.require_insert("replacement");
     table.emplace("replacement", LiveFacts{value(7000), true});
-    require(live_keys(table).size() == 4096, "closed row frees one active slot");
+    require(live_keys(table).size() == limit, "closed row frees one active slot");
 
     LiveTable unjailed;
-    for (std::size_t i = 0; i < 5000; ++i)
+    for (std::size_t i = 0; i < historical_count; ++i)
         unjailed.emplace(std::to_string(i), LiveFacts{value(i), true});
-    require(unjailed.resident_size() == 5000, "ordinary disk profile has no resident cap");
+    require(unjailed.resident_size() == historical_count, "ordinary disk profile has no resident cap");
 }
 
 void cohort_and_rank_refusal_text_uses_manifest() {

@@ -48,18 +48,25 @@ before allocation; actual allocation failure remains `out_of_memory`.
 
 ## Default P0 admission policy
 
-`default_scratch_manifest(std::uint64_t bars)` is the header-only helper in
+`default_scratch_manifest(bars, fresh_per_bar=1, literals=0, fixed_fresh=0,
+declared=false)` is the header-only helper in
 `include/pineforge/detail/scratch_defaults.hpp`. These are **policy limits,
 not measured bounds**, and do not prove that an arbitrary strategy fits.
 The Python host mirrors this tier explicitly, so its fresh-handle wiring does
-not depend on the engine's all-zero expansion.
+not depend on the engine's all-zero expansion. The six historical id maxima
+use the **same** `resident_cohort_sizing()` row function as resident admission:
+`S = max(65536, min(1048576, literals + bars*fresh_per_bar + fixed_fresh))`.
+Demand multiplication and additions saturate at `UINT64_MAX`. A declared need
+above the cap refuses with typed `scratch_capacity_exceeded`, resource
+`cohort`, naming the limit and need; a default-derived excess uses the cap.
+The defaults are one fresh ID per bar and zero literal/fixed allowances.
 
-| Maximum | P0 value |
+| Maximum | Sized value (exact historical value at the floor) |
 | --- | ---: |
 | `K_q`, `B_q` | 0, 0 (q removed) |
-| `K_e`, `B_e` | 262,144 keys, 25,165,824 key bytes |
-| `K_c`, `B_c` | 32,768 keys, 4,227,072 key bytes |
-| `U`, `B_U` | 65,536 IDs, 4,194,304 ID bytes |
+| `K_e`, `B_e` | `4*S` keys, `96*K_e` bytes (262,144; 25,165,824) |
+| `K_c`, `B_c` | `floor(S/2)` keys, `129*K_c` bytes (32,768; 4,227,072) |
+| `U`, `B_U` | `S` IDs, `64*U` bytes (65,536; 4,194,304) |
 | `V`, `B_V` | 27 IDs, 6,912 ID bytes |
 | `R` for a finite batch | `2*bars`, with checked multiplication |
 | `R` without a declared stream lifetime bar count | 65,536 |
@@ -68,15 +75,33 @@ The no-argument C++ overload selects the stream tier; Python uses
 `default_scratch_manifest(None)`. A zero-bar finite batch has `R=0`.
 The current stream-begin API supplies a warmup length, not a declared total
 lifetime bar count: even with warmup bars, the all-zero stream
-default is 65,536. A caller with a finite stream envelope supplies an explicit
+default keeps the floor ID tier and 65,536 roots. A caller with a finite stream envelope supplies an explicit
 manifest for the whole admitted lifetime.
 
-The key/byte choices split a 64 MiB budget (65,536 IDs of up to 64 bytes) and
-refuse a single ID longer than 64 bytes before any store mutation; they are
-otherwise aggregate descriptor limits. Two roots per input bar is an allowance, not an
+At the floor every descriptor field retains its historical value. The bounded
+profile refuses a single ID longer than 64 bytes before any store mutation;
+the byte budgets are aggregate descriptor limits. Two roots per input bar is an allowance, not an
 orders-per-bar bound. Repeated intrabar replacements or loops can exhaust it.
 For larger permitted workloads, the host must admit a larger representable
 manifest before execution and charge the corresponding memory.
+
+The bounded profile additionally admits at most its sized limit of live,
+non-spillable resident cohorts: order IDs placed and not yet closed or
+cancelled. The limit ranges from 65,536 to 1,048,576; admission beyond it
+refuses with the limit, the live count and the approved maximum; the text offers no
+declaration remedy, because the per-bar count comes from the module and the cap is the maximum.
+This is separate from `U`, which counts historical IDs too; the smaller
+remaining allowance governs admission. Live rows stay on the heap and cannot
+spill just to fit this ceiling. Closing or cancelling can release resident
+admission without reclaiming a historical ID slot.
+
+The internal `resident_cohort_limit(std::size_t requested)` accessor defaults
+to 65,536 and clamps to the 1,048,576 cap. The finite-run binder derives bars
+from `R/2` and calls `resident_cohort_sizing()`; a stream stays at the floor.
+The manifest helper accepts sizing inputs, but no CLI/C-ABI declaration
+setting is added here. A caller supplying different demand terms must pass
+the same sizing result to its table bind. This ceiling does not bound
+pending-order bytes or the variable heap payload of each cohort.
 
 ### Hand arithmetic (4096-byte pages)
 
@@ -86,7 +111,7 @@ Data bytes are `40*K+B`, index bytes `16*Q(K)`, cohort bytes
 Empty cohort/rank populations reserve zero. Round each region separately:
 `page(x)=4096*ceil(x/4096)`, `page(0)=0`; the slab is at least one page.
 
-| Region | Unrounded P0 bytes | Pages |
+| Region | Unrounded floor-tier bytes | Pages |
 | --- | ---: | ---: |
 | Sequence data / index (q) | 0 / 0 | 0 / 0 |
 | Erased data (e) | `40*262144+25165824 = 35,651,584` | 8,704 |
@@ -97,16 +122,28 @@ Empty cohort/rank populations reserve zero. Round each region separately:
 | Exit rank | `1+60*27+6912 = 8,533` | 3 |
 | Successor roots | `16*(2*bars) = 32*bars` | `ceil(bars/128)` |
 
-The fixed portion is `8704+2048+1352+256+2561+3 = 14924` pages, or 61,128,704
-bytes. The following totals are hand-derived policy reservations, not an
+The floor's fixed portion is `8704+2048+1352+256+2561+3 = 14924` pages,
+or 61,128,704 bytes. For sized rows `S`, the fixed bytes are
+`page(544*S) + page(16*Q(4*S)) + page(169*floor(S/2)) +
+page(16*Q(floor(S/2))) + page(160*S+1) + page(8533)`.
+The q regions stay empty; rank admission stays unchanged.
+
+| Sized rows S | Erased data/index pages | Consumed data/index pages | Cohort/rank pages | Fixed pages | Fixed bytes | Added bytes over floor |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 65,536 | 8,704 / 2,048 | 1,352 / 256 | 2,561 / 3 | 14,924 | 61,128,704 | 0 |
+| 262,144 | 34,816 / 8,192 | 5,408 / 1,024 | 10,241 / 3 | 59,684 | 244,465,664 | 183,336,960 |
+| 1,048,576 | 139,264 / 32,768 | 21,632 / 4,096 | 40,961 / 3 | 238,724 | 977,813,504 | 916,684,800 |
+
+Add `page(32*bars)` for roots. The following finite-batch totals use the default
+demand (`S=max(65536,min(1048576,bars))`). They are hand-derived policy reservations, not an
 allocation/RSS measurement:
 
 | Input bars | Root bytes | Root pages | Total slab pages | Slab bytes |
 | ---: | ---: | ---: | ---: | ---: |
 | 1,000 | 32,000 | 8 | 14,932 | 61,161,472 |
-| 100,000 | 3,200,000 | 782 | 15,706 | 64,331,776 |
-| 1,000,000 | 32,000,000 | 7,813 | 22,737 | 93,130,752 |
-| 100,000,000 | 3,200,000,000 | 781,250 | 796,174 | 3,261,128,704 |
+| 100,000 | 3,200,000 | 782 | 24,645 | 100,945,920 |
+| 1,000,000 | 32,000,000 | 7,813 | 237,186 | 971,513,856 |
+| 100,000,000 | 3,200,000,000 | 781,250 | 1,019,974 | 4,177,813,504 |
 
 The stream tier reserves 1,048,576 root bytes (256 pages), for a total of
 15,180 pages / 62,177,280 bytes. Region descriptors, shared-owner metadata,

@@ -65,6 +65,16 @@ inline std::string scratch_limit_message(const char* prefix, std::uint64_t limit
     return message;
 }
 
+inline std::string scratch_capacity_message(ScratchResource resource, std::uint64_t limit,
+                                           std::uint64_t need) {
+    std::string message(scratch_resource_name(resource));
+    message += " capacity exceeded: limit ";
+    message += scratch_limit_number(limit);
+    message += ", needed ";
+    message += scratch_limit_number(need);
+    return message;
+}
+
 inline std::string scratch_count_limit_message(ScratchResource resource, std::uint64_t limit) {
     switch (resource) {
     case ScratchResource::cohort:
@@ -105,10 +115,18 @@ inline std::string scratch_byte_limit_message(ScratchResource resource, std::uin
     }
 }
 
-inline std::string scratch_resident_cohort_limit_message(std::uint64_t limit) {
-    return scratch_limit_message("more than ", limit,
+inline std::string scratch_resident_cohort_limit_message(
+    std::uint64_t limit, std::uint64_t live, std::uint64_t cap) {
+    std::string message = scratch_limit_message("more than ", limit,
         " order ids active at once (placed and not yet closed or cancelled); "
-        "close or cancel orders sooner, or reuse ids");
+        "close or cancel orders sooner, or reuse ids; ");
+    message += "live count ";
+    message += scratch_limit_number(live);
+    // No remedy beyond "close, cancel or reuse" exists: the per-bar count comes from the
+    // module itself and the cap is the approved maximum, so the text names the maximum.
+    message += ", approved maximum ";
+    message += scratch_limit_number(cap);
+    return message;
 }
 
 class ScratchCapacityError final : public std::runtime_error, public RunFailureInfo {
