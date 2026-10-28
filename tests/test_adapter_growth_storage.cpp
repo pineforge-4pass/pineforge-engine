@@ -1,4 +1,4 @@
-// CR-150 L19m: real settlements with pinned origin rosters, compared with
+// Real settlements with pinned origin rosters, compared with
 // test-local copies of the old retain-capacity operations. No hash pins.
 #define PINEFORGE_TEST_ALLOCATION_BYTES
 #include "global_allocation_replacement.hpp"

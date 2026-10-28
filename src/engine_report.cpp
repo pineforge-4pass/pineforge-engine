@@ -7,14 +7,16 @@
 #include "selected_report_view.hpp"
 #include <pineforge/metrics_stream.hpp>
 #include "report_scratch.hpp"
-
+#include "strategy_history_policy.hpp"
 #include <pineforge/metrics.hpp>
 #include <pineforge/detail/scratch_sequence.hpp>
 #include "report_value_invalid.hpp"
 #include <algorithm>
 #include <cctype>
 #include <cerrno>
+#include <cfenv>
 #include <cmath>
+#include <cstdio>
 #include <limits>
 #include <stdexcept>
 #include <sys/stat.h>
@@ -23,6 +25,251 @@
 namespace pineforge {
 using namespace internal;
 
+metrics::MetricsStreamingStatusV1 BacktestEngine::set_metrics_streaming_v1(
+        metrics::StreamingSharpeV1 mode, metrics::MetricsNeedMaskV1 needed) {
+    using namespace metrics;
+    if ((mode != StreamingSharpeV1::On && mode != StreamingSharpeV1::Off)
+        || (needed & ~kMetricsNeedAllV1))
+        return MetricsStreamingStatusV1::InvalidArgument;
+    if (report_sink_setter_status() != 0) return MetricsStreamingStatusV1::Busy;
+    auto& s = metrics_streaming_;
+    s.configuration.streaming_sharpe = mode;
+    s.configuration.metrics_needed = needed;
+    // Changing preferences cannot renew another invocation's proof.
+    s.pending_plain = s.prepared = false;
+    s.pending_plan = {};
+    s.pending_failed_plain_inputs = 0;
+    if (!s.active) {
+        s.receipt = {};
+        s.receipt.streaming_sharpe = mode;
+        s.receipt.metrics_needed = needed;
+        s.receipt.route = MetricsRatioRouteV1::LegacyActualCurve;
+        s.receipt.route_reason = MetricsRouteReasonV1::PlainNo;
+    }
+    return MetricsStreamingStatusV1::Ok;
+}
+
+metrics::MetricsStreamingStatusV1 BacktestEngine::metrics_extent_receipt_v1(
+        metrics::MetricsExtentReceiptV1* out) const {
+    using namespace metrics;
+    if (!out || out->struct_size != sizeof(*out) || out->version != 1)
+        return MetricsStreamingStatusV1::InvalidArgument;
+    auto& s = metrics_streaming_;
+    if (s.no_curve && s.fold) {
+        finish_metrics_streaming_v1({});
+    } else if (s.active && !s.receipt_final) {
+        // Obtain the existing presentation exactly once through its ordinary
+        // report/capture gate. Recorded endpoints alone cannot witness a
+        // custom presenter's final metric sequence.
+        ReportC report{};
+        try {
+            fill_report(&report);
+        } catch (...) {
+            free_report(&report);
+            throw;
+        }
+        free_report(&report);
+    } else if (!s.active) {
+        s.receipt.streaming_sharpe = s.configuration.streaming_sharpe;
+        s.receipt.metrics_needed = s.configuration.metrics_needed;
+        s.receipt.route = MetricsRatioRouteV1::LegacyActualCurve;
+    }
+    *out = s.receipt;
+    return MetricsStreamingStatusV1::Ok;
+}
+
+metrics::MetricsStreamingStatusV1 BacktestEngine::prepare_metrics_streaming_v1(
+        const metrics::MetricsStreamingConfigV1& config,
+        const metrics::MetricsExtentPlanV1& plan) {
+    using namespace metrics;
+    if ((config.streaming_sharpe != StreamingSharpeV1::On
+         && config.streaming_sharpe != StreamingSharpeV1::Off)
+        || (config.metrics_needed & ~kMetricsNeedAllV1))
+        return MetricsStreamingStatusV1::InvalidArgument;
+    if (report_sink_setter_status() != 0) return MetricsStreamingStatusV1::Busy;
+    auto& s = metrics_streaming_;
+    const auto& admitted = s.pending_plan;
+    const bool same_plan = plan.present == admitted.present
+        && plan.extent.empty == admitted.extent.empty
+        && plan.extent.count == admitted.extent.count
+        && (plan.extent.empty
+            || (plan.extent.first_time_ms == admitted.extent.first_time_ms
+                && plan.extent.last_time_ms == admitted.extent.last_time_ms))
+        && plan.attempt == admitted.attempt
+        && plan.input_generation == admitted.input_generation
+        && plan.admitted_view == admitted.admitted_view
+        && plan.spec_identity == admitted.spec_identity;
+    s.prepared_configuration = config;
+    s.configuration.streaming_sharpe = config.streaming_sharpe;
+    s.configuration.metrics_needed = config.metrics_needed;
+    s.prepared = true;
+    if (!same_plan) s.pending_plain = false;
+    // Absence of a recovery certificate keeps the actual curve from bar 1;
+    // it never introduces a run refusal or a guessed-prefix rf.
+    if (!s.pending_plain || config.deterministic_replay != 1)
+        s.prepared_configuration.curve_available = 1;
+    return MetricsStreamingStatusV1::Ok;
+}
+
+void BacktestEngine::begin_metrics_streaming_v1(bool admitted_shape) {
+    using namespace metrics;
+    auto& s = metrics_streaming_;
+    auto config = s.prepared ? s.prepared_configuration : s.configuration;
+    const auto plan = s.pending_plan;
+    const bool plain = s.pending_plain && admitted_shape;
+    const auto failed = s.pending_failed_plain_inputs
+        | (s.pending_plain && !admitted_shape ? 1ULL << 24 : 0);
+    s.pending_plain = s.prepared = false; // proof is consumed by THIS begin
+    s.pending_plan = {};
+    s.pending_failed_plain_inputs = 0;
+    s.fold.reset();
+    s.active = true;
+    s.plain = plain;
+    s.no_curve = false;
+    s.points = 0;
+    s.receipt_final = false;
+    s.result = {};
+    s.receipt = {};
+    s.receipt.extent_plan = plan;
+    s.receipt.plain_subset = plain ? 1u : 0u;
+    s.receipt.failed_plain_inputs = failed;
+    s.receipt.streaming_sharpe = config.streaming_sharpe;
+    s.receipt.metrics_needed = config.metrics_needed;
+    s.receipt.route = MetricsRatioRouteV1::LegacyActualCurve;
+    s.receipt.route_reason = MetricsRouteReasonV1::PlainNo;
+    s.run_configuration = config;
+    if (!plain) return;
+    const auto needs_curve = kMetricsNeedReturnsV1 | kMetricsNeedCurveV1
+        | kMetricsNeedMonthlyRatiosV1;
+    const bool bound = plan.present == 1 && plan.attempt == config.attempt
+        && plan.input_generation == config.input_generation
+        && plan.admitted_view == config.admitted_view
+        && plan.spec_identity == config.spec_identity
+        && ((plan.extent.empty == 1 && plan.extent.count == 0)
+            || (plan.extent.empty == 0 && plan.extent.count > 0));
+    const bool off_needs_sharpe = config.streaming_sharpe == StreamingSharpeV1::Off
+        && (config.metrics_needed & kMetricsNeedSharpeBarV1);
+    // A sink/observer or a legacy SUMMARY_ONLY provider keeps its own
+    // existing capture contract. No speculative E bytes or private curve
+    // are smuggled into a prepared no-curve attempt.
+    s.no_curve = config.curve_available == 0 && config.deterministic_replay == 1 && bound
+        && !(config.metrics_needed & needs_curve) && !off_needs_sharpe
+        && !report_sink_state_.enabled
+        && !NativeExecutionConsumer::observer_registered(*this)
+        && std::fegetround() == FE_TONEAREST
+        && pending_equity_report_mode_ == ReportMode::FULL;
+    if (!s.no_curve) {
+        // The exact ordered replay is only needed for the no-curve route.
+        // Existing curve routes keep their established provider and do not
+        // allocate a second scratch history.
+        config.curve_available = 1;
+        s.run_configuration = config;
+        return;
+    }
+    s.run_configuration = config;
+    try {
+        if (make_streaming_equity_ratios_v1(config, plan, {}, s.fold)
+            == MetricsStreamingStatusV1::Ok) return;
+    } catch (const std::bad_alloc&) {
+        // An allocation used ONLY by this optimization cannot replace an
+        // otherwise readable run with a new resource failure.
+    } catch (const detail::ReportScratchIoError&) {
+        // An unjailed report scratch create failure can use the established
+        // resident curve route. An attached arena failure is a typed run
+        // failure: falling back to RAM would hide the jailed resource limit.
+        if (detail::ScratchArena::attached()) throw;
+        s.receipt.route_reason = MetricsRouteReasonV1::ScratchUnavailable;
+    }
+    s.fold.reset();
+    s.no_curve = false;
+    s.run_configuration.curve_available = 1;
+    if (s.receipt.route_reason == MetricsRouteReasonV1::PlainNo
+        || s.receipt.route_reason == MetricsRouteReasonV1::NoRecoveryProof)
+        s.receipt.route_reason = MetricsRouteReasonV1::ScratchUnavailable;
+}
+
+void BacktestEngine::sync_metrics_streaming_held_v1() const {
+    auto& s = metrics_streaming_;
+    if (s.fold && s.points > 0) {
+        if (const auto* held = last_equity_point())
+            s.fold->amend_held(s.points - 1, *held,
+                metrics::equity_month_key(held->time_ms, chart_timezone_));
+    }
+}
+
+void BacktestEngine::finish_metrics_streaming_v1(
+        metrics::MetricsRatioCurveV1 curve, pf_equity_stats_t* equity) const {
+    using namespace metrics;
+    auto& s = metrics_streaming_;
+    const auto boundary = s.receipt.stop_boundary;
+    const auto failed = s.receipt.failed_plain_inputs;
+    const bool execution_failed = last_run_status_ != 0 || !last_error_.empty();
+    if (s.fold && s.plain && (s.no_curve || (!execution_failed && curve.count == s.points))) {
+        sync_metrics_streaming_held_v1();
+        if (curve.read && curve.count > 0) {
+            const auto tail = curve.read(curve.context, curve.count - 1);
+            s.fold->amend_held(s.points - 1, tail,
+                equity_month_key(tail.time_ms, chart_timezone_));
+        }
+        const auto status = s.fold->finish(s.result, curve);
+        if (status == MetricsStreamingStatusV1::Ok) {
+            s.receipt = s.result.receipt;
+            s.receipt.plain_subset = 1;
+            s.receipt.failed_plain_inputs = failed;
+            s.receipt.stop_boundary = boundary;
+            // Whole-report recovery also covers exact monthly ratios and an
+            // interrupted attempt whose presentation/completion is unproved.
+            if (s.no_curve && (execution_failed
+                || summary_equity_fold_.first_pass().month_returns.count >= 2)) {
+                s.receipt.route = MetricsRatioRouteV1::LegacyRerun;
+                s.receipt.route_reason = execution_failed
+                    ? MetricsRouteReasonV1::ExistingFailure : MetricsRouteReasonV1::CurveNeeded;
+                s.receipt.replay_attempts = 1; // host must resolve before publication
+                s.receipt.authoritative_attempt = 0;
+            }
+            s.receipt_final = true;
+            if (equity && s.receipt.route == MetricsRatioRouteV1::Streaming
+                && !s.result.failure_code) {
+                if (s.receipt.metrics_needed & kMetricsNeedSharpeBarV1)
+                    equity->sharpe_bar = s.result.sharpe_bar;
+                if (s.receipt.metrics_needed & kMetricsNeedSortinoBarV1)
+                    equity->sortino_bar = s.result.sortino_bar;
+            }
+            return;
+        }
+    }
+    // No trusted stream identity: observe the final authoritative curve
+    // without changing ANY legacy computation or failure stage.
+    auto& receipt = s.receipt;
+    receipt.route = MetricsRatioRouteV1::LegacyActualCurve;
+    if (execution_failed) receipt.route_reason = MetricsRouteReasonV1::ExistingFailure;
+    if (receipt.route_reason == MetricsRouteReasonV1::None)
+        receipt.route_reason = MetricsRouteReasonV1::PlainNo;
+    receipt.actual_extent = {};
+    receipt.eligible_returns = 0;
+    if (curve.count > 0 && curve.read) {
+        receipt.actual_extent.empty = 0;
+        receipt.actual_extent.count = curve.count;
+        auto point = curve.read(curve.context, 0);
+        receipt.actual_extent.first_time_ms = point.time_ms;
+        for (std::int64_t i = 1; i < curve.count; ++i) {
+            if (point.equity > 0.0) ++receipt.eligible_returns;
+            point = curve.read(curve.context, i);
+        }
+        receipt.actual_extent.last_time_ms = point.time_ms;
+    }
+    const auto& config = s.run_configuration;
+    receipt.actual_attempt = config.attempt;
+    receipt.actual_input_generation = config.input_generation;
+    receipt.actual_admitted_view = config.admitted_view;
+    receipt.actual_spec_identity = config.spec_identity;
+    receipt.authoritative_attempt = config.attempt;
+    receipt.mismatch_fields = fold_detail::extent_mismatch_v1(
+        receipt.extent_plan, config, receipt.actual_extent);
+    receipt.witness = !receipt.extent_plan.present ? MetricsExtentWitnessV1::NotEvaluated
+        : receipt.mismatch_fields ? MetricsExtentWitnessV1::Mismatch : MetricsExtentWitnessV1::Match;
+    s.receipt_final = true;
+}
 
 int32_t BacktestEngine::intern_trace_name(const std::string& name) {
     auto it = trace_name_index_.find(name);
@@ -79,6 +326,16 @@ void BacktestEngine::fill_report(ReportC* out) const try {
             && run_failure_value_of(*this).code == RunFailureCode::report_sink_failed)) {
         *out = ReportC{};
         return;
+    }
+    if (metrics_streaming_.no_curve) {
+        finish_metrics_streaming_v1({});
+        if (metrics_streaming_.receipt.route == metrics::MetricsRatioRouteV1::LegacyRerun) {
+            // A prepared adapter owns this speculative attempt and must
+            // resolve its receipt with the authoritative whole-run replay.
+            // No partial ratio/report or sink publication escapes first.
+            *out = ReportC{};
+            return;
+        }
     }
     // Sealed selected/observed generations use their capture (or the empty
     // report). A live selected sink cannot supply the ordinary full prefix.
@@ -391,7 +648,7 @@ int BacktestEngine::set_equity_report_mode(ReportMode mode) {
 // No ScopedTimezone may be held here: compute_equity_stats takes the
 // non-recursive global tz lock when chart_timezone_ is non-UTC.
 void BacktestEngine::fill_metrics_section(ReportC* out) const {
-    if (active_equity_report_mode_ == ReportMode::SUMMARY_ONLY) {
+    if (active_equity_report_mode_ == ReportMode::SUMMARY_ONLY || metrics_streaming_.no_curve) {
         // Only the independently held report point is presented. A whole-array
         // presenter requires an adapter at the versioned mode admission gate.
         auto presented_fold = summary_equity_fold_;
@@ -415,6 +672,31 @@ void BacktestEngine::fill_metrics_section(ReportC* out) const {
             const auto* ratios = summary_equity_ratios_
                 && summary_equity_ratios_->matches(summary_equity_snapshot_)
                 ? &*summary_equity_ratios_ : nullptr;
+            metrics::EquityRatioResult streaming_ratios;
+            if (metrics_streaming_.no_curve) {
+                finish_metrics_streaming_v1({});
+                if (metrics_streaming_.receipt.route == metrics::MetricsRatioRouteV1::Streaming) {
+                    streaming_ratios.expected = streaming_ratios.replayed = summary_equity_snapshot_;
+                    streaming_ratios.complete = true;
+                    streaming_ratios.sharpe_bar = metrics_streaming_.result.sharpe_bar;
+                    streaming_ratios.sortino_bar = metrics_streaming_.result.sortino_bar;
+                    streaming_ratios.nonfinite_field = metrics_streaming_.result.failure_field;
+                    ratios = &streaming_ratios;
+                }
+            } else {
+                // The old SUMMARY_ONLY second-pass contract remains intact.
+                auto& receipt = metrics_streaming_.receipt;
+                receipt.actual_extent = {};
+                receipt.actual_extent.count = summary_equity_snapshot_.point_count;
+                receipt.actual_extent.empty = summary_equity_snapshot_.point_count == 0;
+                if (!receipt.actual_extent.empty) {
+                    receipt.actual_extent.first_time_ms = summary_equity_snapshot_.first.time_ms;
+                    receipt.actual_extent.last_time_ms = summary_equity_snapshot_.last.time_ms;
+                }
+                receipt.eligible_returns = summary_equity_snapshot_.bar_returns.count;
+                receipt.route = metrics::MetricsRatioRouteV1::LegacyActualCurve;
+                metrics_streaming_.receipt_final = true;
+            }
             summary_equity_ratios_ready_ =
                 !summary_equity_snapshot_.needs_second_pass() || ratios;
             // While the legacy trade producer is present, use its presented
@@ -476,6 +758,7 @@ void BacktestEngine::fill_metrics_section(ReportC* out) const {
                                out->net_profit, initial_capital_, chart_timezone_,
                                first_bar_open_, current_bar_.close, bars_in_market_);
         compute_report_sink_trade_metrics(out, nullptr, 0);
+        observe_metrics_curve_v1(equity_curve_, n, &out->metrics.equity);
         return;
     }
     out->equity_curve_len = n;
@@ -492,6 +775,7 @@ void BacktestEngine::fill_metrics_section(ReportC* out) const {
                            first_bar_open_, current_bar_.close, bars_in_market_);
     if (report_sink_state_.enabled || report_sink_state_.receipt.complete)
         compute_report_sink_trade_metrics(out, out->trades, out->trades_len);
+    observe_metrics_curve_v1(out->equity_curve, n, &out->metrics.equity);
 }
 
 
@@ -601,6 +885,31 @@ void BacktestEngine::free_report(ReportC* report) {
 }
 
 }  // namespace pineforge
+
+extern "C" PF_API std::int32_t strategy_set_metrics_streaming_v1(
+        void* strategy, std::uint32_t mode, std::uint64_t needed) noexcept {
+    using namespace pineforge::metrics;
+    if (!strategy) return static_cast<std::int32_t>(MetricsStreamingStatusV1::InvalidArgument);
+    try {
+        return static_cast<std::int32_t>(
+            static_cast<pineforge::BacktestEngine*>(strategy)->set_metrics_streaming_v1(
+                static_cast<StreamingSharpeV1>(mode), needed));
+    } catch (...) {
+        return static_cast<std::int32_t>(MetricsStreamingStatusV1::InvalidArgument);
+    }
+}
+
+extern "C" PF_API std::int32_t strategy_metrics_extent_receipt_v1(
+        const void* strategy, pineforge::metrics::MetricsExtentReceiptV1* out) noexcept {
+    using namespace pineforge::metrics;
+    if (!strategy) return static_cast<std::int32_t>(MetricsStreamingStatusV1::InvalidArgument);
+    try {
+        return static_cast<std::int32_t>(
+            static_cast<const pineforge::BacktestEngine*>(strategy)->metrics_extent_receipt_v1(out));
+    } catch (...) {
+        return static_cast<std::int32_t>(MetricsStreamingStatusV1::InvalidArgument);
+    }
+}
 
 
 // ---------------------------------------------------------------------------
@@ -922,7 +1231,7 @@ double BacktestEngine::output_constant_value(int index) const {
 
 }  // namespace pineforge
 
-// CR-150 L6B1/L22A: sink runtime. Kept after the existing report/output code
+// Sink runtime. Kept after the existing report/output code
 // so the line-pinned documentation above retains its source coordinates.
 #include <pineforge/detail/scratch_arena.hpp>
 #include "report_sink_writer.hpp"
@@ -1117,7 +1426,6 @@ int BacktestEngine::report_sink_diagnostics_v1(
     *out = local;
     return 0;
 }
-
 void BacktestEngine::set_trade_history_streamable(bool streamable) {
     if (report_sink_setter_status() != 0)
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
@@ -1130,7 +1438,6 @@ void BacktestEngine::set_trade_history_streamable(bool streamable) {
                                       "trade history policy cannot retain sealed trade rows");
     report_sink_state_.trade_history_streamable = streamable;
 }
-
 void BacktestEngine::begin_report_sink() {
     auto& sink = report_sink_state_;
     // A begin owns a fresh run: the optional-sequence witnesses start empty
@@ -1157,18 +1464,21 @@ void BacktestEngine::begin_report_sink() {
     summary_equity_ratios_.reset();
     summary_broker_equity_prefix_[0] = summary_broker_equity_prefix_[1] = initial_capital_;
     summary_broker_equity_prefix_[2] = summary_broker_equity_prefix_[3] = 0.0;
-    if (active_equity_report_mode_ == ReportMode::SUMMARY_ONLY) {
+    if (active_equity_report_mode_ == ReportMode::SUMMARY_ONLY || metrics_streaming_.no_curve) {
         if (sink.enabled)
             throw coded<std::logic_error>(RunFailureCode::report_shape_unsupported,
                 {{"shape", "summary_with_sequence_sink"}},
                 "summary equity mode conflicts with a sequence sink");
-        // Drop a prior FULL run's capacity and prepare the only held point.
+        // SUMMARY_ONLY and a proved streaming attempt share this one held point.
+        // Drop a prior FULL run's capacity before any callback can mark.
         std::vector<pf_equity_point_t> held;
         held.reserve(1);
         equity_curve_.swap(held);
         return; // No curve writer, region, file, or sink publication.
     }
     if (!sink.enabled) return;
+    trades_.set_history_retirement(sink.trade_history_streamable
+        && !detail::strategy_reads_history_by_index(*this));
     // The new run owns these histories. Drop capacity left by a previous
     // sink-off run before callbacks, even if outputs are disabled this time.
     std::vector<uint64_t>().swap(broker_state_hashes_);
@@ -1448,6 +1758,7 @@ void BacktestEngine::compute_report_sink_metrics(ReportC* out,
         out->metrics.equity = metrics::compute_equity_stats(
             curve, equity_count, initial_capital_, chart_timezone_, first_bar_open_,
             current_bar_.close, bars_in_market_, out->net_profit);
+        observe_metrics_curve_v1(curve, equity_count, &out->metrics.equity);
     } catch (const std::exception& error) {
         report_sink_state_.writer.reset();
         auto& engine = const_cast<BacktestEngine&>(*this);
@@ -1604,7 +1915,7 @@ void BacktestEngine::retire_report_sink_hashes() {
 }
 
 // ---------------------------------------------------------------------------
-// CR-150 o1w-seq (R14--R18): the fixed ordered witnesses.
+// Fixed ordered witnesses.
 //
 // Every fold below is over the record's semantic fields, in record order, on
 // an explicit little-endian byte spelling. Nothing here reads the report mode
@@ -1784,7 +2095,7 @@ report_sequence::OptionalSequenceSummary BacktestEngine::optional_sequence_summa
 
 } // namespace pineforge
 
-// CR-150 L17B: selected report reads share these folds for the array and
+// Selected report reads share these folds for the array and
 // scratch sources. Formulae, return generation and floating-point order live
 // in metrics::compute_equity_stats; this boundary supplies the selected facts.
 namespace pineforge::internal {
@@ -1847,7 +2158,7 @@ void compute_selected_report_metrics(
 
 
 // ---------------------------------------------------------------------------
-// CR-150 O1W R12/R13: the terminal range-end row source and the versioned
+// The terminal range-end row source and the versioned
 // report envelope. Appended at the end of the file, after every function the
 // file held before.
 namespace pineforge {
@@ -2108,7 +2419,7 @@ int BacktestEngine::fill_report_envelope_v1(ReportEnvelopeV1* out) const {
     local.metadata.trades = sequence(local.report.total_trades, true);
     local.metadata.equity_curve = sequence(
         equity_count, equity_count > 0 || sink.equity_scratch != nullptr,
-        active_equity_report_mode_ == ReportMode::SUMMARY_ONLY);
+        active_equity_report_mode_ == ReportMode::SUMMARY_ONLY || metrics_streaming_.no_curve);
     local.metadata.broker_state_hash = sequence(
         hash_count, broker_state_hash_recording_, optional_summary);
     local.metadata.trace = sequence(trace_count, trace_enabled_, optional_summary);
@@ -2122,8 +2433,10 @@ int BacktestEngine::fill_report_envelope_v1(ReportEnvelopeV1* out) const {
         : nullptr;
     const bool completed = current && last_run_status_ == 0 && last_error_.empty() && consumer
         && consumer->state_kind() == NativeLifecycleKind::Completed
-        && (active_equity_report_mode_ != ReportMode::SUMMARY_ONLY
-            || equity_summary_ratios_ready());
+        && ((active_equity_report_mode_ != ReportMode::SUMMARY_ONLY
+             && !metrics_streaming_.no_curve) || equity_summary_ratios_ready())
+        && (!metrics_streaming_.no_curve
+            || metrics_streaming_.receipt.route == metrics::MetricsRatioRouteV1::Streaming);
     local.metadata.complete = completed && (!streamed || sink.receipt.complete) ? 1u : 0u;
     *out = local;
     return PF_REPORT_MODE_ACCEPTED;

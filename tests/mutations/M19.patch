@@ -1,0 +1,11 @@
+diff --git a/src/native_execution_consumer.cpp b/src/native_execution_consumer.cpp
+--- a/src/native_execution_consumer.cpp
++++ b/src/native_execution_consumer.cpp
+@@ -14468,6 +14468,7 @@
+                 break;
+             }
+         }
++        tracking = false;
+         if (!tracking) return false;
+         handles.clear();
+         handles.reserve(resident.active);

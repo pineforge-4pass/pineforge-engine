@@ -1,4 +1,4 @@
-"""CR-150 L9A preflight entry for tests/test_run_json_sink.py.
+"""Preflight entry for tests/test_run_json_sink.py.
 
 CTest names the implementation under tests/ so the private-fixture controls
 copy the actual driver into their source mirror. Preflight retains its Docker

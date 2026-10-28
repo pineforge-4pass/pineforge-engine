@@ -995,7 +995,7 @@ class AbiAndNativeCountsTests(unittest.TestCase):
 
     def test_the_supported_record_declares_the_full_revision_alone_never_the_parity_one(self):
         # A build with the section-4 producers and manifest and the completeness proof
-        # (EN-115) emits selected_window_contract_revisions == ["1.3"], never ["1.3-parity"].
+        # The completeness proof emits selected_window_contract_revisions == ["1.3"], never ["1.3-parity"].
         # The literals are written out here, not read from the module.
         supported = {
             "engine": "pineforge",
@@ -1038,7 +1038,7 @@ class AbiAndNativeCountsTests(unittest.TestCase):
 
     def test_with_a_completeness_proof_the_probe_declares_1_3_only(self):
         # Under amendment 6, "1.3" pairs only with value_ownership "complete", and the
-        # completeness proof has run (EN-115). Both capabilities_record(True) and the
+        # completeness proof has run. Both capabilities_record(True) and the
         # --capabilities-json probe must declare ["1.3"] alone, never ["1.3-parity"].
         self.assertEqual(swr.CONTRACT_REVISIONS, ("1.3",))
         record = swr.capabilities_record(True)["capabilities"]

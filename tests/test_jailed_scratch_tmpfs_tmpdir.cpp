@@ -1,5 +1,5 @@
 // Negative control: sealed-arena admission and a real fd-sink native run,
-// with strict private-TMPDIR inotify and own-process mkstemp attribution.
+// with strict private-TMPDIR inotify and process-tree descriptor attribution.
 #define PINEFORGE_TEST_SCRATCH_ATTRIBUTION 1
 #include "default_scratch_tmpfs_fixture.hpp"
 
@@ -94,7 +94,8 @@ void row() {
                 && output.find("\n{\"trailer\":\"pf-report-sink\"") != std::string::npos,
             "jailed report stream lacks its trade or completed trailer");
     watch.collect();
-    require(watch.empty(), "jailed run created a scratch file under TMPDIR, /tmp or /var/tmp");
+    require(watch.empty(), "jailed run created a scratch file under TMPDIR, /tmp or /var/tmp"
+                              + watch.diagnostics());
 }
 } // namespace
 

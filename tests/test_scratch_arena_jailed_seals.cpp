@@ -1,5 +1,5 @@
-// CR-267. Compile the original rows against b3d483d6c1 before the engine fix.
-// CR-267 r2: the write-seal refusal rows
+// Compile the original rows against b3d483d6c1 before the engine fix.
+// The write-seal refusal rows
 // must fail against e9f846ca9a3/b06b21edee4 (the admission commit and its docs
 // commit on the 1.7.0 line) before applying the r2 engine fix.
 #if defined(__linux__) && !defined(_GNU_SOURCE)

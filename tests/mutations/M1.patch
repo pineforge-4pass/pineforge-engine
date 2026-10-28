@@ -1,0 +1,11 @@
+diff --git a/src/native_order_book.hpp b/src/native_order_book.hpp
+--- a/src/native_order_book.hpp
++++ b/src/native_order_book.hpp
+@@ -642,6 +642,7 @@
+                 slot.stamp = r.seq - 1;
+             }
+         }
++        slot.stamp = slot.dormancy = 0;
+         if (priority != incarnation) {
+             IncarnationSlot link;
+             link.priority = priority;

@@ -1,4 +1,4 @@
-// EN-132 D3: declaration admission through the real source host.
+// Declaration admission through the real source host.
 // Written before the producer; expectations pinned from D3 and .lane-out/MAP.md.
 // No new admission header is needed to compile this TU against the base tree.
 #include <pineforge/run_failure.hpp>

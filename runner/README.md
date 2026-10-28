@@ -3,7 +3,8 @@
 Regenerated strategies can provide the additive [checked settings extension](../docs/checked-settings.md).
 The runner validates inputs and overrides before ledger binding, includes the
 effective receipt in the deployment identity, and returns it in the run summary.
-Older libraries remain usable with a warning and their legacy settings behavior.
+Libraries with the matching ABI but no checked settings extension remain usable
+with a warning and their legacy settings behavior.
 If the capability symbol is present, any settings API version other than 1 is
 refused rather than treated as a legacy library.
 
@@ -15,8 +16,9 @@ execution, SQLite journaling, recovery and HTTP delivery run in C++.
 
 Both hand-written C++ strategies and `pineforge-codegen-oss` output can expose
 the same strategy C ABI. The new additive native stream API is version 1;
-rebuild strategy libraries against this engine before using the runner. An
-old ABI-v4 library without the native extension is refused before execution.
+rebuild strategy libraries against this engine's ABI 5 before using the runner.
+A library stamped 4 is refused at the ABI check, and a matching library without
+the native stream extension is refused before execution.
 The engine and runner are Apache-2.0. The separately distributed compiler
 retains its own source-available/commercial terms.
 

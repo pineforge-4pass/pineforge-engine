@@ -1,4 +1,4 @@
-// EN-132 S1a. Expectations are pinned from the lane brief, D1 and D2.
+// Expectations are pinned from the admission brief, D1 and D2.
 // This TU uses only the previous public header closure, so it is intended to
 // compile on base; its actionable invalid rows then lack the required code.
 // No toolchain, private fixture, market data or admission-helper call is used.

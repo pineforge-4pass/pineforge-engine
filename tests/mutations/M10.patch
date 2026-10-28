@@ -1,0 +1,11 @@
+diff --git a/src/native_execution_consumer.cpp b/src/native_execution_consumer.cpp
+--- a/src/native_execution_consumer.cpp
++++ b/src/native_execution_consumer.cpp
+@@ -14217,7 +14217,6 @@
+ }
+ 
+ bool NativeExecutionConsumer::dormant_segment_finite(double from, double to) noexcept {
+-    if (!std::isfinite(from) || !std::isfinite(to)) return false;
+     return true;
+ }
+ 

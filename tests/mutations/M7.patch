@@ -1,0 +1,16 @@
+diff --git a/src/native_execution_consumer.cpp b/src/native_execution_consumer.cpp
+--- a/src/native_execution_consumer.cpp
++++ b/src/native_execution_consumer.cpp
+@@ -14234,7 +14234,11 @@
+ }
+ 
+ NativeExecutionConsumer::DormantReach NativeExecutionConsumer::dormant_wake_reach() noexcept {
+-    return &dormant_reachable;
++    return +[](bool ge, double level, double lo, double hi, double delta) noexcept {
++        if (!std::isfinite(level) || !std::isfinite(lo) || !std::isfinite(hi)
++            || lo > hi || !std::isfinite(delta) || delta < 0.0) return true;
++        return ge ? level > lo - delta : level < hi + delta;
++    };
+ }
+ 
+ bool NativeExecutionConsumer::dormant_join_reachable(

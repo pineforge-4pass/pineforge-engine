@@ -72,6 +72,7 @@
 #include <vector>
 #include <signal.h>
 #include "run_abort.hpp"
+#include "retired_trade_history_read.hpp"
 namespace pineforge {
 void clear_native_c_host_refusal_error(BacktestEngine* engine) noexcept;
 bool native_c_host_in_postrun_hook_frame(BacktestEngine* engine) noexcept;
@@ -398,7 +399,7 @@ PF_API int pf_run_abort_restore_sigterm_v1(void) {
  * engine's per-lot range-end rows themselves matched TV (xau-grid 6/6,
  * silicon 9/9 rows). The row is built from the open
  * pyramid lot, so it carries that lot's entry_incarnation like any other
- * close. No struct changed by this accessor (PF_ABI_VERSION is 4 since the native lowering). */
+ * close. No struct changed by this accessor (PF_ABI_VERSION is 5). */
 PF_API uint64_t strategy_closed_trade_entry_incarnation(
         pf_strategy_t s, int trade_index) {
     if (!s) return 0;
@@ -406,6 +407,9 @@ PF_API uint64_t strategy_closed_trade_entry_incarnation(
     try {
         if (engine->closed_trade_close_cause(trade_index) < 0) return 0;
         return engine->get_report_trade(trade_index).entry_incarnation;
+    } catch (const pineforge::detail::RetiredTradeHistoryRead& error) {
+        note_cabi_refusal(s, &error);
+        return 0;
     } catch (...) {
         return 0;
     }
@@ -432,6 +436,9 @@ PF_API const char* strategy_closed_trade_entry_id(pf_strategy_t s, int trade_ind
     try {
         if (engine->closed_trade_close_cause(trade_index) < 0) return nullptr;
         return engine->materialize_report_trade(trade_index).entry_id.c_str();
+    } catch (const pineforge::detail::RetiredTradeHistoryRead& error) {
+        note_cabi_refusal(s, &error);
+        return nullptr;
     } catch (...) {
         return nullptr;
     }
@@ -443,6 +450,9 @@ PF_API const char* strategy_closed_trade_exit_id(pf_strategy_t s, int trade_inde
     try {
         if (engine->closed_trade_close_cause(trade_index) < 0) return nullptr;
         return engine->materialize_report_trade(trade_index).exit_id.c_str();
+    } catch (const pineforge::detail::RetiredTradeHistoryRead& error) {
+        note_cabi_refusal(s, &error);
+        return nullptr;
     } catch (...) {
         return nullptr;
     }
@@ -454,6 +464,9 @@ PF_API const char* strategy_closed_trade_exit_comment(pf_strategy_t s, int trade
     try {
         if (engine->closed_trade_close_cause(trade_index) < 0) return nullptr;
         return engine->materialize_report_trade(trade_index).exit_comment.c_str();
+    } catch (const pineforge::detail::RetiredTradeHistoryRead& error) {
+        note_cabi_refusal(s, &error);
+        return nullptr;
     } catch (...) {
         return nullptr;
     }
@@ -476,13 +489,16 @@ PF_API int strategy_closed_trade_close_cause(pf_strategy_t s, int trade_index) {
     if (!s) return -1;
     try {
         return static_cast<const pineforge::BacktestEngine*>(s)->closed_trade_close_cause(trade_index);
+    } catch (const pineforge::detail::RetiredTradeHistoryRead& error) {
+        note_cabi_refusal(s, &error);
+        return -1;
     } catch (...) {
         return -1;
     }
 }
 
 /* ABI v4 live-runtime surface (task 9): the script-facing position size
- * (strategy.position_size -- signed, KI-64 freeze-aware) and equity after
+ * (strategy.position_size -- signed, freeze-aware) and equity after
  * the most recent run(). strategy_current_equity is initial capital plus
  * realized net profit (strategy.initial_capital + strategy.netprofit) --
  * NOT Pine's strategy.equity, which adds open profit on top of this. NaN
@@ -1418,7 +1434,7 @@ PF_API int strategy_set_symbol_feed_borrowed_v1(
 
 } /* extern "C" */
 
-// Additive CR-150 report sink ABI. P00 owns the frozen declarations.
+// Additive report sink ABI. The declarations are frozen.
 #include <pineforge/report_sink.h>
 
 extern "C" {

@@ -1,4 +1,4 @@
-// CR-150 L19l-C. One live adapter/strategy, differing only in the storage
+// One live adapter/strategy, differing only in the storage
 // backend of its auxiliary id tables. Fail-before on b3c39238e: the explicit
 // fixture storage seam is absent. CORE-TOP owns executed fail-before proof.
 #include <pineforge/source/pine_strategy_host.hpp>
