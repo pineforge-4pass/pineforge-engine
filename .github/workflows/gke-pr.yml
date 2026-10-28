@@ -121,37 +121,32 @@ jobs:
           repo = os.environ["REPO"]
           base = os.environ["BASE_SHA"]
           head = os.environ["HEAD_SHA"]
-          page = 1
           paths = []
-          while True:
-              endpoint = f"repos/{repo}/compare/{base}...{head}?per_page=100&page={page}"
-              result = subprocess.run(["gh", "api", endpoint], check=True,
-                                      capture_output=True, text=True)
-              response = json.loads(result.stdout)
-              rows = response.get("files")
-              if not isinstance(rows, list):
-                  raise SystemExit("compare response has no readable files list")
-              for row in rows:
-                  if not isinstance(row, dict):
-                      raise SystemExit("compare response has an unreadable file row")
-                  filename = row.get("filename")
-                  if (not isinstance(filename, str) or "\x00" in filename
-                          or any(part in ("", ".", "..") for part in filename.split("/"))):
-                      raise SystemExit("compare response has an unreadable filename")
-                  paths.append(filename)
-                  if row.get("status") == "renamed" and "previous_filename" not in row:
-                      raise SystemExit("compare response is missing a rename origin")
-                  if "previous_filename" in row:
-                      previous = row["previous_filename"]
-                      if (not isinstance(previous, str) or "\x00" in previous
-                              or any(part in ("", ".", "..") for part in previous.split("/"))):
-                          raise SystemExit("compare response has an unreadable previous filename")
-                      paths.append(previous)
-              if len(paths) >= 3000:
-                  raise SystemExit("compare response is truncated at 3000 files")
-              if len(rows) < 100:
-                  break
-              page += 1
+          endpoint = f"repos/{repo}/compare/{base}...{head}"
+          result = subprocess.run(["gh", "api", endpoint], check=True,
+                                  capture_output=True, text=True)
+          response = json.loads(result.stdout)
+          rows = response.get("files")
+          if not isinstance(rows, list):
+              raise SystemExit("compare response has no readable files list")
+          if len(rows) >= 300:
+              raise SystemExit("PR changes 300+ files: admission by compare is truncated")
+          for row in rows:
+              if not isinstance(row, dict):
+                  raise SystemExit("compare response has an unreadable file row")
+              filename = row.get("filename")
+              if (not isinstance(filename, str) or "\x00" in filename
+                      or any(part in ("", ".", "..") for part in filename.split("/"))):
+                  raise SystemExit("compare response has an unreadable filename")
+              paths.append(filename)
+              if row.get("status") == "renamed" and "previous_filename" not in row:
+                  raise SystemExit("compare response is missing a rename origin")
+              if "previous_filename" in row:
+                  previous = row["previous_filename"]
+                  if (not isinstance(previous, str) or "\x00" in previous
+                          or any(part in ("", ".", "..") for part in previous.split("/"))):
+                      raise SystemExit("compare response has an unreadable previous filename")
+                  paths.append(previous)
           if not paths:
               raise SystemExit("compare response has no changed paths")
           Path(os.environ["PATH_FILE"]).write_bytes(
@@ -444,39 +439,33 @@ jobs:
           from pathlib import Path
           import subprocess
 
-          page = 1
           paths = []
-          while True:
-              endpoint = (f"repos/{os.environ['REPO']}/compare/"
-                          f"{os.environ['BASE_SHA']}...{os.environ['HEAD_SHA']}"
-                          f"?per_page=100&page={page}")
-              response = json.loads(subprocess.run(
-                  ["gh", "api", endpoint], check=True,
-                  capture_output=True, text=True).stdout)
-              rows = response.get("files")
-              if not isinstance(rows, list):
-                  raise SystemExit("second compare response is unreadable")
-              for row in rows:
-                  if not isinstance(row, dict):
-                      raise SystemExit("second compare response has an unreadable file row")
-                  filename = row.get("filename")
-                  if (not isinstance(filename, str) or "\x00" in filename
-                          or any(part in ("", ".", "..") for part in filename.split("/"))):
-                      raise SystemExit("second compare filename is unreadable")
-                  paths.append(filename)
-                  if row.get("status") == "renamed" and "previous_filename" not in row:
-                      raise SystemExit("second compare response is missing a rename origin")
-                  if "previous_filename" in row:
-                      previous = row["previous_filename"]
-                      if (not isinstance(previous, str) or "\x00" in previous
-                              or any(part in ("", ".", "..") for part in previous.split("/"))):
-                          raise SystemExit("second previous filename is unreadable")
-                      paths.append(previous)
-              if len(paths) >= 3000:
-                  raise SystemExit("second compare response is truncated")
-              if len(rows) < 100:
-                  break
-              page += 1
+          endpoint = (f"repos/{os.environ['REPO']}/compare/"
+                      f"{os.environ['BASE_SHA']}...{os.environ['HEAD_SHA']}")
+          response = json.loads(subprocess.run(
+              ["gh", "api", endpoint], check=True,
+              capture_output=True, text=True).stdout)
+          rows = response.get("files")
+          if not isinstance(rows, list):
+              raise SystemExit("second compare response is unreadable")
+          if len(rows) >= 300:
+              raise SystemExit("second compare response is truncated at 300 files")
+          for row in rows:
+              if not isinstance(row, dict):
+                  raise SystemExit("second compare response has an unreadable file row")
+              filename = row.get("filename")
+              if (not isinstance(filename, str) or "\x00" in filename
+                      or any(part in ("", ".", "..") for part in filename.split("/"))):
+                  raise SystemExit("second compare filename is unreadable")
+              paths.append(filename)
+              if row.get("status") == "renamed" and "previous_filename" not in row:
+                  raise SystemExit("second compare response is missing a rename origin")
+              if "previous_filename" in row:
+                  previous = row["previous_filename"]
+                  if (not isinstance(previous, str) or "\x00" in previous
+                          or any(part in ("", ".", "..") for part in previous.split("/"))):
+                      raise SystemExit("second previous filename is unreadable")
+                  paths.append(previous)
           if not paths:
               raise SystemExit("second compare response has no changed paths")
           Path(os.environ["PATH_FILE"]).write_bytes(
