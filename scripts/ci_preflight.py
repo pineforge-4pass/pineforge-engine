@@ -117,7 +117,7 @@ GKE_JOB_LABELS = {
 }
 GKE_LIGHT_JOB_RUNNERS = {
     'ci-post.yml': dict.fromkeys(
-        ('authz', 'changes', 'build-release-gate', 'build-debug-gate',
+        ('authz', 'build-release-gate', 'build-debug-gate',
          'sanitizers-gate', 'kernel-only-gate', 'build-gate'), GKE_2_LABEL),
     # Separate called-workflow guards to keep each static label count <= 8.
     'native-live.yml': dict.fromkeys(
@@ -310,7 +310,7 @@ JOB_COMMANDS = {
     'gke-pr.yml': {'admit': None, 'preflight': None, 'build': None,
                    'build-debug': None, 'corpus-parity-subset': PARITY,
                    'legs': None, 'result': None},
-    'ci-post.yml': {'authz': None, 'changes': None, 'preflight': None,
+    'ci-post.yml': {'authz': None, 'preflight': None,
                     'preflight-slow': None, 'build': VERIFY, 'build-arm': VERIFY,
                     'build-debug': VERIFY, 'sanitizers': VERIFY, 'kernel-only': VERIFY,
                     **dict.fromkeys(POST_LEG_GATES), 'build-gate': None},
@@ -351,10 +351,8 @@ _LARGER_RUNNER_KEY = re.compile(r'(?<![\w.-])["\']?larger_runner["\']?[ \t]*:')
 # Retired release labels remain refused by the runner pins as well. Neither
 # spelling may grant an arbitrary workflow access to the isolated release pool.
 _RELEASE_POOL_LABEL = re.compile(r'(?<![\w.-])(?:pf-ci-release|pf-gcp-main)(?![\w.-])')
-# A docs-only change (scripts/ci_docs_only.py) skips the proof jobs. Each waits
-# for authz and changes and skips only when changes succeeded and answered
-# docs-only -- exactly the skip the build aggregate accepts -- so a failed or
-# unanswered classification runs it.
+# Post-merge proofs run on every push, schedule and dispatch after authz.
+# PR admission owns the documentation and GitHub-only proof skips.
 PROOF_JOBS = {'build': 'BUILD_RESULT', 'build-arm': 'ARM_BUILD_RESULT',
               'build-debug': 'DEBUG_BUILD_RESULT',
               'build-release-gate': 'RELEASE_GATE_RESULT', 'build-debug-gate': 'DEBUG_GATE_RESULT',
@@ -367,18 +365,11 @@ PR_PROOF_JOBS = {'build': 'BUILD_RESULT', 'build-debug': 'DEBUG_RESULT',
 HEAVY_JOBS = frozenset(('sanitizers', 'kernel-only', 'native-live', 'corpus-parity'))
 AUTHZ_SUCCESS = "${{ needs.authz.result == 'success' }}"
 AUTHZ_ALWAYS = "${{ always() && needs.authz.result == 'success' }}"
-PREFLIGHT_IF = "${{ !github.event.pull_request.draft && (always() && needs.authz.result == 'success') }}"
+POST_LEG_IF = "${{ !cancelled() && needs.authz.result == 'success' }}"
 AUTHZ_FULL_SUCCESS = "${{ needs.authz.result == 'success' && github.event_name != 'pull_request' }}"
+# Retired scheduling condition retained only as a refused mutation input.
 DOCS_ONLY_SKIP = ("${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || "
                   "needs.changes.outputs.docs_only != 'true') }}")
-# Only the scheduling hint comes from changes. The aggregate recomputes this
-# class from the event-bound API diff inside its own job.
-GITHUB_ONLY_SKIP = ("${{ !github.event.pull_request.draft && (always() && needs.authz.result == 'success' && "
-                    "(needs.changes.result != 'success' || "
-                    "(needs.changes.outputs.docs_only != 'true' && (github.event_name != 'pull_request' || "
-                    "needs.changes.outputs.github_only != 'true')))) }}")
-HEAVY_SKIP = DOCS_ONLY_SKIP
-SLOW_PREFLIGHT_IF = AUTHZ_ALWAYS
 BUILD_VERIFY_RUN = ' '.join(r'''|
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
 -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DPINEFORGE_VERSION_SOURCE=FILE \
@@ -498,6 +489,7 @@ BUILD_CACHE_SAVE = ("${{ success() && github.ref == 'refs/heads/main' "
 SHARD_CACHE_SAVE = BUILD_CACHE_SAVE.replace(
     "&& steps.ccache-restore", "&& matrix.shard == 1 && steps.ccache-restore")
 POST_SHARD_GATE_STEP = r'''      - name: Require every shard to have passed
+        if: ${{ needs.authz.result == 'success' }}
         shell: bash
         env:
           SHARD_RESULT: ${{ needs.SHARD_JOB.result }}
@@ -505,6 +497,22 @@ POST_SHARD_GATE_STEP = r'''      - name: Require every shard to have passed
           set -euo pipefail
           printf '%s\n' "shards: $SHARD_RESULT"
           [[ "$SHARD_RESULT" == "success" ]]
+'''
+POST_VERIFY_ENV = '''    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_COMPILERCHECK: content
+      CCACHE_COMPRESS: "1"
+      CCACHE_MAXSIZE: 500M
+      PINEFORGE_REQUIRE_RELEASE_TAGS: "1"
+'''
+POST_PREFLIGHT_ENV = '''    env:
+      PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64-16"]'
+      PINEFORGE_VERIFIER_SLOW: 'true'
+      PINEFORGE_REQUIRE_RELEASE_TAGS: "1"
+'''
+POST_CI_CONCURRENCY = '''concurrency:
+  group: ${{ github.workflow }}-${{ github.run_id }}
+  cancel-in-progress: false
 '''
 PREFLIGHT_LINTER_RUN = ' '.join(r'''|
 set -euo pipefail
@@ -586,38 +594,6 @@ AUTHZ_REFUSE_STEP = '''      - name: Refuse an unauthorised run before anything 
           echo "::error::authz did not pass; nothing of this run's code is checked out or run"
           exit 1
 '''
-# The classification step, exactly: the base's copy of the rule judges the
-# change, a base without one runs every job, and the answer is the script's.
-CLASSIFY_STEP = """      - name: Classify the change
-        id: classify
-        env:
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PUSH_BEFORE: ${{ github.event.before }}
-          PUSH_FORCED: ${{ github.event.forced }}
-        run: |
-          if git show HEAD^1:scripts/ci_docs_only.py > "$RUNNER_TEMP/ci_docs_only.py"; then
-            python3 "$RUNNER_TEMP/ci_docs_only.py" --root . --github-output "$GITHUB_OUTPUT"
-          else
-            echo "not docs-only: the base holds no scripts/ci_docs_only.py"
-            echo "docs_only=false" >> "$GITHUB_OUTPUT"
-          fi
-"""
-VERIFIER_CLASSIFY_STEP = """      - name: Classify verifier self-tests
-        id: verifier
-        env:
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          if git show HEAD^1:scripts/ci_verifier_paths.py > "$RUNNER_TEMP/ci_verifier_paths.py"; then
-            python3 "$RUNNER_TEMP/ci_verifier_paths.py" --root . --github-output "$GITHUB_OUTPUT"
-          else
-            echo "verifier SLOW: the base holds no scripts/ci_verifier_paths.py"
-            echo "verifier_slow=true" >> "$GITHUB_OUTPUT"
-          fi
-"""
-PREFLIGHT_VERIFIER_SLOW = ("${{ needs.changes.result == 'success' && "
-                          "needs.changes.outputs.verifier_slow || 'true' }}")
-PREFLIGHT_TIER = ("${{ github.event_name == 'pull_request' && needs.changes.result == 'success' && "
-                  "needs.changes.outputs.github_only == 'true' && 'github-only' || 'fast' }}")
 # This is the only non-authz token reader allowed by the CI contract. The same
 # step schedules jobs in changes and independently proves skips in build-gate.
 # It executes inline without checkout, validates both rename paths, every page
@@ -904,82 +880,15 @@ PROMOTE_GUARD = r'''  promote-guard:
 '''
 PROMOTE_IF = ("${{ needs.promote-guard.result == 'success' && "
               "needs.promote-guard.outputs.ok == 'true' }}")
-GATE_NEEDS = 'needs: [authz, changes, preflight, build, corpus-parity-subset]'
-POST_GATE_NEEDS = ('needs: [authz, changes, preflight, build, build-arm, sanitizers, native-live, kernel-only, '
-                   'corpus-parity-subset, preflight-slow, corpus-parity]')
-# The matrix dependency already aggregates the selected cells. Its result must
-# never be excused for the PR-only exclusion: no job was created for that cell.
-# Pin the whole step so a widened passed(), a later override or a missing-result
-# fallback cannot keep the required snippets while accepting a failed proof.
-GATE_STEP = r'''      - name: Require every verification lane to have passed
-        shell: bash
-        env:
-          AUTHZ_RESULT: ${{ needs.authz.result }}
-          CHANGES_RESULT: ${{ needs.changes.result }}
-          DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
-          GITHUB_ONLY: ${{ steps.github-only.outputs.github_only }}
-          PREFLIGHT_RESULT: ${{ needs.preflight.result }}
-          BUILD_RESULT: ${{ needs.build.result }}
-          PARITY_RESULT: ${{ needs.corpus-parity-subset.result }}
-        run: |
-          printf '%s\n' "authz: $AUTHZ_RESULT" "changes: $CHANGES_RESULT, docs only: ${DOCS_ONLY:-unanswered}" \
-            "preflight: $PREFLIGHT_RESULT" "matrix: $BUILD_RESULT" \
-            "corpus parity (subset): $PARITY_RESULT"
-          # Every selected PR proof must pass.
-          # GitHub-only skips use this job's own API read, never changes' output.
-          # Classified docs-only skips retain their policy; preflight must pass.
-          docs_only=false
-          if [[ "$CHANGES_RESULT" == "success" && "$DOCS_ONLY" == "true" ]]; then docs_only=true; fi
-          github_only=false
-          if [[ "$GITHUB_EVENT_NAME" == "pull_request" && "${GITHUB_ONLY:-false}" == "true" ]]; then github_only=true; fi
-          passed() { [[ "$1" == "success" || ( ( "$docs_only" == "true" || "$github_only" == "true" ) && "$1" == "skipped" ) ]]; }
-          [[ "$AUTHZ_RESULT" == "success" && "$CHANGES_RESULT" == "success" ]] \
-            && [[ "$PREFLIGHT_RESULT" == "success" ]] && passed "$BUILD_RESULT" \
-            && passed "$PARITY_RESULT"
-'''
+POST_GATE_NEEDS = ('needs: [authz, preflight, build, build-debug, build-release-gate, '
+                   'build-debug-gate, build-arm, sanitizers, sanitizers-gate, native-live, '
+                   'kernel-only, kernel-only-gate, corpus-parity-subset, preflight-slow, corpus-parity]')
 POST_GATE_STEP = r'''      - name: Require every verification lane to have passed
-        shell: bash
         env:
-          AUTHZ_RESULT: ${{ needs.authz.result }}
-          CHANGES_RESULT: ${{ needs.changes.result }}
-          DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
-          PREFLIGHT_RESULT: ${{ needs.preflight.result }}
-          BUILD_RESULT: ${{ needs.build.result }}
-          DEBUG_BUILD_RESULT: ${{ needs.build-debug.result }}
-          RELEASE_GATE_RESULT: ${{ needs.build-release-gate.result }}
-          DEBUG_GATE_RESULT: ${{ needs.build-debug-gate.result }}
-          ARM_BUILD_RESULT: ${{ needs.build-arm.result }}
-          SANITIZER_RESULT: ${{ needs.sanitizers.result }}
-          SANITIZER_GATE_RESULT: ${{ needs.sanitizers-gate.result }}
-          NATIVE_RESULT: ${{ needs.native-live.result }}
-          KERNEL_RESULT: ${{ needs.kernel-only.result }}
-          KERNEL_GATE_RESULT: ${{ needs.kernel-only-gate.result }}
-          PARITY_RESULT: ${{ needs.corpus-parity-subset.result }}
-          SLOW_PREFLIGHT_RESULT: ${{ needs.preflight-slow.result }}
-          FULL_PARITY_RESULT: ${{ needs.corpus-parity.result }}
+          RESULTS: ${{ toJSON(needs.*.result) }}
         run: |
-          printf '%s\n' "authz: $AUTHZ_RESULT" "changes: $CHANGES_RESULT, docs only: ${DOCS_ONLY:-unanswered}" \
-            "preflight: $PREFLIGHT_RESULT" "matrix: $BUILD_RESULT" \
-            "debug shards: $DEBUG_BUILD_RESULT" "release aggregate: $RELEASE_GATE_RESULT" "debug aggregate: $DEBUG_GATE_RESULT" \
-            "arm64 matrix: $ARM_BUILD_RESULT" \
-            "sanitizers: $SANITIZER_RESULT" "native: $NATIVE_RESULT" \
-            "sanitizers aggregate: $SANITIZER_GATE_RESULT" "kernel aggregate: $KERNEL_GATE_RESULT" \
-            "kernel: $KERNEL_RESULT" "corpus parity (subset): $PARITY_RESULT" \
-            "preflight (slow): $SLOW_PREFLIGHT_RESULT" "corpus parity (full): $FULL_PARITY_RESULT"
-          # Every shard matrix, leg aggregate and full-event proof must pass.
-          # Only a classified docs-only push may skip proof jobs.
-          # Both preflight tiers must pass even for a docs-only push.
-          docs_only=false
-          if [[ "$CHANGES_RESULT" == "success" && "$DOCS_ONLY" == "true" ]]; then docs_only=true; fi
-          passed() { [[ "$1" == "success" || ( "$docs_only" == "true" && "$1" == "skipped" ) ]]; }
-          [[ "$AUTHZ_RESULT" == "success" && "$CHANGES_RESULT" == "success" ]] \
-            && [[ "$PREFLIGHT_RESULT" == "success" ]] && passed "$BUILD_RESULT" \
-            && passed "$DEBUG_BUILD_RESULT" && passed "$RELEASE_GATE_RESULT" && passed "$DEBUG_GATE_RESULT" \
-            && passed "$ARM_BUILD_RESULT" \
-            && passed "$SANITIZER_RESULT" && passed "$NATIVE_RESULT" \
-            && passed "$SANITIZER_GATE_RESULT" && passed "$KERNEL_GATE_RESULT" \
-            && passed "$KERNEL_RESULT" && passed "$PARITY_RESULT" \
-            && [[ "$SLOW_PREFLIGHT_RESULT" == "success" ]] && passed "$FULL_PARITY_RESULT"
+          echo "$RESULTS"
+          [ "$(echo "$RESULTS" | tr -d '[] \n"' | tr ',' '\n' | grep -vc '^success$')" = "0" ] || { echo "::error::a needed job did not succeed"; exit 1; }
 '''
 # No stage of this preflight carries a timeout: the verifier self-tests
 # (test_ci_verify.py) drive the real literal-aware parity, receipt and
@@ -2697,7 +2606,7 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                 if (name == 'native-live.yml'
                         or name == 'promote-baseline.yml'
                         or name == 'ci-post.yml' and job not in (
-                            'preflight', 'preflight-slow', 'changes', 'build-gate')):
+                            'preflight', 'preflight-slow')):
                     environments = _job_values(workflow, 'env') + _job_values(body, 'env')
                     if any(re.search(r'\bPF_CI_LABELS["\']?\s*:', value) for value in environments):
                         findings.append(f'{name} job {job} must not set PF_CI_LABELS on a GKE job')
@@ -2728,7 +2637,7 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                 if credentials and not hosted_ok:
                     findings.append(f'{name} job {job} must keep production credentials '
                                     'on a hosted standard runner')
-                environments = ([] if name in ('ci.yml', 'ci-post.yml') and job in ('changes', 'build-gate')
+                environments = ([] if name == 'ci.yml' and job in ('changes', 'build-gate')
                                 else _job_values(workflow, 'env') + _job_values(body, 'env'))
                 if any(re.search(r'\bPF_CI_LABELS["\']?\s*:', value) for value in environments):
                     findings.append(f'{name} job {job} must not set PF_CI_LABELS on a hosted job')
@@ -3350,13 +3259,13 @@ def post_shard_workflow_findings(jobs: dict[str, str]) -> list[str]:
         body = jobs.get(aggregate, '')
         expected_steps = [_code(AUTHZ_REFUSE_STEP),
                           _code(POST_SHARD_GATE_STEP.replace('SHARD_JOB', job))]
-        if (sorted(_needs(body)) != sorted(['authz', 'changes', job])
+        if (sorted(_needs(body)) != sorted(['authz', job])
                 or _job_values(body, 'name') != [display]
-                or _job_values(body, 'if') != [DOCS_ONLY_SKIP]
+                or _job_values(body, 'if') != [POST_LEG_IF]
                 or _job_block(body, 'strategy') or _job_values(body, 'uses')
                 or [_code(step) for step in _steps(body)] != expected_steps):
             findings.append(f'{aggregate} must require only its own complete shard matrix '
-                            'and keep its docs-only scheduling policy')
+                            'and keep its guarded non-required override policy')
     for job, count in POST_SHARDS.items():
         body = jobs.get(job, '')
         steps = _steps(body)
@@ -3417,52 +3326,38 @@ def _native_profile_job_findings(job: str, name: str, *, sharded: bool) -> list[
 
 
 def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[str]:
-    """Pin each pipeline's actual jobs, dependencies, commands and aggregate."""
+    """Pin the full-event pipeline; PR CI now contains only authorization."""
+    if pr:
+        return ci_authz_only_findings(workflow)
     findings = authz_workflow_findings(workflow, name, 'build-gate')
-    events = CI_EVENTS if pr else POST_CI_EVENTS
-    if _job_block(workflow, 'on') != _code(events):
-        findings.append(f'{name} must keep its exact {"unfiltered PR" if pr else "main push, nightly and manual"} triggers')
-    if pr and _job_block(workflow, 'concurrency') != _code(CI_CONCURRENCY):
-        findings.append('ci.yml must keep its exact draft and ready concurrency groups')
+    if _job_block(workflow, 'on') != _code(POST_CI_EVENTS):
+        findings.append(f'{name} must keep its exact main push, nightly and manual triggers')
+    if _job_block(workflow, 'concurrency') != _code(POST_CI_CONCURRENCY):
+        findings.append('ci-post.yml must keep every proof run without cancellation')
     jobs = _jobs(workflow)
-    proofs = PR_PROOF_JOBS if pr else PROOF_JOBS
-    expected_jobs = {'authz', 'changes', 'preflight', *proofs, 'build-gate'}
-    if not pr:
-        expected_jobs.add('preflight-slow')
+    proofs = PROOF_JOBS
+    expected_jobs = {'authz', 'preflight', 'preflight-slow', *proofs, 'build-gate'}
+    if ('changes' in jobs or re.search(r'\bneeds\.changes\b|\boutputs\.(?:docs_only|github_only|code)\b',
+                                      '\n'.join(_code(workflow)))):
+        findings.append('ci-post.yml must not classify full-event changes')
+    if _job_values(workflow, 'env') or _job_values(workflow, 'defaults'):
+        findings.append('ci-post.yml must keep workflow env and defaults out of the aggregate')
     findings += [f'{name} is missing job {job}' for job in sorted(expected_jobs - jobs.keys())]
     if set(jobs) - expected_jobs:
-        findings.append(f'{name} must keep only its pinned {"PR" if pr else "full-event"} jobs')
-    named_jobs = {'authz', 'build', 'build-arm', 'build-gate'}
-    if not pr:
-        named_jobs.update(POST_SHARDS)
-        named_jobs.update(POST_LEG_GATES)
+        findings.append(f'{name} must keep only its pinned full-event jobs')
+    named_jobs = {'authz', 'build-arm', 'build-gate', *POST_SHARDS, *POST_LEG_GATES}
     for job in expected_jobs - named_jobs:
         if _job_values(jobs.get(job, ''), 'name'):
             findings.append(f'{job} must keep its default check name')
-    changes = jobs.get('changes', '')
-    if _needs(changes) != ['authz'] or _job_values(changes, 'if'):
-        findings.append('changes must start after authz on every run')
-    if pr and ('      github_only: ${{ steps.github-only.outputs.github_only }}\n' not in changes
-               or not any(_code(step) == _code(GITHUB_ONLY_STEP) for step in _steps(changes))):
-        findings.append('changes must publish the event-bound GitHub-only PR scheduling hint')
-    if ('      docs_only: ${{ steps.classify.outputs.docs_only }}\n' not in changes
-            or CLASSIFY_STEP not in changes + '\n'):
-        findings.append("changes must publish the base's scripts/ci_docs_only.py answer, exactly")
-    if ('      verifier_slow: ${{ steps.verifier.outputs.verifier_slow }}\n' not in changes
-            or VERIFIER_CLASSIFY_STEP not in changes + '\n'):
-        findings.append("changes must publish the base's scripts/ci_verifier_paths.py answer, exactly")
     preflight = jobs.get('preflight', '')
-    if (sorted(_needs(preflight)) != ['authz', 'changes']
-            or _job_values(preflight, 'if') != [PREFLIGHT_IF if pr else AUTHZ_ALWAYS]):
-        findings.append('preflight must follow authz and changes and run even if classification fails')
-    if (f'      PINEFORGE_VERIFIER_SLOW: {PREFLIGHT_VERIFIER_SLOW}\n' not in preflight
-            or preflight.count('PINEFORGE_VERIFIER_SLOW:') != 1):
-        findings.append('preflight must consume verifier_slow and default to all classes')
+    if sorted(_needs(preflight)) != ['authz'] or _job_values(preflight, 'if'):
+        findings.append('preflight must follow authz on every full event without a status override')
+    if _job_block(preflight, 'env') != _code(POST_PREFLIGHT_ENV):
+        findings.append('preflight must run all verifier classes with required release tags')
     steps = _steps(preflight)
     verify = _step_named(steps, '      - name: Verify workflow wiring and source guards')
-    tier = PREFLIGHT_TIER if pr else 'fast'
     if (_step_values(verify, 'run') != [
-            f'python3 scripts/ci_preflight.py --output-dir build-ci-preflight --tier {tier}']
+            'python3 scripts/ci_preflight.py --output-dir build-ci-preflight --tier fast']
             or _step_values(verify, 'if') != [AUTHZ_SUCCESS]):
         findings.append('preflight must invoke only its fast stage plan')
     linters = _step_named(steps, '      - name: Install workflow linters')
@@ -3471,65 +3366,56 @@ def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[st
             or _step_values(linters, 'run') != [PREFLIGHT_LINTER_RUN]
             or any(_step_values(step, 'run') for step in steps if _step_values(step, 'uses'))):
         findings.append('preflight must keep only checkout, linters, fast checks and diagnostics')
-    if not pr:
-        slow = jobs.get('preflight-slow', '')
-        verify_slow = _step_named(_steps(slow), '      - name: Verify deferred preflight stages')
-        if (sorted(_needs(slow)) != ['authz', 'changes']
-                or _job_values(slow, 'if') != [AUTHZ_ALWAYS]
-                or _step_values(verify_slow, 'if') != [AUTHZ_SUCCESS]
-                or _step_values(verify_slow, 'run') != [
-                    'python3 scripts/ci_preflight.py --output-dir build-ci-preflight-slow --tier slow']):
-            findings.append('preflight-slow must run all deferred stages on full events only')
-    for job in proofs.keys() - (set() if pr else POST_LEG_GATES.keys()):
+    slow = jobs.get('preflight-slow', '')
+    verify_slow = _step_named(_steps(slow), '      - name: Verify deferred preflight stages')
+    if (sorted(_needs(slow)) != ['authz']
+            or _job_values(slow, 'if')
+            or _step_values(verify_slow, 'if') != [AUTHZ_SUCCESS]
+            or _step_values(verify_slow, 'run') != [
+                'python3 scripts/ci_preflight.py --output-dir build-ci-preflight-slow --tier slow']):
+        findings.append('preflight-slow must run all deferred stages on full events only')
+    for job in proofs.keys() - POST_LEG_GATES.keys():
         body = jobs.get(job, '')
-        if (sorted(_needs(body)) != ['authz', 'changes']
-                or _job_values(body, 'if') != [GITHUB_ONLY_SKIP if pr else DOCS_ONLY_SKIP]):
-            findings.append(f'{job} must start alongside preflight, after authz and changes, '
-                            'and skip only its classified path policy')
+        if sorted(_needs(body)) != ['authz'] or _job_values(body, 'if'):
+            findings.append(f'{job} must follow authz on every full event without a status override')
     gate = jobs.get('build-gate', '')
     dependencies = expected_jobs - {'build-gate'}
     if (set(_needs(gate)) != dependencies or len(_needs(gate)) != len(dependencies)
-            or _job_values(gate, 'if') != ['always()'] or _job_values(gate, 'name') != ['build']):
-        findings.append('build-gate must aggregate authz, every proof job, preflight and changes')
-    for job in dependencies:
-        variable = (proofs[job] if job in proofs else
-                    {'authz': 'AUTHZ_RESULT', 'changes': 'CHANGES_RESULT',
-                     'preflight': 'PREFLIGHT_RESULT', 'preflight-slow': 'SLOW_PREFLIGHT_RESULT'}[job])
-        if f'{variable}: ${{{{ needs.{job}.result }}}}' not in gate:
-            findings.append(f'build-gate must read the result of {job}')
-    if 'DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}' not in gate:
-        findings.append("build-gate must read changes' docs_only answer")
-    if '[[ "$AUTHZ_RESULT" == "success" && "$CHANGES_RESULT" == "success" ]]' not in gate:
-        findings.append('build-gate must require authz and changes success')
-    if '[[ "$PREFLIGHT_RESULT" == "success" ]]' not in gate or 'passed "$PREFLIGHT_RESULT"' in gate:
-        findings.append('build-gate must require preflight success')
-    for job, variable in proofs.items():
-        if f'passed "${variable}"' not in gate:
-            findings.append(f'build-gate must require {job} success or a docs-only skip')
+            or _job_values(gate, 'if') != ['always()']
+            or _job_values(gate, 'name')):
+        findings.append('build-gate must directly need every other full-event job')
     gate_steps = _steps(gate)
-    if pr and (len(gate_steps) != 3 or _code(gate_steps[1]) != _code(GITHUB_ONLY_STEP)
-               or 'needs.changes.outputs.github_only' in gate):
-        findings.append('build-gate must independently read the event-bound PR diff before accepting skips')
-    if not gate_steps or _code(gate_steps[-1]) != _code(GATE_STEP if pr else POST_GATE_STEP):
-        findings.append('build-gate must keep the exact result policy: success or a classified docs-only skip')
+    if not gate_steps or _code(gate_steps[-1]) != _code(POST_GATE_STEP):
+        findings.append('build-gate must require exactly success from every needed job')
     if not pr:
+        fields = re.findall(r'(?m)^    ([A-Za-z_][A-Za-z_0-9-]*):', gate)
+        if (fields != ['needs', 'if', 'runs-on', 'permissions', 'steps']
+                or _job_values(gate, 'needs') != [POST_GATE_NEEDS.removeprefix('needs: ')]):
+            findings.append('build-gate must keep only the canonical aggregate fields and direct needs')
+        for job in ('preflight-slow', 'build', 'build-debug', 'build-arm', 'sanitizers', 'kernel-only'):
+            expected_env = POST_VERIFY_ENV
+            if job == 'sanitizers':
+                expected_env += ('      ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:abort_on_error=1\n'
+                                 '      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1\n')
+            if _job_block(jobs.get(job, ''), 'env') != _code(expected_env):
+                findings.append(f'{job} must retain its local compiler and release-tag environment')
         findings += post_shard_workflow_findings(jobs)
-    for job in (('build',) if pr else ('build', 'build-debug', 'build-arm')):
+    for job in ('build', 'build-debug', 'build-arm'):
         build = jobs.get(job, '')
         build_step = _step_named(_steps(build), '      - name: Verify (${{ matrix.build_type }})')
         shard_flag = (' --ctest-shard ${{ matrix.shard }}/' + str(POST_SHARDS[job])
-                      if not pr and job in POST_SHARDS else '')
+                      if job in POST_SHARDS else '')
         if (_step_values(build_step, 'run') != [
-                BUILD_VERIFY_RUN if pr else POST_BUILD_VERIFY_RUN + shard_flag]
+                POST_BUILD_VERIFY_RUN + shard_flag]
                 or _step_values(build_step, 'if') != [AUTHZ_SUCCESS]
-                or _counted_text(build).count('scripts/ci_verify.py') != (0 if pr else 1)
-                or _counted_text(build).count('ctest --test-dir') != (1 if pr else 0)):
+                or _counted_text(build).count('scripts/ci_verify.py') != 1
+                or _counted_text(build).count('ctest --test-dir') != 0):
             findings.append(f'{job} must run the fast Release smoke only on PRs and full profiles otherwise')
         if ('actions/cache' in build
                 or re.search(r'(?m)^\s*cache\s*:', build)):
             findings.append(f'{job} must build cold without an Actions cache')
         pytest_step = _step_named(_steps(build), '      - name: Install the CTest pytest runner')
-        if (pr and pytest_step) or (not pr and _step_values(pytest_step, 'if') != [AUTHZ_SUCCESS]):
+        if _step_values(pytest_step, 'if') != [AUTHZ_SUCCESS]:
             findings.append(f'{job} must install pytest only for the full profiles')
         if not pr:
             platform = _step_named(_steps(build), '      - name: Require the requested platform')

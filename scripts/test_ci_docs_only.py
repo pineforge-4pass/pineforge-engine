@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Unit tests for scripts/ci_docs_only.py, the rule that lets ci.yml skip its
-proof jobs on a documentation-only change. A ci_preflight stage runs them.
+proof jobs on a documentation-only PR. A ci_preflight stage runs them.
 
 The event cases run the script against throwaway git repositories: a pull
-request is the merge GitHub tests, a push is its one commit, and every doubt
-must answer "not docs-only". The workflow runs the base's copy of the script
-with --root; scripts/test_ci_preflight.py runs that step's own shell."""
+request is the merge GitHub tests, every non-PR event runs proofs, and every
+doubt must answer "not docs-only". Admission runs the base copy with --paths;
+scripts/test_ci_preflight.py runs that step's own shell."""
 from __future__ import annotations
 
 import os
@@ -190,7 +190,7 @@ class EventTests(unittest.TestCase):
                                      '  docs/pages/pine-to-native.md (test_pine_to_native_worked '
                                      'compiles and runs its worked migration)'])
         self.fresh()
-        docs_only, lines = self.push(write={'docs/build.sh': 'echo new\n'})
+        docs_only, lines = self.pull_request(write={'docs/build.sh': 'echo new\n'})
         self.assertFalse(docs_only)
         self.assertIn('test_docs_doxygen_retry', lines[-1])
 
@@ -209,7 +209,7 @@ class EventTests(unittest.TestCase):
                     self.assertEqual(lines[2:], not_documentation)
 
     def test_a_deleted_page_is_documentation(self) -> None:
-        docs_only, lines = self.push(remove=('docs/ci.md',))
+        docs_only, lines = self.pull_request(remove=('docs/ci.md',))
         self.assertTrue(docs_only, lines)
 
     def test_a_merge_of_another_head_is_a_doubt(self) -> None:
@@ -234,11 +234,10 @@ class EventTests(unittest.TestCase):
         self.assertFalse(docs_only)
         self.assertEqual(lines[-1], 'not docs-only: the change is empty')
 
-    def test_a_docs_push_is_docs_only(self) -> None:
+    def test_a_docs_push_runs_every_job(self) -> None:
         docs_only, lines = self.push(write={'docs/ci.md': 'new\n'})
-        self.assertTrue(docs_only, lines)
-        self.assertEqual(lines[0], f'the pushed commit against the previous tip: '
-                                   f'{self.base}..{self.repo.head()}, 1 changed path(s)')
+        self.assertFalse(docs_only, lines)
+        self.assertEqual(lines, ['not docs-only: push runs every job'])
 
     def test_a_push_touching_code_is_not(self) -> None:
         docs_only, _ = self.push(write={'README.md': 'new\n', 'CMakeLists.txt': 'x\n'})
@@ -250,26 +249,22 @@ class EventTests(unittest.TestCase):
                 self.fresh()
                 docs_only, lines = self.push(forced=forced, write={'docs/ci.md': 'forced\n'})
                 self.assertFalse(docs_only)
-                self.assertIn('forced', lines[0])
+                self.assertEqual(lines, ['not docs-only: push runs every job'])
         head = {'GITHUB_EVENT_NAME': 'push', 'PUSH_FORCED': 'false'}
-        for before, reason in (('0' * 40, 'the push created the branch'),
-                               ('', "before='' names no commit"),
-                               ('HEAD~1', "before='HEAD~1' names no commit"),
-                               ('e' * 40, 'is not the parent of HEAD')):
+        for before in ('0' * 40, '', 'HEAD~1', 'e' * 40):
             with self.subTest(before=before):
                 docs_only, lines = decide({**head, 'PUSH_BEFORE': before}, self.repo.path)
                 self.assertFalse(docs_only)
-                self.assertIn(reason, lines[0])
+                self.assertEqual(lines, ['not docs-only: push runs every job'])
 
     def test_a_push_of_several_commits_is_a_doubt(self) -> None:
-        # The checkout holds HEAD and its parent; a push whose before is older
-        # carried commits the check cannot see one by one, so it runs everything.
+        # The push carries code followed by docs; every push runs everything.
         self.repo.commit('code', {'src/engine.cpp': 'int z;\n'})
         self.repo.commit('docs', {'docs/ci.md': 'new\n'})
         docs_only, lines = decide({'GITHUB_EVENT_NAME': 'push', 'PUSH_BEFORE': self.base,
                                    'PUSH_FORCED': 'false'}, self.repo.path)
         self.assertFalse(docs_only)
-        self.assertIn('the push carried more than its one commit', lines[0])
+        self.assertEqual(lines, ['not docs-only: push runs every job'])
 
     def test_every_other_event_runs_everything(self) -> None:
         for event in ('workflow_dispatch', 'schedule', 'merge_group', 'pull_request_target', ''):
@@ -282,6 +277,31 @@ class EventTests(unittest.TestCase):
 
 class CommandLineTests(unittest.TestCase):
     """The script as the workflow runs it: its own checkout, its output file."""
+
+    def test_docs_push_is_code_and_docs_pr_output_is_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Repo(Path(directory) / 'repo')
+            base = repo.commit('base', BASE_FILES)
+            repo.git('checkout', '--quiet', '-b', 'topic')
+            head = repo.commit('docs', {'docs/ci.md': 'new\n'})
+            output = Path(directory) / 'output'
+            for event in ('push', 'schedule', 'workflow_dispatch', 'merge_group', ''):
+                with self.subTest(event=event):
+                    output.write_text('')
+                    result = self.run_script(
+                        repo.path, {'GITHUB_EVENT_NAME': event, 'PUSH_BEFORE': base,
+                                    'PUSH_FORCED': 'false'}, output)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(output.read_text(),
+                                     'docs_only=false\ngithub_only=false\ncode=true\n')
+            repo.git('checkout', '--quiet', 'main')
+            repo.git('merge', '--quiet', '--no-ff', '--no-edit', 'topic')
+            output.write_text('')
+            result = self.run_script(
+                repo.path, {'GITHUB_EVENT_NAME': 'pull_request', 'PR_HEAD_SHA': head}, output)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(output.read_text(), 'docs_only=true\ngithub_only=false\n')
+            self.assertIn('docs-only: every changed path is documentation', result.stdout)
 
     def run_script(self, repo: Path, env: dict[str, str], output: Path,
                    outside: Path | None = None) -> subprocess.CompletedProcess:
@@ -306,7 +326,7 @@ class CommandLineTests(unittest.TestCase):
         output = Path(directory.name) / 'github_output'
         outside = Path(directory.name) / 'runner-temp'
         for env, answer in (({'GITHUB_EVENT_NAME': 'push', 'PUSH_BEFORE': base,
-                              'PUSH_FORCED': 'false'}, 'true'),
+                              'PUSH_FORCED': 'false'}, 'false'),
                             ({'GITHUB_EVENT_NAME': 'workflow_dispatch'}, 'false'),
                             ({'GITHUB_EVENT_NAME': 'push', 'PUSH_BEFORE': base,
                               'PUSH_FORCED': 'true'}, 'false')):
@@ -316,7 +336,7 @@ class CommandLineTests(unittest.TestCase):
                     result = self.run_script(repo.path, env, output, where)
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertEqual(output.read_text(),
-                                     f'earlier=1\ndocs_only={answer}\ngithub_only=false\n')
+                                     f'earlier=1\ndocs_only={answer}\ngithub_only=false\ncode=true\n')
                     self.assertIn('docs-only', result.stdout)
 
 
@@ -330,6 +350,8 @@ class PathListTests(unittest.TestCase):
         self.assertEqual(classify_paths(['scripts/ci_docs_only.py']), (False, False))
         self.assertEqual(classify_paths(['docs/ci.md']), (True, False))
         self.assertEqual(classify_paths([]), (False, False))
+        self.assertEqual(classify_paths(['docs/ci.md'], pull_request=False), (False, False))
+        self.assertEqual(classify_paths(['.github/ci.yml'], pull_request=False), (False, False))
 
     def test_nul_names_are_data_and_renames_supply_both_sides(self) -> None:
         paths = ['docs/old name "quoted"\n..', '.github/workflows/new.yml']

@@ -18,14 +18,14 @@ GKE runner group. Its proof legs use the same fixed Release, Debug and parity
 runner sizes as the post workflow; the hosted result is red for refusal,
 failure, cancellation, disagreement or an unanswered class.
 
-The nightly CI schedule is 01:30 UTC. The existing docs-only classification
-still skips proof jobs on a documentation-only PR or main push. Both
-preflight tiers together retain the original full stage inventory; the slow
-tier still runs on a docs-only main push. Scheduled and manual runs execute
-every profile. `ci.yml` retains authorization and draft event handling;
-`gke-pr` owns admission, classification, preflight and proof legs. Docs-only
-and GitHub-only changes still run preflight, while only the proof legs skip.
-Failed, cancelled or unclassified work is red in the hosted result.
+The nightly CI schedule is 01:30 UTC. Documentation-only PRs still skip proof
+jobs; every main push, including documentation merges, runs every proof.
+Both preflight tiers together retain the original full stage inventory;
+pushes, scheduled and manual runs execute both tiers and every profile.
+`ci.yml` retains authorization and draft event handling; `gke-pr` owns
+admission, classification, preflight and PR proof legs. Docs-only and
+GitHub-only PRs still run preflight, while only their proof legs skip.
+Failed, cancelled or unclassified PR work is red in the hosted result.
 
 A GitHub-only PR changes at least one path, with every changed path under
 `.github/`, including both sides of a rename. `scripts/ci_*.py` changes,
@@ -65,8 +65,8 @@ credentialed post work keeps its protected `["self-hosted","pf-gcp-post"]` fleet
 Post Release/Debug/kernel and native shards, post sanitizers and both native-live sanitizer
 profiles use fixed bare GKE scale-set names directly in runner pods carrying the engine toolchain image and sudo. No job routes by event.
 `ci.yml` authz and `docs.yml` authz/build use `["self-hosted","pf-gcp-pr"]`; hosted `ubuntu-24.04` runs admission, `legs` and `result` jobs; secret-free post guards and aggregates use bare scalar GKE names. The hosted and GKE light jobs are secret-free and need no VM-only tools, mounts or caches.
-The seven `ci-post.yml` light jobs use `gke-2cpu-4gb-amd64`; called parity/native light jobs use `gke-4cpu-8gb-amd64` to satisfy the per-label cap, without a weight claim.
-Local reusable calls cannot mix PR and GKE jobs. The full post call graph expands to 36 GKE job instances: amd64 32/16/8/4/2 CPU labels carry 8/7/7/5/7 jobs and arm64 16 CPU carries 2; each label's static cap is 8.
+The six `ci-post.yml` light jobs use `gke-2cpu-4gb-amd64`; called parity/native light jobs use `gke-4cpu-8gb-amd64` to satisfy the per-label cap, without a weight claim.
+Local reusable calls cannot mix PR and GKE jobs. The full post call graph expands to 35 GKE job instances: amd64 32/16/8/4/2 CPU labels carry 8/7/7/5/6 jobs and arm64 16 CPU carries 2; each label's static cap is 8.
 
 The manual `release-ruleset-probe.yml` workflow runs `authz` on
 bare scalar `gke-2cpu-4gb-amd64` and `probe` on `["self-hosted","pf-gcp-post"]`.
@@ -1548,17 +1548,17 @@ requires admission and preflight success, accepts a skipped proof group only
 for the two classified classes, and applies a one-way code-extension veto.
 Failed, cancelled, missing or unexpected jobs remain red.
 
-A push to `main` follows the same rule, since nothing downstream needs the
-proof jobs to have run on a merged commit: `release.yml` starts only on a
-manual dispatch and builds and verifies its own tarballs,
-`promote-baseline.yml` starts on the push to `main`, resolves its merged PR,
-and reads the `pineforge/verify` and `pineforge/parity` statuses on that PR's
-head, no workflow here starts on `workflow_run`,
-and the ruleset requires only those two statuses. A documentation merge
-therefore does not rebuild; the `ci.yml` run on its commit is `preflight` and
-the skip. That run is `main`'s latest, the one the README badge shows, so after
-a documentation merge the badge reports the documentation guards, and the last
-full run on `main` holds the code's verdict.
+Every push to `main` runs every post-merge proof, including documentation
+merges. `ci-post.yml` needs no classification job: push, schedule and dispatch
+all use the full profile plan after authorization. `build-gate` directly
+needs every other job and requires every result to equal `success`.
+Failed, cancelled, skipped or missing work fails the gate. It is the sole
+job-level `always()` aggregate and has no displayed-name override or env.
+The required aggregate context is `build-gate` (formerly `build`); the
+ruleset changes with that rename. Its four per-leg status-override checks
+retain their displayed names and are not required ruleset contexts.
+The maintainers still post `pineforge/verify` and `pineforge/parity` for
+the reviewed PR tree; baseline promotion continues to use those statuses.
 
 `scripts/test_ci_docs_only.py` (`docs-only-tests`, a `ci_preflight` stage)
 holds the rule against real git histories, pull request merges and pushes
@@ -1568,9 +1568,9 @@ documentation. The proof-job inputs above were found by reading every CMake
 file, every `ci_verify.py` stage and every script a CTest row runs; a reader
 added outside CMake must list its file in `PROOF_READS` by hand. The SEO
 postprocessor remains listed after its self-test moved to `docs.yml`. The
-`ci-workflow-contract` stage pins the wiring, the classification step
-verbatim, and `scripts/test_ci_preflight.py` runs that step's own shell and
-the aggregate's own shell, the latter over every outcome of every lane.
+`ci-workflow-contract` stage pins the wiring and PR classification step
+verbatim, and `scripts/test_ci_preflight.py` runs admission's own shell and
+the post aggregate's own shell over every outcome of every needed job.
 
 ### CI-LITE timing estimate
 
@@ -1616,7 +1616,7 @@ The native matrix is exactly `1..4` with `--ctest-shard I/4`; live sanitizers ar
 | `ci.yml` | Unfiltered `pull_request` | `authz`: `["self-hosted","pf-gcp-pr"]`; no proof legs |
 | `gke-pr.yml` | `pull_request_target` to `main` | Hosted admission/result; GKE preflight and proof legs with fixed labels |
 | `docs.yml` | `pull_request`, except `.github/**`-only diffs | `authz` and `build`: `["self-hosted","pf-gcp-pr"]` |
-| `ci-post.yml` | Push to `main`, 01:30 UTC schedule, dispatch | Seven light jobs: scalar `gke-2cpu-4gb-amd64`; bare GKE scalars: Release/sanitizers `gke-32cpu-64gb-amd64`, Debug/kernel `gke-16cpu-32gb-amd64`, preflight tiers `gke-8cpu-16gb-amd64`, arm64 `gke-16cpu-32gb-arm64` |
+| `ci-post.yml` | Push to `main`, 01:30 UTC schedule, dispatch | Six light jobs: scalar `gke-2cpu-4gb-amd64`; bare GKE scalars: Release/sanitizers `gke-32cpu-64gb-amd64`, Debug/kernel `gke-16cpu-32gb-amd64`, preflight tiers `gke-8cpu-16gb-amd64`, arm64 `gke-16cpu-32gb-arm64` |
 | `corpus-parity.yml` | Schedule, dispatch, post CI callers | `authz`: scalar `gke-4cpu-8gb-amd64`; bare GKE scalars: full parity `gke-16cpu-32gb-amd64`, subset `gke-8cpu-16gb-amd64` |
 | `native-live.yml` | Dispatch and post CI callers on `main` | `authz` and both aggregates: scalar `gke-4cpu-8gb-amd64`; bare GKE scalars: native shards `gke-8cpu-16gb-amd64`, sanitizer profiles `gke-16cpu-32gb-amd64` |
 | `docs-post.yml` | Push to `main`, dispatch | `authz`: scalar `gke-2cpu-4gb-amd64`; credentialed `build`: `["self-hosted","pf-gcp-post"]` |
@@ -1636,7 +1636,7 @@ The four full build checks are `build (ubuntu-24.04, Release)`,
 `build-debug` shards, and kernel two shards; sanitizers uses four, all on their fixed GKE sizes.
 Every shard builds the full tree and runs `--ctest-shard I/N` at the runner's core count. Each build refuses an OS mismatch before checkout.
 Each leg aggregate retains its old check name and requires its own matrix's success. The two arm64 cells share `build-arm` on `gke-16cpu-32gb-arm64`. All three build jobs use the same verification steps and profiles.
-Shard jobs and leg aggregates skip together only on classified docs-only changes.
+Shard jobs run on every full event; their leg aggregates reject every non-success result.
 Trusted post workflows and PR proof legs build cold; no trusted job restores an Actions cache.
 `HOSTED_JOB_RUNNERS` pins PR fleet jobs, hosted jobs and exact bare GKE scalars; every GKE job runs directly in a runner pod carrying the engine toolchain image and sudo. PR checks are
 `build`, `build-debug`, `corpus-parity-subset`, `legs` and `result` in `gke-pr.yml`.
