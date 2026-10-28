@@ -8230,6 +8230,15 @@ def _build_replay_sink_report(report, ohlcv_path, n_bars, first_ts, last_ts, ela
         report, ohlcv_path, n_bars, first_ts, last_ts, elapsed,
         applied_inputs, applied_overrides, applied_runtime, sink,
         window_anchor=window_anchor, initial_capital=initial_capital)
+    if replay_rows is not None and "trades" in out:
+        # The fused path hands back already encoded JSON columns, which hold
+        # no rows to annotate: replay reads the verified sink records instead.
+        if isinstance(out["trades"], _JSONColumn):
+            out["trades"] = _JSONRecordArray(
+                lambda: (_sink_trade(row) for row in sink.records("T")), sink.counts["T"])
+        if isinstance(out.get("equity_curve"), _JSONColumn):
+            out["equity_curve"] = _JSONRecordArray(
+                lambda: (row.as_dict() for row in sink.records("E")), sink.counts["E"])
     return _annotate_replay_report(
         out, replay, replay_rows if "trades" in out else None, sink)
 
