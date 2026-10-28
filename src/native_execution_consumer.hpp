@@ -2,6 +2,7 @@
 
 #include <pineforge/detail/scratch_store.hpp>
 #include <pineforge/detail/scratch_arena.hpp>
+#include <pineforge/detail/matrix_store.hpp>
 #include <pineforge/execution_consumer.hpp>
 #include <pineforge/native_host.hpp>
 #include <pineforge/run_failure.hpp>
@@ -595,6 +596,12 @@ public:
     // see the block taken; no host reaches either.
     void set_runtime_ambient(bool enabled) noexcept { runtime_ambient_enabled_ = enabled; }
     uint64_t runtime_ambient_installs() const noexcept { return ambient_installs_; }
+    // The matrix Runtime of this engine's run (detail/matrix_store.hpp): the
+    // Store a script's matrices live in. engine_consumer.cpp makes it current
+    // for every public call that runs script code and ends the run's share
+    // when the run ends. Where values are kept, never what they are: folded
+    // into nothing.
+    detail::matrix_store::RunRuntime& matrix_run() noexcept { return matrix_run_; }
     // consume_matched_request's one-lot stage, carried from a fill's preview
     // to its settlement (R5 lane D2-C: BacktestEngine::NativeSettlementStage::
     // OneLot::preview_keeping / settle_kept). Off, every settlement stages its
@@ -2211,6 +2218,9 @@ private:
     bool ambient_installed_ = false;
     bool runtime_ambient_enabled_ = true;
     uint64_t ambient_installs_ = 0;
+    // matrix_run's Runtime slot: open from the run's first matrix to the end
+    // of the run, empty between runs.
+    detail::matrix_store::RunRuntime matrix_run_;
     // The settlement carry's switch and count (set_settlement_carry), and its
     // generation stamp: the fills this consumer has settled, advanced at each
     // settlement, so a stage carried across a precommit call settles only

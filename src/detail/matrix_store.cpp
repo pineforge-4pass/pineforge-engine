@@ -1,12 +1,20 @@
 #include <pineforge/detail/matrix_store.hpp>
+#include <pineforge/detail/script_store.hpp>
 #include <algorithm>
 #include <array>
 #include <limits>
 #include <stdexcept>
+#include <utility>
 
 namespace pineforge::detail::matrix_store {
 namespace {
+// The calling thread's matrix Runtime source (current_runtime): a
+// ScopedRuntime's explicit choice while one is in force, else the run whose
+// public call is in progress. Restored as each scope ends, so a thread holds
+// no Runtime between calls.
 thread_local Runtime* active_runtime = nullptr;
+thread_local bool runtime_chosen = false;
+thread_local RunRuntime* active_run = nullptr;
 
 // Not representable as a Store object: the script-visible matrix element limit,
 // raised with the code the matrix element cap uses. There is no engine constant
@@ -18,11 +26,64 @@ thread_local Runtime* active_runtime = nullptr;
 }
 }
 
-Runtime* current_runtime() noexcept { return active_runtime; }
-ScopedRuntime::ScopedRuntime(Runtime* runtime) noexcept : previous_(active_runtime) {
-    active_runtime = runtime;
+Runtime::Runtime(std::unique_ptr<ScratchBacking> backing, const o1::Shape& shape)
+    : backing_(std::move(backing)) {
+    if (!backing_) invariant("matrix runtime without a backing");
+    owned_ = o1::Store::open(shape, *backing_);
+    store_ = owned_.get();
 }
-ScopedRuntime::~ScopedRuntime() { active_runtime = previous_; }
+
+Runtime* current_runtime() {
+    if (runtime_chosen) return active_runtime;
+    return active_run ? &active_run->runtime() : nullptr;
+}
+ScopedRuntime::ScopedRuntime(Runtime* runtime) noexcept
+    : previous_(active_runtime), previous_chosen_(runtime_chosen) {
+    active_runtime = runtime;
+    runtime_chosen = true;
+}
+ScopedRuntime::~ScopedRuntime() {
+    active_runtime = previous_;
+    runtime_chosen = previous_chosen_;
+}
+
+Runtime& RunRuntime::runtime() {
+    if (!runtime_) {
+        runtime_ = std::make_shared<Runtime>(make_script_scratch_backing());
+        if (calls_) begin_call();
+    }
+    return *runtime_;
+}
+void RunRuntime::begin_call() { call_ = runtime_->store().begin(); }
+void RunRuntime::finish_call() noexcept {
+    if (!call_) return;
+    try {
+        call_->commit();
+    } catch (const o1::RollbackOnly&) {
+        // The commit rolled the failed call's matrix changes back.
+        runtime_->store().note_cleanup_skipped(o1::CleanupSkip::rollback_only);
+    } catch (...) {
+        runtime_->store().note_cleanup_skipped(o1::CleanupSkip::failed);
+    }
+    call_.reset();
+}
+void RunRuntime::close() noexcept {
+    finish_call();
+    runtime_.reset();
+}
+RunScope::RunScope(RunRuntime& run) noexcept : run_(run), previous_(active_run) {
+    // A Runtime an earlier call of the run opened (a stream's) takes this
+    // call's transaction now. A refused begin leaves every operation its own
+    // one-call transaction; a Store that refuses it fails those visibly.
+    if (run_.calls_++ == 0 && run_.runtime_) {
+        try { run_.begin_call(); } catch (...) {}
+    }
+    active_run = &run_;
+}
+RunScope::~RunScope() {
+    if (--run_.calls_ == 0) run_.finish_call();
+    active_run = previous_;
+}
 
 std::uint64_t Cells::product(std::uint64_t a, std::uint64_t b) {
     if (b && a > std::numeric_limits<std::uint64_t>::max() / b)
@@ -43,7 +104,8 @@ std::uint64_t Cells::layout_bytes(std::uint64_t rows, std::uint64_t columns,
 }
 
 Cells::Cells(Runtime& runtime, std::uint64_t rows, std::uint64_t columns,
-             std::uint64_t width) : runtime_(runtime) {
+             std::uint64_t width)
+    : runtime_(runtime), owner_(runtime.weak_from_this().lock()) {
     if (!width) invariant("zero matrix record width");
     const Header h{rows, columns, width, 0};
     const auto bytes = byte_size(h); // a shape that cannot be stored is refused before any Store call
@@ -54,7 +116,8 @@ Cells::Cells(Runtime& runtime, std::uint64_t rows, std::uint64_t columns,
     owning_ = true;
 }
 
-Cells::Cells(Runtime& runtime, Id id) : runtime_(runtime), id_(id) {
+Cells::Cells(Runtime& runtime, Id id)
+    : runtime_(runtime), id_(id), owner_(runtime.weak_from_this().lock()) {
     const auto h = header();
     if (!h.width || h.reserved || runtime_.store().size(id_) != byte_size(h))
         invariant("invalid borrowed matrix descriptor");

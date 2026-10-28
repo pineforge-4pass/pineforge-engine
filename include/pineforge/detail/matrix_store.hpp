@@ -10,8 +10,11 @@
 // durable generated root/edge; borrowed Cells never release it. Retained script
 // graphs must store those ids, rather than a growing collection of C++ handles.
 // Each active public matrix handle still has fixed shared_ptr control blocks.
-// The run owner keeps Runtime, Store and backing alive through all borrows and
-// snapshots, and retains every borrowed id through the last reachable edge.
+// A run's own Runtime (RunRuntime, made current by the engine for every public
+// call that runs script code) owns its Store and backing, and every Cells made
+// from it shares that ownership. A borrowed Runtime's owner keeps Runtime,
+// Store and backing alive through all borrows and snapshots. Either way the
+// generated graph retains every borrowed id through the last reachable edge.
 //
 // Copies/snapshots copy cell records, preserving shallow reference elements.
 // The graph owner supplies reachability and child rollback for opaque ids;
@@ -40,16 +43,23 @@ inline constexpr std::size_t kTransferBytes = 4096;
     throw coded<std::logic_error>(RunFailureCode::engine_invariant, {}, why);
 }
 
-// Install before constructing script state; the borrowed Store/backing and
-// Runtime must outlive all handles, snapshots and temporary borrows.
-class Runtime {
+// The Store matrices live in. Over a borrowed Store: install it before
+// constructing script state; the Store/backing and this Runtime must outlive
+// all handles, snapshots and temporary borrows. Over a backing of its own (a
+// run's, see RunRuntime): it opens its Store on that backing and, held by a
+// shared_ptr, is shared by every Cells made from it, so the Store closes and
+// the backing's bytes are freed with the last of them and its owner's share.
+class Runtime : public std::enable_shared_from_this<Runtime> {
 public:
-    explicit Runtime(o1::Store& store) noexcept : store_(store) {}
+    explicit Runtime(o1::Store& store) noexcept : store_(&store) {}
+    explicit Runtime(std::unique_ptr<ScratchBacking> backing, const o1::Shape& shape = {});
     Runtime(const Runtime&) = delete;
     Runtime& operator=(const Runtime&) = delete;
-    o1::Store& store() const noexcept { return store_; }
+    o1::Store& store() const noexcept { return *store_; }
 private:
-    o1::Store& store_;
+    std::unique_ptr<ScratchBacking> backing_; // declared first: destroyed last
+    std::unique_ptr<o1::Store> owned_;
+    o1::Store* store_;
 };
 
 // A matrix operation that may change more than one Store record runs in one
@@ -71,8 +81,18 @@ private:
     o1::TxScope transaction_;
 };
 
-Runtime* current_runtime() noexcept;
+// The Runtime a matrix created now on this thread lives in, or null for a
+// native (heap) matrix: the choice of the innermost ScopedRuntime in force (an
+// explicit null keeps matrices native), else the Runtime of the run whose
+// public call is in progress (RunScope), opened on the run's first matrix,
+// else null: a library caller outside any run keeps native matrices. Opening
+// a run's Runtime can fail; the failure propagates, so a run never falls back
+// to native matrices.
+Runtime* current_runtime();
 
+// An explicit choice for the calling thread while the scope lives, over any
+// run's own Runtime: a caller that supplies its own Store (or null, for native
+// matrices) keeps that choice across an engine run it makes inside the scope.
 class ScopedRuntime {
 public:
     explicit ScopedRuntime(Runtime* runtime) noexcept;
@@ -82,6 +102,61 @@ public:
     ScopedRuntime& operator=(const ScopedRuntime&) = delete;
 private:
     Runtime* previous_;
+    bool previous_chosen_;
+};
+
+// One run owner's matrix Runtime. The engine keeps one (in its execution
+// consumer) and makes it current for each public call that runs script code
+// (src/engine_consumer.cpp). runtime() opens it on the run's first matrix,
+// over a script scratch backing of its own (script_store.hpp), so a run that
+// creates no matrix opens nothing. close() ends the owner's share when the run
+// ends; the Runtime closes, and its scratch bytes are freed, with the last
+// Cells, snapshot or borrow still reading it. The next run's runtime() opens a
+// fresh one: no two runs share a Runtime and no thread keeps one between runs.
+//
+// The matrix work of one outermost call runs in one transaction on the run's
+// Store, begun when the call starts (or when the call opens the Runtime) and
+// committed when it returns, so a lone matrix operation joins it instead of
+// committing on its own. Values are what they would be without it. A
+// failure inside an operation leaves the call's transaction rollback-only,
+// as any joined scope does; the commit then rolls the call's matrix changes
+// back and the refusal is recorded in the Store's cleanup counters, never
+// thrown. A host's own begin() on the run's Store joins the call; its
+// rollback() makes the call rollback-only (there is no savepoint).
+class RunRuntime {
+public:
+    RunRuntime() noexcept = default;
+    ~RunRuntime() { close(); }
+    RunRuntime(const RunRuntime&) = delete;
+    RunRuntime& operator=(const RunRuntime&) = delete;
+    Runtime& runtime();
+    // Commits the open call's transaction and ends the owner's share.
+    void close() noexcept;
+    // The Runtime this run has opened, or null.
+    Runtime* opened() const noexcept { return runtime_.get(); }
+private:
+    friend class RunScope;
+    void begin_call();
+    void finish_call() noexcept;
+    std::shared_ptr<Runtime> runtime_;
+    std::unique_ptr<o1::Tx> call_; // declared after runtime_: destroyed first
+    std::uint64_t calls_ = 0;
+};
+
+// Makes `run` the calling thread's run for one public call (current_runtime).
+// Calls nest; another engine's run called from a callback covers this one
+// until it returns. outermost(): no other call of this run is in progress on
+// the thread, so the owner may end the run when this call returns.
+class RunScope {
+public:
+    explicit RunScope(RunRuntime& run) noexcept;
+    ~RunScope();
+    RunScope(const RunScope&) = delete;
+    RunScope& operator=(const RunScope&) = delete;
+    bool outermost() const noexcept { return run_.calls_ == 1; }
+private:
+    RunRuntime& run_;
+    RunRuntime* previous_;
 };
 
 // A fixed descriptor precedes row-major cells in one stable Store object.
@@ -144,6 +219,9 @@ private:
     Runtime& runtime_;
     Id id_ = o1::kNullId;
     bool owning_ = false;
+    // The share of a Runtime held by a shared_ptr (a run's own); null for a
+    // borrowed Runtime, whose owner keeps it alive.
+    std::shared_ptr<Runtime> owner_;
 };
 
 // Never infer ownership from a native struct's bytes. A generated UDT mapping

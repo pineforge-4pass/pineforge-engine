@@ -1,5 +1,7 @@
 #include "engine_internal.hpp"
+#include "native_execution_consumer.hpp"
 
+#include <pineforge/detail/matrix_store.hpp>
 #include <pineforge/execution_consumer.hpp>
 #include <pineforge/native_host.hpp>
 
@@ -9,6 +11,40 @@
 
 namespace pineforge {
 inline namespace engine_script_run_v19 {
+
+namespace {
+
+// Every public call below that runs script code makes the engine's run the
+// calling thread's matrix Runtime source (detail/matrix_store.hpp), so the
+// matrices a script creates live in the run's own Store, and the call's matrix
+// work runs in one transaction on it; outside these calls a library caller
+// keeps native matrices. The run opens its Runtime with its first matrix.
+// When the outermost call returns with no stream live (a batch
+// run's return, stream_end, a refused or failed stream_begin) the run is over
+// and the engine drops its share: the Runtime closes, and its scratch bytes
+// are freed, with the last matrix, snapshot or borrow still reading it (a
+// generated strategy resets its matrices in the next run's
+// prepare_script_run, or frees them with the strategy), and the next run
+// opens its own. A stream keeps its Runtime from stream_begin to stream_end.
+class MatrixRunCall {
+public:
+    explicit MatrixRunCall(BacktestEngine& engine)
+        : engine_(engine),
+          run_(NativeExecutionConsumer::bound(engine).matrix_run()),
+          scope_(run_) {}
+    MatrixRunCall(const MatrixRunCall&) = delete;
+    MatrixRunCall& operator=(const MatrixRunCall&) = delete;
+    ~MatrixRunCall() {
+        if (scope_.outermost() && !engine_.stream_is_realtime()) run_.close();
+    }
+
+private:
+    const BacktestEngine& engine_;
+    detail::matrix_store::RunRuntime& run_;
+    detail::matrix_store::RunScope scope_;
+};
+
+}  // namespace
 
 BacktestEngine::BacktestEngine(NativeConsumerBindTag) {
     execution_consumer_slot_.native = true;
@@ -65,6 +101,7 @@ void BacktestEngine::set_syminfo_metadata(const std::string& key, double value) 
 }
 
 void BacktestEngine::run(const Bar* bars, int n) {
+    const MatrixRunCall matrices(*this);
     execution_consumer().run_simple(*this, bars, n);
 }
 
@@ -74,6 +111,7 @@ void BacktestEngine::run(const Bar* input_bars, int n_input,
                          bool bar_magnifier,
                          int magnifier_samples,
                          MagnifierDistribution magnifier_dist) {
+    const MatrixRunCall matrices(*this);
     execution_consumer().run_tf(*this, input_bars, n_input, input_tf, script_tf,
                                 bar_magnifier, magnifier_samples, magnifier_dist);
 }
@@ -87,6 +125,7 @@ void BacktestEngine::run(const Bar* input_bars, int n_input,
                          bool bar_magnifier,
                          int magnifier_samples,
                          MagnifierDistribution magnifier_dist) {
+    const MatrixRunCall matrices(*this);
     execution_consumer().run_rich(*this, input_bars, n_input, input_tf, script_tf,
                                   inputs, syminfo, overrides, bar_magnifier,
                                   magnifier_samples, magnifier_dist);
@@ -95,27 +134,33 @@ void BacktestEngine::run(const Bar* input_bars, int n_input,
 bool BacktestEngine::stream_begin(const Bar* warmup_bars, int n_warmup,
                                   const std::string& input_tf,
                                   const std::string& script_tf) {
+    const MatrixRunCall matrices(*this);
     return execution_consumer().stream_begin(*this, warmup_bars, n_warmup,
                                              input_tf, script_tf);
 }
 
 bool BacktestEngine::stream_push_bar(const Bar& bar) {
+    const MatrixRunCall matrices(*this);
     return execution_consumer().stream_push_bar(*this, bar);
 }
 
 bool BacktestEngine::stream_push_tick(const TradeTick& tick) {
+    const MatrixRunCall matrices(*this);
     return execution_consumer().stream_push_tick(*this, tick);
 }
 
 bool BacktestEngine::stream_push_ticks(const TradeTick* ticks, int n) {
+    const MatrixRunCall matrices(*this);
     return execution_consumer().stream_push_ticks(*this, ticks, n);
 }
 
 bool BacktestEngine::stream_advance_time(int64_t timestamp_ms) {
+    const MatrixRunCall matrices(*this);
     return execution_consumer().stream_advance_time(*this, timestamp_ms);
 }
 
 bool BacktestEngine::stream_end(bool finalize_partial_input_bar) {
+    const MatrixRunCall matrices(*this);
     return execution_consumer().stream_end(*this, finalize_partial_input_bar);
 }
 
