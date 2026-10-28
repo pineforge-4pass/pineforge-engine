@@ -441,6 +441,11 @@ struct TradeLedger::State {
         }
     }
     void ensure_cache(size_type population) const {
+        // A retiring ledger refuses reads below `first`, so only the retained
+        // rows can ever be cached: size by them, not by every trade ever
+        // closed. Slots are global & mask, so any capacity covering the
+        // retained window holds it without collisions, wherever it starts.
+        if (retiring && population > first) population -= first;
         if (cache && (population <= cache_capacity || cache_capacity == cache_rows)) return;
         size_type capacity = kResidentRows;
         while (capacity < population && capacity < cache_rows) capacity *= 2;

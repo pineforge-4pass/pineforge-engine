@@ -105,7 +105,9 @@ public:
     // Actual allocation: fixed base plus allocated capacity*kLedgerEntryBytes.
     // Allocated on the first read, at min(cache_rows(), the next power of two
     // >= max(64,size())). Further growth invalidates entries; capacity stays
-    // bounded by cache_rows() and independent of the number of bars.
+    // bounded by cache_rows() and independent of the number of bars. A ledger
+    // that retires sealed rows sizes it by the retained rows (size() - base()),
+    // so its allocation does not follow the number of closed trades.
     size_type cache_resident_bytes() const;
     // Occupied decoded entries only; separate from resident_size()'s legacy
     // descriptor/materialization accounting.
