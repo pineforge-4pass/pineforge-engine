@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from difflib import unified_diff
+import io
 import json
 import os
 from pathlib import Path
@@ -43,7 +44,7 @@ def _capture(argv, *, mode=None):
             # Control native printing without changing reported strategy inputs.
             patch.setenv("PINEFORGE_STDOUT_TEST_MODE", mode or "")
             try:
-                status = run_json.main(argv)
+                status = run_json._host_main(argv)
             except BaseException as error:
                 caught = error
             diagnostics.flush()
@@ -208,3 +209,125 @@ def test_late_fault_after_publication_has_no_second_document(monkeypatch):
     assert stdout == expected.encode("ascii"), observed
     assert stdout.count(b"\n") == 1, observed
     assert b"late fault" in stderr, observed
+
+
+class _LibraryStdout(io.StringIO):
+    def __init__(self):
+        super().__init__()
+        self.flushes = 0
+
+    def flush(self):
+        self.flushes += 1
+        return super().flush()
+
+
+def _forbid_report_reservation():
+    pytest.fail("a library call must not reserve or redirect stdout")
+
+
+def test_library_main_uses_replaced_stdout_on_each_run(tmp_path, monkeypatch):
+    source = csv_file(tmp_path, name="chart.csv")
+    monkeypatch.setattr(run_json, "_ReportOutput", _forbid_report_reservation)
+    monkeypatch.setattr(run_json.time, "time", lambda: 1000.0)
+    monkeypatch.setenv("PINEFORGE_STDOUT_TEST_MODE", "")
+    outputs = []
+    for _ in range(2):
+        stdout, stderr = _LibraryStdout(), io.StringIO()
+        with monkeypatch.context() as patch:
+            patch.setattr(sys, "stdout", stdout)
+            patch.setattr(sys, "stderr", stderr)
+            status = run_json.main(_argv(source))
+        text = stdout.getvalue()
+        observed = f"status={status!r}; stdout={text!r}; stderr={stderr.getvalue()!r}"
+        assert status == 0, observed
+        assert stderr.getvalue() == "", observed
+        assert stdout.flushes == 1, observed
+        assert text.startswith('{"engine":"pineforge","input":'), observed
+        assert text.count("\n") == 1 and text.endswith("\n"), observed
+        document = json.loads(text)
+        # The fixture consumes all five bars and emits no trades.
+        assert document["input"]["ohlcv"] == str(source), observed
+        assert document["input"]["bars"] == document["summary"]["bars_processed"] == 5, observed
+        assert document["summary"]["total_trades"] == 0, observed
+        outputs.append(text.encode("utf-8"))
+    assert outputs[0] == outputs[1], _document_difference(*outputs)
+
+
+@pytest.mark.parametrize("kind", ["text", "prepared", "failure"])
+def test_library_writers_use_current_stdout_without_an_owner(monkeypatch, kind):
+    monkeypatch.setattr(run_json, "_ReportOutput", _forbid_report_reservation)
+    report = '{"engine":"pineforge","library":true}\n'
+    expected = ('{"engine":"pineforge","error":"library failure"}\n'
+                if kind == "failure" else report)
+    for _ in range(2):
+        stdout = _LibraryStdout()
+        with monkeypatch.context() as patch:
+            patch.setattr(sys, "stdout", stdout)
+            if kind == "failure":
+                run_json.write_failure("library failure")
+            elif kind == "prepared":
+                text = io.StringIO(report)
+                assert run_json._write_report(text) == 0
+                assert text.closed
+            else:
+                assert run_json._write_report(report) == 0
+        assert stdout.getvalue() == expected, stdout.getvalue()
+        assert stdout.flushes == 1, stdout.flushes
+
+
+@pytest.mark.parametrize("publication", ["report", "failure"])
+@pytest.mark.parametrize("site", ["handler", "resource_cleanup", "signal_cleanup"])
+def test_library_late_fault_preserves_one_document_per_run(monkeypatch, publication, site):
+    report = '{"engine":"pineforge","published":true}\n'
+    expected = ('{"engine":"pineforge","error":"initial failure"}\n'
+                if publication == "failure" else report)
+
+    def fault():
+        raise RuntimeError("late library fault")
+
+    def publish_then_fault(argv, resources):
+        if publication == "failure":
+            run_json.write_failure("initial failure")
+        else:
+            assert run_json._write_report(report) == 0
+        if site == "handler":
+            fault()
+        if site == "resource_cleanup":
+            resources.callback(fault)
+        return 0
+
+    if site == "signal_cleanup":
+        close = run_json._SigtermAbort.close
+
+        def close_then_fault(abort):
+            close(abort)
+            fault()
+
+        monkeypatch.setattr(run_json._SigtermAbort, "close", close_then_fault)
+    monkeypatch.setattr(run_json, "_ReportOutput", _forbid_report_reservation)
+    monkeypatch.setattr(run_json, "_main", publish_then_fault)
+    for _ in range(2):
+        stdout, stderr = _LibraryStdout(), io.StringIO()
+        with monkeypatch.context() as patch:
+            patch.setattr(sys, "stdout", stdout)
+            patch.setattr(sys, "stderr", stderr)
+            status = run_json.main([])
+        observed = (f"status={status!r}; stdout={stdout.getvalue()!r}; "
+                    f"stderr={stderr.getvalue()!r}")
+        assert status == 1, observed
+        assert stdout.getvalue() == expected, observed
+        assert stdout.flushes == 1, observed
+        assert "late library fault" in stderr.getvalue(), observed
+
+
+def test_library_discard_uses_the_current_stdout_descriptor(tmp_path, monkeypatch):
+    path = tmp_path / "library-stdout.txt"
+    with path.open("w", encoding="utf-8") as stdout:
+        stdout.write("before discard\n")
+        stdout.flush()
+        stdout.write("buffered after discard\n")
+        with monkeypatch.context() as patch:
+            patch.setattr(sys, "stdout", stdout)
+            run_json._discard_stdout()
+        stdout.flush()
+    assert path.read_bytes() == b"before discard\n"

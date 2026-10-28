@@ -4660,16 +4660,17 @@ def _syminfo_clock(syminfo_path) -> tuple:
 
 
 def _write_report(text, phases=None) -> int:
-    """Write the whole document to the reserved report channel and flush: 0, or 1 when it cannot
+    """Write the whole document to the report channel and flush: 0, or 1 when it cannot
     take it. No failure line (no second JSON document) may follow part of a report, so the reason
     goes to stderr, the report descriptor is discarded, the exit status is 1 and the phase writer is left
     where it is (serialization): the watchdog sees the terminal status and the last phase.
     With a phase session (a run past the boundary) any exception from the write is that
     outcome, and the stderr line names it as report_post_execution_failed with the real
     phase and the reason (resource, io or exception); without one, the line is the ordinary
-    one."""
-    caught = Exception
+    one and library calls retain their OSError/ValueError handling."""
+    caught = (OSError, ValueError) if phases is None and _REPORT_OUTPUT is None else Exception
     try:
+        _begin_report()
         if isinstance(text, str):
             _report_output().write(text)
         else:
@@ -4684,17 +4685,17 @@ def _write_report(text, phases=None) -> int:
                 # Close errors after publication obey the same stderr-only
                 # rule as report-channel errors; the outer resource stack is idempotent.
                 text.close()
-        _report_output().finish()
+        _finish_report()
     except caught as error:
         _discard_stdout()
         if phases is None:
-            _write_diagnostic(f"run_json: the report could not be written: {error}\n")
+            print(f"run_json: the report could not be written: {error}", file=sys.stderr)
         else:
             reason = ("resource" if isinstance(error, MemoryError)
                       else "io" if isinstance(error, (OSError, ValueError)) else "exception")
-            _write_diagnostic("run_json: report_post_execution_failed (phase "
-                              f"{phases.writer.phase}, reason {reason}): the report could not be written "
-                              f"whole: {error}\n")
+            print("run_json: report_post_execution_failed (phase "
+                  f"{phases.writer.phase}, reason {reason}): the report could not be written "
+                  f"whole: {error}", file=sys.stderr)
         return 1
     return 0
 
@@ -5058,8 +5059,8 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
     except RunFailure as error:
         # The whole report is already out, so no failure line may follow it, and nothing may
         # claim success: this is the harness fault (exit status 1, stderr), never a result.
-        _write_diagnostic(f"run_json: harness_internal_error: the completed phase record could not be "
-                          f"handed over: {error}\n")
+        print(f"run_json: harness_internal_error: the completed phase record could not be "
+              f"handed over: {error}", file=sys.stderr)
         return 1
     return 0
 
@@ -5109,34 +5110,36 @@ def main(argv=None) -> int:
     cannot take whole (_main): exit 1 with the reason on stderr and no line after
     the part written. The csv2bin subcommand instead returns 2 on refusal and
     writes its one failure line to stderr (CR-150's converter contract)."""
-    tokens = sys.argv[1:] if argv is None else argv
-    if tokens and tokens[0] == "csv2bin":
-        return _csv2bin_main(tokens[1:])
-    abort = _SigtermAbort()
-    try:
-        with ExitStack() as binary_inputs:
-            binary_inputs._sigterm_abort = abort
-            return _main(argv, binary_inputs)
-    except RunFailure as failure:
-        if not abort.started and abort.requested():
-            failure = abort.failure()
-        write_failure(str(failure), failure.code, failure.code_args)
-        return failure.exit_status
-    except Exception as error:
-        if not abort.started and abort.requested():
-            failure = abort.failure()
+    with _LibraryReportRun():
+        tokens = sys.argv[1:] if argv is None else argv
+        if tokens and tokens[0] == "csv2bin":
+            return _csv2bin_main(tokens[1:])
+        abort = _SigtermAbort()
+        try:
+            with ExitStack() as binary_inputs:
+                binary_inputs._sigterm_abort = abort
+                return _main(argv, binary_inputs)
+        except RunFailure as failure:
+            if not abort.started and abort.requested():
+                failure = abort.failure()
             write_failure(str(failure), failure.code, failure.code_args)
+            return failure.exit_status
+        except Exception as error:
+            if not abort.started and abort.requested():
+                failure = abort.failure()
+                write_failure(str(failure), failure.code, failure.code_args)
+                return 1
+            typed = _typed_failure(error)
+            if typed is not None:
+                write_failure(str(typed), typed.code, typed.code_args)
+                return typed.exit_status
+            traceback.print_exc(file=sys.stderr)
+            write_failure(f"harness internal error: {type(error).__name__}: {error}",
+                          "harness_internal_error")
             return 1
-        typed = _typed_failure(error)
-        if typed is not None:
-            write_failure(str(typed), typed.code, typed.code_args)
-            return typed.exit_status
-        traceback.print_exc(file=sys.stderr)
-        write_failure(f"harness internal error: {type(error).__name__}: {error}",
-                      "harness_internal_error")
-        return 1
-    finally:
-        abort.close()
+        finally:
+            abort.close()
+    return 1  # A fault after library publication was diagnosed by the run guard.
 
 
 def _legacy_abbreviations(argv, legacy_long, all_long):
@@ -5645,8 +5648,8 @@ def _main(argv, binary_inputs) -> int:
         except RunFailure as error:
             # The whole report is already out: no failure line may follow it, and nothing may
             # claim success; this is the harness fault, exit status 1 on stderr.
-            _write_diagnostic(f"run_json: harness_internal_error: the completed phase record could not be "
-                              f"handed over: {error}\n")
+            print(f"run_json: harness_internal_error: the completed phase record could not be "
+                  f"handed over: {error}", file=sys.stderr)
             return 1
     return 0
 
@@ -7367,6 +7370,28 @@ def _read_strategy_initial_capital(lib, state):
 
 
 _REPORT_OUTPUT = None
+_LIBRARY_REPORT_RUN = None
+
+
+class _LibraryReportRun:
+    """Scope publication state to one main() call without owning any descriptor."""
+
+    def __enter__(self):
+        global _LIBRARY_REPORT_RUN
+        self.previous = _LIBRARY_REPORT_RUN
+        self.published = False
+        _LIBRARY_REPORT_RUN = self
+        return self
+
+    def __exit__(self, kind, error, tb):
+        global _LIBRARY_REPORT_RUN
+        _LIBRARY_REPORT_RUN = self.previous
+        if (_REPORT_OUTPUT is None and self.published
+                and isinstance(error, Exception)):
+            _write_diagnostic(f"run_json: fault after report publication: "
+                              f"{type(error).__name__}: {error}\n")
+            return True
+        return False
 
 
 class _ReportOutput:
@@ -7450,9 +7475,28 @@ class _ReportOutput:
 
 
 def _report_output():
+    # Library callers may replace sys.stdout between writes or between runs.
+    return sys.stdout if _REPORT_OUTPUT is None else _REPORT_OUTPUT
+
+
+def _report_published():
+    if _REPORT_OUTPUT is not None:
+        return _REPORT_OUTPUT.published
+    return _LIBRARY_REPORT_RUN is not None and _LIBRARY_REPORT_RUN.published
+
+
+def _begin_report():
+    if _report_published():
+        raise OSError("the report channel has already been published")
+    if _REPORT_OUTPUT is None and _LIBRARY_REPORT_RUN is not None:
+        _LIBRARY_REPORT_RUN.published = True
+
+
+def _finish_report():
     if _REPORT_OUTPUT is None:
-        raise RuntimeError("the report output owner is not initialized")
-    return _REPORT_OUTPUT
+        sys.stdout.flush()
+    else:
+        _REPORT_OUTPUT.finish()
 
 
 def _same_open_file(left, right):
@@ -7554,6 +7598,14 @@ def _write_diagnostic(text):
 
 
 def _publish_failure(line):
+    if _report_published():
+        _write_diagnostic(f"run_json: fault after report publication: {line}")
+        return
+    _begin_report()
+    if _REPORT_OUTPUT is None:
+        sys.stdout.write(line)
+        sys.stdout.flush()
+        return
     try:
         output = _report_output()
         output.write(line)
@@ -7564,12 +7616,20 @@ def _publish_failure(line):
 
 
 def _discard_stdout() -> None:
-    """Discard the reserved report descriptor after a partial report write."""
-    _report_output().discard()
-
-
-main = _host_main
+    """Discard the host's report descriptor, or the library caller's current stdout."""
+    if _REPORT_OUTPUT is not None:
+        _REPORT_OUTPUT.discard()
+        return
+    try:
+        fd = sys.stdout.fileno()
+    except (AttributeError, OSError, ValueError):  # not a file: nothing to drop
+        return
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    try:
+        os.dup2(devnull, fd)
+    finally:
+        os.close(devnull)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(_host_main())
