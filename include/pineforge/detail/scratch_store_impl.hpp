@@ -1695,6 +1695,24 @@ public:
         return out;
     }
 
+    Status advance_handles(std::uint64_t count) noexcept {
+        if (open_status_ != Status::ok || poisoned_ || busy_ != 0) return Status::programming_error;
+        if (count == 0) return Status::ok;
+        const bool own = !active_;
+        if (own) {
+            const Status st = begin();
+            if (st != Status::ok) return st;
+        }
+        const std::uint64_t limit = std::uint64_t{1} << 62; // Same domain as put_impl.
+        const std::uint64_t remaining = cur_.next_handle < limit ? limit - cur_.next_handle : 0;
+        cur_.next_handle += count < remaining ? count : remaining;
+        if (count > remaining) {
+            poisoned_ = true;
+            return Status::programming_error;
+        }
+        return own ? commit(ScratchDurability::buffered) : Status::ok;
+    }
+
     // ---- state ----------------------------------------------------------------------------
 
     Status open_status_ = Status::ok;
@@ -1825,6 +1843,10 @@ inline ScratchStatus CommandScratchStore::state_digest(ScratchBuffer page, std::
 }
 inline ScratchStoreStats CommandScratchStore::stats() const noexcept {
     return state_ == nullptr ? ScratchStoreStats{} : state_->stats();
+}
+
+inline ScratchStatus CommandScratchStore::advance_handles(std::uint64_t count) noexcept {
+    return state_ == nullptr ? ScratchStatus::programming_error : state_->advance_handles(count);
 }
 
 } // namespace pineforge::detail

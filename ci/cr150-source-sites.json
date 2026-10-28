@@ -36125,20 +36125,6 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "closed_cohorts",
-   "scope": [
-    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: on_applied ( const native_order :: ExecutionAppliedEvent & event , const NativeDecisionContext & context ) #1",
-    "if ( flipped_position && event . closed_units > 0 . 0 ) #1",
-    "cohorts_by_id_ . for_each_sorted_id ( [ & ] ( const SourceId & id ) #1",
-    "if ( ! std :: binary_search ( preserved_cohorts . begin ( ) , preserved_cohorts . end ( ) , id ) ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "closed_cohorts . push_back ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_adapter.cpp",
    "symbol": "exit_tombstones_",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
@@ -37367,6 +37353,109 @@
    ],
    "cls": "assign",
    "spelling": "key = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "selection",
+   "scope": [
+    "namespace pineforge :: source #6",
+    "void PineExecutionAdapter :: cancel_reversal_exit_owners ( const std :: vector < SourceId > & preserved , detail :: ExitScratchRows < SourceId > & selection ) #1",
+    "if ( PINEFORGE_FULL_CLOSE_EXIT_ORACLE ( ) ) #1",
+    "cohorts_by_id_ . for_each_sorted_id ( [ & ] ( const SourceId & id ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "selection . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "owners",
+   "scope": [
+    "namespace pineforge :: source #6",
+    "void PineExecutionAdapter :: cancel_reversal_exit_owners ( const std :: vector < SourceId > & preserved , detail :: ExitScratchRows < SourceId > & selection ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < SourceId >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "owners",
+   "scope": [
+    "namespace pineforge :: source #6",
+    "void PineExecutionAdapter :: cancel_reversal_exit_owners ( const std :: vector < SourceId > & preserved , detail :: ExitScratchRows < SourceId > & selection ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "owners . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "owners",
+   "scope": [
+    "namespace pineforge :: source #6",
+    "void PineExecutionAdapter :: cancel_reversal_exit_owners ( const std :: vector < SourceId > & preserved , detail :: ExitScratchRows < SourceId > & selection ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "owners . push_back ( . . . )",
+   "ordinal": 2
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "owners",
+   "scope": [
+    "namespace pineforge :: source #6",
+    "void PineExecutionAdapter :: cancel_reversal_exit_owners ( const std :: vector < SourceId > & preserved , detail :: ExitScratchRows < SourceId > & selection ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "owners . push_back ( . . . )",
+   "ordinal": 3
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "owners",
+   "scope": [
+    "namespace pineforge :: source #6",
+    "void PineExecutionAdapter :: cancel_reversal_exit_owners ( const std :: vector < SourceId > & preserved , detail :: ExitScratchRows < SourceId > & selection ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "owners . push_back ( . . . )",
+   "ordinal": 4
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "owners",
+   "scope": [
+    "namespace pineforge :: source #6",
+    "void PineExecutionAdapter :: cancel_reversal_exit_owners ( const std :: vector < SourceId > & preserved , detail :: ExitScratchRows < SourceId > & selection ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "owners . push_back ( . . . )",
+   "ordinal": 5
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "owners",
+   "scope": [
+    "namespace pineforge :: source #6",
+    "void PineExecutionAdapter :: cancel_reversal_exit_owners ( const std :: vector < SourceId > & preserved , detail :: ExitScratchRows < SourceId > & selection ) #1",
+    "for ( const auto & handle : live_handles_ ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "owners . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "matches",
+   "scope": [
+    "namespace pineforge :: source #6",
+    "void PineExecutionAdapter :: cancel_reversal_exit_owners ( const std :: vector < SourceId > & preserved , detail :: ExitScratchRows < SourceId > & selection ) #1",
+    "cohorts_by_id_ . for_each_sorted_id ( [ & ] ( const SourceId & id ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "matches = . . .",
    "ordinal": 1
   },
   {

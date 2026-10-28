@@ -407,6 +407,9 @@ public:
         for (auto at = index_.first_sorted(); at != 0; at = index_.next_sorted(at))
             visit(index_.key(at));
     }
+    // Keys-only membership: reads the index alone, restores no row and does
+    // not run the implicit spill pass.
+    bool contains(const std::string& key) const { return index_.find(key).has_value(); }
     iterator find(const std::string& key) {
         spill_implicitly();
         const auto at = index_.find(key);

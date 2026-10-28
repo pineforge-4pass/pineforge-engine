@@ -1384,8 +1384,8 @@ list(APPEND TEST_SOURCES test_native_match_allocations)
 # Source-bound.
 list(APPEND TEST_SOURCES test_adapter_command_allocations)
 list(APPEND TEST_SOURCES test_adapter_exit_scratch)
-# R5 lane PERF-L1: the NativeStrategyHost reads -- the consumer read off the
-# engine's slot, the inline book aggregate, the running lifecycle view --
+list(APPEND TEST_SOURCES test_reversal_exit_owner_gate)
+# R5 lane PERF-L1: NativeStrategyHost's consumer, aggregate and lifecycle reads
 # against the lookups they replaced, inside every host hook of randomized
 # runs. Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_host_reads)
@@ -3779,7 +3779,7 @@ list(REMOVE_ITEM TEST_SOURCES ${_pf_private_fixture_rows})
 
 # Report arithmetic and C-host failure ownership, with source-free includes.
 list(APPEND TEST_SOURCES test_metrics_overflow)
-list(APPEND TEST_SOURCES test_native_c_host_report_failure)
+list(APPEND TEST_SOURCES test_native_c_host_report_failure test_scratch_bulk_advance)
 
 # CR-150: engine-free pipe flag control beside the ordinary C++ unit rows.
 if(UNIX)

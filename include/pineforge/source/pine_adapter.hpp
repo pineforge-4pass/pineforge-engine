@@ -3195,6 +3195,8 @@ private:
     void fold_admission_events() const;
     std::uint64_t checked_live_key(const SourceId&) const;
     detail::LiveSourceHandle live_source_value(native_order::RequestHandle, const SourceId&) const;
+    void cancel_reversal_exit_owners(const std::vector<SourceId>& preserved,
+                                    detail::ExitScratchRows<SourceId>& selection);
 };
 
 namespace detail {
