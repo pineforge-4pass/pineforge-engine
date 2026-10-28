@@ -9724,6 +9724,63 @@
    "ordinal": 1
   },
   {
+   "file": "include/pineforge/source/pine_adapter.hpp",
+   "symbol": "source_id",
+   "scope": [
+    "namespace pineforge :: source #2",
+    "class PineExecutionAdapter #1",
+    "struct PendingProjectionKey #1"
+   ],
+   "cls": "decl",
+   "spelling": "SourceId",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_adapter.hpp",
+   "symbol": "from_entry",
+   "scope": [
+    "namespace pineforge :: source #2",
+    "class PineExecutionAdapter #1",
+    "struct PendingProjectionKey #1"
+   ],
+   "cls": "decl",
+   "spelling": "SourceId",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_adapter.hpp",
+   "symbol": "pending_projection_raw_keys_",
+   "scope": [
+    "namespace pineforge :: source #2",
+    "class PineExecutionAdapter #1"
+   ],
+   "cls": "decl",
+   "spelling": "std::vector<PendingProjectionKey>",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_adapter.hpp",
+   "symbol": "pending_projection_rows_",
+   "scope": [
+    "namespace pineforge :: source #2",
+    "class PineExecutionAdapter #1"
+   ],
+   "cls": "decl",
+   "spelling": "std::vector<int>",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_adapter.hpp",
+   "symbol": "pending_projection_seen_",
+   "scope": [
+    "namespace pineforge :: source #2",
+    "class PineExecutionAdapter #1"
+   ],
+   "cls": "decl",
+   "spelling": "std::unordered_map<PendingProjectionKey, int, PendingProjectionKeyHash>",
+   "ordinal": 1
+  },
+  {
    "file": "include/pineforge/source/pine_language_state.hpp",
    "symbol": "pos_view_frozen_entry_qty_",
    "scope": [
@@ -36536,6 +36593,106 @@
    ],
    "cls": "alloc",
    "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "from_entry",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "void PineExecutionAdapter :: ensure_pending_projection_cache ( ) const noexcept #1",
+    "const auto make_key = [ ] ( const PlacementSnapshot * row ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "from_entry = ...",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "key",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "void PineExecutionAdapter :: ensure_pending_projection_cache ( ) const noexcept #1",
+    "try #1",
+    "+ + raw ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "key = ...",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "pending_projection_raw_keys_",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "void PineExecutionAdapter :: ensure_pending_projection_cache ( ) const noexcept #1",
+    "try #1"
+   ],
+   "cls": "grow",
+   "spelling": "pending_projection_raw_keys_.reserve(...)",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "pending_projection_rows_",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "void PineExecutionAdapter :: ensure_pending_projection_cache ( ) const noexcept #1",
+    "try #1"
+   ],
+   "cls": "grow",
+   "spelling": "pending_projection_rows_.reserve(...)",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "pending_projection_seen_",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "void PineExecutionAdapter :: ensure_pending_projection_cache ( ) const noexcept #1",
+    "try #1"
+   ],
+   "cls": "grow",
+   "spelling": "pending_projection_seen_.reserve(...)",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "pending_projection_raw_keys_",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "void PineExecutionAdapter :: ensure_pending_projection_cache ( ) const noexcept #1",
+    "try #1",
+    "+ + raw ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "pending_projection_raw_keys_.push_back(...)",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "pending_projection_seen_",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "void PineExecutionAdapter :: ensure_pending_projection_cache ( ) const noexcept #1",
+    "try #1",
+    "+ + raw ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "pending_projection_seen_.emplace(...)",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "pending_projection_rows_",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "void PineExecutionAdapter :: ensure_pending_projection_cache ( ) const noexcept #1",
+    "try #1",
+    "+ + raw ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "pending_projection_rows_.push_back(...)",
    "ordinal": 1
   },
   {
