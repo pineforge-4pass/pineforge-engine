@@ -70,6 +70,21 @@ unchanged except for two additive diagnostics keys, described below.
 - The release harness file `docker/run_json.py` changed (below). The hub image
   for this pair carries the 1.8.0 copy.
 
+### Live ledger resource control
+
+- Ledger writes now reserve payload and SQLite overhead before growth and
+  refuse a whole transaction with a typed storage-budget failure. Service and
+  ordinary runs keep their unlimited default in this release; requiring a
+  service budget remains a pending policy decision. The `--ledger-unbounded`
+  opt-out is available for that policy. Offline redelivery accepts the same
+  `--max-ledger-bytes` budget.
+- Delivery status uses transactional counters and oldest-pending indexes,
+  keeping status work independent of action and attempt history. Existing
+  ledgers acquire verified summaries in an automatic, one-way migration;
+  earlier runners cannot open the migrated database. The summaries add one
+  row and up to three partial-index entries per action, plus per-target rows
+  and indexes.
+
 ### Run profile in the report diagnostics
 
 - **Two additive success keys.** Every executed success report of
