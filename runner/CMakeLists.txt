@@ -612,7 +612,7 @@ if(PINEFORGE_BUILD_TESTS)
     set_tests_properties(test_native_live_report_exact_ratio_recovery
         test_native_live_report_interval_ratio_recovery PROPERTIES TIMEOUT 180)
     add_test(NAME test_native_live_report_memory COMMAND test_native_live_report_cli
-        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_market_example> memory)
+        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_live_report_example> memory)
     add_test(NAME test_native_live_report_storage_stop_refresh COMMAND test_native_live_report_cli
         $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_live_report_example> storage-stop-refresh)
     add_test(NAME test_native_live_report_ratio_marker_replay COMMAND test_native_live_report_cli

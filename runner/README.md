@@ -87,15 +87,17 @@ document. Cumulative stdout, legacy report verification and checkpoint equality
 serialize that same fold of the ledger's suffix patches. Peak RSS numbers come
 from `test_native_live_report_memory`; it prints `mem n=<N> peak_rss_kib=<K>`
 for each completed size on Linux and prints a skip reason on macOS. Measured
-on the lab 10-28 with the default stream and default ratio interval: peak RSS
-22,472 KiB at 1,000 inputs and 29,828 KiB at 10,000 inputs, about 0.82 KiB per
-additional input. These are the runner's own `VmHWM` readings for one fixture,
-including the accumulator curve, retained cumulative document and engine
-arrays. The measured native-market fixture records no equity points, so these
-figures do not measure growth of the accumulator curve. The row omitted
-100,000 inputs because its cumulative-stream projection assumes output volume
-quadratic in the input count, exceeding the 180 s timeout. These two points do
-not establish a flat memory bound.
+on the lab 10-28 with the default stream and default ratio interval, on a
+native test host that records one equity point per bar: peak RSS 22,880 KiB at
+1,000 inputs and 40,024 KiB at 10,000 inputs, about 1.9 KiB per additional
+input. These are the runner's own `VmHWM` readings for one fixture, including
+the accumulator curve, retained cumulative document and engine arrays. The
+native market example, which records no equity points, read 22,472 KiB and
+29,828 KiB (about 0.82 KiB per additional input), so the per-bar equity series
+accounts for the difference. The row omitted 100,000 inputs because its
+cumulative-stream projection assumes output volume quadratic in the input
+count, exceeding the 180 s timeout. These two points do not establish a flat
+memory bound.
 
 `--ratio-interval K` takes a positive integer and defaults to 1. **K = 1 (the
 default) is unchanged behaviour:** every input's cumulative report and delta

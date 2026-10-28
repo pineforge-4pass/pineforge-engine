@@ -138,15 +138,16 @@ child at exit; macOS skips with a printed reason. The row measures 1,000 and
 within the 180 s timeout, printing the omission reason otherwise. A peak below
 2 GiB and growth below 4 KiB per additional input between the two largest sizes
 are deliberate sanity ceilings, not measured baselines. Measured on the lab 10-28
-with the default stream and default ratio interval: peak RSS 22,472 KiB at
-1,000 inputs and 29,828 KiB at 10,000 inputs, about 0.82 KiB per additional
-input. These are the runner's own `VmHWM` readings for one fixture, including
-the accumulator curve, retained cumulative document and engine arrays. The
-measured native-market fixture records no equity points, so these figures do
-not measure growth of the accumulator curve. The row omitted 100,000 inputs
-because its cumulative-stream projection assumes output volume quadratic in
-the input count, exceeding the 180 s timeout. These two points do not establish
-a flat memory bound.
+with the default stream and default ratio interval, on a native test host that
+records one equity point per bar: peak RSS 22,880 KiB at 1,000 inputs and
+40,024 KiB at 10,000 inputs, about 1.9 KiB per additional input. These are the
+runner's own `VmHWM` readings for one fixture, including the accumulator curve,
+retained cumulative document and engine arrays. The native market example,
+which records no equity points, read 22,472 KiB and 29,828 KiB (about 0.82 KiB
+per additional input), so the per-bar equity series accounts for the difference.
+The row omitted 100,000 inputs because its cumulative-stream projection assumes
+output volume quadratic in the input count, exceeding the 180 s timeout. These
+two points do not establish a flat memory bound.
 
 For the plain `.bin` input route the input file is mapped, 48 B per bar of file
 payload (`_map_bar_file` docker/run_json.py:2685-2708), and the touched pages

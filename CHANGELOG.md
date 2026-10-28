@@ -149,11 +149,13 @@ stored checkpoints.
   ratio workspace, and engine arrays resident with O(report) growth in equity
   points and trades as the cost of one cumulative-document builder, measured
   by `test_native_live_report_memory`: on the lab 10-28 with the default stream
-  and default ratio interval, the runner's own `VmHWM` peak RSS was 22,472 KiB
-  at 1,000 inputs and 29,828 KiB at 10,000 inputs, about 0.82 KiB per additional
-  input for one native-market fixture with no recorded equity points; the
-  process measurement includes the accumulator curve, retained cumulative
-  document and engine arrays; the row omitted 100,000 inputs because its
+  and default ratio interval, the runner's own `VmHWM` peak RSS was 22,880 KiB
+  at 1,000 inputs and 40,024 KiB at 10,000 inputs, about 1.9 KiB per additional
+  input, for a native test host that records one equity point per bar (22,472
+  KiB and 29,828 KiB, about 0.82 KiB per additional input, for the native market
+  example that records none); the process measurement includes the accumulator
+  curve, retained cumulative document and engine arrays; the row omitted
+  100,000 inputs because its
   cumulative-stream projection assumes output volume quadratic in the input
   count, exceeding the 180 s timeout. These two points do not establish a flat
   memory bound.
