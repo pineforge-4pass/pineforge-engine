@@ -6,6 +6,14 @@
 #include <algorithm>
 #include <cstdio>
 
+// The ledger names this struct as a friend; the run-begin retirement policy is
+// private, and a sink run sets it through the engine.
+namespace pineforge::detail {
+struct TradeLedgerStorageProbe {
+    static void retire_history(TradeLedger& ledger) { ledger.set_history_retirement(true); }
+};
+} // namespace pineforge::detail
+
 namespace {
 using namespace p2cx_tledger;
 using Size = TradeLedger::size_type;
@@ -13,7 +21,7 @@ using Size = TradeLedger::size_type;
 void retiring_ledger_cache_does_not_follow_the_trade_count() {
     TradeLedger ledger;
     ledger.set_scratch_directory(".");
-    ledger.set_history_retirement(true);
+    pineforge::detail::TradeLedgerStorageProbe::retire_history(ledger);
     // The sink-route cap: a cache that follows the population would reach it.
     ledger.set_cache_rows(TradeLedger::kDefaultCacheRows);
     constexpr Size trades = 3 * TradeLedger::kDefaultCacheRows;
