@@ -621,6 +621,7 @@ template pf_equity_stats_t compute_equity_stats<SpillCurve>(
 }  // namespace metrics
 
 void BacktestEngine::fold_trade_percent_prefix(const Trade& trade) {
+    trades_.invalidate_percent_fold();
     trade_percent_prefix_.all_sum += trade.pnl_pct;
     ++trade_percent_prefix_.all_count;
     if (trade.pnl > 0.0) {
@@ -633,7 +634,14 @@ void BacktestEngine::fold_trade_percent_prefix(const Trade& trade) {
 }
 
 void BacktestEngine::reset_trade_percent_prefix() {
+    trades_.invalidate_percent_fold();
     trade_percent_prefix_ = {};
+}
+
+TradeLedger::PercentFold BacktestEngine::current_trade_percent_fold() const {
+    const auto& prefix = trade_percent_prefix_;
+    return trades_.percent_fold({prefix.all_sum, prefix.win_sum, prefix.loss_sum,
+                                prefix.all_count, prefix.win_count, prefix.loss_count});
 }
 
 }  // namespace pineforge

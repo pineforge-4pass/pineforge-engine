@@ -183,6 +183,24 @@ public:
     // Historical bytes remain readable independently of publication.
     void seal(size_type global_end);
 
+    // Derived ordered percentage fold. No history-sized allocation or hash
+    // state belongs to this cache; a changed prefix or ledger restarts it.
+    struct PercentFold {
+        double all_sum = 0.0;
+        double win_sum = 0.0;
+        double loss_sum = 0.0;
+        size_type all_count = 0;
+        size_type win_count = 0;
+        size_type loss_count = 0;
+    };
+    PercentFold percent_fold(const PercentFold& sealed_prefix) const;
+    /// Test and diagnostics observer; counts rows consumed by percentage
+    /// folds for this State. It is monotone, fixed-size and never hashed or
+    /// consulted for cache validity.
+    std::uint64_t percent_fold_rows_consumed() const noexcept;
+    // Sealed-prefix advancement/reset also changes the fold's starting seed.
+    void invalidate_percent_fold() noexcept;
+
 private:
     struct State;
     std::unique_ptr<State> state_;

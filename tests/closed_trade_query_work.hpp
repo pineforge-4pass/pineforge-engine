@@ -7,6 +7,8 @@
 #include <cstring>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 // Defined before engine.hpp: the build-directory header overlay inserts only
@@ -16,6 +18,7 @@ namespace closed_trade_query_work {
 struct Work {
     std::array<std::uint64_t, 3> percent_rows{};
     std::uint64_t percent_control_rows = 0;
+    std::uint64_t percent_fold_rows = 0;
     std::uint64_t net_rows = 0;
     std::uint64_t metric_rows = 0;
     std::uint64_t other_numeric_rows = 0;
@@ -24,14 +27,55 @@ struct Work {
 
 inline Work* counting = nullptr;
 
+template<class Ledger, class = void>
+struct has_percent_fold_rows : std::false_type {};
+
+template<class Ledger>
+struct has_percent_fold_rows<Ledger, std::void_t<
+    decltype(std::declval<const Ledger&>().percent_fold_rows_consumed())>>
+    : std::true_type {};
+
+template<class Ledger>
+std::uint64_t observed_percent_fold_rows(const Ledger& ledger) noexcept {
+    if constexpr (has_percent_fold_rows<Ledger>::value)
+        return ledger.percent_fold_rows_consumed();
+    // The base tree exposes its work only through the accessor-loop overlay.
+    return 0;
+}
+
 class CountScope {
 public:
-    explicit CountScope(Work& work) : previous_(counting) { counting = &work; }
-    ~CountScope() { counting = previous_; }
+    explicit CountScope(Work& work) noexcept
+        : work_(&work), previous_(counting) {
+        counting = &work;
+    }
+    template<class Ledger>
+    CountScope(Work& work, const Ledger& ledger) noexcept
+        : work_(&work), previous_(counting), ledger_(&ledger),
+          read_rows_(&read_percent_fold_rows<Ledger>),
+          before_rows_(observed_percent_fold_rows(ledger)) {
+        counting = &work;
+    }
+    ~CountScope() noexcept {
+        if (read_rows_)
+            work_->percent_fold_rows += read_rows_(ledger_) - before_rows_;
+        counting = previous_;
+    }
     CountScope(const CountScope&) = delete;
     CountScope& operator=(const CountScope&) = delete;
 private:
+    using ReadRows = std::uint64_t (*)(const void*) noexcept;
+
+    template<class Ledger>
+    static std::uint64_t read_percent_fold_rows(const void* value) noexcept {
+        return observed_percent_fold_rows(*static_cast<const Ledger*>(value));
+    }
+
+    Work* work_;
     Work* previous_;
+    const void* ledger_ = nullptr;
+    ReadRows read_rows_ = nullptr;
+    std::uint64_t before_rows_ = 0;
 };
 
 template<class Row>
@@ -68,8 +112,12 @@ inline void accumulator_input() noexcept {
     if (counting) ++counting->accumulator_inputs;
 }
 
-inline std::uint64_t percent_visits(const Work& work) {
+inline std::uint64_t overlay_percent_visits(const Work& work) {
     return work.percent_rows[0] + work.percent_rows[1] + work.percent_rows[2];
+}
+
+inline std::uint64_t percent_visits(const Work& work) {
+    return overlay_percent_visits(work) + work.percent_fold_rows;
 }
 
 inline void require(bool condition, const char* message) {
@@ -227,6 +275,15 @@ inline PercentOracle percent_oracle(const BacktestEngine& host, int count) {
                 && result.counts[2] == static_cast<std::size_t>((count + 1) / 3)
                 && result.evens == static_cast<std::size_t>(count / 3),
             "value mismatch: winning/losing/even population");
+    return result;
+}
+
+inline PercentOracle percent_oracle(const BacktestEngine& host) {
+    // Amendments, rewinds and copies retain the public row order but need
+    // not retain the original tape's percentages or population.
+    PercentOracle result;
+    for (std::size_t index = 0; index < host.closed_trade_count(); ++index)
+        result.add(host.closed_trade(index));
     return result;
 }
 

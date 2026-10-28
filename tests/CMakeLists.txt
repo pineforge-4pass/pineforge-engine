@@ -7898,6 +7898,8 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
 endif()
 
 # Observation-only copies: keep the production files and all arithmetic intact.
+# The percentage loop overlay remains the base-tree work observer; product
+# builds add TradeLedger::percent_fold_rows_consumed() to the same CountScope.
 # Configure dependencies prevent a stale counting copy after a product change.
 set(_closed_trade_work_dir "${CMAKE_CURRENT_BINARY_DIR}/closed_trade_query_work")
 file(MAKE_DIRECTORY "${_closed_trade_work_dir}/pineforge")

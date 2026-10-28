@@ -17,8 +17,8 @@
 
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <cmath>
+#include <cstring>
 #include <map>
 #include <optional>
 #include <stdexcept>
@@ -392,6 +392,39 @@ struct TradeLedger::State {
     mutable size_type cache_count = 0, cache_capacity = 0;
     mutable size_type cache_generation = 2;
 
+    // Run-owned, reconstructible scalars only. The seed is compared bitwise
+    // so signed zero and NaN payloads cannot alias a different sealed fold.
+    struct PercentCache {
+        PercentFold seed{}, fold{};
+        size_type base = 0, end = 0;
+        std::uint64_t generation = 0;
+        bool valid = false;
+    };
+    std::uint64_t row_generation = 0;
+    // Fixed diagnostic observer only. A fresh State starts at zero; this
+    // scalar is excluded from cache validity and every state hash.
+    mutable std::uint64_t percent_fold_rows_consumed = 0;
+    mutable PercentCache percent_cache;
+
+    void rows_changed(bool uncovered_only = false) noexcept {
+        const bool retain = uncovered_only && percent_cache.valid
+            && percent_cache.generation == row_generation;
+        ++row_generation;
+        // Appends and edits at/after the cursor cannot touch a covered row.
+        // Carry their generation forward; the reader folds that suffix once.
+        // Other changes invalidate BEFORE they can write stored rows.
+        // Wraparound cannot revive a stale fold: validity is explicit.
+        if (retain) percent_cache.generation = row_generation;
+        else percent_cache.valid = false;
+    }
+    static bool same_percent_seed(const PercentFold& a, const PercentFold& b) noexcept {
+        return a.all_count == b.all_count && a.win_count == b.win_count
+            && a.loss_count == b.loss_count
+            && std::memcmp(&a.all_sum, &b.all_sum, sizeof(double)) == 0
+            && std::memcmp(&a.win_sum, &b.win_sum, sizeof(double)) == 0
+            && std::memcmp(&a.loss_sum, &b.loss_sum, sizeof(double)) == 0;
+    }
+
     State() {
         index.bound_cache();
         payload.bound_cache();
@@ -671,6 +704,7 @@ TradeLedger& TradeLedger::operator=(const TradeLedger& other) {
 
 TradeLedger::TradeLedger(TradeLedger&& other) : TradeLedger() {
     state_.swap(other.state_);
+    state_->rows_changed();
     state_->invalidate_cache();
 }
 
@@ -812,6 +846,7 @@ bool TradeLedger::is_long_at(size_type global) const {
 void TradeLedger::replace(size_type global, const Trade& row) {
     state_->check(global, true);
     const auto previous = state_->descriptor(global);
+    state_->rows_changed(global >= state_->percent_cache.end);
     state_->invalidate(global);
     const auto record = state_->store(global, row, &previous);
     if (global >= state_->resident_first) state_->rows[state_->slot(global)] = record;
@@ -836,6 +871,7 @@ void TradeLedger::push_back(const Trade& trade) {
     state_->rows[(state_->head + state_->count) % kResidentRows] = record;
     ++state_->count;
     ++state_->end;
+    state_->rows_changed(true);
 }
 
 void TradeLedger::push_back(Trade&& trade) { push_back(static_cast<const Trade&>(trade)); }
@@ -844,6 +880,7 @@ void TradeLedger::resize(size_type global_end) {
     if (global_end < state_->first)
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                        "trade ledger: rewind below resident window");
+    state_->rows_changed();
     state_->invalidate_cache();
     if (global_end < size()) {
         // Re-cuts may rewind far below the descriptor window. All row bytes
@@ -891,11 +928,55 @@ void TradeLedger::seal(size_type global_end) {
     if (global_end < state_->first || global_end > size())
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                        "trade ledger: seal outside resident window");
+    state_->rows_changed();
     // Publication changes no row content, and the checked accessors refuse
     // sealed rows before they reach the cache: cached entries stay valid, so a
     // closedtrades loop is not made cold again by every published trade.
     while (state_->count != 0 && state_->resident_first < global_end) state_->evict();
     state_->first = global_end;
+}
+
+TradeLedger::PercentFold TradeLedger::percent_fold(const PercentFold& sealed_prefix) const {
+    auto& cached = state_->percent_cache;
+    if (!cached.valid || cached.generation != state_->row_generation
+        || cached.base != base() || cached.end < base() || cached.end > size()
+        || !State::same_percent_seed(cached.seed, sealed_prefix)) {
+        cached.valid = false;
+        cached.seed = cached.fold = sealed_prefix;
+        cached.base = cached.end = base();
+        cached.generation = state_->row_generation;
+    }
+    // Never subtract a sealed/truncated tail, regroup it, or accumulate an
+    // independent resident subtotal. Each scalar resumes the original fold
+    // from the sealed seed, adding rows in increasing global index order.
+    // Keep the cache unpublished while read() can throw. On failure, end is
+    // exactly one past the rows already folded, but the invalid flag forces a
+    // later read to rebuild from the sealed seed.
+    cached.valid = false;
+    while (cached.end < size()) {
+        const Trade row = read(cached.end);
+        cached.fold.all_sum += row.pnl_pct;
+        ++cached.fold.all_count;
+        if (row.pnl > 0.0) {
+            cached.fold.win_sum += row.pnl_pct;
+            ++cached.fold.win_count;
+        } else if (row.pnl < 0.0) {
+            cached.fold.loss_sum += row.pnl_pct;
+            ++cached.fold.loss_count;
+        }
+        ++cached.end;
+        ++state_->percent_fold_rows_consumed;
+    }
+    cached.valid = true;
+    return cached.fold;
+}
+
+std::uint64_t TradeLedger::percent_fold_rows_consumed() const noexcept {
+    return state_->percent_fold_rows_consumed;
+}
+
+void TradeLedger::invalidate_percent_fold() noexcept {
+    state_->rows_changed();
 }
 
 } // inline namespace engine_script_run_v19

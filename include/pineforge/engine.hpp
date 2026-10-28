@@ -1173,10 +1173,10 @@ protected:
         return (n > 0) ? (net_profit_sum_ / (double)n) : 0.0;
     }
     double avg_trade_percent() const {
-        double s = trade_percent_prefix_.all_sum;
-        std::size_t n = trade_percent_prefix_.all_count;
-        // Continue the original left fold over the resident rows.
-        for (const auto& t : trades_) { s += t.pnl_pct; ++n; }
+        const auto fold = current_trade_percent_fold();
+        // Continue the original left fold, retaining the original division.
+        const double s = fold.all_sum;
+        const std::size_t n = fold.all_count;
         return n > 0 ? s / static_cast<double>(n) : 0.0;
     }
     double avg_winning_trade() const {
@@ -1187,20 +1187,20 @@ protected:
     }
     double avg_winning_trade_percent() const {
         if (win_trades_count_ <= 0) return 0.0;
-        double s = trade_percent_prefix_.win_sum;
-        std::size_t c = trade_percent_prefix_.win_count;
-        for (const auto& t : trades_) {
-            if (t.pnl > 0.0) { s += t.pnl_pct; ++c; }
-        }
+        const auto fold = current_trade_percent_fold();
+        // The shared fold preserves the winning subsequence's row order.
+        // Keep the settlement guard above and the original division below.
+        const double s = fold.win_sum;
+        const std::size_t c = fold.win_count;
         return (c > 0) ? (s / (double)c) : 0.0;
     }
     double avg_losing_trade_percent() const {
         if (loss_trades_count_ <= 0) return 0.0;
-        double s = trade_percent_prefix_.loss_sum;
-        std::size_t c = trade_percent_prefix_.loss_count;
-        for (const auto& t : trades_) {
-            if (t.pnl < 0.0) { s += t.pnl_pct; ++c; }
-        }
+        const auto fold = current_trade_percent_fold();
+        // The shared fold preserves signed losses and their row order.
+        // Keep the settlement guard above and the original division below.
+        const double s = fold.loss_sum;
+        const std::size_t c = fold.loss_count;
         return (c > 0) ? (s / (double)c) : 0.0;
     }
     double open_trades_capital_held() const {
@@ -2735,6 +2735,7 @@ protected:
     void fold_trade_percent_prefix(const Trade& trade);
     // The streaming owner clears this prefix with the run's closed rows.
     void reset_trade_percent_prefix();
+    TradeLedger::PercentFold current_trade_percent_fold() const;
     // A sink hook receives only range-end rows. Re-summing an edited tail
     // starts with this closed-row left fold, never a separately summed tail.
     double report_closed_net_profit() const;
