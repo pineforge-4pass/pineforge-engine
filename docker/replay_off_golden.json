@@ -1,16 +1,16 @@
 {
-  "source": "pineforge-engine main 95f4fd1f408bf0ded941ecc4144b278a026a677f, default (no replay switch), unjailed, wall clock fixed at 1.0, run id replay-off-golden; default_json digests are taken after the build identity (fingerprint token and digest) is masked as scripts/check_replay_off_golden.py describes",
+  "source": "pineforge-engine main 95f4fd1f408bf0ded941ecc4144b278a026a677f, default (no replay switch), unjailed, wall clock fixed at 1.0, run id replay-off-golden; default_json digests are taken after the build identity (fingerprint token, digest and the plain engine version_string and commit_sha) is masked as scripts/check_replay_off_golden.py describes",
   "scenarios": {
     "fifo": {
-      "default_json": {"sha256": "339c75719f3fefda2d22227c114e6c65220bf763547923c75e9a4a4b569a106b", "bytes": 9027},
+      "default_json": {"sha256": "336d425389a516b4402342c35069481e2287cf97b0be467756da7f599bd4f693", "bytes": 9047},
       "primary_sink": {"sha256": "dfa2679110fbbf9f24f43c902e2e3a2fc33a1d804a202b8554632206d790686e", "bytes": 1554}
     },
     "any": {
-      "default_json": {"sha256": "4400825a4a509c93608ab9a2a1484eb1a0ef3fdb82573f3920639ab289ef01dc", "bytes": 8678},
+      "default_json": {"sha256": "d1b6146c2caf7cd463df0a74486f8e2626dfe9197b33bf79b22bfbd4522bf4bf", "bytes": 8698},
       "primary_sink": {"sha256": "64852f4bb3b132efdd085a9a9c092de7b89224d7bf69bbefe4b779a851e81b14", "bytes": 1440}
     },
     "ordinary": {
-      "default_json": {"sha256": "731691f9340c9cfbba1e81ecd33d77166190410304eeb93365af871b75123c03", "bytes": 8689},
+      "default_json": {"sha256": "7ab6f39a115e4716937c22151a18f4ab97507fe80edd26684292f43027fbf0a7", "bytes": 8709},
       "primary_sink": {"sha256": "7c7f414f108b930471026d66174c219304454ffb19232f5d77ea962a7c1455ce", "bytes": 1453}
     }
   }
