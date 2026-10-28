@@ -1997,20 +1997,21 @@ class RulesetsProbeTests(unittest.TestCase):
             'Post Release/Debug/kernel and native shards, post sanitizers and both native-live sanitizer\n'
             'profiles use fixed bare GKE scale-set names directly in runner pods carrying the engine toolchain image and sudo. No job routes by event.',
             "The manual `release-ruleset-probe.yml` workflow runs `authz` on\n"
-            'bare scalar `gke-2cpu-4gb-amd64` and `probe` on `["self-hosted","pf-gcp-post"]`.',
+            'bare scalar `gke-2cpu-4gb-amd64` and `probe` on protected bare scalar '
+            '`gkp-2cpu-4gb-amd64` with the main-only `release-bot` environment.',
             "Release and promotion use the isolated release fleet:\n"
             "`release`, `notify-hub`, Linux x64 `prebuilt` and baseline `promote` use\n"
             '`["self-hosted","pf-gcp-main"]`.\n'
             'The release ruleset probe runs secret-free `authz` on bare scalar `gke-2cpu-4gb-amd64` and\n'
-            '`probe` on `["self-hosted","pf-gcp-post"]`.',
+            '`probe` on protected bare scalar `gkp-2cpu-4gb-amd64` with environment `release-bot`.',
             "Dispatch **Release ruleset probe** (`release-ruleset-probe.yml`) once from\n"
             "`main` to check actual ruleset visibility with the same App token mint as\n"
             "`release.yml`. The workflow file must be on the default branch, and the run\n"
             "must use `main`'s copy.\n"
-            'The credentialed probe job runs on `["self-hosted","pf-gcp-post"]`, with\n'
+            'The credentialed probe job runs on protected bare scalar `gkp-2cpu-4gb-amd64` under environment `release-bot`, with\n'
             'secret-free `authz` on bare scalar `gke-2cpu-4gb-amd64`.',
-            "`pf-gcp-main` admits only allowlisted workflows (an org runner-group restriction),\n"
-            "so the one-time probe uses `pf-gcp-post`.",
+            "The `gke-protected` runner group must admit this workflow at `refs/heads/main`,\n"
+            "and the `release-bot` environment must allow deployments from `main` only and hold the App key.",
             "The dispatch must run from `main`; the workflow itself refuses any other ref\n"
             "before minting the App token or checking out repository code.",
         )

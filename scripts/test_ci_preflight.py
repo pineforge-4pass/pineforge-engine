@@ -34,6 +34,7 @@ GKE_8 = 'gke-8cpu-16gb-amd64'
 GKE_ARM = 'gke-16cpu-32gb-arm64'
 GKE_2 = 'gke-2cpu-4gb-amd64'
 GKE_4 = 'gke-4cpu-8gb-amd64'
+GKP_2 = 'gkp-2cpu-4gb-amd64'
 EXPECTED_LIGHT_GKE_JOBS = {
     'ci-post.yml': dict.fromkeys(
         ('authz', 'changes', 'build-release-gate', 'build-debug-gate',
@@ -192,7 +193,7 @@ jobs:
   authz:
     name: authz
     # Preflight pins executable workflow lines after removing comment-only lines.
-    # authz uses gke-2cpu-4gb-amd64; the App-token probe uses pf-gcp-post.
+    # authz uses gke-2cpu-4gb-amd64; the App-token probe uses protected gkp-2cpu-4gb-amd64.
     runs-on: gke-2cpu-4gb-amd64
     permissions: {}
     # No timeout-minutes: the owner's no-time-limits rule (check-no-time-limits refuses new ones).
@@ -254,7 +255,8 @@ jobs:
 
   probe:
     needs: [authz]
-    runs-on: ["self-hosted","pf-gcp-post"]
+    runs-on: gkp-2cpu-4gb-amd64
+    environment: release-bot
     steps:
       - name: Refuse a dispatch ref other than main
         env:
@@ -340,6 +342,8 @@ def routed_line(before, value):
 def site_runner(name, job, fleet):
     if fleet == 'gke':
         return EXPECTED_GKE_JOBS[name][job]
+    if fleet == 'protected':
+        return GKP_2
     return {'pr': PR_RUNNER, 'post': POST_RUNNER, 'main': RELEASE_RUNNER}[fleet]
 
 
@@ -732,6 +736,162 @@ def runner_declaration(runner):
         group, label = runner.removeprefix('group: ').split(' labels: ')
         return f'    runs-on:\n      group: {group}\n      labels: {label}\n'
     return f'    runs-on: {runner}\n'
+
+
+class ProtectedGkeProbePolicy(unittest.TestCase):
+    NAME = 'release-ruleset-probe.yml'
+    PIN_FINDING = ('release-ruleset-probe.yml job probe must run on '
+                   'gkp-2cpu-4gb-amd64 (protected)')
+    ENV_FINDING = ('release-ruleset-probe.yml job probe must declare a job environment '
+                   'for protected GKE routing')
+
+    def test_protected_probe_scalar_and_environment_are_accepted(self):
+        self.assertEqual(ci_preflight.runner_findings(
+            {self.NAME: RULESETS_PROBE_WORKFLOW}), [])
+        workflow = (ROOT / '.github/workflows' / self.NAME).read_text()
+        body = _jobs(workflow)['probe']
+        self.assertEqual(ci_preflight._job_values(body, 'runs-on', unquote=False), [GKP_2])
+        self.assertEqual(ci_preflight._job_values(body, 'environment'), ['release-bot'])
+        self.assertEqual(ci_preflight.runner_findings({self.NAME: workflow}), [])
+
+    def test_protected_probe_refuses_old_fleets_and_nonliteral_or_wrong_pins(self):
+        wrong_runners = (
+            POST_RUNNER, PR_RUNNER, RELEASE_RUNNER, 'ubuntu-24.04', GKE_2,
+            f'"{GKP_2}"', f'[{GKP_2}]', f'["{GKP_2}"]',
+            f'["self-hosted","{GKP_2}"]',
+            f'group: gke-protected labels: {GKP_2}',
+            f'{{group: gke-protected, labels: {GKP_2}}}',
+            "${{ 'gkp-2cpu-4gb-amd64' }}",
+            "${{ inputs.runner || 'gkp-2cpu-4gb-amd64' }}",
+            "${{ inputs.runner || 'ubuntu-24.04' }}",
+            'gkp-4cpu-8gb-amd64', 'gkp-2cpu-4gb-arm64', 'GKP-2CPU-4GB-AMD64',
+        )
+        for runner in wrong_runners:
+            with self.subTest(runner=runner):
+                changed = in_job(RULESETS_PROBE_WORKFLOW, 'probe',
+                                 runner_declaration(GKP_2), runner_declaration(runner))
+                self.assertNotEqual(changed, RULESETS_PROBE_WORKFLOW)
+                self.assertIn(self.PIN_FINDING, ci_preflight.runner_findings({self.NAME: changed}))
+                if runner not in (POST_RUNNER, PR_RUNNER, RELEASE_RUNNER, 'ubuntu-24.04',
+                                  GKE_2, 'gkp-4cpu-8gb-amd64', 'gkp-2cpu-4gb-arm64',
+                                  "${{ inputs.runner || 'ubuntu-24.04' }}"):
+                    self.assertIn(
+                        f'{self.NAME} job probe must use a bare scalar protected GKE scale-set name',
+                        ci_preflight.runner_findings({self.NAME: changed}))
+
+    def test_protected_probe_requires_environment_even_with_secrets_or_oidc(self):
+        for replacement in ('', '    permissions:\n      id-token: write\n'):
+            with self.subTest(replacement=replacement):
+                changed = in_job(RULESETS_PROBE_WORKFLOW, 'probe',
+                                 '    environment: release-bot\n', replacement)
+                self.assertNotEqual(changed, RULESETS_PROBE_WORKFLOW)
+                self.assertIn('secrets.PINEFORGE_APP_PRIVATE_KEY', _jobs(changed)['probe'])
+                self.assertEqual(ci_preflight.runner_findings({self.NAME: changed}),
+                                 [self.ENV_FINDING])
+
+    def test_protected_routes_are_confined_to_the_exact_job_and_label(self):
+        workflow = ('on: workflow_dispatch\njobs:\n  inspect:\n'
+                    + runner_declaration(GKP_2) + '    environment: release-bot\n'
+                    '    steps:\n      - run: git --version\n')
+        findings = ci_preflight.runner_findings({'extra.yml': workflow})
+        self.assertIn('extra.yml job inspect may use protected GKE routing only '
+                      'at its exact pinned job and label', findings)
+        self.assertIn('extra.yml may name protected GKE routing only in pinned '
+                      'bare scalar runs-on', findings)
+        changed = RULESETS_PROBE_WORKFLOW.replace('  probe:\n', '  unexpected:\n', 1)
+        self.assertNotEqual(changed, RULESETS_PROBE_WORKFLOW)
+        self.assertIn(f'{self.NAME} job unexpected may use protected GKE routing only '
+                      'at its exact pinned job and label',
+                      ci_preflight.runner_findings({self.NAME: changed}))
+
+    def test_protected_routes_refuse_pull_requests_and_workflow_calls(self):
+        for event, finding in (
+                ('pull_request', f'{self.NAME} must not be reachable from pull_request '
+                 'on the protected GKE workflows'),
+                ('workflow_call', f'{self.NAME} must not declare workflow_call for protected GKE jobs')):
+            with self.subTest(event=event):
+                changed = RULESETS_PROBE_WORKFLOW.replace(
+                    '  workflow_dispatch:\n', f'  workflow_dispatch:\n  {event}:\n', 1)
+                self.assertNotEqual(changed, RULESETS_PROBE_WORKFLOW)
+                self.assertIn(finding, ci_preflight.runner_findings({self.NAME: changed}))
+
+    def test_protected_jobs_refuse_containers_and_services(self):
+        for key, value in (('container', 'alpine:3.20'),
+                           ('services', '\n      database:\n        image: postgres:16')):
+            with self.subTest(key=key):
+                changed = in_job(RULESETS_PROBE_WORKFLOW, 'probe', '    steps:\n',
+                                 f'    {key}: {value}\n    steps:\n')
+                self.assertNotEqual(changed, RULESETS_PROBE_WORKFLOW)
+                subject = 'a job container' if key == 'container' else 'job services'
+                self.assertIn(f'{self.NAME} job probe must not declare {subject} on GKE',
+                              ci_preflight.runner_findings({self.NAME: changed}))
+
+    def test_protected_labels_cannot_hide_outside_the_pinned_runner(self):
+        for extra in (
+                f'    env:\n      RUNNER: {GKP_2}\n',
+                f'    strategy:\n      matrix:\n        runner: [{GKP_2}]\n'):
+            with self.subTest(extra=extra):
+                changed = in_job(RULESETS_PROBE_WORKFLOW, 'probe', '    steps:\n',
+                                 extra + '    steps:\n')
+                self.assertNotEqual(changed, RULESETS_PROBE_WORKFLOW)
+                self.assertIn(f'{self.NAME} may name protected GKE routing only in pinned '
+                              'bare scalar runs-on',
+                              ci_preflight.runner_findings({self.NAME: changed}))
+
+    def test_app_mint_and_app_keys_cannot_use_general_gke_or_hosted_expressions(self):
+        for runner in (GKE_2, "${{ inputs.runner || 'ubuntu-24.04' }}"):
+            for action in ('actions/create-github-app-token', 'tibdex/github-app-token'):
+                for key in ('github.token', 'secrets.PINEFORGE_APP_PRIVATE_KEY'):
+                    with self.subTest(runner=runner, action=action, key=key):
+                        workflow = ('on: workflow_dispatch\njobs:\n  inspect:\n'
+                                    + runner_declaration(runner)
+                                    + f'    steps:\n      - uses: {action}@' + 'a' * 40 + '\n'
+                                    '        with:\n'
+                                    f'          private-key: ${{{{ {key} }}}}\n')
+                        body = _jobs(workflow)['inspect']
+                        self.assertTrue(ci_preflight._holds_credentials(workflow, body))
+                        finding = ('extra.yml job inspect must not expose credentials on GKE'
+                                   if runner == GKE_2 else
+                                   'extra.yml job inspect must keep production credentials '
+                                   'on a hosted standard runner')
+                        self.assertIn(finding, ci_preflight.runner_findings({'extra.yml': workflow}))
+
+    def test_id_token_values_except_literal_lowercase_none_are_credentials(self):
+        values = ('${{ inputs.scope }}', 'bogus', '"${{ inputs.scope }}"',
+                  "'${{ inputs.scope }}'", 'none-other', 'none bogus', 'NONE', 'None',
+                  'write', '"write"', "'write'", 'WRITE', '"Write"', "'WRITE'",
+                  'read', '"read"', "'read'", 'READ', 'none', '"none"', "'none'")
+        for value in values:
+            expected = value not in ('none', '"none"', "'none'")
+            for scope in ('job', 'workflow'):
+                for key in ('id-token', '"id-token"', "'id-token'", 'ID-TOKEN'):
+                    for style in ('block', 'flow-first', 'flow-last'):
+                        with self.subTest(value=value, scope=scope, key=key, style=style):
+                            permission = (
+                                f'permissions:\n  {key}: {value}\n  contents: read\n'
+                                if style == 'block' else
+                                f'permissions: {{{key}: {value}, contents: read}}\n'
+                                if style == 'flow-first' else
+                                f'permissions: {{contents: read, {key}: {value}}}\n')
+                            workflow = ('on: workflow_dispatch\njobs:\n  inspect:\n'
+                                        "    runs-on: ${{ inputs.runner || 'ubuntu-24.04' }}\n"
+                                        '    steps:\n      - run: git --version\n')
+                            if scope == 'job':
+                                permission = ''.join('    ' + line + '\n'
+                                                     for line in permission.splitlines())
+                                workflow = in_job(workflow, 'inspect', '    steps:\n',
+                                                  permission + '    steps:\n')
+                            else:
+                                workflow = workflow.replace('jobs:\n', permission + 'jobs:\n', 1)
+                            self.assertEqual(ci_preflight._holds_credentials(
+                                workflow, _jobs(workflow)['inspect']), expected)
+                            finding = ('extra.yml job inspect must keep production credentials '
+                                       'on a hosted standard runner')
+                            findings = ci_preflight.runner_findings({'extra.yml': workflow})
+                            if expected:
+                                self.assertIn(finding, findings)
+                            else:
+                                self.assertNotIn(finding, findings)
 
 
 class LightGkeRunnerPolicy(unittest.TestCase):
@@ -1435,15 +1595,17 @@ class PostFleetRunnerPolicy(unittest.TestCase):
             '| `native-live.yml` | Dispatch and post CI callers on `main` | '
             '`authz` and both aggregates: scalar `gke-4cpu-8gb-amd64`; bare GKE scalars: '
             'native shards `gke-8cpu-16gb-amd64`, sanitizer profiles `gke-16cpu-32gb-amd64` |',
-            'GKE jobs carry no deployment secrets, effective id-token permissions or environment; '
+            'Jobs on unprotected `gke-` runners carry no deployment secrets, effective id-token permissions or environment; '
             'PR-reachable workflows cannot name GKE routing. '
             'Runner-group workflow/ref allowlists must admit the post-only workflows '
-            'at refs/heads/main before they can acquire pods.',
+            'at refs/heads/main before they can acquire pods; the protected `gkp-` probe requires '
+            'the main-only `release-bot` environment.',
             'Rollback may restore an earlier GCP fleet pin; paid larger-runner labels remain refused.',
             '`build-debug` shards, and kernel two shards; sanitizers uses four, '
             'all on their fixed GKE sizes.',
-            '`HOSTED_JOB_RUNNERS` pins hosted jobs and exact bare GKE scalars; every GKE job runs directly '
-            'in a runner pod carrying the engine toolchain image and sudo. The PR build remains',
+            '`HOSTED_JOB_RUNNERS` pins hosted jobs and exact bare unprotected GKE scalars; '
+            '`PROTECTED_JOB_RUNNERS` pins the protected probe. GKE jobs run directly '
+            'in runner pods. The PR build remains',
             'Every paid larger-runner label is refused in every workflow, including pinned jobs;',
         )
         for required in requirements:
@@ -2731,16 +2893,20 @@ class PreflightFailures(unittest.TestCase):
                 if (not gke and ci_preflight.HOSTED_JOB_RUNNERS.get(name, {}).get(job) not in (None, POST_RUNNER)
                         or ci_preflight.RELEASE_JOB_RUNNERS.get(name, {}).get(job) == 'ubuntu-24.04'):
                     continue  # Hosted jobs have independent literal pins and mutation controls.
-                # Per-job pins retain the canon PR fleet or the dispatch post fleet.
+                # Per-job pins include the protected dispatch probe.
                 fixed_runner = ci_preflight.RELEASE_JOB_RUNNERS.get(name, {}).get(job)
-                fleet = 'gke' if gke else {PR_RUNNER: 'pr', POST_RUNNER: 'post'}.get(fixed_runner, workflow_fleet)
+                fleet = ('gke' if gke else
+                         {PR_RUNNER: 'pr', POST_RUNNER: 'post', GKP_2: 'protected'}.get(
+                             fixed_runner, workflow_fleet))
                 runner = site_runner(name, job, fleet)
                 if (name, job) == ('release.yml', 'prebuilt'):
                     yield name, job, fleet, f'            runner: {RELEASE_RUNNER}\n', RELEASE_MATRIX_FINDING
                     continue
                 value, = ci_preflight._job_values(body, 'runs-on', unquote=False)
                 finding = f'{name} job {job} must run on {runner}'
-                if fixed_runner == POST_RUNNER:
+                if fleet == 'protected':
+                    finding += ' (protected)'
+                elif fixed_runner == POST_RUNNER:
                     finding += ' (post fleet)'
                 elif fixed_runner is not None and fixed_runner != PR_RUNNER:
                     finding += ' (isolated release)'
@@ -4509,7 +4675,7 @@ exit "$lookup_exit"
                 'prebuilt': '${{ matrix.runner }}',
                 'notify-hub': '["self-hosted","pf-gcp-main"]'},
             'release-ruleset-probe.yml': {
-                'probe': '["self-hosted","pf-gcp-post"]'},
+                'probe': 'gkp-2cpu-4gb-amd64'},
             'promote-baseline.yml': {
                 'promote': '["self-hosted","pf-gcp-main"]'},
         })
@@ -4751,13 +4917,13 @@ exit "$lookup_exit"
                     findings = self.routed_file_findings(name, job, before, routed_line(before, runner))
                     self.assertIn(finding, findings)
 
-    def test_gcp_sites_pin_probe_to_the_dispatch_fleet(self):
+    def test_gcp_sites_pin_probe_to_the_protected_runner(self):
         sites = [site for site in self.gcp_sites() if site[0] == 'release-ruleset-probe.yml']
         self.assertEqual([(job, fleet) for _, job, fleet, *_ in sites],
-                         [('probe', 'post')])
+                         [('probe', 'protected')])
         self.assertEqual(sites[0][-1],
-                         f'release-ruleset-probe.yml job probe must run on {POST_RUNNER} '
-                         '(post fleet)')
+                         f'release-ruleset-probe.yml job probe must run on {GKP_2} '
+                         '(protected)')
 
     def test_dispatch_only_job_keeps_the_post_fleet(self):
         name, job = 'dispatch-inspection.yml', 'inspect'
@@ -4778,7 +4944,7 @@ exit "$lookup_exit"
                           'pf-gcp-engine-pr', 'pf-gcp-engine-main', 'pf-gcp-small'):
                 # Refuse the wrong class alone and extra labels on a valid class.
                 extra = (f'["{runner}","{label}"]'
-                         if fleet == 'gke' else runner[:-1] + f',"{label}"]')
+                         if fleet in ('gke', 'protected') else runner[:-1] + f',"{label}"]')
                 for value in (f'["self-hosted","{label}"]', extra):
                     with self.subTest(workflow=name, job=job, runner=value):
                         findings = self.routed_file_findings(name, job, before, routed_line(before, value))
@@ -5596,7 +5762,7 @@ finally:
                     findings = ci_workflow_findings(
                         *original, others=dict(others, **{'release.yml': opened}))
                     self.assertIn('release.yml must retain workflow_dispatch only '
-                                  'for pf-gcp-main jobs', findings)
+                                  'for release jobs', findings)
         for spelling in ('on: >-\n  workflow_dispatch:\n',
                          'on:\n  workflow_dispatch:\non:\n  workflow_dispatch:\n',
                          'on:\n  push:\n'):
@@ -5604,7 +5770,7 @@ finally:
                 opened = release.replace('on:\n  workflow_dispatch:\n', spelling, 1)
                 findings = ci_workflow_findings(*original, others=dict(others, **{'release.yml': opened}))
                 self.assertIn('release.yml must retain workflow_dispatch only '
-                              'for pf-gcp-main jobs', findings)
+                              'for release jobs', findings)
         for job in ('release', 'notify-hub'):
             for runner in ('ubuntu-latest', 'ubuntu-24.04', PR_RUNNER,
                            f"${{{{ fromJSON('{RELEASE_RUNNER}') || 'ubuntu-latest' }}}}"):
@@ -6224,7 +6390,7 @@ finally:
         self.assertEqual(ci_preflight._code(path.read_text()),
                          ci_preflight._code(RULESETS_PROBE_WORKFLOW))
         self.assertEqual(ci_preflight.RELEASE_JOB_RUNNERS.get(path.name),
-                         {'probe': POST_RUNNER})
+                         {'probe': GKP_2})
         self.assertEqual(ci_preflight.HOSTED_JOB_RUNNERS.get(path.name), {'authz': GKE_2})
         probe_app = ci_preflight._step_named(ci_preflight._steps(_jobs(path.read_text())['probe']),
                                              '      - name: Mint org App token')
@@ -6234,20 +6400,20 @@ finally:
         self.assertEqual(probe_app, release_app, 'the mint steps must stay byte-identical')
         self.assertEqual(ci_workflow_findings(*self.ci_sources(), others=self.other_sources()), [])
 
-    def test_release_ruleset_probe_post_fleet_is_accepted(self):
+    def test_release_ruleset_probe_protected_runner_is_accepted(self):
         workflows = {'release-ruleset-probe.yml': RULESETS_PROBE_WORKFLOW}
         self.assertEqual(ci_preflight.runner_findings(workflows), [])
         self.assertEqual(ci_preflight.release_rulesets_probe_workflow_findings(
             RULESETS_PROBE_WORKFLOW, self.other_sources()['release.yml']), [])
 
-    def test_release_ruleset_probe_refuses_release_and_pr_fleets(self):
+    def test_release_ruleset_probe_refuses_all_vm_fleets(self):
         original, others = self.ci_sources(), self.other_sources()
-        finding = (f'release-ruleset-probe.yml job probe must run on {POST_RUNNER} '
-                   '(post fleet)')
-        for runner in (RELEASE_RUNNER, PR_RUNNER):
+        finding = (f'release-ruleset-probe.yml job probe must run on {GKP_2} '
+                   '(protected)')
+        for runner in (POST_RUNNER, RELEASE_RUNNER, PR_RUNNER):
             with self.subTest(runner=runner):
                 changed = in_job(RULESETS_PROBE_WORKFLOW, 'probe',
-                                 f'    runs-on: {POST_RUNNER}\n',
+                                 f'    runs-on: {GKP_2}\n',
                                  f'    runs-on: {runner}\n')
                 self.assertNotEqual(changed, RULESETS_PROBE_WORKFLOW)
                 self.assertIn(finding, ci_preflight.runner_findings(
@@ -6361,7 +6527,7 @@ finally:
         workflow = (ROOT / '.github/workflows/release-ruleset-probe.yml').read_text()
         header = (
             '    # Preflight pins executable workflow lines after removing comment-only lines.\n'
-            '    # authz uses gke-2cpu-4gb-amd64; the App-token probe uses pf-gcp-post.\n')
+            '    # authz uses gke-2cpu-4gb-amd64; the App-token probe uses protected gkp-2cpu-4gb-amd64.\n')
         requirements = (
             (source,
              '# Scoped CI workflows bind this canon header byte for byte, including its\n'
@@ -6437,8 +6603,13 @@ finally:
                 ('permissions', '  contents: read', '  contents: write'),
                 ('extra scope', '  contents: read', '  contents: read\n  actions: read'),
                 ('job permissions', '  probe:\n', '  probe:\n    permissions:\n      contents: write\n'),
-                ('runner', POST_RUNNER, RELEASE_RUNNER),
-                ('PR runner', POST_RUNNER, PR_RUNNER),
+                ('post runner', f'    runs-on: {GKP_2}', f'    runs-on: {POST_RUNNER}'),
+                ('runner', f'    runs-on: {GKP_2}', f'    runs-on: {RELEASE_RUNNER}'),
+                ('PR runner', f'    runs-on: {GKP_2}', f'    runs-on: {PR_RUNNER}'),
+                ('missing environment', '    environment: release-bot\n', ''),
+                ('different environment', '    environment: release-bot', '    environment: release'),
+                ('environment expression', '    environment: release-bot',
+                 '    environment: ${{ inputs.environment }}'),
                 ('app action', 'actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547',
                  'actions/create-github-app-token@v2'),
                 ('app output', '        id: app', '        id: other'),
@@ -7207,6 +7378,31 @@ class CanonAuthz(unittest.TestCase):
 
 
 class ActionlintRunnerLabels(unittest.TestCase):
+    def test_actionlint_runner_labels_reads_protected_scalar_label(self):
+        workflow = self.tree / '.github/workflows/protected-label.yml'
+        workflow.write_text(
+            'on: workflow_dispatch\njobs:\n  inspect:\n'
+            '    runs-on: gkp-unknown\n'
+            '    environment: release-bot\n'
+            '    steps:\n      - run: git --version\n')
+        code, output = self.runner_labels()
+        self.assertEqual(code, 1, output)
+        self.assertIn('protected-label.yml job inspect: label "gkp-unknown" is not declared '
+                      'in .github/actionlint.yaml', output.splitlines())
+
+    def test_protected_scalar_label_is_declared_and_required(self):
+        original = self.config.read_text()
+        self.assertIn(f'    - {GKP_2}\n', original)
+        code, output = self.runner_labels()
+        self.assertEqual(code, 0, output)
+        changed = original.replace(f'    - {GKP_2}\n', '', 1)
+        self.assertNotEqual(changed, original)
+        self.config.write_text(changed)
+        code, output = self.runner_labels()
+        self.assertEqual(code, 1, output)
+        self.assertIn(f'release-ruleset-probe.yml job probe: label "{GKP_2}" is not declared '
+                      'in .github/actionlint.yaml', output.splitlines())
+
     def test_actionlint_runner_labels_reads_gke_scalar_label(self):
         workflow = self.tree / '.github/workflows/gke-label.yml'
         workflow.write_text(
@@ -7308,7 +7504,8 @@ class ActionlintRunnerLabels(unittest.TestCase):
         for label, sites in (
                 ('pf-gcp-pr', (('ci.yml', 'preflight'), ('ci.yml', 'build'),
                                ('corpus-parity-subset.yml', 'corpus-parity-subset'))),
-                ('pf-gcp-post', (('docs-post.yml', 'build'), ('release-ruleset-probe.yml', 'probe'))),
+                ('pf-gcp-post', (('docs-post.yml', 'build'),)),
+                ('gkp-2cpu-4gb-amd64', (('release-ruleset-probe.yml', 'probe'),)),
                 ('gke-32cpu-64gb-amd64', (('ci-post.yml', 'build'), ('ci-post.yml', 'sanitizers'))),
                 ('gke-16cpu-32gb-amd64', (('ci-post.yml', 'build-debug'), ('ci-post.yml', 'kernel-only'),
                                          ('native-live.yml', 'native-live'), ('corpus-parity.yml', 'corpus-parity'))),

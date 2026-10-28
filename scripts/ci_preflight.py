@@ -122,6 +122,9 @@ GKE_JOB_RUNNERS = {
            **GKE_LIGHT_JOB_RUNNERS.get(name, {})}
     for name in {**GKE_JOB_LABELS, **GKE_LIGHT_JOB_RUNNERS}
 }
+PROTECTED_JOB_RUNNERS = {
+    ('release-ruleset-probe.yml', 'probe'): 'gkp-2cpu-4gb-amd64',
+}
 CI_EVENTS = '''on:
   pull_request:
     # LB-387: suite jobs skip on a draft PR (the required aggregate then fails, never passes);
@@ -311,7 +314,8 @@ HOSTED_JOB_RUNNERS = {
 RELEASE_JOB_RUNNERS = {
     'release.yml': {'release': RELEASE_RUNNER, 'prebuilt': HOSTED_MATRIX_RUNNER,
                     'notify-hub': RELEASE_RUNNER},
-    'release-ruleset-probe.yml': {'probe': POST_RUNNER},
+    'release-ruleset-probe.yml': {
+        'probe': PROTECTED_JOB_RUNNERS[('release-ruleset-probe.yml', 'probe')]},
     'promote-baseline.yml': {'promote': RELEASE_RUNNER},
 }
 # Credential-bearing jobs outside the release pins and gated docs build retain
@@ -1321,7 +1325,7 @@ def _effective_permissions(workflow: str, body: str) -> list[str]:
 
 
 def _holds_credentials(workflow: str, body: str, *, effective_permissions: bool = False) -> bool:
-    """L6: non-GITHUB_TOKEN secrets, OIDC writes or a deployment environment.
+    """Non-GITHUB_TOKEN secrets, OIDC except literal none, App minting or an environment.
 
     Existing VM checks conservatively include workflow permissions. GKE checks
     use the job's effective scopes. Bracket/dynamic secret access and inherited
@@ -1331,9 +1335,16 @@ def _holds_credentials(workflow: str, body: str, *, effective_permissions: bool 
         return True
     permissions = (_effective_permissions(workflow, body) if effective_permissions else
                    _job_values(workflow, 'permissions') + _job_values(body, 'permissions'))
-    oidc_write = r'''(?<![\w-])["']?id-token["']?\s*:\s*(?:"write"|'write'|write)(?=$|[\s,}])'''
-    if any(value == 'write-all' or re.search(oidc_write, value, re.IGNORECASE)
+    # Only literal lowercase none opts out, including in folded block mappings.
+    # The exclusion owns the whitespace so backtracking cannot bypass it.
+    oidc = (r'''(?<![\w-])["']?id-token["']?\s*:'''
+            r'''(?!\s*(?-i:"none"|'none'|none)'''
+            r'''(?:\s*(?:$|[,}])|\s+["']?[\w-]+["']?\s*:))''')
+    if any(value == 'write-all' or re.search(oidc, value, re.IGNORECASE)
            for value in permissions):
+        return True
+    if any(re.match(r'(?:actions/create-github-app-token|tibdex/github-app-token)@', value)
+           for step in _steps(body) for value in _step_values(step, 'uses')):
         return True
     text = '\n'.join(re.sub(r'\s+#.*$', '', line) for line in _code(body))
     text += '\n' + '\n'.join(_job_values(workflow, 'env'))
@@ -1384,7 +1395,7 @@ def workflow_fleet_findings(workflows: dict[str, str]) -> list[str]:
     routes = workflow_event_routes(workflows)
     for name, workflow in workflows.items():
         # Per-job release/probe pins are checked by runner_findings; the probe
-        # shares release.yml's App credential and uses the post fleet.
+        # shares release.yml's App credential and uses a protected runner.
         if name in RELEASE_JOB_RUNNERS:
             continue
         events = _events(workflow)
@@ -1430,8 +1441,11 @@ def _authz_header(name: str) -> str:
     return AUTHZ_JOB_HEADER.replace('runs-on: ubuntu-24.04', f'runs-on: {runner}')
 
 
-_GKE_ROUTE = re.compile(r'(?<![\w.-])gke-[\w.-]+', re.IGNORECASE)
+_GKE_ROUTE = re.compile(r'(?<![\w.-])gke-(?!protected(?![\w.-]))[\w.-]+', re.IGNORECASE)
 _GKE_SCALE_LABEL = re.compile(r'(?<![\w.-])gke-\d+cpu-\d+gb-(?:amd64|arm64)(?![\w.-])')
+_PROTECTED_ROUTE = re.compile(r'(?<![\w.-])(?:gke-protected(?![\w.-])|gkp-[\w.-]+)',
+                              re.IGNORECASE)
+_PROTECTED_SCALE_LABEL = re.compile(r'gkp-\d+cpu-\d+gb-(?:amd64|arm64)')
 
 
 def _matrix_rows(body: str) -> list[dict[str, str]] | None:
@@ -1597,8 +1611,14 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
     routes = workflow_event_routes(workflows)
     for name, workflow in workflows.items():
         code = '\n'.join(re.sub(r'\s+#.*$', '', line) for line in _code(workflow))
-        if 'pull_request' in routes[name] and _GKE_ROUTE.search(code):
+        fixed_protected = {job: runner for (path, job), runner in PROTECTED_JOB_RUNNERS.items()
+                           if path == name}
+        if 'pull_request' in routes[name] and (_GKE_ROUTE.search(code) or _PROTECTED_ROUTE.search(code)):
             findings.append(f'{name} is reachable from pull_request and must not contain GKE routing')
+        if fixed_protected and 'pull_request' in routes[name]:
+            findings.append(f'{name} must not be reachable from pull_request on the protected GKE workflows')
+        if fixed_protected and 'workflow_call' in (_events(workflow) or set()):
+            findings.append(f'{name} must not declare workflow_call for protected GKE jobs')
         if _LARGER_RUNNER_KEY.search(code):
             findings.append(f'{name} must not define a larger_runner key; use the GCP fleet or hosted exceptions')
         timed = JOB_COMMANDS.get(name, {})
@@ -1611,9 +1631,10 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
         pinned = {job: event_runner for job in timed}
         pinned.update(fixed_hosted)
         pinned.update(fixed_release)
+        pinned.update(fixed_protected)
         if (fixed_release and name != 'promote-baseline.yml'
                 and _events(workflow) != {'workflow_dispatch'}):
-            findings.append(f'{name} must retain workflow_dispatch only for pf-gcp-main jobs')
+            findings.append(f'{name} must retain workflow_dispatch only for release jobs')
         if (name == 'promote-baseline.yml'
                 and _events(workflow) != {'push', 'workflow_dispatch'}):
             findings.append(f'{name} must retain push and workflow_dispatch '
@@ -1629,20 +1650,39 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
         if _unparsed(workflow):
             findings.append(f'{name} has jobs lines the runner contract cannot read')
         jobs = _jobs(workflow)
+        protected_code = code
         findings += [f'{name} is missing job {job}' for job in pinned if job not in jobs]
         for job, body in jobs.items():
             runs_on, uses = _job_values(body, 'runs-on'), _job_values(body, 'uses')
+            raw_runners = _job_values(body, 'runs-on', unquote=False)
+            protected_pin = fixed_protected.get(job)
+            protected_ok = bool(protected_pin and raw_runners == [protected_pin])
+            has_protected = bool(_PROTECTED_ROUTE.search(' '.join(runs_on)))
+            if has_protected and (len(raw_runners) != 1
+                                  or not _PROTECTED_SCALE_LABEL.fullmatch(raw_runners[0])):
+                findings.append(f'{name} job {job} must use a bare scalar protected GKE scale-set name')
+            if has_protected and not protected_ok:
+                findings.append(f'{name} job {job} may use protected GKE routing only '
+                                'at its exact pinned job and label')
+            if has_protected and not any(_job_values(body, 'environment')):
+                findings.append(f'{name} job {job} must declare a job environment '
+                                'for protected GKE routing')
+            if protected_ok:
+                body_code = '\n'.join(re.sub(r'\s+#.*$', '', line) for line in _code(body))
+                without_runner = '\n'.join(
+                    line for line in body_code.splitlines()
+                    if not (_indent(line) == 4 and _key_value(line, 'runs-on') == protected_pin))
+                protected_code = protected_code.replace(body_code, without_runner, 1)
             gke_pin = GKE_JOB_RUNNERS.get(name, {}).get(job)
             has_gke = bool(_GKE_ROUTE.search(' '.join(runs_on)))
-            raw_runners = _job_values(body, 'runs-on', unquote=False)
             if has_gke and (len(raw_runners) != 1
                             or not _GKE_SCALE_LABEL.fullmatch(raw_runners[0])):
                 findings.append(f'{name} job {job} must use a bare scalar GKE scale-set name')
             if has_gke and runs_on != [gke_pin]:
                 findings.append(f'{name} job {job} may use GKE routing only at its exact pinned job and label')
-            if has_gke and _job_values(body, 'container'):
+            if (has_gke or has_protected) and _job_values(body, 'container'):
                 findings.append(f'{name} job {job} must not declare a job container on GKE')
-            if has_gke and _job_values(body, 'services'):
+            if (has_gke or has_protected) and _job_values(body, 'services'):
                 findings.append(f'{name} job {job} must not declare job services on GKE')
             if has_gke:
                 permissions = _effective_permissions(workflow, body)
@@ -1673,19 +1713,21 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                     continue
             hosted_platform = (len(runs_on) == 1 and
                                bool(re.fullmatch(r'ubuntu-(?:\d{2}\.\d{2}|latest)-arm', runs_on[0])))
-            if job in fixed_release:
+            if protected_pin or job in fixed_release:
                 # A quoted JSON scalar does not select a YAML label array.
                 actual = _job_values(body, 'runs-on', unquote=False)
-                expected = [fixed_release[job]]
-                if fixed_release[job] == PR_RUNNER:
+                release_runner = protected_pin or fixed_release[job]
+                expected = [release_runner]
+                if release_runner == PR_RUNNER:
                     # Normalize the runner array here; the probe workflow pin below
                     # compares nonblank lines after removing comment-only lines.
                     actual = [_runner_value(value) for value in actual]
                     expected = [_runner_value(value) for value in expected]
                 if actual != expected:
-                    suffix = {PR_RUNNER: '', POST_RUNNER: ' (post fleet)', 'ubuntu-24.04': ' (hosted)'}.get(
-                        fixed_release[job], ' (isolated release)')
-                    findings.append(f'{name} job {job} must run on {fixed_release[job]}{suffix}')
+                    suffix = (' (protected)' if protected_pin else
+                              {PR_RUNNER: '', POST_RUNNER: ' (post fleet)', 'ubuntu-24.04': ' (hosted)'}.get(
+                                  release_runner, ' (isolated release)'))
+                    findings.append(f'{name} job {job} must run on {release_runner}{suffix}')
                 environments = _job_values(workflow, 'env') + _job_values(body, 'env')
                 if any(re.search(r'\bPF_CI_LABELS["\']?\s*:', value) for value in environments):
                     findings.append(f'{name} job {job} must not set PF_CI_LABELS '
@@ -1762,6 +1804,8 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
             # Keep parallelism tied to the runner's available cores.
             if not _sized(_counted_text(body), command):
                 findings.append(f'{name} job {job} must size its parallelism to the runner')
+        if _PROTECTED_ROUTE.search(protected_code):
+            findings.append(f'{name} may name protected GKE routing only in pinned bare scalar runs-on')
     for name, job, strategy, build_name, population in (
             ('ci.yml', 'build', BUILD_STRATEGY, BUILD_NAME, 'only Ubuntu Release on pull_request'),
             ('ci-post.yml', 'build', POST_BUILD_STRATEGY, post_build_name(4),
@@ -1933,7 +1977,7 @@ jobs:
   authz:
     name: authz
     # Preflight pins executable workflow lines after removing comment-only lines.
-    # authz uses gke-2cpu-4gb-amd64; the App-token probe uses pf-gcp-post.
+    # authz uses gke-2cpu-4gb-amd64; the App-token probe uses protected gkp-2cpu-4gb-amd64.
     runs-on: gke-2cpu-4gb-amd64
     permissions: {}
     # No timeout-minutes: the owner's no-time-limits rule (check-no-time-limits refuses new ones).
@@ -1995,7 +2039,8 @@ jobs:
 
   probe:
     needs: [authz]
-    runs-on: ["self-hosted","pf-gcp-post"]
+    runs-on: gkp-2cpu-4gb-amd64
+    environment: release-bot
     steps:
       - name: Refuse a dispatch ref other than main
         env:
@@ -2924,7 +2969,7 @@ def actionlint_runner_label_findings(source: Path) -> list[str]:
             values = _job_values(mapping, 'labels') if mapping else _job_values(body, 'runs-on')
             for value in values:
                 if not value.startswith('['):
-                    if value.startswith(('pf-', 'gke-')) and re.fullmatch(_LITERAL_RUNNER_LABEL, value):
+                    if value.startswith(('pf-', 'gke-', 'gkp-')) and re.fullmatch(_LITERAL_RUNNER_LABEL, value):
                         if value not in declared:
                             findings.append(f'{path.name} job {job}: label "{value}" is not declared '
                                             f'in {config_name}')
