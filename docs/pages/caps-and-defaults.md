@@ -10,8 +10,8 @@ them.
 
 | Row | Source value | Unit | Enforced where | Refusal | Unlimited | Who may change it |
 | --- | --- | --- | --- | --- | --- | --- |
-| `scratch-layout-page-size` | `4096` (include/pineforge/detail/scratch_slab.hpp:19) | bytes per scratch page | compute_layout page rounding and ScratchSlab alignment | `scratch_capacity_exceeded` / `layout` | no | compile-time |
-| `scratch-region-count` | `9` (include/pineforge/detail/scratch_slab.hpp:18) | regions | ScratchSlab Layout region array | `scratch_capacity_exceeded` / `layout` | no | compile-time |
+| `scratch-layout-page-size` | `4096` (include/pineforge/detail/scratch_slab.hpp:20) | bytes per scratch page | compute_layout page rounding and ScratchSlab alignment | `scratch_capacity_exceeded` / `layout` | no | compile-time |
+| `scratch-region-count` | `9` (include/pineforge/detail/scratch_slab.hpp:19) | regions | ScratchSlab Layout region array | `scratch_capacity_exceeded` / `layout` | no | compile-time |
 | `reserved-sequence-key-count` | `0` (include/pineforge/detail/scratch_defaults.hpp:28) | keys | compute_layout requires the removed q region to remain zero | `scratch_capacity_exceeded` / `layout` | no; reserved zero is invalid when nonzero | compile-time default |
 | `reserved-sequence-byte-count` | `0` (include/pineforge/detail/scratch_defaults.hpp:28) | bytes | compute_layout requires the removed q region to remain zero | `scratch_capacity_exceeded` / `layout` | no; reserved zero is invalid when nonzero | compile-time default |
 | `erased-key-count-default` | `262144` (include/pineforge/detail/scratch_defaults.hpp:29) | keys | DiskIdTable admission before erased-key growth | `scratch_capacity_exceeded` / `erased_data` | no | compile-time default |
@@ -24,7 +24,7 @@ them.
 | `exit-rank-byte-default` | `6912` (include/pineforge/detail/scratch_defaults.hpp:32) | bytes | exit-rank admission | `scratch_capacity_exceeded` / `exit_rank` | no | compile-time default |
 | `successor-root-reserve-default` | `2 * bars` (include/pineforge/detail/scratch_defaults.hpp:33) | rows | successor-root slab region before row writes | `scratch_capacity_exceeded` / `successor_roots` | no | compile-time default |
 | `successor-root-stream-default` | `65536` (include/pineforge/detail/scratch_defaults.hpp:41) | rows | default stream scratch manifest | `scratch_capacity_exceeded` / `successor_roots` | no | compile-time default |
-| `layout-manifest-v-ceiling` | `manifest.V > 27` (include/pineforge/detail/scratch_slab.hpp:77) | manifest exit-rank keys | compute_layout manifest validation | `scratch_capacity_exceeded` / `layout` | no | compile-time |
+| `layout-manifest-v-ceiling` | `manifest.V > 27` (include/pineforge/detail/scratch_slab.hpp:78) | manifest exit-rank keys | compute_layout manifest validation | `scratch_capacity_exceeded` / `layout` | no | compile-time |
 | `identifier-component-max-cohort` | `key_size > 64` (include/pineforge/detail/disk_id_table.hpp:208) | bytes per identifier component | DiskIdTable::require_id_size for cohort tables | `scratch_capacity_exceeded` / `cohort` | no | compile-time policy literal |
 | `identifier-component-max-pair` | `first > 64 \|\| second > 64` (include/pineforge/detail/id_pair_store.hpp:428) | bytes per identifier component | IdPairStore::require_id_components | `scratch_capacity_exceeded` / `erased_data` | no | compile-time policy literal |
 | `resident-cohort-cap` | `4096` (include/pineforge/detail/scratch_defaults.hpp:16) | non-spillable live order ids | DiskResidentIdTable::require_live_growth | `scratch_capacity_exceeded` / `cohort` | no | compile-time |
@@ -43,7 +43,7 @@ them.
 | `scratch-store-default-page-size` | `0` (include/pineforge/detail/scratch_store.hpp:36) | bytes per page | CommandScratchStore geometry validation | none: engine status is outside the run-failure catalog | no | host configuration |
 | `scratch-store-default-journal-slots` | `0` (include/pineforge/detail/scratch_store.hpp:37) | resident staging slots | CommandScratchStore geometry validation | none: engine status is outside the run-failure catalog | no | host configuration |
 | `scratch-store-default-index-slots` | `0` (include/pineforge/detail/scratch_store.hpp:38) | resident index staging slots | CommandScratchStore geometry validation | none: engine status is outside the run-failure catalog | no | host configuration |
-| `scratch-store-default-mode` | `ScratchOpenMode::reopen` (include/pineforge/detail/scratch_store.hpp:32) | open mode | CommandScratchStore open contract | none: engine status is outside the run-failure catalog | no | host configuration |
+| `scratch-store-default-mode` | `ScratchOpenMode::reopen` (include/pineforge/detail/scratch_store.hpp:40) | open mode | CommandScratchStore open contract | none: engine status is outside the run-failure catalog | no | host configuration |
 | `scratch-store-max-page-count` | `std::size_t{1} << 24` (include/pineforge/detail/scratch_store_impl.hpp:152) | backing pages | scratch_store_impl geometry validation | none: engine status is outside the run-failure catalog | no | compile-time |
 | `scratch-store-max-page-size` | `std::size_t{1} << 20` (include/pineforge/detail/scratch_store_impl.hpp:153) | bytes per page | scratch_store_impl geometry validation | none: engine status is outside the run-failure catalog | no | compile-time |
 | `o1-object-header-bytes` | `16` (src/detail/o1_store.cpp:50) | bytes per object header | StoreImpl object chunk records | none: not enforced by the engine | no | compile-time |

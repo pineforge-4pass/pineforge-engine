@@ -94,7 +94,7 @@ include/pineforge/detail/scratch_file.hpp:135-142 selects it.
 Linux jailed admission requires sealed memfd backing
 (`strategy_require_report_scratch_arena_v1` src/c_abi.cpp:1493-1510).
 The hosting wrapper supplies `PF_SCRATCH_ARENA_BYTES`
-src/scratch_arena.cpp:385-386.
+src/scratch_arena.cpp:387-388.
 The engine never resizes that backing (the sizing comment above `ScratchArena`
 include/pineforge/detail/scratch_arena.hpp:71-110).
 Arena allocation rounds to **1 MiB chunks**

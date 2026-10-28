@@ -74,7 +74,7 @@ scan:
   generated_files:
     - "tutorial/**/generated*.cpp"
 ceilings:
-  unreviewed: 1281
+  unreviewed: 1283
   pending-flat-memory: 185
 owners:
   - {name: "generated-cpp", globs: ["tutorial/**"]}
@@ -1274,6 +1274,8 @@ entries:
   - {id: "U1241", file: "include/pineforge/detail/id_pair_store.hpp", symbol: "memory_at_", ops: ["assign", "decl"], container: "const_iterator", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 134}
   - {id: "U1242", file: "include/pineforge/detail/id_pair_store.hpp", symbol: "next", ops: ["grow"], container: "unresolved by the index: next.resize(...)", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 577}
   - {id: "U1243", file: "include/pineforge/detail/journal_codec.hpp", symbol: "out", ops: ["grow"], container: "unresolved by the index: out.resize(...)", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 163}
+  - {id: "U1549", file: "include/pineforge/detail/run_usage.hpp", symbol: "entries_", ops: ["subscript"], container: "unresolved by the index: entries_[...]", owner: "engine-core", phase: "unclassified", state: "unreviewed", note: "CR-429 usage receipt: indexing of the fixed std::array<Entry, kCapacity> (256) descriptor table that measures the peak bytes and count of open scratch files; the probe is modulo kCapacity, the array never grows and the table marks the figure unmeasured when full. Entered unreviewed: no flat-memory proof of the surrounding run path is claimed here.", line: 166}
+  - {id: "U1550", file: "include/pineforge/detail/scratch_file.hpp", symbol: "run_usage_scratch_files", ops: ["grow"], container: "unresolved by the index: run_usage_scratch_files.resize(...)", owner: "engine-core", phase: "unclassified", state: "unreviewed", note: "CR-429 usage receipt: not a container growth. RunUsageScratchFiles::resize(fd, bytes) updates the logical extent of one entry of the fixed 256-entry table (an atomic store and a peak update); the scanner reads the method name resize as a vector grow. Entered unreviewed: a method spelled resize on a non-container is not a scanner class the gate knows yet.", line: 133}
   - {id: "U1244", file: "include/pineforge/detail/scratch_arena.hpp", symbol: "chunks", ops: ["decl"], container: "std::vector<std::uint32_t>", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 144}
   - {id: "U1245", file: "include/pineforge/detail/scratch_directory.hpp", symbol: "<temp:string>", ops: ["temp"], container: "unresolved by the index: std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 38}
   - {id: "U1246", file: "include/pineforge/detail/scratch_directory.hpp", symbol: "first", ops: ["decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 161}

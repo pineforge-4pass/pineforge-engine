@@ -1653,6 +1653,32 @@
    "ordinal": 1
   },
   {
+   "file": "include/pineforge/detail/run_usage.hpp",
+   "symbol": "entries_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class RunUsageScratchFiles #1",
+    "void open ( int fd ) noexcept #1",
+    "+ + i ) #1"
+   ],
+   "cls": "subscript",
+   "spelling": "entries_ [ . . . ]",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/run_usage.hpp",
+   "symbol": "entries_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class RunUsageScratchFiles #1",
+    "Entry * find ( int fd ) noexcept #1",
+    "+ + i ) #1"
+   ],
+   "cls": "subscript",
+   "spelling": "entries_ [ . . . ]",
+   "ordinal": 1
+  },
+  {
    "file": "include/pineforge/detail/scratch_arena.hpp",
    "symbol": "chunks",
    "scope": [
@@ -2053,6 +2079,18 @@
   },
   {
    "file": "include/pineforge/detail/scratch_file.hpp",
+   "symbol": "run_usage_scratch_files",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class ScratchFile #1",
+    "void truncate ( std :: uint64_t bytes ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "run_usage_scratch_files . resize ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/scratch_file.hpp",
    "symbol": "refusal",
    "scope": [
     "namespace pineforge :: detail #1",
@@ -2110,6 +2148,57 @@
    "cls": "append",
    "spelling": "name + = . . .",
    "ordinal": 3
+  },
+  {
+   "file": "include/pineforge/detail/scratch_file.hpp",
+   "symbol": "run_usage_scratch_files",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class ScratchFile #1",
+    "void ensure_size ( std :: uint64_t bytes , std :: uint64_t needed_bytes_lower_bound = 0 ) #1",
+    "if ( status . st_size > = static_cast < off_t > ( bytes ) ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "run_usage_scratch_files . resize ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/scratch_file.hpp",
+   "symbol": "run_usage_scratch_files",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class ScratchFile #1",
+    "void ensure_size ( std :: uint64_t bytes , std :: uint64_t needed_bytes_lower_bound = 0 ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "run_usage_scratch_files . resize ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/scratch_file.hpp",
+   "symbol": "run_usage_scratch_files",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class ScratchFile #1",
+    "ssize_t write_some ( std :: uint64_t offset , const void * data , std :: size_t length ) #1",
+    "else #1"
+   ],
+   "cls": "grow",
+   "spelling": "run_usage_scratch_files . resize ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/scratch_file.hpp",
+   "symbol": "run_usage_scratch_files",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class ScratchFile #1",
+    "void write ( std :: uint64_t offset , const void * data , std :: size_t length ) #1",
+    "while ( written < length ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "run_usage_scratch_files . resize ( . . . )",
+   "ordinal": 1
   },
   {
    "file": "include/pineforge/detail/scratch_file.hpp",
