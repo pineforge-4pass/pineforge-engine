@@ -136,14 +136,18 @@ unchanged except for two additive diagnostics keys, described below.
   keeps its name, value and order. A bare option means `auto`. With `auto`, a
   native module that certifies itself takes the engine's no-curve metrics route
   (Sharpe, Sortino, the monthly ratios, the equity summary and the trade
-  statistics are computed as the run goes), which saves 16 bytes of resident
-  memory per bar as measured; the document is byte for byte the one `legacy`
-  prints. A module certifies itself through one new optional export,
+  statistics are computed as the run goes), which saves at least 12 bytes of
+  resident memory per bar (the bound the acceptance test asserts); the document
+  is byte for byte the one `legacy` prints. A module certifies itself through one new optional export,
   `strategy_metrics_only_capability_v1`; a module without it, `legacy`, or a
   result the runner cannot accept keeps the actual equity curve, as before. The
-  option is refused together with an explicit report sink, a phase stream,
-  selected-window options, outputs, a benchmark run or symbol feeds. Without the
-  option nothing changes.
+  option is refused together with, among others, an explicit report sink, a
+  phase stream, selected-window options, outputs, a benchmark run or symbol
+  feeds. Without the option nothing changes.
+- **The reference-run scripts read the renamed range-provenance member.** They
+  read a tape's `metrics.json` range-provenance member as `rangeProvenance`
+  first; the member's previous name is still accepted until the next minor
+  release, and the label the scripts print names the member they read.
 
 ### Native live report stream
 
