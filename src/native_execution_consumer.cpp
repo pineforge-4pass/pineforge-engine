@@ -8,6 +8,7 @@
 #include "presentation_capture_window.hpp"
 #include "report_sink_writer.hpp"
 #include "run_abort.hpp"
+#include "resource_clock.hpp"
 #include <pineforge/execution_close_scope.hpp>
 #include <pineforge/market_driver.hpp>
 #include <pineforge/timeframe.hpp>
@@ -1596,6 +1597,7 @@ void NativeExecutionConsumer::close_open_epoch_at_exit(BacktestEngine& engine, b
 
 void NativeExecutionConsumer::terminal_success(BacktestEngine& engine,
                                                NativeFailureOperation operation) {
+    if (!check_run_budget(engine, operation)) return;
     NativeSelectedEpoch& epoch = selected_epoch_;
     pf_execution_observation_v1& seen = epoch.observation;
     if (seen.phase == kEpochSealed && seen.fault_stage != kEpochFaultNone) {
@@ -1836,6 +1838,7 @@ bool NativeExecutionConsumer::prepare_public_begin(
         return false;
     }
     try {
+        start_run_budget();
         auto config = engine.scratch_table_config_;
         const auto& m = config.manifest;
         if (config.backend == detail::ScratchTableBackend::bounded_memory
@@ -1932,6 +1935,36 @@ bool NativeExecutionConsumer::check_sigterm_abort(BacktestEngine& engine,
     render(engine, "native run aborted", RunFailureCode::run_aborted,
            {{"bars_count", completed}, {"strategy_started", strategy_started}});
     return false;
+}
+
+void NativeExecutionConsumer::start_run_budget() {
+    // No clock syscall at all for an absent or all-zero descriptor.
+    run_wall_origin_ms_ = run_budget_.wall_ms ? resource_clock::wall_ms() : 0;
+    run_cpu_origin_ms_ = run_budget_.cpu_ms ? resource_clock::cpu_ms() : 0;
+}
+
+bool NativeExecutionConsumer::check_run_budget(BacktestEngine& engine,
+                                                NativeFailureOperation operation) {
+    if (failed()) return false;
+    const auto exceeded = [&](const char* kind, std::uint64_t limit, std::int64_t origin,
+                              std::int64_t now) {
+        const auto used = std::max<std::int64_t>(0, now - origin);
+        if (static_cast<std::uint64_t>(used) <= limit) return false;
+        fail(engine, NativeFailure{NativeFailureCode::Contract, operation});
+        // Release the owned writer/file without flushing a success trailer.
+        // Borrowed stream descriptors remain the host's responsibility.
+        engine.report_sink_state_.writer.reset();
+        engine.report_sink_state_.receipt = {};
+        engine.report_sink_state_.summary = {};
+        render(engine, "run resource budget exceeded", RunFailureCode::run_budget_exceeded,
+               {{"kind", kind}, {"limit", static_cast<std::int64_t>(limit)}, {"used", used}});
+        return true;
+    };
+    if (run_budget_.wall_ms && exceeded("wall", run_budget_.wall_ms, run_wall_origin_ms_,
+                                        resource_clock::wall_ms())) return false;
+    if (run_budget_.cpu_ms && exceeded("cpu", run_budget_.cpu_ms, run_cpu_origin_ms_,
+                                       resource_clock::cpu_ms())) return false;
+    return true;
 }
 
 bool NativeExecutionConsumer::abort_before_sink_trailer(BacktestEngine& engine) {
@@ -3228,6 +3261,7 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     begin_is_stream_ = false;
     state_ = NativeRunning{std::move(ready->spec), phase};
     cache_running_policy();
+    if (!check_run_budget(engine, NativeFailureOperation::Begin)) return false;
     if (!check_abort_or_projection(engine, NativeFailureOperation::Begin)) return false;
     if (phase == NativeRunPhase::Batch && !check_sigterm_abort(engine, false)) return false;
     // The host's opaque state is dropped here: after the final pre-host check has
@@ -3286,7 +3320,7 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     // Every feed this run reads is installed by now, the host's and the
     // declared series' alike: the daily feed's stamps label the D bars.
     prepare_day_labels(engine, begin_bars, begin_n);
-    return true;
+    return check_run_budget(engine, NativeFailureOperation::Begin);
 }
 
 bool NativeExecutionConsumer::preflight_bars(BacktestEngine& engine, const Bar* bars, int n,
@@ -10552,6 +10586,7 @@ std::optional<Bar> NativeExecutionConsumer::series_bar(std::size_t subscription)
 bool NativeExecutionConsumer::consume_confirmed_input(BacktestEngine& engine, const Bar& bar,
                                                       int index, bool last) {
     (void)last;
+    if (!check_run_budget(engine, NativeFailureOperation::Input)) return false;
     processing_input_ = true;
     const auto* running = std::get_if<NativeRunning>(&state_);
     const bool tolerant_realtime = legacy_tolerant_slot_labels() && running
@@ -10915,6 +10950,7 @@ void NativeExecutionConsumer::pump_batch(BacktestEngine& engine, const Bar* bars
     }
     // The final natural/session seal has also returned. Any unfinished bucket
     // has consumed all supplied inputs and would not calculate in this batch.
+    if (!check_run_budget(engine, NativeFailureOperation::Input)) return;
     if (!check_sigterm_abort(engine, true)) return;
     (void)check_abort_or_projection(engine, NativeFailureOperation::Input);
 }
@@ -11527,6 +11563,7 @@ bool NativeExecutionConsumer::finalize_elapsed_slots(BacktestEngine& engine,
 }
 
 bool NativeExecutionConsumer::deliver_tick(BacktestEngine& engine, const TradeTick& tick) {
+    if (!check_run_budget(engine, NativeFailureOperation::Input)) return false;
     processing_input_ = true;
     select_input_mode(InputMode::ObservedTicks);
     // A print at a D bar's moved label is its bar's, as the script interval
@@ -13592,6 +13629,28 @@ int native_execution_observation_v1(const BacktestEngine* engine,
 int native_set_selected_window_v1(BacktestEngine* engine,
                                   const pf_selected_window_config_v1* config) noexcept {
     return NativeExecutionConsumer::set_selected_window_v1(engine, config);
+}
+
+int NativeExecutionConsumer::set_run_budget_v1(
+        BacktestEngine* engine, const pf_run_budget_v1* budget) noexcept {
+    if (!engine) return -1;
+    pf_run_budget_v1 next{};
+    if (budget) {
+        if (budget->struct_size != sizeof(*budget) || budget->version != 1) return -1;
+        next = *budget;
+        constexpr auto maximum = static_cast<std::uint64_t>(
+            std::numeric_limits<std::int64_t>::max());
+        if (next.wall_ms > maximum || next.cpu_ms > maximum) return -1;
+    }
+    NativeExecutionConsumer* consumer = nullptr;
+    const int refusal = gate_selected_setter(engine, budget != nullptr, &consumer);
+    if (refusal != 0) return refusal;
+    if (consumer) consumer->run_budget_ = next;
+    return 0;
+}
+
+int native_set_run_budget_v1(BacktestEngine* engine, const pf_run_budget_v1* budget) noexcept {
+    return NativeExecutionConsumer::set_run_budget_v1(engine, budget);
 }
 
 int native_selected_window_counts_v1(const BacktestEngine* engine,

@@ -50,12 +50,12 @@ typedef struct pf_report_sink_v1 {
  *  Bytes, canonical JSON, hashes, LF framing and the 1 MiB line limit are
  *  identical to the path sink. Writes are strictly sequential: no open,
  *  creation, seek, pwrite, truncation, unlink or rename on this route.
- *  Partial writes and EINTR are retried; EAGAIN blocks in poll() with bounded
- *  buffering. Only a successful run writes a trailer, as its last line.
+ *  Partial writes and EINTR are retried; poll() has a 30-second no-progress
+ *  stall budget (sink_stalled). Only success writes a trailer as its last line.
  *  Failure or abort leaves no valid trailer; the receipt stays incomplete.
  *
- *  Socket writes use send(..., MSG_NOSIGNAL). For a FIFO the host MUST ignore
- *  SIGPIPE (Python does by default; C hosts use signal(SIGPIPE, SIG_IGN))
+ *  Sockets use MSG_NOSIGNAL|MSG_DONTWAIT; Linux observes released send buffers.
+ *  FIFO hosts MUST ignore SIGPIPE (Python does; C: signal(SIGPIPE, SIG_IGN))
  *  so a closed reader becomes the typed report_sink_failed error. The
  *  library never changes process-wide SIGPIPE disposition. A successful new inherited-arena attach sets SIGXFSZ to SIG_IGN process-wide; detach does not restore it. Hosts relying on their SIGXFSZ handler or default termination must account for this before attaching an arena. */
 typedef struct pf_report_sink_fd_v1 {

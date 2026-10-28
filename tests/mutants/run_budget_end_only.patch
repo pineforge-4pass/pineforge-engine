@@ -1,0 +1,14 @@
+--- a/src/native_execution_consumer.cpp
++++ b/src/native_execution_consumer.cpp
+@@ -10586,7 +10586,6 @@
+ bool NativeExecutionConsumer::consume_confirmed_input(BacktestEngine& engine, const Bar& bar,
+                                                       int index, bool last) {
+     (void)last;
+-    if (!check_run_budget(engine, NativeFailureOperation::Input)) return false;
+     processing_input_ = true;
+     const auto* running = std::get_if<NativeRunning>(&state_);
+     const bool tolerant_realtime = legacy_tolerant_slot_labels() && running
+@@ -11565,3 +11564,2 @@
+ bool NativeExecutionConsumer::deliver_tick(BacktestEngine& engine, const TradeTick& tick) {
+-    if (!check_run_budget(engine, NativeFailureOperation::Input)) return false;
+     processing_input_ = true;

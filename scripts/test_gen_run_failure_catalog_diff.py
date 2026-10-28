@@ -502,7 +502,7 @@ class CatalogDiff(unittest.TestCase):
                 "kind": "vocab",
                 "optional": True,
                 "values": ["arena_exhausted", "arena_io", "arena_backing", "scratch_io",
-                           "sink_io", "sink_peer_closed", "sink_exhausted"],
+                           "sink_io", "sink_peer_closed", "sink_exhausted", "sink_stalled"],
             },
             "sink_bytes": {"kind": "integer", "optional": True},
             "store": {
@@ -518,12 +518,28 @@ class CatalogDiff(unittest.TestCase):
             "report sink open failed",
             "report sink write failed",
             "report sink write made no progress",
+            "report sink reader stalled",
         ])
         # What the diff says of the code follows the diff's own start: an addition
         # while its release is in progress (the diff starts at an older release),
         # part of the base once a release reset has moved the start to its release.
         diff = json.loads((ROOT / DIFF).read_text(encoding="utf-8"))
         self.assert_diff_states_code(diff, "report_sink_failed", entry)
+
+    def test_run_budget_exceeded_schema(self) -> None:
+        catalog = json.loads((ROOT / CATALOG).read_text(encoding="utf-8"))
+        entry = catalog["codes"]["run_budget_exceeded"]
+        self.assertEqual(entry["class"], "resource")
+        self.assertIs(entry["retryable"], False)
+        self.assertEqual(entry["since"], "1.9.0")
+        self.assertEqual(entry["args"], {
+            "kind": {"kind": "vocab", "values": ["wall", "cpu"]},
+            "limit": {"kind": "integer"},
+            "used": {"kind": "integer"},
+        })
+        self.assertEqual(entry["english"], ["run resource budget exceeded"])
+        diff = json.loads((ROOT / DIFF).read_text(encoding="utf-8"))
+        self.assert_diff_states_code(diff, "run_budget_exceeded", entry)
 
     def test_a_codes_diff_holds_before_and_after_its_release_reset(self) -> None:
         # alpha ships in 1.1.0. While that release is in progress the diff, from

@@ -2025,4 +2025,7 @@ PF_API uint32_t strategy_stream_engine_layout_version(void);
 /** Feature probe: include <pineforge/report_sink.h> for the additive sink ABI. */
 #define PINEFORGE_HAS_REPORT_SINK_V1 1
 
+/** Feature probe: include <pineforge/run_budget.h> for cooperative run limits. */
+#define PINEFORGE_HAS_RUN_BUDGET_V1 1
+
 #endif /* PINEFORGE_H */

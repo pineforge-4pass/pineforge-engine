@@ -7927,6 +7927,28 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 8)
         "-Wl,--wrap=_ZnamRKSt9nothrow_t")
 endif()
 # --- CR-150 resident-command-scratch end ---
+if(UNIX)
+    pineforge_add_unit_test(test_host_run_budget)
+    pineforge_add_unit_test(test_report_sink_stall)
+    target_link_libraries(test_host_run_budget PRIVATE Threads::Threads)
+    # Same formulas as the in-process alarm guards: 100 two-budget spin
+    # intervals + setup, and two complete sink stall intervals + setup.
+    # The outer guard adds one second for the alarm's failure diagnostic.
+    math(EXPR _pf_budget_timeout "(100 * 2 * 100 + 999) / 1000 + 1 + 1")
+    math(EXPR _pf_stall_timeout "(2 * 30 * 1000 + 999) / 1000 + 1 + 1")
+    set_tests_properties(test_host_run_budget PROPERTIES TIMEOUT ${_pf_budget_timeout})
+    set_tests_properties(test_report_sink_stall PROPERTIES TIMEOUT ${_pf_stall_timeout})
+    foreach(_pf_row cpu begin begin_callback unchanged setter real_cpu)
+        add_test(NAME test_host_run_budget_${_pf_row} COMMAND test_host_run_budget ${_pf_row})
+        set_tests_properties(test_host_run_budget_${_pf_row} PROPERTIES TIMEOUT ${_pf_budget_timeout})
+    endforeach()
+    foreach(_pf_row blocking signals socket slow socket_slow engine real_blocked)
+        add_test(NAME test_report_sink_stall_${_pf_row} COMMAND test_report_sink_stall ${_pf_row})
+        set_tests_properties(test_report_sink_stall_${_pf_row} PROPERTIES TIMEOUT ${_pf_stall_timeout})
+    endforeach()
+    set_tests_properties(test_report_sink_stall_real_blocked PROPERTIES LABELS "slow")
+endif()
+
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
         message(FATAL_ERROR "PR fast row or executable is missing: ${_pf_fast_test}")

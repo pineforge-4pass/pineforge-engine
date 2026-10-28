@@ -128,6 +128,8 @@ EXPECTED_RUNTIME = frozenset({
     "strategy_set_scratch_tables_v1",
     "strategy_report_sink_summary_v1",
     "strategy_stream_engine_layout_version",
+    "pf_run_budget_version",
+    "strategy_set_run_budget_v1",
 })
 
 # The headers under include/pineforge/ whose PF_API declarations are read as one
@@ -139,9 +141,10 @@ RUNTIME_HEADERS = (
     "execution_observer.h",
     "selected_window.h",
     "report_sink.h",
+    "run_budget.h",
 )
-EXPECTED_PUBLIC_DECLARATIONS = 115
-EXPECTED_RUNTIME_IMPLEMENTATIONS = 95
+EXPECTED_PUBLIC_DECLARATIONS = 117
+EXPECTED_RUNTIME_IMPLEMENTATIONS = 97
 
 # Runtime setters whose data a stream cannot take: the source host refuses
 # stream_begin() while any of them holds data (the native daily feed since its

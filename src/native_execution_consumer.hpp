@@ -5,6 +5,7 @@
 #include <pineforge/execution_consumer.hpp>
 #include <pineforge/native_host.hpp>
 #include <pineforge/run_failure.hpp>
+#include <pineforge/run_budget.h>
 #include <pineforge/native_bar_views.hpp>
 #include <pineforge/metrics_stream.hpp>
 #include "native_calendar_memo.hpp"
@@ -2313,6 +2314,8 @@ public:
                                       const pf_selected_window_config_v1* config) noexcept;
     static int selected_window_counts_v1(const BacktestEngine* engine,
                                          pf_selected_window_counts_v1* out) noexcept;
+    static int set_run_budget_v1(BacktestEngine* engine,
+                                 const pf_run_budget_v1* budget) noexcept;
 
     // The source adapter's read of the selected window, never a C export: the
     // pending configuration (what the next admitted generation will take, read
@@ -2832,6 +2835,13 @@ private:
     // Only BookSpill's index poison is permanent until the next run.
     bool match_dormant_was_fast_ = false;
     MatchDormantCounts match_dormant_counts_;
+    // Host resource control, like observer configuration: never a trading
+    // state/hash input. Appended so earlier member offsets stay unchanged.
+    pf_run_budget_v1 run_budget_{};
+    std::int64_t run_wall_origin_ms_ = 0;
+    std::int64_t run_cpu_origin_ms_ = 0;
+    void start_run_budget();
+    bool check_run_budget(BacktestEngine& engine, NativeFailureOperation operation);
 };
 
 // The same lazy backing used by RunCommandScratch's Book binding. Kept in

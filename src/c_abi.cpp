@@ -39,7 +39,7 @@
  *     strategy_set_report_sink_v1, strategy_set_report_sink_fd_v1, strategy_report_sink_receipt_v1,
  *     strategy_set_scratch_tables_v1, strategy_report_sink_summary_v1,
  *     pf_report_scratch_arena_stats, strategy_require_report_scratch_arena_v1,
- *     strategy_report_sink_diagnostics_v1,
+ *     strategy_report_sink_diagnostics_v1, pf_run_budget_version, strategy_set_run_budget_v1,
  *     pf_run_abort_install_sigterm_v1, pf_run_abort_requested_v1,
  *     pf_run_abort_restore_sigterm_v1 — the
  *     authoritative list is EXPECTED_RUNTIME in scripts/check_c_abi_runtime.py (CI). Other
@@ -54,6 +54,7 @@
 #include <pineforge/pineforge.h>
 #include <pineforge/execution_observer.h>
 #include <pineforge/selected_window.h>
+#include <pineforge/run_budget.h>
 #include <pineforge/engine.hpp>
 #include "engine_layout_fingerprint.hpp"
 #include <pineforge/native_host.hpp>
@@ -86,6 +87,7 @@ int native_set_execution_observer_v1(BacktestEngine*, const pf_execution_observe
 int native_execution_observation_v1(const BacktestEngine*, pf_execution_observation_v1*) noexcept;
 int native_set_selected_window_v1(BacktestEngine*, const pf_selected_window_config_v1*) noexcept;
 int native_selected_window_counts_v1(const BacktestEngine*, pf_selected_window_counts_v1*) noexcept;
+int native_set_run_budget_v1(BacktestEngine*, const pf_run_budget_v1*) noexcept;
 }
 }
 
@@ -1406,6 +1408,13 @@ PF_API int strategy_execution_observation_v1(
 }
 
 PF_API uint32_t pf_selected_window_version(void) { return 1; }
+
+PF_API uint32_t pf_run_budget_version(void) { return 1; }
+
+PF_API int strategy_set_run_budget_v1(pf_strategy_t s, const pf_run_budget_v1* budget) {
+    return pineforge::native_set_run_budget_v1(
+        static_cast<pineforge::BacktestEngine*>(s), budget);
+}
 
 PF_API int strategy_set_selected_window_v1(
         pf_strategy_t s, const pf_selected_window_config_v1* config) {

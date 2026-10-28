@@ -15,6 +15,7 @@ V170_ADDITIONS = {
     "scratch_configuration_invalid": 68,
     "scratch_io_failed": 69,
 }
+V190_ADDITIONS = {"run_budget_exceeded": max(V170_ADDITIONS.values()) + 1}
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import check_run_failure_codes as registry
@@ -60,6 +61,7 @@ def test_run_failure_code_numbers_stable():
     assert len(set(current.values())) == len(current)
     assert all(value > 64 for name, value in current.items() if name not in released)
     assert {name: current.get(name) for name in V170_ADDITIONS} == V170_ADDITIONS
+    assert {name: current.get(name) for name in V190_ADDITIONS} == V190_ADDITIONS
 
 
 def test_run_failure_generator_appends_after_released_numbers():
@@ -68,6 +70,7 @@ def test_run_failure_generator_appends_after_released_numbers():
     generated = numbers(registry.render_codes_header(catalogue))
     assert {name: generated.get(name) for name in released} == released
     assert {name: generated.get(name) for name in V170_ADDITIONS} == V170_ADDITIONS
+    assert {name: generated.get(name) for name in V190_ADDITIONS} == V190_ADDITIONS
     for path, rendered in registry.generated(catalogue).items():
         assert (ROOT / path).read_text(encoding="utf-8") == rendered, str(path)
     # A future alphabetically earlier addition cannot shift any existing code.
