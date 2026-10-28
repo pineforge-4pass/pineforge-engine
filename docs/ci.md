@@ -38,7 +38,7 @@ The classifier uses exact `.github/` and `docs/` prefixes, so lookalike
 directories and the classifier itself cannot create a skip.
 
 `--tier github-only` runs `shellcheck-version`, `actionlint-runner-labels`,
-`workflow-lint`, `ci-workflow-contract`, `docs-workflow-contract` and
+`runner-allowlist`, `workflow-lint`, `ci-workflow-contract`, `docs-workflow-contract` and
 `docs-workflow-contract-tests`, plus the usual actionlint version check.
 It excludes source guards and the general preflight test suite. A failed
 classification selects the ordinary fast tier and fails the aggregate.
@@ -49,7 +49,7 @@ also avoids the Doxygen build.
 `unittest-shards-tests` and `run-json-harness-tests`; `preflight-slow` runs
 exactly those stages with `--tier slow`. Toolchain setup and the hash-pinned
 pytest install stay in the slow job. A plain local invocation below retains
-all stages and its existing event-aware verifier-class selection. `preflight-tests` runs every discovered method across up to eight shards, sized to available CPUs, with separate logs in `build-ci-preflight/preflight-tests-shards/`.
+all stages and its existing event-aware verifier-class selection. `runner-allowlist` independently scans workflow runner labels against the committed mirror in the fast tier's parallel group; `preflight-tests` runs every discovered method across up to eight shards, sized to available CPUs, with separate logs in `build-ci-preflight/preflight-tests-shards/`.
 
 The smoke configures Release, builds `pineforge_pr_smoke` and directly runs
 `ctest --test-dir build -L '^fast$' --output-on-failure --no-tests=error`.
@@ -94,7 +94,7 @@ Python refuse a system-wide install (PEP 668), and `.venv/` is ignored. The
 and fails, never skips, without it.
 
 Actionlint only accepts declared custom self-hosted runner labels; preflight
-checks the declarations in `.github/actionlint.yaml`.
+checks the declarations in `.github/actionlint.yaml`. Before a workflow file moves onto a gke- or gkp- label, add its line to `.github/runner-group-allowlist.txt` and ask for the org runner-group entry; the merge waits for both.
 
 ORG-ACTIONPINS is enforced by preflight's `ci-workflow-contract`: every
 third-party `uses:` in `.github/workflows/*.yml` (also `.yaml`) and nested
