@@ -7836,3 +7836,55 @@ endforeach()
 if(PINEFORGE_BUILD_SOURCE_LAYER)
     add_custom_target(pineforge_pr_smoke DEPENDS ${PINEFORGE_PR_FAST_TESTS})
 endif()
+
+# Observation-only copies: keep the production files and all arithmetic intact.
+# Configure dependencies prevent a stale counting copy after a product change.
+set(_closed_trade_work_dir "${CMAKE_CURRENT_BINARY_DIR}/closed_trade_query_work")
+file(MAKE_DIRECTORY "${_closed_trade_work_dir}/pineforge")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${PROJECT_SOURCE_DIR}/include/pineforge/engine.hpp"
+    "${PROJECT_SOURCE_DIR}/src/engine_metrics.cpp")
+file(READ "${PROJECT_SOURCE_DIR}/include/pineforge/engine.hpp" _closed_trade_header)
+string(APPEND _closed_trade_header
+    "\nnamespace closed_trade_query_work {\n"
+    "template<class Rows, class Visit>\n"
+    "void percent_overlay_control(const Rows& trades_, Visit visit) {\n"
+    "    for (const auto& t : trades_) { visit(t); }\n"
+    "}\n}\n")
+string(REPLACE "for (const auto& t : trades_) {"
+    "for (const auto& t : trades_) { (void)::closed_trade_query_work::percent_input(__func__, t);"
+    _closed_trade_header "${_closed_trade_header}")
+# Force the observed accessor body at its test call site in Debug as well.
+foreach(_closed_trade_accessor IN ITEMS
+        avg_trade_percent avg_winning_trade_percent avg_losing_trade_percent)
+    string(REPLACE "double ${_closed_trade_accessor}() const {"
+        "[[gnu::always_inline]] double ${_closed_trade_accessor}() const {"
+        _closed_trade_header "${_closed_trade_header}")
+endforeach()
+file(WRITE "${_closed_trade_work_dir}/pineforge/engine.hpp"
+    "#define PINEFORGE_TEST_CLOSED_TRADE_PERCENT_OVERLAY 1\n${_closed_trade_header}")
+file(READ "${PROJECT_SOURCE_DIR}/src/engine_metrics.cpp" _closed_trade_metrics)
+set(_closed_trade_fold "void TradeStatsAccumulator::fold(const TradeC& trade) {")
+string(FIND "${_closed_trade_metrics}" "${_closed_trade_fold}" _closed_trade_fold_at)
+if(_closed_trade_fold_at EQUAL -1)
+    message(FATAL_ERROR "setup failure: trade accumulator counting seam is missing")
+endif()
+string(REPLACE "${_closed_trade_fold}"
+    "${_closed_trade_fold}\n    ::closed_trade_query_work::accumulator_input();"
+    _closed_trade_metrics "${_closed_trade_metrics}")
+file(WRITE "${_closed_trade_work_dir}/closed_trade_work_engine_metrics.cpp"
+    "#define PINEFORGE_TEST_CLOSED_TRADE_METRIC_OVERLAY 1\n${_closed_trade_metrics}")
+set(_closed_trade_work_tests test_closed_trade_report_query_work)
+list(APPEND TEST_SOURCES test_closed_trade_report_query_work)
+pineforge_add_unit_test(test_closed_trade_report_query_work)
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    list(APPEND _closed_trade_work_tests test_closed_trade_percent_query_work)
+    list(APPEND TEST_SOURCES test_closed_trade_percent_query_work)
+    pineforge_add_unit_test(test_closed_trade_percent_query_work)
+endif()
+foreach(_closed_trade_test IN LISTS _closed_trade_work_tests)
+    target_include_directories(${_closed_trade_test} BEFORE PRIVATE
+        "${_closed_trade_work_dir}"
+        "${PROJECT_SOURCE_DIR}/include/pineforge"
+        "${PROJECT_SOURCE_DIR}/src")
+endforeach()
