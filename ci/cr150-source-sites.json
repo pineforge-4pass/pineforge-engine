@@ -37503,7 +37503,7 @@
    "symbol": "indexes",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: ensure_projected_pending_index ( ) const #1"
+    "bool PineExecutionAdapter :: ensure_projected_pending_index ( ) const try #1"
    ],
    "cls": "decl",
    "spelling": "std :: vector < int >",
@@ -37514,7 +37514,7 @@
    "symbol": "next",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: ensure_projected_pending_index ( ) const #1"
+    "bool PineExecutionAdapter :: ensure_projected_pending_index ( ) const try #1"
    ],
    "cls": "decl",
    "spelling": "std :: vector < int >",
@@ -37525,7 +37525,7 @@
    "symbol": "exits",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: ensure_projected_pending_index ( ) const #1"
+    "bool PineExecutionAdapter :: ensure_projected_pending_index ( ) const try #1"
    ],
    "cls": "decl",
    "spelling": "std :: unordered_map < Key , int , Hash >",
@@ -37536,7 +37536,7 @@
    "symbol": "indexes",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: ensure_projected_pending_index ( ) const #1"
+    "bool PineExecutionAdapter :: ensure_projected_pending_index ( ) const try #1"
    ],
    "cls": "grow",
    "spelling": "indexes . reserve ( . . . )",
@@ -37547,7 +37547,7 @@
    "symbol": "exits",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: ensure_projected_pending_index ( ) const #1"
+    "bool PineExecutionAdapter :: ensure_projected_pending_index ( ) const try #1"
    ],
    "cls": "grow",
    "spelling": "exits . reserve ( . . . )",
@@ -37558,7 +37558,7 @@
    "symbol": "exits",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: ensure_projected_pending_index ( ) const #1",
+    "bool PineExecutionAdapter :: ensure_projected_pending_index ( ) const try #1",
     "+ + raw ) #1",
     "if ( exit ) #1"
    ],
@@ -37571,7 +37571,7 @@
    "symbol": "indexes",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: ensure_projected_pending_index ( ) const #1",
+    "bool PineExecutionAdapter :: ensure_projected_pending_index ( ) const try #1",
     "+ + raw ) #1"
    ],
    "cls": "grow",
