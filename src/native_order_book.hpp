@@ -1,6 +1,6 @@
 #pragma once
 
-// Included within pineforge::native_order::native_order_v7 by native_order.cpp,
+// Included within pineforge::native_order::native_order_v8 by native_order.cpp,
 // after its file-local archive helpers and WorkingRequestCore::JournalStore.
 // The include context preserves the existing helpers' linkage and lookup.
 
