@@ -81,13 +81,26 @@ diagnostics keys, described below.
 
 ### Native live report checkpoints
 
-The live runner now writes an immutable cumulative report checkpoint in the
-same transaction as every configured checkpoint boundary. Report export starts
-from the nearest verified checkpoint and applies only the following deltas,
-with a structural tail bound of the checkpoint interval plus the checkpoint
-row. A payload or integrity witness failure records a typed diagnostic and
-falls back to full report reconstruction. The default interval is 1024 inputs
-and can be changed with `--checkpoint-interval K`.
+The live runner now writes immutable cumulative report checkpoints at K, 2K,
+4K, ... committed inputs. `--checkpoint-interval K` sets the first/base interval
+(default 1024). For fixed K and bounded per-input report growth, geometric
+checkpoints use linear payload storage. Report export starts at the nearest
+verified checkpoint P, reading its witness snapshot and C-P tail deltas for
+cursor C; the tail approaches half the history just before the next doubling.
+The runner README gives the exact report-row and stored-payload bounds.
+
+Checkpoint preparation and its separate insert transaction run after the input
+commit. A failed checkpoint records a typed diagnostic and leaves that input
+durable so the service can continue. An old ledger gets its first checkpoint
+during open/startup recovery, before new inputs; this initial reconstruction
+reads the full history. Each boundary still builds an O(T) document for a
+report of size T.
+
+Default export and restart verify the report chain only from the nearest
+checkpoint onward. `report --verify-full` re-verifies the whole committed chain.
+A payload or integrity witness failure falls back to full report
+reconstruction; startup failures are published on stderr and in the service
+status file's `checkpoint_diagnostic` field.
 
 The checkpoint contains report state only. The engine has no state restore
 entry point, so restart recovery still replays committed strategy inputs and

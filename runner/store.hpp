@@ -16,6 +16,7 @@ void refuse_legacy_ledger(const std::string& path, const std::string& legacy_ide
 inline constexpr std::uint64_t kDefaultReportCheckpointInterval = 1024;
 
 struct LedgerOptions {
+    // First boundary; later boundaries double: K, 2K, 4K, ...
     std::uint64_t report_checkpoint_interval = kDefaultReportCheckpointInterval;
 };
 
@@ -25,7 +26,10 @@ enum class CheckpointFailureCode {
     previous_hash_mismatch,
     payload_hash_mismatch,
     invalid_payload,
+    write_failed,
 };
+
+const char* checkpoint_failure_code_name(CheckpointFailureCode code) noexcept;
 
 class CheckpointFailure final : public std::runtime_error {
 public:
@@ -48,6 +52,7 @@ struct CheckpointDiagnostic {
 
 struct ReportReadStats {
     std::uint64_t checkpoint_rows = 0;
+    // Includes the report snapshot read to verify a checkpoint's witness.
     std::uint64_t delta_rows = 0;
 };
 
@@ -114,6 +119,9 @@ public:
                        const std::function<std::string()>& legacy_report = {});
     std::optional<std::uint64_t> verified_report_checkpoint(std::uint64_t target) const;
     void verify_report_checkpoint(std::uint64_t cursor, const std::string& report_json) const;
+    // Startup retry after replay has populated legacy reports or digests.
+    void checkpoint_recovered_report(std::uint64_t cursor) noexcept;
+    std::optional<CheckpointDiagnostic> checkpoint_diagnostic() const;
 
 #ifdef PINEFORGE_LIVE_LEGACY_TEST_API
     std::optional<StoredEvent> pending_event() const;

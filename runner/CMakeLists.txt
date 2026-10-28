@@ -89,6 +89,10 @@ if(PINEFORGE_BUILD_TESTS)
     add_test(NAME test_native_live_startup COMMAND test_native_live_startup)
     add_test(NAME native_live_help COMMAND pineforge-live --help)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME native_live_checkpoint_e2e COMMAND ${Python3_EXECUTABLE}
+        ${PROJECT_SOURCE_DIR}/tests/native_live_checkpoint_e2e.py $<TARGET_FILE:pineforge-live>
+        $<TARGET_FILE:native_market_example>)
+    set_tests_properties(native_live_checkpoint_e2e PROPERTIES TIMEOUT 180)
     if(PINEFORGE_BUILD_SOURCE_LAYER)
         add_library(native_live_service_example MODULE ${PROJECT_SOURCE_DIR}/tests/native_live_service_strategy.cpp)
         target_link_libraries(native_live_service_example PRIVATE PineForge::pineforge)

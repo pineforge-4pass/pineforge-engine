@@ -2,6 +2,9 @@
 #include "../runner/json.hpp"
 #include "../runner/store.hpp"
 
+#include <sqlite3.h>
+
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -55,19 +58,28 @@ private:
     std::string path_;
 };
 
-std::string initial_report() {
-    return Json::object({{"counter", Json::number("0")}}).dump();
+Json retained_items(std::uint64_t count) {
+    Json values;
+    values.kind = Json::Kind::Array;
+    // Compact rows keep the 100,000-input checkpoint below the JSON frame
+    // limit; the structural test also covers wider rows and limit fallback.
+    for (std::uint64_t index = 0; index < count; ++index)
+        values.items.push_back(Json::number("100"));
+    return values;
 }
 
 std::string expected_report(std::uint64_t cursor) {
-    return Json::object({{"counter", Json::number(std::to_string(cursor))}}).dump();
+    return Json::object({{"report", Json::object({
+        {"equity_curve", retained_items(cursor + 1)}})}}).dump();
 }
 
 std::string report_delta(std::uint64_t cursor) {
+    const auto patch = Json::object({
+        {"offset", Json::number(std::to_string(cursor))}, {"items", retained_items(1)}});
     return Json::object({
         {"schema_version", Json::string("pineforge-native-report-delta/v1")},
-        {"fields", Json::object({{"counter", Json::number(std::to_string(cursor))}})},
-        {"arrays", Json::object({})},
+        {"fields", Json::object({})},
+        {"arrays", Json::object({{"equity_curve", patch}})},
     }).dump();
 }
 
@@ -75,7 +87,7 @@ void populate(const std::string& path, std::uint64_t inputs, std::uint64_t inter
     LedgerOptions options;
     options.report_checkpoint_interval = interval;
     Ledger ledger(path, "checkpoint-measurement", options);
-    ledger.verify_report(0, initial_report());
+    ledger.verify_report(0, expected_report(0));
     for (std::uint64_t index = 0; index < inputs; ++index)
         ledger.commit_input(index, "{}", index + 1, {}, report_delta(index + 1));
 }
@@ -84,6 +96,27 @@ std::uintmax_t file_bytes(const std::string& path) {
     std::error_code error;
     const auto size = std::filesystem::file_size(path, error);
     return error ? 0 : size;
+}
+
+std::uint64_t stored_checkpoint_bytes(const std::string& path) {
+    sqlite3* database = nullptr;
+    const auto opened = sqlite3_open_v2(path.c_str(), &database, SQLITE_OPEN_READONLY, nullptr);
+    struct Close {
+        sqlite3* database;
+        ~Close() { if (database) sqlite3_close(database); }
+    } close{database};
+    if (opened != SQLITE_OK) throw std::runtime_error("measurement SQL open failed");
+    sqlite3_stmt* statement = nullptr;
+    const auto prepared = sqlite3_prepare_v2(database,
+        "SELECT COALESCE(SUM(length(CAST(payload AS BLOB))),0) FROM report_checkpoints",
+        -1, &statement, nullptr);
+    struct Finalize {
+        sqlite3_stmt* statement;
+        ~Finalize() { sqlite3_finalize(statement); }
+    } finalize{statement};
+    if (prepared != SQLITE_OK || sqlite3_step(statement) != SQLITE_ROW)
+        throw std::runtime_error("measurement checkpoint byte query failed");
+    return static_cast<std::uint64_t>(sqlite3_column_int64(statement, 0));
 }
 
 std::uint64_t peak_rss_bytes() {
@@ -117,7 +150,7 @@ void measure(std::uint64_t inputs, std::uint64_t interval) {
     populate(path, inputs, interval);
     const auto ledger_bytes = file_bytes(path);
     const auto wal_bytes = file_bytes(path + "-wal");
-    const auto target = inputs - 1;
+    const auto target = inputs;
 
     LedgerView view(path);
     ReportReadStats checkpoint_stats;
@@ -141,16 +174,32 @@ void measure(std::uint64_t inputs, std::uint64_t interval) {
     CHECK_OP(from_checkpoint, ==, expected_report(target));
     CHECK_OP(full_replay, ==, expected_report(target));
     CHECK_OP(exported, ==, full_replay);
+    auto boundary = interval;
+    std::uint64_t checkpoint_count = 1;
+    while (boundary <= target / 2) { boundary *= 2; ++checkpoint_count; }
     CHECK_OP(checkpoint_stats.checkpoint_rows, ==, 1u);
-    CHECK_OP(checkpoint_stats.checkpoint_rows + checkpoint_stats.delta_rows, <=, interval);
+    CHECK_OP(checkpoint_stats.delta_rows, ==, 1 + target - boundary);
+    CHECK_OP(checkpoint_stats.checkpoint_rows + checkpoint_stats.delta_rows, <=,
+             2 + std::min(boundary - 1, inputs - boundary));
     CHECK_OP(full_stats.checkpoint_rows, ==, 0u);
     CHECK_OP(full_stats.delta_rows, ==, inputs + 1);
     CHECK_OP(export_stats.checkpoint_rows, ==, 1u);
+    CHECK_OP(export_stats.delta_rows, ==, checkpoint_stats.delta_rows);
+    const auto header = expected_report(0).size();
+    const auto bytes_per_input = expected_report(1).size() - header;
+    const auto report_bytes = from_checkpoint.size();
+    const auto checkpoint_bytes = stored_checkpoint_bytes(path);
+    CHECK_OP(bytes_per_input * interval, >=, header);
+    CHECK_OP(checkpoint_bytes, ==,
+             checkpoint_count * header + bytes_per_input * (2 * boundary - interval));
+    CHECK_OP(checkpoint_bytes, <, 3 * report_bytes);
 
-    std::printf("| %llu | %llu | %llu | %llu | %llu | %.6f | %.6f | %.6f |\n",
+    std::printf("| %llu | %llu | %llu | %llu | %llu | %llu | %llu | %.6f | %.6f | %.6f |\n",
         static_cast<unsigned long long>(inputs),
         static_cast<unsigned long long>(ledger_bytes),
         static_cast<unsigned long long>(wal_bytes),
+        static_cast<unsigned long long>(checkpoint_bytes),
+        static_cast<unsigned long long>(report_bytes),
         static_cast<unsigned long long>(peak_rss_bytes()),
         static_cast<unsigned long long>(open_file_descriptors()),
         checkpoint_seconds, full_seconds, export_seconds);
@@ -160,9 +209,9 @@ void measure(std::uint64_t inputs, std::uint64_t interval) {
 
 int main() {
     constexpr std::uint64_t interval = 100;
-    std::printf("| inputs | ledger_file_bytes | wal_bytes | peak_rss_bytes | open_fds | "
-                "recovery_from_checkpoint_seconds | recovery_full_replay_seconds | export_seconds |\n");
-    std::printf("|---:|---:|---:|---:|---:|---:|---:|---:|\n");
+    std::printf("| inputs | ledger_file_bytes | wal_bytes | checkpoint_payload_bytes | report_bytes | "
+                "peak_rss_bytes | open_fds | report_from_checkpoint_seconds | report_full_replay_seconds | export_seconds |\n");
+    std::printf("|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n");
     try {
         for (const auto inputs : {1000u, 10000u, 100000u})
             measure(inputs, interval);

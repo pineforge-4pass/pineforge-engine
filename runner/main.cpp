@@ -74,7 +74,7 @@ void help() {
                  "         --webhook-secret-env NAME --allow-insecure-http\n"
                  "         --webhook-routes FILE (strict per-action routing; optional webhooks)\n"
                  "         --from-input N --max-events N --max-attempts 8\n"
-                 "         --checkpoint-interval K (default 1024)\n"
+                 "         --checkpoint-interval K (first boundary, then doubles; default 1024)\n"
                  "         --native-config FILE (strict native run specification)\n"
                  "         --check (one HTTP snapshot) --poll-ms 1000\n"
                  "         --report-jsonl (mirror committed cumulative reports to stdout)\n"
@@ -91,7 +91,7 @@ void help() {
                  "the zero-based start of a resumed tail. HTTP polls use full snapshots.\n"
                  "Usage: pineforge-live actions --ledger L --after N [--follow] [--deployment D]\n"
                  "       pineforge-live status --ledger L [--deployment D]\n"
-                 "       pineforge-live report --ledger L [--deployment D] [--at-input N]\n"
+                 "       pineforge-live report --ledger L [--deployment D] [--at-input N] [--verify-full]\n"
                  "       pineforge-live probe --status-file PATH --max-age S [--ready]\n"
                  "       pineforge-live redeliver --ledger L --deployment D --target T [--from N] [--failed-only]\n"
                  "Add --control-dir PATH to redeliver to request resending from a running runner.\n"
@@ -689,6 +689,17 @@ Json real(double value) {
     s << std::setprecision(17) << value;
     return Json::number(s.str());
 }
+Json checkpoint_diagnostic_json(const std::optional<CheckpointDiagnostic>& diagnostic) {
+    if (!diagnostic) return Json{};
+    return Json::object({
+        {"code", Json::string(checkpoint_failure_code_name(diagnostic->code))},
+        {"cursor", num(diagnostic->cursor)}, {"message", Json::string(diagnostic->message)}});
+}
+void log_checkpoint_diagnostic(const std::optional<CheckpointDiagnostic>& diagnostic) {
+    if (diagnostic)
+        std::cerr << "pineforge-live: " << Json::object({
+            {"checkpoint_diagnostic", checkpoint_diagnostic_json(diagnostic)}}).dump() << '\n';
+}
 std::string cumulative_report(Strategy& strategy, const std::string& deployment,
                               std::uint64_t cursor, ReportDeltas& deltas) {
     pf_report_t report{};
@@ -923,17 +934,35 @@ int run(Config c) {
     ServiceFile service(c.status_file, c.status_interval * 1000);
     ledger.bind_routing(c.routing.stored_document());
     ReportDeltas report_deltas;
-    ledger.verify_report(0, cumulative_report(strategy, deployment, 0, report_deltas), [&] { return report_deltas.json(); });
+    const auto recovery_report_document = [&](std::uint64_t report_cursor) {
+        (void)report_cursor;
+        return report_deltas.json();
+    };
+    ledger.verify_report(0, cumulative_report(strategy, deployment, 0, report_deltas),
+                         [&] { return recovery_report_document(0); });
     Cursor cursor;
     cursor.bar_timestamp = warmup.back().timestamp;
     auto recorded = ledger.input_count();
+    std::optional<CheckpointDiagnostic> checkpoint_diagnostic;
+    const auto note_checkpoint_diagnostic = [&](std::optional<CheckpointDiagnostic> diagnostic) {
+        if (!diagnostic || (checkpoint_diagnostic &&
+            checkpoint_diagnostic->code == diagnostic->code &&
+            checkpoint_diagnostic->cursor == diagnostic->cursor)) return false;
+        checkpoint_diagnostic = std::move(diagnostic);
+        log_checkpoint_diagnostic(checkpoint_diagnostic);
+        return true;
+    };
+    note_checkpoint_diagnostic(ledger.checkpoint_diagnostic());
     std::optional<std::uint64_t> verified_report_checkpoint;
     try {
         verified_report_checkpoint = ledger.verified_report_checkpoint(recorded);
-    } catch (const CheckpointFailure&) {
+    } catch (const CheckpointFailure& failure) {
+        note_checkpoint_diagnostic(CheckpointDiagnostic{
+            failure.code(), failure.cursor(), failure.what()});
         verified_report_checkpoint.reset();
     }
     auto recovering = Json::object({{"deployment", Json::string(deployment)}, {"state", Json::string("recovering")},
+        {"checkpoint_diagnostic", checkpoint_diagnostic_json(checkpoint_diagnostic)},
         {"ready", Json::boolean(false)}, {"readiness", Json::object({
             {"validated_strategy_warmup", Json::boolean(true)}, {"recovered_ledger", Json::boolean(false)},
             {"verified_source_prefix", Json::boolean(false)}, {"no_unhealed_input_gap", Json::boolean(true)},
@@ -959,15 +988,16 @@ int run(Config c) {
                 throw std::runtime_error("native replay order-action mismatch");
         auto report = cumulative_report(strategy, deployment, i + 1, report_deltas);
         if (!verified_report_checkpoint || i + 1 > *verified_report_checkpoint) {
-            ledger.verify_report(i + 1, report, [&] { return report_deltas.json(); });
+            ledger.verify_report(i + 1, report, [&] { return recovery_report_document(i + 1); });
         } else if (i + 1 == *verified_report_checkpoint) {
-            ledger.verify_report(i + 1, report, [&] { return report_deltas.json(); });
-            ledger.verify_report_checkpoint(i + 1, report_deltas.json());
+            ledger.verify_report(i + 1, report, [&] { return recovery_report_document(i + 1); });
+            ledger.verify_report_checkpoint(i + 1, recovery_report_document(i + 1));
         }
         strategy.clear(strategy.state);
         recovering.members["metrics"].members["report_cursor"] = num(ledger.report_cursor());
         service.publish(recovering);
     }
+    ledger.checkpoint_recovered_report(recorded);
     if (c.from_input > recorded)
         throw std::runtime_error("from-input skips unrecorded inputs");
     std::uint64_t processed = 0, replayed_prefix = 0;
@@ -992,6 +1022,7 @@ int run(Config c) {
     std::string last_state;
     bool last_ready = false;
     const auto pulse = [&](bool force = false) {
+        const bool checkpoint_changed = note_checkpoint_diagnostic(ledger.checkpoint_diagnostic());
         if (!service.enabled() && !c.max_ledger_bytes) return;
         service.heartbeat();
         const auto clock = std::chrono::steady_clock::now();
@@ -1000,7 +1031,7 @@ int run(Config c) {
         if (!service.enabled()) return;
         const std::string state = storage_stop ? "storage_budget" : stopped ? "draining" : "running";
         const bool ready = prefix_verified && !storage_stop && !stopped;
-        const bool changed = state != last_state || ready != last_ready;
+        const bool changed = state != last_state || ready != last_ready || checkpoint_changed;
         if (!force && !changed && clock - last_pulse < std::chrono::seconds(c.status_interval)) return;
         last_pulse = clock;
         last_state = state;
@@ -1014,6 +1045,7 @@ int run(Config c) {
         }
         service.publish(Json::object({{"deployment", Json::string(deployment)},
             {"state", Json::string(state)},
+            {"checkpoint_diagnostic", checkpoint_diagnostic_json(checkpoint_diagnostic)},
             {"ready", Json::boolean(ready)},
             {"readiness", Json::object({{"validated_strategy_warmup", Json::boolean(true)},
                 {"recovered_ledger", Json::boolean(true)}, {"verified_source_prefix", Json::boolean(prefix_verified)},
@@ -1245,13 +1277,14 @@ int ledger_command(int argc, char** argv) {
     std::string path, target, deployment, control_dir;
     std::uint64_t after = 0, from = 1;
     std::optional<std::uint64_t> at_input;
-    bool follow = false, failed_only = false;
+    bool follow = false, failed_only = false, verify_full = false;
     std::set<std::string> seen;
     for (int index = 2; index < argc; ++index) {
         const std::string option = argv[index];
         if (!seen.insert(option).second) throw std::runtime_error("duplicate option: " + option);
         if (command == "actions" && option == "--follow") { follow = true; continue; }
         if (command == "redeliver" && option == "--failed-only") { failed_only = true; continue; }
+        if (command == "report" && option == "--verify-full") { verify_full = true; continue; }
         if (index + 1 == argc) throw std::runtime_error("missing option value: " + option);
         const std::string value = argv[++index];
         if (option == "--ledger") path = value;
@@ -1270,7 +1303,9 @@ int ledger_command(int argc, char** argv) {
     if (!deployment.empty() && deployment != view.identity())
         throw std::runtime_error("ledger deployment identity mismatch");
     if (command == "report") {
-        std::cout << view.report_json(at_input) << '\n';
+        const auto report = verify_full ? view.report_json_full(at_input) : view.report_json(at_input);
+        log_checkpoint_diagnostic(view.checkpoint_diagnostic());
+        std::cout << report << '\n';
         return 0;
     }
     if (command == "status") {
