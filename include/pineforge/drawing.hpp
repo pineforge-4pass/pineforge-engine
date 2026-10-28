@@ -361,37 +361,37 @@ public:
     }
 };
 
-// Keep the published LabelRec/string signatures. A backing block owns its
-// text byte objects until its last version reference disappears; delete/FIFO
-// never releases text. A future ScriptString binding replaces this codec,
-// LabelRec::text and the legacy getter together, without a second value type.
+// Keep the published LabelRec/string signatures. A label's text bytes live in
+// its block's own Store object, after the block's 32 wire records, so a label
+// costs no object of its own and the text goes with the block's last version
+// reference; delete/FIFO never releases text (a deleted label stays readable).
+// A future ScriptString binding replaces this codec, LabelRec::text and the
+// legacy getter together, without a second value type.
 struct DrawingLabelCodec {
     struct Wire {
         int64_t x = 0;
         double y = 0;
         XLoc xloc = XLoc::bar_index;
         YLoc yloc = YLoc::price;
-        o1::Id text = o1::kNullId;
         std::uint64_t text_size = 0;
         bool alive = false;
     };
-    static Wire encode(const LabelRec& rec, o1::Store& store) {
-        o1::Id text = o1::kNullId;
-        if (!rec.text.empty()) {
-            text = store.create(rec.text.size(), alignof(char));
-            if (store.write(text, 0, rec.text.data(), rec.text.size()) != rec.text.size())
-                pine_engine_invariant("short drawing label text write");
-        }
-        return {rec.x, rec.y, rec.xloc, rec.yloc, text, rec.text.size(), rec.alive};
+    static Wire encode(const LabelRec& rec) {
+        return {rec.x, rec.y, rec.xloc, rec.yloc, rec.text.size(), rec.alive};
     }
-    static LabelRec decode(const Wire& wire, o1::Store& store) {
+    static std::uint64_t bytes(const Wire& wire) { return wire.text_size; }
+    static void write_bytes(const LabelRec& rec, o1::Store& store, o1::Id block,
+                            std::uint64_t offset) {
+        if (!rec.text.empty() &&
+            store.write(block, offset, rec.text.data(), rec.text.size()) != rec.text.size())
+            pine_engine_invariant("short drawing label text write");
+    }
+    static LabelRec decode(const Wire& wire, o1::Store& store, o1::Id block,
+                           std::uint64_t offset) {
         std::string text(static_cast<std::size_t>(wire.text_size), '\0');
-        if (!text.empty() && store.read(wire.text, 0, text.data(), text.size()) != text.size())
+        if (!text.empty() && store.read(block, offset, text.data(), text.size()) != text.size())
             pine_engine_invariant("short drawing label text read");
         return {wire.x, wire.y, wire.xloc, wire.yloc, std::move(text), wire.alive};
-    }
-    static void release(const Wire& wire, o1::Store& store) {
-        if (wire.text != o1::kNullId) store.release(wire.text);
     }
 };
 
@@ -433,13 +433,26 @@ public:
     explicit DrawingArena(int cap = 50)
         : order_(static_cast<std::size_t>(std::max(1, cap))), cap_(std::max(1, cap)) {}
     DrawingArena(const DrawingArena&) = default;
+    // A Store error in either assignment propagates, never leaving records
+    // and roster from different values. The records' assignment is all or
+    // nothing. An inline roster's cannot fail once its slots are reserved; a
+    // roster above one page of ids has a Store root, so its copy (the retain)
+    // is made before the records change and published by a swap, and the
+    // replaced roster is released last, with the new value already in place.
     DrawingArena& operator=(const DrawingArena& other) {
         if (this != &other) {
-            order_.prepare_assignment(other.order_);
-            auto next_records = other.recs_;
-            order_ = other.order_;
-            recs_ = std::move(next_records);
-            cap_ = other.cap_;
+            if (order_.is_external() || other.order_.is_external()) {
+                detail::DrawingOrder roster(other.order_);
+                recs_ = other.recs_;
+                order_.swap(roster);
+                cap_ = other.cap_;
+                roster.release_external();
+            } else {
+                order_.prepare_assignment(other.order_);
+                recs_ = other.recs_;
+                order_ = other.order_;
+                cap_ = other.cap_;
+            }
         }
         return *this;
     }
@@ -456,26 +469,45 @@ public:
     }
     DrawingArena& operator=(DrawingArena&& other) {
         if (this != &other) {
-            order_.prepare_assignment(other.order_);
-            order_ = other.order_;
-            recs_ = std::move(other.recs_);
-            other.order_.clear();
-            cap_ = other.cap_;
+            if (order_.is_external() || other.order_.is_external()) {
+                detail::DrawingOrder roster(other.order_);
+                recs_ = std::move(other.recs_);
+                order_.swap(roster);
+                other.order_.clear();
+                cap_ = other.cap_;
+                roster.release_external();
+            } else {
+                order_.prepare_assignment(other.order_);
+                recs_ = std::move(other.recs_);
+                order_ = other.order_;
+                other.order_.clear();
+                cap_ = other.cap_;
+            }
         }
         return *this;
     }
 
+    // Exact-cap FIFO eviction (oldest first). A refusal leaves the arena as
+    // before the call: the oldest record is tombstoned before the new one is
+    // appended (the tombstone may copy a shared block or load its block and
+    // throw, leaving it live and in order_), and if the append throws (a block
+    // copy, or a working-block load that flushes a block into the Store) the
+    // tombstone is undone through the block it made writable, which a failed
+    // append leaves in place, before the oldest id ever leaves order_.
     int32_t alloc(Rec r) {
         auto push = order_.prepare_push();
-        while ((int)order_.size() >= cap_) {        // exact-cap FIFO eviction (oldest first)
-            // Tombstone before leaving order_: the write may copy a shared block
-            // and throw, which must leave the record live and in order_.
-            recs_.write(static_cast<std::uint32_t>(order_.front())).alive = false;
-            order_.pop_front();
-        }
+        const bool evict = (int)order_.size() >= cap_;
+        const auto oldest = evict ? static_cast<std::uint32_t>(order_.front()) : 0u;
+        if (evict) recs_.write(oldest).alive = false;
         int32_t id = static_cast<int32_t>(recs_.size());
         r.alive = true;
-        recs_.push_back(std::move(r));
+        try {
+            recs_.push_back(std::move(r));
+        } catch (...) {
+            if (evict) recs_.write(oldest).alive = true;
+            throw;
+        }
+        if (evict) order_.pop_front();
         push.commit(id);
         return id;
     }

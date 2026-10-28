@@ -19,6 +19,18 @@
 // Every expected count comes from the explicit begins, the record tree's
 // shape and the records made here, never from a run.
 //
+// Footprint rows. A capacity-600 history ring pushed 1,000,000 times keeps a
+// Store footprint (objects, logical bytes, backing extent) bounded by its
+// capacity; label text takes no Store object of its own, over 1,064,960
+// labels created and evicted or deleted at a cap of 50, and the typed
+// refusal still comes when the record tree itself passes the limit.
+//
+// Atomicity rows. A refused allocation that must evict at the cap leaves the
+// oldest drawing live and in *.all. A release that the Store refuses (a
+// rollback-only caller transaction) propagates from an assignment, leaving
+// the value as it was, and a destructor records it instead of stopping the
+// process.
+//
 // FAIL-BEFORE. The merge base's o1_store.hpp (3ea5a0d6) declares neither
 // TxPoolExhausted, Store::scope(), Shape::max_live_objects nor the four hooks
 // history_drawing_store_fixture.hpp overrides, so this unit does not compile
@@ -35,6 +47,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <deque>
 #include <exception>
 #include <memory>
 #include <optional>
@@ -281,7 +294,8 @@ std::string object_limit_text(std::uint64_t limit) {
 // Store's typed cohort refusal and leave the Store's live objects and bytes
 // as they were before the call.
 template<class Call>
-void refused_at_limit(const Store& real, const char* admitted_message, Call&& call) {
+void refused_at_limit(const Store& real, const char* admitted_message, Call&& call,
+                      std::uint64_t limit = kLimit) {
     const auto before = real.stats();
     bool refused = false;
     try {
@@ -291,7 +305,7 @@ void refused_at_limit(const Store& real, const char* admitted_message, Call&& ca
         const auto failure = pineforge::classify_run_failure(error);
         require(failure.code == pineforge::RunFailureCode::scratch_capacity_exceeded &&
                 failure.args != nullptr && *failure.args == "{\"resource\":\"cohort\"}" &&
-                std::string(error.what()) == object_limit_text(kLimit),
+                std::string(error.what()) == object_limit_text(limit),
                 "DRAWING_STORE_LIMIT_RED: CAP+1 refusal lost its cohort argument or text");
     } catch (const std::exception&) {
         require(false, "DRAWING_STORE_LIMIT_RED: CAP+1 refusal is not the Store's typed "
@@ -456,6 +470,395 @@ void live_object_cap() {
                 "refused lone, joined and partway through a path\n",
                 static_cast<unsigned long long>(kLimit));
 }
+
+// ---- footprint rows ---------------------------------------------------------
+constexpr std::uint64_t kSlotsPerBlock = 32;
+constexpr std::uint64_t kPageBytes = 4096;
+
+// The record store's backing extent in pages, from its design
+// (detail/scratch_store_impl.hpp), for at most `records` Store objects live at
+// once, each one record: a 16-byte key and a value of `value_bytes` (the
+// object's 16-byte header and its data, one chunk, at most half a page). A
+// 4096-byte page keeps 4080 usable bytes. A key or value up to half a page is
+// a chain of 64-byte cells carrying 56 bytes each, 63 cells to a page, and
+// cell_alloc and alloc_page take their free lists first, so space an erase or
+// a replacement frees is reused at once: the cell pages never exceed the peak
+// of live cells, plus one record's (an upsert writes before it frees). The
+// ordered index of at most 506 handles is one leaf. The handle table (127
+// entries a leaf, 508 children a node, three levels below 32,774,128 handles)
+// keeps at most one leaf and one node per live record, a root, and at most two
+// roots left behind as it grew. A transaction journals a page it changes once,
+// into pages reused across transactions, so the journal never needs more
+// pages than the data. Two superblocks.
+constexpr std::uint64_t backing_pages_for(std::uint64_t records, std::uint64_t value_bytes) {
+    const std::uint64_t cell_payload = 56;
+    const std::uint64_t cells_per_page = 63;
+    const std::uint64_t cells_per_record = 1 + (value_bytes + cell_payload - 1) / cell_payload;
+    const std::uint64_t cell_pages =
+        ((records + 1) * cells_per_record + cells_per_page - 1) / cells_per_page;
+    const std::uint64_t index_pages = 1;
+    const std::uint64_t handle_pages = 1 + 2 * (records + 1) + 2;
+    const std::uint64_t data_pages = cell_pages + index_pages + handle_pages;
+    return 2 + 2 * data_pages;
+}
+
+// A capacity-600 ring of doubles (detail/history_ring.hpp) addresses its slots
+// modulo 1024, the smallest power of two not below 600: 32 blocks of 32 slots.
+// Every address is below 32 * 32, so each of the twelve node levels holds one
+// node. A block or a node is two 8-byte header words and 32 eight-byte values
+// or child ids.
+constexpr std::uint64_t kRingSlots = 1024;
+constexpr std::uint64_t kRingLevels = 12;
+constexpr std::uint64_t kRingObjects = kRingSlots / kSlotsPerBlock + kRingLevels;
+constexpr std::uint64_t kRingObjectBytes =
+    2 * sizeof(std::uint64_t) + kSlotsPerBlock * sizeof(double);
+static_assert(sizeof(double) == sizeof(pineforge::detail::o1::Id),
+              "a node's child ids are as wide as the ring's values");
+// At most two versions of the tree are live at once (the ring and its
+// calc-on-fill copy), and one root-to-block path is being copied.
+constexpr std::uint64_t kRingPeakObjects = 2 * kRingObjects + kRingLevels + 1;
+constexpr std::uint64_t kRingBackingPages =
+    backing_pages_for(kRingPeakObjects, 16 + kRingObjectBytes);
+static_assert(kRingObjects == 44 && kRingObjectBytes == 272 && kRingBackingPages == 442,
+              "the ring bound is the arithmetic above");
+
+double ring_value(std::size_t n) { return 0.25 * static_cast<double>(n) - 7.0; }
+
+// A capacity-600 history ring pushed 1,000,000 times, with a calc-on-fill
+// cycle (a copy, a speculative update and pushes, the restore) every 997
+// pushes. Every 100,000 pushes, with no copy alive, its Store holds at most
+// kRingObjects objects of kRingObjectBytes each and a backing extent of
+// kRingBackingPages pages, whatever the number of pushes. A ring that takes a
+// new slot per push and never releases one holds 3,125 blocks and 98 + 4 + 1
+// + 9 nodes, 3,237 objects, at the first check.
+void history_ring_footprint() {
+    StoreFixture fixture;
+    const Store& real = *fixture.real;
+    constexpr std::size_t kPushes = 1000000;
+    constexpr std::size_t kCycle = 997;
+    constexpr std::size_t kCheck = 100000;
+    std::uint64_t most_objects = 0, most_bytes = 0, most_backing = 0;
+    {
+        History history(kHistory, fixture.storage);
+        for (std::size_t n = 0; n < kPushes; ++n) {
+            history.push_front(ring_value(n));
+            if ((n + 1) % kCycle == 0) {
+                const History saved = history;
+                history.update_front(-1.0);
+                for (int i = 2; i <= 4; ++i) history.push_front(-static_cast<double>(i));
+                history = saved;
+                const std::size_t size = std::min(n + 1, kHistory);
+                require(history.size() == size && history[0] == ring_value(n) &&
+                        history[size - 1] == ring_value(n + 1 - size),
+                        "HISTORY_RING_FOOTPRINT_RED: a restore changed the window");
+            }
+            if ((n + 1) % kCheck != 0) continue;
+            const auto stats = history.storage_stats();
+            most_objects = std::max(most_objects, stats.objects_live);
+            most_bytes = std::max(most_bytes, stats.bytes_live);
+            most_backing = std::max(most_backing, stats.bytes_backing);
+            require(stats.objects_live <= kRingObjects,
+                    "HISTORY_RING_FOOTPRINT_RED: the ring's Store objects grew with its pushes");
+            require(stats.bytes_live <= kRingObjects * kRingObjectBytes,
+                    "HISTORY_RING_FOOTPRINT_RED: the ring's live Store bytes grew with its pushes");
+            require(stats.bytes_backing <= kRingBackingPages * kPageBytes,
+                    "HISTORY_RING_FOOTPRINT_RED: the ring's backing grew with its pushes");
+        }
+        require(history.size() == kHistory && history.capacity() == kHistory,
+                "HISTORY_RING_FOOTPRINT_RED: the window's shape changed");
+        for (std::size_t offset = 0; offset < kHistory; ++offset)
+            require(history[offset] == ring_value(kPushes - 1 - offset),
+                    "HISTORY_RING_FOOTPRINT_RED: a late read of the window changed");
+        require(pineforge::is_na(history[kHistory]),
+                "HISTORY_RING_FOOTPRINT_RED: a read past the window returned a value");
+    }
+    require(real.stats().objects_live == 0 && real.stats().bytes_live == 0,
+            "HISTORY_RING_FOOTPRINT_RED: the ring row retained Store objects");
+    std::printf("history and drawing store limits: ring capacity=%zu pushes=%zu objects<=%llu "
+                "(bound %llu) live<=%llu (bound %llu) backing<=%llu (bound %llu)\n",
+                kHistory, kPushes, static_cast<unsigned long long>(most_objects),
+                static_cast<unsigned long long>(kRingObjects),
+                static_cast<unsigned long long>(most_bytes),
+                static_cast<unsigned long long>(kRingObjects * kRingObjectBytes),
+                static_cast<unsigned long long>(most_backing),
+                static_cast<unsigned long long>(kRingBackingPages * kPageBytes));
+}
+
+// The six-level record tree over `records` records, every block flushed: one
+// block per 32 records, then on each node level one node per 32 below it.
+constexpr std::uint64_t tree_objects(std::uint64_t records) {
+    std::uint64_t below = (records + kSlotsPerBlock - 1) / kSlotsPerBlock;
+    std::uint64_t total = below;
+    for (std::uint64_t level = 0; level < kLevels; ++level) {
+        below = (below + kSlotsPerBlock - 1) / kSlotsPerBlock;
+        total += below;
+    }
+    return total;
+}
+static_assert(tree_objects(1064960) == 33280 + 1040 + 33 + 2 + 1 + 1 + 1,
+              "the record tree over 1,040 x 1,024 labels");
+// A label block's object is two header words, its 32 wire records, then the
+// texts of its labels; a node is two header words and 32 child ids.
+constexpr std::uint64_t kLabelBlockBytes =
+    2 * sizeof(std::uint64_t) + kSlotsPerBlock * sizeof(pineforge::detail::DrawingLabelCodec::Wire);
+constexpr std::uint64_t kNodeBytes =
+    2 * sizeof(std::uint64_t) + kSlotsPerBlock * sizeof(pineforge::detail::o1::Id);
+
+std::string footprint_text(std::size_t i) {
+    std::string text(8 + i % 17, '\0');
+    for (std::size_t k = 0; k < text.size(); ++k)
+        text[k] = static_cast<char>('A' + (i * 7 + k * 3) % 26);
+    return text;
+}
+
+// 1,064,960 labels with text, created at a cap of 50 (each past the cap evicts
+// the oldest) and every seventh deleted at once, so at most 50 are live. A
+// deleted or evicted label stays readable, so each keeps its record and its
+// text bytes; the text costs no Store object, so the Store holds the record
+// tree's objects and no more: one per 32 labels and the nodes above them.
+// Labels whose text is an object of its own add one object per label: past
+// 1,016,000 labels they need more than the 1,048,576 live objects a Store
+// admits, and at the first check (262,144 labels) they hold 270,604 objects
+// against a bound of 8,460.
+void label_text_footprint() {
+    StoreFixture fixture;
+    const Store& real = *fixture.real;
+    constexpr std::size_t kLabelCap = 50;
+    constexpr std::size_t kLabels = 1064960;
+    constexpr std::size_t kCheck = 262144;
+    std::uint64_t text_bytes = 0, most_objects = 0;
+    {
+        DrawingArena<LabelRec> labels(static_cast<int>(kLabelCap), fixture.storage);
+        std::deque<std::int32_t> order;
+        for (std::size_t i = 0; i < kLabels; ++i) {
+            const auto id = static_cast<std::int32_t>(i);
+            const auto label = pineforge::pf_label_new(labels, id, 0.5 * id, footprint_text(i),
+                                                       XLoc::bar_time, YLoc::abovebar);
+            text_bytes += 8 + i % 17;
+            require(label.id == id, "LABEL_TEXT_FOOTPRINT_RED: a label id was not the next one");
+            if (order.size() == kLabelCap) order.pop_front();
+            order.push_back(id);
+            if (i % 7 == 3) {
+                pineforge::pf_label_delete(labels, label);
+                order.pop_back();
+            }
+            if ((i + 1) % kCheck != 0 && i + 1 != kLabels) continue;
+            const auto stats = labels.storage_stats();
+            const std::uint64_t made = i + 1;
+            const std::uint64_t objects = tree_objects(made);
+            const std::uint64_t blocks = (made + kSlotsPerBlock - 1) / kSlotsPerBlock;
+            most_objects = std::max(most_objects, stats.objects_live);
+            require(stats.objects_live <= objects,
+                    "LABEL_TEXT_FOOTPRINT_RED: label text took Store objects of its own");
+            require(stats.bytes_live <=
+                        blocks * kLabelBlockBytes + text_bytes + (objects - blocks) * kNodeBytes,
+                    "LABEL_TEXT_FOOTPRINT_RED: the labels' Store bytes exceed their records and texts");
+        }
+        require(labels.size() == static_cast<std::int32_t>(kLabels) && labels.order() == order,
+                "LABEL_TEXT_FOOTPRINT_RED: the label ids or the *.all order changed");
+        // Live, deleted and evicted labels read back whole: the first and
+        // last 64 and every 4,099th between.
+        const auto check_label = [&](std::size_t i) {
+            const auto id = static_cast<std::int32_t>(i);
+            const bool alive = std::find(order.begin(), order.end(), id) != order.end();
+            const LabelRec rec = std::as_const(labels).at(id);
+            require(rec.x == id && rec.y == 0.5 * id && rec.xloc == XLoc::bar_time &&
+                        rec.yloc == YLoc::abovebar && rec.text == footprint_text(i) &&
+                        rec.alive == alive && labels.alive(id) == alive,
+                    "LABEL_TEXT_FOOTPRINT_RED: a label read back changed");
+        };
+        for (std::size_t i = 0; i < 64; ++i) check_label(i);
+        for (std::size_t i = 64; i + 64 < kLabels; i += 4099) check_label(i);
+        for (std::size_t i = kLabels - 64; i < kLabels; ++i) check_label(i);
+    }
+    require(real.stats().objects_live == 0 && real.stats().bytes_live == 0,
+            "LABEL_TEXT_FOOTPRINT_RED: the label row retained Store objects");
+    std::printf("history and drawing store limits: labels=%zu cap=%zu objects<=%llu (tree %llu) "
+                "text_bytes=%llu\n",
+                kLabels, kLabelCap, static_cast<unsigned long long>(most_objects),
+                static_cast<unsigned long long>(tree_objects(kLabels)),
+                static_cast<unsigned long long>(text_bytes));
+}
+
+// The live-object refusal still comes, at the record tree's own shape. With
+// the texts inside their block, labels reach the Store only as blocks: the
+// two working blocks none, the first flushed block its whole path, each later
+// block under the same level-1 node one object. At the limit kLimit that
+// admits 1 + (kLimit - kPath) flushed blocks and two working ones; the next
+// block's flush is the CAP+1 object. Labels whose texts are objects of their
+// own need 32 more at the first flush and are refused there.
+void label_text_limit() {
+    Shape shape;
+    shape.resident_pages = 8;
+    shape.journal_slots = 4;
+    shape.index_slots = 4;
+    shape.max_live_objects = kLimit;
+    StoreFixture fixture(shape);
+    HandleCounts& handles = fixture.handles;
+    const Store& real = *fixture.real;
+    // Room for every label: an inline roster of 400 ids, so nothing is evicted.
+    constexpr int kRoster = 400;
+    constexpr std::uint64_t kFlushed = 1 + (kLimit - kPath);
+    constexpr int kAdmitted = static_cast<int>((kFlushed + 2) * kSlotsPerBlock);
+    static_assert(kAdmitted == 320 && kAdmitted < kRoster, "ten blocks of labels, none evicted");
+    std::vector<LabelRec> model;
+    {
+        DrawingArena<LabelRec> labels(kRoster, fixture.storage);
+        for (int i = 0; i < kAdmitted; ++i) {
+            std::int32_t got = -1;
+            try {
+                got = labels.alloc(label_at(i));
+            } catch (const ScratchCapacityError&) {
+                require(false, "LABEL_TEXT_LIMIT_RED: CAP: a label the limit admits was refused");
+            }
+            require(got == i, "LABEL_TEXT_LIMIT_RED: an admitted label did not get the next id");
+            model.push_back(label_at(i));
+        }
+        require(real.stats().objects_live == kLimit,
+                "LABEL_TEXT_LIMIT_RED: CAP: the labels did not reach the limit at the record "
+                "tree's shape");
+        // The refused object is the new block itself, the flush's first create.
+        const auto refused_id = kAdmitted;
+        const auto last_admitted = handles.last_id;
+        refused_at_limit(real, "LABEL_TEXT_LIMIT_RED: CAP+1: a label block past the limit was "
+                               "admitted",
+                         [&] { (void)labels.alloc(label_at(refused_id)); });
+        require(labels.size() == kAdmitted && labels.order().size() == model.size() &&
+                handles.last_id == last_admitted,
+                "LABEL_TEXT_LIMIT_RED: the refused label consumed an id or changed the order");
+        // The two working blocks, read without a Store operation.
+        for (int i = kAdmitted - 2 * kBlock; i < kAdmitted; ++i)
+            require(labels.alive(i) &&
+                        same(std::as_const(labels).at(i), model[static_cast<std::size_t>(i)]),
+                    "LABEL_TEXT_LIMIT_RED: the refusal changed a label");
+    }
+    require(real.stats().objects_live == 0 && real.stats().bytes_live == 0,
+            "LABEL_TEXT_LIMIT_RED: the label limit row retained Store objects");
+    std::printf("history and drawing store limits: label limit=%llu admitted=%d labels in %llu "
+                "objects; the next block refused\n",
+                static_cast<unsigned long long>(kLimit), kAdmitted,
+                static_cast<unsigned long long>(kLimit));
+}
+
+// ---- atomicity rows ---------------------------------------------------------
+// At the cap an allocation evicts the oldest drawing. Here its new record's
+// block must first flush a working block, the first path, past a limit below
+// one path: the refusal must leave the oldest drawing live and in *.all, and
+// every record as it was. Evicting before the append leaves it dead and gone
+// from the order.
+void eviction_refused_at_limit() {
+    constexpr std::uint64_t kEvictLimit = kPath - 1;
+    Shape shape;
+    shape.resident_pages = 8;
+    shape.journal_slots = 4;
+    shape.index_slots = 4;
+    shape.max_live_objects = kEvictLimit;
+    StoreFixture fixture(shape);
+    const Store& real = *fixture.real;
+    constexpr int kEvictCap = 3;
+    {
+        DrawingArena<LineRec> lines(kEvictCap, fixture.storage);
+        // Ids 0 .. 63 fill the two working blocks; no block reaches the Store.
+        for (int i = 0; i < 2 * kBlock; ++i)
+            require(lines.alloc(line_at(i)) == i,
+                    "DRAWING_EVICTION_REFUSAL_RED: a line id was not the next one");
+        require(real.stats().objects_live == 0,
+                "DRAWING_EVICTION_REFUSAL_RED: a working block reached the Store");
+        const std::vector<std::int32_t> live{2 * kBlock - 3, 2 * kBlock - 2, 2 * kBlock - 1};
+        require(lines.order() == live, "DRAWING_EVICTION_REFUSAL_RED: the FIFO order is not the newest three");
+        // Id 64 evicts id 61; its block, the third, needs a working block
+        // flushed into the Store first.
+        refused_at_limit(real, "DRAWING_EVICTION_REFUSAL_RED: an eviction past the limit was admitted",
+                         [&] { (void)lines.alloc(line_at(2 * kBlock)); }, kEvictLimit);
+        require(lines.size() == 2 * kBlock && lines.order() == live,
+                "DRAWING_EVICTION_REFUSAL_RED: the refused allocation evicted the oldest drawing");
+        for (int i = 0; i < 2 * kBlock; ++i) {
+            const bool alive = i >= 2 * kBlock - kEvictCap;
+            LineRec want = line_at(i);
+            want.alive = alive;
+            require(lines.alive(i) == alive && same(std::as_const(lines).at(i), want),
+                    "DRAWING_EVICTION_REFUSAL_RED: the refused allocation changed a line record");
+        }
+    }
+    require(real.stats().objects_live == 0 && real.stats().bytes_live == 0,
+            "DRAWING_EVICTION_REFUSAL_RED: the eviction row retained Store objects");
+    std::printf("history and drawing store limits: eviction at cap %d refused at limit %llu; "
+                "the oldest drawing stayed live\n",
+                kEvictCap, static_cast<unsigned long long>(kEvictLimit));
+}
+
+// A rollback-only caller transaction refuses every Store mutation. An
+// assignment whose replaced tree must be released then raises RollbackOnly
+// and leaves both values as they were; a value destroyed meanwhile records
+// one skipped cleanup. Releasing outside a scope, under a catch that
+// terminates, stops the process at the first of these.
+void release_refusal_propagates() {
+    StoreFixture fixture;
+    const Store& real = *fixture.real;
+    History history(kHistory, fixture.storage), moved(kHistory, fixture.storage);
+    std::optional<History> doomed(std::in_place, kHistory, fixture.storage);
+    DrawingArena<LineRec> lines(kCap, fixture.storage);
+    const DrawingArena<LineRec> empty(kCap, fixture.storage);
+    std::vector<LineRec> line_model;
+    for (int i = 0; i < 100; ++i) {
+        history.push_front(value_at(i));
+        moved.push_front(value_at(1000 + i));
+        doomed->push_front(value_at(2000 + i));
+    }
+    for (int i = 0; i < 70; ++i) {
+        require(lines.alloc(line_at(i)) == i, "RELEASE_REFUSAL_RED: a line id was not the next one");
+        line_model.push_back(line_at(i));
+    }
+    // Every value reaches the Store: four roots.
+    (void)history.storage_stats();
+    (void)moved.storage_stats();
+    (void)doomed->storage_stats();
+    (void)lines.storage_stats();
+    const auto skipped = real.stats().cleanup_skipped_rollback_only;
+    const auto check_history_values = [&](const History& ring, int base, const char* message) {
+        require(ring.size() == 100, message);
+        for (std::size_t offset = 0; offset < 100; ++offset)
+            require(ring[offset] == value_at(base + 99 - static_cast<int>(offset)), message);
+    };
+    {
+        auto outer = fixture.storage->store->begin();
+        {
+            auto abandoned = fixture.storage->store->scope();
+        } // destroyed unfinished: the caller transaction is rollback-only
+        bool refused = false;
+        try {
+            history = std::move(moved);
+        } catch (const RollbackOnly&) {
+            refused = true;
+        }
+        require(refused, "RELEASE_REFUSAL_RED: a history move-assign in a rollback-only "
+                         "transaction did not raise RollbackOnly");
+        check_history_values(history, 0, "RELEASE_REFUSAL_RED: the refused move changed the receiver");
+        check_history_values(moved, 1000, "RELEASE_REFUSAL_RED: the refused move changed its source");
+        refused = false;
+        try {
+            lines = empty;
+        } catch (const RollbackOnly&) {
+            refused = true;
+        }
+        require(refused, "RELEASE_REFUSAL_RED: restoring an empty arena in a rollback-only "
+                         "transaction did not raise RollbackOnly");
+        check_arena(lines, line_model, "RELEASE_REFUSAL_RED: the refused restore changed the arena");
+        doomed.reset();
+        require(real.stats().cleanup_skipped_rollback_only == skipped + 1,
+                "RELEASE_REFUSAL_RED: a value destroyed in a rollback-only transaction did not "
+                "record one skipped cleanup");
+        outer->rollback();
+    }
+    // With the caller transaction gone the same assignments complete.
+    history = std::move(moved);
+    check_history_values(history, 1000, "RELEASE_REFUSAL_RED: the move after the rollback was lost");
+    lines = empty;
+    require(lines.size() == 0 && lines.order().empty(),
+            "RELEASE_REFUSAL_RED: the restore after the rollback was lost");
+    std::printf("history and drawing store limits: releases refused by a rollback-only "
+                "transaction raised RollbackOnly; one skipped cleanup recorded\n");
+}
 } // namespace
 
 int main() {
@@ -474,7 +877,13 @@ int main() {
     };
     row("live_object_limit", live_object_cap);
     row("fifth_nested_begin", fifth_nested_begin_refused);
+    row("history_ring_footprint", history_ring_footprint);
+    row("label_text_footprint", label_text_footprint);
+    row("label_text_limit", label_text_limit);
+    row("eviction_refused_at_limit", eviction_refused_at_limit);
+    row("release_refusal_propagates", release_refusal_propagates);
     if (failures == 0)
-        std::puts("history and drawing store limits: live-object limit and handle pool rows passed");
+        std::puts("history and drawing store limits: limit, handle pool, footprint and "
+                  "atomicity rows passed");
     return failures == 0 ? 0 : 1;
 }

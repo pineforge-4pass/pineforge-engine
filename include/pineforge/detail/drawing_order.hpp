@@ -72,6 +72,9 @@ public:
         else slots_.resize(cap);
     }
     DrawingOrder(const DrawingOrder&) = default;
+    // All or nothing: the reservation and the external slots' assignment
+    // (itself all or nothing) run first; the slot copy then fits the
+    // reservation, and nothing after it can throw.
     DrawingOrder& operator=(const DrawingOrder& rhs) {
         if (this != &rhs) {
             prepare_assignment(rhs);
@@ -84,6 +87,10 @@ public:
         return *this;
     }
     void prepare_assignment(const DrawingOrder& rhs) { slots_.reserve(rhs.slots_.size()); }
+    // Releases the external slots of a roster that was replaced and is about
+    // to be destroyed, so a Store error propagates rather than being recorded
+    // by its destructor.
+    void release_external() { external_.reset(); }
     bool is_external() const noexcept { return capacity_ > inline_slots; }
     void swap(DrawingOrder& rhs) noexcept {
         using std::swap;
