@@ -1554,8 +1554,8 @@ all use the full profile plan after authorization. `build-gate` directly
 needs every other job and requires every result to equal `success`.
 Failed, cancelled, skipped or missing work fails the gate. It is the sole
 job-level `always()` aggregate and has no displayed-name override or env.
-The required aggregate context is `build-gate` (formerly `build`); the
-ruleset changes with that rename. Its four per-leg status-override checks
+The org canon names the post-merge aggregate `build-gate` (formerly `build`);
+the merge ruleset is unchanged: it requires only `pineforge/verify` and `pineforge/parity`. Its four per-leg status-override checks
 retain their displayed names and are not required ruleset contexts.
 The maintainers still post `pineforge/verify` and `pineforge/parity` for
 the reviewed PR tree; baseline promotion continues to use those statuses.
