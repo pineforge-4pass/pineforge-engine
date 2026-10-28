@@ -682,7 +682,7 @@ public:
         old_.clear();
         size_ = 0;
         high_water_ = 0;
-        erased_rows_ = 0;
+        erased_rows_ = 0; visited_slots_ = 0;
         erased_digest_ = kFoldBasis;
         erased_minima_.clear();
         erased_foreign_ids_.clear();
@@ -690,7 +690,7 @@ public:
         detail::placement_audit_forget(this);
 #endif
     }
-
+    std::uint64_t visited_slots() const noexcept { return visited_slots_; } // Observer only; never folded.
     iterator begin() noexcept {
         const auto first = next_after(0);
         return iterator(this, first.first, first.second);
@@ -712,11 +712,11 @@ public:
     // For a whole-table read: no row is inserted or erased while it runs.
     template<class Visit>
     [[gnu::always_inline]] void visit_rows(Visit&& visit) const {
-        for (const auto& entry : old_) {
+        for (const auto& entry : old_) { ++visited_slots_;
             if (visit(entry.first, static_cast<const PlacementSnapshot&>(*entry.second))) return;
         }
         for (std::size_t index = head_; index < window_.size(); ++index) {
-            const auto& slot = window_[index];
+            const auto& slot = window_[index]; ++visited_slots_;
             if (slot
                 && visit(base_ + static_cast<std::uint64_t>(index - head_),
                          static_cast<const PlacementSnapshot&>(*slot))) {
@@ -916,11 +916,11 @@ private:
         if (after < base_) {
             const auto found = std::upper_bound(old_.begin(), old_.end(), after,
                 [](std::uint64_t key, const auto& entry) { return key < entry.first; });
-            if (found != old_.end()) return {found->first, found->second.get()};
+            if (found != old_.end()) { ++visited_slots_; return {found->first, found->second.get()}; }
         }
         std::size_t index = after < base_ ? head_
             : head_ + static_cast<std::size_t>(after - base_) + 1U;
-        for (; index < window_.size(); ++index) {
+        for (; index < window_.size(); ++index) { ++visited_slots_;
             if (window_[index])
                 return {base_ + static_cast<std::uint64_t>(index - head_), window_[index].get()};
         }
@@ -940,7 +940,7 @@ private:
     std::vector<std::pair<std::uint64_t, std::unique_ptr<PlacementSnapshot>>> old_;
     std::size_t size_ = 0;
     std::uint64_t high_water_ = 0;
-    std::uint64_t erased_rows_ = 0;
+    std::uint64_t erased_rows_ = 0; mutable std::uint64_t visited_slots_ = 0;
     std::uint64_t erased_digest_ = kFoldBasis;
     // Only erased history needs storage. Retained rows are the q query view.
     Minima erased_minima_;
@@ -3213,6 +3213,51 @@ private:
     void fold_admission_events() const;
     std::uint64_t checked_live_key(const SourceId&) const;
     detail::LiveSourceHandle live_source_value(native_order::RequestHandle, const SourceId&) const;
+
+public:
+    // Cumulative physical work, reset at run begin. No decision or state fold
+    // reads these integers. Population snapshots are explicit diagnostics.
+    struct RetirementWork {
+        std::uint64_t placement_sweeps = 0, prefix_sweeps = 0;
+        std::uint64_t row_visits = 0, pin_rows = 0, gate_rows = 0;
+        std::uint64_t candidate_rows = 0, final_rows = 0;
+        std::uint64_t pin_comparisons = 0, peer_visits = 0, held_comparisons = 0;
+        std::uint64_t k3_pairs = 0, root_visits = 0, family_visits = 0;
+        std::uint64_t cohort_rows = 0, certificate_rows = 0, fronts_tested = 0;
+        std::uint64_t missing_fronts = 0, missing_fronts_pinned = 0;
+        std::uint64_t rows_erased = 0, origins_retired = 0;
+        // Slots include empty dense-window slots, as well as returned old rows.
+        // Backing counts are restored/spilled cohort records, not page I/O.
+        std::uint64_t placement_slots = 0, backing_rows_restored = 0;
+        std::uint64_t backing_rows_spilled = 0, spill_rows_visited = 0;
+    };
+    struct RetirementPopulation {
+        std::uint64_t m = 0, R = 0, C = 0;
+        std::uint64_t live = 0, pending = 0, owners = 0, opened = 0, retired_exit_rows = 0;
+    };
+    const RetirementWork& retirement_work() const noexcept { return retirement_work_; }
+    // Explicit observation only: visits placements to classify nonlive exits.
+    RetirementPopulation retirement_population() const;
+
+private:
+    RetirementWork retirement_work_{};
+    struct RetirementObservation {
+        PineExecutionAdapter& adapter;
+        std::uint64_t slots, restored, spilled, spill_visits;
+        explicit RetirementObservation(PineExecutionAdapter& owner) noexcept
+            : adapter(owner), slots(owner.placement_.visited_slots()),
+              restored(owner.cohorts_by_id_.work_counters().rows_restored),
+              spilled(owner.cohorts_by_id_.work_counters().rows_spilled),
+              spill_visits(owner.cohorts_by_id_.work_counters().rows_visited_by_spill) {}
+        ~RetirementObservation() {
+            auto& work = adapter.retirement_work_;
+            const auto& backing = adapter.cohorts_by_id_.work_counters();
+            work.placement_slots += adapter.placement_.visited_slots() - slots;
+            work.backing_rows_restored += backing.rows_restored - restored;
+            work.backing_rows_spilled += backing.rows_spilled - spilled;
+            work.spill_rows_visited += backing.rows_visited_by_spill - spill_visits;
+        }
+    };
 };
 
 namespace detail {

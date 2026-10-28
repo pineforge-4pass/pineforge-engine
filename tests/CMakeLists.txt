@@ -1481,7 +1481,7 @@ list(APPEND TEST_SOURCES test_native_fused_settlement_allocations)
 # order, working request, position, trade, equity point and admission field --
 # as on the lane's base and as with the erasure switched off (equivalence).
 # Source-bound.
-list(APPEND TEST_SOURCES test_adapter_live_state_scaling)
+list(APPEND TEST_SOURCES test_adapter_live_state_scaling test_retirement_work_scaling)
 list(APPEND TEST_SOURCES test_adapter_live_state_equivalence)
 # R5 lane V19-D: a bracket family's roster parks the erased members behind a
 # retained one (the v4 fold reads what is retained): randomized append /
