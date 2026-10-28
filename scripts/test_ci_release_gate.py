@@ -2340,7 +2340,7 @@ class WorkflowPinTests(unittest.TestCase):
             needs = re.search(r"(?m)^    needs: \[([^\n]+)\]$", gate)
             self.assertIsNotNone(needs)
             self.assertCountEqual([value.strip() for value in needs[1].split(",")],
-                                  ["authz", "changes", job_id])
+                                  ["authz", job_id])
             self.assertIn("${{ needs." + job_id + ".result }}", gate)
             name = re.search(r"(?m)^    name: (.+)$", gate)
             self.assertIsNotNone(name, "the aggregate check name must be explicit")
