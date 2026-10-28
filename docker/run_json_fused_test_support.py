@@ -111,6 +111,14 @@ def reference_sink(runner, sink):
     result._identity = None
     result.summary = result.summary_failure = result.diagnostics = None
     result.keep, result.closed = True, False
+    if runner is run_json:
+        result._fused_pass = True
+        result._spool_resources = ExitStack()
+        result._equity_spool = result._trades_spool = None
+        result._spool_failure = None
+        result._spool_open_failure = False
+        result._equity_spool_failed = result._trades_spool_failed = False
+        result._fused_outputs = None
     return result
 
 

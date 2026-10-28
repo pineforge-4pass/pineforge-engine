@@ -269,16 +269,6 @@ _INPUT_RE = re.compile(
 SOURCE_FEED_CANONICALIZATION = "pf-ohlcv-barc-le-v1"
 _SOURCE_FEED_HASH_PREFIX = b"pineforge:ohlcv:barc-le:v1\0"
 _SOURCE_FEED_RECORD = struct.Struct("<5dq")
-_BAR_HEADER = b"timestamp,open,high,low,close,volume\n"
-_BAR_FLOAT = (
-    rb"[+-]?(?:(?:[0-9]+\.[0-9]*|\.[0-9]+)"
-    rb"(?:[eE][+-]?[0-9]+)?|[0-9]+[eE][+-]?[0-9]+)"
-)
-_BAR_CANONICAL_LINE = re.compile(
-    rb"([0-9]{13}),(" + _BAR_FLOAT + rb"),(" + _BAR_FLOAT
-    + rb"),(" + _BAR_FLOAT + rb"),(" + _BAR_FLOAT + rb"),("
-    + _BAR_FLOAT + rb")\n")
-_BAR_BULK_SLAB_ROWS = 4096
 
 
 def _new_source_feed_hasher():
@@ -699,6 +689,18 @@ def build_fingerprint(provenance: dict) -> dict:
         "provenance": provenance,
     }
 # <<< fingerprint helpers
+
+
+_BAR_HEADER = b"timestamp,open,high,low,close,volume\n"
+_BAR_FLOAT = (
+    rb"[+-]?(?:(?:[0-9]+\.[0-9]*|\.[0-9]+)"
+    rb"(?:[eE][+-]?[0-9]+)?|[0-9]+[eE][+-]?[0-9]+)"
+)
+_BAR_CANONICAL_LINE = re.compile(
+    rb"([0-9]{13}),(" + _BAR_FLOAT + rb"),(" + _BAR_FLOAT
+    + rb"),(" + _BAR_FLOAT + rb"),(" + _BAR_FLOAT + rb"),("
+    + _BAR_FLOAT + rb")\n")
+_BAR_BULK_SLAB_ROWS = 4096
 
 
 _RELEASE_OVERRIDE_TYPES = {
@@ -6959,8 +6961,9 @@ class _BoundedJSONFile:
     Disk files use Linux O_DIRECT or Darwin F_NOCACHE. Legacy libraries with
     no engine sink can also use tmpfs/ramfs for the unjailed JSON artifact.
     Engine sink and scratch directories are selected by _disk_report_directory.
-    One aligned 64 KiB anonymous window is the I/O working set. Every write
-    window is synchronized before reuse. Jailed and fd routes use UTF-8 memory buffers.
+    One aligned 64 KiB anonymous window is the I/O working set. Full windows
+    are written before reuse; flush synchronizes pending writes before readback.
+    Jailed and fd routes use UTF-8 memory buffers.
     """
     window = 64 * 1024
 
@@ -6971,6 +6974,7 @@ class _BoundedJSONFile:
         self.used = self.base = self.size = self.position = 0
         self.read_base, self.read_size = -1, 0
         self.reading = False
+        self._dirty = False
         self.binary = False
         self.libc = ctypes.CDLL(None, use_errno=True)
         fd = file.fileno()
@@ -7020,11 +7024,8 @@ class _BoundedJSONFile:
             self._io_error()
         if written != aligned:
             raise OSError("short report artifact write")
-        os.ftruncate(self.file.fileno(), self.size)
-        if hasattr(os, "fdatasync"):
-            os.fdatasync(self.file.fileno())
-        else:
-            os.fsync(self.file.fileno())
+        if aligned != self.used:
+            os.ftruncate(self.file.fileno(), self.size)
         if self.used == self.window:
             self.base += self.window
             self.used = 0
@@ -7046,6 +7047,7 @@ class _BoundedJSONFile:
             self.buffer[self.used:self.used + count] = data[position:position + count]
             self.used += count
             self.size += count
+            self._dirty = True
             position += count
             if self.used == self.window:
                 self._sync_window()
@@ -7053,8 +7055,15 @@ class _BoundedJSONFile:
 
     def flush(self):
         self.file.flush()  # retain checked flush/close failure behavior
-        if not self.reading:
+        if not self.reading and self._dirty:
             self._sync_window()
+            # A full last window has no buffered bytes, but still needs a
+            # barrier. A following rewind must not sync unchanged bytes again.
+            if hasattr(os, "fdatasync"):
+                os.fdatasync(self.file.fileno())
+            else:
+                os.fsync(self.file.fileno())
+            self._dirty = False
 
     def seek(self, position):
         if position != 0:

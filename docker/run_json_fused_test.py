@@ -891,6 +891,270 @@ def test_fused_atomic_publication(tmp_path, monkeypatch, frozen, fault):
             assert actual.failure[4] == {"reason": "scratch_io"}
 
 
+@contextmanager
+def _artifact_sync_probe(monkeypatch, runner, *, full_sync=False, fail=False):
+    """Wrap real artifact syscalls without changing the shared os module."""
+    real_os = runner.os
+    proxy = types.SimpleNamespace(**vars(real_os))
+    probe = types.SimpleNamespace(syncs=[], truncates=[])
+
+    def counted_sync(name):
+        original = getattr(real_os, name)
+
+        def sync(fd):
+            probe.syncs.append((name, fd, real_os.fstat(fd).st_size))
+            if fail:
+                raise OSError(errno.ENOSPC, "injected artifact sync failure")
+            return original(fd)
+
+        return sync
+
+    for name in ("fdatasync", "fsync"):
+        if hasattr(real_os, name):
+            setattr(proxy, name, counted_sync(name))
+    if full_sync and hasattr(proxy, "fdatasync"):
+        del proxy.fdatasync
+
+    def truncate(fd, size):
+        probe.truncates.append((fd, size))
+        return real_os.ftruncate(fd, size)
+
+    proxy.ftruncate = truncate
+    with monkeypatch.context() as patch:
+        patch.setattr(runner, "os", proxy)
+        yield probe
+
+
+@pytest.mark.parametrize("full_sync", (False, True), ids=("native-sync", "fsync"))
+@pytest.mark.parametrize("tail", (0, 4096, 17),
+                         ids=("full-window", "aligned-tail", "padded-tail"))
+def test_report_artifact_sync_count_follows_flush_events(
+        tmp_path, monkeypatch, capsys, full_sync, tail):
+    size = 8 * run_json._BoundedJSONFile.window + tail
+    overhead = len(json.dumps({"payload": ""}, separators=(",", ":"))) + 1
+    document = {"payload": "x" * (size - overhead)}
+    expected = json.dumps(document, separators=(",", ":")) + "\n"
+    assert len(expected) == size
+    with _artifact_sync_probe(monkeypatch, run_json, full_sync=full_sync) as probe:
+        with ExitStack() as resources:
+            artifact = run_json._prepare_stream_report(document, resources, str(tmp_path))
+            assert type(artifact) is run_json._BoundedJSONFile
+            assert os.fstat(artifact.fileno()).st_size == size
+            # Preparation explicitly flushes, then rewinds (which flushes).
+            flush_seek_events = 2
+            assert 0 < len(probe.syncs) <= 1 + flush_seek_events
+            assert len(probe.syncs) == 1
+            assert probe.syncs[0][1:] == (artifact.fileno(), size)
+            method = "fdatasync" if not full_sync and hasattr(os, "fdatasync") else "fsync"
+            assert probe.syncs[0][0] == method
+            assert probe.truncates == (
+                [(artifact.fileno(), size)] if tail % 4096 else [])
+            assert run_json._write_report(artifact) == 0
+            assert len(probe.syncs) == 1
+        assert artifact.closed
+    captured = capsys.readouterr()
+    assert captured.out == expected and captured.err == ""
+
+
+@pytest.mark.parametrize("full_sync", (False, True), ids=("native-sync", "fsync"))
+def test_fused_artifact_sync_count_follows_rewinds(tmp_path, monkeypatch, full_sync):
+    window = run_json._BoundedJSONFile.window
+    message = "x" * (8 * window + 17)
+    rows = _mixed()
+    rows[2] = _event(message)
+    with _sink_case(tmp_path, rows, outputs=True) as (sink, library, report):
+        with _artifact_sync_probe(monkeypatch, run_json, full_sync=full_sync) as probe:
+            outcome = support.assemble(
+                run_json, sink, library, report, outputs=True, configure=_configure_outputs)
+        assert outcome.failure is None and len(outcome.report) >= 8 * window
+        assert json.loads(outcome.report)["outputs"]["events"][0]["message"] == message
+        descriptors = {fd for _, fd, _ in probe.syncs}
+        # Trade/equity, open/close times, two series, events, and the document.
+        assert len(descriptors) == 8
+        assert len(probe.syncs) == len(descriptors)
+        assert sum(size >= 8 * window for _, _, size in probe.syncs) == 2
+
+
+def test_report_artifact_full_windows_are_readable_before_flush(tmp_path, monkeypatch):
+    window = run_json._BoundedJSONFile.window
+    data = b"".join(bytes([65 + index]) * window for index in range(8))
+    with _artifact_sync_probe(monkeypatch, run_json) as probe, ExitStack() as resources:
+        artifact = run_json._json_temporary(resources, str(tmp_path))
+        assert artifact.write_ascii(data) == len(data)
+        assert os.fstat(artifact.fileno()).st_size == len(data)
+        # Use a second aligned window so raw readback cannot change append state.
+        with run_json.mmap.mmap(-1, window) as buffer:
+            address = ctypes.addressof(ctypes.c_char.from_buffer(buffer))
+            for offset in range(0, len(data), window):
+                assert artifact.libc.pread(
+                    artifact.fileno(), address, window, offset) == window
+                assert buffer[:] == data[offset:offset + window]
+        assert probe.syncs == [] and probe.truncates == []
+        assert artifact.read().encode("ascii") == data
+        assert len(probe.syncs) == 1
+        artifact.seek(0)
+        assert artifact.read().encode("ascii") == data
+        assert len(probe.syncs) == 1
+
+
+def test_report_artifact_flush_then_append_keeps_exact_bytes(tmp_path, monkeypatch):
+    window = run_json._BoundedJSONFile.window
+    first, second = b"a" * (window + 17), b"b" * window
+    with _artifact_sync_probe(monkeypatch, run_json) as probe, ExitStack() as resources:
+        artifact = run_json._json_temporary(resources, str(tmp_path))
+        artifact.write_ascii(first)
+        artifact.flush()
+        assert os.fstat(artifact.fileno()).st_size == len(first)
+        assert len(probe.syncs) == 1
+        artifact.write_ascii(second)
+        assert len(probe.syncs) == 1
+        artifact.flush()
+        assert os.fstat(artifact.fileno()).st_size == len(first + second)
+        assert len(probe.syncs) == 2
+        artifact.seek(0)
+        assert artifact.read().encode("ascii") == first + second
+        assert len(probe.syncs) == 2
+        assert probe.truncates == [
+            (artifact.fileno(), len(first)), (artifact.fileno(), len(first + second))]
+
+
+@pytest.mark.parametrize("fault", ("errno", "short", "interrupted"))
+def test_report_artifact_window_write_errors_match_frozen(
+        tmp_path, frozen, fault):
+    def run(runner):
+        window = runner._BoundedJSONFile.window
+        data = b"".join(bytes([65 + index]) * window for index in range(3))
+        calls = []
+        with ExitStack() as resources:
+            artifact = runner._json_temporary(resources, str(tmp_path))
+            libc = artifact.libc
+
+            def pwrite(fd, address, count, offset):
+                calls.append(offset)
+                if len(calls) == 2:
+                    if fault == "short":
+                        return count - 4096
+                    ctypes.set_errno(errno.EINTR if fault == "interrupted" else errno.ENOSPC)
+                    return -1
+                return libc.pwrite(fd, address, count, offset)
+
+            artifact.libc = types.SimpleNamespace(pwrite=pwrite, pread=libc.pread)
+            if fault == "interrupted":
+                assert artifact.write_ascii(data) == len(data)
+                assert calls == [0, window, window, 2 * window]
+                assert artifact.read().encode("ascii") == data
+                return None
+            with pytest.raises(OSError) as caught:
+                artifact.write_ascii(data)
+            assert calls == [0, window]
+            assert artifact.size == 2 * window
+            error = caught.value
+            assert type(error) is OSError
+            if fault == "errno":
+                assert error.errno == errno.ENOSPC
+                assert str(error) == str(OSError(errno.ENOSPC, os.strerror(errno.ENOSPC)))
+            else:
+                assert str(error) == "short report artifact write"
+            return support.failure_envelope(runner, error)
+
+    assert run(run_json) == run(frozen)
+
+
+@pytest.mark.parametrize("full_sync", (False, True), ids=("native-sync", "fsync"))
+@pytest.mark.parametrize("sink_errors", (False, True), ids=("ordinary-error", "sink-error"))
+def test_report_artifact_sync_failure_waits_for_flush(
+        tmp_path, monkeypatch, capsys, frozen, full_sync, sink_errors):
+    def prepare(runner):
+        completed = []
+
+        def rows():
+            yield "x" * (8 * runner._BoundedJSONFile.window + 17)
+            completed.append(True)
+
+        exception = runner.RunFailure if sink_errors else OSError
+        with _artifact_sync_probe(
+                monkeypatch, runner, full_sync=full_sync, fail=True) as probe:
+            with ExitStack() as resources, pytest.raises(exception) as caught:
+                artifact = runner._prepare_stream_report(
+                    {"rows": runner._JSONRecordArray(rows)}, resources, str(tmp_path),
+                    sink_errors=sink_errors)
+                runner._write_report(artifact)
+        assert len(probe.syncs) == 1
+        for _, fd, _ in probe.syncs:
+            with pytest.raises(OSError):
+                os.fstat(fd)
+        error = caught.value
+        storage_error = error.__cause__ if sink_errors else error
+        assert type(storage_error) is OSError
+        assert storage_error.errno == errno.ENOSPC
+        assert str(storage_error) == str(
+            OSError(errno.ENOSPC, "injected artifact sync failure"))
+        if sink_errors:
+            assert type(error) is runner.RunFailure
+            assert str(error) == "report sink write failed"
+            assert error.code == "report_sink_failed"
+            assert error.code_args == {"reason": "scratch_io"}
+        return support.failure_envelope(runner, error), completed
+
+    expected, _ = prepare(frozen)
+    actual, completed = prepare(run_json)
+    assert actual == expected
+    assert completed == [True]
+    captured = capsys.readouterr()
+    assert captured.out == captured.err == ""
+    assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("full_sync", (False, True), ids=("native-sync", "fsync"))
+@pytest.mark.parametrize("outputs", (False, True), ids=("report", "outputs"))
+def test_fused_sync_failure_never_publishes(
+        tmp_path, monkeypatch, frozen, full_sync, outputs):
+    with _sink_case(tmp_path, _mixed() if outputs else [_point(0), _trade(1)],
+                    outputs=outputs) as (sink, library, report):
+        published = []
+
+        def run(runner):
+            with _artifact_sync_probe(
+                    monkeypatch, runner, full_sync=full_sync, fail=True) as probe:
+                outcome = support.assemble(
+                    runner, sink, library, report, outputs=outputs,
+                    configure=_configure_outputs if outputs else None,
+                    consume=lambda *args: published.append(True))
+            assert len(probe.syncs) == 1
+            assert outcome.report == b"" and outcome.failure is not None
+            assert outcome.failure[1:5] == (
+                "RunFailure", "report sink write failed",
+                "report_sink_failed", {"reason": "scratch_io"})
+            assert isinstance(outcome.error.__cause__, OSError)
+            assert outcome.error.__cause__.errno == errno.ENOSPC
+            for _, fd, _ in probe.syncs:
+                with pytest.raises(OSError):
+                    os.fstat(fd)
+            return outcome
+
+        support.assert_same(run(run_json), run(frozen))
+        assert published == []
+
+
+def test_fused_large_report_bytes_match_frozen_artifacts(tmp_path, frozen):
+    rows = []
+    for index in range(10_000):
+        rows.extend((
+            _point(index), _trade(index + 1, pnl=-0.0 if index % 2 else 1.0),
+            ["O", index, ordinary.bars.T0 + index,
+             ordinary.bars.T0 + index + 1, -0.0, float(index)],
+        ))
+    rows.extend((["K", 50.], _event('quote"\n漢' * 2048)))
+    with _sink_case(tmp_path, rows, outputs=True) as (sink, library, report):
+        expected = support.assemble(
+            frozen, sink, library, report, outputs=True, configure=_configure_outputs)
+        actual = support.assemble(
+            run_json, sink, library, report, outputs=True, configure=_configure_outputs)
+        assert expected.failure is None
+        assert len(expected.report) >= 8 * run_json._BoundedJSONFile.window
+        support.assert_same(actual, expected)
+
+
 BAR_HEADER = b"timestamp,open,high,low,close,volume\n"
 
 
