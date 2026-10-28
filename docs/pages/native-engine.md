@@ -470,7 +470,7 @@ spec fields.
 The rich `run(bars, n, input_tf, script_tf, inputs, syminfo, overrides, …)`
 overload (`engine.hpp:2027`) is **not** refused as a source mutation: it
 reaches `NativeExecutionConsumer::run_rich`
-(`src/native_execution_consumer.hpp:148`), which admits the begin, checks the
+(`src/native_execution_consumer.hpp:149`), which admits the begin, checks the
 timeframe arguments against the spec, preflights and pumps the batch exactly
 like the plain overload. `inputs` / `syminfo` / `overrides` are carried only as
 `NativeBeginArgs` fields to `prepare_native_begin` — the overrides as the
@@ -3099,7 +3099,7 @@ and not a way to register a series: registration is
 `NativeRunSpec::subscriptions` or `declare_timeframe_subscriptions`. In-run the
 setter is a source mutation and **throws**, latching `Failed`
 (`UnsupportedSource`) through `guard_native_mutation`
-(`engine_aux_security.cpp:83`, `guard_native_mutation` `engine_consumer.cpp:42`).
+(`engine_aux_security.cpp:83`, `guard_native_mutation` `engine_consumer.cpp:100`).
 
 ## Batch OHLCV vs ticks vs quiet
 
