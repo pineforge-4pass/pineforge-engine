@@ -27353,7 +27353,7 @@ void PineExecutionAdapter::ensure_projected_pending_index() const {
             || row->family == PineOrderFamily::ExitTrail;
         if (exit) {
             const auto& origin = row->bracket_origin;
-            const Key key{row->source_id, row->from_entry, origin.run.session_key,
+            const Key key{row->source_id, row->from_entry, std::string_view(origin.run.session_key.string()),
                           origin.run.run_number, origin.incarnation};
             auto inserted = exits.emplace(key, raw);
             if (!inserted.second) {
