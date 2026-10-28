@@ -928,6 +928,7 @@ PINNED_SLOW_TEST_ROWS = frozenset((
     'test_broker_state_hash_coverage_mutations',
     'test_chart_day_memo',
     *(f'test_ci_verify_slice_{index}' for index in range(1, 9)),
+    'test_standing_orders_wall',
     'test_l10recon1_merge_fill_liveness',
     'test_local_time_fields',
     'test_magnifier_endpoints4',
@@ -944,6 +945,7 @@ PINNED_SLOW_TEST_ROWS = frozenset((
     'test_native_cpp_versions',
     'test_native_definition_index',
     'test_native_direct_mutation',
+    'test_native_dormant_book_capacity',
     'test_native_event_retention',
     'test_native_group_absorption',
     'test_native_group_keep_handle',
@@ -983,6 +985,8 @@ PINNED_SLOW_TEST_ROWS = frozenset((
     'test_position_tail_summary_scale',
     # tests/cr150.d/p2cx-a5s.cmake:3.
     'test_o1_store',
+    # tests/cr150.d/udt-object-graphs.cmake:6.
+    'test_a5u_growth_1m',
     # tests/cr150.d/core-cr150-cohort.cmake:5,11 (Release-only timing ratio).
     'test_adapter_spaced_ids_scaling',
     # tests/cr150.d/strings-maps.cmake:6,11,28.
@@ -991,6 +995,17 @@ PINNED_SLOW_TEST_ROWS = frozenset((
     'test_p2_a5_map_prepared_1m',
     # tests/cr150.d/p2cx-a5arr.cmake:5.
     'test_array_growth_1m',
+    # tests/cr150.d/report-trade-retirement.cmake and report-trade-reference.cmake:
+    # the closed-trade retirement witnesses, the identity row against the frozen
+    # reference, the reference corruption row and the sink-consumer row.
+    'test_report_sink_trade_comparison',
+    'test_report_sink_trade_history',
+    'test_report_sink_trade_identity',
+    'test_report_sink_trade_legacy',
+    'test_report_sink_trade_reference',
+    'test_report_sink_trade_residency',
+    'test_report_sink_trade_retirement',
+    'test_sink_history_consumers',
 ))
 
 

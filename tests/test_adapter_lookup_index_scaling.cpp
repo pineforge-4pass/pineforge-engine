@@ -15,7 +15,7 @@
 //     044 (two quantity brackets per entry) at 55 % in exit().
 // So a run four times longer cost far more than four times as much. This row
 // holds the SHAPE of the cost with user CPU time, the best of six rounds per
-// leg, and a ratio under 5 -- four for a linear run, plus room for noise
+// leg, and a ratio under 5.5 (reason at kShapeBound) -- four for a linear run, plus room for noise
 // and for the per-bar work a shorter run amortizes worse. The small leg is
 // calibrated independently for each workload until its best sample has at
 // least 100 ms of CPU; the large leg is four times that size. The original
@@ -212,7 +212,13 @@ constexpr int kInitialBars = 6000;
 // The small leg grows to at most this many bars; an Apple M4 Max needs 48,000.
 constexpr int kMaxCalibratedBars = 384000;
 constexpr double kMinLegSeconds = 0.1;
-constexpr double kShapeBound = 5.0;
+// The legs differ by 4x in bars, so a linear run gives 4.0. On the lab, main
+// measured 4.45 to 4.84 and this branch 4.50 to 5.06. The logical id probe each
+// applied reversal makes is a log-depth search and adds at most a factor of
+// about 1.16 to the ratio; the rest of the excess over 4.0 is memory-hierarchy
+// growth with run length and timing noise. 5.5 leaves room for both and still
+// fails a quadratic run, which gives 16.0.
+constexpr double kShapeBound = 5.5;
 
 int calibrated_bars(Workload workload) {
     return ratio_timing::presized(

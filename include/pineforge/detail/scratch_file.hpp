@@ -6,6 +6,7 @@
 #include <pineforge/detail/scratch_mapped_read.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
@@ -119,6 +120,46 @@ public:
     // The report facade retains its file-mode descriptor/truncate API.
     // Arena readers continue to borrow the store rather than the shared fd.
     int descriptor() const noexcept { return fd_; }
+    // Physical occupancy diagnostic, not logical row identity. Arena values
+    // include chunk rounding; disk values are the anonymous file's extent.
+    std::uint64_t storage_bytes() const {
+        if (slab_) throw std::logic_error("scratch occupancy requires a file or arena");
+        if (arena_) return region_.chunks.size() * ScratchArena::kChunkBytes;
+        if (fd_ < 0) return 0;
+        struct stat info{};
+        int result;
+        do { result = ::fstat(fd_, &info); } while (result != 0 && errno == EINTR);
+        if (result != 0) io_error(errno, "scratch extent");
+        if (info.st_size < 0) io_error(EIO, "scratch extent");
+        return static_cast<std::uint64_t>(info.st_size);
+    }
+    // Rebase a positional file after its owner has proved a complete head
+    // chunk dead. The owner translates its logical offsets; no borrowed view
+    // escapes. Arena mode returns the chunks through the existing allocator.
+    // Disk mode moves the surviving suffix in fixed windows, then truncates;
+    // it works on disk filesystems without COLLAPSE_RANGE support as well.
+    void release_prefix(std::uint64_t bytes) {
+        if (bytes == 0) return;
+        if (slab_) throw std::logic_error("scratch head release requires a file or arena");
+        if (bytes % ScratchArena::kChunkBytes != 0)
+            io_error(EINVAL, "scratch head release alignment");
+        if (arena_) {
+            arena_io([&] { arena_->release_prefix(region_, bytes); });
+            return;
+        }
+        const auto extent = storage_bytes();
+        if (bytes > extent) io_error(EINVAL, "scratch head release extent");
+        std::array<unsigned char, kCacheBytes> window;
+        const auto kept = extent - bytes;
+        for (std::uint64_t offset = 0; offset < kept;) {
+            const auto count = static_cast<std::size_t>(
+                std::min<std::uint64_t>(window.size(), kept - offset));
+            read(bytes + offset, window.data(), count);
+            write(offset, window.data(), count);
+            offset += count;
+        }
+        truncate(kept);
+    }
     void truncate(std::uint64_t bytes) {
         if (slab_) throw std::logic_error("scratch truncate requires a file or arena");
         check_extent(bytes, 0, arena_ != nullptr, io_raiser_);

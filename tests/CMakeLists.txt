@@ -1384,8 +1384,8 @@ list(APPEND TEST_SOURCES test_native_match_allocations)
 # Source-bound.
 list(APPEND TEST_SOURCES test_adapter_command_allocations)
 list(APPEND TEST_SOURCES test_adapter_exit_scratch)
-# R5 lane PERF-L1: the NativeStrategyHost reads -- the consumer read off the
-# engine's slot, the inline book aggregate, the running lifecycle view --
+list(APPEND TEST_SOURCES test_reversal_exit_owner_gate)
+# R5 lane PERF-L1: NativeStrategyHost's consumer, aggregate and lifecycle reads
 # against the lookups they replaced, inside every host hook of randomized
 # runs. Source-free, so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_host_reads)
@@ -1400,7 +1400,7 @@ list(APPEND TEST_SOURCES test_native_lean_path)
 # so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_intrabar_scratch)
 list(APPEND TEST_SOURCES test_parent_terminal_scratch)
-list(APPEND TEST_SOURCES test_same_bar_trade_scratch)
+list(APPEND TEST_SOURCES test_same_bar_trade_scratch test_exit_group_reorder_scaling)
 list(APPEND TEST_SOURCES test_global_exit_recut_scratch)
 # R5 lane PERF-L1: the interval cache's prior answers and the session-point
 # memo hold only what a fresh, memo-free resolution answers, in every host hook
@@ -1482,7 +1482,7 @@ list(APPEND TEST_SOURCES test_native_fused_settlement_allocations)
 # order, working request, position, trade, equity point and admission field --
 # as on the lane's base and as with the erasure switched off (equivalence).
 # Source-bound.
-list(APPEND TEST_SOURCES test_adapter_live_state_scaling)
+list(APPEND TEST_SOURCES test_adapter_live_state_scaling test_retirement_work_scaling)
 list(APPEND TEST_SOURCES test_adapter_live_state_equivalence)
 # R5 lane V19-D: a bracket family's roster parks the erased members behind a
 # retained one (the v4 fold reads what is retained): randomized append /
@@ -3065,6 +3065,25 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX
     endif()
 endif()
 
+# The Python host loads this small shared library; its native entry point
+# can write fd 1, fail after that write, and emit a deterministic empty sink stream.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX
+   AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
+    add_library(run_json_stdout_strategy MODULE
+        test_run_json_stdout_strategy.cpp ${PROJECT_SOURCE_DIR}/src/sha256.cpp)
+    target_include_directories(run_json_stdout_strategy PRIVATE
+        ${PROJECT_SOURCE_DIR}/include ${PROJECT_BINARY_DIR}/include
+        ${PROJECT_SOURCE_DIR}/src)
+    target_compile_options(run_json_stdout_strategy PRIVATE -ffp-contract=off)
+    set_target_properties(run_json_stdout_strategy PROPERTIES
+        PREFIX "" SUFFIX ".so" LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/run_json_stdout")
+    add_test(NAME test_run_json_stdout_contract
+        COMMAND ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider
+            ${PROJECT_SOURCE_DIR}/tests/test_run_json_stdout.py)
+    set_property(TEST test_run_json_stdout_contract APPEND PROPERTY ENVIRONMENT
+        "PINEFORGE_STDOUT_STRATEGY_SO=$<TARGET_FILE:run_json_stdout_strategy>")
+endif()
+
 # Recorded outputs through docker/run_json.py (--outputs): two strategy
 # libraries run as a process, one that records outputs
 # (outputs_fixture_strategy.cpp, a bare host with the per-library outputs
@@ -3779,7 +3798,22 @@ list(REMOVE_ITEM TEST_SOURCES ${_pf_private_fixture_rows})
 
 # Report arithmetic and C-host failure ownership, with source-free includes.
 list(APPEND TEST_SOURCES test_metrics_overflow)
-list(APPEND TEST_SOURCES test_native_c_host_report_failure)
+list(APPEND TEST_SOURCES test_native_c_host_report_failure test_scratch_bulk_advance)
+list(APPEND TEST_SOURCES test_native_unreachable_book)
+list(APPEND TEST_SOURCES test_native_dormant_book_cost)
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    list(APPEND TEST_SOURCES test_standing_orders_wall test_projected_pending_scaling)
+endif()
+list(APPEND TEST_SOURCES test_native_dormant_book_resident)
+list(APPEND TEST_SOURCES test_native_dormant_book_transcript)
+list(APPEND TEST_SOURCES test_native_dormant_book_switch)
+list(APPEND TEST_SOURCES test_native_dormant_book_tokens)
+list(APPEND TEST_SOURCES test_native_dormant_book_read_failure)
+list(APPEND TEST_SOURCES test_native_dormant_book_index_fault)
+list(APPEND TEST_SOURCES test_native_dormant_book_allocation_fault)
+list(APPEND TEST_SOURCES test_native_dormant_book_reachability)
+list(APPEND TEST_SOURCES test_native_dormant_book_core_contract)
+list(APPEND TEST_SOURCES test_native_dormant_book_capacity)
 
 # CR-150: engine-free pipe flag control beside the ordinary C++ unit rows.
 if(UNIX)
@@ -3804,6 +3838,15 @@ if(UNIX)
             -DPIPE_WRITER=$<TARGET_FILE:test_pipe_writer_fd_flags>
             -DPLANT_MODE=--plant-close
             -P ${CMAKE_CURRENT_SOURCE_DIR}/run_pipe_writer_fd_flags.cmake)
+endif()
+
+add_test(NAME test_native_dormant_book_notification_middle_spill
+    COMMAND test_native_dormant_book_transcript --notification-middle-spill)
+add_test(NAME test_native_dormant_book_resident_window
+    COMMAND test_native_dormant_book_transcript --resident-window)
+set_tests_properties(test_native_dormant_book_capacity PROPERTIES LABELS "slow")
+if(TEST test_standing_orders_wall)
+    set_tests_properties(test_standing_orders_wall PROPERTIES LABELS "slow")
 endif()
 
 if(PINEFORGE_BUILD_SOURCE_LAYER)
@@ -7431,6 +7474,14 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_libraries(test_jailed_scratch_tmpfs_tmpdir PRIVATE ${CMAKE_DL_LIBS} Threads::Threads)
 endif()
 # --- CR-150 s4e-fix-tmp end ---
+
+# --- CR-150 streaming-ratios begin ---
+# The two-thread determinism row links Threads; a lane file may not link.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
+    target_link_libraries(test_metrics_streaming_ratios PRIVATE Threads::Threads)
+    target_link_libraries(tool_metrics_streaming_compare PRIVATE Threads::Threads)
+endif()
+# --- CR-150 streaming-ratios end ---
 
 # --- CR-150 core-cr150-l6b1 begin ---
 # CR-150 L6B1: appended after every pre-existing line pin. A real source

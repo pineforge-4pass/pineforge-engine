@@ -1,8 +1,9 @@
 #pragma once
 
-// Pure report folds. No engine, point array, scratch region, allocation, or
-// callback is retained here. The caller supplies chart-civil month keys after
-// dispatch, without holding a timezone guard across an engine callback.
+// Pure report folds retain no engine or point source. Streaming-ratio folds
+// own a bounded RAM batch and the run's positional scratch stream.
+// The caller supplies chart-civil month keys after dispatch, without holding
+// a timezone guard across an engine callback.
 #include <pineforge/pineforge.h>
 #include <algorithm>
 #include <cmath>
@@ -10,6 +11,7 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <string>
 
 namespace pineforge {
@@ -22,6 +24,178 @@ namespace metrics {
 // in int64 so every int64 millisecond timestamp's UTC month is representable.
 // An unrepresentable local civil time raises report_result_invalid.
 std::int64_t equity_month_key(std::int64_t time_ms, const std::string& chart_timezone);
+
+// Streaming ratios. A fold owns a fixed-size prefix, one editable held point,
+// and an ordered packed return replay. Its fallback result is an internal
+// routing decision, never a run failure; scratch I/O failures remain typed.
+enum class MetricsStreamingStatusV1 : std::int32_t {
+    Ok = 0,
+    NotImplemented = -1,
+    InvalidArgument = -2,
+    Busy = -3,
+};
+enum class StreamingSharpeV1 : std::uint32_t { Off = 0, On = 1 };
+using MetricsNeedMaskV1 = std::uint64_t;
+constexpr MetricsNeedMaskV1 kMetricsNeedSharpeBarV1 = 1ULL << 0;
+constexpr MetricsNeedMaskV1 kMetricsNeedSortinoBarV1 = 1ULL << 1;
+constexpr MetricsNeedMaskV1 kMetricsNeedMonthlyRatiosV1 = 1ULL << 2;
+constexpr MetricsNeedMaskV1 kMetricsNeedReturnsV1 = 1ULL << 3;
+constexpr MetricsNeedMaskV1 kMetricsNeedEquitySummaryV1 = 1ULL << 4;
+constexpr MetricsNeedMaskV1 kMetricsNeedTradeStatsV1 = 1ULL << 5;
+constexpr MetricsNeedMaskV1 kMetricsNeedCurveV1 = 1ULL << 6;
+constexpr MetricsNeedMaskV1 kMetricsNeedAllV1 = (1ULL << 7) - 1;
+
+// Fixed-width, versioned diagnostic PODs; no change to pf_report_t.
+// Empty extents have empty=1 and count=0; endpoint words are not observations.
+struct MetricsExtentV1 {
+    std::int64_t count = 0;
+    std::int64_t first_time_ms = 0;
+    std::int64_t last_time_ms = 0;
+    std::uint32_t empty = 1;
+    std::uint32_t reserved = 0;
+};
+struct MetricsExtentPlanV1 {
+    MetricsExtentV1 extent;
+    std::uint64_t attempt = 0;
+    std::uint64_t input_generation = 0;
+    std::uint64_t admitted_view = 0;
+    std::uint64_t spec_identity = 0;
+    std::uint32_t present = 0;
+    std::uint32_t reserved = 0;
+};
+enum class MetricsRatioRouteV1 : std::uint32_t {
+    Unavailable = 0, Streaming = 1, LegacyActualCurve = 2, LegacyRerun = 3,
+};
+enum class MetricsExtentWitnessV1 : std::uint32_t {
+    NotEvaluated = 0, Match = 1, Mismatch = 2,
+};
+enum class MetricsRouteReasonV1 : std::uint32_t {
+    None = 0, SharpeSwitchOff = 1, ReturnsNeeded = 2, CurveNeeded = 3,
+    PlainNo = 4, NoExtentProof = 5, NoRecoveryProof = 6, NumericGuard = 7,
+    ExtentMismatch = 8, LiveSnapshot = 9, ExistingFailure = 10,
+    OrderedReplay = 11, ScratchUnavailable = 12,
+};
+enum class MetricsStopBoundaryKindV1 : std::uint32_t {
+    None = 0, CompletedMark = 1, IntraBar = 2, MarginCallback = 3,
+};
+struct MetricsStopBoundaryV1 {
+    std::int64_t completed_marks = 0;
+    std::int64_t input_index = -1;
+    MetricsStopBoundaryKindV1 kind = MetricsStopBoundaryKindV1::None;
+    std::uint32_t reserved = 0;
+};
+// mismatch_fields: bit 0 empty, 1 count, 2 first, 3 last, 4 attempt,
+// 5 input_generation, 6 admitted_view, 7 spec_identity.
+struct MetricsExtentReceiptV1 {
+    std::uint32_t struct_size = sizeof(MetricsExtentReceiptV1);
+    std::uint32_t version = 1;
+    MetricsExtentPlanV1 extent_plan;
+    MetricsExtentV1 actual_extent;
+    std::uint64_t actual_attempt = 0;
+    std::uint64_t actual_input_generation = 0;
+    std::uint64_t actual_admitted_view = 0;
+    std::uint64_t actual_spec_identity = 0;
+    std::uint64_t eligible_returns = 0;
+    std::uint64_t mismatch_fields = 0;
+    std::uint64_t failed_plain_inputs = 0;
+    MetricsNeedMaskV1 metrics_needed = kMetricsNeedAllV1;
+    MetricsStopBoundaryV1 stop_boundary;
+    MetricsExtentWitnessV1 witness = MetricsExtentWitnessV1::NotEvaluated;
+    MetricsRatioRouteV1 route = MetricsRatioRouteV1::Unavailable;
+    MetricsRouteReasonV1 route_reason = MetricsRouteReasonV1::None;
+    StreamingSharpeV1 streaming_sharpe = StreamingSharpeV1::On;
+    std::uint32_t plain_subset = 0;
+    std::uint32_t replay_attempts = 0;
+    std::uint64_t authoritative_attempt = 0;
+};
+static_assert(sizeof(MetricsExtentV1) == 32, "streaming-ratio extent POD");
+static_assert(sizeof(MetricsExtentPlanV1) == 72, "streaming-ratio plan POD");
+static_assert(sizeof(MetricsStopBoundaryV1) == 24, "streaming-ratio stop POD");
+static_assert(sizeof(MetricsExtentReceiptV1) == 232, "streaming-ratio receipt POD");
+
+// The engine uses actual extent for Sharpe; only Sortino consumes the plan.
+// On is the default; explicit Off plus a Sharpe need selects the exact curve
+// route. A mask without SharpeBar permits skipping Sharpe. Returns/curve and
+// monthly needs retain the curve under either switch setting. A mismatch or
+// failed recovery proof chooses the exact curve route, never a new run
+// failure or a changed report domain. An admitted no-curve route uses the
+// ordered scratch replay and reports OrderedReplay.
+struct MetricsStreamingConfigV1 {
+    StreamingSharpeV1 streaming_sharpe = StreamingSharpeV1::On;
+    MetricsNeedMaskV1 metrics_needed = kMetricsNeedAllV1;
+    std::uint64_t attempt = 0;
+    std::uint64_t input_generation = 0;
+    std::uint64_t admitted_view = 0;
+    std::uint64_t spec_identity = 0;
+    std::uint32_t deterministic_replay = 0;
+    std::uint32_t curve_available = 1;
+};
+namespace fold_detail {
+inline std::uint64_t extent_mismatch_v1(const MetricsExtentPlanV1& plan,
+        const MetricsStreamingConfigV1& config, const MetricsExtentV1& actual) {
+    if (!plan.present) return 0;
+    std::uint64_t fields = 0;
+    if (plan.extent.empty != actual.empty) fields |= 1ULL << 0;
+    if (plan.extent.count != actual.count) fields |= 1ULL << 1;
+    if (!plan.extent.empty && !actual.empty) {
+        if (plan.extent.first_time_ms != actual.first_time_ms) fields |= 1ULL << 2;
+        if (plan.extent.last_time_ms != actual.last_time_ms) fields |= 1ULL << 3;
+    }
+    if (plan.attempt != config.attempt) fields |= 1ULL << 4;
+    if (plan.input_generation != config.input_generation) fields |= 1ULL << 5;
+    if (plan.admitted_view != config.admitted_view) fields |= 1ULL << 6;
+    if (plan.spec_identity != config.spec_identity) fields |= 1ULL << 7;
+    return fields;
+}
+} // namespace fold_detail
+struct MetricsRatioTraceV1 {
+    const char* series_stage;
+    std::int64_t return_index;
+    const char* operation;
+    const char* code;
+    const char* field;
+    const char* reason;
+};
+using MetricsRatioTraceCallbackV1 = void (*)(void*, const MetricsRatioTraceV1&);
+struct MetricsRatioTraceSinkV1 {
+    void* context = nullptr;
+    MetricsRatioTraceCallbackV1 emit = nullptr;
+};
+struct MetricsStreamingResultV1 {
+    MetricsExtentReceiptV1 receipt;
+    double sharpe_bar = std::numeric_limits<double>::quiet_NaN();
+    double sortino_bar = std::numeric_limits<double>::quiet_NaN();
+    double downside_sum = 0.0;
+    double centered_sum = 0.0;
+    const char* failure_code = nullptr;
+    const char* failure_field = nullptr;
+    const char* failure_reason = nullptr;
+};
+// Optional checked, final metric-point provider for the exact curve route.
+// A Streaming result must not read it. It is absent after a no-curve attempt;
+// LegacyRerun then asks the eligible host for its authoritative second run.
+struct MetricsRatioCurveV1 {
+    void* context = nullptr;
+    std::int64_t count = 0;
+    pf_equity_point_t (*read)(void*, std::int64_t) = nullptr;
+};
+class StreamingEquityRatiosV1 {
+public:
+    virtual ~StreamingEquityRatiosV1() = default;
+    virtual MetricsStreamingStatusV1 append(const pf_equity_point_t&, int month_key) = 0;
+    // zero-based logical index must be the CURRENT held point. A released
+    // point cannot be amended after its successor exists. Violation is an
+    // internal assertion (SIGABRT, also in Release), never a new run failure.
+    // Repeated amendments before release are legal.
+    virtual MetricsStreamingStatusV1 amend_held(
+        std::int64_t logical_index, const pf_equity_point_t&, int month_key) = 0;
+    virtual MetricsStreamingStatusV1 finish(
+        MetricsStreamingResultV1&, MetricsRatioCurveV1 = {}) const = 0;
+    virtual std::size_t state_size_bytes() const = 0;
+};
+MetricsStreamingStatusV1 make_streaming_equity_ratios_v1(
+    const MetricsStreamingConfigV1&, const MetricsExtentPlanV1&,
+    MetricsRatioTraceSinkV1, std::unique_ptr<StreamingEquityRatiosV1>&);
 
 struct EquityReturnSummary {
     std::size_t count = 0;

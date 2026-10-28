@@ -95,7 +95,7 @@ old sorted live sequence. Dead rows contribute identity. The existing
 257-seed composition law therefore proves equality for every state and
 every incoming seed, including binary keys and prefixes. `fold_sorted`
 still folds the live count and applies this root in O(1)
-(`include/pineforge/detail/id_pair_store.hpp:360`).
+(`include/pineforge/detail/id_pair_store.hpp:363`).
 
 ### Fixed budget and publication
 

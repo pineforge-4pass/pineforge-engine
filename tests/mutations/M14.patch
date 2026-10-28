@@ -1,0 +1,12 @@
+diff --git a/src/native_order_book.hpp b/src/native_order_book.hpp
+--- a/src/native_order_book.hpp
++++ b/src/native_order_book.hpp
+@@ -606,7 +606,7 @@
+         resident.back() = active_meta(priority);
+     }
+     bool scan_spilled_closes() const noexcept {
+-        return spilled_book_closes != 0;
++        return false;
+     }
+     bool carries_read_failure() const noexcept {
+         return ever_spilled;
