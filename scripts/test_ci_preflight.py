@@ -8982,6 +8982,60 @@ class GkeAdmissionRuleTests(unittest.TestCase):
             self.assertTrue(any('other.yml' in finding and refusal in finding
                                 for finding in findings), findings)
 
+    def copy_repository_admission_inputs(self, directory: Path, *,
+                                        without_admission: bool = False) -> None:
+        ignore = shutil.ignore_patterns('gke-pr.yml') if without_admission else None
+        shutil.copytree(ROOT / '.github/workflows', directory / '.github/workflows',
+                        symlinks=True, ignore=ignore)
+        shutil.copytree(ROOT / '.github/actions', directory / '.github/actions',
+                        symlinks=True)
+        shutil.copyfile(ROOT / '.github/actionlint.yaml', directory / '.github/actionlint.yaml',
+                        follow_symlinks=False)
+
+    def test_real_repository_admission_inputs_are_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as fetched:
+            directory = Path(fetched)
+            self.copy_repository_admission_inputs(directory)
+            # The hosted admit job runs actionlint; these unit rows check the text rules.
+            self.assertEqual(admit_rule_findings(directory, run_actionlint=False), [])
+
+    def test_reverting_release_runner_exemption_rejects_real_repository_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as fetched:
+            directory = Path(fetched)
+            self.copy_repository_admission_inputs(directory)
+            release_path = '.github/workflows/release.yml'
+            release = (directory / release_path).read_text(encoding='utf-8')
+            runner = '    runs-on: ${{ matrix.runner }}'
+            self.assertIn(runner, _jobs(release)['prebuilt'])
+            lines = release.splitlines()
+            self.assertEqual(lines.count(runner), 1)
+            number = lines.index(runner) + 1
+
+            source = inspect.getsource(ci_preflight._admit_flow_findings)
+            guard = "Path(name).name == 'release.yml' and value == '${{ matrix.runner }}'"
+            self.assertEqual(source.count(guard), 1)
+            mutant = source.replace(
+                guard, "name == 'release.yml' and value == '${{ matrix.runner }}'", 1)
+            namespace = dict(admit_rule_findings.__globals__)
+            exec(compile(mutant, '<release-runner-exemption-reverted>', 'exec'), namespace)
+            # Rebind both real callers so the copied rule handles the fetched paths.
+            for checker in (admit_yaml_findings, admit_rule_findings):
+                exec(compile(inspect.getsource(checker),
+                             '<admission-with-reverted-release-exemption>', 'exec'), namespace)
+            findings = namespace['admit_rule_findings'](directory, run_actionlint=False)
+            self.assertEqual(findings, [
+                f'{release_path}:{number}: every runs-on must be a literal value'])
+            with self.assertRaisesRegex(AssertionError, 'every runs-on must be a literal value'):
+                self.assertEqual(findings, [])
+
+    def test_real_repository_inputs_without_admission_workflow_are_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as fetched:
+            directory = Path(fetched)
+            self.copy_repository_admission_inputs(directory, without_admission=True)
+            self.assertFalse((directory / '.github/workflows/gke-pr.yml').exists())
+            self.assertEqual(admit_rule_findings(directory, run_actionlint=False), [
+                'gke-pr.yml: admission workflow is missing'])
+
 
 if __name__ == '__main__':
     if any(arg == '--slice' or arg.startswith('--slice=') for arg in sys.argv[1:]):
