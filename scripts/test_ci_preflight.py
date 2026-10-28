@@ -2125,6 +2125,14 @@ class ProtectedArmReleasePolicy(unittest.TestCase):
     def test_protected_arm_with_release_environment_is_accepted(self):
         workflow = self.protected_workflow()
         self.assertEqual(ci_preflight.runner_findings({'release.yml': workflow}), [])
+        for comment in ('# Ordinary build comment',
+                        '# secrets.PINEFORGE_APP_PRIVATE_KEY is not used here',
+                        '# ${{ secrets.GITHUB_TOKEN }}'):
+            with self.subTest(comment=comment):
+                changed = in_step(workflow, 'prebuilt', 'Configure', '        run: |\n',
+                                  '        run: |\n          ' + comment + '\n')
+                self.assertNotEqual(changed, workflow)
+                self.assertEqual(ci_preflight.runner_findings({'release.yml': changed}), [])
 
     def test_hosted_arm_is_refused_on_the_real_release_matrix(self):
         workflow = self.protected_workflow()
@@ -2147,13 +2155,17 @@ class ProtectedArmReleasePolicy(unittest.TestCase):
 
     def test_protected_arm_refuses_oidc_and_other_secret_access(self):
         workflow = self.protected_workflow()
-        changed = in_job(workflow, 'prebuilt',
-                         '      contents: write   # gh release upload\n',
-                         '      contents: write   # gh release upload\n'
-                         '      id-token: write\n')
-        self.assertNotEqual(changed, workflow)
-        self.assertIn(self.PERMISSIONS_FINDING,
-                      ci_preflight.runner_findings({'release.yml': changed}))
+        for permissions in ('      contents: write   # gh release upload\n'
+                            '      id-token: write\n',
+                            '      contents: read   # gh release upload\n',
+                            '      contents: write   # gh release upload\n'
+                            '      packages: write\n'):
+            with self.subTest(permissions=permissions):
+                changed = in_job(workflow, 'prebuilt',
+                                 '      contents: write   # gh release upload\n', permissions)
+                self.assertNotEqual(changed, workflow)
+                self.assertIn(self.PERMISSIONS_FINDING,
+                              ci_preflight.runner_findings({'release.yml': changed}))
         for reference in ('secrets.DEPLOY_KEY', "secrets['GITHUB_TOKEN']",
                           'secrets.github_token', 'toJSON(secrets)'):
             for job, before, after in (
@@ -2168,6 +2180,47 @@ class ProtectedArmReleasePolicy(unittest.TestCase):
                     self.assertIn(self.SECRETS_FINDING,
                                   ci_preflight.runner_findings({'release.yml': changed}))
 
+    def test_commented_secret_expressions_are_refused_on_the_real_release(self):
+        workflow = self.workflow()
+        self.assertIn('          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n',
+                      _jobs(workflow)['prebuilt'])
+        self.assertEqual(ci_preflight.runner_findings({'release.yml': workflow}), [])
+        for reference in ('secrets.PINEFORGE_APP_PRIVATE_KEY',
+                          "secrets['PINEFORGE_APP_PRIVATE_KEY']",
+                          'secrets[inputs.key]', 'toJSON(secrets)',
+                          "format('}} {0}', secrets.PINEFORGE_APP_PRIVATE_KEY)"):
+            with self.subTest(reference=reference):
+                changed = in_step(workflow, 'prebuilt', 'Configure', '        run: |\n',
+                                  '        run: |\n          # ${{ ' + reference + ' }}\n')
+                self.assertNotEqual(changed, workflow)
+                self.assertEqual(ci_preflight.runner_findings({'release.yml': changed}),
+                                 [self.SECRETS_FINDING])
+
+    def test_credential_detection_reads_commented_expressions_on_the_real_release(self):
+        # Remove the environment so it cannot mask a missed secret reference.
+        workflow = in_job(self.workflow(), 'prebuilt', '    environment: release\n', '')
+        self.assertFalse(ci_preflight._holds_credentials(workflow, _jobs(workflow)['prebuilt']))
+        for comment in ('# secrets.PINEFORGE_APP_PRIVATE_KEY is not used here',
+                        '# ${{ secrets.GITHUB_TOKEN }}',
+                        "# ${{ secrets['GITHUB_TOKEN'] }}"):
+            with self.subTest(allowed_comment=comment):
+                changed = in_step(workflow, 'prebuilt', 'Configure', '        run: |\n',
+                                  '        run: |\n          ' + comment + '\n')
+                self.assertNotEqual(changed, workflow)
+                self.assertFalse(ci_preflight._holds_credentials(
+                    changed, _jobs(changed)['prebuilt']))
+        for reference in ('secrets.PINEFORGE_APP_PRIVATE_KEY',
+                          "secrets['PINEFORGE_APP_PRIVATE_KEY']", 'secrets[inputs.key]',
+                          "format('}} {0}', secrets.PINEFORGE_APP_PRIVATE_KEY)"):
+            for prefix in ('# ', ': # '):
+                with self.subTest(reference=reference, prefix=prefix):
+                    changed = in_step(workflow, 'prebuilt', 'Configure', '        run: |\n',
+                                      '        run: |\n          ' + prefix
+                                      + '${{ ' + reference + ' }}\n')
+                    self.assertNotEqual(changed, workflow)
+                    self.assertTrue(ci_preflight._holds_credentials(
+                        changed, _jobs(changed)['prebuilt']))
+
     def test_release_build_requires_runner_core_count(self):
         workflow = self.workflow()
         self.assertIn(f'        run: cmake --build build -j {CORES}\n',
@@ -2180,6 +2233,18 @@ class ProtectedArmReleasePolicy(unittest.TestCase):
                 self.assertNotEqual(changed, workflow)
                 self.assertIn(self.BUILD_FINDING,
                               ci_preflight.runner_findings({'release.yml': changed}))
+        for guard in ('        if: ${{ false }}\n', '        continue-on-error: true\n'):
+            with self.subTest(guard=guard):
+                changed = in_step(workflow, 'prebuilt', 'Build', '      - name: Build\n',
+                                  '      - name: Build\n' + guard)
+                self.assertNotEqual(changed, workflow)
+                self.assertIn(self.BUILD_FINDING,
+                              ci_preflight.runner_findings({'release.yml': changed}))
+        build = f'      - name: Build\n        run: cmake --build build -j {CORES}\n'
+        duplicate = in_job(workflow, 'prebuilt', build, build + '\n' + build)
+        self.assertEqual(_jobs(duplicate)['prebuilt'].count('      - name: Build\n'), 2)
+        self.assertIn(self.BUILD_FINDING,
+                      ci_preflight.runner_findings({'release.yml': duplicate}))
 
     def test_protected_release_label_is_declared_once(self):
         config = (ROOT / '.github/actionlint.yaml').read_text()
