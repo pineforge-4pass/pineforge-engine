@@ -149,6 +149,18 @@ def test_fd_sink_stream_is_unchanged_by_native_fd1_output(tmp_path):
     assert MARKER in printed[2]
 
 
+@pytest.mark.parametrize("value", ["-1", "0", "1", "2", str(1 << 31), str(1 << 40), str(1 << 100)])
+def test_out_of_range_report_sink_descriptor_keeps_typed_refusal(tmp_path, value):
+    status, stdout, stderr = _invoke(tmp_path, extra=("--report-sink-fd", value))
+    observed = f"value={value!r}; status={status!r}; stdout={stdout!r}; stderr={stderr!r}"
+    assert status == 2, observed
+    assert stdout == (
+        b'{"engine":"pineforge","error":"error: --report-sink-fd must be a descriptor number '
+        b'from 3 through INT_MAX","code":"run_request_invalid","args":{"option":"arguments"}}\n'
+    ), observed
+    assert stderr == b"", observed
+
+
 @pytest.mark.parametrize(("field", "value"), [
     ("report_sink_fd", 71),
     ("run_phase_fd", "71"),

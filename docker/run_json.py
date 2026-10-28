@@ -7519,7 +7519,7 @@ def _validate_report_fd_separation(args):
         return None
 
     def check(fd, label):
-        if isinstance(fd, int) and (
+        if isinstance(fd, int) and 3 <= fd <= (1 << (ctypes.sizeof(ctypes.c_int) * 8 - 1)) - 1 and (
                 fd == owner.fd or _same_open_file(owner.fd, fd)):
             raise _request_invalid(
                 f"error: {label} collides with the reserved report descriptor",

@@ -3038,10 +3038,10 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX
     endif()
 endif()
 
-# The stdout contract fixture is a small real shared library loaded by the
-# Python host. Its native entry point can write fd 1, fail after that write,
-# and emit a deterministic empty sink stream.
-if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
+# The Python host loads this small shared library; its native entry point
+# can write fd 1, fail after that write, and emit a deterministic empty sink stream.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX
+   AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
     add_library(run_json_stdout_strategy MODULE
         test_run_json_stdout_strategy.cpp ${PROJECT_SOURCE_DIR}/src/sha256.cpp)
     target_include_directories(run_json_stdout_strategy PRIVATE
