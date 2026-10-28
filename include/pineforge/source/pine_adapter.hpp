@@ -667,7 +667,7 @@ public:
     // are monotone, so a handle above this mark at an observation time was
     // unknown to every adapter collection populated before that observation.
     std::uint64_t high_water() const noexcept { return high_water_; }
-    // Rows erased over the run (a statistic; nothing reads it back).
+    std::array<std::uint64_t, 5> sequence_work() const noexcept;
     std::uint64_t erased_rows() const noexcept { return erased_rows_; }
     // The window is reserved for the rows a run keeps live at once, not for
     // every incarnation it will allocate: the table stays O(live).
@@ -684,7 +684,7 @@ public:
         high_water_ = 0;
         erased_rows_ = 0;
         erased_digest_ = kFoldBasis;
-        erased_minima_.clear();
+        erased_minima_.clear(); sequence_index_.reset(); sequence_queries_ = sequence_rows_ = 0;
         erased_foreign_ids_.clear();
 #if PINEFORGE_PLACEMENT_AUDIT
         detail::placement_audit_forget(this);
@@ -788,17 +788,17 @@ public:
             spare_.pop_back();
             overwrite(*node, std::forward<Args>(args)...);
         }
-        PlacementSnapshot* row = node.get();
-        place(incarnation, std::move(node));
+        PlacementSnapshot* row = node.get(); prepare_place(incarnation);
+        change_sequences(incarnation, nullptr, row); place(incarnation, std::move(node));
         ++size_;
         high_water_ = std::max(high_water_, incarnation);
         return {iterator(this, incarnation, row), true};
     }
 
-    // Queries scan retained identities directly. Replacement has no scratch
-    // workset to refold/reserve, and never changes the erased minima.
+    // Publish the derived identity update before replacing the retained row.
+    // Rewritten predecessors never become erased history.
     void replace(std::uint64_t incarnation, PlacementSnapshot&& snapshot) {
-        at(incarnation) = std::move(snapshot);
+        auto& row = at(incarnation); change_sequences(incarnation, &row, &snapshot); row = std::move(snapshot);
     }
 
     // Borrow the complete retirement workset before touching any row, cohort
@@ -820,9 +820,9 @@ public:
         const PlacementSnapshot* row = locate(incarnation);
         if (!row) return false;
         preflight_erased_rows([&](const auto& emit) { emit(*row); });
-        // Fold the admitted pair before taking the node as well: a disk I/O
-        // failure must not lose its retained-row query evidence.
-        fold_sequence(erased_minima_, *row);
+        // A failed derived write publishes no placement or erased-history change.
+        change_sequences(incarnation, row, nullptr);
+        try { fold_sequence(erased_minima_, *row); } catch (...) { sequence_index_.reset(); throw; }
         std::unique_ptr<PlacementSnapshot> node = take(incarnation);
         remember_erased(*node);
         --size_;
@@ -844,11 +844,11 @@ public:
     // Smallest command_sequence among the rows ever inserted whose source_id
     // is `source_id`: over the rows bound to `from_entry` when any is, else
     // over all of them; UINT64_MAX when no row carried the id. The retained
-    // rows are scanned without a q cache; replace() rewrites their identity
-    // wholesale. Every erased row was folded into e when it left.
+    // rows have a replacement-safe backed identity index; erased minima stay
+    // separate. An explicitly present UINT64_MAX pair still falls back.
     std::uint64_t command_sequence_for(const std::string& source_id,
                                        const std::string& from_entry) const;
-
+private: friend class PineExecutionAdapter; bool exit_sequences_certified() const noexcept; void begin_exit_sequence_certificate(); void watch_exit_sequence(const SourceId&, const SourceId&); void certify_exit_sequences() noexcept; public:
     // Whether an erased row that is not a margin close carried a source id
     // other than `first` and `second`: what a scan for such a row over every
     // placement ever made reads of the erased ones.
@@ -868,7 +868,7 @@ private:
     static constexpr std::size_t kWindowReserve = 256;
     static constexpr std::size_t kSpareNodes = 64;
     static constexpr std::uint64_t kFoldBasis = 1469598103934665603ULL;
-
+    struct SequenceIndex; SequenceIndex& sequence_index() const; std::array<std::uint64_t, 2> retained_sequences(const SourceId&, const SourceId&) const;
     // Single keys hold the minimum over any from_entry; pair keys hold the
     // exact (source_id, from_entry) minimum. Their separate key domains keep
     // an empty from_entry distinct from the any-entry summary. Neither the
@@ -929,8 +929,8 @@ private:
 
     void place(std::uint64_t incarnation, std::unique_ptr<PlacementSnapshot> node);
     std::unique_ptr<PlacementSnapshot> take(std::uint64_t incarnation) noexcept;
-    void remember_erased(const PlacementSnapshot& row);
-
+    void remember_erased(const PlacementSnapshot& row); void prepare_place(std::uint64_t incarnation);
+    void change_sequences(std::uint64_t, const PlacementSnapshot*, const PlacementSnapshot*);
     // window_[head_ + i] holds incarnation base_ + i, or null; old_ holds the
     // rows below base_, ascending.
     std::vector<std::unique_ptr<PlacementSnapshot>> window_;
@@ -942,7 +942,7 @@ private:
     std::uint64_t high_water_ = 0;
     std::uint64_t erased_rows_ = 0;
     std::uint64_t erased_digest_ = kFoldBasis;
-    // Only erased history needs storage. Retained rows are the q query view.
+    mutable std::shared_ptr<SequenceIndex> sequence_index_; mutable std::uint64_t sequence_queries_ = 0, sequence_rows_ = 0;
     Minima erased_minima_;
     // Up to three distinct source ids of erased non-margin rows: as many as
     // erased_non_margin_id_outside() can ever need.
@@ -1968,7 +1968,7 @@ public:
     bool immediate_calculation_close(
         const native_order::ExecutionAppliedEvent&,
         const NativeDecisionContext&) const noexcept;
-
+    struct ExitGroupWork;
     std::uint64_t command_sequence_for_exit(const SourceId& exit_id,
                                             const SourceId& from_entry = {}) const;
     bool is_open_phase_exit(std::size_t trade_index) const;
@@ -1983,7 +1983,7 @@ public:
     // slot start + i takes the phase of the trade previously at indices[i].
     void permute_exit_phases(std::size_t start, const std::vector<std::size_t>& indices);
     void permute_exit_phase_rows(std::size_t start, std::size_t count,
-                                const std::function<std::size_t(std::size_t)>& source_at);
+                                const std::function<std::size_t(std::size_t)>& source_at); ExitGroupWork exit_group_work() const noexcept;
     // The place of each of `ids` among the children one global strategy.exit
     // fill closes, in TradingView's entry-id table (exit_rank_keys_); nullopt
     // where the pinned table does not reach (PineStrategyHost::
@@ -2991,6 +2991,27 @@ private:
         std::numeric_limits<std::int64_t>::min();
     PendingIntentView pending_view_{};
     ::pineforge::detail::ScratchSequence<std::uint8_t> trade_exit_phase_;
+public:
+    struct ExitGroupWork {
+        std::uint64_t publications = 0, tail_rows = 0, comparisons = 0;
+        std::uint64_t sequence_queries = 0, sequence_rows = 0, sequence_index_operations = 0;
+        std::uint64_t sequence_index_pages = 0, sequence_index_resident_bytes = 0;
+        std::uint64_t scratch_operations = 0, replacements = 0;
+        std::size_t retained_placements = 0;
+    };
+private:
+    // Derived ordering evidence and diagnostics are absent from the state fold.
+    struct ExitGroupCertificate {
+        const TradeLedger* ledger = nullptr;
+        std::size_t base = 0, start = 0, end = 0;
+        bool rows_valid = false;
+    } exit_group_certificate_;
+    ExitGroupWork exit_group_work_{};
+    bool exit_group_certified(const TradeLedger&) const noexcept;
+    void invalidate_exit_group(std::size_t first, std::size_t count = 1) noexcept;
+    void certify_exit_group(const TradeLedger&, std::size_t start, bool ordered = true);
+    void finish_exit_group_sort(::pineforge::detail::CommandScratchStore&,
+                                const ::pineforge::detail::ScratchStoreStats&) noexcept;
     // TradingView's entry-id table (global_exit_child_ranks): every entry id
     // in the order of its first fill, never removed, with a running digest,
     // and the most keys it ever held counting one transient key per live

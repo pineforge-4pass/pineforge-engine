@@ -988,16 +988,16 @@ std::uint64_t PlacementTable::command_sequence_for(const std::string& source_id,
     std::uint64_t any = absent;
     bool paired_known = false;
     std::uint64_t paired = absent;
-    visit_rows([&](std::uint64_t, const PlacementSnapshot& row) {
-        if (row.source_id != source_id) return false;
-        known = true;
-        any = std::min(any, row.command_sequence);
-        if (row.from_entry == from_entry) {
-            paired_known = true;
-            paired = std::min(paired, row.command_sequence);
-        }
-        return false;
-    });
+    const auto retained = retained_sequences(source_id, from_entry);
+    ++sequence_queries_;
+    any = retained[0];
+    paired = retained[1];
+    known = any != absent;
+    paired_known = paired != absent;
+    // The backed index contains only current retained identities. Replacement
+    // removes its predecessor rather than folding it into erased history.
+    // Single and exact-pair domains remain distinct, including empty pairs.
+    // Both minima still combine with the original erased evidence below.
     if (const auto minima = erased_minima_.lookup(source_id)) {
         known = true;
         any = std::min(any, *minima);
@@ -2612,7 +2612,7 @@ void PineExecutionAdapter::reset_for_run() {
     dropped_close_count_ = 0;
     dropped_close_digest_ = 1469598103934665603ULL;
     open_entry_fees_.clear();
-    trade_exit_phase_.clear();
+    trade_exit_phase_.clear(); exit_group_certificate_ = {}; exit_group_work_ = {};
     exit_phase_final_ = 0;
     exit_phase_digest_ = 1469598103934665603ULL;
     exit_rank_keys_.clear();
@@ -6879,7 +6879,7 @@ void PineExecutionAdapter::set_exit_phase(std::size_t trade_index, std::uint8_t 
         exit_phase_digest_ = prefix.exit_phase_digest;
         if (host_) detail::run_consumer(*host_).restart_exit_phases();
     }
-    trade_exit_phase_.set(offset, phase);
+    if (trade_exit_phase_[offset] != phase) { invalidate_exit_group(trade_index); } trade_exit_phase_.set(offset, phase);
 }
 
 void PineExecutionAdapter::observe_terminal_receipts() {
@@ -28956,12 +28956,13 @@ PineExecutionAdapter::require_cohort(const SourceId& id) {
 namespace pineforge::source {
 
 void PlacementTable::set_auxiliary_tables_directory(const std::string& directory) {
-    erased_minima_.set_directory(directory);
+    erased_minima_.set_directory(directory); sequence_index_.reset();
 }
 
 void PlacementTable::bind_auxiliary_scratch_tables(const std::shared_ptr<::pineforge::detail::ScratchSlab>& slab) {
     erased_minima_.bind_scratch_tables(slab, ::pineforge::detail::ScratchResource::erased_data,
                                       ::pineforge::detail::ScratchResource::erased_index);
+    sequence_index_.reset();
 }
 
 void PlacementTable::fixture_use_memory_auxiliary_tables() {
@@ -28969,7 +28970,7 @@ void PlacementTable::fixture_use_memory_auxiliary_tables() {
         throw coded<std::logic_error>(
             RunFailureCode::engine_invariant, {},
             "placement auxiliary fixture backend changed after use");
-    erased_minima_.fixture_use_memory_reference();
+    erased_minima_.fixture_use_memory_reference(); sequence_index_.reset();
 }
 
 std::uint64_t PlacementTable::auxiliary_disk_bytes() const noexcept {
@@ -29220,6 +29221,425 @@ bool PineExecutionAdapter::has_live_trail_policy() const noexcept {
     return counts[static_cast<std::size_t>(PineOrderFamily::Entry)] != 0
         || counts[static_cast<std::size_t>(PineOrderFamily::ExitStop)] != 0
         || counts[static_cast<std::size_t>(PineOrderFamily::ExitTrail)] != 0;
+}
+
+} // namespace pineforge::source
+
+namespace pineforge::source {
+
+// Retained identities and the current tail's dependencies use an independent
+// store. Neither its handles nor its physical layout enter the broker hash.
+// The comparison index has logarithmic population cost and fixed resident
+// workspace; it is not a constant-time radix directory.
+struct PlacementTable::SequenceIndex {
+    using Status = ::pineforge::detail::ScratchStatus;
+    using Handle = ::pineforge::detail::ScratchHandle;
+    using Buffer = ::pineforge::detail::ScratchBuffer;
+    using Bytes = ::pineforge::detail::ScratchBytes;
+    using Field = ::pineforge::detail::ScratchField;
+    static constexpr auto absent = std::numeric_limits<std::uint64_t>::max();
+
+    // A length-delimited exact identity, followed by big-endian sequence and
+    // incarnation words. Domains 0 and 1 index retained singles and pairs.
+    // Domain 3 watches query answers. Domain 2 orders fallback dependencies
+    // by their answer before their from-entry bytes, for bounded range checks.
+    class Key final : public ::pineforge::detail::ScratchByteSource {
+    public:
+        Key(unsigned domain, std::string_view id,
+            std::optional<std::string_view> from = std::nullopt,
+            std::uint64_t sequence = 0, std::uint64_t incarnation = 0)
+            : domain_(domain), id_(id), from_(from),
+              sequence_(sequence), incarnation_(incarnation) {
+            if (id.size() > absent - 33
+                || (from && from->size() > absent - 33 - id.size()))
+                throw std::length_error("retained identity key is too long");
+        }
+        std::uint64_t prefix_size() const noexcept {
+            return 9 + id_.size() + (from_ ? 8 + from_->size() : 0);
+        }
+        std::uint64_t id_prefix_size() const noexcept { return 9 + id_.size(); }
+        std::uint64_t size() const noexcept override { return prefix_size() + 16; }
+        Status read(std::uint64_t offset, Buffer destination) const noexcept override {
+            if (offset > size() || destination.size > size() - offset
+                || (destination.size && !destination.data)) return Status::programming_error;
+            for (std::size_t index = 0; index < destination.size; ++index)
+                destination.data[index] = static_cast<std::byte>(byte(offset + index));
+            return Status::ok;
+        }
+    private:
+        static unsigned char word(std::uint64_t value, std::uint64_t at) noexcept {
+            return static_cast<unsigned char>(value >> (8 * (7 - at)));
+        }
+        unsigned char byte(std::uint64_t at) const noexcept {
+            if (at == 0) return static_cast<unsigned char>(domain_);
+            --at;
+            if (at < 8) return word(id_.size(), at);
+            at -= 8;
+            if (at < id_.size()) return static_cast<unsigned char>(id_[at]);
+            at -= id_.size();
+            if (domain_ == 2) {
+                if (at < 8) return word(sequence_, at);
+                at -= 8;
+            }
+            if (from_) {
+                if (at < 8) return word(from_->size(), at);
+                at -= 8;
+                if (at < from_->size()) return static_cast<unsigned char>((*from_)[at]);
+                at -= from_->size();
+            }
+            if (domain_ == 2) return word(incarnation_, at);
+            return at < 8 ? word(sequence_, at) : word(incarnation_, at - 8);
+        }
+        unsigned domain_;
+        std::string_view id_;
+        std::optional<std::string_view> from_;
+        std::uint64_t sequence_, incarnation_;
+    };
+
+    static Status compare(void* context, const ::pineforge::detail::ScratchByteSource& a,
+                          const ::pineforge::detail::ScratchByteSource& b, int& order) noexcept {
+        ++static_cast<SequenceIndex*>(context)->operations;
+        std::array<std::byte, 128> left{}, right{};
+        const auto common = std::min(a.size(), b.size());
+        for (std::uint64_t offset = 0; offset < common;) {
+            const auto count = static_cast<std::size_t>(
+                std::min<std::uint64_t>(left.size(), common - offset));
+            auto status = a.read(offset, {left.data(), count});
+            if (status != Status::ok) return status;
+            status = b.read(offset, {right.data(), count});
+            if (status != Status::ok) return status;
+            const int compared = std::memcmp(left.data(), right.data(), count);
+            if (compared != 0) { order = compared; return Status::ok; }
+            offset += count;
+        }
+        order = a.size() < b.size() ? -1 : b.size() < a.size() ? 1 : 0;
+        return Status::ok;
+    }
+
+    mutable std::uint64_t operations = 0;
+    std::unique_ptr<::pineforge::detail::ScratchBacking> backing =
+        detail::make_command_scratch_backing(512);
+    ::pineforge::detail::CommandScratchStore store{
+        {2, 512, 1, 1, {0x6578697473657131ULL, this, compare},
+         ::pineforge::detail::ScratchOpenMode::create_empty}, backing.get()};
+    bool certified = false;
+
+    SequenceIndex() { require(store.status()); }
+    void require(Status status) const {
+        if (status == Status::ok) return;
+        if (status == Status::io_error)
+            ::pineforge::detail::rethrow_carried_scratch_failure(store.carried_failure());
+        throw coded<std::logic_error>(
+            status == Status::io_error ? RunFailureCode::scratch_io_failed
+                                       : RunFailureCode::engine_invariant,
+            {}, "retained sequence index operation failed");
+    }
+    struct Transaction {
+        SequenceIndex& index;
+        explicit Transaction(SequenceIndex& value) : index(value) {
+            ++index.operations;
+            index.require(index.store.begin());
+        }
+        ~Transaction() {
+            if (index.store.transaction_active()) (void)index.store.rollback();
+        }
+        void commit() {
+            ++index.operations;
+            index.require(index.store.commit(::pineforge::detail::ScratchDurability::buffered));
+        }
+    };
+    Handle seek(const Key& key) const {
+        ++operations;
+        Handle handle = ::pineforge::detail::scratch_no_handle;
+        const auto status = store.lower_bound(key, handle);
+        if (status != Status::end) require(status);
+        return handle;
+    }
+    bool matches(Handle handle, const Key& key, std::uint64_t bytes) const {
+        if (handle == ::pineforge::detail::scratch_no_handle) return false;
+        ::pineforge::detail::ScratchRecordInfo info{};
+        ++operations;
+        require(store.point(handle, info));
+        if (info.key_bytes < bytes || (bytes == key.size() && info.key_bytes != bytes))
+            return false;
+        std::array<std::byte, 128> left{}, right{};
+        for (std::uint64_t offset = 0; offset < bytes;) {
+            const auto count = static_cast<std::size_t>(
+                std::min<std::uint64_t>(left.size(), bytes - offset));
+            ++operations;
+            require(store.read(handle, Field::key, offset, {left.data(), count}));
+            require(key.read(offset, {right.data(), count}));
+            if (std::memcmp(left.data(), right.data(), count) != 0) return false;
+            offset += count;
+        }
+        return true;
+    }
+    Handle find(const Key& key) const {
+        const auto handle = seek(key);
+        return matches(handle, key, key.size()) ? handle : ::pineforge::detail::scratch_no_handle;
+    }
+    std::uint64_t minimum(unsigned domain, std::string_view id,
+                          std::optional<std::string_view> from = std::nullopt) const {
+        const Key probe(domain, id, from);
+        const auto handle = seek(probe);
+        if (!matches(handle, probe, probe.prefix_size())) return absent;
+        std::array<std::byte, 8> bytes{};
+        ++operations;
+        require(store.read(handle, Field::key, probe.prefix_size(), {bytes.data(), bytes.size()}));
+        std::uint64_t result = 0;
+        for (const auto byte : bytes)
+            result = (result << 8) | std::to_integer<unsigned char>(byte);
+        return result;
+    }
+    void put(const Key& key, Bytes bytes = {}) {
+        ::pineforge::detail::ScratchSpanSource value(bytes);
+        Handle handle = ::pineforge::detail::scratch_no_handle;
+        ++operations;
+        require(store.put(key, value, handle));
+    }
+    void erase(const Key& key) {
+        const auto handle = find(key);
+        if (handle == ::pineforge::detail::scratch_no_handle)
+            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                          "retained sequence identity is absent");
+        ++operations;
+        require(store.erase(handle));
+    }
+    void insert(std::uint64_t incarnation, const PlacementSnapshot& row) {
+        put(Key(0, row.source_id, std::nullopt, row.command_sequence, incarnation));
+        put(Key(1, row.source_id, row.from_entry, row.command_sequence, incarnation));
+    }
+    void remove(std::uint64_t incarnation, const PlacementSnapshot& row) {
+        erase(Key(0, row.source_id, std::nullopt, row.command_sequence, incarnation));
+        erase(Key(1, row.source_id, row.from_entry, row.command_sequence, incarnation));
+    }
+    void clear_dependencies() {
+        certified = false;
+        Transaction transaction(*this);
+        const Key first(2, {});
+        for (auto handle = seek(first); handle != ::pineforge::detail::scratch_no_handle;
+             handle = seek(first)) {
+            ++operations;
+            require(store.erase(handle));
+        }
+        transaction.commit();
+    }
+    void watch(unsigned domain, std::string_view id,
+               std::optional<std::string_view> from, std::uint64_t minimum) {
+        const Key key(domain, id, from, domain == 2 ? minimum : 0);
+        if (find(key) != ::pineforge::detail::scratch_no_handle) return;
+        Transaction transaction(*this);
+        put(key, {reinterpret_cast<const std::byte*>(&minimum), sizeof minimum});
+        transaction.commit();
+    }
+    template<class Erased>
+    std::uint64_t combined_minimum(unsigned domain, std::string_view id,
+                                   std::optional<std::string_view> from,
+                                   const Erased& erased) const {
+        auto current = minimum(domain, id, from);
+        const auto historical = from ? erased.lookup(id, *from) : erased.lookup(id);
+        return historical ? std::min(current, *historical) : current;
+    }
+    template<class Erased>
+    void check_pair(std::string_view id, std::string_view from, const Erased& erased) {
+        if (!certified) return;
+        const auto handle = find(Key(3, id, from));
+        if (handle == ::pineforge::detail::scratch_no_handle) return;
+        std::uint64_t previous = absent;
+        ++operations;
+        require(store.read(handle, Field::value, 0,
+                           {reinterpret_cast<std::byte*>(&previous), sizeof previous}));
+        const auto paired = combined_minimum(1, id, from, erased);
+        const auto current = paired != absent
+            ? paired : combined_minimum(0, id, std::nullopt, erased);
+        if (previous != current) { certified = false; return; }
+        // A pair can begin/end using the fallback while its final answer
+        // stays identical. Maintain that dependency without dirtying the tail.
+        const Key fallback(2, id, from, previous);
+        const auto dependency = find(fallback);
+        if (paired == absent && dependency == ::pineforge::detail::scratch_no_handle)
+            put(fallback);
+        else if (paired != absent && dependency != ::pineforge::detail::scratch_no_handle) {
+            ++operations;
+            require(store.erase(dependency));
+        }
+    }
+    template<class Erased>
+    void check_fallbacks(std::string_view id, const Erased& erased) {
+        if (!certified) return;
+        const Key first(2, id);
+        const auto handle = seek(first);
+        if (!matches(handle, first, first.id_prefix_size())) return;
+        const auto current = combined_minimum(0, id, std::nullopt, erased);
+        std::array<std::byte, 8> bytes{};
+        ++operations;
+        require(store.read(handle, Field::key, first.id_prefix_size(), {bytes.data(), bytes.size()}));
+        std::uint64_t minimum = 0;
+        for (const auto byte : bytes)
+            minimum = (minimum << 8) | std::to_integer<unsigned char>(byte);
+        if (minimum != current) { certified = false; return; }
+        if (current == absent) return;
+        // Every remaining fallback must have this exact answer. One lower
+        // bound rules out the whole greater-answer range, without a tail walk.
+        const Key greater(2, id, std::nullopt, current + 1);
+        if (matches(seek(greater), greater, greater.id_prefix_size())) certified = false;
+    }
+};
+
+PlacementTable::SequenceIndex& PlacementTable::sequence_index() const {
+    if (!sequence_index_) {
+        auto next = std::make_shared<SequenceIndex>();
+        SequenceIndex::Transaction transaction(*next);
+        // The normal first insertion builds an empty index. Only a failed
+        // derived write or a backing rebind needs this recovery walk.
+        visit_rows([&](std::uint64_t incarnation, const PlacementSnapshot& row) {
+            ++sequence_rows_;
+            next->insert(incarnation, row);
+            return false;
+        });
+        transaction.commit();
+        sequence_index_ = std::move(next);
+    }
+    return *sequence_index_;
+}
+
+void PlacementTable::prepare_place(std::uint64_t incarnation) {
+    // All allocation precedes the backed update. place() then only moves an
+    // owning pointer into reserved storage, so it cannot fail after commit.
+    const auto reserve = [](auto& rows, std::size_t required) {
+        if (required <= rows.capacity()) return;
+        const auto grown = rows.capacity()
+            + std::min(rows.capacity(), rows.max_size() - rows.capacity());
+        rows.reserve(std::max(required, grown));
+    };
+    if (window_rows_ == 0 && (old_.empty() || incarnation > old_.back().first)) {
+        reserve(window_, 1);
+    } else if (incarnation < base_) {
+        reserve(old_, old_.size() + 1);
+    } else {
+        const auto index = head_ + static_cast<std::size_t>(incarnation - base_);
+        if (index >= window_.size()) reserve(window_, index + 1);
+    }
+}
+
+void PlacementTable::change_sequences(std::uint64_t incarnation,
+                                     const PlacementSnapshot* before,
+                                     const PlacementSnapshot* after) {
+    static_assert(std::is_nothrow_move_assignable_v<PlacementSnapshot>,
+                  "placement publication must not fail after its identity update");
+    if (before && after && before->source_id == after->source_id
+        && before->from_entry == after->from_entry
+        && before->command_sequence == after->command_sequence) return;
+    try {
+        auto& index = sequence_index();
+        SequenceIndex::Transaction transaction(index);
+        if (before) index.remove(incarnation, *before);
+        if (after) index.insert(incarnation, *after);
+        // Erasure transfers the identical minima to erased_minima_; its
+        // combined query answers therefore do not change at all.
+        if (after) {
+            if (before) index.check_pair(before->source_id, before->from_entry, erased_minima_);
+            index.check_pair(after->source_id, after->from_entry, erased_minima_);
+            if (before) index.check_fallbacks(before->source_id, erased_minima_);
+            index.check_fallbacks(after->source_id, erased_minima_);
+        }
+        transaction.commit();
+    } catch (...) {
+        // Placements are still unchanged. Discard all possibly stale derived
+        // handles; the next use reconstructs from the authoritative rows.
+        sequence_index_.reset();
+        throw;
+    }
+}
+
+std::array<std::uint64_t, 2> PlacementTable::retained_sequences(
+        const SourceId& id, const SourceId& from) const {
+    constexpr auto absent = SequenceIndex::absent;
+    if (size_ == 0 && !sequence_index_) return {absent, absent};
+    const auto& index = sequence_index();
+    return {index.minimum(0, id), index.minimum(1, id, from)};
+}
+
+std::array<std::uint64_t, 5> PlacementTable::sequence_work() const noexcept {
+    if (!sequence_index_) return {sequence_queries_, sequence_rows_, 0, 0, 0};
+    const auto stats = sequence_index_->store.stats();
+    return {sequence_queries_, sequence_rows_, sequence_index_->operations,
+            stats.page_reads + stats.page_writes + stats.syncs, stats.resident_bytes};
+}
+
+bool PlacementTable::exit_sequences_certified() const noexcept {
+    return sequence_index_ && sequence_index_->certified;
+}
+
+void PlacementTable::begin_exit_sequence_certificate() {
+    sequence_index().clear_dependencies();
+}
+
+void PlacementTable::watch_exit_sequence(const SourceId& id, const SourceId& from) {
+    auto& index = sequence_index();
+    const auto paired = index.combined_minimum(1, id, from, erased_minima_);
+    const auto answer = paired != SequenceIndex::absent
+        ? paired : index.combined_minimum(0, id, std::nullopt, erased_minima_);
+    index.watch(3, id, from, answer);
+    // A finite paired minimum masks the any-entry fallback completely.
+    if (paired != SequenceIndex::absent) return;
+    index.watch(2, id, from, answer);
+}
+
+void PlacementTable::certify_exit_sequences() noexcept {
+    if (sequence_index_) sequence_index_->certified = true;
+}
+
+PineExecutionAdapter::ExitGroupWork PineExecutionAdapter::exit_group_work() const noexcept {
+    auto result = exit_group_work_;
+    const auto sequence = placement_.sequence_work();
+    result.sequence_queries = sequence[0];
+    result.sequence_rows = sequence[1];
+    result.sequence_index_operations = sequence[2];
+    result.sequence_index_pages = sequence[3];
+    result.sequence_index_resident_bytes = sequence[4];
+    result.retained_placements = placement_.size();
+    return result;
+}
+
+bool PineExecutionAdapter::exit_group_certified(const TradeLedger& trades) const noexcept {
+    const auto& certificate = exit_group_certificate_;
+    return certificate.rows_valid && certificate.ledger == &trades
+        && certificate.base == trades.base() && certificate.end == trades.size()
+        && placement_.exit_sequences_certified();
+}
+
+void PineExecutionAdapter::invalidate_exit_group(std::size_t first, std::size_t count) noexcept {
+    auto& certificate = exit_group_certificate_;
+    // The preceding row is a dependency too: a key rewrite can merge it
+    // into the formerly certified group without changing the ledger size.
+    const auto boundary = certificate.start == 0 ? 0 : certificate.start - 1;
+    if (count && first < certificate.end
+        && (first >= boundary || count > boundary - first))
+        certificate.rows_valid = false;
+}
+
+void PineExecutionAdapter::certify_exit_group(const TradeLedger& trades, std::size_t start, bool ordered) {
+    exit_group_certificate_.rows_valid = false;
+    placement_.begin_exit_sequence_certificate();
+    for (std::size_t index = start; index < trades.size(); ++index) {
+        ++exit_group_work_.tail_rows;
+        const Trade& row = trades[index];
+        placement_.watch_exit_sequence(row.exit_id, row.entry_id);
+    }
+    placement_.certify_exit_sequences();
+    exit_group_certificate_ = {&trades, trades.base(), start, trades.size(), ordered};
+}
+
+void PineExecutionAdapter::finish_exit_group_sort(
+        ::pineforge::detail::CommandScratchStore& scratch,
+        const ::pineforge::detail::ScratchStoreStats& before) noexcept {
+    const auto after = scratch.stats();
+    exit_group_work_.scratch_operations += (after.page_reads - before.page_reads)
+        + (after.page_writes - before.page_writes) + (after.syncs - before.syncs);
+    // The permutation changes positions, preserving the watched key set.
+    // Publish only after all replacements and scratch rollback succeeded.
+    exit_group_certificate_.rows_valid = true;
 }
 
 } // namespace pineforge::source
