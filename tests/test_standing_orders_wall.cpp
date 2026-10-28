@@ -192,13 +192,13 @@ std::vector<int> parse_grid(const char* value) {
         const long count = std::strtol(cursor, &end, 10);
         if (errno != 0 || end == cursor || count <= 0
             || count > std::numeric_limits<int>::max()
-            || (*end != ',' && *end != '\0') || grid.size() == 4)
-            throw std::runtime_error("standing-orders --n requires three or four positive int counts");
+            || (*end != ',' && *end != '\0') || grid.size() == 5)
+            throw std::runtime_error("standing-orders --n requires three to five positive int counts");
         grid.push_back(static_cast<int>(count));
         if (*end == '\0') break;
         cursor = end + 1;
     }
-    require(grid.size() >= 3, "standing-orders --n requires three or four positive int counts");
+    require(grid.size() >= 3, "standing-orders --n requires three to five positive int counts");
     return grid;
 }
 
@@ -223,8 +223,9 @@ void require_linear_work(const std::vector<int>& grid,
                 + std::to_string(grid[i]));
 #if defined(__linux__)
     // One spill per new request and a terminal read of each spill are linear.
-    // Allow twice population growth for tree depth / spill-knee overhead:
-    // at 7500 / 2500 this is the required maximum ratio of six.
+    // Allow twice population growth for tree depth overhead against the
+    // reference N (the first grid point): at 10000 / 5000 the maximum ratio
+    // is four, at 15000 / 5000 it is six.
     for (std::size_t i = 1; i < grid.size(); ++i)
         require(static_cast<long double>(work[i].preads) * grid[0]
                     <= static_cast<long double>(work[0].preads) * grid[i] * 2.0L,
@@ -246,7 +247,15 @@ double parse_cap(const char* value) {
 
 int main(int argc, char** argv) {
     try {
-        std::vector<int> grid{2500, 5000, 7500, 10000};
+        // The reference point is the first entry; it sits above the 4,096
+        // resident cap so the budget below never mixes the resident regime
+        // into the baseline. Factor 2 against that reference is unchanged.
+        // The 20,000-order row is not in this default grid: reads per order keep
+        // rising linearly past 15,000 (a quadratic total) and exceed the factor
+        // at 20,000, on this tree and on the one before it; tracked in public
+        // issue #621. Pass --n=5000,7500,10000,15000,20000 to run it; it
+        // returns to the default grid when that is fixed.
+        std::vector<int> grid{5000, 7500, 10000, 15000};
         double cap_seconds = 600.0;
         for (int i = 1; i < argc; ++i) {
             if (std::strncmp(argv[i], "--n=", 4) == 0)
@@ -254,7 +263,7 @@ int main(int argc, char** argv) {
             else if (std::strncmp(argv[i], "--cap-seconds=", 14) == 0)
                 cap_seconds = parse_cap(argv[i] + 14);
             else
-                throw std::runtime_error("standing-orders usage: [--n=a,b,c[,d]] [--cap-seconds=s]");
+                throw std::runtime_error("standing-orders usage: [--n=a,b,c[,d[,e]]] [--cap-seconds=s]");
         }
         std::vector<RunWork> work(grid.size());
         std::vector<double> walls(grid.size(), kNaN);
