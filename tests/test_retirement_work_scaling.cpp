@@ -1,6 +1,6 @@
 // Measure retirement through ordinary strategy commands and the public run.
 // Prices and quantities below have exact integer money oracles. Work counts
-// describe the observed loops; this probe imposes no time or scaling verdict.
+// pin unchanged quiet work independently of retained history and run length.
 #include <pineforge/source/pine_strategy_host.hpp>
 
 #include <cinttypes>
@@ -195,7 +195,11 @@ struct Report {
     ~Report() { BacktestEngine::free_report(&value); }
 };
 
-void run_shape(Shape shape, int n, int history, bool recording) {
+struct QuietRate {
+    std::uint64_t rows = 0, bars = 0;
+};
+
+QuietRate run_shape(Shape shape, int n, int history, bool recording) {
     RetirementProbe host(shape, n, history, recording);
     const auto bars = feed(shape, n);
     host.run(bars.data(), n, "1", "1");
@@ -255,9 +259,17 @@ void run_shape(Shape shape, int n, int history, bool recording) {
         require(begin.retired_exit_rows >= static_cast<std::uint64_t>(history)
                 && end.retired_exit_rows == begin.retired_exit_rows,
                 "retired bracket fixture did not retain nonlive exit rows");
-        require(quiet.row_visits > 0 && quiet.pin_rows > 0,
+        // Setup must observe real scans before unchanged bars can skip them.
+        require(host.begin_quiet.work.row_visits > 0 && host.begin_quiet.work.pin_rows > 0,
                 "retired bracket scan counters are zero");
-        require(quiet.gate_rows > 0, "retired bracket gate scan counter is zero");
+        require(host.begin_quiet.work.gate_rows > 0,
+                "retired bracket gate scan counter is zero");
+        // The retention inputs do not change in this window. At most two
+        // reference rows per bar may be visited, regardless of retained exits.
+        const auto quiet_bars = static_cast<std::uint64_t>(
+            host.quiet_end() - host.quiet_begin());
+        require(quiet.row_visits <= 2 * quiet_bars,
+                "quiet retirement row visits exceeded two per bar");
     } else if (shape == Shape::MissingFront) {
         require(begin.C == static_cast<std::uint64_t>(history + 1)
                 && host.begin_quiet.work.origins_retired > 0,
@@ -272,24 +284,235 @@ void run_shape(Shape shape, int n, int history, bool recording) {
                 "per bar bracket churn did not visit peers and erase retired rows");
     }
     require(terminal.work.rows_erased > 0, "retirement fixture erased no placement rows");
+    return {quiet.row_visits, static_cast<std::uint64_t>(
+        host.quiet_end() - host.quiet_begin())};
+}
+
+enum class Change { Publication, Withdrawal, Pending };
+
+class RetentionChangeProbe final : public source::PineStrategyHost {
+public:
+    explicit RetentionChangeProbe(Change change) : change_(change) {
+        source::PineStrategyConfig config;
+        config.initial_capital = 1000000.0;
+        config.default_qty_type = static_cast<int>(QtyType::FIXED);
+        config.default_qty_value = 1.0;
+        config.pyramiding = 2;
+        config.process_orders_on_close = true;
+        config.margin_long = config.margin_short = 0.0;
+        configure_pine_strategy(config);
+        set_syminfo_timezone("UTC");
+        set_syminfo_session("24x7");
+        set_syminfo_mintick(1.0);
+    }
+
+    bool saw_change = false, saw_age = false, saw_stable_pending = false;
+
+    void on_source_bar(const Bar&) override {
+        const int i = pine_bar_index();
+        if (i == 0) strategy_entry("position", true, missing, missing, 4.0);
+        if (i == 1)
+            strategy_exit("target", "position", 110.0, 90.0, missing, missing,
+                          missing, 100.0, {}, 1.0, "target");
+        if (i == 8) {
+            const auto p = adapter_.retirement_population();
+            require(live_position_size() == 3.0 && net_profit() == 10.0
+                    && p.retired_exit_rows >= 2 && p.live == 0 && p.pending == 0,
+                    "retention change fixture did not establish its retained bracket");
+            before_ = adapter_.retirement_work();
+        }
+        if (i == 9)
+            require(adapter_.retirement_work().placement_sweeps == before_.placement_sweeps,
+                    "unchanged bracket did not reuse its retirement certificate");
+        if (i == 10) {
+            before_ = adapter_.retirement_work();
+            if (change_ == Change::Publication) {
+                // One unit closes at the same 100 basis; the original lot and
+                // its incarnation still hold the other two units.
+                strategy_order("partial", false, 1.0);
+            } else if (change_ == Change::Withdrawal) {
+                strategy_cancel("target");
+            } else {
+                strategy_order("waiting", false, 1.0, 120.0);
+            }
+        }
+        if (i == 11) {
+            const auto& work = adapter_.retirement_work();
+            require(work.placement_sweeps > before_.placement_sweeps,
+                    "changed placement or lifecycle bypassed the retirement sweep");
+            require(live_position_size() == (change_ == Change::Publication ? 2.0 : 3.0),
+                    "retention change fixture changed the wrong quantity");
+            saw_change = true;
+        }
+        if (i == 13 && change_ == Change::Publication) {
+            require(adapter_.retirement_work().rows_erased > before_.rows_erased,
+                    "retired order did not expire after its placement bar");
+            saw_age = true;
+        }
+        if (change_ == Change::Pending) {
+            if (i == 14) {
+                before_ = adapter_.retirement_work();
+                strategy_order("waiting", false, 2.0, 120.0);
+            }
+            if (i == 15)
+                require(adapter_.retirement_work().placement_sweeps > before_.placement_sweeps,
+                        "pending replacement bypassed the retirement sweep");
+            if (i == 17) before_ = adapter_.retirement_work();
+            if (i == 20) {
+                const auto quiet = difference(adapter_.retirement_work(), before_);
+                require(pending_order_count() > 0 && live_position_size() == 3.0,
+                        "pending retention fixture lost its resting request");
+                require(quiet.row_visits <= 2 * 3 && quiet.placement_sweeps == 0,
+                        "stable pending references prevented retirement certificate reuse");
+                saw_stable_pending = true;
+            }
+        }
+        if (i == 24) strategy_cancel_all();
+        if (i == 25) strategy_close("position");
+    }
+
+private:
+    Change change_;
+    Work before_{};
+};
+
+void run_retention_changes() {
+    const auto bars = feed(Shape::RetiredBrackets, 32);
+    for (const auto change : {Change::Publication, Change::Withdrawal, Change::Pending}) {
+        RetentionChangeProbe host(change);
+        host.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
+        require(host.last_error().empty(), host.last_error().c_str());
+        require(host.saw_change && (change != Change::Publication || host.saw_age)
+                && (change != Change::Pending || host.saw_stable_pending),
+                "retention change fixture missed its observation");
+        Report report;
+        host.fill_report(&report.value);
+        // Four units entered at 100. One target earns (110 - 100) * 1 = 10;
+        // the partial order and final close both earn zero at 100.
+        require(host.live_position_size() == 0.0 && report.value.net_profit == 10.0
+                && report.value.trades_len == (change == Change::Publication ? 3 : 2),
+                "retention change report disagrees with the hand money oracle");
+        double closed_units = 0.0;
+        int targets = 0;
+        for (int i = 0; i < report.value.trades_len; ++i) {
+            const auto& trade = report.value.trades[i];
+            require(!trade.open_at_end && trade.entry_price == 100.0 && trade.commission == 0.0,
+                    "retention change trade has an unexpected basis");
+            closed_units += trade.qty;
+            if (trade.exit_price == 110.0) ++targets;
+            else require(trade.exit_price == 100.0, "retention change trade left its price path");
+        }
+        require(closed_units == 4.0 && targets == 1,
+                "retention change trades disagree with the hand quantity oracle");
+    }
+}
+
+class RetentionBindingProbe final : public source::PineStrategyHost {
+public:
+    RetentionBindingProbe() {
+        source::PineStrategyConfig config;
+        config.initial_capital = 1000000.0;
+        config.default_qty_type = static_cast<int>(QtyType::FIXED);
+        config.default_qty_value = 1.0;
+        config.pyramiding = 4;
+        config.process_orders_on_close = true;
+        config.margin_long = config.margin_short = 0.0;
+        configure_pine_strategy(config);
+        set_syminfo_timezone("UTC");
+        set_syminfo_session("24x7");
+        set_syminfo_mintick(1.0);
+    }
+    bool saw_binding = false;
+    void on_source_bar(const Bar&) override {
+        const int i = pine_bar_index();
+        if (i == 0) strategy_entry("position", true, missing, missing, 4.0);
+        if (i == 1)
+            strategy_exit("target", "position", 110.0, 90.0, missing, missing,
+                          missing, 100.0, {}, 1.0, "target");
+        if (i == 8) {
+            strategy_entry("joining", true, 95.0, missing, 1.0);
+            strategy_entry("waiting", true, 90.0, missing, 1.0);
+        }
+        if (i == 9) strategy_exit("protected", "joining", 120.0, 80.0);
+        if (i == 11) {
+            population_ = adapter_.retirement_population();
+            require(population_.live == 4 && population_.pending == 0
+                    && population_.opened == 1 && live_position_size() == 3.0,
+                    "retention binding fixture did not establish its pending entry and exits");
+            before_ = adapter_.retirement_work();
+        }
+        if (i == 12)
+            require(adapter_.retirement_work().placement_sweeps == before_.placement_sweeps
+                    && live_position_size() == 4.0,
+                    "retention binding fixture did not fill inside an unchanged opening");
+        if (i == 13) {
+            const auto p = adapter_.retirement_population();
+            // One live entry becomes an opened lot under the same handle.
+            // Its sibling retains the shared placement-bar pin. No placement
+            // is added or erased; the existing exits change binding metadata.
+            require(p.live == 3 && p.opened == 2 && p.pending == 0
+                    && p.R + p.live == population_.R + population_.live,
+                    "retention binding fixture changed placement membership");
+            require(adapter_.retirement_work().placement_sweeps > before_.placement_sweeps,
+                    "retention metadata change bypassed the retirement sweep");
+            saw_binding = true;
+        }
+        if (i == 24) strategy_cancel_all();
+        if (i == 25) strategy_close_all();
+    }
+private:
+    Work before_{};
+    Population population_{};
+};
+
+void run_retention_binding() {
+    auto bars = feed(Shape::RetiredBrackets, 32);
+    bars[12].low = 95.0;
+    RetentionBindingProbe host;
+    host.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
+    require(host.last_error().empty(), host.last_error().c_str());
+    require(host.saw_binding, "retention binding fixture missed its observation");
+    Report report;
+    host.fill_report(&report.value);
+    // The target earns (110 - 100) * 1 = 10. The joined unit earns
+    // (100 - 95) * 1 = 5; the other three units close at their 100 basis.
+    require(host.live_position_size() == 0.0 && report.value.net_profit == 15.0
+            && report.value.trades_len == 3,
+            "retention binding report disagrees with the hand money oracle");
+    double units = 0.0, profit = 0.0;
+    for (int i = 0; i < report.value.trades_len; ++i) {
+        const auto& trade = report.value.trades[i];
+        require(!trade.open_at_end && trade.commission == 0.0,
+                "retention binding trade has an unexpected basis");
+        units += trade.qty;
+        profit += (trade.exit_price - trade.entry_price) * trade.qty;
+    }
+    require(units == 5.0 && profit == 15.0,
+            "retention binding trades disagree with the hand money oracle");
 }
 #undef RETIREMENT_COUNTS
 } // namespace
 
 int main() {
     try {
+        QuietRate reference{};
         for (const int n : {2000, 4000, 8000}) {
             // History and quiet length also vary independently: each size
             // runs both the same history and one proportional to its bars.
             for (const int history : {64, n / 16}) {
                 for (const bool recording : {false, true}) {
-                    run_shape(Shape::RetiredBrackets, n, history, recording);
+                    const auto quiet = run_shape(Shape::RetiredBrackets, n, history, recording);
+                    if (!reference.bars) reference = quiet;
+                    require(quiet.rows * reference.bars == reference.rows * quiet.bars,
+                            "quiet retirement row visits per bar changed with history or run length");
                     run_shape(Shape::MissingFront, n, history, recording);
                 }
             }
             for (const bool recording : {false, true})
                 run_shape(Shape::Churn, n, 0, recording);
         }
+        run_retention_changes();
+        run_retention_binding();
         std::puts("retirement work probe: OK");
         return 0;
     } catch (const std::exception& error) {

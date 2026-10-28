@@ -42,3 +42,8 @@ M26	tests/mutations/M26.patch	test_native_dormant_book_tokens	keepalive lifetime
 M-resident-window	tests/mutations/M-resident-window.patch	test_native_dormant_book_transcript	--resident-window callback allowances match eager after a resident suffix refresh
 M-middle-in-match-path	tests/mutations/M-middle-in-match-path.patch	test_native_dormant_book_transcript	--notification-middle-spill forbids middle spills while candidates are retained
 M-first-ensure-throws	tests/mutations/M-first-ensure-throws.patch	test_native_dormant_book_allocation_fault	first book allocation failure falls back to eager matching
+retirement-publication	tests/mutations/retirement-publication.patch	test_retirement_work_scaling	run_retention_changes Publication: changed placement or lifecycle bypassed the retirement sweep
+retirement-withdrawal	tests/mutations/retirement-withdrawal.patch	test_retirement_work_scaling	run_retention_changes Withdrawal: changed placement or lifecycle bypassed the retirement sweep
+retirement-references	tests/mutations/retirement-references.patch	test_retirement_work_scaling	quiet cleanup: unchanged retirement sweep erased a placement, or retirement fixture erased no placement rows
+retirement-age	tests/mutations/retirement-age.patch	test_retirement_work_scaling	run_retention_changes Publication: unchanged retirement sweep erased a placement, or retired order did not expire after its placement bar
+retirement-metadata	tests/mutations/retirement-metadata.patch	test_retirement_work_scaling	run_retention_binding: retention metadata change bypassed the retirement sweep

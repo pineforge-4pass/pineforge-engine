@@ -34,7 +34,7 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
-
+#include <array>
 namespace pineforge::source {
 
 // A2: Pine entry ids and from_entry values are source strings, never a
@@ -3230,6 +3230,8 @@ public:
         // Backing counts are restored/spilled cohort records, not page I/O.
         std::uint64_t placement_slots = 0, backing_rows_restored = 0;
         std::uint64_t backing_rows_spilled = 0, spill_rows_visited = 0;
+        // Debug repeats the sweep independently of the decision-path counts.
+        std::uint64_t validation_sweeps = 0, validation_row_visits = 0;
     };
     struct RetirementPopulation {
         std::uint64_t m = 0, R = 0, C = 0;
@@ -3243,14 +3245,16 @@ private:
     RetirementWork retirement_work_{};
     struct RetirementObservation {
         PineExecutionAdapter& adapter;
+        RetirementWork& work;
         std::uint64_t slots, restored, spilled, spill_visits;
         explicit RetirementObservation(PineExecutionAdapter& owner) noexcept
-            : adapter(owner), slots(owner.placement_.visited_slots()),
+            : RetirementObservation(owner, owner.retirement_work_) {}
+        RetirementObservation(PineExecutionAdapter& owner, RetirementWork& destination) noexcept
+            : adapter(owner), work(destination), slots(owner.placement_.visited_slots()),
               restored(owner.cohorts_by_id_.work_counters().rows_restored),
               spilled(owner.cohorts_by_id_.work_counters().rows_spilled),
               spill_visits(owner.cohorts_by_id_.work_counters().rows_visited_by_spill) {}
         ~RetirementObservation() {
-            auto& work = adapter.retirement_work_;
             const auto& backing = adapter.cohorts_by_id_.work_counters();
             work.placement_slots += adapter.placement_.visited_slots() - slots;
             work.backing_rows_restored += backing.rows_restored - restored;
@@ -3258,6 +3262,33 @@ private:
             work.spill_rows_visited += backing.rows_visited_by_spill - spill_visits;
         }
     };
+    // Exact current references, never a digest or a historical placement copy.
+    // These sets and the certificate are derived scratch, outside source state.
+    struct RetirementInputs {
+        std::vector<std::uint64_t> roots, askable, groups, marks;
+        std::vector<std::int32_t> bars;
+        bool operator==(const RetirementInputs& other) const noexcept {
+            return roots == other.roots && askable == other.askable
+                && groups == other.groups && marks == other.marks && bars == other.bars;
+        }
+    };
+    struct RetirementGate {
+        RetirementInputs saved, current;
+        bool certified = false;
+        std::int64_t cycle = -1, interval = -1;
+        std::int64_t broker_open = std::numeric_limits<std::int64_t>::min();
+        std::int64_t interval_expiry = std::numeric_limits<std::int64_t>::max();
+        std::int64_t broker_expiry = std::numeric_limits<std::int64_t>::max();
+    };
+    RetirementGate retirement_gate_;
+    void invalidate_retirement() noexcept { retirement_gate_.certified = false; }
+    void capture_retirement_inputs(RetirementInputs&) const;
+    void observe_retirement_expiry(const PlacementSnapshot&, std::int64_t interval) noexcept;
+    void sweep_retired_rows(const NativeDecisionContext&, RetirementWork&);
+    void finish_retirement_phases();
+#ifndef NDEBUG
+    std::array<std::uint64_t, 3> retirement_validation_state() const;
+#endif
 };
 
 namespace detail {
