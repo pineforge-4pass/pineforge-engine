@@ -148,7 +148,7 @@ POST_DEBUG_BUILD_RUNNER_FINDING = 'ci-post.yml build-debug must select only Ubun
 POST_ARM_BUILD_RUNNER_FINDING = ('ci-post.yml build-arm must select '
                                 'only Linux arm64 Release/Debug cells on full events')
 RELEASE_MATRIX_FINDING = ('release.yml prebuilt must use exactly the isolated Linux x64 '
-                          'and hosted ARM matrix')
+                          'and protected ARM matrix')
 CI_JOB_IDS = ('authz',)
 GKE_PR_JOB_IDS = ('admit', 'preflight', 'build', 'build-debug',
                   'corpus-parity-subset', 'legs', 'result')
@@ -699,6 +699,7 @@ class AppTokenEnvironments(unittest.TestCase):
     def test_real_minting_jobs_have_exactly_the_inventoried_environments(self):
         expected = {
             ('release.yml', 'release'): ['release'],
+            ('release.yml', 'prebuilt'): ['release'],
             ('release.yml', 'notify-hub'): ['release'],
             ('release-ruleset-probe.yml', 'probe'): ['release'],
             ('promote-baseline.yml', 'promote'): ['release-bot'],
@@ -1765,7 +1766,7 @@ class PostFleetRunnerPolicy(unittest.TestCase):
             'Local reusable calls cannot mix PR and GKE jobs. The full post call graph expands to 35 GKE job instances: '
             "amd64 32/16/8/4/2 CPU labels carry 8/7/7/5/6 jobs and arm64 16 CPU carries 2; each label's static cap is 8.",
             'The amd64 post build shards and the two arm64 post cells use bare scalar',
-            'Hosted exceptions cover PR light jobs and the existing hosted release cells; post light jobs use bare scalar GKE names.',
+            'Hosted exceptions cover PR light jobs and the existing hosted release cells; release ARM uses a protected runner and post light jobs use bare scalar GKE names.',
             '`native-live.yml` runs four `native` shards on `gke-8cpu-16gb-amd64`;\n'
             '`live-sanitizers` and `live-tsan` each build once on `gke-16cpu-32gb-amd64`.',
             'The `native-live (native)` summary requires all four successful shard proofs; it runs after shard failure '
@@ -1786,7 +1787,7 @@ class PostFleetRunnerPolicy(unittest.TestCase):
             '| `native-live.yml` | Dispatch and post CI callers on `main` | '
             '`authz` and both aggregates: scalar `gke-4cpu-8gb-amd64`; bare GKE scalars: '
             'native shards `gke-8cpu-16gb-amd64`, sanitizer profiles `gke-16cpu-32gb-amd64` |',
-            'GKE jobs carry no deployment secrets, effective id-token permissions or environment; '
+            'Unprotected `gke-*` jobs carry no deployment secrets, effective id-token permissions or environment; '
             'pull_request workflows cannot name GKE routing. '
             'Runner-group workflow/ref allowlists must admit the post-only workflows '
             'at refs/heads/main before they can acquire pods. '
@@ -2197,6 +2198,114 @@ class PostLinuxBuildPolicy(unittest.TestCase):
                 self.assertNotEqual(changed, release)
                 self.assertIn('release.yml prebuilt must not contain macOS build steps',
                               ci_preflight.runner_findings({'release.yml': changed}))
+
+
+class ProtectedArmReleasePolicy(unittest.TestCase):
+    LABEL = 'gkp-8cpu-16gb-arm64'
+    ENVIRONMENT_FINDING = ('release.yml prebuilt must use the release environment '
+                           'for protected ARM')
+    PERMISSIONS_FINDING = ('release.yml prebuilt must grant only contents: write '
+                           'without id-token')
+    SECRETS_FINDING = 'release.yml prebuilt may reference only secrets.GITHUB_TOKEN'
+    BUILD_FINDING = 'release.yml prebuilt must build at the runner core count'
+
+    def workflow(self):
+        return (ROOT / '.github/workflows/release.yml').read_text()
+
+    def protected_workflow(self):
+        """Route the real file to the target runner, including on the old tree."""
+        workflow = self.workflow()
+        rows = re.findall(r'(?m)^          - triple: linux-aarch64\n'
+                          r'            runner: ([^\n]+)$', _jobs(workflow)['prebuilt'])
+        self.assertEqual(len(rows), 1, 'the real ARM row must be unique')
+        workflow = in_job(workflow, 'prebuilt', f'            runner: {rows[0]}\n',
+                          f'            runner: {self.LABEL}\n')
+        if not ci_preflight._job_values(_jobs(workflow)['prebuilt'], 'environment'):
+            workflow = in_job(workflow, 'prebuilt',
+                              '    runs-on: ${{ matrix.runner }}\n',
+                              '    runs-on: ${{ matrix.runner }}\n'
+                              '    environment: release\n')
+        return workflow
+
+    def test_real_release_arm_route_and_environment_are_pinned(self):
+        workflow = self.workflow()
+        prebuilt = _jobs(workflow)['prebuilt']
+        self.assertIn('          - triple: linux-aarch64\n'
+                      f'            runner: {self.LABEL}\n', prebuilt)
+        self.assertEqual(ci_preflight._job_values(prebuilt, 'environment'), ['release'])
+        self.assertIn('          - triple: linux-x86_64\n'
+                      f'            runner: {RELEASE_RUNNER}\n', prebuilt)
+        self.assertEqual(ci_preflight.runner_findings({'release.yml': workflow}), [])
+
+    def test_protected_arm_with_release_environment_is_accepted(self):
+        workflow = self.protected_workflow()
+        self.assertEqual(ci_preflight.runner_findings({'release.yml': workflow}), [])
+
+    def test_hosted_arm_is_refused_on_the_real_release_matrix(self):
+        workflow = self.protected_workflow()
+        changed = in_job(workflow, 'prebuilt', f'runner: {self.LABEL}\n',
+                         'runner: ubuntu-22.04-arm\n')
+        self.assertNotEqual(changed, workflow)
+        self.assertIn(RELEASE_MATRIX_FINDING,
+                      ci_preflight.runner_findings({'release.yml': changed}))
+
+    def test_protected_arm_without_release_environment_is_refused(self):
+        workflow = self.protected_workflow()
+        for environment in ('', '    environment: copilot\n',
+                            '    environment: ${{ inputs.environment }}\n'):
+            with self.subTest(environment=environment):
+                changed = in_job(workflow, 'prebuilt', '    environment: release\n',
+                                 environment)
+                self.assertNotEqual(changed, workflow)
+                self.assertIn(self.ENVIRONMENT_FINDING,
+                              ci_preflight.runner_findings({'release.yml': changed}))
+
+    def test_protected_arm_refuses_oidc_and_other_secret_access(self):
+        workflow = self.protected_workflow()
+        changed = in_job(workflow, 'prebuilt',
+                         '      contents: write   # gh release upload\n',
+                         '      contents: write   # gh release upload\n'
+                         '      id-token: write\n')
+        self.assertNotEqual(changed, workflow)
+        self.assertIn(self.PERMISSIONS_FINDING,
+                      ci_preflight.runner_findings({'release.yml': changed}))
+        for reference in ('secrets.DEPLOY_KEY', "secrets['GITHUB_TOKEN']",
+                          'secrets.github_token', 'toJSON(secrets)'):
+            for job, before, after in (
+                    ('prebuilt', '    steps:\n',
+                     '    env:\n      EXTRA: ${{ ' + reference + ' }}\n    steps:\n'),
+                    (None, '  PINEFORGE_REQUIRE_RELEASE_TAGS: "1"\n',
+                     '  PINEFORGE_REQUIRE_RELEASE_TAGS: "1"\n'
+                     '  EXTRA: ${{ ' + reference + ' }}\n')):
+                with self.subTest(reference=reference, job=job):
+                    changed = in_job(workflow, job, before, after)
+                    self.assertNotEqual(changed, workflow)
+                    self.assertIn(self.SECRETS_FINDING,
+                                  ci_preflight.runner_findings({'release.yml': changed}))
+
+    def test_release_build_requires_runner_core_count(self):
+        workflow = self.workflow()
+        self.assertIn(f'        run: cmake --build build -j {CORES}\n',
+                      _jobs(workflow)['prebuilt'])
+        self.assertEqual(ci_preflight.runner_findings({'release.yml': workflow}), [])
+        for command in ('cmake --build build -j 4', 'echo build'):
+            with self.subTest(command=command):
+                changed = in_step(workflow, 'prebuilt', 'Build',
+                                  f'run: cmake --build build -j {CORES}', f'run: {command}')
+                self.assertNotEqual(changed, workflow)
+                self.assertIn(self.BUILD_FINDING,
+                              ci_preflight.runner_findings({'release.yml': changed}))
+
+    def test_protected_release_label_is_declared_once(self):
+        config = (ROOT / '.github/actionlint.yaml').read_text()
+        self.assertEqual(config.count(f'    - {self.LABEL}\n'), 1)
+
+    def test_protected_release_docs_match_the_real_route(self):
+        docs = (ROOT / 'docs/ci.md').read_text()
+        self.assertEqual(len(docs.splitlines()), 2016)
+        self.assertIn("Release's Linux arm64 artifact cell uses bare scalar "
+                      '`gkp-8cpu-16gb-arm64` with `environment: release`, restricted to '
+                      '`refs/heads/main`;\n', docs)
 
 
 class ActionPins(unittest.TestCase):
@@ -6604,24 +6713,26 @@ finally:
                         *original, others=dict(others, **{'release.yml': changed}))
                     self.assertIn(f'release.yml job {job} must run on {RELEASE_RUNNER} '
                                   '(isolated release)', findings)
-        # Restoring the old x64 label must fail, as must moving a hosted leg
+        # Restoring the old x64 label must fail, as must moving the protected leg
         # or changing anything else in the pinned two-leg Linux matrix.
         for before, after in ((f'runner: {RELEASE_RUNNER}\n', 'runner: ubuntu-22.04\n'),
                               (f'runner: {RELEASE_RUNNER}\n', f'runner: {MATRIX_LINUX_RUNNER}\n'),
                               (f'runner: {RELEASE_RUNNER}\n',
                                f"runner: ${{{{ fromJSON('{RELEASE_RUNNER}') || 'ubuntu-22.04' }}}}\n"),
-                              ('runner: ubuntu-22.04-arm', 'runner: ubuntu-24.04'),
-                              ('runner: ubuntu-22.04-arm', f'runner: {RELEASE_RUNNER}'),
-                              ('runner: ubuntu-22.04-arm', 'runner: macos-latest'),
-                              ('runner: ubuntu-22.04-arm', 'runner: macos-26-xlarge'),
+                              ('runner: gkp-8cpu-16gb-arm64', 'runner: ubuntu-22.04-arm'),
+                              ('runner: gkp-8cpu-16gb-arm64', 'runner: ubuntu-24.04'),
+                              ('runner: gkp-8cpu-16gb-arm64', f'runner: {RELEASE_RUNNER}'),
+                              ('runner: gkp-8cpu-16gb-arm64', 'runner: macos-latest'),
+                              ('runner: gkp-8cpu-16gb-arm64', 'runner: macos-26-xlarge'),
                               ('        include:\n', '        include:\n'
                                '          - triple: macos-universal\n'
                                '            runner: macos-latest\n'
                                '            cmake_extra: "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64"\n'),
                               ('          - triple: linux-aarch64\n'
-                               '            runner: ubuntu-22.04-arm\n', '')):
+                               '            runner: gkp-8cpu-16gb-arm64\n', '')):
             with self.subTest(release_runner=after):
                 changed = in_job(release, 'prebuilt', before, after)
+                self.assertNotEqual(changed, release)
                 findings = ci_workflow_findings(*original, others=dict(others, **{'release.yml': changed}))
                 self.assertIn(RELEASE_MATRIX_FINDING, findings)
 
@@ -8369,6 +8480,21 @@ class CanonAuthz(unittest.TestCase):
 
 
 class ActionlintRunnerLabels(unittest.TestCase):
+    def test_actionlint_runner_labels_reads_protected_scalar_label(self):
+        workflow = self.tree / '.github/workflows/protected-label.yml'
+        workflow.write_text(
+            'on: workflow_dispatch\njobs:\n  inspect:\n'
+            '    runs-on: gkp-8cpu-16gb-arm64\n'
+            '    environment: release\n'
+            '    steps:\n      - run: "true"\n')
+        original = self.config.read_text()
+        self.config.write_text(original.replace('    - gkp-8cpu-16gb-arm64\n', '', 1))
+        code, output = self.runner_labels()
+        self.assertEqual(code, 1, output)
+        self.assertIn('protected-label.yml job inspect: label "gkp-8cpu-16gb-arm64" '
+                      'is not declared in .github/actionlint.yaml', output.splitlines())
+        self.config.write_text(original)
+
     def test_actionlint_runner_labels_reads_gke_scalar_label(self):
         workflow = self.tree / '.github/workflows/gke-label.yml'
         workflow.write_text(
