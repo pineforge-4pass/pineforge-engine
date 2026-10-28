@@ -652,6 +652,7 @@ public:
     using const_iterator = Iterator<true>;
 
     PlacementTable() = default;
+    explicit PlacementTable(std::size_t cache_bytes) : erased_minima_(cache_bytes) {}
     PlacementTable(const PlacementTable&) = delete;
     PlacementTable& operator=(const PlacementTable&) = delete;
     PlacementTable(PlacementTable&&) noexcept = default;
@@ -2764,10 +2765,12 @@ private:
     std::uint64_t source_command_sequence_ = 0;
     std::int32_t entry_attempt_bar_ = -1;
     std::uint32_t entry_attempts_on_bar_ = 0;
-    CohortTable cohorts_by_id_;
+    // 192 KiB per adapter, not per engine. One adapter owns each cache;
+    // these private disk read caches are never shared across threads.
+    CohortTable cohorts_by_id_{pineforge::detail::IdTableReadCache::kCacheBytes};
     void observe_pending_scan(PendingScanCounter&) const noexcept;
     CohortTable::iterator require_cohort(const SourceId&);
-    PlacementTable placement_;
+    PlacementTable placement_{pineforge::detail::IdTableReadCache::kPairCacheBytes};
     std::unordered_map<std::uint64_t, detail::LiveSourceHandle> live_by_source_key_;
     std::unordered_map<std::uint64_t, BracketRoster> bracket_families_;
     // Immutable, wholly settled families. All appends restore through
@@ -2814,7 +2817,8 @@ private:
     // then suppress just that duplicate debit at notification delivery.
     std::unordered_set<std::uint64_t> current_debited_applied_ordinals_;
     std::unordered_set<std::uint64_t> intraday_loss_relabel_ordinals_;
-    pineforge::detail::IdPairStore<std::int64_t, true> consumed_partial_exit_cycles_;
+    pineforge::detail::IdPairStore<std::int64_t, true> consumed_partial_exit_cycles_{
+        pineforge::detail::IdTableReadCache::kPairCacheBytes};
     std::unordered_set<std::uint64_t> bracket_shadowed_openings_;
     std::unordered_map<SourceId, NamedEntryCancelToken> named_entry_cancel_tokens_;
     // An exit bound to its entry id whose working order a strategy.cancel of
@@ -2996,7 +3000,8 @@ private:
     // and the most keys it ever held counting one transient key per live
     // strategy.close / close_all order -- and, for the alternative the tapes
     // leave open, per live strategy.order market order too.
-    ::pineforge::detail::DiskIdTable<std::uint32_t> exit_rank_keys_;
+    ::pineforge::detail::DiskIdTable<std::uint32_t> exit_rank_keys_{
+        pineforge::detail::IdTableReadCache::kCacheBytes};
     std::uint64_t exit_rank_keys_digest_ = 1469598103934665603ULL;
     std::uint32_t exit_rank_peak_ = 0;
     std::uint32_t exit_rank_alt_peak_ = 0;
