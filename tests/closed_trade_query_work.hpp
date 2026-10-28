@@ -19,6 +19,7 @@ struct Work {
     std::array<std::uint64_t, 3> percent_rows{};
     std::uint64_t percent_control_rows = 0;
     std::uint64_t percent_fold_rows = 0;
+    std::uint64_t report_fold_rows = 0;
     std::uint64_t net_rows = 0;
     std::uint64_t metric_rows = 0;
     std::uint64_t other_numeric_rows = 0;
@@ -43,6 +44,21 @@ std::uint64_t observed_percent_fold_rows(const Ledger& ledger) noexcept {
     return 0;
 }
 
+template<class Ledger, class = void>
+struct has_report_fold_rows : std::false_type {};
+
+template<class Ledger>
+struct has_report_fold_rows<Ledger, std::void_t<
+    decltype(std::declval<const Ledger&>().report_fold_rows_consumed())>>
+    : std::true_type {};
+
+template<class Ledger>
+std::uint64_t observed_report_fold_rows(const Ledger& ledger) noexcept {
+    if constexpr (has_report_fold_rows<Ledger>::value)
+        return ledger.report_fold_rows_consumed();
+    return 0; // The unfixed report TU is observed by numeric_index instead.
+}
+
 class CountScope {
 public:
     explicit CountScope(Work& work) noexcept
@@ -53,12 +69,16 @@ public:
     CountScope(Work& work, const Ledger& ledger) noexcept
         : work_(&work), previous_(counting), ledger_(&ledger),
           read_rows_(&read_percent_fold_rows<Ledger>),
-          before_rows_(observed_percent_fold_rows(ledger)) {
+          before_rows_(observed_percent_fold_rows(ledger)),
+          read_report_rows_(&read_report_fold_rows<Ledger>),
+          before_report_rows_(observed_report_fold_rows(ledger)) {
         counting = &work;
     }
     ~CountScope() noexcept {
         if (read_rows_)
             work_->percent_fold_rows += read_rows_(ledger_) - before_rows_;
+        if (read_report_rows_)
+            work_->report_fold_rows += read_report_rows_(ledger_) - before_report_rows_;
         counting = previous_;
     }
     CountScope(const CountScope&) = delete;
@@ -71,11 +91,18 @@ private:
         return observed_percent_fold_rows(*static_cast<const Ledger*>(value));
     }
 
+    template<class Ledger>
+    static std::uint64_t read_report_fold_rows(const void* value) noexcept {
+        return observed_report_fold_rows(*static_cast<const Ledger*>(value));
+    }
+
     Work* work_;
     Work* previous_;
     const void* ledger_ = nullptr;
     ReadRows read_rows_ = nullptr;
     std::uint64_t before_rows_ = 0;
+    ReadRows read_report_rows_ = nullptr;
+    std::uint64_t before_report_rows_ = 0;
 };
 
 template<class Row>

@@ -2736,6 +2736,11 @@ protected:
     // The streaming owner clears this prefix with the run's closed rows.
     void reset_trade_percent_prefix();
     TradeLedger::PercentFold current_trade_percent_fold() const;
+    bool ordinary_report_fold() const noexcept;
+    double fill_cached_closed_trades(ReportC* out) const;
+    bool copy_cached_report_trade_metrics(
+        metrics::TradeStatsAccumulator& all, metrics::TradeStatsAccumulator& longs,
+        metrics::TradeStatsAccumulator& shorts) const;
     // A sink hook receives only range-end rows. Re-summing an edited tail
     // starts with this closed-row left fold, never a separately summed tail.
     double report_closed_net_profit() const;

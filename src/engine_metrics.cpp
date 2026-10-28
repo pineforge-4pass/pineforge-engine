@@ -636,6 +636,9 @@ void BacktestEngine::fold_trade_percent_prefix(const Trade& trade) {
 void BacktestEngine::reset_trade_percent_prefix() {
     trades_.invalidate_percent_fold();
     trade_percent_prefix_ = {};
+    // Bind the empty report seeds before publication; the first read after
+    // a finished ordinary run must not discover its closed history.
+    (void)trades_.report_fold(initial_capital_, {});
 }
 
 TradeLedger::PercentFold BacktestEngine::current_trade_percent_fold() const {
@@ -665,3 +668,77 @@ template pf_equity_stats_t compute_equity_stats<report_sink::ScratchCurveWindow>
 
 } // namespace metrics
 } // namespace pineforge
+
+#include <cstring>
+#include <type_traits>
+
+namespace pineforge::metrics {
+
+void TradeStatsAccumulator::reset(TradeFilter filter, double initial_capital) noexcept {
+    static_assert(std::is_trivially_copyable_v<State>, "report accumulator must stay scalar");
+    *state_ = State(filter, initial_capital);
+}
+
+std::size_t TradeStatsAccumulator::state_bytes() noexcept {
+    return sizeof(State);
+}
+
+bool TradeStatsAccumulator::same_state(const TradeStatsAccumulator& other) const noexcept {
+    const auto& a = *state_;
+    const auto& b = *other.state_;
+    const auto same_double = [](const double& left, const double& right) {
+        return std::memcmp(&left, &right, sizeof(double)) == 0;
+    };
+    if (a.filter != b.filter || !same_double(a.initial_capital, b.initial_capital)
+        || a.nonfinite_field != b.nonfinite_field || a.nonfinite_prefix != b.nonfinite_prefix)
+        return false;
+#define PF_SAME_INTEGER(field) if (a.stats.field != b.stats.field) return false
+    PF_SAME_INTEGER(num_trades);
+    PF_SAME_INTEGER(num_wins);
+    PF_SAME_INTEGER(num_losses);
+    PF_SAME_INTEGER(num_even);
+    PF_SAME_INTEGER(max_consecutive_wins);
+    PF_SAME_INTEGER(max_consecutive_losses);
+#undef PF_SAME_INTEGER
+#define PF_SAME_STAT(field) if (!same_double(a.stats.field, b.stats.field)) return false
+    PF_SAME_STAT(percent_profitable);
+    PF_SAME_STAT(net_profit);
+    PF_SAME_STAT(net_profit_pct);
+    PF_SAME_STAT(gross_profit);
+    PF_SAME_STAT(gross_profit_pct);
+    PF_SAME_STAT(gross_loss);
+    PF_SAME_STAT(gross_loss_pct);
+    PF_SAME_STAT(profit_factor);
+    PF_SAME_STAT(avg_trade);
+    PF_SAME_STAT(avg_trade_pct);
+    PF_SAME_STAT(avg_win);
+    PF_SAME_STAT(avg_win_pct);
+    PF_SAME_STAT(avg_loss);
+    PF_SAME_STAT(avg_loss_pct);
+    PF_SAME_STAT(ratio_avg_win_avg_loss);
+    PF_SAME_STAT(largest_win);
+    PF_SAME_STAT(largest_win_pct);
+    PF_SAME_STAT(largest_loss);
+    PF_SAME_STAT(largest_loss_pct);
+    PF_SAME_STAT(commission_paid);
+    PF_SAME_STAT(expectancy);
+    PF_SAME_STAT(avg_bars_in_trade);
+    PF_SAME_STAT(avg_bars_in_wins);
+    PF_SAME_STAT(avg_bars_in_losses);
+#undef PF_SAME_STAT
+#define PF_SAME_LOCAL(field) if (!same_double(a.field, b.field)) return false
+    PF_SAME_LOCAL(pct_sum);
+    PF_SAME_LOCAL(win_pct_sum);
+    PF_SAME_LOCAL(loss_pct_sum);
+    PF_SAME_LOCAL(bars_sum);
+    PF_SAME_LOCAL(win_bars_sum);
+    PF_SAME_LOCAL(loss_bars_sum);
+    PF_SAME_LOCAL(largest_win);
+    PF_SAME_LOCAL(largest_win_pct);
+    PF_SAME_LOCAL(largest_loss);
+    PF_SAME_LOCAL(largest_loss_pct);
+#undef PF_SAME_LOCAL
+    return a.streak_w == b.streak_w && a.streak_l == b.streak_l;
+}
+
+} // namespace pineforge::metrics

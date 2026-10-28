@@ -14,7 +14,7 @@
 #include <pineforge/order_action.hpp>
 #include <pineforge/run_failure.hpp>
 #include <pineforge/detail/scratch_file.hpp>
-
+#include <pineforge/metrics_stream.hpp>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -406,9 +406,28 @@ struct TradeLedger::State {
     mutable std::uint64_t percent_fold_rows_consumed = 0;
     mutable PercentCache percent_cache;
 
-    void rows_changed(bool uncovered_only = false) noexcept {
+    struct ReportCache {
+        double capital = 0.0, seed_net = 0.0;
+        metrics::TradeStatsAccumulator seed_all{metrics::TradeFilter::ALL, 0.0};
+        metrics::TradeStatsAccumulator seed_longs{metrics::TradeFilter::LONG, 0.0};
+        metrics::TradeStatsAccumulator seed_shorts{metrics::TradeFilter::SHORT, 0.0};
+        metrics::TradeStatsAccumulator all{metrics::TradeFilter::ALL, 0.0};
+        metrics::TradeStatsAccumulator longs{metrics::TradeFilter::LONG, 0.0};
+        metrics::TradeStatsAccumulator shorts{metrics::TradeFilter::SHORT, 0.0};
+        ReportFold fold{};
+        size_type base = 0, end = 0;
+        std::uint64_t generation = 0;
+        bool explicit_seed = false, valid = false;
+    };
+    static constexpr size_type kReportAccumulatorStates = 6; // Seeds and current folds.
+    mutable ReportCache report_cache;
+    mutable std::uint64_t report_fold_rows_consumed = 0;
+
+    void rows_changed(bool uncovered_only = false, bool report_uncovered = false) noexcept {
         const bool retain = uncovered_only && percent_cache.valid
             && percent_cache.generation == row_generation;
+        const bool retain_report = report_uncovered && report_cache.valid
+            && report_cache.generation == row_generation;
         ++row_generation;
         // Appends and edits at/after the cursor cannot touch a covered row.
         // Carry their generation forward; the reader folds that suffix once.
@@ -416,6 +435,8 @@ struct TradeLedger::State {
         // Wraparound cannot revive a stale fold: validity is explicit.
         if (retain) percent_cache.generation = row_generation;
         else percent_cache.valid = false;
+        if (retain_report) report_cache.generation = row_generation;
+        else report_cache.valid = false;
     }
     static bool same_percent_seed(const PercentFold& a, const PercentFold& b) noexcept {
         return a.all_count == b.all_count && a.win_count == b.win_count
@@ -423,6 +444,41 @@ struct TradeLedger::State {
             && std::memcmp(&a.all_sum, &b.all_sum, sizeof(double)) == 0
             && std::memcmp(&a.win_sum, &b.win_sum, sizeof(double)) == 0
             && std::memcmp(&a.loss_sum, &b.loss_sum, sizeof(double)) == 0;
+    }
+
+    void consume_report_row(const Trade& row) {
+        auto& cached = report_cache;
+        ++report_fold_rows_consumed;
+        // Preserve validate_trade's row/field order without throwing during
+        // publication. The report raises the same typed failure on demand.
+#define PF_REPORT_FIELD(field) \
+        if (!cached.fold.nonfinite_field && !std::isfinite(row.field)) { \
+            cached.fold.nonfinite_field = "trades." #field; \
+            cached.fold.failure_row = cached.end; \
+        }
+        PF_REPORT_FIELD(entry_price);
+        PF_REPORT_FIELD(exit_price);
+        PF_REPORT_FIELD(qty);
+        PF_REPORT_FIELD(pnl);
+        PF_REPORT_FIELD(pnl_pct);
+        PF_REPORT_FIELD(max_runup);
+        PF_REPORT_FIELD(max_drawdown);
+        PF_REPORT_FIELD(commission);
+#undef PF_REPORT_FIELD
+        if (!cached.fold.nonfinite_field) {
+            ++cached.fold.total_trades;
+            const double next = cached.fold.net + row.pnl;
+            if (std::isfinite(next)) cached.fold.net = next;
+            else {
+                cached.fold.nonfinite_field = "summary.net_pnl";
+                cached.fold.failure_row = cached.end;
+            }
+        }
+        const auto record = internal::report_trade_row(row);
+        cached.all.fold(record);
+        cached.longs.fold(record);
+        cached.shorts.fold(record);
+        ++cached.end;
     }
 
     State() {
@@ -746,11 +802,13 @@ void TradeLedger::set_cache_rows(size_type rows) {
 TradeLedger::size_type TradeLedger::cache_rows() const { return state_->cache_rows; }
 TradeLedger::size_type TradeLedger::resident_cache_bytes(size_type rows) {
     State::validate_cache_rows(rows);
-    return sizeof(TradeLedger) + sizeof(State) + rows * kLedgerEntryBytes;
+    return sizeof(TradeLedger) + sizeof(State) + rows * kLedgerEntryBytes
+        + State::kReportAccumulatorStates * metrics::TradeStatsAccumulator::state_bytes();
 }
 TradeLedger::size_type TradeLedger::cache_resident_bytes() const {
     return sizeof(TradeLedger) + sizeof(State)
-        + state_->cache_capacity * kLedgerEntryBytes;
+        + state_->cache_capacity * kLedgerEntryBytes
+        + State::kReportAccumulatorStates * metrics::TradeStatsAccumulator::state_bytes();
 }
 TradeLedger::size_type TradeLedger::cache_size() const { return state_->cache_count; }
 
@@ -846,7 +904,8 @@ bool TradeLedger::is_long_at(size_type global) const {
 void TradeLedger::replace(size_type global, const Trade& row) {
     state_->check(global, true);
     const auto previous = state_->descriptor(global);
-    state_->rows_changed(global >= state_->percent_cache.end);
+    state_->rows_changed(global >= state_->percent_cache.end,
+                        global >= state_->report_cache.end);
     state_->invalidate(global);
     const auto record = state_->store(global, row, &previous);
     if (global >= state_->resident_first) state_->rows[state_->slot(global)] = record;
@@ -871,7 +930,16 @@ void TradeLedger::push_back(const Trade& trade) {
     state_->rows[(state_->head + state_->count) % kResidentRows] = record;
     ++state_->count;
     ++state_->end;
-    state_->rows_changed(true);
+    state_->rows_changed(true, true);
+    auto& cached = state_->report_cache;
+    if (cached.valid && cached.generation == state_->row_generation
+        && cached.base == base() && cached.end == size() - 1
+        && size() <= static_cast<size_type>(std::numeric_limits<int>::max())
+        && !cached.fold.nonfinite_field) {
+        cached.valid = false;
+        state_->consume_report_row(trade);
+        cached.valid = true;
+    }
 }
 
 void TradeLedger::push_back(Trade&& trade) { push_back(static_cast<const Trade&>(trade)); }
@@ -977,6 +1045,72 @@ std::uint64_t TradeLedger::percent_fold_rows_consumed() const noexcept {
 
 void TradeLedger::invalidate_percent_fold() noexcept {
     state_->rows_changed();
+}
+
+TradeLedger::ReportFold TradeLedger::report_fold(
+        double initial_capital, const ReportSeed& sealed_seed,
+        metrics::TradeStatsAccumulator* all, metrics::TradeStatsAccumulator* longs,
+        metrics::TradeStatsAccumulator* shorts) const {
+    // The existing report count guard runs before any numeric fold. Do not
+    // overflow the accumulator's report-width counters during publication.
+    if (size() > static_cast<size_type>(std::numeric_limits<int>::max()))
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+            "report trade count exceeds the report row limit");
+    const bool explicit_seed = sealed_seed.all && sealed_seed.longs && sealed_seed.shorts;
+    if ((!explicit_seed && (sealed_seed.all || sealed_seed.longs || sealed_seed.shorts))
+        || (base() != 0 && !explicit_seed))
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+            "report trade fold is missing its sealed metric seeds");
+    auto& cached = state_->report_cache;
+    const bool same_seed = cached.explicit_seed == explicit_seed
+        && std::memcmp(&cached.capital, &initial_capital, sizeof(double)) == 0
+        && std::memcmp(&cached.seed_net, &sealed_seed.net, sizeof(double)) == 0
+        && (!explicit_seed || (cached.seed_all.same_state(*sealed_seed.all)
+            && cached.seed_longs.same_state(*sealed_seed.longs)
+            && cached.seed_shorts.same_state(*sealed_seed.shorts)));
+    if (!cached.valid || cached.generation != state_->row_generation
+        || cached.base != base() || cached.end < base() || cached.end > size()
+        || !same_seed) {
+        cached.valid = false;
+        cached.capital = initial_capital;
+        cached.seed_net = sealed_seed.net;
+        cached.explicit_seed = explicit_seed;
+        if (explicit_seed) {
+            cached.seed_all = *sealed_seed.all;
+            cached.seed_longs = *sealed_seed.longs;
+            cached.seed_shorts = *sealed_seed.shorts;
+        } else {
+            cached.seed_all.reset(metrics::TradeFilter::ALL, initial_capital);
+            cached.seed_longs.reset(metrics::TradeFilter::LONG, initial_capital);
+            cached.seed_shorts.reset(metrics::TradeFilter::SHORT, initial_capital);
+        }
+        cached.all = cached.seed_all;
+        cached.longs = cached.seed_longs;
+        cached.shorts = cached.seed_shorts;
+        cached.fold = {};
+        cached.fold.net = sealed_seed.net;
+        cached.fold.total_trades = base();
+        if (!std::isfinite(sealed_seed.net)) {
+            cached.fold.nonfinite_field = "summary.net_pnl";
+            cached.fold.failure_row = base();
+        }
+        cached.base = cached.end = base();
+        cached.generation = state_->row_generation;
+    }
+    // A failure is a complete answer too: never read later scratch rows and
+    // let a later I/O error overtake the first numeric failure.
+    cached.valid = false;
+    while (cached.end < size() && !cached.fold.nonfinite_field)
+        state_->consume_report_row(numeric_at(cached.end));
+    cached.valid = true;
+    if (all) *all = cached.all;
+    if (longs) *longs = cached.longs;
+    if (shorts) *shorts = cached.shorts;
+    return cached.fold;
+}
+
+std::uint64_t TradeLedger::report_fold_rows_consumed() const noexcept {
+    return state_->report_fold_rows_consumed;
 }
 
 } // inline namespace engine_script_run_v19

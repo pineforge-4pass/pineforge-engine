@@ -41,6 +41,12 @@ public:
     void fold(const TradeC& trade);
     pf_trade_stats_t finish() const;
 
+    // Fixed-size reset/copy support for derived ledger report folds. Compare
+    // scalar representations individually; struct padding is never a key.
+    void reset(TradeFilter filter, double initial_capital) noexcept;
+    bool same_state(const TradeStatsAccumulator& other) const noexcept;
+    static std::size_t state_bytes() noexcept;
+
 private:
     struct State;
     std::unique_ptr<State> state_;

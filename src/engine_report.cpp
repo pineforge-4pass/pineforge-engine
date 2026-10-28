@@ -188,13 +188,13 @@ void BacktestEngine::fill_trades_section(ReportC* out) const {
             out->net_profit = net;
             out->total_trades = n_closed;
         } else {
-            for (std::size_t index = trades_.base(); index < trades_.size(); ++index) {
-                const Trade trade = trades_.numeric_at(index);
-                report::validate_trade(trade);
-                ++out->total_trades;
-                net = report::finite_value(net + trade.pnl, "summary.net_pnl");
-                out->net_profit = net;
-            }
+            // The ledger publishes this exact ordered fold as rows close.
+            // A historical amendment rebuilds it once, on the first read.
+            // Publish the old path's partial count/net before raising its
+            // deferred first validation or aggregate-overflow failure.
+            net = fill_cached_closed_trades(out);
+            // Terminal rows below belong only to this report's local net;
+            // neither their values nor their failures enter the ledger cache.
         }
         for (const auto& row : range_end_trades_) {
             report::validate_trade(row);
@@ -269,7 +269,7 @@ double BacktestEngine::report_closed_net_profit() const {
                 "report trade fold is missing its sealed prefix");
         sum = report::finite_value(consumer->closed_trade_prefix().pnl, "summary.net_pnl");
     }
-    // Continue the original left fold; the decision counters use other seeds.
+    if (ordinary_report_fold()) return fill_cached_closed_trades(nullptr);
     for (std::size_t index = trades_.base(); index < trades_.size(); ++index) {
         const Trade trade = trades_.numeric_at(index);
         report::validate_trade(trade);
@@ -280,9 +280,7 @@ double BacktestEngine::report_closed_net_profit() const {
 
 void BacktestEngine::compute_report_sink_trade_metrics(
         ReportC* out, const TradeC* open_rows, int count) const {
-    // Keep each filter's original left-fold order: closed rows, then the
-    // presented range-end rows. Interleaving independent filters changes none
-    // of their additions. No TradeC history or separately summed tail exists.
+    // Resume each filter in ledger order, then apply presented terminal rows.
     if (trades_.base() != 0) {
         const auto* consumer = static_cast<const NativeExecutionConsumer*>(
             execution_consumer_slot_.ptr.get());
@@ -300,8 +298,10 @@ void BacktestEngine::compute_report_sink_trade_metrics(
         longs.fold(row);
         shorts.fold(row);
     };
-    for (std::size_t index = trades_.base(); index < trades_.size(); ++index)
-        fold(report_trade_row(trades_.numeric_at(index)));
+    if (!copy_cached_report_trade_metrics(all, longs, shorts)) {
+        for (std::size_t index = trades_.base(); index < trades_.size(); ++index)
+            fold(report_trade_row(trades_.numeric_at(index)));
+    }
     if (open_rows != nullptr || report_mode_ == ReportMode::FULL) {
         // FULL still folds the caller's presented rows (a selected capture
         // may deliberately publish none of them).
@@ -2130,3 +2130,33 @@ int BacktestEngine::fill_report_envelope_v1(ReportEnvelopeV1* out) const {
 }
 
 }  // namespace pineforge
+
+namespace pineforge {
+
+bool BacktestEngine::ordinary_report_fold() const noexcept {
+    return report_mode_ != ReportMode::FULL && trades_.base() == 0
+        && !report_sink_state_.enabled && !report_sink_state_.receipt.complete;
+}
+
+double BacktestEngine::fill_cached_closed_trades(ReportC* out) const {
+    const auto folded = trades_.report_fold(initial_capital_, {});
+    if (out) {
+        out->total_trades = static_cast<int>(folded.total_trades);
+        out->net_profit = folded.net;
+    }
+    if (folded.nonfinite_field)
+        report::finite_value(std::numeric_limits<double>::quiet_NaN(), folded.nonfinite_field);
+    return folded.net;
+}
+
+bool BacktestEngine::copy_cached_report_trade_metrics(
+        metrics::TradeStatsAccumulator& all, metrics::TradeStatsAccumulator& longs,
+        metrics::TradeStatsAccumulator& shorts) const {
+    if (!ordinary_report_fold()) return false;
+    const auto folded = trades_.report_fold(initial_capital_, {}, &all, &longs, &shorts);
+    if (folded.nonfinite_field)
+        report::finite_value(std::numeric_limits<double>::quiet_NaN(), folded.nonfinite_field);
+    return true;
+}
+
+} // namespace pineforge

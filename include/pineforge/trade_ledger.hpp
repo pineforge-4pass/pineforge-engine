@@ -10,7 +10,7 @@
 namespace pineforge {
 
 struct Trade;
-
+namespace metrics { class TradeStatsAccumulator; }
 // The engine-side additions stay in this existing epoch (DESIGN 6:1344-1347).
 inline namespace engine_script_run_v19 {
 
@@ -93,8 +93,8 @@ public:
     // bytes on 64-bit targets; maximum: 1,048,576 rows, 327,155,712 entry bytes.
     void set_cache_rows(size_type rows);
     size_type cache_rows() const;
-    // Accounted ledger/cache storage: rows*kLedgerEntryBytes + a fixed base
-    // (sizeof ledger + State). Excludes allocator overhead, scratch/OS pages,
+    // Accounted ledger/cache storage: rows*kLedgerEntryBytes plus the fixed
+    // ledger, State and accumulator storage. Excludes allocator/scratch/OS pages,
     // configured directory strings, returned owning Trades and the explicit
     // legacy materialize() map. Validates the same row range as the setter.
     static size_type resident_cache_bytes(size_type rows);
@@ -200,6 +200,30 @@ public:
     std::uint64_t percent_fold_rows_consumed() const noexcept;
     // Sealed-prefix advancement/reset also changes the fold's starting seed.
     void invalidate_percent_fold() noexcept;
+
+    // Derived report fold. Null metric seeds mean the original empty
+    // ALL/LONG/SHORT states at initial_capital; a sealed range supplies all
+    // three unfinalized seeds. Output accumulators receive independent copies.
+    struct ReportSeed {
+        double net = 0.0;
+        const metrics::TradeStatsAccumulator* all = nullptr;
+        const metrics::TradeStatsAccumulator* longs = nullptr;
+        const metrics::TradeStatsAccumulator* shorts = nullptr;
+    };
+    struct ReportFold {
+        double net = 0.0; // Last finite net, starting at positive zero.
+        size_type total_trades = 0; // Includes an aggregate-overflow row.
+        size_type failure_row = 0;
+        const char* nonfinite_field = nullptr;
+    };
+    ReportFold report_fold(
+        double initial_capital, const ReportSeed& sealed_seed,
+        metrics::TradeStatsAccumulator* all = nullptr,
+        metrics::TradeStatsAccumulator* longs = nullptr,
+        metrics::TradeStatsAccumulator* shorts = nullptr) const;
+    // Counts every eagerly or lazily consumed row, including invalid rows.
+    // Fixed diagnostic state only, never hashed or used as a cache key.
+    std::uint64_t report_fold_rows_consumed() const noexcept;
 
 private:
     struct State;

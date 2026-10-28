@@ -38,10 +38,13 @@ NativeRunSpec specification() {
 
 class ReportHost final : public NativeStrategyHost {
 public:
-    explicit ReportHost(ReportMode mode) {
+    explicit ReportHost(ReportMode mode, int terminal_after = -1)
+        : terminal_after_(terminal_after) {
         require(set_report_mode_v1(mode) == PF_REPORT_MODE_ACCEPTED,
                 "setup failure: report mode refused");
-        require(configure_native(specification()).status == NativeSetupStatus::Applied,
+        auto spec = specification();
+        spec.report_open_position_at_end = terminal_after >= 0;
+        require(configure_native(spec).status == NativeSetupStatus::Applied,
                 "setup failure: native specification refused");
     }
 
@@ -51,12 +54,25 @@ public:
         if (index % 4 == 0) {
             const double units = (long_side(trade) ? 1.0 : -1.0) * quantity(trade);
             accepted(submit({orders::Transact{units}, "position", ""}));
-        } else if (index % 4 == 1) {
+        } else if (index % 4 == 1 && trade != terminal_after_) {
             accepted(submit({orders::Flatten{}, "close", ""}));
         }
     }
 
+    TradeLedger& rows() { return trades_; }
+    const TradeLedger& rows() const { return trades_; }
+
+    void prepare_next_run() {
+        auto spec = specification();
+        spec.identity.run_number = ++run_number_;
+        spec.report_open_position_at_end = terminal_after_ >= 0;
+        require(configure_native(spec).status == NativeSetupStatus::Applied,
+                "setup failure: reused native specification refused");
+    }
+
 private:
+    int terminal_after_;
+    std::uint64_t run_number_ = 1;
     template<class Result>
     static void accepted(const Result& result) {
         require(result.status == orders::SubmitStatus::Accepted && result.handle.has_value(),
@@ -164,24 +180,28 @@ void forwarding_control(const std::vector<Bar>& bars, const Oracle& expected, in
 }
 
 struct Sample {
+    Work execution{};
     std::array<Work, query_count> reports{};
 };
 
 Sample sample(int trades) {
     const auto bars = tape(trades);
     ReportHost host(ReportMode::SUMMARY_ONLY);
-    host.run(bars.data(), static_cast<int>(bars.size()));
+    Sample result;
+    {
+        CountScope scope(result.execution, host.rows());
+        host.run(bars.data(), static_cast<int>(bars.size()));
+    }
     check_completed(host);
     const auto rows = public_rows(host, trades);
     const auto expected = oracle(rows);
     forwarding_control(bars, expected, trades);
 
-    Sample result;
     for (std::size_t query = 0; query < query_count; ++query) {
         OwnedEnvelope envelope;
         int status = 0;
         {
-            CountScope scope(result.reports[query]);
+            CountScope scope(result.reports[query], host.rows());
             // Outside dispatch, with no execution observer, selected window
             // or sink: the ordinary ledger metric route must answer.
             status = host.fill_report_envelope_v1(&envelope.value);
@@ -201,14 +221,337 @@ Sample sample(int trades) {
                 "value mismatch: summary metadata or capture population");
         const auto& work = result.reports[query];
         std::printf("VALUES VERIFIED closed=%d query=%zu net=%a "
-                    "numeric-net=%llu numeric-metrics=%llu other-numeric=%llu fold-inputs=%llu\n",
+                    "numeric-net=%llu numeric-metrics=%llu other-numeric=%llu "
+                    "fold-inputs=%llu cached-fold-rows=%llu\n",
                     trades, query, report.net_profit,
                     static_cast<unsigned long long>(work.net_rows),
                     static_cast<unsigned long long>(work.metric_rows),
                     static_cast<unsigned long long>(work.other_numeric_rows),
-                    static_cast<unsigned long long>(work.accumulator_inputs));
+                    static_cast<unsigned long long>(work.accumulator_inputs),
+                    static_cast<unsigned long long>(work.report_fold_rows));
     }
     return result;
+}
+
+Oracle current_oracle(const BacktestEngine& engine) {
+    std::vector<TradeC> rows;
+    for (std::size_t index = 0; index < engine.closed_trade_count(); ++index)
+        rows.push_back(public_report_row(engine.closed_trade(index)));
+    for (int index = static_cast<int>(engine.closed_trade_count());
+         index < engine.report_trade_count(); ++index)
+        rows.push_back(public_report_row(engine.get_report_trade(index)));
+    Oracle result;
+    const auto count = static_cast<int>(rows.size());
+    result.all = trade_stats_reference::compute_trade_stats(
+        rows.data(), count, metrics::TradeFilter::ALL, initial_capital);
+    result.longs = trade_stats_reference::compute_trade_stats(
+        rows.data(), count, metrics::TradeFilter::LONG, initial_capital);
+    result.shorts = trade_stats_reference::compute_trade_stats(
+        rows.data(), count, metrics::TradeFilter::SHORT, initial_capital);
+    for (const auto& row : rows) result.net += row.pnl;
+    return result;
+}
+
+void no_closed_work(const Work& work, const char* context) {
+    require(work.net_rows == 0 && work.metric_rows == 0 && work.other_numeric_rows == 0
+                && work.accumulator_inputs == 0 && work.report_fold_rows == 0,
+            context);
+}
+
+template<class Engine>
+Work current_report(const Engine& engine, const char* context, const Oracle* snapshot = nullptr) {
+    const auto expected = snapshot ? *snapshot : current_oracle(engine);
+    Work observed{};
+    try {
+        OwnedEnvelope envelope;
+        {
+            CountScope scope(observed, engine.rows());
+            require(engine.fill_report_envelope_v1(&envelope.value) == PF_REPORT_MODE_ACCEPTED,
+                    "value mismatch: amended report read refused");
+        }
+        equal_report(envelope.value.report, expected, engine.report_trade_count());
+    } catch (const std::exception& error) {
+        throw std::runtime_error(std::string(context) + ": " + error.what());
+    }
+    return observed;
+}
+
+void run_population(ReportHost& host, int count) {
+    const auto bars = tape(count);
+    host.run(bars.data(), static_cast<int>(bars.size()));
+    check_completed(host);
+    public_rows(host, count);
+    current_report(host, "real run before amendment");
+}
+
+void exact_rebuild(const Work& work, std::size_t rows, const char* context) {
+    // Each row is validated/net-folded and feeds the three independent
+    // accumulators once. These counts are layout estimates from source,
+    // not measured here; the lab executes these equalities.
+    require(work.report_fold_rows == rows, context);
+    require(work.net_rows == 0 && work.metric_rows == 0 && work.other_numeric_rows == 0,
+            "cache rebuild also replayed the old report loops");
+}
+
+void old_row_amendments() {
+    ReportHost host(ReportMode::SUMMARY_ONLY);
+    run_population(host, large_trades);
+    require(host.rows().resident_base() > 1,
+            "setup failure: amendment must precede the descriptor window");
+    host.rows().modify(0, [](Trade& row) {
+        row.pnl *= 2.0;
+        row.pnl_pct *= 2.0;
+        row.commission = 0.125;
+    });
+    const auto hash = host.broker_state_hash();
+    const auto amended = current_report(host, "old closed row amended after report");
+    exact_rebuild(amended, host.rows().size() - host.rows().base(),
+                  "old-row amendment did not rebuild exactly the covered suffix");
+    no_closed_work(current_report(host, "quiet report after amendment"),
+                   "quiet amended report consumed closed rows");
+    require(host.broker_state_hash() == hash, "report cache changed the broker state hash");
+}
+
+void truncate_and_reappend() {
+    ReportHost host(ReportMode::SUMMARY_ONLY);
+    run_population(host, large_trades);
+    const auto end = host.closed_trade_count();
+    std::vector<Trade> tail;
+    for (std::size_t index = end - 3; index < end; ++index)
+        tail.push_back(host.closed_trade(index));
+    host.rows().resize(end - tail.size());
+    for (auto row : tail) {
+        row.pnl *= 2.0;
+        row.pnl_pct *= 2.0;
+        host.rows().push_back(std::move(row));
+    }
+    exact_rebuild(current_report(host, "same-count truncate and reappend"), end,
+                  "same-count replacement did not rebuild exactly the closed population");
+    no_closed_work(current_report(host, "quiet report after truncate and reappend"),
+                   "quiet recut report consumed closed rows");
+
+    // Once rebuilt, a new append must be folded during publication, before
+    // even its first report read. No row is fabricated by the fixture.
+    Work appended{};
+    {
+        CountScope scope(appended, host.rows());
+        host.rows().push_back(tail.front());
+    }
+    require(appended.report_fold_rows == 1, "appended row was not folded eagerly exactly once");
+    no_closed_work(current_report(host, "first report after eager append"),
+                   "first report after append consumed closed rows");
+}
+
+struct Failure {
+    RunFailureValue value{};
+    std::string message;
+    int total = 0;
+    double net = 0.0;
+};
+
+Failure report_failure(const BacktestEngine& engine) {
+    OwnedReport report;
+    try {
+        engine.fill_report(&report.value);
+    } catch (const std::exception& error) {
+        return {classify_run_failure(error), error.what(),
+                report.value.total_trades, report.value.net_profit};
+    }
+    throw std::runtime_error("invalid report unexpectedly succeeded");
+}
+
+void equal_failure(const Failure& actual, const Failure& expected) {
+    require(actual.value.code == expected.value.code
+                && ((!actual.value.args && !expected.value.args)
+                    || (actual.value.args && expected.value.args
+                        && *actual.value.args == *expected.value.args))
+                && actual.message == expected.message,
+            "cached report changed the first typed numeric error");
+    require(actual.total == expected.total, "cached report changed partial row count");
+    equal_double(actual.net, expected.net, "partial report net before numeric failure");
+}
+
+void invalid_numeric_rows() {
+    ReportHost summary(ReportMode::SUMMARY_ONLY), full(ReportMode::FULL);
+    run_population(summary, small_trades);
+    run_population(full, small_trades);
+    // Use the untouched FULL producer as the old fold's error oracle. The
+    // earlier row's later field must win over the next row's earlier field.
+    for (auto* host : {&summary, &full}) {
+        host->rows().modify(1, [](Trade& row) {
+            row.commission = std::numeric_limits<double>::infinity();
+        });
+        host->rows().modify(2, [](Trade& row) {
+            row.entry_price = std::numeric_limits<double>::quiet_NaN();
+        });
+    }
+    const auto expected = report_failure(full);
+    Work invalid_rebuild{}, invalid_repeat{};
+    {
+        CountScope scope(invalid_rebuild, summary.rows());
+        equal_failure(report_failure(summary), expected);
+    }
+    require(invalid_rebuild.report_fold_rows == 2,
+            "invalid-row rebuild did not stop at the first invalid row");
+    {
+        CountScope scope(invalid_repeat, summary.rows());
+        equal_failure(report_failure(summary), expected);
+    }
+    no_closed_work(invalid_repeat, "repeated invalid report consumed closed rows");
+
+    // A valid cache must consume an invalid append too: deferring its
+    // validation failure until the report preserves execution behavior.
+    ReportHost append_summary(ReportMode::SUMMARY_ONLY), append_full(ReportMode::FULL);
+    run_population(append_summary, small_trades);
+    run_population(append_full, small_trades);
+    auto row = append_summary.closed_trade(0);
+    row.qty = std::numeric_limits<double>::infinity();
+    Work invalid_append{};
+    {
+        CountScope scope(invalid_append, append_summary.rows());
+        append_summary.rows().push_back(row);
+    }
+    require(invalid_append.report_fold_rows == 1,
+            "invalid append skipped its eager fold or validation failure");
+    append_full.rows().push_back(row);
+    const auto appended_expected = report_failure(append_full);
+    for (std::size_t query = 0; query < query_count; ++query) {
+        Work work{};
+        {
+            CountScope scope(work, append_summary.rows());
+            equal_failure(report_failure(append_summary), appended_expected);
+        }
+        no_closed_work(work, "report replayed an eagerly validated invalid row");
+    }
+
+    // Each finite term validates; the aggregate fails after publishing the
+    // overflowing row's count, while retaining the preceding finite net.
+    for (auto* host : {&summary, &full}) {
+        host->rows().resize(2);
+        for (std::size_t index = 0; index < host->rows().size(); ++index) {
+            auto finite = host->closed_trade(0);
+            finite.pnl = std::numeric_limits<double>::max();
+            finite.commission = 0.0;
+            host->rows().replace(index, finite);
+        }
+    }
+    equal_failure(report_failure(summary), report_failure(full));
+
+    // Finite rows/net can still overflow an accumulator. ALL must finish
+    // before LONG and SHORT, preserving the old field and error arguments.
+    for (auto* host : {&summary, &full}) {
+        host->prepare_next_run();
+        run_population(*host, small_trades);
+        host->rows().modify(0, [](Trade& finite) {
+            finite.commission = std::numeric_limits<double>::max();
+        });
+        host->rows().modify(1, [](Trade& finite) {
+            finite.commission = std::numeric_limits<double>::max();
+        });
+    }
+    const auto metric_expected = report_failure(full);
+    equal_failure(report_failure(summary), metric_expected);
+    equal_failure(report_failure(summary), metric_expected);
+}
+
+class ReportEngineCopy final : public BacktestEngine {
+public:
+    explicit ReportEngineCopy(const BacktestEngine& engine) : BacktestEngine(engine) {}
+    void on_bar(const Bar&) override {
+        throw std::logic_error("setup failure: report copy received dispatch");
+    }
+    TradeLedger& rows() { return trades_; }
+    const TradeLedger& rows() const { return trades_; }
+};
+
+void copy_then_diverge() {
+    ReportHost host(ReportMode::SUMMARY_ONLY);
+    run_population(host, small_trades);
+    ReportEngineCopy copy(host);
+    current_report(copy, "copied report engine");
+    const auto copied_before = current_oracle(copy);
+    host.rows().modify(0, [](Trade& row) { row.pnl *= 2.0; row.pnl_pct *= 2.0; });
+    current_report(host, "original report engine diverged");
+    no_closed_work(current_report(copy, "copy retained original rows", &copied_before),
+                   "quiet copied report replayed closed rows");
+    const auto original_before = current_oracle(host);
+    copy.rows().modify(1, [](Trade& row) { row.pnl *= 0.5; row.pnl_pct *= 0.5; });
+    exact_rebuild(current_report(copy, "copied report engine diverged"), copy.rows().size(),
+                  "diverged copy did not rebuild exactly its own rows");
+    no_closed_work(current_report(copy, "second report from diverged copy"),
+                   "second diverged-copy report replayed closed rows");
+    no_closed_work(current_report(host, "original retained divergent rows", &original_before),
+                   "copy mutation invalidated the original report cache");
+
+    copy.rows() = host.rows();
+    exact_rebuild(current_report(copy, "ledger copy assignment at unchanged count"),
+                  host.rows().size(), "assigned ledger retained a stale report cache");
+    TradeLedger moved(host.rows());
+    copy.rows().modify(1, [](Trade& row) { row.pnl_pct *= 2.0; });
+    current_report(copy, "warm destination before ledger move");
+    copy.rows() = std::move(moved);
+    exact_rebuild(current_report(copy, "ledger move assignment at unchanged count"),
+                  host.rows().size(), "moved ledger retained the destination report cache");
+}
+
+void reseal_and_reset() {
+    ReportHost host(ReportMode::SUMMARY_ONLY);
+    run_population(host, small_trades);
+    // No sink means a nonempty sealed prefix is refused by the public
+    // report contract. Re-sealing the legal empty prefix still invalidates.
+    host.rows().seal(0);
+    exact_rebuild(current_report(host, "report after empty-prefix seal"), host.rows().size(),
+                  "seal did not invalidate the report fold");
+    host.rows().seal(0);
+    exact_rebuild(current_report(host, "report after empty-prefix reseal"), host.rows().size(),
+                  "reseal did not invalidate the report fold");
+    no_closed_work(current_report(host, "quiet report after reseal"),
+                   "quiet resealed report replayed closed rows");
+    std::vector<Trade> saved;
+    for (std::size_t index = 0; index < host.closed_trade_count(); ++index)
+        saved.push_back(host.closed_trade(index));
+    host.rows().clear();
+    for (auto row : saved) {
+        row.pnl *= 0.5;
+        row.pnl_pct *= 0.5;
+        host.rows().push_back(std::move(row));
+    }
+    exact_rebuild(current_report(host, "clear and repopulate at unchanged count"),
+                  saved.size(), "clear retained a report cache from the previous rows");
+    host.prepare_next_run();
+    run_population(host, small_trades);
+    no_closed_work(current_report(host, "report after run reset"),
+                   "reset run failed to maintain the report fold eagerly");
+
+    ReportHost full(ReportMode::FULL);
+    run_population(full, small_trades);
+    host.rows().seal(1);
+    full.rows().seal(1);
+    equal_failure(report_failure(host), report_failure(full));
+    host.rows().seal(2);
+    full.rows().seal(2);
+    equal_failure(report_failure(host), report_failure(full));
+}
+
+void terminal_rows_are_transient() {
+    ReportHost host(ReportMode::SUMMARY_ONLY, small_trades);
+    const auto bars = tape(small_trades + 1);
+    host.run(bars.data(), static_cast<int>(bars.size()));
+    require(host.last_run_status() == 0 && host.last_error().empty()
+                && host.native_state().kind == NativeLifecycleKind::Completed,
+            "setup failure: terminal-lot run failed");
+    public_rows(host, small_trades);
+    require(host.report_trade_count() > static_cast<int>(host.closed_trade_count())
+                && host.get_report_trade(small_trades).open_at_end,
+            "setup failure: terminal row is missing");
+    for (std::size_t query = 0; query < query_count; ++query) {
+        const auto work = current_report(host, "terminal row applied to report copy");
+        require(work.report_fold_rows == 0 && work.net_rows == 0 && work.metric_rows == 0
+                    && work.other_numeric_rows == 0,
+                "terminal report consumed closed history");
+        require(work.accumulator_inputs == 3,
+                "terminal row must enter each copied accumulator exactly once");
+    }
 }
 
 } // namespace
@@ -225,10 +568,21 @@ int main() {
                 || a.metric_rows != 0 || b.metric_rows != 0
                 || a.other_numeric_rows != 0 || b.other_numeric_rows != 0
                 || a.accumulator_inputs != 0 || b.accumulator_inputs != 0
+                || a.report_fold_rows != 0 || b.report_fold_rows != 0
                 || b.net_rows > a.net_rows || b.metric_rows > a.metric_rows
-                || b.accumulator_inputs > a.accumulator_inputs;
+                || b.accumulator_inputs > a.accumulator_inputs
+                || b.report_fold_rows > a.report_fold_rows;
         }
         require(!replayed, "summary report replayed closed history");
+        require(small.execution.report_fold_rows == small_trades
+                    && large.execution.report_fold_rows == large_trades,
+                "run did not eagerly fold every newly closed row exactly once");
+        old_row_amendments();
+        truncate_and_reappend();
+        invalid_numeric_rows();
+        copy_then_diverge();
+        reseal_and_reset();
+        terminal_rows_are_transient();
         return 0;
     } catch (const std::exception& error) {
         std::fprintf(stderr, "test_closed_trade_report_query_work: %s\n", error.what());
