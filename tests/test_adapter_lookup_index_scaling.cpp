@@ -212,7 +212,11 @@ constexpr int kInitialBars = 6000;
 // The small leg grows to at most this many bars; an Apple M4 Max needs 48,000.
 constexpr int kMaxCalibratedBars = 384000;
 constexpr double kMinLegSeconds = 0.1;
-constexpr double kShapeBound = 5.0;
+// The legs differ by 4x in bars, so a linear run gives 4.0. Each applied reversal
+// probes the logical id table for its exit owners, a search whose depth grows
+// with the number of ids ever stored, so the ratio sits a little above 4.0 and
+// measured 4.5 to 5.06 on the lab; 5.5 still fails a quadratic run (16.0).
+constexpr double kShapeBound = 5.5;
 
 int calibrated_bars(Workload workload) {
     return ratio_timing::presized(
