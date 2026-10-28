@@ -3166,9 +3166,9 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
         closed_row_prefix_.clear();
     }
     engine.trades_.set_scratch_directory(engine.report_sink_state_.scratch_dir);
-    // The ledger read cache is bounded by the run's memory contract: a sink run
-    // keeps it at a fixed size independent of the trade count (the sink
-    // heap-flatness witness); other runs use the default budget.
+    // A sink run declares the same 65,536-row read-cache cap as the default:
+    // 20,447,232 entry bytes plus the fixed ledger/State base, independent of
+    // trade count. Allocation grows lazily up to that cap (the sink heap witness).
     engine.trades_.set_cache_rows(engine.report_sink_state_.enabled
         ? TradeLedger::kSinkCacheRows : TradeLedger::kDefaultCacheRows);
     precommit_digest_.reset();

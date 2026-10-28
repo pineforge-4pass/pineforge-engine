@@ -8,15 +8,15 @@ namespace {
 using namespace p2cx_tledger;
 using Size = TradeLedger::size_type;
 
-// A sink run keeps the read cache inside one report_sink::kScratchWindowBytes
-// (64 KiB, src/report_scratch.hpp): the sink heap-flatness witness
-// (test_selected_metrics_l17b) allows 2 windows for ALL working storage, of
-// which the sink's own window takes one. 128 x 312 = 39,936 <= 65,536.
-static_assert(TradeLedger::kSinkCacheRows * TradeLedger::kLedgerEntryBytes <= 64U * 1024U,
-              "sink-run ledger cache exceeds one scratch window");
-static_assert(TradeLedger::kSinkCacheRows >= TradeLedger::kResidentRows
-              && TradeLedger::kSinkCacheRows <= TradeLedger::kDefaultCacheRows,
-              "sink-run ledger cache rows outside the budget range");
+// The sink heap-flatness witness (test_selected_metrics_l17b) accounts for
+// this declared cache cap separately from its two 64 KiB scratch windows.
+// resident_cache_bytes() includes sizeof(TradeLedger)+sizeof(State); it is
+// not constexpr, so budgets_and_accounting checks that full bound at runtime.
+static_assert(TradeLedger::kSinkCacheRows == 65536
+              && TradeLedger::kSinkCacheRows * TradeLedger::kLedgerEntryBytes == 20447232,
+              "sink-run ledger cache must declare exactly 20,447,232 entry bytes");
+static_assert(TradeLedger::kSinkCacheRows == TradeLedger::kDefaultCacheRows,
+              "sink-run ledger cache cap must equal the default cap");
 
 void bounded(const TradeLedger& ledger) {
     CHECK(ledger.cache_size() <= ledger.cache_rows());
@@ -69,6 +69,10 @@ void budgets_and_accounting() {
     CHECK(TradeLedger::kLedgerEntryBytes == 312);
     CHECK(TradeLedger::kDefaultCacheRows == 65536);
     CHECK(TradeLedger::kMaxCacheRows == 1048576);
+    const TradeLedger empty;
+    const auto sink_bound = TradeLedger::resident_cache_bytes(TradeLedger::kSinkCacheRows);
+    CHECK(sink_bound == empty.cache_resident_bytes() + 20447232);
+    CHECK(sink_bound <= TradeLedger::resident_cache_bytes(TradeLedger::kDefaultCacheRows));
     // Exceed the small/default caps. For the maximum setting, verify real
     // lazy allocation with 129 rows instead of constructing a million-row run.
     for (const Size budget : {Size{4}, Size{7}, TradeLedger::kDefaultCacheRows,
