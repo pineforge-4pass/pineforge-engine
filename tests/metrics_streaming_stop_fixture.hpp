@@ -113,6 +113,11 @@ inline bool same_extent(const MetricsExtentV1& a, const MetricsExtentV1& b) {
         && (a.empty || (a.first_time_ms == b.first_time_ms
                        && a.last_time_ms == b.last_time_ms));
 }
+inline bool same_endpoint(const MetricsExtentReceiptV1& receipt, const PointSource& points) {
+    return receipt.actual_last_equity_valid == (points.count > 0 ? 1u : 0u)
+        && (points.count == 0
+            || same(receipt.actual_last_equity, points[points.count - 1].equity));
+}
 struct Trace {
     std::string stage;
     std::int64_t index;

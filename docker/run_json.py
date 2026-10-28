@@ -5686,6 +5686,8 @@ def _main(argv, binary_inputs) -> int:
             elapsed, inputs, overrides, applied_runtime,
             sink if sink is not None else trade_entry_incarnations,
             initial_capital=engine_initial_capital)
+        if metrics is not None:
+            metrics.add_annualization(out)
         if sink is None:
             _validate_report_result(out)
         _add_scratch_arena_diagnostics(lib, out["diagnostics"], args)
@@ -8211,11 +8213,13 @@ class MetricsExtentReceiptV1(ctypes.Structure):
         ("stop_boundary", MetricsStopBoundaryV1)] + [
         (name, ctypes.c_uint32) for name in
         ("witness", "route", "route_reason", "streaming_sharpe", "plain_subset",
-         "replay_attempts")] + [("authoritative_attempt", ctypes.c_uint64)]
+         "replay_attempts")] + [("authoritative_attempt", ctypes.c_uint64),
+                               ("actual_last_equity", ctypes.c_double),
+                               ("actual_last_equity_valid", ctypes.c_uint32)]
 
 
 for _pod, _size in ((MetricsExtentV1, 32), (MetricsExtentPlanV1, 72),
-                    (MetricsStopBoundaryV1, 24), (MetricsExtentReceiptV1, 232)):
+                    (MetricsStopBoundaryV1, 24), (MetricsExtentReceiptV1, 248)):
     if ctypes.sizeof(_pod) != _size:
         raise RuntimeError(f"unsupported native metrics layout: {_pod.__name__}")
 
@@ -8291,12 +8295,12 @@ def _metrics_extent_receipt(lib, state):
         status = getter(state, ctypes.byref(receipt))
     except Exception:
         return None  # an unobserved speculative report cannot be published
-    if status != 0 or receipt.struct_size != 232 or receipt.version != 1:
+    if status != 0 or receipt.struct_size != 248 or receipt.version != 1:
         return None
     return receipt
 
 
-def _metrics_streaming_complete(receipt, report, failure) -> bool:
+def _metrics_streaming_complete(receipt, report, failure, initial_capital=None) -> bool:
     if (failure is not None or receipt.route != 1 or receipt.route_reason != 11
             or receipt.streaming_sharpe != 1 or receipt.metrics_needed != 0x37
             or receipt.plain_subset != 1 or receipt.failed_plain_inputs
@@ -8310,12 +8314,15 @@ def _metrics_streaming_complete(receipt, report, failure) -> bool:
     for name in ("count", "empty", "first_time_ms", "last_time_ms"):
         if getattr(plan.extent, name) != getattr(actual, name):
             return False
-    # The receipt transports timestamps, not equity/open-profit endpoints.
-    # Until a native endpoint transport exists, keep the actual curve when
-    # annualization might need it. Never manufacture endpoints from net P&L.
+    # A curve-free annualization diagnostic needs the fold's own final mark
+    # and exported capital. The older first-mark proof requires a real curve.
     if (actual.count > 0 and (not report.equity_curve or report.equity_curve_len <= 0)
             and math.isfinite(report.metrics.equity.cagr)):
-        return False
+        if (receipt.actual_last_equity_valid != 1
+                or not math.isfinite(receipt.actual_last_equity)
+                or initial_capital is None or not math.isfinite(initial_capital)
+                or initial_capital <= 0):
+            return False
     return True
 
 
@@ -8341,6 +8348,8 @@ class _MetricsOnlyRun:
         self.failure = None
         self.first_receipt = self.first_failure = self.first_status = None
         self.recovery_receipt = None
+        self.annualization_endpoints = None
+        self.annualization_capital = None
         self.syminfo = self.syminfo_applied = None
         self.cpp_digest, self.cpp_text, self.cpp_error = None, "", None
         if args.generated_cpp:
@@ -8396,6 +8405,12 @@ class _MetricsOnlyRun:
         state, sink, report = self.active or (None, None, None)
         return state, sink, report, settings_receipt
 
+    def add_annualization(self, out):
+        if self.annualization_endpoints is not None:
+            out["diagnostics"].update(_annualization_block(
+                self.annualization_endpoints, out["metrics"],
+                initial_capital=self.annualization_capital))
+
     def execute(self, run, make_state, settings_receipt, abort):
         state, sink, report = self.active
         run(state, report)
@@ -8424,7 +8439,19 @@ class _MetricsOnlyRun:
         if receipt is not None:
             if receipt.route == 2:  # admission retained the actual curve from bar one
                 return self.result(settings_receipt)
-            if _metrics_streaming_complete(receipt, report, failure):
+            capital = _read_strategy_initial_capital(self.lib, state)
+            if _metrics_streaming_complete(receipt, report, failure, capital):
+                if (receipt.actual_extent.count > 0
+                        and (not report.equity_curve or report.equity_curve_len <= 0)
+                        and math.isfinite(report.metrics.equity.cagr)):
+                    # With validated exported capital the shared helper reads
+                    # only these three endpoint fields. No first mark is inferred.
+                    self.annualization_endpoints = (
+                        {"time_ms": receipt.actual_extent.first_time_ms},
+                        {"time_ms": receipt.actual_extent.last_time_ms,
+                         "equity": receipt.actual_last_equity},
+                    )
+                    self.annualization_capital = capital
                 return self.result(settings_receipt)
         # LegacyRerun, an unavailable receipt or an invalid streaming proof:
         # free report before state, then rebuild settings, trades/orders/lots,

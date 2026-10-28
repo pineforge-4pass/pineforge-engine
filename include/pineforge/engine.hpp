@@ -2238,6 +2238,8 @@ public:
     // to the configuration of the attempt it describes.
     metrics::MetricsStreamingStatusV1 set_metrics_streaming_v1(
         metrics::StreamingSharpeV1, metrics::MetricsNeedMaskV1);
+    // The receipt also observes the final metric equity mark when nonempty;
+    // this observation never participates in the planned extent's identity.
     metrics::MetricsStreamingStatusV1 metrics_extent_receipt_v1(
         metrics::MetricsExtentReceiptV1*) const;
     metrics::MetricsStreamingStatusV1 admit_metrics_plain_v1(

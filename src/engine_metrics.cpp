@@ -515,6 +515,10 @@ public:
         auto& receipt = out.receipt;
         receipt.extent_plan = plan_;
         receipt.actual_extent = actual;
+        if (have_held_) {
+            receipt.actual_last_equity = held_.equity;
+            receipt.actual_last_equity_valid = 1;
+        }
         receipt.actual_attempt = config_.attempt;
         receipt.actual_input_generation = config_.input_generation;
         receipt.actual_admitted_view = config_.admitted_view;
@@ -603,9 +607,14 @@ public:
             actual = {};
             actual.count = curve.count;
             actual.empty = curve.count == 0;
+            receipt.actual_last_equity = 0.0;
+            receipt.actual_last_equity_valid = 0;
             if (curve.count > 0) {
                 actual.first_time_ms = curve.read(curve.context, 0).time_ms;
-                actual.last_time_ms = curve.read(curve.context, curve.count - 1).time_ms;
+                const auto last = curve.read(curve.context, curve.count - 1);
+                actual.last_time_ms = last.time_ms;
+                receipt.actual_last_equity = last.equity;
+                receipt.actual_last_equity_valid = 1;
             }
             receipt.mismatch_fields = fold_detail::extent_mismatch_v1(plan_, config_, actual);
             receipt.witness = !plan_.present ? MetricsExtentWitnessV1::NotEvaluated

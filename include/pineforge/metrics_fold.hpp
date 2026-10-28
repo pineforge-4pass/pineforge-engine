@@ -119,11 +119,19 @@ struct MetricsExtentReceiptV1 {
     std::uint32_t plain_subset = 0;
     std::uint32_t replay_attempts = 0;
     std::uint64_t authoritative_attempt = 0;
+    // Observed final metric mark, independent of the plan and its witness.
+    // Valid is exactly 1 when a mark was observed; empty extents leave it 0.
+    double actual_last_equity = 0.0;
+    std::uint32_t actual_last_equity_valid = 0;
 };
 static_assert(sizeof(MetricsExtentV1) == 32, "streaming-ratio extent POD");
 static_assert(sizeof(MetricsExtentPlanV1) == 72, "streaming-ratio plan POD");
 static_assert(sizeof(MetricsStopBoundaryV1) == 24, "streaming-ratio stop POD");
-static_assert(sizeof(MetricsExtentReceiptV1) == 232, "streaming-ratio receipt POD");
+static_assert(sizeof(MetricsExtentReceiptV1) == 248, "streaming-ratio receipt POD");
+static_assert(offsetof(MetricsExtentReceiptV1, actual_last_equity) == 232,
+              "streaming-ratio final equity offset");
+static_assert(offsetof(MetricsExtentReceiptV1, actual_last_equity_valid) == 240,
+              "streaming-ratio final equity validity offset");
 
 // The engine uses actual extent for Sharpe; only Sortino consumes the plan.
 // On is the default; explicit Off plus a Sharpe need selects the exact curve

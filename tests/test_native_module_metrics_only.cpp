@@ -248,6 +248,14 @@ struct Instance {
     }
 };
 
+void compare_endpoint(const MetricsExtentReceiptV1& receipt, const pf_report_t& control) {
+    CHECK(receipt.actual_last_equity_valid == (control.equity_curve_len > 0 ? 1u : 0u));
+    CHECK(control.equity_curve_len == 0 || control.equity_curve != nullptr);
+    if (control.equity_curve_len > 0 && control.equity_curve)
+        CHECK(same_word(receipt.actual_last_equity,
+                        control.equity_curve[control.equity_curve_len - 1].equity));
+}
+
 void compare_trade_stats(const pf_trade_stats_t& a, const pf_trade_stats_t& b) {
 #define WORD(field) CHECK(same_word(a.field, b.field))
     WORD(num_trades); WORD(num_wins); WORD(num_losses); WORD(num_even);
@@ -338,6 +346,8 @@ void certified_rows() {
         old.run(bars, full); next.run(bars, full);
         old.successful(); next.successful();
         const auto control = old.receipt(), actual = next.receipt();
+        compare_endpoint(control, old.report);
+        compare_endpoint(actual, old.report);
         CHECK(control.route == MetricsRatioRouteV1::LegacyActualCurve);
         CHECK(actual.route == MetricsRatioRouteV1::Streaming);
         CHECK(actual.route_reason == MetricsRouteReasonV1::OrderedReplay);
@@ -366,6 +376,7 @@ void certified_rows() {
         native_module::publish_report(next.host(), &reread);
         compare_report_values(reread, old.report);
         CHECK(reread.equity_curve_len == 0);
+        compare_endpoint(next.receipt(), old.report);
         report_free(&reread);
     }
 }
@@ -378,6 +389,8 @@ void uncertified_row() {
     old.run(bars); next.run(bars);
     old.successful(); next.successful();
     const auto receipt = next.receipt();
+    compare_endpoint(receipt, old.report);
+    compare_endpoint(old.receipt(), old.report);
     CHECK(receipt.route == MetricsRatioRouteV1::LegacyActualCurve);
     CHECK(receipt.plain_subset == 0 && receipt.extent_plan.present == 0);
     CHECK(next.report.equity_curve_len == static_cast<std::int64_t>(bars.size()));
@@ -396,6 +409,7 @@ void off_and_default_rows() {
         CHECK(Certification::calls == 0);
         old.successful(); next.successful();
         const auto receipt = next.receipt();
+        compare_endpoint(receipt, old.report);
         CHECK(receipt.streaming_sharpe == StreamingSharpeV1::Off);
         CHECK(receipt.route == MetricsRatioRouteV1::LegacyActualCurve);
         CHECK(receipt.plain_subset == 0 && receipt.extent_plan.present == 0);
@@ -414,6 +428,7 @@ void off_and_default_rows() {
         CHECK(next.receipt().metrics_needed == kMetricsNeedAllV1);
         CHECK(next.receipt().route == MetricsRatioRouteV1::LegacyActualCurve);
         CHECK(next.receipt().extent_plan.present == 0);
+        compare_endpoint(next.receipt(), old.report);
         compare_report_values(next.report, old.report);
         compare_curves(next.report, old.report);
     }
@@ -439,6 +454,7 @@ void exclusions() {
         old.run(bars); next.run(bars);
         old.successful(); next.successful();
         const auto receipt = next.receipt();
+        compare_endpoint(receipt, old.report);
         CHECK(receipt.route == MetricsRatioRouteV1::LegacyActualCurve);
         CHECK(receipt.plain_subset == 0 && receipt.failed_plain_inputs != 0);
         CHECK(next.report.equity_curve_len > 0);
@@ -468,6 +484,7 @@ void unavailable_declaration_rows() {
         old.successful(); next.successful();
         CHECK(next.receipt().route == MetricsRatioRouteV1::LegacyActualCurve);
         CHECK(next.receipt().extent_plan.present == 0);
+        compare_endpoint(next.receipt(), old.report);
         compare_report_values(next.report, old.report);
         compare_curves(next.report, old.report);
     }
@@ -495,6 +512,8 @@ void identity_row() {
     CHECK(a.extent_plan.input_generation == b.extent_plan.input_generation);
     CHECK(a.extent_plan.spec_identity == b.extent_plan.spec_identity);
     CHECK(a.extent_plan.admitted_view == b.extent_plan.admitted_view);
+    CHECK(a.actual_last_equity_valid == 1 && b.actual_last_equity_valid == 1);
+    CHECK(same_word(a.actual_last_equity, b.actual_last_equity));
     CHECK(c.extent_plan.input_generation != a.extent_plan.input_generation);
     CHECK(c.extent_plan.admitted_view != a.extent_plan.admitted_view);
     CHECK(d.extent_plan.input_generation == a.extent_plan.input_generation);
@@ -520,6 +539,8 @@ void stopped_rows() {
         authoritative.preference(StreamingSharpeV1::Off, kMetricsNeedAllV1);
         old.run(bars); candidate.run(bars);
         const auto receipt = candidate.receipt();
+        compare_endpoint(receipt, old.report);
+        compare_endpoint(old.receipt(), old.report);
         CHECK(!candidate.host()->last_error().empty());
         CHECK(receipt.route == MetricsRatioRouteV1::LegacyRerun);
         CHECK(receipt.route_reason == MetricsRouteReasonV1::ExistingFailure);
@@ -537,9 +558,91 @@ void stopped_rows() {
         authoritative.run(bars);
         compare_failure(authoritative, old);
         CHECK(authoritative.receipt().route == MetricsRatioRouteV1::LegacyActualCurve);
+        compare_endpoint(authoritative.receipt(), old.report);
         compare_report_values(authoritative.report, old.report);
         compare_curves(authoritative.report, old.report);
         CHECK(authoritative.report.equity_curve_len == candidate.trading()->marks);
+    }
+}
+void summary_endpoint_row() {
+    if (!row("legacy-summary-final-equity-matches-actual-curve")) return;
+    auto bars = multi_month_bars();
+    Instance old(certified_api), summary(certified_api);
+    old.configure(); summary.configure();
+    old.preference(StreamingSharpeV1::Off, kMetricsNeedAllV1);
+    summary.preference(StreamingSharpeV1::Off);
+    CHECK(summary.host()->set_equity_report_mode(ReportMode::SUMMARY_ONLY) == 0);
+    old.run(bars); summary.run(bars);
+    old.successful(); summary.successful();
+    const auto receipt = summary.receipt();
+    CHECK(receipt.route == MetricsRatioRouteV1::LegacyActualCurve);
+    CHECK(summary.report.equity_curve == nullptr && summary.report.equity_curve_len == 0);
+    CHECK(old.report.equity_curve_len == static_cast<std::int64_t>(bars.size()));
+    compare_endpoint(receipt, old.report);
+    CHECK(same_word(summary.report.metrics.equity.cagr, old.report.metrics.equity.cagr));
+}
+void annualization_endpoint_rows() {
+    struct Input {
+        const char* name;
+        std::int64_t span_ms;
+        double last_close;
+        bool overflow;
+    };
+    constexpr std::int64_t day = 86400000, epoch = 1704067200000LL;
+    for (const auto& input : {
+            Input{"final-equity-subday-annualization", 3600000, 104., false},
+            Input{"final-equity-compounded-annualization", 2 * day, 100.25, false},
+            Input{"final-equity-overflow-annualization", day, 9000., true}}) {
+        if (!row(input.name)) continue;
+        const auto spec = run_spec();
+        std::vector<pf_bar_t> bars{
+            {100., 101., 99., 100., 10., epoch},
+            {100., 101., 98., 99., 10., epoch + input.span_ms / 2},
+            {100., input.last_close + 1., 99., input.last_close, 10., epoch + input.span_ms},
+        };
+        Instance old(certified_api), candidate(certified_api);
+        old.configure(spec); candidate.configure(spec);
+        old.preference(StreamingSharpeV1::Off, kMetricsNeedAllV1);
+        candidate.preference(StreamingSharpeV1::On);
+        old.run(bars); candidate.run(bars);
+        old.successful(); candidate.successful();
+        CHECK(old.report.equity_curve_len == static_cast<std::int64_t>(bars.size()));
+        const auto receipt = candidate.receipt();
+        CHECK(receipt.route == MetricsRatioRouteV1::Streaming);
+        CHECK(candidate.report.equity_curve == nullptr && candidate.report.equity_curve_len == 0);
+        compare_endpoint(receipt, old.report);
+        compare_endpoint(old.receipt(), old.report);
+        compare_report_values(candidate.report, old.report);
+        CHECK(std::isfinite(old.report.metrics.equity.cagr));
+        if (old.report.equity_curve_len > 0 && old.report.equity_curve) {
+            const auto& first = old.report.equity_curve[0];
+            const auto& last = old.report.equity_curve[old.report.equity_curve_len - 1];
+            const double years = static_cast<double>(last.time_ms - first.time_ms)
+                / (365.25 * 86400. * 1000.);
+            const double compounded =
+                (std::pow(last.equity / spec.initial_capital, 1. / years) - 1.) * 100.;
+            CHECK(std::isfinite(compounded) == !input.overflow);
+        }
+    }
+}
+void empty_endpoint_row() {
+    if (!row("empty-actual-extent-has-no-final-equity")) return;
+    auto bars = multi_month_bars();
+    Instance old(certified_api), candidate(certified_api);
+    for (auto* instance : {&old, &candidate}) {
+        instance->configure();
+        instance->trading()->stop_after = 1;
+        instance->trading()->stop_before_mark = true;
+    }
+    old.preference(StreamingSharpeV1::Off);
+    candidate.preference(StreamingSharpeV1::On);
+    old.run(bars); candidate.run(bars);
+    compare_failure(candidate, old);
+    CHECK(old.report.equity_curve_len == 0 && candidate.report.equity_curve_len == 0);
+    for (auto* instance : {&old, &candidate}) {
+        const auto receipt = instance->receipt();
+        CHECK(receipt.actual_extent.empty == 1 && receipt.actual_extent.count == 0);
+        compare_endpoint(receipt, old.report);
     }
 }
 } // namespace module_metrics_test
@@ -563,6 +666,9 @@ int main(int argc, char** argv) {
     unavailable_declaration_rows();
     identity_row();
     stopped_rows();
+    summary_endpoint_row();
+    annualization_endpoint_rows();
+    empty_endpoint_row();
     if (!list_only && rows == 0) {
         std::fprintf(stderr, "no matching native module metrics-only rows\n");
         return 2;

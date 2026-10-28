@@ -240,6 +240,8 @@ def assert_route(run, *, streaming, count):
     assert len(run.receipts) == 1, run.receipts
     receipt = run.receipts[0]
     assert receipt["replays"] == 0, receipt
+    assert receipt["last_equity_valid"] == 1, receipt
+    assert math.isfinite(receipt["last_equity"]), receipt
     if streaming:
         expected = {
             "route": 1, "reason": 11, "mode": 1, "mask": 0x37,
@@ -302,6 +304,9 @@ def check_documents(tmp_path, *, certified, jailed):
         assert full["diagnostics"]["scratch_arena_bytes"] == ARENA_BYTES
         assert 0 <= full["diagnostics"]["scratch_arena_high_water_bytes"] <= ARENA_BYTES
     assert len(ordinary.receipts) == 1, ordinary.receipts
+    for run in (ordinary, legacy, auto):
+        assert run.receipts[0]["last_equity_valid"] == 1
+        assert run.receipts[0]["last_equity"] == full["equity_curve"][-1]["equity"]
     assert_route(legacy, streaming=False, count=SMALL_COUNT)
     assert_route(auto, streaming=certified, count=SMALL_COUNT)
 

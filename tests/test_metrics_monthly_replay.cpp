@@ -34,8 +34,8 @@ constexpr std::int64_t kHour = 3'600'000;
 constexpr std::size_t kBatchBytes = 64U * 1024U;
 static_assert(sizeof(EquityMetricsFold) <= 256, "fixed scalar summary");
 static_assert(sizeof(EquityFoldSnapshot) <= 160, "fixed summary snapshot");
-static_assert(sizeof(void*) != 8 || sizeof(MetricsStreamingResultV1) == 288,
-              "preserve the existing result layout");
+static_assert(sizeof(void*) != 8 || sizeof(MetricsStreamingResultV1) == 304,
+              "streaming result includes the final-equity receipt");
 static_assert(sizeof(MetricsMonthlyResultV1) <= 32, "fixed monthly companion");
 
 std::string selected_row;
@@ -522,6 +522,11 @@ void engine_series(const std::string& name,
     MetricsExtentReceiptV1 receipt;
     CHECK(name, actual.metrics_extent_receipt_v1(&receipt) == MetricsStreamingStatusV1::Ok);
     CHECK(name, receipt.metrics_needed == need);
+    CHECK(name, receipt.actual_last_equity_valid ==
+        (expected.value.equity_curve_len > 0 ? 1u : 0u));
+    if (expected.value.equity_curve && expected.value.equity_curve_len > 0)
+        CHECK(name, same(receipt.actual_last_equity,
+            expected.value.equity_curve[expected.value.equity_curve_len - 1].equity));
     const bool matching = fixture::same_extent(plan_for(planned).extent, receipt.actual_extent);
     CHECK(name, receipt.witness == (matching ? MetricsExtentWitnessV1::Match
                                              : MetricsExtentWitnessV1::Mismatch));

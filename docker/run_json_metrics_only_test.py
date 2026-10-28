@@ -7,6 +7,7 @@ import contextlib
 import ctypes
 import io
 import json
+import math
 from pathlib import Path
 import struct
 import sys
@@ -30,11 +31,15 @@ class MetricsLibrary(ordinary.SinkLibrary):
     """Extend the existing fake library with independently controlled receipts."""
     def __init__(self, *, routes=(2,), receipt_fault=None, receipt_edit=None,
                  failures=(), no_curve=False, cagr=0.25, after_run=None,
-                 bad_report=None, arena_stats=None):
+                 bad_report=None, arena_stats=None, initial_capital=None,
+                 curve_from_feed=False, calmar=-0.):
         super().__init__(arena_stats=arena_stats)
         self.routes, self.receipt_fault, self.receipt_edit = routes, receipt_fault, receipt_edit
         self.failures, self.no_curve, self.cagr = failures, no_curve, cagr
         self.after_run, self.bad_report = after_run, bad_report
+        self.curve_from_feed = curve_from_feed
+        self.calmar = calmar
+        self.last_equities = {}
         self.created, self.live, self.events = [], set(), []
         self.preferences, self.config, self.extents, self.errors = [], {}, {}, {}
         self.executions, self.receipts, self.settings = [], [], []
@@ -44,6 +49,9 @@ class MetricsLibrary(ordinary.SinkLibrary):
         self.report_free = self.export("report_free", self.free_report)
         setattr(self, SETTER, self.export(SETTER, self.preference))
         setattr(self, GETTER, self.export(GETTER, self.metrics_receipt))
+        if initial_capital is not None:
+            self.strategy_initial_capital = self.export(
+                "strategy_initial_capital", lambda st: initial_capital)
         self.strategy_get_last_error = self.export(
             "strategy_get_last_error", lambda st: self.errors.get(st, ("", "", {}))[0].encode())
         self.strategy_get_last_error_code = self.export(
@@ -82,9 +90,16 @@ class MetricsLibrary(ordinary.SinkLibrary):
         report = args[-1]._obj
         self.report_states[id(report)] = state
         self.extents[state] = count, int(feed[0].timestamp), int(feed[count - 1].timestamp)
+        if self.curve_from_feed:
+            for i in range(report.equity_curve_len):
+                report.equity_curve[i] = run_json.EquityPointC(
+                    int(feed[i].timestamp), float(feed[i].close), -0.)
+        self.last_equities[state] = (
+            report.equity_curve[report.equity_curve_len - 1].equity
+            if report.equity_curve_len else None)
         self.executions.append((state, ctypes.addressof(feed), id(report)))
         self.events.append(("run", state))
-        report.metrics.equity.cagr, report.metrics.equity.calmar = self.cagr, -0.
+        report.metrics.equity.cagr, report.metrics.equity.calmar = self.cagr, self.calmar
         report.metrics.equity.sharpe_bar, report.metrics.equity.sortino_bar = 1.125, 2.75
         report.metrics.equity.sharpe_monthly, report.metrics.equity.sortino_monthly = 3.25, 4.5
         report.metrics.all.num_trades = len(self.pnls)
@@ -108,8 +123,8 @@ class MetricsLibrary(ordinary.SinkLibrary):
 
     def metrics_receipt(self, state, pointer):
         out = pointer._obj
-        assert (out.struct_size, out.version) == (232, 1)
-        assert ctypes.string_at(ctypes.addressof(out) + 8, 224) == bytes(224)
+        assert (out.struct_size, out.version) == (248, 1)
+        assert ctypes.string_at(ctypes.addressof(out) + 8, 240) == bytes(240)
         self.receipts.append(state)
         attempt = self.created.index(state)
         if attempt == 0 and self.receipt_fault == "status":
@@ -120,6 +135,9 @@ class MetricsLibrary(ordinary.SinkLibrary):
         plan = out.extent_plan
         plan.extent = run_json.MetricsExtentV1(count, first, last, int(count == 0), 0)
         out.actual_extent = plan.extent
+        if self.last_equities[state] is not None:
+            out.actual_last_equity = self.last_equities[state]
+            out.actual_last_equity_valid = 1
         plan.present = 1
         for i, name in enumerate(("attempt", "input_generation", "admitted_view", "spec_identity")):
             value = (1 << 40) + 17 * (i + 1) + (attempt if name == "attempt" else 0)
@@ -321,15 +339,16 @@ def test_auto_missing_binding_keeps_legacy_curve(tmp_path, monkeypatch, missing)
 def test_native_receipt_layout_and_fixed_width_words():
     assert [ctypes.sizeof(pod) for pod in (
         run_json.MetricsExtentV1, run_json.MetricsExtentPlanV1,
-        run_json.MetricsStopBoundaryV1, run_json.MetricsExtentReceiptV1)] == [32, 72, 24, 232]
-    payload = bytearray(232)
-    struct.pack_into("=II", payload, 0, 232, 1)
+        run_json.MetricsStopBoundaryV1, run_json.MetricsExtentReceiptV1)] == [32, 72, 24, 248]
+    payload = bytearray(248)
+    struct.pack_into("=II", payload, 0, 248, 1)
     struct.pack_into("=qqqII", payload, 8, 9, -17, 111, 0, 0)
     struct.pack_into("=QQQQII", payload, 40, 2**40 + 1, 2**41 + 2, 2**42 + 3, 2**43 + 4, 1, 0)
     struct.pack_into("=qqqII", payload, 80, 8, -19, 109, 0, 0)
     struct.pack_into("=8Q", payload, 112, *(2**44 + i for i in range(8)))
     struct.pack_into("=qqII", payload, 176, 7, -3, 2, 0)
     struct.pack_into("=6IQ", payload, 200, 1, 3, 11, 1, 1, 2, 2**52 + 7)
+    struct.pack_into("=dI", payload, 232, -12345.625, 1)
     receipt = run_json.MetricsExtentReceiptV1.from_buffer(payload)
     assert (receipt.extent_plan.extent.count, receipt.extent_plan.extent.first_time_ms) == (9, -17)
     assert receipt.extent_plan.spec_identity == 2**43 + 4
@@ -337,6 +356,12 @@ def test_native_receipt_layout_and_fixed_width_words():
     assert receipt.metrics_needed == 2**44 + 7
     assert (receipt.stop_boundary.input_index, receipt.route, receipt.replay_attempts) == (-3, 3, 2)
     assert receipt.authoritative_attempt == 2**52 + 7
+    assert receipt.actual_last_equity == struct.unpack_from("=d", payload, 232)[0]
+    assert receipt.actual_last_equity_valid == 1
+    assert run_json.MetricsExtentReceiptV1.actual_last_equity.offset == 232
+    assert run_json.MetricsExtentReceiptV1.actual_last_equity_valid.offset == 240
+    receipt.actual_last_equity_valid = 2**32 - 1
+    assert struct.unpack_from("=I", payload, 240)[0] == 2**32 - 1
     receipt.actual_attempt = 2**60 + 13
     assert struct.unpack_from("=Q", payload, 112)[0] == 2**60 + 13
 
@@ -372,15 +397,90 @@ def test_unavailable_receipt_recovers_instead_of_publishing_partial(tmp_path, mo
     assert actual.encode() == expected.encode() and len(library.executions) == 2
 
 
-def test_missing_annualization_endpoints_uses_actual_curve(tmp_path, monkeypatch):
+@pytest.mark.parametrize("capital", [None, 0., -1., float("nan"), float("inf"), -float("inf")])
+def test_missing_or_invalid_annualization_capital_uses_actual_curve(tmp_path, monkeypatch, capital):
     expected, document, _ = success(ordinary.invoke(
-        tmp_path, monkeypatch, library=MetricsLibrary(), extra=["--metrics-only=legacy"]))
+        tmp_path, monkeypatch, library=MetricsLibrary(initial_capital=capital),
+        extra=["--metrics-only=legacy"]))
     assert "annualization" in document["diagnostics"]
     monkeypatch.setattr(run_json, "_metrics_only_supported", lambda lib: True)
     actual, _, library = success(ordinary.invoke(
-        tmp_path, monkeypatch, library=MetricsLibrary(routes=(1, 2), no_curve=True),
+        tmp_path, monkeypatch, library=MetricsLibrary(
+            routes=(1, 2), no_curve=True, initial_capital=capital),
         extra=["--metrics-only"]))
     assert actual.encode() == expected.encode() and len(library.executions) == 2
+
+
+@pytest.mark.parametrize("field,value", [
+    ("actual_last_equity_valid", 0), ("actual_last_equity_valid", 2),
+    ("actual_last_equity_valid", 2**32 - 1),
+    ("actual_last_equity", float("nan")), ("actual_last_equity", float("inf")),
+])
+def test_invalid_final_mark_uses_actual_curve(tmp_path, monkeypatch, field, value):
+    capital = 10000.
+    expected, _, _ = success(ordinary.invoke(
+        tmp_path, monkeypatch, library=MetricsLibrary(initial_capital=capital),
+        extra=["--metrics-only=legacy"]))
+    def corrupt(receipt, attempt):
+        if attempt == 0:
+            setattr(receipt, field, value)
+    monkeypatch.setattr(run_json, "_metrics_only_supported", lambda lib: True)
+    actual, _, library = success(ordinary.invoke(
+        tmp_path, monkeypatch, library=MetricsLibrary(
+            routes=(1, 2), no_curve=True, initial_capital=capital, receipt_edit=corrupt),
+        extra=["--metrics-only"]))
+    assert actual.encode() == expected.encode()
+    assert len(library.executions) == 2
+    assert [row[1:] for row in library.preferences] == [(1, 0x37), (0, 0x7f)]
+
+
+@pytest.mark.parametrize("span,last_equity,overflow", [
+    (60000, 10005., False), (2 * 86400000, 10005., False), (86400000, 80000., True),
+])
+@pytest.mark.parametrize("calmar", [None, -0.])
+def test_finite_annualization_uses_observed_endpoints_without_replay(
+        tmp_path, monkeypatch, span, last_equity, overflow, calmar):
+    capital = 10000.
+    def chart(directory):
+        path = directory / "annualization.csv"
+        times = [ordinary.bars.T0, ordinary.bars.T0 + span // 2, ordinary.bars.T0 + span]
+        prices = [capital, capital - 1., last_equity]
+        path.write_text("timestamp,open,high,low,close,volume\n" + "".join(
+            f"{timestamp},{price},{price},{price},{price},1\n"
+            for timestamp, price in zip(times, prices)))
+        return path
+    monkeypatch.setattr(ordinary.bars, "csv_file", chart)
+    def library(**kwargs):
+        return MetricsLibrary(initial_capital=capital, curve_from_feed=True,
+                              calmar=float("nan") if calmar is None else calmar, **kwargs)
+    legacy_text, legacy, _ = success(ordinary.invoke(
+        tmp_path, monkeypatch, library=library(), extra=["--metrics-only=legacy"]))
+    # Also observe the actual curve in an ordinary independent execution.
+    _, ordinary_document, control = success(ordinary.invoke(
+        tmp_path, monkeypatch, library=ordinary.without_report_sink(library())))
+    curve = ordinary_document["equity_curve"]
+    assert curve[-1]["equity"] == control.last_equities[control.created[0]]
+    assert curve[-1]["equity"] != capital + ordinary_document["summary"]["net_pnl"]
+    if overflow:
+        # This input really overflows the compounded form; no math helper is mocked.
+        years = float(curve[-1]["time_ms"] - curve[0]["time_ms"]) / (365.25 * 86400. * 1000.)
+        with pytest.raises(OverflowError):
+            math.pow(curve[-1]["equity"] / capital, 1. / years)
+        assert "annualization" in legacy["diagnostics"]
+    elif span < run_json.MIN_ANNUALIZATION_SPAN_MS:
+        assert "annualization" in legacy["diagnostics"]
+    else:
+        assert "annualization" not in legacy["diagnostics"]
+    monkeypatch.setattr(run_json, "_metrics_only_supported", lambda lib: True)
+    actual_text, actual, streamed = success(ordinary.invoke(
+        tmp_path, monkeypatch, library=library(routes=(1,), no_curve=True),
+        extra=["--metrics-only=auto"]))
+    assert math.isfinite(actual["metrics"]["equity"]["cagr"])
+    assert actual["diagnostics"].get("annualization") == legacy["diagnostics"].get("annualization")
+    assert actual_text.encode() == legacy_text.encode()
+    assert actual_text.encode() == document_bytes(metrics_shape(ordinary_document))
+    assert len(streamed.executions) == 1 and streamed.receipts == streamed.created
+    assert streamed.last_equities[streamed.created[0]] == curve[-1]["equity"]
 
 
 def test_valid_streaming_receipt_without_endpoint_need_does_not_replay(tmp_path, monkeypatch):

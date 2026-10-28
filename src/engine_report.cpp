@@ -256,6 +256,8 @@ void BacktestEngine::finish_metrics_streaming_v1(
     if (receipt.route_reason == MetricsRouteReasonV1::None)
         receipt.route_reason = MetricsRouteReasonV1::PlainNo;
     receipt.actual_extent = {};
+    receipt.actual_last_equity = 0.0;
+    receipt.actual_last_equity_valid = 0;
     receipt.eligible_returns = 0;
     if (curve.count > 0 && curve.read) {
         receipt.actual_extent.empty = 0;
@@ -267,6 +269,8 @@ void BacktestEngine::finish_metrics_streaming_v1(
             point = curve.read(curve.context, i);
         }
         receipt.actual_extent.last_time_ms = point.time_ms;
+        receipt.actual_last_equity = point.equity;
+        receipt.actual_last_equity_valid = 1;
     }
     const auto& config = s.run_configuration;
     receipt.actual_attempt = config.attempt;
@@ -701,11 +705,15 @@ void BacktestEngine::fill_metrics_section(ReportC* out) const {
                 // The old SUMMARY_ONLY second-pass contract remains intact.
                 auto& receipt = metrics_streaming_.receipt;
                 receipt.actual_extent = {};
+                receipt.actual_last_equity = 0.0;
+                receipt.actual_last_equity_valid = 0;
                 receipt.actual_extent.count = summary_equity_snapshot_.point_count;
                 receipt.actual_extent.empty = summary_equity_snapshot_.point_count == 0;
                 if (!receipt.actual_extent.empty) {
                     receipt.actual_extent.first_time_ms = summary_equity_snapshot_.first.time_ms;
                     receipt.actual_extent.last_time_ms = summary_equity_snapshot_.last.time_ms;
+                    receipt.actual_last_equity = summary_equity_snapshot_.last.equity;
+                    receipt.actual_last_equity_valid = 1;
                 }
                 receipt.eligible_returns = summary_equity_snapshot_.bar_returns.count;
                 receipt.route = metrics::MetricsRatioRouteV1::LegacyActualCurve;

@@ -2,6 +2,7 @@
 
 #include <pineforge/native_module.hpp>
 
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -47,11 +48,15 @@ public:
         pineforge::metrics::MetricsExtentReceiptV1 receipt{};
         const auto status = strategy_metrics_extent_receipt_v1(
             static_cast<const pineforge::BacktestEngine*>(this), &receipt);
+        char last_equity[32] = "null";
+        if (receipt.actual_last_equity_valid == 1 && std::isfinite(receipt.actual_last_equity))
+            std::snprintf(last_equity, sizeof(last_equity), "%.17g", receipt.actual_last_equity);
         std::fprintf(stderr,
             "metrics-only-native {\"status\":%d,\"route\":%u,\"reason\":%u,"
             "\"mode\":%u,\"mask\":%llu,\"plain\":%u,\"failed\":%llu,"
             "\"witness\":%u,\"mismatch\":%llu,\"replays\":%u,"
             "\"planned\":%u,\"count\":%lld,\"first\":%lld,\"last\":%lld,"
+            "\"last_equity_valid\":%u,\"last_equity\":%s,"
             "\"attempt\":%llu,\"authoritative_attempt\":%llu}\n",
             static_cast<int>(status), static_cast<unsigned>(receipt.route),
             static_cast<unsigned>(receipt.route_reason),
@@ -66,6 +71,7 @@ public:
             static_cast<long long>(receipt.actual_extent.count),
             static_cast<long long>(receipt.actual_extent.first_time_ms),
             static_cast<long long>(receipt.actual_extent.last_time_ms),
+            static_cast<unsigned>(receipt.actual_last_equity_valid), last_equity,
             static_cast<unsigned long long>(receipt.actual_attempt),
             static_cast<unsigned long long>(receipt.authoritative_attempt));
     }

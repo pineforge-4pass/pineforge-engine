@@ -166,6 +166,19 @@ Columns: **Feature** (adapter mechanism, cited) · **Native today** (`yes` / `pa
 | RP9 | Broker-state hash: scalar + per-bar recording | **partial** — scalar `broker_state_hash` engine_state_hash.cpp:24, C ABI `strategy_broker_state_hash` c_abi.cpp:684; per-bar rows are appended only by the source scheduler `scheduler_record_broker_hash` pine_strategy_host.cpp:3247 **Closed:** under `KernelRecorded` with `set_broker_state_hash_recording(true)` the consumer appends one `broker_state_hash()` row after each report point, so `broker_state_hash_len == equity_curve_len == script_bars_processed` on a completed run in batch and across a stream's warmup and realtime legs. A Failed or Aborted run can expose a shorter prefix. A row is the run's continuation identity at that bar, per driving mode — the broker half alone is mode-invariant (`tests/test_native_report_truth.cpp`). | K | L2 | F:I2 O:J1 S:X3 | O's "yes" covers the scalar only. §3.9 records the old quadratic adapter fold and closed-row kernel walk as history; V19-E and V19-A replaced them with running digests. |
 | RP10 | Fold the host's own durable state into the hash | **partial** — the protected virtual `hash_source_extension` engine.hpp:576 is overridable but source-named; the kernel default folds `"source:none"` engine_state_hash.cpp:20-22 **Closed:** `hash_host_extension(BrokerStateHashSink&)` engine.hpp:570 is the generic seam — protected virtual on `BacktestEngine`, called once per hash, last — and `hash_source_extension` engine.hpp:576 is its deprecated spelling, which the generic default forwards to (`tests/test_native_host_hash_extension.cpp`). | K | L2 (the virtual rides the shared bump) | F:I3 O:J1 S:X3 | — |
 
+The metrics extent receipt also carries `actual_last_equity` and
+`actual_last_equity_valid`, copied from the final authoritative metric mark.
+An empty extent leaves validity zero. These observations are outside the
+planned extent, its identity hash and every mismatch bit. The receipt is
+248 bytes; the plan remains 72 bytes and each extent remains 32 bytes.
+For a curve-free scalar document with finite CAGR, the JSON runner requires
+valid final equity and finite positive capital from `strategy_initial_capital`.
+It passes the observed timestamps and final equity to the existing
+annualization diagnostic helper; a missing proof requests the actual curve.
+Native endpoint rows compare against separate actual-curve executions, and
+document rows compare legacy bytes across sub-day, compounded and overflow
+spans, including nullable Calmar.
+
 ### 1.9 Other runtime surface
 
 | ID | Feature (adapter mechanism) | Native today | Class | Lane | Sources | Notes |

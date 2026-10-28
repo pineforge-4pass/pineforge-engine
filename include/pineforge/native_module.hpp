@@ -234,6 +234,8 @@ public:
             }
             plan.input_generation = generation.value();
             plan.spec_identity = native_run_spec_digest(spec);
+            // Bind only the planned input extent. Final equity is a receipt
+            // observation produced after execution and never part of this hash.
             MetricsBindingHashV1 view;
             view.word(plan.input_generation);
             view.word(plan.spec_identity);
