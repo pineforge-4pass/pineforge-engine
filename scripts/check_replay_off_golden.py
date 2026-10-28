@@ -5,9 +5,10 @@ Runs `docker/run_json.py` WITHOUT any replay switch on three fixed scripts
 (a re-cut group in FIFO mode, a re-cut group in ANY mode, and an ordinary close
 with a report-only terminal row) and compares, as raw bytes, the default JSON
 report and the `pf-report-sink/v1` stream with digests recorded from the
-pre-extension engine (`docker/replay_off_golden.json`). Nothing is parsed,
-masked or re-encoded before the comparison; the only input fixed before
-serialization is the producer's wall clock and the run identity.
+pre-extension engine (`docker/replay_off_golden.json`). The inputs fixed
+before serialization are the producer's wall clock and the run identity; the
+only bytes masked before hashing are the build identity (see
+`mask_build_identity`), because a build of another commit cannot share them.
 
 A scenario whose recorded digest is empty fails and prints the digests it
 measured, so the file can be filled from a build of the revision it names.
@@ -15,6 +16,7 @@ measured, so the file can be filled from a build of the revision it names.
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import importlib.util
 import json
@@ -58,26 +60,35 @@ def worker(runner_path, library, shape, primary):
 
 
 def mask_build_identity(text, document):
-    """The report names the build that produced it (engine.version_string, a git
-    describe, and engine.commit_sha, the short commit). Two builds of different
-    commits can never share those bytes, so the two strings are replaced by a
-    fixed token; every other byte of the report is compared as produced."""
-    engine = document.get("engine")
-    if not isinstance(engine, dict):
-        raise RuntimeError("default report has no engine identity block")
+    """The report names the build that produced it only inside fingerprint.token
+    (base64 of the canonical provenance JSON, whose engine block holds
+    version_string, a git describe, and commit_sha, the short commit) and in
+    fingerprint.digest (sha256 of those bytes). Two builds of different commits
+    can never share those two values. They are replaced by a fixed token in the
+    raw bytes, and the decoded provenance with only the two engine strings
+    blanked is appended in canonical form, so everything else the fingerprint
+    carries is still compared. Every other byte is compared as produced."""
+    fingerprint = document.get("fingerprint")
+    if not isinstance(fingerprint, dict):
+        raise RuntimeError("default report has no fingerprint")
+    token, digest = fingerprint.get("token"), fingerprint.get("digest")
+    if not isinstance(token, str) or not isinstance(digest, str):
+        raise RuntimeError("fingerprint token or digest is missing")
+    provenance = json.loads(base64.b64decode(token))
+    engine = provenance.get("engine")
+    if (not isinstance(engine, dict) or "version_string" not in engine
+            or "commit_sha" not in engine):
+        raise RuntimeError("fingerprint provenance has no engine identity")
+    engine["version_string"] = engine["commit_sha"] = "<build-identity>"
     masked = text
-    # The longer string first: the describe text may contain the short commit.
-    for key in ("version_string", "commit_sha"):
-        value = engine.get(key)
-        if not isinstance(value, str):
-            raise RuntimeError(f"engine.{key} is missing from the default report")
-        if not value:
-            continue
+    for value in (token, digest):
         needle = json.dumps(value).encode("utf-8")
-        if masked.count(needle) < 1:
-            raise RuntimeError(f"engine.{key} not found in the raw report bytes")
+        if masked.count(needle) != 1:
+            raise RuntimeError("fingerprint value not found exactly once in the raw report")
         masked = masked.replace(needle, b'"<build-identity>"')
-    return masked
+    return (masked + b"\nprovenance-without-build-identity "
+            + json.dumps(provenance, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            + b"\n")
 
 
 def measure(runner, library, shape, directory):
