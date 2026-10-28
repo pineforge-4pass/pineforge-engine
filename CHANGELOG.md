@@ -84,6 +84,11 @@ unchanged except for two additive diagnostics keys, described below.
   earlier runners cannot open the migrated database. The summaries add one
   row and up to three partial-index entries per action, plus per-target rows
   and indexes.
+- The ledger open derives the table layouts it accepts from one list of the
+  ledger's tables: every layout a runner has written, each also without
+  `report_integrity`; any other table count is refused as before. A ledger
+  without integrity digests, including one that already has the delivery
+  summaries, opens and needs one verified `run` replay before export.
 
 ### Run profile in the report diagnostics
 
