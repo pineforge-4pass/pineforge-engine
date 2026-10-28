@@ -12,7 +12,9 @@ git alone with --to-tag), the minor-release rule, a removal, a clone without
 tags (a diff whose from tag published no catalog is recomputed offline; one
 whose from tag published a catalog is rebuilt by running the diff backwards;
 a hidden removal, a forged null from and required tags fail), the flags a
-sibling catalog uses, and this tree's own checked-in diff.
+sibling catalog uses, and this tree's own checked-in diff. What a diff says of
+a code follows the diff's own start (from.version against the code's since),
+so those tests hold before and after the reset a release brings.
 
 The documentation page lists every class, code and argument kind of
 docker/run_failure_codes.json between two markers; test_docs_tables holds
@@ -111,6 +113,17 @@ def catalog_bytes(codes: dict) -> bytes:
     return (json.dumps(catalog, indent=1, sort_keys=True) + "\n").encode()
 
 
+def field_at(entry: dict, path: str) -> tuple:
+    """Whether `path` (object keys joined by '.', as a diff change spells a
+    field) names a member of `entry`, and that member (None when it does not)."""
+    value = entry
+    for key in path.split("."):
+        if not isinstance(value, dict) or key not in value:
+            return False, None
+        value = value[key]
+    return True, value
+
+
 class Repo:
     def __init__(self, path: Path):
         self.path = path
@@ -186,6 +199,57 @@ class CatalogDiff(unittest.TestCase):
         self.repo.commit("chore(release): " + tag)
         self.repo.tag(tag)
         self.ok(self.repo.run("--check"))
+
+    def assert_diff_states_code(self, diff: dict, name: str, entry: dict) -> None:
+        """What `diff` must say of the code `name`, whose catalog entry is `entry`.
+
+        The diff's own start decides, so one expectation holds before and after
+        the reset a release brings (--reset: from that release, nothing added).
+        `since` is the release that first ships the code, from.version the
+        release whose catalog the diff is against; the generator's version_key
+        compares them as numbers, a candidate X.Y.Z-rc.N below its release X.Y.Z.
+        """
+        start, since = diff["from"]["version"], entry["since"]
+        start_key, since_key = generator.version_key(start), generator.version_key(since)
+        self.assertIsNotNone(start_key, f"from.version {start!r} is no release version")
+        self.assertIsNotNone(since_key, f"{name}: since {since!r} is no release version")
+        added = [item for item in diff["added"] if item["code"] == name]
+        self.assertNotIn(name, [item["code"] for item in diff["removed"]],
+                         f"{name} is removed: a published code is deprecated, never removed")
+        # since is X.Y.Z, which a release shares with its candidates: from a candidate of
+        # its own release (since X.Y.Z, the diff from X.Y.Z-rc.N) it cannot tell whether
+        # the candidate shipped the code, so the diff says, and is held to what it says.
+        after_start = bool(added) if start.startswith(since + "-rc.") else since_key > start_key
+        if after_start:
+            # It has not shipped in the diff's published base: corrections to its
+            # class/args are part of the whole addition, not a breaking change.
+            self.assertEqual(added, [{"code": name, "collection": "codes", "entry": entry}],
+                             f"{name} first ships in {since}, after {start} where the diff "
+                             "starts: the diff must add it, whole")
+            self.assertNotIn(name, [item["code"] for item in diff["changed"]],
+                             f"{name} first ships in {since}, after {start} where the diff "
+                             "starts: it is an addition, not a change")
+            return
+        # The start's catalog carries it: the diff does not add it. It may list it as
+        # changed -- a correction made since the release -- but for real changes only,
+        # and as this tree's catalog holds them.
+        self.assertEqual(added, [],
+                         f"{name} first ships in {since}, not after {start} where the diff "
+                         "starts: it is no addition")
+        changed = [item for item in diff["changed"] if item["code"] == name]
+        self.assertLessEqual(len(changed), 1, f"{name} is changed twice")
+        for item in changed:
+            self.assertEqual(item["collection"], "codes")
+            self.assertTrue(item["fields"], f"{name} is changed in no field")
+            for change in item["fields"]:
+                sides = [(change[f"{side}Present"], json.dumps(change[side], sort_keys=True))
+                         for side in ("before", "after")]
+                where = f"{name} {change['path']}"
+                self.assertNotEqual(sides[0], sides[1],
+                                    f"{where} is listed as changed, and did not change")
+                held, value = field_at(entry, change["path"])
+                self.assertEqual(sides[1], (held, json.dumps(value, sort_keys=True)),
+                                 f"{where}: the after side is not this tree's catalog")
 
     def test_self_test(self) -> None:
         result = subprocess.run([sys.executable, str(SCRIPT), "--self-test"],
@@ -455,14 +519,69 @@ class CatalogDiff(unittest.TestCase):
             "report sink write failed",
             "report sink write made no progress",
         ])
-        # It has not shipped in the diff's published base: corrections to its
-        # class/args are part of the whole addition, not a breaking change.
+        # What the diff says of the code follows the diff's own start: an addition
+        # while its release is in progress (the diff starts at an older release),
+        # part of the base once a release reset has moved the start to its release.
         diff = json.loads((ROOT / DIFF).read_text(encoding="utf-8"))
-        additions = [item for item in diff["added"] if item["code"] == "report_sink_failed"]
-        self.assertEqual(additions, [
-            {"code": "report_sink_failed", "collection": "codes", "entry": entry},
-        ])
-        self.assertNotIn("report_sink_failed", [item["code"] for item in diff["changed"]])
+        self.assert_diff_states_code(diff, "report_sink_failed", entry)
+
+    def test_a_codes_diff_holds_before_and_after_its_release_reset(self) -> None:
+        # alpha ships in 1.1.0. While that release is in progress the diff, from
+        # v1.0.0, adds it; after the reset the release brings it is in the diff's
+        # base and the diff adds nothing. One expectation holds on both sides.
+        alpha = code("1.1.0")
+        self.start({"alpha": alpha})
+        before = self.repo.diff()
+        self.assertEqual([item["code"] for item in before["added"]], ["alpha"])
+        self.assert_diff_states_code(before, "alpha", alpha)
+        self.release("v1.1.0")
+        after = self.repo.diff()
+        self.assertEqual(after["added"], [])
+        self.assert_diff_states_code(after, "alpha", alpha)
+
+        def refused(diff: dict, needle: str) -> None:
+            with self.assertRaises(AssertionError) as raised:
+                self.assert_diff_states_code(diff, "alpha", alpha)
+            self.assertIn(needle, str(raised.exception))
+
+        def starting_at(diff: dict, version: str) -> dict:
+            moved = json.loads(json.dumps(diff))
+            moved["from"]["version"] = version
+            return moved
+
+        # The expectation can fail: each diff below says the other side's thing.
+        refused(starting_at(before, "1.1.0"), "is no addition")
+        refused(starting_at(after, "1.0.0"), "the diff must add it")
+        # A candidate sorts below its release: 1.0.9-rc.2 starts before 1.1.0,
+        # 1.2.0-rc.1 after it.
+        for version, state in (("1.0.9-rc.2", before), ("1.2.0-rc.1", after)):
+            self.assert_diff_states_code(starting_at(state, version), "alpha", alpha)
+        refused(starting_at(after, "1.0.9-rc.2"), "the diff must add it")
+        refused(starting_at(before, "1.2.0-rc.1"), "is no addition")
+        # 1.1.0-rc.1 shares alpha's since: the diff says whether the candidate
+        # shipped alpha, and either way is held to its rules.
+        for state in (before, after):
+            self.assert_diff_states_code(starting_at(state, "1.1.0-rc.1"), "alpha", alpha)
+        # A correction made after the release is a change of a published code: the
+        # diff may say so, truthfully, and nothing else.
+        said = {"path": "description", "beforePresent": True, "afterPresent": True,
+                "before": "older", "after": "d"}
+        corrected = starting_at(after, "1.1.0")
+        corrected["changed"] = [{"code": "alpha", "collection": "codes", "fields": [said]}]
+        self.assert_diff_states_code(corrected, "alpha", alpha)
+        for lie, needle in ((dict(said, before="d"), "did not change"),
+                            (dict(said, after="e"), "not this tree's catalog")):
+            lying = starting_at(corrected, "1.1.0")
+            lying["changed"][0]["fields"] = [lie]
+            refused(lying, needle)
+        # Before its release the code is an addition, whole: no change beside it.
+        unreleased = starting_at(before, "1.0.0")
+        unreleased["changed"] = corrected["changed"]
+        refused(unreleased, "not a change")
+        # A published code is never removed.
+        removed = starting_at(after, "1.1.0")
+        removed["removed"] = [{"code": "alpha", "collection": "codes", "entry": alpha}]
+        refused(removed, "is removed")
 
     def test_docs_tables(self) -> None:
         catalog = json.loads((ROOT / CATALOG).read_text(encoding="utf-8"))
