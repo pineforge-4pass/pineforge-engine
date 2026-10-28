@@ -208,6 +208,8 @@ class CatalogDiff(unittest.TestCase):
         `since` is the release that first ships the code, from.version the
         release whose catalog the diff is against; the generator's version_key
         compares them as numbers, a candidate X.Y.Z-rc.N below its release X.Y.Z.
+        A reset diff (from.catalogSha256 is to.catalogSha256: one catalog on both
+        sides) adds nothing, from any start.
         """
         start, since = diff["from"]["version"], entry["since"]
         start_key, since_key = generator.version_key(start), generator.version_key(since)
@@ -216,10 +218,13 @@ class CatalogDiff(unittest.TestCase):
         added = [item for item in diff["added"] if item["code"] == name]
         self.assertNotIn(name, [item["code"] for item in diff["removed"]],
                          f"{name} is removed: a published code is deprecated, never removed")
-        # since is X.Y.Z, which a release shares with its candidates: from a candidate of
-        # its own release (since X.Y.Z, the diff from X.Y.Z-rc.N) it cannot tell whether
-        # the candidate shipped the code, so the diff says, and is held to what it says.
-        after_start = bool(added) if start.startswith(since + "-rc.") else since_key > start_key
+        # since is X.Y.Z, which a release shares with its candidates, and a candidate sorts
+        # below its release: from X.Y.Z-rc.N the code is after the start. A reset diff is the
+        # exception, one catalog on both sides: the candidate's is this tree's, it carries the
+        # code already, nothing is added. Any other diff is held to add the code, so a code the
+        # candidate itself shipped cannot be named once the catalog has moved on from it.
+        reset = diff["from"]["catalogSha256"] == diff["to"]["catalogSha256"]
+        after_start = (not reset) if start.startswith(since + "-rc.") else since_key > start_key
         if after_start:
             # It has not shipped in the diff's published base: corrections to its
             # class/args are part of the whole addition, not a breaking change.
@@ -229,6 +234,9 @@ class CatalogDiff(unittest.TestCase):
             self.assertNotIn(name, [item["code"] for item in diff["changed"]],
                              f"{name} first ships in {since}, after {start} where the diff "
                              "starts: it is an addition, not a change")
+            # Whatever the start: one catalog on both sides adds nothing.
+            self.assertFalse(reset, f"{name} is added by a reset diff, one catalog on both "
+                                    "sides: a reset adds nothing")
             return
         # The start's catalog carries it: the diff does not add it. It may list it as
         # changed -- a correction made since the release -- but for real changes only,
@@ -538,15 +546,26 @@ class CatalogDiff(unittest.TestCase):
         after = self.repo.diff()
         self.assertEqual(after["added"], [])
         self.assert_diff_states_code(after, "alpha", alpha)
+        # What the controls below rely on, as the generator wrote it: one catalog on both
+        # sides of the reset diff, two on the diff before the reset.
+        self.assertEqual(after["from"]["catalogSha256"], after["to"]["catalogSha256"])
+        self.assertNotEqual(before["from"]["catalogSha256"], before["to"]["catalogSha256"])
 
-        def refused(diff: dict, needle: str) -> None:
+        def refused(diff: dict, needle: str, entry: dict = alpha) -> None:
             with self.assertRaises(AssertionError) as raised:
-                self.assert_diff_states_code(diff, "alpha", alpha)
+                self.assert_diff_states_code(diff, "alpha", entry)
             self.assertIn(needle, str(raised.exception))
 
         def starting_at(diff: dict, version: str) -> dict:
             moved = json.loads(json.dumps(diff))
             moved["from"]["version"] = version
+            return moved
+
+        def adding(diff: dict, entry: dict | None) -> dict:
+            """`diff` whose only addition is alpha, whole as `entry` (None: no addition)."""
+            moved = json.loads(json.dumps(diff))
+            moved["added"] = [] if entry is None else [
+                {"code": "alpha", "collection": "codes", "entry": entry}]
             return moved
 
         # The expectation can fail: each diff below says the other side's thing.
@@ -558,10 +577,24 @@ class CatalogDiff(unittest.TestCase):
             self.assert_diff_states_code(starting_at(state, version), "alpha", alpha)
         refused(starting_at(after, "1.0.9-rc.2"), "the diff must add it")
         refused(starting_at(before, "1.2.0-rc.1"), "is no addition")
-        # 1.1.0-rc.1 shares alpha's since: the diff says whether the candidate
-        # shipped alpha, and either way is held to its rules.
+        # 1.1.0-rc.1 shares alpha's since, and a candidate sorts below its release: from it
+        # alpha is an addition, unless the diff is a reset one -- one catalog on both sides,
+        # so the candidate carries alpha already and nothing is added.
         for state in (before, after):
             self.assert_diff_states_code(starting_at(state, "1.1.0-rc.1"), "alpha", alpha)
+        # A reset diff that still adds alpha contradicts itself; a diff whose catalogs differ
+        # and adds nothing leaves alpha out. Each is refused.
+        refused(starting_at(adding(after, alpha), "1.1.0-rc.1"), "is no addition")
+        refused(starting_at(adding(before, None), "1.1.0-rc.1"), "the diff must add it")
+        # A reset adds nothing from any start, not only from a candidate of alpha's release.
+        refused(starting_at(adding(after, alpha), "1.0.0"), "a reset adds nothing")
+        # Versions compare as numbers, not as text, where "1.10.0" sorts below "1.9.0": a code
+        # of 1.10.0 is after a diff from 1.9.0, a code of 1.9.0 is not after one from 1.10.0.
+        newer, older = code("1.10.0"), code("1.9.0")
+        self.assert_diff_states_code(starting_at(adding(before, newer), "1.9.0"), "alpha", newer)
+        refused(starting_at(adding(before, None), "1.9.0"), "the diff must add it", entry=newer)
+        refused(starting_at(adding(before, older), "1.10.0"), "is no addition", entry=older)
+        self.assert_diff_states_code(starting_at(adding(before, None), "1.10.0"), "alpha", older)
         # A correction made after the release is a change of a published code: the
         # diff may say so, truthfully, and nothing else.
         said = {"path": "description", "beforePresent": True, "afterPresent": True,
@@ -574,6 +607,17 @@ class CatalogDiff(unittest.TestCase):
             lying = starting_at(corrected, "1.1.0")
             lying["changed"][0]["fields"] = [lie]
             refused(lying, needle)
+        # A change is one row of the codes collection that names a field: a code listed
+        # twice, under another collection, or in no field is refused.
+        twice = starting_at(corrected, "1.1.0")
+        twice["changed"] = corrected["changed"] * 2
+        refused(twice, "alpha is changed twice")
+        elsewhere = starting_at(corrected, "1.1.0")
+        elsewhere["changed"][0]["collection"] = "fragments"
+        refused(elsewhere, "'fragments' != 'codes'")
+        fieldless = starting_at(corrected, "1.1.0")
+        fieldless["changed"][0]["fields"] = []
+        refused(fieldless, "alpha is changed in no field")
         # Before its release the code is an addition, whole: no change beside it.
         unreleased = starting_at(before, "1.0.0")
         unreleased["changed"] = corrected["changed"]
@@ -582,6 +626,11 @@ class CatalogDiff(unittest.TestCase):
         removed = starting_at(after, "1.1.0")
         removed["removed"] = [{"code": "alpha", "collection": "codes", "entry": alpha}]
         refused(removed, "is removed")
+        # Both versions must be release versions. A candidate number of 0 still starts like a
+        # candidate of 1.1.0, which the -rc rule never compares, so only the check refuses it.
+        refused(starting_at(before, "1.1.0-rc.0"),
+                "from.version '1.1.0-rc.0' is no release version")
+        refused(before, "alpha: since '1.1' is no release version", entry=code("1.1"))
 
     def test_docs_tables(self) -> None:
         catalog = json.loads((ROOT / CATALOG).read_text(encoding="utf-8"))

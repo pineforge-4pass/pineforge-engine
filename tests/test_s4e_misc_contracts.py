@@ -98,3 +98,11 @@ def test_upcoming_failure_codes_are_announced():
     # in `upcoming` would be true by construction, so none is made.)
     announced = set(re.findall(r"`([a-z][a-z0-9_]+)`", failure_code_preamble()))
     assert upcoming <= announced, f"unannounced failure codes: {sorted(upcoming - announced)}"
+    # The check above passes a diff that lost its additions. `due` (from the catalog) is every
+    # code released after the diff's own start (an -rc.N start counts as its release): all added.
+    start_version = diff["from"]["version"]
+    start = tuple(int(part) for part in start_version.split("-", 1)[0].split("."))
+    due = {name for name, entry in codes.items()
+           if tuple(int(part) for part in entry["since"].split(".")) > start}
+    added = {row["code"] for row in diff["added"] if row["collection"] == "codes"}
+    assert due <= added, f"the diff from {start_version} does not add {sorted(due - added)}"
