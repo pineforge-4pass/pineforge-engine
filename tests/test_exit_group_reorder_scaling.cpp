@@ -339,10 +339,102 @@ void failed_identity_publication() {
                 && table.command_sequence_for("original", "a") == 7,
             "failed retained-index write changed the authoritative placement");
 }
+
+class BoundaryAmendmentHost final : public source::PineStrategyHost {
+public:
+    BoundaryAmendmentHost() {
+        attach_pine_execution_adapter();
+        source::PineStrategyConfig config;
+        config.initial_capital = 1000000.0;
+        config.margin_long = config.margin_short = 0.0;
+        config.commission_value = 0.0;
+        config.slippage = 0;
+        config.pyramiding = 2;
+        configure_pine_strategy(config);
+    }
+    void on_source_bar(const Bar&) override {
+        const int bar = pine_bar_index();
+        if (bar == 0) strategy_entry("boundary", true, na, na, 1.0);
+        if (bar == 1) {
+            strategy_exit("boundary-exit", "boundary", 100.0, na);
+            strategy_entry("position", true, na, na, 2.0);
+        }
+        if (bar == 2) {
+            require(live_position_size() == 2.0, "setup: tail position did not open");
+            // The path reaches 101 before 102; publication must restore the
+            // submitted order, 102 before 101, within the two-row tail.
+            strategy_exit("first", "position", 102.0, na, na, na, na, 100.0, "", 1.0);
+            strategy_exit("second", "position", 101.0, na, na, na, na, 100.0, "", 1.0);
+        }
+        if (bar == 3) {
+            check_trades();
+            const auto boundary_phase = adapter_.exit_phase_value(0);
+            const auto tail_phase = adapter_.exit_phase_value(1);
+            require(boundary_phase != tail_phase,
+                    "setup: predecessor and tail did not exercise different fill phases");
+            before_ = adapter_.exit_group_work();
+            // Exercise the public phase-amendment interface on actual run
+            // output. The predecessor is a certificate dependency even
+            // though this amendment leaves all Trade fields unchanged.
+            adapter_.permute_exit_phases(0, {1});
+            require(adapter_.exit_phase_value(0) == tail_phase,
+                    "predecessor phase amendment did not publish its source phase");
+            amended_ = true;
+        }
+        if (bar == 4) {
+            require(amended_, "setup: predecessor phase was not amended");
+            check_trades();
+            const auto after = adapter_.exit_group_work();
+            require(after.tail_rows > before_.tail_rows
+                        && after.sequence_queries > before_.sequence_queries,
+                    "predecessor phase amendment bypassed exit-group publication");
+            observed = true;
+        }
+    }
+    bool observed = false;
+private:
+    void check_trades() const {
+        require(closed_trade_count() == 3, "setup: predecessor and bracket tail are incomplete");
+        const auto boundary = closed_trade(0);
+        const auto first = closed_trade(1);
+        const auto second = closed_trade(2);
+        require(boundary.entry_id == "boundary" && first.entry_id == "position"
+                    && second.entry_id == "position" && boundary.exit_from_bracket
+                    && first.exit_from_bracket && second.exit_from_bracket
+                    && first.entry_time == second.entry_time && first.exit_time == second.exit_time
+                    && boundary.exit_time != first.exit_time,
+                "setup: final bracket group does not have exactly one predecessor");
+        // All entries cost 100 with no fees. The predecessor exits at 100
+        // for zero; the submitted tail exits earn 102-100=2 and 101-100=1.
+        require(boundary.entry_price == 100.0 && boundary.exit_price == 100.0
+                    && boundary.qty == 1.0 && boundary.pnl == 0.0
+                    && first.exit_id == "first" && first.entry_price == 100.0
+                    && first.exit_price == 102.0 && first.qty == 1.0 && first.pnl == 2.0
+                    && second.exit_id == "second" && second.entry_price == 100.0
+                    && second.exit_price == 101.0 && second.qty == 1.0 && second.pnl == 1.0
+                    && boundary.commission == 0.0 && first.commission == 0.0
+                    && second.commission == 0.0,
+                "predecessor amendment changed trades from submitted-order hand arithmetic");
+    }
+    bool amended_ = false;
+    source::PineExecutionAdapter::ExitGroupWork before_{};
+};
+
+void boundary_amendment_publication() {
+    BoundaryAmendmentHost host;
+    std::array<Bar, 6> bars{};
+    for (std::size_t index = 0; index < bars.size(); ++index)
+        bars[index] = {100.0, index == 3 ? 103.0 : 100.5, 99.5, 100.0,
+                       1.0, epoch + 60000LL * static_cast<std::int64_t>(index)};
+    host.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
+    require(host.last_error().empty(), host.last_error().c_str());
+    require(host.observed, "setup: predecessor amendment publication was not observed");
+}
 } // namespace
 
 int main() {
     try {
+        boundary_amendment_publication();
         std::uint64_t resident = 0;
         for (const int parked : {500, 1000, 2000}) {
             std::uint64_t previous = 0;

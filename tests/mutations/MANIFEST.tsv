@@ -47,3 +47,5 @@ retirement-withdrawal	tests/mutations/retirement-withdrawal.patch	test_retiremen
 retirement-references	tests/mutations/retirement-references.patch	test_retirement_work_scaling	quiet cleanup: unchanged retirement sweep erased a placement, or retirement fixture erased no placement rows
 retirement-age	tests/mutations/retirement-age.patch	test_retirement_work_scaling	run_retention_changes Publication: unchanged retirement sweep erased a placement, or retired order did not expire after its placement bar
 retirement-metadata	tests/mutations/retirement-metadata.patch	test_retirement_work_scaling	run_retention_binding: retention metadata change bypassed the retirement sweep
+exit-group-boundary	tests/mutations/exit-group-boundary.patch	test_exit_group_reorder_scaling	boundary_amendment_publication: predecessor phase amendment bypassed exit-group publication
+exit-group-sequence	tests/mutations/exit-group-sequence.patch	test_exit_group_reorder_scaling	retained_identity_reference: retained identity lookup differs from independent row-history oracle

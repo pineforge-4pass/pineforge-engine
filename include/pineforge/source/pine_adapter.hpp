@@ -3244,20 +3244,20 @@ private:
     mutable bool projected_pending_valid_ = false;
     mutable std::vector<int> projected_pending_indexes_;
     mutable std::vector<int> projected_pending_next_;
-    void ensure_projected_pending_index() const;
+    bool ensure_projected_pending_index() const;
     int projected_pending_next(int index) const noexcept;
     int projected_raw_pending_next(int raw) const noexcept;
     int projected_level_resolved(const PlacementSnapshot&) const noexcept;
+    // Bump the version before mutation. Do not keep the returned reference
+    // across another pending_write of the same container.
     template<class Row> Row& pending_write(Row& row) noexcept {
         refresh_pending_view();
         return row;
     }
-#ifndef NDEBUG
-    static int debug_projected_pending_size(const PineExecutionAdapter&) noexcept;
-    static bool debug_projected_pending_at(
+    static int scan_projected_pending_size(const PineExecutionAdapter&) noexcept;
+    static bool scan_projected_pending_at(
         const PineExecutionAdapter&, int index, const PlacementSnapshot*&,
-        native_order::RequestHandle&) noexcept;
-#endif
+        native_order::RequestHandle&, int* raw_index = nullptr) noexcept;
 
 public:
     // Cumulative physical work, reset at run begin. No decision or state fold

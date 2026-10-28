@@ -5085,7 +5085,7 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
                         }
                         if (live->second.void_issue && !snapshot.void_issue)
                             unvoid_exit(live->second);
-                        live->second.exit_levels.trail_offset = snapshot.exit_levels.trail_offset;
+                        live->second.exit_levels.trail_offset = snapshot.exit_levels.trail_offset; invalidate_retirement();
                         live->second.trail_activation_level = snapshot.trail_activation_level;
                         live->second.requested_qty = snapshot.requested_qty;
                         live->second.projection_remaining_qty = snapshot.projection_remaining_qty;
@@ -27310,11 +27310,11 @@ bool PineExecutionAdapter::same_projected_order(
         && left.bracket_origin == right.bracket_origin;
 }
 
-void PineExecutionAdapter::ensure_projected_pending_index() const {
+bool PineExecutionAdapter::ensure_projected_pending_index() const try {
     const auto placements_version = placement_.pending_observer_version_;
     if (projected_pending_valid_
         && projected_pending_version_ == pending_projection_version_
-        && projected_placement_version_ == placements_version) return;
+        && projected_placement_version_ == placements_version) return true;
     struct Key {
         std::string_view source, from, session;
         std::uint64_t run, origin;
@@ -27364,13 +27364,13 @@ void PineExecutionAdapter::ensure_projected_pending_index() const {
         }
         indexes.push_back(raw);
     }
-    // Persist integers only; the temporary key views die before any writer.
+    // Publish complete integer indexes only; failed allocation leaves exact scans in charge.
     projected_pending_indexes_.swap(indexes);
     projected_pending_next_.swap(next);
     projected_pending_version_ = pending_projection_version_;
     projected_placement_version_ = placements_version;
-    projected_pending_valid_ = true;
-}
+    projected_pending_valid_ = true; return true;
+} catch (const std::bad_alloc&) { projected_pending_valid_ = false; return false; }
 
 int PendingIntentView::size() const noexcept {
     return owner_ ? owner_->projected_pending_size() : 0;
@@ -29281,9 +29281,8 @@ bool PineExecutionAdapter::has_live_trail_policy() const noexcept {
         || counts[static_cast<std::size_t>(PineOrderFamily::ExitTrail)] != 0;
 }
 
-#ifndef NDEBUG
-// Keep the original scans independent of the index to catch missed writers.
-int PineExecutionAdapter::debug_projected_pending_size(
+// Original exact scans serve allocation failures and independent Debug checks.
+int PineExecutionAdapter::scan_projected_pending_size(
         const PineExecutionAdapter& owner) noexcept {
     const int raw_count = owner.projected_raw_pending_size();
     int count = 0;
@@ -29310,11 +29309,12 @@ int PineExecutionAdapter::debug_projected_pending_size(
     return count;
 }
 
-bool PineExecutionAdapter::debug_projected_pending_at(
+bool PineExecutionAdapter::scan_projected_pending_at(
         const PineExecutionAdapter& owner, int index, const PlacementSnapshot*& snapshot,
-        native_order::RequestHandle& handle) noexcept {
+        native_order::RequestHandle& handle, int* raw_index) noexcept {
     snapshot = nullptr;
     handle = {};
+    if (raw_index) *raw_index = -1;
     if (index < 0) return false;
     const int raw_count = owner.projected_raw_pending_size();
     int projected = 0;
@@ -29340,19 +29340,19 @@ bool PineExecutionAdapter::debug_projected_pending_at(
         if (projected++ == index) {
             snapshot = candidate;
             handle = candidate_handle;
+            if (raw_index) *raw_index = raw;
             return true;
         }
     }
     return false;
 }
-#endif
 
 int PineExecutionAdapter::projected_pending_size() const noexcept {
-    ensure_projected_pending_index();
+    if (!ensure_projected_pending_index()) return scan_projected_pending_size(*this);
     const int count = static_cast<int>(projected_pending_indexes_.size());
 #ifndef NDEBUG
     if (projected_raw_pending_size() <= 256)
-        assert(count == debug_projected_pending_size(*this));
+        assert(count == scan_projected_pending_size(*this));
 #endif
     return count;
 }
@@ -29364,7 +29364,8 @@ bool PineExecutionAdapter::projected_pending_at(
     handle = {};
     bool found = false;
     if (index >= 0) {
-        ensure_projected_pending_index();
+        if (!ensure_projected_pending_index())
+            return scan_projected_pending_at(*this, index, snapshot, handle);
         if (static_cast<std::size_t>(index) < projected_pending_indexes_.size())
             found = projected_raw_pending_at(
                 projected_pending_indexes_[static_cast<std::size_t>(index)], snapshot, handle);
@@ -29373,7 +29374,7 @@ bool PineExecutionAdapter::projected_pending_at(
     if (projected_raw_pending_size() <= 256) {
         const PlacementSnapshot* expected_snapshot = nullptr;
         native_order::RequestHandle expected_handle;
-        const bool expected_found = debug_projected_pending_at(
+        const bool expected_found = scan_projected_pending_at(
             *this, index, expected_snapshot, expected_handle);
         assert(found == expected_found);
         assert(snapshot == expected_snapshot);
@@ -29384,11 +29385,23 @@ bool PineExecutionAdapter::projected_pending_at(
 }
 
 int PineExecutionAdapter::projected_pending_next(int index) const noexcept {
+    if (!projected_pending_valid_) {
+        const PlacementSnapshot* snapshot = nullptr;
+        native_order::RequestHandle handle;
+        int raw = -1;
+        if (!scan_projected_pending_at(*this, index, snapshot, handle, &raw)) return -1;
+        return projected_raw_pending_next(raw);
+    }
     return projected_raw_pending_next(
         projected_pending_indexes_[static_cast<std::size_t>(index)]);
 }
 
 int PineExecutionAdapter::projected_raw_pending_next(int raw) const noexcept {
+    // Stay on the scan for the whole observer call, including sibling merges.
+    // The next independent accessor retries the index build.
+    if (raw < 0) return -1;
+    if (!projected_pending_valid_)
+        return raw < projected_raw_pending_size() - 1 ? raw + 1 : -1;
     return projected_pending_next_[static_cast<std::size_t>(raw)];
 }
 

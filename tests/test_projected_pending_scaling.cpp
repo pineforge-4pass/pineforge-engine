@@ -3,6 +3,7 @@
 // Bounds are layout estimates from source, not measured.
 #include <pineforge/pending_order_mirror.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
+#include "global_allocation_replacement.hpp"
 
 #include <array>
 #include <cmath>
@@ -265,9 +266,135 @@ public:
     }
     int observations = 0;
 };
+
+enum class Observer { Count, Copy, Levels, Probe, Resolved };
+
+class AllocationFailureHost final : public source::PineStrategyHost {
+public:
+    AllocationFailureHost(Observer observer, std::size_t fault)
+        : observer_(observer), fault_(fault) {
+        source::PineStrategyConfig config;
+        config.initial_capital = 10'000'000.0;
+        config.default_qty_type = static_cast<int>(QtyType::FIXED);
+        config.default_qty_value = 1.0;
+        config.margin_long = config.margin_short = 0.0;
+        configure_pine_strategy(config);
+    }
+    void on_source_bar(const Bar&) override {
+        if (pine_bar_index() == 0) {
+            strategy_entry("held", true, nan, nan, 3.0);
+            return;
+        }
+        if (pine_bar_index() != 1) return;
+        // Three one-unit brackets exhaust the three-unit parent. The buy at
+        // 1 stays pending; the final bar reaches every limit, but no stop.
+        for (int i = 0; i < 3; ++i)
+            strategy_exit("exit-" + std::to_string(i), "held",
+                          200.0 + i, 50.0 - i, nan, nan, nan, nan, "", 1.0);
+        strategy_order("resting", true, 2.0, 1.0);
+        const auto expected = oracle(adapter_);
+        CHECK(expected.size() == 4);
+        if (expected.size() != 4) return;
+        int opening = -1;
+        for (std::size_t i = 0; i < expected.size(); ++i)
+            if (expected[i].first.snapshot.opening) opening = static_cast<int>(i);
+        CHECK(opening >= 0);
+        if (opening < 0) return;
+        const auto hash = broker_state_hash_projection();
+        const auto before = global_allocation::allocations;
+        const auto refused = global_allocation::refused;
+        pf_pending_order_v1_t copied{};
+        double stop = nan, limit = nan, trail = nan, qty = nan;
+        int close_only = -1, partition = -1, result = -1;
+        std::fprintf(stderr, "pending allocation observer=%d fault=%zu\n",
+                     static_cast<int>(observer_), fault_);
+        global_allocation::fail_after = fault_;
+        switch (observer_) {
+        case Observer::Count: result = observe_pending_count_v1(); break;
+        case Observer::Copy: result = observe_pending_copy_v1(1, &copied); break;
+        case Observer::Levels:
+            result = observe_pending_effective_levels(1, &stop, &limit, &trail); break;
+        case Observer::Probe:
+            result = observe_probe_fill_qty(opening, 100.0, &qty, &close_only, &partition); break;
+        case Observer::Resolved: result = observe_pending_level_resolved(1); break;
+        }
+        global_allocation::fail_after = std::numeric_limits<std::size_t>::max();
+        allocations = global_allocation::allocations - before;
+        const auto refusals = global_allocation::refused - refused;
+        if (fault_ == std::numeric_limits<std::size_t>::max()) {
+            CHECK(refusals == 0);
+            CHECK(allocations > 0);
+        } else {
+            CHECK(refusals == 1);
+            // Only the allocations preceding the fault succeeded. An exact
+            // scan must not allocate, including the sibling-level merge.
+            CHECK(allocations == fault_);
+        }
+        switch (observer_) {
+        case Observer::Count: CHECK(result == static_cast<int>(expected.size())); break;
+        case Observer::Copy: CHECK(result == 0); check_row(copied, expected[1]); break;
+        case Observer::Levels:
+            CHECK(result == 0);
+            CHECK(same_double(stop, expected[1].levels.stop));
+            CHECK(same_double(limit, expected[1].levels.limit));
+            CHECK(same_double(trail, expected[1].levels.trail_price));
+            break;
+        case Observer::Probe:
+            CHECK(result == 0 && qty == 2.0 && close_only == 0 && partition == 0); break;
+        case Observer::Resolved: CHECK(result == 1); break;
+        }
+        const auto retry = global_allocation::allocations;
+        CHECK(observe_pending_count_v1() == static_cast<int>(expected.size()));
+        if (refusals) CHECK(global_allocation::allocations > retry);
+        CHECK(broker_state_hash_projection() == hash);
+        enumerate(*this, adapter_, expected);
+        enumerate_levels(*this, adapter_, expected);
+        observed = true;
+    }
+    std::size_t allocations = 0;
+    bool observed = false;
+private:
+    Observer observer_;
+    std::size_t fault_;
+};
+
+void allocation_failure_fallback() {
+    const Bar bars[] = {{100, 100, 100, 100, 1, 60'000},
+                        {100, 100, 100, 100, 1, 120'000},
+                        {100, 203, 99, 100, 1, 180'000}};
+    const auto run = [&](AllocationFailureHost& host) {
+        host.run(bars, 3, "1", "1");
+        CHECK(host.last_error().empty());
+        CHECK(host.observed);
+        CHECK(host.closed_trade_count() == 3);
+        for (std::size_t i = 0; i < host.closed_trade_count(); ++i) {
+            const auto row = host.closed_trade(i);
+            // One unit bought at 100 and sold at 200+i earns 100+i,
+            // with zero fees and slippage: total profit is 100+101+102.
+            CHECK(row.entry_price == 100.0 && row.qty == 1.0);
+            CHECK(row.exit_price == 200.0 + i && row.pnl == 100.0 + i);
+            CHECK(row.commission == 0.0);
+        }
+        return host.broker_state_hash_projection();
+    };
+    AllocationFailureHost healthy(Observer::Count, std::numeric_limits<std::size_t>::max());
+    const auto hash = run(healthy);
+    if (failures) return;
+    // The healthy observer supplies the allocation census; every fault is
+    // inside the real cache build, with no product hook or guessed limit.
+    for (const auto observer : {Observer::Count, Observer::Copy, Observer::Levels,
+                                Observer::Probe, Observer::Resolved})
+        for (std::size_t fault = 0; fault < healthy.allocations; ++fault) {
+            AllocationFailureHost host(observer, fault);
+            CHECK(run(host) == hash);
+            if (failures) return;
+        }
+}
 } // namespace
 
 int main() {
+    allocation_failure_fallback();
+    if (failures) return 1;
     const Bar bars[] = {{100, 100, 100, 100, 1, 60'000},
                         {100, 100, 100, 100, 1, 120'000}};
     std::uint64_t previous = 0;

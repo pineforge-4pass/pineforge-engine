@@ -1,0 +1,14 @@
+diff --git a/src/source/pine_adapter.cpp b/src/source/pine_adapter.cpp
+--- a/src/source/pine_adapter.cpp
++++ b/src/source/pine_adapter.cpp
+@@ -29816,9 +29816,9 @@
+ void PineExecutionAdapter::invalidate_exit_group(std::size_t first, std::size_t count) noexcept {
+     auto& certificate = exit_group_certificate_;
+     // The preceding row is a dependency too: a key rewrite can merge it
+     // into the formerly certified group without changing the ledger size.
+-    const auto boundary = certificate.start == 0 ? 0 : certificate.start - 1;
++    const auto boundary = certificate.start;
+     if (count && first < certificate.end
+         && (first >= boundary || count > boundary - first))
+         certificate.rows_valid = false;
+ }

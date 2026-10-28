@@ -964,7 +964,7 @@ void source::PineStrategyHost::on_native_bar(
 
 void source::PineStrategyHost::on_native_applied(
         const native_order::ExecutionAppliedEvent& event,
-        const NativeDecisionContext& context) { adapter_.invalidate_exit_group(event.first_trade_index, event.closed_trade_count);
+        const NativeDecisionContext& context) { adapter_.invalidate_exit_group(event.first_trade_index, event.closed_trade_count); // Covers later close_cause, exit_time and exit_id writes; no exit-group sort intervenes.
     // R5 lane F3: the kernel records CloseCause::Bracket for a close its
     // owner's fill armed (WaitForApplied). A Pine row keeps the cause this host
     // has always given it -- a strategy.exit leg by its order family
