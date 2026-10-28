@@ -74,7 +74,7 @@ scan:
   generated_files:
     - "tutorial/**/generated*.cpp"
 ceilings:
-  unreviewed: 1280
+  unreviewed: 1282
   pending-flat-memory: 188
 owners:
   - {name: "generated-cpp", globs: ["tutorial/**"]}
@@ -1558,3 +1558,5 @@ entries:
   - {id: "U1524", file: "src/native_order_book.hpp", symbol: "resident", ops: ["assign", "decl", "grow"], container: "std::vector<ResidentMeta>", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 130}
   - {id: "U1525", file: "src/native_order_book.hpp", symbol: "created", ops: ["alloc"], container: "unresolved by the index: make_shared", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 176}
   - {id: "U1526", file: "src/native_execution_consumer.cpp", symbol: "resident_", ops: ["assign"], container: "unresolved by the index: resident_ = ...", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 14374}
+  - {id: "U1527", file: "src/native_order.cpp", symbol: "directory", ops: ["assign", "decl"], container: "std::string", owner: "native-kernel", phase: "unclassified", state: "unreviewed", note: "Scratch directory references and retained path text have no established fixed length bound. String storage is outside the supported guarded vector proof and remains OPEN.", line: 2085}
+  - {id: "U1528", file: "src/native_order.cpp", symbol: "rows", ops: ["assign", "decl", "grow"], container: "std::vector<RequestHandle>", owner: "native-kernel", phase: "unclassified", state: "unreviewed", note: "Groups RequestHandle snapshots, LiveRequest materialization and scalar row reads. Snapshots and materialization grow with opening or live order count; no fixed bound or supported guarded vector proof is established. OPEN.", line: 1344}
