@@ -21,7 +21,7 @@ ownership rule unchanged.
 The proportional rule applies to **cagr**, and reaches calmar through it;
 **sharpe_bar and sortino_bar** keep one formula on every span. The complete
 annualized-field inventory of `compute_equity_stats`
-(`src/engine_metrics.cpp:814`), with exact public paths and reason keys, is
+(`src/engine_metrics.cpp:981`), with exact public paths and reason keys, is
 below. No field other than `cagr` and `calmar` receives an annualization
 reason, and `calmar` carries the same reason as the `cagr` it was computed from.
 

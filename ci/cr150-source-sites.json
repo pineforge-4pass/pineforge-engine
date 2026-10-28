@@ -6297,12 +6297,24 @@
   },
   {
    "file": "include/pineforge/native_module.hpp",
+   "symbol": "value_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace native_module #1",
+    "class MetricsBindingHashV1 #1"
+   ],
+   "cls": "assign",
+   "spelling": "value_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/native_module.hpp",
    "symbol": "<temp:string>",
    "scope": [
     "namespace pineforge #1",
     "namespace native_module #1",
     "template < typename Host > class Module final : public Host #1",
-    "public : void note_error ( const char * text , const RunFailureValue & value ) noexcept #1",
+    "void note_error ( const char * text , const RunFailureValue & value ) noexcept #1",
     "try #1"
    ],
    "cls": "temp",
@@ -14112,6 +14124,23 @@
   },
   {
    "file": "src/engine_metrics.cpp",
+   "symbol": "next",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace metrics #1",
+    "namespace #1",
+    "namespace streaming_v1 #1",
+    "class MonthEndReplay #1",
+    "private : bool close_month ( ) #1",
+    "if ( count_ = = capacity_ ) #1",
+    "try #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_unique",
+   "ordinal": 1
+  },
+  {
+   "file": "src/engine_metrics.cpp",
    "symbol": "returns",
    "scope": [
     "namespace pineforge #1",
@@ -14124,6 +14153,36 @@
    ],
    "cls": "grow",
    "spelling": "returns . append ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/engine_metrics.cpp",
+   "symbol": "months",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace metrics #1",
+    "namespace #1",
+    "namespace streaming_v1 #1",
+    "class Fold final : public StreamingEquityRatiosV1 #1",
+    "public : Fold ( MetricsStreamingConfigV1 config , MetricsExtentPlanV1 plan , MetricsRatioTraceSinkV1 sink ) : config_ ( config ) , plan_ ( plan ) , sink_ ( sink ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_unique",
+   "ordinal": 1
+  },
+  {
+   "file": "src/engine_metrics.cpp",
+   "symbol": "months",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace metrics #1",
+    "namespace #1",
+    "namespace streaming_v1 #1",
+    "class Fold final : public StreamingEquityRatiosV1 #1",
+    "MetricsStreamingStatusV1 enable_months ( ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_unique",
    "ordinal": 1
   },
   {
