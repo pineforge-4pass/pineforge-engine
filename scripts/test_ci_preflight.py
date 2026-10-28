@@ -3537,10 +3537,12 @@ class RunnerGroupAllowlist(unittest.TestCase):
         self.omit('ci.yml')
         path = self.workflows / 'ci.yml'
         original = path.read_text()
+        # The real authz job's own runs-on line is the text to replace: it is the PR fleet now.
+        current = re.search(r'^    runs-on: .*\n', _jobs(original)['authz'], re.M).group(0)
+        self.assertIn('pf-gcp-pr', current)
         for runner in ('ubuntu-24.04', PR_RUNNER, POST_RUNNER, RELEASE_RUNNER):
             with self.subTest(runner=runner):
-                path.write_text(in_job(original, 'authz', '    runs-on: ubuntu-24.04\n',
-                                       f'    runs-on: {runner}\n'))
+                path.write_text(in_job(original, 'authz', current, f'    runs-on: {runner}\n'))
                 code, lines = self.run_stage()
                 self.assertEqual(self.failures(lines), [], lines)
                 self.assertEqual(code, 0, lines)
@@ -3548,7 +3550,8 @@ class RunnerGroupAllowlist(unittest.TestCase):
     def test_real_tree_mirror_preserves_the_live_group_and_only_two_advisories(self):
         expected_names = ('ci-post.yml', 'ci.yml', 'corpus-parity-subset.yml',
                           'corpus-parity.yml', 'docs-post.yml', 'gke-pr.yml',
-                          'native-live.yml', 'promote-baseline.yml', 'release-ruleset-probe.yml')
+                          'native-live.yml', 'promote-baseline.yml', 'release-ruleset-probe.yml',
+                          'release.yml')
         self.assertEqual(self.entries(), [self.reference(name) for name in expected_names])
         code, lines = self.run_stage(repository=None)
         self.assertEqual(code, 0, lines)
