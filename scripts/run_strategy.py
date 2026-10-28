@@ -59,6 +59,9 @@ bar (the bar the first entry was placed on) -- or, on a run whose feed
 starts on TradingView's first computed bar, before that bar -- and the
 trades written are those entered inside the tape's span —
 _tv_entry_emit_window states the exact rule.
+
+PINEFORGE_RUN_JSON_PROFILE=jailed excludes this driver before any run or
+output staging: run_request_invalid, strategy_driver_no_jailed_route.
 """
 from __future__ import annotations
 
@@ -4490,7 +4493,26 @@ def _run_via_docker(strategy_dir: Path, ohlcv_path: Path, params: dict,
 
 # --- CLI ---------------------------------------------------------------
 
+def _refuse_jailed_profile() -> None:
+    """Read run_json's host selector once, before any driver side effects."""
+    profile = os.environ.get("PINEFORGE_RUN_JSON_PROFILE", "unjailed")
+    if profile == "jailed":
+        error = RuntimeError(
+            "jailed profile excludes scripts/run_strategy.py: "
+            "strategy_driver_no_jailed_route")
+    elif profile != "unjailed":
+        error = RuntimeError("PINEFORGE_RUN_JSON_PROFILE must be unjailed or jailed")
+    else:
+        return
+    # Preserve _with_run_failure_code's attributes and the CLI's reporting.
+    # Keep the named exclusion in the text: this code's args are closed.
+    error.run_failure_code = "run_request_invalid"
+    error.run_failure_args = '{"option":"arguments"}'
+    raise error
+
+
 def main() -> int:
+    _refuse_jailed_profile()
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("strategy_dir", type=Path,

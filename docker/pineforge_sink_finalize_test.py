@@ -397,6 +397,54 @@ def test_pipe_round_trip_from_path_writer(tmp_path, stdout_mode):
     assert_success(result, receipt, out, spool, payload)
 
 
+@pytest.mark.parametrize("profile", [None, "unjailed"], ids=["default", "explicit"])
+def test_file_mode_runs_normally_outside_jailed_profile(tmp_path, monkeypatch, profile):
+    # Making the file-mode refusal unconditional must turn this round trip red.
+    if profile is None:
+        monkeypatch.delenv("PINEFORGE_RUN_JSON_PROFILE", raising=False)
+    else:
+        monkeypatch.setenv("PINEFORGE_RUN_JSON_PROFILE", profile)
+    payload = fixture_stream(tmp_path)
+    result, receipt, out, spool = invoke(
+        tmp_path, payload, extra=("--max-bytes", str(len(payload))))
+    assert_success(result, receipt, out, spool, payload)
+    assert tuple(receipt) == RECEIPT_KEYS
+
+
+@pytest.mark.parametrize("stderr_receipt", [False, True])
+def test_jailed_file_mode_keeps_the_typed_failure_channels(
+        tmp_path, monkeypatch, stderr_receipt):
+    monkeypatch.setenv("PINEFORGE_RUN_JSON_PROFILE", "jailed")
+    payload = fixture_stream(tmp_path)
+    output = tmp_path / "out.sink"
+    previous = b"previous output\n"
+    output.write_bytes(previous)
+    result, receipt, out, spool = invoke(
+        tmp_path, payload, out=output, receipt_pipe=True,
+        extra=("--receipt-fd", "2") if stderr_receipt else ())
+    assert result.returncode == 3 and result.stdout == b"", result.stderr
+    diagnostic = json.loads(result.stderr)
+    if stderr_receipt:
+        assert receipt is None
+        receipt = diagnostic
+        assert tuple(receipt) == TYPED_REFUSAL_RECEIPT_KEYS
+    else:
+        assert tuple(receipt) == RECEIPT_KEYS
+        assert tuple(diagnostic) == ("tool", "event", "exit_code", "detail", "code", "args")
+    assert diagnostic["tool"] == "pineforge-sink-finalize"
+    assert diagnostic["event"] == "sink_refused" and diagnostic["exit_code"] == 3
+    assert diagnostic["code"] == "run_request_invalid"
+    assert diagnostic["args"] == {"option": "arguments"}
+    assert diagnostic["detail"] == (
+        "jailed profile excludes pineforge-sink-finalize file-output mode: "
+        "finalizer_file_output_no_jailed_route")
+    assert receipt["complete"] is False and receipt["sha256"] == ""
+    assert receipt["sink_bytes"] == 0
+    assert all(receipt["count_" + tag.lower()] == 0 for tag in TAGS)
+    assert out.read_bytes() == previous
+    assert list(spool.iterdir()) == []
+
+
 @pytest.mark.parametrize("tiny,unix_socket,receipt_pipe,launcher", [
     (True, False, False, False), (True, True, True, False),
     (False, False, True, True),

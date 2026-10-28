@@ -8,9 +8,7 @@ TemporaryFile can unlink a file before the parent has a chance to see it.
 from __future__ import annotations
 
 import argparse
-import ast
 import ctypes
-import errno
 import fcntl
 import io
 import json
@@ -42,7 +40,6 @@ from test_run_json_sink_fd import FdLibrary, SelectedFdLibrary, Stream, sealed_a
 
 
 ARENA_BYTES = 16 * 1024 * 1024
-IO_ERRNOS = (errno.EACCES, errno.EPERM, errno.EROFS, errno.EFBIG)
 RUN_JSON = "docker/run_json.py"
 RUN_STRATEGY = "scripts/run_strategy.py"
 FINALIZER = "docker/pineforge_sink_finalize.py"
@@ -326,6 +323,13 @@ def _child_main(argv):
         _emit(own.events_fd, {"kind": "typed-refusal", "code": error.code,
                               "args": error.code_args, "detail": str(error)})
         status = error.exit_status
+    except RuntimeError as error:
+        if not getattr(error, "run_failure_code", None):
+            raise
+        _emit(own.events_fd, {"kind": "typed-refusal", "code": error.run_failure_code,
+                              "args": json.loads(error.run_failure_args),
+                              "detail": str(error)})
+        status = 1
     except SystemExit as error:
         status = error.code
     finally:
@@ -445,31 +449,23 @@ def _assert_no_files(result, site):
         f"exit={result.status}; stderr={result.stderr!r}")
 
 
-def _assert_native_io_block(result, function):
-    _assert_jail(result)
-    assert result.status == 1, (result.status, result.stdout, result.stderr, result.events)
-    assert any(event["kind"] == "os-error" and event["errno"] in IO_ERRNOS
-               for event in result.events), result.events
-    assert _entered(result, RUN_STRATEGY, function), result.events
-    assert _attempts(result, RUN_STRATEGY, function), result.events
-
-
-def _assert_jailed_refusal(document):
-    assert isinstance(document.get("code"), str) and document["code"], document
-    assert isinstance(document.get("args"), dict), document
-    detail = str(document.get("detail", "")) + json.dumps(document["args"])
-    assert "jailed" in detail, document
-
-
 def _assert_driver_refusal(result):
     _assert_jail(result)
-    assert result.status != 0, result
+    assert result.status == 1 and result.stdout == result.stderr == b"", result
     refusals = [event for event in result.events if event["kind"] == "typed-refusal"]
-    assert len(refusals) == 1, result.events
-    _assert_jailed_refusal(refusals[0])
+    assert refusals == [{
+        "kind": "typed-refusal", "code": "run_request_invalid",
+        "args": {"option": "arguments"},
+        "detail": ("jailed profile excludes scripts/run_strategy.py: "
+                   "strategy_driver_no_jailed_route"),
+    }], result.events
+    assert _entered(result, RUN_STRATEGY, "main"), result.events
     assert not any(event["kind"] == "native-result" for event in result.events)
+    assert not _entered(result, RUN_STRATEGY, "_report_from_sink"), result.events
+    assert not _entered(result, RUN_STRATEGY, "_run_via_docker"), result.events
     assert not _entered(result, RUN_STRATEGY, "_trim_ohlcv_csv"), result.events
     assert not _entered(result, RUN_STRATEGY, "_write_sink_engine_trades_csv")
+    assert not _entered(result, RUN_STRATEGY, "_SinkTraceNames.__iter__"), result.events
 
 
 def test_final_json_spool_stays_resident(tmp_path):
@@ -585,116 +581,52 @@ def test_output_columns_use_fd_metadata_without_implicit_recording(tmp_path):
 
 
 def test_trace_name_dedup_requires_a_jailed_guard(tmp_path):
-    """A, static fallback: scripts/run_strategy.py:2088 TemporaryFile.
+    """The trace CLI must refuse before native results or dedup staging.
 
-    A real trace CLI run returns a _SinkTraceNames view but is blocked by
-    reverse-CSV staging first. Do not mock that earlier file operation.
-    The explicit source assertion below fails on the missing refusal guard;
-    it is not runtime evidence of reaching the trace-name creating call.
+    The former static fallback is replaced by an exact typed refusal from
+    the real entry point. No earlier file operation is mocked away.
     """
     source, probe, fixture = _inputs(tmp_path)
     result = _child(tmp_path, "trace-names", [
         probe, "--ohlcv", source, "--no-trim-output",
         "--output", os.devnull, "--trace-json", os.devnull,
     ], fixture=fixture)
-    if not _attempts(result):
-        _assert_driver_refusal(result)
-        _assert_no_files(result, "trace-name dedup (jailed refusal)")
-        return
-    _assert_native_io_block(result, "_write_sink_engine_trades_csv")
-    assert {"kind": "native-result", "trades": "_SinkRows",
-            "trace_names": "_SinkTraceNames"} in result.events
-    assert not _entered(result, RUN_STRATEGY, "_SinkTraceNames.__iter__"), result.events
-    assert not any(result.leftovers.values()), (
-        f"trace-name dedup: earlier staging left directory entries {result.leftovers!r}")
-
-    tree = ast.parse((ROOT / RUN_STRATEGY).read_text(encoding="utf-8"))
-    trace_class = next(node for node in tree.body
-                       if isinstance(node, ast.ClassDef) and node.name == "_SinkTraceNames")
-    iterator = next(node for node in trace_class.body
-                    if isinstance(node, ast.FunctionDef) and node.name == "__iter__")
-    creating_calls = [
-        node for node in ast.walk(iterator)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-        and isinstance(node.func.value, ast.Name) and node.func.value.id == "tempfile"
-        and node.func.attr == "TemporaryFile"
-    ]
-    assert creating_calls, "trace-name dedup creating call moved; re-audit this fallback"
-    # A comment mentioning the selector is not a guard. Require an actual
-    # direct environment comparison and unconditional typed raise in its
-    # true branch before staging. This deliberately recognizes only the
-    # two simple local forms; the CLI refusal above covers an entry guard.
-    comparisons = {
-        ast.dump(ast.parse(
-            'os.environ.get("PINEFORGE_RUN_JSON_PROFILE"' + default
-            + ') == "jailed"', mode="eval").body)
-        for default in ("", ', "unjailed"')
-    }
-    guards = [
-        node for node in iterator.body
-        if isinstance(node, ast.If) and node.lineno < creating_calls[0].lineno
-        and ast.dump(node.test) in comparisons
-        and isinstance(node.body[0], ast.Raise)
-        and isinstance(node.body[0].exc, ast.Call)
-        and isinstance(node.body[0].exc.func, ast.Name)
-        and node.body[0].exc.func.id == "RunFailure"
-        and len(node.body[0].exc.args) >= 2
-        and isinstance(node.body[0].exc.args[1], ast.Constant)
-        and isinstance(node.body[0].exc.args[1].value, str)
-        and node.body[0].exc.args[1].value
-    ]
-    assert guards, (
-        "trace-name dedup: scripts/run_strategy.py:2088 creates a temporary file "
-        "without a jailed refusal guard; static fallback only, because the real "
-        "trace CLI child was blocked at reverse-CSV staging before name iteration")
+    _assert_driver_refusal(result)
+    _assert_no_files(result, "trace-name dedup (jailed refusal)")
 
 
 def test_feed_trim_creates_no_temporary_under_jailed_environment(tmp_path):
-    """A: scripts/run_strategy.py:3685 mkstemp(prefix='pf_ohlcv_').
+    """The Docker CLI must refuse before mkstemp(prefix='pf_ohlcv_').
 
-    The real docker runner sees an input bound and reaches _trim_ohlcv_csv
-    before launching Docker. The environment selector is currently ignored.
+    The input bound would require feed trimming without the entry guard.
     """
     source, probe, _fixture = _inputs(tmp_path, trim=True)
     result = _child(tmp_path, "feed-trim", [
         probe, "--ohlcv", source, "--no-trim-output",
         "--runner", "docker", "--output", os.devnull,
     ])
-    if _attempts(result):
-        _assert_native_io_block(result, "_trim_ohlcv_csv")
-        assert _entered(result, RUN_STRATEGY, "_run_via_docker")
-        assert any("pf_ohlcv_" in event["path"] for event in _attempts(result))
-    else:
-        _assert_driver_refusal(result)
+    _assert_driver_refusal(result)
     _assert_no_files(result, "feed trim (_trim_ohlcv_csv / pf_ohlcv_*.csv)")
 
 
 def test_reverse_csv_staging_creates_no_temporaries_under_jailed_environment(tmp_path):
-    """A: scripts/run_strategy.py:3781 opens rows and offsets TemporaryFiles.
+    """The CSV CLI must refuse before rows and offsets TemporaryFiles.
 
-    A verified native-result fixture gives main() real _SinkRows; CSV
-    publication reaches the rows/offset staging before opening its output.
-    On an unprivileged host the first open already fails, hiding the second.
+    The verified fixture would give main() real _SinkRows without the guard.
     """
     source, probe, fixture = _inputs(tmp_path)
     result = _child(tmp_path, "reverse-csv", [
         probe, "--ohlcv", source, "--no-trim-output", "--output", os.devnull,
     ], fixture=fixture)
-    if _attempts(result):
-        _assert_native_io_block(result, "_write_sink_engine_trades_csv")
-        assert {"kind": "native-result", "trades": "_SinkRows",
-                "trace_names": "_SinkTraceNames"} in result.events
-    else:
-        _assert_driver_refusal(result)
+    _assert_driver_refusal(result)
     _assert_no_files(result, "reverse-CSV staging (rows and offsets TemporaryFile)")
 
 
 def test_finalizer_spool_creates_no_file_under_jailed_environment(tmp_path):
-    """A: docker/pineforge_sink_finalize.py:439 mkstemp('.pineforge-sink-').
+    """File mode must refuse before mkstemp('.pineforge-sink-').
 
-    File mode ignores the jailed environment and attempts its spool. The
-    same real finalizer first verifies a complete stdout-mode stream with
-    no spool; success there must not hide the file-mode creation attempt.
+    The same real finalizer still verifies a complete stdout-mode stream
+    with a positive size cap and no spool.
     """
     _source, _probe, fixture = _inputs(tmp_path)
     wire = fixture.read_bytes()
@@ -718,16 +650,20 @@ def test_finalizer_spool_creates_no_file_under_jailed_environment(tmp_path):
     ], input_bytes=wire)
     _assert_jail(result)
     receipt = json.loads(result.stderr)
-    assert result.status != 0 and result.stdout == b"", result
-    assert receipt["complete"] is False, receipt
-    if _attempts(result):
-        assert result.status == 5, result
-        assert _entered(result, FINALIZER, "main")
-        assert _attempts(result, FINALIZER, "main"), result.events
-        assert any(".pineforge-sink-" in event["path"] and ".spool" in event["path"]
-                   for event in _attempts(result)), result.events
-    else:
-        _assert_jailed_refusal(receipt)
+    assert result.status == 3 and result.stdout == b"", result
+    expected = {
+        "complete": False,
+        **{"count_" + tag: 0 for tag in "etovkxh"},
+        "sink_bytes": 0, "sha256": "", "finalizer_version": "1.1.0",
+        "tool": "pineforge-sink-finalize", "event": "sink_refused", "exit_code": 3,
+        "detail": ("jailed profile excludes pineforge-sink-finalize file-output mode: "
+                   "finalizer_file_output_no_jailed_route"),
+        "code": "run_request_invalid", "args": {"option": "arguments"},
+    }
+    assert receipt == expected and tuple(receipt) == tuple(expected), receipt
+    assert _entered(result, FINALIZER, "main")
+    assert not _entered(result, FINALIZER, "_receive")
+    assert not _entered(result, FINALIZER, "_verify")
     _assert_no_files(result, "finalizer spool (.pineforge-sink-*.spool)")
 
 
