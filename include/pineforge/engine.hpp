@@ -2045,12 +2045,12 @@ public:
     // Pine plumbing: one owning row value answers all of it, and a host
     // that owns its report needs the row, not twenty wrappers. Range-end
     // report rows are NOT here — report_trade_count() / get_report_trade()
-    // below span both spaces. Index against closed_trade_count(); each read
-    // owns its exact value, including a row below the published base.
+    // below span both spaces. Index against closed_trade_count(); reads below
+    // base refuse with engine_invariant only on an admitted retiring sink run.
     std::size_t closed_trade_count() const noexcept { return trades_.size(); }
     Trade closed_trade(std::size_t i) const { return trades_.read(i); }
     // Newest first, preserving global indices across resident and external
-    // rows. Start cursor at closed_trade_count(); false means cursor == 0.
+    // rows. Start at closed_trade_count(); crossing a retired base refuses.
     bool previous_closed_trade(std::size_t& cursor, Trade& value) const {
         return trades_.previous(cursor, value);
     }

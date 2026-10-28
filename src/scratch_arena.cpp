@@ -447,6 +447,16 @@ void ScratchArena::release_region(Region& region) noexcept {
     --impl_->open_regions;
 }
 
+void ScratchArena::release_prefix(Region& region, std::uint64_t bytes) {
+    const std::lock_guard<std::mutex> lock(impl_->mutex);
+    if (bytes % kChunkBytes != 0 || bytes > region.size)
+        arena_error(EINVAL, "scratch arena head release");
+    const auto count = static_cast<std::size_t>(bytes / kChunkBytes);
+    for (std::size_t i = 0; i < count; ++i) impl_->release_chunk(region.chunks[i]);
+    region.chunks.erase(region.chunks.begin(), region.chunks.begin() + count);
+    region.size -= bytes;
+}
+
 void ScratchArena::ensure_size(Region& region, std::uint64_t bytes,
                                std::uint64_t needed_bytes_lower_bound) {
     const std::lock_guard<std::mutex> lock(impl_->mutex);
