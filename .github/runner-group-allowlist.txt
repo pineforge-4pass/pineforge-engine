@@ -8,3 +8,4 @@ pineforge-4pass/pineforge-engine/.github/workflows/gke-pr.yml@refs/heads/main
 pineforge-4pass/pineforge-engine/.github/workflows/native-live.yml@refs/heads/main
 pineforge-4pass/pineforge-engine/.github/workflows/promote-baseline.yml@refs/heads/main
 pineforge-4pass/pineforge-engine/.github/workflows/release-ruleset-probe.yml@refs/heads/main
+pineforge-4pass/pineforge-engine/.github/workflows/release.yml@refs/heads/main
