@@ -7451,6 +7451,14 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 endif()
 # --- CR-150 s4e-fix-tmp end ---
 
+# --- CR-150 streaming-ratios begin ---
+# The two-thread determinism row links Threads; a lane file may not link.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
+    target_link_libraries(test_metrics_streaming_ratios PRIVATE Threads::Threads)
+    target_link_libraries(tool_metrics_streaming_compare PRIVATE Threads::Threads)
+endif()
+# --- CR-150 streaming-ratios end ---
+
 # --- CR-150 core-cr150-l6b1 begin ---
 # CR-150 L6B1: appended after every pre-existing line pin. A real source
 # strategy module, with the same whole-archive link as release modules.
