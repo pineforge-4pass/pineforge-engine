@@ -176,8 +176,8 @@ impl Default for PfReport {
 const PF_MAGNIFIER_ENDPOINTS: c_int = 3;
 
 // PfReport is CALLER-allocated: before any run, resolve `pf_abi_version`
-// via libloading and assert it returns 4 (PF_ABI_VERSION) — an old .so
-// writing into this larger struct (or vice versa) corrupts memory silently.
+// via libloading and assert it returns 5 (PF_ABI_VERSION). This also enforces
+// the 1.8.0 module rebuild; differing report layouts can corrupt memory.
 
 // ── Safe wrapper ──────────────────────────────────────────────────────
 

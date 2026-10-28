@@ -890,13 +890,13 @@ class ReportC(ctypes.Structure):
 # pf_abi_version() export is asserted before any run. v3 appended
 # pf_trade_t::open_at_end (TradeC above); v4 appended the live-runtime
 # accessors and grew pf_report_t with the broker_state_hash array after
-# equity_curve_len (ReportC above already carries both fields).
+# equity_curve_len; v5 retains that layout and requires a 1.8.0 module rebuild.
 # test_run_strategy_range_end.py pins this constant to the header's
 # macro, because the campaign's verifier runs every probe through THIS
 # harness and a stale guard here is a run-error on every slug (the
 # f-1d spark pre-check of 2026-09-02 found exactly that: ".so reports
 # 3, harness expects 2" x64).
-EXPECTED_PF_ABI = 4
+EXPECTED_PF_ABI = 5
 
 
 def _check_abi(lib: ctypes.CDLL) -> None:

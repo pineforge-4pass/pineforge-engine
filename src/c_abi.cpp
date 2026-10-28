@@ -398,7 +398,7 @@ PF_API int pf_run_abort_restore_sigterm_v1(void) {
  * engine's per-lot range-end rows themselves matched TV (xau-grid 6/6,
  * silicon 9/9 rows). The row is built from the open
  * pyramid lot, so it carries that lot's entry_incarnation like any other
- * close. No struct changed by this accessor (PF_ABI_VERSION is 4 since the native lowering). */
+ * close. No struct changed by this accessor (PF_ABI_VERSION is 5). */
 PF_API uint64_t strategy_closed_trade_entry_incarnation(
         pf_strategy_t s, int trade_index) {
     if (!s) return 0;

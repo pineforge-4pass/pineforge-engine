@@ -647,8 +647,9 @@ the next epoch of the ABI that carries it: the next `PF_ABI_VERSION`, and the na
 Lane REL10 removes the four aliases for 1.0.0, before the 1.0 compatibility promise begins, and
 without those epochs: an alias shares its storage or its value with the primary spelling, so
 removing it moves no offset, size, value, hash fold or mangled name, and neither epoch would have
-anything to version. `PF_ABI_VERSION` stays 4 and `lifecycle_v1` stays `lifecycle_v1`. A consumer
-that still names an old spelling renames it and recompiles. The generic names are rule 2's: the
+anything to version. `PF_ABI_VERSION` was still 4 in 1.0.0 and `lifecycle_v1` stayed `lifecycle_v1`. <!-- verified HEAD -->
+A consumer that still names an old spelling renames it and recompiles.
+The generic names are rule 2's: the
 fields are named for their resampling period, the domains for the fill-recalculation pass, and
 neither for a Pine or TradingView setting.
 
@@ -659,7 +660,7 @@ to rule: the row that pointed here from the residual section left with them.
 
 | removed spelling | 1.0 spelling | ABI that carries it | what holds it |
 |---|---|---|---|
-| `pf_equity_stats_t::sharpe_tv` | `sharpe_monthly` | public C ABI (`include/pineforge/pineforge.h`, `PF_ABI_VERSION` 4) | Month-end-resampled equity simple returns (chart timezone, open-time bucketing), risk-free 2 %/yr, annualized ×√12, sample (N−1) stddev. A plain `double` again, at offset 48; `sizeof(pf_equity_stats_t)` 120 and `offsetof(pf_metrics_t, equity)` 648 are unmoved, pinned by `static_assert` in `src/c_abi.cpp` and checked from C by `tests/test_c_abi.c`. `test_removed_public_spellings` fails unless naming the old spelling fails to compile. |
+| `pf_equity_stats_t::sharpe_tv` | `sharpe_monthly` | public C ABI (`include/pineforge/pineforge.h`, `PF_ABI_VERSION` 5) | Month-end-resampled equity simple returns (chart timezone, open-time bucketing), risk-free 2 %/yr, annualized ×√12, sample (N−1) stddev. A plain `double` again, at offset 48; `sizeof(pf_equity_stats_t)` 120 and `offsetof(pf_metrics_t, equity)` 648 are unmoved, pinned by `static_assert` in `src/c_abi.cpp` and checked from C by `tests/test_c_abi.c`. `test_removed_public_spellings` fails unless naming the old spelling fails to compile. |
 | `pf_equity_stats_t::sortino_tv` | `sortino_monthly` | public C ABI (as above) | Same resampling, population downside deviation vs the monthly risk-free; offset 56. Held on the same terms. |
 | `exit_legs::Domain::Coof` | `FillRecalc` | standalone C++ ABI `pineforge::exit_legs::lifecycle_v1` (`include/pineforge/exit_leg_lifecycle.hpp`) | The fill-recalculation re-entry pass: the host re-runs its script after a fill and observes the rest of the same bar (`coof` abbreviated `calc_on_order_fills`, the Pine adapter's name for it). `FillRecalc == 1`, the underlying type stays `uint8_t` and `RawTicks` stays 4. `test_removed_public_spellings` fails unless `Domain::Coof` fails to compile. |
 | `exit_legs::Domain::MagnifierCoof` | `MagnifierFillRecalc` | standalone C++ ABI `lifecycle_v1` (as above) | The same pass on a magnified sub-bar; `MagnifierFillRecalc == 3`. Held on the same terms. |
@@ -770,7 +771,7 @@ number names its symbol on this tree.
 | `on_native_timeframe_bar` (`native_host.hpp:905`) and `NativeTimeframeBarContext::interval` (`native_host.hpp:829`) | **query routed** | The callback signature stays frozen. `strategy_native_timeframe_bar_interval_v1` is valid only during that callback and copies the kernel calendar interval without deriving it from the delivered bar or delivery timestamp. |
 | `magnifier_sub_bars_total` / `magnifier_sample_ticks_total` (`engine_report.cpp:106-107`) | **kernel-owned report facts** | The generic intrabar driver already increments `NativeDriverStatistics::sub_bars_processed` / `sample_ticks_processed` for every retained path (`native_execution_consumer.cpp:9202-9214`); the kernel now publishes those same counters for bare hosts. They are report fields, not new durable state: the existing `native_continuation_hash` fold of `NativeDriverStatistics` (`native_execution_consumer.cpp:1127-1132`) sees the same values, so no hash contract moves. |
 | `pf_native_lot_excursion_v1` (`native_c_api.h:1918`) | **additive fee tail** | `entry_commission` carries the C++ `ClosedLotExcursionFacts::entry_commission` in account currency. The callback table publishes a trailing layout marker so F4 callers still receive the base facts length; current callers receive the fee tail without changing `PF_NATIVE_API_VERSION`. |
-| `strategy_outputs_set_enabled` and the eight `strategy_outputs_*` readers (`pineforge.h`, group `pf_outputs`) | **additive runtime exports** | Recording is off by default, and nothing a run computes reads the record. The event copy is size-prefixed like `strategy_pending_order_get`, and `PF_ABI_VERSION` stays 4. The writers are C++ only in this version (the BASE-CLASS SEAMS rows of `native_c_api.h`): a C host declares no outputs, so its handle answers every reader as empty. |
+| `strategy_outputs_set_enabled` and the eight `strategy_outputs_*` readers (`pineforge.h`, group `pf_outputs`) | **additive runtime exports** | Recording is off by default, and nothing a run computes reads the record. The event copy is size-prefixed like `strategy_pending_order_get`, and the current `PF_ABI_VERSION` is 5. The writers are C++ only in this version (the BASE-CLASS SEAMS rows of `native_c_api.h`): a C host declares no outputs, so its handle answers every reader as empty. |
 
 ## TradingView-calibrated kernel mechanisms (rule 2's own account)
 
