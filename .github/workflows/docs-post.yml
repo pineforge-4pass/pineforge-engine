@@ -88,7 +88,8 @@ jobs:
 
   build:
     needs: [authz]
-    runs-on: ["self-hosted", "pf-gcp-post"]
+    runs-on: gkp-4cpu-8gb-amd64
+    environment: docs-deploy
     env:
       CF_PROJECT: ${{ vars.CF_PAGES_PROJECT || 'pineforge-docs' }}
       DEPLOY_BRANCH: ${{ github.ref_name }}
@@ -108,6 +109,10 @@ jobs:
           sudo ln -sf "/opt/doxygen-${DOXYGEN_VERSION}/bin/doxygen" /usr/local/bin/doxygen
           doxygen --version
           dot -V
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
 
       # Run the SEO assertion on a synthetic site before the real docs build.
       # A failure stops this job. The real build also fails on warnings in the

@@ -97,6 +97,7 @@ GKE_8_LABEL = 'gke-8cpu-16gb-amd64'
 GKE_ARM_LABEL = 'gke-16cpu-32gb-arm64'
 GKE_2_LABEL = 'gke-2cpu-4gb-amd64'
 GKE_4_LABEL = 'gke-4cpu-8gb-amd64'
+DOCS_DEPLOY_RUNNER = 'gkp-4cpu-8gb-amd64'
 GKE_JOB_LABELS = {
     'ci-post.yml': {'preflight': GKE_8_LABEL, 'preflight-slow': GKE_8_LABEL,
                     'build': GKE_32_LABEL, 'build-debug': GKE_16_LABEL,
@@ -300,7 +301,7 @@ HOSTED_JOB_RUNNERS = {
     'ci.yml': dict.fromkeys(('authz', 'changes', 'build-gate'), 'ubuntu-24.04'),
     'ci-post.yml': GKE_JOB_RUNNERS['ci-post.yml'],
     'corpus-parity-subset.yml': {'authz': 'ubuntu-24.04'},
-    'docs-post.yml': GKE_JOB_RUNNERS['docs-post.yml'],
+    'docs-post.yml': {**GKE_JOB_RUNNERS['docs-post.yml'], 'build': DOCS_DEPLOY_RUNNER},
     'native-live.yml': GKE_JOB_RUNNERS['native-live.yml'],
     'corpus-parity.yml': GKE_JOB_RUNNERS['corpus-parity.yml'],
     'docs.yml': {'authz': 'ubuntu-24.04', 'build': 'ubuntu-24.04'},
@@ -314,7 +315,7 @@ RELEASE_JOB_RUNNERS = {
     'release-ruleset-probe.yml': {'probe': POST_RUNNER},
     'promote-baseline.yml': {'promote': RELEASE_RUNNER},
 }
-# Credential-bearing jobs outside the release pins and gated docs build retain
+# Credential-bearing jobs outside the release pins and protected docs build retain
 # standard hosted labels. Existing hosted exceptions above are pinned separately.
 STANDARD_RUNNERS = ('ubuntu-24.04',)
 # Refuse paid labels everywhere, including pinned jobs, metadata and release matrices.
@@ -1690,6 +1691,15 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                 if any(re.search(r'\bPF_CI_LABELS["\']?\s*:', value) for value in environments):
                     findings.append(f'{name} job {job} must not set PF_CI_LABELS '
                                     'on an isolated release job')
+            elif (name, job) == ('docs-post.yml', 'build') and job in fixed_hosted:
+                if _job_values(body, 'runs-on', unquote=False) != [DOCS_DEPLOY_RUNNER]:
+                    findings.append(f'{name} job {job} must run on {DOCS_DEPLOY_RUNNER} (protected)')
+                if _job_values(body, 'environment') != ['docs-deploy']:
+                    findings.append(f'{name} job {job} must use environment docs-deploy')
+                environments = _job_values(workflow, 'env') + _job_values(body, 'env')
+                if any(re.search(r'\bPF_CI_LABELS["\']?\s*:', value) for value in environments):
+                    findings.append(f'{name} job {job} must not set PF_CI_LABELS '
+                                    'on a gated docs job')
             elif gke_pin and job in fixed_hosted:
                 if _job_values(body, 'runs-on', unquote=False) != [gke_pin]:
                     findings.append(f'{name} job {job} must run on {gke_pin}')
@@ -1715,7 +1725,7 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                     findings.append(f'{name} job {job} must not set PF_CI_LABELS '
                                     'on a post fleet job')
             elif (job in fixed_hosted
-                  or (credentials and (name, job) != ('docs-post.yml', 'build'))
+                  or credentials
                   or (job not in pinned and hosted_platform)):
                 # Exact hosted pins retain their credential/metadata checks.
                 if job in fixed_hosted:
@@ -2924,7 +2934,7 @@ def actionlint_runner_label_findings(source: Path) -> list[str]:
             values = _job_values(mapping, 'labels') if mapping else _job_values(body, 'runs-on')
             for value in values:
                 if not value.startswith('['):
-                    if value.startswith(('pf-', 'gke-')) and re.fullmatch(_LITERAL_RUNNER_LABEL, value):
+                    if value.startswith(('pf-', 'gke-', 'gkp-')) and re.fullmatch(_LITERAL_RUNNER_LABEL, value):
                         if value not in declared:
                             findings.append(f'{path.name} job {job}: label "{value}" is not declared '
                                             f'in {config_name}')

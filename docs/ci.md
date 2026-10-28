@@ -68,7 +68,7 @@ PRs restore the newest compatible default-branch compiler cache, and only
 successful runs on `main` save that cache namespace.
 
 Verification jobs keep literal runner pins at the workflow boundary: PR build/preflight and parity subset use `["self-hosted","pf-gcp-pr"]`;
-post preflight/parity use bare GKE scale-set names; credentialed docs keep `["self-hosted","pf-gcp-post"]`.
+post preflight/parity use bare GKE scale-set names; credentialed docs use protected `gkp-4cpu-8gb-amd64` under `docs-deploy`.
 Post Release/Debug/kernel and native shards, post sanitizers and both native-live sanitizer
 profiles use fixed bare GKE scale-set names directly in runner pods carrying the engine toolchain image and sudo. No job routes by event.
 Hosted `ubuntu-24.04` runs PR `authz`, `changes`/`build-gate` and `docs.yml`'s `build`; secret-free post guards and aggregates use bare scalar GKE names. These light, secret-free jobs need no VM-only tools, mounts or caches.
@@ -79,8 +79,8 @@ The manual `release-ruleset-probe.yml` workflow runs `authz` on
 bare scalar `gke-2cpu-4gb-amd64` and `probe` on `["self-hosted","pf-gcp-post"]`.
 
 `docs.yml` retains the PR build name and `.github/**` exclusion.
-`docs-post.yml` builds and deploys on main pushes and manual dispatch.
-Tag pushes no longer trigger docs: the post fleet admits only engine `main`.
+`docs-post.yml` builds and deploys on main pushes and manual dispatch; `actions/setup-node` installs Node 22 before the site build.
+Tag pushes no longer trigger docs; deployment uses the main-only `docs-deploy` environment.
 Release and baseline promotion retain their separate `pf-gcp-main` policy.
 
 Start with the preflight used by GitHub Actions. Install actionlint 1.7.12,
@@ -1124,7 +1124,7 @@ their self-tests, and the detached-comment ceiling. The migration worked example
 CTest row, and the Doxygen documentation build runs in CI for pull requests,
 main pushes and manual dispatch. `.github/workflows/docs.yml` builds and
 uploads PR documentation; `.github/workflows/docs-post.yml` builds, uploads
-and deploys on the post fleet. The PR file contains no deployment step or
+and deploys on protected `gkp-4cpu-8gb-amd64` under `docs-deploy`. The PR file contains no deployment step or
 Cloudflare secret reference.
 
 `scripts/check_doc_anchors.py` checks every `file:line` citation in the pages it
@@ -1647,7 +1647,7 @@ runs, and this page does not claim either target as met.
 
 ## Runners and time limits
 
-Credentialed work retains its VM pins; secret-free post Linux jobs run directly in GKE runner pods carrying the engine toolchain image and sudo.
+Credentialed docs use protected `gkp-4cpu-8gb-amd64` under `docs-deploy`; other credentialed work retains its VM pins, and secret-free post Linux jobs run directly in GKE runner pods carrying the engine toolchain image and sudo.
 The four amd64 post legs, arm64 cells, preflight, parity and native verification use bare GKE scale-set names; their aggregates use the light image. Promotion's `promote-guard` and docs-post/probe `authz` each use one `gke-2cpu-4gb-amd64` instance in separate roots; their image must include `gh` for permission lookups.
 The native matrix is exactly `1..4` with `--ctest-shard I/4`; live sanitizers are unsharded. Each runner label remains a literal, checked per job:
 
@@ -1659,15 +1659,15 @@ The native matrix is exactly `1..4` with `--ctest-shard I/4`; live sanitizers ar
 | `ci-post.yml` | Push to `main`, 01:30 UTC schedule, dispatch | Seven light jobs: scalar `gke-2cpu-4gb-amd64`; bare GKE scalars: Release/sanitizers `gke-32cpu-64gb-amd64`, Debug/kernel `gke-16cpu-32gb-amd64`, preflight tiers `gke-8cpu-16gb-amd64`, arm64 `gke-16cpu-32gb-arm64` |
 | `corpus-parity.yml` | Schedule, dispatch, post CI callers | `authz`: scalar `gke-4cpu-8gb-amd64`; bare GKE scalars: full parity `gke-16cpu-32gb-amd64`, subset `gke-8cpu-16gb-amd64` |
 | `native-live.yml` | Dispatch and post CI callers on `main` | `authz` and both aggregates: scalar `gke-4cpu-8gb-amd64`; bare GKE scalars: native shards `gke-8cpu-16gb-amd64`, sanitizer profiles `gke-16cpu-32gb-amd64` |
-| `docs-post.yml` | Push to `main`, dispatch | `authz`: scalar `gke-2cpu-4gb-amd64`; credentialed `build`: `["self-hosted","pf-gcp-post"]` |
+| `docs-post.yml` | Push to `main`, dispatch | `authz`: scalar `gke-2cpu-4gb-amd64`; credentialed `build`: scalar `gkp-4cpu-8gb-amd64`, environment `docs-deploy` |
 
 Post CI starts on push to `main`, schedule and dispatch; its GKE routing checker
 refuses all PR events. Reusable workflows inherit their caller's event.
 `workflow_event_routes` and `workflow_fleet_findings` in `scripts/ci_preflight.py`
 follow local calls to a fixed point, refuse mixed event classes and require
-literal VM arrays or exact bare scalar GKE scale-set names outside hosted pins; job conditions cannot excuse routing.
+literal VM arrays or exact bare scalar `gke-`/`gkp-` scale-set names outside hosted pins; job conditions cannot excuse routing.
 Fork PRs on hosted runners run without our secrets, so the VM-only fork-refusal hook is not needed.
-GKE jobs carry no deployment secrets, effective id-token permissions or environment; PR-reachable workflows cannot name GKE routing. Runner-group workflow/ref allowlists must admit the post-only workflows at refs/heads/main before they can acquire pods.
+Jobs on `gke-` labels carry no deployment secrets, effective id-token permissions or environment; PR-reachable workflows cannot name GKE routing. Runner-group workflow/ref allowlists must admit the post-only workflows at refs/heads/main before they can acquire pods. Docs `build` uses a protected `gkp-` runner with the main-only `docs-deploy` environment.
 Rollback may restore an earlier GCP fleet pin; paid larger-runner labels remain refused.
 
 The four full build checks are `build (ubuntu-24.04, Release)`,
@@ -1678,7 +1678,7 @@ Every shard builds the full tree and runs `--ctest-shard I/N` at the runner's co
 Each leg aggregate retains its old check name and requires its own matrix's success. The two arm64 cells share `build-arm` on `gke-16cpu-32gb-arm64`. All three build jobs use the same verification steps and profiles.
 Shard jobs and leg aggregates skip together only on classified docs-only changes.
 One cache key per architecture/profile/SHA is restored by all shards; only shard 1 saves it.
-`HOSTED_JOB_RUNNERS` pins hosted jobs and exact bare GKE scalars; every GKE job runs directly in a runner pod carrying the engine toolchain image and sudo. The PR build remains
+`HOSTED_JOB_RUNNERS` pins hosted jobs and exact bare `gke-`/`gkp-` scalars; secret-free GKE jobs run directly in runner pods carrying the engine toolchain image and sudo. The PR build remains
 `build (ubuntu-24.04, Release)` and its aggregate remains `build`.
 
 Release and promotion use the isolated release fleet:

@@ -13,5 +13,6 @@ self-hosted-runner:
     - gke-16cpu-32gb-amd64
     - gke-8cpu-16gb-amd64
     - gke-16cpu-32gb-arm64
+    - gkp-4cpu-8gb-amd64
     - pf-ci-x64
     - pf-ci-x64-16
