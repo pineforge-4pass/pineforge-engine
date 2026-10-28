@@ -20,6 +20,10 @@ ABI number in `strategy_library_incompatible`'s message. The report keys are
 unchanged except for two additive diagnostics keys, described below.
 
 - Monthly Sharpe/Sortino month keys for timestamps beyond about 34,800 years from the epoch no longer overflow; in-range results are unchanged.
+- The report's annualization diagnostic now uses the engine's initial capital
+  on every report path. The unnamed path sink previously omitted it and could
+  drop the diagnostic when the compounded return overflowed; metric values are
+  unchanged.
 
 ### Compatibility and migration
 

@@ -7614,7 +7614,7 @@ def _build_sink_report(report, ohlcv_path, n_bars, first_ts, last_ts, elapsed,
             {"entry_bar_index": 0},) if diagnostics.trade_at_start else ()
         out["diagnostics"].update(
             _annualization_block(
-                diagnostics, out["metrics"], first_bar_trade, window_anchor))
+                diagnostics, out["metrics"], first_bar_trade, window_anchor, initial_capital))
         if sink.named:
             reference = {
                 "path": sink.path,
