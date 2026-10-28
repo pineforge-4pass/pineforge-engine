@@ -1746,6 +1746,12 @@ class PostFleetRunnerPolicy(unittest.TestCase):
             'Hosted exceptions cover PR light jobs and the existing hosted release cells; post light jobs use bare scalar GKE names.',
             '`native-live.yml` runs four `native` shards on `gke-8cpu-16gb-amd64`;\n'
             '`live-sanitizers` and `live-tsan` each build once on `gke-16cpu-32gb-amd64`.',
+            'The `native-live (native)` summary requires all four successful shard proofs; it runs after shard failure '
+            'with an authz-guarded `!cancelled()` override and is declared non-required to the policy checker with '
+            '`--not-required native-live-native`.',
+            '`native-live-gate` is the only job with job-level `always()` and directly requires `authz`, both sanitizer '
+            'cells, the shard matrix and its summary; it refuses every failed, cancelled, missing or skipped result, '
+            "and the caller's `build` aggregate still requires the reusable workflow to succeed.",
             "paid 16-core runners' medians over five runs were 1815, 1812, 1770, 2050",
             'The four amd64 post legs, arm64 cells, preflight, parity and native verification use bare GKE scale-set names; '
             'their aggregates use the light image. '
@@ -8095,6 +8101,142 @@ class HostedNativeProfiles(unittest.TestCase):
     def workflow(self):
         return (ROOT / '.github/workflows/native-live.yml').read_text()
 
+    def test_native_reserves_job_always_for_its_only_required_gate(self):
+        native = self.workflow()
+        jobs = _jobs(native)
+        always_jobs = [job for job, body in jobs.items()
+                       if any(re.search(r'\balways\s*\(', value, re.IGNORECASE)
+                              for value in ci_preflight._job_values(body, 'if'))]
+        self.assertEqual(always_jobs, ['native-live-gate'])
+        finding = 'native-live.yml must reserve job-level always() for native-live-gate'
+        for job in ('native-live', 'native-live-shards'):
+            with self.subTest(job=job):
+                changed = in_job(native, job, '    needs: [authz]\n',
+                                 '    needs: [authz]\n    if: always()\n')
+                self.assertNotEqual(changed, native)
+                self.assertIn(finding, native_workflow_findings(changed))
+        changed = in_job(native, 'native-live-native',
+                         "    if: ${{ !cancelled() && needs.authz.result == 'success' }}",
+                         '    if: always()')
+        self.assertNotEqual(changed, native)
+        self.assertIn(finding, native_workflow_findings(changed))
+
+    def test_native_gate_directly_needs_every_other_job_once(self):
+        native = self.workflow()
+        jobs = _jobs(native)
+        needs = ci_preflight._needs(jobs['native-live-gate'])
+        self.assertEqual(sorted(needs), sorted(set(jobs) - {'native-live-gate'}))
+        self.assertEqual(len(needs), len(set(needs)))
+        before = '    needs: [' + ', '.join(needs) + ']'
+        for job in needs:
+            with self.subTest(removed=job):
+                after = '    needs: [' + ', '.join(value for value in needs if value != job) + ']'
+                changed = in_job(native, 'native-live-gate', before, after)
+                self.assertNotEqual(changed, native)
+                self.assertIn('native-live-gate must fail unless every profile succeeds',
+                              native_workflow_findings(changed))
+        changed = in_job(native, 'native-live-gate', before,
+                         '    needs: [' + ', '.join([*needs, needs[0]]) + ']')
+        self.assertIn('native-live-gate must fail unless every profile succeeds',
+                      native_workflow_findings(changed))
+
+    def test_native_build_environment_is_local_to_both_proof_jobs(self):
+        native = self.workflow()
+        self.assertEqual(ci_preflight._job_values(native, 'env'), [])
+        expected = [
+            '    env:',
+            '      CCACHE_COMPILERCHECK: content',
+            '      CCACHE_COMPRESS: "1"',
+            '      CCACHE_MAXSIZE: 500M',
+            '      PINEFORGE_REQUIRE_RELEASE_TAGS: "1"',
+            '      CCACHE_DIR: ${{ github.workspace }}/.ccache/${{ matrix.profile }}',
+        ]
+        for job in ('native-live', 'native-live-shards'):
+            with self.subTest(job=job):
+                self.assertEqual(ci_preflight._job_block(_jobs(native)[job], 'env'), expected)
+                for line in expected[1:]:
+                    changed = in_job(native, job, line + '\n', '')
+                    self.assertIn('native-live.yml must isolate build settings in each native proof job',
+                                  native_workflow_findings(changed))
+        changed = native.replace('\njobs:\n', '\nenv:\n  CCACHE_COMPRESS: "1"\n\njobs:\n', 1)
+        self.assertNotEqual(changed, native)
+        self.assertIn('native-live.yml must isolate build settings in each native proof job',
+                      native_workflow_findings(changed))
+
+    def test_native_shard_summary_uses_the_authorized_cancellable_override(self):
+        native = self.workflow()
+        body = _jobs(native)['native-live-native']
+        condition = "${{ !cancelled() && needs.authz.result == 'success' }}"
+        self.assertEqual(ci_preflight._job_values(body, 'if'), [condition])
+        steps = ci_preflight._steps(body)
+        self.assertEqual(ci_preflight._code(steps[0]), ci_preflight._code(AUTHZ_REFUSE_STEP))
+        self.assertEqual(ci_preflight._step_values(steps[-1], 'if'),
+                         [ci_preflight.AUTHZ_SUCCESS])
+        finding = 'native-live-native must fail unless all four native shard proofs succeed'
+        for before, after in (
+                ('    if: ' + condition, '    if: success()'),
+                ('    if: ' + condition,
+                 "    if: ${{ !cancelled() || needs.authz.result == 'success' }}"),
+                (AUTHZ_REFUSE_STEP, ''),
+                (f'        if: {ci_preflight.AUTHZ_SUCCESS}\n', '')):
+            with self.subTest(mutation=after):
+                changed = in_job(native, 'native-live-native', before, after)
+                self.assertNotEqual(changed, native)
+                self.assertIn(finding, native_workflow_findings(changed))
+
+    def test_native_gate_keeps_the_canonical_all_results_step_before_diagnostics(self):
+        native = self.workflow()
+        steps = ci_preflight._steps(_jobs(native)['native-live-gate'])
+        self.assertEqual(len(steps), 3)
+        self.assertEqual(ci_preflight._code(steps[0]), ci_preflight._code(AUTHZ_REFUSE_STEP))
+        self.assertEqual(ci_preflight._step_values(steps[1], 'name'),
+                         ['Every needed job succeeded'])
+        self.assertEqual(ci_preflight._step_block(steps[1], 'env'),
+                         ['        env:', '          RESULTS: ${{ toJSON(needs.*.result) }}'])
+        self.assertEqual(ci_preflight._step_values(steps[1], 'if'), [])
+        self.assertEqual(ci_preflight._step_values(steps[-1], 'if'), [AUTHZ_ALWAYS])
+        finding = 'native-live-gate must fail unless every profile succeeds'
+        for before, after in (
+                ('${{ toJSON(needs.*.result) }}', '${{ toJSON(needs.native-live.result) }}'),
+                (steps[1], ''),
+                ('grep -vc', 'grep -c'),
+                (f'        if: {AUTHZ_ALWAYS}\n', ''),
+                ('    steps:\n', '    env:\n      RESULTS: success\n    steps:\n'),
+                ('    steps:\n', '    name: renamed\n    steps:\n'),
+                ('    steps:\n', '    defaults:\n      run:\n        shell: sh\n    steps:\n')):
+            with self.subTest(mutation=after):
+                changed = in_job(native, 'native-live-gate', before, after)
+                self.assertNotEqual(changed, native)
+                self.assertIn(finding, native_workflow_findings(changed))
+        script = job_script(native, 'native-live-gate', 'Every needed job succeeded')
+        needs = ci_preflight._needs(_jobs(native)['native-live-gate'])
+        for job in needs:
+            for outcome in ('success', 'failure', 'cancelled', 'skipped'):
+                with self.subTest(needed_job=job, outcome=outcome):
+                    results = ['success' if value != job else outcome for value in needs]
+                    ran = subprocess.run(['bash', '-e', '-o', 'pipefail', '-c', script],
+                                         capture_output=True,
+                                         env={**os.environ, 'RESULTS': json.dumps(results)})
+                    self.assertEqual(ran.returncode, 0 if outcome == 'success' else 1, ran.stdout)
+        changed = in_job(native, 'native-live-gate', 'grep -vc', 'grep -c')
+        mutant = job_script(changed, 'native-live-gate', 'Every needed job succeeded')
+        ran = subprocess.run(['bash', '-e', '-o', 'pipefail', '-c', mutant], capture_output=True,
+                             env={**os.environ, 'RESULTS': json.dumps(['success'] * len(needs))})
+        self.assertEqual(ran.returncode, 1, ran.stdout)
+
+    def test_native_gate_shape_ignores_timeout_key_but_requires_all_results_step(self):
+        native = self.workflow()
+        finding = 'native-live-gate must fail unless every profile succeeds'
+        changed = in_job(native, 'native-live-gate', '    steps:\n',
+                         '    timeout-minutes: 360\n    steps:\n')
+        self.assertNotEqual(changed, native)
+        self.assertNotIn(finding, native_workflow_findings(changed))
+
+        changed = in_job(native, 'native-live-gate',
+                         '      - name: Every needed job succeeded\n', '')
+        self.assertNotEqual(changed, native)
+        self.assertIn(finding, native_workflow_findings(changed))
+
     def test_native_jobs_have_exact_hosted_pins_without_fleet_metadata(self):
         native = self.workflow()
         jobs = _jobs(native)
@@ -8116,9 +8258,9 @@ class HostedNativeProfiles(unittest.TestCase):
                     self.assertIn(f'native-live.yml job {job} must run on {label}{suffix}',
                                   ci_preflight.runner_findings({'native-live.yml': changed}))
                 for scope in (None, job):
-                    before = '\nenv:\n' if scope is None else '\n    env:\n'
+                    before = '\njobs:\n' if scope is None else '\n    env:\n'
                     if scope is None:
-                        after = before + f"  PF_CI_LABELS: '{POST_RUNNER}'\n"
+                        after = f"\nenv:\n  PF_CI_LABELS: '{POST_RUNNER}'\n\njobs:\n"
                         changed = native.replace(before, after, 1)
                     elif before in jobs[job]:
                         changed = in_job(native, job, before,
@@ -8167,7 +8309,8 @@ class HostedNativeProfiles(unittest.TestCase):
             with self.subTest(label=label):
                 changed = native + f'\n  unrelated:\n    runs-on: {label}\n    steps:\n      - run: "true"\n'
                 self.assertIn(finding, ci_preflight.runner_findings({'native-live.yml': changed}))
-                changed = native.replace('\nenv:\n', f'\nenv:\n  UNPINNED_RUNNER: {label}\n', 1)
+                changed = native.replace('\njobs:\n', f'\nenv:\n  UNPINNED_RUNNER: {label}\n\njobs:\n', 1)
+                self.assertNotEqual(changed, native)
                 self.assertIn(finding, ci_preflight.runner_findings({'native-live.yml': changed}))
         swapped = in_job(native, 'native-live', runner_declaration(GKE_16),
                          '    runs-on: pf-linux-x64-16\n')
@@ -8196,7 +8339,8 @@ class HostedNativeProfiles(unittest.TestCase):
         aggregate = _jobs(native).get('native-live-native', '')
         self.assertEqual(ci_preflight._job_values(aggregate, 'name'), ['native-live (native)'])
         self.assertEqual(ci_preflight._needs(aggregate), ['authz', 'native-live-shards'])
-        self.assertEqual(ci_preflight._job_values(aggregate, 'if'), ['always()'])
+        self.assertEqual(ci_preflight._job_values(aggregate, 'if'),
+                         ["${{ !cancelled() && needs.authz.result == 'success' }}"])
         script = job_script(native, 'native-live-native', 'Require every native shard to have passed')
         valid = {'AUTHZ_RESULT': 'success', 'SHARDS_RESULT': 'success',
                  **{f'SHARD_{index}_RESULT': 'success' for index in range(1, 5)}}
@@ -8216,9 +8360,10 @@ class HostedNativeProfiles(unittest.TestCase):
                 self.assertNotEqual(changed, native)
                 self.assertIn(finding, native_workflow_findings(changed))
         for job, before, after, expected in (
-                ('native-live-native', '    if: always()', '    if: success()', finding),
+                ('native-live-native', "    if: ${{ !cancelled() && needs.authz.result == 'success' }}",
+                 '    if: success()', finding),
                 ('native-live-native', '    needs: [authz, native-live-shards]', '    needs: [authz]', finding),
-                ('native-live-gate', '    needs: [authz, native-live, native-live-native]',
+                ('native-live-gate', '    needs: [authz, native-live, native-live-shards, native-live-native]',
                  '    needs: [authz, native-live]', 'native-live-gate must fail unless every profile succeeds'),
                 ('native-live-gate', '          test "$NATIVE_RESULT" = success', '          true',
                  'native-live-gate must fail unless every profile succeeds')):
@@ -8292,7 +8437,7 @@ class IndependentNativeProfiles(unittest.TestCase):
             ('fail-fast: false', 'fail-fast: true'),
             ('    name: native-live (${{ matrix.profile }})',
              '    name: native-live (${{ matrix.profile }})\n    needs: prior'),
-            ('needs: [authz, native-live, native-live-native]', 'needs: [authz]'),
+            ('needs: [authz, native-live, native-live-shards, native-live-native]', 'needs: [authz]'),
             ('test "$PROFILES_RESULT" = success', 'true'),
             ('PROFILES_RESULT: ${{ needs.native-live.result }}', 'PROFILES_RESULT: success'),
             ('contents: read', 'contents: write'),
@@ -8370,21 +8515,35 @@ class IndependentNativeProfiles(unittest.TestCase):
     def test_native_aggregate_rejects_failure_cancellation_and_skip(self):
         native = (ROOT / '.github/workflows/native-live.yml').read_text()
         script = job_script(native, 'native-live-gate', 'Require every native profile to have passed')
+        outcomes = ('success', 'failure', 'cancelled', 'skipped', '')
         for authz, result, shards in ((authz, profile, shards)
-                                      for authz in ('success', 'failure', 'cancelled', 'skipped', '')
-                                      for profile in ('success', 'failure', 'cancelled', 'skipped', '')
-                                      for shards in ('success', 'failure', 'cancelled', 'skipped', '')):
-            with self.subTest(authz=authz, result=result, shards=shards):
-                ran = subprocess.run(['bash', '-e', '-c', script], capture_output=True,
-                                     env={**os.environ, 'AUTHZ_RESULT': authz, 'PROFILES_RESULT': result,
-                                          'NATIVE_RESULT': shards})
-                self.assertEqual(ran.returncode == 0, authz == result == shards == 'success', ran.stdout)
-                if authz != 'success' or result != 'success' or shards != 'success':
-                    self.assertEqual(ran.returncode, 1, ran.stdout)
-                # A cancelled profile job is how the platform stops a hang at the job maximum: the
-                # aggregate still fails, and the log names it as a HANG to re-run (EN-116).
-                self.assertEqual(b'HANG (re-run)' in ran.stdout,
-                                 'cancelled' in (result, shards), ran.stdout)
+                                      for authz in outcomes for profile in outcomes for shards in outcomes):
+            for matrix in outcomes:
+                with self.subTest(authz=authz, result=result, shards=shards, matrix=matrix):
+                    ran = subprocess.run(['bash', '-e', '-o', 'pipefail', '-c', script], capture_output=True,
+                                         env={**os.environ, 'AUTHZ_RESULT': authz, 'PROFILES_RESULT': result,
+                                              'NATIVE_RESULT': shards, 'SHARDS_RESULT': matrix})
+                    self.assertEqual(ran.returncode == 0,
+                                     authz == result == shards == matrix == 'success', ran.stdout)
+                    if authz != 'success' or result != 'success' or shards != 'success' or matrix != 'success':
+                        self.assertEqual(ran.returncode, 1, ran.stdout)
+                    # A cancelled profile or shard still fails and names the platform stop.
+                    self.assertEqual(b'HANG (re-run)' in ran.stdout,
+                                     'cancelled' in (result, shards, matrix), ran.stdout)
+        # Mutate the actual final gate: each missing predicate must admit the
+        # corresponding bad result, proving that the shell assertions are live.
+        for field in ('AUTHZ_RESULT', 'PROFILES_RESULT', 'SHARDS_RESULT', 'NATIVE_RESULT'):
+            changed = in_job(native, 'native-live-gate',
+                             f'          test "${field}" = success', '          true')
+            mutant = job_script(changed, 'native-live-gate', 'Require every native profile to have passed')
+            valid = dict.fromkeys(('AUTHZ_RESULT', 'PROFILES_RESULT', 'SHARDS_RESULT', 'NATIVE_RESULT'), 'success')
+            for outcome in outcomes[1:]:
+                with self.subTest(missing_predicate=field, outcome=outcome):
+                    ran = subprocess.run(['bash', '-e', '-o', 'pipefail', '-c', mutant],
+                                         capture_output=True, env={**os.environ, **valid, field: outcome})
+                    self.assertEqual(ran.returncode, 0, ran.stdout)
+                    self.assertIn('native-live-gate must fail unless every profile succeeds',
+                                  native_workflow_findings(changed))
 
     def test_three_profiles_share_the_platform_maximum_and_no_fail_fast(self):
         native = (ROOT / '.github/workflows/native-live.yml').read_text()
@@ -8401,7 +8560,7 @@ class IndependentNativeProfiles(unittest.TestCase):
             for budget in ('matrix.job_minutes', 'matrix.verify_minutes',
                            '--test-timeout', '--ctest-timeout'):
                 self.assertNotIn(budget, job)
-        self.assertIn('needs: [authz, native-live, native-live-native]', jobs['native-live-gate'])
+        self.assertIn('needs: [authz, native-live, native-live-shards, native-live-native]', jobs['native-live-gate'])
 
     def test_both_native_entry_points_and_dependencies_always_build_cold(self):
         native = (ROOT / '.github/workflows/native-live.yml').read_text()
