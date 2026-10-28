@@ -86,7 +86,7 @@ summary of it.
   `NativeCoordinate::interval_index` (`market_driver.hpp:74`) is the sequential
   SCRIPT-bar index even when `input_tf` is finer than `script_tf`. The same
   script coordinate books `PyramidEntry::entry_bar_index`, trade-row indices and
-  the inclusive bar metrics (`entry_bar_index` / `exit_bar_index` `engine_orders.cpp:127-128`, `bars` `engine_metrics.cpp:649`).
+  the inclusive bar metrics (`entry_bar_index` / `exit_bar_index` `engine_orders.cpp:127-128`, `bars` `engine_metrics.cpp:807`).
   `NativeCoordinate::input_interval_index` (`market_driver.hpp:79`) names the
   input slot that supplied the point for a host that needs input cadence. Both
   coordinate values are folded by `hash_coordinate`
@@ -149,10 +149,10 @@ summary of it.
   the field comments say so, and `scripts/check_adapter_spec_shadowing.py` holds the adapter to
   the fields it actually needs.
 - **Feeding data.** Bars enter through the engine's own entry points: `run(bars, n)`
-  (`engine.hpp:2048`), the timeframe `run` (`engine.hpp:2048`), the rich begin
-  (`run` `engine.hpp:2136`), or `stream_begin` (`engine.hpp:2107`) / `stream_push_bar`
-  (`engine.hpp:2113`) / `stream_push_tick(s)` / `stream_advance_time` / `stream_end`
-  (`engine.hpp:2117`). `market_driver.hpp` is driver *types* (`NativeCoordinate` `market_driver.hpp:72`), not a feed API; read
+  (`engine.hpp:2055`), the timeframe `run` (`engine.hpp:2057`), the rich begin
+  (`run` `engine.hpp:2145`), or `stream_begin` (`engine.hpp:2116`) / `stream_push_bar`
+  (`engine.hpp:2122`) / `stream_push_tick(s)` / `stream_advance_time` / `stream_end`
+  (`engine.hpp:2126`). `market_driver.hpp` is driver *types* (`NativeCoordinate` `market_driver.hpp:72`), not a feed API; read
   `examples/native/native_market_strategy.cpp` for a host that drives both a batch and a stream.
 - **Data / HTF.** The magnifier (`magnifier.hpp`) reconstructs intrabar fills.
   `request.security`-style series **are** reachable from a bare host, as declared series of the
@@ -165,24 +165,24 @@ summary of it.
   `NativeSeriesSource::AuxiliaryFeed` for a series finer than the input. The kernel owns the
   aggregation, the `lookahead`/`gaps` delivery rules and the lazy-seal chronology; TradingView's
   `request.security` *semantics* are not in it. `prepare_native_security_feeds` stays protected
-  (`engine.hpp:1968`) and `configure_security_evaluators` stays an empty virtual
+  (`engine.hpp:1977`) and `configure_security_evaluators` stays an empty virtual
   (`engine.hpp:1608`) — a host does not register an evaluator by hand — while
-  `set_native_security_feed` (`engine.hpp:2067`) is the pre-run door for a series'
+  `set_native_security_feed` (`engine.hpp:2076`) is the pre-run door for a series'
   authoritative bars and still throws in-run
   (`guard_native_mutation` `engine_aux_security.cpp:83`).
   Indicators are `ta_*.cpp`, session/calendar `session_time.cpp` / `native_calendar.cpp`, FX
   `configure_native_fx_curve` (`native_host.hpp:1222`).
-- **Reporting.** `fill_report` (`engine.hpp:2213`, `src/engine_report.cpp:74`) gives a bare host
+- **Reporting.** `fill_report` (`engine.hpp:2222`, `src/engine_report.cpp:74`) gives a bare host
   trade stats, and the equity curve is a run-spec choice rather than a host chore.
   `NativeReportPolicy::HostRecorded` (the default) leaves the series to the host, whose
   `record_equity_point` / `update_equity_extremes` remain protected
-  (`update_equity_extremes` `engine.hpp:1648`, `record_equity_point` `engine.hpp:1666`);
+  (`update_equity_extremes` `engine.hpp:1648`, `record_equity_point` `engine.hpp:1675`);
   `KernelRecorded` has the consumer mark one point per script calculation, and
   `KernelRecordedAtHostMarks` records the same series at the host's own marks.
   `report_open_position_at_end` books the still-open position as a mark-to-market row under
   `KernelRecorded`. Under `HostRecorded` an unrecorded curve still degenerates —
-  `compute_equity_stats` answers its defined empty-curve metrics with no error (`src/engine_metrics.cpp:821`,
-  consumed by `fill_metrics_section`, `src/engine_report.cpp:650`) — which is why the policy exists.
+  `compute_equity_stats` answers its defined empty-curve metrics with no error (`src/engine_metrics.cpp:979`,
+  consumed by `fill_metrics_section`, `src/engine_report.cpp:660`) — which is why the policy exists.
 - **Reproducibility.** Two digests, one wrapping the other. `native_continuation_hash()`
   (`native_host.hpp:1406`) returns the consumer's event/continuation hash. **A digest names
   the run's inputs** (rule 2): the timezone identity enters it as the zone's *content* —
@@ -194,7 +194,7 @@ summary of it.
   hosts ever agreed. A tzdata release that rewrites the zone's rules still moves the digest,
   because the run then read different rules (`tests/test_native_continuation_portable.cpp`,
   measured equal on macOS/arm64 and Linux/aarch64 at tzdata 2026c).
-  `broker_state_hash()` (`engine.hpp:2429`)
+  `broker_state_hash()` (`engine.hpp:2438`)
   folds that hash with position and lot state under the pinned domain
   `pineforge-broker-state/v19` (`engine_state_hash.cpp:41`), the closed rows as their count and
   a running digest each final row folds into once; it is the one exported to C as
@@ -768,7 +768,7 @@ number names its symbol on this tree.
 | `strategy_configure_native_v1` (`c_abi.cpp:1082`) versus `strategy_configure_native_ext_result_v1` (`native_c_host.cpp:4107`) | **retained legacy base plus typed additive route** | A base specification the kernel rejects still returns `-1` and latches `Failed`, preserving its frozen caller contract; a Ready misuse retains that Contract latch. The C boundary refuses arguments, a Running phase and a Completed hash hook without entering kernel configure, so a read cannot reconfigure its host. The extended result call validates before its first configure, writes `pf_native_spec_error_t` / `pf_native_spec_field_t`, and names reused-host session-key and run-number refusals; no old signature or layout moved. |
 | `strategy_configure_native_fx_curve_v1` (`pineforge.h:551`) | **typed additive route** | `strategy_configure_native_fx_curve_ext_v1` writes the C twin of `NativeFxCurveValidation` and its offending index. The old `-1` route remains unchanged, while a C caller can now distinguish a decreasing timestamp, non-positive rate, allocation failure or wrong phase. |
 | `on_native_timeframe_bar` (`native_host.hpp:905`) and `NativeTimeframeBarContext::interval` (`native_host.hpp:829`) | **query routed** | The callback signature stays frozen. `strategy_native_timeframe_bar_interval_v1` is valid only during that callback and copies the kernel calendar interval without deriving it from the delivered bar or delivery timestamp. |
-| `magnifier_sub_bars_total` / `magnifier_sample_ticks_total` (`engine_report.cpp:364-365`) | **kernel-owned report facts** | The generic intrabar driver already increments `NativeDriverStatistics::sub_bars_processed` / `sample_ticks_processed` for every retained path (`native_execution_consumer.cpp:9224-9236`); the kernel now publishes those same counters for bare hosts. They are report fields, not new durable state: the existing `native_continuation_hash` fold of `NativeDriverStatistics` (`native_execution_consumer.cpp:1127-1132`) sees the same values, so no hash contract moves. |
+| `magnifier_sub_bars_total` / `magnifier_sample_ticks_total` (`engine_report.cpp:373-374`) | **kernel-owned report facts** | The generic intrabar driver already increments `NativeDriverStatistics::sub_bars_processed` / `sample_ticks_processed` for every retained path (`native_execution_consumer.cpp:9224-9236`); the kernel now publishes those same counters for bare hosts. They are report fields, not new durable state: the existing `native_continuation_hash` fold of `NativeDriverStatistics` (`native_execution_consumer.cpp:1127-1132`) sees the same values, so no hash contract moves. |
 | `pf_native_lot_excursion_v1` (`native_c_api.h:1918`) | **additive fee tail** | `entry_commission` carries the C++ `ClosedLotExcursionFacts::entry_commission` in account currency. The callback table publishes a trailing layout marker so F4 callers still receive the base facts length; current callers receive the fee tail without changing `PF_NATIVE_API_VERSION`. |
 | `strategy_outputs_set_enabled` and the eight `strategy_outputs_*` readers (`pineforge.h`, group `pf_outputs`) | **additive runtime exports** | Recording is off by default, and nothing a run computes reads the record. The event copy is size-prefixed like `strategy_pending_order_get`, and `PF_ABI_VERSION` stays 4. The writers are C++ only in this version (the BASE-CLASS SEAMS rows of `native_c_api.h`): a C host declares no outputs, so its handle answers every reader as empty. |
 

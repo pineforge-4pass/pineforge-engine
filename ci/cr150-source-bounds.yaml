@@ -74,7 +74,7 @@ scan:
   generated_files:
     - "tutorial/**/generated*.cpp"
 ceilings:
-  unreviewed: 1281
+  unreviewed: 1283
   pending-flat-memory: 188
 owners:
   - {name: "generated-cpp", globs: ["tutorial/**"]}
@@ -1371,6 +1371,8 @@ entries:
   - {id: "U1321", file: "src/command_scratch_production.cpp", symbol: "refusal", ops: ["decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 224}
   - {id: "U1322", file: "src/command_scratch_production.cpp", symbol: "set_command_scratch_byte_cap", ops: ["alloc"], container: "unresolved by the index: make_shared", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 368}
   - {id: "U1525", file: "src/engine_metrics.cpp", symbol: "held_", ops: ["assign"], container: "unresolved by the index: held_ = ...", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 365}
+  - {id: "U1528", file: "src/engine_metrics.cpp", symbol: "months", ops: ["alloc"], container: "unresolved by the index: make_unique", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 461}
+  - {id: "U1529", file: "src/engine_metrics.cpp", symbol: "next", ops: ["alloc"], container: "unresolved by the index: make_unique", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 397}
   - {id: "U1526", file: "src/engine_metrics.cpp", symbol: "out", ops: ["alloc"], container: "unresolved by the index: make_unique", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 514}
   - {id: "U1527", file: "src/engine_metrics.cpp", symbol: "returns", ops: ["grow"], container: "unresolved by the index: returns.append(...)", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 340}
   - {id: "U1323", file: "src/engine_metrics.cpp", symbol: "state_", ops: ["alloc", "assign"], container: "unresolved by the index: make_unique", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 349}
