@@ -692,18 +692,102 @@ std::array<std::string, 3> ledger_files(const fs::path& path) {
     return {read_file(path), read_file(path.string() + "-wal"), read_file(path.string() + "-shm")};
 }
 
+std::uint64_t scalar_u64(sqlite3* database, const char* sql) {
+    sqlite3_stmt* raw = nullptr;
+    require(sqlite3_prepare_v2(database, sql, -1, &raw, nullptr) == SQLITE_OK, "cannot prepare test scalar");
+    std::unique_ptr<sqlite3_stmt, decltype(&sqlite3_finalize)> statement(raw, sqlite3_finalize);
+    require(sqlite3_step(raw) == SQLITE_ROW && sqlite3_column_int64(raw, 0) >= 0, "invalid test scalar");
+    return static_cast<std::uint64_t>(sqlite3_column_int64(raw, 0));
+}
+
+std::uint64_t snapshot_bytes(const std::array<std::string, 3>& files) {
+    return files[0].size() + files[1].size() + files[2].size();
+}
+
+// Independent admission-contract arithmetic, as in the store unit fixture.
+// FULL auto-vacuum makes D=C1; the control below checks C1=C0 for these rows.
+// Neither the production estimator nor a refusal receipt supplies this value.
+std::uint64_t checkpoint_contract_request(const std::array<std::string, 3>& files,
+                                          std::uint64_t page, std::uint64_t prior_pages,
+                                          std::uint64_t changed_pages, std::uint64_t payload_bytes = 0) {
+    const auto additional = payload_bytes ? 8 * payload_bytes / (page - 64) + 4 : 0;
+    const auto frames = changed_pages + additional + (65536 + page + 23) / (page + 24);
+    const auto logical_bytes = prior_pages * page;
+    const auto index_bytes = 32768 * (2 + 8 * (files[1].size() / (page + 24) + frames) / 32768);
+    return 2 * frames * (page + 24) + 32 +
+        (logical_bytes > files[0].size() ? logical_bytes - files[0].size() : 0) +
+        (index_bytes > files[2].size() ? index_bytes - files[2].size() : 0);
+}
+
 void storage_stop_refresh(Fixture& fixture) {
-    constexpr std::uint64_t count = 7, interval = 3, limit = 1024 * 1024;
+    constexpr std::uint64_t count = 7, interval = 3, page = 65536;
     interval_clock(fixture);
-    const auto batches = batch_documents(fixture, interval, count);
+    const auto batches = batch_documents(fixture, interval, count + 1);
+    const auto payload_bytes = interval_document(batches, count + 1, interval).dump().size();
+    const auto prepare = [&](const fs::path& ledger) {
+        auto database = open_database(ledger, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+        // Eight small inputs, their deltas and checkpoints fit existing roots
+        // at 64 KiB. FULL auto-vacuum removes cache-residency ambiguity in D.
+        execute(database.get(), "PRAGMA page_size=65536; PRAGMA auto_vacuum=FULL; VACUUM;");
+        require(scalar_u64(database.get(), "PRAGMA page_size") == page &&
+                scalar_u64(database.get(), "PRAGMA auto_vacuum") == 1, "wrong budget fixture layout");
+    };
+    const auto command_for = [&](const fs::path& ledger, const fs::path& status,
+                                  const std::string& option, std::uint64_t limit) {
+        auto command = fixture.command(ledger, status, option, 0);
+        command.insert(command.end(), {"--ratio-interval", "3", "--checkpoint-interval", "2"});
+        if (limit) command.insert(command.end(), {"--max-ledger-bytes", std::to_string(limit)});
+        return command;
+    };
+    std::uint64_t limit = 0;
+    {
+        const auto ledger = fixture.temporary.path / "storage-contract.sqlite";
+        const auto status = fixture.temporary.path / "storage-contract.status";
+        prepare(ledger);
+        Runner control(command_for(ledger, status, "--report-jsonl", 0),
+                       fixture.temporary.path / "storage-contract.stderr");
+        wait_ready(status, 0, control);
+        auto database = open_database(ledger, SQLITE_OPEN_READONLY);
+        const auto pages = scalar_u64(database.get(), "PRAGMA page_count");
+        std::uint64_t prefix_admission = 0;
+        for (std::uint64_t cursor = 1; cursor <= count + 1; ++cursor) {
+            if (cursor <= count) {
+                const auto files = ledger_files(ledger);
+                const auto checkpoint_bytes = cursor == 2 || cursor == 4
+                    ? interval_document(batches, cursor, interval).dump().size() : 0;
+                prefix_admission = std::max(prefix_admission, snapshot_bytes(files) +
+                    checkpoint_contract_request(files, page, pages, pages, checkpoint_bytes));
+            }
+            control.send(fixture.inputs[cursor - 1] + "\n");
+            require(control.line() == interval_document(batches, cursor, interval).dump(),
+                    "budget control differs from batch");
+            if (cursor == 2 || cursor == 4 || cursor == 8)
+                require(stored_delta(ledger, cursor, true) == interval_document(batches, cursor, interval).dump(),
+                        "budget control checkpoint differs from batch");
+            require(scalar_u64(database.get(), "PRAGMA page_count") == pages,
+                    "budget control input or checkpoint grew beyond existing roots");
+            if (cursor == count) {
+                const auto files = ledger_files(ledger);
+                const auto input_only = checkpoint_contract_request(files, page, pages, pages);
+                const auto request = checkpoint_contract_request(files, page, pages, pages, payload_bytes);
+                // Interval 2 schedules checkpoints at 2,4,8. The limit admits
+                // input 8 alone, but not its cumulative checkpoint reservation.
+                // Use half that reservation margin, with E supplied solely by
+                // the independent batch document's serialized length.
+                require(request > input_only + 1, "checkpoint margin does not force refusal");
+                limit = snapshot_bytes(files) + input_only + (request - input_only) / 2;
+            }
+        }
+        require(limit >= prefix_admission, "derived budget cannot admit the first seven inputs");
+        control.crash();
+    }
     for (const auto& option : {"--report-jsonl", "--report-jsonl=delta"}) {
         const auto name = option == std::string("--report-jsonl") ? "storage-full" : "storage-delta";
         const auto ledger = fixture.temporary.path / (std::string(name) + ".sqlite");
         const auto status = fixture.temporary.path / (std::string(name) + ".status");
-        auto command = fixture.command(ledger, status, option, 0);
-        command.insert(command.end(), {"--ratio-interval", "3", "--checkpoint-interval", "2",
-                                       "--max-ledger-bytes", std::to_string(limit)});
-        Runner child(command, fixture.temporary.path / (std::string(name) + ".stderr"));
+        prepare(ledger);
+        Runner child(command_for(ledger, status, option, limit),
+                     fixture.temporary.path / (std::string(name) + ".stderr"));
         wait_ready(status, 0, child);
         Json committed;
         apply_delta(committed, stored_delta(ledger, 0));
@@ -723,17 +807,15 @@ void storage_stop_refresh(Fixture& fixture) {
         // remove WAL/SHM sidecars and obscure the no-write assertion.
         auto keeper = open_database(ledger, SQLITE_OPEN_READONLY);
         execute(keeper.get(), "BEGIN; SELECT COUNT(*) FROM inputs;");
+        const auto pages = scalar_u64(keeper.get(), "PRAGMA page_count");
         const auto before = ledger_files(ledger);
-        // One later input uses the maximum legal batch, on checkpoint boundary
-        // 8. Its cumulative-payload reservation exceeds the finite budget.
-        // It advances the engine before its SQL rollback.
-        std::uint32_t seed = 12345;
-        std::string refused = "{\"type\":\"batch\",\"events\":[";
-        for (std::uint64_t index = count + 1; index <= count + 1024; ++index) {
-            if (index != count + 1) refused += ',';
-            refused += seeded_input(index, seed);
-        }
-        refused += "]}";
+        const auto used = snapshot_bytes(before);
+        require(used + checkpoint_contract_request(before, page, pages, pages) < limit &&
+                limit < used + checkpoint_contract_request(before, page, pages, pages, payload_bytes),
+                "finite budget must fit input 8 alone and refuse its scheduled checkpoint");
+        // One ordinary bar isolates the checkpoint charge rather than relying
+        // on a large batch. It advances the engine before its SQL rollback.
+        const auto& refused = fixture.inputs[count];
         require(refused.size() < 1024 * 1024, "storage fixture exceeds the feed frame limit");
         child.send(refused + "\n");
         const auto refresh = child.line();
@@ -757,9 +839,21 @@ void storage_stop_refresh(Fixture& fixture) {
 }
 
 void historical_ratio_export(Fixture& fixture) {
-    constexpr std::uint64_t count = 8, target = 7, interval = 3;
+    constexpr std::uint64_t count = 10, target = 8, interval = 3;
     interval_clock(fixture);
+    // The reporting host holds one unit from the first live open. At K=3,
+    // cursor 6 ends at close 160; cursor 8 adds closes 60 and 180, hence marked
+    // equity changes of -100 and +120. Those nonzero, unequal returns change
+    // the per-bar mean and sample variance (unlike the old empty curve).
+    // Target 8 is two inputs after the last refresh; input 10 keeps it historical.
+    const std::array<int, count> closes{{100, 120, 80, 140, 70, 160, 60, 180, 90, 150}};
+    for (std::uint64_t index = 0; index < count; ++index)
+        fixture.inputs[index] = "{\"type\":\"bar\",\"bar\":{\"ts_open\":" + std::to_string((index + 1) * 60000) +
+            ",\"o\":100,\"h\":181,\"l\":59,\"c\":" + std::to_string(closes[index]) + ",\"v\":4}}";
     const auto batches = batch_documents(fixture, interval, count);
+    require(batches[target].at("report").at("equity_curve").items.size() == target + 1 &&
+            batches[target].at("report").at("metrics").at("equity").at("sharpe_bar").kind == Json::Kind::Number,
+            "historical fixture needs a recorded curve with finite per-bar ratios");
     const auto ledger = fixture.temporary.path / "historical-ratios.sqlite";
     const auto status = fixture.temporary.path / "historical-ratios.status";
     auto command = fixture.command(ledger, status, "--report-jsonl", 0);

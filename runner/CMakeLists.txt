@@ -614,15 +614,21 @@ if(PINEFORGE_BUILD_TESTS)
     add_test(NAME test_native_live_report_memory COMMAND test_native_live_report_cli
         $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_market_example> memory)
     add_test(NAME test_native_live_report_storage_stop_refresh COMMAND test_native_live_report_cli
-        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_market_example> storage-stop-refresh)
+        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_live_report_example> storage-stop-refresh)
     add_test(NAME test_native_live_report_ratio_marker_replay COMMAND test_native_live_report_cli
         $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_market_example> ratio-marker-replay)
     add_test(NAME test_native_live_report_historical_ratio_export COMMAND test_native_live_report_cli
-        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_market_example> historical-ratio-export)
+        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_live_report_example> historical-ratio-export)
     set_tests_properties(test_native_live_report_memory test_native_live_report_storage_stop_refresh
         test_native_live_report_ratio_marker_replay test_native_live_report_historical_ratio_export
         PROPERTIES TIMEOUT 180)
     set_tests_properties(test_native_live_report_memory PROPERTIES SKIP_RETURN_CODE 77)
+    add_library(native_live_report_example MODULE
+        ${PROJECT_SOURCE_DIR}/tests/native_live_report_strategy.cpp)
+    target_link_libraries(native_live_report_example PRIVATE PineForge::pineforge)
+    target_compile_options(native_live_report_example PRIVATE -fvisibility=hidden -ffp-contract=off -UNDEBUG)
+    set_target_properties(native_live_report_example PROPERTIES PREFIX "")
+    add_dependencies(test_native_live_report_cli native_live_report_example)
     if(PINEFORGE_BUILD_SOURCE_LAYER)
         add_test(NAME native_live_ratio_interval_e2e COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/tests/native_live_ratio_interval_e2e.py $<TARGET_FILE:pineforge-live>
