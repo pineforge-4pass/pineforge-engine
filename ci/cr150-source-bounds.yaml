@@ -74,7 +74,7 @@ scan:
   generated_files:
     - "tutorial/**/generated*.cpp"
 ceilings:
-  unreviewed: 1293
+  unreviewed: 1291
   pending-flat-memory: 185
 owners:
   - {name: "generated-cpp", globs: ["tutorial/**"]}
@@ -1565,6 +1565,4 @@ entries:
   - {id: "U1554", file: "include/pineforge/matrix.hpp", symbol: "borrow_external", ops: ["decl"], container: "NumericMatrix", owner: "script-state", phase: "unclassified", state: "unreviewed", line: 87, note: "returns a handle onto a Store object; no native cell container"}
   - {id: "U1555", file: "src/matrix.cpp", symbol: "cells", ops: ["alloc", "grow"], container: "unresolved by the index: make_shared", owner: "script-state", phase: "unclassified", state: "unreviewed", line: 37, note: "Cells control block per borrow plus Store object resize; no guard the gate accepts"}
   - {id: "U1556", file: "src/matrix.cpp", symbol: "storage_", ops: ["alloc"], container: "unresolved by the index: make_shared", owner: "script-state", phase: "unclassified", state: "unreviewed", line: 56, note: "one handle record per matrix; no size guard the gate accepts"}
-  - {id: "U1557", file: "src/matrix.cpp", symbol: "r", ops: ["assign", "decl"], container: "Index", owner: "script-state", phase: "unclassified", state: "unreviewed", line: 52, note: "loop index of the Eigen index alias, not a container"}
-  - {id: "U1558", file: "src/matrix.cpp", symbol: "c", ops: ["assign", "decl"], container: "Index", owner: "script-state", phase: "unclassified", state: "unreviewed", line: 53, note: "loop index of the Eigen index alias, not a container"}
   - {id: "U1547", file: "src/detail/udt_graph.cpp", symbol: "store_", ops: ["grow"], container: "unresolved by the index: store_.resize(...)", owner: "engine-core", phase: "unclassified", state: "unreviewed", note: "Three Store-backed node resizes in resize_edges and resize_payload; object_bytes checks address-space overflow, but no declared fixed input or supported own-size guard bounds the requested record size.", line: 259}
