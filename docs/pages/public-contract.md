@@ -220,7 +220,7 @@ understands. This tree declares `["1.3"]` on a supported runtime and `[]`
 otherwise; see the [capability table](../../docker/README.md#selected-window-contract-revision)
 for revision history. The revision is declared in the probe, not in each
 report. The probe also sets `selected_window_bars_bin_version`
-(`docker/run_json.py:4852`) to 0: selected-window requests
+(`docker/run_json.py:4859`) to 0: selected-window requests
 require a CSV chart. General binary-feed support does not imply selected-window
 binary-chart support.
 
