@@ -94,7 +94,7 @@ include/pineforge/detail/scratch_file.hpp:175-182 selects it.
 Linux jailed admission requires sealed memfd backing
 (`strategy_require_report_scratch_arena_v1` src/c_abi.cpp:1457-1474).
 The hosting wrapper supplies `PF_SCRATCH_ARENA_BYTES`
-src/scratch_arena.cpp:478-479.
+src/scratch_arena.cpp:484-485.
 The engine never resizes that backing (the sizing comment above `ScratchArena`
 include/pineforge/detail/scratch_arena.hpp:71-110).
 Arena allocation rounds to **1 MiB chunks**
@@ -103,7 +103,7 @@ Arena allocation rounds to **1 MiB chunks**
 Bounded mapping windows do not remove that arena memory cost.
 Exhaustion fails closed with typed `report_sink_failed`
 (`ReportScratchIoError` include/pineforge/detail/scratch_arena.hpp:16-21),
-reason `arena_exhausted` src/scratch_arena.cpp:326-330.
+reason `arena_exhausted` src/scratch_arena.cpp:332-336.
 There is no RAM fallback (the comment on `ScratchFile`
 include/pineforge/detail/scratch_file.hpp:31-40).
 
