@@ -616,7 +616,7 @@ SANITIZER_FLAG = '-fsanitize=address,undefined'
 # `line.get_price` function literal), the public run-failure wire vocabulary
 # the catalog docker/run_failure_codes.json publishes.
 ADR_RULED_IDENTIFIERS_MIN = 193
-ADR_RULED_TEXTS_MIN = 59
+ADR_RULED_TEXTS_MIN = 61  # 59 + the two matrix.diff texts of the kernel unit src/matrix.cpp
 # PR-only registration floors: the complete CTest populations of the three
 # excluded profiles at INT25, counted with ctest -N on the integrated tree --
 # 653/653/662 at 91d65ad6 (INT24) plus wave G's six rows (C-SURFACE-1 +1,

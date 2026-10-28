@@ -224,7 +224,7 @@ class SanitizerAndDebugBuildTests(unittest.TestCase):
         self.assertEqual(findings, [], [str(f) for f in findings])
         findings, summary = evaluate_table(strings + [text], nm)   # a debug archive: covered
         self.assertEqual(findings, [], [str(f) for f in findings])
-        self.assertEqual(summary["phraseHits"], 22)
+        self.assertEqual(summary["phraseHits"], 25)
 
     def test_only_a_marked_row_may_be_absent(self) -> None:
         adr = guard.ADR.read_text(encoding="utf-8")
@@ -285,7 +285,7 @@ class EvaluatorTests(unittest.TestCase):
                          sum(1 for n in RULED.identifiers
                              if any(p.search(n) for _, p in guard.IDENTIFIER_PATTERNS)
                              or guard.SENTINEL[1].match(n)))
-        self.assertEqual(summary["phraseHits"], 21)
+        self.assertEqual(summary["phraseHits"], 24)
 
     def test_a_name_outside_the_table_fails(self) -> None:
         for intruder in ("market_admission_observation_bogus", "coof_bogus", "pooc_bogus",

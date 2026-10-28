@@ -27,7 +27,11 @@ namespace {
 
 NumericMatrix NumericMatrix::new_(int rows, int cols, double init_val) {
     if (auto* runtime = ms::current_runtime()) {
-        if (rows < 0 || cols < 0) throw std::invalid_argument("matrix.new: negative dimensions");
+        if (rows < 0 || cols < 0)
+            throw coded<std::invalid_argument>(
+                RunFailureCode::pine_matrix_error,
+                {{"function", "matrix.new"}, {"reason", "negative_dimensions"}},
+                "matrix.new: negative dimensions");
         return NumericMatrix(ms::make_cells(*runtime, rows, cols, init_val));
     }
     return NumericMatrix(Eigen::MatrixXd::Constant(rows, cols, init_val));
