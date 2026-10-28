@@ -49,7 +49,7 @@ also avoids the Doxygen build.
 `unittest-shards-tests` and `run-json-harness-tests`; `preflight-slow` runs
 exactly those stages with `--tier slow`. Toolchain setup and the hash-pinned
 pytest install stay in the slow job. A plain local invocation below retains
-all stages and its existing event-aware verifier-class selection.
+all stages and its existing event-aware verifier-class selection. `preflight-tests` runs every discovered method across up to eight shards, sized to available CPUs, with separate logs in `build-ci-preflight/preflight-tests-shards/`.
 
 The smoke configures Release, builds `pineforge_pr_smoke` and directly runs
 `ctest --test-dir build -L '^fast$' --output-on-failure --no-tests=error`.
@@ -148,11 +148,11 @@ To bump an action, resolve the desired upstream version to its full commit
 SHA and update both the SHA and version comment together.
 
 This checks the CI/native workflow syntax, expressions and shell commands,
-source ABI/hash/schema guards, and the verifier's failure-handling tests. A
-failure makes the hosted `result` red and retains diagnostics in
-`build-ci-preflight/`. The proof legs start after `gke-pr` admission has
-classified the compare list. A documentation-only change skips them
-([Documentation-only changes](#documentation-only-changes)).
+source ABI/hash/schema guards, and the verifier's failure-handling tests.
+Explicitly independent stages run after serial stages in a pool of at most four workers; unknown stages stay serial.
+A failure makes the hosted `result` red and retains each stage's log in `build-ci-preflight/`;
+the summary keeps declaration order and per-stage times, and all independent stages finish even after a failure.
+The proof legs start after `gke-pr` admission has classified the compare list. A documentation-only change skips them ([Documentation-only changes](#documentation-only-changes)).
 It does not compile the engine or replace any complete verification profile.
 
 Then use the same verification entrypoint as GitHub Actions before publishing:

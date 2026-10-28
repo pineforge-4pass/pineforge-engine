@@ -2,6 +2,7 @@
 """Exercise preflight failure propagation with real child processes."""
 import argparse
 import contextlib
+from concurrent.futures import ThreadPoolExecutor
 import io
 import inspect
 import json
@@ -12,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -31,6 +33,14 @@ from ci_preflight import (AUTHZ_ALWAYS, AUTHZ_REFUSE_STEP, CORES,
                           native_workflow_findings, run_checks)
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+class ParallelCommand(tuple):
+    """Exercise the opt-in protocol without depending on a new constructor."""
+
+    parallel = True
+
+
 GKE_32 = 'gke-32cpu-64gb-amd64'
 GKE_16 = 'gke-16cpu-32gb-amd64'
 GKE_8 = 'gke-8cpu-16gb-amd64'
@@ -6276,6 +6286,177 @@ finally:
         self.assertEqual([s['exitCode'] for s in summary['stages']], [7, 0])
         self.assertIn('failure witness', (logs / 'fail.log').read_text())
         self.assertIn('next check ran', (logs / 'next.log').read_text())
+
+    def test_preflight_stage_shards_every_test_with_cpu_cap_and_separate_logs(self):
+        output = ROOT / 'build-ci-preflight'
+        for cpus, expected in ((1, 1), (2, 2), (8, 8), (16, 8), (64, 8)):
+            with self.subTest(cpus=cpus), \
+                    mock.patch.object(os, 'sched_getaffinity', create=True,
+                                      return_value=set(range(cpus))), \
+                    mock.patch.object(os, 'cpu_count', return_value=64):
+                for tier in ('fast', 'all'):
+                    argv = {entry[0]: entry[1] for entry in check_commands(
+                        ROOT, output, env={'GITHUB_EVENT_NAME': 'pull_request'}, tier=tier)
+                    }['preflight-tests']
+                    self.assertEqual(argv, [
+                        sys.executable, str(ROOT / 'scripts/run_unittest_shards.py'),
+                        str(ROOT / 'scripts/test_ci_preflight.py'),
+                        '--shards', str(expected),
+                        '--log-dir', str(output / 'preflight-tests-shards'),
+                    ])
+        with mock.patch.object(os, 'sched_getaffinity', create=True,
+                               side_effect=OSError('affinity unavailable')), \
+                mock.patch.object(os, 'cpu_count', return_value=None):
+            argv = {entry[0]: entry[1] for entry in check_commands(ROOT)}['preflight-tests']
+            self.assertEqual(argv[argv.index('--shards') + 1], '1')
+
+    def test_preflight_shard_failure_fails_its_stage_and_names_test_and_shard(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        module = root / 'preflight_failure_witness.py'
+        module.write_text(
+            'from pathlib import Path\n'
+            'import tempfile\n'
+            'import unittest\n'
+            'class Witness(unittest.TestCase):\n'
+            '    def test_failure(self):\n'
+            '        self.fail("preflight shard failure witness")\n'
+            '    def test_success(self):\n'
+            '        self.assertTrue(Path(tempfile.gettempdir()).is_dir())\n'
+            'if __name__ == "__main__":\n'
+            '    unittest.main()\n')
+        output = root / 'logs'
+        with mock.patch.object(os, 'sched_getaffinity', create=True,
+                               return_value={0, 1}):
+            argv = list({entry[0]: entry[1] for entry in check_commands(
+                ROOT, output)}['preflight-tests'])
+        index = next(index for index, arg in enumerate(argv)
+                     if Path(arg).name == 'test_ci_preflight.py')
+        argv[index] = str(module)
+        with contextlib.redirect_stdout(io.StringIO()):
+            code = run_checks([('preflight-tests', argv)], output, source=root)
+        summary = json.loads((output / 'preflight-summary.json').read_text())
+        self.assertEqual(code, 1)
+        self.assertEqual(summary['status'], 'failed')
+        self.assertEqual([(stage['name'], stage['status'], stage['exitCode'])
+                          for stage in summary['stages']], [('preflight-tests', 'failed', 1)])
+        log = (output / 'preflight-tests.log').read_text()
+        self.assertIn('shard 1/2: FAILED', log)
+        self.assertIn('preflight_failure_witness.Witness.test_failure', log)
+        self.assertIn('preflight shard failure witness', log)
+        shard_logs = sorted((output / 'preflight-tests-shards').glob('shard-*.log'))
+        self.assertEqual([path.name for path in shard_logs], ['shard-01.log', 'shard-02.log'])
+        self.assertIn('Ran 1 test', shard_logs[0].read_text())
+        self.assertIn('Ran 1 test', shard_logs[1].read_text())
+
+    def test_only_audited_stages_opt_into_the_parallel_group(self):
+        expected = {
+            'preflight-tests', 'cr150-source-gate-tests',
+            'rng-draw-order', 'rng-draw-order-tests', 'native-c-surface-tests',
+            'selected-window-ownership-tests', 'release-gate-tests',
+            'run-failure-diff-tests', 'design-inventory', 'design-inventory-tests',
+            'doc-anchors', 'doc-anchors-tests', 'doc-lint', 'doc-lint-tests',
+            'kernel-seam-rows', 'kernel-seam-rows-tests',
+        }
+        for tier in ('all', 'fast'):
+            plan = check_commands(ROOT, env={}, tier=tier)
+            self.assertEqual({entry[0] for entry in plan
+                              if getattr(entry, 'parallel', False)}, expected)
+            self.assertTrue(all(len(entry) == 2 for entry in plan))
+        for tier in ('slow', 'github-only'):
+            self.assertFalse(any(getattr(entry, 'parallel', False)
+                                 for entry in check_commands(ROOT, tier=tier)))
+
+    def test_parallel_failure_crash_and_serial_default_keep_logs_and_declared_order(self):
+        caller = threading.get_ident()
+        actual_run = subprocess.run
+        crash_finished = threading.Event()
+        lock = threading.Lock()
+        threads, environments, completed, active, serial_overlap = {}, {}, [], set(), []
+        commands = [
+            ParallelCommand(('fail', [sys.executable, '-c',
+                                     'import sys; print("failed work"); sys.exit(7)'])),
+            ('unknown', [sys.executable, '-c', 'print("serial work")']),
+            ParallelCommand(('crash', [sys.executable, '-c',
+                                      'raise RuntimeError("parallel crash witness")'])),
+            ParallelCommand(('next', [sys.executable, '-c', 'print("next work")'])),
+        ]
+        names = {tuple(entry[1]): entry[0] for entry in commands}
+
+        def observe(argv, **kwargs):
+            name = names[tuple(argv)]
+            worker = threading.get_ident()
+            with lock:
+                threads[name] = worker
+                environments[name] = kwargs.get('env')
+                if name == 'unknown':
+                    serial_overlap.extend(active)
+                active.add(name)
+            try:
+                result = actual_run(argv, **kwargs)
+                # Hold the first real result until another worker finishes.
+                # Main's serial runner never waits here: its red is an
+                # assertion about execution, rather than a hung setup.
+                if name == 'fail' and worker != caller:
+                    crash_finished.wait()
+                with lock:
+                    completed.append(name)
+                return result
+            finally:
+                with lock:
+                    active.remove(name)
+                if name == 'crash':
+                    crash_finished.set()
+
+        def pool_for_two(*args, **kwargs):
+            self.assertEqual(kwargs, {'max_workers': 2})
+            return ThreadPoolExecutor(*args, **kwargs)
+
+        with mock.patch.object(os, 'sched_getaffinity', create=True, return_value={0, 1}), \
+                mock.patch.object(ci_preflight, 'ThreadPoolExecutor', create=True,
+                                  side_effect=pool_for_two), \
+                mock.patch.object(ci_preflight.subprocess, 'run', side_effect=observe):
+            code, summary, logs = self.run_preflight(commands)
+        self.assertEqual(code, 1)
+        self.assertEqual(summary['status'], 'failed')
+        self.assertEqual([stage['name'] for stage in summary['stages']],
+                         [entry[0] for entry in commands])
+        self.assertEqual([stage['exitCode'] for stage in summary['stages']], [7, 0, 1, 0])
+        self.assertEqual([stage['status'] for stage in summary['stages']],
+                         ['failed', 'passed', 'failed', 'passed'])
+        self.assertEqual(threads['unknown'], caller)
+        self.assertIsNone(environments['unknown'])
+        self.assertEqual(serial_overlap, [])
+        for name in ('fail', 'crash', 'next'):
+            self.assertNotEqual(threads[name], caller, name)
+            self.assertEqual(environments[name]['PYTHONDONTWRITEBYTECODE'], '1')
+        self.assertLess(completed.index('crash'), completed.index('fail'))
+        for name, witness in (('fail', 'failed work'), ('unknown', 'serial work'),
+                              ('crash', 'RuntimeError: parallel crash witness'),
+                              ('next', 'next work')):
+            self.assertIn(witness, (logs / f'{name}.log').read_text())
+        for stage in summary['stages']:
+            self.assertEqual(set(stage), {'name', 'argv', 'status', 'exitCode', 'advisory',
+                                         'log', 'startedAt', 'seconds'})
+            self.assertIs(stage['advisory'], False)
+            self.assertIsInstance(stage['seconds'], float)
+
+    def test_parallel_pool_sizes_to_affinity_with_a_four_worker_cap(self):
+        commands = [ParallelCommand((name, [sys.executable, '-c', 'print("pool work")']))
+                    for name in ('one', 'two')]
+        for cpus, expected in ((1, 1), (3, 3), (16, 4)):
+            with self.subTest(cpus=cpus), \
+                    mock.patch.object(os, 'sched_getaffinity', create=True,
+                                      return_value=set(range(cpus))), \
+                    mock.patch.object(os, 'cpu_count', return_value=64), \
+                    mock.patch.object(ci_preflight, 'ThreadPoolExecutor', create=True,
+                                      wraps=ThreadPoolExecutor) as pool:
+                code, summary, _ = self.run_preflight(commands)
+                self.assertEqual(code, 0)
+                self.assertEqual([stage['status'] for stage in summary['stages']],
+                                 ['passed', 'passed'])
+                pool.assert_called_once_with(max_workers=expected)
 
     def test_missing_tool_is_a_failure(self):
         code, summary, _ = self.run_preflight([('missing', ['/nonexistent/pineforge-ci-tool'])])
