@@ -27,10 +27,12 @@ constexpr std::size_t payload_bytes = 2 * window_bytes;
 // The operational stall policy is 30 s; the injected rows require no real
 // wait. A real blocked row gets 2*30 s + 1 s setup, even under instrumentation.
 constexpr std::int64_t stall_ms = 30 * 1000;
+constexpr std::int64_t sample_ms = stall_ms / 300;
 constexpr unsigned timeout_seconds = (2 * stall_ms + 999) / 1000 + 1;
 std::int64_t wall = 0;
 int reader_fd = -1, wakes = 0;
-bool progressing = false, interrupted = false, drain_all = false;
+bool progressing = false, interrupted = false, drain_all = false, socket_reader = false;
+bool close_on_wake = false, drain_once = false;
 std::string consumed;
 
 void require(bool ok, const char* text) {
@@ -50,15 +52,34 @@ int poll_wait(pollfd* fds, nfds_t count, int timeout) {
     const int ready = ::poll(fds, count, 0);
     if (ready != 0) return ready;
     wall += timeout;
+    if (close_on_wake) {
+        require(::close(reader_fd) == 0, "close socket peer during wait");
+        reader_fd = -1;
+        close_on_wake = false;
+        return ::poll(fds, count, 0);
+    }
+    if (drain_once) {
+        char byte;
+        require(::read(reader_fd, &byte, 1) == 1, "release one socket buffer");
+        consumed += byte;
+        drain_once = false;
+        pollfd writable{fds[0].fd, POLLOUT, 0};
+        require(::poll(&writable, 1, 0) == 0,
+                "one freed socket buffer must remain below POLLOUT");
+    }
     if (progressing) {
-        // Consume exactly ONE byte, below PIPE_BUF and POLLOUT's free-space
-        // threshold, on every wake. Queue depth must reset the stall timer.
-        if (drain_all) {
+        if (drain_all || socket_reader) {
+            // AF_UNIX accounts buffer allocations, so a partial buffer read
+            // need not make a send possible. Release up to one PIPE_BUF per
+            // slow wake; the writer must retry send even without POLLOUT.
             std::array<char, window_bytes> bytes{};
-            const auto count_read = ::read(reader_fd, bytes.data(), bytes.size());
+            const auto count_read = ::read(reader_fd, bytes.data(),
+                                           drain_all ? bytes.size() : PIPE_BUF);
             require(count_read > 0, "fast reader consumes pending bytes");
             consumed.append(bytes.data(), static_cast<std::size_t>(count_read));
         } else {
+            // ONE byte, below PIPE_BUF and POLLOUT's free-space threshold.
+            // Pipe queue depth must reset the stall timer on every wake.
             char byte;
             require(::read(reader_fd, &byte, 1) == 1, "slow reader consumes a byte");
             consumed += byte;
@@ -73,6 +94,7 @@ struct Scope {
         wall = wakes = 0;
         progressing = slow; interrupted = signals; consumed.clear();
         drain_all = fast;
+        socket_reader = close_on_wake = drain_once = false;
         resource_clock::read_clock = clock_read;
         resource_clock::wait_poll = poll_wait;
     }
@@ -85,7 +107,7 @@ struct Scope {
 struct Pipe {
     int read_fd = -1, write_fd = -1, flags = 0;
     std::size_t capacity = 0;
-    explicit Pipe(bool nonblocking = true, bool socket = false) {
+    explicit Pipe(bool nonblocking = true, bool socket = false, bool byte_buffers = false) {
         int fds[2];
         require((socket ? ::socketpair(AF_UNIX, SOCK_STREAM, 0, fds) : ::pipe(fds)) == 0,
                 "create sink transport");
@@ -102,7 +124,7 @@ struct Pipe {
         // platform-specific pipe/socket size.
         std::array<char, PIPE_BUF> bytes{};
         for (;;) {
-            const auto written = ::write(write_fd, bytes.data(), bytes.size());
+            const auto written = ::write(write_fd, bytes.data(), byte_buffers ? 1 : bytes.size());
             if (written > 0) { capacity += static_cast<std::size_t>(written); continue; }
             if (written < 0 && errno == EINTR) continue;
             require(written < 0 && (errno == EAGAIN || errno == EWOULDBLOCK),
@@ -186,17 +208,83 @@ void blocked_row(bool nonblocking, bool signals, bool socket, bool real_time) {
                 "stall expiry must be bounded even with repeated EINTR");
 }
 
+void socket_closed_row(bool during_wait) {
+    Scope scope(false, false);
+    Pipe pipe(false, true);
+    const pf_report_sink_fd_v1 sink{sizeof sink, 1, pipe.write_fd, "stall-test"};
+    if (during_wait) {
+        close_on_wake = true;
+    } else {
+        require(::close(pipe.read_fd) == 0, "close socket peer before write");
+        reader_fd = -1;
+    }
+    // The poll hook owns the peer close in the other case.
+    pipe.read_fd = -1;
+    report_sink::LineWriter writer(sink);
+    bool stopped = false;
+    try { emit(writer); }
+    catch (const report_sink::WriterError& error) {
+        stopped = true;
+        const auto failure = classify_run_failure(error);
+        require(error.error_number() == EPIPE || error.error_number() == ECONNRESET,
+                "closed socket must retain peer-closed errno");
+        require(failure.code == RunFailureCode::report_sink_failed && failure.args
+                    && *failure.args == "{\"reason\":\"sink_peer_closed\"}",
+                "closed socket must retain sink_peer_closed, never sink_stalled");
+    }
+    require(stopped && !writer.diagnostics().complete,
+            "closed socket must fail without success diagnostics");
+    require(!close_on_wake && wall < stall_ms,
+            "closed socket must stop before the stall deadline");
+    require(::fcntl(pipe.write_fd, F_GETFL) == pipe.flags,
+            "closed socket cleanup must preserve borrowed descriptor flags");
+}
+
+void socket_short_send_row() {
+    Scope scope(false, false);
+    // Linux AF_UNIX charges each send's buffer allocation. Fill with one-byte
+    // sends so reading one byte releases one allocation, less than POLLOUT's
+    // free-space threshold. A nonblocking send can nevertheless accept bytes.
+    Pipe pipe(false, true, true);
+    drain_once = true;
+    const pf_report_sink_fd_v1 sink{sizeof sink, 1, pipe.write_fd, "stall-test"};
+    {
+        report_sink::LineWriter writer(sink);
+        bool stopped = false;
+        try { emit(writer); }
+        catch (const report_sink::WriterError& error) {
+            const auto failure = classify_run_failure(error);
+            stopped = error.error_number() == ETIMEDOUT
+                && failure.code == RunFailureCode::report_sink_failed && failure.args
+                && *failure.args == "{\"reason\":\"sink_stalled\"}";
+        }
+        require(stopped && !writer.diagnostics().complete,
+                "socket must stall when no more bytes can be accepted");
+    }
+    require(wall == stall_ms + sample_ms,
+            "accepted socket bytes must reset the deadline at the first wake");
+    const auto wire = pipe.finish();
+    require(wire.size() > pipe.capacity
+                && wire.find("{\"schema\":\"pf-report-sink\"") != std::string::npos,
+            "socket must accept report bytes below POLLOUT before the peer stalls");
+    require(wire.find("\"trailer\"") == std::string::npos,
+            "partial socket progress must not publish a success trailer");
+}
+
 std::string progressing_wire(bool fast, bool socket = false) {
     Scope scope(true, false, fast);
     Pipe pipe(true, socket);
+    socket_reader = socket;
     pipe.empty();
     const pf_report_sink_fd_v1 sink{sizeof sink, 1, pipe.write_fd, "stall-test"};
     {
         report_sink::LineWriter writer(sink);
-        // Report payload > actual pipe capacity + one full payload, on every
-        // kernel: rows=floor(capacity/payload_bytes)+2. Each row stays below
-        // the independent 1 MiB line limit.
-        emit(writer, pipe.capacity / payload_bytes + 2);
+        // A socket slow wake drains at most PIPE_BUF bytes. Force more than
+        // 2*S/P wakes by sending > C + (2*S/P)*PIPE_BUF + one payload:
+        // rows=floor((C + (2*S/P)*PIPE_BUF)/payload_bytes)+2. Pipe wakes drain
+        // one byte and only need the original C + one payload geometry.
+        const auto progress_bytes = socket ? (2 * stall_ms / sample_ms) * PIPE_BUF : 0;
+        emit(writer, (pipe.capacity + progress_bytes) / payload_bytes + 2);
         require(writer.diagnostics().complete == 1, "progressing reader must complete");
     }
     require(fast || (wall > 2 * stall_ms && wakes > 2),
@@ -232,9 +320,9 @@ struct Host final : NativeStrategyHost {
     }
 };
 
-void engine_row() {
+void engine_row(bool socket = false) {
     Scope scope(false, false);
-    Pipe pipe;
+    Pipe pipe(true, socket);
     Host host;
     auto handle = static_cast<BacktestEngine*>(&host);
     const pf_report_sink_fd_v1 sink{sizeof sink, 1, pipe.write_fd, "stall-test"};
@@ -286,10 +374,17 @@ int main(int argc, char** argv) {
         else if (row == "blocking") blocked_row(false, false, false, false);
         else if (row == "signals") blocked_row(true, true, false, false);
         else if (row == "socket") blocked_row(false, false, true, false);
+        else if (row == "socket_nonblocking") blocked_row(true, false, true, false);
+        else if (row == "socket_signals") blocked_row(false, true, true, false);
+        else if (row == "socket_closed") socket_closed_row(false);
+        else if (row == "socket_close_wait") socket_closed_row(true);
+        else if (row == "socket_short_send") socket_short_send_row();
         else if (row == "real_blocked") blocked_row(true, false, false, true);
+        else if (row == "real_socket") blocked_row(false, false, true, true);
         else if (row == "slow") slow_row();
         else if (row == "socket_slow") slow_row(true);
         else if (row == "engine") engine_row();
+        else if (row == "engine_socket") engine_row(true);
         else throw std::runtime_error("unknown sink stall row");
         ::alarm(0);
         return 0;

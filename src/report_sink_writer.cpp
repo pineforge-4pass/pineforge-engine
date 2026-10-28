@@ -395,27 +395,14 @@ struct LineWriter::State {
         int queued = 0;
         // FIONREAD on a pipe's write end reports bytes awaiting consumption,
         // including reads too small to release a whole pipe buffer/POLLOUT.
-        if (!socket) {
-            if (::ioctl(descriptor, FIONREAD, &queued) != 0) io_error("pipe queue query failed", errno);
-        } else {
-#if defined(__APPLE__)
-            socklen_t length = sizeof queued;
-            if (::getsockopt(descriptor, SOL_SOCKET, SO_NWRITE, &queued, &length) != 0)
-                io_error("socket queue query failed", errno);
-#elif defined(TIOCOUTQ)
-            // Unix sockets expose queued buffer memory here, not individual
-            // partial reads. Only released buffers prove observable progress.
-            if (::ioctl(descriptor, TIOCOUTQ, &queued) != 0)
-                io_error("socket queue query failed", errno);
-#endif
-        }
+        if (::ioctl(descriptor, FIONREAD, &queued) != 0) io_error("pipe queue query failed", errno);
         return queued;
     }
 
     void wait_writable(std::int64_t& progress_ms) {
-        int previous = queued_bytes();
+        int previous = socket ? 0 : queued_bytes();
         for (;;) {
-            const int before_wait = queued_bytes();
+            const int before_wait = socket ? 0 : queued_bytes();
             const auto now = resource_clock::wall_ms();
             if (before_wait < previous) progress_ms = now;
             previous = before_wait;
@@ -433,6 +420,11 @@ struct LineWriter::State {
             if (result < 0 && number != EINTR) io_error("poll failed", number);
             if (ready.revents & POLLNVAL) io_error("poll invalid fd", EBADF);
             if (ready.revents & (POLLERR | POLLHUP)) io_error("stream peer closed", EPIPE);
+            // AF_UNIX and TCP progress means bytes accepted by send(), not a
+            // queue-memory decrease or POLLOUT. A stream may accept a short
+            // send below its writable low-water mark. Retry after EVERY wake
+            // (also timeout/EINTR), and reset the deadline only for count > 0.
+            if (socket) return;
             const int current = queued_bytes();
             if (current < previous) progress_ms = resource_clock::wall_ms();
             previous = current;

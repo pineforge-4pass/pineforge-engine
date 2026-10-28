@@ -133,7 +133,7 @@ EXPECTED_RUNTIME = frozenset({
 })
 
 # The headers under include/pineforge/ whose PF_API declarations are read as one
-# set for the two counts below: pineforge.h plus the three additive v1 headers,
+# set for the two counts below: pineforge.h plus the four additive v1 headers,
 # every symbol of which is defined in src/c_abi.cpp. native_c_api.h is not one
 # of them: it is the independent inventory pinned by EXPECTED_NATIVE_C_API.
 RUNTIME_HEADERS = (

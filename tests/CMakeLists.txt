@@ -7938,15 +7938,24 @@ if(UNIX)
     math(EXPR _pf_stall_timeout "(2 * 30 * 1000 + 999) / 1000 + 1 + 1")
     set_tests_properties(test_host_run_budget PROPERTIES TIMEOUT ${_pf_budget_timeout})
     set_tests_properties(test_report_sink_stall PROPERTIES TIMEOUT ${_pf_stall_timeout})
-    foreach(_pf_row cpu begin begin_callback unchanged setter real_cpu)
+    foreach(_pf_row cpu begin begin_callback unchanged setter real_cpu sink)
         add_test(NAME test_host_run_budget_${_pf_row} COMMAND test_host_run_budget ${_pf_row})
         set_tests_properties(test_host_run_budget_${_pf_row} PROPERTIES TIMEOUT ${_pf_budget_timeout})
     endforeach()
-    foreach(_pf_row blocking signals socket slow socket_slow engine real_blocked)
+    foreach(_pf_row blocking signals socket socket_nonblocking socket_signals
+            socket_closed socket_close_wait slow socket_slow engine engine_socket
+            real_blocked real_socket)
         add_test(NAME test_report_sink_stall_${_pf_row} COMMAND test_report_sink_stall ${_pf_row})
         set_tests_properties(test_report_sink_stall_${_pf_row} PROPERTIES TIMEOUT ${_pf_stall_timeout})
     endforeach()
-    set_tests_properties(test_report_sink_stall_real_blocked PROPERTIES LABELS "slow")
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_test(NAME test_report_sink_stall_socket_short_send
+            COMMAND test_report_sink_stall socket_short_send)
+        set_tests_properties(test_report_sink_stall_socket_short_send
+            PROPERTIES TIMEOUT ${_pf_stall_timeout})
+    endif()
+    set_tests_properties(test_report_sink_stall_real_blocked test_report_sink_stall_real_socket
+        PROPERTIES LABELS "slow")
 endif()
 
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)

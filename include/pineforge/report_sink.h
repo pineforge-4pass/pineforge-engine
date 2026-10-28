@@ -33,7 +33,7 @@ typedef struct pf_report_sink_v1 {
 
 /** Borrowed sequential stream sink descriptor (CX-SINK-B1/B2).
  *  struct_size is sizeof(pf_report_sink_fd_v1), version is 1. fd is the
- *  caller-selected write end of a FIFO or AF_UNIX SOCK_STREAM socket; there
+ *  caller-selected write end of a FIFO or stream socket (AF_UNIX or TCP); there
  *  is no library default fd number. NULL run_id means ""; it is copied.
  *  No path or scratch directory is supplied or derived for this sink.
  *
@@ -51,10 +51,10 @@ typedef struct pf_report_sink_v1 {
  *  identical to the path sink. Writes are strictly sequential: no open,
  *  creation, seek, pwrite, truncation, unlink or rename on this route.
  *  Partial writes and EINTR are retried; poll() has a 30-second no-progress
- *  stall budget (sink_stalled). Only success writes a trailer as its last line.
+ *  budget (sink_stalled): FIFO reads or accepted socket sends reset it.
  *  Failure or abort leaves no valid trailer; the receipt stays incomplete.
  *
- *  Sockets use MSG_NOSIGNAL|MSG_DONTWAIT; Linux observes released send buffers.
+ *  Sockets use MSG_NOSIGNAL|MSG_DONTWAIT; only success writes a final trailer.
  *  FIFO hosts MUST ignore SIGPIPE (Python does; C: signal(SIGPIPE, SIG_IGN))
  *  so a closed reader becomes the typed report_sink_failed error. The
  *  library never changes process-wide SIGPIPE disposition. A successful new inherited-arena attach sets SIGXFSZ to SIG_IGN process-wide; detach does not restore it. Hosts relying on their SIGXFSZ handler or default termination must account for this before attaching an arena. */

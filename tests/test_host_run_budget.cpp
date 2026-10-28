@@ -70,15 +70,17 @@ struct ClockScope {
     ~ClockScope() { resource_clock::read_clock = nullptr; }
 };
 
-std::vector<Bar> tape() {
+std::vector<Bar> tape(int count) {
     std::vector<Bar> bars;
-    for (int i = 0; i != 3; ++i)
+    for (int i = 0; i != count; ++i)
         bars.push_back({100, 101, 99, 100, 1, INT64_C(1704067200000) + i * INT64_C(60000)});
     return bars;
 }
 
 struct Host final : NativeStrategyHost {
     int callbacks = 0, begins = 0, busy_result = 0;
+    int spin_at = 1;
+    int input_count = 3;
     bool spin = false, real_clock = false, spin_begin = false, at_limit = false;
     Host() {
         NativeRunSpec spec;
@@ -102,8 +104,10 @@ struct Host final : NativeStrategyHost {
         require(::clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &start) == 0, "read spin clock");
         const auto elapsed = [&] {
             require(::clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &now) == 0, "read spin clock");
-            return (now.tv_sec - start.tv_sec) * INT64_C(1000)
-                + (now.tv_nsec - start.tv_nsec) / 1000000;
+            // Subtract before converting: truncating a negative nanosecond
+            // component separately could finish almost one millisecond early.
+            return ((now.tv_sec - start.tv_sec) * INT64_C(1000000000)
+                + now.tv_nsec - start.tv_nsec) / 1000000;
         };
         // Injected rows need one real millisecond; the real-clock row burns
         // 2*limit_ms, independently of any implementation clock read.
@@ -120,16 +124,19 @@ struct Host final : NativeStrategyHost {
     void on_native_bar(const Bar&, const NativeDecisionContext&) override {
         ++callbacks;
         busy_result = strategy_set_run_budget_v1(handle(), nullptr);
+        if (spin && spin_at > 1 && callbacks == spin_at)
+            require(physical_position().lot_count > 0,
+                    "sink budget fixture must fill its entry before the spin");
         if (callbacks == 1 || callbacks == 2) {
             const auto placed = submit({native_order::Transact{callbacks == 1 ? 1.0 : -1.0},
                                          callbacks == 1 ? "entry" : "exit", ""});
             require(placed.status == native_order::SubmitStatus::Accepted, "budget fixture trade");
         }
-        if (spin && callbacks == 1) burn();
+        if (spin && callbacks == spin_at) burn();
         if (at_limit && callbacks == 1) wall = cpu = limit_ms;
     }
     void execute() {
-        const auto bars = tape();
+        const auto bars = tape(input_count);
         run(bars.data(), static_cast<int>(bars.size()), "1", "1", false, 4,
             MagnifierDistribution::ENDPOINTS);
     }
@@ -177,7 +184,7 @@ void begin_row() {
     require(host.begins == 0 && host.callbacks == 0, "begin budget must precede host callbacks");
 }
 
-std::string report_bytes(Host& host) {
+std::string report_bytes(Host& host, bool success = true) {
     // Compare canonical wire bytes, including trades/equity/hash records
     // and the trailer digest. This does not compare object padding or heap
     // addresses, which are not output bytes.
@@ -202,11 +209,26 @@ std::string report_bytes(Host& host) {
         require(strategy_set_report_sink_fd_v1(host.handle(), &sink) == 0, "install budget output");
         host.execute();
         host.fill_report(&report);
-        require(host.last_run_status() == 0 && report.total_trades > 0,
-                "unchanged-budget fixture must finish real trades");
         pf_report_sink_receipt_v1 receipt{sizeof receipt, 1};
-        require(strategy_report_sink_receipt_v1(host.handle(), &receipt) == 0 && receipt.complete,
-                "unchanged-budget fixture must publish a complete report");
+        require(strategy_report_sink_receipt_v1(host.handle(), &receipt) == 0,
+                "query budget output receipt");
+        if (success) {
+            require(host.last_run_status() == 0 && report.total_trades > 0,
+                    "unchanged-budget fixture must finish real trades");
+            require(receipt.complete,
+                    "unchanged-budget fixture must publish a complete report");
+        } else {
+            require(host.last_run_status() == 1 && !receipt.complete && !receipt.sha256_hex[0],
+                    "exceeded budget must not publish a successful receipt");
+            pf_report_sink_summary_v1 summary{sizeof summary, 1};
+            require(strategy_report_sink_summary_v1(host.handle(), &summary) == 0
+                        && !summary.complete, "exceeded budget must not publish summary success");
+            // Existing failed-run summaries may retain scalar diagnostics.
+            // They must never expose completed sink arrays or a success latch.
+            require(!report.trades && !report.equity_curve
+                        && !report.trace && report.equity_curve_len == 0,
+                    "exceeded budget must expose no completed sink arrays");
+        }
     } catch (...) {
         BacktestEngine::free_report(&report);
         ::close(fds[1]);
@@ -218,6 +240,21 @@ std::string report_bytes(Host& host) {
     reader.join();
     require(read_ok, "read budget output");
     return bytes;
+}
+
+void sink_row() {
+    ClockScope clock;
+    Host host;
+    host.spin = true;
+    host.spin_at = 2; // Allow the first submitted entry to fill before failure.
+    // A callback may seal the preceding input. Leave one input for that seal
+    // and another boundary to stop on: N = spin_at + 2.
+    host.input_count = host.spin_at + 2;
+    install(host, limit_ms, 0);
+    const auto wire = report_bytes(host, false);
+    expect_failure(host, "wall", 2 * limit_ms);
+    require(host.callbacks == host.spin_at && wire.find("\"trailer\"") == std::string::npos,
+            "budget must stop at an input boundary and abandon the sink trailer");
 }
 
 void unchanged_row() {
@@ -292,6 +329,7 @@ int main(int argc, char** argv) {
         else if (row == "begin") begin_row();
         else if (row == "unchanged") unchanged_row();
         else if (row == "setter") { ClockScope clock; setter_row(); }
+        else if (row == "sink") sink_row();
         else if (row == "real_cpu") real_spin_row();
         else throw std::runtime_error("unknown budget row");
         ::alarm(0);
