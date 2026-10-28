@@ -23,8 +23,9 @@ inline namespace engine_script_run_v19 {
 // kCacheStringBytes of decoded string bytes per row. Wider rows retain their
 // numeric records in the cache and use scratch only for string reads.
 // Scalar numeric misses read descriptors only, with a separate fixed
-// kResidentRows scan window (10,768 bytes including keys on 64-bit targets).
-// A further 8-byte key tracks scan direction. Numeric admission gives
+// kNumericWindowRows scan window (64,528 bytes including keys on 64-bit targets).
+// A further 8-byte key tracks scan direction: windows, tail and keys total
+// 10,752 + 10,752 + 64,528 + 8 = 86,040 bytes. Numeric admission gives
 // referenced cache slots a second chance before replacing stale residents.
 // Owning Trade values still belong to readers.
 //
@@ -40,6 +41,9 @@ public:
     // storage type is complete.
     static constexpr size_type kRecordBytes = 168;
     static constexpr size_type kResidentRows = 64;
+    // Numeric-only refill budget: 384 * 168 = 64,512 descriptor bytes.
+    // Independent of the descriptor/string block and cache-entry budgets.
+    static constexpr size_type kNumericWindowRows = 384;
     // One knob for this cache kind: ledger_rows. Each entry contains a
     // 168-byte numeric/extent record, a global key and validity generation,
     // and exactly 128 inline string bytes (all four strings combined).
@@ -139,7 +143,7 @@ public:
     std::string entry_id_at(size_type global) const;
     // Pine field reads use the same check(global,true) as at(). A numeric
     // hit loads just its Record member, without constructing/copying a Trade
-    // or any string. Numeric misses use 64-row descriptor reads and no payload
+    // or any string. Numeric misses use kNumericWindowRows descriptor reads and no payload
     // reads; forward/reverse numeric scans have O(1) amortised operation work
     // per field access on the plain-file backend, even above the cache cap
     // (the whole scan is O(T)); the arena path is not measured. After lazy
