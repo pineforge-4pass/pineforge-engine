@@ -8197,15 +8197,25 @@ def read_replay_values(lib, state, initial_capital, pointvalue):
             "net_profit_sum": float(accessor(state))}
 
 
-def _annotate_replay_report(out, replay, replay_rows):
+def _replay_array_length(array, sink, tag):
+    """Length of a report array: resident, or the verified count of a spooled stream."""
+    try:
+        return len(array)
+    except TypeError:
+        if sink is None:
+            raise
+        return sink.counts[tag]
+
+
+def _annotate_replay_report(out, replay, replay_rows, sink=None):
     """Add the opt-in operands after the canonical POD report is assembled."""
     if replay is not None:
         out["replay"] = {key: replay[key] for key in
                          ("initial_capital", "pointvalue", "net_profit_sum")}
     if replay_rows is not None:
-        replay_rows.join(out)
-    for key in ("trades", "equity_curve"):
-        if key in out and len(out[key]) == 0:
+        replay_rows.join(out, sink)
+    for key, tag in (("trades", "T"), ("equity_curve", "E")):
+        if key in out and _replay_array_length(out[key], sink, tag) == 0:
             out[key] = []
     return out
 
@@ -8221,7 +8231,7 @@ def _build_replay_sink_report(report, ohlcv_path, n_bars, first_ts, last_ts, ela
         applied_inputs, applied_overrides, applied_runtime, sink,
         window_anchor=window_anchor, initial_capital=initial_capital)
     return _annotate_replay_report(
-        out, replay, replay_rows if "trades" in out else None)
+        out, replay, replay_rows if "trades" in out else None, sink)
 
 
 def _replay_finite(value, field):
@@ -8375,9 +8385,11 @@ class _ReplayCapture:
         except ReplaySinkFormatError as error:
             raise _engine_invariant("the engine's replay companion is invalid: " + str(error)) from error
 
-    def join(self, out):
+    def join(self, out, sink=None):
         trades, points = out["trades"], out["equity_curve"]
-        if len(trades) != self.counts.get("R") or len(points) != self.counts.get("Q"):
+        trade_count = _replay_array_length(trades, sink, "T")
+        point_count = _replay_array_length(points, sink, "E")
+        if trade_count != self.counts.get("R") or point_count != self.counts.get("Q"):
             raise _engine_invariant("replay R/Q coverage differs from the JSON arrays")
 
         def joined_trades():
@@ -8413,8 +8425,8 @@ class _ReplayCapture:
                     raise _engine_invariant("replay Q coverage exceeds the JSON points")
             finally:
                 annotations.close()
-        out["trades"] = _JSONRecordArray(joined_trades, len(trades))
-        out["equity_curve"] = _JSONRecordArray(joined_points, len(points))
+        out["trades"] = _JSONRecordArray(joined_trades, trade_count)
+        out["equity_curve"] = _JSONRecordArray(joined_points, point_count)
 
     def close(self):
         if not self.closed:

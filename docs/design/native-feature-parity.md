@@ -1323,7 +1323,7 @@ engine.hpp:2009) is not. The other is a contract that the six folded fields of
 a booked row are never rewritten. In the tree they are not; the only writer
 after booking, the Pine host, rewrites `close_cause`, `exit_from_bracket`,
 `exit_comment` and `entry_incarnation` only; its
-writes are `close_cause` pine_strategy_host.cpp:979, `exit_comment` :1109, `close_cause` :1124-1129, `exit_from_bracket` :1634 and `entry_incarnation` :1809-1819.
+writes are `close_cause` pine_strategy_host.cpp:979, `exit_comment` :1110, `close_cause` :1124-1129, `exit_from_bracket` :1635 and `entry_incarnation` :1809-1819.
 But `trades_` engine.hpp:715 is a protected member any host can write, so a
 lane that takes the consumer-side digest has to make that contract explicit.
 Folding `(count, digest)` in place of the rows saves the 256-entry table but
