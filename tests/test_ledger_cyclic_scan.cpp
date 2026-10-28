@@ -76,6 +76,9 @@ constexpr Size kPasses = 8;
 // The production sizeof(NumericWindow) assertion ties its actual storage to
 // these public constants; pin the byte count independently of sizeof(State).
 static_assert(kWindow * TradeLedger::kRecordBytes + 2 * sizeof(Size) == 64528);
+// Two more words hold the miss key, direction flags and alignment padding.
+static_assert((2 * kBlock + kWindow) * TradeLedger::kRecordBytes
+              + 4 * sizeof(Size) == 86048);
 
 Size ceil_div(Size value, Size divisor) {
     return value / divisor + (value % divisor != 0);
@@ -107,7 +110,7 @@ Trade scan_row(Size index) {
     return value;
 }
 
-void cyclic_scan(Size population) {
+void cyclic_scan(Size population, bool cached_prefix = true) {
     TradeLedger ledger;
     ledger.set_scratch_directory(".");
     REQUIRE(population > ledger.cache_rows() + kBlock);
@@ -120,24 +123,24 @@ void cyclic_scan(Size population) {
     }
     REQUIRE(ledger.resident_base() == population - kBlock);
     REQUIRE(ledger.cache_size() == 0);
-    // Pass zero is cold; every later pass must preserve the first cache_rows
-    // numeric records, streaming only the older overflow descriptors. There
-    // are no mutations or string reads between the measured passes.
+    // Pass zero is cold. The smaller populations retain the cached prefix;
+    // at three cache capacities, collisions age it out and every pass streams
+    // all spilled descriptors. No mutations or string reads intervene.
     for (Size pass = 0; pass <= kPasses; ++pass) {
         ledger_cyclic_io::Measure measure;
         for (Size index = 0; index < population; ++index)
             CHECK(same_bits(ledger.entry_price_at(index), prices[index]));
         const auto io = measure.finish();
         const Size descriptor_rows = population - kBlock
-            - (pass == 0 ? 0 : ledger.cache_rows());
+            - (pass == 0 || !cached_prefix ? 0 : ledger.cache_rows());
         const Size blocks = ceil_div(descriptor_rows, kWindow);
         const Size bytes = descriptor_rows * TradeLedger::kRecordBytes;
         // One index read per block, plus at most one additional pread for
         // each crossed 64 KiB read budget, including a partial initial budget.
         // No payload preads: the measured accessor requests only a number.
         // Dividing by population gives <= 1/kWindow + 168/65536 + 2/population,
-        // independent of the excess population. The warm bound is tighter:
-        // substitute population-cache_rows-64 for the descriptor population.
+        // independent of the excess population. With a retained prefix the
+        // warm descriptor population is population-cache_rows-64.
         const Size limit = blocks + ceil_div(bytes, detail::ScratchFile::kCacheBytes);
         std::printf("cyclic scan N=%zu pass=%zu preads=%llu bytes=%llu "
                     "index_blocks=%zu expected_payload_preads=0 limit=%zu\n",
@@ -150,6 +153,63 @@ void cyclic_scan(Size population) {
         CHECK(ledger.cache_size() == ledger.cache_rows());
     }
 }
+
+void adjacent_pair_scan(bool next_then_current) {
+    constexpr Size population = 65536 + 20000;
+    TradeLedger ledger;
+    ledger.set_scratch_directory(".");
+    std::vector<double> prices;
+    prices.reserve(population);
+    for (Size index = 0; index < population; ++index) {
+        const Trade value = scan_row(index);
+        prices.push_back(value.entry_price);
+        ledger.push_back(value);
+    }
+    REQUIRE(ledger.resident_base() == population - kBlock);
+    REQUIRE(ledger.cache_size() == 0);
+    for (Size pass = 0; pass < kPasses; ++pass) {
+        ledger_cyclic_io::Measure measure;
+        if (next_then_current) {
+            for (Size index = 0; index + 1 < population; ++index) {
+                CHECK(same_bits(ledger.entry_price_at(index + 1), prices[index + 1]));
+                CHECK(same_bits(ledger.entry_price_at(index), prices[index]));
+            }
+        } else {
+            for (Size index = 1; index < population; ++index) {
+                CHECK(same_bits(ledger.entry_price_at(index), prices[index]));
+                CHECK(same_bits(ledger.entry_price_at(index - 1), prices[index - 1]));
+            }
+        }
+        const auto io = measure.finish();
+        const Size descriptor_rows = population - kBlock
+            - (pass == 0 ? 0 : ledger.cache_rows());
+        const Size blocks = ceil_div(descriptor_rows, kWindow);
+        // Only forward refills: the first (1,0) can repeat 383 descriptors.
+        // Repeated resident-tail reads can replace up to 64 prefix keys;
+        // on warm passes that contiguous hole needs at most one 384-row probe.
+        // Otherwise a pair refill retains its predecessor without rereading
+        // or readmitting it and reads 383 new rows except at the end.
+        // For D <= 85,472, ceil(D/383) <= ceil(D/384)+1.
+        // Allow one block for that loss and one
+        // startup probe, then count every possible 64 KiB transfer split.
+        const Size byte_limit = (descriptor_rows + kWindow) * TradeLedger::kRecordBytes;
+        const Size limit = blocks + 2
+            + ceil_div(byte_limit, detail::ScratchFile::kCacheBytes);
+        std::printf("adjacent pairs N=%zu next_then_current=%d pass=%zu "
+                    "preads=%llu bytes=%llu limit=%zu byte_limit=%zu\n",
+                    population, next_then_current, pass,
+                    static_cast<unsigned long long>(io.reads),
+                    static_cast<unsigned long long>(io.bytes), limit, byte_limit);
+        CHECK(io.reads >= blocks);
+        CHECK(io.reads <= limit);
+        CHECK(io.bytes >= descriptor_rows * TradeLedger::kRecordBytes);
+        CHECK(io.bytes <= byte_limit);
+        CHECK(ledger.cache_size() == ledger.cache_rows());
+    }
+}
+
+void current_then_previous_pairs() { adjacent_pair_scan(false); }
+void next_then_current_pairs() { adjacent_pair_scan(true); }
 
 void descending_scan() {
     constexpr Size population = 65536 + 20000;
@@ -170,16 +230,16 @@ void descending_scan() {
             CHECK(same_bits(ledger.entry_price_at(cursor - 1), prices[cursor - 1]));
         const auto io = measure.finish();
         // Cold: the resident tail establishes direction before any I/O.
-        // Warm: cache hits do not write the direction scalar. The first miss
-        // may probe forward, duplicating at most kWindow-1 cached descriptors; the
-        // next descending miss establishes direction for all remaining rows.
+        // Warm: cache hits do not write the direction state. Startup needs
+        // at most two forward probes before two descending miss steps
+        // establish direction, each duplicating at most kWindow-1 descriptors.
         const Size descriptor_rows = population
             - (pass == 0 ? kBlock : ledger.cache_rows());
         const Size blocks = ceil_div(descriptor_rows, kWindow);
-        const Size extra_blocks = pass == 0 ? 0 : 1;
+        const Size extra_blocks = pass == 0 ? 0 : 2;
         const Size bytes = descriptor_rows * TradeLedger::kRecordBytes;
         const Size byte_limit = bytes
-            + (pass == 0 ? 0 : (kWindow - 1) * TradeLedger::kRecordBytes);
+            + (pass == 0 ? 0 : 2 * (kWindow - 1) * TradeLedger::kRecordBytes);
         const Size limit = blocks + extra_blocks
             + ceil_div(byte_limit, detail::ScratchFile::kCacheBytes);
         std::printf("descending scan N=%zu pass=%zu preads=%llu bytes=%llu "
@@ -192,6 +252,39 @@ void descending_scan() {
         CHECK(io.bytes <= byte_limit);
         CHECK(ledger.cache_size() == ledger.cache_rows());
     }
+}
+
+void backward_scan_stops_at_published_base() {
+    constexpr Size population = 2 * kWindow + kBlock;
+    constexpr Size published = kWindow + 32;
+    TradeLedger ledger;
+    ledger.set_scratch_directory(".");
+    std::vector<double> prices;
+    for (Size index = 0; index < population; ++index) {
+        const Trade value = scan_row(index);
+        prices.push_back(value.entry_price);
+        ledger.push_back(value);
+    }
+    ledger.seal(published);
+    REQUIRE(ledger.base() == published);
+    REQUIRE(ledger.cache_size() == 0);
+    const Size descriptor_rows = ledger.resident_base() - published;
+    REQUIRE(descriptor_rows < kWindow);
+    ledger_cyclic_io::Measure measure;
+    for (Size cursor = population; cursor > published; --cursor)
+        CHECK(same_bits(ledger.entry_price_at(cursor - 1), prices[cursor - 1]));
+    const auto io = measure.finish();
+    CHECK(io.reads == 1);
+    CHECK(io.bytes == descriptor_rows * TradeLedger::kRecordBytes);
+    // Each live key occupies its own slot. A window extending below base()
+    // would also admit sealed keys and make this exact occupancy too large.
+    CHECK(ledger.cache_size() == population - published);
+    CHECK(ledger.cache_size() <= ledger.cache_rows());
+    bool refused = false;
+    try { (void)ledger.entry_price_at(published - 1); }
+    catch (const coded<std::logic_error>&) { refused = true; }
+    CHECK(refused);
+    CHECK(ledger.cache_size() == population - published);
 }
 
 void sliding_lookback(bool newest_first, Size lookback) {
@@ -465,13 +558,18 @@ void failed_numeric_refill_retries_exactly() {
 
 void first_population() { cyclic_scan(65536 + 20000); }
 void second_population() { cyclic_scan(90000); }
+void three_cache_populations() { cyclic_scan(3 * TradeLedger::kDefaultCacheRows, false); }
 } // namespace
 
 int main() {
     test("pread forwarding control", forwarding_control);
     test("85,536 rows over repeated numeric scans", first_population);
     test("90,000 rows over repeated numeric scans", second_population);
+    test("196,608 rows over repeated numeric scans", three_cache_populations);
+    test("ascending numeric pairs current then previous", current_then_previous_pairs);
+    test("ascending numeric pairs next then current", next_then_current_pairs);
     test("85,536 rows over descending numeric scans", descending_scan);
+    test("backward numeric scan stops at published base", backward_scan_stops_at_published_base);
     test("sliding numeric lookback oldest first", oldest_first_lookback);
     test("sliding numeric lookback newest first", newest_first_lookback);
     test("numeric window and lazy strings after mutations",
