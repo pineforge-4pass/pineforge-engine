@@ -3266,10 +3266,10 @@ private:
     // These sets and the certificate are derived scratch, outside source state.
     struct RetirementInputs {
         std::vector<std::uint64_t> roots, askable, groups, marks;
-        std::vector<std::int32_t> bars;
+        std::vector<std::int32_t> bar_numbers;
         bool operator==(const RetirementInputs& other) const noexcept {
             return roots == other.roots && askable == other.askable
-                && groups == other.groups && marks == other.marks && bars == other.bars;
+                && groups == other.groups && marks == other.marks && bar_numbers == other.bar_numbers;
         }
     };
     struct RetirementGate {

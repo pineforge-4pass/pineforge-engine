@@ -29298,7 +29298,7 @@ void PineExecutionAdapter::capture_retirement_inputs(RetirementInputs& inputs) c
     inputs.roots.clear();
     inputs.askable.clear();
     inputs.groups.clear();
-    inputs.bars.clear();
+    inputs.bar_numbers.clear();
     inputs.marks.clear();
     const auto root = [&](std::uint64_t value) {
         if (value != 0) inputs.roots.push_back(value);
@@ -29312,7 +29312,7 @@ void PineExecutionAdapter::capture_retirement_inputs(RetirementInputs& inputs) c
         root(value.reservation_growth_owner_incarnation);
         if (value.sequential_group != 0) inputs.groups.push_back(value.sequential_group);
         if (value.projection_created_bar_pinned)
-            inputs.bars.push_back(value.projection_created_bar);
+            inputs.bar_numbers.push_back(value.projection_created_bar);
     };
     const auto request = [&](const native_order::Request& value) {
         if (const auto* wait = std::get_if<native_order::WaitForApplied>(&value.owner)) {
@@ -29331,7 +29331,7 @@ void PineExecutionAdapter::capture_retirement_inputs(RetirementInputs& inputs) c
         if (row->second.sequential_group != 0)
             inputs.groups.push_back(row->second.sequential_group);
         if (row->second.family == PineOrderFamily::Entry)
-            inputs.bars.push_back(row->second.projection_created_bar);
+            inputs.bar_numbers.push_back(row->second.projection_created_bar);
     }
     for (const auto& cohort : cohorts_by_id_.held_rows()) {
         for (const auto& opening : cohort.second.opened) {
@@ -29394,7 +29394,7 @@ void PineExecutionAdapter::capture_retirement_inputs(RetirementInputs& inputs) c
     canonical_retirement_set(inputs.roots);
     canonical_retirement_set(inputs.askable);
     canonical_retirement_set(inputs.groups);
-    canonical_retirement_set(inputs.bars);
+    canonical_retirement_set(inputs.bar_numbers);
     canonical_retirement_set(inputs.marks);
 }
 
