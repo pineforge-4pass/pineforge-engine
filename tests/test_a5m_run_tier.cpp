@@ -12,8 +12,11 @@
 //  - flush failure: a backing write that fails at a push's flush fails that
 //    push with the typed scratch_io_failed failure; the push's matrix changes
 //    are not in the Store, which holds the bytes of the call before; the
-//    failure is recorded as a failed cleanup, and the next push succeeds with
-//    no failure of its own.
+//    failure is recorded as a failed cleanup, and it latches the run failed as
+//    a throw out of the push would: the next push is refused as every input of
+//    a failed run is, runs nothing and leaves the Store as it was.
+//  - flush failure, batch run: a batch run whose flush fails after its last
+//    execution is left failed, with the same typed failure.
 //  - bit identity: the run under its tier, under an explicit native choice and
 //    under an explicit Runtime (a Store with no tier) reads the same cells and
 //    spectra every bar and makes the same trades.
@@ -264,6 +267,14 @@ public:
     FailingBacking() : ScratchBacking(pineforge::detail::ScratchBackingKind::disk, 4096) {}
     std::uint64_t page_count() const noexcept override { return inner_.page_count(); }
     void fail_next(int writes) noexcept { failing_ = writes; }
+    // Arms one failing write once `executions` holds `count` entries (a
+    // script's per-execution digests): the first write after that execution.
+    void fail_after(const std::vector<std::uint64_t>& executions, std::size_t count) noexcept {
+        watched_ = &executions;
+        watched_count_ = count;
+    }
+    // Drops the watch before the watched script can be destroyed.
+    void stop_watching() noexcept { watched_ = nullptr; }
     std::uint64_t written() const noexcept { return written_; }
     std::uint64_t failed() const noexcept { return failed_; }
 
@@ -276,6 +287,10 @@ protected:
     pineforge::detail::ScratchStatus do_write_page(
         pineforge::detail::ScratchPageId page,
         pineforge::detail::ScratchBytes in) noexcept override {
+        if (watched_ != nullptr && watched_->size() >= watched_count_) {
+            watched_ = nullptr;
+            failing_ = 1;
+        }
         if (failing_ > 0) {
             --failing_;
             ++failed_;
@@ -294,7 +309,25 @@ private:
     a5m_test::FileBacking inner_;
     int failing_ = 0;
     std::uint64_t written_ = 0, failed_ = 0;
+    const std::vector<std::uint64_t>* watched_ = nullptr;
+    std::size_t watched_count_ = 0;
 };
+
+// The run is latched failed as a throw out of the entry latches it: the
+// consumer's lifecycle is Failed, with an Unexpected failure at `operation`.
+void require_latched(const pineforge::BacktestEngine& engine,
+                     pineforge::NativeFailureOperation operation, const char* call) {
+    const pineforge::NativeStateView state =
+        pineforge::NativeExecutionConsumer::bound(engine).view();
+    if (state.kind == pineforge::NativeLifecycleKind::Failed &&
+        state.failure.code == pineforge::NativeFailureCode::Unexpected &&
+        state.failure.operation == operation)
+        return;
+    std::fprintf(stderr, "A5M run tier: after %s the run's state is %d, failure %d at %d\n", call,
+                 static_cast<int>(state.kind), static_cast<int>(state.failure.code),
+                 static_cast<int>(state.failure.operation));
+    require(false, "a failed matrix flush did not latch the run failed");
+}
 
 // The script's transposes are its own temporaries here, so a push changes the
 // run's Store only at its flush: the armed write is the flush's.
@@ -335,15 +368,54 @@ void flush_failure() {
     const auto stats = runtime->store().stats();
     require(stats.cleanup_failed == 1 && stats.cleanup_skipped_rollback_only == 0,
             "the failed flush was not recorded as one failed cleanup");
+    require_latched(script, pineforge::NativeFailureOperation::Input,
+                    "the push whose matrix flush failed");
+    require(script.last_error().rfind("stream_push_bar: matrix store flush: ", 0) == 0,
+            "the latch changed the failing call's error");
 
-    // The failure was that call's: the next push succeeds without one.
-    require(script.stream_push_bar(bars[static_cast<std::size_t>(kFailing + 1)]),
-            script.last_error().c_str());
-    require(script.last_error().empty(), "the next call carried the failed call's error");
-    std::vector<int> kept = first(kFailing);
-    kept.push_back(kFailing + 1);
-    at_boundary(*runtime, script, kept, "the push after the failure", 2);
+    // The latch holds: the next push is refused as every input of a failed run
+    // is (the consumer's refusal, with its own text and code), runs nothing and
+    // leaves the Store as the failed push left it.
+    const std::size_t executions = script.digests.size();
+    require(!script.stream_push_bar(bars[static_cast<std::size_t>(kFailing + 1)]),
+            "the push after a failed flush was not refused");
+    const std::string refused = pineforge::run_failure_code_of(script);
+    std::printf("A5M run tier flush failure, next push: code=%s error='%s'\n", refused.c_str(),
+                script.last_error().c_str());
+    require(refused == "engine_invariant" && script.last_error() == "native host already failed",
+            "the push after a failed flush was not refused as an input of a failed run");
+    require(script.digests.size() == executions && script.last_run_status() == 1,
+            "the refused push ran the script or reported success");
+    require_latched(script, pineforge::NativeFailureOperation::Input, "the refused push");
+    at_boundary(*runtime, script, first(kFailing), "the refused push", 2);
     (void)script.stream_end(false);
+}
+
+// A batch run is one call: its flush, armed to fail after the run's last
+// execution, fails the run, which is left failed with the typed failure.
+void flush_failure_batch() {
+    constexpr int kBars = 32;
+    const auto bars = a5m_run::tape(kBars);
+    MaskScript script(false);
+    auto backing = std::make_unique<FailingBacking>();
+    FailingBacking* failing = backing.get();
+    failing->fail_after(script.digests, static_cast<std::size_t>(kBars));
+    pineforge::NativeExecutionConsumer::bound(script).matrix_run().open_over(std::move(backing));
+    script.run(bars.data(), kBars, "1", "1", false);
+    failing->stop_watching();
+    const auto runtime = script.runtime.lock();
+    a5m_run::require_or_exit(runtime != nullptr,
+                             "the run's Runtime closed while its matrices were alive");
+    const std::string code = pineforge::run_failure_code_of(script);
+    std::printf("A5M run tier flush failure, batch run: code=%s error='%s'\n", code.c_str(),
+                script.last_error().c_str());
+    require(failing->failed() == 1 && script.digests.size() == static_cast<std::size_t>(kBars),
+            "the batch run's armed write was not one after its last execution");
+    require(code == "scratch_io_failed" &&
+                script.last_error().rfind("run: matrix store flush: ", 0) == 0,
+            "the batch run's flush failure is not its typed scratch failure");
+    require(script.last_run_status() == 1, "the batch run whose flush failed reported success");
+    require_latched(script, pineforge::NativeFailureOperation::Input, "the batch run");
 }
 
 void bit_identity() {
@@ -465,6 +537,7 @@ int main() {
     };
     row("call boundary", call_boundary);
     row("flush failure", flush_failure);
+    row("flush failure, batch run", flush_failure_batch);
     row("bit identity", bit_identity);
     row("large bypass", large_bypass);
     if (ok) std::puts("A5M run tier: every row reached");

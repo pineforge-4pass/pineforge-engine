@@ -4,7 +4,6 @@
 #include <pineforge/detail/matrix_store.hpp>
 #include <pineforge/execution_consumer.hpp>
 #include <pineforge/native_host.hpp>
-#include <pineforge/run_failure.hpp>
 
 #include <exception>
 #include <stdexcept>
@@ -23,7 +22,8 @@ namespace {
 // keeps native matrices. The run opens its Runtime with its first matrix.
 // Each call ends with flush(): the call's matrices, which a fixed resident
 // budget fronts within the call, are written back to the run's Store and
-// committed before the call returns, and a failure there fails this call.
+// committed before the call returns, and a failure there fails this call and
+// latches the run failed, so every later call of the run is refused.
 // When the outermost call returns with no stream live (a batch
 // run's return, stream_end, a refused or failed stream_begin) the run is over
 // and the engine drops its share: the Runtime closes, and its scratch bytes
@@ -44,16 +44,18 @@ public:
     }
 
     // The call's boundary (RunRuntime::flush). False when it failed: the
-    // failure is this call's, recorded with its code and the entry's name
-    // unless the call recorded a failure of its own first.
+    // failure latches the run failed, as a failure inside the entry does, and
+    // is this call's, recorded with its code and the entry's name unless the
+    // call recorded a failure of its own first
+    // (NativeExecutionConsumer::fail_matrix_flush).
     bool flush(const char* entrypoint) {
         try {
             run_.flush();
             return true;
         } catch (const std::exception& error) {
-            if (engine_.last_error().empty()) note_run_failure(engine_, entrypoint, error);
+            NativeExecutionConsumer::fail_matrix_flush(engine_, entrypoint, &error);
         } catch (...) {
-            if (engine_.last_error().empty()) note_run_failure_unknown(engine_, entrypoint);
+            NativeExecutionConsumer::fail_matrix_flush(engine_, entrypoint, nullptr);
         }
         return false;
     }

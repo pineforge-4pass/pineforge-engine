@@ -331,6 +331,29 @@ public:
     static const char* failure_code_of(const BacktestEngine& engine) noexcept;
     static const char* failure_args_of(const BacktestEngine& engine) noexcept;
     static RunFailureValue failure_value_of(const BacktestEngine& engine) noexcept;
+    // A public call that failed at its matrix flush, after its entry returned
+    // (MatrixRunCall::flush, engine_consumer.cpp): latches the run failed as a
+    // throw out of that entry latches it, so every later entry is refused, and
+    // records the failure as note_run_failure does for `entrypoint` unless the
+    // call recorded a failure of its own first. The latch is fail()'s, as
+    // fail_from_exception makes it: Unexpected, at the operation the entry's
+    // own catch arm names (Stream for stream_begin, stream_advance_time and
+    // stream_end, Input for the batch runs and the three pushes); a failure
+    // already latched keeps its code (latch_failure). A null `error` is a
+    // non-standard exception. Error paths only.
+    static void fail_matrix_flush(BacktestEngine& engine, const char* entrypoint,
+                                  const std::exception* error) {
+        const std::string_view entry = entrypoint != nullptr ? entrypoint : "";
+        const bool stream = entry == "stream_begin" || entry == "stream_advance_time"
+                            || entry == "stream_end";
+        const bool recorded = !engine.last_error_.empty();
+        bound(engine).fail(engine, NativeFailure{NativeFailureCode::Unexpected,
+                                                 stream ? NativeFailureOperation::Stream
+                                                        : NativeFailureOperation::Input});
+        if (recorded) return;
+        if (error != nullptr) note_run_failure(engine, entrypoint, *error);
+        else note_run_failure_unknown(engine, entrypoint);
+    }
     // Whether retained rows answer the latest run/stream_begin call (ledger below):
     // false after a call that never reached begin_ready's reset_run_state() or was
     // refused over a live attempt; true after begin or with no consumer bound.
