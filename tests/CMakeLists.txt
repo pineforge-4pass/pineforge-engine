@@ -7460,6 +7460,29 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND PINEFORGE_BUILD_TUTORIAL
         LABELS "slow;mem" RUN_SERIAL TRUE)
 endif()
 
+# Real JSON-runner fixtures use the production native-module export macro.
+# Keep Python-loaded modules out of instrumented builds.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX
+   AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
+    add_library(metrics_only_certified_strategy MODULE metrics_only_certified_strategy.cpp)
+    add_library(metrics_only_uncertified_strategy MODULE metrics_only_uncertified_strategy.cpp)
+    foreach(_pf_metrics_module IN ITEMS
+            metrics_only_certified_strategy metrics_only_uncertified_strategy)
+        target_link_libraries(${_pf_metrics_module} PRIVATE pineforge)
+        if(APPLE)
+            target_link_options(${_pf_metrics_module} PRIVATE
+                "-Wl,-force_load,$<TARGET_FILE:pineforge>")
+        else()
+            target_link_options(${_pf_metrics_module} PRIVATE
+                "-Wl,--whole-archive" "$<TARGET_FILE:pineforge>" "-Wl,--no-whole-archive")
+        endif()
+        target_compile_options(${_pf_metrics_module} PRIVATE -ffp-contract=off -UNDEBUG)
+        set_target_properties(${_pf_metrics_module} PROPERTIES
+            PREFIX "" SUFFIX ".so"
+            LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/metrics_only_fixture")
+    endforeach()
+endif()
+
 # CR-150: one file per lane in tests/cr150.d/<lane>.cmake (see tests/cr150.d/README.md).
 file(GLOB CR150_LANE_CMAKE CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/cr150.d/*.cmake")
 list(SORT CR150_LANE_CMAKE)
