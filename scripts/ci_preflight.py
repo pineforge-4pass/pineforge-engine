@@ -2027,6 +2027,26 @@ def _effective_permissions(workflow: str, body: str) -> list[str]:
     return _job_values(body, 'permissions') or _job_values(workflow, 'permissions')
 
 
+def _github_expressions(text: str) -> list[str]:
+    """Read raw expressions, including comments, without retaining plain prose."""
+    expressions, index = [], 0
+    while (start := text.find('${{', index)) != -1:
+        end, in_string = start + 3, False
+        while end < len(text):
+            if text[end] == "'":
+                if in_string and text.startswith("''", end):
+                    end += 2
+                    continue
+                in_string = not in_string
+            elif not in_string and text.startswith('}}', end):
+                end += 2
+                break
+            end += 1
+        expressions.append(text[start:end])
+        index = end
+    return expressions
+
+
 def _holds_credentials(workflow: str, body: str, *, effective_permissions: bool = False) -> bool:
     """L6: non-GITHUB_TOKEN secrets, OIDC writes or a deployment environment.
 
@@ -2044,6 +2064,8 @@ def _holds_credentials(workflow: str, body: str, *, effective_permissions: bool 
         return True
     text = '\n'.join(re.sub(r'\s+#.*$', '', line) for line in _code(body))
     text += '\n' + '\n'.join(_job_values(workflow, 'env'))
+    # GitHub interpolates expressions before the shell discards comments.
+    text += '\n' + '\n'.join(_github_expressions(body))
     for match in re.finditer(r'\bsecrets\s*(?:\.\s*([A-Za-z_]\w*)|\[([^\]]+)\])',
                              text, re.IGNORECASE):
         if match.group(1) is not None:
@@ -2713,7 +2735,8 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
         if _job_values(prebuilt, 'permissions') != ['contents: write']:
             findings.append('release.yml prebuilt must grant only contents: write '
                             'without id-token')
-        credential_text = '\n'.join(_code(prebuilt) + _job_block(workflows['release.yml'], 'env'))
+        credential_text = '\n'.join(_code(prebuilt) + _github_expressions(prebuilt)
+                                    + _job_block(workflows['release.yml'], 'env'))
         if re.search(r'\bsecrets\b', re.sub(r'\bsecrets\.GITHUB_TOKEN\b', '', credential_text),
                      re.IGNORECASE):
             findings.append('release.yml prebuilt may reference only secrets.GITHUB_TOKEN')
