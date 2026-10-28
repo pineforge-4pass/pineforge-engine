@@ -739,7 +739,7 @@ def snapshot(*directories):
 
 
 def sealed_arena_fd(size):
-    """A memfd sized to `size` and sealed GROW|SHRINK|SEAL (CR-267: the jailed
+    """A memfd sized to `size` and sealed GROW|SHRINK|SEAL (the jailed
     admission requires a sealed memfd on Linux). The caller owns the fd."""
     flags = 1 | 2  # MFD_CLOEXEC | MFD_ALLOW_SEALING (linux/memfd.h)
     if hasattr(os, "memfd_create"):
@@ -1050,7 +1050,7 @@ def test_native_unjailed_fd_without_arena_reports_default_profile(tmp_path):
 
 def test_native_jailed_fd_with_arena_and_zero_fsize_creates_no_files(tmp_path):
     source = bars.csv_file(tmp_path, count=17)
-    # On Linux the jailed admission requires a sealed memfd arena (CR-267); an
+    # On Linux the jailed admission requires a sealed memfd arena; an
     # ordinary file is refused with report_sink_failed/arena_backing (the test
     # above). Off Linux there are no sealed memfds and the admission accepts
     # any attached arena, so the ordinary-file arena of the original row stays.

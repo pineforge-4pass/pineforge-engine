@@ -1,8 +1,8 @@
 /*
- * test_calendar_wm_open_utc_fastpath.cpp — KI-35 completion proof.
+ * test_calendar_wm_open_utc_fastpath.cpp — completion proof.
  *
  * calendar_week_open_local_ms / calendar_month_open_local_ms gained the same
- * UTC fast path calendar_day_open_local_ms has had since eab8676 (KI-35):
+ * UTC fast path calendar_day_open_local_ms has had since eab8676:
  * pure integer / gmtime_r arithmetic, no tz_util::ScopedTimezone, no tzset.
  * This test proves the fast path is BIT-EQUAL to the ScopedTimezone slow path
  * it bypasses. The slow-path bodies are replicated here verbatim (localtime_r

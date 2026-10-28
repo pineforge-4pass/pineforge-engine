@@ -1,4 +1,4 @@
-// CR150-CX: a live trade-scratch digest preserves the backing's typed failure.
+// A live trade-scratch digest preserves the backing's typed failure.
 // Static read in the edit lane; execution belongs to the supervisor's lab.
 #include <pineforge/detail/scratch_arena.hpp>
 #include <pineforge/detail/scratch_store.hpp>

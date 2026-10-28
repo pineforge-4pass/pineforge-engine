@@ -1,4 +1,4 @@
-// CR-150 RAM foundation. The frozen previous closure lacks both the v1
+// Scratch-storage foundation. The frozen previous closure lacks both the v1
 // descriptor and its C symbol; compile/link this whole body there first and
 // record the first diagnostic remotely. No local execution was performed.
 // Include C declarations first: engine.hpp suppresses per-strategy declarations.

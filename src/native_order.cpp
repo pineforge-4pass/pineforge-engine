@@ -7972,7 +7972,7 @@ static_assert(std::variant_size_v<Owner> == 5);
 static_assert(std::variant_size_v<Authority> == 8);
 static_assert(std::variant_size_v<ExecutionScope> == 3);
 
-// CR-150 L19A. This helper stays in the core's owning epoch and translation
+// This helper stays in the core's owning epoch and translation
 // unit. Its shared_ptr permits an incomplete private type in the public
 // header; WorkingRequestCore is noncopyable, so the file has one owner.
 // Only physical storage changes: note_committed_events still folds every

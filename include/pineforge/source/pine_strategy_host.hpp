@@ -577,7 +577,7 @@ public:
     void fixture_retain_all_events();
 
 protected:
-    // CR-150 observer seam: on_native_applied is final, so a host that has to
+    // The observer seam: on_native_applied is final, so a host that has to
     // observe an applied event after the host itself has settled its rows
     // overrides THIS instead. Called exactly once per applied event, at the
     // end of on_native_applied and after finish_applied_admission -- never
@@ -931,7 +931,7 @@ private:
     // False, keeping this host's own drive, when the run or any site needs a
     // Pine-only rule the kernel step does not have: a stream (the kernel
     // takes confirmed bars only), the bar magnifier or an aggregated chart
-    // (the calling-bar deferrals), the auxiliary feed, the KI-55 range-start
+    // (the calling-bar deferrals), the auxiliary feed, the range-start
     // cut and its OTC-daily pins, the historical lookahead projection,
     // barmerge.lookahead_on, ticker.heikinashi, request.security_lower_tf,
     // sec_ids that are not the registration order, or a declaration the
@@ -998,7 +998,7 @@ private:
     }
     // Drops the entries of sec_ids the evaluator registry no longer holds.
     void prune_pine_security_states();
-    // KI-55 range-start gate for one evaluator: true when the input bar at
+    // Range-start gate for one evaluator: true when the input bar at
     // `input_ts` belongs to an HTF bucket that opened before the cut --
     // security_range_start_ms_ under the flag, else the run's first chart
     // bar for a coarser-than-chart / chart-timeframe evaluator
@@ -1242,13 +1242,13 @@ protected:
     //            only).
     void apply_realtime_tail_horizon(const Bar* bars, int n, bool script_bar_geometry);
 
-    // Opt-in KI-55 chart warmup parity (see set_syminfo_metadata,
+    // Opt-in chart warmup parity (see set_syminfo_metadata,
     // "chart_ema_na_warmup"). When enabled, chart-timeframe ta.ema instances
     // first used by on_bar na-warm per TV built-in semantics. This selector is
     // scoped independently from request.security so the two execution contexts
     // cannot leak their warmup mode into each other. Default OFF.
     bool chart_ema_na_warmup_ = false;
-    // Independent opt-in KI-55 HTF warmup parity. When enabled,
+    // Independent opt-in HTF warmup parity. When enabled,
     // request.security series aggregate from security_range_start_ms_ instead
     // of the feed start and their embedded ta.ema na-warm per TV built-in
     // semantics. The cut is taken per evaluator on HTF-BUCKET opens, not on

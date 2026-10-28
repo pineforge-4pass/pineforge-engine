@@ -1,4 +1,4 @@
-// CR-150 L18. Independent reference: the original Trade rows in a vector,
+// Independent reference: the original Trade rows in a vector,
 // walked backwards. No harvested outputs or hash pins.
 // Fail-before must be compiled by the lab against the frozen header closure:
 // this tree adds ../src/source/pine_position_tail.hpp / binding.hpp.

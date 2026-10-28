@@ -21,7 +21,7 @@
 // both 0.015 in decimal) gives plusDM 0 AND minusDM 0 on TradingView
 // (`lab tv` f15-plusdm-perbar-0714 / f15-dmi-internals-0718), where a strict
 // IEEE compare hands the 0.015 to one side. A source frontend lowers its own
-// script-level float relationals to the same predicate (KI-73, visit_expr.py
+// script-level float relationals to the same predicate (visit_expr.py
 // _emit_float_relational); the deprecated `pine_float_*` spellings of these
 // helpers live in the source-layer header
 // <pineforge/source/pine_float_compare.hpp>.

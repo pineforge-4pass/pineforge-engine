@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mutation self-tests for scripts/cr150_source_gate.py (CR-150 / C4).
+"""Mutation self-tests for scripts/cr150_source_gate.py (source allocation bound).
 
 Every test runs the real gate as a subprocess on a tree it has just built or
 mutated, and judges the gate by its exit code and its printed counts. Nothing

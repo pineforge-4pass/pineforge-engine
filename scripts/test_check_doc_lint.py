@@ -14,6 +14,10 @@ count the tree derives stated wrong (each of the three families), and a
 ``<!-- verified HEAD -->`` marker on a sentence that states a non-live epoch as
 today's.
 
+The selected-window holding rule has six isolated cases: a good public section,
+the section missing, one function missing, one option missing, an unparseable
+header declaration and a missing CLI delimiter.
+
 The must-not-fire half is what keeps the guard usable: a *live* epoch of a
 family whose other members moved on, a ``lane L…`` mention in a design
 document that is a roadmap on purpose, a link to a directory, a fenced code
@@ -48,6 +52,59 @@ SOURCE = """#include <pineforge/engine.hpp>
 const char* domain() { return "pineforge-broker-state/v18"; }
 """
 
+SELECTED_WINDOW_HEADER = """#pragma once
+PF_API uint32_t pf_selected_window_version(void);
+PF_API int strategy_set_selected_window_v1(
+    pf_strategy_t, const pf_selected_window_config_v1 *);
+PF_API int strategy_selected_window_counts_v1(
+    pf_strategy_t, pf_selected_window_counts_v1 *);
+"""
+
+SELECTED_WINDOW_PLAN_HEADER = """#pragma once
+PF_API uint32_t pf_selected_plan_version(void);
+PF_API int pf_plan_selected_primary_v1(
+    const pf_selected_plan_request_v1 *, const pf_bar_t *rows,
+    uint64_t count, pf_selected_plan_result_v1 *);
+"""
+
+SELECTED_WINDOW_CLI = """def _main():
+    ap = parser
+    # Selected-window mode (selected-window/v1; fixture)
+    ap.add_argument("--report-policy")
+    ap.add_argument("--window-start-ms")
+    ap.add_argument("--window-end-ms")
+    ap.add_argument("--preroll-bars")
+    ap.add_argument("--fed-start-ms")
+    ap.add_argument("--capabilities-json")
+    ap.add_argument("--validate-window-only")
+    ap.add_argument("--run-phase-fd")
+    ap.add_argument("--request-feed-inventory")
+    ap.add_argument("--report-shape")
+    ap.add_argument("--curve-point-budget")
+    ap.add_argument("--results-digest")
+    pre_profile_long = tuple(s for s in ap._option_string_actions if s.startswith("--"))
+"""
+
+SELECTED_WINDOW_PAGE = """## Selected windows {#selected_windows_walk_forward}
+--report-policy
+--window-start-ms
+--window-end-ms
+--preroll-bars
+--fed-start-ms
+--capabilities-json
+--validate-window-only
+--run-phase-fd
+--request-feed-inventory
+--report-shape
+--curve-point-budget
+--results-digest
+pf_selected_window_version
+strategy_set_selected_window_v1
+strategy_selected_window_counts_v1
+pf_selected_plan_version
+pf_plan_selected_primary_v1
+"""
+
 
 class Tree:
     """A throwaway repository: one header, one source, and pages under docs/."""
@@ -61,6 +118,16 @@ class Tree:
         (self.root / 'docs/design').mkdir(parents=True)
         (self.root / 'include/pineforge/engine.hpp').write_text(HEADER)
         (self.root / 'src/engine_state_hash.cpp').write_text(SOURCE)
+        selected = {
+            'include__pineforge__selected_window.h': SELECTED_WINDOW_HEADER,
+            'include__pineforge__selected_window_plan.h': SELECTED_WINDOW_PLAN_HEADER,
+            'docker__run_json.py': SELECTED_WINDOW_CLI,
+            'docs__pages__public-contract.md': SELECTED_WINDOW_PAGE,
+        }
+        for name, body in selected.items():
+            path = self.root / name.replace('__', '/')
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(body)
         for name, body in files.items():
             path = self.root / name.replace('__', '/')
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -87,6 +154,59 @@ def tree(**files: str):
 
 PAGE = 'docs__pages__native-engine.md'
 DESIGN = 'docs__design__native-feature-parity.md'
+SELECTED_PAGE = 'docs__pages__public-contract.md'
+SELECTED_HEADER = 'include__pineforge__selected_window.h'
+SELECTED_PLAN_HEADER = 'include__pineforge__selected_window_plan.h'
+SELECTED_CLI = 'docker__run_json.py'
+
+
+def selected_surface(**overrides: str) -> dict[str, str]:
+    files = {
+        SELECTED_PAGE: SELECTED_WINDOW_PAGE,
+        SELECTED_HEADER: SELECTED_WINDOW_HEADER,
+        SELECTED_PLAN_HEADER: SELECTED_WINDOW_PLAN_HEADER,
+        SELECTED_CLI: SELECTED_WINDOW_CLI,
+    }
+    files.update(overrides)
+    return files
+
+
+class SelectedWindowContract(unittest.TestCase):
+    def assert_offends(self, files: dict[str, str], *needles: str) -> None:
+        with tree(**selected_surface(**files)) as t:
+            code, out = t.run()
+        self.assertEqual(code, 1, out)
+        self.assertIn('[selected-window-contract]', out)
+        for needle in needles:
+            self.assertIn(needle, out)
+
+    def test_good_selected_window_contract(self) -> None:
+        with tree(**selected_surface()) as t:
+            code, out = t.run()
+        self.assertEqual(code, 0, out)
+
+    def test_missing_selected_window_section(self) -> None:
+        self.assert_offends({SELECTED_PAGE: '# Other section\n'},
+                            'expected one {#selected_windows_walk_forward} section')
+
+    def test_function_missing_from_selected_window_section(self) -> None:
+        page = SELECTED_WINDOW_PAGE.replace('pf_plan_selected_primary_v1\n', '')
+        self.assert_offends({SELECTED_PAGE: page}, 'pf_plan_selected_primary_v1')
+
+    def test_option_missing_from_selected_window_section(self) -> None:
+        page = SELECTED_WINDOW_PAGE.replace('--results-digest\n', '')
+        self.assert_offends({SELECTED_PAGE: page}, '--results-digest')
+
+    def test_unparseable_selected_window_header(self) -> None:
+        header = SELECTED_WINDOW_HEADER + 'PF_API int broken(\n'
+        self.assert_offends({SELECTED_HEADER: header},
+                            'cannot read or parse', 'selected_window.h')
+
+    def test_selected_window_cli_delimiter_missing(self) -> None:
+        cli = SELECTED_WINDOW_CLI.replace(
+            'pre_profile_long = tuple', 'profile_long = tuple')
+        self.assert_offends({SELECTED_CLI: cli},
+                            'cannot read or parse', 'run_json.py')
 
 # The count sources of rule 6, each small enough to count by eye: three
 # native_c_api.h declarations, two pineforge.h ones, one runtime name, floors

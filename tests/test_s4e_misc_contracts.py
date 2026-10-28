@@ -20,7 +20,7 @@ INPUTS = (
 @pytest.fixture(scope="module", autouse=True)
 def declared_inputs():
     paths = [ROOT / relative for relative in INPUTS]
-    print("S4E misc contract inputs:\n" + "\n".join(map(str, paths)), flush=True)
+    print("Misc contract inputs:\n" + "\n".join(map(str, paths)), flush=True)
     forbidden = tuple(Path.home() / relative for relative in (
         ".config/zsh/keys", ".ssh", ".aws", ".codex", ".config/pineforge"))
 

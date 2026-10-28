@@ -2615,7 +2615,7 @@ private:
     void* batch_input_owner_ = nullptr;
     void (*batch_input_release_)(void*) noexcept = nullptr;
 
-    // CR-150 L17A: selected E records have already been emitted at capture.
+    // Selected E records have already been emitted at capture.
     // Output bookkeeping, like presentation_ready_: not hashed and never read
     // by a broker decision, a continuation fold or the source adapter. Reset
     // with the presentation; appended so every pre-existing member keeps its
@@ -2640,7 +2640,7 @@ public:
         return native_bar_views_v1::normalize_native_run_spec(spec, pending_bar_views_.context());
     }
 
-    // CR-150 V1/V2, CORE-TOP rev 6 amendment (10-18 19:24), changes 1-2:
+    // The V1/V2 amendment (10-18 19:24), changes 1-2:
     // staging only replaces pending descriptors/source. It never judges the
     // lifecycle or changes active state; only an applied configure binds and
     // judges pending data against candidate metadata. Refused configure or
@@ -2891,7 +2891,7 @@ private:
 }  // inline namespace engine_script_run_v19
 }  // namespace pineforge
 
-// CR-150 L17B: runtime-private selected metric entry points. The two sources
+// Runtime-private selected metric entry points. The two sources
 // share the report fold; the source owns/borrows its storage for the whole call.
 // equity_len is the pre-presentation M + 1, observation_count is M, even when
 // the host publishes a shorter curve. No presentation or timezone lock is held

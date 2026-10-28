@@ -646,7 +646,9 @@ ADR_RULED_TEXTS_MIN = 59
 EXCLUDED_REGISTERED_MIN = {
     # +28 rows in every engine profile: verifier 8 + preflight 8 + command-after 8 + report 4.
     # Each is slices + cover - parent; native adds equivalence: 964 + 28 + 8 = 1000.
-    'debug': 904, 'sanitizers': 895, 'native': 1000,
+    # Three public Linux scratch-attribution cases in both fixture worlds.
+    # 904/895/1000 + 3 = 907/898/1003; release/kernel 923/365 + 3 = 926/368.
+    'debug': 907, 'sanitizers': 898, 'native': 1003,
     # D1, run 39221717231 of the PR TSV, historical REGISTERED counts
     # (selected + 29 then; the current slow pin covers 60): Debug 938 - 876 = 62 and
     # sanitizers 929 - 867 = 62 below their registry; Release and kernel-only
@@ -657,7 +659,7 @@ EXCLUDED_REGISTERED_MIN = {
     # Basis of the offset: the existing keys count rows registered BEFORE -LE,
     # so a selected count (909, 900) is never compared with a key (876, 867).
     # See docs/ci.md, "PR tier versus MAIN/RELEASE", and COVERAGE-FLOORS.
-    'release': 923, 'kernel': 365,
+    'release': 926, 'kernel': 368,
 }
 # test_native_live_websocket exits 77 wherever the linked libcurl has no
 # WebSocket support (a system libcurl); main's kernel floor counted that skip
@@ -799,8 +801,10 @@ PRIVATE_FIXTURE_SKIP_LITERAL = 'SKIP private fixtures not present: '
 # reads each from one line, and the table references the names. Re-measuring a row
 # means editing these literals and the `pinned` counts in the table.
 # +28 public rows: verifier 8 + preflight 8 + command-after 8 + report 4; 910 + 28 = 938, 337 + 28 = 365.
-RELEASE_MIN_TESTS = 938
-KERNEL_MIN_TESTS = 365
+# Scratch attribution: aggregate stays one row; nine individual cases become twelve (+3).
+# Both fixture worlds gain three public Linux rows; pinned populations stay fixed.
+RELEASE_MIN_TESTS = 941
+KERNEL_MIN_TESTS = 368
 PRIVATE_FIXTURE_PROFILE_FLOORS = {
     'release': (RELEASE_MIN_TESTS, 307),
     'kernel': (KERNEL_MIN_TESTS, 31),
@@ -808,7 +812,7 @@ PRIVATE_FIXTURE_PROFILE_FLOORS = {
 
 # The earlier manifest-controls split replaced one public row with four shards (+3
 # registered/run rows in every engine profile, in either fixture world).
-# These pinned minimum floors (absent: 938 - 307 = 631, 365 - 31 = 334) and the PR
+# These pinned minimum floors (absent: 941 - 307 = 634, 368 - 31 = 337) and the PR
 # registration minima remain lower bounds; more rows only raise the count.
 # The receipt/private-fixture populations and runner-only floors are unchanged.
 
@@ -955,7 +959,7 @@ PINNED_SLOW_TEST_ROWS = frozenset((
     'test_native_runtime_ambient',
     'test_native_script_bucket_completions',
     'test_native_settlement_carry',
-    # tests/CMakeLists.txt:7354.
+    # tests/CMakeLists.txt:7516.
     'test_run_json_selected_sink_memory_l9s',
     # tests/CMakeLists.txt:7354 (report-memory bound row).
     'test_report_sink_scratch_curve_resident',
