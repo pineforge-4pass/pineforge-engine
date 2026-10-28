@@ -24,7 +24,8 @@ inline namespace engine_script_run_v19 {
 // numeric records in the cache and use scratch only for string reads.
 // Scalar numeric misses read descriptors only, with a separate fixed
 // kResidentRows scan window (10,768 bytes including keys on 64-bit targets).
-// Numeric admission retains the older key on a cache-slot collision.
+// A further 8-byte key tracks scan direction. Numeric admission gives
+// referenced cache slots a second chance before replacing stale residents.
 // Owning Trade values still belong to readers.
 //
 // Reads own their values. No reference or contiguous pointer into an
@@ -42,7 +43,7 @@ public:
     // One knob for this cache kind: ledger_rows. Each entry contains a
     // 168-byte numeric/extent record, a global key and validity generation,
     // and exactly 128 inline string bytes (all four strings combined).
-    // The string-validity flag shares the generation word. On 64-bit targets:
+    // String validity and reference flags share the generation word. On 64-bit targets:
     // 168 + 16 + 128 = 312 bytes, with no additional alignment padding.
     // No per-entry heap allocation or growing offset/string directory.
     static constexpr size_type kCacheStringBytes = 128;
@@ -139,9 +140,10 @@ public:
     // Pine field reads use the same check(global,true) as at(). A numeric
     // hit loads just its Record member, without constructing/copying a Trade
     // or any string. Numeric misses use 64-row descriptor reads and no payload
-    // reads; a forward numeric scan is O(1) amortised work per field access
-    // even above the cache cap (the whole scan is O(T)). After lazy packing,
-    // a string hit copies only the requested packed bytes. Strings fitting
+    // reads; forward/reverse numeric scans have O(1) amortised operation work
+    // per field access on the plain-file backend, even above the cache cap
+    // (the whole scan is O(T)); the arena path is not measured. After lazy
+    // packing, a string hit copies only the requested packed bytes. Strings fitting
     // the allowance are retained on their first string/full-row request.
     double pnl_at(size_type global) const;
     double pnl_pct_at(size_type global) const;
