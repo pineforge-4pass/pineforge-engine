@@ -154,9 +154,13 @@ diagnostics keys, described below.
   failures through the saved descriptor. FD sink records stay on their
   caller-supplied stream, and descriptor collisions with the report channel,
   phase channel, or arena slot use the existing `run_request_invalid` failure.
-  The loaded strategy remains in the same process and inherits the saved
-  descriptor, so this isolates ordinary native fd 1 output without creating a
-  security boundary.
+  Isolation holds only when the harness keeps stdout and stderr separate;
+  when they name the same file, the host emits one diagnostic and still runs.
+  The library can write the saved descriptor because it runs in this process;
+  the descriptor is non-inheritable, so exec'd children do not get it. This
+  isolates ordinary native fd 1 output without creating a security boundary.
+  Host report text is now encoded as UTF-8 rather than using Python stdout's
+  encoding; reports are ASCII, so no difference is expected.
 
 ### CI and release process
 

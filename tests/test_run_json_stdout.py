@@ -7,6 +7,7 @@ import io
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 from types import SimpleNamespace
 
@@ -168,6 +169,7 @@ def test_out_of_range_report_sink_descriptor_keeps_typed_refusal(tmp_path, value
 ])
 def test_reserved_report_descriptor_collisions_are_typed(monkeypatch, field, value):
     # os.dup returns an int; argparse leaves --run-phase-fd as text.
+    # The arena case exercises only fd == owner.fd; real owners relocate off 5.
     owner = SimpleNamespace(fd=int(value))
     monkeypatch.setattr(run_json, "_REPORT_OUTPUT", owner)
     args = SimpleNamespace(
@@ -343,3 +345,137 @@ def test_library_discard_uses_the_current_stdout_descriptor(tmp_path, monkeypatc
             run_json._discard_stdout()
         stdout.flush()
     assert path.read_bytes() == b"before discard\n"
+
+
+def test_host_merged_streams_diagnose_and_still_publish_one_report(tmp_path):
+    source = csv_file(tmp_path, name="chart.csv")
+    result = subprocess.run(
+        [sys.executable, "-B", str(ROOT / "docker/run_json.py"), *_argv(source)],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        env={**os.environ, "PINEFORGE_STDOUT_TEST_MODE": "print"}, timeout=30)
+    observed = f"status={result.returncode!r}; merged={result.stdout!r}"
+    assert result.returncode == 0, observed
+    lines = result.stdout.splitlines(keepends=True)
+    assert len(lines) == 3, observed
+    assert lines[0] == (
+        b"report channel not isolated: stdout and stderr are the same file\n"
+    ), observed
+    assert lines[1] == MARKER, observed
+    assert lines[2].endswith(b"\n"), observed
+    document = json.loads(lines[2])
+    assert document["engine"] == "pineforge", observed
+    assert document["input"]["ohlcv"] == str(source), observed
+    assert document["input"]["bars"] == document["summary"]["bars_processed"] == 5, observed
+    assert document["summary"]["total_trades"] == 0, observed
+    assert document["trades"] == [], observed
+
+
+@pytest.mark.parametrize(("argv", "option"), [
+    (["--help"], b"--so"),
+    (["csv2bin", "--help"], b"--chart"),
+])
+def test_host_help_stays_on_original_stdout(argv, option):
+    result = subprocess.run(
+        [sys.executable, "-B", str(ROOT / "docker/run_json.py"), *argv],
+        capture_output=True, timeout=30)
+    observed = (f"status={result.returncode!r}; stdout={result.stdout!r}; "
+                f"stderr={result.stderr!r}")
+    assert result.returncode == 0, observed
+    assert result.stdout.startswith(b"usage: run_json.py"), observed
+    assert option in result.stdout, observed
+    assert result.stderr == b"", observed
+
+
+def test_host_relocates_report_descriptor_when_three_and_four_are_occupied(tmp_path):
+    source = csv_file(tmp_path, name="chart.csv")
+    clean_status, clean_stdout, clean_stderr = _capture(_argv(source))
+    bootstrap = """
+import os
+import sys
+sys.path.insert(0, sys.argv[1])
+import run_json
+
+for expected_fd in (3, 4):
+    fd = os.open(os.devnull, os.O_RDONLY)
+    assert fd == expected_fd, (expected_fd, fd)
+probe = os.dup(1)
+assert probe == 5, probe
+os.close(probe)
+
+original_main = run_json._REPORT_MAIN
+def check_reserved_descriptor(argv):
+    owner = run_json._REPORT_OUTPUT
+    assert owner.fd != 5, owner.fd
+    assert not os.get_inheritable(owner.fd), owner.fd
+    return original_main(argv)
+run_json._REPORT_MAIN = check_reserved_descriptor
+run_json.time.time = lambda: 1000.0
+sys.exit(run_json._host_main(sys.argv[2:]))
+"""
+    result = subprocess.run(
+        [sys.executable, "-B", "-c", bootstrap, str(ROOT / "docker"), *_argv(source)],
+        capture_output=True, close_fds=True,
+        env={**os.environ, "PINEFORGE_STDOUT_TEST_MODE": ""}, timeout=30)
+    observed = (f"status={result.returncode!r}; stdout={result.stdout!r}; "
+                f"stderr={result.stderr!r}; clean_status={clean_status!r}; "
+                f"clean_stderr={clean_stderr!r}")
+    assert result.returncode == clean_status == 0, observed
+    assert result.stderr == clean_stderr == b"", observed
+    assert result.stdout == clean_stdout, _document_difference(clean_stdout, result.stdout)
+    document = json.loads(result.stdout)
+    assert document["input"]["bars"] == document["summary"]["bars_processed"] == 5, observed
+    assert document["trades"] == [], observed
+
+
+@pytest.mark.parametrize("literal", [False, True], ids=["escaped-json", "literal-unicode"])
+def test_host_failure_channel_encodes_non_ascii_text_as_utf8(monkeypatch, literal):
+    def fail(_):
+        if literal:
+            # failure_line escapes Unicode; inject a literal line to test the channel encoder.
+            run_json._publish_failure('{"engine":"pineforge","error":"caf\u00e9"}\n')
+        else:
+            run_json.write_failure("caf\u00e9")
+        return 1
+
+    monkeypatch.setattr(run_json, "_REPORT_MAIN", fail)
+    status, stdout, stderr = _capture([])
+    expected = (b'{"engine":"pineforge","error":"caf\xc3\xa9"}\n' if literal
+                else b'{"engine":"pineforge","error":"caf\\u00e9"}\n')
+    observed = f"status={status!r}; stdout={stdout!r}; stderr={stderr!r}"
+    assert status == 1, observed
+    assert stdout == expected, observed
+    assert json.loads(stdout)["error"] == "caf\u00e9", observed
+    assert stderr == b"", observed
+
+
+@pytest.mark.parametrize("publication", ["report", "failure"])
+def test_library_second_report_does_not_discard_callers_stdout(tmp_path, monkeypatch, publication):
+    report = '{"engine":"pineforge","published":true}\n'
+    expected = (b'{"engine":"pineforge","error":"initial failure"}\n'
+                if publication == "failure" else report.encode("ascii"))
+
+    def publish_twice(argv, resources):
+        if publication == "failure":
+            run_json.write_failure("initial failure")
+        else:
+            assert run_json._write_report(report) == 0
+        return run_json._write_report('{"engine":"pineforge","second":true}\n')
+
+    monkeypatch.setattr(run_json, "_main", publish_twice)
+    path = tmp_path / "library-stdout.txt"
+    stderr = io.StringIO()
+    with path.open("w", encoding="utf-8") as stdout:
+        with monkeypatch.context() as patch:
+            patch.setattr(sys, "stdout", stdout)
+            patch.setattr(sys, "stderr", stderr)
+            status = run_json.main([])
+        # A real descriptor makes an accidental dup2-to-null observable to the caller.
+        os.write(stdout.fileno(), b"caller still writable\n")
+    observed = (f"status={status!r}; stdout={path.read_bytes()!r}; "
+                f"stderr={stderr.getvalue()!r}")
+    assert status == 1, observed
+    assert path.read_bytes() == expected + b"caller still writable\n", observed
+    assert stderr.getvalue() == (
+        "run_json: the report could not be written: "
+        "the report channel has already been published\n"
+    ), observed

@@ -4383,6 +4383,9 @@ class _ArgumentParser(argparse.ArgumentParser):
     run_request_invalid{option}; it still prints the usage and the message to
     stderr and exits 2."""
 
+    def print_help(self, file=None):
+        super().print_help(file=_report_output() if file is None else file)
+
     def error(self, message):
         self.print_usage(sys.stderr)
         text = f"{self.prog}: error: {message}"
@@ -4669,6 +4672,7 @@ def _write_report(text, phases=None) -> int:
     phase and the reason (resource, io or exception); without one, the line is the ordinary
     one and library calls retain their OSError/ValueError handling."""
     caught = (OSError, ValueError) if phases is None and _REPORT_OUTPUT is None else Exception
+    already_published = _report_published()
     try:
         _begin_report()
         if isinstance(text, str):
@@ -4687,7 +4691,9 @@ def _write_report(text, phases=None) -> int:
                 text.close()
         _finish_report()
     except caught as error:
-        _discard_stdout()
+        # A rejected second library publication must not discard the caller's stdout.
+        if _REPORT_OUTPUT is not None or not already_published:
+            _discard_stdout()
         if phases is None:
             print(f"run_json: the report could not be written: {error}", file=sys.stderr)
         else:
@@ -5069,7 +5075,7 @@ def _csv2bin_main(argv) -> int:
     """Standalone conversion: no strategy library, one refusal line on stderr."""
     import pf_bars
 
-    class ConverterParser(argparse.ArgumentParser):
+    class ConverterParser(_ArgumentParser):
         def error(self, message):
             raise RunFailure(f"csv2bin: {message}", "run_request_invalid",
                              {"option": "arguments"}, exit_status=2)
@@ -7395,9 +7401,12 @@ class _LibraryReportRun:
 
 
 class _ReportOutput:
-    """Own the caller's report descriptor and keep native fd 1 diagnostic-only."""
+    """Own the caller's report descriptor and route native fd 1 to stderr."""
 
     def __init__(self):
+        if _same_open_file(1, 2):
+            _write_diagnostic("report channel not isolated: "
+                              "stdout and stderr are the same file\n")
         fd = os.dup(1)
         try:
             if fd == 5:
