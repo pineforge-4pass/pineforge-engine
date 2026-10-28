@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -30,12 +31,14 @@ import re
 import shlex
 import subprocess
 import sys
+import threading
 import time
 import unicodedata
 
 from ci_verify import (ROOT, PRIVATE_FIXTURE_SKIP_LITERAL, private_fixtures_overlay,
                        source_guard_commands)
 from ci_verifier_classes import verifier_class_tier
+from run_unittest_shards import default_shard_count
 
 ACTIONLINT_VERSION = '1.7.12'
 # Pin the exact ordered names extracted from the CMake slow-label list.
@@ -2946,6 +2949,15 @@ def actionlint_runner_label_findings(source: Path) -> list[str]:
 RUN_JSON_TESTS = 'run_json_*_test.py'
 
 
+class CheckCommand(tuple):
+    """A binding (name, argv) tuple with an explicit concurrency opt-in."""
+
+    def __new__(cls, name: str, argv: list[str], *, parallel: bool = False):
+        command = super().__new__(cls, (name, argv))
+        command.parallel = parallel
+        return command
+
+
 def run_json_harness_command(source: Path) -> list[str]:
     """pytest over every docker/run_json_*_test.py, found when the plan is built
     (a new one is never forgotten); -B and no cacheprovider leave the checkout
@@ -3001,26 +3013,37 @@ def check_commands(source: Path, output: Path | None = None,
           '--root', str(source)]),
         # The gate's own mutation controls: each class of unlisted site, bad
         # bound, empty scan and missing manifest must change the verdict.
-        ('cr150-source-gate-tests',
-         [sys.executable, str(source / 'scripts/test_cr150_source_gate.py')]),
+        # These opt-ins read the checkout; mutations use private temporary
+        # copies. No stage in this group consumes another stage's output.
+        CheckCommand('cr150-source-gate-tests',
+                     [sys.executable, str(source / 'scripts/test_cr150_source_gate.py')],
+                     parallel=True),
         # R5 lane H-DOCGATES (AUDIT4-opus X17, perf N-2): two random draws whose
         # order C++ leaves to the compiler build a different battery on x86-64
         # GCC than on AppleClang -- XPLAT1's bug class, back at ten sites.
-        ('rng-draw-order-tests',
-         [sys.executable, str(source / 'scripts/test_check_rng_draw_order.py')]),
-        ('rng-draw-order',
-         [sys.executable, str(source / 'scripts/check_rng_draw_order.py')]),
+        CheckCommand('rng-draw-order-tests',
+                     [sys.executable, str(source / 'scripts/test_check_rng_draw_order.py')],
+                     parallel=True),
+        CheckCommand('rng-draw-order',
+                     [sys.executable, str(source / 'scripts/check_rng_draw_order.py')],
+                     parallel=True),
         ('verifier-tests',
          [sys.executable, str(source / 'scripts/run_unittest_shards.py'),
           str(source / 'scripts/test_ci_verify.py'),
           '--log-dir', str(output_dir / 'verifier-tests-shards'), *class_args]),
-        ('preflight-tests', [sys.executable, str(source / 'scripts/test_ci_preflight.py')]),
+        CheckCommand('preflight-tests',
+                     [sys.executable, str(source / 'scripts/run_unittest_shards.py'),
+                      str(source / 'scripts/test_ci_preflight.py'),
+                      '--shards', str(min(8, default_shard_count())),
+                      '--log-dir', str(output_dir / 'preflight-tests-shards')],
+                     parallel=True),
         ('unittest-shards-tests',
          [sys.executable, str(source / 'scripts/test_run_unittest_shards.py')]),
         ('verifier-paths-tests',
          [sys.executable, str(source / 'scripts/test_ci_verifier_paths.py')]),
-        ('native-c-surface-tests',
-         [sys.executable, str(source / 'scripts/test_check_native_c_api_surface.py')]),
+        CheckCommand('native-c-surface-tests',
+                     [sys.executable, str(source / 'scripts/test_check_native_c_api_surface.py')],
+                     parallel=True),
         ('kernel-residuals-tests',
          [sys.executable, str(source / 'scripts/test_check_kernel_residuals.py')]),
         ('corpus-parity-identity-tests',
@@ -3035,8 +3058,10 @@ def check_commands(source: Path, output: Path | None = None,
          [sys.executable, str(source / 'scripts/test_report_schema_keys.py')]),
         # EN-132: the checker itself comes from source_guard_commands above;
         # its negative controls and independent D4 route need no engine.
-        ('selected-window-ownership-tests',
-         [sys.executable, '-I', '-B', str(source / 'tests/ownership/test_manifest_checker.py')]),
+        CheckCommand('selected-window-ownership-tests',
+                     [sys.executable, '-I', '-B',
+                      str(source / 'tests/ownership/test_manifest_checker.py')],
+                     parallel=True),
         # Recorded outputs: the keys, order and value rules of run_json's
         # "outputs" block, with no engine (docs/outputs.md).
         ('report-outputs-key-tests',
@@ -3046,12 +3071,15 @@ def check_commands(source: Path, output: Path | None = None,
         # Includes the single App-only main pull_request barrier, complete
         # Actions/ruleset pages, permission docs, bump identity/parent/tree diff.
         # Binding in both fast/all.
-        ('release-gate-tests', [sys.executable, str(source / 'scripts/test_ci_release_gate.py')]),
+        CheckCommand('release-gate-tests',
+                     [sys.executable, str(source / 'scripts/test_ci_release_gate.py')],
+                     parallel=True),
         # R5 run-failure codes: the catalog diff release.yml stamps is a tested
         # script, and the code tables of docs/pages/run-failure-codes.md are
         # generated from the catalog it diffs.
-        ('run-failure-diff-tests',
-         [sys.executable, str(source / 'scripts/test_gen_run_failure_catalog_diff.py')]),
+        CheckCommand('run-failure-diff-tests',
+                     [sys.executable, str(source / 'scripts/test_gen_run_failure_catalog_diff.py')],
+                     parallel=True),
         # R5 run-failure codes: docker/run_json.py's failure line, its own codes
         # held to docker/run_failure_codes.json, and the syminfo, symbol-feed
         # and diagnostics harness paths. The tests need pytest: CI installs
@@ -3062,10 +3090,12 @@ def check_commands(source: Path, output: Path | None = None,
         # change, and scripts/ci_docs_only.py's rule decides which that is.
         ('docs-only-tests',
          [sys.executable, str(source / 'scripts/test_ci_docs_only.py')]),
-        ('design-inventory-tests',
-         [sys.executable, str(source / 'scripts/test_check_design_inventory.py')]),
-        ('design-inventory',
-         [sys.executable, str(source / 'scripts/check_design_inventory.py')]),
+        CheckCommand('design-inventory-tests',
+                     [sys.executable, str(source / 'scripts/test_check_design_inventory.py')],
+                     parallel=True),
+        CheckCommand('design-inventory',
+                     [sys.executable, str(source / 'scripts/check_design_inventory.py')],
+                     parallel=True),
         ('detached-comments-tests',
          [sys.executable, str(source / 'scripts/measure_detached_comments.py'),
           '--self-test']),
@@ -3077,14 +3107,18 @@ def check_commands(source: Path, output: Path | None = None,
           '--self-test-tempdir']),
         ('dangling-comment-names-tests',
          [sys.executable, str(source / 'scripts/test_check_dangling_comment_names.py')]),
-        ('doc-anchors-tests',
-         [sys.executable, str(source / 'scripts/test_check_doc_anchors.py')]),
-        ('doc-anchors',
-         [sys.executable, str(source / 'scripts/check_doc_anchors.py')]),
-        ('doc-lint-tests',
-         [sys.executable, str(source / 'scripts/test_check_doc_lint.py')]),
-        ('doc-lint',
-         [sys.executable, str(source / 'scripts/check_doc_lint.py')]),
+        CheckCommand('doc-anchors-tests',
+                     [sys.executable, str(source / 'scripts/test_check_doc_anchors.py')],
+                     parallel=True),
+        CheckCommand('doc-anchors',
+                     [sys.executable, str(source / 'scripts/check_doc_anchors.py')],
+                     parallel=True),
+        CheckCommand('doc-lint-tests',
+                     [sys.executable, str(source / 'scripts/test_check_doc_lint.py')],
+                     parallel=True),
+        CheckCommand('doc-lint',
+                     [sys.executable, str(source / 'scripts/check_doc_lint.py')],
+                     parallel=True),
         # R5 lane H-DOCGATES (AUDIT4-opus X13): a published sentence leaves only
         # when its commit's message names it -- by the introducing lane or commit,
         # or by its words -- and older text never silently replaces newer text.
@@ -3095,10 +3129,12 @@ def check_commands(source: Path, output: Path | None = None,
         # R5 lane H-DOCGATES (AUDIT4-opus X10): every kernel `source_*` seam and
         # every kernel member or row field the source layer writes is named by
         # an ADR-0001 row, which states who writes it and its ruling.
-        ('kernel-seam-rows-tests',
-         [sys.executable, str(source / 'scripts/test_check_kernel_seam_rows.py')]),
-        ('kernel-seam-rows',
-         [sys.executable, str(source / 'scripts/check_kernel_seam_rows.py')]),
+        CheckCommand('kernel-seam-rows-tests',
+                     [sys.executable, str(source / 'scripts/test_check_kernel_seam_rows.py')],
+                     parallel=True),
+        CheckCommand('kernel-seam-rows',
+                     [sys.executable, str(source / 'scripts/check_kernel_seam_rows.py')],
+                     parallel=True),
         # NOT advisory: the migration page's coverage claim is L14-B's own, and
         # it is true on this tree. A `strategy.*` name added to the Pine v6
         # inventory without a row on that page fails here immediately.
@@ -3127,7 +3163,10 @@ def run_checks(commands: list[tuple], output: Path, *, source: Path = ROOT) -> i
 
     A stage may be ``(name, argv)`` or ``(name, argv, advisory)``. An advisory
     stage still runs and still prints its findings, but its failure is recorded
-    as ``reported`` and does not fail the preflight.
+    as ``reported`` and does not fail the preflight. Only commands explicitly
+    marked ``parallel=True`` join the independent group, after all serial
+    stages finish. Plain tuples stay serial and never overlap that group.
+    Summary rows retain declaration order, including during the run.
     """
     output.mkdir(parents=True, exist_ok=True)
     run_t0 = time.monotonic()
@@ -3135,48 +3174,74 @@ def run_checks(commands: list[tuple], output: Path, *, source: Path = ROOT) -> i
                'scope': 'workflow and source checks only; full verification still required',
                'startedAt': _utc_now(), 'stages': []}
     summary_path = output / 'preflight-summary.json'
+    stages: dict[int, dict] = {}
+    record_lock = threading.Lock()
 
     def record() -> None:
+        summary['stages'] = [stages[index] for index in sorted(stages)]
         summary_path.write_text(json.dumps(summary, indent=2) + '\n')
 
     record()
-    for entry in commands:
+
+    def run_stage(item: tuple[int, tuple]) -> None:
+        index, entry = item
         name, argv = entry[0], entry[1]
         advisory = bool(entry[2]) if len(entry) > 2 else False
-        print(f'ci_preflight: {name}: {shlex.join(argv)}'
-              + (' [advisory]' if advisory else ''), flush=True)
-        stage_t0 = time.monotonic()
-        stage = {'name': name, 'argv': argv, 'status': 'running', 'exitCode': None,
-                 'advisory': advisory, 'log': name + '.log',
-                 'startedAt': _utc_now(), 'seconds': None}
-        summary['stages'].append(stage)
-        record()
+        with record_lock:
+            print(f'ci_preflight: {name}: {shlex.join(argv)}'
+                  + (' [advisory]' if advisory else ''), flush=True)
+            stage_t0 = time.monotonic()
+            stage = {'name': name, 'argv': argv, 'status': 'running', 'exitCode': None,
+                     'advisory': advisory, 'log': name + '.log',
+                     'startedAt': _utc_now(), 'seconds': None}
+            stages[index] = stage
+            record()
+        # Independent Python checks must not race over import caches in the
+        # checkout. Preserve their argv and the serial environment contract.
+        env = ({**os.environ, 'PYTHONDONTWRITEBYTECODE': '1'}
+               if getattr(entry, 'parallel', False) else None)
         try:
-            result = subprocess.run(argv, cwd=source, capture_output=True)
+            result = subprocess.run(argv, cwd=source, capture_output=True, env=env)
             code, log = result.returncode, result.stdout + result.stderr
         except OSError as error:
             code, log = 127, str(error).encode()
-        stage['seconds'] = round(time.monotonic() - stage_t0, 3)
+        seconds = round(time.monotonic() - stage_t0, 3)
         (output / stage['log']).write_bytes(log)
-        if log:
-            print(log.decode('utf-8', 'replace'), end='', flush=True)
-        if (code == 77 and not advisory and not private_fixtures_overlay()
-                and PRIVATE_FIXTURE_SKIP_LITERAL.encode() in log):
-            # A source guard whose private fixture input the tree lacks exits
-            # 77 with the pinned literal naming the missing path.  The literal
-            # is required: a bare 77 without it stays a failure -- and so does
-            # the literal itself while PINEFORGE_PRIVATE_FIXTURES is set, when
-            # the input the guard names is in the tree (R2-F3).
-            print(f'ci_preflight: {name}: skipped (exit 77, private fixtures absent)',
-                  flush=True)
-            stage.update(status='skipped', exitCode=code)
-        elif code and advisory:
-            print(f'ci_preflight: {name}: exit {code}, reported only '
-                  '(this stage is declared advisory)', flush=True)
-            stage.update(status='reported', exitCode=code)
+        with record_lock:
+            stage['seconds'] = seconds
+            if log:
+                print(f'ci_preflight: {name}: output ({stage["log"]})', flush=True)
+                print(log.decode('utf-8', 'replace'), end='', flush=True)
+            if (code == 77 and not advisory and not private_fixtures_overlay()
+                    and PRIVATE_FIXTURE_SKIP_LITERAL.encode() in log):
+                # A source guard whose private fixture input the tree lacks exits
+                # 77 with the pinned literal naming the missing path.  The literal
+                # is required: a bare 77 without it stays a failure -- and so does
+                # the literal itself while PINEFORGE_PRIVATE_FIXTURES is set, when
+                # the input the guard names is in the tree (R2-F3).
+                print(f'ci_preflight: {name}: skipped (exit 77, private fixtures absent)',
+                      flush=True)
+                stage.update(status='skipped', exitCode=code)
+            elif code and advisory:
+                print(f'ci_preflight: {name}: exit {code}, reported only '
+                      '(this stage is declared advisory)', flush=True)
+                stage.update(status='reported', exitCode=code)
+            else:
+                stage.update(status='passed' if code == 0 else 'failed', exitCode=code)
+            record()
+
+    parallel = []
+    for index, entry in enumerate(commands):
+        if getattr(entry, 'parallel', False):
+            parallel.append((index, entry))
         else:
-            stage.update(status='passed' if code == 0 else 'failed', exitCode=code)
-        record()
+            run_stage((index, entry))
+    if parallel:
+        with ThreadPoolExecutor(max_workers=min(4, default_shard_count())) as pool:
+            # map submits the whole group and observes every result; a failed
+            # subprocess is a summary row, never a reason to cancel its peers.
+            for _ in pool.map(run_stage, parallel):
+                pass
     passed = bool(commands) and all(stage['exitCode'] == 0 or stage['advisory']
                                     or stage['status'] == 'skipped'
                                     for stage in summary['stages'])
