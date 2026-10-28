@@ -212,10 +212,14 @@ Sample exercise(int group, int parked, bool reverse, bool coof, bool churn,
         bars.push_back({100.0, index == 2 || (second && index == 16) ? 100.5 + group : 100.5,
                         99.5, 100.0, 1.0, epoch + 60000LL * index});
     host.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
+    // A work-bound failure inside a callback ends the run; report that error
+    // itself rather than the incomplete-window message that would follow.
+    require(host.last_error().empty(), host.last_error().c_str());
     const auto result = host.finish();
     if (reuse) {
         host.restart();
         host.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
+        require(host.last_error().empty(), host.last_error().c_str());
         host.finish();
     }
     std::printf("exit group=%d retained-at-least=%d reverse=%d fill-recalculation=%d "
