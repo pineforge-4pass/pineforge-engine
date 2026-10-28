@@ -22,11 +22,14 @@
 #include <utility>
 #include <vector>
 #include "report_scratch.hpp"
+#include "live_report_patch.hpp"
 
 #define PINEFORGE_HAS_DEPENDENCY_SCRATCH_V1 1
 
 namespace pineforge {
 inline namespace engine_script_run_v19 {
+
+class LiveReportAccumulator;
 
 // Lookup state a host derives from its own bookkeeping and cannot keep in its
 // own object -- a generated script's ABI fixes that object's layout -- parked
@@ -339,6 +342,11 @@ public:
     // fill_snapshot_report reads the latest reset attempt's rows through the same gate.
     static bool rows_are_current(const BacktestEngine& engine) noexcept;
     static void fill_snapshot_report(const BacktestEngine& engine, ReportC* out);
+    // Internal live reader: same stream ownership/reentry gates, with owning
+    // array suffixes and runner-owned folds instead of an owning full report.
+    static report::LiveReportPatch fill_live_report_patch(
+        const BacktestEngine& engine, LiveReportAccumulator& accumulator,
+        std::uint64_t input_index, bool final_input);
     std::vector<NativeMarketEvent> events_after(uint64_t after_ordinal) const;
     // The command rows of events_after(after_ordinal), read in place (R5 lane
     // PERF-P4). The history is in ordinal order, so those rows are exactly

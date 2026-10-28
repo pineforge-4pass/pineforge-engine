@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "store.hpp"
 #include "report_delta.hpp"
+#include "ratio_report.hpp"
 #include "json.hpp"
 #include "transport.hpp"
 
@@ -720,6 +721,7 @@ std::string LedgerView::report_json(std::optional<std::uint64_t> cursor) const {
     Statement report(impl_->db, "SELECT input_cursor,payload FROM report_snapshots ORDER BY input_cursor");
     Json document;
     bool found = false;
+    std::optional<std::string> ratio_timezone;
     std::uint64_t expected = 0;
     std::string previous_hash;
     while (report.row()) {
@@ -735,12 +737,21 @@ std::string LedgerView::report_json(std::optional<std::uint64_t> cursor) const {
         if (index > target) continue;
         auto payload = parse_json(bytes);
         if (payload.members.count("schema_version") && payload.at("schema_version").text() == "pineforge-native-report-delta/v1") {
+            if (payload.members.count("ratios_as_of_input")) {
+                if (payload.at("ratios_as_of_input").integer<std::uint64_t>() > index)
+                    throw std::runtime_error("invalid interval report ratio cursor");
+                const auto zone = payload.at("ratio_context").at("chart_timezone").text();
+                if (ratio_timezone && *ratio_timezone != zone)
+                    throw std::runtime_error("interval report ratio clock changed");
+                ratio_timezone = zone;
+            }
             apply_report_delta(document, payload);
         } else document = std::move(payload);
         found = index == target;
     }
     if (expected != committed + 1) throw std::runtime_error("cumulative report delta hole");
     if (!found) throw std::runtime_error("no cumulative report at requested input cursor");
+    if (ratio_timezone) refresh_report_ratios(document, *ratio_timezone);
     return document.dump();
 }
 

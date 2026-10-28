@@ -3,6 +3,7 @@
 #include "json.hpp"
 #include "report_delta.hpp"
 #include "../src/report_value_invalid.hpp"
+#include "../src/live_report_patch.hpp"
 #include <pineforge/pineforge.h>
 #include <algorithm>
 #include <cmath>
@@ -169,6 +170,49 @@ inline Json native_report_document(const pf_report_t& report, const std::string&
         {"closed_trades", std::move(closed)}});
 }
 
+inline Json native_report_json(const pineforge::report::LiveReportPatch& patch) {
+    // Reuse the scalar serializer with genuinely empty arrays. Only the
+    // explicit patch views below ever index suffix storage.
+    auto empty = patch.scalars;
+    if (empty.trades || empty.equity_curve || empty.security_diag || empty.trace
+        || empty.trace_names || empty.broker_state_hash || empty.trace_len)
+        throw std::runtime_error("invalid carried report scalar block");
+    empty.trades_len = empty.security_diag_len = 0;
+    empty.trace_names_len = 0;
+    empty.equity_curve_len = empty.broker_state_hash_len = 0;
+    auto fields = native_report_json(empty);
+    const auto array = [](const auto& suffix, auto serialize) {
+        if (suffix.offset > suffix.logical_length
+            || suffix.rows.size() != suffix.logical_length - suffix.offset)
+            throw std::runtime_error("invalid carried report array patch");
+        return report_array(suffix.rows.data(), static_cast<std::int64_t>(suffix.rows.size()), serialize);
+    };
+    fields.members["trades_len"] = report_number(patch.scalars.trades_len);
+    fields.members["equity_curve_len"] = report_number(patch.scalars.equity_curve_len);
+    fields.members["security_diag_len"] = report_number(patch.scalars.security_diag_len);
+    fields.members["broker_state_hash_len"] = report_number(patch.scalars.broker_state_hash_len);
+    fields.members["trace_names_len"] = report_number(patch.scalars.trace_names_len);
+    fields.members["trades"] = array(patch.trades, report_trade);
+    fields.members["equity_curve"] = array(patch.equity, [](const pf_equity_point_t& point) {
+        return Json::object({{"time_ms", report_number(point.time_ms)},
+            {"equity", report_result_number(point.equity, "equity_curve.equity")},
+            {"open_profit", report_result_number(point.open_profit, "equity_curve.open_profit")}});
+    });
+    fields.members["security_diag"] = array(patch.security, [](const pf_security_diag_t& diag) {
+        return Json::object({{"sec_id", report_number(diag.sec_id)},
+            {"feed_count", report_number(diag.feed_count)},
+            {"complete_count", report_number(diag.complete_count)},
+            {"partial_count", report_number(diag.partial_count)}});
+    });
+    fields.members["broker_state_hash"] = array(patch.hashes, [](std::uint64_t hash) {
+        return report_number(hash);
+    });
+    fields.members["trace_names"] = array(patch.trace_names, [](const std::string& name) {
+        return Json::string(name);
+    });
+    return fields;
+}
+
 class ReportDeltas {
 public:
     explicit ReportDeltas(bool retain_document = false)
@@ -245,6 +289,82 @@ public:
         array_sizes_["trace"] = static_cast<std::size_t>(report.trace_len);
         array_sizes_["trace_names"] = static_cast<std::size_t>(report.trace_names_len);
         array_sizes_["broker_state_hash"] = static_cast<std::size_t>(report.broker_state_hash_len);
+        return delta.dump();
+    }
+    std::string update(const pineforge::report::LiveReportPatch& patch,
+                       const std::string& deployment, std::uint64_t cursor,
+                       std::uint64_t state_hash) {
+        const auto expected_start = [&](const char* name) {
+            const auto found = array_sizes_.find(name);
+            return found == array_sizes_.end() || !found->second ? 0 : found->second - 1;
+        };
+        if (patch.trades.offset != (closed_trade_high_water_ ? closed_trade_high_water_ - 1 : 0)
+            || patch.equity.offset != std::min(expected_start("equity_curve"), patch.equity.logical_length)
+            || patch.hashes.offset != std::min(expected_start("broker_state_hash"), patch.hashes.logical_length)
+            || patch.trace_names.offset != std::min(expected_start("trace_names"), patch.trace_names.logical_length)
+            || patch.security.offset != 0
+            || patch.closed_trades < closed_trade_high_water_
+            || patch.closed_trades > patch.trades.logical_length
+            || patch.scalars.trades_len < 0
+            || static_cast<std::size_t>(patch.scalars.trades_len) != patch.trades.logical_length
+            || patch.scalars.equity_curve_len < 0
+            || static_cast<std::size_t>(patch.scalars.equity_curve_len) != patch.equity.logical_length
+            || patch.scalars.security_diag_len < 0
+            || static_cast<std::size_t>(patch.scalars.security_diag_len) != patch.security.logical_length
+            || patch.scalars.broker_state_hash_len < 0
+            || static_cast<std::size_t>(patch.scalars.broker_state_hash_len) != patch.hashes.logical_length
+            || patch.scalars.trace_names_len < 0
+            || static_cast<std::size_t>(patch.scalars.trace_names_len) != patch.trace_names.logical_length)
+            throw std::runtime_error("cumulative carried report prefix or length regressed");
+        auto fields = native_report_json(patch);
+        Json arrays = Json::object({});
+        const auto put = [&](const char* name, std::size_t offset, std::size_t length) {
+            arrays.members[name] = Json::object({
+                {"offset", report_number(offset)}, {"items", std::move(fields.members[name])}});
+            fields.members.erase(name);
+            array_sizes_[name] = length;
+        };
+        put("trades", patch.trades.offset, patch.trades.logical_length);
+        put("equity_curve", patch.equity.offset, patch.equity.logical_length);
+        put("security_diag", patch.security.offset, patch.security.logical_length);
+        put("broker_state_hash", patch.hashes.offset, patch.hashes.logical_length);
+        put("trace", 0, 0);
+        put("trace_names", patch.trace_names.offset, patch.trace_names.logical_length);
+        Json closed;
+        closed.kind = Json::Kind::Array;
+        for (std::size_t i = 0; i < patch.trades.rows.size(); ++i) {
+            ++closed_trade_visits_;
+            const auto absolute = patch.trades.offset + i;
+            if (absolute >= patch.closed_trades) {
+                if (!patch.trades.rows[i].open_at_end)
+                    throw std::runtime_error("invalid carried report open-trade boundary");
+                break;
+            }
+            if (patch.trades.rows[i].open_at_end)
+                throw std::runtime_error("cumulative report closed-trade prefix regressed");
+            closed.items.push_back(report_trade(patch.trades.rows[i]));
+        }
+        closed_trade_high_water_ = patch.closed_trades;
+        arrays.members["closed_trades"] = Json::object({
+            {"offset", report_number(std::min(patch.trades.offset, patch.closed_trades))},
+            {"items", std::move(closed)}});
+        const auto& curve = arrays.at("equity_curve").at("items").items;
+        auto next = Json::object({{"schema_version", Json::string("pineforge-native-report/v1")},
+            {"deployment", Json::string(deployment)}, {"input_cursor", report_number(cursor)},
+            {"state_hash", Json::string(std::to_string(state_hash))},
+            {"equity", curve.empty() ? Json{} : curve.back().at("equity")},
+            {"open_profit", curve.empty() ? Json{} : curve.back().at("open_profit")},
+            {"report", std::move(fields)}});
+        auto delta = Json::object({{"schema_version", Json::string("pineforge-native-report-delta/v1")},
+            {"fields", changed_report_fields(scalars_, next)}, {"arrays", std::move(arrays)}});
+        if (patch.interval_ratios) {
+            delta.members["ratios_as_of_input"] = report_number(patch.ratios_as_of_input);
+            // Export needs the same civil-month clock as the live ratio pass.
+            delta.members["ratio_context"] = Json::object({
+                {"chart_timezone", Json::string(patch.chart_timezone)}});
+        }
+        scalars_ = std::move(next);
+        if (document_) apply_report_delta(*document_, delta);
         return delta.dump();
     }
     std::string json() const {

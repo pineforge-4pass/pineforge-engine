@@ -17,7 +17,7 @@ if(PINEFORGE_ENABLE_SANITIZERS)
     add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
     add_link_options(-fsanitize=address,undefined)
 endif()
-add_library(pineforge_live_support STATIC store.cpp transport.cpp routing.cpp delivery.cpp service.cpp)
+add_library(pineforge_live_support STATIC store.cpp ratio_report.cpp transport.cpp routing.cpp delivery.cpp service.cpp)
 target_compile_features(pineforge_live_support PUBLIC cxx_std_17)
 target_include_directories(pineforge_live_support PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 if(TARGET SQLite3::SQLite3)
@@ -25,7 +25,8 @@ if(TARGET SQLite3::SQLite3)
 else()
     set(_pf_sqlite_target SQLite::SQLite3)
 endif()
-target_link_libraries(pineforge_live_support PUBLIC ${_pf_sqlite_target} CURL::libcurl OpenSSL::Crypto Threads::Threads)
+target_link_libraries(pineforge_live_support PUBLIC ${_pf_sqlite_target} CURL::libcurl OpenSSL::Crypto Threads::Threads PineForge::pineforge)
+target_compile_options(pineforge_live_support PRIVATE -ffp-contract=off)
 target_compile_options(pineforge_live_support PRIVATE -Wall -Wextra -Wpedantic)
 add_library(pineforge_live_startup STATIC native_startup.cpp)
 target_compile_features(pineforge_live_startup PUBLIC cxx_std_17)
@@ -85,6 +86,17 @@ if(PINEFORGE_BUILD_TESTS)
     target_link_libraries(test_live_report PRIVATE PineForge::pineforge)
     target_compile_options(test_live_report PRIVATE -UNDEBUG)
     add_test(NAME test_live_report COMMAND test_live_report)
+    add_executable(test_live_report_accumulator
+        ${PROJECT_SOURCE_DIR}/tests/test_live_report_accumulator.cpp)
+    target_include_directories(test_live_report_accumulator PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(test_live_report_accumulator PRIVATE pineforge_live_support PineForge::pineforge)
+    target_compile_options(test_live_report_accumulator PRIVATE -UNDEBUG -ffp-contract=off)
+    add_test(NAME test_live_report_accumulator_equivalence
+        COMMAND test_live_report_accumulator equivalence)
+    add_test(NAME test_live_report_accumulator_growth
+        COMMAND test_live_report_accumulator growth)
+    add_test(NAME test_live_ratio_export
+        COMMAND test_live_report_accumulator export)
     add_executable(test_live_identity ${PROJECT_SOURCE_DIR}/tests/test_live_identity.cpp)
     target_link_libraries(test_live_identity PRIVATE pineforge_live_support)
     target_compile_options(test_live_identity PRIVATE -UNDEBUG)
@@ -125,6 +137,9 @@ if(PINEFORGE_BUILD_TESTS)
         add_test(NAME native_live_report_e2e COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/tests/native_live_report_e2e.py $<TARGET_FILE:pineforge-live>
             $<TARGET_FILE:native_live_report_oracle> ${_pf_report_strategies})
+        add_test(NAME native_live_ratio_interval_e2e COMMAND ${Python3_EXECUTABLE}
+            ${PROJECT_SOURCE_DIR}/tests/native_live_ratio_interval_e2e.py $<TARGET_FILE:pineforge-live>
+            $<TARGET_FILE:native_live_report_oracle> $<TARGET_FILE:native_live_example>)
         add_test(NAME native_live_chart_input_e2e COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/tests/native_live_chart_input_e2e.py $<TARGET_FILE:pineforge-live>
             $<TARGET_FILE:native_live_report_oracle> $<TARGET_FILE:native_live_example>)
@@ -174,12 +189,13 @@ if(PINEFORGE_BUILD_TESTS)
     add_dependencies(test_native_example_selected native_selected_example)
     add_test(NAME test_native_example_selected
         COMMAND test_native_example_selected $<TARGET_FILE:native_selected_example>)
-    add_library(pineforge_live_legacy_test_support STATIC store.cpp transport.cpp)
+    add_library(pineforge_live_legacy_test_support STATIC store.cpp ratio_report.cpp transport.cpp)
     target_compile_features(pineforge_live_legacy_test_support PUBLIC cxx_std_17)
     target_include_directories(pineforge_live_legacy_test_support PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_definitions(pineforge_live_legacy_test_support PUBLIC PINEFORGE_LIVE_LEGACY_TEST_API)
     target_link_libraries(pineforge_live_legacy_test_support PUBLIC
-        ${_pf_sqlite_target} CURL::libcurl OpenSSL::Crypto Threads::Threads)
+        ${_pf_sqlite_target} CURL::libcurl OpenSSL::Crypto Threads::Threads PineForge::pineforge)
+    target_compile_options(pineforge_live_legacy_test_support PRIVATE -ffp-contract=off)
     foreach(native_test test_native_live_store test_native_live_websocket test_native_live_routing test_native_live_service)
         add_executable(${native_test} ${PROJECT_SOURCE_DIR}/tests/${native_test}.cpp)
         if(native_test STREQUAL "test_native_live_store")

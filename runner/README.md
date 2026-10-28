@@ -54,14 +54,54 @@ and report are already durable, and export remains available.
 The input, engine hash, actions, cumulative report and its integrity digest commit in one SQLite
 transaction. Append-only `pineforge-native-report-delta/v1` rows contain changed
 scalar fields and appended/replaced array suffixes, not historical full-report
-copies. Export folds these rows through the selected cursor into byte-identical
-canonical report JSON. Recovery verifies each input's engine hash, actions and
+copies. With the default ratio interval, export folds these rows through the
+selected cursor into byte-identical canonical report JSON.
+Recovery verifies each input's engine hash, actions and
 exact report delta before delivery. Existing full-report rows remain immutable
 and readable; recovery verifies them against the reconstructed full report, then
 new inputs use deltas. This avoids quadratic report storage without changing the
-export schema or engine computation. The default delta stream retains scalar
-state and array counts only; `--report-jsonl=full` retains the cumulative
-document needed for full JSONL output.
+export schema or batch engine computation. The delta serializer retains scalar
+state and array counts; a runner-owned accumulator also carries trade-stat folds
+and the equity series needed for exact ratios. `--report-jsonl=full` retains the
+cumulative document needed for full JSONL output.
+
+`--ratio-interval K` takes a positive integer and defaults to 1. **K = 1 (the
+default) is unchanged behaviour:** every input's cumulative report and delta
+carry the same exact four ratios as the batch routine. Closed-trade statistics,
+net profit, equity high-water, drawdown/run-up and the other scalar metrics are
+carried in report row order. Ordinary live reports materialize and fold only new
+rows and replacement tails, including the current open-lot rows. Security
+diagnostics still replace their current array. Selected, sink and whole-array
+presentation routes retain their existing report reader.
+
+K > 1 is an opt-in trade of per-input freshness for work for exactly these
+`report.metrics.equity` fields: `sharpe_monthly`, `sharpe_bar`, `sortino_bar` and
+`sortino_monthly`. They are recomputed by the same batch routine when the
+committed-message cursor is divisible by K, at the final input and at export.
+Cursor 0 initializes the warmup ratios. Between boundaries the four values
+retain their last computation, and every interval-mode
+`pineforge-native-report-delta/v1` adds `ratios_as_of_input`, the committed-message
+cursor of that computation. The additive `ratio_context.chart_timezone` carries
+the civil-month clock required for exact read-only export. Both keys are outside
+`fields`; patch consumers can ignore them, and the cumulative report schema
+stays the same.
+
+Finite files, `--check` snapshots and `--max-events` refresh a known final input
+before it commits. When EOF or shutdown reveals the end of a pipe/socket after
+its last commit, JSONL emits one extra ratio-refresh delta (or full document) at
+that same cursor before the operational summary. It adds no input or action.
+Export, including `--at-input`, refreshes the four ratios against the selected
+cursor's cumulative curve after verifying its immutable ledger rows. It leaves
+those stored deltas unchanged. Interval-mode ledgers bind K into their deployment
+identity, so resuming requires the same K; K = 1 retains the existing identity.
+
+The ratio recomputation is still O(series), including its batch return mean and
+variance/downside passes. K = 1 pays that cost at every input; K > 1 pays it at
+the scheduled boundaries and final/export reads. Other ordinary-live report
+work is O(new/replaced rows) per input, plus current open lots and security
+diagnostics. A fixed K > 1 reduces ratio work frequency; it does not make the
+ratio recomputations independent of history. Full JSONL also writes the entire
+cumulative document.
 Array suffix replacement assumes at most one provisional trailing element for
 equity points and broker hashes. The runner never enables tracing and refuses
 nonempty `trace`: traces can contain several records per bucket, so enabling
@@ -70,7 +110,7 @@ not just its last record. `trace_names` likewise has no active trace updates.
 Older ledgers acquire reports by deterministic replay; resume them with `run`
 before export. Ledgers written before integrity digests were added also require
 one verified replay to populate the digests; old full/delta rows stay unchanged.
-Reports are immutable and never change with webhook timing.
+Stored report deltas are immutable and never change with webhook timing.
 The deployment already binds strategy-library bytes, warmup bytes, effective
 settings, symbol units, broker configuration and routing. Operational export
 flags do not change it.

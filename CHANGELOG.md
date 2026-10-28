@@ -86,14 +86,28 @@ diagnostics keys, described below.
   input, matching the payload stored in the ledger. This deliberately changes
   the stream shape for existing consumers that read the old cumulative
   document; request `--report-jsonl=full` to retain that cumulative output.
-- **Per-input report-path work is flat in the appended rows.** The runner
+- **Non-ratio per-input report work is flat in appended rows.** The runner
   carries a closed-trade high-water mark and no longer scans the full closed
-  trade prefix for every input. Delta output and the default runner state keep
-  only scalar state and array counts, while full mode retains the cumulative
-  document. The native `fill_report` call still rebuilds the engine's trade
-  and equity/metrics report on each input; removing that remaining term needs
-  an engine-side carried report accumulator and a separate batch-byte
-  equivalence proof.
+  trade prefix for every input. Delta serialization keeps scalar state and
+  array counts; the report accumulator carries the equity series for ratios,
+  and full mode also retains the cumulative document.
+  The ordinary live path now uses an engine-side carried report
+  accumulator for trade materialization, trade statistics, equity high-water,
+  drawdown/run-up and the other non-ratio scalars, updating only appended rows
+  and replacement tails. The batch `fill_report` and C exports are unchanged.
+- **Optional ratio interval.** `--ratio-interval K` is a positive integer,
+  default 1. K = 1 (the default) is unchanged behaviour: every input carries
+  the exact batch ratios. K > 1 trades per-input freshness of `sharpe_monthly`,
+  `sharpe_bar`, `sortino_bar` and `sortino_monthly` for work: the same batch
+  routine refreshes them at divisible input cursors, the final input and
+  export; intermediate deltas retain the last values and add
+  `ratios_as_of_input`. An additive `ratio_context.chart_timezone` preserves
+  the month clock for export. A pipe/socket whose EOF is discovered after its
+  last commit emits a final refresh at the same cursor; stored deltas remain
+  immutable. Exact ratio recomputation remains O(series), at every input for
+  K = 1 and at the scheduled boundaries for K > 1. Other ordinary-live
+  per-input report work is O(new/replaced rows), including current open lots
+  and diagnostics; full JSONL still writes the whole cumulative document.
 
 ### Scratch placement (behaviour of 1.7.0 and later, restated)
 

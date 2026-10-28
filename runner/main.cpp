@@ -11,6 +11,7 @@
 #include <pineforge/pineforge.h>
 #include <pineforge/native_calendar.hpp>
 #include "../src/native_calendar_memo.hpp"
+#include "../src/live_report.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -59,6 +60,7 @@ struct Config {
     mutable pineforge::native_calendar::SessionDayMemo input_calendar_memo;
     std::uint64_t from_input = 0, max_events = 0, max_attempts = 8;
     std::uint64_t status_interval = 1, max_ledger_bytes = 0, feed_idle_timeout = 15, feed_message_timeout = 15;
+    std::uint64_t ratio_interval = 1;
     long poll_ms = 1000;
     bool check = false, allow_http = false;
     ReportJsonlMode report_jsonl = ReportJsonlMode::Off;
@@ -81,6 +83,7 @@ void help() {
                  "         --check (one HTTP snapshot) --poll-ms 1000\n"
                  "         --report-jsonl (mirror committed report deltas to stdout)\n"
                  "         --report-jsonl=full (mirror cumulative reports to stdout)\n"
+                 "         --ratio-interval K (positive; default 1 keeps exact ratios at every input)\n"
                  "         --status-file PATH --status-interval 1 (seconds, 1..300)\n"
                  "         --feed-idle-timeout 15 --feed-message-timeout 15 (seconds, 1..300)\n"
                  "         --control-dir PATH --max-ledger-bytes N (0 disables budget)\n"
@@ -206,6 +209,10 @@ Config args(int argc, char **argv) {
             c.from_input = unsigned_arg(v);
         else if (a == "--max-events")
             c.max_events = unsigned_arg(v);
+        else if (a == "--ratio-interval") {
+            c.ratio_interval = unsigned_arg(v);
+            if (!c.ratio_interval) throw std::runtime_error("ratio-interval must be positive");
+        }
         else if (a == "--max-attempts")
             c.max_attempts = unsigned_arg(v);
         else if (a == "--native-config")
@@ -697,8 +704,19 @@ Json real(double value) {
 }
 std::string cumulative_report(Strategy& strategy, const std::string& deployment,
                               std::uint64_t cursor, ReportDeltas& deltas,
-                              const std::function<void(const pf_report_t&, const std::string&,
-                                                       std::uint64_t)>& verify = {}) {
+                              pineforge::LiveReportAccumulator& accumulator,
+                              const std::function<void(const std::string&, std::uint64_t)>& verify = {},
+                              bool final_input = false) {
+    const auto patch = accumulator.update(
+        *static_cast<const pineforge::BacktestEngine*>(strategy.state), cursor, final_input);
+    const auto state_hash = strategy.hash(strategy.state);
+    auto result = deltas.update(patch, deployment, cursor, state_hash);
+    if (verify) verify(result, state_hash);
+    return result;
+}
+std::string batch_report_json(Strategy& strategy, const std::string& deployment,
+                             std::uint64_t cursor, ReportDeltas& deltas,
+                             std::uint64_t state_hash) {
     pf_report_t report{};
     struct ReleaseReport {
         Strategy& strategy;
@@ -706,11 +724,7 @@ std::string cumulative_report(Strategy& strategy, const std::string& deployment,
         ~ReleaseReport() { strategy.free_report(&report); }
     } release{strategy, report};
     strategy.check(strategy.fill_report(strategy.state, &report));
-    const auto state_hash = strategy.hash(strategy.state);
-    auto result = deltas.update(report, deployment, cursor, state_hash);
-    if (verify)
-        verify(report, result, state_hash);
-    return result;
+    return deltas.full_json(report, deployment, cursor, state_hash);
 }
 std::vector<Event> actions(Strategy &s, const Config &c, const std::string &deployment) {
     std::vector<Event> out;
@@ -905,6 +919,10 @@ int run(Config c) {
             : identity(legacy_fields(c), original, library);
     deployment = bind_deployment_identity(deployment, settings_receipt, capabilities_receipt,
                                           c.routing.routed, c.routing.file_identity, confirmed_bar_receipt);
+    // The opt-in changes immutable report payloads, so replay must use the
+    // same interval. The default keeps the historical deployment identity.
+    if (c.ratio_interval > 1)
+        deployment = sha256_hex(deployment + ":ratio-interval-v1:" + std::to_string(c.ratio_interval));
     try {
         // A switched PineStrategyHost is native-bound but owns its run spec
         // through prepare_native_begin.  Let that provider admit the stream
@@ -933,13 +951,22 @@ int run(Config c) {
     ServiceFile service(c.status_file, c.status_interval * 1000);
     ledger.bind_routing(c.routing.stored_document());
     ReportDeltas report_deltas(c.report_jsonl == ReportJsonlMode::Full);
-    const auto verify_report = [&](std::uint64_t cursor) {
-        cumulative_report(strategy, deployment, cursor, report_deltas,
-            [&](const pf_report_t& native, const std::string& payload, std::uint64_t state_hash) {
+    pineforge::LiveReportAccumulator report_accumulator(c.ratio_interval);
+    const auto verify_report = [&](std::uint64_t cursor, const std::string& stored = std::string{}) {
+        // A finite feed can have forced a non-periodic final boundary. Its
+        // immutable freshness marker supplies that same boundary on replay.
+        bool final_input = false;
+        if (c.ratio_interval > 1 && !stored.empty()) {
+            const auto payload = parse_json(stored);
+            if (const auto* as_of = payload.find("ratios_as_of_input"))
+                final_input = as_of->integer<std::uint64_t>() == cursor;
+        }
+        cumulative_report(strategy, deployment, cursor, report_deltas, report_accumulator,
+            [&](const std::string& payload, std::uint64_t state_hash) {
                 ledger.verify_report(cursor, payload, [&] {
-                    return report_deltas.full_json(native, deployment, cursor, state_hash);
+                    return batch_report_json(strategy, deployment, cursor, report_deltas, state_hash);
                 });
-            });
+            }, final_input);
     };
     verify_report(0);
     Cursor cursor;
@@ -969,7 +996,7 @@ int run(Config c) {
             if (events[k].id != row->events[k].id || events[k].payload != row->events[k].payload ||
                 events[k].target_id != row->events[k].target_id || events[k].delivery_id != row->events[k].delivery_id)
                 throw std::runtime_error("native replay order-action mismatch");
-        verify_report(i + 1);
+        verify_report(i + 1, row->report_json);
         strategy.clear(strategy.state);
         recovering.members["metrics"].members["report_cursor"] = num(ledger.report_cursor());
         service.publish(recovering);
@@ -1032,7 +1059,7 @@ int run(Config c) {
                 {"report_cursor", num(ledger.report_cursor())}, {"targets", std::move(pending)}})}}), force || changed);
     };
     pulse(true);
-    auto consume_message = [&](const std::string &message, std::uint64_t &index) {
+    auto consume_message = [&](const std::string &message, std::uint64_t &index, bool final_input = false) {
         delivery.check();
         auto frame = feed_record(message);
         auto canonical = frame.dump();
@@ -1051,7 +1078,9 @@ int run(Config c) {
             try { apply_record(strategy, c, cursor, frame); }
             catch (const InputGap&) { service.input_gap(); throw; }
             auto events = actions(strategy, c, deployment);
-            auto report = cumulative_report(strategy, deployment, index + 1, report_deltas);
+            const bool last = final_input || (c.max_events && processed + 1 >= c.max_events);
+            auto report = cumulative_report(strategy, deployment, index + 1, report_deltas,
+                                            report_accumulator, {}, last);
             ledger.commit_input(index, canonical, strategy.hash(strategy.state), events, report);
             strategy.clear(strategy.state);
             ++processed;
@@ -1072,7 +1101,14 @@ int run(Config c) {
         while (!stopped && !storage_stop && line(in, row)) {
             if (blank(row))
                 continue;
-            consume_message(row, index);
+            bool last = false;
+            if (c.ratio_interval > 1 && (c.feed_url.empty() || c.check)) {
+                // File/string streams can reveal EOF without delaying intake
+                // from a live pipe or socket. Whitespace is insignificant JSON.
+                in >> std::ws;
+                last = in.peek() == std::char_traits<char>::eof();
+            }
+            consume_message(row, index, last);
             if (c.max_events && processed >= c.max_events)
                 break;
         }
@@ -1116,7 +1152,7 @@ int run(Config c) {
                     if (stopped) break;
                     if (!n) {
                         if (!blank(pending))
-                            consume_message(pending, index);
+                            consume_message(pending, index, true);
                         break;
                     }
                     last_data = std::chrono::steady_clock::now();
@@ -1189,6 +1225,19 @@ int run(Config c) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
                 }
             } while (!stopped && !storage_stop);
+        }
+        // A pipe/socket can reveal its final cursor only after that input
+        // committed. Publish a final refresh at the same cursor; immutable
+        // ledger rows remain the originally committed interval deltas.
+        const auto final_cursor = ledger.input_count();
+        if (c.ratio_interval > 1 && report_accumulator.ratios_as_of_input() != final_cursor) {
+            const auto final_report = cumulative_report(strategy, deployment, final_cursor,
+                report_deltas, report_accumulator, {}, true);
+            if (c.report_jsonl != ReportJsonlMode::Off) {
+                std::cout << (c.report_jsonl == ReportJsonlMode::Full ? report_deltas.json() : final_report)
+                          << '\n' << std::flush;
+                if (!std::cout) throw std::runtime_error("report-jsonl stdout write failed; committed input remains durable");
+            }
         }
         if (stopped || storage_stop) delivery.limit_drain();
         delivery.finish(false);
