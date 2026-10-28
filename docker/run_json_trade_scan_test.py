@@ -696,29 +696,106 @@ def test_other_filters_keep_strict_reader_format_errors(tmp_path, tag):
         assert str(failure.value) == INVALID + str(reference.value)
 
 
-def test_digest_refusal_discards_provisional_report_bytes(tmp_path, monkeypatch):
-    original = run_json._ReportSink.records
-    changed = []
+def _invoke_before_sink_read_refusal(tmp_path, monkeypatch, mutate, *,
+                                    library_factory=ordinary.SinkLibrary,
+                                    observe=None):
+    """Change the completed native file before its first verification open.
 
-    def records(sink, tag=None):
-        if tag == "T" and not changed:
-            path = Path(sink.path)
-            raw, identity = path.read_bytes(), _identity(path)
-            start = raw.index(b'\n["T",') + 1
-            position = raw.index(b",100.0,", start)
-            assert position < raw.index(b"\n", start)
-            path.write_bytes(raw[:position + 1] + b"9" + raw[position + 2:])
-            assert _identity(path) == identity
-            changed.append(sink.path)
-        return original(sink, tag)
+    Run the same corruption through the byte-pinned reader/adapter closure
+    first. No compatibility record scanner is involved in the injection.
+    """
+    # Imported at call time: the oracle support also imports fixture encoders
+    # from this module.
+    from run_json_fused_test_support import (
+        failure_envelope, load_frozen_copy, reference_imports,
+    )
 
-    monkeypatch.setattr(run_json._ReportSink, "records", records)
-    status, text, stderr, library = ordinary.invoke(tmp_path, monkeypatch)
-    assert len(changed) == 1
-    assert status == 1 and stderr == ""
-    assert text == run_json.failure_line(DIGEST_DIFFERS, "engine_invariant", {})
-    assert library.freed == library.installed == changed
-    assert all(not Path(path).exists() for path in changed)
+    reference = load_frozen_copy("before_sink_read_frozen")
+    outcomes, inputs = [], []
+    for runner in (reference, run_json):
+        original_verify = runner._ReportSink.verify
+        original_open = runner._open_uncached_sink
+        original_init = runner._BoundedJSONFile.__init__
+        changed, scratch, failures = [], [], []
+        active_sink = None
+
+        def initialize(file, stream):
+            original_init(file, stream)
+            if not isinstance(file, runner._UncachedSinkFile):
+                scratch.append((file, file.fileno()))
+
+        def verify(sink, *args, **kwargs):
+            nonlocal active_sink
+            assert active_sink is None
+            active_sink = sink
+            try:
+                return original_verify(sink, *args, **kwargs)
+            except Exception as error:
+                failures.append(failure_envelope(runner, error))
+                raise
+
+        def open_sink(path, **kwargs):
+            assert active_sink is not None and path == active_sink.path
+            assert not changed, "the corruption must precede the first sink open"
+            assert active_sink._identity is None and not active_sink.sha256
+            before = Path(path).read_bytes()
+            mutate(active_sink)
+            after = Path(path).read_bytes()
+            assert after != before
+            inputs.append((before, after))
+            changed.append(path)
+            if observe is not None and runner is run_json:
+                observe(active_sink, patch)
+            return original_open(path, **kwargs)
+
+        with monkeypatch.context() as patch, reference_imports(runner):
+            patch.setattr(runner._ReportSink, "verify", verify)
+            patch.setattr(runner, "_open_uncached_sink", open_sink)
+            patch.setattr(runner._BoundedJSONFile, "__init__", initialize)
+            status, text, stderr, library = ordinary.invoke(
+                tmp_path, patch, runner=runner, library=library_factory())
+        assert len(changed) == 1
+        assert status == 1 and stderr == ""
+        assert "Traceback" not in text + stderr
+        assert library.freed == library.installed == changed
+        assert all(not Path(path).exists() for path in changed)
+        if runner is run_json:
+            assert scratch, "the real private report spools must have been opened"
+        for file, fd in scratch:
+            assert file.closed and file.buffer is None
+            with pytest.raises(OSError):
+                os.fstat(fd)
+        assert len(failures) == 1
+        failure = failures[0]
+        assert failure[:2] == ("run_json", "RunFailure")
+        assert failure[3:5] == ("engine_invariant", {})
+        assert failure[6] == status
+        assert text.encode("ascii") == failure[7]
+        # Exactly one failure document; no provisional report prefix/suffix.
+        document = ordinary.json.loads(text)
+        assert tuple(document) == ("engine", "error", "code", "args")
+        assert document["engine"] == "pineforge"
+        assert document["code"] == "engine_invariant" and document["args"] == {}
+        outcomes.append((status, text, stderr, failure))
+    assert len(inputs) == 2 and inputs[1] == inputs[0]
+    assert outcomes[1] == outcomes[0]
+    return outcomes[1][1], ordinary.json.loads(outcomes[1][1])["error"]
+
+
+def test_trade_corruption_before_fused_read_discards_provisional_report_bytes(
+        tmp_path, monkeypatch):
+    def mutate(sink):
+        path = Path(sink.path)
+        raw, identity = path.read_bytes(), _identity(path)
+        start = raw.index(b'\n["T",') + 1
+        position = raw.index(b",100.0,", start)
+        assert position < raw.index(b"\n", start)
+        path.write_bytes(raw[:position + 1] + b"9" + raw[position + 2:])
+        assert _identity(path) == identity
+
+    text, error = _invoke_before_sink_read_refusal(tmp_path, monkeypatch, mutate)
+    assert error == INVALID + "line 10: trailer SHA-256 mismatch"
+    assert text == run_json.failure_line(error, "engine_invariant", {})
 
 
 @pytest.mark.parametrize("fault", ["eio", "truncate"],

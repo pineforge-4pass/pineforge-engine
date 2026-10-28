@@ -1,0 +1,15 @@
+diff --git a/src/native_order_book.hpp b/src/native_order_book.hpp
+index f11397e8c..7781185df 100644
+--- a/src/native_order_book.hpp
++++ b/src/native_order_book.hpp
+@@ -536,10 +536,6 @@ struct WorkingRequestCore::BookSpill {
+         const auto& r = reg[(slot.dormancy >> 1) & 1u];
+         if (slot.stamp >= r.seq) return;
+         uint64_t point = r.cur;
+-        if (r.in_progress && row.priority() >= r.W) {
+-            if (slot.stamp >= r.seq - 1) return;
+-            point = r.prev;
+-        }
+         // The base evaluated_allowance formula is the single allowance calculation.
+         const Allowance eager = core.evaluated_allowance(row, point);
+         const auto& expected = std::get<AllowanceUnits>(eager);

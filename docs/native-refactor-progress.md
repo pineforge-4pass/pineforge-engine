@@ -20,7 +20,7 @@ was to resume after the final native audit, and has landed again (#293–#298).
 | R4-A | Selected closes, current-point execution, native run specification and forward lifecycle | Complete ([PR #250](https://github.com/pineforge-4pass/pineforge-engine/pull/250)) |
 | R4-B | Host-sized terms, exact reversal, precommit view, immutable native FX curve, ABI fencing, example and docs | In implementation; no R4 acceptance claim |
 | Slice B | Source-layer cut, including the generic native FX broker-open epoch clock | Intermediate ownership boundary landed; no R4 credit |
-| Slice C | Pine compatibility adapter lowering onto the native seams | L3b deletion landing complete locally; pending the campaign-level integration gate |
+| Slice C | Pine compatibility adapter lowering onto the native seams | Compatibility deletion landing complete locally; pending the campaign-level integration gate |
 | R5 | Final requirement and compatibility audit | Open |
 | R6 | Resume the parity improvement campaign after the audit | Queued |
 
@@ -118,18 +118,18 @@ Handwritten native host
        -> BacktestEngine
 ```
 
-L3b removed the legacy compatibility consumer, default legacy construction,
+The compatibility cut removed the legacy compatibility consumer, default legacy construction,
 source pending-order book, source matching loop, lifecycle seams, and the
-legacy scheduler/stream bodies after L3a had switched every public Pine route.
+legacy scheduler/stream bodies after the preceding cut had switched every public Pine route.
 `PineStrategyHost` owns a `PineExecutionAdapter` and `PineScheduler`; the
 scheduler owns language state by value, and the adapter lowers each source
 command into the generic native request state machine. `NativeExecutionConsumer`
-is the sole execution owner. The C pending-order ABI remains v1, but its
+is the sole execution authority. The C pending-order ABI remains v1, but its
 read-only rows now come from `PendingIntentView`, not a compatibility order
 object.
 
 This records a local implementation boundary only. It is not a parity campaign
-acceptance claim: the integration owner still performs the final composite
+acceptance claim: the integration lead still performs the final composite
 measurement and gate.
 
 ## R4-C epoch baseline (historical)
@@ -137,12 +137,12 @@ measurement and gate.
 R4-C's L1 baseline used `native_order_v5`, engine/host <!-- verified HEAD -->
 `engine_script_run_v17`, `native-consumer/v7`, broker/stream version 17, and <!-- verified HEAD -->
 the source extension domain `pineforge-source-adapter/v2`; its native run-spec <!-- verified HEAD -->
-was v2. Each of those has moved since: the tree now declares `native_order_v7`,
+was v2. Each of those has moved since: the tree now declares `native_order_v8`,
 `engine_script_run_v19`, `native-consumer/v9`, `pineforge-broker-state/v19`,
 `pineforge-source-adapter/v4` and `native_run_spec_v3`. Unchanged since R4-C:
 identity values `native_order_v1`, the calendar `native_calendar_v2`, the
-driver `native_driver_v5`, `PF_ABI_VERSION` 4, and the frozen ab9714b provider
-at v16 for the required bidirectional rejection pairs.
+driver `native_driver_v5`, and the frozen ab9714b provider at v16 for the
+runtime-budget baseline. `PF_ABI_VERSION` is now 5 for the 1.8.0 module rebuild.
 
 ## Completed R3 settlement and observation milestones
 
@@ -161,13 +161,13 @@ in implementation as recorded above; it merged as PR #251.
 
 ## Deferred performance work
 
-The R5 performance wave stopped at the supervisor's cap ("R5 SUPERVISOR RULING
-2026-09-25 00:15 Taipei") and the owner's decision ("OWNER DECISION 2026-09-25
-00:20 Taipei"), both in the campaign ledger. The items below were measured or
-designed and then deferred, and none of them is implemented. Each figure is the
-named lane's own, on the host and with the tool given. A ratio is candidate
+The performance wave stopped at the review cap and the release decision,
+both in the campaign ledger. The items below were
+measured or designed and then deferred, and none of them is
+implemented. Each figure is the
+named slice's own, on the host and with the tool given. A ratio is candidate
 over base, so below 1 is faster, and "off / on" is the magnifier. Rulings are
-quoted by their ledger title. Lane reports, scratch trees and prototype
+quoted by their ledger title. Slice reports, scratch trees and prototype
 branches are the maintainers' unpublished evidence; the column below names
 them for the record only. "Linux aarch64" is the maintainers' Cortex-A725 host.
 
@@ -181,9 +181,9 @@ them for the record only. "Linux aarch64" is the maintainers' Cortex-A725 host.
 | The kernel quiet-run loop and the Pine quiet calculation | A loop for consecutive quiet bars of a pumped batch at the chart's own timeframe (label and gap checks in the batch preflight, precomputed intervals and session facts, one calculation frame); and skipping a flat bar's post-script hooks when its script issued nothing | Estimated, not prototyped (PERF-D3's report, section 3.7): about 1,000 instructions a bar for the loop and 800 for the quiet calculation, taking the floor from 3,726 instructions (S1, S2 and D2-A) to about 1,900, or 180–200 ns a bar | As S1a (PERF-D3's follow-up row) | The PERF-D3 report only | After S1a and S1b |
 | PGO | Profile-guided optimisation of the library objects: an instrumented build, a training run over the bench strategies, a `-fprofile-use` rebuild and the identity gates, per compiler and target, with a staleness gate on the profile | LAYOUT1, Linux aarch64 (Cortex-A725), GCC 13.3, `perf stat`, trained on 86 slots and timed on the 14 held-out probes: 14.5 % fewer cycles, CPU time 0.865, 7 % fewer instructions, 26 % fewer L1i refills, 36 % fewer front-end stalls, layout spread 9.0 % → 5.1 %, fingerprints identical | "R5 LAYOUT1 DONE + ACCEPTED 2026-09-24 21:45 Taipei": "PGO APPROVED as a lane (PGO1) scheduled LAST in the perf wave after the code lanes (profile staleness)"; the supervisor's cap: "PGO folds into the release lane"; the owner: "release with PGO in the release build"; TRIAGE1 §D | Unpublished. The tree carries only LAYOUT1's `-falign-functions=64` | The release lane. BENCH4 timed the standard Release build without PGO, and neither BENCH4's nor REL10-ENGINE's brief names it |
 | Compact journal records and a history ring buffer (L3) | Smaller command records and a ring buffer for the request core's history. Since the bounded-journal change, `WorkingRequestCore::history` (`include/pineforge/native_order.hpp:1840`) returns a `JournalView` over `journal_` (`include/pineforge/native_order.hpp:2597`) instead of exposing the former `history_` vector. Compact records and a ring remain the deferred L3 proposal | L3, Linux aarch64 (Cortex-A725), `perf` call graphs, inclusive shares: at most 3.68 % of bracket, 11.99 % of re-issue, 4.26 % of market and 3.42 % of the 14 probes (retiring the history alone: 1.64, 4.51, 2.53 and 1.00 %); only part is realisable, since records must still be written | "R5 L3 DONE + ACCEPTED 2026-09-24 22:10 Taipei", ruling 1: "DEFERRED to the PERF-D3 structural plan"; TRIAGE1 §D: "compact journal records" | Lane L3's code, merged by INT22 (#285); its profiles are unpublished | A `native_order` layout epoch |
-| A checked-values handoff for executions (L3) | `execution_values` runs twice, in `check_execution` (`src/native_order.cpp:7251`) and again in `apply_execution` (`src/native_order.cpp:7275`); handing the checked values across needs a public type, an API addition with no layout change | L3, as above: 2.21 % of bracket for the two together, about 1.1 % recoverable | L3 ruling 2: "a public checked-values handoff for executions (~1.1% bracket) -> DEFERRED" | As above | An owner decision on the API addition |
-| A chunked `trades_` store (L3) | Closed trades in chunks rather than one vector; `trades_` (`include/pineforge/engine.hpp:676`) is protected `BacktestEngine` state, so script ABI | L3, as above: on bracket, vector growth 0.64 %, `Trade` moves 0.74 % and `record_close_trade` 0.43 % (at most about 1.4 %); at most 0.35 % on the 14 probes | L3 ruling 4: "chunked trades_ store (ABI) -> DEFERRED" | As above | An `engine_script_run` epoch that changes the engine's protected layout |
-| A zoned chart-day memo (D2-D finding 4) | On a chart with a timezone, `libc_chart_day_key` (`src/source/pine_adapter.cpp:17965`) takes the process timezone lock through `ScopedTimezone` and calls `localtime_r` on every bar, because `on_bar_open` (`src/source/pine_adapter.cpp:22867`) reads `chart_day_key` (`src/source/pine_adapter.cpp:23104`) unconditionally. The non-UTC monthly Sharpe/Sortino walk, `month_key_local` (`src/engine_metrics.cpp:49`), pays one `localtime_r` per equity point. UTC charts use D2-D's memo, `civil_chart_day_key` (`src/source/pine_adapter.cpp:17949`) | Not measured on a zoned chart. The UTC path cost 134 instructions a bar before D2-D's memo and 68 after (D2-D, Linux aarch64, callgrind on the floor). PERF-K1: `ScopedTimezone` copies the zone name, which allocates for names of 16 or more characters under libstdc++ | TRIAGE1 §D: "D2-D finding 4 (the timezone `localtime_r` memo)", under the owner's cap. D2-D's report: an exact zoned memo "would need the zone's transition table, which belongs in `timezone.cpp`" | None; the UTC memo's witness is `tests/test_chart_day_memo.cpp` | A lane that owns `src/timezone.cpp` and builds an exact zone-transition memo (PERF-K1's Sitka case shows why a shortcut is not exact), byte-identical, with the zoned keys of `test_chart_day_memo` still equal to the computed ones |
+| A checked-values handoff for executions (L3) | `execution_values` runs twice, in `check_execution` (`src/native_order.cpp:6968`) and again in `apply_execution` (`src/native_order.cpp:6992`); handing the checked values across needs a public type, an API addition with no layout change | L3, as above: 2.21 % of bracket for the two together, about 1.1 % recoverable | L3 ruling 2: "a public checked-values handoff for executions (~1.1% bracket) -> DEFERRED" | As above | An owner decision on the API addition |
+| A chunked `trades_` store (L3) | Closed trades in chunks rather than one vector; `trades_` (`include/pineforge/engine.hpp:711`) is protected `BacktestEngine` state, so script ABI | L3, as above: on bracket, vector growth 0.64 %, `Trade` moves 0.74 % and `record_close_trade` 0.43 % (at most about 1.4 %); at most 0.35 % on the 14 probes | L3 ruling 4: "chunked trades_ store (ABI) -> DEFERRED" | As above | An `engine_script_run` epoch that changes the engine's protected layout |
+| A zoned chart-day memo (D2-D finding 4) | On a chart with a timezone, `libc_chart_day_key` (`src/source/pine_adapter.cpp:17965`) takes the process timezone lock through `ScopedTimezone` and calls `localtime_r` on every bar, because `on_bar_open` (`src/source/pine_adapter.cpp:22867`) reads `chart_day_key` (`src/source/pine_adapter.cpp:23104`) unconditionally. The non-UTC monthly Sharpe/Sortino walk, `month_key_local` (`src/engine_metrics.cpp:55`), pays one `localtime_r` per equity point. UTC charts use D2-D's memo, `civil_chart_day_key` (`src/source/pine_adapter.cpp:17949`) | Not measured on a zoned chart. The UTC path cost 134 instructions a bar before D2-D's memo and 68 after (D2-D, Linux aarch64, callgrind on the floor). PERF-K1: `ScopedTimezone` copies the zone name, which allocates for names of 16 or more characters under libstdc++ | TRIAGE1 §D: "D2-D finding 4 (the timezone `localtime_r` memo)", under the owner's cap. D2-D's report: an exact zoned memo "would need the zone's transition table, which belongs in `timezone.cpp`" | None; the UTC memo's witness is `tests/test_chart_day_memo.cpp` | A lane that owns `src/timezone.cpp` and builds an exact zone-transition memo (PERF-K1's Sitka case shows why a shortcut is not exact), byte-identical, with the zoned keys of `test_chart_day_memo` still equal to the computed ones |
 | Thread-local reads that remain per call | D2-C moved the three scopes' writes onto the pump's block, `pump_ambient` (`src/native_execution_consumer.hpp:581`). A reader still reaches the block through `tl_runtime_ambient` (`src/ta_extremes_volume.cpp:29`): `bar_context` (`src/ta_extremes_volume.cpp:82`), read by every `ExtremeRing::update` (`src/ta_extremes_volume.cpp:117`), which backs `ta.highest`, `ta.lowest`, `ta.highestbars` and `ta.lowestbars` and, through an embedded `Highest` and `Lowest`, `ta.stoch`, `ta.wpr` and `ta.range`; and `matching_day_partition` (`src/timeframe.cpp:628`), read by the default-anchored `ta.vwap` through `session_day_index`, by `crosses_boundary` on a DAY period (`timeframe.change("D")`) and by the session-period helpers. `decompose_ms_local` (`src/session_time.cpp:250`) reads two thread-locals per call on a zoned clock. The prepared order storage now caches one idle block per token type through `free_block` (`src/native_order.cpp:888`), replacing the former `free_blocks` vector; prepared allocation and deallocation still reach that thread-local cache. `ema_na_warmup_flag` is read once per EMA, at its first compute | One thread-local access per reader call. AUDIT4, macOS arm64, a dlopen'd tutorial-MACD probe, counted by `_tlv_get_addr` breakpoints and by descriptor patching: 1.000 a bar for one `ta::Highest` and for one default `ta::VWAP`, 1.999 for one `pine_hour` on a New York clock, 0.000 on the no-order floor and with orders. On Linux a TLS-descriptor call costs about 20 instructions: D2-C's 13 → 4 calls a bar was 260 → 80 instructions (Linux aarch64, GCC 13, callgrind). INT23: 2.00 a bar on the zoned probe 064, 0.08 on probe 008 | None for the TA and day-partition readers: "RULING: INT23 ACCEPTED" (ledger, 2026-09-24 23:30 UTC) reads "dlopen TLS 13->0/bar", and INT23's report names only the timezone and order-core residuals. This row is their record | Unpublished (AUDIT4's scratch) | A byte-identical lane that hands these readers the pump's block without a thread-local read. `ta::bar_context()` is script ABI, so its public declaration stays as it is |
 | "audit-off mode", "LTO", "data-oriented layout" | Named in "OWNER DECISION 2026-09-25 00:20 Taipei" among the post-release structural items: "S1 bulk quiet bars, S2 per-strategy specialization, audit-off mode, LTO+PGO, data-oriented layout". No engine or campaign document defines, designs or measures the three | None | The owner decision | None | Struck from this inventory until a design note defines one of them |
 
@@ -194,9 +194,9 @@ them for the record only. "Linux aarch64" is the maintainers' Cortex-A725 host.
 K4, the batch log pre-size. Since V19-B's step 6 (`08e71bae`) a run under the
 default `NativeEventRetention::Window` keeps no driver point and retires its
 journal at every script-bar boundary, so K4 has nothing to size.
-`reserve_driver_log` (`src/native_execution_consumer.cpp:3522-3527`) returns
+`reserve_driver_log` (`src/native_execution_consumer.cpp:3544-3549`) returns
 unless the retention is Full, and `presize_logs`
-(`src/native_execution_consumer.cpp:10807-10818`) sizes no journal under Window.
+(`src/native_execution_consumer.cpp:10843-10854`) sizes no journal under Window.
 `NativeRunSpec::event_retention` (`include/pineforge/native_run_spec.hpp:714`)
 defaults to Window, and the Pine adapter declares
 `NativeEventRetention::Window` (`src/source/pine_adapter.cpp:3187`). K4 still

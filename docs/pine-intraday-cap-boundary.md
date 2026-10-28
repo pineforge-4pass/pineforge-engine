@@ -148,9 +148,9 @@ No mismatch test program is executed.
 
 Broker hashes moved to `pineforge-broker-state/v4` here (since advanced to <!-- verified HEAD -->
 `pineforge-broker-state/v19`), and stream fingerprints began with version 4 then.
-Each Pine component's own schema remained 1. Public C ABI version4, stream API
-version1, POD layouts, exports and `PINEFORGE_HAS_SCRIPT_RUN_PREPARE_V1` remain
-unchanged. This version correction changes linking and serialized hash bytes,
+Each Pine component's own schema remained 1. Public C ABI version 4, stream API
+version 1, POD layouts, exports and `PINEFORGE_HAS_SCRIPT_RUN_PREPARE_V1` were
+unchanged by that historical version correction, which changed linking and serialized hash bytes,
 not cap charging, fill prices or other economic behavior. It does not make
 cross-module opaque C handles safe: retain the creating module's functions.
 

@@ -188,9 +188,10 @@ itself. Open it with `ctypes.CDLL`:
 lib = ctypes.CDLL("./my_strategy.so")
 
 # ABI guard — pf_report_t is CALLER-allocated, so running an old .so
-# against the v4 mirror above (or vice versa) silently corrupts memory.
-# Verify the .so's layout version before any run:
-EXPECTED_PF_ABI = 4   # PF_ABI_VERSION in <pineforge/pineforge.h> as of v1.0.0;
+# against a different report layout can corrupt memory. ABI 5 also requires
+# a 1.8.0 module rebuild while retaining the layout introduced in ABI 4.
+# Verify the .so's module compatibility version before any run:
+EXPECTED_PF_ABI = 5   # PF_ABI_VERSION in <pineforge/pineforge.h> from v1.8.0;
                       # a v0.13.1 .so answers 3 and needs that release's mirror
 try:
     lib.pf_abi_version.restype = ctypes.c_int

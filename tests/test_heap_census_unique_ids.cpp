@@ -1,4 +1,4 @@
-// CR-150 L0B. A live Pine host, not a model of its id tables. The profile
+// A live Pine host, not a model of its id tables. The profile
 // checkpoint is BEFORE host destruction and BEFORE allocating a report copy.
 // No closedtrades/opentrades reads occur in on_source_bar. Normal ctest checks
 // the fixture's fills and ids; heap_census.py checks its retained-byte slope.

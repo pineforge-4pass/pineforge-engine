@@ -1,4 +1,4 @@
-// test_security_range_start_na_warmup — pins the opt-in KI-55 HTF warmup flag.
+// test_security_range_start_na_warmup — pins the opt-in HTF warmup flag.
 //
 // The engine run flag ``security_range_start_na_warmup`` (carried through the
 // existing syminfo_metadata channel as an epoch-ms range start) makes every

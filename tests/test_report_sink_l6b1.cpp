@@ -1,4 +1,4 @@
-// CR-150 L6B1: the real, whole-archive strategy module below is built from
+// The real, whole-archive strategy module below is built from
 // this same file. On f397d88d linking/loading fails on the missing sink ABI:
 // P00 declares it but supplies no runtime definitions. No fake runtime/tape.
 #include <pineforge/pineforge.h>

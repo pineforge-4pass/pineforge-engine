@@ -1,0 +1,11 @@
+diff --git a/src/source/pine_adapter.cpp b/src/source/pine_adapter.cpp
+--- a/src/source/pine_adapter.cpp
++++ b/src/source/pine_adapter.cpp
+@@ -29166,7 +29166,6 @@
+ // present while their handles are live (erase_retired_rows roots them).
+ void PineExecutionAdapter::remember_live(const native_order::RequestHandle& handle,
+                                         PlacementSnapshot&& snapshot) {
+-    invalidate_retirement();
+     const auto previous = placement_.find(handle.incarnation);
+     const bool already_live = previous != placement_.end()
+         && std::find(live_handles_.begin(), live_handles_.end(), handle) != live_handles_.end();

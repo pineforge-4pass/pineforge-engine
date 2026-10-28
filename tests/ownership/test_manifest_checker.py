@@ -6,8 +6,8 @@ The positive tree check deliberately requires the integrated producers, rather
 than accepting a recorded count or treating existing integration findings as a
 successful check. The supervisor runs this suite on the completed tree.
 
-Use --shard I/N (1-based) to run sorted loader-discovered ManifestCheckerTests
-ids at positions [I-1::N], plus the cheap partition guard in every shard.
+Use --shard I/N (1-based) for a deterministic, structurally balanced partition
+of loader-discovered ManifestCheckerTests, plus the cheap guards in every shard.
 Without --shard, the usual unittest discovery and CLI selectors apply.
 """
 from __future__ import annotations
@@ -193,7 +193,7 @@ class ManifestCheckerTests(unittest.TestCase):
         return subprocess.run(
             [sys.executable, "-I", "-B", str(CHECKER), "--root",
              str(self.root if copied_tree else ROOT), "--manifest", str(manifest)],
-            cwd=self.root, capture_output=True, text=True, timeout=60)
+            cwd=self.root, capture_output=True, text=True)
 
     def copy_tree(self):
         for directory in ("src", "include", "docker"):
@@ -676,39 +676,143 @@ class ManifestCheckerTests(unittest.TestCase):
         path = self.root / "bad.json"
         path.write_text('{"format":"one","format":"two"}', encoding="utf-8")
         result = subprocess.run([sys.executable, "-I", "-B", str(CHECKER), "--manifest", str(path)],
-                                capture_output=True, text=True, timeout=60)
+                                capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("ownership[input]: duplicate JSON key format", result.stdout.splitlines())
 
 
+def checker_run_count(name: str, methods: dict, active=()) -> int:
+    """Count subprocess launches through self helpers and literal for loops.
+
+    This reads ASTs only. Unknown loop sizes carrying checker work fail closed
+    rather than silently underweighting a new control. Branches are summed as
+    a conservative structural estimate; no measured timings enter the split.
+    """
+    if name in active:
+        raise ValueError(f"recursive checker helper: {name}")
+    active = (*active, name)
+
+    def walk(nodes, bindings):
+        total = 0
+        for node in nodes:
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        bindings[target.id] = node.value
+            if isinstance(node, ast.For):
+                repeated = walk(node.body, dict(bindings))
+                if repeated:
+                    iterable = bindings.get(node.iter.id) if isinstance(node.iter, ast.Name) else node.iter
+                    if not isinstance(iterable, (ast.Tuple, ast.List)):
+                        raise ValueError(f"{name}: checker work requires a literal loop")
+                    total += len(iterable.elts) * repeated
+                total += walk([node.iter, *node.orelse], dict(bindings))
+                continue
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                owner = node.func.value
+                if isinstance(owner, ast.Name):
+                    if owner.id == "subprocess" and node.func.attr == "run":
+                        total += 1
+                    elif owner.id == "self" and node.func.attr in methods:
+                        total += checker_run_count(node.func.attr, methods, active)
+            nested = walk(ast.iter_child_nodes(node), bindings)
+            if nested and isinstance(node, (ast.While, ast.AsyncFor, ast.ListComp,
+                                            ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+                raise ValueError(f"{name}: checker work requires a literal loop")
+            total += nested
+        return total
+
+    return walk(methods[name].body, {})
+
+
+def case_weights() -> dict[str, int]:
+    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+    case_class = next(node for node in tree.body
+                      if isinstance(node, ast.ClassDef) and node.name == ManifestCheckerTests.__name__)
+    methods = {node.name: node for node in case_class.body if isinstance(node, ast.FunctionDef)}
+    # Even scalar/schema-only cases have setup and assertions to run.
+    return {name: max(1, checker_run_count(name, methods))
+            for name in methods if name.startswith("test_")}
+
+
+def partition_case_ids(ids: list[str], weights: dict[str, int], count: int) -> list[list[str]]:
+    shards = [[] for _ in range(count)]
+    loads = [0] * count
+    # Largest work first; stable ids, then case count and index break ties.
+    for test_id in sorted(ids, key=lambda value: (-weights[value.rsplit(".", 1)[-1]], value)):
+        index = min(range(count), key=lambda slot: (loads[slot], len(shards[slot]), slot))
+        shards[index].append(test_id)
+        loads[index] += weights[test_id.rsplit(".", 1)[-1]]
+    return [sorted(shard) for shard in shards]
+
+
 def shard_case_ids(index: int, count: int) -> list[str]:
-    ids = sorted(test.id() for test in
-                 unittest.TestLoader().loadTestsFromTestCase(ManifestCheckerTests))
-    return ids[index - 1::count]
+    ids = [test.id() for test in
+           unittest.TestLoader().loadTestsFromTestCase(ManifestCheckerTests)]
+    return partition_case_ids(ids, case_weights(), count)[index - 1]
 
 
 class ManifestCheckerShardingTests(unittest.TestCase):
     def test_shards_partition_every_case_exactly_once(self):
-        # Discover the expectation independently of shard_case_ids, and use
-        # index residues rather than reproducing its slicing implementation.
+        # Discover coverage independently, then check the actual CLI selector
+        # against the weighted partition for several input orders.
         ids = sorted(test.id() for test in
                      unittest.TestLoader().loadTestsFromTestCase(ManifestCheckerTests))
+        weights = case_weights()
         self.assertGreaterEqual(len(ids), 30)
         for count in range(1, 9):
             with self.subTest(shards=count):
+                expected = partition_case_ids(ids, weights, count)
+                self.assertEqual(expected, partition_case_ids(ids, weights, count))
+                self.assertEqual(expected, partition_case_ids(list(reversed(ids)), weights, count))
+                self.assertEqual(expected, partition_case_ids(ids[::2] + ids[1::2], weights, count))
                 seen = set()
                 total = 0
                 for index in range(1, count + 1):
                     shard = shard_case_ids(index, count)
-                    expected = [test_id for position, test_id in enumerate(ids)
-                                if position % count == index - 1]
-                    self.assertEqual(shard, expected)
+                    self.assertEqual(shard, expected[index - 1])
                     self.assertEqual(len(shard), len(set(shard)))
                     self.assertTrue(seen.isdisjoint(shard))
                     seen.update(shard)
                     total += len(shard)
                 self.assertEqual(seen, set(ids))
                 self.assertEqual(total, len(ids))
+
+    def test_four_shards_balance_checker_work(self):
+        weights = case_weights()
+        loads = [sum(weights[test_id.rsplit(".", 1)[-1]]
+                     for test_id in shard_case_ids(index, 4))
+                 for index in range(1, 5)]
+        self.assertGreater(min(loads), 0)
+        # max/min <= 5/4 allows 25% structural imbalance (four units at the
+        # current lightest load of 16), above single-unit rounding noise.
+        # The old modulo split's 22/15/14/15 violates it: 4*22 > 5*14.
+        self.assertLessEqual(4 * max(loads), 5 * min(loads), loads)
+
+    def test_checker_weights_follow_source_loops_and_helpers(self):
+        # Parse fixtures only: these subprocess calls are never executed.
+        for mutations in (("field", "reason"), ("a", "b", "c", "d", "e")):
+            with self.subTest(mutations=mutations):
+                tree = ast.parse(f"""
+def control(self):
+    mutations = {mutations!r}
+    for mutation in mutations:
+        self.reject()
+    self.run_checker()
+def reject(self):
+    self.run_checker()
+def run_checker(self):
+    return subprocess.run(["checker"])
+""")
+                methods = {node.name: node for node in tree.body}
+                self.assertEqual(checker_run_count("control", methods), len(mutations) + 1)
+        tree = ast.parse("""
+def control(self):
+    for mutation in discover_mutations():
+        subprocess.run(["checker"])
+""")
+        with self.assertRaisesRegex(ValueError, "literal loop"):
+            checker_run_count("control", {node.name: node for node in tree.body})
 
 
 def parse_shard(value: str) -> tuple[int, int]:

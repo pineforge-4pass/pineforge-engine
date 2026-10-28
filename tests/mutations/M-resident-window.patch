@@ -1,0 +1,12 @@
+diff --git a/src/native_order_book.hpp b/src/native_order_book.hpp
+--- a/src/native_order_book.hpp
++++ b/src/native_order_book.hpp
+@@ -515,7 +515,7 @@ struct WorkingRequestCore::BookSpill {
+             if (core.epoch_ > std::numeric_limits<uint64_t>::max() - 2)
+                 throw coded<std::overflow_error>(RunFailureCode::engine_invariant, {},
+                                                   "native working-request epoch exhausted");
+-            allowance = AllowanceUnits{r.cur, meta.initial, meta.initial};
++            allowance = AllowanceUnits{r.prev, meta.initial, meta.initial};
+             core.epoch_ += 2;
+         }
+         for (auto& r : reg) {
