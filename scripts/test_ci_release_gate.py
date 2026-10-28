@@ -1992,8 +1992,8 @@ class RulesetsProbeTests(unittest.TestCase):
     def test_probe_dispatch_branch_and_fleets_are_documented(self):
         docs = (ROOT / "docs/ci.md").read_text()
         requirements = (
-            'PR build/preflight and parity subset use `["self-hosted","pf-gcp-pr"]`;\n'
-            'post preflight/parity use bare GKE scale-set names; credentialed docs keep `["self-hosted","pf-gcp-post"]`.\n'
+            'admit is hosted, while PR preflight, proof legs and parity use bare GKE scale-set names;\n'
+            'credentialed post work keeps its protected `["self-hosted","pf-gcp-post"]` fleet.\n'
             'Post Release/Debug/kernel and native shards, post sanitizers and both native-live sanitizer\n'
             'profiles use fixed bare GKE scale-set names directly in runner pods carrying the engine toolchain image and sudo. No job routes by event.',
             "The manual `release-ruleset-probe.yml` workflow runs `authz` on\n"
