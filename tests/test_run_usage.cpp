@@ -32,6 +32,24 @@ void require(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
 }
 
+void require_run_state(pineforge::NativeStrategyHost& host, bool condition,
+                       const char* message) {
+    if (!condition) {
+        const auto state = host.native_state();
+        auto* engine = static_cast<pineforge::BacktestEngine*>(&host);
+        std::fprintf(stderr,
+                     "test_run_usage: %s: native_state.kind=%u native_failure_code=%u "
+                     "native_failure_operation=%u last_run_status=%d failure_code=%s "
+                     "failure_args=%s last_error=%s\n",
+                     message, static_cast<unsigned>(state.kind),
+                     static_cast<unsigned>(state.failure.code),
+                     static_cast<unsigned>(state.failure.operation),
+                     host.last_run_status(), strategy_get_last_error_code(engine),
+                     strategy_get_last_error_args(engine), host.last_error().c_str());
+    }
+    require(condition, message);
+}
+
 pineforge::NativeRunSpec usage_spec(const char* key) {
     pineforge::NativeRunSpec spec;
     spec.identity.session_key = key;
@@ -49,6 +67,8 @@ pineforge::NativeRunSpec usage_spec(const char* key) {
     spec.point_value = 1.0;
     spec.account_fx = 1.0;
     spec.price_tick = 0.01;
+    // This host does not record its own report points.
+    spec.report_policy = pineforge::NativeReportPolicy::KernelRecorded;
     return spec;
 }
 
@@ -75,8 +95,9 @@ std::vector<pineforge::Bar> bars(int count) {
     result.reserve(static_cast<std::size_t>(count));
     for (int i = 0; i < count; ++i) {
         const double close = 100.0 + i;
+        // UTC 24x7 one-minute bars must carry canonical minute-open labels.
         result.push_back({close, close + 1.0, close - 1.0, close, 10.0,
-                          INT64_C(1700000000000) + static_cast<std::int64_t>(i) * 60000});
+                          static_cast<std::int64_t>(i) * INT64_C(60000)});
     }
     return result;
 }
@@ -106,6 +127,19 @@ std::uint64_t file_bytes(const std::string& path) {
     return static_cast<std::uint64_t>(stream.tellg());
 }
 
+std::uint64_t file_rows(const std::string& path) {
+    std::ifstream stream(path, std::ios::binary);
+    require(stream.good(), "sink file could not be read for row count");
+    std::uint64_t count = 0;
+    std::string line;
+    while (std::getline(stream, line)) {
+        if (line.compare(0, 5, "[\"E\",") == 0
+            || line.compare(0, 5, "[\"T\",") == 0) ++count;
+    }
+    require(stream.eof(), "sink file row read failed");
+    return count;
+}
+
 void query_is_transactional_before_first_run() {
     struct pf_run_usage_v1 value{};
     value.struct_size = 0;
@@ -125,8 +159,9 @@ void successful_run_has_measured_usage() {
             "usage success spec refused");
     const auto input = bars(count);
     host.run(input.data(), static_cast<int>(input.size()));
-    require(host.native_state().kind == pineforge::NativeLifecycleKind::Completed,
-            "usage success run failed");
+    require_run_state(host,
+                      host.native_state().kind == pineforge::NativeLifecycleKind::Completed,
+                      "usage success run failed");
 
     pf_report_t report{};
     host.fill_report(reinterpret_cast<pineforge::ReportC*>(&report));
@@ -165,13 +200,17 @@ void sink_usage_is_independently_counted() {
     require(strategy_set_report_sink_v1(&host, &sink) == 0, "usage sink setter refused");
     const auto input = bars(2);
     host.run(input.data(), static_cast<int>(input.size()));
-    require(host.native_state().kind == pineforge::NativeLifecycleKind::Completed,
-            "usage sink run failed");
+    require_run_state(host,
+                      host.native_state().kind == pineforge::NativeLifecycleKind::Completed,
+                      "usage sink run failed");
     pf_report_t report{};
     host.fill_report(reinterpret_cast<pineforge::ReportC*>(&report));
     const Receipt receipt;
-    const std::uint64_t expected_rows =
-        static_cast<std::uint64_t>(report.equity_curve_len + report.trades_len);
+    // A sink report releases its arrays. Count the published E/T records instead;
+    // with no orders, this fixture must publish one equity point per script bar.
+    const std::uint64_t expected_rows = file_rows(path);
+    require(expected_rows == static_cast<std::uint64_t>(input.size()),
+            "usage sink did not publish one equity row per input bar");
     require(receipt.value.sink_rows_written == expected_rows,
             "sink row count was not independently counted");
     require(receipt.value.sink_bytes_written == file_bytes(path),
@@ -189,8 +228,11 @@ void failed_run_keeps_receipt() {
             "usage failure spec refused");
     const auto input = bars(3);
     host.run(input.data(), static_cast<int>(input.size()));
-    require(host.native_state().kind == pineforge::NativeLifecycleKind::Failed,
-            "expected the callback failure");
+    require_run_state(host,
+                      host.native_state().kind == pineforge::NativeLifecycleKind::Failed
+                          && host.native_state().failure.code
+                              == pineforge::NativeFailureCode::CallbackException,
+                      "expected the callback failure");
     const Receipt receipt;
     require(receipt.value.bars_processed == 1,
             "failed receipt did not retain bars before the failure");
