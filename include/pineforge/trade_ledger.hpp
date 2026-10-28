@@ -47,9 +47,10 @@ public:
         kRecordBytes + 2 * sizeof(size_type) + kCacheStringBytes;
     static constexpr size_type kDefaultCacheRows = 65536;
     static constexpr size_type kMaxCacheRows = 1048576;
-    // A run with a report sink installed keeps the cache inside the sink's
-    // fixed heap window: 128 x 312 = 39,936 B, under one 64 KiB scratch window.
-    static constexpr size_type kSinkCacheRows = 128;
+    // A report-sink run has the same declared constant cap as the default:
+    // 65,536 x 312 = 20,447,232 entry bytes, plus sizeof(TradeLedger)+sizeof(State).
+    // Allocation remains lazy and grows by powers of two up to this cap.
+    static constexpr size_type kSinkCacheRows = kDefaultCacheRows;
     using Visitor = std::function<bool(size_type, const Trade&)>;
 
     class const_iterator {

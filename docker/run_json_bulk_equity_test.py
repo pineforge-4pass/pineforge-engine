@@ -1,11 +1,10 @@
-"""Bounded equity batches against the unchanged strict path and real writers.
+"""Bounded equity batches through fused assembly and the frozen strict reader.
 
-Every differential test also measures the real canonical path: on the older
-implementation that assertion fails because E still calls loads/dumps per row.
-Counters always delegate; they do not replace parsing or serialization.
+Counters delegate to real proofs, parsers, encoders and artifact writes.
+The standalone scan also retains its exact completed-prefix contract.
 """
-from contextlib import ExitStack
 import errno
+from functools import lru_cache
 import hashlib
 from pathlib import Path
 import re
@@ -20,6 +19,7 @@ sys.path.insert(0, str(ROOT / "docker"))
 
 import pf_sink
 import run_json
+import run_json_fused_test_support as support
 import test_run_json_sink as ordinary
 import test_run_json_stream_fastpath as oracle
 from run_json_trade_scan_test import _event, _point, _sink, _trade, _trailer_start
@@ -29,19 +29,45 @@ I53 = (1 << 53) - 1
 POINTS = 2000
 
 
-def _document(sink, report):
-    return run_json._build_sink_report(
+@lru_cache(maxsize=1)
+def _reference_runner():
+    return support.load_frozen_copy("bulk_equity_reference")
+
+
+def _document(sink, report, runner=run_json):
+    return runner._build_sink_report(
         report, Path("fixed.csv"), POINTS, ordinary.bars.T0,
         ordinary.bars.T0 + 86400000, 0.125, {}, {}, {}, sink)
 
 
-def _run(sink, library, report, monkeypatch, enabled, *, copy_only=False,
-         destination=None, equity_only=False):
+def _endpoints(sink):
+    diagnostics = sink.diagnostics
+    if diagnostics is None:
+        return None
+    return (diagnostics.count_e, ordinary.encoded(diagnostics.first),
+            ordinary.encoded(diagnostics.last), diagnostics.trade_at_start)
+
+
+def _result(outcome, counts, endpoints):
+    envelope = outcome.failure
+    failure = ((envelope[:2], *envelope[2:5]) if envelope is not None else None)
+    return outcome.report, failure, counts, endpoints, outcome
+
+
+def _run(sink, library, report, monkeypatch, use_fused, *,
+         destination=None, bulk=True, after_verify=None):
+    """Publish a real prepared artifact; the reference disables bulk in frozen code."""
+    runner = run_json if use_fused else _reference_runner()
+    parser = pf_sink if use_fused else runner._rjone_pf_sink
+    target = support.reference_sink(runner, sink) if use_fused else sink
     destination = oracle._Destination() if destination is None else destination
-    counts = {"verify": 0, "copy": 0, "decode_e": 0, "dump_e": 0}
+    counts = {"verify": 0, "copy": 0, "decode_e": 0, "dump_e": 0,
+              "strict_e": 0, "bulk_e": 0, "encoded_e": 0, "batch_sizes": []}
     phase = "verify"
-    loads, dumps = run_json.json.loads, run_json.json.dumps
-    decode = pf_sink.RecordParser.parse_verified
+    verified_target = None
+    loads, dumps = runner.json.loads, runner.json.dumps
+    parse, decode = parser.RecordParser.parse, parser.RecordParser.parse_verified
+    prove = runner._bulk_equity
 
     def counted_loads(*args, **kwargs):
         counts[phase] += 1
@@ -56,39 +82,100 @@ def _run(sink, library, report, monkeypatch, enabled, *, copy_only=False,
         counts["decode_e"] += 1
         return decode(parser, line)
 
-    failure = None
+    def counted_parse(parser, *args, **kwargs):
+        record = parse(parser, *args, **kwargs)
+        if record.tag == "E":
+            counts["strict_e"] += 1
+        return record
+
+    def counted_proof(raw):
+        batch = prove(raw)
+        if batch is not None:
+            counts["bulk_e"] += batch.count
+            counts["batch_sizes"].append(batch.count)
+        return batch
+
+    def verified(verified_sink, native):
+        nonlocal phase, verified_target
+        verified_target = verified_sink
+        phase = "copy"
+        if after_verify is not None:
+            after_verify(verified_sink, native)
+
+    def publish(artifact, document):
+        while chunk := artifact.read(64 * 1024):
+            destination.write(chunk.decode("ascii") if isinstance(chunk, bytes) else chunk)
+
     with monkeypatch.context() as patch:
-        # raising=False makes the performance assertion, rather than a missing
-        # switch, the substantive failure on the older implementation.
-        patch.setattr(run_json, "_BULK_E_ENABLED", enabled, raising=False)
-        patch.setattr(run_json.json, "loads", counted_loads)
-        patch.setattr(run_json.json, "dumps", counted_dumps)
-        patch.setattr(pf_sink.RecordParser, "parse_verified", counted_decode)
+        patch.setattr(runner, "_BULK_E_ENABLED", use_fused and bulk)
+        patch.setattr(runner.json, "loads", counted_loads)
+        patch.setattr(runner.json, "dumps", counted_dumps)
+        patch.setattr(parser.RecordParser, "parse", counted_parse)
+        patch.setattr(parser.RecordParser, "parse_verified", counted_decode)
+        patch.setattr(runner, "_bulk_equity", counted_proof)
+        if use_fused:
+            append = runner._JSONColumn.append_ascii
+
+            def counted_append(column, data):
+                result = append(column, data)
+                counts["encoded_e"] += data.count(b'{"time_ms":')
+                return result
+
+            patch.setattr(runner._JSONColumn, "append_ascii", counted_append)
         try:
-            if not copy_only:
-                sink.verify(library, 1, report)
-            phase = "copy"
-            document = _document(sink, report)
-            run_json._stream_json(document["equity_curve"] if equity_only else document, destination)
+            outcome = support.assemble(
+                runner, target, library, report, after_verify=verified, consume=publish)
+        finally:
+            if use_fused:
+                target.close()
+    outcome.report = destination.bytes()
+    endpoints = _endpoints(verified_target) if verified_target is not None else None
+    return _result(outcome, counts, endpoints)
+
+
+def _scan(sink, monkeypatch, use_bulk, *, destination=None):
+    """Exercise the surviving raw E scan, including bytes completed before refusal."""
+    runner = run_json if use_bulk else _reference_runner()
+    target = support.reference_sink(runner, sink)
+    target.header, target.counts = sink.header, dict(sink.counts)
+    target.sha256, target._identity = sink.sha256, sink._identity
+    destination = oracle._Destination() if destination is None else destination
+    outcome = support.Outcome()
+    with monkeypatch.context() as patch, support.reference_imports(runner):
+        patch.setattr(runner, "_BULK_E_ENABLED", use_bulk)
+        try:
+            runner._stream_json(runner._JSONEquityArray(target), destination)
         except Exception as error:
-            failure = (type(error), str(error), getattr(error, "code", None),
-                       getattr(error, "code_args", None))
-    diagnostics = sink.diagnostics
-    endpoints = (diagnostics.count_e, ordinary.encoded(diagnostics.first),
-                 ordinary.encoded(diagnostics.last),
-                 diagnostics.trade_at_start) if diagnostics is not None else None
-    return destination.bytes(), failure, counts, endpoints
+            outcome.error = error
+            outcome.failure = support.failure_envelope(runner, error)
+        finally:
+            target.close()
+    outcome.report = destination.bytes()
+    return _result(outcome, {}, None)
+
+
+def _assert_result(actual, strict):
+    assert actual[:2] == strict[:2]
+    assert actual[3] == strict[3]
+    support.assert_same(actual[4], strict[4])
+
+
+def _assert_scan(actual, strict):
+    assert actual[:2] == strict[:2]
+    assert actual[4].failure == strict[4].failure
 
 
 def _assert_bulk(actual, strict, *, verify=True, copy=True):
-    assert actual[:2] == strict[:2]
-    assert actual[3] == strict[3]
+    _assert_result(actual, strict)
+    points = strict[3][0]
     if verify:
         assert actual[2]["verify"] < strict[2]["verify"] - POINTS // 2
+        assert actual[2]["bulk_e"] == points
     if copy:
         assert actual[2]["decode_e"] == actual[2]["dump_e"] == 0
-        assert strict[2]["decode_e"] >= POINTS
-        assert strict[2]["dump_e"] >= POINTS
+        assert actual[2]["encoded_e"] == points
+        assert strict[2]["decode_e"] >= points
+        assert strict[2]["dump_e"] >= points
 
 
 def _control(tmp_path, monkeypatch):
@@ -98,8 +185,8 @@ def _control(tmp_path, monkeypatch):
         assert strict[1] is actual[1] is None
         _assert_bulk(actual, strict)
         assert actual[2]["verify"] == 2
-        # Empty T and nonempty E each parse their own raw header.
-        assert actual[2]["copy"] == 2
+        assert actual[2]["copy"] == 0
+        assert actual[2]["bulk_e"] == actual[2]["encoded_e"] == POINTS
 
 
 @pytest.mark.parametrize("kind", ["ordinary", "negative", "exponents", "integer-edges", "mixed"])
@@ -138,13 +225,26 @@ def test_every_small_window_edge_preserves_bytes(tmp_path, monkeypatch, offset):
 
 @pytest.mark.parametrize("count", [0, 1, 511, 512, 513, 1024, 1025])
 def test_empty_and_batch_boundary_write_calls(tmp_path, monkeypatch, count):
-    with _sink(tmp_path, [_point(i) for i in range(count)], verify=False) as args:
+    with _sink(tmp_path, [_point(i) for i in range(count)]) as args:
+        old_scan, new_scan = oracle._Destination(), oracle._Destination()
+        strict_scan = _scan(args[0], monkeypatch, False, destination=old_scan)
+        actual_scan = _scan(args[0], monkeypatch, True, destination=new_scan)
+        assert strict_scan[1] is actual_scan[1] is None
+        _assert_scan(actual_scan, strict_scan)
+        assert new_scan.calls == old_scan.calls
         old_destination, new_destination = oracle._Destination(), oracle._Destination()
         strict = _run(*args, monkeypatch, False, destination=old_destination)
         actual = _run(*args, monkeypatch, True, destination=new_destination)
         assert strict[1] is actual[1] is None
-        assert actual[:2] == strict[:2]
+        _assert_result(actual, strict)
         assert new_destination.calls == old_destination.calls
+        assert all(len(chunk) <= 64 * 1024 for chunk in new_destination.calls)
+        assert actual[2]["bulk_e"] == actual[2]["encoded_e"] == count
+        assert all(0 < size <= _reference_runner()._BULK_E_BATCH
+                   for size in actual[2]["batch_sizes"])
+        assert actual[2]["decode_e"] == actual[2]["dump_e"] == 0
+        assert strict[2]["decode_e"] >= count
+        assert strict[2]["dump_e"] >= count
     _control(tmp_path, monkeypatch)
 
 
@@ -247,7 +347,7 @@ def test_strict_refusal_type_text_code_and_priority(tmp_path, monkeypatch, fault
             report.total_trades = 1
         strict = _run(sink, library, report, monkeypatch, False)
         actual = _run(sink, library, report, monkeypatch, True)
-        assert actual[:2] == strict[:2]
+        _assert_result(actual, strict)
         if fault not in ("negative-zero", "escaped-tag"):
             assert strict[1] is not None, fault
         else:
@@ -263,7 +363,7 @@ def test_strict_refusal_type_text_code_and_priority(tmp_path, monkeypatch, fault
 
 
 @pytest.mark.parametrize("fault", ["identity", "digest", "count", "format-and-digest"])
-def test_copy_guards_and_completed_prefix_match_strict(tmp_path, monkeypatch, fault):
+def test_sink_scan_guards_and_fused_refusals_match_frozen(tmp_path, monkeypatch, fault):
     with _sink(tmp_path, [_point(i) for i in range(POINTS)]) as (sink, library, report):
         path = Path(sink.path)
         raw = path.read_bytes()
@@ -283,11 +383,9 @@ def test_copy_guards_and_completed_prefix_match_strict(tmp_path, monkeypatch, fa
                 sink.counts["E"] += 1
             assert len(changed) == len(old) and changed != old
             path.write_bytes(raw.replace(old, changed))
-        strict = _run(sink, library, report, monkeypatch, False,
-                      copy_only=True, equity_only=True)
-        actual = _run(sink, library, report, monkeypatch, True,
-                      copy_only=True, equity_only=True)
-        assert actual[:2] == strict[:2]
+        strict = _scan(sink, monkeypatch, False)
+        actual = _scan(sink, monkeypatch, True)
+        _assert_scan(actual, strict)
         assert strict[1] is not None and strict[1][2] == "engine_invariant"
         if fault == "format-and-digest":
             assert "invalid UTF-8 or JSON" in strict[1][1]
@@ -295,6 +393,23 @@ def test_copy_guards_and_completed_prefix_match_strict(tmp_path, monkeypatch, fa
             assert strict[1][1].endswith("E scan disagrees with its verified count")
         else:
             assert strict[1][1].endswith(f"{fault} differs")
+        # The fused read proves the trailer itself before exposing any prefix.
+        if fault == "count":
+            _rewrite(sink, library, lambda body: body,
+                     trailer_edit=lambda trailer: trailer["counts"].update(E=POINTS + 1))
+        strict = _run(sink, library, report, monkeypatch, False)
+        actual = _run(sink, library, report, monkeypatch, True)
+        _assert_result(actual, strict)
+        assert strict[1] is not None and strict[1][2] == "engine_invariant"
+        assert actual[0] == strict[0] == b""
+        if fault == "format-and-digest":
+            assert "invalid UTF-8 or JSON" in strict[1][1]
+        elif fault == "count":
+            assert "trailer count mismatch for E" in strict[1][1]
+        elif fault == "digest":
+            assert "trailer SHA-256 mismatch" in strict[1][1]
+        else:
+            assert "bytes after the trailer" in strict[1][1]
     _control(tmp_path, monkeypatch)
 
 
@@ -316,7 +431,7 @@ def test_deferred_equity_failure_keeps_competing_priority(tmp_path, monkeypatch,
             report.metrics.all.profit_factor = float("inf")
         strict = _run(sink, library, report, monkeypatch, False)
         actual = _run(sink, library, report, monkeypatch, True)
-        assert actual[:2] == strict[:2]
+        _assert_result(actual, strict)
         assert strict[1] is not None
         if competing in ("format", "receipt"):
             assert strict[1][2] == "engine_invariant"
@@ -330,12 +445,12 @@ def test_deferred_equity_failure_keeps_competing_priority(tmp_path, monkeypatch,
 
 @pytest.mark.parametrize("invalid_first", [False, True], ids=["read-error", "format-first"])
 def test_verify_read_error_keeps_line_and_format_priority(tmp_path, monkeypatch, invalid_first):
-    original = run_json._UncachedSinkFile.read
-
-    def fail(file, count=-1):
-        if file.position >= file.window:
-            raise OSError(errno.EIO, "injected sink read failure")
-        return original(file, count)
+    def failing_read(original):
+        def fail(file, count=-1):
+            if file.position >= file.window:
+                raise OSError(errno.EIO, "injected sink read failure")
+            return original(file, count)
+        return fail
 
     with _sink(tmp_path, [_point(i) for i in range(POINTS)], verify=False) as args:
         sink, library, report = args
@@ -344,10 +459,12 @@ def test_verify_read_error_keeps_line_and_format_priority(tmp_path, monkeypatch,
             _rewrite(sink, library, lambda body: body.replace(
                 target, BAD_LINES["repr-decimal"], 1))
         with monkeypatch.context() as patch:
-            patch.setattr(run_json._UncachedSinkFile, "read", fail)
+            for runner in (_reference_runner(), run_json):
+                patch.setattr(runner._UncachedSinkFile, "read",
+                              failing_read(runner._UncachedSinkFile.read))
             strict = _run(sink, library, report, patch, False)
             actual = _run(sink, library, report, patch, True)
-        assert actual[:2] == strict[:2]
+        _assert_result(actual, strict)
         assert strict[1] is not None and strict[1][2] == "engine_invariant"
         if invalid_first:
             assert "f64 column is not the Python repr" in strict[1][1]
@@ -357,20 +474,22 @@ def test_verify_read_error_keeps_line_and_format_priority(tmp_path, monkeypatch,
 
 
 def test_bulk_count_overflow_replays_the_strict_failure(tmp_path, monkeypatch):
-    original = run_json._open_uncached_sink
-
-    def open_sink(path, *, raw=False):
-        reader = original(path, raw=raw)
-        if not raw:
-            reader._counts["E"] = I53 - 1
-        return reader
+    def overflowing_reader(original):
+        def open_sink(path, *, raw=False):
+            reader = original(path, raw=raw)
+            if not raw:
+                reader._counts["E"] = I53 - 1
+            return reader
+        return open_sink
 
     with _sink(tmp_path, [_point(0), _point(1)], verify=False) as args:
         with monkeypatch.context() as patch:
-            patch.setattr(run_json, "_open_uncached_sink", open_sink)
+            for runner in (_reference_runner(), run_json):
+                patch.setattr(runner, "_open_uncached_sink",
+                              overflowing_reader(runner._open_uncached_sink))
             strict = _run(*args, patch, False)
             actual = _run(*args, patch, True)
-        assert actual[:2] == strict[:2]
+        _assert_result(actual, strict)
         assert strict[1] is not None
         assert strict[1][1].endswith("line 3: record count exceeds the exact JSON integer bound")
     _control(tmp_path, monkeypatch)
@@ -395,9 +514,10 @@ def test_first_noncanonical_e_disables_later_bulk_proofs(tmp_path, monkeypatch):
             patch.setattr(run_json, "_bulk_equity", prove)
             actual = _run(sink, library, report, patch, True)
         assert strict[1] is actual[1] is None
-        assert actual[:2] == strict[:2]
+        _assert_result(actual, strict)
         assert proofs and all(later not in raw for raw in proofs)
-        assert actual[2]["decode_e"] >= POINTS // 2
+        assert actual[2]["strict_e"] >= POINTS // 2
+        assert actual[2]["dump_e"] >= POINTS // 2
 
 
 def test_new_scan_buffer_is_window_bounded(tmp_path, monkeypatch):
@@ -415,8 +535,10 @@ def test_new_scan_buffer_is_window_bounded(tmp_path, monkeypatch):
     rows = [_point(i) for i in range(POINTS)]
     rows[1500:1500] = [_event("x" * (2 * run_json._BULK_E_WINDOW))]
     with _sink(tmp_path, rows, verify=False) as args:
+        strict = _run(*args, monkeypatch, False)
         actual = _run(*args, monkeypatch, True)
         assert actual[1] is None
+        _assert_result(actual, strict)
     assert sizes and max(sizes) <= run_json._BULK_E_WINDOW
 
 
@@ -439,9 +561,11 @@ def test_verify_hashes_body_in_windows_including_other_tags(tmp_path, monkeypatc
 
     with _sink(tmp_path, rows, verify=False) as (sink, library, report):
         raw = Path(sink.path).read_bytes()
+        strict = _run(sink, library, report, monkeypatch, False)
         with monkeypatch.context() as patch:
             patch.setattr(hashlib, "sha256", Digest)
-            sink.verify(library, 1, report)
+            actual = _run(sink, library, report, patch, True)
+        _assert_result(actual, strict)
         assert len(states) == 1
         parts = states[0].parts
         assert b"".join(parts) == raw[:_trailer_start(raw)]
@@ -455,25 +579,28 @@ def test_verify_hashes_body_in_windows_including_other_tags(tmp_path, monkeypatc
 
 def test_encoded_artifact_write_error_retains_code(tmp_path, monkeypatch):
     _control(tmp_path, monkeypatch)
-    original = run_json._BoundedJSONFile.write_ascii
-    attempted = []
+    outcomes = []
+    with _sink(tmp_path, [_point(i) for i in range(POINTS)], verify=False) as args:
+        for use_fused, runner in ((False, _reference_runner()), (True, run_json)):
+            original = runner._BoundedJSONFile.write_ascii
+            attempted = []
 
-    def fail(file, data):
-        if b'"time_ms":' in data:
-            attempted.append(data)
-            raise OSError(errno.ENOSPC, "injected report artifact full")
-        return original(file, data)
+            def fail(file, data):
+                if b'"time_ms":' in data:
+                    attempted.append(data)
+                    raise OSError(errno.ENOSPC, "injected report artifact full")
+                return original(file, data)
 
-    with _sink(tmp_path, [_point(i) for i in range(POINTS)]) as (sink, library, report):
-        monkeypatch.setattr(run_json._BoundedJSONFile, "write_ascii", fail)
-        with ExitStack() as resources:
-            with pytest.raises(run_json.RunFailure) as failure:
-                run_json._prepare_stream_report(
-                    _document(sink, report), resources, str(tmp_path))
-        assert failure.value.code == "report_sink_failed"
-        assert failure.value.code_args == {"reason": "scratch_io"}
-        assert str(failure.value) == "report sink write failed"
-        assert len(attempted) == 1
+            with monkeypatch.context() as patch:
+                patch.setattr(runner._BoundedJSONFile, "write_ascii", fail)
+                outcome = _run(*args, patch, use_fused)
+            assert outcome[1] is not None
+            assert outcome[1][1:] == (
+                "report sink write failed", "report_sink_failed", {"reason": "scratch_io"})
+            assert outcome[0] == b""
+            assert len(attempted) == 1
+            outcomes.append(outcome)
+    _assert_result(outcomes[1], outcomes[0])
 
 
 def test_a_run_is_consumed_in_batches_of_at_most_the_batch_size():
@@ -506,24 +633,45 @@ def _traced_peak(action):
         tracemalloc.stop()
 
 
-def _pass_peaks(tmp_path, count):
-    """Traced peaks of the verify pass and of the copy pass over `count` E lines.
+class _DigestDestination:
+    def __init__(self):
+        self.digest, self.size = hashlib.sha256(), 0
 
-    The fixture writer's lines are 32-33 bytes, so a 64 KiB window holds about
-    2,000 of them and 1,000 lines fill half of one. The destination keeps
-    nothing: only the memory of the passes themselves is traced.
+    def write(self, text):
+        data = text.encode("ascii")
+        self.digest.update(data)
+        self.size += len(data)
+        return len(text)
+
+
+def _pass_peaks(tmp_path, count, monkeypatch):
+    """Trace fused verification and encoded readback without retaining their bytes.
+
+    The frozen reader supplies the expected byte count and SHA outside tracing.
+    Both stages must complete, even though readback no longer parses E records.
     """
     rows = [_point(i) for i in range(count)]
     with _sink(tmp_path, rows, verify=False) as (sink, library, report):
+        reference = _reference_runner()
+        expected, actual = _DigestDestination(), _DigestDestination()
+        native = support.clone_report(reference, report)
+        target = support.reference_sink(reference, sink)
+        with monkeypatch.context() as patch, support.reference_imports(reference):
+            patch.setattr(reference, "_BULK_E_ENABLED", False)
+            target.verify(library, 1, native)
+            document = _document(target, native, reference)
+            reference._stream_json(document["equity_curve"], expected)
         verify = _traced_peak(lambda: sink.verify(library, 1, report))
         document = _document(sink, report)
         copy = _traced_peak(lambda: run_json._stream_json(
-            document["equity_curve"], oracle._DiscardDestination()))
+            document["equity_curve"], actual))
+        assert actual.size == expected.size > 0
+        assert actual.digest.hexdigest() == expected.digest.hexdigest()
     return {"verify": verify, "copy": copy}
 
 
 def _memory_problems(tmp_path, monkeypatch):
-    """What breaks the flat-memory contract of the two bulk passes; [] when nothing does.
+    """Check the same memory bounds for the fused read and encoded readback.
 
     Without a bound on the lines one regex call matches, the engine's
     backtracking stack holds about 2 KiB for every line of the run: the
@@ -543,13 +691,13 @@ def _memory_problems(tmp_path, monkeypatch):
     problems, peaks = [], {}
     with monkeypatch.context() as patch:
         patch.setattr(run_json, "_bulk_equity", counted)
-        _pass_peaks(tmp_path, 200)  # first-use imports and caches stay out of the numbers
+        _pass_peaks(tmp_path, 200, patch)  # exclude first-use imports and caches
         for count in MEMORY_COUNTS:
             accepted.clear()
-            peaks[count] = _pass_peaks(tmp_path, count)
-            # Both passes must take every line in bulk, or a flat peak proves nothing.
-            if sum(accepted) != 2 * count:
-                problems.append(f"engaged: {sum(accepted)} of {2 * count} lines were "
+            peaks[count] = _pass_peaks(tmp_path, count, patch)
+            # Each point is proved once; readback's bytes match the frozen curve.
+            if sum(accepted) != count:
+                problems.append(f"engaged: {sum(accepted)} of {count} lines were "
                                 f"accepted in bulk for {count} points")
     for name in ("verify", "copy"):
         by_count = {count: peaks[count][name] for count in MEMORY_COUNTS}
@@ -563,12 +711,12 @@ def _memory_problems(tmp_path, monkeypatch):
     return problems
 
 
-def test_bulk_passes_use_flat_python_memory(tmp_path, monkeypatch):
+def test_fused_bulk_and_artifact_readback_use_flat_python_memory(tmp_path, monkeypatch):
     problems = _memory_problems(tmp_path, monkeypatch)
     assert not problems, "\n".join(problems)
 
 
-def test_control_a_regex_call_over_a_whole_window_fails_the_memory_check(tmp_path, monkeypatch):
+def test_unbounded_regex_breaks_fused_memory_limits(tmp_path, monkeypatch):
     # The batch size raised to the whole window: one regex call may span every
     # line of a window again, as before the bound. Each of the two bounds must
     # see it, or the check could not fail on that bound.
