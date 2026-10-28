@@ -34,12 +34,12 @@ std::string history_limit_message(long long requested) {
 } // namespace
 
 HistoryLimitError::HistoryLimitError(long long requested)
-    : coded<std::runtime_error>(RunFailureCode::pine_runtime_limit,
-          {{"limit", "max_bars_back"}, {"max", kMaxHistoryOffset}},
-          history_limit_message(requested)), requested_(requested) {}
+    : std::runtime_error(history_limit_message(requested)), requested_(requested) {}
 
 void check_history_limit(long long requested) {
-    if (requested > kMaxHistoryOffset) throw HistoryLimitError(requested);
+    if (requested <= kMaxHistoryOffset) return;
+    throw coded<HistoryLimitError>(RunFailureCode::pine_runtime_limit,
+        {{"limit", "max_bars_back"}, {"max", kMaxHistoryOffset}}, HistoryLimitError(requested));
 }
 
 // --- RSI ---

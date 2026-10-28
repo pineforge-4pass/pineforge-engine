@@ -122,10 +122,10 @@ BarContext& bar_context();
 
 inline constexpr long long kMaxHistoryOffset = 15000;
 
-// Retain the existing runtime-limit code, catalog arguments and English.
-// The requested offset is available as typed exception context too; it is
-// script-computed, so it must not enter the catalog's closed argument set.
-class HistoryLimitError final : public coded<std::runtime_error> {
+// Thrown as coded<HistoryLimitError>: the existing runtime-limit code, catalog
+// arguments and English, and the requested offset as typed exception context;
+// it is script-computed, so it must not enter the catalog's closed argument set.
+class HistoryLimitError : public std::runtime_error {
     long long requested_;
 public:
     explicit HistoryLimitError(long long requested);
