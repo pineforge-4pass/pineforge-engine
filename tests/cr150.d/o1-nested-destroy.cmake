@@ -1,0 +1,2 @@
+list(APPEND TEST_SOURCES test_p2_a5_nested_destroy)
+pineforge_add_unit_test(test_p2_a5_nested_destroy)
