@@ -368,8 +368,9 @@ jobs:
           - triple: linux-x86_64
             runner: ["self-hosted","pf-gcp-main"]
           - triple: linux-aarch64
-            runner: ubuntu-22.04-arm
+            runner: gkp-8cpu-16gb-arm64
     runs-on: ${{ matrix.runner }}
+    environment: release
 
     steps:
       # A dry run has no tag yet: it builds the dispatched commit.
@@ -399,7 +400,7 @@ jobs:
         run: printf '%s\n' "${NEXT}" > VERSION
 
       # linux-x86_64 runs on the pf-gcp-main fleet: no sudo, no docker, Eigen 3.4.0 is baked
-      # into its image. Only the hosted Linux slice (linux-aarch64) installs Eigen here.
+      # into its image. The protected ARM slice (linux-aarch64) installs Eigen with apt.
       - name: Install Eigen3 (Linux)
         if: runner.os == 'Linux' && matrix.triple != 'linux-x86_64'
         run: |
@@ -444,7 +445,7 @@ jobs:
             -DCMAKE_INSTALL_PREFIX="${PWD}/${stage}"
 
       - name: Build
-        run: cmake --build build -j 4
+        run: cmake --build build -j "$(getconf _NPROCESSORS_ONLN)"
 
       - name: Install to staging
         run: cmake --install build

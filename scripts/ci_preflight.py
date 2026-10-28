@@ -202,7 +202,7 @@ RELEASE_STRATEGY = ('    strategy:\n'
                     '          - triple: linux-x86_64\n'
                     f'            runner: {RELEASE_RUNNER}\n'
                     '          - triple: linux-aarch64\n'
-                    '            runner: ubuntu-22.04-arm\n')
+                    '            runner: gkp-8cpu-16gb-arm64\n')
 NATIVE_STRATEGY = '''    strategy:
       fail-fast: false
       matrix:
@@ -2710,7 +2710,21 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
         prebuilt = _jobs(workflows['release.yml']).get('prebuilt', '')
         if _job_block(prebuilt, 'strategy') != _code(RELEASE_STRATEGY):
             findings.append('release.yml prebuilt must use exactly the isolated Linux x64 '
-                            'and hosted ARM matrix')
+                            'and protected ARM matrix')
+        if _job_values(prebuilt, 'environment', unquote=False) != ['release']:
+            findings.append('release.yml prebuilt must use the release environment '
+                            'for protected ARM')
+        if _job_values(prebuilt, 'permissions') != ['contents: write']:
+            findings.append('release.yml prebuilt must grant only contents: write '
+                            'without id-token')
+        credential_text = '\n'.join(_code(prebuilt) + _job_block(workflows['release.yml'], 'env'))
+        if re.search(r'\bsecrets\b', re.sub(r'\bsecrets\.GITHUB_TOKEN\b', '', credential_text),
+                     re.IGNORECASE):
+            findings.append('release.yml prebuilt may reference only secrets.GITHUB_TOKEN')
+        build = _step_named(_steps(prebuilt), '      - name: Build')
+        if (_step_values(build, 'run') != [f'cmake --build build -j {CORES}']
+                or _step_values(build, 'if') or _step_values(build, 'continue-on-error')):
+            findings.append('release.yml prebuilt must build at the runner core count')
         if any(re.search(r'macos|darwin|CMAKE_OSX_', '\n'.join(_code(step)), re.IGNORECASE)
                for step in _steps(prebuilt)):
             findings.append('release.yml prebuilt must not contain macOS build steps')
@@ -3823,7 +3837,7 @@ def actionlint_runner_label_findings(source: Path) -> list[str]:
             values = _job_values(mapping, 'labels') if mapping else _job_values(body, 'runs-on')
             for value in values:
                 if not value.startswith('['):
-                    if value.startswith(('pf-', 'gke-')) and re.fullmatch(_LITERAL_RUNNER_LABEL, value):
+                    if value.startswith(('pf-', 'gke-', 'gkp-')) and re.fullmatch(_LITERAL_RUNNER_LABEL, value):
                         if value not in declared:
                             findings.append(f'{path.name} job {job}: label "{value}" is not declared '
                                             f'in {config_name}')
