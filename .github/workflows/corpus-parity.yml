@@ -21,7 +21,7 @@ name: Corpus parity
 # cores do not shorten, so the whole population cannot be held to the ~25 min
 # a required pull-request check is budgeted for. Full parity therefore runs
 # nightly (01:30 UTC), on `workflow_dispatch`, and on the full-event pipeline.
-# The pull-request early signal lives in corpus-parity-subset.yml.
+# The pull-request early signal is the inline corpus-parity-subset job in gke-pr.yml.
 #
 # FULL-EVENT SUBSET. The `corpus-parity-subset` job below
 # re-runs the 54 probes scripts/corpus_parity_subset.txt names -- in parallel,
@@ -75,7 +75,7 @@ jobs:
   authz:
     name: authz
     # Fleet routing is fixed for this workflow; releases use pf-gcp-main.
-    runs-on: ubuntu-24.04
+    runs-on: gke-4cpu-8gb-amd64
     permissions: {}
     # No timeout-minutes: the owner's no-time-limits rule (check-no-time-limits refuses new ones).
     steps:
@@ -176,14 +176,6 @@ jobs:
           test "$(git -C corpus rev-parse HEAD)" = "$gitlink"
           git -C corpus status --porcelain -- validation
 
-      - name: Restore ccache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ runner.os }}-${{ runner.arch }}-corpus-parity-${{ github.sha }}
-          restore-keys: |
-            ccache-${{ runner.os }}-${{ runner.arch }}-corpus-parity-
-
       - name: Check TradingView parity against the committed oracle
         shell: bash
         env:
@@ -251,11 +243,8 @@ jobs:
           echo "recorded corpus gitlink: $gitlink"
           echo "gitlink=$gitlink" >> "$GITHUB_OUTPUT"
 
-      # Check the submodule out WITHOUT smudging Git LFS, so the ~176 MB
-      # full-history 1m feed is fetched at most once per gitlink instead of
-      # once per pull-request push. The cache below carries it, and the step
-      # after that proves the restored bytes are the ones the corpus commit
-      # points at.
+      # Check the submodule out WITHOUT smudging Git LFS, then fetch its feed
+      # directly and verify the recorded bytes.
       - name: Check out the validation corpus at the recorded gitlink
         shell: bash
         env:
@@ -266,21 +255,11 @@ jobs:
           test "$(git -C corpus rev-parse HEAD)" = "${{ steps.pin.outputs.gitlink }}"
           git -C corpus status --porcelain -- validation
 
-      - name: Restore the corpus chart feed
-        id: feed
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: corpus/data
-          key: corpus-feed-${{ steps.pin.outputs.gitlink }}
-
       - name: Pull the Git-LFS chart feed
-        if: steps.feed.outputs.cache-hit != 'true'
         run: git -C corpus lfs pull
 
-      # A restored cache is not evidence. Every LFS pointer the corpus commits
-      # under data/ records its content's sha256; check the bytes on disk
-      # against it, so a corrupt or stale cache is "the feed is wrong" here and
-      # not "54 probes drifted" three steps later.
+      # Every LFS pointer the corpus commits under data/ records its content's
+      # sha256; check the bytes on disk against it before running the probes.
       - name: Verify the chart feed against its Git-LFS pointers
         shell: bash
         run: |
@@ -294,14 +273,6 @@ jobs:
                 ;;
             esac
           done
-
-      - name: Restore ccache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ runner.os }}-${{ runner.arch }}-corpus-parity-subset-${{ github.sha }}
-          restore-keys: |
-            ccache-${{ runner.os }}-${{ runner.arch }}-corpus-parity-subset-
 
       - name: Check TradingView parity over the pull-request subset
         shell: bash

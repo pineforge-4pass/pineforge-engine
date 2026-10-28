@@ -1992,23 +1992,23 @@ class RulesetsProbeTests(unittest.TestCase):
     def test_probe_dispatch_branch_and_fleets_are_documented(self):
         docs = (ROOT / "docs/ci.md").read_text()
         requirements = (
-            'PR build/preflight and parity subset use `["self-hosted","pf-gcp-pr"]`;\n'
-            'post preflight/parity use bare GKE scale-set names; credentialed docs keep `["self-hosted","pf-gcp-post"]`.\n'
+            'admit is hosted, while PR preflight, proof legs and parity use bare GKE scale-set names;\n'
+            'credentialed post work keeps its protected `["self-hosted","pf-gcp-post"]` fleet.\n'
             'Post Release/Debug/kernel and native shards, post sanitizers and both native-live sanitizer\n'
             'profiles use fixed bare GKE scale-set names directly in runner pods carrying the engine toolchain image and sudo. No job routes by event.',
             "The manual `release-ruleset-probe.yml` workflow runs `authz` on\n"
-            'hosted `ubuntu-24.04` and `probe` on `["self-hosted","pf-gcp-post"]`.',
+            'bare scalar `gke-2cpu-4gb-amd64` and `probe` on `["self-hosted","pf-gcp-post"]`.',
             "Release and promotion use the isolated release fleet:\n"
             "`release`, `notify-hub`, Linux x64 `prebuilt` and baseline `promote` use\n"
             '`["self-hosted","pf-gcp-main"]`.\n'
-            'The release ruleset probe runs secret-free `authz` on hosted `ubuntu-24.04` and\n'
+            'The release ruleset probe runs secret-free `authz` on bare scalar `gke-2cpu-4gb-amd64` and\n'
             '`probe` on `["self-hosted","pf-gcp-post"]`.',
             "Dispatch **Release ruleset probe** (`release-ruleset-probe.yml`) once from\n"
             "`main` to check actual ruleset visibility with the same App token mint as\n"
             "`release.yml`. The workflow file must be on the default branch, and the run\n"
             "must use `main`'s copy.\n"
             'The credentialed probe job runs on `["self-hosted","pf-gcp-post"]`, with\n'
-            'secret-free `authz` on hosted `ubuntu-24.04`.',
+            'secret-free `authz` on bare scalar `gke-2cpu-4gb-amd64`.',
             "`pf-gcp-main` admits only allowlisted workflows (an org runner-group restriction),\n"
             "so the one-time probe uses `pf-gcp-post`.",
             "The dispatch must run from `main`; the workflow itself refuses any other ref\n"

@@ -72,7 +72,7 @@ inline int month_key_utc(int64_t ts_ms) {
     }
     struct tm tb {};
     gmtime_r(&secs, &tb);
-    return (tb.tm_year + 1900) * 12 + tb.tm_mon;
+    return static_cast<int>((static_cast<int64_t>(tb.tm_year) + 1900) * 12 + tb.tm_mon);
 }
 
 inline pf_equity_stats_t compute_equity_stats(const pf_equity_point_t* curve, int64_t n,

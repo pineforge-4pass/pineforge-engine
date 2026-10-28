@@ -8,6 +8,7 @@
 #include <cmath>
 #include <iomanip>
 #include <locale>
+#include <memory>
 #include <sstream>
 #include <type_traits>
 
@@ -148,39 +149,86 @@ inline Json native_report_json(const pf_report_t& report,
     return result;
 }
 
+inline Json native_report_document(const pf_report_t& report, const std::string& deployment,
+                                   std::uint64_t cursor, std::uint64_t state_hash) {
+    auto fields = native_report_json(report);
+    Json closed;
+    closed.kind = Json::Kind::Array;
+    for (std::int64_t index = 0; index < report.trades_len; ++index)
+        if (!report.trades[index].open_at_end)
+            closed.items.push_back(report_trade(report.trades[index]));
+    const auto& curve = fields.at("equity_curve").items;
+    return Json::object({
+        {"schema_version", Json::string("pineforge-native-report/v1")},
+        {"deployment", Json::string(deployment)},
+        {"input_cursor", report_number(cursor)},
+        {"state_hash", Json::string(std::to_string(state_hash))},
+        {"equity", curve.empty() ? Json{} : curve.back().at("equity")},
+        {"open_profit", curve.empty() ? Json{} : curve.back().at("open_profit")},
+        {"report", std::move(fields)},
+        {"closed_trades", std::move(closed)}});
+}
+
 class ReportDeltas {
 public:
+    explicit ReportDeltas(bool retain_document = false)
+        : document_(retain_document ? std::make_unique<Json>(Json::object({})) : nullptr) {}
+
     std::string update(const pf_report_t& report, const std::string& deployment,
                        std::uint64_t cursor, std::uint64_t state_hash) {
         if (report.trace_len != 0)
             throw std::runtime_error("cumulative report deltas require tracing to remain disabled");
         std::map<std::string, std::size_t> starts;
-        if (document_.members.count("report")) {
-            for (const auto* name : {"equity_curve", "trace", "trace_names", "broker_state_hash"}) {
-                const auto size = document_.at("report").at(name).items.size();
-                starts[name] = size ? size - 1 : 0;
-            }
-            const auto closed = document_.at("closed_trades").items.size();
-            starts["trades"] = closed ? closed - 1 : 0;
+        for (const auto* name : {"equity_curve", "trace", "trace_names", "broker_state_hash"}) {
+            const auto found = array_sizes_.find(name);
+            const auto size = found == array_sizes_.end() ? 0 : found->second;
+            starts[name] = size ? size - 1 : 0;
         }
+        starts["trades"] = closed_trade_high_water_
+            ? closed_trade_high_water_ - 1 : 0;
         starts["security_diag"] = 0;
         auto fields = native_report_json(report, starts);
         Json arrays = Json::object({});
         for (const auto* name : {"trades", "equity_curve", "security_diag", "trace", "trace_names", "broker_state_hash"}) {
             auto values = std::move(fields.members[name]);
-            const auto offset = std::min<std::size_t>(starts[name], name == std::string("trades")
-                ? report.trades_len : document_.members.count("report")
-                    ? document_.at("report").at(name).items.size() : 0);
+            const auto current_size = [&]() -> std::size_t {
+                if (name == std::string("trades"))
+                    return static_cast<std::size_t>(report.trades_len);
+                if (name == std::string("equity_curve"))
+                    return static_cast<std::size_t>(report.equity_curve_len);
+                if (name == std::string("security_diag"))
+                    return static_cast<std::size_t>(report.security_diag_len);
+                if (name == std::string("trace"))
+                    return static_cast<std::size_t>(report.trace_len);
+                if (name == std::string("trace_names"))
+                    return static_cast<std::size_t>(report.trace_names_len);
+                return static_cast<std::size_t>(report.broker_state_hash_len);
+            }();
+            const auto offset = std::min<std::size_t>(starts[name], current_size);
             arrays.members[name] = Json::object({{"offset", report_number(offset)}, {"items", std::move(values)}});
             fields.members.erase(name);
         }
         Json closed;
         closed.kind = Json::Kind::Array;
-        std::size_t closed_count = 0;
-        for (std::int64_t index = 0; index < report.trades_len; ++index)
-            if (!report.trades[index].open_at_end && closed_count++ >= starts["trades"])
-                closed.items.push_back(report_trade(report.trades[index]));
-        arrays.members["closed_trades"] = Json::object({{"offset", report_number(std::min(starts["trades"], closed_count))},
+        if (closed_trade_high_water_ > 0) {
+            if (closed_trade_high_water_ > static_cast<std::size_t>(report.trades_len)
+                || report.trades[closed_trade_high_water_ - 1].open_at_end)
+                throw std::runtime_error("cumulative report closed-trade prefix regressed");
+            ++closed_trade_visits_;
+            closed.items.push_back(report_trade(report.trades[closed_trade_high_water_ - 1]));
+        }
+        for (std::size_t index = closed_trade_high_water_;
+             index < static_cast<std::size_t>(report.trades_len); ++index) {
+            ++closed_trade_visits_;
+            // fill_trades_section emits closed rows before range-end open rows,
+            // so a closed row after this open suffix is unreachable by design.
+            if (report.trades[index].open_at_end)
+                break;
+            closed.items.push_back(report_trade(report.trades[index]));
+            ++closed_trade_high_water_;
+        }
+        arrays.members["closed_trades"] = Json::object({
+            {"offset", report_number(std::min(starts["trades"], closed_trade_high_water_))},
             {"items", std::move(closed)}});
         const auto& curve = arrays.at("equity_curve").at("items").items;
         auto next = Json::object({{"schema_version", Json::string("pineforge-native-report/v1")},
@@ -191,12 +239,32 @@ public:
         auto delta = Json::object({{"schema_version", Json::string("pineforge-native-report-delta/v1")},
             {"fields", changed_report_fields(scalars_, next)}, {"arrays", std::move(arrays)}});
         scalars_ = std::move(next);
-        apply_report_delta(document_, delta);
+        if (document_)
+            apply_report_delta(*document_, delta);
+        array_sizes_["trades"] = static_cast<std::size_t>(report.trades_len);
+        array_sizes_["equity_curve"] = static_cast<std::size_t>(report.equity_curve_len);
+        array_sizes_["security_diag"] = static_cast<std::size_t>(report.security_diag_len);
+        array_sizes_["trace"] = static_cast<std::size_t>(report.trace_len);
+        array_sizes_["trace_names"] = static_cast<std::size_t>(report.trace_names_len);
+        array_sizes_["broker_state_hash"] = static_cast<std::size_t>(report.broker_state_hash_len);
         return delta.dump();
     }
-    std::string json() const { return document_.dump(); }
+    std::string json() const {
+        if (!document_)
+            throw std::runtime_error("cumulative report document was not retained");
+        return document_->dump();
+    }
+    std::string full_json(const pf_report_t& report, const std::string& deployment,
+                          std::uint64_t cursor, std::uint64_t state_hash) const {
+        return native_report_document(report, deployment, cursor, state_hash).dump();
+    }
+    std::size_t closed_trade_visits() const noexcept { return closed_trade_visits_; }
 private:
-    Json document_ = Json::object({}), scalars_ = Json::object({});
+    std::unique_ptr<Json> document_;
+    Json scalars_ = Json::object({});
+    std::map<std::string, std::size_t> array_sizes_;
+    std::size_t closed_trade_high_water_ = 0;
+    std::size_t closed_trade_visits_ = 0;
 };
 
 }

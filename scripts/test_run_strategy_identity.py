@@ -84,7 +84,7 @@ class EngineEntryIdentityCsvTests(unittest.TestCase):
 class EngineTradeQtyFormatTests(unittest.TestCase):
     """The exported ``Qty`` column must carry the ledger quantity to the lot
     step: ``%g``'s 6 significant digits truncated (and sometimes rounded UP)
-    every OANDA:EURUSD-scale lot (TV KI-52 all-in: 92293.36 units)."""
+    every OANDA:EURUSD-scale lot (TV all-in: 92293.36 units)."""
 
     def test_large_lots_keep_every_lot_step_digit(self) -> None:
         self.assertEqual(format_trade_qty(923941.16), "923941.16")

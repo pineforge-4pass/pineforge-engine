@@ -1,7 +1,7 @@
-// CR-257 T1. Edit-only I/O specification; execution belongs to the lab.
+// Edit-only I/O specification; execution belongs to the Linux test host.
 // Forward real I/O; use filename prefixes only to attribute its measured cost.
 #if !defined(__linux__)
-#error "CR-257 syscall accounting requires the Linux linker-wrap target"
+#error "Syscall accounting requires the Linux linker-wrap target"
 #endif
 
 #if !defined(_GNU_SOURCE)
@@ -213,7 +213,7 @@ bool same(const Io& a, const Io& b) noexcept {
 } // namespace
 
 Measure::Measure() {
-    require(!measuring && platform_page != 0, "CR-257 invalid/nested measurement");
+    require(!measuring && platform_page != 0, "Invalid/nested measurement");
     counters = {};
     fd_cache = {};
     last_page_io = {};
@@ -221,35 +221,35 @@ Measure::Measure() {
 }
 Measure::~Measure() { measuring = false; }
 Counters Measure::finish() {
-    require(measuring, "CR-257 measurement finished twice");
+    require(measuring, "Measurement finished twice");
     measuring = false;
     return counters;
 }
 void validate(const Counters& io) {
     require(!io.classification_error && !io.multiple_page_fds,
-            "CR-257 fd/page classification or fixed accounting failed or found another backing");
+            "Fd/page classification or fixed accounting failed or found another backing");
     Io classified;
     for (const auto& file : io.classes) add(classified, file);
-    require(same(classified, io.total), "CR-257 per-class I/O does not sum to all RUN I/O");
+    require(same(classified, io.total), "Per-class I/O does not sum to all RUN I/O");
     for (const auto& reads : io.alternate_reads) {
         const bool page = reads.fd == io.page_fd && reads.device == io.page_device
             && reads.inode == io.page_inode;
         if (reads.fd < 0 || (!page && reads.file_class != FileClass::command)) continue;
-        require(reads.read == 0, "CR-257 RUN used read on the command page fd");
-        require(reads.readv == 0, "CR-257 RUN used readv on the command page fd");
-        require(reads.preadv == 0, "CR-257 RUN used preadv on the command page fd");
-        require(reads.preadv2 == 0, "CR-257 RUN used preadv2 on the command page fd");
-        require(reads.mmap == 0, "CR-257 RUN used mmap on the command page fd");
+        require(reads.read == 0, "RUN used read on the command page fd");
+        require(reads.readv == 0, "RUN used readv on the command page fd");
+        require(reads.preadv == 0, "RUN used preadv on the command page fd");
+        require(reads.preadv2 == 0, "RUN used preadv2 on the command page fd");
+        require(reads.mmap == 0, "RUN used mmap on the command page fd");
     }
     require(io.total.pread.errors == 0 && io.total.pwrite.errors == 0
             && io.total.pread.short_io == 0 && io.total.pwrite.short_io == 0
             && io.total.pread.bytes == io.total.pread.transferred
             && io.total.pwrite.bytes == io.total.pwrite.transferred
             && io.total.fadvise.errors == 0 && io.total.fdatasync.errors == 0,
-            "CR-257 RUN encountered a real I/O error or short transfer");
+            "RUN encountered a real I/O error or short transfer");
 }
 void bound(const char* metric, Count actual, Count allowed, Context context) {
-    require(context.n != 0, "CR-257 missing measured bar/chunk count");
+    require(context.n != 0, "Missing measured bar/chunk count");
     const bool ok = actual <= allowed;
     std::printf("X257 %s total=%llu per_bar=%.9Lf allowed=%llu"
                 " extent_pages=%llu records_changed=%llu N=%llu %s\n",
@@ -266,11 +266,11 @@ void class_bound(FileClass file, const char* metric, Count actual, Count allowed
     const auto length = std::snprintf(label, sizeof(label), "class.%s.%s",
                                      kClassNames[class_index(file)], metric);
     require(length > 0 && static_cast<std::size_t>(length) < sizeof(label),
-            "CR-257 truncated class metric");
+            "Truncated class metric");
     bound(label, actual, allowed, context);
 }
 void total_info(const char* metric, Count actual, Context context) {
-    require(context.n != 0, "CR-257 missing informational population");
+    require(context.n != 0, "Missing informational population");
     std::printf("X257 total (all classes, informational) %s=%llu per_bar=%.9Lf N=%llu INFO\n",
         metric, static_cast<unsigned long long>(actual),
         static_cast<long double>(actual) / context.n,
@@ -394,7 +394,7 @@ source::PineExecutionAdapter& adapter(source::PineStrategyHost& host) {
 }
 pd::scratch_impl::Core& core(pd::CommandScratchStore& store) {
     auto* state = store.*member(StoreMember{});
-    require(state != nullptr, "CR-257 command store has no workspace");
+    require(state != nullptr, "Command store has no workspace");
     return *state;
 }
 
@@ -412,7 +412,7 @@ struct ScopeEraseAccounting {
             ++cleared_scopes;
         }
         static_assert(sd::kExitScopeEraseBatch == 64,
-                      "CR-265: scope erase commits are bounded by ceil(records/64)");
+                      "Scope erase commits are bounded by ceil(records/64)");
         constexpr Count batch = sd::kExitScopeEraseBatch;
         const Count before = rows / batch + (rows % batch != 0);
         rows += removed;
@@ -429,15 +429,15 @@ void check_scope_erase_accounting() {
     require(batched.cleared_scopes == 1 && batched.commit_allowance == 2
             && per_row.cleared_scopes == 1 && per_row.commit_allowance == 2
             && per_row.commit_allowance < batch + 1,
-            "CR-257 per-row teardown must not inflate the 65-row scope allowance");
+            "Per-row teardown must not inflate the 65-row scope allowance");
     separate.erased(1, 1);
     separate.erased(2, 1);
     require(separate.cleared_scopes == 2 && separate.commit_allowance == 2,
-            "CR-257 distinct partial scopes must each receive one commit");
+            "Distinct partial scopes must each receive one commit");
     per_row.inserted();
     per_row.erased(1, 1);
     require(per_row.cleared_scopes == 2 && per_row.commit_allowance == 3,
-            "CR-257 refilled scope must be counted as a separate clear");
+            "Refilled scope must be counted as a separate clear");
 }
 
 struct CommandObserver {
@@ -479,10 +479,10 @@ struct CommandObserver {
         CommandObserver& observer;
         pd::ScratchKeyOrder previous;
         explicit ScopeOrder(CommandObserver& measured) : observer(measured) {
-            require(observer.store != nullptr, "CR-257 scope observation needs a live store");
+            require(observer.store != nullptr, "Scope observation needs a live store");
             previous = observer.store->order_;
             require(previous.id == sd::exit_scratch_key_order().id && previous.compare,
-                    "CR-257 scope observation needs the exit-scratch key order");
+                    "Scope observation needs the exit-scratch key order");
             observer.store->order_ = {previous.id, this, &compare};
         }
         ~ScopeOrder() { observer.store->order_ = previous; }
@@ -600,7 +600,7 @@ struct Driver {
     explicit Driver(Count n) {
         require(n > 0 && n % kPeriod == 0 && n + kWarmup
                 <= static_cast<Count>(std::numeric_limits<int>::max()),
-                "CR-257 invalid driver population");
+                "Invalid driver population");
         bool held = false, armed = false, long_side = true;
         Count opened = 0;
         double limit = 0.0, stop = 0.0;
@@ -624,7 +624,7 @@ struct Driver {
             if (held && armed) {
                 const bool limit_hit = long_side ? bar.high >= limit : bar.low <= limit;
                 const bool stop_hit = long_side ? bar.low <= stop : bar.high >= stop;
-                require(!(limit_hit && stop_hit), "CR-257 driver has an ambiguous bracket bar");
+            require(!(limit_hit && stop_hit), "Driver has an ambiguous bracket bar");
                 if (limit_hit || stop_hit) {
                     trades.push_back({opened, i, long_side, 0.0,
                                       limit_hit ? limit : stop});
@@ -634,7 +634,7 @@ struct Driver {
                 }
             }
             if (phase == 0) {
-                require(!held, "CR-257 signal sequence entered before its prior bracket closed");
+            require(!held, "Signal sequence entered before its prior bracket closed");
                 held = true;
                 // Market entries submitted by the source calculation fill
                 // at the next open. Brackets rest through the intervening
@@ -656,7 +656,7 @@ struct Driver {
             signals.push_back(signal);
         }
         require(!held && !trades.empty() && pending_bars > 0,
-                "CR-257 driver is flat, non-trading, or ends before its exit");
+                "Driver is flat, non-trading, or ends before its exit");
         for (auto& trade : trades)
             trade.entry_price = bars[static_cast<std::size_t>(trade.entry)].open;
     }
@@ -679,7 +679,7 @@ struct ReferenceScratch {
           versions(store), context{store, {}} {
         require(backing.status() == pd::ScratchStatus::ok
                 && store.status() == pd::ScratchStatus::ok,
-                "CR-257 reference scratch geometry failed");
+                "Reference scratch geometry failed");
         context.versions = &versions;
     }
 };
@@ -710,7 +710,7 @@ public:
         require(index < driver.signals.size()
                 && pine_bar_index() == static_cast<int>(index)
                 && bar.timestamp == driver.bars[static_cast<std::size_t>(index)].timestamp,
-                "CR-257 strategy skipped, duplicated or ignored an input bar");
+                "Strategy skipped, duplicated or ignored an input bar");
         if (index == 0 && reference) {
             auto& execution = adapter(*this);
             const auto& original = sd::exit_scratch(execution);
@@ -797,7 +797,7 @@ Canonical canonical(const TradingHost& host) {
     ReportOwner owner(host);
     const auto& r = owner.value;
     require(r.trades_len > 0 && r.trades && r.equity_curve_len > 0 && r.equity_curve,
-            "CR-257 missing full trade/equity report");
+            "Missing full trade/equity report");
     Canonical out;
     out.add(r.total_trades); out.add(r.trades_len); out.add(r.net_profit);
     out.add(r.input_bars_processed); out.add(r.script_bars_processed);
@@ -823,7 +823,7 @@ Canonical canonical(const TradingHost& host) {
     // These optional outputs are deliberately disabled in BOTH independent
     // runs. A new nonempty output cannot silently escape the comparison.
     require(r.trace_len == 0 && r.trace_names_len == 0 && r.broker_state_hash_len == 0,
-            "CR-257 unexpected optional output requires canonical encoding");
+            "Unexpected optional output requires canonical encoding");
     out.add(r.trace_len); out.add(r.trace_names_len); out.add(r.broker_state_hash_len);
     out.add(static_cast<Count>(host.closed_trade_count()));
     for (Count i = 0; i < host.closed_trade_count(); ++i)
@@ -832,14 +832,14 @@ Canonical canonical(const TradingHost& host) {
 }
 void validate_trading(const TradingHost& host, const Driver& driver) {
     require(host.last_error().empty() && host.last_run_status() == 0,
-            "CR-257 engine run failed");
+            "Engine run failed");
     require(host.callbacks == driver.bars.size()
             && host.script_bars_processed() == static_cast<std::int64_t>(driver.bars.size())
             && host.closed_trade_count() > 0
             && host.closed_trade_count() == driver.trades.size()
             && host.closes == driver.trades.size() && host.opens == driver.trades.size()
             && host.pending_observations > 0 && host.physical_position().signed_units == 0.0,
-            "CR-257 driver/engine trade count, pending brackets or bar count disagree");
+            "Driver/engine trade count, pending brackets or bar count disagree");
     for (Count i = 0; i < driver.trades.size(); ++i) {
         const auto row = host.closed_trade(static_cast<std::size_t>(i));
         const auto& expected = driver.trades[static_cast<std::size_t>(i)];
@@ -850,7 +850,7 @@ void validate_trading(const TradingHost& host, const Driver& driver) {
                 && row.exit_bar_index == static_cast<int>(expected.exit)
                 && row.is_long == expected.is_long && row.qty == 1.0
                 && row.entry_id == kEntryId && row.exit_from_bracket && !row.open_at_end,
-                "CR-257 trade departed from the independent signal/OHLC driver");
+                "Trade departed from the independent signal/OHLC driver");
     }
 }
 } // namespace
@@ -865,7 +865,7 @@ SourceRun source_run(Count n) {
         CommandObserver observer; // BEFORE stores; AFTER host on destruction.
         TradingHost host(driver);
         require(host.stream_begin(driver.bars.data(), static_cast<int>(kWarmup), "1", "1"),
-                "CR-257 trading warmup failed");
+                "Trading warmup failed");
         auto& context = sd::exit_scratch(adapter(host));
         observer.store = &core(context.store);
         CommandObserver::ScopeOrder scope_order(observer); // Restored before host destruction.
@@ -875,11 +875,11 @@ SourceRun source_run(Count n) {
         const auto closes_before = host.closed_trade_count();
         require(context.store.record_count() == 0 && !context.store.transaction_active()
                 && closes_before > 0 && host.pending_order_count() == 0,
-                "CR-257 warmup did not finish with a settled, trading source store");
+                "Warmup did not finish with a settled, trading source store");
         Measure run;
         for (Count i = kWarmup; i < driver.bars.size(); ++i)
             require(host.stream_push_bar(driver.bars[static_cast<std::size_t>(i)]),
-                    "CR-257 trading RUN failed");
+                "Trading RUN failed");
         result.io = run.finish(); // ONLY push loop: no setup, end, report, destructor.
         const auto after = context.store.stats();
         result.page_reads = observer.reads;
@@ -905,33 +905,33 @@ SourceRun source_run(Count n) {
                 && observer.syncs == after.syncs - before.syncs
                 && observer.commits == observer.store->cur_.seq - sequence_before
                 && observer.created == observer.store->cur_.next_handle - handles_before,
-                "CR-257 observer/wrappers/actual source store disagree or missed RUN I/O");
+                "Observer/wrappers/actual source store disagree or missed RUN I/O");
         require(observer.commits > 0 && observer.created > 0 && observer.erased == observer.created
                 && observer.inserts > 0 && context.store.record_count() == 0
                 && result.cleared_scopes > 0 && result.cleared_scopes <= observer.erased
                 && result.erase_commit_allowance >= result.cleared_scopes
                 && !context.store.transaction_active() && host.closed_trade_count() > closes_before
                 && observer.extent_pages <= after.backing_pages,
-                "CR-257 temporary records/commits or measured trades are vacuous");
+                "Temporary records/commits or measured trades are vacuous");
         // This is the geometric premise of the cold-once read bound, not a
         // population-tuned allowance. Check the actual backing as well as the
         // max page+1 of write charges produced INSIDE RUN.
         require(after.backing_pages * platform_page <= kCacheBytes,
-                "CR-257 fixture working set does not fit the fixed read cache");
+                "Fixture working set does not fit the fixed read cache");
         bound("command.pages_per_commit", observer.maximum_commit_writes,
               pd::kPagesPerCommit, result.context);
-        require(host.stream_end(), "CR-257 trading stream end failed");
+        require(host.stream_end(), "Trading stream end failed");
         validate_trading(host, driver);
         measured = canonical(host);
     }
-    require(!measuring, "CR-257 reference accidentally measured");
+    require(!measuring, "Reference accidentally measured");
     ReferenceScratch memory; // Independent bytes/cache, fixed size, unrelated to N.
     TradingHost reference(driver, &memory);
     reference.run(driver.bars.data(), static_cast<int>(driver.bars.size()), "1", "1", false);
     validate_trading(reference, driver);
     const Canonical expected = canonical(reference);
     require(measured.bytes == expected.bytes,
-            "CR-257 ZERO-DIFF: disk/stream full report differs from independent memory/batch report");
+            "ZERO-DIFF: disk/stream full report differs from independent memory/batch report");
     std::printf("X257 zero_diff bytes=%zu trades=%zu pending_bars=%llu N=%llu PASS\n",
         measured.bytes.size(), driver.trades.size(),
         static_cast<unsigned long long>(driver.pending_bars),
@@ -942,20 +942,20 @@ SourceRun source_run(Count n) {
 SourceRun scope_erase_run(Count records) {
     check_scope_erase_accounting();
     require(records > sd::kExitScopeEraseBatch,
-            "CR-257 erase fixture must exercise a full batch and a partial batch");
+            "Erase fixture must exercise a full batch and a partial batch");
     CommandObserver observer; // Register before creating the actual backing.
     auto backing = pd::make_command_scratch_backing(platform_page);
     pd::CommandScratchStore store({2, platform_page, 1, 1, sd::exit_scratch_key_order(),
                                    pd::ScratchOpenMode::create_empty}, backing.get());
-    require(store.status() == pd::ScratchStatus::ok, "CR-257 erase fixture store failed");
+    require(store.status() == pd::ScratchStatus::ok, "Erase fixture store failed");
     sd::ExitScratchContext context{store, {}};
     sd::ExitScratchRows<Count> rows(context);
     for (Count i = 0; i < records; ++i) rows.push_back(i * 17 + 3);
     require(rows.size() == records && store.record_count() == records,
-            "CR-257 erase fixture did not insert its real temporary records");
+            "Erase fixture did not insert its real temporary records");
     for (Count i = 0; i < records; ++i)
         require(rows[static_cast<std::size_t>(i)] == i * 17 + 3,
-                "CR-257 erase fixture ignored its stored payloads");
+                "Erase fixture ignored its stored payloads");
     observer.store = &core(store);
     CommandObserver::ScopeOrder scope_order(observer); // Restored while store is still alive.
     const auto before = store.stats();
@@ -981,7 +981,7 @@ SourceRun scope_erase_run(Count records) {
             && observer.syncs == after.syncs - before.syncs
             && observer.commits == observer.store->cur_.seq - sequence_before
             && store.record_count() == 0 && rows.empty() && !store.transaction_active(),
-            "CR-257 actual scope clear missed records, publications or wrapped I/O");
+            "Actual scope clear missed records, publications or wrapped I/O");
     result.context.extent_pages = observer.extent_pages;
     result.context.records_changed = observer.erased;
     result.page_reads = observer.reads;
@@ -996,9 +996,9 @@ SourceRun scope_erase_run(Count records) {
     for (Count i = 0; i < records; ++i) reused.push_back(i * 29 + 7);
     for (Count i = 0; i < records; ++i)
         require(reused[static_cast<std::size_t>(i)] == i * 29 + 7,
-                "CR-257 batched erase damaged subsequent scope reuse");
+            "Batched erase damaged subsequent scope reuse");
     require(store.record_count() == records && rows.empty(),
-            "CR-257 cleared scope retained new scope membership");
+            "Cleared scope retained new scope membership");
     return result;
 }
 
@@ -1011,10 +1011,10 @@ void source_bounds(const SourceRun& run) {
     // Independent classifiers must agree on ALL command counters, not merely
     // on a zero read count. The generic ScratchFile test has a different name.
     require(same(command, pages),
-            "CR-257 pineforge-command prefix and anonymous page counters disagree");
+            "Command prefix and anonymous page counters disagree");
     require(payload.pwrite.calls > 0
             && run.io.classes[class_index(FileClass::trade_index)].pwrite.calls > 0,
-            "CR-257 trading RUN did not identify active ledger payload/index files");
+            "Trading RUN did not identify active ledger payload/index files");
     for (std::size_t i = 0; i < kClassNames.size(); ++i) {
         const auto& reads = run.io.classes[i].pread;
         std::printf("X257 class=%s pread_calls=%llu pread_bytes=%llu per_bar=%.9Lf N=%llu INFO\n",
@@ -1037,10 +1037,10 @@ void source_bounds(const SourceRun& run) {
     // so no nonresident-row allowance or per-bar literal belongs here.
     class_bound(FileClass::trade_payload, "pread_calls", payload.pread.calls, 0, context);
     class_bound(FileClass::trade_payload, "pread_bytes", payload.pread.bytes, 0, context);
-    // CR-265 allows insert_commits + sum over non-empty scope clears of
+    // The batching rule allows insert_commits + sum over non-empty scope clears of
     // ceil(rows_in_scope / kExitScopeEraseBatch), rounding each scope separately.
     require(run.erase_commit_allowance < context.records_changed,
-            "CR-257 source fixture must reject one teardown commit per erased row");
+            "Source fixture must reject one teardown commit per erased row");
     const Count allowed_commits = run.insert_commits + run.erase_commit_allowance;
     const Count write_calls = allowed_commits * pd::kPagesPerCommit;
     bound("command.commits", run.commits, allowed_commits, context);
@@ -1049,7 +1049,7 @@ void source_bounds(const SourceRun& run) {
     bound("command.page_pwrite_bytes", pages.pwrite.bytes, write_calls * platform_page, context);
     bound("command.total_pwrite_bytes", io.pwrite.bytes, write_calls * platform_page, context);
     require(pages.pread.bytes <= io.pread.bytes && pages.pwrite.bytes <= io.pwrite.bytes,
-            "CR-257 command page bytes exceed total RUN bytes");
+            "Command page bytes exceed total RUN bytes");
     const Count scratch_read_bytes = io.pread.bytes - pages.pread.bytes;
     const Count scratch_write_bytes = io.pwrite.bytes - pages.pwrite.bytes;
     // Only the non-page ScratchFiles (ledger/payload/sequence) issue these
@@ -1078,21 +1078,21 @@ void source_bounds(const SourceRun& run) {
 int main(int argc, char** argv) {
     try {
         const long page = ::sysconf(_SC_PAGESIZE);
-        cr257::require(page > 0, "CR-257 platform page size query failed");
+        cr257::require(page > 0, "Platform page size query failed");
         cr257::platform_page = static_cast<std::size_t>(page);
         cr257::require(cr257::kCacheBytes % cr257::platform_page == 0
                        && cr257::kCacheBytes / cr257::platform_page >= 2,
-                       "CR-257 lab geometry needs at least two pages per read window");
+                       "Test geometry needs at least two pages per read window");
         const std::string mode = argc == 1 ? "source" : argv[1];
-        cr257::require(argc <= 2, "CR-257 unexpected command-line arguments");
+        cr257::require(argc <= 2, "Unexpected command-line arguments");
         if (mode == "source") cr257::source_bounds(cr257::source_run(cr257::kSmallN));
         else if (mode == "source-100k") cr257::source_100k();
         else if (mode == "dontneed") cr257::scratch_file_io();
         else if (mode == "erase-scope") cr257::exit_scope_io();
-        else throw std::runtime_error("CR-257 unknown test mode");
+        else throw std::runtime_error("Unknown test mode");
         return cr257::failures == 0 ? 0 : 1;
     } catch (const std::exception& error) {
-        std::fprintf(stderr, "CR-257 setup/result-integrity failure: %s\n", error.what());
+        std::fprintf(stderr, "Setup/result-integrity failure: %s\n", error.what());
         return 1;
     }
 }

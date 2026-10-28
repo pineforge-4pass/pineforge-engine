@@ -64,6 +64,16 @@ struct LiveHandlesTag {
 template struct PrivateAccess<LiveHandlesTag,
     &source::PineExecutionAdapter::live_handles_>;
 
+// The adapter's single live-membership writer: it keeps the per-family live
+// counters in step with the live handle list.
+struct RememberLiveTag {
+    using type = void (source::PineExecutionAdapter::*)(
+        const no::RequestHandle&, source::PlacementSnapshot&&);
+    friend type access(RememberLiveTag);
+};
+template struct PrivateAccess<RememberLiveTag,
+    &source::PineExecutionAdapter::remember_live>;
+
 struct BrokerEpochTag {
     using type = std::uint64_t source::PineExecutionAdapter::*;
     friend type access(BrokerEpochTag);
@@ -174,15 +184,12 @@ public:
             break;
         }
         case QualificationCase::IncarnationGap: {
-            auto& live = adapter_.*access(LiveHandlesTag{});
             const auto original = pending.plan.final_short;
             no::RequestHandle replacement = original;
             replacement.incarnation += 10U;
-            const auto replacement_snapshot = placements.at(original.incarnation);
-            const auto inserted = placements.try_emplace(
-                replacement.incarnation, replacement_snapshot);
-            CHECK(inserted.second);
-            live.push_back(replacement);
+            auto replacement_snapshot = placements.at(original.incarnation);
+            CHECK(placements.find(replacement.incarnation) == placements.end());
+            (adapter_.*access(RememberLiveTag{}))(replacement, std::move(replacement_snapshot));
             pending.plan.final_short = replacement;
             break;
         }

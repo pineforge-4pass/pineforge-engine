@@ -1,4 +1,4 @@
-// CR-150 L19G: K1 costs the askable origins, not the exit's re-issue history.
+// K1 costs the askable origins, not the exit's re-issue history.
 // This unit uses the real Pine host and kernel. The directed recancel case
 // invokes the adapter's pair-hold policy at a live callback (the same policy
 // a declined reversal uses), then cancels/re-issues an explicit per-origin

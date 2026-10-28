@@ -1,4 +1,4 @@
-// CR-150 A5 — O(1) resident script-state store contract.
+// O(1) resident script-state store contract.
 //
 // PURPOSE. Script-owned state (arrays, strings, map payloads, matrices, UDT graphs,
 // drawing records) grows with bars or with objects the script creates. This header

@@ -1281,7 +1281,7 @@ public:
     /// without any bookkeeping to keep in step. Text that matches nothing is
     /// not a command.
     std::vector<NativeWorkingRequest> native_working_requests() const;
-    /// Allocation-free live-order reads with the owning accessor's visibility.
+    /// Live-order reads, owning accessor's visibility; spilled rows may allocate and do scratch I/O.
     /// Callbacks may read or write their own scratch store, but issue no host
     /// commands. False returns cancelled, even for the last row.
     detail::ScratchStatus visit_native_working_requests(void*, bool (*)(void*, const NativeWorkingRequest&)) const;

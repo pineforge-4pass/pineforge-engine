@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include <pineforge/run_failure.hpp>
+
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -11,6 +13,22 @@
 namespace pineforge::live {
 
 void refuse_legacy_ledger(const std::string& path, const std::string& legacy_identity);
+
+// Pending deployment-policy decision; this release keeps both defaults unlimited.
+inline constexpr bool service_requires_ledger_budget = false;
+void validate_ledger_budget(bool service_enabled, std::uint64_t limit, bool unbounded);
+#ifdef PINEFORGE_LIVE_LEGACY_TEST_API
+void validate_ledger_budget(bool service_enabled, std::uint64_t limit, bool unbounded,
+                            bool require_service_budget);
+#endif
+
+class LedgerBudgetExceeded : public coded<std::runtime_error> {
+public:
+    LedgerBudgetExceeded(std::uint64_t used, std::uint64_t requested, std::uint64_t limit);
+    const std::uint64_t used;
+    const std::uint64_t requested;
+    const std::uint64_t limit;
+};
 
 struct Event {
     std::string id;
@@ -55,7 +73,8 @@ struct DeliveryScan {
 // Payloads are opaque bytes and are never reserialized or changed on delivery.
 class Ledger {
 public:
-    Ledger(const std::string& path, const std::string& deployment_identity);
+    Ledger(const std::string& path, const std::string& deployment_identity,
+           std::uint64_t max_bytes = 0);
     ~Ledger();
     Ledger(const Ledger&) = delete;
     Ledger& operator=(const Ledger&) = delete;
@@ -74,8 +93,9 @@ public:
                        const std::function<std::string()>& legacy_report = {});
 
 #ifdef PINEFORGE_LIVE_LEGACY_TEST_API
+    void set_byte_budget(std::uint64_t max_bytes);
     std::optional<StoredEvent> pending_event() const;
-    std::uint64_t pending_count() const;
+    std::uint64_t pending_count(std::uint64_t* steps = nullptr) const;
     // Persist the attempt before sending. A crash leaves an unacknowledged
     // attempt; the receiver must deduplicate using the immutable event id.
     void begin_delivery(const std::string& event_id);
@@ -91,8 +111,8 @@ public:
                                   const std::string& request_id = {});
     void finish_attempt(const DeliveryAttempt& attempt, std::uint64_t ended_at,
                         long http_status, bool success, const std::string& error);
-    std::uint64_t unsent_count() const;
-    std::string delivery_metrics_json(std::uint64_t now) const;
+    std::uint64_t unsent_count(std::uint64_t* steps = nullptr) const;
+    std::string delivery_metrics_json(std::uint64_t now, std::uint64_t* steps = nullptr) const;
     std::uint64_t request_redelivery(const std::string& request_id, const std::string& target,
                                      std::uint64_t from, bool failed_only);
     std::optional<RequestedDelivery> next_redelivery_event(std::uint64_t request_order,
@@ -114,7 +134,7 @@ public:
     std::vector<StoredEvent> actions_after(std::uint64_t after, std::size_t limit = 256) const;
     std::vector<StoredEvent> redelivery_events(const std::string& target,
                                               std::uint64_t from, bool failed_only) const;
-    std::string status_json() const;
+    std::string status_json(std::uint64_t* steps = nullptr) const;
     std::string report_json(std::optional<std::uint64_t> cursor = std::nullopt) const;
 private:
     struct Impl;

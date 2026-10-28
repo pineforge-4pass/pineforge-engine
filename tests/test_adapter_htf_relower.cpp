@@ -29,7 +29,7 @@
 // auxiliary feed, no Heikin-Ashi, no lookahead_on) and add the shapes the
 // adapter keeps for itself: Heikin-Ashi, lookahead_on, lower-TF, an
 // aggregated chart, the bar magnifier, the forex intraday daily request
-// (KI-55 OTC pins), the range-start warmup flag, a stream, and a host reused
+// (OTC pins), the range-start warmup flag, a stream, and a host reused
 // from a kernel-routed batch run for a stream run.
 
 #include <pineforge/na.hpp>

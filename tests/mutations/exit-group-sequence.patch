@@ -1,0 +1,13 @@
+diff --git a/src/source/pine_adapter.cpp b/src/source/pine_adapter.cpp
+--- a/src/source/pine_adapter.cpp
++++ b/src/source/pine_adapter.cpp
+@@ -29733,8 +29733,7 @@
+     if (!before && size_ == 0 && !sequence_index_) return;
+     if (before && after && before->source_id == after->source_id
+-        && before->from_entry == after->from_entry
+-        && before->command_sequence == after->command_sequence) return;
++        && before->from_entry == after->from_entry) return;
+     try {
+         auto& index = sequence_index();
+         SequenceIndex::Transaction transaction(index);
+         if (before) index.remove(incarnation, *before);

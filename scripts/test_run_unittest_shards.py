@@ -241,6 +241,57 @@ class UnittestShardsTests(unittest.TestCase):
                 for shard_num in range(1, count + 1):
                     self.assertIn(f'shard {shard_num}/{count}:', output)
 
+    def test_preflight_balances_mutations_covers_discovery_and_refuses_a_dropped_row(self) -> None:
+        prefix = 'test_ci_preflight.PreflightFailures.'
+        heavy = [
+            prefix + 'test_gcp_sites_reject_retired_and_void_labels',
+            prefix + 'test_light_jobs_refuse_vm_labels_unlisted_images_arrays_and_fallbacks',
+        ]
+        middle = prefix + 'test_gcp_sites_require_every_routed_job'
+        ids = [heavy[0], middle, heavy[1]]
+        self.assertEqual(ids, sorted(ids))
+        discovered = shards_runner.discover_test_ids(ROOT / 'scripts/test_ci_preflight.py')
+        self.assertTrue(set(ids) <= set(discovered))
+        shards = shards_runner.split_into_shards(ids, 2)
+        locations = [next(index for index, shard in enumerate(shards) if test_id in shard)
+                     for test_id in heavy]
+        self.assertNotEqual(locations[0], locations[1], shards)
+        self.assertEqual(shards, shards_runner.split_into_shards(list(reversed(ids)), 2))
+        shards_runner.validate_shard_partition(ids, shards)
+
+        module = ROOT / 'scripts/test_ci_preflight.py'
+        ids = discovered
+        heavy = {
+            prefix + method for method in (
+                'test_gcp_sites_reject_retired_and_void_labels',
+                'test_light_jobs_refuse_vm_labels_unlisted_images_arrays_and_fallbacks',
+                'test_no_stage_runs_under_a_timeout_and_jobs_keep_the_platform_maximum',
+                'test_pool_jobs_reject_hosted_runners_and_fallbacks_from_mutated_files',
+                'test_ci_contract_pins_spot_runners_time_limits_and_parallelism',
+                'test_ci_contract_pins_the_docs_only_skip',
+                'test_gcp_sites_reject_cross_class_routes',
+                'test_authz_and_every_dependency_are_required_from_mutated_files',
+            )
+        }
+        self.assertTrue(heavy <= set(ids), 'a balance-table method was renamed or lost')
+        planned = shards_runner.split_into_shards(ids, 8)
+        flattened = [test_id for shard in planned for test_id in shard]
+        self.assertEqual(len(flattened), len(ids))
+        self.assertCountEqual(flattened, ids)
+        self.assertEqual([len(heavy & set(shard)) for shard in planned], [1] * 8)
+        shards_runner.validate_shard_partition(ids, planned)
+        # Mutate the actual assignment, not discovery or the expected count.
+        removed = planned[0].pop()
+        out = io.StringIO()
+        with mock.patch.object(shards_runner.subprocess, 'Popen') as launch, \
+                redirect_stdout(out), redirect_stderr(out):
+            code = shards_runner.run_shards(module, shard_count=8, shards_override=planned)
+        self.assertEqual(code, 1)
+        self.assertIn('partition mismatch', out.getvalue())
+        self.assertIn('lost ids:', out.getvalue())
+        self.assertIn(removed, out.getvalue())
+        launch.assert_not_called()
+
     def test_lost_or_duplicated_test_ids_print_and_fail(self) -> None:
         full_ids = shards_runner.discover_test_ids(self.module_path)
         lost_shards = shards_runner.split_into_shards(full_ids, 2)

@@ -78,6 +78,7 @@ env:
 jobs:
   release:
     runs-on: ["self-hosted","pf-gcp-main"]
+    environment: release
 
     outputs:
       tag:        ${{ steps.bump.outputs.tag }}
@@ -505,6 +506,7 @@ jobs:
     needs: [release, prebuilt]
     if: ${{ !inputs.dry_run }}
     runs-on: ["self-hosted","pf-gcp-main"]
+    environment: release
     steps:
       - name: Mint org App token (hub dispatch)
         id: app

@@ -1,0 +1,12 @@
+diff --git a/src/native_order_book.hpp b/src/native_order_book.hpp
+--- a/src/native_order_book.hpp
++++ b/src/native_order_book.hpp
+@@ -586,8 +586,6 @@
+             erase_index(core, row);
+             --reg[(slot.dormancy >> 1) & 1u].spilled_dormant;
+         } else --active_spilled;
+-        resident.insert(resident.begin() + static_cast<std::ptrdiff_t>(at),
+-                        active_meta(row.priority()));
+         assert_aligned(core);
+     }
+     void pushed(const WorkingRequestCore& core) noexcept {

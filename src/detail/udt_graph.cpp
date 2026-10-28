@@ -23,6 +23,13 @@ constexpr std::size_t kCopyBytes = 256;
 constexpr std::size_t kEdgeBatch = 32;
 // A node at most this large is initialized/read with one Store call.
 constexpr std::size_t kStageBytes = 512;
+
+// Same coded failure as the codegen helper pine_na_stop, raised directly: a
+// kernel unit does not call the codegen-contract helpers.
+[[noreturn]] void na_stop(const char* object, const char* english) {
+    throw coded<std::runtime_error>(RunFailureCode::pine_na_reference, {{"object", object}},
+                                    english ? english : "");
+}
 } // namespace
 
 [[noreturn]] void UdtGraph::fail(const char* why) {
@@ -144,7 +151,7 @@ bool UdtGraph::alive(Id id) const {
 }
 
 UdtGraph::Node UdtGraph::node(Id id) const {
-    if (id == kNullId) pine_na_stop("udt_object", "Cannot access a field of an na UDT object.");
+    if (id == kNullId) na_stop("udt_object", "Cannot access a field of an na UDT object.");
     // A dead id stops inside Store::read: by the o1 contract reading a dead
     // id is a caller error, never a silent zero.
     Node n;
@@ -300,7 +307,7 @@ void UdtGraph::write(Id id, std::uint64_t off, const void* src, std::size_t byte
 }
 
 void UdtGraph::read_object(Id id, const UdtType& type, void* payload, Id* children) const {
-    if (id == kNullId) pine_na_stop("udt_object", "Cannot access a field of an na UDT object.");
+    if (id == kNullId) na_stop("udt_object", "Cannot access a field of an na UDT object.");
     const std::uint64_t total = object_bytes(type.payload_bytes, type.edge_count);
     std::array<unsigned char, kStageBytes> stage{};
     const auto staged = static_cast<std::size_t>(std::min<std::uint64_t>(total, stage.size()));

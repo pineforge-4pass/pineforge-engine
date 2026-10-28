@@ -1,0 +1,12 @@
+diff --git a/src/native_execution_consumer.cpp b/src/native_execution_consumer.cpp
+--- a/src/native_execution_consumer.cpp
++++ b/src/native_execution_consumer.cpp
+@@ -6752,7 +6752,7 @@
+     const auto grid = grid_threshold(*spec);
+     const uint64_t P = point.coordinate.ordinal;
+     requests_.refresh_point_allowances(P, read_position(engine));
+-    MatchBookSpillScope retained_candidates(*this, false);
++    MatchBookSpillScope retained_candidates(*this, true);
+     MatchDormantPoint dormant(*this, engine, point, driver_class, from_price, to_price);
+     double t_cursor = 0.0, cursor_price = from_price;
+     native_order::MatchCursor path_cursor = make_cursor(point, t_cursor);

@@ -27,3 +27,7 @@ set_tests_properties(test_open_report_rows_retention_flat PROPERTIES LABELS "slo
 list(APPEND TEST_SOURCES test_report_trades_summary_flat)
 pineforge_add_unit_test(test_report_trades_summary_flat)
 set_tests_properties(test_report_trades_summary_flat PROPERTIES LABELS "slow;mem")
+list(APPEND TEST_SOURCES test_report_sink_trade_residency)
+pineforge_add_unit_test(test_report_sink_trade_residency)
+set_tests_properties(test_report_sink_trade_residency PROPERTIES
+    LABELS "slow;mem;LAB-DISKSCRATCH" RUN_SERIAL TRUE)

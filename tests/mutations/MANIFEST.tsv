@@ -1,0 +1,51 @@
+id	patch	test target	expected-red row
+M1	tests/mutations/M1.patch	test_native_dormant_book_switch	eager/dormant transcript comparison
+M2	tests/mutations/M2.patch	test_native_dormant_book_switch	t=0 callback spill with an unswept suffix
+M3	tests/mutations/M3.patch	test_native_dormant_book_switch	index membership count after promotion
+M4	tests/mutations/M4.patch	test_native_dormant_book_core_contract	resident epoch run exercises dormant resident sweeps
+M5	tests/mutations/M5.patch	test_native_dormant_book_switch	cancellation metadata alignment
+M6	tests/mutations/M6.patch	test_native_dormant_book_reachability	join/wake equality or independently computed eager envelope
+M7	tests/mutations/M7.patch	test_native_dormant_book_reachability	closed envelope boundary
+M8	tests/mutations/M8.patch	test_native_dormant_book_transcript	t=0 watermark and fresh reads
+M9	tests/mutations/M9.patch	test_native_dormant_book_transcript	complete the allowance sweep before an interior winner
+M10	tests/mutations/M10.patch	test_native_dormant_book_reachability	production finite-segment predicate against classified endpoints
+M11	tests/mutations/M11.patch	test_native_dormant_book_transcript	driver permissions for CarriedOpen/Other
+M11_OBSERVED_PRINT_LIMIT	tests/mutations/M11_OBSERVED_PRINT_LIMIT.patch	test_native_dormant_book_transcript	driver permissions for OBSERVED_PRINT_LIMIT
+M11_OBSERVED_PRINT_OTHER	tests/mutations/M11_OBSERVED_PRINT_OTHER.patch	test_native_dormant_book_transcript	driver permissions for OBSERVED_PRINT_OTHER
+M11_CARRIED_OPEN_LIMIT	tests/mutations/M11_CARRIED_OPEN_LIMIT.patch	test_native_dormant_book_transcript	driver permissions for CARRIED_OPEN_LIMIT
+M11_CARRIED_OPEN_OTHER	tests/mutations/M11_CARRIED_OPEN_OTHER.patch	test_native_dormant_book_transcript	driver permissions for CARRIED_OPEN_OTHER
+M11_TICK_AFTER_CALCULATION_LIMIT	tests/mutations/M11_TICK_AFTER_CALCULATION_LIMIT.patch	test_native_dormant_book_transcript	driver permissions for TICK_AFTER_CALCULATION_LIMIT
+M11_TICK_AFTER_CALCULATION_OTHER	tests/mutations/M11_TICK_AFTER_CALCULATION_OTHER.patch	test_native_dormant_book_transcript	driver permissions for TICK_AFTER_CALCULATION_OTHER
+M11_CONFIRMED_OPEN_LIMIT	tests/mutations/M11_CONFIRMED_OPEN_LIMIT.patch	test_native_dormant_book_transcript	driver permissions for CONFIRMED_OPEN_LIMIT
+M11_CONFIRMED_OPEN_OTHER	tests/mutations/M11_CONFIRMED_OPEN_OTHER.patch	test_native_dormant_book_transcript	driver permissions for CONFIRMED_OPEN_OTHER
+M11_CONFIRMED_EXCURSION_LIMIT	tests/mutations/M11_CONFIRMED_EXCURSION_LIMIT.patch	test_native_dormant_book_transcript	driver permissions for CONFIRMED_EXCURSION_LIMIT
+M11_CONFIRMED_EXCURSION_OTHER	tests/mutations/M11_CONFIRMED_EXCURSION_OTHER.patch	test_native_dormant_book_transcript	driver permissions for CONFIRMED_EXCURSION_OTHER
+M11_CONFIRMED_AFTER_CALCULATION_CLOSE_LIMIT	tests/mutations/M11_CONFIRMED_AFTER_CALCULATION_CLOSE_LIMIT.patch	test_native_dormant_book_transcript	driver permissions for CONFIRMED_AFTER_CALCULATION_CLOSE_LIMIT
+M11_CONFIRMED_AFTER_CALCULATION_CLOSE_OTHER	tests/mutations/M11_CONFIRMED_AFTER_CALCULATION_CLOSE_OTHER.patch	test_native_dormant_book_transcript	driver permissions for CONFIRMED_AFTER_CALCULATION_CLOSE_OTHER
+M11_CURRENT_EXECUTION_LIMIT	tests/mutations/M11_CURRENT_EXECUTION_LIMIT.patch	test_native_dormant_book_transcript	driver permissions for CURRENT_EXECUTION_LIMIT
+M11_CURRENT_EXECUTION_OTHER	tests/mutations/M11_CURRENT_EXECUTION_OTHER.patch	test_native_dormant_book_transcript	driver permissions for CURRENT_EXECUTION_OTHER
+M12	tests/mutations/M12.patch	test_native_dormant_book_switch	wake the command target before cancellation
+M13	tests/mutations/M13.patch	test_native_dormant_book_switch	kept-handle reprice metadata alignment
+M14	tests/mutations/M14.patch	test_native_dormant_book_switch	eager/dormant comparison with active spilled rows
+M15	tests/mutations/M15.patch	test_native_dormant_book_read_failure	carried tick failure location
+M16	tests/mutations/M16.patch	test_native_dormant_book_index_fault	index failure disables acceleration for the rest of the run
+M17	tests/mutations/M17.patch	test_native_dormant_book_transcript	fresh decode above an unfinished watermark
+M18	tests/mutations/M18.patch	test_native_dormant_book_core_contract	resident epoch arithmetic
+M19	tests/mutations/M19.patch	test_native_dormant_book_transcript	active trailing order executes at 106 minus 2
+M20	tests/mutations/M20.patch	test_native_dormant_book_transcript	remaining suffix after an active row spills during a point
+M21	tests/mutations/M21.patch	test_native_dormant_book_core_contract	final spilled row epoch arithmetic and index membership count
+M22	tests/mutations/M22.patch	test_native_dormant_book_reachability	two-tick margin against an independently computed eager envelope
+M23	tests/mutations/M23.patch	test_native_dormant_book_transcript	complete before an interior winner and when no winner remains
+M24	tests/mutations/M24.patch	test_native_dormant_book_transcript	--notification-middle-spill promotion with candidates retained after a callback
+M25	tests/mutations/M25.patch	test_native_dormant_book_tokens	held decoded ring copies stay frozen
+M26	tests/mutations/M26.patch	test_native_dormant_book_tokens	keepalive lifetime before raw pointer access
+M-resident-window	tests/mutations/M-resident-window.patch	test_native_dormant_book_transcript	--resident-window callback allowances match eager after a resident suffix refresh
+M-middle-in-match-path	tests/mutations/M-middle-in-match-path.patch	test_native_dormant_book_transcript	--notification-middle-spill forbids middle spills while candidates are retained
+M-first-ensure-throws	tests/mutations/M-first-ensure-throws.patch	test_native_dormant_book_allocation_fault	first book allocation failure falls back to eager matching
+retirement-publication	tests/mutations/retirement-publication.patch	test_retirement_work_scaling	run_retention_changes Publication: changed placement or lifecycle bypassed the retirement sweep
+retirement-withdrawal	tests/mutations/retirement-withdrawal.patch	test_retirement_work_scaling	run_retention_changes Withdrawal: changed placement or lifecycle bypassed the retirement sweep
+retirement-references	tests/mutations/retirement-references.patch	test_retirement_work_scaling	quiet cleanup: unchanged retirement sweep erased a placement, or retirement fixture erased no placement rows
+retirement-age	tests/mutations/retirement-age.patch	test_retirement_work_scaling	run_retention_changes Publication: unchanged retirement sweep erased a placement, or retired order did not expire after its placement bar
+retirement-metadata	tests/mutations/retirement-metadata.patch	test_retirement_work_scaling	run_retention_binding: retention metadata change bypassed the retirement sweep
+exit-group-boundary	tests/mutations/exit-group-boundary.patch	test_exit_group_reorder_scaling	boundary_amendment_publication: predecessor phase amendment bypassed exit-group publication
+exit-group-sequence	tests/mutations/exit-group-sequence.patch	test_exit_group_reorder_scaling	retained_identity_reference: retained identity lookup differs from independent row-history oracle

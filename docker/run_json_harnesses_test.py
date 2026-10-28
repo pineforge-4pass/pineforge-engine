@@ -60,7 +60,7 @@ class FakeLib:
     def __init__(self, text=b"", code=None, args=b"{}", status=None):
         self.calls = []
         exports = {
-            "pf_abi_version": lambda: 4,
+            "pf_abi_version": lambda: run_json.EXPECTED_PF_ABI,
             "strategy_create": lambda params: ST,
             "strategy_set_input": lambda state, key, value: None,
             "strategy_set_override": lambda state, key, value: None,

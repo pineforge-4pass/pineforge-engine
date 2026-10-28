@@ -316,16 +316,16 @@ void test_run_shape_conditions() {
     condition("magnifier: 120 on RTH 15 -> 60", rth_bars(5), Site{"120"}, rth_magnified, false,
               true, {});
 
-    // KI-55 range-start cut (:1546): a range start at bar 6 (01:30Z) cuts the
+    // Range-start cut (:1546): a range start at bar 6 (01:30Z) cuts the
     // hour in progress; the kernel, which has no cut, reads it from bar 3.
     const std::vector<Bar> hourly = grid_bars(64);
     Shape range_start;
     range_start.range_start_ms = static_cast<double>(hourly[6].timestamp);
-    condition("KI-55 range start at bar 6", hourly, Site{"60"}, range_start, false, true, {{3, 10}});
+        condition("Range start at bar 6", hourly, Site{"60"}, range_start, false, true, {{3, 10}});
     // ... and a cut at the first bar cuts nothing, route included.
     Shape range_start_first;
     range_start_first.range_start_ms = static_cast<double>(hourly[0].timestamp);
-    condition("KI-55 range start at bar 0", hourly, Site{"60"}, range_start_first, false, true, {});
+        condition("Range start at bar 0", hourly, Site{"60"}, range_start_first, false, true, {});
 
     // historical lookahead projection (:1546): a lookahead_off site is the
     // kernel's plain series; a lookahead_on site is the kernel's lookahead

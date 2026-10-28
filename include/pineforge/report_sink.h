@@ -1,7 +1,7 @@
 /*
  * SPDX-License-Identifier: Apache-2.0
  *
- * CR-150 P00: report sink C ABI declarations, DESIGN.md revision 6,
+ * Report sink C ABI declarations, DESIGN.md revision 6,
  * section 3.7 lines 782-901 and section 6 lines 1278-1317.
  * No definitions or runtime feature probe are supplied by this contract.
  * Include this additive header explicitly, as for execution_observer.h.
@@ -71,7 +71,7 @@ typedef struct pf_report_sink_fd_v1 {
  *  until the trailer exists. complete becomes 1 once the trailer is written.
  *  trades_retained is 1 when closedtrades.* history stays script-readable.
  *  The explicit seven-byte reserved field gives a 144-byte layout with no
- *  implicit padding. PF_ABI_VERSION stays 4; no existing report/trade grows.
+ *  implicit padding. PF_ABI_VERSION is 5; no existing report/trade grows.
  *  RESOLVED S1: receipt query initialization and outcomes follow the
  *  CORE-TOP rev 6 amendment (10-18 16:04); see the query declaration below. */
 typedef struct pf_report_sink_receipt_v1 {

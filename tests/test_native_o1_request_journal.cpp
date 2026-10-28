@@ -1,4 +1,4 @@
-// CR-221 O1-E2, rows E03--E05 of the whole-run O(1) inventory (E02 is
+// Rows E03--E05 of the whole-run O(1) inventory (E02 is
 // test_native_o1_live_book.cpp, the paged id contract of E04 is
 // test_native_o1_chain_pages.cpp).
 //
