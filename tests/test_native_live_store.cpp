@@ -273,9 +273,16 @@ void exercise_writer_budget(Ledger& ledger, const std::string& path, Write&& wri
     const auto request = expect_budget_refusal(ledger, path, used + 1, write);
     CHECK(request > 1);
     CHECK(expect_budget_refusal(ledger, path, used + request - 1, write) == request);
+    const auto before = snapshot_bytes(ledger_files(path));
     ledger.set_byte_budget(used + request + 1);
     write();
-    CHECK(snapshot_bytes(ledger_files(path)) <= used + request + 1);
+    const auto after = snapshot_bytes(ledger_files(path));
+    if (after > used + request + 1 || (after > before && after - before > request))
+        std::fprintf(stderr, "writer growth: request=%llu before=%llu after=%llu limit=%llu\n",
+            static_cast<unsigned long long>(request), static_cast<unsigned long long>(before),
+            static_cast<unsigned long long>(after), static_cast<unsigned long long>(used + request + 1));
+    CHECK(after <= used + request + 1);
+    CHECK(after <= before || after - before <= request);
     ledger.set_byte_budget(0);
 }
 
@@ -308,7 +315,9 @@ void ledger_budget_admission() {
             // plus two balancing levels. For P>=512, 8/(P-64) <= 16/P bounds
             // text/overflow copies without using the estimator's height.
             const auto text = payload.size() * 3 + 3 + 3 + 3 + 2 + 4 + 12 + 12 + 64;
-            const auto touched_pages = 16ULL * text / page_size + 1 + 56ULL * 8 * (32 + 2);
+            const auto padding_pages = (65536 + page_size + 23) / (page_size + 24);
+            const auto touched_pages = logical_pages + 16ULL * text / page_size + 1 +
+                56ULL * 8 * (32 + 2) + padding_pages;
             const auto frame_size = page_size + 24;
             const auto prior_frames = before_files[1] ? before_files[1]->size() / frame_size : 0;
             // WAL + checkpoint, earlier logical pages, and 32 KiB index
@@ -316,16 +325,18 @@ void ledger_budget_admission() {
             const auto index_bytes = (2 + (prior_frames + touched_pages) / 4096) * 32768;
             const auto slack = 2 * touched_pages * frame_size + 32 +
                 logical_pages * page_size + index_bytes;
-            const bool within_slack = after >= before && request >= after - before &&
+            // This ceiling catches absurd over-estimation only. It is not a
+            // tightness check; the action-batch row separately pins usability.
+            const bool within_ceiling = after >= before && request >= after - before &&
                 request - (after - before) <= slack;
-            if (!within_slack || after > used + request + 1)
+            if (!within_ceiling || after > used + request + 1)
                 std::fprintf(stderr, "ledger growth: request=%llu before=%llu after=%llu slack=%llu page_size=%llu\n",
                     static_cast<unsigned long long>(request), static_cast<unsigned long long>(before),
                     static_cast<unsigned long long>(after), static_cast<unsigned long long>(slack),
                     static_cast<unsigned long long>(page_size));
             CHECK(after >= before && after - before <= request);
             CHECK(after <= used + request + 1);
-            CHECK(within_slack);
+            CHECK(within_ceiling);
             ledger.set_byte_budget(0);
             CHECK(ledger.input(0)->canonical_json == payload && ledger.input(0)->report_json == payload);
             CHECK(ledger.pending_count() == 2 && ledger.unsent_count() == 1);
@@ -365,6 +376,74 @@ void ledger_budget_admission() {
     ledger.bind_routing("{}");
     CHECK(ledger.request_redelivery("request-one", "default", 1, true) == 1);
     CHECK(throws([&] { Ledger tiny(temp.file("tiny.sqlite"), "tiny", 1); }));
+}
+
+void ledger_budget_action_batches() {
+    TempDir temp;
+    constexpr std::uint64_t ordinary_budget = 64000000;
+    {
+        const auto path = temp.file("fresh.sqlite");
+        CHECK(!std::filesystem::exists(path));
+        Ledger ledger(path, "fresh", ordinary_budget);
+        ledger.commit_input(0, "{}", 1, {{"first", "{}"}});
+        CHECK(ledger.input_count() == 1 && ledger.pending_count() == 1);
+        CHECK(snapshot_bytes(ledger_files(path)) <= ordinary_budget);
+    }
+    for (const auto page : {4096U, 65536U}) {
+        const auto path = temp.file("actions-" + std::to_string(page) + ".sqlite");
+        prepare_empty_ledger(path, page);
+        Ledger ledger(path, "actions", ordinary_budget);
+        ledger.verify_report(0, "{}");
+        CHECK(snapshot_bytes(ledger_files(path)) < ordinary_budget);
+        const auto make_events = [](std::uint64_t index, unsigned count) {
+            std::vector<Event> events;
+            for (unsigned position = 0; position < count; ++position) {
+                const auto id = std::to_string(index) + "-" + std::to_string(position);
+                events.push_back({id, "{}", "main", "delivery-" + id});
+            }
+            return events;
+        };
+        const auto first = make_events(0, 1);
+        const auto used = snapshot_bytes(ledger_files(path));
+        const auto one_request = expect_budget_refusal(ledger, path, used + 1,
+            [&] { ledger.commit_input(0, "{}", 1, first, "{}"); });
+        const auto limit = used + one_request * 4;
+        for (const auto count : {1U, 10U, 100U}) {
+            const auto index = ledger.input_count();
+            const auto events = make_events(index, count);
+            const auto commit = [&] { ledger.commit_input(index, "{}", 1, events, "{}"); };
+            const auto before = snapshot_bytes(ledger_files(path));
+            const auto request = expect_budget_refusal(ledger, path, before + 1, commit);
+            ledger.set_byte_budget(limit);
+            bool admitted = true;
+            try { commit(); }
+            catch (const LedgerBudgetExceeded&) {
+                admitted = false;
+                // Measure the refused operation too, so a false refusal has
+                // both the estimate and the real growth in the lab log.
+                ledger.set_byte_budget(0);
+                commit();
+            }
+            const auto after = snapshot_bytes(ledger_files(path));
+            const auto growth = after > before ? after - before : 0;
+            std::fprintf(stderr, "action batch: page_size=%u actions=%u request=%llu one_request=%llu "
+                "before=%llu after=%llu growth=%llu limit=%llu admitted=%d\n",
+                page, count, static_cast<unsigned long long>(request),
+                static_cast<unsigned long long>(one_request), static_cast<unsigned long long>(before),
+                static_cast<unsigned long long>(after), static_cast<unsigned long long>(growth),
+                static_cast<unsigned long long>(limit), admitted);
+            CHECK(growth <= request);
+            CHECK(after <= limit);
+            CHECK(admitted);
+            CHECK(ledger.input(index)->events.size() == count);
+        }
+        // Ordinary audited delivery must also work inside 64 MB.
+        ledger.set_byte_budget(ordinary_budget);
+        const auto attempt = ledger.start_attempt(ledger.input(0)->events.front(), 100);
+        ledger.finish_attempt(attempt, 101, 204, true, "");
+        CHECK(snapshot_bytes(ledger_files(path)) <= ordinary_budget);
+        compare_delivery_recount(ledger, path);
+    }
 }
 
 void ledger_terminal_budget() {
@@ -424,18 +503,25 @@ void ledger_terminal_budget() {
 }
 
 void service_ledger_policy() {
+    CHECK(!service_requires_ledger_budget);
     validate_ledger_budget(false, 0, false);
+    validate_ledger_budget(true, 0, false);
     validate_ledger_budget(true, 1, false);
     validate_ledger_budget(true, 0, true);
-    bool refused = false;
-    try { validate_ledger_budget(true, 0, false); }
-    catch (const std::invalid_argument& error) {
-        refused = true;
-        const auto typed = pineforge::classify_run_failure(error);
-        CHECK(typed.code == pineforge::RunFailureCode::run_request_invalid);
-        CHECK(typed.args && *typed.args == "{\"option\":\"arguments\"}");
+    for (const bool require_budget : {false, true}) {
+        validate_ledger_budget(false, 0, false, require_budget);
+        validate_ledger_budget(true, 1, false, require_budget);
+        validate_ledger_budget(true, 0, true, require_budget);
+        bool refused = false;
+        try { validate_ledger_budget(true, 0, false, require_budget); }
+        catch (const std::invalid_argument& error) {
+            refused = true;
+            const auto typed = pineforge::classify_run_failure(error);
+            CHECK(typed.code == pineforge::RunFailureCode::run_request_invalid);
+            CHECK(typed.args && *typed.args == "{\"option\":\"arguments\"}");
+        }
+        CHECK(refused == require_budget);
     }
-    CHECK(refused);
 }
 
 void seeded_delivery_recount() {
@@ -563,6 +649,9 @@ void delivery_summary_migration() {
         "(3,'success','side','d4',1,'started',180,NULL,0,'',0,''),"
         "(4,'success','side','d4',1,'completed',180,190,204,'',1,'');");
     CHECK(scalar_text(path, "SELECT COUNT(*) FROM sqlite_master WHERE type='table'") == "9");
+    // Historical payload is read during verification, not copied into the
+    // summaries. Keep it larger than the ordinary SQLite page cache.
+    execute_sql(path, "UPDATE events SET payload=hex(zeroblob(400000)) WHERE ordinal<>1");
     const auto input_bytes = source_rows(path, "SELECT * FROM inputs ORDER BY input_index");
     const auto action_bytes = source_rows(path, "SELECT * FROM events ORDER BY ordinal");
     const auto log_bytes = source_rows(path, "SELECT * FROM delivery_log ORDER BY log_id");
@@ -571,8 +660,9 @@ void delivery_summary_migration() {
     try { Ledger limited(path, "previous", 1); }
     catch (const LedgerBudgetExceeded& error) { refused = true; CHECK(error.limit == 1 && error.requested > 0); }
     CHECK(refused && ledger_files(path) == before);
+    const auto upgrade_limit = snapshot_bytes(before) + 8ULL * 1024 * 1024;
     {
-        Ledger ledger(path, "previous");
+        Ledger ledger(path, "previous", upgrade_limit);
         CHECK(ledger.pending_count() == 4 && ledger.unsent_count() == 2);
         CHECK(ledger.pending_event()->id == "unknown");
         const auto metrics = parse_json(ledger.delivery_metrics_json(1000));
@@ -580,6 +670,11 @@ void delivery_summary_migration() {
         CHECK(metrics.at("main").at("oldest_age_ms").integer<unsigned>() == 900);
         CHECK(metrics.at("side").at("oldest_age_ms").integer<unsigned>() == 700);
         compare_delivery_recount(ledger, path);
+        const auto after = snapshot_bytes(ledger_files(path));
+        std::fprintf(stderr, "large ledger upgrade: before=%llu after=%llu limit=%llu\n",
+            static_cast<unsigned long long>(snapshot_bytes(before)), static_cast<unsigned long long>(after),
+            static_cast<unsigned long long>(upgrade_limit));
+        CHECK(after <= upgrade_limit);
     }
     CHECK(source_rows(path, "SELECT * FROM inputs ORDER BY input_index") == input_bytes);
     CHECK(source_rows(path, "SELECT * FROM events ORDER BY ordinal") == action_bytes);
@@ -609,10 +704,17 @@ void previous_binary_ledger(const std::string& path) {
     const auto inputs = source_rows(path, "SELECT * FROM inputs ORDER BY input_index");
     const auto events = source_rows(path, "SELECT * FROM events ORDER BY ordinal");
     const auto attempts = source_rows(path, "SELECT * FROM delivery_log ORDER BY log_id");
+    const auto before = snapshot_bytes(ledger_files(path));
+    const auto limit = before + 8ULL * 1024 * 1024;
     for (unsigned open = 0; open < 2; ++open) {
-        Ledger ledger(path, "previous-produced");
+        Ledger ledger(path, "previous-produced", limit);
         CHECK(ledger.input_count() == 2 && ledger.pending_count() == 4 && ledger.unsent_count() == 2);
         compare_delivery_recount(ledger, path);
+        const auto after = snapshot_bytes(ledger_files(path));
+        std::fprintf(stderr, "previous ledger upgrade: open=%u before=%llu after=%llu limit=%llu\n",
+            open, static_cast<unsigned long long>(before), static_cast<unsigned long long>(after),
+            static_cast<unsigned long long>(limit));
+        CHECK(after <= limit);
     }
     CHECK(scalar_text(path, "SELECT COUNT(*) FROM sqlite_master WHERE type='table'") == "12");
     CHECK(source_rows(path, "SELECT * FROM inputs ORDER BY input_index") == inputs);
@@ -979,6 +1081,7 @@ int main(int argc, char** argv) {
             previous_binary_ledger(argv[2]);
         } else {
             ledger_budget_admission();
+            ledger_budget_action_batches();
             ledger_terminal_budget();
             service_ledger_policy();
             seeded_delivery_recount();

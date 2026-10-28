@@ -165,10 +165,8 @@ try:
 
         def start(name, extra=(), module=library, env=None, mode="bars"):
             ledger, health = root / (name + ".sqlite"), root / (name + ".status.json")
-            budget = [] if "--max-ledger-bytes" in extra or "--ledger-unbounded" in extra else [
-                "--max-ledger-bytes", "1073741824"]
             process = subprocess.Popen([runner] + list(map(str, base(ledger, module, mode) +
-                ["--status-file", health, "--feed", "-"] + budget + list(extra))), stdin=subprocess.PIPE,
+                ["--status-file", health, "--feed", "-"] + list(extra))), stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
             children.append(process)
             wait_for(lambda: health.exists() and status(health).get("state") == "running")
@@ -179,12 +177,12 @@ try:
             return json.loads(invoke(["report", "--ledger", ledger]))
 
         for suffix, options in (("unset", []), ("zero", ["--max-ledger-bytes", "0"])):
-            ledger = root / (suffix + ".sqlite")
-            health = root / (suffix + ".status.json")
-            result = subprocess.run([runner] + list(map(str, base(ledger) +
-                ["--feed", feed, "--status-file", health] + options)), capture_output=True, text=True)
-            assert result.returncode == 1 and "run_request_invalid" in result.stderr, result
-            assert "--ledger-unbounded" in result.stderr and not ledger.exists() and not health.exists()
+            process, ledger, health = start("service-" + suffix, options)
+            process.stdin.write(batch)
+            process.stdin.flush()
+            wait_for(lambda: query(ledger, "SELECT count(*) FROM inputs") == [(1,)])
+            finish(process)
+            assert export(ledger)["input_cursor"] == 1
         for name, options in (("unbounded", ["--ledger-unbounded"]),
                               ("explicit-zero", ["--max-ledger-bytes", "0", "--ledger-unbounded"])):
             process, ledger, health = start(name, options)
@@ -197,7 +195,7 @@ try:
             ledger = root / ("ordinary-" + suffix + ".sqlite")
             result = json.loads(invoke(base(ledger) + ["--feed", feed] + options))
             assert result["inputs_committed"] == 1
-        print("PASS service budget policy, explicit unlimited opt-out and ordinary unlimited default", flush=True)
+        print("PASS service and ordinary unlimited defaults and explicit unlimited opt-out", flush=True)
 
         baseline = root / "baseline.sqlite"
         invoke(base(baseline, gated_library) + ["--feed", feed])
@@ -211,7 +209,7 @@ try:
         assert set(status(health)["metrics"]) - {"control_errors"} == {"committed_input", "last_seq", "source_timestamp_ms",
             "source_lag_ms", "queue_bytes", "ledger_bytes", "report_cursor", "targets"}
         duplicate = subprocess.run([runner] + list(map(str, base(ledger) + ["--feed", feed,
-            "--status-file", health, "--ledger-unbounded"])), capture_output=True, text=True)
+            "--status-file", health])), capture_output=True, text=True)
         assert duplicate.returncode == 1 and status(health)["liveness"]["alive"]
         process.stdin.write("{")
         process.stdin.flush()
@@ -377,11 +375,16 @@ try:
         assert query(ledger, "SELECT * FROM delivery_log ORDER BY log_id") == delivery_rows
         finish(process)
         assert len(receipts) == 9
+        before_attempts = query(ledger, "SELECT * FROM delivery_log ORDER BY log_id")
         invoke(["redeliver", "--ledger", ledger, "--deployment", deployment, "--target", "default",
-            "--from", str(from_sequence)], env=environment)
+            "--from", str(from_sequence), "--max-ledger-bytes", "1"], 3, env=environment)
+        assert len(receipts) == 9
+        assert query(ledger, "SELECT * FROM delivery_log ORDER BY log_id") == before_attempts
+        invoke(["redeliver", "--ledger", ledger, "--deployment", deployment, "--target", "default",
+            "--from", str(from_sequence), "--max-ledger-bytes", "64000000"], env=environment)
         assert len(receipts) == 10
         assert receipts_by_sequence(receipts[9:], receipt_sequence) == expected_selected
-        print("PASS live failed/selected redelivery, stable IDs, dedup, restart, audit and offline lock", flush=True)
+        print("PASS live failed/selected redelivery, stable IDs, dedup, restart, audit and offline budget/lock", flush=True)
 
         typo = root / "missing-control"
         invoke(["redeliver", "--ledger", ledger, "--deployment", deployment, "--target", "default",
@@ -440,7 +443,7 @@ try:
         keepalive_health = root / "keepalive.status.json"
         keepalive_command = base(root / "keepalive.sqlite") + ["--feed-url", f"ws://{endpoint}/keepalive",
             "--allow-insecure-http", "--feed-idle-timeout", "5", "--feed-message-timeout", "1",
-            "--status-file", keepalive_health, "--max-events", "1", "--ledger-unbounded"]
+            "--status-file", keepalive_health, "--max-events", "1"]
         process = subprocess.Popen([runner] + list(map(str, keepalive_command)),
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         children.append(process)

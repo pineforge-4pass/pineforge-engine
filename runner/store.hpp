@@ -14,9 +14,13 @@ namespace pineforge::live {
 
 void refuse_legacy_ledger(const std::string& path, const std::string& legacy_identity);
 
-// Deployment policy: ordinary runs retain the unlimited default.
-inline constexpr bool service_requires_ledger_budget = true;
+// Pending deployment-policy decision; this release keeps both defaults unlimited.
+inline constexpr bool service_requires_ledger_budget = false;
 void validate_ledger_budget(bool service_enabled, std::uint64_t limit, bool unbounded);
+#ifdef PINEFORGE_LIVE_LEGACY_TEST_API
+void validate_ledger_budget(bool service_enabled, std::uint64_t limit, bool unbounded,
+                            bool require_service_budget);
+#endif
 
 class LedgerBudgetExceeded : public coded<std::runtime_error> {
 public:

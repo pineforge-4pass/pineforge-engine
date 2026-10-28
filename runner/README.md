@@ -171,28 +171,47 @@ pineforge-live probe --status-file status.json --max-age 3 --ready
   abandoned attempt.
 - Run/offline-redelivery exits: **0** normal completion or graceful signal
   stop; **1** fatal initialization, input, storage-I/O or internal failure;
-  **2** offline redelivery with selected failed/pending actions; **3** run
-  stopped at its storage budget. `actions --follow` retains exit 130 on a
-  signal. A supervisor's grace period must allow message computation/commit
+  **2** offline redelivery with selected failed/pending actions; **3** run or
+  offline redelivery stopped at its storage budget. `actions --follow` retains
+  exit 130 on a signal. A supervisor's grace period must allow message computation/commit
   (plus, after a fatal error or a storage-budget stop, the delivery drain); there is no claim that arbitrary strategy code is
   interruptible. Container liveness probes can detect a stalled control loop.
 - `--max-ledger-bytes N` budgets database + WAL + SHM bytes (0 disables it;
-  default 0; integer 0..INT64_MAX). With `--status-file` (service mode), an
-  omitted or zero budget is refused at startup with `run_request_invalid`
-  unless `--ledger-unbounded` explicitly opts out. Ordinary runs retain the
-  unlimited default. A positive budget remains effective even with the opt-out.
-  Before each write transaction, the runner reserves payload bytes and
-  conservative SQLite row/index, WAL, checkpoint and SHM overhead. Insufficient
-  space refuses the whole transaction before writing, carries `used`,
-  `requested` and `limit` in a typed `scratch_capacity_exceeded` failure, removes
+  default 0; integer 0..INT64_MAX). Service mode (`--status-file`) also retains
+  the unlimited default in this release: it does not require a budget.
+  Requiring one remains a pending policy decision, controlled by
+  `service_requires_ledger_budget`. The `--ledger-unbounded` opt-out is
+  implemented for that policy; a positive budget still applies with the opt-out.
+  With a finite budget, SQL changes stay in SQLite's page cache until admission
+  immediately before COMMIT. The runner reserves each accounted page once,
+  plus WAL, checkpoint and SHM overhead. Insufficient space rolls back the whole
+  transaction before database/WAL growth, carries `used`,
+  `requested` and `limit` in a typed `scratch_capacity_exceeded` failure
+  (`resource: layout` names the ledger budget here), removes
   readiness and exits 3. Earlier committed inputs, actions and reports stay
   intact. Delivery is cancelled on an admission refusal; unfinished attempts
   remain recoverable. The existing post-growth check and
   `storage_below_budget` readiness field remain in use. An actual I/O failure
   exits 1. Initialization and migrations also need admission space; a refusal
   there can precede status publication. No automatic pruning or report
-  retention policy is applied. See [ledger budget accounting](../docs/live-ledger-budget.md)
-  for the reservation formula and its conservative headroom.
+  retention policy is applied.
+
+Headroom is approximately twice the accounted SQLite page bytes, plus any
+earlier WAL pages still owed to the main file, at most one sector of frame
+padding per WAL/checkpoint allowance, and SHM region rounding. For a 32-page
+bound, no earlier checkpoint debt, a WAL-index bound of 64 KiB and an existing
+32 KiB SHM file, the next write needs **428,320 bytes at 4 KiB pages** or
+**4,359,760 bytes at 64 KiB pages**, beyond current usage. A 2 MiB allocation
+bound needs **4,383,520 / 4,359,760 bytes**, respectively, under the same
+conditions. These numbers come from the
+[reservation formula](../docs/live-ledger-budget.md). The exact minimum budget
+for a write is `used + requested`; it varies with the transaction and checkpoint
+debt. **64 MB (64,000,000 bytes)** is a workable fresh-ledger budget for short
+ordinary inputs at both page sizes; the test covers initialization and
+1/10/100-action inputs. Large payloads and history need additional space.
+Auto-vacuum or disabled SQLite allocation tracking uses the whole logical page
+count as the bound; the accounting guide states the larger headroom and the
+finite-budget migration rule.
 
 ### Live redelivery control files
 
@@ -243,6 +262,9 @@ retained; the oldest are removed during polling. Durable audit stays in SQLite,
 not the acknowledgment files. The control directory is outside the
 ledger budget. Without `--control-dir`, `redeliver` remains offline, reads only
 the selected target's secret and refuses while the runner holds the lock.
+Offline redelivery accepts `--max-ledger-bytes N` (default 0, unlimited);
+attempts and results use the same admission as `run`. Live submissions use the
+running owner's budget.
 
 The additive ledger tables/columns are migrated while holding its writer lock.
 Delivery counts and oldest-pending indexes are rebuilt once from the existing
@@ -250,6 +272,12 @@ rows and verified in that migration transaction. Later delivery and status work
 uses the summaries and indexes; status visits targets rather than historical
 actions or attempts. Counters update in the same transaction as their source
 rows, including failed redelivery and legacy acknowledgements.
+Permanent summary storage adds one `delivery_state` row per action and up to
+three partial-index entries for pending, unsent and oldest-pending lookup.
+The row and oldest index copy the target name. `delivery_targets` adds one
+row, a primary-key index entry and an eligible pending-index entry per distinct
+target, shared by its actions. These grow alongside the original action and
+attempt history; there is no pruning.
 This is a one-way runner upgrade: back up the ledger before upgrading; earlier
 runner versions cannot open the migrated database. Strategy/deployment identity
 and historical action payload bytes remain unchanged.

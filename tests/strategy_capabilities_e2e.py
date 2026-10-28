@@ -56,7 +56,7 @@ try:
             controls = root / f'refused-{index}.control'
             health = root / f'refused-{index}.status.json'
             command = base + ['--strategy', library, '--ledger', str(ledger),
-                              '--control-dir', str(controls), '--status-file', str(health), '--ledger-unbounded']
+                              '--control-dir', str(controls), '--status-file', str(health)]
             if declaration == 'calc_on_order_fills':
                 command += ['--override', 'calc_on_order_fills=false']
             result = subprocess.run(command, capture_output=True, text=True)

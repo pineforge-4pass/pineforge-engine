@@ -94,7 +94,7 @@ void help() {
                  "       pineforge-live probe --status-file PATH --max-age S [--ready]\n"
                  "       pineforge-live redeliver --ledger L --deployment D --target T [--from N] [--failed-only]\n"
                  "Add --control-dir PATH to redeliver to request resending from a running runner.\n"
-                 "Without --control-dir redeliver is offline and requires the ledger lock.\n";
+                 "Offline redeliver requires the ledger lock and accepts --max-ledger-bytes N (default 0, unlimited).\n";
 }
 std::uint64_t unsigned_arg(const std::string &s) {
     return Json::number(s).integer<std::uint64_t>();
@@ -1234,7 +1234,7 @@ int probe_command(int argc, char** argv) {
 int ledger_command(int argc, char** argv) {
     const std::string command = argv[1];
     std::string path, target, deployment, control_dir;
-    std::uint64_t after = 0, from = 1;
+    std::uint64_t after = 0, from = 1, max_ledger_bytes = 0;
     std::optional<std::uint64_t> at_input;
     bool follow = false, failed_only = false;
     std::set<std::string> seen;
@@ -1252,6 +1252,11 @@ int ledger_command(int argc, char** argv) {
         else if (command == "redeliver" && option == "--from") from = unsigned_arg(value);
         else if (command == "redeliver" && option == "--target") target = value;
         else if (command == "redeliver" && option == "--control-dir") control_dir = value;
+        else if (command == "redeliver" && option == "--max-ledger-bytes") {
+            max_ledger_bytes = unsigned_arg(value);
+            if (max_ledger_bytes > static_cast<std::uint64_t>(INT64_MAX))
+                throw std::runtime_error("ledger budget exceeds supported range");
+        }
         else throw std::runtime_error("unknown option: " + option);
     }
     if (path.empty()) throw std::runtime_error("ledger is required");
@@ -1282,6 +1287,8 @@ int ledger_command(int argc, char** argv) {
         return stopped ? 130 : 0;
     }
     if (target.empty()) throw std::runtime_error("redeliver requires target");
+    if (!control_dir.empty() && seen.count("--max-ledger-bytes"))
+        throw std::runtime_error("live redelivery uses the running owner's ledger budget; --max-ledger-bytes is for offline redelivery");
     const auto document = view.routing_document();
     if (document.empty()) throw std::runtime_error("resume this phase-A ledger with run before redelivering");
     auto routing = restore_routes(document);
@@ -1304,7 +1311,7 @@ int ledger_command(int argc, char** argv) {
         else ++position;
     }
     auto targets = routing.load_secrets();
-    Ledger ledger(path, view.identity());
+    Ledger ledger(path, view.identity(), max_ledger_bytes);
     auto events = view.redelivery_events(target, from, failed_only);
     const auto selected = events.size();
     std::set<std::string> selected_ids;
