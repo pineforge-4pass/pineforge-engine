@@ -79,8 +79,15 @@ def mask_build_identity(text, document):
     if (not isinstance(engine, dict) or "version_string" not in engine
             or "commit_sha" not in engine):
         raise RuntimeError("fingerprint provenance has no engine identity")
-    engine["version_string"] = engine["commit_sha"] = "<build-identity>"
     masked = text
+    # The report also carries the same provenance as a plain object next to the
+    # token: its engine block names the build twice more, as plain members.
+    for key in ("version_string", "commit_sha"):
+        needle = f'"{key}":{json.dumps(engine[key])}'.encode("utf-8")
+        if masked.count(needle) != 1:
+            raise RuntimeError(f"engine {key} not found exactly once in the raw report")
+        masked = masked.replace(needle, f'"{key}":"<build-identity>"'.encode("utf-8"))
+    engine["version_string"] = engine["commit_sha"] = "<build-identity>"
     for value in (token, digest):
         needle = json.dumps(value).encode("utf-8")
         if masked.count(needle) != 1:
