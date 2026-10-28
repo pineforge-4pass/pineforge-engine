@@ -85,11 +85,10 @@ class ScratchFile;
 // attached arena.
 // The wrapper preallocates regular files in a root-owned 0700 directory,
 // mode 0600, and passes O_RDWR. New mappings and short preads recheck size.
-// The one unrecoverable case is SIGBUS after a concurrent shrink invalidates
-// an already mapped window (including the fstat-to-access race). There is no
-// SIGBUS handler. With the wrapper retaining size until child exit, only the
-// child itself can cause this by shrinking its inherited regular-file fd;
-// the arena never shrinks it, and memfd SHRINK seals prevent it entirely.
+// Opt-in mapped readers check size only when mapping. Their leaf copies recover
+// a concurrent-shrink SIGBUS as a typed I/O failure. The original write and
+// zero-fill mappings still require the wrapper to retain size until exit;
+// memfd SHRINK seals prevent shrink entirely.
 //
 // Successful attach deliberately sets process-wide SIGXFSZ to SIG_IGN, and
 // detach does not restore it: a later EFBIG must be a typed refusal instead
@@ -157,6 +156,11 @@ private:
                      std::uint64_t needed_bytes_lower_bound = 0);
     void write(Region& region, std::uint64_t offset, const void* data, std::size_t length);
     void read(const Region& region, std::uint64_t offset, void* data, std::size_t length) const;
+    void read_mapped(const Region& region, std::uint64_t offset,
+                     void* data, std::size_t length, std::size_t span,
+                     std::size_t field_offset, bool descending) const;
+    void invalidate_mapped_reads(const Region& region) const noexcept;
+    std::size_t read_window_bytes() const noexcept;
 
     std::unique_ptr<Impl> impl_;
     static std::unique_ptr<ScratchArena> singleton_;

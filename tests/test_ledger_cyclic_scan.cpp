@@ -1,6 +1,6 @@
 // Repeated numeric history scans must remain batched above the cache cap.
 // I/O bounds measure the plain-file backend; the arena path is not measured.
-#include "p2cx_tledger_fixture.hpp"
+#include "ledger_cyclic_scan_fixture.hpp"
 
 #include <pineforge/detail/scratch_file.hpp>
 
@@ -16,58 +16,14 @@
 #include <utility>
 #include <vector>
 
-namespace ledger_cyclic_io {
-struct Counts {
-    std::uint64_t reads = 0, bytes = 0;
-};
-inline bool measuring = false;
-inline Counts counts;
-enum class ReadFault { none, prefix, failure };
-inline ReadFault read_fault = ReadFault::none;
-
-struct Measure {
-    Measure() {
-        REQUIRE(!measuring);
-        counts = {};
-        measuring = true;
-    }
-    ~Measure() { measuring = false; }
-    Counts finish() {
-        measuring = false;
-        return counts;
-    }
-};
-} // namespace ledger_cyclic_io
-
-extern "C" ssize_t pread(int fd, void* data, std::size_t length, off_t offset) {
-    ssize_t received;
-    if (ledger_cyclic_io::read_fault == ledger_cyclic_io::ReadFault::failure) {
-        ledger_cyclic_io::read_fault = ledger_cyclic_io::ReadFault::none;
-        errno = EIO;
-        received = -1;
-    } else {
-        if (ledger_cyclic_io::read_fault == ledger_cyclic_io::ReadFault::prefix) {
-            // Transfer real descriptors before failing the continuation, so
-            // the retained buffer actually contains a mixture during failure.
-            length = std::min(length, 2 * pineforge::TradeLedger::kRecordBytes);
-            ledger_cyclic_io::read_fault = ledger_cyclic_io::ReadFault::failure;
-        }
-        received = static_cast<ssize_t>(
-            ::syscall(SYS_pread64, fd, data, length, offset));
-    }
-    if (ledger_cyclic_io::measuring) {
-        ++ledger_cyclic_io::counts.reads;
-        if (received > 0)
-            ledger_cyclic_io::counts.bytes += static_cast<std::uint64_t>(received);
-    }
-    return received;
-}
-
 namespace {
 using namespace p2cx_tledger;
 using Size = TradeLedger::size_type;
 constexpr Size kBlock = TradeLedger::kResidentRows;
 constexpr Size kPasses = 8;
+// Independent of the new production API: this witness builds on the previous
+// implementation too, where the first zero-pread assertion must fail.
+constexpr Size kWindowBytes = 1024 * 1024;
 // The production sizeof(NumericWindow) assertion ties its actual storage to
 // these public constants; pin the byte count independently of sizeof(State).
 static_assert(kBlock * TradeLedger::kRecordBytes + 2 * sizeof(Size) == 10768);
@@ -83,12 +39,42 @@ void forwarding_control() {
     const char expected[] = "actual positional read";
     char actual[sizeof expected]{};
     file.write(0, expected, sizeof expected);
-    ledger_cyclic_io::Measure measure;
-    file.read(0, actual, sizeof actual);
-    const auto io = measure.finish();
-    REQUIRE(io.reads == 1);
-    REQUIRE(io.bytes == sizeof expected);
-    REQUIRE(std::memcmp(actual, expected, sizeof expected) == 0);
+    {
+        ledger_cyclic_io::Measure measure;
+        file.read(0, actual, sizeof actual);
+        const auto io = measure.finish();
+        REQUIRE(io.reads == 1);
+        REQUIRE(io.bytes == sizeof expected);
+        REQUIRE(std::memcmp(actual, expected, sizeof expected) == 0);
+    }
+    {
+        ledger_cyclic_io::Measure measure;
+        void* view = ::mmap(nullptr, sizeof expected, PROT_READ, MAP_SHARED,
+                             file.descriptor(), 0);
+        REQUIRE(view != MAP_FAILED);
+        CHECK(std::memcmp(view, expected, sizeof expected) == 0);
+        REQUIRE(::munmap(view, sizeof expected) == 0);
+        struct stat status{};
+        REQUIRE(::fstat(file.descriptor(), &status) == 0);
+        CHECK(status.st_size == sizeof expected);
+        const auto io = measure.finish();
+        CHECK(io.maps == 1 && io.unmaps == 1 && io.stats == 1);
+        CHECK(io.bad_maps == 0);
+    }
+}
+
+void mapped_pass(const ledger_cyclic_io::Counts& io, Size population) {
+    const auto windows = ceil_div(population * TradeLedger::kRecordBytes, kWindowBytes);
+    // Replacement counts both eviction and admission. Include one startup
+    // direction probe and the live window carried from the preceding pass.
+    CHECK(io.reads == 0);
+    CHECK(io.bytes == 0);
+    CHECK(io.maps > 0);
+    CHECK(io.maps <= windows + 1);
+    CHECK(io.unmaps <= windows + 1);
+    CHECK(io.maps + io.unmaps <= 2 * windows + 2);
+    CHECK(io.bad_maps == 0);
+    CHECK(io.stats == io.maps); // No per-row/per-block size checks on reuse.
 }
 
 Trade scan_row(Size index) {
@@ -123,25 +109,15 @@ void cyclic_scan(Size population) {
         for (Size index = 0; index < population; ++index)
             CHECK(same_bits(ledger.entry_price_at(index), prices[index]));
         const auto io = measure.finish();
-        const Size descriptor_rows = population - kBlock
-            - (pass == 0 ? 0 : ledger.cache_rows());
-        const Size blocks = ceil_div(descriptor_rows, kBlock);
-        const Size bytes = descriptor_rows * TradeLedger::kRecordBytes;
-        // One index read per block, plus at most one additional pread for
-        // each crossed 64 KiB read budget, including a partial initial budget.
-        // No payload preads: the measured accessor requests only a number.
-        // Dividing by population gives <= 1/64 + 168/65536 + 2/population,
-        // independent of the excess population. The warm bound is tighter:
-        // substitute population-cache_rows-64 for the descriptor population.
-        const Size limit = blocks + ceil_div(bytes, detail::ScratchFile::kCacheBytes);
-        std::printf("cyclic scan N=%zu pass=%zu preads=%llu bytes=%llu "
-                    "index_blocks=%zu expected_payload_preads=0 limit=%zu\n",
+        const auto limit = 2 * ceil_div(population * TradeLedger::kRecordBytes,
+                                        kWindowBytes) + 2;
+        std::printf("cyclic scan N=%zu pass=%zu preads=%llu maps=%llu "
+                    "unmaps=%llu map_unmap_limit=%zu\n",
                     population, pass,
                     static_cast<unsigned long long>(io.reads),
-                    static_cast<unsigned long long>(io.bytes), blocks, limit);
-        CHECK(io.reads >= blocks); // An inert scan counter cannot pass.
-        CHECK(io.reads <= limit);
-        CHECK(io.bytes == bytes);
+                    static_cast<unsigned long long>(io.maps),
+                    static_cast<unsigned long long>(io.unmaps), limit);
+        mapped_pass(io, population);
         CHECK(ledger.cache_size() == ledger.cache_rows());
     }
 }
@@ -164,27 +140,12 @@ void descending_scan() {
         for (Size cursor = population; cursor != 0; --cursor)
             CHECK(same_bits(ledger.entry_price_at(cursor - 1), prices[cursor - 1]));
         const auto io = measure.finish();
-        // Cold: the resident tail establishes direction before any I/O.
-        // Warm: cache hits do not write the direction scalar. The first miss
-        // may probe forward, duplicating at most 63 cached descriptors; the
-        // next descending miss establishes direction for all remaining rows.
-        const Size descriptor_rows = population
-            - (pass == 0 ? kBlock : ledger.cache_rows());
-        const Size blocks = ceil_div(descriptor_rows, kBlock);
-        const Size extra_blocks = pass == 0 ? 0 : 1;
-        const Size bytes = descriptor_rows * TradeLedger::kRecordBytes;
-        const Size byte_limit = bytes
-            + (pass == 0 ? 0 : (kBlock - 1) * TradeLedger::kRecordBytes);
-        const Size limit = blocks + extra_blocks
-            + ceil_div(byte_limit, detail::ScratchFile::kCacheBytes);
-        std::printf("descending scan N=%zu pass=%zu preads=%llu bytes=%llu "
-                    "limit=%zu byte_limit=%zu\n", population, pass,
+        std::printf("descending scan N=%zu pass=%zu preads=%llu maps=%llu "
+                    "unmaps=%llu\n", population, pass,
                     static_cast<unsigned long long>(io.reads),
-                    static_cast<unsigned long long>(io.bytes), limit, byte_limit);
-        CHECK(io.reads >= blocks);
-        CHECK(io.reads <= limit);
-        CHECK(io.bytes >= bytes);
-        CHECK(io.bytes <= byte_limit);
+                    static_cast<unsigned long long>(io.maps),
+                    static_cast<unsigned long long>(io.unmaps));
+        mapped_pass(io, population);
         CHECK(ledger.cache_size() == ledger.cache_rows());
     }
 }
@@ -208,13 +169,11 @@ void sliding_lookback(bool newest_first) {
         CHECK(same_bits(ledger.entry_price_at(index), prices[index]));
     REQUIRE(ledger.cache_size() == ledger.cache_rows());
 
-    // At most ceil(N/64)+2 logical refills covers a direction probe and an
-    // end fragment. Add the worst 64 KiB transfer splits, independent of bars.
-    const Size refill_limit = ceil_div(lookback, kBlock) + 2;
-    const Size byte_limit = refill_limit * kBlock * TradeLedger::kRecordBytes;
-    const Size per_bar_limit = refill_limit
-        + ceil_div(byte_limit, detail::ScratchFile::kCacheBytes);
-    std::uint64_t warm_reads = 0, warm_bytes = 0, total_reads = 0;
+    // The lookback plus one descriptor refill fits in a window, with one
+    // extra map permitted for arbitrary alignment at the window boundary.
+    const Size per_bar_limit = ceil_div((lookback + kBlock) * TradeLedger::kRecordBytes,
+                                        kWindowBytes) + 1;
+    std::uint64_t warm_reads = 0, warm_bytes = 0, total_maps = 0, warm_maps = 0;
     for (Size bar = 0; bar < bars; ++bar) {
         const Trade value = scan_row(population + bar);
         prices.push_back(value.entry_price);
@@ -227,18 +186,21 @@ void sliding_lookback(bool newest_first) {
             CHECK(same_bits(ledger.entry_price_at(index), prices[index]));
         }
         const auto io = measure.finish();
-        total_reads += io.reads;
+        total_maps += io.maps;
         if (bar >= warmup) {
             warm_reads += io.reads;
             warm_bytes += io.bytes;
+            warm_maps += io.maps;
         }
-        std::printf("lookback newest_first=%d bar=%zu preads=%llu bytes=%llu "
-                    "limit=%zu\n", newest_first, bar,
+        std::printf("lookback newest_first=%d bar=%zu preads=%llu maps=%llu "
+                    "map_limit=%zu\n", newest_first, bar,
                     static_cast<unsigned long long>(io.reads),
-                    static_cast<unsigned long long>(io.bytes), per_bar_limit);
-        if (bar == 0) CHECK(io.reads > 0);
-        CHECK(io.reads <= per_bar_limit);
-        CHECK(io.bytes <= byte_limit);
+                    static_cast<unsigned long long>(io.maps), per_bar_limit);
+        if (bar == 0) CHECK(io.maps > 0);
+        CHECK(io.reads == 0 && io.bytes == 0);
+        CHECK(io.maps <= per_bar_limit);
+        CHECK(io.stats == io.maps);
+        CHECK(io.bad_maps == 0);
         CHECK(ledger.cache_size() == ledger.cache_rows());
     }
     // Two encounters clear then replace a stale resident. Thereafter the
@@ -247,11 +209,12 @@ void sliding_lookback(bool newest_first) {
     // instead refills at least ceil((200-64)/64) descriptor windows.
     CHECK(warm_reads == 0);
     CHECK(warm_bytes == 0);
-    CHECK(total_reads <= warmup * per_bar_limit);
-    std::printf("lookback newest_first=%d bars=%zu warmup=%zu warm_preads=%llu "
-                "total_preads=%llu total_limit=%zu\n", newest_first, bars, warmup,
-                static_cast<unsigned long long>(warm_reads),
-                static_cast<unsigned long long>(total_reads), warmup * per_bar_limit);
+    CHECK(warm_maps == 0);
+    CHECK(total_maps <= warmup * per_bar_limit);
+    std::printf("lookback newest_first=%d bars=%zu warmup=%zu warm_maps=%llu "
+                "total_maps=%llu total_limit=%zu\n", newest_first, bars, warmup,
+                static_cast<unsigned long long>(warm_maps),
+                static_cast<unsigned long long>(total_maps), warmup * per_bar_limit);
 }
 
 void oldest_first_lookback() { sliding_lookback(false); }
@@ -380,12 +343,15 @@ void scan_window_and_lazy_strings_follow_mutations() {
 }
 
 void failed_numeric_refill_retries_exactly() {
+    // Put the failed refill across a real mapping boundary: its low fragment
+    // is copied into the old buffer before mmap of the high fragment fails.
+    constexpr Size target = kWindowBytes / TradeLedger::kRecordBytes - 3;
     for (const Size budget : {Size{4}, Size{7}}) {
         TradeLedger ledger;
         ledger.set_scratch_directory(".");
         ledger.set_cache_rows(budget);
         std::vector<Trade> expected;
-        for (Size index = 0; index < 200; ++index) {
+        for (Size index = 0; index < target + 2 * kBlock; ++index) {
             expected.push_back(scan_row(index));
             ledger.push_back(expected.back());
             CHECK(ledger.cache_size() <= ledger.cache_rows());
@@ -398,12 +364,12 @@ void failed_numeric_refill_retries_exactly() {
         same_trade(ledger.read(younger), expected[younger]);
         CHECK(ledger.cache_size() <= ledger.cache_rows());
         // The descriptor window still contains key 0.
-        // The failed new refill overwrites rows 0 and 1
-        // in that buffer with descriptors 96 and 97 before ScratchFile raises.
-        ledger_cyclic_io::read_fault = ledger_cyclic_io::ReadFault::prefix;
+        // The failed new refill overwrites the buffer's prefix with genuine
+        // descriptors before the cross-window continuation raises.
+        ledger_cyclic_io::fail_next_map = true;
         bool refused = false;
         ledger_cyclic_io::Measure failure_measure;
-        try { (void)ledger.entry_price_at(96); }
+        try { (void)ledger.entry_price_at(target); }
         catch (const detail::ReportScratchIoError& error) {
             refused = true;
             CHECK(error.code().value() == EIO);
@@ -411,29 +377,29 @@ void failed_numeric_refill_retries_exactly() {
         }
         const auto failure_io = failure_measure.finish();
         CHECK(refused);
-        CHECK(ledger_cyclic_io::read_fault == ledger_cyclic_io::ReadFault::none);
-        ledger_cyclic_io::read_fault = ledger_cyclic_io::ReadFault::none;
-        CHECK(failure_io.reads == 2);
-        CHECK(failure_io.bytes == 2 * TradeLedger::kRecordBytes);
+        CHECK(!ledger_cyclic_io::fail_next_map);
+        ledger_cyclic_io::fail_next_map = false;
+        CHECK(failure_io.reads == 0);
+        CHECK(failure_io.maps == 1 && failure_io.unmaps == 1);
         CHECK(ledger.cache_size() <= ledger.cache_rows());
 
         // Probe the preceding window BEFORE retrying the failed key: merely
-        // retrying 96 first would overwrite and hide a mixed stale window.
+        // retrying the failed key first would hide a mixed stale window.
         ledger_cyclic_io::Measure old_window_measure;
         CHECK(same_bits(ledger.entry_price_at(0), expected[0].entry_price));
         const auto old_window_io = old_window_measure.finish();
-        CHECK(old_window_io.reads > 0);
+        CHECK(old_window_io.reads == 0 && old_window_io.maps == 1);
         CHECK(ledger.cache_size() <= ledger.cache_rows());
         for (Size index = 0; index < kBlock; ++index) {
             same_numeric_fields(ledger, index, expected[index]);
             CHECK(ledger.cache_size() <= ledger.cache_rows());
         }
         ledger_cyclic_io::Measure retry_measure;
-        CHECK(same_bits(ledger.entry_price_at(96), expected[96].entry_price));
+        CHECK(same_bits(ledger.entry_price_at(target), expected[target].entry_price));
         const auto retry_io = retry_measure.finish();
-        CHECK(retry_io.reads > 0);
+        CHECK(retry_io.reads == 0 && retry_io.maps == 1);
         CHECK(ledger.cache_size() <= ledger.cache_rows());
-        for (Size index = 96; index < ledger.resident_base(); ++index) {
+        for (Size index = target; index < ledger.resident_base(); ++index) {
             same_numeric_fields(ledger, index, expected[index]);
             CHECK(ledger.cache_size() <= ledger.cache_rows());
         }
@@ -445,7 +411,7 @@ void second_population() { cyclic_scan(90000); }
 } // namespace
 
 int main() {
-    test("pread forwarding control", forwarding_control);
+    test("pread, mmap, munmap and fstat forwarding controls", forwarding_control);
     test("85,536 rows over repeated numeric scans", first_population);
     test("90,000 rows over repeated numeric scans", second_population);
     test("85,536 rows over descending numeric scans", descending_scan);

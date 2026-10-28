@@ -24,6 +24,10 @@ inline namespace engine_script_run_v19 {
 // numeric records in the cache and use scratch only for string reads.
 // Scalar numeric misses read descriptors only, with a separate fixed
 // kResidentRows scan window (10,768 bytes including keys on 64-bit targets).
+// Its source is a read-only shared mapping: one at-most-1-MiB plain-file
+// window, or the arena's existing globally capped LRU; slabs use checked copies.
+// The caller-owned view adds 48 bytes and its copied-row mask another 8 bytes
+// on 64-bit targets, without growing the embedded ScratchFile type.
 // A further 8-byte key tracks scan direction. Numeric admission gives
 // referenced cache slots a second chance before replacing stale residents.
 // Owning Trade values still belong to readers.
@@ -88,7 +92,7 @@ public:
     TradeLedger(TradeLedger&&);
     TradeLedger& operator=(TradeLedger&&);
 
-    // Bind before the first spill. No mapping or in-memory offset directory.
+    // Bind before the first spill. No in-memory offset directory.
     void set_scratch_directory(const std::string&);
     const std::string& scratch_directory() const;
     // Configure before the first append/spill; clear() preserves the budget.
