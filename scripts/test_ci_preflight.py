@@ -3692,14 +3692,19 @@ class PreflightFailures(unittest.TestCase):
                     'promote-baseline.yml job promote-guard must keep production credentials '
                     'on a hosted standard runner',
                 ]
-                expected = self.quoted_key_lint_findings(changed[2], setting) + credentials + [
-                    f'baseline promotion must not define workflow-level {key}',
-                ]
+                # ci_workflow_findings reports runner findings first, then the
+                # action-pin lint, then the App-token environment finding, then
+                # the promotion findings.
+                app_token = []
                 if key == 'env' and 'secrets.PINEFORGE_APP_PRIVATE_KEY' in setting:
                     # The inherited key also reaches the unbound guard job;
                     # retain the original workflow-level refusal below it.
-                    expected.insert(0, AppTokenEnvironments.finding(
-                        'promote-baseline.yml', 'promote-guard'))
+                    app_token = [AppTokenEnvironments.finding(
+                        'promote-baseline.yml', 'promote-guard')]
+                expected = (credentials + self.quoted_key_lint_findings(changed[2], setting)
+                            + app_token + [
+                                f'baseline promotion must not define workflow-level {key}',
+                            ])
                 self.assertEqual(ci_workflow_findings(*changed), expected)
 
     def test_promotion_guard_rejects_job_defaults(self):
