@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """CI guardrail: runtime-side PF_API implementations stay documented.
 
-Two inventories, pinned independently so neither can drift into the other:
+Three inventories, pinned independently so neither can drift into another:
 
   1. The compiled-strategy surface. pineforge.h plus the v1 headers named in
      RUNTIME_HEADERS list the harness-facing symbols; only those in
@@ -16,6 +16,12 @@ Two inventories, pinned independently so neither can drift into the other:
      there without updating that list fails this script's stage,
      source-guard-c-abi (ci_preflight and every ci_verify profile), exactly as
      it does for c_abi.cpp.
+
+  3. The native module macro (native_module.hpp). Its ordinary entries implement
+     generated-strategy declarations, while its one optional metrics-only
+     capability belongs to the module and MUST NOT enter EXPECTED_RUNTIME.
+     Pin both the macro's definitions and the optional declaration separately;
+     the legacy header/runtime counts above do not include this optional group.
 """
 
 from __future__ import annotations
@@ -143,6 +149,26 @@ RUNTIME_HEADERS = (
 EXPECTED_PUBLIC_DECLARATIONS = 114
 EXPECTED_RUNTIME_IMPLEMENTATIONS = 94
 
+# Per-module implementations, never static-runtime implementations. The
+# capability has its own declaration in native_module.hpp; the other eight
+# declarations belong to pineforge.h and its generated-strategy surface.
+EXPECTED_NATIVE_MODULE = frozenset({
+    "strategy_create",
+    "strategy_free",
+    "strategy_set_input",
+    "strategy_set_override",
+    "strategy_set_magnifier_volume_weighted",
+    "run_backtest",
+    "run_backtest_full",
+    "report_free",
+    "strategy_metrics_only_capability_v1",
+})
+EXPECTED_OPTIONAL_MODULE = frozenset({
+    "strategy_metrics_only_capability_v1",
+})
+EXPECTED_NATIVE_MODULE_IMPLEMENTATIONS = 9
+EXPECTED_OPTIONAL_MODULE_DECLARATIONS = 1
+
 # Runtime setters whose data a stream cannot take: the source host refuses
 # stream_begin() while any of them holds data (the native daily feed since its
 # lane, and lane XSYM-D's five symbol-data setters). Each declaration's own
@@ -212,6 +238,7 @@ EXPECTED_NATIVE_C_API_DECLARATIONS = 43
 EXPECTED_NATIVE_C_API_IMPLEMENTATIONS = 43
 
 _PF_API_DECL = re.compile(r"^\s*PF_API\b.+\b(\w+)\s*\(")
+_EXTERN_PF_API_DECL = re.compile(r'^\s*extern\s+"C"\s+PF_API\b.+\b(\w+)\s*\(')
 
 
 def _pf_api_names(path: Path) -> list[str]:
@@ -298,7 +325,55 @@ def main() -> int:
         )
         return 1
 
-    return _check_native_c_api(hdr_set, abi_set)
+    result = _check_native_c_api(hdr_set, abi_set)
+    if result:
+        return result
+    return _check_native_module(hdr_set, abi_set)
+
+
+def _check_native_module(hdr_set: set[str], abi_set: set[str]) -> int:
+    """Keep optional module capability separate from the static runtime."""
+    header = ROOT / "include" / "pineforge" / "native_module.hpp"
+    if not header.is_file():
+        print("check_c_abi_runtime: missing native_module.hpp", file=sys.stderr)
+        return 2
+    definitions = _pf_api_names(header)
+    declarations = [
+        match.group(1)
+        for line in header.read_text(encoding="utf-8").splitlines()
+        if (match := _EXTERN_PF_API_DECL.match(line))
+    ]
+    if (len(EXPECTED_NATIVE_MODULE) != EXPECTED_NATIVE_MODULE_IMPLEMENTATIONS
+            or len(EXPECTED_OPTIONAL_MODULE) != EXPECTED_OPTIONAL_MODULE_DECLARATIONS):
+        print("check_c_abi_runtime: inconsistent native-module inventory counts",
+              file=sys.stderr)
+        return 1
+    if (len(definitions) != EXPECTED_NATIVE_MODULE_IMPLEMENTATIONS
+            or set(definitions) != EXPECTED_NATIVE_MODULE):
+        print(
+            f"check_c_abi_runtime: native_module.hpp macro PF_API set {sorted(definitions)} "
+            f"!= expected {sorted(EXPECTED_NATIVE_MODULE)}",
+            file=sys.stderr,
+        )
+        return 1
+    if (len(declarations) != EXPECTED_OPTIONAL_MODULE_DECLARATIONS
+            or set(declarations) != EXPECTED_OPTIONAL_MODULE):
+        print(
+            f"check_c_abi_runtime: native_module.hpp optional PF_API declarations "
+            f"{sorted(declarations)} != expected {sorted(EXPECTED_OPTIONAL_MODULE)}",
+            file=sys.stderr,
+        )
+        return 1
+    if EXPECTED_OPTIONAL_MODULE & (hdr_set | abi_set | EXPECTED_NATIVE_C_API):
+        print("check_c_abi_runtime: optional module export entered a runtime inventory",
+              file=sys.stderr)
+        return 1
+    ordinary = EXPECTED_NATIVE_MODULE - EXPECTED_OPTIONAL_MODULE
+    if not ordinary <= hdr_set - abi_set:
+        print("check_c_abi_runtime: native module entries must implement generated declarations",
+              file=sys.stderr)
+        return 1
+    return 0
 
 
 def _historical_only_undocumented(header_text: str) -> list[str]:

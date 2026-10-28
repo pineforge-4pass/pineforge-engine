@@ -2917,9 +2917,11 @@ inline constexpr std::size_t kReportSinkHeldEquityPoints = 1;
 } // inline namespace engine_script_run_v19
 } // namespace pineforge
 
-// first-stage proposed C entry points, declared here because pineforge.h and the
-// runtime-export inventory belong to the supervisor's subsequent ABI slice.
-// No existing export calls these stubs. mode: 0=OFF, 1=ON (default);
+// Optional metrics C entry points, implemented in engine_report.cpp and
+// declared here independently of pineforge.h's static-runtime inventory.
+// Native modules advertise their certified execution adapter separately via
+// strategy_metrics_only_capability_v1 (native_module.hpp).
+// mode: 0=OFF, 1=ON (default);
 // metrics_needed is the OR of kMetricsNeed*V1. The getter is an additive
 // diagnostic transport; it does not extend pf_report_t.
 extern "C" PF_API std::int32_t strategy_set_metrics_streaming_v1(

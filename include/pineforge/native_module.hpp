@@ -20,8 +20,9 @@
 /// PINEFORGE_EXPORT_NATIVE_STRATEGY(MyHost);
 /// @endcode
 ///
-/// The macro adds no new C symbol: every name it defines is already declared
-/// in `<pineforge/pineforge.h>`. The remaining runtime exports
+/// The ordinary entry points are declared in `<pineforge/pineforge.h>`.
+/// The optional metrics-only capability below belongs to each module, not
+/// the static runtime. The remaining runtime exports
 /// (`strategy_configure_native_v1`, the `strategy_stream_*` family,
 /// `strategy_get_last_error`, …) come from the engine's own `c_abi.cpp`; the
 /// generated `strategy_create` references `pf_abi_version()` so the linker
@@ -36,15 +37,105 @@
 #include <pineforge/pineforge.h>
 #include <pineforge/run_failure.hpp>
 
+#include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <exception>
+#include <limits>
+#include <optional>
 #include <string>
 #include <type_traits>
 #include <vector>
 
+/// Optional per-module probe. Call it, rather than testing symbol presence:
+/// Ok (0) certifies this module's metrics-only adapter; NotImplemented (-1)
+/// keeps the actual curve. Callers must resolve LegacyRerun before publishing
+/// any report, using a fresh strategy with the same settings and frozen bars.
+extern "C" PF_API std::int32_t strategy_metrics_only_capability_v1(void) noexcept;
+
 namespace pineforge {
 namespace native_module {
+
+/// Specialize for the EXACT host passed to PINEFORGE_EXPORT_NATIVE_STRATEGY.
+/// Return its versioned declaration, or nullopt when it cannot certify itself.
+/// No specialization means no certification; a subclass does not inherit one.
+///
+/// In addition to the declaration's presenter/marks/scheduler facts, opting in
+/// certifies one final metric point per input bar, with no extra anchor, on the
+/// admitted passthrough schedule, and deterministic whole-run replay on a fresh
+/// instance with identical settings and frozen input. Source hosts with private
+/// tail/probe modes need their own adapter: this wrapper certifies only the
+/// native defaults of those setters. A modified presenter or mark implementation
+/// needs a new, truthful specialization, never a caller-provided declaration.
+template <typename Host>
+struct MetricsPlainHostV1 {
+    static std::optional<MetricsPlainDeclarationV1> declaration() {
+        return std::nullopt;
+    }
+};
+
+template <typename Host>
+bool metrics_plain_declaration_v1(MetricsPlainDeclarationV1& out) noexcept {
+    try {
+        const auto declaration = MetricsPlainHostV1<Host>::declaration();
+        if (!declaration) return false;
+        const auto& d = *declaration;
+        if (d.struct_size != sizeof(d) || d.version != 1
+            || d.builtin_presenter != 1 || d.builtin_marks != 1
+            || d.builtin_scheduler != 1 || d.security_sites != 0
+            || d.lower_tf_sites != 0 || d.magnifier_declared != 0
+            || d.calculation_trigger > 1 || d.calc_on_every_history_tick != 0)
+            return false;
+        out = d;
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+template <typename Host>
+std::int32_t metrics_only_capability_v1() noexcept {
+    MetricsPlainDeclarationV1 declaration;
+    return static_cast<std::int32_t>(metrics_plain_declaration_v1<Host>(declaration)
+        ? metrics::MetricsStreamingStatusV1::Ok
+        : metrics::MetricsStreamingStatusV1::NotImplemented);
+}
+
+// Report-only invocation identities. They never enter broker decisions or
+// continuation hashes. Exhaustion disables the optimization instead of wrapping
+// an attempt identity. Fresh handles used for recovery receive fresh attempts.
+inline std::uint64_t next_metrics_attempt_v1() noexcept {
+    static std::atomic<std::uint64_t> last{0};
+    auto previous = last.load(std::memory_order_relaxed);
+    while (previous != std::numeric_limits<std::uint64_t>::max()) {
+        if (last.compare_exchange_weak(previous, previous + 1,
+                std::memory_order_relaxed, std::memory_order_relaxed))
+            return previous + 1;
+    }
+    return 0;
+}
+
+// Hash scalar words explicitly: neither Bar padding nor host byte order is an
+// input. NaN payloads and signed zero remain distinct input generations.
+class MetricsBindingHashV1 {
+    std::uint64_t value_ = 14695981039346656037ULL;
+public:
+    void word(std::uint64_t value) noexcept {
+        for (unsigned i = 0; i < 8; ++i) {
+            value_ ^= value & 0xffu;
+            value_ *= 1099511628211ULL;
+            value >>= 8;
+        }
+    }
+    void number(double value) noexcept {
+        std::uint64_t bits;
+        static_assert(sizeof(bits) == sizeof(value), "binary64 input binding");
+        std::memcpy(&bits, &value, sizeof(bits));
+        word(bits);
+    }
+    std::uint64_t value() const noexcept { return value_; }
+};
 
 // Bars are borrowed through the C mirror and reports are memcpy'd, so
 // their layouts must agree exactly.
@@ -91,6 +182,120 @@ class Module final : public Host {
                   "PINEFORGE_EXPORT_NATIVE_STRATEGY requires a NativeStrategyHost subclass");
 
 public:
+    /// This is a speculative report optimization only. Failure to establish
+    /// any proof leaves the existing run and its refusal ordering in charge.
+    void prepare_metrics_only_v1(const Bar* bars, int count,
+                                 const char* input_tf, const char* script_tf,
+                                 bool with_timeframes) noexcept {
+        using namespace metrics;
+        if (this->metrics_streaming_.configuration.streaming_sharpe
+                != StreamingSharpeV1::On)
+            return;
+        // Existing/default requests retain their sequence and do not acquire
+        // an admission or recovery proof just by using this wrapper.
+        const auto needed = this->metrics_streaming_.configuration.metrics_needed;
+        if (needed & (kMetricsNeedReturnsV1 | kMetricsNeedCurveV1)) return;
+        MetricsPlainDeclarationV1 declaration;
+        if (!metrics_plain_declaration_v1<Host>(declaration)) return;
+        try {
+            const auto state = this->native_state();
+            if (state.kind != NativeLifecycleKind::Ready || !state.spec
+                || count < 0 || (count > 0 && !bars))
+                return;
+            const auto& spec = *state.spec;
+            // Empty timeframe arguments are forwarded unchanged by run_batch.
+            // They cannot certify a different staged view before native begin
+            // has resolved/refused them.
+            const bool bound_timeframes = !with_timeframes
+                || (input_tf && script_tf && spec.input_tf == input_tf
+                    && spec.script_tf == script_tf);
+            MetricsExtentPlanV1 plan;
+            plan.present = 1;
+            plan.extent.count = count;
+            plan.extent.empty = count == 0;
+            if (count > 0) {
+                plan.extent.first_time_ms = bars[0].timestamp;
+                plan.extent.last_time_ms = bars[count - 1].timestamp;
+            }
+            plan.attempt = next_metrics_attempt_v1();
+            if (plan.attempt == 0) return;
+            // The caller freezes these borrowed bars through synchronous run
+            // and recovery. Bind their actual words, not their storage address.
+            MetricsBindingHashV1 generation;
+            generation.word(static_cast<std::uint64_t>(count));
+            for (int i = 0; i < count; ++i) {
+                const auto& bar = bars[i];
+                generation.word(static_cast<std::uint64_t>(bar.timestamp));
+                generation.number(bar.open);
+                generation.number(bar.high);
+                generation.number(bar.low);
+                generation.number(bar.close);
+                generation.number(bar.volume);
+            }
+            plan.input_generation = generation.value();
+            plan.spec_identity = native_run_spec_digest(spec);
+            MetricsBindingHashV1 view;
+            view.word(plan.input_generation);
+            view.word(plan.spec_identity);
+            view.word(static_cast<std::uint64_t>(plan.extent.count));
+            view.word(static_cast<std::uint64_t>(plan.extent.first_time_ms));
+            view.word(static_cast<std::uint64_t>(plan.extent.last_time_ms));
+            view.word(plan.extent.empty);
+            plan.admitted_view = view.value();
+
+            MetricsPlainInputsV1 inputs;
+            inputs.declaration = &declaration;
+            inputs.module_contract_bound = declaration.calculation_trigger
+                == static_cast<std::uint32_t>(spec.calculation);
+            inputs.historical_batch = 1;
+            inputs.equal_resolved_timeframes = bound_timeframes
+                && !spec.input_tf.empty() && spec.input_tf == spec.script_tf;
+            inputs.timeframe_undetected = spec.timeframe_undetected;
+            inputs.intrabar_none = spec.intrabar.is_none();
+            inputs.builtin_host_marks =
+                spec.report_policy == NativeReportPolicy::KernelRecorded
+                || spec.report_policy == NativeReportPolicy::KernelRecordedAtHostMarks;
+            inputs.feed_tolerant_passthrough =
+                spec.slot_label_policy == NativeSlotLabelPolicy::FeedTolerant
+                && spec.subscriptions.empty() && !spec.auxiliary_feed
+                && spec.instrument_feeds.empty();
+            // An override may keep private state this wrapper cannot inspect.
+            // Unknown is PLAIN=no, even if a module supplied a declaration.
+            const bool native_tails = this->template native_tail_defaults<Host>(0);
+            inputs.realtime_tail = native_tails ? 0u : 1u;
+            inputs.probe_suppress_tail_logic = native_tails ? 0u : 1u;
+            inputs.calculation_trigger = static_cast<std::uint32_t>(spec.calculation);
+            inputs.final_admitted_view_bound = bound_timeframes;
+            // Selection is owned by native begin, which rechecks pending AND
+            // admitted selection after all legacy refusals, before consuming
+            // this candidate proof. No selected run can use the input extent.
+            MetricsExtentReceiptV1 receipt;
+            if (this->admit_metrics_plain_v1(inputs, plan, &receipt)
+                    != MetricsStreamingStatusV1::Ok
+                || receipt.plain_subset != 1 || receipt.failed_plain_inputs != 0)
+                return;
+            MetricsStreamingConfigV1 config;
+            config.streaming_sharpe = StreamingSharpeV1::On;
+            config.metrics_needed = needed;
+            config.attempt = plan.attempt;
+            config.input_generation = plan.input_generation;
+            config.admitted_view = plan.admitted_view;
+            config.spec_identity = plan.spec_identity;
+            config.deterministic_replay = 1; // the exact-host certification above
+            config.curve_available = 0;
+            if (this->prepare_metrics_streaming_v1(config, plan)
+                    == MetricsStreamingStatusV1::Ok)
+                return;
+        } catch (...) {
+            // Admission is optional, including allocation in a module's hook.
+            // The ordinary run still owns every execution failure.
+        }
+        this->metrics_streaming_.pending_plain = false;
+        this->metrics_streaming_.prepared = false;
+        this->metrics_streaming_.pending_plan = {};
+        this->metrics_streaming_.pending_failed_plain_inputs = 0;
+    }
+
     /// Presentation text for `strategy_get_last_error`, written with its run
     /// failure code (`strategy_get_last_error_code`) so the two never
     /// disagree. Never throws: it runs on the C boundary, often from a catch
@@ -105,6 +310,20 @@ public:
     void note_error(const char* text) noexcept {
         note_error(text, RunFailureValue{RunFailureCode::engine_unclassified_error, nullptr});
     }
+
+private:
+    // An overload or inaccessible setter is unknown, rather than a new compile
+    // requirement on arbitrary uncertified hosts using the existing macro.
+    template <typename H>
+    static auto native_tail_defaults(int) noexcept
+        -> decltype(&H::set_realtime_tail, &H::set_probe_suppress_tail_logic, bool{}) {
+        return std::is_same<decltype(&H::set_realtime_tail),
+                            decltype(&BacktestEngine::set_realtime_tail)>::value
+            && std::is_same<decltype(&H::set_probe_suppress_tail_logic),
+                            decltype(&BacktestEngine::set_probe_suppress_tail_logic)>::value;
+    }
+    template <typename H>
+    static bool native_tail_defaults(...) noexcept { return false; }
 };
 
 inline BacktestEngine* as_engine(pf_strategy_t strategy) {
@@ -241,6 +460,9 @@ void run_batch(pf_strategy_t strategy, pf_bar_t* bars, int count,
         // begin preflight still owns their diagnostic and lifecycle result.
         // The caller keeps this array alive through the synchronous run.
         // Reports own their arrays separately, as publish_report requires.
+        if (auto* module = as_module<Host>(strategy))
+            module->prepare_metrics_only_v1(source, count, input_tf, script_tf,
+                                            with_timeframes);
         if (with_timeframes) {
             engine->run(source, count, input_tf ? input_tf : "",
                         script_tf ? script_tf : "");
@@ -296,6 +518,9 @@ inline void report_free(pf_report_t* report) {
 /// Use it once, at namespace scope, in the module's translation unit.
 #define PINEFORGE_EXPORT_NATIVE_STRATEGY(Class)                                     \
     extern "C" {                                                                    \
+    PF_API std::int32_t strategy_metrics_only_capability_v1(void) noexcept {        \
+        return ::pineforge::native_module::metrics_only_capability_v1<Class>();     \
+    }                                                                               \
     PF_API pf_strategy_t strategy_create(const char*) {                             \
         return ::pineforge::native_module::create<Class>();                         \
     }                                                                               \
