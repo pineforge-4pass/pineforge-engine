@@ -1,0 +1,17 @@
+{
+  "source": "pineforge-engine main 95f4fd1f408bf0ded941ecc4144b278a026a677f, default (no replay switch), unjailed, wall clock fixed at 1.0, run id replay-off-golden",
+  "scenarios": {
+    "fifo": {
+      "default_json": {"sha256": "", "bytes": 0},
+      "primary_sink": {"sha256": "", "bytes": 0}
+    },
+    "any": {
+      "default_json": {"sha256": "", "bytes": 0},
+      "primary_sink": {"sha256": "", "bytes": 0}
+    },
+    "ordinary": {
+      "default_json": {"sha256": "", "bytes": 0},
+      "primary_sink": {"sha256": "", "bytes": 0}
+    }
+  }
+}
