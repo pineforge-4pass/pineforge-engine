@@ -1399,7 +1399,7 @@ list(APPEND TEST_SOURCES test_native_lean_path)
 # so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_intrabar_scratch)
 list(APPEND TEST_SOURCES test_parent_terminal_scratch)
-list(APPEND TEST_SOURCES test_same_bar_trade_scratch)
+list(APPEND TEST_SOURCES test_same_bar_trade_scratch test_exit_group_reorder_scaling)
 list(APPEND TEST_SOURCES test_global_exit_recut_scratch)
 # R5 lane PERF-L1: the interval cache's prior answers and the session-point
 # memo hold only what a fresh, memo-free resolution answers, in every host hook
