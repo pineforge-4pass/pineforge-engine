@@ -312,6 +312,7 @@ struct LineWriter::State {
     char* buffer;
     std::size_t used = 0;
     off_t offset = 0;
+    bool unsynced = false;
     bool has_equity_time = false;
     std::int64_t equity_time = 0;
 
@@ -433,8 +434,17 @@ struct LineWriter::State {
             return;
         }
         if (::ftruncate(descriptor, offset + used) != 0) io_error("truncate failed", errno);
-        // Direct I/O bypasses data cache. Synchronize every fixed in-flight
-        // window before reuse. No buffered fallback or advisory eviction.
+        // Direct I/O bypasses data cache; a returned pwrite has released the
+        // window, so reuse needs no sync. No buffered fallback or eviction.
+        unsynced = true;
+        if (used == io_window) { offset += used; used = 0; }
+        // Keep a partial window for an aligned rewrite on the next append;
+        // padding never appears inside the logical stream.
+    }
+    // One fdatasync (fsync on other systems) makes every written window and the
+    // file size durable; write_trailer and abandon call it before they return.
+    void synchronize() {
+        if (!unsynced) return;
         int status;
 #if defined(__linux__)
         do { status = ::fdatasync(descriptor); } while (status < 0 && errno == EINTR);
@@ -442,9 +452,7 @@ struct LineWriter::State {
         do { status = ::fsync(descriptor); } while (status < 0 && errno == EINTR);
 #endif
         if (status < 0) io_error("synchronize failed", errno);
-        if (used == io_window) { offset += used; used = 0; }
-        // Keep a partial window for an aligned rewrite on the next append;
-        // padding never appears inside the logical stream.
+        unsynced = false;
     }
     void append(std::string_view bytes) {
         while (!bytes.empty()) {
@@ -572,6 +580,7 @@ void LineWriter::abandon() {
         // line() can cross the fixed buffer boundary. Flush its retained
         // suffix here so EOF follows LF, never a partially emitted record.
         state.flush();
+        state.synchronize();
         state.fail();
     } catch (...) {
         state.fail();
@@ -598,7 +607,7 @@ Trailer LineWriter::write_trailer() {
             line.append('"'); line.append(tags[i]); line.append("\":"); integer(line, counts[i]);
         }
         line.append("},\"sha256\":\""); line.append(digest); line.append("\"}");
-        state.line(false); state.flush();
+        state.line(false); state.flush(); state.synchronize();
         std::memcpy(state.trailer.sha256_hex, digest.c_str(), digest.size() + 1);
         state.phase = State::Phase::complete;
         return state.trailer;
