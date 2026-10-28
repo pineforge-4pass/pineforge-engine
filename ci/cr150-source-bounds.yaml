@@ -74,7 +74,7 @@ scan:
   generated_files:
     - "tutorial/**/generated*.cpp"
 ceilings:
-  unreviewed: 1306
+  unreviewed: 1307
   pending-flat-memory: 173
 owners:
   - {name: "generated-cpp", globs: ["tutorial/**"]}
@@ -1569,3 +1569,4 @@ entries:
   - {id: "U1590", file: "include/pineforge/detail/id_pair_store.hpp", symbol: "slots_", ops: ["assign"], container: "std::uint64_t", owner: "engine-core", phase: "unclassified", state: "unreviewed", note: "Integer slot count assigned in the constructor, clear and the index replacement, not a container; the scanner reports it because the drawing order unit declares a vector of the same name."}
   - {id: "U1591", file: "include/pineforge/detail/scratch_store_impl.hpp", symbol: "slots_", ops: ["assign"], container: "std::size_t", owner: "engine-core", phase: "unclassified", state: "unreviewed", note: "Integer slot count assigned once per core, not a container; the scanner reports it because the drawing order unit declares a vector of the same name."}
   - {id: "U1592", file: "include/pineforge/run_failure.hpp", symbol: "<temp:type>", ops: ["temp"], container: "unresolved by the index: type", owner: "engine-core", phase: "unclassified", state: "unreviewed", note: "The enable_if member type of four template constructor defaults, not a container; the scanner reports it because the drawing store unit names a member alias type."}
+  - {id: "U1593", file: "include/pineforge/detail/drawing_records.hpp", symbol: "store", ops: ["grow"], container: "unresolved by the index: store.resize(...)", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 131, note: "One Store object per 32-record label block: the block, then the text bytes of its records. When this value owns the block and nothing shares it (same epoch, one reference) the object is resized in place to the block plus that text; a new or shared block is created at full size instead. Growth spills to the Store backing; the size follows label text length and no declared fixed input or supported own-size guard bounds it."}
