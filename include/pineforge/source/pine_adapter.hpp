@@ -1546,9 +1546,11 @@ void bind_id_pair_scratch_tables(source::PineExecutionAdapter&,
 
 namespace pineforge::source {
 
-// Allocation-free view facade for Appendix C's later C projection. L2 does
-// not wire the C ABI; this only exposes named truthful sources to native
-// fixture tests and keeps observer reads side-effect-free.
+// Read-side view facade for Appendix C's later C projection. L2 does not wire
+// the C ABI; this only exposes named truthful sources to native fixture tests.
+// Its derived projection index is warmed and maintained outside hashed source
+// state, so observer reads are side-effect-free and allocation-free after the
+// current working population has been indexed.
 class PendingIntentView {
 public:
     int size() const noexcept;
@@ -1765,6 +1767,11 @@ public:
 
     int short_seed_collision_role_v1(native_order::RequestHandle) const noexcept;
     const PendingIntentView& pending_intent_view() const noexcept { return pending_view_; }
+    // Diagnostic-only count of raw-row probes made by the pending projection;
+    // excluded from continuation and broker state.
+    std::uint64_t fixture_pending_projection_operations() const noexcept {
+        return pending_projection_operations_;
+    }
     // Read-only fixture facade for command-boundary rows that have not yet
     // become live native requests.  It never participates in matching.
     std::vector<FixturePendingSnapshot> fixture_pending_snapshots() const;
@@ -2567,6 +2574,40 @@ private:
     void purge_brackets_after_applied_reversal(const PlacementSnapshot&);
     void revive_brackets_after_margin(
         const native_order::ExecutionAppliedEvent&, const NativeDecisionContext&);
+    struct PendingProjectionKey {
+        bool present = false;
+        PineOrderFamily family = PineOrderFamily::Entry;
+        SourceId source_id{};
+        SourceId from_entry{};
+        native_order::RequestHandle bracket_origin{};
+
+        // Only exits enter the seen index. Their family distinguishes raw
+        // validation keys, but same_projected_order coalesces all exit kinds.
+        bool operator==(const PendingProjectionKey& other) const noexcept {
+            return present == other.present
+                && source_id == other.source_id && from_entry == other.from_entry
+                && bracket_origin == other.bracket_origin;
+        }
+    };
+    struct PendingProjectionKeyHash {
+        static void mix(std::size_t& seed, std::size_t value) noexcept {
+            seed ^= value + static_cast<std::size_t>(0x9e3779b9U)
+                + (seed << 6U) + (seed >> 2U);
+        }
+        std::size_t operator()(const PendingProjectionKey& key) const noexcept {
+            std::size_t seed = std::hash<bool>{}(key.present);
+            mix(seed, std::hash<SourceId>{}(key.source_id));
+            mix(seed, std::hash<SourceId>{}(key.from_entry));
+            mix(seed, std::hash<std::string>{}(
+                key.bracket_origin.run.session_key.string()));
+            mix(seed, std::hash<std::uint64_t>{}(
+                key.bracket_origin.run.run_number));
+            mix(seed, std::hash<std::uint64_t>{}(
+                key.bracket_origin.incarnation));
+            return seed;
+        }
+    };
+    void ensure_pending_projection_cache() const noexcept;
     int projected_pending_size() const noexcept;
     bool projected_pending_at(int index, const PlacementSnapshot*& snapshot,
                               native_order::RequestHandle& handle) const noexcept;
@@ -2900,6 +2941,14 @@ private:
     std::int64_t last_bar_dual_entry_script_open_ms_ =
         std::numeric_limits<std::int64_t>::min();
     PendingIntentView pending_view_{};
+    // Derived, non-hashed projection state. The raw books remain authoritative;
+    // this index only records first representatives for the current population.
+    mutable bool pending_projection_cache_initialized_ = false;
+    mutable std::vector<PendingProjectionKey> pending_projection_raw_keys_;
+    mutable std::vector<int> pending_projection_rows_;
+    mutable std::unordered_map<PendingProjectionKey, int, PendingProjectionKeyHash>
+        pending_projection_seen_;
+    mutable std::uint64_t pending_projection_operations_ = 0;
     ::pineforge::detail::ScratchSequence<std::uint8_t> trade_exit_phase_;
     // TradingView's entry-id table (global_exit_child_ranks): every entry id
     // in the order of its first fill, never removed, with a running digest,
