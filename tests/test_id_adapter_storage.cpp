@@ -930,8 +930,10 @@ public:
             descriptor.version = 1;
             descriptor.backend = PF_SCRATCH_TABLE_BOUNDED_MEMORY;
             if (cap_probe_) {
+                // The live limit is derived from R / 2 (the manifest's bar count), so
+                // the manifest is sized for exactly the floor while one more bar is fed.
                 const auto manifest = pineforge::detail::default_scratch_manifest(
-                    pineforge::detail::kMaxResidentCohorts + 1);
+                    pineforge::detail::kMaxResidentCohorts);
                 descriptor.K_q = manifest.K_q; descriptor.B_q = manifest.B_q;
                 descriptor.K_e = manifest.K_e; descriptor.B_e = manifest.B_e;
                 descriptor.K_c = manifest.K_c; descriptor.B_c = manifest.B_c;

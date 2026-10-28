@@ -38,7 +38,9 @@ public:
         set_syminfo_timezone("UTC");
         set_syminfo_session("24x7");
 
-        const auto manifest = pineforge::detail::default_scratch_manifest(kExpectedLimit + 1);
+        // The live limit is derived from R / 2 (the manifest's bar count): size the
+        // manifest for exactly the floor while the run feeds one more bar.
+        const auto manifest = pineforge::detail::default_scratch_manifest(kExpectedLimit);
         pf_scratch_tables_v1 descriptor{};
         descriptor.struct_size = static_cast<std::uint32_t>(sizeof descriptor);
         descriptor.version = 1;

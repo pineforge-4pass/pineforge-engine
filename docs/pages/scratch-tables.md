@@ -56,6 +56,8 @@ The Python host mirrors this tier explicitly, so its fresh-handle wiring does
 not depend on the engine's all-zero expansion. The six historical id maxima
 use the **same** `resident_cohort_sizing()` row function as resident admission:
 `S = max(65536, min(1048576, literals + bars*fresh_per_bar + fixed_fresh))`.
+Resident admission itself applies the function to the bar count alone (`R/2`),
+so the receipt sizes the historical regions, not the live limit.
 Demand multiplication and additions saturate at `UINT64_MAX`. A declared need
 above the cap refuses with typed `scratch_capacity_exceeded`, resource
 `cohort`, naming the limit and need; a default-derived excess uses the cap.
