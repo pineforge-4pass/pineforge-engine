@@ -384,7 +384,7 @@ NumericMatrix NumericMatrix::concat(const NumericMatrix& other, bool horizontal)
 }
 
 // ── Aggregation ─────────────────────────────────────────────────────────────
-
+//
 // Keep Eigen's exact packet/fold choices. These compatibility kernels still
 // need dense workspaces; their out-of-core workspace conversion is separate.
 double NumericMatrix::avg() const {
