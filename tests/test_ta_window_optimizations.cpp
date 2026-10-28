@@ -4,6 +4,7 @@
 // former straightforward implementation. The production result is compared
 // as a double bit pattern; any NaN is compared as NA.
 
+#define PINEFORGE_TEST_ALLOCATION_BYTES
 #include "global_allocation_replacement.hpp"
 
 #include <pineforge/na.hpp>
@@ -11,6 +12,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cfenv>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -67,6 +69,48 @@ const std::array<double, 18> kSeries = {
     3.0, 1.0, 1.0, na<double>(), 2.0, 5.0, 2.0, -0.0, 0.0,
     4.0, na<double>(), 4.0, 1.0, 6.0, 1.0, 2.0, 2.0, 7.0,
 };
+
+constexpr int kSeededBars = 4096;
+constexpr int kGapPeriod = 13;
+
+std::array<double, kSeededBars> seeded_series() {
+    // xorshift32, seed 0x6d2b79f5, shifts (13, 17, 5), unsigned wraparound.
+    // Use the high 16 bits modulo this small alphabet; both zero signs have
+    // extra weight to put them at the median rank and make them Mode winners.
+    // Every thirteenth bar is NA, independent of the PRNG.
+    const std::array<double, 22> alphabet = {
+        -4.0, -3.0, -2.0, -1.0, -0.0, 0.0, -0.0, 0.0, -0.0, 0.0, 1.0,
+        2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+    };
+    // On libstdc++, sort preserves the three zeros' order in this five-value
+    // prefix, whereas nth_element selects +0 at rank 2 instead of -0.
+    // Its first three values also give Mode a winning first key of -0.
+    const std::array<double, 5> prefix = {1.0, -0.0, 0.0, -0.0, 1.0};
+    std::array<double, kSeededBars> series{};
+    std::uint32_t state = 0x6d2b79f5u;
+    for (int bar = 0; bar < kSeededBars; ++bar) {
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        series[bar] = alphabet[(state >> 16) % alphabet.size()];
+        if (bar % kGapPeriod == kGapPeriod - 1) series[bar] = na<double>();
+        if (bar < static_cast<int>(prefix.size())) series[bar] = prefix[bar];
+    }
+    // Surround the first 17*17 scheduled gaps with every ordered finite pair.
+    // At W=3 the NA driver compares [left, NA, right], including distinct
+    // keys sharing a map bucket. This exercises NA-first tie repair without
+    // depending on chance encounters in the PRNG or hardcoding a hash value.
+    static_assert(kSeededBars > 17 * 17 * kGapPeriod, "finite pair coverage fits the series");
+    int pair = 0;
+    for (int left = -4; left <= 12; ++left) {
+        for (int right = -4; right <= 12; ++right) {
+            const int gap = kGapPeriod * (++pair) - 1;
+            series[gap - 1] = static_cast<double>(left);
+            series[gap + 1] = static_cast<double>(right);
+        }
+    }
+    return series;
+}
 
 double volume_at(int bar) {
     return bar == 10 ? na<double>() : 100.0 + 3.0 * bar;
@@ -253,6 +297,44 @@ struct RefMode {
     int length_;
     std::deque<double> buffer_;
 };
+
+// Coverage probes use only the reference window. They do not supply expected
+// outputs: those always come from the unchanged former algorithms above.
+bool median_selection_changes_zero(const RefMedian& reference, double sorted) {
+    if (static_cast<int>(reference.buffer_.size()) < reference.length_
+        || is_na(sorted) || sorted != 0.0) {
+        return false;
+    }
+    std::vector<double> selected(reference.buffer_.begin(), reference.buffer_.end());
+    if (std::any_of(selected.begin(), selected.end(),
+                    [](double value) { return is_na(value); })) {
+        return false;
+    }
+    const int n = static_cast<int>(selected.size());
+    if (n % 2 == 1) {
+        std::nth_element(selected.begin(), selected.begin() + n / 2, selected.end());
+        return !exact(selected[n / 2], sorted);
+    }
+    std::nth_element(selected.begin(), selected.begin() + n / 2 - 1, selected.end());
+    const double lower = selected[n / 2 - 1];
+    std::nth_element(selected.begin(), selected.begin() + n / 2, selected.end());
+    return !exact((lower + selected[n / 2]) / 2.0, sorted);
+}
+
+bool mode_na_tie_repair_is_observable(const RefMode& reference) {
+    if (static_cast<int>(reference.buffer_.size()) < reference.length_) return false;
+    std::unordered_map<double, int> counts;
+    for (double value : reference.buffer_) ++counts[value];
+    if (counts.empty() || !is_na(counts.begin()->first)) return false;
+    bool has_finite = false;
+    for (const auto& entry : counts) {
+        if (entry.second != 1) return false;
+        if (!is_na(entry.first)) has_finite = true;
+    }
+    // The first iterated key is NA and all counts tie at one. Removing the
+    // is_na(mode_value) tie clause leaves NA instead of the finite minimum.
+    return has_finite;
+}
 
 struct RefPercentRank {
     explicit RefPercentRank(int length) : length_(length) {}
@@ -513,6 +595,155 @@ void test_mode() {
     }
 }
 
+void test_median_seeded() {
+    const auto series = seeded_series();
+    int selection_witnesses = 0;
+    for (int length = 3; length <= 21; ++length) {
+        ta::Median actual(length);
+        RefMedian reference(length);
+        int compared = 0;
+        int negative_zeros = 0;
+        int positive_zeros = 0;
+        for (int bar = 0; bar < kSeededBars; ++bar) {
+            const double expected = reference.compute(series[bar]);
+            check_value(actual.compute(series[bar]), expected,
+                        "Median seeded signed zero", length, bar);
+            ++compared;
+            if (!is_na(expected) && expected == 0.0) {
+                if (std::signbit(expected)) ++negative_zeros;
+                else ++positive_zeros;
+            }
+            if (!is_na(series[bar]) && median_selection_changes_zero(reference, expected)) {
+                ++selection_witnesses;
+            }
+        }
+        check_count(compared, kSeededBars, "Median seeded signed zero", length);
+        check_true(negative_zeros > 0 && positive_zeros > 0,
+                   "Median seeded reference produces both zero signs");
+    }
+    check_true(selection_witnesses > 0,
+               "Median seeded compares zeros reordered by unguarded selection");
+}
+
+void test_mode_seeded() {
+    const auto series = seeded_series();
+    for (int length = 3; length <= 21; ++length) {
+        ta::Mode actual(length);
+        RefMode reference(length);
+        int compared = 0;
+        int negative_zeros = 0;
+        int positive_zeros = 0;
+        for (int bar = 0; bar < kSeededBars; ++bar) {
+            const double expected = reference.compute(series[bar]);
+            check_value(actual.compute(series[bar]), expected,
+                        "Mode seeded zero winner", length, bar);
+            ++compared;
+            if (!is_na(expected) && expected == 0.0) {
+                if (std::signbit(expected)) ++negative_zeros;
+                else ++positive_zeros;
+            }
+        }
+        check_count(compared, kSeededBars, "Mode seeded zero winner", length);
+        check_true(negative_zeros > 0 && positive_zeros > 0,
+                   "Mode seeded reference produces both zero signs");
+    }
+}
+
+void test_mode_seeded_na_fallback() {
+    const auto series = seeded_series();
+    int repair_witnesses = 0;
+    for (int length = 3; length <= 21; ++length) {
+        ta::Mode actual(length);
+        RefMode reference(length);
+        int compared = 0;
+        int injected = 0;
+        int fallback_compared = 0;
+        int expected_fallback = 0;
+        int ready_bars = 0;
+        for (int bar = 0; bar < kSeededBars; ++bar) {
+            const bool gap = is_na(series[bar]);
+            // compute(NA) skips the window. To reach the exceptional fallback
+            // state, first advance this bar, then inject NA with recompute.
+            const double src = gap ? 1.0 : series[bar];
+            const double expected = reference.compute(src);
+            check_value(actual.compute(src), expected,
+                        "Mode seeded NA fallback", length, bar);
+            ++compared;
+            if (bar >= length - 1) {
+                ++ready_bars;
+                const bool has_na = std::any_of(
+                    reference.buffer_.begin(), reference.buffer_.end(),
+                    [](double value) { return is_na(value); });
+                if (has_na) ++fallback_compared;
+                // An injection at g survives a subsequent compute at b
+                // exactly when b - length < g < b. Gaps are 12, 25, 38, ...
+                const int gap_count = bar / kGapPeriod
+                    - std::max(0, (bar - length + 1) / kGapPeriod);
+                if (gap_count > 0) ++expected_fallback;
+                if (mode_na_tie_repair_is_observable(reference)) ++repair_witnesses;
+            }
+            if (gap) {
+                check_value(actual.recompute(na<double>()),
+                            reference.recompute(na<double>()),
+                            "Mode seeded inject NA", length, bar);
+                ++injected;
+            }
+        }
+        check_count(compared, kSeededBars, "Mode seeded NA fallback", length);
+        check_count(injected, kSeededBars / kGapPeriod, "Mode seeded inject NA", length);
+        check_count(ready_bars, kSeededBars - length + 1,
+                    "Mode seeded ready windows", length);
+        check_count(fallback_compared, expected_fallback,
+                    "Mode seeded retained NA windows", length);
+    }
+    check_true(repair_witnesses > 0,
+               "Mode seeded compares NA-first tied maps with a finite winner");
+}
+
+void test_alma_cached_weights() {
+    std::fenv_t saved_environment{};
+    const int saved = std::fegetenv(&saved_environment);
+    check_true(saved == 0, "ALMA cache witness can save floating environment");
+    if (saved != 0) return;
+
+    for (bool floor : {false, true}) {
+        // W=5, offset=0.5, sigma=100 gives exponents -800, -200, 0, -200,
+        // -800. The tails underflow to zero; the other cached weights and
+        // their sums/products with 1.0 are normal or exactly zero.
+        // A volatile parameter keeps the reference exp calls observable.
+        volatile double sigma = 100.0;
+        ta::ALMA actual(5, 0.5, sigma, floor);
+        RefALMA reference(5, 0.5, sigma, floor);
+        for (int bar = 0; bar < 5; ++bar) {
+            actual.compute(1.0);
+            reference.compute(1.0);
+        }
+        int compared = 0;
+        for (int again = 0; again < 2; ++again) {
+            check_true(std::feclearexcept(FE_ALL_EXCEPT) == 0,
+                       "ALMA cache witness can clear reference flags");
+            const double expected = again == 0
+                ? reference.compute(1.0) : reference.recompute(1.0);
+            const bool reference_underflow = std::fetestexcept(FE_UNDERFLOW) != 0;
+            check_true(reference_underflow,
+                       "ALMA former per-call exp raises underflow (positive control)");
+            check_true(std::feclearexcept(FE_ALL_EXCEPT) == 0,
+                       "ALMA cache witness can clear production flags");
+            const double value = again == 0
+                ? actual.compute(1.0) : actual.recompute(1.0);
+            const bool actual_underflow = std::fetestexcept(FE_UNDERFLOW) != 0;
+            check_value(value, expected, "ALMA cached weights value", 5, again);
+            check_true(!actual_underflow, again == 0
+                ? "ALMA cached weights compute does not repeat exp underflow"
+                : "ALMA cached weights recompute does not repeat exp underflow");
+            ++compared;
+        }
+        check_count(compared, 2, "ALMA cached weights", 5);
+    }
+    check_true(std::fesetenv(&saved_environment) == 0,
+               "ALMA cache witness restores floating environment");
+}
+
 void test_percent_rank() {
     for (int length : kLengths) {
         ta::PercentRank actual(length);
@@ -639,46 +870,93 @@ void test_recompute_paths() {
 }
 
 // --------------------------------------------------------------------------
-// Allocation witness. Warm-up fills the fixed windows before measurement.
+// Allocation witness. These windows still use std::deque<double>: warmed
+// compute calls can allocate a node as the ends move. Count that separately
+// from temporary vector/map/node allocations, over 384 calls at W=5 and W=50.
+// libstdc++ nodes are 512 bytes (64 doubles); libc++ nodes are 4096 bytes
+// (512 doubles). Both obey the conservative ceil(calls/64)+1 node bound here.
+// At these lengths the former vectors (4W/8W bytes) cannot masquerade as a
+// deque node. All measured inputs are finite, so Mode's NA fallback is outside
+// this claim. No reference or assertion runs inside the measured span; only
+// the indicator and the nonallocating size callback do.
 // --------------------------------------------------------------------------
 
-std::size_t rci_allocations_after_warmup() {
-    ta::RCI indicator(5);
-    for (int i = 0; i < 20; ++i) indicator.compute(1.25 + i);
-    const std::size_t before = global_allocation::allocations;
-    volatile double sink = 0.0;
-    for (int i = 0; i < 8; ++i) sink = indicator.compute(100.0 + i);
-    (void)sink;
-    return global_allocation::allocations - before;
+#if defined(_LIBCPP_VERSION)
+constexpr std::size_t kDequeNodeBytes = 4096;
+#else
+constexpr std::size_t kDequeNodeBytes = 512;
+#endif
+// Warm through four node widths, including libc++'s initial pointer-map
+// growth, so the measured allocations are steady-state node turnover.
+constexpr int kAllocationWarmup = 4 * kDequeNodeBytes / sizeof(double);
+constexpr int kAllocationCalls = 384;
+constexpr std::size_t kDequeNodeBound = (kAllocationCalls + 63) / 64 + 1;
+
+struct AllocationCounts {
+    std::size_t deque_nodes = 0;
+    std::size_t other = 0;
+    int calls = 0;
+};
+
+AllocationCounts* active_allocation_counts = nullptr;
+
+void count_window_allocation(std::size_t size) {
+    if (size == kDequeNodeBytes) ++active_allocation_counts->deque_nodes;
+    else ++active_allocation_counts->other;
 }
 
-std::size_t median_allocations_after_warmup() {
-    ta::Median indicator(5);
-    for (int i = 0; i < 20; ++i) indicator.compute(1.25 + i);
-    const std::size_t before = global_allocation::allocations;
+template <class Indicator>
+AllocationCounts allocations_after_warmup(int length) {
+    Indicator indicator(length);
     volatile double sink = 0.0;
-    for (int i = 0; i < 8; ++i) sink = indicator.compute(100.0 + i);
+    for (int i = 0; i < kAllocationWarmup; ++i) sink = indicator.compute(1.25 + i);
+    AllocationCounts counts;
+    active_allocation_counts = &counts;
+    global_allocation::on_recorded = count_window_allocation;
+    global_allocation::recording = true;
+    for (int i = 0; i < kAllocationCalls; ++i) {
+        sink = indicator.compute(1000.0 + i);
+        ++counts.calls;
+    }
+    global_allocation::recording = false;
+    global_allocation::on_recorded = nullptr;
+    active_allocation_counts = nullptr;
     (void)sink;
-    return global_allocation::allocations - before;
+    return counts;
 }
 
-std::size_t mode_allocations_after_warmup() {
-    ta::Mode indicator(5);
-    for (int i = 0; i < 20; ++i) indicator.compute(1.25 + i);
-    const std::size_t before = global_allocation::allocations;
-    volatile double sink = 0.0;
-    for (int i = 0; i < 8; ++i) sink = indicator.compute(100.0 + i);
-    (void)sink;
-    return global_allocation::allocations - before;
+template <class Indicator, class Reference>
+void check_window_allocations(const char* name, int length) {
+    const auto counts = allocations_after_warmup<Indicator>(length);
+    char label[160];
+    std::snprintf(label, sizeof(label), "%s allocation span", name);
+    check_count(counts.calls, kAllocationCalls, label, length);
+    std::snprintf(label, sizeof(label),
+                  "%s length=%d temporary allocations=%zu expected=0",
+                  name, length, counts.other);
+    check_true(counts.other == 0, label);
+    std::snprintf(label, sizeof(label),
+                  "%s length=%d deque node allocations=%zu bound=%zu",
+                  name, length, counts.deque_nodes, kDequeNodeBound);
+    check_true(counts.deque_nodes <= kDequeNodeBound, label);
+
+    // Positive control: the same measurement must see at least one temporary
+    // allocation on EVERY former-algorithm call, not just a deque boundary.
+    const auto old_counts = allocations_after_warmup<Reference>(length);
+    std::snprintf(label, sizeof(label), "%s former allocation span", name);
+    check_count(old_counts.calls, kAllocationCalls, label, length);
+    std::snprintf(label, sizeof(label),
+                  "%s length=%d former temporary allocations=%zu minimum=%d",
+                  name, length, old_counts.other, kAllocationCalls);
+    check_true(old_counts.other >= static_cast<std::size_t>(kAllocationCalls), label);
 }
 
 void test_allocations() {
-    check_true(rci_allocations_after_warmup() == 0,
-               "RCI has no per-call allocations after warmup");
-    check_true(median_allocations_after_warmup() == 0,
-               "Median has no per-call allocations after warmup");
-    check_true(mode_allocations_after_warmup() == 0,
-               "Mode has no per-call allocations after warmup");
+    for (int length : {5, 50}) {
+        check_window_allocations<ta::RCI, RefRCI>("RCI", length);
+        check_window_allocations<ta::Median, RefMedian>("Median", length);
+        check_window_allocations<ta::Mode, RefMode>("Mode", length);
+    }
 }
 
 }  // namespace
@@ -688,6 +966,10 @@ int main() {
     test_median();
     test_alma();
     test_mode();
+    test_median_seeded();
+    test_mode_seeded();
+    test_mode_seeded_na_fallback();
+    test_alma_cached_weights();
     test_percent_rank();
     test_percentiles();
     test_mfi_cmo();
