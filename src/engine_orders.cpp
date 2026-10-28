@@ -391,6 +391,16 @@ struct TradeLedger::State {
     mutable std::unique_ptr<CacheEntry[]> cache;
     mutable size_type cache_count = 0, cache_capacity = 0;
     mutable size_type cache_generation = 2;
+    // A block can contain more rows than a deliberately small configured
+    // cache. Keep the requested row available to the current accessor after
+    // later rows replace its direct-mapped slot.
+    mutable CacheEntry block_result{};
+    static constexpr size_type kBlockPayloadBytes = 64U * 1024U;
+
+    struct BlockExtent {
+        std::uint64_t offset = 0;
+        size_type length = 0, row = 0, packed_offset = 0;
+    };
 
     State() {
         index.bound_cache();
@@ -480,7 +490,126 @@ struct TradeLedger::State {
     }
     const CacheEntry& load(size_type global) const {
         if (const auto* entry = cached(global)) return *entry;
+        if (global < resident_first) return load_block(global);
         return remember(global, descriptor(global));
+    }
+    const CacheEntry& load_block(size_type global) const {
+        // These fixed buffers total 92,736 bytes on the 64-bit build:
+        // 10,752 B descriptors, 65,536 B payload, 8,192 B packed strings
+        // and 8,192 B extent metadata, plus a small validity array. They are
+        // stack storage and do not grow with the ledger population.
+        std::array<Record, kResidentRows> records{};
+        std::array<char, kBlockPayloadBytes> payload_bytes{};
+        std::array<char, kResidentRows * kCacheStringBytes> strings{};
+        std::array<BlockExtent, kResidentRows * 4> extents{};
+        std::array<bool, kResidentRows> strings_valid{};
+
+        const auto count = std::min(kResidentRows,
+                                    std::min(end - global, resident_first - global));
+        index.read(record_offset(global), records.data(), count * sizeof(Record));
+
+        size_type extent_count = 0;
+        for (size_type row = 0; row < count; ++row) {
+            const std::array<StringExtent, 4> texts{{
+                records[row].entry_id, records[row].entry_comment,
+                records[row].exit_comment, records[row].exit_id}};
+            size_type bytes = 0;
+            bool valid = true;
+            for (const auto text : texts) {
+                if (text.length > kCacheStringBytes - bytes) {
+                    valid = false;
+                    break;
+                }
+                bytes += static_cast<size_type>(text.length);
+            }
+            strings_valid[row] = valid;
+            if (!valid) continue;
+
+            size_type packed_offset = 0;
+            for (const auto text : texts) {
+                validate_string(text);
+                const auto length = static_cast<size_type>(text.length);
+                if (length != 0) {
+                    auto* destination = strings.data()
+                        + row * kCacheStringBytes + packed_offset;
+                    if (payload_end - text.offset <= kPayloadTailBytes) {
+                        const auto span = tail_span(text.offset, length);
+                        std::copy_n(payload_tail.data() + span.slot, span.first, destination);
+                        std::copy_n(payload_tail.data(), length - span.first,
+                                    destination + span.first);
+                    } else {
+                        extents[extent_count++] = {text.offset, length, row, packed_offset};
+                    }
+                }
+                packed_offset += length;
+            }
+        }
+
+        std::sort(extents.begin(), extents.begin() + extent_count,
+                  [](const BlockExtent& left, const BlockExtent& right) {
+                      return left.offset < right.offset;
+                  });
+        size_type begin = 0;
+        while (begin < extent_count) {
+            size_type finish = begin + 1;
+            std::uint64_t range_end = extents[begin].offset + extents[begin].length;
+            while (finish < extent_count
+                   && extents[finish].offset <= range_end) {
+                range_end = std::max(range_end,
+                                     extents[finish].offset + extents[finish].length);
+                ++finish;
+            }
+            const auto range_start = extents[begin].offset;
+            const auto range_length = range_end - range_start;
+            if (range_length <= kBlockPayloadBytes) {
+                payload.read(range_start, payload_bytes.data(),
+                             static_cast<size_type>(range_length));
+                for (size_type i = begin; i < finish; ++i) {
+                    const auto& extent = extents[i];
+                    const auto relative = static_cast<size_type>(extent.offset - range_start);
+                    std::copy_n(payload_bytes.data() + relative, extent.length,
+                                strings.data() + extent.row * kCacheStringBytes
+                                    + extent.packed_offset);
+                }
+            } else {
+                // Valid packed rows have at most 128 bytes of payload. This
+                // path handles sparse replacement extents without allocating
+                // a buffer proportional to their address span.
+                for (size_type i = begin; i < finish; ++i) {
+                    const auto& extent = extents[i];
+                    payload.read(extent.offset,
+                                 strings.data() + extent.row * kCacheStringBytes
+                                     + extent.packed_offset,
+                                 extent.length);
+                }
+            }
+            begin = finish;
+        }
+
+        block_result.record = records[0];
+        block_result.global = global;
+        if (strings_valid[0])
+            std::copy_n(strings.data(), kCacheStringBytes, block_result.strings.data());
+        block_result.generation = cache_generation
+            | static_cast<size_type>(strings_valid[0]);
+
+        ensure_cache(end);
+        for (size_type row = 0; row < count; ++row) {
+            auto& entry = cache[cache_slot(global + row)];
+            if (current(entry)) --cache_count;
+            entry.generation = 0;
+            entry.record = records[row];
+            if (strings_valid[row]) {
+                std::copy_n(strings.data() + row * kCacheStringBytes,
+                            kCacheStringBytes, entry.strings.data());
+            }
+            entry.global = global + row;
+            entry.generation = cache_generation
+                | static_cast<size_type>(strings_valid[row]);
+            ++cache_count;
+        }
+        if (const auto* entry = cached(global)) return *entry;
+        return block_result;
     }
     template<auto Member>
     auto numeric_field(size_type global) const {
