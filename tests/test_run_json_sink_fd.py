@@ -892,7 +892,8 @@ def test_native_fd_matches_file_document_and_wire(tmp_path, transport, outputs):
     assert all(event["closed"] for event in actual[4][1:])
 
 
-def test_native_fd_records_leave_only_small_stdout(tmp_path):
+@pytest.mark.parametrize("run_id", [None, "", RUN_ID], ids=["unset", "empty", "supplied"])
+def test_native_fd_records_leave_only_small_stdout(tmp_path, run_id):
     source = bars.csv_file(tmp_path, count=97)
     module = native_module(False)
     environment = {key: value for key, value in os.environ.items()
@@ -901,6 +902,8 @@ def test_native_fd_records_leave_only_small_stdout(tmp_path):
     with Stream() as stream:
         argv = ["--so", module, "--ohlcv", str(source), "--input-tf", "1",
                 "--script-tf", "1", "--report-sink-fd", str(stream.writer)]
+        if run_id is not None:
+            argv += ["--run-id", run_id]
         process = subprocess.Popen([sys.executable, "-B", str(ROOT / "docker" / "run_json.py"),
                                     *argv], env=environment, pass_fds=(stream.writer,),
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -916,6 +919,7 @@ def test_native_fd_records_leave_only_small_stdout(tmp_path):
         for _ in reader:
             pass
         assert reader.complete and reader.trailer is not None, observed
+        assert reader.header["run_id"] == ("" if run_id is None else run_id), observed
         assert reader.counts["T"] == document["summary"]["total_trades"], observed
         assert reader.counts["E"] > 0, observed
 

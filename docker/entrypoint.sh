@@ -35,7 +35,7 @@
 #   PINEFORGE_MAGNIFIER_SAMPLES  Sub-bar sample count when magnifier=true (>=2, default 4).
 #   PINEFORGE_MAGNIFIER_DIST     Sample distribution: uniform / cosine / triangle /
 #                                endpoints (default) / front_loaded / back_loaded.
-#
+#   PINEFORGE_RUN_ID             Sink header id: raw --run-id, even empty (no limit added here: a wrapper that needs one refuses empty itself); unset keeps default ""; run_json.py validates UTF-8 without NUL.
 # Optional env var (instrument metadata):
 #   PINEFORGE_SYMINFO    Path to a syminfo JSON file, a flat object or {"syminfo": {...}}.
 #                        Keys applied: mincontract (the lot size: order quantities are
@@ -270,6 +270,7 @@ extra=()
 [[ -n "${PINEFORGE_SYMINFO:-}" ]]        && extra+=(--syminfo "${PINEFORGE_SYMINFO}")
 [[ -n "${PINEFORGE_SYMBOL_FEEDS:-}" ]]   && extra+=(--symbol-feeds "${PINEFORGE_SYMBOL_FEEDS}")
 [[ -n "${PINEFORGE_REPORT_SINK_FD+x}" ]] && extra+=(--report-sink-fd "${PINEFORGE_REPORT_SINK_FD}")  # set values incl. empty; run_json.py validates
+[[ -n "${PINEFORGE_RUN_ID+x}" ]] && extra+=(--run-id "${PINEFORGE_RUN_ID}")  # set values incl. empty; run_json.py validates
 if [[ "${PINEFORGE_BENCH:-}" =~ ^(1|true|yes|on)$ ]]; then
     extra+=(--bench --warmup "${PINEFORGE_WARMUP:-3}" --repeats "${PINEFORGE_REPEATS:-20}")
 fi
