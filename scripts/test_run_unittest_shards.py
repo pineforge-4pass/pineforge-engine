@@ -245,7 +245,7 @@ class UnittestShardsTests(unittest.TestCase):
         prefix = 'test_ci_preflight.PreflightFailures.'
         heavy = [
             prefix + 'test_gcp_sites_reject_retired_and_void_labels',
-            prefix + 'test_light_jobs_refuse_vm_labels_unlisted_images_arrays_and_fallbacks',
+            prefix + 'test_light_jobs_refuse_other_routes_unlisted_images_arrays_and_fallbacks',
         ]
         middle = prefix + 'test_gcp_sites_require_every_routed_job'
         ids = [heavy[0], middle, heavy[1]]
@@ -264,7 +264,7 @@ class UnittestShardsTests(unittest.TestCase):
         heavy = {
             prefix + method for method in (
                 'test_gcp_sites_reject_retired_and_void_labels',
-                'test_light_jobs_refuse_vm_labels_unlisted_images_arrays_and_fallbacks',
+                'test_light_jobs_refuse_other_routes_unlisted_images_arrays_and_fallbacks',
                 'test_no_stage_runs_under_a_timeout_and_jobs_keep_the_platform_maximum',
                 'test_pool_jobs_reject_hosted_runners_and_fallbacks_from_mutated_files',
                 'test_ci_contract_pins_spot_runners_time_limits_and_parallelism',

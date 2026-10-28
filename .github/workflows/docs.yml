@@ -17,7 +17,7 @@ jobs:
   authz:
     name: authz
     # Fleet routing is fixed for this workflow; releases use pf-gcp-main.
-    runs-on: ubuntu-24.04
+    runs-on: ["self-hosted", "pf-gcp-pr"]
     permissions: {}
     # No timeout-minutes: the owner's no-time-limits rule (check-no-time-limits refuses new ones).
     steps:
@@ -78,7 +78,7 @@ jobs:
 
   build:
     needs: [authz]
-    runs-on: ubuntu-24.04
+    runs-on: ["self-hosted", "pf-gcp-pr"]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
