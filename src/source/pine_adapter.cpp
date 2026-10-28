@@ -29285,16 +29285,27 @@ bool PineExecutionAdapter::has_live_trail_policy() const noexcept {
 namespace pineforge::source {
 namespace {
 template<class T>
-void canonical_retirement_set(std::vector<T>& values) {
+bool retirement_capacity_excessive(const std::vector<T>& values) {
+    // Express size * 4 < capacity without overflowing the size type.
+    return values.capacity() != 0 && values.size() <= (values.capacity() - 1) / 4;
+}
+
+template<class T>
+void compact_retirement_set(std::vector<T>& values) {
+    if (retirement_capacity_excessive(values)) std::vector<T>(values).swap(values);
+}
+
+template<class T>
+void canonical_retirement_set(std::vector<T>& values, bool compact) {
+    // Refill includes duplicate references. Keep room for them after the
+    // distinct set is formed, so an unchanged refill never has to regrow.
+    if (compact) compact_retirement_set(values);
     std::sort(values.begin(), values.end());
     values.erase(std::unique(values.begin(), values.end()), values.end());
-    // Retain capacity for current references, never for a historical peak.
-    if (values.capacity() / 4 > values.size())
-        std::vector<T>(values).swap(values);
 }
 } // namespace
 
-void PineExecutionAdapter::capture_retirement_inputs(RetirementInputs& inputs) const {
+bool PineExecutionAdapter::capture_retirement_inputs(RetirementInputs& inputs) const {
     inputs.roots.clear();
     inputs.askable.clear();
     inputs.groups.clear();
@@ -29391,11 +29402,20 @@ void PineExecutionAdapter::capture_retirement_inputs(RetirementInputs& inputs) c
             return false;
         });
     }
-    canonical_retirement_set(inputs.roots);
-    canonical_retirement_set(inputs.askable);
-    canonical_retirement_set(inputs.groups);
-    canonical_retirement_set(inputs.bar_numbers);
-    canonical_retirement_set(inputs.marks);
+    // Multiplicity can fall while the distinct sets stay equal. Report that
+    // capacity debt before canonicalization so it can invalidate the gate.
+    const bool excess_capacity = retirement_capacity_excessive(inputs.roots)
+        || retirement_capacity_excessive(inputs.askable)
+        || retirement_capacity_excessive(inputs.groups)
+        || retirement_capacity_excessive(inputs.bar_numbers)
+        || retirement_capacity_excessive(inputs.marks);
+    const bool compact = !retirement_gate_.certified;
+    canonical_retirement_set(inputs.roots, compact);
+    canonical_retirement_set(inputs.askable, compact);
+    canonical_retirement_set(inputs.groups, compact);
+    canonical_retirement_set(inputs.bar_numbers, compact);
+    canonical_retirement_set(inputs.marks, compact);
+    return excess_capacity;
 }
 
 void PineExecutionAdapter::observe_retirement_expiry(
@@ -29428,17 +29448,17 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
     auto& gate = retirement_gate_;
     if (detail::retain_retired_rows() || !bound_consumer()
         || placement_.size() <= live_handles_.size()) {
-        gate.certified = false;
+        gate = {};
         sweep_retired_rows(context, retirement_work_);
         return;
     }
-    capture_retirement_inputs(gate.current);
+    const bool excess_capacity = capture_retirement_inputs(gate.current);
     const auto interval = static_cast<std::int64_t>(context.coordinate.interval_index);
     const bool unchanged = gate.certified && gate.cycle == current_position_cycle_
         && interval >= gate.interval && interval < gate.interval_expiry
         && last_broker_open_ms_ >= gate.broker_open && last_broker_open_ms_ <= gate.broker_expiry
         && gate.current == gate.saved;
-    if (unchanged) {
+    if (unchanged && !excess_capacity) {
 #ifndef NDEBUG
         // Use the original reader on these very inputs, including its phase
         // publication. Only retirement state must remain unchanged.
@@ -29464,13 +29484,22 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
     }
     gate.certified = false;
     std::swap(gate.saved, gate.current);
+    // Saved inputs are only compared, so only their distinct values need
+    // space. The refill buffer is compacted at its raw size during capture.
+    compact_retirement_set(gate.saved.roots);
+    compact_retirement_set(gate.saved.askable);
+    compact_retirement_set(gate.saved.groups);
+    compact_retirement_set(gate.saved.bar_numbers);
+    compact_retirement_set(gate.saved.marks);
     gate.interval_expiry = gate.broker_expiry = std::numeric_limits<std::int64_t>::max();
     const auto erased = placement_.erased_rows();
     sweep_retired_rows(context, retirement_work_);
+    // Refresh both buffers even after a removal, releasing obsolete capacity
+    // while uncertified and warming the next refill before certification.
+    capture_retirement_inputs(gate.current);
     // A removal can expose a new representative. Do not certify its result
     // until a later original sweep has proved there is no more work.
     if (placement_.erased_rows() != erased || !retired_row_scratch_.doomed.empty()) return;
-    capture_retirement_inputs(gate.current);
     if (!(gate.current == gate.saved)) return;
     gate.cycle = current_position_cycle_;
     gate.interval = interval;

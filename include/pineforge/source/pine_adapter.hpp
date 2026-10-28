@@ -3282,7 +3282,7 @@ private:
     };
     RetirementGate retirement_gate_;
     void invalidate_retirement() noexcept { retirement_gate_.certified = false; }
-    void capture_retirement_inputs(RetirementInputs&) const;
+    bool capture_retirement_inputs(RetirementInputs&) const;
     void observe_retirement_expiry(const PlacementSnapshot&, std::int64_t interval) noexcept;
     void sweep_retired_rows(const NativeDecisionContext&, RetirementWork&);
     void finish_retirement_phases();
