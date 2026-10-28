@@ -80,7 +80,7 @@ payload length supplies the extra-payload reservation. After the input commits,
 the checkpoint is inserted in its own admitted transaction while retaining the
 writer mutex, with a byte ceiling no greater than the input's reservation.
 Charging that payload to the boundary input is intended
-(`Ledger::commit_input`, `runner/store.cpp:1084`): the boundary input can hit a
+(`Ledger::commit_input`, `runner/store.cpp:1093`): the boundary input can hit a
 storage stop when the input alone would fit, up to the cumulative payload's
 reservation earlier than strictly necessary. This cost buys the guarantee that
 no input commits with a checkpoint admitted without room in its reservation.
@@ -133,7 +133,7 @@ document memory. Ledgers that first need reports or integrity digests populated
 retry after startup replay, before new inputs. Later opens add no startup copy
 when a checkpoint already exists.
 Startup and post-replay checkpoints intentionally have no input reservation
-behind them (`Ledger::checkpoint_recovered_report`, `runner/store.cpp:1210`;
+behind them (`Ledger::checkpoint_recovered_report`, `runner/store.cpp:1219`;
 the post-replay call is `checkpoint_recovered_report`, `runner/main.cpp:1039`).
 With a large budget, either can spend most of the remaining headroom on an
 O(T) payload before the first live input. The run can stop sooner, never over
@@ -252,8 +252,9 @@ pineforge-live probe --status-file status.json --max-age 3 --ready
   run (zero for a checkpoint verification failure). The additive `reason` is
   `budget` for a refused checkpoint admission, `build` for preparation or
   allocation failure, or `io` for database setup/write failure.
-  `budget_count`, `build_count` and `io_count` count those reasons separately
-  and sum to the existing `count`. Verification failures have null `reason`
+  `reason` names the most recent failure, while `budget_count`, `build_count`
+  and `io_count` are cumulative since the ledger was opened and `count` is their
+  sum. Verification failures have null `reason`
   and zero reason counts. The status file and stderr use the same diagnostic
   JSON fields.
 - `probe --status-file PATH --max-age S [--ready]` exits 0 only for a valid,
@@ -334,7 +335,11 @@ conditions. These numbers come from the
 for a write is `used + requested`; re-evaluating admission against unchanged
 ledger files retains that reservation and the exact limit admits the write.
 Physical growth can be less than the reservation. The minimum varies with the
-transaction and checkpoint debt. **64 MB (64,000,000 bytes)** is a workable
+transaction and checkpoint debt. The production-default checkpoint row shows
+that the observed request belongs to the contract's allowed set, is no larger
+than the logical-page (FULL) request, and admits at `used + request` with growth
+at most `request`; it does not pin the estimator to the resident-page count.
+**64 MB (64,000,000 bytes)** is a workable
 fresh-ledger budget for short ordinary inputs at both page sizes; the test
 covers initialization and 1/10/100-action inputs. Large payloads and history
 need additional space.

@@ -694,7 +694,7 @@ struct Ledger::Impl {
     int database_fd = -1;
     std::string path;
     std::uint64_t checkpoint_interval = kDefaultReportCheckpointInterval;
-    // Recording even an allocation failure must not allocate or throw.
+    // Best-effort failure recording does not allocate.
     std::atomic<std::uint64_t> checkpoint_write_failure{0};
     std::atomic<std::uint64_t> checkpoint_write_failures{0};
     mutable std::mutex checkpoint_diagnostic_mutex;
@@ -711,7 +711,7 @@ struct Ledger::Impl {
         if (lock_fd >= 0) close(lock_fd);
     }
 
-    void note_checkpoint_write_failure(std::uint64_t cursor, CheckpointWriteFailureReason reason) noexcept {
+    void note_checkpoint_write_failure(std::uint64_t cursor, CheckpointWriteFailureReason reason) {
         // Publish the reason counters and their existing total as one snapshot.
         std::lock_guard<std::mutex> lock(checkpoint_diagnostic_mutex);
         switch (reason) {
@@ -722,6 +722,15 @@ struct Ledger::Impl {
         checkpoint_write_failures.fetch_add(1);
         checkpoint_write_failure.store(cursor);
         checkpoint_write_reason = reason;
+    }
+
+    void try_note_checkpoint_write_failure(std::uint64_t cursor, CheckpointWriteFailureReason reason) noexcept {
+        try {
+            note_checkpoint_write_failure(cursor, reason);
+        } catch (...) {
+            // Locking can throw before any counter changes. Drop only this
+            // diagnostic so a skipped optional checkpoint cannot stop the run.
+        }
     }
 
     void try_report_checkpoint(std::uint64_t cursor, const CheckpointRow* prepared = nullptr,
@@ -758,11 +767,11 @@ struct Ledger::Impl {
                 throw;
             }
         } catch (const LedgerBudgetExceeded&) {
-            note_checkpoint_write_failure(cursor, CheckpointWriteFailureReason::budget);
+            try_note_checkpoint_write_failure(cursor, CheckpointWriteFailureReason::budget);
         } catch (const std::bad_alloc&) {
-            note_checkpoint_write_failure(cursor, CheckpointWriteFailureReason::build);
+            try_note_checkpoint_write_failure(cursor, CheckpointWriteFailureReason::build);
         } catch (...) {
-            note_checkpoint_write_failure(cursor, reason);
+            try_note_checkpoint_write_failure(cursor, reason);
         }
     }
 
@@ -1143,7 +1152,7 @@ void Ledger::commit_input(std::uint64_t index, const std::string& canonical_json
     }
     tx.commit();
     if (checkpoint_preparation_failed)
-        impl_->note_checkpoint_write_failure(index + 1, CheckpointWriteFailureReason::build);
+        impl_->try_note_checkpoint_write_failure(index + 1, CheckpointWriteFailureReason::build);
     if (checkpoint) impl_->try_report_checkpoint(index + 1, &*checkpoint, reserved_limit);
 }
 
@@ -1217,7 +1226,7 @@ void Ledger::checkpoint_recovered_report(std::uint64_t cursor) noexcept {
         }
         impl_->try_report_checkpoint(cursor);
     } catch (...) {
-        impl_->note_checkpoint_write_failure(cursor, CheckpointWriteFailureReason::io);
+        impl_->try_note_checkpoint_write_failure(cursor, CheckpointWriteFailureReason::io);
     }
 }
 
