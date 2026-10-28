@@ -25,7 +25,7 @@ if(TARGET SQLite3::SQLite3)
 else()
     set(_pf_sqlite_target SQLite::SQLite3)
 endif()
-target_link_libraries(pineforge_live_support PUBLIC ${_pf_sqlite_target} CURL::libcurl OpenSSL::Crypto Threads::Threads PineForge::pineforge)
+target_link_libraries(pineforge_live_support PUBLIC PineForge::pineforge ${_pf_sqlite_target} CURL::libcurl OpenSSL::Crypto Threads::Threads)
 target_compile_options(pineforge_live_support PRIVATE -Wall -Wextra -Wpedantic)
 add_library(pineforge_live_startup STATIC native_startup.cpp)
 target_compile_features(pineforge_live_startup PUBLIC cxx_std_17)
@@ -89,6 +89,10 @@ if(PINEFORGE_BUILD_TESTS)
     add_test(NAME test_native_live_startup COMMAND test_native_live_startup)
     add_test(NAME native_live_help COMMAND pineforge-live --help)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME native_live_checkpoint_e2e COMMAND ${Python3_EXECUTABLE}
+        ${PROJECT_SOURCE_DIR}/tests/native_live_checkpoint_e2e.py $<TARGET_FILE:pineforge-live>
+        $<TARGET_FILE:native_market_example>)
+    set_tests_properties(native_live_checkpoint_e2e PROPERTIES TIMEOUT 180)
     if(PINEFORGE_BUILD_SOURCE_LAYER)
         add_library(native_live_service_example MODULE ${PROJECT_SOURCE_DIR}/tests/native_live_service_strategy.cpp)
         target_link_libraries(native_live_service_example PRIVATE PineForge::pineforge)
@@ -173,7 +177,10 @@ if(PINEFORGE_BUILD_TESTS)
     target_include_directories(pineforge_live_legacy_test_support PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_definitions(pineforge_live_legacy_test_support PUBLIC PINEFORGE_LIVE_LEGACY_TEST_API)
     target_link_libraries(pineforge_live_legacy_test_support PUBLIC
-        ${_pf_sqlite_target} CURL::libcurl OpenSSL::Crypto Threads::Threads PineForge::pineforge)
+        PineForge::pineforge ${_pf_sqlite_target} CURL::libcurl OpenSSL::Crypto Threads::Threads)
+    add_executable(native_live_ledger_fixture_writer EXCLUDE_FROM_ALL
+        ${PROJECT_SOURCE_DIR}/tests/native_live_ledger_fixture_writer.cpp)
+    target_link_libraries(native_live_ledger_fixture_writer PRIVATE pineforge_live_legacy_test_support)
     foreach(native_test test_native_live_store test_native_live_websocket test_native_live_routing test_native_live_service)
         add_executable(${native_test} ${PROJECT_SOURCE_DIR}/tests/${native_test}.cpp)
         if(native_test STREQUAL "test_native_live_store")
@@ -184,7 +191,37 @@ if(PINEFORGE_BUILD_TESTS)
         target_compile_options(${native_test} PRIVATE -UNDEBUG)
         add_test(NAME ${native_test} COMMAND ${native_test})
     endforeach()
+    add_executable(test_native_live_report_cli ${PROJECT_SOURCE_DIR}/tests/test_native_live_report_cli.cpp)
+    target_link_libraries(test_native_live_report_cli PRIVATE pineforge_live_startup ${CMAKE_DL_LIBS})
+    target_compile_options(test_native_live_report_cli PRIVATE -UNDEBUG -ffp-contract=off)
+    add_dependencies(test_native_live_report_cli pineforge-live native_market_example)
+    add_test(NAME test_native_live_report_first_commit COMMAND test_native_live_report_cli
+        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_market_example> first-commit)
+    add_test(NAME test_native_live_report_summary_only COMMAND test_native_live_report_cli
+        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_market_example> summary-only)
+    add_test(NAME test_native_live_report_options COMMAND test_native_live_report_cli
+        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_market_example> options)
+    add_test(NAME test_native_live_report_default_recovery COMMAND test_native_live_report_cli
+        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_market_example> default-recovery)
+    set_tests_properties(test_native_live_report_first_commit test_native_live_report_summary_only
+        test_native_live_report_options test_native_live_report_default_recovery PROPERTIES TIMEOUT 180)
     set_tests_properties(test_native_live_websocket PROPERTIES SKIP_RETURN_CODE 77)
+    add_executable(test_native_live_checkpoint
+        ${PROJECT_SOURCE_DIR}/tests/test_native_live_checkpoint.cpp)
+    target_link_libraries(test_native_live_checkpoint PRIVATE pineforge_live_legacy_test_support)
+    target_compile_options(test_native_live_checkpoint PRIVATE -UNDEBUG)
+    add_test(NAME test_native_live_checkpoint COMMAND test_native_live_checkpoint)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_executable(test_native_live_checkpoint_measurement
+            ${PROJECT_SOURCE_DIR}/tests/test_native_live_checkpoint_measurement.cpp)
+        target_link_libraries(test_native_live_checkpoint_measurement PRIVATE
+            pineforge_live_legacy_test_support)
+        target_compile_options(test_native_live_checkpoint_measurement PRIVATE -UNDEBUG)
+        add_test(NAME test_native_live_checkpoint_measurement
+            COMMAND test_native_live_checkpoint_measurement)
+        set_tests_properties(test_native_live_checkpoint_measurement PROPERTIES
+            LABELS "slow;diagnostic" RUN_SERIAL TRUE)
+    endif()
     if(PINEFORGE_BUILD_SOURCE_LAYER)
         add_test(NAME native_live_routing_e2e COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/tests/native_live_routing_e2e.py $<TARGET_FILE:pineforge-live>
@@ -568,6 +605,12 @@ if(PINEFORGE_BUILD_TESTS)
         COMMAND test_live_report_accumulator growth)
     add_test(NAME test_live_ratio_export
         COMMAND test_live_report_accumulator export)
+    add_test(NAME test_native_live_report_exact_ratio_recovery COMMAND test_native_live_report_cli
+        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_market_example> exact-ratio-recovery)
+    add_test(NAME test_native_live_report_interval_ratio_recovery COMMAND test_native_live_report_cli
+        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_market_example> interval-ratio-recovery)
+    set_tests_properties(test_native_live_report_exact_ratio_recovery
+        test_native_live_report_interval_ratio_recovery PROPERTIES TIMEOUT 180)
     if(PINEFORGE_BUILD_SOURCE_LAYER)
         add_test(NAME native_live_ratio_interval_e2e COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/tests/native_live_ratio_interval_e2e.py $<TARGET_FILE:pineforge-live>

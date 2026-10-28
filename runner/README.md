@@ -32,38 +32,57 @@ computed order actions, not an exchange connection.
 ```sh
 pineforge-live report --ledger orders.sqlite3
 pineforge-live report --ledger orders.sqlite3 --deployment DEPLOYMENT --at-input 20
+pineforge-live report --ledger orders.sqlite3 --verify-full
 ```
 
 `report` exports canonical `pineforge-native-report/v1` JSON. `--at-input N`
 is a committed-message cursor (the number of messages, not the zero-based input
 index, action sequence or bar count); 0 denotes warmup. Omit it for the latest
 committed report. An unavailable cursor or mismatched optional deployment exits
-1. Reading is safe while a runner owns the ledger. Export re-verifies the whole
-committed report-integrity chain in one read snapshot, including inputs, stored
-state hashes and immutable actions, even for an earlier requested cursor.
-A missing or mismatched digest refuses export. These SHA-256 digests detect
-ledger corruption, not edits by someone able to replace both data and digests;
-only `run` recomputes engine state by replay. `run --report-jsonl` mirrors
-each newly committed `pineforge-native-report-delta/v1` payload to stdout,
-followed by the existing operational run summary. Use
-`run --report-jsonl=full` when a cumulative `pineforge-native-report/v1`
-document is required. Replay of source-prefix messages is not mirrored again.
+1. Reading is safe while a runner owns the ledger. Export uses the nearest
+verified report checkpoint at or below the requested cursor and folds only the
+following deltas. The checkpoint carries the cumulative report bytes, its
+report-integrity chain value and a payload hash. Default export and restart
+verify the report-integrity chain only from the nearest verified checkpoint
+onward; replayed report deltas below it are not compared individually.
+`report --verify-full` bypasses checkpoints and re-verifies every committed
+report-integrity row, including rows after a requested historical cursor.
+With no usable checkpoint, export retains this full-chain verification.
+Each export path checks its selected report-integrity rows in one read snapshot
+against their inputs, stored state hashes and immutable actions. A missing or
+mismatched report-integrity digest refuses export.
+A mismatched checkpoint witness falls back to full report reconstruction and
+records a typed diagnostic. These SHA-256 digests detect ledger corruption, not
+edits by someone able to replace both data and digests. A consistent edit of a
+checkpoint's payload and payload hash in the same row is not detected at
+default export; restart's equality check against the recomputed cumulative
+report refuses it. Only `run` recomputes engine state by replay.
+`run --report-jsonl` continues to mirror one cumulative
+`pineforge-native-report/v1` document per newly committed input, with unchanged
+bytes and field order. `run --report-jsonl=full` is an explicit alias with
+identical output. The new opt-in `run --report-jsonl=delta` mirrors the ledger's
+`pineforge-native-report-delta/v1` patch with an additional top-level integer
+`input_cursor` as the FIRST key of the line (the stored ledger row has no such
+key and begins with `schema_version`). Other option values are refused.
+Both streams begin after startup reads, warmup, recovery and the first new
+input's commit; the first committed input has cursor 1. Neither warmup nor
+replay of source-prefix messages is mirrored. To apply delta output, start with
+the cumulative document at the preceding cursor (`report --at-input 0` for a
+new run's warmup). Both streams end with the operational run summary.
+Without `--report-jsonl`, stdout contains exactly one line: that exit summary.
 A closed stdout pipe fails clearly with exit 1, never SIGPIPE; the last input
 and report are already durable, and export remains available.
 
-The input, engine hash, actions, cumulative report and its integrity digest commit in one SQLite
-transaction. Append-only `pineforge-native-report-delta/v1` rows contain changed
-scalar fields and appended/replaced array suffixes, not historical full-report
-copies. With the default ratio interval, export folds these rows through the
-selected cursor into byte-identical canonical report JSON.
-Recovery verifies each input's engine hash, actions and
-exact report delta before delivery. Existing full-report rows remain immutable
-and readable; recovery verifies them against the reconstructed full report, then
-new inputs use deltas. This avoids quadratic report storage without changing the
-export schema or batch engine computation. The delta serializer retains scalar
-state and array counts; a runner-owned accumulator also carries trade-stat folds
-and the equity series needed for exact ratios. `--report-jsonl=full` retains the
-cumulative document needed for full JSONL output.
+The input, engine hash, actions, report delta and its integrity digest commit in
+one SQLite transaction. Append-only `pineforge-native-report-delta/v1` rows
+contain changed scalar fields and appended/replaced array suffixes, not
+historical full-report copies. With the default ratio interval, export folds
+these rows through the selected cursor into byte-identical canonical report JSON.
+The runner-owned accumulator carries trade-stat folds and the equity series
+needed for exact ratios. All stream modes retain one cumulative document by
+applying the same suffix patches used in the ledger. Cumulative stdout, legacy
+report verification and checkpoint equality serialize that fold; they never
+rebuild a separate native report.
 
 `--ratio-interval K` takes a positive integer and defaults to 1. **K = 1 (the
 default) is unchanged behaviour:** every input's cumulative report and delta
@@ -80,28 +99,101 @@ K > 1 is an opt-in trade of per-input freshness for work for exactly these
 committed-message cursor is divisible by K, at the final input and at export.
 Cursor 0 initializes the warmup ratios. Between boundaries the four values
 retain their last computation, and every interval-mode
-`pineforge-native-report-delta/v1` adds `ratios_as_of_input`, the committed-message
+delta and cumulative document adds `ratios_as_of_input`, the committed-message
 cursor of that computation. The additive `ratio_context.chart_timezone` carries
-the civil-month clock required for exact read-only export. Both keys are outside
-`fields`; patch consumers can ignore them, and the cumulative report schema
-stays the same.
+the civil-month clock required for exact read-only export, including when a
+checkpoint supplies the prefix. Both keys are outside the delta's `fields`;
+patch consumers copy them to the cumulative document. K = 1 adds neither key.
 
 Finite files, `--check` snapshots and `--max-events` refresh a known final input
 before it commits. When EOF or shutdown reveals the end of a pipe/socket after
 its last commit, JSONL emits one extra ratio-refresh delta (or full document) at
 that same cursor before the operational summary. It adds no input or action.
 Export, including `--at-input`, refreshes the four ratios against the selected
-cursor's cumulative curve after verifying its immutable ledger rows. It leaves
-those stored deltas unchanged. Interval-mode ledgers bind K into their deployment
+cursor's cumulative curve after verifying its immutable ledger rows, and sets
+the exported freshness marker to that cursor. It leaves stored deltas and
+checkpoints unchanged. Interval-mode ledgers bind K into their deployment
 identity, so resuming requires the same K; K = 1 retains the existing identity.
 
 The ratio recomputation is still O(series), including its batch return mean and
 variance/downside passes. K = 1 pays that cost at every input; K > 1 pays it at
 the scheduled boundaries and final/export reads. Other ordinary-live report
-work is O(new/replaced rows) per input, plus current open lots and security
-diagnostics. A fixed K > 1 reduces ratio work frequency; it does not make the
-ratio recomputations independent of history. Full JSONL also writes the entire
-cumulative document.
+materialization and folding are O(new/replaced rows) per input, plus current
+open lots and security diagnostics. A fixed K > 1 reduces ratio work frequency;
+it does not make the ratio recomputations independent of history.
+
+At a checkpoint boundary, the cumulative checkpoint is prepared from that
+transaction's report state before admission. Its serialized
+payload length supplies the extra-payload reservation. After the input commits,
+the checkpoint is inserted in its own admitted transaction while retaining the
+writer mutex, with a byte ceiling no greater than the input's reservation.
+A checkpoint build or write failure records `write_failed` and continues with
+the input durable. If the separate transaction's actual page admission needs
+more room than reserved, only the checkpoint rolls back; the diagnostic count
+increases without latching a storage stop. Preparation still constructs and
+serializes an O(T) cumulative document at a boundary, where T is the full
+report size; it can delay the input loop and does
+not provide constant memory or constant export time.
+
+`--checkpoint-interval K` sets the first/base interval, default 1024 committed
+inputs. Subsequent boundaries double: K, 2K, 4K, ... . For a fixed K with all
+scheduled checkpoints present and usable, let N be the committed input count and
+`P = K * 2^j <= C < 2P` for a requested cursor C. Let Q be the nearest verified
+checkpoint, at least P. Export reads one checkpoint, one report snapshot to
+verify its witness, and exactly `C-Q` tail deltas. Thus the report rows read
+are exactly `C-Q+2` (`C-P+2` when Q=P), bounded by
+`2 + min(K * 2^j - 1, N - K * 2^j)` for cursors in that interval.
+This bounds report rows read, not all database lookups or output bytes.
+The tail approaches half the history only just before the next doubled
+boundary and resets to zero at that boundary; there is no fixed recent-tail
+cap. In general, with an actual nearest checkpoint Q, the count is `C-Q+2`.
+Without one, full reconstruction reads all `N+1` report rows, including
+warmup. Checkpoint-verification fallback performs that full reconstruction
+plus the rejected checkpoint probe; its counters describe the full path.
+Failed writes or changes to K can leave missing boundaries; the fixed-K
+geometric bound then does not apply. The existing JSON parser limit also
+applies: a checkpoint payload over 1 MiB is refused as `invalid_payload` and
+export reconstructs from the individual report rows. That fallback can return
+a larger report when each stored row fits the parser limit; no checkpoint
+read bound is claimed for it.
+
+This avoids quadratic report storage under bounded per-input report growth.
+If cumulative payload bytes satisfy `B(c) <= H + b*c`, the geometric
+checkpoints through N store at most `m*H + b*(2P-K)` payload bytes, where
+`m = 1 + floor(log2(N/K))` and P is the latest scheduled boundary (N >= K).
+This is O(N) for fixed H, b and K, plus O(log N) checkpoint metadata.
+For the test's exact model `B(c) = H + b*c` with `H <= b*K`, this sum is
+strictly less than `3*B(N)`; one startup checkpoint adds at most `B(N)`,
+giving a strict `4*B(N)` bound. These ratios apply to that growth model,
+not to arbitrary reports that shrink. Existing checkpoint rows are immutable
+and retained; these bounds cover the geometric schedule's new rows at fixed K.
+No checkpoint pruning policy is applied.
+
+Opening a nonempty ledger without checkpoints attempts its first checkpoint at
+the current cursor, before live intake. This startup step verifies and
+reconstructs the full report history, taking O(N) report-row work and O(T)
+document memory. Ledgers that first need reports or integrity digests populated
+retry after startup replay, before new inputs. Later opens add no startup copy
+when a checkpoint already exists.
+
+Recovery still replays every committed strategy input because the
+strategy state has no restore API; it verifies warmup, every input's engine hash
+and actions before delivery, verifies the recomputed report at the
+checkpoint and later inputs, and uses the checkpoint only for the report-side
+prefix. At the checkpoint boundary, restart compares the checkpoint payload
+with the same carried cumulative document that live stdout used, including
+interval-mode freshness metadata and in delta and no-stream modes. The stored
+freshness marker reproduces known non-periodic final boundaries during replay.
+Existing full-report rows remain immutable and readable; when recovery verifies
+one, it compares it with the recomputed cumulative document. New inputs use
+deltas. Strategy-state recovery remains full replay work.
+
+The batch `fill_report` and C exports are unchanged. Delta output costs
+O(new/replaced rows) per input and avoids quadratic output as history grows.
+Plain `--report-jsonl` and `--report-jsonl=full` keep the
+O(cumulative document) output cost per input, which can be quadratic over a
+growing run. All modes retain the cumulative JSON arrays and the accumulator's
+equity history; this is O(history) memory, not a flat-memory claim.
 Array suffix replacement assumes at most one provisional trailing element for
 equity points and broker hashes. The runner never enables tracing and refuses
 nonempty `trace`: traces can contain several records per bucket, so enabling
@@ -140,7 +232,8 @@ no report field is silently excluded from the confirmed-bar E2E comparison.
 pineforge-live run --strategy strategy.so --warmup history-15m.csv --script-tf 15 \
   --symbol EXCHANGE:SYMBOL --mode bars --feed - --ledger orders.sqlite3 \
   --status-file status.json --status-interval 1 --control-dir control \
-  --feed-idle-timeout 15 --feed-message-timeout 15 --max-ledger-bytes 1073741824
+  --feed-idle-timeout 15 --feed-message-timeout 15 --checkpoint-interval 1024 \
+  --max-ledger-bytes 1073741824
 pineforge-live probe --status-file status.json --max-age 3
 pineforge-live probe --status-file status.json --max-age 3 --ready
 ```
@@ -183,6 +276,13 @@ pineforge-live probe --status-file status.json --max-age 3 --ready
   on the next poll. A request rejected with `accept_failure` is visible in its
   acknowledgement, but is not logged or included in `control_errors`; submitters
   must inspect the acknowledgement rather than rely on the health counter alone.
+- `checkpoint_diagnostic` is null or the latest checkpoint failure this run,
+  with `code`, `cursor` and a sanitized `message`. Startup verification failures
+  and optional checkpoint build/write failures are also logged on stderr.
+  The field persists through recovery, running and stopped status, including
+  after a later successful checkpoint; it does not itself remove readiness.
+  Its `count` field counts optional checkpoint preparation/write failures this
+  run (zero for a checkpoint verification failure).
 - `probe --status-file PATH --max-age S [--ready]` exits 0 only for a valid,
   alive control-loop heartbeat no older than S seconds (integer 1..86400).
   Add `--ready` to also require readiness. Missing, malformed, future-dated,
@@ -215,19 +315,59 @@ pineforge-live probe --status-file status.json --max-age 3 --ready
   abandoned attempt.
 - Run/offline-redelivery exits: **0** normal completion or graceful signal
   stop; **1** fatal initialization, input, storage-I/O or internal failure;
-  **2** offline redelivery with selected failed/pending actions; **3** run
-  stopped at its storage budget. `actions --follow` retains exit 130 on a
-  signal. A supervisor's grace period must allow message computation/commit
+  **2** offline redelivery with selected failed/pending actions; **3** run or
+  offline redelivery stopped at its storage budget. `actions --follow` retains
+  exit 130 on a signal. A supervisor's grace period must allow message computation/commit
   (plus, after a fatal error or a storage-budget stop, the delivery drain); there is no claim that arbitrary strategy code is
   interruptible. Container liveness probes can detect a stalled control loop.
 - `--max-ledger-bytes N` budgets database + WAL + SHM bytes (0 disables it;
-  default 0; integer 0..INT64_MAX). Crossing the budget removes readiness,
-  stops intake after the current whole message and exits 3 without deleting
-  inputs, actions or reports. Recovery still verifies the ledger before
-  deciding to stop. It is a stop threshold, not a quota: one atomic message
-  and the bounded delivery drain can exceed it. Reserve free space for both;
-  an actual I/O failure exits 1. No automatic pruning or report retention
-  policy is applied.
+  default 0; integer 0..INT64_MAX). Service mode (`--status-file`) also retains
+  the unlimited default in this release: it does not require a budget.
+  Requiring one remains a pending policy decision, controlled by
+  `service_requires_ledger_budget`. The `--ledger-unbounded` opt-out is
+  implemented for that policy; a positive budget still applies with the opt-out.
+  With a finite budget, SQL changes stay in SQLite's page cache until admission
+  immediately before COMMIT. The runner reserves each accounted page once,
+  plus WAL, checkpoint and SHM overhead. It releases unreferenced clean pages
+  before counting this ledger's resident pages, so cache history and unrelated
+  SQLite allocations do not change a repeated write's reservation.
+  Insufficient space rolls back the whole transaction before database/WAL
+  growth, carries `used`,
+  `requested` and `limit` in a typed `scratch_capacity_exceeded` failure
+  (`resource: layout` names the ledger budget here), removes
+  readiness and exits 3. Earlier committed inputs, actions and reports stay
+  intact. Delivery is cancelled on an admission refusal; unfinished attempts
+  remain recoverable. The existing post-growth check and
+  `storage_below_budget` readiness field remain in use. An actual I/O failure
+  exits 1. Initialization and migrations also need admission space; a refusal
+  there can precede status publication. No automatic pruning or report
+  retention policy is applied.
+- `--checkpoint-interval K` writes cumulative report checkpoints at K, 2K, 4K,
+  ... committed inputs. K is the first/base interval, must be positive and
+  defaults to 1024. Checkpoints are report recovery aids; they do not serialize
+  or restore strategy state. Startup and recovery checkpoint writes use the
+  same admission; opening files already over a finite budget refuses before
+  any checkpoint is attempted.
+
+Headroom is approximately twice the accounted SQLite page bytes, plus any
+earlier WAL pages still owed to the main file, at most one sector of frame
+padding per WAL/checkpoint allowance, and SHM region rounding. For a 32-page
+bound, no earlier checkpoint debt, a WAL-index bound of 64 KiB and an existing
+32 KiB SHM file, the next write needs **428,320 bytes at 4 KiB pages** or
+**4,359,760 bytes at 64 KiB pages**, beyond current usage. A 2 MiB resident-page
+bound needs **4,383,520 / 4,359,760 bytes**, respectively, under the same
+conditions. These numbers come from the
+[reservation formula](../docs/live-ledger-budget.md). The exact minimum budget
+for a write is `used + requested`; re-evaluating admission against unchanged
+ledger files retains that reservation and the exact limit admits the write.
+Physical growth can be less than the reservation. The minimum varies with the
+transaction and checkpoint debt. **64 MB (64,000,000 bytes)** is a workable
+fresh-ledger budget for short ordinary inputs at both page sizes; the test
+covers initialization and 1/10/100-action inputs. Large payloads and history
+need additional space.
+Auto-vacuum or unavailable cache observation uses the whole logical page
+count as the bound; the accounting guide states the larger headroom and the
+finite-budget migration rule.
 
 ### Live redelivery control files
 
@@ -278,8 +418,22 @@ retained; the oldest are removed during polling. Durable audit stays in SQLite,
 not the acknowledgment files. The control directory is outside the
 ledger budget. Without `--control-dir`, `redeliver` remains offline, reads only
 the selected target's secret and refuses while the runner holds the lock.
+Offline redelivery accepts `--max-ledger-bytes N` (default 0, unlimited);
+attempts and results use the same admission as `run`. Live submissions use the
+running owner's budget.
 
 The additive ledger tables/columns are migrated while holding its writer lock.
+Delivery counts and oldest-pending indexes are rebuilt once from the existing
+rows and verified in that migration transaction. Later delivery and status work
+uses the summaries and indexes; status visits targets rather than historical
+actions or attempts. Counters update in the same transaction as their source
+rows, including failed redelivery and legacy acknowledgements.
+Permanent summary storage adds one `delivery_state` row per action and up to
+three partial-index entries for pending, unsent and oldest-pending lookup.
+The row and oldest index copy the target name. `delivery_targets` adds one
+row, a primary-key index entry and an eligible pending-index entry per distinct
+target, shared by its actions. These grow alongside the original action and
+attempt history; there is no pruning.
 This is a one-way runner upgrade: back up the ledger before upgrading; earlier
 runner versions cannot open the migrated database. Strategy/deployment identity
 and historical action payload bytes remain unchanged.
@@ -646,10 +800,12 @@ process; it never continues with an advanced but uncommitted strategy.
 
 Restart uses the original strategy/warmup/settings, reconstructs the same
 native instance by replaying committed inputs, and compares hashes and every
-action payload before sending anything. Strategy private members are not
+action payload before sending anything. Report export can start at a verified
+checkpoint, but restart cannot restore strategy state from it and therefore
+still replays the committed strategy inputs. Strategy private members are not
 serialized: hand-written strategies must be deterministic and avoid external
-I/O/random state influencing decisions. The hash covers observable engine
-and stream state, not arbitrary C++ private variables.
+I/O/random state influencing decisions. The hash covers observable engine and
+stream state, not arbitrary C++ private variables.
 
 Replay fails closed if changed timezone rules or session configuration make
 recorded input incompatible with the calendar. A cadence or input-gap refusal

@@ -4745,6 +4745,21 @@ environment defaults for spec fields. Omitted CLI clock/symbol flags take the
 file. Explicit `--input-tf`, `--script-tf`, `--timezone`, `--session`,
 `--chart-timezone`, or `--symbol` must equal the file.
 
+Live report export uses immutable cumulative checkpoints at K, 2K, 4K, ...
+committed inputs; `--checkpoint-interval K` selects the positive first
+interval, default 1024. The input admission includes the serialized checkpoint
+payload; the checkpoint then uses its own admitted transaction after the input
+commit. A checkpoint failure is optional and published as a diagnostic.
+Startup and recovery checkpoints use the same byte budget. Export starts at
+the nearest verified checkpoint Q and reads C-Q tail deltas at cursor C,
+plus one checkpoint and its witness snapshot. Missing or failed checkpoints
+use full reconstruction. Export and restart verify the report chain only from
+the checkpoint; `report --verify-full` verifies every committed report row.
+Checkpoints do not serialize strategy state: restart still replays the committed
+strategy inputs because the stream ABI has no state restore operation. See the
+[runner guide](../../runner/README.md) for the geometric read/storage bounds,
+checkpoint validation and preparation costs.
+
 `input_mode` is the CLI `--mode` (`bars` or `ticks`), not a JSON key.
 Timestamps in the spec, warmup CSV, and JSONL are Unix milliseconds.
 

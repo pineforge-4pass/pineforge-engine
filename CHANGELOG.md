@@ -36,6 +36,21 @@ diagnostics keys, described below.
 - The release harness file `docker/run_json.py` changed (below). The hub image
   for this pair carries the 1.8.0 copy.
 
+### Live ledger resource control
+
+- Ledger writes now reserve payload and SQLite overhead before growth and
+  refuse a whole transaction with a typed storage-budget failure. Service and
+  ordinary runs keep their unlimited default in this release; requiring a
+  service budget remains a pending policy decision. The `--ledger-unbounded`
+  opt-out is available for that policy. Offline redelivery accepts the same
+  `--max-ledger-bytes` budget.
+- Delivery status uses transactional counters and oldest-pending indexes,
+  keeping status work independent of action and attempt history. Existing
+  ledgers acquire verified summaries in an automatic, one-way migration;
+  earlier runners cannot open the migrated database. The summaries add one
+  row and up to three partial-index entries per action, plus per-target rows
+  and indexes.
+
 ### Run profile in the report diagnostics
 
 - **Two additive success keys.** Every executed success report of
@@ -79,7 +94,46 @@ diagnostics keys, described below.
   per-record sink parse and the dense-script close path are separate work, not in
   this release.
 
+### Native live report checkpoints
+
+The live runner now writes immutable cumulative report checkpoints at K, 2K,
+4K, ... committed inputs. `--checkpoint-interval K` sets the first/base interval
+(default 1024). For fixed K and bounded per-input report growth, geometric
+checkpoints use linear payload storage. Report export starts at the nearest
+verified checkpoint P, reading its witness snapshot and C-P tail deltas for
+cursor C; the tail approaches half the history just before the next doubling.
+The runner README gives the exact report-row and stored-payload bounds.
+
+Checkpoint preparation precedes input admission, which reserves its serialized
+cumulative payload. Its separate insert transaction runs after the input
+commit and admits its pages within that reservation. A failed checkpoint records
+a typed diagnostic and counter and leaves that input durable so the service can
+continue. An old ledger gets its first checkpoint
+during open/startup recovery, before new inputs; this initial reconstruction
+reads the full history. Each boundary still builds an O(T) document for a
+report of size T.
+
+Default export and restart verify the report chain only from the nearest
+checkpoint onward. `report --verify-full` re-verifies the whole committed chain.
+A payload or integrity witness failure falls back to full report
+reconstruction; startup failures are published on stderr and in the service
+status file's `checkpoint_diagnostic` field.
+
+The checkpoint contains report state only. The engine has no state restore
+entry point, so restart recovery still replays committed strategy inputs and
+validates their state hashes and actions. The diagnostic measurement row prints
+the lab's file, WAL, RSS, descriptor and timing values; this release does not
+claim those unmeasured values in its documentation.
+
 ### Native live report stream
+
+The development entries below are retained in order. The cumulative stream
+default in the later entry supersedes the earlier delta default; the carried
+accumulator in the earlier entry closes the later entry's remaining native
+rebuild term. All stream modes now retain the cumulative fold for checkpoint
+verification. Interval-mode cumulative documents also carry `ratios_as_of_input`
+and `ratio_context`; export refreshes the ratios and marker without changing
+stored checkpoints.
 
 - **Delta JSONL is the default.** `pineforge-live run --report-jsonl` now
   emits one `pineforge-native-report-delta/v1` document for each committed
@@ -108,6 +162,25 @@ diagnostics keys, described below.
   K = 1 and at the scheduled boundaries for K > 1. Other ordinary-live
   per-input report work is O(new/replaced rows), including current open lots
   and diagnostics; full JSONL still writes the whole cumulative document.
+- **Delta JSONL is opt-in; the default stream is unchanged.**
+  `pineforge-live run --report-jsonl` continues to emit one cumulative
+  `pineforge-native-report/v1` document per committed input, with the same
+  bytes and field order. `--report-jsonl=full` is an explicit alias with
+  identical output. The new `--report-jsonl=delta` emits the ledger's
+  `pineforge-native-report-delta/v1` patch with an additional top-level integer
+  `input_cursor` as the first key of the line (the stored ledger row has no
+  such key), beginning at the same commit point as the cumulative stream.
+- **The runner no longer rescans the closed-trade prefix per input; delta
+  output is linear in the appended rows.** The native `fill_report` call still
+  rebuilds the engine's trade and equity/metrics report on each input; removing
+  that remaining term needs an engine-side carried report accumulator and a
+  separate batch-byte equivalence proof. The runner carries a closed-trade
+  high-water mark in every mode. Delta output costs O(new rows) per input,
+  avoiding quadratic output as history grows. Runs without a report stream
+  and runs with `--report-jsonl=delta` retain only scalar state and array
+  counts. Plain `--report-jsonl` and `--report-jsonl=full` retain the cumulative
+  document and keep the old O(cumulative document) output cost per input,
+  which can be quadratic over a growing run.
 
 ### Scratch placement (behaviour of 1.7.0 and later, restated)
 
@@ -2366,10 +2439,10 @@ release either.
   report. Each export re-verifies an append-only SHA-256 integrity chain over
   the committed inputs, stored state hashes, actions and report rows, so a
   ledger written before 1.2.0 needs one verified `run` replay to fill in its
-  reports and digests before it exports. The 1.2.0 runner mirrored each new
-  cumulative report to stdout; current 1.8.0 uses the delta stream by default
-  and `run --report-jsonl=full` retains that cumulative shape. A closed pipe
-  exits 1, not SIGPIPE, and loses no input.
+  reports and digests before it exports. `run --report-jsonl` mirrors each new
+  cumulative report to stdout as before; `run --report-jsonl=full` is an
+  explicit alias, and `run --report-jsonl=delta` opts into delta output.
+  A closed pipe exits 1, not SIGPIPE, and loses no input.
   The runner keeps tracing off and refuses to export a nonempty trace. A
   confirmed-bar run's report is checked field by field against a batch
   backtest of the same bars; the one tested difference is that a batch seals a

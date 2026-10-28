@@ -150,26 +150,6 @@ inline Json native_report_json(const pf_report_t& report,
     return result;
 }
 
-inline Json native_report_document(const pf_report_t& report, const std::string& deployment,
-                                   std::uint64_t cursor, std::uint64_t state_hash) {
-    auto fields = native_report_json(report);
-    Json closed;
-    closed.kind = Json::Kind::Array;
-    for (std::int64_t index = 0; index < report.trades_len; ++index)
-        if (!report.trades[index].open_at_end)
-            closed.items.push_back(report_trade(report.trades[index]));
-    const auto& curve = fields.at("equity_curve").items;
-    return Json::object({
-        {"schema_version", Json::string("pineforge-native-report/v1")},
-        {"deployment", Json::string(deployment)},
-        {"input_cursor", report_number(cursor)},
-        {"state_hash", Json::string(std::to_string(state_hash))},
-        {"equity", curve.empty() ? Json{} : curve.back().at("equity")},
-        {"open_profit", curve.empty() ? Json{} : curve.back().at("open_profit")},
-        {"report", std::move(fields)},
-        {"closed_trades", std::move(closed)}});
-}
-
 inline Json native_report_json(const pineforge::report::LiveReportPatch& patch) {
     // Reuse the scalar serializer with genuinely empty arrays. Only the
     // explicit patch views below ever index suffix storage.
@@ -264,6 +244,8 @@ public:
         for (std::size_t index = closed_trade_high_water_;
              index < static_cast<std::size_t>(report.trades_len); ++index) {
             ++closed_trade_visits_;
+            // fill_trades_section emits closed rows before range-end open rows,
+            // so a closed row after this open suffix is unreachable by design.
             if (report.trades[index].open_at_end)
                 break;
             closed.items.push_back(report_trade(report.trades[index]));
@@ -369,12 +351,11 @@ public:
     }
     std::string json() const {
         if (!document_)
-            throw std::runtime_error("full cumulative report requires --report-jsonl=full");
+            throw std::runtime_error("cumulative report document was not retained");
         return document_->dump();
     }
-    std::string full_json(const pf_report_t& report, const std::string& deployment,
-                          std::uint64_t cursor, std::uint64_t state_hash) const {
-        return native_report_document(report, deployment, cursor, state_hash).dump();
+    std::string full_json() const {
+        return json();
     }
     std::size_t closed_trade_visits() const noexcept { return closed_trade_visits_; }
 private:

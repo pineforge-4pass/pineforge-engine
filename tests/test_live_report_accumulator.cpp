@@ -3,6 +3,7 @@
 #include "../src/live_report.hpp"
 #include "../src/native_execution_consumer.hpp"
 #include "../runner/report.hpp"
+#include "live_report_document_oracle.hpp"
 #include "../runner/store.hpp"
 #include "native_report_truth_fixture.hpp"
 
@@ -28,6 +29,8 @@ void merge(Json& into, const Json& fields) {
 }
 void apply(Json& into, const Json& delta) {
     merge(into, delta.at("fields"));
+    for (const auto* name : {"ratios_as_of_input", "ratio_context"})
+        if (const auto* value = delta.find(name)) into.members[name] = *value;
     for (const auto& item : delta.at("arrays").members) {
         auto& owner = item.first == "closed_trades" ? into : into.members["report"];
         auto& values = owner.members[item.first];
@@ -172,7 +175,14 @@ Result exercise(int inputs, std::uint64_t interval, const std::string& zone,
                 Json::object({{"type", Json::string("time")},
                     {"ts", report_number(bars[static_cast<std::size_t>(i + 2)].timestamp)}}).dump(),
                 hash, {}, bytes);
-            assert(LedgerView(stored.path).report_json(i) == expected.dump());
+            auto exported_expected = expected;
+            if (interval > 1) {
+                exported_expected.members["ratios_as_of_input"] = report_number(i);
+                exported_expected.members["ratio_context"] = Json::object({
+                    {"chart_timezone", Json::string(zone)}});
+            }
+            assert(LedgerView(stored.path).report_json(i) == exported_expected.dump());
+            assert(LedgerView(stored.path).report_json_full(i) == exported_expected.dump());
             // Export is read-only: the stored input payload remains the
             // interval delta, including its original ratio freshness marker.
             if (i) assert(stored.ledger->input(i - 1)->report_json == bytes);
@@ -202,6 +212,9 @@ Result exercise(int inputs, std::uint64_t interval, const std::string& zone,
             assert(delta.at("ratios_as_of_input").integer<std::uint64_t>() == as_of);
             assert(ratios(applied).dump() == last_ratios.dump());
             set_ratios(expected, last_ratios);
+            expected.members["ratios_as_of_input"] = report_number(as_of);
+            expected.members["ratio_context"] = Json::object({
+                {"chart_timezone", Json::string(zone)}});
             assert(applied.dump() == expected.dump());
         }
         assert(deltas.json() == applied.dump());
@@ -227,10 +240,15 @@ Result exercise(int inputs, std::uint64_t interval, const std::string& zone,
                                                      actual.stream_state_hash()));
     apply(applied, final_delta);
     BatchReport final_batch(reference);
-    const auto expected = native_report_document(final_batch.c(), "seeded", inputs,
-                                                 actual.stream_state_hash()).dump();
-    assert(applied.dump() == expected);
-    assert(deltas.json() == expected);
+    auto expected = native_report_document(final_batch.c(), "seeded", inputs,
+                                           actual.stream_state_hash());
+    if (interval > 1) {
+        expected.members["ratios_as_of_input"] = report_number(inputs);
+        expected.members["ratio_context"] = Json::object({
+            {"chart_timezone", Json::string(zone)}});
+    }
+    assert(applied.dump() == expected.dump());
+    assert(deltas.json() == expected.dump());
     const auto input_count = static_cast<std::uint64_t>(inputs);
     assert(carried.work().ratio_recomputations
         == input_count / interval + (input_count % interval != 0));

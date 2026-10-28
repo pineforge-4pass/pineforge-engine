@@ -28,6 +28,17 @@ inline void apply_report_delta(Json& document, const Json& delta) {
     if (delta.at("schema_version").text() != "pineforge-native-report-delta/v1")
         throw std::runtime_error("unsupported cumulative report delta");
     merge_report_fields(document, delta.at("fields"));
+    if (const auto* as_of = delta.find("ratios_as_of_input")) {
+        if (as_of->integer<std::uint64_t>() > document.at("input_cursor").integer<std::uint64_t>())
+            throw std::runtime_error("invalid interval report ratio cursor");
+        const auto& context = delta.at("ratio_context");
+        const auto zone = context.at("chart_timezone").text();
+        if (const auto* previous = document.find("ratio_context"))
+            if (previous->at("chart_timezone").text() != zone)
+                throw std::runtime_error("interval report ratio clock changed");
+        document.members["ratios_as_of_input"] = *as_of;
+        document.members["ratio_context"] = context;
+    }
     for (const auto& [name, patch] : delta.at("arrays").members) {
         auto& owner = name == "closed_trades" ? document : document.members["report"];
         owner.kind = Json::Kind::Object;

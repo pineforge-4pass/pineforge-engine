@@ -87,9 +87,13 @@ def main():
         assert len(default_rows) == count
         document = {}
         apply_delta(document, json.loads(stored_rows(default_path)[0][1]))
-        for cursor, delta in enumerate(default_rows, 1):
-            assert "ratios_as_of_input" not in delta
-            apply_delta(document, delta)
+        default_stored = dict(stored_rows(default_path))
+        for cursor, cumulative in enumerate(default_rows, 1):
+            assert cumulative["schema_version"] == "pineforge-native-report/v1"
+            assert type(cumulative["input_cursor"]) is int and cumulative["input_cursor"] == cursor
+            assert "ratios_as_of_input" not in cumulative
+            apply_delta(document, json.loads(default_stored[cursor]))
+            equal(document, cumulative)
             equal(batches[cursor], document["report"])
 
         def compare_interval(path, result, final_cursor, extra_refresh):
@@ -97,25 +101,41 @@ def main():
             assert summary["inputs_committed"] == final_cursor
             assert len(rows) == final_cursor + int(extra_refresh)
             accumulated = {}
-            apply_delta(accumulated, json.loads(stored_rows(path)[0][1]))
+            stored = dict(stored_rows(path))
+            apply_delta(accumulated, json.loads(stored[0]))
             as_of = 0
-            for cursor, delta in enumerate(rows[:final_cursor], 1):
+            for cursor, cumulative in enumerate(rows[:final_cursor], 1):
                 if cursor % interval == 0 or (cursor == final_cursor and not extra_refresh):
                     as_of = cursor
-                assert delta["ratios_as_of_input"] == as_of
-                apply_delta(accumulated, delta)
+                assert cumulative["schema_version"] == "pineforge-native-report/v1"
+                assert cumulative["input_cursor"] == cursor
+                assert cumulative["ratios_as_of_input"] == as_of
+                equal({"chart_timezone": "UTC"}, cumulative["ratio_context"])
+                apply_delta(accumulated, json.loads(stored[cursor]))
+                equal(accumulated, cumulative)
                 expected = copy.deepcopy(batches[cursor])
                 expected["metrics"]["equity"].update(ratio_fields(batches[as_of]))
                 equal(expected, accumulated["report"])
             if extra_refresh:
                 assert rows[-1]["ratios_as_of_input"] == final_cursor
-                apply_delta(accumulated, rows[-1])
+                assert rows[-1]["input_cursor"] == final_cursor
+                assert rows[-1]["schema_version"] == "pineforge-native-report/v1"
+                expected_refresh = copy.deepcopy(accumulated)
+                expected_refresh["report"]["metrics"]["equity"].update(ratio_fields(batches[final_cursor]))
+                expected_refresh["ratios_as_of_input"] = final_cursor
+                equal(expected_refresh, rows[-1])
+                accumulated = rows[-1]
             equal(batches[final_cursor], accumulated["report"])
             before = stored_rows(path)
             for cursor in (0, 1, 6, 7, min(9, final_cursor), final_cursor):
                 exported = checked([runner, "report", "--ledger", str(path),
                                     "--at-input", str(cursor)])
-                equal(batches[cursor], json.loads(exported.stdout)["report"])
+                document = json.loads(exported.stdout)
+                equal(batches[cursor], document["report"])
+                assert document["ratios_as_of_input"] == cursor
+                verified = checked([runner, "report", "--ledger", str(path),
+                                    "--at-input", str(cursor), "--verify-full"])
+                assert verified.stdout == exported.stdout
             assert stored_rows(path) == before
             return accumulated
 
@@ -138,6 +158,23 @@ def main():
         rows, summary = output_rows(pipe_replay)
         assert summary["inputs_processed"] == 0 and len(rows) == 1
         assert rows[0]["ratios_as_of_input"] == count
+        delta_path = root / "delta-pipe.sqlite3"
+        delta_command = command(delta_path, interval, "-")
+        delta_command[delta_command.index("--report-jsonl")] = "--report-jsonl=delta"
+        deltas, summary = output_rows(checked(delta_command, input_text=feed_text))
+        assert summary["inputs_committed"] == count and len(deltas) == count + 1
+        accumulated = {}
+        apply_delta(accumulated, json.loads(stored_rows(delta_path)[0][1]))
+        for index, delta in enumerate(deltas):
+            cursor = min(index + 1, count)
+            as_of = count if index == count else cursor // interval * interval
+            assert type(delta["input_cursor"]) is int and delta["input_cursor"] == cursor
+            assert delta["ratios_as_of_input"] == as_of
+            apply_delta(accumulated, delta)
+            expected = copy.deepcopy(batches[cursor])
+            expected["metrics"]["equity"].update(ratio_fields(batches[as_of]))
+            equal(expected, accumulated["report"])
+        assert json.loads(stored_rows(delta_path)[-1][1])["ratios_as_of_input"] == count // interval * interval
         max_path = root / "max.sqlite3"
         limited = checked(command(max_path, interval) + ["--max-events", "9"])
         compare_interval(max_path, limited, 9, False)
