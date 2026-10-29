@@ -613,6 +613,14 @@ if(PINEFORGE_BUILD_TESTS)
         test_native_live_report_interval_ratio_recovery PROPERTIES TIMEOUT 180)
     add_test(NAME test_native_live_report_memory COMMAND test_native_live_report_cli
         $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_live_report_example> memory)
+    add_executable(test_native_live_report_curve_staging_work
+        ${PROJECT_SOURCE_DIR}/tests/test_native_live_report_curve_staging_work.cpp)
+    target_include_directories(test_native_live_report_curve_staging_work PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(test_native_live_report_curve_staging_work PRIVATE pineforge_live_support pineforge_live_report)
+    target_compile_options(test_native_live_report_curve_staging_work PRIVATE -UNDEBUG -ffp-contract=off)
+    add_test(NAME test_native_live_report_curve_staging_work
+        COMMAND test_native_live_report_curve_staging_work)
+    set_tests_properties(test_native_live_report_curve_staging_work PROPERTIES TIMEOUT 180)
     add_test(NAME test_native_live_report_storage_stop_refresh COMMAND test_native_live_report_cli
         $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_live_report_example> storage-stop-refresh)
     add_test(NAME test_native_live_report_ratio_marker_replay COMMAND test_native_live_report_cli
