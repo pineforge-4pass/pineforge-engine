@@ -7474,11 +7474,14 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         ${PROJECT_SOURCE_DIR}/include
         ${PROJECT_BINARY_DIR}/include
         ${PROJECT_SOURCE_DIR}/src)
-    target_compile_options(test_engine_layout_probe PRIVATE -std=c++17 -ffp-contract=off -UNDEBUG)
+    target_compile_options(test_engine_layout_probe PRIVATE -std=c++17 -ffp-contract=off -UNDEBUG
+        -ffunction-sections -fdata-sections)
     # The probe links no engine library and only prints compile-time constants;
     # headers it includes reference library-defined type information that no
-    # executed code touches, so unresolved symbols are tolerated at link time.
-    target_link_options(test_engine_layout_probe PRIVATE -Wl,--unresolved-symbols=ignore-all)
+    # executed code touches. Unused sections are dropped at link time so no
+    # unresolved relocation reaches the executable.
+    target_link_options(test_engine_layout_probe PRIVATE -Wl,--gc-sections
+        -Wl,--unresolved-symbols=ignore-all)
 endif()
 # --- CR-150 engine-layout end ---
 
