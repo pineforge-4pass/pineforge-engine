@@ -2,6 +2,7 @@
 #include <pineforge/native_host.hpp>
 #include <pineforge/report_sink.h>
 #include <pineforge/run_failure.hpp>
+#include <pineforge/run_budget.h>
 #include "../src/report_sink_writer.hpp"
 #include "../src/resource_clock.hpp"
 
@@ -11,12 +12,15 @@
 #include <cstdio>
 #include <fcntl.h>
 #include <limits.h>
+#include <limits>
 #include <signal.h>
 #include <stdexcept>
 #include <string>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
+#include <type_traits>
 #include <unistd.h>
+#include <vector>
 
 namespace {
 using namespace pineforge;
@@ -24,15 +28,23 @@ using namespace pineforge;
 // derives its row count from the measured kernel capacity below.
 constexpr std::size_t window_bytes = 64 * 1024;
 constexpr std::size_t payload_bytes = 2 * window_bytes;
-// The operational stall policy is 30 s; the injected rows require no real
-// wait. A real blocked row gets 2*30 s + 1 s setup, even under instrumentation.
-constexpr std::int64_t stall_ms = 30 * 1000;
+// Choose S=300*the documented 1 ms sampling floor, hence P=S/300=1 ms.
+// Real stalls also use S: 300 samples leave a wide margin above one cadence.
+constexpr std::int64_t sample_floor_ms = 1, sample_ceiling_ms = 100;
+constexpr std::int64_t stall_ms = 300 * sample_floor_ms;
 constexpr std::int64_t sample_ms = stall_ms / 300;
-constexpr unsigned timeout_seconds = (2 * stall_ms + 999) / 1000 + 1;
-std::int64_t wall = 0;
+// The default witness crosses twice the former 30 s policy on virtual time.
+// Retain that duration as the real harness allowance for the one-byte reader
+// under instrumentation: ceil(2*former_stall_ms/1000)+1, never a sink limit.
+constexpr std::int64_t former_stall_ms = 30 * 1000;
+constexpr unsigned timeout_seconds = (2 * former_stall_ms + 999) / 1000 + 1;
+std::int64_t wall = 0, configured_stall_ms = stall_ms;
 int reader_fd = -1, wakes = 0;
+int clock_reads = 0;
 bool progressing = false, interrupted = false, drain_all = false, socket_reader = false;
 bool close_on_wake = false, drain_once = false;
+bool hold_default = false, observed_default_wait = false;
+report_sink::LineWriter* waiting_writer = nullptr;
 std::string consumed;
 
 void require(bool ok, const char* text) {
@@ -40,6 +52,7 @@ void require(bool ok, const char* text) {
 }
 
 int clock_read(clockid_t kind, timespec* out) {
+    ++clock_reads;
     const auto ms = kind == CLOCK_MONOTONIC ? wall : 0;
     out->tv_sec = ms / 1000;
     out->tv_nsec = (ms % 1000) * 1000000;
@@ -47,11 +60,35 @@ int clock_read(clockid_t kind, timespec* out) {
 }
 
 int poll_wait(pollfd* fds, nfds_t count, int timeout) {
-    require(timeout > 0 && timeout <= stall_ms, "poll must have a finite stall timeout");
     ++wakes;
     const int ready = ::poll(fds, count, 0);
     if (ready != 0) return ready;
-    wall += timeout;
+    if (hold_default) {
+        // No reads at the first blocked wait; only virtual time advances.
+        wall += 2 * former_stall_ms;
+        hold_default = false;
+        errno = EINTR;
+        return -1;
+    }
+    if (configured_stall_ms == 0) {
+        require(timeout == -1, "off sink must retain an indefinite blocking poll");
+        if (!observed_default_wait) {
+            require(wall == 2 * former_stall_ms && consumed.empty()
+                        && (!waiting_writer || !waiting_writer->diagnostics().complete),
+                    "off sink must still be waiting before the reader drains");
+            require(clock_reads == 0, "off sink must not sample resource clocks");
+            observed_default_wait = true;
+        }
+    } else {
+        const auto cadence = std::clamp(configured_stall_ms / 300,
+                                       sample_floor_ms, sample_ceiling_ms);
+        require(timeout > 0 && timeout <= cadence,
+                "poll cadence must respect the configured interval and sampling clamps");
+        if (wakes == 1)
+            require(timeout == std::min(cadence, configured_stall_ms),
+                    "first poll must use the derived sampling cadence");
+    }
+    if (timeout > 0) wall += timeout;
     if (close_on_wake) {
         require(::close(reader_fd) == 0, "close socket peer during wait");
         reader_fd = -1;
@@ -92,9 +129,11 @@ int poll_wait(pollfd* fds, nfds_t count, int timeout) {
 struct Scope {
     Scope(bool slow, bool signals, bool fast = false) {
         wall = wakes = 0;
+        clock_reads = 0; configured_stall_ms = stall_ms;
         progressing = slow; interrupted = signals; consumed.clear();
         drain_all = fast;
         socket_reader = close_on_wake = drain_once = false;
+        hold_default = observed_default_wait = false; waiting_writer = nullptr;
         resource_clock::read_clock = clock_read;
         resource_clock::wait_poll = poll_wait;
     }
@@ -166,6 +205,22 @@ struct Pipe {
 
 const report_sink::RecordSet records{false, true, false, 0, 0};
 
+// Keep new rows compilable against the old public writer declaration, so an
+// absent configuration method fails at runtime rather than at setup.
+template<class Writer>
+auto configure_stall_impl(Writer& writer, std::int64_t interval, int)
+    -> decltype(writer.set_sink_stall_ms(std::uint64_t{}), void()) {
+    writer.set_sink_stall_ms(static_cast<std::uint64_t>(interval));
+    configured_stall_ms = interval;
+}
+template<class Writer>
+void configure_stall_impl(Writer&, std::int64_t, ...) {
+    require(false, "writer stall configuration is absent");
+}
+void configure_stall(report_sink::LineWriter& writer, std::int64_t interval) {
+    configure_stall_impl(writer, interval, 0);
+}
+
 void emit(report_sink::LineWriter& writer, std::size_t rows = 1) {
     writer.write_header(records);
     const pf_trace_entry_t trace{0, 0, 0, 1.0};
@@ -174,7 +229,8 @@ void emit(report_sink::LineWriter& writer, std::size_t rows = 1) {
     writer.write_trailer();
 }
 
-void blocked_row(bool nonblocking, bool signals, bool socket, bool real_time) {
+void blocked_row(bool nonblocking, bool signals, bool socket, bool real_time,
+                 std::int64_t interval = stall_ms) {
     Scope scope(false, signals);
     if (real_time) {
         resource_clock::read_clock = nullptr;
@@ -184,6 +240,7 @@ void blocked_row(bool nonblocking, bool signals, bool socket, bool real_time) {
     const pf_report_sink_fd_v1 sink{sizeof sink, 1, pipe.write_fd, "stall-test"};
     {
         report_sink::LineWriter writer(sink);
+        configure_stall(writer, interval);
         bool stopped = false;
         try { emit(writer); }
         catch (const report_sink::WriterError& error) {
@@ -204,8 +261,10 @@ void blocked_row(bool nonblocking, bool signals, bool socket, bool real_time) {
     require(::fcntl(pipe.write_fd, F_GETFL) == pipe.flags,
             "stall cleanup must preserve the borrowed descriptor and flags");
     if (!real_time)
-        require(wall >= stall_ms && wall <= 2 * stall_ms,
+        require(wall >= interval && wall <= 2 * interval,
                 "stall expiry must be bounded even with repeated EINTR");
+    if (!real_time)
+        require(wall == interval, "stall expiry must honor the exact configured interval");
 }
 
 void socket_closed_row(bool during_wait) {
@@ -221,6 +280,7 @@ void socket_closed_row(bool during_wait) {
     // The poll hook owns the peer close in the other case.
     pipe.read_fd = -1;
     report_sink::LineWriter writer(sink);
+    configure_stall(writer, stall_ms);
     bool stopped = false;
     try { emit(writer); }
     catch (const report_sink::WriterError& error) {
@@ -250,6 +310,7 @@ void socket_short_send_row() {
     const pf_report_sink_fd_v1 sink{sizeof sink, 1, pipe.write_fd, "stall-test"};
     {
         report_sink::LineWriter writer(sink);
+        configure_stall(writer, stall_ms);
         bool stopped = false;
         try { emit(writer); }
         catch (const report_sink::WriterError& error) {
@@ -279,6 +340,7 @@ std::string progressing_wire(bool fast, bool socket = false) {
     const pf_report_sink_fd_v1 sink{sizeof sink, 1, pipe.write_fd, "stall-test"};
     {
         report_sink::LineWriter writer(sink);
+        configure_stall(writer, stall_ms);
         // A socket slow wake drains at most PIPE_BUF bytes. Force more than
         // 2*S/P wakes by sending > C + (2*S/P)*PIPE_BUF + one payload:
         // rows=floor((C + (2*S/P)*PIPE_BUF)/payload_bytes)+2. Pipe wakes drain
@@ -302,7 +364,61 @@ void slow_row(bool socket = false) {
             "slow-reader payload, counts and digest must equal the fast reader byte for byte");
 }
 
+std::string default_wire(bool fast, int registration = 0, bool socket = false) {
+    Scope scope(true, false, true);
+    configured_stall_ms = 0;
+    hold_default = true;
+    Pipe pipe(true, socket);
+    pipe.empty();
+    const pf_report_sink_fd_v1 sink{sizeof sink, 1, pipe.write_fd, "default-test"};
+    {
+        report_sink::LineWriter writer(sink);
+        waiting_writer = &writer;
+        if (registration == 1) configure_stall(writer, 0);
+        if (registration == 2) {
+            configure_stall(writer, stall_ms);
+            configure_stall(writer, 0);
+        }
+        configured_stall_ms = 0;
+        // The fast reference uses the same default, without a simulated hold.
+        if (fast) {
+            hold_default = false;
+            observed_default_wait = true;
+        }
+        // As in the progress fixture, N=floor(C/payload_bytes)+2 forces
+        // backpressure even when a platform has unusually large buffers.
+        try { emit(writer, pipe.capacity / payload_bytes + 2); }
+        catch (const report_sink::WriterError& error) {
+            const auto failure = classify_run_failure(error);
+            require(!(failure.code == RunFailureCode::report_sink_failed && failure.args
+                        && *failure.args == "{\"reason\":\"sink_stalled\"}"),
+                    "off sink must still wait after twice the former deadline");
+            throw;
+        }
+        require(writer.diagnostics().complete, "off sink must complete after its reader resumes");
+        require(observed_default_wait && !hold_default && clock_reads == 0,
+                "default sink must wait without a timer before completing");
+    }
+    require(::fcntl(pipe.write_fd, F_GETFL) == pipe.flags,
+            "default sink must preserve borrowed flags");
+    return pipe.finish();
+}
+
+void default_row(bool socket = false) {
+    const auto actual = default_wire(false, 0, socket);
+    const auto expected = default_wire(true, 0, socket);
+    require(actual == expected && actual.find("\"trailer\"") != std::string::npos,
+            "default stalled-reader wire must equal the complete fast-reader wire");
+    require(default_wire(false, 1, socket) == expected && default_wire(false, 2, socket) == expected,
+            "zero and removed sink intervals must preserve the complete default wire");
+}
+
+template<class T, class = void> struct BudgetStorage : T { std::uint64_t sink_stall_ms; };
+template<class T> struct BudgetStorage<T, std::void_t<decltype(T::sink_stall_ms)>> : T {};
+using Budget = BudgetStorage<pf_run_budget_v1>;
+
 struct Host final : NativeStrategyHost {
+    int callbacks = 0;
     Host() {
         NativeRunSpec spec;
         spec.identity = {"sink-budget-test", 1};
@@ -316,16 +432,105 @@ struct Host final : NativeStrategyHost {
         set_trace_enabled(true);
     }
     void on_native_bar(const Bar&, const NativeDecisionContext&) override {
+        ++callbacks;
+        require(strategy_set_run_budget_v1(static_cast<BacktestEngine*>(this), nullptr) == -3,
+                "active run must preserve its sink interval");
         trace(std::string(payload_bytes, 'x'), 1);
     }
 };
 
-void engine_row(bool socket = false) {
+std::string engine_default_wire(bool fast, int registration) {
+    Scope scope(true, false, true);
+    configured_stall_ms = 0;
+    hold_default = !fast; observed_default_wait = fast;
+    Pipe pipe(true);
+    pipe.empty();
+    Host host;
+    auto handle = static_cast<BacktestEngine*>(&host);
+    Budget budget{};
+    budget.struct_size = sizeof budget; budget.version = 1;
+    if (registration) {
+        if (registration == 2) budget.sink_stall_ms = stall_ms;
+        require(strategy_set_run_budget_v1(handle, &budget) == 0, "install all-zero host budget");
+        if (registration == 2)
+            require(strategy_set_run_budget_v1(handle, nullptr) == 0, "remove all host limits");
+    }
+    const pf_report_sink_fd_v1 sink{sizeof sink, 1, pipe.write_fd, "default-engine-test"};
+    require(strategy_set_report_sink_fd_v1(handle, &sink) == 0, "install default engine sink");
+    // N=floor(C/payload_bytes)+2 makes trace output exceed measured capacity
+    // by at least one payload, forcing a blocked wait on every platform.
+    const auto count = pipe.capacity / payload_bytes + 2;
+    std::vector<Bar> bars;
+    for (std::size_t i = 0; i < count; ++i)
+        bars.push_back({100, 101, 99, 100, 1,
+                        INT64_C(1704067200000) + static_cast<std::int64_t>(i) * 60000});
+    ReportC report{};
+    try {
+        host.run(bars.data(), static_cast<int>(bars.size()), "1", "1", false, 4,
+                 MagnifierDistribution::ENDPOINTS);
+        host.fill_report(&report);
+    } catch (const std::exception& error) {
+        BacktestEngine::free_report(&report);
+        const auto failure = classify_run_failure(error);
+        require(!(failure.code == RunFailureCode::report_sink_failed && failure.args
+                    && *failure.args == "{\"reason\":\"sink_stalled\"}"),
+                "default host sink must wait beyond the former deadline");
+        throw;
+    }
+    BacktestEngine::free_report(&report);
+    require(host.last_run_status() == 0,
+            "default host sink must wait beyond the former deadline");
+    pf_report_sink_receipt_v1 receipt{sizeof receipt, 1};
+    require(strategy_report_sink_receipt_v1(handle, &receipt) == 0 && receipt.complete
+                && observed_default_wait && !hold_default && clock_reads == 0,
+            "absent, zero and removed host limits must complete without resource clock reads");
+    require(::fcntl(pipe.write_fd, F_GETFL) == pipe.flags,
+            "default engine sink must preserve borrowed flags");
+    return pipe.finish();
+}
+
+void engine_default_row() {
+    const auto actual = engine_default_wire(false, 0);
+    const auto expected = engine_default_wire(true, 0);
+    require(actual == expected && actual.find("\"trailer\"") != std::string::npos,
+            "default engine wire must equal the complete fast-reader wire");
+    require(engine_default_wire(false, 1) == expected && engine_default_wire(false, 2) == expected,
+            "zero and removed host budgets must preserve the complete default wire");
+}
+
+void engine_row(bool socket = false, const char* rejection = nullptr,
+                std::int64_t interval = stall_ms, bool large_header = false) {
     Scope scope(false, false);
     Pipe pipe(true, socket);
     Host host;
     auto handle = static_cast<BacktestEngine*>(&host);
-    const pf_report_sink_fd_v1 sink{sizeof sink, 1, pipe.write_fd, "stall-test"};
+    Budget budget{};
+    budget.struct_size = sizeof budget; budget.version = 1;
+    budget.sink_stall_ms = interval;
+    require(strategy_set_run_budget_v1(handle, &budget) == 0, "install host-selected sink interval");
+    configured_stall_ms = interval;
+    if (rejection) {
+        Budget bad{};
+        bad.struct_size = sizeof bad; bad.version = 1;
+        const std::string reason = rejection;
+        if (reason == "version") ++bad.version;
+        else if (reason == "size") --bad.struct_size;
+        else if (reason == "old_size") bad.struct_size = 2 * sizeof(std::uint32_t)
+                                                          + 2 * sizeof(std::uint64_t);
+        else if (reason == "large_size") ++bad.struct_size;
+        else if (reason == "wall_range") bad.wall_ms = std::numeric_limits<std::uint64_t>::max();
+        else if (reason == "cpu_range") bad.cpu_ms = std::numeric_limits<std::uint64_t>::max();
+        else if (reason == "sink_range") bad.sink_stall_ms = std::numeric_limits<std::uint64_t>::max();
+        else throw std::runtime_error("unknown descriptor rejection");
+        require(strategy_set_run_budget_v1(handle, &bad) == -1,
+                "invalid descriptor must be refused before replacing the sink interval");
+    }
+    // Configuration is copied; the caller's object cannot remove the limit.
+    budget.sink_stall_ms = 0;
+    // A run id of one writer window, plus the fixed schema fields, forces
+    // a header flush before any callback while remaining below the line cap.
+    const auto run_id = large_header ? std::string(window_bytes, 'r') : std::string("stall-test");
+    const pf_report_sink_fd_v1 sink{sizeof sink, 1, pipe.write_fd, run_id.c_str()};
     require(strategy_set_report_sink_fd_v1(handle, &sink) == 0, "install blocked engine sink");
     const Bar bar{100, 101, 99, 100, 1, INT64_C(1704067200000)};
     try {
@@ -355,6 +560,16 @@ void engine_row(bool socket = false) {
     BacktestEngine::free_report(&report);
     require(::fcntl(pipe.write_fd, F_GETFL) == pipe.flags,
             "engine cleanup must preserve borrowed sink ownership");
+    require(wall == interval,
+            "host sink interval must be copied and retained after descriptor refusal");
+    if (large_header)
+        require(host.callbacks == 0, "sink interval must apply before the header flush");
+}
+
+void sink_setter_row() {
+    for (const auto* reason : {"version", "size", "old_size", "large_size",
+                               "wall_range", "cpu_range", "sink_range"})
+        engine_row(false, reason);
 }
 
 void timed_out(int) {
@@ -385,6 +600,21 @@ int main(int argc, char** argv) {
         else if (row == "socket_slow") slow_row(true);
         else if (row == "engine") engine_row();
         else if (row == "engine_socket") engine_row(true);
+        else if (row == "default") default_row();
+        else if (row == "default_socket") default_row(true);
+        else if (row == "engine_default") engine_default_row();
+        else if (row == "begin_sink") engine_row(false, nullptr, stall_ms, true);
+        // S=2*(300*1 ms)+1 ms: P=2 ms, with a final 1 ms wait. This pins
+        // arbitrary intervals and the remaining-time cap, not a round policy.
+        else if (row == "configured") engine_row(false, nullptr, 2 * stall_ms + sample_floor_ms);
+        else if (row == "setter") sink_setter_row();
+        // At S=1 ms, floor(S/300)=0, so the 1 ms clamp is essential.
+        else if (row == "cadence_floor")
+            blocked_row(true, false, false, false, sample_floor_ms);
+        // S=2*300*100+1 ms gives a raw 200 ms cadence, capped to 100 ms;
+        // the final 1 ms also witnesses the remaining-time cap.
+        else if (row == "cadence_ceiling")
+            blocked_row(true, false, false, false, 2 * 300 * sample_ceiling_ms + sample_floor_ms);
         else throw std::runtime_error("unknown sink stall row");
         ::alarm(0);
         return 0;

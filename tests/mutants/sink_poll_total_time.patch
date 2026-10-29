@@ -1,17 +1,17 @@
 --- a/src/report_sink_writer.cpp
 +++ b/src/report_sink_writer.cpp
-@@ -406,3 +406,3 @@
+@@ -420,3 +420,3 @@
              const auto now = resource_clock::wall_ms();
 -            if (before_wait < previous) progress_ms = now;
 +            if (before_wait < previous) (void)now;
              previous = before_wait;
-@@ -429,3 +429,3 @@
+@@ -443,3 +443,3 @@
              const int current = queued_bytes();
 -            if (current < previous) progress_ms = resource_clock::wall_ms();
 +            if (current < previous) (void)current;
              previous = current;
-@@ -485,3 +485,3 @@
+@@ -502,3 +502,3 @@
              written += static_cast<std::size_t>(count);
--            if (borrowed) progress_ms = resource_clock::wall_ms();
-+            if (borrowed) (void)progress_ms;
+-            if (timed) progress_ms = resource_clock::wall_ms();
++            if (timed) (void)progress_ms;
          }

@@ -1409,7 +1409,7 @@ PF_API int strategy_execution_observation_v1(
 
 PF_API uint32_t pf_selected_window_version(void) { return 1; }
 
-PF_API uint32_t pf_run_budget_version(void) { return 1; }
+PF_API uint32_t pf_run_budget_version(void) { return 1; } // Unreleased v1 retains its version.
 
 PF_API int strategy_set_run_budget_v1(pf_strategy_t s, const pf_run_budget_v1* budget) {
     return pineforge::native_set_run_budget_v1(

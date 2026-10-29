@@ -14,7 +14,9 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-# Match the inner alarms plus the one-second diagnostic margin used by CTest.
+# Match the inner alarms plus CTest's one-second diagnostic margin. Sink
+# fixtures use S=300*1 ms; the guard retains the former 30 s policy solely
+# to cover the one-byte reader and the 2*30 s virtual default witness.
 SINK_TIMEOUT = (2 * 30 * 1000 + 999) // 1000 + 1 + 1
 BUDGET_TIMEOUT = (100 * 2 * 100 + 999) // 1000 + 1 + 1
 VARIANTS = {
@@ -33,6 +35,44 @@ VARIANTS = {
          "real CPU spin must stop at the next bar boundary"),
         ("test_host_run_budget", "sink", BUDGET_TIMEOUT,
          "budget must stop at an input boundary and abandon the sink trailer"),
+    ),
+    "sink_zero_builtin": (
+        ("test_report_sink_stall", "default", SINK_TIMEOUT,
+         "off sink must still wait after twice the former deadline"),
+        ("test_report_sink_stall", "default_socket", SINK_TIMEOUT,
+         "off sink must still wait after twice the former deadline"),
+    ),
+    "sink_consumer_zero_builtin": (
+        ("test_report_sink_stall", "engine_default", SINK_TIMEOUT,
+         "default host sink must wait beyond the former deadline"),
+    ),
+    "sink_sample_no_floor": (
+        ("test_report_sink_stall", "cadence_floor", SINK_TIMEOUT,
+         "poll cadence must respect the configured interval and sampling clamps"),
+    ),
+    "sink_sample_no_ceiling": (
+        ("test_report_sink_stall", "cadence_ceiling", SINK_TIMEOUT,
+         "poll cadence must respect the configured interval and sampling clamps"),
+    ),
+    "sink_sample_no_remaining": (
+        ("test_report_sink_stall", "configured", SINK_TIMEOUT,
+         "host sink interval must be copied and retained after descriptor refusal"),
+    ),
+    "sink_budget_no_range": (
+        ("test_report_sink_stall", "setter", SINK_TIMEOUT,
+         "invalid descriptor must be refused before replacing the sink interval"),
+    ),
+    "run_budget_old_size": (
+        ("test_host_run_budget", "layout", BUDGET_TIMEOUT,
+         "unreleased descriptor must reject the old 24-byte size"),
+    ),
+    "run_budget_zero_wall_clock": (
+        ("test_host_run_budget", "unchanged", BUDGET_TIMEOUT,
+         "absent budget must not sample resource clocks"),
+    ),
+    "sink_small_header_input": (
+        ("test_report_sink_stall", "begin_sink", SINK_TIMEOUT,
+         "sink interval must apply before the header flush"),
     ),
 }
 

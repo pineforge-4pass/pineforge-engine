@@ -594,7 +594,7 @@ inventories are pinned by `scripts/check_c_abi_runtime.py`:
 | `strategy_closed_trade_entry_id` / `_exit_id` / `_exit_comment` / `_close_cause` | ABI v4: per-closed-trade id/comment strings and a `close_cause` (`pf_close_cause_t`: `SCRIPT`, `BRACKET`, `LIQUIDATION` for a margin call, `RISK_LIMIT` for the intraday loss cap, `FILL_CAP` for the intraday fill cap, `RANGE_END`), indexed like `strategy_closed_trade_entry_incarnation` |
 | `strategy_initial_capital` | ABI v4: the engine's effective configured initial capital, after the native run specification or strategy override; `NaN` if `s` is `NULL` or the read raises |
 | `strategy_current_equity` / `strategy_script_bars_processed` | ABI v4: `initial_capital + netprofit` (not Pine's `strategy.equity`, which also adds open profit); total script bars dispatched by the most recent run |
-| `pf_run_budget_version` / `strategy_set_run_budget_v1` | Cooperative wall/process CPU limits from [run_budget.h](include/pineforge/run_budget.h); zero is unlimited, with typed `run_budget_exceeded` at begin/input boundaries |
+| `pf_run_budget_version` / `strategy_set_run_budget_v1` | Host-set `wall_ms`, `cpu_ms`, `sink_stall_ms` from [run_budget.h](include/pineforge/run_budget.h): all default to 0 (off). Wall/CPU failures are `run_budget_exceeded`; the sink interval limits no progress, never total time. The compute host owns compile/transpile deadlines. Code generation owns empty-target `replace_all`. HPO sets budgets through this API. A callback that never returns needs an out-of-process watchdog. |
 
 ### Driving the kernel from C
 

@@ -24,6 +24,7 @@ struct pf_run_budget_v1 {
 #include <string>
 #include <sys/socket.h>
 #include <thread>
+#include <type_traits>
 #include <unistd.h>
 #include <vector>
 
@@ -37,6 +38,11 @@ extern "C" int strategy_set_run_budget_v1(pf_strategy_t, const pf_run_budget_v1*
 
 namespace {
 using namespace pineforge;
+// The previous descriptor was 24 bytes. Extend only that header's storage so
+// the new descriptor reaches its size rejection as a runtime red witness.
+template<class T, class = void> struct BudgetStorage : T { std::uint64_t sink_stall_ms; };
+template<class T> struct BudgetStorage<T, std::void_t<decltype(T::sink_stall_ms)>> : T {};
+using Budget = BudgetStorage<pf_run_budget_v1>;
 constexpr std::int64_t limit_ms = 100;
 // Each row has at most one real spin of 2*limit_ms. Allow 100 such
 // intervals plus one second for setup: ceil(100*2*100/1000)+1 = 21 s.
@@ -52,8 +58,10 @@ void require(bool ok, const char* text) {
 
 int read_clock(clockid_t kind, timespec* out) {
     if (kind == CLOCK_PROCESS_CPUTIME_ID) ++cpu_reads;
-    if (kind == CLOCK_MONOTONIC && expire_at_begin && ++wall_reads == 2)
-        wall += 2 * limit_ms;
+    if (kind == CLOCK_MONOTONIC) {
+        ++wall_reads;
+        if (expire_at_begin && wall_reads == 2) wall += 2 * limit_ms;
+    }
     const auto value = kind == CLOCK_MONOTONIC ? wall : cpu;
     out->tv_sec = value / 1000;
     out->tv_nsec = (value % 1000) * 1000000;
@@ -142,9 +150,13 @@ struct Host final : NativeStrategyHost {
     }
 };
 
-void install(Host& host, std::uint64_t wall_limit, std::uint64_t cpu_limit) {
+void install(Host& host, std::uint64_t wall_limit, std::uint64_t cpu_limit,
+             std::uint64_t sink_limit = 0) {
     require(strategy_set_run_budget_v1 != nullptr, "run budget setter is absent");
-    const pf_run_budget_v1 budget{sizeof budget, 1, wall_limit, cpu_limit};
+    Budget budget{};
+    budget.struct_size = sizeof budget; budget.version = 1;
+    budget.wall_ms = wall_limit; budget.cpu_ms = cpu_limit;
+    budget.sink_stall_ms = sink_limit;
     require(strategy_set_run_budget_v1(host.handle(), &budget) == 0, "install run budget");
 }
 
@@ -263,33 +275,66 @@ void unchanged_row() {
     install(bounded, limit_ms, limit_ms);
     bounded.at_limit = true;
     install(unlimited, 0, 0);
+    unlimited.spin = true;
     install(removed, limit_ms, limit_ms);
     require(strategy_set_run_budget_v1(removed.handle(), nullptr) == 0, "remove budget");
+    removed.spin = true;
     const auto expected = report_bytes(plain);
-    require(cpu_reads == 0, "absent budget must not sample CPU time");
+    require(cpu_reads == 0 && wall_reads == 0, "absent budget must not sample resource clocks");
     require(report_bytes(bounded) == expected && cpu_reads > 0,
             "unreached budget must exercise clocks and preserve every report byte and hash");
     const int measured = cpu_reads;
+    const int measured_wall = wall_reads;
     require(report_bytes(unlimited) == expected && report_bytes(removed) == expected
-                && cpu_reads == measured,
-            "zero and removed budgets must preserve bytes without sampling CPU time");
+                && cpu_reads == measured && wall_reads == measured_wall,
+            "zero and removed budgets must preserve bytes without sampling resource clocks");
 }
 
 void setter_row() {
     require(pf_run_budget_version && pf_run_budget_version() == 1, "run budget version is absent");
     Host host;
     install(host, limit_ms, 0);
-    pf_run_budget_v1 bad{sizeof bad, 2, 0, 0};
+    Budget bad{};
+    bad.struct_size = sizeof bad; bad.version = 2;
     require(strategy_set_run_budget_v1(host.handle(), &bad) == -1, "refuse bad budget version");
     bad.version = 1; --bad.struct_size;
     require(strategy_set_run_budget_v1(host.handle(), &bad) == -1, "refuse bad budget size");
     bad.struct_size = sizeof bad;
     bad.wall_ms = std::numeric_limits<std::uint64_t>::max();
     require(strategy_set_run_budget_v1(host.handle(), &bad) == -1, "refuse unrepresentable budget");
+    bad.wall_ms = 0;
+    bad.cpu_ms = std::numeric_limits<std::uint64_t>::max();
+    require(strategy_set_run_budget_v1(host.handle(), &bad) == -1, "refuse unrepresentable CPU budget");
+    bad.cpu_ms = 0;
+    bad.sink_stall_ms = std::numeric_limits<std::uint64_t>::max();
+    require(strategy_set_run_budget_v1(host.handle(), &bad) == -1, "refuse unrepresentable sink budget");
     require(strategy_set_run_budget_v1(nullptr, nullptr) == -1, "refuse null budget handle");
     host.spin = true;
     host.execute();
     expect_failure(host, "wall", 2 * limit_ms);
+}
+
+void layout_row() {
+    // Two 32-bit header words followed by three 64-bit limits: 8+3*8=32.
+    constexpr auto header_bytes = 2 * sizeof(std::uint32_t);
+    constexpr auto limit_bytes = sizeof(std::uint64_t);
+    require(sizeof(pf_run_budget_v1) == header_bytes + 3 * limit_bytes,
+            "run budget descriptor must contain three limits in 32 bytes");
+    Budget budget{};
+    const auto* base = reinterpret_cast<const char*>(&budget);
+    require(reinterpret_cast<const char*>(&budget.wall_ms) - base == header_bytes
+                && reinterpret_cast<const char*>(&budget.cpu_ms) - base == header_bytes + limit_bytes
+                && reinterpret_cast<const char*>(&budget.sink_stall_ms) - base
+                    == header_bytes + 2 * limit_bytes,
+            "run budget limit offsets must be 8, 16 and 24");
+    require(budget.wall_ms == 0 && budget.cpu_ms == 0 && budget.sink_stall_ms == 0,
+            "all three budget defaults must be off");
+    Host host;
+    install(host, 0, 0, limit_ms);
+    budget.struct_size = header_bytes + 2 * limit_bytes;
+    budget.version = 1;
+    require(strategy_set_run_budget_v1(host.handle(), &budget) == -1,
+            "unreleased descriptor must reject the old 24-byte size");
 }
 
 void real_spin_row() {
@@ -329,6 +374,7 @@ int main(int argc, char** argv) {
         else if (row == "begin") begin_row();
         else if (row == "unchanged") unchanged_row();
         else if (row == "setter") { ClockScope clock; setter_row(); }
+        else if (row == "layout") layout_row();
         else if (row == "sink") sink_row();
         else if (row == "real_cpu") real_spin_row();
         else throw std::runtime_error("unknown budget row");

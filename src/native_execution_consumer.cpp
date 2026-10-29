@@ -13631,6 +13631,12 @@ int native_set_selected_window_v1(BacktestEngine* engine,
     return NativeExecutionConsumer::set_selected_window_v1(engine, config);
 }
 
+std::uint64_t NativeExecutionConsumer::sink_stall_ms(const BacktestEngine& engine) noexcept {
+    const auto* consumer =
+        static_cast<const NativeExecutionConsumer*>(engine.execution_consumer_slot_.ptr.get());
+    return consumer ? consumer->run_budget_.sink_stall_ms : 0;
+}
+
 int NativeExecutionConsumer::set_run_budget_v1(
         BacktestEngine* engine, const pf_run_budget_v1* budget) noexcept {
     if (!engine) return -1;
@@ -13640,7 +13646,8 @@ int NativeExecutionConsumer::set_run_budget_v1(
         next = *budget;
         constexpr auto maximum = static_cast<std::uint64_t>(
             std::numeric_limits<std::int64_t>::max());
-        if (next.wall_ms > maximum || next.cpu_ms > maximum) return -1;
+        if (next.wall_ms > maximum || next.cpu_ms > maximum
+            || next.sink_stall_ms > maximum) return -1;
     }
     NativeExecutionConsumer* consumer = nullptr;
     const int refusal = gate_selected_setter(engine, budget != nullptr, &consumer);

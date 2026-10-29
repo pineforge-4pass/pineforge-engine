@@ -7932,19 +7932,21 @@ if(UNIX)
     pineforge_add_unit_test(test_report_sink_stall)
     target_link_libraries(test_host_run_budget PRIVATE Threads::Threads)
     # Same formulas as the in-process alarm guards: 100 two-budget spin
-    # intervals + setup, and two complete sink stall intervals + setup.
+    # intervals + setup; sink guards retain twice the former 30 s interval
+    # for the virtual default witness and the instrumented one-byte reader.
     # The outer guard adds one second for the alarm's failure diagnostic.
     math(EXPR _pf_budget_timeout "(100 * 2 * 100 + 999) / 1000 + 1 + 1")
     math(EXPR _pf_stall_timeout "(2 * 30 * 1000 + 999) / 1000 + 1 + 1")
     set_tests_properties(test_host_run_budget PROPERTIES TIMEOUT ${_pf_budget_timeout})
     set_tests_properties(test_report_sink_stall PROPERTIES TIMEOUT ${_pf_stall_timeout})
-    foreach(_pf_row cpu begin begin_callback unchanged setter real_cpu sink)
+    foreach(_pf_row cpu begin begin_callback unchanged setter real_cpu sink layout)
         add_test(NAME test_host_run_budget_${_pf_row} COMMAND test_host_run_budget ${_pf_row})
         set_tests_properties(test_host_run_budget_${_pf_row} PROPERTIES TIMEOUT ${_pf_budget_timeout})
     endforeach()
     foreach(_pf_row blocking signals socket socket_nonblocking socket_signals
             socket_closed socket_close_wait slow socket_slow engine engine_socket
-            real_blocked real_socket)
+            real_blocked real_socket default default_socket engine_default begin_sink
+            configured setter cadence_floor cadence_ceiling)
         add_test(NAME test_report_sink_stall_${_pf_row} COMMAND test_report_sink_stall ${_pf_row})
         set_tests_properties(test_report_sink_stall_${_pf_row} PROPERTIES TIMEOUT ${_pf_stall_timeout})
     endforeach()

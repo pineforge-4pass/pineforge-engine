@@ -31,10 +31,9 @@ constexpr std::int64_t safe_integer = INT64_C(9007199254740991);
 constexpr std::size_t max_line = 1024 * 1024;
 constexpr std::size_t io_window = 64 * 1024;
 constexpr std::size_t io_alignment = 4096;
-// Operational policy: allow thirty seconds with no reader progress. Sample
-// at 1/300 of that interval so sub-POLLOUT pipe reads remain observable.
-constexpr std::int64_t stall_budget_ms = 30 * 1000;
-constexpr int progress_sample_ms = static_cast<int>(stall_budget_ms / 300);
+// Sample at interval/300 to observe sub-POLLOUT pipe progress, with a 1 ms
+// floor for poll's millisecond resolution and a 100 ms responsiveness ceiling.
+constexpr std::int64_t sample_floor_ms = 1, sample_ceiling_ms = 100;
 constexpr std::array<char, 7> tags{{'E', 'T', 'O', 'V', 'K', 'X', 'H'}};
 
 [[noreturn]] void invalid(const char* message) {
@@ -308,6 +307,7 @@ struct LineWriter::State {
     bool borrowed = false;
     bool socket = false;
     bool nonblocking = false;
+    std::int64_t sink_stall_ms = 0;
     Phase phase = Phase::configured;
     RecordSet records{};
     Trailer trailer{};
@@ -376,7 +376,7 @@ struct LineWriter::State {
         socket = S_ISSOCK(info.st_mode);
         if (!socket && !S_ISFIFO(info.st_mode))
             io_error("fd is not a FIFO or stream socket", EINVAL);
-        if (!socket) {
+        if (!socket && sink_stall_ms) {
             const int flags = ::fcntl(descriptor, F_GETFL);
             if (flags < 0) io_error("fd flags query failed", errno);
             nonblocking = (flags & O_NONBLOCK) != 0;
@@ -400,6 +400,20 @@ struct LineWriter::State {
     }
 
     void wait_writable(std::int64_t& progress_ms) {
+        if (!sink_stall_ms) {
+            // Preserve the original blocking wait, including EINTR retries.
+            // No queue queries, clock samples, finite poll or timer when off.
+            pollfd ready{descriptor, POLLOUT, 0};
+            int result;
+            do { result = resource_clock::poll(&ready, 1, -1); }
+            while (result < 0 && errno == EINTR);
+            if (result < 0) io_error("poll failed", errno);
+            if (ready.revents & POLLNVAL) io_error("poll invalid fd", EBADF);
+            if (ready.revents & (POLLERR | POLLHUP)) io_error("stream peer closed", EPIPE);
+            return;
+        }
+        const auto progress_sample_ms = std::clamp(sink_stall_ms / 300,
+                                                   sample_floor_ms, sample_ceiling_ms);
         int previous = socket ? 0 : queued_bytes();
         for (;;) {
             const int before_wait = socket ? 0 : queued_bytes();
@@ -407,13 +421,13 @@ struct LineWriter::State {
             if (before_wait < previous) progress_ms = now;
             previous = before_wait;
             const auto elapsed = std::max<std::int64_t>(0, now - progress_ms);
-            if (elapsed >= stall_budget_ms) {
+            if (elapsed >= sink_stall_ms) {
                 fail();
                 throw WriterError(WriterFailure::stalled,
                                   "report sink reader stalled", ETIMEDOUT);
             }
             const int timeout = static_cast<int>(std::min<std::int64_t>(
-                progress_sample_ms, stall_budget_ms - elapsed));
+                progress_sample_ms, sink_stall_ms - elapsed));
             pollfd ready{descriptor, POLLOUT, 0};
             const int result = resource_clock::poll(&ready, 1, timeout);
             const int number = errno;
@@ -458,8 +472,9 @@ struct LineWriter::State {
         std::memset(buffer + used, 0, aligned - used);
         std::size_t written = 0;
         const auto extent = borrowed ? used : aligned;
-        auto progress_ms = borrowed ? resource_clock::wall_ms() : 0;
-        const bool atomic_pipe = borrowed && !socket && !nonblocking;
+        const bool timed = borrowed && sink_stall_ms != 0;
+        auto progress_ms = timed ? resource_clock::wall_ms() : 0;
+        const bool atomic_pipe = timed && !socket && !nonblocking;
         while (written < extent) {
             // POLLOUT guarantees room for an atomic pipe write. Keeping each
             // write <= PIPE_BUF bounds even a caller's blocking descriptor
@@ -469,11 +484,13 @@ struct LineWriter::State {
                 ? std::min<std::size_t>(extent - written, PIPE_BUF) : extent - written;
             const auto count = borrowed
                 ? (socket
-                    ? ::send(descriptor, buffer + written, remaining, MSG_NOSIGNAL | MSG_DONTWAIT)
+                    ? ::send(descriptor, buffer + written, remaining,
+                             MSG_NOSIGNAL | (timed ? MSG_DONTWAIT : 0))
                     : ::write(descriptor, buffer + written, remaining))
                 : ::pwrite(descriptor, buffer + written, extent - written, offset + written);
             if (count < 0) {
                 const int number = errno;
+                if (number == EINTR && !timed) continue;
                 if (borrowed && (number == EINTR || number == EAGAIN || number == EWOULDBLOCK)) {
                     wait_writable(progress_ms);
                     continue;
@@ -483,7 +500,7 @@ struct LineWriter::State {
             }
             if (count == 0) io_error("write made no progress", EIO);
             written += static_cast<std::size_t>(count);
-            if (borrowed) progress_ms = resource_clock::wall_ms();
+            if (timed) progress_ms = resource_clock::wall_ms();
         }
         if (borrowed) {
             used = 0;

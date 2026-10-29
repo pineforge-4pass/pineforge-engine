@@ -13,6 +13,17 @@ version number follows semantic versioning over the surfaces the
 - Closed-trade text equality can compare bytes without owning strings and the closed-trade count is read inline; rebuild C++ consumers and relink strategies with matching headers and archive.
 - A module built for 1.8.0 (ABI 5, no layout stamp) is refused at load with the runner's `strategy ABI mismatch` asking for a rebuild for 1.9. Stream layout stamp 1 existed only in unshipped development builds; their live ledgers with more than one entry fail replay closed.
 - Closed-trade C string accessors return the stored text for retained sealed rows, previously NULL; the loaders' ABI refusal message now asks for a rebuild for 1.9.
+- Host run budgets now expose `wall_ms`, `cpu_ms` and `sink_stall_ms`, all
+  defaulting to **0 (off)**. The unreleased v1 descriptor is exactly 32 bytes;
+  version remains 1 and the previous 24-byte candidate is refused. Wall time
+  includes begin preparation and realtime idle; CPU time counts all process
+  threads. The sink interval measures no progress, never total report time;
+  sampling is interval/300 rounded down and clamped to 1–100 ms. With it off,
+  sink waits retain their blocking behavior without a timer.
+  The compute host owns compile and transpile deadlines.
+  Code generation owns empty-target `replace_all` handling.
+  HPO sets budgets through this API.
+  A callback that never returns needs an out-of-process watchdog.
 
 **[1.8.0](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.8.0)**,
 paired with [pineforge-codegen 1.8.0](https://github.com/pineforge-4pass/pineforge-codegen-oss/releases/tag/v1.8.0).

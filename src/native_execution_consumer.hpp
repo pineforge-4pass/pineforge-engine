@@ -2316,6 +2316,8 @@ public:
                                          pf_selected_window_counts_v1* out) noexcept;
     static int set_run_budget_v1(BacktestEngine* engine,
                                  const pf_run_budget_v1* budget) noexcept;
+    // Copied host configuration, read without allocating a consumer or clocks.
+    static std::uint64_t sink_stall_ms(const BacktestEngine& engine) noexcept;
 
     // The source adapter's read of the selected window, never a C export: the
     // pending configuration (what the next admitted generation will take, read
