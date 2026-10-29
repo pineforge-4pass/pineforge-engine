@@ -312,7 +312,7 @@ class HarnessAbiMirrorTests(unittest.TestCase):
         self.assertIsNotNone(m)
         assert m is not None
         self.assertEqual(EXPECTED_PF_ABI, int(m.group(1)))
-        self.assertEqual(EXPECTED_PF_ABI, 5)
+        self.assertEqual(EXPECTED_PF_ABI, 6)
 
     def test_trade_mirror_ends_with_open_at_end(self) -> None:
         names = [name for name, _ in TradeC._fields_]

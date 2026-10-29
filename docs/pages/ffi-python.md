@@ -188,10 +188,10 @@ itself. Open it with `ctypes.CDLL`:
 lib = ctypes.CDLL("./my_strategy.so")
 
 # ABI guard — pf_report_t is CALLER-allocated, so running an old .so
-# against a different report layout can corrupt memory. ABI 5 also requires
-# a 1.8.0 module rebuild while retaining the layout introduced in ABI 4.
+# against a different report layout can corrupt memory. ABI 6 also requires
+# a 1.9 module rebuild while retaining the C layout introduced in ABI 4.
 # Verify the .so's module compatibility version before any run:
-EXPECTED_PF_ABI = 5   # PF_ABI_VERSION in <pineforge/pineforge.h> from v1.8.0;
+EXPECTED_PF_ABI = 6   # PF_ABI_VERSION in <pineforge/pineforge.h> for v1.9;
                       # a v0.13.1 .so answers 3 and needs that release's mirror
 try:
     lib.pf_abi_version.restype = ctypes.c_int
@@ -199,7 +199,7 @@ try:
 except AttributeError:
     raise RuntimeError(".so predates pf_abi_version (ABI v1); rebuild it")
 if abi != EXPECTED_PF_ABI:
-    raise RuntimeError(f"ABI mismatch: .so={abi}, mirror={EXPECTED_PF_ABI}")
+    raise RuntimeError(f"ABI mismatch: .so={abi}, mirror={EXPECTED_PF_ABI}; rebuild for pineforge 1.9")
 
 lib.strategy_create.argtypes  = [ctypes.c_char_p]
 lib.strategy_create.restype   = ctypes.c_void_p

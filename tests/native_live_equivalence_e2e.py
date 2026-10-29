@@ -191,8 +191,8 @@ class Strategy:
             function = getattr(self.library, name)
             function.argtypes = arguments
             function.restype = result
-        if self.library.pf_abi_version() != 5:
-            raise RuntimeError("unsupported report ABI")
+        if self.library.pf_abi_version() != 6:
+            raise RuntimeError("unsupported report ABI; rebuild for pineforge 1.9")
         self.sha256 = hashlib.sha256(self.path.read_bytes()).hexdigest()
 
     def create(self):

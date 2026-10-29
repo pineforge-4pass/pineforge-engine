@@ -89,9 +89,9 @@ change.
 The public surface and stability rules for these revisions are in
 [Selected windows and walk-forward use](#selected_windows_walk_forward).
 
-1.8.0 requires rebuilding native C++ objects for `native_order_v8` and
-relinking strategy libraries against the matching headers and archive.
-`PF_ABI_VERSION` is 5: the loader refuses a library stamped 4 at its ABI
+1.9 requires rebuilding strategy modules for the closed-trade ledger layout and
+relinking against the matching headers and archive.
+`PF_ABI_VERSION` is 6: the loader refuses a 1.8.0 library stamped 5 at its ABI
 mismatch check before calling strategy entry points. This is an explicit
 exception to the earlier promise of one ABI number throughout 1.x; the
 caller-allocated C report and trade layouts remain unchanged.
@@ -128,15 +128,15 @@ The C ABI is `<pineforge/pineforge.h>` and the native host API
 `<pineforge/native_c_api.h>` it includes: the `PF_API` functions, the `pf_*`
 structs and enumerations, and the `PF_*` constants.
 
-- **`PF_ABI_VERSION` is 5 from 1.8.0.** Earlier 1.x releases used ABI 4.
+- **`PF_ABI_VERSION` is 6 for 1.9.** 1.8.0 used ABI 5; earlier 1.x releases used ABI 4.
   It versions module compatibility as well as the layouts a
   caller allocates or strides over (`pf_report_t`, `pf_trade_t`, the metrics
   structs), and a consumer checks `pf_abi_version() == PF_ABI_VERSION` before
   it runs a strategy. `test_c_abi` checks that equality, `test_live_run_status`
-  pins the value 5, and `test_run_strategy_range_end` pins the Python
+  pins the value 6, and `test_run_strategy_range_end` pins the Python
   harness's `EXPECTED_PF_ABI` to it. The public Unix
   `test_strategy_module_abi_epoch` row requires the typed refusal of a
-  stamp-4 module before any strategy entry point runs, and acceptance of a
+  stamp-5 module before any strategy entry point runs, and acceptance of a
   module stamped with the current header value.
 - **Functions are append-only.** No `PF_API` function is removed or renamed in
   1.x; new ones are added. `scripts/check_c_abi_runtime.py` (a source guard of

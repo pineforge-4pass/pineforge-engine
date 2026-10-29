@@ -11,9 +11,9 @@ against tomorrow's runtime — and tells you when it won't.
 From 1.0.0, within one `PINEFORGE_VERSION_MAJOR` (the
 [public contract](public-contract.md) is the full statement):
 
-- **`PF_ABI_VERSION` is 5 from 1.8.0.** This release requires rebuilding
-  strategy libraries for the native order layout change; libraries stamped 4
-  are refused by the loader's ABI mismatch check. The previous 1.x releases
+- **`PF_ABI_VERSION` is 6 for 1.9.** This release requires rebuilding
+  strategy libraries for the closed-trade ledger layout; libraries stamped 5
+  are refused by the loader's ABI mismatch check. 1.8.0 used ABI 5; earlier 1.x releases
   used `PF_ABI_VERSION` 4. <!-- verified HEAD -->
   The layouts a caller allocates or strides
   over (`pf_report_t`, `pf_trade_t`, the metrics structs) do not change; a
@@ -43,7 +43,7 @@ parties are the program that loads it and the library it loads:
 | Scenario | Outcome |
 | --- | --- |
 | A consumer loads a strategy library with the same `PF_ABI_VERSION`. | Works for every function that release has; probe a newer one with `dlsym` first. |
-| A 1.8.0 consumer loads a strategy library stamped 4. | Refused at the ABI mismatch check; rebuild the library against matching headers and archive. |
+| A 1.9 consumer loads a 1.8.0 strategy library stamped 5. | Refused at the ABI mismatch check; rebuild the library for pineforge 1.9 against matching headers and archive. |
 | Consumer and library from different majors, or from different 0.x minors. | **No guarantee.** Check `pf_abi_version()` and rebuild. |
 | A C++ object (a generated strategy, a native host) built against another release's headers. | **Not supported.** Rebuild against the headers and archive it links. |
 
@@ -72,7 +72,7 @@ Four layers:
 4. **Module stamp check** — the public Unix CTest row
    `test_strategy_module_abi_epoch` loads compiled stamp probes through
    `docker/run_json.py::load_strategy`. It requires the typed ABI mismatch,
-   both version numbers and zero strategy entry-point calls for stamp 4,
+   both version numbers and zero strategy entry-point calls for stamp 5,
    plus acceptance of the current header stamp. Dynamic-loader resolution
    and initializers precede this function-based stamp check.
 
@@ -156,7 +156,7 @@ nm -D --defined-only my_strategy.so | awk '$2=="T"{print $3}' | sort
 Include `<pineforge/report_sink.h>` for the additive
 `pf_report_sink_fd_v1` descriptor and `strategy_set_report_sink_fd_v1`.
 `pf_report_sink_version()` remains 1, the wire format remains version 1,
-and `PF_ABI_VERSION` is 5. The existing path descriptor and all existing
+and `PF_ABI_VERSION` is 6. The existing path descriptor and all existing
 report, trade and receipt layouts stay unchanged.
 
 | Field | Type | Offset |
@@ -227,7 +227,7 @@ only after the fd API is admitted.
 `<pineforge/report_sink.h>` for both sink transports. It avoids a record
 read-back when a jailed child publishes its summary. The existing
 `pf_report_sink_receipt_v1` remains exactly 144 bytes, the wire and report
-sink ABI version remain 1, and `PF_ABI_VERSION` is 5.
+sink ABI version remain 1, and `PF_ABI_VERSION` is 6.
 
 `pf_report_sink_summary_v1` is 64 bytes, aligned to 8 bytes, with these
 offsets on both LP64 and ILP32:
@@ -428,8 +428,8 @@ part of this aggregate ABI.
 capability, not the class layout version. Regenerate and rebuild a strategy
 module to obtain complete script-state reset; replacing an archive does not
 retrofit an old module. Public C function signatures and
-`strategy_stream_api_version()` (1) are unchanged; `PF_ABI_VERSION` is now 5
-for the 1.8.0 module rebuild requirement. The pending-order v1
+`strategy_stream_api_version()` (1) are unchanged; `PF_ABI_VERSION` is now 6
+for the 1.9 module rebuild requirement. The pending-order v1
 mirror preserves all 406 pre-change field names/types/offsets and its full
 3192-byte size. No field is added for these placement derivations: the original
 admission operands already have actual-value projections, while removed native
@@ -536,8 +536,8 @@ because those layouts changed between 1.6.x and 1.7.0 inside v7, and 1.7.0
 shipped without an epoch move; the new namespace separates every earlier native
 module, 1.7.0 ones included, from this release. Rebuild
 native C++ modules against the matching headers and archive; stale v7 order
-symbols are refused at link or load time. `PF_ABI_VERSION` advances from 4
-to 5 because the adapter and engine headers grew members and the C export
+symbols are refused at link or load time. `PF_ABI_VERSION` advanced from 4 <!-- verified HEAD -->
+to 5 in 1.8.0 because the adapter and engine headers grew members and the C export
 `strategy_initial_capital` was added since 1.7.0, so the loader also refuses a
 strategy library stamped 4 with its ABI mismatch diagnostic before calling any
 strategy entry point.

@@ -56,4 +56,4 @@ accessor still reports resolved levels rather than masking eligibility.
 Historical internal object layouts require matching C++ headers/library. L3b
 removes the compatibility order object and projects the frozen pending-row ABI
 from native requests plus adapter facts. The public C layouts, stream API 1,
-and pending mirror version 1 are preserved; the current C ABI version is 5.
+and pending mirror version 1 are preserved; the current C ABI version is 6.

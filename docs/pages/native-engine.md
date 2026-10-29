@@ -3178,9 +3178,9 @@ a `pf_strategy_t` from `strategy_native_host_create_v1` unchanged — and
 `strategy_native_submit_v1` (`native_c_api.h:2748`) obeys the one legality
 rule its C++ spelling does.
 
-Rebuild strategy libraries against this engine's ABI 5. A module with the
+Rebuild strategy libraries for pineforge 1.9 against this engine's ABI 6. A module with the
 matching ABI but without the native contract is legacy and cannot take
-`--native-config`; a module stamped 4 is refused by the ABI check first.
+`--native-config`; a module stamped 5 or earlier is refused by the ABI check first.
 
 ## Errors
 

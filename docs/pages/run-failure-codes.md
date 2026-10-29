@@ -56,7 +56,7 @@ if (code != NULL && code[0] != '\0') {
   and `<pineforge/run_failure.hpp>`) is the compile-time probe. At run time a
   harness looks the two symbols up (`dlsym`, Python's `hasattr`): a strategy
   library built against an earlier runtime lacks them. The getters are
-  additive exports and move no layout; the current `PF_ABI_VERSION` is 5.
+  additive exports and move no layout; the current `PF_ABI_VERSION` is 6.
 
 A failed run is read from the code, never from the text alone.
 `docker/run_json.py` fails a run when the code is non-empty, the text is

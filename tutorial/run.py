@@ -118,9 +118,9 @@ class ReportC(ctypes.Structure):
 # pf_report_t is caller-allocated, so a stale mirror means the runtime
 # writes past our buffer. Assert the .so's ABI version before any run.
 # v4 added the live accessors and broker_state_hash after equity_curve_len.
-# The mirrors already carry those fields; v5 requires rebuilt 1.8.0 modules
-# without growing the C report/trade layouts.
-EXPECTED_PF_ABI = 5
+# The mirrors already carry those fields; v6 requires rebuilt 1.9 modules
+# for the closed-trade ledger layout without growing the C report/trade layouts.
+EXPECTED_PF_ABI = 6
 
 def check_abi(lib: ctypes.CDLL) -> None:
     try:
@@ -133,7 +133,7 @@ def check_abi(lib: ctypes.CDLL) -> None:
     if abi != EXPECTED_PF_ABI:
         raise RuntimeError(
             f"pineforge ABI mismatch: .so reports {abi}, harness expects "
-            f"{EXPECTED_PF_ABI}; rebuild.")
+            f"{EXPECTED_PF_ABI}; rebuild for pineforge 1.9.")
 
 
 # A failure's stable code and arguments (engine 1.4.0+; an older .so has neither),

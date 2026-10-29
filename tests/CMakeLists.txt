@@ -4350,7 +4350,7 @@ if(UNIX)
         target_compile_options(strategy_abi_${_pf_abi_probe} PRIVATE -fvisibility=hidden)
         set_target_properties(strategy_abi_${_pf_abi_probe} PROPERTIES PREFIX "")
     endforeach()
-    target_compile_definitions(strategy_abi_previous PRIVATE PF_LIVE_ABI_STAMP=4)
+    target_compile_definitions(strategy_abi_previous PRIVATE PF_LIVE_ABI_STAMP=5)
     target_compile_definitions(strategy_abi_current PRIVATE PF_LIVE_ABI_STAMP=PF_ABI_VERSION)
     add_test(NAME test_strategy_module_abi_epoch
         COMMAND ${Python3_EXECUTABLE} -E -B ${PROJECT_SOURCE_DIR}/tests/test_run_json_bin.py

@@ -87,16 +87,16 @@ typedef struct pf_report_s {
 
 @note The `metrics` / `equity_curve` fields were appended in **ABI
 version 2** (`PF_ABI_VERSION`). `pf_report_t` is caller-allocated, so
-consumers must check `pf_abi_version() == PF_ABI_VERSION` (5 from v1.8.0)
-before running. Earlier 1.x libraries answered 4; a v0.13.1 `.so`
+consumers must check `pf_abi_version() == PF_ABI_VERSION` (6 for v1.9)
+before running. 1.8.0 libraries answered 5, earlier 1.x libraries 4; a v0.13.1 `.so`
 answers 3. A `.so`
 with no `pf_abi_version` symbol is ABI v1 and predates these fields.
 **ABI version 3** appends `pf_trade_t::open_at_end`, the range-end close
 flag; a v2 reader would misindex the trades array. **ABI version 4**
 appends `pf_report_t::broker_state_hash` / `broker_state_hash_len`; a v3
-reader's struct is 16 bytes too small. **ABI version 5** requires rebuilding
-strategy libraries for the 1.8.0 native order layouts; it preserves the C
-report and trade layouts.
+reader's struct is 16 bytes too small. **ABI version 5** required rebuilding
+strategy libraries for the 1.8.0 native order layouts; **ABI version 6** requires a
+1.9 rebuild for the closed-trade ledger layout. Both preserve the C report and trade layouts.
 
 ## Versioned report modes {#report_modes_v1}
 
@@ -199,7 +199,7 @@ typedef struct pf_report_envelope_v1 {
 ```
 
 Initialize metadata's `struct_size` and `version` before a versioned native
-read. `PF_ABI_VERSION` is 5: passing an envelope to a legacy report function
+read. `PF_ABI_VERSION` is 6: passing an envelope to a legacy report function
 is invalid. Free the embedded payload with the existing report free operation;
 the caller owns the envelope. Bounded per-definition security diagnostics
 remain in the payload in all modes.

@@ -16,8 +16,8 @@ execution, SQLite journaling, recovery and HTTP delivery run in C++.
 
 Both hand-written C++ strategies and `pineforge-codegen-oss` output can expose
 the same strategy C ABI. The new additive native stream API is version 1;
-rebuild strategy libraries against this engine's ABI 5 before using the runner.
-A library stamped 4 is refused at the ABI check, and a matching library without
+rebuild strategy libraries for pineforge 1.9 against this engine's ABI 6 before using the runner.
+A library stamped 5 or earlier is refused at the ABI check, and a matching library without
 the native stream extension is refused before execution.
 The engine and runner are Apache-2.0. The separately distributed compiler
 retains its own source-available/commercial terms.

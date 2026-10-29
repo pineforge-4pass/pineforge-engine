@@ -94,9 +94,9 @@
  *  flag); a v2 reader would misindex every row after the first.
  *  Value 4 appended live-runtime accessors and the per-bar broker-state
  *  hash array to pf_report_t.
- *  Value 5 requires a 1.8.0 module rebuild for the native order layouts,
- *  without growing the caller-allocated C report/trade layouts. */
-#define PF_ABI_VERSION 5
+ *  Value 5 requires a 1.8.0 module rebuild for native order layouts; C report/trade layouts did not grow.
+ *  Value 6 requires a 1.9 module rebuild for the closed-trade ledger layout. */
+#define PF_ABI_VERSION 6
 
 /** Feature probe for the opt-in split chart/request.security feed boundary.
  *  When defined, #strategy_set_aux_security_feed is available. */

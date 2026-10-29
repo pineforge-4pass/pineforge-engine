@@ -7,7 +7,7 @@ fields for a host that runs a strategy live by recomputing `run_backtest_full`
 over its accumulated bars. They were written for the earlier Python `pineforge-live`
 runtime, which is retired; the native runner in `runner/` replaces it.
 ABI v4 shipped in v1.0.0; v0.13.1, the last 0.x release, had ABI 3.
-The current `PF_ABI_VERSION` is 5 from 1.8.0, requiring rebuilt strategy
+The current `PF_ABI_VERSION` is 6 for 1.9, requiring rebuilt strategy
 libraries while preserving this surface and its C layouts. Every one
 of the 25 symbols is
 **default off / read-only** and **never changes a historical run**: the

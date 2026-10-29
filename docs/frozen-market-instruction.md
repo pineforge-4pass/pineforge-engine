@@ -77,7 +77,7 @@ at their owning order. Metadata mutation checks refuse hidden nested fields,
 changed variant/enum alternatives, removed or conditional folds, and waivers.
 The representation is now adapter-owned over native requests. The frozen public
 mirror layout remains append-only and is projected from those facts.
-The public C layouts and stream API 1 are unchanged; the current C ABI version is 5.
+The public C layouts and stream API 1 are unchanged; the current C ABI version is 6.
 
 `test_frozen_market_instruction` pinned role construction, amounts in both
 orientations, quantity ownership, whole-book revocation, replacement,

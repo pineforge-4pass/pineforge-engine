@@ -25,7 +25,7 @@ establish provider availability.
 The envelope contains `metadata` followed by `report`, the unchanged
 `ReportC` / `pf_report_t` payload introduced in ABI 4. Do not append fields to
 either legacy struct: old callers allocate that exact size.
-`PF_ABI_VERSION` is now 5 for the 1.8.0 module rebuild; envelope version 1 is an
+`PF_ABI_VERSION` is now 6 for the 1.9 module rebuild; envelope version 1 is an
 independent, opt-in contract. No existing function can be
 passed the address of an envelope in place of a report.
 
@@ -40,7 +40,7 @@ An envelope must not already own an unfreed payload when filled.
 
 The C-compatible structs do not themselves add a C export. The initial native
 host integration can link the C++ methods. A C/ctypes loader must negotiate a
-provider implementing this contract before selecting SUMMARY_ONLY; ABI 5,
+provider implementing this contract before selecting SUMMARY_ONLY; ABI 6,
 sink-v1 support or the presence of this header is insufficient. A provider
 bridge for that loader must be landed with its implementation and inventory
 updates, not advertised by an unimplemented runtime symbol.

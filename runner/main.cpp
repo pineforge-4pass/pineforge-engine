@@ -386,9 +386,9 @@ class Strategy {
         if (!library_)
             throw std::runtime_error("cannot load compiled strategy library");
         try {
-            auto abi = symbol<decltype(&pf_abi_version)>("pf_abi_version");
-            if (abi() != PF_ABI_VERSION)
-                throw std::runtime_error("strategy ABI mismatch");
+            const int abi = symbol<decltype(&pf_abi_version)>("pf_abi_version")();
+            if (abi != PF_ABI_VERSION)
+                throw std::runtime_error("strategy ABI mismatch: .so reports " + std::to_string(abi) + ", runner expects " + std::to_string(PF_ABI_VERSION) + "; rebuild for pineforge 1.9.");
             if (symbol<decltype(&strategy_stream_api_version)>("strategy_stream_api_version")() !=
                 1)
                 throw std::runtime_error("native stream extension version mismatch");

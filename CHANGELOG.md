@@ -10,12 +10,14 @@ version number follows semantic versioning over the surfaces the
 - Closed-trade reads serve retained sealed rows from backing storage; policy-erased history still refuses with its typed error.
 - Closed-trade text equality can compare bytes without owning strings, count reads are inline, and field reads probe the cache once; rebuild C++ consumers and relink strategies with matching headers and archive.
 
+1.9 needs a module rebuild (ABI 6).
+
 **[1.8.0](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.8.0)**,
 paired with [pineforge-codegen 1.8.0](https://github.com/pineforge-4pass/pineforge-codegen-oss/releases/tag/v1.8.0).
 A minor release. It speeds up the `run_json` wrapper (the wrapper only, not the
 engine), adds one unused storage building block to the library, states where
 scratch files are placed, carries release-gate and CI changes, and stops
-building and publishing macOS. The C ABI version is now `PF_ABI_VERSION` 5,
+building and publishing macOS. The C ABI version was `PF_ABI_VERSION` 5, <!-- verified HEAD -->
 requiring strategy libraries to be rebuilt for the native order layouts.
 The run-failure code catalog adds or removes no code and changes two entries
 since 1.7.0: the optional `engine_invariant` reason vocabulary and the expected

@@ -494,7 +494,7 @@ def check_strategy_module_abi_epoch(previous_path, current_path):
     assert match, "the runtime header must declare its module ABI"
     expected = int(match.group(1))
     assert run_json.EXPECTED_PF_ABI == expected
-    previous = 4  # Previous 1.x release stamp, independent of the live header.
+    previous = 5  # 1.8.0 release stamp, independent of the live header.
 
     probes = []
     for path in paths:
@@ -515,7 +515,7 @@ def check_strategy_module_abi_epoch(previous_path, current_path):
     assert error.code_args == {"reason": "abi_mismatch", "abi": previous}
     assert str(error) == (
         f"pineforge ABI mismatch: .so reports {previous}, harness expects "
-        f"{expected}; rebuild.")
+        f"{expected}; rebuild for pineforge 1.9.")
     assert probes[0].pf_test_abi_calls() == 1
     assert probes[0].pf_test_strategy_calls() == 0
 
