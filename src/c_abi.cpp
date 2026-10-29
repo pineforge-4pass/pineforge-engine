@@ -388,7 +388,7 @@ PF_API int pf_run_abort_restore_sigterm_v1(void) {
 
 /* trade_index is a REPORT row index: pf_report_t::trades is trades_ followed
  * by range_end_trades_ (fill_trades_section, engine_report.cpp), so the
- * accessor uses closed_trade_close_cause's -1 as the resident-window check;
+ * accessor uses closed_trade_close_cause's -1 as the report-index check;
  * get_report_trade keeps global indices, including after a sealed prefix.
  *
  * round-4b F3: this bounded the index by trade_count() == trades_.size(),
@@ -430,7 +430,7 @@ PF_API uint64_t strategy_closed_trade_entry_incarnation(
  * handle, like strategy_get_last_error. This legacy pointer API explicitly
  * materializes each requested row; value/page readers use bounded storage.
  * NULL on a NULL handle or an
- * out-of-range/streamed row, checked by the close-cause query before indexing. */
+ * out-of-range/policy-erased row; retained sealed rows remain readable. */
 PF_API const char* strategy_closed_trade_entry_id(pf_strategy_t s, int trade_index) {
     if (!s) return nullptr;
     const auto* engine = static_cast<const pineforge::BacktestEngine*>(s);

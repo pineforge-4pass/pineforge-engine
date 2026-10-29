@@ -1340,9 +1340,9 @@ PF_API int64_t strategy_position_cycle_seq(pf_strategy_t s);
  *  same REPORT row space as #strategy_closed_trade_entry_incarnation
  *  (`trades_` then the range-end rows, `open_at_end`). The returned pointer
  *  is valid until the next run() (or stream call) on this handle, like
- *  #strategy_get_last_error. NULL on a NULL @p s or an out-of-range
- *  @p trade_index. This legacy borrowed-pointer API materializes each
- *  requested row until the next run; full-history requests use growing RAM. */
+ *  #strategy_get_last_error. NULL on NULL @p s, out-of-range @p trade_index
+ *  or policy-erased rows; retained sealed rows are readable. This legacy API
+ *  materializes rows until the next run; full-history reads use growing RAM. */
 PF_API const char* strategy_closed_trade_entry_id(pf_strategy_t s, int trade_index);
 /** See #strategy_closed_trade_entry_id for the row-space/lifetime/NULL
  *  contract. The returned string is the engine's own INTERNAL exit id, not

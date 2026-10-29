@@ -389,7 +389,7 @@ struct TradeLedger::State {
         std::array<char, kCacheStringBytes> strings{};
         // The generation is even; its low bit records whether all four
         // packed strings fit. This flag adds no padding to the 312-byte entry.
-        bool strings_valid() const { return (generation & size_type{1}) != 0; }
+        [[gnu::always_inline]] bool strings_valid() const { return (generation & size_type{1}) != 0; }
     };
     static_assert(sizeof(CacheEntry) == kLedgerEntryBytes);
     size_type cache_rows = kDefaultCacheRows;
@@ -409,16 +409,16 @@ struct TradeLedger::State {
                                                                      : "value_above_maximum"}},
                                                "trade ledger: cache rows outside [1,1048576]");
     }
-    size_type cache_slot(size_type global) const {
+    [[gnu::always_inline]] size_type cache_slot(size_type global) const {
         // Defaults/growth are powers of two. The public integer knob also
         // permits other final caps, which need the ordinary modulo fallback.
         const auto mask = cache_capacity - 1;
         return (cache_capacity & mask) == 0 ? global & mask : global % cache_capacity;
     }
-    bool current(const CacheEntry& entry) const {
+    [[gnu::always_inline]] bool current(const CacheEntry& entry) const {
         return (entry.generation & ~size_type{1}) == cache_generation;
     }
-    const CacheEntry* cached(size_type global) const {
+    [[gnu::always_inline]] const CacheEntry* cached(size_type global) const {
         if (!cache) return nullptr;
         const auto& entry = cache[cache_slot(global)];
         return current(entry) && entry.global == global ? &entry : nullptr;
@@ -493,14 +493,18 @@ struct TradeLedger::State {
         return remember(global, descriptor(global));
     }
     template<auto Member>
+    [[gnu::always_inline]]
     auto numeric_field(size_type global) const {
-        check(global, true);
+        check(global);
+        if (const auto* entry = cached(global)) return entry->record.*Member;
         return load(global).record.*Member;
     }
     template<StringExtent Record::*Member>
+    [[gnu::always_inline]]
     std::string string_field(size_type global) const {
-        check(global, true);
-        const auto& entry = load(global);
+        check(global);
+        const auto* cached_entry = cached(global);
+        const auto& entry = cached_entry ? *cached_entry : load(global);
         const auto text = entry.record.*Member;
         if (!entry.strings_valid()) return get_string(text);
         size_type offset = 0;
@@ -512,6 +516,25 @@ struct TradeLedger::State {
             offset += static_cast<size_type>(entry.record.exit_comment.length);
         return std::string(entry.strings.data() + offset, static_cast<size_type>(text.length));
     }
+    template<StringExtent Record::*Member>
+    [[gnu::always_inline]]
+    bool string_equals(size_type global, std::string_view rhs) const {
+        check(global);
+        const auto* cached_entry = cached(global);
+        const auto& entry = cached_entry ? *cached_entry : load(global);
+        const auto text = entry.record.*Member;
+        if (!entry.strings_valid() || text.length > kCacheStringBytes)
+            return string_equals_chunks(text, rhs);
+        size_type offset = 0;
+        if constexpr (Member != &Record::entry_id)
+            offset += static_cast<size_type>(entry.record.entry_id.length);
+        if constexpr (Member == &Record::exit_comment || Member == &Record::exit_id)
+            offset += static_cast<size_type>(entry.record.entry_comment.length);
+        if constexpr (Member == &Record::exit_id)
+            offset += static_cast<size_type>(entry.record.exit_comment.length);
+        return std::string_view(entry.strings.data() + offset,
+                                static_cast<size_type>(text.length)) == rhs;
+    }
     static std::uint64_t absolute_record_offset(size_type global) {
         if (global > std::numeric_limits<std::uint64_t>::max() / sizeof(Record))
             throw detail::ScratchIoError(EFBIG, "trade ledger offset");
@@ -520,11 +543,16 @@ struct TradeLedger::State {
     std::uint64_t record_offset(size_type global) const {
         return absolute_record_offset(global) - index_origin;
     }
+    [[noreturn, gnu::cold, gnu::noinline]]
+    static void throw_check_failure(bool retired) {
+        if (retired) throw detail::RetiredTradeHistoryRead();
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                       "trade ledger: row outside resident window");
+    }
+    [[gnu::always_inline]]
     void check(size_type global, bool mutable_row = false) const {
-        if (retiring && global < first) throw detail::RetiredTradeHistoryRead();
-        if (global >= end || (mutable_row && global < first))
-            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
-                                           "trade ledger: row outside resident window");
+        if (retiring && global < first) throw_check_failure(true);
+        if (global >= end || (mutable_row && global < first)) throw_check_failure(false);
     }
     size_type slot(size_type global) const {
         return (head + global - resident_first) % kResidentRows;
@@ -572,6 +600,29 @@ struct TradeLedger::State {
                 payload.read(text.offset - payload_origin, result, length);
             }
         }
+    }
+    [[gnu::noinline, gnu::cold]]
+    bool string_equals_chunks(StringExtent text, std::string_view rhs) const {
+        validate_string(text);
+        const auto length = static_cast<size_type>(text.length);
+        // Match the scratch transfer budget; keep this fixed buffer off the
+        // cache-hit stack and independent of the requested field's length.
+        std::array<char, detail::ScratchFile::kCacheBytes> chunk;
+        bool equal = length == rhs.size();
+        for (size_type offset = 0; offset < length;) {
+            const auto count = std::min(chunk.size(), length - offset);
+            if (payload_end - text.offset <= kPayloadTailBytes)
+                read_string({text.offset + offset, count}, chunk.data());
+            else
+                payload.read(text.offset + offset - payload_origin, chunk.data(), count);
+            // Never skip a read after a length/content mismatch: the owning
+            // read would still surface an I/O failure later in the extent.
+            if (equal && std::string_view(chunk.data(), count)
+                             != std::string_view(rhs.data() + offset, count))
+                equal = false;
+            offset += count;
+        }
+        return equal;
     }
     std::string get_string(StringExtent text) const {
         validate_string(text);
@@ -846,19 +897,19 @@ Trade TradeLedger::read(size_type global) const {
 
 Trade TradeLedger::operator[](size_type global) const { return at(global); }
 Trade TradeLedger::at(size_type global) const {
-    state_->check(global, true);
+    state_->check(global);
     return read(global);
 }
 
 Trade TradeLedger::back() const {
-    if (size() == base())
+    if (empty())
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                        "trade ledger: no resident last row");
     return read(size() - 1);
 }
 
 Trade TradeLedger::numeric_at(size_type global) const {
-    state_->check(global, true);
+    state_->check(global);
     return State::decode_numeric(state_->descriptor(global));
 }
 
@@ -873,6 +924,18 @@ std::string TradeLedger::exit_comment_at(size_type global) const {
 }
 std::string TradeLedger::exit_id_at(size_type global) const {
     return state_->string_field<&State::Record::exit_id>(global);
+}
+bool TradeLedger::entry_id_equals(size_type global, std::string_view rhs) const {
+    return state_->string_equals<&State::Record::entry_id>(global, rhs);
+}
+bool TradeLedger::exit_id_equals(size_type global, std::string_view rhs) const {
+    return state_->string_equals<&State::Record::exit_id>(global, rhs);
+}
+bool TradeLedger::entry_comment_equals(size_type global, std::string_view rhs) const {
+    return state_->string_equals<&State::Record::entry_comment>(global, rhs);
+}
+bool TradeLedger::exit_comment_equals(size_type global, std::string_view rhs) const {
+    return state_->string_equals<&State::Record::exit_comment>(global, rhs);
 }
 double TradeLedger::pnl_at(size_type global) const {
     return state_->numeric_field<&State::Record::pnl>(global);
@@ -938,6 +1001,7 @@ void TradeLedger::replace(size_type global, const Trade& row) {
 }
 
 void TradeLedger::modify(size_type global, const std::function<void(Trade&)>& edit) {
+    state_->check(global, true);
     Trade row = at(global);
     edit(row);
     replace(global, row);
@@ -999,7 +1063,7 @@ bool TradeLedger::previous(size_type& cursor, Trade& value) const {
 }
 
 const Trade& TradeLedger::materialize(size_type global) const {
-    state_->check(global, true);
+    state_->check(global);
     const auto found = state_->materialized.find(global);
     if (found != state_->materialized.end()) return found->second;
     return state_->materialized.emplace(global, read(global)).first->second;
@@ -1012,9 +1076,9 @@ void TradeLedger::seal(size_type global_end) {
     // The consumer has already emitted T and folded all logical identities.
     // Only an explicitly admitted sink run drops its physical history.
     state_->retire(global_end);
-    // Publication changes no row content, and the checked accessors refuse
-    // sealed rows before they reach the cache: cached entries stay valid, so a
-    // closedtrades loop is not made cold again by every published trade.
+    // Publication changes no retained row content: cached entries stay valid,
+    // so sealed reads can reuse them without making a closedtrades loop cold.
+    // Physical retirement invalidates its cache and refuses erased rows.
     while (state_->count != 0 && state_->resident_first < global_end) state_->evict();
     state_->first = global_end;
 }
