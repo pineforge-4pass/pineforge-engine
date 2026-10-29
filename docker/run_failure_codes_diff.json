@@ -8,14 +8,137 @@
   "to": {
     "version": null,
     "unreleased": true,
-    "catalogSha256": "b41d21b856aa1afe11a1ab8a734b7231a8527ff633a75794d09c6f34206f1414"
+    "catalogSha256": "811f5e5bccacc6fe7d33544bcb3ff04a231fc9843b37613cdc72b180a53cd21f"
   },
   "catalogSchema": {
     "before": "pineforge-run-failure-catalog/v1",
     "after": "pineforge-run-failure-catalog/v1"
   },
-  "metadataChanges": [],
+  "metadataChanges": [
+    {
+      "path": "classes.resource",
+      "beforePresent": true,
+      "afterPresent": true,
+      "before": "Machine memory or scratch storage; retryability is specified per code.",
+      "after": "Machine memory, scratch storage, host process or transport availability and budgets, including an unavailable producer; retryability is specified per code."
+    }
+  ],
   "added": [
+    {
+      "code": "diagnostic_budget_exceeded",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "cap_bytes": {
+            "kind": "integer"
+          },
+          "requested_bytes": {
+            "kind": "integer"
+          },
+          "used_bytes": {
+            "kind": "integer"
+          }
+        },
+        "class": "resource",
+        "description": "The diagnostics exceed their admitted byte budget.",
+        "english": [
+          "The diagnostics exceed their admitted byte budget."
+        ],
+        "retryable": false,
+        "since": "1.9.0"
+      }
+    },
+    {
+      "code": "report_budget_exceeded",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "cap_bytes": {
+            "kind": "integer"
+          },
+          "channel": {
+            "kind": "vocab",
+            "values": [
+              "json",
+              "aggregate"
+            ]
+          },
+          "requested_bytes": {
+            "kind": "integer"
+          },
+          "used_bytes": {
+            "kind": "integer"
+          }
+        },
+        "class": "resource",
+        "description": "The report exceeds its admitted byte budget.",
+        "english": [
+          "The report exceeds its admitted byte budget."
+        ],
+        "retryable": false,
+        "since": "1.9.0"
+      }
+    },
+    {
+      "code": "report_channel_failed",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "channel": {
+            "kind": "vocab",
+            "values": [
+              "report",
+              "sink",
+              "candidate",
+              "diagnostic",
+              "status"
+            ]
+          },
+          "reason": {
+            "kind": "vocab",
+            "values": [
+              "setup",
+              "io",
+              "peer_closed",
+              "deadline",
+              "protocol"
+            ]
+          }
+        },
+        "class": "resource",
+        "description": "A report transport could not complete.",
+        "english": [
+          "A report transport could not complete."
+        ],
+        "retryable": false,
+        "since": "1.9.0"
+      }
+    },
+    {
+      "code": "run_deadline_exceeded",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "stage": {
+            "kind": "vocab",
+            "values": [
+              "prepare",
+              "compile",
+              "run",
+              "finalize",
+              "publish"
+            ]
+          }
+        },
+        "class": "resource",
+        "description": "The admitted channel lifetime expired.",
+        "english": [
+          "The admitted channel lifetime expired."
+        ],
+        "retryable": false,
+        "since": "1.9.0"
+      }
+    },
     {
       "code": "run_descriptor_limit_exceeded",
       "collection": "codes",
@@ -65,6 +188,84 @@
         "description": "Descriptor admission exceeded the finite run allowance or the process soft NOFILE limit. used includes committed and pending descriptors before the denied additional requested count; peak is the preceding high water. Counters are host-owned nonnegative integers at most 2^53-1.",
         "english": [
           "run quota refused"
+        ],
+        "retryable": false,
+        "since": "1.9.0"
+      }
+    },
+    {
+      "code": "run_isolation_unavailable",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "reason": {
+            "kind": "vocab",
+            "values": [
+              "platform",
+              "policy",
+              "descriptor"
+            ]
+          }
+        },
+        "class": "unsupported",
+        "description": "The requested report isolation is unavailable.",
+        "english": [
+          "The requested report isolation is unavailable."
+        ],
+        "retryable": false,
+        "since": "1.9.0"
+      }
+    },
+    {
+      "code": "run_process_refused",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "operation": {
+            "kind": "vocab",
+            "values": [
+              "fork",
+              "vfork",
+              "clone",
+              "clone3"
+            ]
+          }
+        },
+        "class": "resource",
+        "description": "The native process attempted forbidden process creation.",
+        "english": [
+          "The native process attempted forbidden process creation."
+        ],
+        "retryable": false,
+        "since": "1.9.0"
+      }
+    },
+    {
+      "code": "run_producer_failed",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "exit_status": {
+            "kind": "integer",
+            "optional": true
+          },
+          "reason": {
+            "kind": "vocab",
+            "values": [
+              "exit",
+              "signal",
+              "claim"
+            ]
+          },
+          "signal": {
+            "kind": "integer",
+            "optional": true
+          }
+        },
+        "class": "resource",
+        "description": "The native report producer did not complete successfully.",
+        "english": [
+          "The native report producer did not complete successfully."
         ],
         "retryable": false,
         "since": "1.9.0"
