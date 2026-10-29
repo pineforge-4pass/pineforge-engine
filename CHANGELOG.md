@@ -7,11 +7,10 @@ version number follows semantic versioning over the surfaces the
 
 ## 1.9.0 — 2026-10-30
 
-- The shared window-plan library links on macOS again: an Apple-only linker
-  option in `CMakeLists.txt` allows the one symbol the library leaves for its
-  host to stay undefined, which is the macOS link failure recorded as a known
-  issue for 1.8.0. macOS remains unsupported and no CI job builds it; only the
-  Linux x86_64 and arm64 legs run.
+- On macOS, `CMakeLists.txt` now lets one symbol,
+  `strategy_reads_trade_history`, stay undefined when linking the shared
+  window-plan library (the 1.8.0 known issue). macOS is not supported and no CI
+  job builds or tests it.
 - Register seven failure codes for the planned supervised report channel.
   With the three run-quota codes they form the ten codes added in 1.9.0,
   numbered 70 to 79 in name order after the existing codes. Nothing emits the
