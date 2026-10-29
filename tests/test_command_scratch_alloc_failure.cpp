@@ -251,8 +251,8 @@ void disk_directory_io_failure() {
         require(error.code() == std::error_code(ENOTDIR, std::generic_category()),
                 "a genuine invalid scratch directory preserves ENOTDIR");
         require(std::string(error.what()).find("command scratch create") == 0
-                    && std::string(error.what()).find("/dev/null") != std::string::npos,
-                (std::string("the disk failure retains its command-create operation and selected path; observed what(): ")
+                    && std::string(error.what()).find("Not a directory") != std::string::npos,
+                (std::string("the disk failure retains its command-create operation and the system text; observed what(): ")
                     + error.what()).c_str());
     }
     require(caught, "an unusable scratch directory must fail");
