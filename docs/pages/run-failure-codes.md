@@ -104,7 +104,7 @@ codes it tested the text alone, so a script stopped by an empty
 The tables below list the catalog at this tree.
 
 The catalog contains 79 named failure codes: 38 first released in 1.4.0,
-26 first released in 1.5.0, 5 added in 1.7.0, and 10 scheduled for 1.9.0
+26 first released in 1.5.0, 5 added in 1.7.0, and 10 added in 1.9.0
 (3 run-quota codes and 7 report-channel codes). One unnamed `none` sentinel
 gives 80 registry entries; existing numbers stay fixed.
 
