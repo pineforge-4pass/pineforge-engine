@@ -7,6 +7,10 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
+- Register seven failure codes for the planned supervised report channel,
+  appended after the existing codes. Nothing emits them yet; no existing
+  code, argument or exit status changes.
+
 ### Closed-trade reads
 
 - C++ callers can compare closed-trade ids and comments in place, including
