@@ -9,7 +9,6 @@
  * own NativeRunSpec::report_open_position_at_end). This file keeps no entry,
  * exit or range-end helper of its own (ADR-0001 rule 5).
  */
-
 #include "engine_internal.hpp"
 #include <pineforge/order_action.hpp>
 #include <pineforge/run_failure.hpp>

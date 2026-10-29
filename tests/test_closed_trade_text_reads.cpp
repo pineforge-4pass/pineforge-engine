@@ -396,8 +396,15 @@ template<Field F> void append_inputs(Reader& host, const std::vector<std::string
         host.ledger().push_back(trade);
     }
 }
+// A numeric read admits the decoded record only; the four packed strings are
+// filled by the first text read of a row. One text read per row therefore
+// belongs to the warm-up, or the first measured access of each row would pay
+// the one-time packing reads and break the zero-pread bound below.
 void warm(TradeLedger& ledger, Size rows) {
-    for (Size i = 0; i < rows; ++i) (void)ledger.pnl_at(i);
+    for (Size i = 0; i < rows; ++i) {
+        (void)ledger.pnl_at(i);
+        (void)ledger.entry_id_at(i);
+    }
 }
 template<Field F> constexpr View short_literal() {
     if constexpr (F == Field::EntryId) return "entry-short";
