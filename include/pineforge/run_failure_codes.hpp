@@ -85,8 +85,15 @@ enum class RunFailureCode : std::uint16_t {
     run_descriptor_limit_exceeded = 70,
     run_quota_configuration_invalid = 71,
     run_resource_quota_exceeded = 72,
+    diagnostic_budget_exceeded = 73,
+    report_budget_exceeded = 74,
+    report_channel_failed = 75,
+    run_deadline_exceeded = 76,
+    run_isolation_unavailable = 77,
+    run_process_refused = 78,
+    run_producer_failed = 79,
 };
 
-inline constexpr std::uint16_t kRunFailureCodeCount = 73;
+inline constexpr std::uint16_t kRunFailureCodeCount = 80;
 
 }  // namespace pineforge
