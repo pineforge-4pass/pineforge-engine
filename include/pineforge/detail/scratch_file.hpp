@@ -3,9 +3,11 @@
 #include <pineforge/detail/scratch_slab.hpp>
 #include <pineforge/detail/scratch_arena.hpp>
 #include <pineforge/detail/scratch_directory.hpp>
+#include <pineforge/detail/run_quota.hpp>
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
@@ -13,9 +15,11 @@
 #include <fcntl.h>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <system_error>
 #include <unistd.h>
 #include <utility>
@@ -27,6 +31,128 @@ namespace pineforge::detail {
 
 // Compatibility name for ledger/phase users of the report-scratch backend.
 using ScratchIoError = ReportScratchIoError;
+
+// Physical-file accounting shared with the command backing, whose syscalls
+// bypass ScratchFile. Construct only in managed mode, before mkstemp. The host
+// confirms the admitted inode before accepting created()'s COMMIT.
+class ScratchFileQuota {
+public:
+    explicit ScratchFileQuota(QuotaArtifact artifact)
+        : quota_(RunQuota::from_environment()), artifact_(artifact) {
+        static std::atomic<std::uint64_t> generations{0};
+        auto generation = generations.load(std::memory_order_relaxed);
+        for (;;) {
+            if (generation == std::numeric_limits<std::uint64_t>::max())
+                throw coded<std::runtime_error>(RunFailureCode::run_quota_configuration_invalid,
+                    {{"stage", "execution"}, {"reason", "counter_overflow"}, {"setting", "protocol"}},
+                    "scratch quota object generation exhausted");
+            if (generations.compare_exchange_weak(generation, generation + 1,
+                                                   std::memory_order_relaxed)) break;
+        }
+        object_ = {static_cast<std::uint64_t>(::getpid()), generation + 1, 0, 0};
+        creation_ = quota_.reserve(object_, {0, 1, 0, 0}, 0, 0,
+                                   QuotaStage::execution, artifact_);
+    }
+
+    // A failed create proves that none of its reservation was realized.
+    void create_failed() noexcept {
+        const int saved_errno = errno;
+        try { creation_.cancel(); } catch (...) {}
+        errno = saved_errno;
+    }
+    // Return query errno to the caller's established I/O raiser. On a query
+    // or protocol failure the unknown inode remains reserved for host cleanup.
+    int created(int fd) {
+        struct stat info{};
+        int result;
+        do { result = ::fstat(fd, &info); } while (result != 0 && errno == EINTR);
+        if (result != 0) return errno;
+        struct statvfs filesystem{};
+        do { result = ::fstatvfs(fd, &filesystem); } while (result != 0 && errno == EINTR);
+        if (result != 0) return errno;
+        block_size_ = filesystem.f_bsize;
+        (void)quota_rounded_extent(0, block_size_);
+        object_.device = static_cast<std::uint64_t>(info.st_dev);
+        object_.inode = static_cast<std::uint64_t>(info.st_ino);
+        creation_.commit({0, 1, 0, 0}, 0, object_.device, object_.inode);
+        registered_ = true;
+        creation_.cancel();
+        return 0;
+    }
+    void unlinked() noexcept { unlinked_ = true; }
+    void borrow_descriptor() noexcept { borrowed_ = true; }
+    // Only an exclusive, anonymous backing can prove last-close locally.
+    // Borrowed descriptors/named residue stay with the host lease, even after
+    // this owner closes; unlink or a failed close alone refunds nothing.
+    void closed() noexcept {
+        if (!registered_ || !unlinked_ || borrowed_) return;
+        const int saved_errno = errno;
+        try {
+            quota_.release(object_, {charged_, 1, 0, 0}, charged_, 0,
+                           QuotaStage::execution, artifact_);
+            registered_ = false;
+        } catch (...) {}
+        errno = saved_errno;
+    }
+
+    class Growth {
+    public:
+        Growth(ScratchFileQuota& owner, std::uint64_t requested_end)
+            : owner_(owner), realized_(owner.extent_) {
+            owner.quota_.check();
+            const auto requested = quota_rounded_extent(
+                std::max(owner.extent_, requested_end), owner.block_size_);
+            ticket_ = owner.quota_.reserve(owner.object_, {requested - owner.charged_, 0, 0, 0},
+                owner.charged_, requested, QuotaStage::execution, owner.artifact_);
+        }
+        Growth(const Growth&) = delete;
+        Growth& operator=(const Growth&) = delete;
+        ~Growth() noexcept {
+            const int saved_errno = errno;
+            // Preserve the selected I/O exception/errno if reconciliation also
+            // fails. The ticket then conservatively retains unknown growth.
+            try { finish(); } catch (...) {}
+            errno = saved_errno;
+        }
+        void wrote(std::uint64_t end) noexcept { realized_ = std::max(realized_, end); }
+        void truncated(std::uint64_t bytes) noexcept { realized_ = bytes; }
+        void finish() {
+            if (finished_) return;
+            finished_ = true;
+            owner_.extent_ = realized_;
+            const auto actual = quota_rounded_extent(realized_, owner_.block_size_);
+            const auto committed = std::max(owner_.charged_, actual);
+            ticket_.commit({committed - owner_.charged_, 0, 0, 0}, committed,
+                           owner_.object_.device, owner_.object_.inode);
+            owner_.charged_ = committed;
+            ticket_.cancel();
+            // A shrink is observed only after the successful sizing syscall.
+            if (actual < committed) {
+                owner_.quota_.release(owner_.object_, {committed - actual, 0, 0, 0},
+                    committed, actual, QuotaStage::execution, owner_.artifact_);
+                owner_.charged_ = actual;
+            }
+        }
+
+    private:
+        ScratchFileQuota& owner_;
+        std::uint64_t realized_;
+        QuotaTicket ticket_;
+        bool finished_ = false;
+    };
+
+private:
+    RunQuota quota_;
+    QuotaObject object_;
+    QuotaArtifact artifact_;
+    QuotaTicket creation_;
+    std::uint64_t block_size_ = 0;
+    std::uint64_t extent_ = 0;
+    std::uint64_t charged_ = 0;
+    bool registered_ = false;
+    bool unlinked_ = false;
+    bool borrowed_ = false;
+};
 
 // Run-owned positional scratch: an anonymous, close-on-exec file for an empty
 // owner, or checked slab copies when bound. Without a slab, open() selects an
@@ -48,6 +174,7 @@ public:
         if (this != &other) {
             clear();
             fd_ = std::exchange(other.fd_, -1);
+            quota_ = std::move(other.quota_);
             directory_ = std::move(other.directory_);
             slab_ = std::move(other.slab_);
             resource_ = other.resource_;
@@ -101,8 +228,12 @@ public:
     void clear() noexcept {
         if (arena_) arena_->release_region(region_);
         arena_ = nullptr;
-        if (fd_ >= 0) ::close(fd_);
+        if (fd_ >= 0) {
+            const int result = ::close(fd_);
+            if (result == 0 && quota_) quota_->closed();
+        }
         fd_ = -1;
+        quota_.reset();
         clean_bytes_read_ = bytes_written_since_sync_ = 0;
         // resource_ was validated at bind. Clearing reuses the same allocation
         // and binding; a later empty-owner bind explicitly restores disk mode.
@@ -112,7 +243,10 @@ public:
     bool arena_backed() const noexcept { return arena_ != nullptr; }
     // The report facade retains its file-mode descriptor/truncate API.
     // Arena readers continue to borrow the store rather than the shared fd.
-    int descriptor() const noexcept { return fd_; }
+    int descriptor() const noexcept {
+        if (quota_) quota_->borrow_descriptor();
+        return fd_;
+    }
     // Physical occupancy diagnostic, not logical row identity. Arena values
     // include chunk rounding; disk values are the anonymous file's extent.
     std::uint64_t storage_bytes() const {
@@ -160,15 +294,22 @@ public:
             arena_io([&] { arena_->truncate(region_, bytes); });
             return;
         }
+        std::optional<ScratchFileQuota::Growth> reservation;
+        if (quota_) reservation.emplace(*quota_, bytes);
         int result;
         do { result = ::ftruncate(fd_, static_cast<off_t>(bytes)); }
         while (result != 0 && errno == EINTR);
         if (result != 0) io_error(errno, "report scratch truncate");
+        if (reservation) {
+            reservation->truncated(bytes);
+            reservation->finish();
+        }
     }
     void open(const char* prefix) {
         if (slab_) return;
         if (opened()) return;
         if (auto* arena = ScratchArena::attached()) {
+            if (mode() == QuotaMode::managed) RunQuota::from_environment().check();
             arena_io([&] { arena->open_region(region_); });
             arena_ = arena;
             return;
@@ -185,16 +326,41 @@ public:
         if (name.back() != '/') name += '/';
         name += prefix;
         name += "-XXXXXX";
+        if (mode() == QuotaMode::managed) {
+            const auto artifact = region_.store == ScratchStore::curve
+                ? QuotaArtifact::curve : QuotaArtifact::table;
+            quota_ = std::make_unique<ScratchFileQuota>(artifact);
+        }
         const int opened = ::mkstemp(name.data());
-        if (opened < 0) io_error(errno, create_message.c_str());
+        if (opened < 0) {
+            const int error = errno;
+            if (quota_) quota_->create_failed();
+            quota_.reset();
+            io_error(error, create_message.c_str());
+        }
+        try {
+            if (quota_) {
+                const int error = quota_->created(opened);
+                if (error != 0) io_error(error, "scratch backing");
+            }
+        } catch (...) {
+            ::close(opened);
+            ::unlink(name.c_str());
+            quota_.reset();
+            throw;
+        }
         if (::unlink(name.c_str()) != 0) {
             const int error = errno;
             ::close(opened);
+            quota_.reset();
             io_error(error, "scratch unlink");
         }
+        if (quota_) quota_->unlinked();
         if (::fcntl(opened, F_SETFD, FD_CLOEXEC) == -1) {
             const int error = errno;
-            ::close(opened);
+            const int result = ::close(opened);
+            if (result == 0 && quota_) quota_->closed();
+            quota_.reset();
             io_error(error, "scratch cloexec");
         }
         fd_ = opened;
@@ -239,6 +405,7 @@ public:
         auto* arena = ScratchArena::attached();
         if (!arena) throw std::logic_error("bounded scratch requires an attached arena");
         check_extent(max_bytes, 0, true, io_raiser_);
+        if (mode() == QuotaMode::managed) RunQuota::from_environment().check();
         arena_io([&] { arena->open_region(region_, max_bytes); });
         arena_ = arena;
     }
@@ -258,14 +425,23 @@ public:
             arena_io([&] { arena_->ensure_size(region_, bytes, needed_bytes_lower_bound); });
             return;
         }
+        std::optional<ScratchFileQuota::Growth> reservation;
+        if (quota_) reservation.emplace(*quota_, bytes);
         struct stat status{};
         int result;
         do { result = ::fstat(fd_, &status); } while (result != 0 && errno == EINTR);
         if (result != 0) io_error(errno, "scratch size");
-        if (status.st_size >= static_cast<off_t>(bytes)) return;
+        if (status.st_size >= static_cast<off_t>(bytes)) {
+            if (reservation) reservation->finish();
+            return;
+        }
         do { result = ::ftruncate(fd_, static_cast<off_t>(bytes)); }
         while (result != 0 && errno == EINTR);
         if (result != 0) io_error(errno, "scratch resize");
+        if (reservation) {
+            reservation->truncated(bytes);
+            reservation->finish();
+        }
     }
     static void check_extent(std::uint64_t offset, std::size_t length, bool arena = false,
                              IoRaiser raiser = IoRaiser::report_sink) {
@@ -292,11 +468,17 @@ public:
         if (slab_) slab_->write_at(resource_, offset, data, count);
         else if (arena_) arena_io([&] { arena_->write(region_, offset, data, count); });
         else {
+            std::optional<ScratchFileQuota::Growth> reservation;
+            if (quota_) reservation.emplace(*quota_, length == 0 ? 0 : offset + length);
             prepare_write();
             const auto chunk = std::min(count, bounded_cache_
                 ? kCacheBytes - bytes_written_since_sync_
                 : static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()));
             const ssize_t written = ::pwrite(fd_, data, chunk, static_cast<off_t>(offset));
+            if (reservation && written >= 0) {
+                if (written > 0) reservation->wrote(offset + static_cast<std::uint64_t>(written));
+                reservation->finish();
+            }
             if (written > 0 && bounded_cache_)
                 bytes_written_since_sync_ += static_cast<std::size_t>(written);
             return written;
@@ -336,6 +518,8 @@ public:
             arena_io([&] { arena_->write(region_, offset, data, length); });
             return;
         }
+        std::optional<ScratchFileQuota::Growth> reservation;
+        if (quota_ && length != 0) reservation.emplace(*quota_, offset + length);
         const auto* bytes = static_cast<const unsigned char*>(data);
         std::size_t written = 0;
         while (written < length) {
@@ -348,8 +532,10 @@ public:
             if (count < 0 && errno == EINTR) continue;
             if (count <= 0) io_error(count < 0 ? errno : EIO, "scratch write");
             written += static_cast<std::size_t>(count);
+            if (reservation) reservation->wrote(offset + written);
             if (bounded_cache_) bytes_written_since_sync_ += static_cast<std::size_t>(count);
         }
+        if (reservation) reservation->finish();
     }
     void read(std::uint64_t offset, void* data, std::size_t length) const {
         if (slab_) {
@@ -446,5 +632,7 @@ private:
     ScratchArena::Region region_;
     mutable std::size_t clean_bytes_read_ = 0;
     std::size_t bytes_written_since_sync_ = 0;
+    // Empty in unmanaged mode: no quota allocation, query or ledger traffic.
+    std::unique_ptr<ScratchFileQuota> quota_;
 };
 } // namespace pineforge::detail
