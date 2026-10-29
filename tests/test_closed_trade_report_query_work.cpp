@@ -2,17 +2,21 @@
 // body comes from the build-directory overlay, including same-TU array calls.
 #include "closed_trade_query_work.hpp"
 #include "trade_stats_reference.hpp"
+
+// TradeLedger's declaration is already included. Only call arguments in the
+// real report TU are forwarded; this counts hits as well as scratch reads.
+// The report TU comes first: the metrics TU declares its own metrics::detail,
+// and once that is visible the report TU's `detail::` names inside functions
+// that use `metrics` become ambiguous with pineforge::detail.
+#define numeric_at(index) numeric_at(::closed_trade_query_work::numeric_index(__func__, (index)))
+#include "../src/engine_report.cpp"
+#undef numeric_at
+
 #include "closed_trade_work_engine_metrics.cpp"
 
 #ifndef PINEFORGE_TEST_CLOSED_TRADE_METRIC_OVERLAY
 #error "setup failure: accumulator input counting overlay is missing"
 #endif
-
-// TradeLedger's declaration is already included. Only call arguments in the
-// real report TU are forwarded; this counts hits as well as scratch reads.
-#define numeric_at(index) numeric_at(::closed_trade_query_work::numeric_index(__func__, (index)))
-#include "../src/engine_report.cpp"
-#undef numeric_at
 
 namespace {
 using namespace closed_trade_query_work;
