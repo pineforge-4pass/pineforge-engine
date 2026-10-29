@@ -35,9 +35,9 @@ and deletes the provisional file otherwise.
 PATH is a dedicated output pathname owned exclusively by this invocation.
 File mode runs as a uid permitted to write the output and spool directories,
 without RLIMIT_FSIZE=0.
-PINEFORGE_RUN_JSON_PROFILE accepts unjailed (default) or jailed. File mode
-is excluded under jailed before touching PATH or creating a spool: exit 3,
-with reason finalizer_file_output_no_jailed_route in a text diagnostic.
+PINEFORGE_RUN_JSON_PROFILE accepts unjailed (default) or jailed. File mode is excluded under jailed before touching
+PATH or creating a spool: exit 3, with a text diagnostic naming finalizer_file_output_no_jailed_route on stderr only when --receipt-fd is not 2.
+With --receipt-fd 2, the caller sees exit 3 and the ordinary failure receipt only, indistinguishable from a malformed stream.
 Stdout mode with a positive --max-bytes remains accepted.
 An old entry at PATH is unlinked before receiving input, so a failed run
 cannot leave an old success behind. A random mode-0600 spool is created
@@ -104,7 +104,7 @@ removes PATH and returns 5; the receiver must require exit 0.
 Exit codes:
   0  complete and verified; sink delivered/published and receipt written
   2  usage error
-  3  malformed stream; host-profile refusal with a text diagnostic naming the reason
+  3  malformed stream (JSON/schema/line rule, run-id mismatch, or E/T/O/K order) or a host-profile refusal (text diagnostic naming the reason on stderr only when --receipt-fd is not 2; with --receipt-fd 2, the ordinary failure receipt only, indistinguishable from a malformed stream)
   4  verification failure: trailer grammar, counts, SHA-256, or extra bytes
   5  input/output I/O failure (including receipt/rename)
   6  EOF without a trailer, including empty input/final fragments

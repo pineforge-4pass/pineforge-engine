@@ -430,7 +430,7 @@ def test_host_profile_refusals_keep_text_diagnostics_and_ordinary_receipts(
         tmp_path, payload, out=output, receipt_pipe=receipt_channel != "stdout",
         extra=("--receipt-fd", "2") if receipt_channel == "stderr" else ())
     assert result.returncode == 3, result.stderr
-    if receipt_channel == "stderr":
+    if receipt_channel == "stderr":  # fd 2 is silent by design: ordinary receipt only.
         assert receipt is None and result.stdout == b""
         receipt = json.loads(result.stderr)
         assert result.stderr == encoded(receipt)
@@ -831,11 +831,11 @@ def test_receipt_contract_text_lists_every_receipt_shape():
         for label, keys in re.findall(r"Keys \(([^)]+)\):\s*([a-z0-9_,\s]+)\.", section)
     }
     assert described == {
-        "success": RECEIPT_KEYS,
-        "ordinary failure": RECEIPT_KEYS,
-        "exit-8 exhaustion": EXHAUSTED_RECEIPT_KEYS,
-        "typed refusal with M=2": TYPED_REFUSAL_RECEIPT_KEYS,
+        "success": RECEIPT_KEYS, "ordinary failure": RECEIPT_KEYS,
+        "exit-8 exhaustion": EXHAUSTED_RECEIPT_KEYS, "typed refusal with M=2": TYPED_REFUSAL_RECEIPT_KEYS,
     }
+    assert finalizer.__doc__.count("on stderr only when --receipt-fd is not 2") == 2
+    assert finalizer.__doc__.count("ordinary failure receipt only, indistinguishable from a malformed stream") == 2
 
 
 @pytest.mark.parametrize("stdout_mode", [False, True])

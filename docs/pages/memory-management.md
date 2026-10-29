@@ -238,7 +238,7 @@ trailer raises `missing header or trailer`.
 and exit status 1
 (2 for the refusals above). The separate sink finalizer tool,
 `docker/pineforge_sink_finalize.py`, has its own exit statuses: 0 complete and verified, 2 usage error,
-3 malformed stream, 4 verification failure, 5 input or output failure, 6 end of input without a
+3 malformed stream or host-profile refusal, 4 verification failure, 5 input or output failure, 6 end of input without a
 trailer, 7 internal error, 8 `sink_exhausted` (the stream exceeds `--max-bytes`;
 `sink_exhausted` at `docker/pineforge_sink_finalize.py:104-113`). Its output is provisional until
 exit 0, and a consumer must discard everything it received on exit 3 to 8 (`PROVISIONAL` at

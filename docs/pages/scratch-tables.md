@@ -262,9 +262,9 @@ APP acceptance tests remain **planned**, not established by engine host fakes.
 trace-name dedup, Docker feed trim and reverse-CSV staging need writable storage.
 It raises the existing typed RuntimeError (exit 1), reason
 `strategy_driver_no_jailed_route`, before any native result or output staging.
-`pineforge-sink-finalize` file-output mode is excluded before output removal
-and spool creation: exit 3 with a text diagnostic naming
-`finalizer_file_output_no_jailed_route` (no typed code or arguments).
+`pineforge-sink-finalize` file-output mode is excluded before output removal and spool creation: exit 3,
+with a text diagnostic naming `finalizer_file_output_no_jailed_route` on stderr only when `--receipt-fd` is not 2 (no typed code or arguments).
+With `--receipt-fd 2`, the caller sees exit 3 and the ordinary failure receipt only, indistinguishable from a malformed stream.
 The strategy driver uses `run_request_invalid` and `{"option":"arguments"}`;
 its reason is in diagnostic text, without new typed argument keys.
 Unjailed file mode needs writable output and spool directories.
