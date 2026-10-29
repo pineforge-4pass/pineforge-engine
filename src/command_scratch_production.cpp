@@ -196,7 +196,7 @@ private:
             failure_ = error;
             return ScratchStatus::io_error;
         } catch (...) {
-            // All backing faults obey the L6 io_error ruling. Caller contract
+            // All backing faults return io_error. Caller contract
             // violations are checked before reaching ScratchFile.
             return ScratchStatus::io_error;
         }
