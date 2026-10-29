@@ -71,7 +71,7 @@ typedef struct pf_report_sink_fd_v1 {
  *  until the trailer exists. complete becomes 1 once the trailer is written.
  *  trades_retained is 1 when closedtrades.* history stays script-readable.
  *  The explicit seven-byte reserved field gives a 144-byte layout with no
- *  implicit padding. PF_ABI_VERSION is 5; no existing report/trade grows.
+ *  implicit padding. PF_ABI_VERSION is 6; no existing report/trade grows.
  *  RESOLVED S1: receipt query initialization and outcomes follow the
  *  CORE-TOP rev 6 amendment (10-18 16:04); see the query declaration below. */
 typedef struct pf_report_sink_receipt_v1 {

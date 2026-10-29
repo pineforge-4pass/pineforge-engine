@@ -1997,8 +1997,8 @@ PF_API int strategy_set_symbol_feed_borrowed_v1(
     pf_strategy_t s, const char* key, const char* timeframe,
     const pf_bar_t* bars, const int64_t* close_ms, int n);
 
-/** Exact C++ engine layout: 2 is the 1.9 closed-trade ledger layout; 1 is 1.8.0.
- *  Bump whenever that layout changes, independently of #PF_ABI_VERSION. */
+/** Exact C++ engine layout: 2 is 1.9; 1 was unshipped development only.
+ *  1.8.0 has no stamp and fails the ABI check; bump layout independently of #PF_ABI_VERSION. */
 #define PF_STREAM_ENGINE_LAYOUT_VERSION 2u
 
 /** Optional module declaration that its strategy handles point directly to

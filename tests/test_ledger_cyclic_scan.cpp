@@ -416,7 +416,7 @@ void scan_window_and_lazy_strings_follow_mutations() {
         CHECK(ledger.cache_size() <= ledger.cache_rows());
         same_string_fields(ledger, 96, expected[96]);
         CHECK(ledger.cache_size() <= ledger.cache_rows());
-        // Publication preserves bytes; checked fields still refuse sealed keys.
+        // Publication preserves bytes; checked fields still serve sealed keys.
         ledger.seal(80);
         CHECK(ledger.cache_size() <= ledger.cache_rows());
         same_trade(ledger.read(65), expected[65]);
@@ -519,6 +519,62 @@ void failed_numeric_refill_retries_exactly() {
 void first_population() { cyclic_scan(65536 + 20000); }
 void second_population() { cyclic_scan(90000); }
 void three_cache_populations() { cyclic_scan(3 * TradeLedger::kDefaultCacheRows, false); }
+
+void reverse_numeric_values_below_base() {
+    constexpr Size population = 2 * kWindow + kBlock;
+    constexpr Size published = kWindow + kBlock / 2;
+    TradeLedger ledger;
+    ledger.set_scratch_directory(".");
+    std::vector<Trade> expected;
+    for (Size index = 0; index < population; ++index) {
+        expected.push_back(scan_row(index));
+        ledger.push_back(expected.back());
+    }
+    ledger.seal(published);
+    REQUIRE(ledger.base() == published);
+    REQUIRE(ledger.cache_size() == 0);
+    // Two descending miss steps establish reverse direction; then check a
+    // whole descriptor block of predecessors against the saved input rows.
+    // Start below base(); the third read refills backward all the way to 0.
+    constexpr Size reads = 2 + kBlock;
+    for (Size offset = 0; offset < reads; ++offset) {
+        const Size index = kWindow - 1 - offset;
+        same_numeric_fields(ledger, index, expected[index]);
+    }
+}
+
+void descending_numeric_values_cross_base() {
+    constexpr Size population = 2 * kWindow + kBlock;
+    constexpr Size published = kWindow + kBlock / 2;
+    TradeLedger ledger;
+    ledger.set_scratch_directory(".");
+    std::vector<Trade> expected;
+    for (Size index = 0; index < population; ++index) {
+        expected.push_back(scan_row(index));
+        ledger.push_back(expected.back());
+    }
+    ledger.seal(published);
+    REQUIRE(ledger.base() == published);
+    REQUIRE(ledger.cache_size() == 0);
+    REQUIRE(population <= ledger.cache_rows());
+    for (Size cursor = population; cursor != 0; --cursor) {
+        const Size index = cursor - 1;
+        same_numeric_fields(ledger, index, expected[index]);
+        // All keys fit distinct slots. Above base the reverse refill ends at
+        // published, so exactly population-published keys have been admitted.
+        // MUTANT: floor 0 admits kBlock/2 extra sealed keys at this boundary.
+        if (index == published)
+            CHECK(ledger.cache_size() == population - published);
+        // The first sealed miss continues backward by min(window,published)
+        // keys. MUTANT: an unconditional published floor cannot serve them.
+        if (index == published - 1)
+            CHECK(ledger.cache_size() == population - published
+                                         + std::min(kWindow, published));
+    }
+    // Every key was visited and the cap exceeds the population: no collision
+    // or eviction is possible. Skipping sealed admission breaks this count.
+    CHECK(ledger.cache_size() == population);
+}
 } // namespace
 
 int main() {
@@ -535,6 +591,8 @@ int main() {
     test("numeric window and lazy strings after mutations",
          scan_window_and_lazy_strings_follow_mutations);
     test("numeric refill failure and exact retry", failed_numeric_refill_retries_exactly);
+    test("reverse numeric values below base", reverse_numeric_values_below_base);
+    test("descending numeric values cross base", descending_numeric_values_cross_base);
     std::printf("test_ledger_cyclic_scan: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

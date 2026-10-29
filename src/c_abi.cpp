@@ -387,8 +387,8 @@ PF_API int pf_run_abort_restore_sigterm_v1(void) {
 
 /* trade_index is a REPORT row index: pf_report_t::trades is trades_ followed
  * by range_end_trades_ (fill_trades_section, engine_report.cpp), so the
- * accessor uses closed_trade_close_cause's -1 as the resident-window check;
- * get_report_trade keeps global indices, including after a sealed prefix.
+ * accessor uses closed_trade_close_cause's -1 as the retained-row check;
+ * get_report_trade serves retained sealed rows at their global indices.
  *
  * round-4b F3: this bounded the index by trade_count() == trades_.size(),
  * so every range-end row (the position still open after the final bar,
@@ -399,7 +399,7 @@ PF_API int pf_run_abort_restore_sigterm_v1(void) {
  * engine's per-lot range-end rows themselves matched TV (xau-grid 6/6,
  * silicon 9/9 rows). The row is built from the open
  * pyramid lot, so it carries that lot's entry_incarnation like any other
- * close. No struct changed by this accessor (PF_ABI_VERSION is 5). */
+ * close. No struct changed by this accessor (PF_ABI_VERSION is 6). */
 PF_API uint64_t strategy_closed_trade_entry_incarnation(
         pf_strategy_t s, int trade_index) {
     if (!s) return 0;

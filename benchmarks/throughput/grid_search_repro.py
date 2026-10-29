@@ -139,9 +139,9 @@ class pf_report_t(ctypes.Structure):
 # pf_report_t is caller-allocated; a layout mismatch means the runtime
 # writes past this script's report buffer. Verify the ABI before running.
 # v4 added the live accessors and broker_state_hash after equity_curve_len.
-# The mirrors already carry those fields; v5 requires rebuilt 1.8.0 modules
+# The mirrors already carry those fields; v6 requires rebuilt 1.9 modules
 # without growing the C report/trade layouts.
-EXPECTED_PF_ABI = 5
+EXPECTED_PF_ABI = 6
 
 def check_abi(lib):
     try:

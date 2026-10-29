@@ -656,6 +656,8 @@ void restarts_and_reuse(Directory& directory) {
                     + " fixture run latched an engine error: " + latched_error(*host)
                     + " [" + host->progress() + "]");
     }
+    const std::vector<Trade> reference(
+        baseline.ledger().begin(), baseline.ledger().end());
     const auto base = streamed.ledger().base();
     require(base > 0 && base < streamed.consumer().closed_rows_final(),
             "restart fixture did not retain a final row at nonzero base");
@@ -683,7 +685,7 @@ void restarts_and_reuse(Directory& directory) {
     }
     invariant([&] { streamed.native_closed_rows_amended(base - 1); });
     invariant([&] { streamed.clear_phase(base - 1); });
-    require(streamed.ledger()[base - 1].entry_id == ((base - 1) % 2 == 0 ? "entry-a" : "entry-b"), "sealed entry id changed");
+    require(streamed.ledger()[base - 1].entry_id == reference.at(base - 1).entry_id, "sealed entry id changed");
     invariant([&] { streamed.ledger().resize(base - 1); });
     invariant([&] { streamed.consumer().seal_closed_rows(streamed, base - 1, 0, 0.0, 0.0); });
     // Shrink to the base itself: the running digest must become the sealed

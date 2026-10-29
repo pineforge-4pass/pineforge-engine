@@ -138,7 +138,7 @@ public:
 
     // read()/at()/[] span the retained source, including sealed rows on a
     // non-retiring ledger. An explicitly retiring ledger refuses reads below
-    // base() with typed RetiredTradeHistoryRead (coded engine_invariant).
+    // base() with a coded std::logic_error (engine_invariant).
     // Writers still reject sealed rows below the publication boundary.
     // Packed hits allocate only the owning strings required by read(); a
     // numeric-only entry first fills its existing inline string allowance.
@@ -168,7 +168,7 @@ public:
     // Copies reuse the mapped source without preads. Reverse refills require two
     // descending miss steps, or continuation below a backward window.
     // Ascending (i,i-1) and (i+1,i) pairs retain a window predecessor instead
-    // of starting a reverse scan. Backward refills stop at 0, or base() if retiring.
+    // of starting a reverse scan. Reverse refills stop at base(), or 0 below it.
     // A cold reverse scan has no probes; a warm one needs at most two forward
     // probes, two extra windows and 2*(kNumericWindowRows-1) repeated rows.
     // After lazy packing, a string hit copies only the requested packed bytes.
@@ -190,7 +190,7 @@ public:
     std::string entry_comment_at(size_type global) const;
     std::string exit_comment_at(size_type global) const;
     std::string exit_id_at(size_type global) const;
-    // Same checked unsealed-row contract as the owning text getters. Compare
+    // Same checked retained-row contract as the owning text getters. Compare
     // exact bytes (including NUL); empty fields equal an empty rhs. Return a
     // plain bool: no pointer escapes. Warm reads allocate no owning strings;
     // oversized text uses fixed stack chunks and consumes the whole extent,
@@ -239,7 +239,7 @@ private:
     // Run-begin policy and non-public storage census; neither changes this
     // installed object's layout or the logical trade/hash representation.
     void set_history_retirement(bool);
-    void check_history_read(size_type) const;
+
     std::array<std::uint64_t, 2> scratch_storage_bytes() const;
     struct State;
     std::unique_ptr<State> state_;

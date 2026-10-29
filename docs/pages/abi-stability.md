@@ -341,7 +341,7 @@ aggregate controls each exercise that pair; no caller executable is run. The
 
 The v18 to v19 step, between development builds before v1.0.0, is an internal C++ epoch
 transition rather than a public C ABI break: the historical `PF_ABI_VERSION` was 4 on both sides. <!-- verified HEAD -->
-The 1.8.0 module rebuild requirement advances the C ABI independently.
+The 1.8.0 module rebuild requirement advanced the C ABI independently.
 
 R5 lane D2-A adds two non-virtual `NativeStrategyHost` members inside v19,
 without an epoch: `declare_native_bar_open_hook(bool)` and

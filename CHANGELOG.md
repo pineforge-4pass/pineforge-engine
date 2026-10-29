@@ -11,7 +11,8 @@ version number follows semantic versioning over the surfaces the
 
 - Closed-trade reads serve retained sealed rows from backing storage; policy-erased history still refuses with its typed error.
 - Closed-trade text equality can compare bytes without owning strings and the closed-trade count is read inline; rebuild C++ consumers and relink strategies with matching headers and archive.
-- A module stamped for the 1.8.0 engine layout (stream layout version 1) falls back to the report path on 1.9; its live ledgers with more than one entry fail replay closed.
+- A module built for 1.8.0 (ABI 5, no layout stamp) is refused at load with the runner's `strategy ABI mismatch` asking for a rebuild for 1.9. Stream layout stamp 1 existed only in unshipped development builds; their live ledgers with more than one entry fail replay closed.
+- Closed-trade C string accessors return the stored text for retained sealed rows, previously NULL; the loaders' ABI refusal message now asks for a rebuild for 1.9.
 
 **[1.8.0](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.8.0)**,
 paired with [pineforge-codegen 1.8.0](https://github.com/pineforge-4pass/pineforge-codegen-oss/releases/tag/v1.8.0).

@@ -644,8 +644,8 @@ struct TradeLedger::State {
             }
             return numeric_window.records[row];
         }
-        // A reverse span stops at the sealed base, so a scan never admits sealed
-        // keys; only a read that itself starts below the base of a non-retiring
+        // A reverse scan from at or above the base never admits sealed keys;
+        // only a read that itself starts below the base of a non-retiring
         // ledger extends the span down to row 0.
         const size_type retained = retain_predecessor ? 1 : 0;
         const size_type span_floor = (retiring || global >= first) ? first : 0;
@@ -1187,7 +1187,7 @@ void TradeLedger::set_history_retirement(bool enabled) {
     state_->retiring = enabled;
 }
 
-void TradeLedger::check_history_read(size_type global) const { state_->check(global); }
+
 
 std::array<std::uint64_t, 2> TradeLedger::scratch_storage_bytes() const {
     return {state_->index.storage_bytes(), state_->payload.storage_bytes()};
@@ -1237,7 +1237,7 @@ Trade TradeLedger::at(size_type global) const {
 }
 
 Trade TradeLedger::back() const {
-    if (size() == base())
+    if (empty())
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                        "trade ledger: no resident last row");
     return read(size() - 1);
