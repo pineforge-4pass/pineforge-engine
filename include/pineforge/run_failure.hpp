@@ -24,6 +24,8 @@
 //    timeframes) -- never from a value the script computes while it runs;
 //    Q7's run_aborted additionally carries only engine-owned completion count
 //    and started witnesses, never a script-computed index or value;
+//    command_bytes capacity refusals carry only the configured byte cap and
+//    the aggregate extent needed at the engine's failed admission;
 //  * a vocabulary argument outside its closed list, an undeclared argument, a
 //    wrong kind or a missing required argument turns the failure into
 //    engine_invariant (the English is kept): a wrong call cannot mint a code
@@ -123,6 +125,7 @@
 #include <cstdint>
 #include <cstring>
 #include <exception>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -175,14 +178,19 @@ enum class RunFailureArgKind : std::uint8_t {
 /// One typed argument as a raise site spells it. `name` is a literal; a text
 /// value is copied.
 struct RunFailureArg {
-    // boolean and null_value are appended, so the earlier values keep theirs. A
+    // boolean, null_value and unsigned_integer are appended, preserving earlier values. A
     // boolean is held in `integer` (0 or 1) and serializes as true or false; a
     // null_value holds nothing and serializes as null. Neither is ever a string.
-    enum class Type : std::uint8_t { text, integer, number, boolean, null_value };
+    enum class Type : std::uint8_t { text, integer, number, boolean, null_value, unsigned_integer };
     const char* name = "";
     Type type = Type::text;
     std::string text;
-    std::int64_t integer = 0;
+    // The unsigned alternative preserves byte caps above INT64_MAX without
+    // widening the argument's numeric storage or rounding through a double.
+    union {
+        std::int64_t integer = 0;
+        std::uint64_t unsigned_integer;
+    };
     double number = 0.0;
 
     // Out of line (src/run_failure.cpp): a literal value is handed over by
@@ -204,7 +212,16 @@ struct RunFailureArg {
               typename std::enable_if<std::is_integral<Integer>::value
                                       && !std::is_same<Integer, bool>::value, int>::type = 0>
     RunFailureArg(const char* arg_name, Integer value)
-        : name(arg_name), type(Type::integer), integer(static_cast<std::int64_t>(value)) {}
+        : name(arg_name), type(Type::integer) {
+        if constexpr (std::is_unsigned<Integer>::value) {
+            if (value > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
+                type = Type::unsigned_integer;
+                unsigned_integer = static_cast<std::uint64_t>(value);
+                return;
+            }
+        }
+        integer = static_cast<std::int64_t>(value);
+    }
     template <typename Floating,
               typename std::enable_if<std::is_floating_point<Floating>::value, int>::type = 0>
     RunFailureArg(const char* arg_name, Floating value)

@@ -77,6 +77,7 @@ bool scalar_value_ok(const RunFailureArg& arg) noexcept {
     switch (arg.type) {
     case RunFailureArg::Type::text:
     case RunFailureArg::Type::integer:
+    case RunFailureArg::Type::unsigned_integer:
     case RunFailureArg::Type::null_value:
         return true;
     case RunFailureArg::Type::number:
@@ -191,11 +192,13 @@ RunFailureValue make_run_failure(RunFailureCode code, const RunFailureArgs& args
             }
             switch (declared->kind) {
             case RunFailureArgKind::integer:
-                if (arg.type != RunFailureArg::Type::integer) return invariant();
+                if (arg.type != RunFailureArg::Type::integer
+                    && arg.type != RunFailureArg::Type::unsigned_integer) return invariant();
                 break;
             case RunFailureArgKind::number:
                 // An integer or a finite number: never text, a boolean or a null.
                 if (arg.type != RunFailureArg::Type::integer
+                    && arg.type != RunFailureArg::Type::unsigned_integer
                     && arg.type != RunFailureArg::Type::number) {
                     return invariant();
                 }
@@ -262,6 +265,9 @@ RunFailureValue make_run_failure(RunFailureCode code, const RunFailureArgs& args
             switch (arg->type) {
             case RunFailureArg::Type::integer:
                 *json += std::to_string(arg->integer);
+                break;
+            case RunFailureArg::Type::unsigned_integer:
+                *json += std::to_string(arg->unsigned_integer);
                 break;
             case RunFailureArg::Type::number:
                 if (!append_json_number(*json, arg->number)) return invariant();

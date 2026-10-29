@@ -82,6 +82,10 @@ codes it tested the text alone, so a script stopped by an empty
 - **Cancellation progress is engine-owned.** Q7's `run_aborted` witnesses
   are the count of fully completed input bars and a boolean start witness.
   They are produced by the run boundary, never read from script output.
+- **Command scratch capacity counts are engine-owned.** For
+  `scratch_capacity_exceeded` with `resource: "command_bytes"`, `cap` is the
+  configured byte budget and `needed` is the aggregate extent at the refused
+  admission. Neither argument reads a script-computed value.
 - **Validation is central.** An undeclared argument, a wrong kind, a value
   outside an argument's closed list or a missing required argument turns the
   failure into `engine_invariant`, its English kept: a wrong call cannot mint
@@ -178,7 +182,7 @@ in addition to its six released 1.4.0 reasons.
 | `run_mode_unsupported` | `unsupported` | no | `feature` (vocab, 11 values) | A feature the requested run mode does not support. |
 | `run_options_rejected` | `input` | no | `input_tf` (timeframe, optional), `option` (vocab, 11 values), `script_tf` (timeframe, optional) | The run's own options (timeframes, intrabar path, magnifier, path order) were refused. |
 | `run_request_invalid` | `input` | no | `option` (vocab, 25 values) | The harness command line or one of its JSON options is invalid. |
-| `scratch_capacity_exceeded` | `resource` | no | `resource` (vocab, 10 values) | The admitted scratch-table layout or a fixed region's capacity was exceeded. The run must be admitted with sufficient finite maxima before retrying. |
+| `scratch_capacity_exceeded` | `resource` | no | `cap` (integer, optional), `needed` (integer, optional), `resource` (vocab, 11 values) | The admitted scratch-table layout, a fixed region's capacity or the command-scratch byte cap was exceeded. With resource command_bytes, cap is the configured aggregate byte cap and needed is the aggregate live extent plus the refused growth, saturated to UINT64_MAX only on arithmetic overflow. Raise PINEFORGE_COMMAND_SCRATCH_MAX_BYTES or shrink the run before retrying; the refusal precedes backing changes. Other resources require sufficient finite maxima and retain their existing resource-only arguments. |
 | `scratch_configuration_invalid` | `input` | no | `reason` (vocab, 3 values), `stage` (vocab, 1 values) | The command-scratch byte cap from the environment or the caller is malformed: not a positive decimal, out of uint64_t range, or zero. |
 | `scratch_io_failed` | `resource` | no | none | The engine could not create, resize, read or write command scratch or the storage of one of its auxiliary tables (the disk id table, the id-pair store or the placement table). Command scratch also raises this code when the default-directory policy fails a directory query or refuses memory-backed default candidates, or when an explicit memory-backed command directory is refused. Native runs create command scratch at begin, so these failures are resource failures before any strategy callback. The run has no successful completion. Report-sink scratch files, the curve writer and the position-tail facade do not raise this code: they raise report_sink_failed with reason scratch_io. |
 | `security_feed_refused` | `input` | no | `reason` (vocab, 11 values) | An auxiliary or native request.security feed was refused. |
@@ -228,6 +232,24 @@ in addition to its six released 1.4.0 reasons.
 | `vocab` | One value of the arg's closed `values` list. |
 
 <!-- END generated tables -->
+
+### Command scratch byte capacity {#run_failure_codes_command_bytes}
+
+Crossing `PINEFORGE_COMMAND_SCRATCH_MAX_BYTES` in either disk or attached-arena
+mode raises `scratch_capacity_exceeded` with `resource: "command_bytes"`.
+Its `cap` and `needed` arguments are integer byte counts: the configured cap
+and the total live command-store extent including the refused extension.
+For example, a cap of 1,024 bytes shared by two 512-byte stores reports
+`{"cap":1024,"needed":1536,"resource":"command_bytes"}` when either store
+tries to add another page. Both numbers retain full `uint64_t` precision;
+an overflowing total saturates to `UINT64_MAX`.
+
+Raise the cap or shrink the run before another attempt. Admission refuses
+before changing a resident prefix, spilling it, extending a file or claiming
+arena chunks. An attached arena's own share refusal retains
+`report_sink_failed` with `reason: "arena_exhausted"` if both limits cross.
+The byte-cap reason does not relabel backing I/O errors. Source scratch write
+failures, including `ENOSPC` or `EIO`, retain `scratch_io_failed` with `{}`.
 
 A code's closed value lists and its English templates are the catalog's own
 `values` and `english` arrays. A `vocab` argument takes exactly one of its

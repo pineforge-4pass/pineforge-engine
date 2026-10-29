@@ -82,7 +82,8 @@ struct ScratchIoObserver {
 // protect previously committed pages. No operation throws or allocates an
 // O(page_count) userspace directory. Production backing must extend/spill;
 // backing I/O faults, including exhaustion, are io_error. An arena backing
-// can additionally carry its original typed exception for an owner to rethrow;
+// or command-byte-cap refusal can additionally carry its original typed
+// exception for an owner to rethrow;
 // the status itself is never a capacity code. programming_error is reserved
 // for caller contract violations.
 class ScratchBacking {
@@ -103,7 +104,8 @@ public:
     }
     // Optional original exception for the last backing operation. Borrowed
     // until the next operation/destruction; inspect before cleanup I/O.
-    // Disk/test backings retain their existing status-only behavior.
+    // Disk I/O faults and test backings retain their status-only behavior;
+    // a command-byte-cap refusal carries its capacity verdict in either mode.
     virtual const ReportScratchIoError* carried_failure() const noexcept { return nullptr; }
 
     ScratchStatus read_page(ScratchPageId id, ScratchBuffer destination) const noexcept {

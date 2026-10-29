@@ -234,12 +234,14 @@ and HPO drivers are in other repositories; their integration is **planned**.
 
 | Code | Typed args | Class | Retryable | Required host action |
 | --- | --- | --- | --- | --- |
-| `scratch_capacity_exceeded` | `resource` (closed name) | resource | false | Refuse completion and refund the run/trial reservation. Admit a different envelope before a new attempt. |
+| `scratch_capacity_exceeded` | `resource` (closed name), `cap` and `needed` (optional integer bytes for `command_bytes`) | resource | false | Refuse completion and refund the run/trial reservation. Admit a different envelope before a new attempt; for `command_bytes`, raise the command scratch byte cap or shrink the run. |
 | `scratch_io_failed` | `{}` | resource | false | Refuse completion and refund the run/trial reservation. Investigate backing I/O/corruption. |
 
 Capacity resources are `layout`, `sequence_data`, `sequence_index`,
 `erased_data`, `erased_index`, `consumed_data`, `consumed_index`, `cohort`,
-`exit_rank`, and `successor_roots`. q names remain in the wire vocabulary.
+`exit_rank`, `successor_roots`, and `command_bytes`. The last names the aggregate
+command-store byte budget, not a slab region; its `cap` and `needed` are integer
+byte counts. q names remain in the wire vocabulary.
 The implemented bounded-memory checks cover the entire operation's count and
 byte workset before its first semantic mutation, with no grow/rehash/fallback.
 Physical allocator failure stays `out_of_memory`; it is not relabeled as a

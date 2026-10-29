@@ -45,7 +45,9 @@ pineforge::detail::ScratchIoObserver set_command_scratch_io_observer(
 
 struct CommandScratchByteBudget {
     explicit CommandScratchByteBudget(std::uint64_t bytes) noexcept : limit(bytes) {}
-    bool reserve(std::uint64_t bytes) noexcept;
+    // On refusal, needed is the total at the failed atomic admission, with
+    // arithmetic overflow saturated to UINT64_MAX.
+    bool reserve(std::uint64_t bytes, std::uint64_t* needed = nullptr) noexcept;
     void release(std::uint64_t bytes) noexcept;
     const std::uint64_t limit;
     std::atomic<std::uint64_t> live_bytes{0};
@@ -94,7 +96,11 @@ ScratchStatus command_scratch_io_status(int error) noexcept;
 // set, it must be positive decimal uint64_t, even with an explicit registration;
 // invalid values throw std::invalid_argument. Unset means no default cap.
 // Extents consume the run budget until destruction; over-cap extensions return
-// ScratchStatus::io_error before extending the backing in either mode.
+// ScratchStatus::io_error carrying scratch_capacity_exceeded, resource
+// command_bytes, with cap and needed byte counts before changing either backing.
+// needed is the aggregate live extent plus the refused growth, saturated to
+// UINT64_MAX only on arithmetic overflow. A simultaneous arena-share crossing
+// retains the arena's report_sink_failed verdict.
 // Zero page size and sizes beyond off_t throw std::invalid_argument.
 // OS setup failures throw std::system_error.
 std::unique_ptr<pineforge::detail::ScratchBacking> make_command_scratch_backing(

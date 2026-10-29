@@ -1,6 +1,7 @@
 #pragma once
 
 #include <pineforge/detail/scratch_backing.hpp>
+#include <pineforge/detail/scratch_arena.hpp>
 
 #include <array>
 #include <cstddef>
@@ -16,7 +17,8 @@ struct CommandScratchByteBudget;
 // One fixed allocation serves first as a dense resident prefix, then as the
 // read cache after spill. At most three stores per run share the fixed bound K
 // below, including their decorator objects/slot keys. Nothing depends on extent
-// or bars. No I/O operation allocates or throws.
+// or bars. I/O operations do not throw; a refused byte admission may allocate
+// the bounded typed diagnostic carried to the owner.
 //
 // Page size is immutable per backing. Direct-mapped keys therefore identify
 // pages in this one geometry (512 B through 1 MiB, including non-powers of
@@ -44,10 +46,10 @@ public:
     std::optional<std::uint64_t> arena_capacity_bytes() const noexcept override {
         return inner_->arena_capacity_bytes();
     }
-    // Forwards the inner backing's last failure. A cache hit does not reset
-    // it, so this is meaningful only after a failed logical operation.
+    // A byte-cap refusal belongs to this decorator; other failures belong to
+    // the inner backing. Inspect only after a failed logical operation.
     const ReportScratchIoError* carried_failure() const noexcept override {
-        return inner_->carried_failure();
+        return failure_ ? &*failure_ : inner_->carried_failure();
     }
 
 protected:
@@ -69,6 +71,7 @@ private:
     bool resident_;
     std::uint64_t resident_extent_ = 0;
     std::shared_ptr<CommandScratchByteBudget> budget_;
+    mutable std::optional<ReportScratchIoError> failure_;
     std::unique_ptr<std::byte[]> bytes_;
     mutable std::array<ScratchPageId, kMaxSlots> page_ids_{};
 };

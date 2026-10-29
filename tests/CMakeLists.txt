@@ -7927,6 +7927,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 8)
         "-Wl,--wrap=_ZnamRKSt9nothrow_t")
 endif()
 # --- CR-150 resident-command-scratch end ---
+# --- CR-150 command-scratch-byte-cap begin ---
+if(PINEFORGE_BUILD_SOURCE_LAYER AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_options(test_command_scratch_byte_cap_failure PRIVATE "-Wl,--wrap=pwrite")
+endif()
+# --- CR-150 command-scratch-byte-cap end ---
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
         message(FATAL_ERROR "PR fast row or executable is missing: ${_pf_fast_test}")

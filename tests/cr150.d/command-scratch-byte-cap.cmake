@@ -1,0 +1,5 @@
+if(PINEFORGE_BUILD_SOURCE_LAYER AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    list(APPEND TEST_SOURCES test_command_scratch_byte_cap_failure)
+    pineforge_add_unit_test(test_command_scratch_byte_cap_failure)
+    set_tests_properties(test_command_scratch_byte_cap_failure PROPERTIES LABELS "scratch")
+endif()

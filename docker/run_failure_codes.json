@@ -1284,6 +1284,14 @@
   },
   "scratch_capacity_exceeded": {
    "args": {
+    "cap": {
+     "kind": "integer",
+     "optional": true
+    },
+    "needed": {
+     "kind": "integer",
+     "optional": true
+    },
     "resource": {
      "kind": "vocab",
      "values": [
@@ -1296,14 +1304,16 @@
       "consumed_index",
       "cohort",
       "exit_rank",
-      "successor_roots"
+      "successor_roots",
+      "command_bytes"
      ]
     }
    },
    "class": "resource",
-   "description": "The admitted scratch-table layout or a fixed region's capacity was exceeded. The run must be admitted with sufficient finite maxima before retrying.",
+   "description": "The admitted scratch-table layout, a fixed region's capacity or the command-scratch byte cap was exceeded. With resource command_bytes, cap is the configured aggregate byte cap and needed is the aggregate live extent plus the refused growth, saturated to UINT64_MAX only on arithmetic overflow. Raise PINEFORGE_COMMAND_SCRATCH_MAX_BYTES or shrink the run before retrying; the refusal precedes backing changes. Other resources require sufficient finite maxima and retain their existing resource-only arguments.",
    "english": [
-    "scratch capacity exceeded"
+    "scratch capacity exceeded",
+    "command scratch byte cap exceeded; raise PINEFORGE_COMMAND_SCRATCH_MAX_BYTES or shrink the run"
    ],
    "retryable": false,
    "since": "1.7.0"

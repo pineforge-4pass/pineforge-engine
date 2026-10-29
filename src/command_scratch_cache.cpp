@@ -62,6 +62,7 @@ void CachedScratchBacking::remember(ScratchPageId id, const std::byte* bytes) co
 
 ScratchStatus CachedScratchBacking::do_read_page(
         ScratchPageId id, ScratchBuffer destination) const noexcept {
+    failure_.reset();
     if (resident_) {
         if (id >= resident_extent_) return ScratchStatus::not_found;
         std::memcpy(destination.data, bytes_.get() + static_cast<std::size_t>(id) * page_size(),
@@ -84,6 +85,7 @@ ScratchStatus CachedScratchBacking::do_read_page(
 
 ScratchStatus CachedScratchBacking::do_write_page(
         ScratchPageId id, ScratchBytes source) noexcept {
+    failure_.reset();
     // Preserve the file's offset check before byte admission, including when
     // a capped caller supplies an unrepresentable id.
     const auto size = static_cast<std::uint64_t>(page_size());
@@ -91,7 +93,19 @@ ScratchStatus CachedScratchBacking::do_write_page(
         return ScratchStatus::programming_error;
     const auto before = page_count();
     const auto growth = id >= before ? (id + 1 - before) * size : 0;
-    if (budget_ && growth != 0 && !budget_->reserve(growth)) return ScratchStatus::io_error;
+    std::uint64_t needed = 0;
+    if (budget_ && growth != 0 && !budget_->reserve(growth, &needed)) {
+        // Refuse before resident copies, spill, cache invalidation or file
+        // extension. The owner rethrows this original validated verdict.
+        try {
+            throw ReportScratchIoError(budget_->limit, needed);
+        } catch (const ReportScratchIoError& error) {
+            failure_ = error;
+        } catch (...) {
+            // Diagnostic allocation failure still obeys the noexcept I/O API.
+        }
+        return ScratchStatus::io_error;
+    }
     const auto status = write(id, source);
     // A failed spill keeps the resident prefix authoritative. After spill,
     // ftruncate may have extended the file before a failed/short pwrite;
@@ -135,6 +149,7 @@ ScratchStatus CachedScratchBacking::write(ScratchPageId id, ScratchBytes source)
 }
 
 ScratchStatus CachedScratchBacking::do_sync(ScratchDurability durability) noexcept {
+    failure_.reset();
     // The fresh unlinked disk file has no page data while fully resident.
     // Arena/test backings retain their own supported durability statuses.
     if (resident_ && inner_->page_count() == 0 && kind() == ScratchBackingKind::disk

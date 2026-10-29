@@ -8,7 +8,7 @@
   "to": {
     "version": null,
     "unreleased": true,
-    "catalogSha256": "97fe2b5206c1167f859b6d0cf065443a2511ffef739d0f02aa227cc35cc4c75f"
+    "catalogSha256": "78b83777b06b5076a5af5cd79b9033ac119bf51c5f97e9540146c4ef489660f8"
   },
   "catalogSchema": {
     "before": "pineforge-run-failure-catalog/v1",
@@ -33,6 +33,81 @@
               "order_key_hash_collision"
             ]
           }
+        }
+      ]
+    },
+    {
+      "code": "scratch_capacity_exceeded",
+      "collection": "codes",
+      "fields": [
+        {
+          "path": "args.cap",
+          "beforePresent": false,
+          "afterPresent": true,
+          "before": null,
+          "after": {
+            "kind": "integer",
+            "optional": true
+          }
+        },
+        {
+          "path": "args.needed",
+          "beforePresent": false,
+          "afterPresent": true,
+          "before": null,
+          "after": {
+            "kind": "integer",
+            "optional": true
+          }
+        },
+        {
+          "path": "args.resource.values",
+          "beforePresent": true,
+          "afterPresent": true,
+          "before": [
+            "layout",
+            "sequence_data",
+            "sequence_index",
+            "erased_data",
+            "erased_index",
+            "consumed_data",
+            "consumed_index",
+            "cohort",
+            "exit_rank",
+            "successor_roots"
+          ],
+          "after": [
+            "layout",
+            "sequence_data",
+            "sequence_index",
+            "erased_data",
+            "erased_index",
+            "consumed_data",
+            "consumed_index",
+            "cohort",
+            "exit_rank",
+            "successor_roots",
+            "command_bytes"
+          ]
+        },
+        {
+          "path": "description",
+          "beforePresent": true,
+          "afterPresent": true,
+          "before": "The admitted scratch-table layout or a fixed region's capacity was exceeded. The run must be admitted with sufficient finite maxima before retrying.",
+          "after": "The admitted scratch-table layout, a fixed region's capacity or the command-scratch byte cap was exceeded. With resource command_bytes, cap is the configured aggregate byte cap and needed is the aggregate live extent plus the refused growth, saturated to UINT64_MAX only on arithmetic overflow. Raise PINEFORGE_COMMAND_SCRATCH_MAX_BYTES or shrink the run before retrying; the refusal precedes backing changes. Other resources require sufficient finite maxima and retain their existing resource-only arguments."
+        },
+        {
+          "path": "english",
+          "beforePresent": true,
+          "afterPresent": true,
+          "before": [
+            "scratch capacity exceeded"
+          ],
+          "after": [
+            "scratch capacity exceeded",
+            "command scratch byte cap exceeded; raise PINEFORGE_COMMAND_SCRATCH_MAX_BYTES or shrink the run"
+          ]
         }
       ]
     },

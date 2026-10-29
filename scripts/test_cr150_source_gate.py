@@ -1215,6 +1215,8 @@ class RealTree(unittest.TestCase):
         self.assertGreater(c['entries_matched'], 0)
         self.assertEqual(c['findings'], 0)
         self.assertEqual(c['PASS(bounded)'], 0)
+        # OPEN counts (file, symbol) groups. The signed/unsigned decimal
+        # temporaries share src/run_failure.cpp's std::to_string group.
         self.assertEqual(c['OPEN'], 1483)
         # Every matched entry is exactly one of PASS(bounded) / OPEN.
         self.assertEqual(c['PASS(bounded)'] + c['OPEN'], c['entries_matched'])

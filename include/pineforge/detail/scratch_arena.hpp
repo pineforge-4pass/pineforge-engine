@@ -1,7 +1,9 @@
 #pragma once
 
 #include <pineforge/run_failure.hpp>
+#include <pineforge/detail/scratch_errors.hpp>
 
+#include <cerrno>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -11,14 +13,22 @@
 
 namespace pineforge::detail {
 
-// Also used by the legacy ScratchFile backend. Keep errno and the typed run
-// failure together, so callers keep their existing std::system_error catch.
+// Also used by command scratch and the legacy ScratchFile backend. Keep errno
+// and the typed run failure together for the existing std::system_error catches.
 class ReportScratchIoError final : public std::system_error, public RunFailureInfo {
 public:
     ReportScratchIoError(int error, const char* operation,
                    const RunFailureArgs& args = {{"reason", "scratch_io"}})
         : std::system_error(error, std::generic_category(), operation),
           RunFailureInfo(RunFailureCode::report_sink_failed, args) {}
+    // Command-byte admission shares the existing status/exception transport.
+    // It is a resource refusal; actual backing I/O keeps its original code.
+    ReportScratchIoError(std::uint64_t cap, std::uint64_t needed)
+        : std::system_error(EFBIG, std::generic_category(),
+              "command scratch byte cap exceeded; raise PINEFORGE_COMMAND_SCRATCH_MAX_BYTES or shrink the run"),
+          RunFailureInfo(RunFailureCode::scratch_capacity_exceeded,
+              {{"resource", scratch_resource_name(ScratchResource::command_bytes)},
+               {"cap", cap}, {"needed", needed}}) {}
 };
 
 // Re-emit the original typed object, retaining errno, English and the validated

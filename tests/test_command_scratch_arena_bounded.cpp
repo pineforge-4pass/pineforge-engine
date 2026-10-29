@@ -45,6 +45,16 @@ void exhaustion_args(const ReportScratchIoError& error, const ScratchArenaStats&
     integer_arg(error, "needed_bytes_lower_bound", needed);
 }
 
+void byte_capacity_args(const ReportScratchIoError& error, std::uint64_t cap,
+                        std::uint64_t needed) {
+    require(error.run_failure_code() == RunFailureCode::scratch_capacity_exceeded
+            && error.run_failure().args
+            && error.run_failure().args->find("\"resource\":\"command_bytes\"") != std::string::npos,
+            "a command byte-budget refusal carries its distinct capacity resource");
+    integer_arg(error, "cap", cap);
+    integer_arg(error, "needed", needed);
+}
+
 void capacity_floor_boundaries() {
     require(kCommandScratchArenaShare.num == 1 && kCommandScratchArenaShare.den == 16,
             "the provisional command share is 1/16");
@@ -183,8 +193,9 @@ void share_refuses_before_claim_and_releases_budget(std::size_t page_bytes,
         require(arena->stats().bytes_used == before.bytes_used,
                 "simultaneous refusal claims no chunks");
         require(b->write_page(0, {image.data(), image.size()}) == ScratchStatus::io_error
-                && !b->carried_failure(),
-                "byte-budget-only refusal keeps its separate status-only behavior");
+                && b->carried_failure(),
+                "byte-budget-only refusal carries its separate capacity reason");
+        byte_capacity_args(*b->carried_failure(), capacity, capacity + page_bytes);
         a.reset();
         require(b->write_page(0, {image.data(), image.size()}) == ScratchStatus::ok,
                 "neither kind of refused reservation leaks shared budget");
@@ -671,8 +682,9 @@ void zero_fsize_child(std::size_t page_bytes) {
         require(b->read_page(0, {read.data(), read.size()}) == ScratchStatus::ok && read == second,
                 "second region preserves exact bytes");
         require(a->write_page(3, {first.data(), first.size()}) == ScratchStatus::io_error
-                && a->page_count() == 3 && a->carried_failure() == nullptr,
+                && a->page_count() == 3 && a->carried_failure(),
                 "arena mode preserves shared byte-cap refusal and logical extent");
+        byte_capacity_args(*a->carried_failure(), 4 * page_bytes, 5 * page_bytes);
         a.reset();
         require(b->write_page(2, {second.data(), second.size()}) == ScratchStatus::ok,
                 "destroying the first backing releases its shared budget");

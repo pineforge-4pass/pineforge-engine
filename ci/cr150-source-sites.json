@@ -25129,6 +25129,20 @@
   },
   {
    "file": "src/run_failure.cpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge #1",
+    "RunFailureValue make_run_failure ( RunFailureCode code , const RunFailureArgs & args ) noexcept #1",
+    "try #1",
+    "for ( const auto & [ declared , arg ] : matched ) #1",
+    "switch ( arg -> type ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 2
+  },
+  {
+   "file": "src/run_failure.cpp",
    "symbol": "json",
    "scope": [
     "namespace pineforge #1",

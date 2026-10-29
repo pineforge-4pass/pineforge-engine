@@ -20,11 +20,17 @@
 
 namespace pineforge::detail {
 
-bool CommandScratchByteBudget::reserve(std::uint64_t bytes) noexcept {
+bool CommandScratchByteBudget::reserve(std::uint64_t bytes, std::uint64_t* needed) noexcept {
     if (limit == 0) return true;
     auto used = live_bytes.load(std::memory_order_relaxed);
     for (;;) {
-        if (bytes > limit - used) return false;
+        if (bytes > limit - used) {
+            if (needed) {
+                const auto maximum = std::numeric_limits<std::uint64_t>::max();
+                *needed = bytes > maximum - used ? maximum : used + bytes;
+            }
+            return false;
+        }
         if (live_bytes.compare_exchange_weak(used, used + bytes, std::memory_order_relaxed))
             return true;
     }
@@ -164,10 +170,14 @@ protected:
             const auto grow = [&] {
                 file_.ensure_size(end, command_scratch_arena_needed_bytes(end));
             };
-            if (budget_ && !budget_->reserve(growth)) {
+            std::uint64_t needed = 0;
+            if (budget_ && !budget_->reserve(growth, &needed)) {
                 // A simultaneous share crossing must still carry the arena's
                 // typed verdict. This bounded call cannot claim any chunks.
-                return end > capacity_ ? perform(grow) : ScratchStatus::io_error;
+                return perform([&] {
+                    if (end > capacity_) grow();
+                    throw ReportScratchIoError(budget_->limit, needed);
+                });
             }
             const auto status = perform(grow);
             if (status != ScratchStatus::ok) {
