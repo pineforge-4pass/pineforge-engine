@@ -223,6 +223,75 @@ def _drain_report_artifact(artifact):
     return b"".join(chunks)
 
 
+@pytest.mark.parametrize("count", (0, 1, 4097), ids=("empty", "one", "many"))
+def test_fused_report_builder_wrapper_iterates_before_serialization(
+        tmp_path, monkeypatch, count):
+    builder = run_json._build_sink_report
+    prepare = run_json._prepare_stream_report
+    walks, first_rows = {}, {}
+    returned_ids, phases = [], []
+
+    def wrapper(*args, **kwargs):
+        document = builder(*args, **kwargs)
+        assert not returned_ids
+        for key, spool in (("trades", sink._trades_spool),
+                           ("equity_curve", sink._equity_spool)):
+            column = document[key]
+            assert type(column) is run_json._JSONColumn
+            assert type(column.file) is run_json._BoundedJSONFile
+            assert column is spool
+            assert not column.file.closed
+            first_walk = list(iter(column))
+            second_walk = list(iter(column))
+            assert len(first_walk) == len(second_walk) == count
+            assert len(column) == count
+            _assert_decoded_rows(second_walk, first_walk)
+            if count:
+                first_rows[key] = next(iter(column))
+                _assert_decoded_rows(first_rows[key], first_walk[0])
+            else:
+                with pytest.raises(StopIteration):
+                    next(iter(column))
+            walks[key] = (first_walk, second_walk)
+        assert isinstance(document["applied_runtime"], dict)
+        document["applied_runtime"]["syminfo"] = {
+            "trades_rows": len(walks["trades"][0]),
+            "equity_rows": len(walks["equity_curve"][0]),
+        }
+        returned_ids.append(id(document))
+        return document
+
+    def before_prepare(document):
+        assert returned_ids == [id(document)]
+        assert not phases
+        phases.append("before_prepare")
+
+    def prepare_after_wrapper(document, *args, **kwargs):
+        assert returned_ids == [id(document)]
+        assert phases == ["before_prepare"]
+        phases.append("serialize")
+        return prepare(document, *args, **kwargs)
+
+    with _sink_case(tmp_path, _iteration_rows(count)) as (sink, library, report):
+        with monkeypatch.context() as patch:
+            patch.setattr(run_json, "_build_sink_report", wrapper)
+            patch.setattr(run_json, "_prepare_stream_report", prepare_after_wrapper)
+            outcome = support.assemble(
+                run_json, sink, library, report, before_prepare=before_prepare)
+        assert outcome.failure is None, outcome.failure
+    assert phases == ["before_prepare", "serialize"]
+    expected = json.loads(outcome.report)
+    _assert_decoded_rows(expected["applied_runtime"]["syminfo"], {
+        "trades_rows": count, "equity_rows": count,
+    })
+    for key in ("trades", "equity_curve"):
+        assert len(expected[key]) == count
+        for walked in walks[key]:
+            _assert_decoded_rows(walked, expected[key])
+        if count:
+            _assert_decoded_rows(first_rows[key], expected[key][0])
+
+
 @pytest.mark.parametrize("trade_count,equity_count", (
     (0, 0), (0, 4097), (1, 1), (4097, 4097),
 ), ids=("empty", "no-trades-with-equity", "one", "many"))
