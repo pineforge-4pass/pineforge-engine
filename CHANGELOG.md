@@ -5,8 +5,13 @@ README's *Releases* section and on the GitHub releases page. From 1.0.0 the
 version number follows semantic versioning over the surfaces the
 [public contract](docs/pages/public-contract.md) lists.
 
-## Unreleased
+## 1.9.0 — 2026-10-30
 
+- The shared window-plan library links on macOS again: an Apple-only linker
+  option in `CMakeLists.txt` allows the one symbol the library leaves for its
+  host to stay undefined, which is the macOS link failure recorded as a known
+  issue for 1.8.0. macOS remains unsupported and no CI job builds it; only the
+  Linux x86_64 and arm64 legs run.
 - Register seven failure codes for the planned supervised report channel.
   With the three run-quota codes they form the ten codes added in 1.9.0,
   numbered 70 to 79 in name order after the existing codes. Nothing emits the
@@ -79,10 +84,7 @@ claim those unmeasured values in its documentation.
 
 ### Native live report stream updates
 
-The development entries below are retained in order. The cumulative stream
-default in the later entry supersedes the earlier delta default; the carried
-accumulator in the earlier entry closes the later entry's remaining native
-rebuild term. All stream modes now retain the cumulative fold for checkpoint
+All stream modes now retain the cumulative fold for checkpoint
 verification. For modules with a matching engine-layout stamp, interval-mode
 cumulative documents also carry `ratios_as_of_input` and `ratio_context`; export
 refreshes the ratios and marker without changing stored checkpoints.
@@ -95,11 +97,12 @@ refreshes the ratios and marker without changing stored checkpoints.
   snapshots and exact ratios at every input, even for K > 1. They add neither
   `ratios_as_of_input` nor `ratio_context` and emit no terminal interval refresh.
   The runner prints no warning about a missing or mismatched stamp.
-- **Delta JSONL is the default.** `pineforge-live run --report-jsonl` now
-  emits one `pineforge-native-report-delta/v1` document for each committed
-  input, matching the payload stored in the ledger. This deliberately changes
-  the stream shape for existing consumers that read the old cumulative
-  document; request `--report-jsonl=full` to retain that cumulative output.
+- **Delta JSONL is opt-in; the default stream is unchanged.**
+  `pineforge-live run --report-jsonl` and `--report-jsonl=full` emit one
+  cumulative `pineforge-native-report/v1` document per committed input, with the
+  same bytes and field order as before. `--report-jsonl=delta` is the opt-in
+  mode: it emits the ledger's `pineforge-native-report-delta/v1` patch with an
+  additional top-level integer `input_cursor`. Other values are refused.
 - **Non-ratio per-input report work is flat in appended rows.** For modules
   with the matching stamp, the runner carries a closed-trade high-water mark
   and no longer scans the full closed trade prefix for every input. Delta
