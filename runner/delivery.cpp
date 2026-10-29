@@ -154,9 +154,9 @@ private:
         // ledger method, a scheduler callback, or a mutex shared with D.
         WebhookMulti transport;
         while (!stopping()) {
-            SendWebhook command;
             // Interleave bounded add batches with curl progress.
             for (unsigned count = 0; count < 16; ++count) {
+                SendWebhook command;
                 if (stopping() || !commands_.pop(command)) break;
                 if (stopping()) return; // Cancellation must not submit queued sends.
                 transport.add(command.key, *command.options, command.event);

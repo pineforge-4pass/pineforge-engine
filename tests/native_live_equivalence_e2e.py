@@ -602,43 +602,46 @@ class MockReceiver:
 
 
 def print_pending_evidence(output, attempts, effects):
-    ledger_path = output / "orders.sqlite3"
-    if not ledger_path.is_file():
-        return
     try:
-        ledger_uri = ledger_path.resolve().as_uri() + "?mode=ro"
-        with closing(sqlite3.connect(ledger_uri, uri=True)) as ledger:
-            ledger.row_factory = sqlite3.Row
-            events = ledger.execute(
-                "SELECT ordinal,event_id,input_index,input_position,attempts,last_error "
-                "FROM events WHERE acknowledged=0 ORDER BY ordinal").fetchall()
-            if not events:
-                return
-            print(f"PENDING_EVENT_EVIDENCE ledger={ledger_path}", file=sys.stderr, flush=True)
-            for row in events:
-                event = dict(row)
-                event["delivery_log"] = [dict(delivery) for delivery in ledger.execute(
-                    "SELECT attempt,phase,http_status,error_category,success,started_at,ended_at "
-                    "FROM delivery_log WHERE event_id=? ORDER BY log_id", (event["event_id"],))]
-                receipts = [attempt for attempt in attempts if attempt["event_id"] == event["event_id"]]
-                # The receiver stores its chosen status before writing the response.
-                # A recorded 200 proves acceptance, not that curl observed the 200.
-                event["receiver"] = {
-                    "received": bool(receipts), "receive_count": len(receipts),
-                    "recorded_http_statuses": [receipt["status"] for receipt in receipts],
-                    "status_recorded_before_response": True,
-                    "effect_recorded": any(effect["event_id"] == event["event_id"] for effect in effects)}
-                print(json.dumps(event, indent=2), file=sys.stderr, flush=True)
-    except sqlite3.Error as error:
-        print(f"PENDING_EVENT_EVIDENCE read failed: {error}", file=sys.stderr, flush=True)
-    print(f"RUNNER_STDERR_TAIL path={output / 'runner.stderr.log'} last=40",
-          file=sys.stderr, flush=True)
-    try:
-        with (output / "runner.stderr.log").open(encoding="utf-8", errors="replace") as log:
-            tail = "".join(deque(log, maxlen=40))
-        print(tail, end="" if tail.endswith("\n") else "\n", file=sys.stderr, flush=True)
-    except OSError as error:
-        print(f"RUNNER_STDERR_TAIL read failed: {error}", file=sys.stderr, flush=True)
+        ledger_path = output / "orders.sqlite3"
+        if not ledger_path.is_file():
+            return
+        try:
+            ledger_uri = ledger_path.resolve().as_uri() + "?mode=ro"
+            with closing(sqlite3.connect(ledger_uri, uri=True)) as ledger:
+                ledger.row_factory = sqlite3.Row
+                events = ledger.execute(
+                    "SELECT ordinal,event_id,input_index,input_position,attempts,last_error "
+                    "FROM events WHERE acknowledged=0 ORDER BY ordinal").fetchall()
+                if not events:
+                    return
+                print(f"PENDING_EVENT_EVIDENCE ledger={ledger_path}", file=sys.stderr, flush=True)
+                for row in events:
+                    event = dict(row)
+                    event["delivery_log"] = [dict(delivery) for delivery in ledger.execute(
+                        "SELECT attempt,phase,http_status,error_category,success,started_at,ended_at "
+                        "FROM delivery_log WHERE event_id=? ORDER BY log_id", (event["event_id"],))]
+                    receipts = [attempt for attempt in attempts if attempt["event_id"] == event["event_id"]]
+                    # The receiver stores its chosen status before writing the response.
+                    # A recorded 200 proves acceptance, not that curl observed the 200.
+                    event["receiver"] = {
+                        "received": bool(receipts), "receive_count": len(receipts),
+                        "recorded_http_statuses": [receipt["status"] for receipt in receipts],
+                        "status_recorded_before_response": True,
+                        "effect_recorded": any(effect["event_id"] == event["event_id"] for effect in effects)}
+                    print(json.dumps(event, indent=2), file=sys.stderr, flush=True)
+        except sqlite3.Error as error:
+            print(f"PENDING_EVENT_EVIDENCE read failed: {error}", file=sys.stderr, flush=True)
+        print(f"RUNNER_STDERR_TAIL path={output / 'runner.stderr.log'} last=40",
+              file=sys.stderr, flush=True)
+        try:
+            with (output / "runner.stderr.log").open(encoding="utf-8", errors="replace") as log:
+                tail = "".join(deque(log, maxlen=40))
+            print(tail, end="" if tail.endswith("\n") else "\n", file=sys.stderr, flush=True)
+        except OSError as error:
+            print(f"RUNNER_STDERR_TAIL read failed: {error}", file=sys.stderr, flush=True)
+    except Exception as error:
+        print(f"PENDING_EVENT_EVIDENCE failed: {error}", file=sys.stderr, flush=True)
 
 
 def tape_files(output, rows, split):
