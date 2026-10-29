@@ -19,11 +19,18 @@ since 1.7.0: the optional `engine_invariant` reason vocabulary and the expected
 ABI number in `strategy_library_incompatible`'s message. The report keys are
 unchanged except for two additive diagnostics keys, described below.
 
+### Upgrading
+
+- Live runner users: copy your ledger file before you first start the 1.8.0 runner. 1.8.0 adds a report checkpoint table to the ledger, and a 1.7.x runner refuses to open a ledger that 1.8.0 has opened, so going back to 1.7.x needs that copy.
+
+### Fixed
+
 - Monthly Sharpe/Sortino month keys for timestamps beyond about 34,800 years from the epoch no longer overflow; in-range results are unchanged.
 - The report's annualization diagnostic now uses the engine's initial capital
   on every report path. The path-sink report route (named or unnamed)
   previously omitted it and could drop the diagnostic when the compounded
   return overflowed; metric values are unchanged.
+- Strategies that reversed on an entry id the other side had used before kept the wrong position: the reversal's new lot was erased from its entry, so later percentage exits were sized from zero units and closed nothing, the position stayed open, later entries could exceed the pyramiding limit, and the closed-trade rows for those exits were missing. Affected releases: v1.1.0 through v1.7.0. Fixed in 1.8.0. Release 1.0.0 handles percentage exits after a reversal differently for an older, unrelated reason, so it is not a safe version to stay on either.
 
 ### Compatibility and migration
 
