@@ -22,12 +22,12 @@
 #include <utility>
 #include <vector>
 #include "report_scratch.hpp"
-
+namespace pineforge::report { struct LiveReportPatch; }
 #define PINEFORGE_HAS_DEPENDENCY_SCRATCH_V1 1
 
 namespace pineforge {
 inline namespace engine_script_run_v19 {
-
+class LiveReportAccumulator;
 // Lookup state a host derives from its own bookkeeping and cannot keep in its
 // own object -- a generated script's ABI fixes that object's layout -- parked
 // with the consumer that serves the host (R5 lane PERF-P7). The consumer owns
@@ -2663,6 +2663,11 @@ public:
     // binding already detached is engine_invariant at admit_public_begin.
     NativeBarViews bar_views() const noexcept;
 
+    // Internal live reader: same stream ownership/reentry gates, with owning
+    // array suffixes and runner-owned folds instead of an owning full report.
+    static report::LiveReportPatch fill_live_report_patch(
+        const BacktestEngine& engine, LiveReportAccumulator& accumulator,
+        std::uint64_t input_index, bool final_input);
     // Dormant matching computes the eager book's exact observable rows. These
     // switches/counters are internal witnesses, never run-spec or hash input.
     // Counters describe this run; dormant_rows counts successful new joins,
