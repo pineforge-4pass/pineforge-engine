@@ -7988,6 +7988,12 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX AND NOT PINEFORGE_ENABLE_SANITIZERS AND
 endif()
 # --- CR-150 core-cr150-replay-rq end ---
 
+# CR-507: the container entrypoint refuses a mounted strategy.cpp the host did not vouch for.
+# Placed before the PR fast-row registration, which must stay the last block of this file.
+add_test(NAME test_entrypoint_cpp_attest
+    COMMAND ${Python3_EXECUTABLE} -B -m pytest -p no:cacheprovider ${PROJECT_SOURCE_DIR}/tests/test_entrypoint_cpp_attest.py
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
         message(FATAL_ERROR "PR fast row or executable is missing: ${_pf_fast_test}")
@@ -8008,9 +8014,3 @@ endforeach()
 if(PINEFORGE_BUILD_SOURCE_LAYER)
     add_custom_target(pineforge_pr_smoke DEPENDS ${PINEFORGE_PR_FAST_TESTS})
 endif()
-
-# CR-507: the container entrypoint refuses a mounted strategy.cpp the host did not vouch for.
-# Appended after every line-pinned row.
-add_test(NAME test_entrypoint_cpp_attest
-    COMMAND ${Python3_EXECUTABLE} -B -m pytest -p no:cacheprovider ${PROJECT_SOURCE_DIR}/tests/test_entrypoint_cpp_attest.py
-    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
