@@ -23,6 +23,19 @@ version number follows semantic versioning over the surfaces the
   layouts and `PF_ABI_VERSION` 5 are unchanged; existing 1.8.0 strategy modules
   require no rebuild for these changes.
 
+### Native live webhook transport ownership
+
+An independent curl-owner thread now drives HTTP while the delivery worker
+handles the ledger. This addresses accepted deliveries timing out while the
+delivery worker waited for the ledger mutex during a checkpoint.
+Commands and completed results cross two 256-entry rings, one in each direction.
+While idle, each direction can wait up to 20 ms for the other thread to notice
+work; there is no wakeup. Queued batches and ledger stalls can add further delay.
+`ended_at` is stamped when the delivery worker records the result in the ledger,
+so after a ledger stall a successful attempt's `ended_at - started_at` can exceed
+`total_timeout_ms`. Timeout settings, retry policy, acknowledgement and recovery
+semantics are unchanged.
+
 ### Live ledger report-checkpoint layouts
 
 - The ledger open derives the table layouts it accepts from one list of the
@@ -69,21 +82,30 @@ The development entries below are retained in order. The cumulative stream
 default in the later entry supersedes the earlier delta default; the carried
 accumulator in the earlier entry closes the later entry's remaining native
 rebuild term. All stream modes now retain the cumulative fold for checkpoint
-verification. Interval-mode cumulative documents also carry `ratios_as_of_input`
-and `ratio_context`; export refreshes the ratios and marker without changing
-stored checkpoints.
+verification. For modules with a matching engine-layout stamp, interval-mode
+cumulative documents also carry `ratios_as_of_input` and `ratio_context`; export
+refreshes the ratios and marker without changing stored checkpoints.
 
+- **Optional engine-layout query.** The runtime C surface adds
+  `strategy_stream_engine_layout_version`. The carried accumulator and
+  ratio-interval scheduling described below apply only when this optional
+  module export matches `PF_STREAM_ENGINE_LAYOUT_VERSION`. Modules without a
+  matching stamp keep the public-report path: full `strategy_stream_fill_report`
+  snapshots and exact ratios at every input, even for K > 1. They add neither
+  `ratios_as_of_input` nor `ratio_context` and emit no terminal interval refresh.
+  The runner prints no warning about a missing or mismatched stamp.
 - **Delta JSONL is the default.** `pineforge-live run --report-jsonl` now
   emits one `pineforge-native-report-delta/v1` document for each committed
   input, matching the payload stored in the ledger. This deliberately changes
   the stream shape for existing consumers that read the old cumulative
   document; request `--report-jsonl=full` to retain that cumulative output.
-- **Non-ratio per-input report work is flat in appended rows.** The runner
-  carries a closed-trade high-water mark and no longer scans the full closed
-  trade prefix for every input. Delta serialization keeps scalar state and
-  array counts; the report accumulator carries the equity series for ratios,
-  while every mode keeps the cumulative JSON document, accumulator curve and
-  ratio workspace, and engine arrays resident with O(report) growth in equity
+- **Non-ratio per-input report work is flat in appended rows.** For modules
+  with the matching stamp, the runner carries a closed-trade high-water mark
+  and no longer scans the full closed trade prefix for every input. Delta
+  serialization keeps scalar state and array counts; the report accumulator
+  carries the equity series for ratios, while every mode keeps the cumulative
+  JSON document, accumulator curve and ratio workspace, and engine arrays
+  resident with O(report) growth in equity
   points and trades as the cost of one cumulative-document builder, measured
   by `test_native_live_report_memory`: on the lab 10-28 with the default stream
   and default ratio interval, the runner's own `VmHWM` peak RSS was 22,880 KiB
@@ -96,17 +118,20 @@ stored checkpoints.
   and engine arrays; the row omitted
   100,000 inputs because its
   cumulative-stream projection assumes output volume quadratic in the input
-  count, exceeding the 180 s timeout. These two points do not establish a flat
-  memory bound.
-  The ordinary live path now uses an engine-side carried report
-  accumulator for trade materialization, trade statistics, equity high-water,
-  drawdown/run-up and the other non-ratio scalars, updating only appended rows
-  and replacement tails. The batch `fill_report` and C exports are unchanged.
+  count, exceeding the work deadline for that build. These two points do not
+  establish a flat memory bound.
+  For modules with the matching stamp, the ordinary live path uses an
+  engine-side carried report accumulator for trade materialization, trade
+  statistics, equity high-water, drawdown/run-up and the other non-ratio scalars,
+  updating only appended rows and replacement tails.
+  The batch `fill_report` and existing C exports retain their behaviour;
+  `strategy_stream_engine_layout_version` is additive.
 - **Optional ratio interval.** `--ratio-interval K` is a positive integer,
   default 1. K = 1 (the default) is unchanged behaviour: every input carries
-  the exact batch ratios. K > 1 trades per-input freshness of `sharpe_monthly`,
-  `sharpe_bar`, `sortino_bar` and `sortino_monthly` for work: the same batch
-  routine refreshes them at divisible input cursors, the final input and
+  the exact batch ratios. For modules with the matching stamp, K > 1 trades
+  per-input freshness of `sharpe_monthly`, `sharpe_bar`, `sortino_bar` and
+  `sortino_monthly` for work: the same batch routine refreshes them at divisible
+  input cursors, the final input and
   export; intermediate deltas retain the last values and add
   `ratios_as_of_input`. An additive `ratio_context.chart_timezone` preserves
   the month clock for export. A pipe/socket whose EOF is discovered after its
